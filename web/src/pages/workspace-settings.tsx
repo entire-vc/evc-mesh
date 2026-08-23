@@ -52,6 +52,7 @@ import {
 import { useRulesStore } from "@/stores/rules";
 import { cn } from "@/lib/cn";
 import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
+import { apiErrorMessage } from "@/lib/api-error";
 import type {
   AssignmentRulesConfig,
   ImportResult,
@@ -357,7 +358,7 @@ function AssignmentRulesEditor({
     } catch (err) {
       setFeedback({
         type: "error",
-        message: err instanceof Error ? err.message : "Failed to save rules",
+        message: apiErrorMessage(err, "Failed to save rules"),
       });
     }
   };
@@ -859,7 +860,7 @@ export function WorkspaceSettingsPage() {
     } catch (err) {
       setProfileFeedback({
         type: "error",
-        message: err instanceof Error ? err.message : "Failed to save profile",
+        message: apiErrorMessage(err, "Failed to save profile"),
       });
     } finally {
       setIsSavingProfile(false);
@@ -881,7 +882,7 @@ export function WorkspaceSettingsPage() {
     } catch (err) {
       setGeneralFeedback({
         type: "error",
-        message: err instanceof Error ? err.message : "Failed to save settings",
+        message: apiErrorMessage(err, "Failed to save settings"),
       });
     } finally {
       setIsSavingGeneral(false);
@@ -910,7 +911,7 @@ export function WorkspaceSettingsPage() {
     } catch (err) {
       setIconFeedback({
         type: "error",
-        message: err instanceof Error ? err.message : "Upload failed.",
+        message: apiErrorMessage(err, "Upload failed."),
       });
     } finally {
       setIsUploadingIcon(false);
@@ -935,7 +936,7 @@ export function WorkspaceSettingsPage() {
       navigate("/", { replace: true });
     } catch (err) {
       setDeleteWorkspaceError(
-        err instanceof Error ? err.message : "Failed to delete workspace.",
+        apiErrorMessage(err, "Failed to delete workspace."),
       );
       setIsDeletingWorkspace(false);
     }
@@ -971,7 +972,7 @@ export function WorkspaceSettingsPage() {
       await updateWorkspaceMemberName(currentWorkspace.id, memberToRename.user_id, trimmed);
       setMemberToRename(null);
     } catch (err) {
-      setRenameError(err instanceof Error ? err.message : "Failed to update name");
+      setRenameError(apiErrorMessage(err, "Failed to update name"));
     } finally {
       setIsRenaming(false);
     }
@@ -990,7 +991,7 @@ export function WorkspaceSettingsPage() {
       await removeWorkspaceMember(currentWorkspace.id, memberToRemove.user_id);
       setMemberToRemove(null);
     } catch (err) {
-      setRemoveError(err instanceof Error ? err.message : "Failed to remove member");
+      setRemoveError(apiErrorMessage(err, "Failed to remove member"));
     } finally {
       setIsRemoving(false);
     }
@@ -1020,7 +1021,7 @@ export function WorkspaceSettingsPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setExportError(err instanceof Error ? err.message : "Export failed");
+      setExportError(apiErrorMessage(err, "Export failed"));
     } finally {
       setIsExporting(false);
     }
@@ -1048,7 +1049,7 @@ export function WorkspaceSettingsPage() {
       setImportConfigResult(result);
       setConfigYamlText("");
     } catch (err) {
-      setImportConfigError(err instanceof Error ? err.message : "Import failed");
+      setImportConfigError(apiErrorMessage(err, "Import failed"));
     } finally {
       setIsImportingConfig(false);
     }
@@ -1075,7 +1076,7 @@ export function WorkspaceSettingsPage() {
       setImportTeamResult(result);
       setTeamYamlText("");
     } catch (err) {
-      setImportTeamError(err instanceof Error ? err.message : "Team import failed");
+      setImportTeamError(apiErrorMessage(err, "Team import failed"));
     } finally {
       setIsImportingTeam(false);
     }
@@ -1098,7 +1099,7 @@ export function WorkspaceSettingsPage() {
       setTemplatesSaved(true);
       setTimeout(() => setTemplatesSaved(false), 3000);
     } catch (err) {
-      setTemplatesEditorError(err instanceof Error ? err.message : "Failed to save templates");
+      setTemplatesEditorError(apiErrorMessage(err, "Failed to save templates"));
     } finally {
       setIsSavingTemplates(false);
     }
@@ -1626,7 +1627,7 @@ export function WorkspaceSettingsPage() {
                         } catch (err) {
                           setResendResult({
                             inviteId: invite.id,
-                            error: err instanceof Error ? err.message : "Resend failed",
+                            error: apiErrorMessage(err, "Resend failed"),
                           });
                         }
                       }}

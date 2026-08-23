@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { AgentType } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface RegisterAgentDialogProps {
   open: boolean;
@@ -72,7 +73,7 @@ export function RegisterAgentDialog({
         setStep("key");
       } catch (err) {
         setError(
-          err instanceof Error ? err.message : "Failed to register agent",
+          apiErrorMessage(err, "Failed to register agent"),
         );
       } finally {
         setIsSubmitting(false);

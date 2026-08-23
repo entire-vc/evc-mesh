@@ -13,6 +13,7 @@ import { Select } from "@/components/ui/select";
 import { useProjectStore } from "@/stores/project";
 import { slugify, statusCategoryConfig } from "@/lib/utils";
 import type { StatusCategory, TaskStatus } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface StatusDialogProps {
   open: boolean;
@@ -114,7 +115,7 @@ export function StatusDialog({
       onClose();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to save status",
+        apiErrorMessage(err, "Failed to save status"),
       );
     } finally {
       setIsSubmitting(false);

@@ -15,6 +15,7 @@ import { Select } from "@/components/ui/select";
 import { useCustomFieldStore } from "@/stores/custom-field";
 import { slugifyFieldKey } from "@/lib/utils";
 import type { CustomFieldDefinition, FieldType } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface CustomFieldDialogProps {
   open: boolean;
@@ -249,7 +250,7 @@ export function CustomFieldDialog({
       onClose();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to save custom field",
+        apiErrorMessage(err, "Failed to save custom field"),
       );
     } finally {
       setIsSubmitting(false);

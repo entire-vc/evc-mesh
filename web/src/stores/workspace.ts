@@ -2,11 +2,12 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import { getAccessToken } from "@/lib/api";
 import type { CreateWorkspaceRequest, Workspace } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Failed to load workspaces";
+  return apiErrorMessage(error, "Failed to load workspaces");
 }
 
 interface WorkspaceState {

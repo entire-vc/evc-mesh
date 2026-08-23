@@ -57,6 +57,7 @@ import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
 import { cn } from "@/lib/cn";
 import { inlineLabel } from "@/lib/user-display";
+import { apiErrorMessage } from "@/lib/api-error";
 import {
   formatDate,
   formatRelative,
@@ -469,7 +470,7 @@ export function TaskPanel({
       await updateTask(currentTask.id, { title: titleDraft.trim() });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update title");
+      toast.error(apiErrorMessage(err, "Failed to update title"));
     }
   }, [currentTask, titleDraft, updateTask, onTaskUpdated]);
 
@@ -493,7 +494,7 @@ export function TaskPanel({
       setTimeout(() => setDescSaved(false), 1500);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save description",
+        apiErrorMessage(err, "Failed to save description"),
       );
     } finally {
       setDescSaving(false);
@@ -519,7 +520,7 @@ export function TaskPanel({
       if (taskId) await fetchTask(taskId);
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to change status");
+      toast.error(apiErrorMessage(err, "Failed to change status"));
     }
   };
 
@@ -554,7 +555,7 @@ export function TaskPanel({
       toast.success("Gate cleared");
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to clear human gate",
+        apiErrorMessage(err, "Failed to clear human gate"),
       );
     } finally {
       setClearingGate(false);
@@ -568,7 +569,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to change priority",
+        apiErrorMessage(err, "Failed to change priority"),
       );
     }
   };
@@ -580,7 +581,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to change delegation mode",
+        apiErrorMessage(err, "Failed to change delegation mode"),
       );
     }
   };
@@ -603,7 +604,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to change assignee",
+        apiErrorMessage(err, "Failed to change assignee"),
       );
     }
   };
@@ -623,7 +624,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to change reviewer",
+        apiErrorMessage(err, "Failed to change reviewer"),
       );
     }
   };
@@ -637,7 +638,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to change due date",
+        apiErrorMessage(err, "Failed to change due date"),
       );
     }
   };
@@ -656,7 +657,7 @@ export function TaskPanel({
       }
       toast.success("Task moved to another project");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to move task");
+      toast.error(apiErrorMessage(err, "Failed to move task"));
     }
   };
 
@@ -670,7 +671,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to update estimate",
+        apiErrorMessage(err, "Failed to update estimate"),
       );
     }
   }, [currentTask, hoursDraft, updateTask, onTaskUpdated]);
@@ -701,7 +702,7 @@ export function TaskPanel({
       await updateTask(currentTask.id, { labels });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add label");
+      toast.error(apiErrorMessage(err, "Failed to add label"));
     }
   }, [currentTask, labelDraft, updateTask, onTaskUpdated]);
 
@@ -714,7 +715,7 @@ export function TaskPanel({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          err instanceof Error ? err.message : "Failed to remove label",
+          apiErrorMessage(err, "Failed to remove label"),
         );
       }
     },
@@ -734,7 +735,7 @@ export function TaskPanel({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          err instanceof Error ? err.message : "Failed to update field",
+          apiErrorMessage(err, "Failed to update field"),
         );
       }
     },
@@ -829,7 +830,7 @@ export function TaskPanel({
       suppressNavBlockRef.current = true;
       onCreated?.(createdTask);
     } catch (err) {
-      setDraftError(err instanceof Error ? err.message : "Failed to create task");
+      setDraftError(apiErrorMessage(err, "Failed to create task"));
     } finally {
       setDraftSubmitting(false);
     }

@@ -58,6 +58,7 @@ import { useMentionSuggestions } from "@/hooks/use-mention-suggestions";
 import { documentHref, linkLabel } from "@/lib/docs/doc-link";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { apiErrorMessage } from "@/lib/api-error";
 import "@/components/doc-editor.css";
 
 /**
@@ -91,7 +92,7 @@ const PROSE_CLASS = "mesh-doc-prose text-sm text-foreground focus:outline-none";
  */
 function reportUploadFailure(file: File, err: unknown): void {
   toast.error(`Could not attach ${file.name}`, {
-    description: err instanceof Error ? err.message : "upload failed",
+    description: apiErrorMessage(err, "upload failed"),
   });
 }
 
