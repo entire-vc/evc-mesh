@@ -621,10 +621,13 @@ export function DocCommentAffordance({
  * the rail itself (`onOpenRail`) so the composer this starts always has
  * somewhere to render, then starts the draft.
  *
- * The visible label is a placeholder. The copy for this button is under
- * §1r.A review on `#03acfaae` — this task builds the mechanism only, per
- * `#41d01325`; the label gets swapped for approved words in a follow-up
- * commit, not decided here.
+ * Icon-only for now: a visible label is copy under §1r.A review on
+ * `#03acfaae`, and `web/**` deploys to prod on merge with no human step in
+ * between (see `#41d01325`) — so the button ships with no visible text at
+ * all rather than an unapproved placeholder. `aria-label`/`title` are exempt
+ * from that gate (they exist for crawlers and screen readers, not as
+ * product copy) and carry the button's only description until the approved
+ * label lands as a follow-up commit.
  */
 export function DocCommentPageEntry({
   controller,
@@ -639,17 +642,17 @@ export function DocCommentPageEntry({
     <Button
       type="button"
       variant="ghost"
-      size="sm"
+      size="icon"
       data-testid="doc-comment-page-entry"
-      className="h-7 gap-1 px-2 text-xs"
+      className="h-7 w-7"
+      title="Comment on the whole document"
+      aria-label="Comment on the whole document"
       onClick={() => {
         onOpenRail();
         controller.startPageDraft();
       }}
     >
       <MessageSquarePlus className="h-3.5 w-3.5" />
-      {/* [TEXT PENDING APPROVAL — see #03acfaae] */}
-      [TEXT PENDING APPROVAL]
     </Button>
   );
 }
