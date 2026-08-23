@@ -70,10 +70,16 @@ func NewAgentHandlerWithEvents(as service.AgentService, ts service.TaskService, 
 
 // registerAgentRequest represents the JSON body for registering a new agent.
 type registerAgentRequest struct {
-	Name          string           `json:"name"`
-	AgentType     domain.AgentType `json:"agent_type"`
-	Capabilities  map[string]any   `json:"capabilities"`
-	ParentAgentID *uuid.UUID       `json:"parent_agent_id,omitempty"`
+	Name               string           `json:"name"`
+	AgentType          domain.AgentType `json:"agent_type"`
+	Capabilities       map[string]any   `json:"capabilities"`
+	ParentAgentID      *uuid.UUID       `json:"parent_agent_id,omitempty"`
+	Role               *string          `json:"role,omitempty"`
+	ResponsibilityZone *string          `json:"responsibility_zone,omitempty"`
+	EscalationTo       *string          `json:"escalation_to,omitempty"`
+	AcceptsFrom        json.RawMessage  `json:"accepts_from,omitempty"`
+	MaxConcurrentTasks *int             `json:"max_concurrent_tasks,omitempty"`
+	WorkingHours       *string          `json:"working_hours,omitempty"`
 }
 
 // listAgentsQuery represents query parameters for listing agents.
@@ -143,11 +149,17 @@ func (h *AgentHandler) Register(c echo.Context) error {
 	}
 
 	input := service.RegisterAgentInput{
-		WorkspaceID:   wsID,
-		Name:          req.Name,
-		AgentType:     req.AgentType,
-		Capabilities:  req.Capabilities,
-		ParentAgentID: req.ParentAgentID,
+		WorkspaceID:        wsID,
+		Name:               req.Name,
+		AgentType:          req.AgentType,
+		Capabilities:       req.Capabilities,
+		ParentAgentID:      req.ParentAgentID,
+		Role:               req.Role,
+		ResponsibilityZone: req.ResponsibilityZone,
+		EscalationTo:       req.EscalationTo,
+		AcceptsFrom:        req.AcceptsFrom,
+		MaxConcurrentTasks: req.MaxConcurrentTasks,
+		WorkingHours:       req.WorkingHours,
 	}
 
 	output, err := h.agentService.Register(c.Request().Context(), input)

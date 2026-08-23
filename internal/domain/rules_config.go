@@ -113,7 +113,11 @@ type AgentProfileUpdate struct {
 	Role               *string         `json:"role,omitempty"`
 	Capabilities       json.RawMessage `json:"capabilities"`
 	ResponsibilityZone *string         `json:"responsibility_zone,omitempty"`
-	EscalationTo       json.RawMessage `json:"escalation_to,omitempty"`
+	// EscalationTo is a single name/handle (e.g. "Garfield"), not a list —
+	// matches the shape every other write path already assumes: the MCP
+	// tool (mcpsdk.ParseString), and TeamAgentConfig.EscalationTo (plain
+	// string) used by YAML config import/export.
+	EscalationTo       *string         `json:"escalation_to,omitempty"`
 	AcceptsFrom        json.RawMessage `json:"accepts_from"`
 	MaxConcurrentTasks *int            `json:"max_concurrent_tasks,omitempty"`
 	WorkingHours       *string         `json:"working_hours,omitempty"`

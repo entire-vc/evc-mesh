@@ -589,12 +589,23 @@ type DocumentCommentService interface {
 }
 
 // RegisterAgentInput holds parameters for registering a new agent.
+//
+// Role/ResponsibilityZone/MaxConcurrentTasks/WorkingHours use pointers so
+// Register can tell "omitted, apply a sane default" apart from "explicitly
+// set to the zero value" (e.g. MaxConcurrentTasks: 0 on purpose, to pause a
+// lane without deleting it).
 type RegisterAgentInput struct {
-	WorkspaceID   uuid.UUID        `json:"workspace_id"`
-	Name          string           `json:"name"`
-	AgentType     domain.AgentType `json:"agent_type"`
-	Capabilities  map[string]any   `json:"capabilities"`
-	ParentAgentID *uuid.UUID       `json:"parent_agent_id,omitempty"`
+	WorkspaceID        uuid.UUID        `json:"workspace_id"`
+	Name               string           `json:"name"`
+	AgentType          domain.AgentType `json:"agent_type"`
+	Capabilities       map[string]any   `json:"capabilities"`
+	ParentAgentID      *uuid.UUID       `json:"parent_agent_id,omitempty"`
+	Role               *string          `json:"role,omitempty"`
+	ResponsibilityZone *string          `json:"responsibility_zone,omitempty"`
+	EscalationTo       *string          `json:"escalation_to,omitempty"`
+	AcceptsFrom        json.RawMessage  `json:"accepts_from,omitempty"`
+	MaxConcurrentTasks *int             `json:"max_concurrent_tasks,omitempty"`
+	WorkingHours       *string          `json:"working_hours,omitempty"`
 }
 
 // RegisterAgentOutput holds the result of agent registration, including the raw API key.

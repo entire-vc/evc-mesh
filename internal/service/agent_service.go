@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,11 @@ const (
 	apiKeyPrefixLen = 8
 	// agentKeyDefaultTTL is the lifetime granted to a newly registered or rotated key.
 	agentKeyDefaultTTL = 365 * 24 * time.Hour
+	// defaultMaxConcurrentTasks is applied when registration omits the field.
+	// 0 reads as "takes no tasks" even though dispatch does not actually
+	// enforce it yet (#8b39a38e) — a freshly registered agent should not
+	// start out looking parked.
+	defaultMaxConcurrentTasks = 5
 )
 
 type agentService struct {
@@ -138,8 +144,54 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 		UpdatedAt:    now,
 	}
 
-	// Capabilities are stored as-is; marshalling happens at the repo layer.
-	// No additional processing is needed here.
+	if len(input.Capabilities) > 0 {
+		capBytes, err := json.Marshal(input.Capabilities)
+		if err != nil {
+			return nil, apierror.BadRequest("invalid capabilities")
+		}
+		agent.Capabilities = capBytes
+	}
+
+	// Role/ResponsibilityZone/WorkingHours/MaxConcurrentTasks: omitted (nil
+	// pointer) means "apply a sane default", not "leave the column's own
+	// SQL default in place" — the INSERT always supplies an explicit value
+	// for every one of these columns (see AgentRepo.Create), so a Go zero
+	// value here would silently override the schema default instead of
+	// falling back to it. This is what produced agents with an empty
+	// responsibility_zone and max_concurrent_tasks=0 straight out of
+	// registration (task #85714565).
+	if input.Role != nil && strings.TrimSpace(*input.Role) != "" {
+		agent.Role = strings.TrimSpace(*input.Role)
+	} else {
+		agent.Role = "developer"
+	}
+	if input.ResponsibilityZone != nil {
+		agent.ResponsibilityZone = strings.TrimSpace(*input.ResponsibilityZone)
+	}
+	if input.WorkingHours != nil && strings.TrimSpace(*input.WorkingHours) != "" {
+		agent.WorkingHours = strings.TrimSpace(*input.WorkingHours)
+	} else {
+		agent.WorkingHours = "24/7"
+	}
+	if input.MaxConcurrentTasks != nil {
+		agent.MaxConcurrentTasks = *input.MaxConcurrentTasks
+	} else {
+		agent.MaxConcurrentTasks = defaultMaxConcurrentTasks
+	}
+	if input.EscalationTo != nil && strings.TrimSpace(*input.EscalationTo) != "" {
+		escBytes, err := json.Marshal(strings.TrimSpace(*input.EscalationTo))
+		if err != nil {
+			return nil, apierror.BadRequest("invalid escalation_to")
+		}
+		raw := json.RawMessage(escBytes)
+		agent.EscalationTo = &raw
+	}
+	// AcceptsFrom: nil is left as-is on purpose — AgentRepo.Create already
+	// defaults a nil value to `["*"]` (explicit "accept from anyone"), which
+	// is exactly what an omitted field should mean here.
+	if input.AcceptsFrom != nil {
+		agent.AcceptsFrom = input.AcceptsFrom
+	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
 		return nil, err
