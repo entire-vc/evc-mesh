@@ -258,7 +258,11 @@ unconfigured and Mesh never calls out.
 
 ### MCP server
 
-Read by the `mesh-mcp` binary (`cmd/mcp`), not by the API. In SSE mode
+Read by the `mesh-mcp` binary, not by the API. It is built from the separate
+[`entire-vc/evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp)
+repository — pinned to a commit in `deploy/docker/mesh/Dockerfile`'s
+`MESH_MCP_REF` build arg, fetched via `go install` at image-build time — not
+from a `cmd/mcp` package in this repository. In SSE mode
 `docker-compose.prod.yml` sets the transport, host and port for you, and also
 proxies it under `/mcp/` on the same origin as the web UI (`nginx.conf`) —
 `https://<your-host>/mcp/sse` works out of the box once `MESH_BASE_URL` is set,
@@ -272,7 +276,7 @@ with no separate port to open.
 | `MESH_MCP_HOST` | `0.0.0.0` | SSE listen host |
 | `MESH_MCP_PORT` | `8081` | SSE listen port |
 | `MESH_MCP_PUBLIC_URL` | *(empty — the binary's own default; see note)* | Public base URL of the SSE server (e.g. `https://mesh.example.com/mcp`). Empty means the message endpoint is advertised as a path relative to whatever URL the client connected to — correct for localhost and a directly-published container port, but **not** for a reverse proxy that strips a path prefix (like the bundled nginx's `/mcp/` route), which needs the prefix included explicitly. |
-| `MESH_MCP_PROFILE` | `full` | `full` (49 tools) or `core` (21 tools). Applies to stdio mode; in SSE mode the profile is chosen by which endpoint the client connects to (`/sse` vs `/core/sse`). |
+| `MESH_MCP_PROFILE` | `full` | `full` (61 tools) or `core` (25 tools). Applies to stdio mode; in SSE mode the profile is chosen by which endpoint the client connects to (`/sse` vs `/core/sse`). |
 
 See [Agent onboarding](agent-onboarding.md) for issuing keys and connecting a
 client.
