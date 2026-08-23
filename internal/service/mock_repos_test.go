@@ -1021,6 +1021,14 @@ type MockCommentRepository struct {
 	items              map[uuid.UUID]*domain.Comment
 	errToReturn        error
 	enrichedAuthorName *string // simulates SQL CASE WHEN author_name subquery
+	// createFailFor, when set, is consulted BEFORE errToReturn on every Create
+	// call. It exists because errToReturn is a blanket switch that fails EVERY
+	// call uniformly — useless for a scenario where the comment under test
+	// must persist (so the service reaches its own follow-up write) and only
+	// THAT follow-up write (e.g. a system notice) fails. Predicate on the
+	// comment itself rather than a call counter: a counter is order-dependent
+	// and silently wrong the moment an unrelated write is added ahead of it.
+	createFailFor func(*domain.Comment) bool
 }
 
 func NewMockCommentRepository() *MockCommentRepository {
@@ -1028,6 +1036,9 @@ func NewMockCommentRepository() *MockCommentRepository {
 }
 
 func (m *MockCommentRepository) Create(_ context.Context, c *domain.Comment) error {
+	if m.createFailFor != nil && m.createFailFor(c) {
+		return fmt.Errorf("mock: forced Create failure")
+	}
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
@@ -2365,6 +2376,45 @@ func (m *MockProjectIntegrationRepository) ListByProject(_ context.Context, proj
 		result = append(result, *pi)
 	}
 	return result, nil
+}
+
+func (m *MockProjectIntegrationRepository) SetKeyExpiry(_ context.Context, projectID uuid.UUID, intType string, expiresAt *time.Time, source string) error {
+	if m.err != nil {
+		return m.err
+	}
+	pi, ok := m.byKey[projectID][intType]
+	if !ok {
+		return apierror.NotFound("ProjectIntegration")
+	}
+	pi.KeyExpiresAt = expiresAt
+	if expiresAt != nil {
+		src := source
+		pi.KeyExpirySource = &src
+	} else {
+		pi.KeyExpirySource = nil
+	}
+	return nil
+}
+
+func (m *MockProjectIntegrationRepository) RecordSyncCheck(_ context.Context, projectID uuid.UUID, intType string, checkedAt time.Time, status, errMsg string) error {
+	if m.err != nil {
+		return m.err
+	}
+	pi, ok := m.byKey[projectID][intType]
+	if !ok {
+		return apierror.NotFound("ProjectIntegration")
+	}
+	checked := checkedAt
+	pi.LastSyncCheckedAt = &checked
+	st := status
+	pi.LastSyncStatus = &st
+	if status == "error" && errMsg != "" {
+		msg := errMsg
+		pi.LastSyncError = &msg
+	} else {
+		pi.LastSyncError = nil
+	}
+	return nil
 }
 
 var _ repository.ProjectIntegrationRepository = (*MockProjectIntegrationRepository)(nil)

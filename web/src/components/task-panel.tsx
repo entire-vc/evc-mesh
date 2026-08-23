@@ -1857,7 +1857,15 @@ export function TaskPanel({
             {propertiesGrid}
             {descriptionPanel}
             {draftError && <p className="text-sm text-destructive">{draftError}</p>}
-            <div className="flex items-center justify-end gap-2 pt-2">
+            {/* Below `lg` the submit is pinned to the bottom of the scrollport.
+                The draft runs ~1100px (title + properties + description), so an
+                inline submit sits below the fold on a 393x852 screen and costs a
+                scroll — while the way OUT (`Cancel`, sticky in the header) is
+                always one tap. Making the primary action harder to reach than the
+                escape hatch is backwards, and the modal this route replaced kept
+                its submit visible via `DialogFooter`. Desktop is unchanged: it
+                has no fold problem, so the row stays in the scroll flow. */}
+            <div className="sticky bottom-0 -mx-5 flex items-center justify-end gap-2 border-t border-border bg-background px-5 py-3 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0 lg:py-0 lg:pt-2">
               {onClose && (
                 <Button
                   type="button"
@@ -1973,10 +1981,10 @@ export function TaskPanel({
                       projectSettings={
                         (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
                       }
-                      onRelayDocSelect={(url) => {
+                      onDocInsert={(markdown) => {
                         setDescDraft((prev) => {
                           const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                          return prev + sep + url + "\n";
+                          return prev + sep + markdown + "\n";
                         });
                         setEditingDescription(true);
                         setActiveMobileTab("description");
@@ -2095,10 +2103,10 @@ export function TaskPanel({
                     projectSettings={
                       (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
                     }
-                    onRelayDocSelect={(url) => {
+                    onDocInsert={(markdown) => {
                       setDescDraft((prev) => {
                         const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                        return prev + sep + url + "\n";
+                        return prev + sep + markdown + "\n";
                       });
                       setEditingDescription(true);
                     }}

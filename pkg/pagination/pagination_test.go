@@ -491,3 +491,29 @@ func TestParams_LimitAliasStillPaginates(t *testing.T) {
 	assert.Equal(t, 10, p.Limit())
 	assert.Equal(t, 10, p.Offset())
 }
+
+// ---------------------------------------------------------------------------
+// ?order= alias (?order=desc was accepted and silently ignored — only
+// ?sort_dir=desc did anything)
+// ---------------------------------------------------------------------------
+
+func TestParams_OrderAliasFeedsSortDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    Params
+		expected string
+	}{
+		{"order_alone_is_used", Params{Order: "desc"}, "desc"},
+		{"explicit_sort_dir_wins", Params{SortDir: "asc", Order: "desc"}, "asc"},
+		{"order_asc", Params{Order: "asc"}, "asc"},
+		{"empty_order_falls_back_to_default", Params{Order: ""}, "asc"},
+		{"garbage_order_falls_back_to_default", Params{Order: "sideways"}, "asc"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.input
+			p.Normalize()
+			assert.Equal(t, tt.expected, p.SortDir)
+		})
+	}
+}
