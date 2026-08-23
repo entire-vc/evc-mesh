@@ -1271,6 +1271,84 @@ describe("DocsPage — the discussion under the page", () => {
     });
   });
 
+  describe("below `lg`, one COMMENTS surface, not two (#fd898a58)", () => {
+    // jsdom does not evaluate media queries (see the "narrow screens" describe
+    // above), and this fix genuinely needs JS to decide whether to mount the
+    // rail at all — a CSS-only `hidden` would still leave it in the DOM (and
+    // running), which is exactly what AC1 below rules out. So these tests
+    // replace `window.matchMedia` directly rather than relying on jsdom's
+    // (nonexistent) layout, matching `useIsMobile`'s own contract.
+    let restoreMatchMedia: (() => void) | undefined;
+
+    function mockViewport(isMobile: boolean) {
+      const previous = window.matchMedia;
+      window.matchMedia = ((query: string) => {
+        const target = new EventTarget();
+        return Object.assign(target, {
+          matches: isMobile,
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: target.addEventListener.bind(target),
+          removeEventListener: target.removeEventListener.bind(target),
+          dispatchEvent: target.dispatchEvent.bind(target),
+        }) as MediaQueryList;
+      }) as typeof window.matchMedia;
+      restoreMatchMedia = () => {
+        window.matchMedia = previous;
+      };
+    }
+
+    afterEach(() => {
+      restoreMatchMedia?.();
+      restoreMatchMedia = undefined;
+    });
+
+    it("AC1: exactly one COMMENTS surface renders, even with the rail stored open", async () => {
+      mockViewport(true);
+      mockWithComments([comment()]);
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      const tree = await screen.findByTestId("doc-comment-tree");
+      // The bug this guards: `railOpen=true` used to mount the rail
+      // regardless of width, landing it directly under the always-mounted
+      // tree — same threads, second header, right where the reader was
+      // already scrolling.
+      expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(1);
+      // And the one surface that IS on screen still carries the composer —
+      // AC1 is "one surface with everything", not "one surface, form gone".
+      expect(
+        within(tree).getByPlaceholderText("Add a comment… @ to mention"),
+      ).toBeInTheDocument();
+    });
+
+    it("AC2: the rail toggle is not shown — nothing visible controls a surface that cannot open", async () => {
+      mockViewport(true);
+      mockWithComments([comment()]);
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-tree");
+      expect(screen.queryByTestId("doc-comment-toggle")).not.toBeInTheDocument();
+    });
+
+    it("AC3 regression: at `lg`+ the rail still renders alongside the tree, once per surface", async () => {
+      mockViewport(false);
+      mockWithComments([comment()]);
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-tree");
+      await screen.findByTestId("doc-comment-rail");
+      await waitFor(() => {
+        expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(2);
+      });
+      expect(screen.getByTestId("doc-comment-toggle")).toBeInTheDocument();
+    });
+  });
+
   describe("comment on the page as a whole, no selection required (#41d01325)", () => {
     // jsdom has no layout, so it has no scrollIntoView — the rail calls it on
     // the thread it focuses, and submitting a draft focuses the new thread.

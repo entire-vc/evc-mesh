@@ -56,6 +56,7 @@ import {
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { copyText } from "@/lib/clipboard";
+import { useIsMobile } from "@/lib/use-is-mobile";
 // Two unrelated anchor systems live on this page. `@/lib/docs/anchor` (D6) is
 // the fragment link that points at a paragraph; `@/lib/doc-comments` (D7) is
 // the range a comment is attached to. Same word, different features — keep the
@@ -479,6 +480,16 @@ export function DocsPage() {
 
   const [railOpen, setRailOpen] = useState(loadDocCommentsRailOpen);
   const [showResolved, setShowResolved] = useState(false);
+
+  // Below `lg` a 320px rail and a readable column do not both fit (see the
+  // layout comment further down), so the rail is dropped entirely on this
+  // width rather than stacking under `DocCommentTree` — that stack is what
+  // produced two "COMMENTS" headers in a row on 393px (`#fd898a58`; Pavel's
+  // choice among three options, canonical-decision-2026-08-23-docs-ui-393-lg).
+  // `railOpen` itself is left untouched here: it is what the toggle persists
+  // to localStorage, and it must still read back correctly once the viewport
+  // widens past `lg` again.
+  const isMobile = useIsMobile();
 
   // ---- Search (D-search-surface) --------------------------------------------
   // Reuses the `documents/search` endpoint the `[[` link menu already calls
@@ -1098,12 +1109,17 @@ export function DocsPage() {
                     space, which is exactly what pushed them off-screen. */}
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   {/* How many conversations are open on this page, and the
-                      switch for the rail that holds them. */}
-                  <DocCommentToggle
-                    controller={comments}
-                    open={railOpen}
-                    onToggle={toggleRail}
-                  />
+                      switch for the rail that holds them — hidden below `lg`,
+                      where the rail itself never renders (see `isMobile`
+                      above): a visible control for a surface that cannot
+                      open is worse than no control at all (`#fd898a58` AC2). */}
+                  {!isMobile && (
+                    <DocCommentToggle
+                      controller={comments}
+                      open={railOpen}
+                      onToggle={toggleRail}
+                    />
+                  )}
                   {/* Not gated on railOpen: this entry point must work whether
                       or not the rail is open — see DocCommentTree's header
                       note (`#744ae979`) on why the two surfaces are no longer
@@ -1246,7 +1262,15 @@ export function DocsPage() {
                   />
                 </article>
 
-                {railOpen && (
+                {/* `!isMobile` on top of `railOpen`: below `lg` this flex
+                    container stacks instead of running side-by-side (see the
+                    `lg:flex-row` note above `<article>`), and the rail would
+                    land directly under `DocCommentTree` — same threads,
+                    second "COMMENTS" header, right where a user is already
+                    reading (`#fd898a58`). `DocCommentTree` alone carries the
+                    full thread list and the composer at every width, so
+                    nothing is lost by not mounting the rail here. */}
+                {railOpen && !isMobile && (
                   <DocCommentRail
                     controller={comments}
                     showResolved={showResolved}
