@@ -20,7 +20,6 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { CalendarToolbar } from "@/components/calendar-toolbar";
-import { CreateTaskDialog } from "@/components/create-task-dialog";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { useSavedViewStore } from "@/stores/saved-view-store";
@@ -405,9 +404,6 @@ export function CalendarPage() {
   const [showUnscheduled, setShowUnscheduled] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Dialog state
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [dialogDueDate, setDialogDueDate] = useState<string | undefined>();
   const [recurringOpen, setRecurringOpen] = useState(false);
 
   // Slide-over state
@@ -511,8 +507,8 @@ export function CalendarPage() {
 
   // Add task on specific date
   const handleAddTask = (date: string) => {
-    setDialogDueDate(date);
-    setDialogOpen(true);
+    if (!wsSlug || !currentProject) return;
+    navigate(`/w/${wsSlug}/p/${currentProject.slug}/new?due=${date}`);
   };
 
   const handleTaskClick = useCallback((task: Task) => {
@@ -693,13 +689,6 @@ export function CalendarPage() {
           </DragOverlay>
         </DndContext>
       )}
-
-      {/* Create task dialog */}
-      <CreateTaskDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        defaultDueDate={dialogDueDate}
-      />
 
       <CreateRecurringDialog
         open={recurringOpen}

@@ -223,13 +223,13 @@ func TestCommentHandler_List_WithIncludeInternal(t *testing.T) {
 }
 
 // TestCommentHandler_List_SortDirBinding pins that the handler binds and
-// normalizes sort_dir and passes it through to the service unchanged — the
-// actual defect (task 4222c17d, D3) was one layer down, in the repository
-// hardcoding ASC regardless of what the handler bound, so this test alone
-// would NOT have caught the regression. It documents that this layer was
-// already correct, so a future change here doesn't quietly break it while
-// the repo-level test (comment_repo_test.go, real DB per §1o) covers the
-// part that was actually broken.
+// normalizes sort_dir/order and passes the result through to the service
+// unchanged — the original defect (task 4222c17d, D3) was one layer down, in
+// the repository hardcoding ASC regardless of what the handler bound, so this
+// test alone would NOT have caught that regression. It documents that this
+// layer is correct, so a future change here doesn't quietly break it while
+// the repo-level test (comment_repo_test.go, real DB per §1o) covers the part
+// that was actually broken there.
 func TestCommentHandler_List_SortDirBinding(t *testing.T) {
 	taskID := uuid.New()
 
@@ -238,10 +238,15 @@ func TestCommentHandler_List_SortDirBinding(t *testing.T) {
 		query       string
 		wantSortDir string
 	}{
-		{"explicit desc", "?sort_dir=desc", "desc"},
-		{"explicit asc", "?sort_dir=asc", "asc"},
+		{"explicit sort_dir=desc", "?sort_dir=desc", "desc"},
+		{"explicit sort_dir=asc", "?sort_dir=asc", "asc"},
 		{"unspecified defaults to asc", "", "asc"},
-		{"unrecognized value falls back to asc, not left as-is", "?sort_dir=bogus", "asc"},
+		// order= is the REST-conventional spelling that used to be silently
+		// ignored — ?order=desc returned the same page as no params at all.
+		// It must feed SortDir exactly like sort_dir does.
+		{"order=desc aliases to sort_dir", "?order=desc", "desc"},
+		{"order=asc aliases to sort_dir", "?order=asc", "asc"},
+		{"explicit sort_dir wins over order", "?sort_dir=asc&order=desc", "asc"},
 	}
 
 	for _, tc := range cases {
@@ -268,6 +273,90 @@ func TestCommentHandler_List_SortDirBinding(t *testing.T) {
 			assert.Equal(t, tc.wantSortDir, gotSortDir)
 		})
 	}
+}
+
+// TestCommentHandler_List_RejectsGarbageSortDir pins the fix: before, an
+// unrecognized sort_dir/order value was accepted and silently normalized to
+// "asc" (200, well-formed page) — indistinguishable from the caller's
+// request having been honoured, which is exactly how "?order=desc" came to
+// look like it worked. A garbage value must now 400 rather than default
+// quietly, naming whichever of the two query parameters actually carried it.
+func TestCommentHandler_List_RejectsGarbageSortDir(t *testing.T) {
+	taskID := uuid.New()
+
+	cases := []struct {
+		name      string
+		query     string
+		wantField string
+	}{
+		{"garbage sort_dir", "?sort_dir=sideways", "sort_dir"},
+		{"garbage order", "?order=sideways", "order"},
+		{"garbage order, empty sort_dir names order not sort_dir", "?sort_dir=&order=sideways", "order"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockSvc := &MockCommentService{
+				ListByTaskFunc: func(ctx context.Context, tid uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
+					t.Fatal("service must not be called when pagination params are rejected")
+					return nil, nil
+				},
+			}
+			h, e := setupCommentTest(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.query, http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/tasks/:task_id/comments")
+			c.SetParamNames("task_id")
+			c.SetParamValues(taskID.String())
+
+			err := h.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+			var apiErr apierror.Error
+			err = json.Unmarshal(rec.Body.Bytes(), &apiErr)
+			require.NoError(t, err)
+			assert.Contains(t, apiErr.Validation, tc.wantField)
+		})
+	}
+}
+
+// TestCommentHandler_List_OrderDescReturnsWhateverPageServiceGives pins that
+// once order=desc is bound to SortDir, the handler doesn't reorder or
+// otherwise post-process the service's result — sorting is the service/repo's
+// job, the handler's only job here is to stop dropping the parameter.
+func TestCommentHandler_List_OrderDescReturnsWhateverPageServiceGives(t *testing.T) {
+	taskID := uuid.New()
+	now := time.Now()
+	newest := domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "newest", CreatedAt: now, UpdatedAt: now}
+
+	mockSvc := &MockCommentService{
+		ListByTaskFunc: func(ctx context.Context, tid uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
+			require.Equal(t, "desc", pg.SortDir)
+			require.Equal(t, 5, pg.PageSize)
+			return pagination.NewPage([]domain.Comment{newest}, 26, pg), nil
+		},
+	}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?limit=5&order=desc", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/comments")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.List(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var page pagination.Page[domain.Comment]
+	err = json.Unmarshal(rec.Body.Bytes(), &page)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, newest.ID, page.Items[0].ID)
 }
 
 func TestCommentHandler_List_IncludesReplies(t *testing.T) {

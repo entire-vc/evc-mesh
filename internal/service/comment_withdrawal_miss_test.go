@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -266,6 +267,77 @@ func TestReleaseHumanGateOnWithdrawal_BlockerStillOpenPhrase_ExplainsWhy(t *test
 		"this body's negator DID reach the scope — do not blame paragraph order")
 }
 
+// ---------------------------------------------------------------------------
+// Task #081f1354 — a comment that withdraws AND raises a fresh marker in one
+// breath must not silently thaw the card.
+//
+// Live repro (throwaway task, same session, 2026-08-21): task already
+// human_gate=true from an earlier marker. One comment posts a fresh
+// "❓ Blocking @pavel" followed by "Предыдущий вопрос снят — …" —
+// enforceBlockingTriage (runs first, same request) reaffirms the gate on the
+// new marker; releaseHumanGateOnWithdrawal, unaware a marker was just
+// reasserted in the SAME comment, read "снят" as negating it and cleared
+// human_gate=false before the request even finished — the new ask vanished
+// the instant it was raised. get_task before: human_gate=true. After this one
+// comment: human_gate=false, human_gate_armed_at stamped to the very comment
+// that (net) left the gate down.
+// ---------------------------------------------------------------------------
+
+// negatorThenFreshMarkerBody is the exact shape that reproduced live: a fresh
+// marker, then a negator word in the paragraph after it. negatorScope anchors
+// to THIS comment's own last marker, so "снят" reads as in-scope regardless of
+// which ask the author meant it for.
+const negatorThenFreshMarkerBody = "❓ **Blocking @pavel**: тестовый вопрос, версия B (переформулирован)?\n\n" +
+	"Предыдущий вопрос снят — был основан на устаревших данных."
+
+func TestReleaseHumanGateOnWithdrawal_FreshMarkerInSameComment_DoesNotRelease(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: negatorThenFreshMarkerBody,
+	}))
+
+	// enforceBlockingTriage (runs first, same request) legitimately reaffirms
+	// the gate on the fresh marker — that call is expected and correct. What
+	// must NOT happen is releaseHumanGateOnWithdrawal placing a SECOND call
+	// clearing it back to false.
+	gateCalls := env.taskMover.humanGateCalls()
+	for _, c := range gateCalls {
+		assert.True(t, c.value, "no call may clear the gate — that would be the bug reproducing")
+	}
+	notices := env.withdrawalMarkerConflictNotices()
+	require.Len(t, notices, 1, "the author must be told why the withdrawal was refused, not left to silence")
+	assert.Equal(t, domain.ActorTypeSystem, notices[0].AuthorType)
+}
+
+// TestReleaseHumanGateOnWithdrawal_NegatorAloneStillReleases is the negative
+// control demanded by the task's own AC3: the SAME negator wording, with the
+// marker line removed, must still release exactly as before this fix — proof
+// the new guard is scoped to "this comment ALSO carries a marker", not to the
+// negator wording itself.
+func TestReleaseHumanGateOnWithdrawal_NegatorAloneStillReleases(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Предыдущий вопрос снят — был основан на устаревших данных.",
+	}))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "no marker in this body — the guard must not fire, negator releases as before")
+	assert.False(t, gateCalls[0].value)
+	assert.Empty(t, env.withdrawalMarkerConflictNotices())
+}
+
 // TestReportWithdrawalMiss_BystanderGetsNoNotice bounds the noise. Every agent
 // comment on a gated task passes through this path, but only the live marker's
 // OWNER could have withdrawn the ask, so only they get told. Telling a bystander
@@ -331,4 +403,119 @@ func TestReportWithdrawalMiss_NoticeCannotItselfWithdraw(t *testing.T) {
 		assert.False(t, hasNegatorInScope(body), "notice for %s must not read as a withdrawal", reason)
 		assert.False(t, hasBlockingMarker(body), "notice for %s must not arm a gate", reason)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// ctxCacheInv branches — reportWithdrawalMiss and reportWithdrawalMarkerConflict
+// both invalidate the parent task's context cache after posting their notice,
+// but setupTriageEnv wires no ContextCacheInvalidator, so neither branch was
+// ever exercised. These tests wire a fake one via setupTriageEnvWithOptions.
+//
+// Neither request is a single invalidate call in practice — enforceBlockingTriage
+// and the base Create path invalidate too, for reasons unrelated to these two
+// notices — so asserting an exact total count would pin incidental behaviour of
+// OTHER code paths, not the property under test. What is asserted instead: the
+// invalidator fired for the right task (proves the branch ran at all), and —
+// for the failure case — that exactly ONE fewer call happens when the notice's
+// own Create fails, isolated by comparing against the same scenario run clean.
+// ---------------------------------------------------------------------------
+
+// TestReportWithdrawalMiss_InvalidatesContextCache reuses the exact scenario
+// from TestReleaseHumanGateOnWithdrawal_NegatorInFirstParagraph_ExplainsWhy
+// (a withdrawal-miss notice IS posted) with a ContextCacheInvalidator wired in.
+func TestReportWithdrawalMiss_InvalidatesContextCache(t *testing.T) {
+	inv := &fakeCtxCacheInvalidator{}
+	env := setupTriageEnvWithOptions(t, true, WithCommentContextCacheInvalidator(inv))
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: firstParagraphWithdrawalBody,
+	}))
+
+	require.Len(t, env.withdrawalMissNotices(), 1, "sanity: the notice this test depends on must still post")
+	require.NotEmpty(t, inv.calls, "posting the withdrawal-miss notice must invalidate the task's context cache")
+	for _, id := range inv.calls {
+		assert.Equal(t, taskID, id, "every invalidate call in this single-task scenario must name this task")
+	}
+}
+
+// TestReportWithdrawalMarkerConflict_InvalidatesContextCache is the same
+// property for the OTHER notice (#081f1354): a comment carrying both a
+// withdrawal negator and a fresh Blocking marker.
+func TestReportWithdrawalMarkerConflict_InvalidatesContextCache(t *testing.T) {
+	inv := &fakeCtxCacheInvalidator{}
+	env := setupTriageEnvWithOptions(t, true, WithCommentContextCacheInvalidator(inv))
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: negatorThenFreshMarkerBody,
+	}))
+
+	require.Len(t, env.withdrawalMarkerConflictNotices(), 1, "sanity: the conflict notice must still post")
+	require.NotEmpty(t, inv.calls, "posting the conflict notice must invalidate the task's context cache")
+	for _, id := range inv.calls {
+		assert.Equal(t, taskID, id, "every invalidate call in this single-task scenario must name this task")
+	}
+}
+
+// TestReportWithdrawalMarkerConflict_NoticeCreateFails covers the DB-error
+// branch: the ORIGINAL comment (the one carrying the negator+marker) must
+// still persist — the gate decision itself does not depend on being able to
+// announce it — but when the system notice's own Create call fails, the
+// function must log and return WITHOUT invalidating the cache on the conflict
+// notice's own behalf.
+//
+// createFailFor matches on the notice's own body text, not a bare
+// AuthorType==system predicate — enforceBlockingTriage posts its own system
+// comment on this same request (reaffirming the fresh marker), and a blanket
+// "fail every system Create" would take that one down too, muddying which
+// invalidate call this test is actually about.
+//
+// The clean run (previous test) cannot be reused as the "before" figure
+// directly — a fresh env is needed since MockCommentRepository is stateful —
+// so this test runs its OWN clean control immediately before the failing run,
+// on an identical scenario, and asserts the failing run has exactly one fewer
+// invalidate call. That isolates the ONE call this test targets from every
+// other invalidate source on the request, without hardcoding their count.
+func TestReportWithdrawalMarkerConflict_NoticeCreateFails(t *testing.T) {
+	runOnce := func(failNotice bool) []uuid.UUID {
+		inv := &fakeCtxCacheInvalidator{}
+		env := setupTriageEnvWithOptions(t, true, WithCommentContextCacheInvalidator(inv))
+		if failNotice {
+			env.commentRepo.createFailFor = func(c *domain.Comment) bool {
+				return c.AuthorType == domain.ActorTypeSystem &&
+					strings.Contains(c.Body, "И слова отзыва, И новый")
+			}
+		}
+		taskID := env.seedGatedTask(env.inProgressID)
+		askerID := uuid.New()
+		env.seedAgentBlockingComment(taskID, askerID)
+
+		ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+		require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+			TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+			Body: negatorThenFreshMarkerBody,
+		}), "the author's own comment must persist regardless of whether the follow-up notice can")
+
+		if failNotice {
+			assert.Empty(t, env.withdrawalMarkerConflictNotices(), "the notice's own Create failed — it must not appear as posted")
+		} else {
+			require.Len(t, env.withdrawalMarkerConflictNotices(), 1, "sanity: the clean control must post the notice")
+		}
+		return inv.calls
+	}
+
+	clean := runOnce(false)
+	failed := runOnce(true)
+	assert.Len(t, failed, len(clean)-1,
+		"a failed notice Create must skip exactly its own invalidate call and no other — "+
+			"clean=%v failed=%v", clean, failed)
 }

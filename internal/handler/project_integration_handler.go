@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -13,7 +14,20 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// teamRelayResponse is the API-facing shape (agent_key redacted to a hint).
+// teamRelayKeyExpiringSoonWindow is how far ahead of key_expires_at the "on
+// the way out" flag turns on. Spec doc 55cf5d7e §3.9 names the credential's
+// actual lifetime (90 days) and requires a warning "заранее" but does not
+// name a lead time — this is a judgment call, not a value read out of the
+// spec. 14 days: long enough that rotating the credential (a human action,
+// not an automated one — R5-A's key_expiry_source exists precisely because
+// this date can be a manual claim rather than a verified fact) doesn't have
+// to happen same-day, short enough that the flag isn't lit for most of the
+// credential's life. Revisit if this reads as too noisy or too late in
+// practice.
+const teamRelayKeyExpiringSoonWindow = 14 * 24 * time.Hour
+
+// teamRelayResponse is the API-facing shape (agent_key redacted to a hint —
+// never the value, in this field or any other; see toTeamRelayResponse).
 type teamRelayResponse struct {
 	ID                 uuid.UUID `json:"id"`
 	ProjectID          uuid.UUID `json:"project_id"`
@@ -24,6 +38,32 @@ type teamRelayResponse struct {
 	AgentKeyHint       string    `json:"agent_key_hint"` // last 4 chars, e.g. "••••abcd"
 	Subfolder          string    `json:"subfolder"`
 	IncludeProjectSlug bool      `json:"include_project_slug"`
+	// DocsMountPath is the R3/R5-A mount-point switch (empty = project root).
+	DocsMountPath string `json:"docs_mount_path,omitempty"`
+
+	// KeyExpiresAt/KeyExpirySource surface R5-A's schema as-is: a nil
+	// KeyExpiresAt means the expiry is unknown, and KeyExpirySource
+	// ("manual"|"source") is the label a UI is required to show alongside any
+	// date it renders — see domain.ProjectIntegration.KeyExpiresAt for why an
+	// unlabeled date would be an indicator nobody can trust.
+	KeyExpiresAt    *time.Time `json:"key_expires_at,omitempty"`
+	KeyExpirySource *string    `json:"key_expiry_source,omitempty"`
+	// KeyExpiringSoon is computed here, server-side, so the threshold is one
+	// number in one place rather than a policy every caller has to reimplement
+	// consistently. True once expiry is within teamRelayKeyExpiringSoonWindow —
+	// including if it has already passed. False (not omitted) when
+	// KeyExpiresAt is nil: "unknown expiry" and "not expiring soon" are
+	// different facts, and a caller checking only this field must not read
+	// "false" as "safe" when the truth is "we don't know".
+	KeyExpiringSoon bool `json:"key_expiring_soon"`
+
+	// LastSyncCheckedAt/LastSyncStatus/LastSyncError are R5-A's sync-check
+	// columns as-is; LastSyncStatus of "key_expired" is what turns the empty
+	// tree from spec §3.9 into a named, distinguishable state instead of an
+	// unexplained empty folder.
+	LastSyncCheckedAt *time.Time `json:"last_sync_checked_at,omitempty"`
+	LastSyncStatus    *string    `json:"last_sync_status,omitempty"`
+	LastSyncError     *string    `json:"last_sync_error,omitempty"`
 }
 
 func toTeamRelayResponse(pi *domain.ProjectIntegration) teamRelayResponse {
@@ -37,6 +77,11 @@ func toTeamRelayResponse(pi *domain.ProjectIntegration) teamRelayResponse {
 		hint = "••••"
 	}
 
+	expiringSoon := false
+	if pi.KeyExpiresAt != nil {
+		expiringSoon = time.Until(*pi.KeyExpiresAt) <= teamRelayKeyExpiringSoonWindow
+	}
+
 	return teamRelayResponse{
 		ID:                 pi.ID,
 		ProjectID:          pi.ProjectID,
@@ -47,6 +92,13 @@ func toTeamRelayResponse(pi *domain.ProjectIntegration) teamRelayResponse {
 		AgentKeyHint:       hint,
 		Subfolder:          settings.Subfolder,
 		IncludeProjectSlug: settings.IncludeProjectSlug,
+		DocsMountPath:      settings.DocsMountPath,
+		KeyExpiresAt:       pi.KeyExpiresAt,
+		KeyExpirySource:    pi.KeyExpirySource,
+		KeyExpiringSoon:    expiringSoon,
+		LastSyncCheckedAt:  pi.LastSyncCheckedAt,
+		LastSyncStatus:     pi.LastSyncStatus,
+		LastSyncError:      pi.LastSyncError,
 	}
 }
 
@@ -104,6 +156,7 @@ func (h *ProjectIntegrationHandler) UpsertTeamRelay(c echo.Context) error {
 		AgentKey           string `json:"agent_key"`
 		Subfolder          string `json:"subfolder"`
 		IncludeProjectSlug bool   `json:"include_project_slug"`
+		DocsMountPath      string `json:"docs_mount_path"`
 	}
 	if bindErr := c.Bind(&body); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
@@ -123,6 +176,7 @@ func (h *ProjectIntegrationHandler) UpsertTeamRelay(c echo.Context) error {
 		AgentKey:           body.AgentKey,
 		Subfolder:          body.Subfolder,
 		IncludeProjectSlug: body.IncludeProjectSlug,
+		DocsMountPath:      body.DocsMountPath,
 		CreatedBy:          createdBy,
 	}
 

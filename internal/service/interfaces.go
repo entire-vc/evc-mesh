@@ -1247,7 +1247,16 @@ type UpsertProjectIntegrationInput struct {
 	AgentKey           string // empty = keep existing
 	Subfolder          string
 	IncludeProjectSlug bool
-	CreatedBy          *uuid.UUID
+	// DocsMountPath is the mount-point switch from R3/R5-A (domain.TeamRelaySettings.
+	// DocsMountPath) — where the share's subtree is grafted into the project's Docs
+	// tree. Empty means the project root. Threading it through here is what makes
+	// PATCH able to change it at all: before this field existed, UpsertTeamRelay
+	// rebuilt TeamRelaySettings from only the 4 fields above and wrote the result
+	// as a full settings replace, which would have silently wiped any
+	// DocsMountPath a caller had set — the only prior writer of that column was a
+	// hand-run migration/SQL statement, never this API.
+	DocsMountPath string
+	CreatedBy     *uuid.UUID
 }
 
 // ProjectIntegrationService manages project-level integrations.
