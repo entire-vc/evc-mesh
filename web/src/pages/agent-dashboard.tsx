@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bot, Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig, agentTypeConfig, getAgentPresenceLabel, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
+import { agentStatusConfig, agentTypeConfig, asCapabilityList, getAgentPresenceLabel, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
 import { formatRelative } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAgentStore } from "@/stores/agent";
@@ -189,7 +189,7 @@ function AgentCard({
 
         {/* Capabilities */}
         {(() => {
-          const caps = Array.isArray(agent.capabilities) ? agent.capabilities : Object.keys(agent.capabilities ?? {});
+          const caps = asCapabilityList(agent.capabilities);
           return caps.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {caps.slice(0, 3).map((cap) => (

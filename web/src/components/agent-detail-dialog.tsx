@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Copy, Pencil, RefreshCw, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, Check, Clock, Copy, Layers, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentStatusConfig, agentTypeConfig, getEffectiveStatus, isAgentStale } from "@/lib/agent-utils";
+import { agentStatusConfig, agentTypeConfig, asCapabilityList, getEffectiveStatus, isAgentStale, splitList } from "@/lib/agent-utils";
 import { formatDate, formatRelative } from "@/lib/utils";
 import { useAgentStore } from "@/stores/agent";
 import { useMemberStore } from "@/stores/member";
@@ -19,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { Agent, AgentType } from "@/types";
+import type { Agent, AgentProfileUpdateRequest, AgentType } from "@/types";
 import { inlineLabel } from "@/lib/user-display";
 import { apiErrorMessage } from "@/lib/api-error";
 
@@ -36,7 +36,7 @@ export function AgentDetailDialog({
   onOpenChange,
   agent,
 }: AgentDetailDialogProps) {
-  const { agents, updateAgent, deleteAgent, regenerateKey } = useAgentStore();
+  const { agents, updateAgent, updateAgentProfile, deleteAgent, regenerateKey } = useAgentStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { workspaceMembers, fetchWorkspaceMembers } = useMemberStore();
 
@@ -55,6 +55,14 @@ export function AgentDetailDialog({
   const [roleDraft, setRoleDraft] = useState("");
   const [editingCallbackUrl, setEditingCallbackUrl] = useState(false);
   const [callbackUrlDraft, setCallbackUrlDraft] = useState("");
+  // Five fields new to this form (task #85714565), all routed through
+  // PUT /agents/:id/profile — one editing slot instead of 5x the
+  // editing-boolean/draft-string pairs above, since only one can be open
+  // at a time anyway.
+  const [editingProfileField, setEditingProfileField] = useState<
+    "responsibility_zone" | "working_hours" | "accepts_from" | "max_concurrent_tasks" | "escalation_to" | "capabilities" | null
+  >(null);
+  const [profileFieldDraft, setProfileFieldDraft] = useState("");
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -70,6 +78,8 @@ export function AgentDetailDialog({
     setRoleDraft("");
     setEditingCallbackUrl(false);
     setCallbackUrlDraft("");
+    setEditingProfileField(null);
+    setProfileFieldDraft("");
     setNewApiKey(null);
     setCopied(false);
     setIsLoading(false);
@@ -160,6 +170,67 @@ export function AgentDetailDialog({
       setIsLoading(false);
     }
   }, [agent, callbackUrlDraft, updateAgent]);
+
+  const handleStartEditProfileField = useCallback(
+    (field: NonNullable<typeof editingProfileField>, initialValue: string) => {
+      setProfileFieldDraft(initialValue);
+      setEditingProfileField(field);
+    },
+    [],
+  );
+
+  const handleSaveProfileField = useCallback(async () => {
+    if (!agent || !editingProfileField) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const req: AgentProfileUpdateRequest = {};
+      switch (editingProfileField) {
+        case "responsibility_zone":
+          req.responsibility_zone = profileFieldDraft.trim();
+          break;
+        case "working_hours":
+          req.working_hours = profileFieldDraft.trim();
+          break;
+        case "accepts_from": {
+          const list = splitList(profileFieldDraft);
+          // Same rule as at creation: clearing the field means "accept
+          // from anyone", not "not configured" — send an explicit "*"
+          // rather than an empty array.
+          req.accepts_from = list.length > 0 ? list : ["*"];
+          break;
+        }
+        case "escalation_to":
+          req.escalation_to = profileFieldDraft.trim();
+          break;
+        case "max_concurrent_tasks": {
+          const parsed = parseInt(profileFieldDraft, 10);
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            // The Save button is disabled for this exact condition (see
+            // isMaxConcurrentDraftValid below) — reaching here would mean
+            // it was clicked anyway (e.g. Enter key). Refuse rather than
+            // silently commit 0 ("takes no tasks"), the failure this whole
+            // task exists to prevent, just reachable from the edit path.
+            setIsLoading(false);
+            return;
+          }
+          req.max_concurrent_tasks = parsed;
+          break;
+        }
+        case "capabilities": {
+          const caps = splitList(profileFieldDraft);
+          req.capabilities = Object.fromEntries(caps.map((c) => [c, true]));
+          break;
+        }
+      }
+      await updateAgentProfile(agent.id, req);
+      setEditingProfileField(null);
+    } catch (err) {
+      setError(apiErrorMessage(err, "Failed to update agent"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [agent, editingProfileField, profileFieldDraft, updateAgentProfile]);
 
   const handleRegenerateKey = useCallback(async () => {
     if (!agent) return;
@@ -576,6 +647,112 @@ export function AgentDetailDialog({
             )}
           </DetailRow>
 
+          {/* Responsibility zone */}
+          <ProfileFieldRow
+            label="Responsibility zone"
+            displayValue={
+              <span className="text-sm">{agent.responsibility_zone || "Not set"}</span>
+            }
+            editing={editingProfileField === "responsibility_zone"}
+            draft={profileFieldDraft}
+            onDraftChange={setProfileFieldDraft}
+            onStartEdit={() =>
+              handleStartEditProfileField("responsibility_zone", agent.responsibility_zone ?? "")
+            }
+            onSave={() => void handleSaveProfileField()}
+            onCancel={() => setEditingProfileField(null)}
+            isLoading={isLoading}
+          />
+
+          {/* Working hours */}
+          <ProfileFieldRow
+            label="Working hours"
+            icon={<Clock className="h-3 w-3" />}
+            displayValue={
+              <span className="text-sm">{agent.working_hours || "Not set"}</span>
+            }
+            editing={editingProfileField === "working_hours"}
+            draft={profileFieldDraft}
+            onDraftChange={setProfileFieldDraft}
+            onStartEdit={() =>
+              handleStartEditProfileField("working_hours", agent.working_hours ?? "")
+            }
+            onSave={() => void handleSaveProfileField()}
+            onCancel={() => setEditingProfileField(null)}
+            isLoading={isLoading}
+            placeholder="24/7"
+          />
+
+          {/* Accepts from */}
+          <ProfileFieldRow
+            label="Accepts from"
+            displayValue={
+              <span className="text-sm">
+                {agent.accepts_from && agent.accepts_from.length > 0
+                  ? agent.accepts_from.join(", ")
+                  : "Not set"}
+              </span>
+            }
+            editing={editingProfileField === "accepts_from"}
+            draft={profileFieldDraft}
+            onDraftChange={setProfileFieldDraft}
+            onStartEdit={() =>
+              handleStartEditProfileField("accepts_from", (agent.accepts_from ?? []).join(", "))
+            }
+            onSave={() => void handleSaveProfileField()}
+            onCancel={() => setEditingProfileField(null)}
+            isLoading={isLoading}
+            placeholder="*"
+          />
+
+          {/* Max concurrent tasks — no shipped label copy yet (§1r.A): icon + aria-label only. */}
+          <ProfileFieldRow
+            icon={<Layers className="h-3 w-3" />}
+            ariaLabel="Max concurrent tasks"
+            displayValue={
+              <span className="text-sm">
+                {agent.max_concurrent_tasks ?? 0}
+              </span>
+            }
+            editing={editingProfileField === "max_concurrent_tasks"}
+            draft={profileFieldDraft}
+            onDraftChange={setProfileFieldDraft}
+            onStartEdit={() =>
+              handleStartEditProfileField(
+                "max_concurrent_tasks",
+                String(agent.max_concurrent_tasks ?? 0),
+              )
+            }
+            onSave={() => void handleSaveProfileField()}
+            onCancel={() => setEditingProfileField(null)}
+            isLoading={isLoading}
+            inputType="number"
+            saveDisabled={
+              editingProfileField === "max_concurrent_tasks" &&
+              (!Number.isFinite(parseInt(profileFieldDraft, 10)) || parseInt(profileFieldDraft, 10) < 0)
+            }
+          />
+
+          {/* Escalation to — no shipped label copy yet (§1r.A): icon + aria-label only. */}
+          <ProfileFieldRow
+            icon={<ArrowUpCircle className="h-3 w-3" />}
+            ariaLabel="Escalation contact"
+            displayValue={
+              <span className="text-sm">
+                {agent.escalation_to || "Not set"}
+              </span>
+            }
+            editing={editingProfileField === "escalation_to"}
+            draft={profileFieldDraft}
+            onDraftChange={setProfileFieldDraft}
+            onStartEdit={() =>
+              handleStartEditProfileField("escalation_to", agent.escalation_to ?? "")
+            }
+            onSave={() => void handleSaveProfileField()}
+            onCancel={() => setEditingProfileField(null)}
+            isLoading={isLoading}
+          />
+
           {/* Description */}
           <div>
             <div className="mb-1.5 flex items-center justify-between">
@@ -719,23 +896,67 @@ export function AgentDetailDialog({
           </div>
 
           {/* Capabilities */}
-          {(() => {
-            const caps = Array.isArray(agent.capabilities) ? agent.capabilities : Object.keys(agent.capabilities ?? {});
-            return caps.length > 0 ? (
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Capabilities
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {caps.map((cap) => (
-                  <Badge key={cap} variant="outline" className="text-xs">
-                    {cap}
-                  </Badge>
-                ))}
-              </div>
+              </span>
+              {editingProfileField !== "capabilities" && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6"
+                  onClick={() =>
+                    handleStartEditProfileField(
+                      "capabilities",
+                      asCapabilityList(agent.capabilities).join(", "),
+                    )
+                  }
+                  title="Edit capabilities"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              )}
             </div>
-            ) : null;
-          })()}
+            {editingProfileField === "capabilities" ? (
+              <div className="space-y-2">
+                <Input
+                  value={profileFieldDraft}
+                  onChange={(e) => setProfileFieldDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSaveProfileField();
+                    if (e.key === "Escape") setEditingProfileField(null);
+                  }}
+                  placeholder="code-review, docs, deploy"
+                  className="text-sm"
+                  autoFocus
+                />
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={() => void handleSaveProfileField()} disabled={isLoading} className="h-7 gap-1.5">
+                    <Check className="h-3 w-3" />
+                    Save
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingProfileField(null)} disabled={isLoading} className="h-7 gap-1.5">
+                    <X className="h-3 w-3" />
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (() => {
+              const caps = asCapabilityList(agent.capabilities);
+              return caps.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {caps.map((cap) => (
+                    <Badge key={cap} variant="outline" className="text-xs">
+                      {cap}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm italic text-muted-foreground">Not set</p>
+              );
+            })()}
+          </div>
 
         </div>
 
@@ -778,6 +999,96 @@ function DetailRow({
         {label}
       </span>
       {children}
+    </div>
+  );
+}
+
+/**
+ * Inline-editable row for one of the five profile fields added in task
+ * #85714565. `label` renders as visible text when set; when omitted, `icon`
+ * + `ariaLabel` carry the field's identity instead (§1r.A — no shipped copy
+ * exists yet for "max concurrent tasks" / "escalation to", so those two
+ * fields go icon+aria-label-only rather than inventing new visible words).
+ */
+function ProfileFieldRow({
+  label,
+  icon,
+  ariaLabel,
+  displayValue,
+  editing,
+  draft,
+  onDraftChange,
+  onStartEdit,
+  onSave,
+  onCancel,
+  isLoading,
+  inputType = "text",
+  placeholder,
+  saveDisabled = false,
+}: {
+  label?: string;
+  icon?: React.ReactNode;
+  ariaLabel?: string;
+  displayValue: React.ReactNode;
+  editing: boolean;
+  draft: string;
+  onDraftChange: (v: string) => void;
+  onStartEdit: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+  isLoading: boolean;
+  inputType?: "text" | "number";
+  placeholder?: string;
+  /** Extra condition (beyond isLoading) that keeps Save disabled — e.g. an invalid numeric draft. */
+  saveDisabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {icon}
+        {label}
+      </span>
+      {editing ? (
+        <div className="flex items-center gap-2">
+          <Input
+            type={inputType}
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSave();
+              if (e.key === "Escape") onCancel();
+            }}
+            placeholder={placeholder}
+            aria-label={ariaLabel ?? label}
+            title={ariaLabel ?? label}
+            className="h-7 w-48 text-sm"
+            autoFocus
+          />
+          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={onSave} disabled={isLoading || saveDisabled} aria-label="Save" title="Save">
+            <Check className="h-3 w-3" />
+          </Button>
+          {/* Disabled while a save is in flight, not just Save — cancelling
+              while isLoading can't actually abort the pending request, and
+              switching back to display mode early made the response that
+              lands moments later silently overwrite the "cancelled" edit. */}
+          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={onCancel} disabled={isLoading} aria-label="Cancel" title="Cancel">
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          {displayValue}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6 shrink-0"
+            onClick={onStartEdit}
+            title={ariaLabel ? `Edit ${ariaLabel.toLowerCase()}` : `Edit ${label}`}
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

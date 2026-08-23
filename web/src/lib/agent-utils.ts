@@ -60,3 +60,22 @@ export function getAgentPresenceLabel(
   }
   return `last run ${formatRelative(agent.last_heartbeat)}`;
 }
+
+/**
+ * Capabilities are stored as a JSON object ({}) in Postgres, but some API
+ * responses shape it as string[] instead. Normalize either into a plain
+ * string list for display/editing.
+ */
+export function asCapabilityList(v: unknown): string[] {
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === "object") return Object.keys(v);
+  return [];
+}
+
+/** Splits a comma-separated form field into trimmed, non-empty entries. */
+export function splitList(v: string): string[] {
+  return v
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}

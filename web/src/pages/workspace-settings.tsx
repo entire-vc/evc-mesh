@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { asCapabilityList } from "@/lib/agent-utils";
 import {
   AlertTriangle,
   ArrowRight,
@@ -109,17 +110,10 @@ function agentStatusColor(status: string): string {
   }
 }
 
-// Normalize capabilities: API may return object {} instead of string[].
-function asStringArray(v: unknown): string[] {
-  if (Array.isArray(v)) return v;
-  if (v && typeof v === "object") return Object.keys(v);
-  return [];
-}
-
 // ---- Team section sub-components ----
 
 function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
-  const caps = asStringArray(agent.capabilities);
+  const caps = asCapabilityList(agent.capabilities);
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-lg border border-border">
@@ -201,7 +195,7 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
 }
 
 function HumanRow({ human }: { human: TeamDirectoryHuman }) {
-  const caps = asStringArray(human.capabilities);
+  const caps = asCapabilityList(human.capabilities);
   return (
     <div className="flex items-center gap-3 py-2.5 px-3 rounded-lg border border-border">
       <Avatar
