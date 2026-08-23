@@ -13,12 +13,15 @@ import {
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
+  CircleCheck,
   GitBranch,
   List,
   Loader2,
+  Lock,
   Paperclip,
   Pencil,
   Plus,
+  Snowflake,
   Trash2,
   X,
 } from "lucide-react";
@@ -153,6 +156,13 @@ export function ListViewPage() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [cfFilters, setCFFilters] = useState<CFFilters>({});
 
+  // "Waiting on me" filter: server-side human_gate=true (subtask #3's param).
+  // Unlike tags/CF, this must be a real query param rather than a client-side
+  // filter over the loaded page — this view is paginated (DEFAULT_PER_PAGE=50),
+  // so filtering only the current page would silently undercount against the
+  // project's true human_gate=true set.
+  const [humanGateOnly, setHumanGateOnly] = useState(false);
+
   // Column visibility state
   const DEFAULT_VISIBLE_COLUMNS = new Set([
     "name",
@@ -169,15 +179,41 @@ export function ListViewPage() {
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
   const perPage = Math.max(1, Number(searchParams.get("per_page")) || DEFAULT_PER_PAGE);
 
+  // Shared fetch params for every fetchTasks call below, so the human_gate
+  // filter stays in sync with pagination everywhere tasks get re-fetched.
+  const fetchParams = useMemo(
+    () => ({
+      page,
+      page_size: perPage,
+      ...(humanGateOnly ? { human_gate: "true" } : {}),
+    }),
+    [page, perPage, humanGateOnly],
+  );
+
   useEffect(() => {
     if (currentProject) {
       fetchStatuses(currentProject.id);
-      fetchTasks(currentProject.id, { page, page_size: perPage });
+      fetchTasks(currentProject.id, fetchParams);
       fetchCustomFields(currentProject.id).catch(() => {
         // Custom fields API may not be available yet
       });
     }
-  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, page, perPage]);
+  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, fetchParams]);
+
+  // Toggling the filter changes which page-1 items are "correct" for the
+  // current URL page number — jump back to page 1 so the user doesn't land
+  // on a now-out-of-range or mismatched page.
+  const handleHumanGateOnlyChange = useCallback(
+    (next: boolean) => {
+      setHumanGateOnly(next);
+      if (page !== 1) {
+        const params = new URLSearchParams(searchParams);
+        params.set("page", "1");
+        setSearchParams(params);
+      }
+    },
+    [page, searchParams, setSearchParams],
+  );
 
   // Clear selection when tasks change (page navigation)
   useEffect(() => {
@@ -472,12 +508,12 @@ export function ListViewPage() {
         // Pass status_id via a cast — backend handles it
         ...(({ status_id: statusId } as unknown) as Record<string, unknown>),
       } as Parameters<typeof createTask>[1]);
-      await fetchTasks(currentProject.id, { page, page_size: perPage });
+      await fetchTasks(currentProject.id, fetchParams);
       toast.success("Task created");
     } catch {
       toast.error("Failed to create task");
     }
-  }, [addingTitle, addingInGroup, currentProject, createTask, fetchTasks, page, perPage]);
+  }, [addingTitle, addingInGroup, currentProject, createTask, fetchTasks, fetchParams]);
 
   // ---------------------------------------------------------------------------
   // Selection helpers
@@ -575,10 +611,10 @@ export function ListViewPage() {
       }
 
       if (currentProject) {
-        await fetchTasks(currentProject.id, { page, page_size: perPage });
+        await fetchTasks(currentProject.id, fetchParams);
       }
     },
-    [selectedTaskIds, updateTask, moveTask, currentProject, fetchTasks, page, perPage],
+    [selectedTaskIds, updateTask, moveTask, currentProject, fetchTasks, fetchParams],
   );
 
   const runBulkDelete = useCallback(async () => {
@@ -606,9 +642,9 @@ export function ListViewPage() {
     }
 
     if (currentProject) {
-      await fetchTasks(currentProject.id, { page, page_size: perPage });
+      await fetchTasks(currentProject.id, fetchParams);
     }
-  }, [selectedTaskIds, deleteTask, currentProject, fetchTasks, page, perPage]);
+  }, [selectedTaskIds, deleteTask, currentProject, fetchTasks, fetchParams]);
 
   // ---------------------------------------------------------------------------
   // Navigation
@@ -717,8 +753,37 @@ export function ListViewPage() {
           onChange={setCFFilters}
         />
 
+        {/* Waiting on me (human_gate=true) filter */}
+        <Button
+          variant={humanGateOnly ? "default" : "outline"}
+          size="sm"
+          className="h-8 gap-1.5 px-2.5 text-xs"
+          aria-pressed={humanGateOnly}
+          onClick={() => handleHumanGateOnlyChange(!humanGateOnly)}
+        >
+          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+          Waiting on me
+        </Button>
+
         {/* Spacer */}
         <div className="flex-1" />
+
+        {/* Full create screen — alongside the per-group inline quick-add
+            below, not instead of it. Quick-add stays for fast title-only
+            capture; this is the entry point when the rest of the fields
+            (description, assignee, labels, ...) matter. */}
+        <Button
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={() => {
+            if (wsSlug && currentProject) {
+              navigate(`/w/${wsSlug}/p/${currentProject.slug}/new`);
+            }
+          }}
+          title="New Task"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
 
         {/* Column picker */}
         <ColumnPicker columns={allColumns} onChange={handleColumnChange} />
@@ -730,6 +795,17 @@ export function ListViewPage() {
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-10 w-full rounded-lg" />
           ))}
+        </div>
+      ) : tasks.length === 0 && page === 1 && humanGateOnly ? (
+        <div className="flex flex-col items-center justify-center py-20">
+          <Lock className="mb-4 h-12 w-12 text-muted-foreground" />
+          <h3 className="mb-2 text-lg font-semibold">Nothing waiting on a human</h3>
+          <p className="mb-4 text-sm text-muted-foreground">
+            No tasks in this project currently have a human gate set.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => handleHumanGateOnlyChange(false)}>
+            Clear filter
+          </Button>
         </div>
       ) : tasks.length === 0 && page === 1 ? (
         <div className="flex flex-col items-center justify-center py-20">
@@ -1107,6 +1183,17 @@ export function ListViewPage() {
                                         <span className="text-xs text-muted-foreground hover:text-foreground transition-colors">
                                           {subtask.title}
                                         </span>
+                                        {subtask.human_gate && (
+                                          <span
+                                            className="flex-shrink-0"
+                                            title="Waiting on a human sign-off"
+                                          >
+                                            <Lock
+                                              className="h-3 w-3 text-amber-600 dark:text-amber-400"
+                                              aria-label="Waiting on a human sign-off"
+                                            />
+                                          </span>
+                                        )}
                                       </div>
                                     </td>
 
@@ -1356,7 +1443,7 @@ export function ListViewPage() {
         onClose={() => setSlideOverTaskId(null)}
         onTaskUpdated={() => {
           if (currentProject) {
-            fetchTasks(currentProject.id, { page, page_size: perPage });
+            fetchTasks(currentProject.id, fetchParams);
           }
         }}
       />
@@ -1612,6 +1699,21 @@ function EnhancedTitleCell({
 
         {/* Visual indicators */}
         <span className="flex items-center gap-1 ml-1 flex-shrink-0">
+          {task.human_gate && (
+            <span
+              className="flex items-center text-amber-600 dark:text-amber-400"
+              title={
+                task.human_gate_class === "soft"
+                  ? "Waiting on a human sign-off (soft — auto-releases after a timeout)"
+                  : "Waiting on a human sign-off"
+              }
+            >
+              <Lock
+                className="h-3 w-3"
+                aria-label="Waiting on a human sign-off"
+              />
+            </span>
+          )}
           {hasDescription && (
             <AlignLeft
               className="h-3 w-3 text-muted-foreground/60"
@@ -1628,6 +1730,28 @@ function EnhancedTitleCell({
             <span className="flex items-center gap-0.5 text-muted-foreground/60">
               <GitBranch className="h-3 w-3" aria-hidden="true" />
               <span className="text-[10px]">{subtaskCount}</span>
+            </span>
+          )}
+          {task.false_open?.all_children_closed && (
+            <span
+              className="flex items-center text-emerald-600 dark:text-emerald-400"
+              title={`False-open: все подзадачи закрыты, карточка без изменений ${task.false_open.stale_days} дн. — стоит пересмотреть приоритет`}
+            >
+              <CircleCheck
+                className="h-3 w-3"
+                aria-label="False-open: all subtasks closed"
+              />
+            </span>
+          )}
+          {task.false_open?.only_parked_children_left && (
+            <span
+              className="flex items-center text-sky-600 dark:text-sky-400"
+              title={`Остались только backlog-подзадачи (${task.false_open.open_children_count}), карточка без изменений ${task.false_open.stale_days} дн. — работа есть, но не движется`}
+            >
+              <Snowflake
+                className="h-3 w-3"
+                aria-label="False-open: only parked subtasks left"
+              />
             </span>
           )}
         </span>

@@ -52,6 +52,21 @@ var ErrCheckoutConflict = errors.New("task is already checked out")
 // is called with a token that does not match the stored checkout_token.
 var ErrInvalidCheckoutToken = errors.New("invalid checkout token")
 
+// FalseOpenStaleDays is how many days an umbrella's own content (its
+// updated_at, its newest comment) must have sat untouched before the
+// false-open signal (domain.FalseOpenSignal, task #c80fe88f) is allowed to
+// fire. Chosen at 14 days: long enough that a parent which simply hasn't
+// caught up with subtasks closed minutes/hours ago never lights up, short
+// enough to still catch the class of problem the signal exists for — #65dc5949
+// sat 80 days, and task #c80fe88f's own live measurement found false-open
+// umbrellas averaging 38-52 days idle (max 72) even without any staleness
+// gate applied. 14 days is two work-weeks of margin under that curve.
+const FalseOpenStaleDays = 14
+
+// timeNow is overridable in tests so false-open staleness math is
+// deterministic instead of racing wall-clock time.
+var timeNow = time.Now
+
 // taskEnrichedSelect is the SELECT clause used for all task queries that need
 // computed fields. It appends 4 correlated subqueries to the base columns so
 // that callers always receive subtask_count, assignee_name, artifact_count,
@@ -77,6 +92,7 @@ const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = tasks.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = tasks.id) AS vcs_link_count,
+	` + falseOpenComputedColsNoAlias + `,
 	CASE
 		WHEN tasks.assignee_type = 'agent' THEN
 			(SELECT name FROM agents WHERE id = tasks.assignee_id AND deleted_at IS NULL)
@@ -99,10 +115,43 @@ const taskComputedCols = `
 		ELSE NULL
 	END AS created_by_name`
 
+// falseOpenComputedColsNoAlias/falseOpenComputedColsAliased expose the raw
+// per-row stats domain.FalseOpenSignal (task #c80fe88f) is built from — the
+// AllChildrenClosed/OnlyParkedChildrenLeft threshold logic itself lives in Go
+// (taskRow.toDomain, alongside the FalseOpenStaleDays constant) rather than
+// duplicated across these two SQL variants, so there is exactly one place
+// that decides what "false-open" means.
+const falseOpenComputedColsNoAlias = `
+	(SELECT COUNT(*) FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+		WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL
+		AND sts.category NOT IN ('done', 'cancelled')) AS false_open_children_count,
+	(SELECT COUNT(*) FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+		WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL
+		AND sts.category NOT IN ('done', 'cancelled', 'backlog')) AS false_open_nonparked_children_count,
+	(SELECT category FROM task_statuses WHERE id = tasks.status_id) AS false_open_own_category,
+	GREATEST(
+		tasks.updated_at,
+		COALESCE((SELECT MAX(c.created_at) FROM comments c WHERE c.task_id = tasks.id), tasks.updated_at)
+	) AS false_open_last_activity_at`
+
+const falseOpenComputedColsAliased = `
+	(SELECT COUNT(*) FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+		WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL
+		AND sts.category NOT IN ('done', 'cancelled')) AS false_open_children_count,
+	(SELECT COUNT(*) FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+		WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL
+		AND sts.category NOT IN ('done', 'cancelled', 'backlog')) AS false_open_nonparked_children_count,
+	(SELECT category FROM task_statuses WHERE id = t.status_id) AS false_open_own_category,
+	GREATEST(
+		t.updated_at,
+		COALESCE((SELECT MAX(c.created_at) FROM comments c WHERE c.task_id = t.id), t.updated_at)
+	) AS false_open_last_activity_at`
+
 const taskComputedColsAliased = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL) AS subtask_count,
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = t.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = t.id) AS vcs_link_count,
+	` + falseOpenComputedColsAliased + `,
 	CASE
 		WHEN t.assignee_type = 'agent' THEN
 			(SELECT name FROM agents WHERE id = t.assignee_id AND deleted_at IS NULL)
@@ -186,6 +235,13 @@ type taskRow struct {
 	CreatedByName *string `db:"created_by_name"`
 	ArtifactCount int     `db:"artifact_count"`
 	VCSLinkCount  int     `db:"vcs_link_count"`
+
+	// False-open raw stats (task #c80fe88f) — see falseOpenComputedCols*
+	// and toDomain's threshold logic below.
+	FalseOpenChildrenCount          int                   `db:"false_open_children_count"`
+	FalseOpenNonparkedChildrenCount int                   `db:"false_open_nonparked_children_count"`
+	FalseOpenOwnCategory            domain.StatusCategory `db:"false_open_own_category"`
+	FalseOpenLastActivityAt         time.Time             `db:"false_open_last_activity_at"`
 }
 
 func (r *taskRow) toDomain() domain.Task {
@@ -235,6 +291,36 @@ func (r *taskRow) toDomain() domain.Task {
 		CreatedByName:           r.CreatedByName,
 		ArtifactCount:           r.ArtifactCount,
 		VCSLinkCount:            r.VCSLinkCount,
+		FalseOpen:               r.falseOpenSignal(),
+	}
+}
+
+// falseOpenSignal builds domain.FalseOpenSignal from the raw stats the
+// false_open_* computed columns fetched, or nil if this row isn't a
+// candidate at all: a leaf task (no subtasks) or one whose own status is
+// already terminal has nothing to say here. AllChildrenClosed and
+// OnlyParkedChildrenLeft are mutually exclusive and both gated on
+// FalseOpenStaleDays — see domain.FalseOpenSignal and the const's doc for
+// why (task #c80fe88f review comment 2026-08-20: merging the two into one
+// flag would equally catch umbrellas correctly blocked on a live parked
+// dependency, e.g. #65dc5949 on c0afa1c5).
+func (r *taskRow) falseOpenSignal() *domain.FalseOpenSignal {
+	if r.SubtaskCount == 0 {
+		return nil
+	}
+	if r.FalseOpenOwnCategory == domain.StatusCategoryDone || r.FalseOpenOwnCategory == domain.StatusCategoryCancelled {
+		return nil
+	}
+	staleDays := int(timeNow().Sub(r.FalseOpenLastActivityAt).Hours() / 24)
+	if staleDays < 0 {
+		staleDays = 0
+	}
+	stale := staleDays >= FalseOpenStaleDays
+	return &domain.FalseOpenSignal{
+		AllChildrenClosed:      stale && r.FalseOpenChildrenCount == 0,
+		OnlyParkedChildrenLeft: stale && r.FalseOpenChildrenCount > 0 && r.FalseOpenNonparkedChildrenCount == 0,
+		OpenChildrenCount:      r.FalseOpenChildrenCount,
+		StaleDays:              staleDays,
 	}
 }
 
@@ -740,6 +826,11 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 		} else {
 			conditions = append(conditions, "due_date IS NULL")
 		}
+	}
+	if filter.HumanGate != nil {
+		conditions = append(conditions, fmt.Sprintf("human_gate = $%d", argIdx))
+		args = append(args, *filter.HumanGate)
+		argIdx++
 	}
 
 	// Custom field JSONB filters.

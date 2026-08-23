@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,33 @@ import (
 
 // presignedURLExpiry is the duration for presigned download URLs.
 const presignedURLExpiry = 1 * time.Hour
+
+// inlineSafeMimeTypes are the only content types GetDownloadURL will ever
+// serve without a Content-Disposition: attachment header, no matter what the
+// caller requests. The artifact bucket is proxied through our own origin
+// (mesh.entire.host/s3/...), so a type the browser renders instead of
+// downloading executes there with the reader's cookies/session. Every type
+// on this list is either passive raster data or has no script-execution path
+// in a browser; text/* (including text/html) and image/svg+xml are
+// deliberately excluded — SVG carries its own <script>/event-handler surface.
+var inlineSafeMimeTypes = map[string]bool{
+	"image/png":       true,
+	"image/jpeg":      true,
+	"image/gif":       true,
+	"image/webp":      true,
+	"application/pdf": true,
+}
+
+// isInlineSafeMimeType reports whether mimeType may be rendered inline by a
+// browser. Parameters (e.g. "; charset=utf-8") are ignored, matching how
+// artifact.MimeType is compared elsewhere.
+func isInlineSafeMimeType(mimeType string) bool {
+	base := mimeType
+	if i := strings.Index(base, ";"); i >= 0 {
+		base = base[:i]
+	}
+	return inlineSafeMimeTypes[strings.ToLower(strings.TrimSpace(base))]
+}
 
 // StorageClient is the interface for S3-compatible object storage.
 type StorageClient interface {
@@ -165,7 +193,12 @@ func (s *artifactService) GetByIDInWorkspace(ctx context.Context, id, workspaceI
 
 // GetDownloadURL generates a presigned URL for downloading the artifact.
 // inline=true requests no Content-Disposition header, so the browser renders
-// the file using the response Content-Type instead of forcing a download.
+// the file using the response Content-Type instead of forcing a download —
+// but only when artifact.MimeType is on the inlineSafeMimeTypes allowlist.
+// The bucket is proxied through our own origin, so any other type (notably
+// text/html) always gets attachment disposition regardless of what the
+// caller asked for: a browser must never execute artifact content as our
+// origin's own page.
 func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID, inline bool) (string, error) {
 	artifact, err := s.artifactRepo.GetByID(ctx, id)
 	if err != nil {
@@ -180,7 +213,7 @@ func (s *artifactService) GetDownloadURL(ctx context.Context, id uuid.UUID, inli
 	}
 
 	filename := artifact.Name
-	if inline {
+	if inline && isInlineSafeMimeType(artifact.MimeType) {
 		filename = ""
 	}
 

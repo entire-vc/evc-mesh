@@ -109,6 +109,15 @@ type triageTestEnv struct {
 // setupTriageEnv wires a commentService with the deps the enforcement path needs.
 // When withTriageColumn is false the project has no triage status (graceful no-op case).
 func setupTriageEnv(t *testing.T, withTriageColumn bool) triageTestEnv {
+	return setupTriageEnvWithOptions(t, withTriageColumn)
+}
+
+// setupTriageEnvWithOptions is setupTriageEnv plus caller-supplied options, for
+// tests that need a dependency setupTriageEnv does not wire by default (e.g. a
+// ContextCacheInvalidator fake, or a commentRepo primed to fail on a specific
+// write). Kept as a separate function rather than a variadic parameter on
+// setupTriageEnv itself so every existing call site stays untouched.
+func setupTriageEnvWithOptions(t *testing.T, withTriageColumn bool, extra ...CommentServiceOption) triageTestEnv {
 	t.Helper()
 	commentRepo := NewMockCommentRepository()
 	taskRepo := NewMockTaskRepository()
@@ -138,12 +147,13 @@ func setupTriageEnv(t *testing.T, withTriageColumn bool) triageTestEnv {
 
 	timeNow = func() time.Time { return frozenTime }
 
-	svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+	opts := append([]CommentServiceOption{
 		WithCommentProjectRepo(projectRepo),
 		WithCommentStatusRepo(statusRepo),
 		WithCommentUserRepo(userRepo),
 		WithCommentTaskService(taskMover),
-	).(*commentService)
+	}, extra...)
+	svc := NewCommentService(commentRepo, taskRepo, activityRepo, opts...).(*commentService)
 
 	return triageTestEnv{
 		svc, commentRepo, taskRepo, statusRepo, userRepo, taskMover,
@@ -190,6 +200,34 @@ func (env triageTestEnv) withdrawalMissNotices() []domain.Comment {
 		}
 	}
 	return out
+}
+
+// withdrawalMarkerConflictNotices returns the system comments posted by
+// reportWithdrawalMarkerConflict (#081f1354) — the trace that a comment carrying
+// BOTH a withdrawal negator AND a fresh Blocking marker was refused as
+// ambiguous, distinct from withdrawalMissNotices (a negator that plain didn't
+// count) even though both share the "human_gate по-прежнему поднят" opener.
+func (env triageTestEnv) withdrawalMarkerConflictNotices() []domain.Comment {
+	var out []domain.Comment
+	for _, c := range env.systemComments() {
+		if strings.Contains(c.Body, "И слова отзыва, И новый") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// fakeCtxCacheInvalidator records every task ID it was asked to invalidate.
+// Tests use it (via WithCommentContextCacheInvalidator) to prove the
+// ctxCacheInv branches inside reportWithdrawalMiss and
+// reportWithdrawalMarkerConflict actually fire — setupTriageEnv leaves
+// ctxCacheInv nil, so those branches are otherwise never exercised.
+type fakeCtxCacheInvalidator struct {
+	calls []uuid.UUID
+}
+
+func (f *fakeCtxCacheInvalidator) Invalidate(_ context.Context, taskID uuid.UUID) {
+	f.calls = append(f.calls, taskID)
 }
 
 // seedTask inserts a task with the given status and returns its ID.

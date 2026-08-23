@@ -1,7 +1,7 @@
 # Entire VC Mesh
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![MCP](https://img.shields.io/badge/MCP-49_tools-8B5CF6)](docs/mcp-reference.md)
 [![Status](https://img.shields.io/badge/Status-Alpha-orange)](https://github.com/entire-vc/evc-mesh/releases)
@@ -255,6 +255,18 @@ Or connect via SSE for remote agents:
 ```
 
 The MCP server exposes 49 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
+
+**Two implementations exist, on purpose.** `./cmd/mcp` in this repo and the
+standalone [`evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp) server
+both implement the same MCP tool set (`internal/mcp` in each — Go's
+`internal/` visibility rules mean one cannot import the other across
+modules). `evc-mesh-mcp` is the one under active development and gets new
+tools/fixes first; `./cmd/mcp` here is the copy this repo builds and deploys
+alongside the API. If you are choosing which to run, prefer
+`evc-mesh-mcp`. `cmd/mcp-drift-check` (run in CI on both repos) diffs the two
+`internal/mcp` trees function-by-function and fails the build on
+unreviewed drift — see `cmd/mcp-drift-check/allow.txt` for the currently
+known, tracked differences.
 
 ## Documentation
 

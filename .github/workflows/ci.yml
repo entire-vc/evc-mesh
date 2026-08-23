@@ -104,6 +104,29 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: "v2.11.3"
+          # The action's own `config verify` step has no way to point at a
+          # local schema (golangci-lint-action only forwards --config, never
+          # --schema, to that command) — it always fetches the schema over
+          # the network, putting an external host on the merge-queue
+          # critical path. PR #711 (a Caddyfile-only change, zero Go
+          # touched) got ejected from the queue when that fetch timed out,
+          # costing ~20min and a manual re-enqueue for a config file that
+          # hadn't changed (task #848579ba). Disabled here; replaced by the
+          # step below against a vendored copy.
+          verify: false
+      - name: golangci-lint config verify (local schema, no network)
+        # `--schema` is a real (if hidden/"debugging purpose only") flag on
+        # `golangci-lint config verify` in v2.11.x — it accepts a local file
+        # path and skips the network fetch entirely. Schema pinned to match
+        # `version` above; see .github/golangci-schema.json for where to
+        # re-vendor it from when that version changes.
+        #
+        # NB for a future version bump: golangci-lint v2.12 removed this
+        # flag — `config verify` there always validates against an
+        # embedded schema with no network call of its own, so upgrading
+        # past v2.11.x means deleting this workaround (both steps here,
+        # `verify: false` above included) rather than adjusting it.
+        run: golangci-lint config verify --schema .github/golangci-schema.json
 
   test:
     name: Test
@@ -305,6 +328,206 @@ jobs:
           TEST_API_URL: "http://localhost:8005"
           TEST_DB_DSN: "host=localhost port=5432 user=mesh password=mesh dbname=mesh sslmode=disable"
         run: go test ./tests/integration/ -v -tags=integration -timeout=120s
+
+  # ─── A1. Tenancy & RBAC gate ────────────────────────────────────────────────
+  # The job above is a REPORT: `continue-on-error: true` means its red is a
+  # colour, not a refusal. That mitigation was added 63480da5 (18.06) because the
+  # suite was flaky; the docker-run NATS/MinIO rework that removed the actual
+  # cause of the flake landed c97f936d (28.07), 40 days LATER, and nobody
+  # revisited the mitigation. Meanwhile ./tests/integration/cross_tenant_*.go
+  # became the only place in the repository where tenancy is proved over live
+  # HTTP against the real router — and on #682 it went red for a real reason
+  # (two new /workspaces/:ws_id/secrets routes uncovered by any table) while the
+  # other 18 checks were green and one click would have merged it.
+  #
+  # A gate whose refusal stops nothing is a gate only while someone volunteers to
+  # read it. So the deterministic half moves here, into a job that can say no.
+  #
+  # Why a SEPARATE job rather than dropping `continue-on-error` from the one
+  # above: that job also carries webhook_test.go and rate_limit_test.go, which
+  # are timing-dependent. Making the whole suite required re-introduces exactly
+  # the risk the mitigation was bought with — a flaky required check reorders the
+  # merge queue and can wedge the repo (enforce_admins: true). This job runs only
+  # the deterministic tenancy/RBAC set, so it is cheap to trust.
+  #
+  # The REPORT job deliberately still runs these tests too. Narrowing it with
+  # `-skip` would create a second place where the split has to stay in sync, and
+  # a drifting split is how coverage goes missing silently. Duplicate execution
+  # costs one runner; a drifted exclusion list costs a tenancy hole.
+  #
+  # ⚠️ `name:` below IS the required status-check context string in branch
+  # protection. Renaming this job renames the context; protection then waits
+  # forever for a check nobody produces, and with enforce_admins: true nobody can
+  # override it. Rename = two steps, in this order: add the new context, then
+  # remove the old one.
+  tenancy-rbac-gate:
+    name: "Tenancy & RBAC gate"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mesh
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # nats and minio are started as plain containers below, not as services,
+      # for the reasons spelled out on the REPORT job: a `services:` entry runs
+      # the image's default CMD, which for nats means no JetStream and for minio
+      # means printing usage and exiting.
+    env:
+      # Single source of truth for what this gate covers. Both the guard step and
+      # the run step read it, so they cannot disagree about the selection.
+      TENANCY_RUN_RE: "^(TestCrossTenant|TestCrossWorkspace|TestRBACLite|TestSecretsRBAC|TestSecretsPlaintext|TestWorkspaceListing|TestAgentTaskFeedIsWorkspaceScoped)"
+      # Measured on the tree that introduced this job: 50 tests match. The
+      # pre-flight guard refuses to run if the count drops. Raise this number
+      # when you add tenancy tests; lowering it is a deliberate act that must be
+      # explained.
+      TENANCY_MIN_TESTS: "50"
+      # ...and 46 of those 50 actually EXECUTE. Selection is not execution: on
+      # the first run of this job, 4 selected tests skipped —
+      # TestRBACLite_{Owner,Member,Agent}* are unconditional
+      # `t.Skip("TODO: implement RBAC lite first")` placeholders, and
+      # TestCrossTenant_SparkInstallRequiresMembership is env-gated on
+      # TEST_SPARK_ENABLED. A selection floor alone would therefore accept a
+      # tree where every real assertion had been replaced by t.Skip: the count
+      # holds, the job is green, and the gate guards nothing. So the run step
+      # asserts on tests that PASSED, which is the number with teeth. The
+      # RBACLite placeholders stay in the pattern deliberately — when someone
+      # implements RBAC lite they come under the gate for free, and this floor
+      # goes to 49.
+      TENANCY_MIN_PASSED: "46"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A `-run` regex that matches nothing exits 0 with "testing: warning: no
+      # tests to run" and paints the job green. That failure is invisible in
+      # exactly the way this whole job exists to prevent: the gate would report
+      # "all clear" while enforcing nothing, and a rename or a file move is all
+      # it takes. So count the selection BEFORE trusting it. `-list` compiles the
+      # package but starts nothing, so this needs no database and costs seconds.
+      - name: Guard — the selection is not empty
+        run: |
+          go test ./tests/integration/ -tags=integration -list "$TENANCY_RUN_RE" \
+            | grep -E '^Test' | sort > /tmp/selected.txt
+          n=$(wc -l < /tmp/selected.txt | tr -d ' ')
+          echo "selected $n test(s), floor is $TENANCY_MIN_TESTS"
+          cat /tmp/selected.txt
+          if [ "$n" -lt "$TENANCY_MIN_TESTS" ]; then
+            echo "::error::Tenancy gate selects $n tests, below the floor of $TENANCY_MIN_TESTS."
+            echo "::error::Either tests were removed/renamed out of the pattern, or TENANCY_RUN_RE no longer matches. Refusing to run a gate that guards less than it claims."
+            exit 1
+          fi
+
+      - name: Start NATS with JetStream enabled
+        run: |
+          docker run -d --name nats -p 4222:4222 nats:2-alpine \
+            --jetstream --store_dir /data --http_port 8222
+          for _ in $(seq 30); do
+            if docker exec nats wget --spider -q http://127.0.0.1:8222/healthz 2>/dev/null; then
+              echo "NATS ready with JetStream"; exit 0
+            fi
+            sleep 1
+          done
+          echo "NATS did not become healthy"; docker logs nats; exit 1
+
+      - name: Start MinIO (object storage)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          for _ in $(seq 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+              echo "MinIO ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become healthy"; docker logs minio; exit 1
+
+      - name: Install goose + run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@latest
+          goose -dir migrations up
+
+      - name: Build + start API server
+        env:
+          DB_HOST: localhost
+          DB_PORT: "5432"
+          DB_USER: mesh
+          DB_PASSWORD: mesh
+          DB_NAME: mesh
+          DB_SSL_MODE: disable
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          NATS_URL: "nats://localhost:4222"
+          S3_ENDPOINT: "localhost:9000"
+          S3_ACCESS_KEY_ID: minioadmin
+          S3_SECRET_ACCESS_KEY: minioadmin
+          S3_BUCKET: mesh-artifacts
+          S3_REGION: us-east-1
+          S3_USE_SSL: "false"
+          JWT_SECRET: "ci-test-secret-32chars-minimum!!"
+          JWT_ISSUER: "mesh-ci"
+          MESH_RATE_LIMIT_ENABLED: "false"
+          # Same fixed, published, CI-only key as the REPORT job — it protects a
+          # throwaway Postgres that dies with the runner. REQUIRED=1 so a key
+          # mistake fails loudly instead of silently downgrading to plaintext.
+          MESH_INTEGRATION_ENCRYPTION_KEY: "ZXZjLW1lc2gtY2ktaW50ZWdyYXRpb24tdGVzdC1rMzI="
+          MESH_INTEGRATION_ENCRYPTION_REQUIRED: "1"
+          APP_ENV: test
+        run: |
+          go build -o /tmp/mesh-api ./cmd/api
+          /tmp/mesh-api &
+          for i in $(seq 15); do
+            curl -sf http://localhost:8005/healthz && break || sleep 1
+          done
+          echo "API server ready"
+
+      - name: Run tenancy + RBAC tests (blocking)
+        env:
+          TEST_API_URL: "http://localhost:8005"
+          TEST_DB_DSN: "host=localhost port=5432 user=mesh password=mesh dbname=mesh sslmode=disable"
+        run: |
+          # pipefail, or `tee` returns 0 and a failing suite reads as a pass.
+          set -o pipefail
+          go test ./tests/integration/ -v -tags=integration -timeout=300s \
+            -run "$TENANCY_RUN_RE" 2>&1 | tee /tmp/tenancy.log
+          # `--- PASS:` at column 0 is a top-level test; subtests are indented.
+          passed=$(grep -cE '^--- PASS: ' /tmp/tenancy.log || true)
+          skipped=$(grep -cE '^--- SKIP: ' /tmp/tenancy.log || true)
+          echo "executed: $passed passed, $skipped skipped (floor is $TENANCY_MIN_PASSED passed)"
+          grep -E '^--- SKIP: ' /tmp/tenancy.log || true
+          if [ "$passed" -lt "$TENANCY_MIN_PASSED" ]; then
+            echo "::error::Tenancy gate: $passed tests passed, below the floor of $TENANCY_MIN_PASSED."
+            echo "::error::go test exited 0, so nothing FAILED — tests were skipped or removed instead. A gate that guards fewer assertions than it claims is not a gate."
+            exit 1
+          fi
 
   # ─── A2. Repo-layer integration tests ──────────────────────────────────────
   # internal/repository/postgres/integration_test.go carries `//go:build

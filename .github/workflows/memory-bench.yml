@@ -199,11 +199,53 @@ jobs:
   recall-gate-branch:
     name: Memory recall gate
     runs-on: ubuntu-latest
-    # ~10 min of bench against a local build, plus build + model download on a
-    # cold cache. Generous rather than tight: a timeout here reads as a gate
-    # failure, and this is the arm that blocks merges. A capture runs the whole
-    # bench `repeat` times, so it gets the same headroom the prod arm gets.
-    timeout-minutes: ${{ (inputs.update_baseline && 120) || 45 }}
+    # Sized against the job's MEASURED worst case, not against its median and
+    # not against an estimate. The comment here used to say "~10 min of bench
+    # ... generous rather than tight" while the budget was 45 and the real thing
+    # takes 40+. Measured 2026-08-22, then re-derived independently by a second
+    # pass over the workflow's FULL run history (150 runs), job-level timings for
+    # this job only:
+    #
+    #   measuring runs that COMPLETED : 39.97, 40.28, 40.43, 40.63 min  (n=4)
+    #   runs killed by this timeout   : 45.40, 45.42, 45.42, 45.45 min  (n=4)
+    #   no-op runs (memory untouched) : 0.7 - 1.3 min
+    #
+    # Read the second row before raising this by a notch: those runs did not
+    # finish, so 45.4 is a floor on what they needed, not what they needed.
+    #
+    # WHERE THE TIME ACTUALLY GOES, because that is what sizes the budget.
+    # Almost none of it is bench work. The gate step's log shows questions ending
+    # in the harness's `MESH_MCP_HTTP_TIMEOUT_SECS: 120` deadline —
+    # `[NN/24] ... ! (12X.Xs)` — while the ones that beat the embed queue return
+    # in ~4s. The split VARIES per run and the bad case is the one that sizes
+    # this: run 32590095200 (completed) was 16/24 timed out, run 32590768351
+    # (killed) was 20/20 of the questions it reached. That is the blindness
+    # tracked in issue #587, open since 2026-08-17, and it is NOT fixed here.
+    # This budget only has to be large enough that a blind run still REACHES a
+    # verdict instead of being killed mid-question:
+    #
+    #   worst case = 24 questions * ~124.7s = 49.9 min of pure client timeout
+    #              + 2.5-2.9 min setup-to-gate-start  (measured, not guessed)
+    #              + 4.0 min power check              (measured)
+    #              ~= 57 min
+    #
+    # So 60 would have been another coin flip, three minutes from losing — the
+    # same mistake as 45, just later in the distribution. 75 leaves ~18 min /
+    # ~30% over the empirical worst case. The asymmetry justifies the slack:
+    # overshooting costs runner minutes on a run that was already dead,
+    # undershooting turns a REQUIRED check under `enforce_admins: true` red for
+    # every PR touching a memory path, with no override for anyone — and it
+    # presents as `cancelled`, which reads like an aborted run rather than a
+    # gate verdict, so the next person debugs their own branch first (#739 lost
+    # two consecutive runs and a session to exactly that misread).
+    #
+    # Raise this WITH a fresh measurement, not by instinct — a stale reason is
+    # how it got to 45. Better than raising it: close #587, and the worst case
+    # above collapses from ~50 min of timeouts to a few minutes of real work.
+    #
+    # A capture (`update_baseline`) runs the whole bench `repeat` times, so it
+    # keeps the same 120 it always had.
+    timeout-minutes: ${{ (inputs.update_baseline && 120) || 75 }}
     permissions:
       contents: read
       issues: write
@@ -298,6 +340,7 @@ jobs:
           python scripts/memory-bench/test_bench_window.py
           python scripts/memory-bench/test_fixture_ages.py
           python scripts/memory-bench/test_search_settle.py
+          python scripts/memory-bench/test_confirm_embedder_alive.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
           python scripts/memory-bench/fixture_ages.py --selftest
@@ -609,6 +652,26 @@ jobs:
           fi
 
       # ---------------------------------------------------------------------
+      # Re-confirm the embedder is ALIVE right before anything measures
+      # through it, not just at its own startup step. Several minutes and
+      # several steps (migrations, Go build, bootstrap, mesh-mcp checkout +
+      # cross-compile) separate "Start the local embedder" from the first
+      # step that actually depends on it — long enough for a crash or an
+      # OOM-kill in between to go unnoticed until a scored question fails.
+      # Without this, a dead embedder here reads as N individual recall
+      # misses that silently accumulate into an INCONCLUSIVE verdict
+      # (#352a0b11 — 24/24 "could not run", no named cause). This step turns
+      # that into one loud, specific failure at the earliest point it can be
+      # caught, instead of a mystery diagnosed after the fact from
+      # embedder.log.
+      # ---------------------------------------------------------------------
+      - name: Confirm the embedder is still alive before measuring
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          bash scripts/memory-bench/confirm_embedder_alive.sh \
+            http://127.0.0.1:8099/healthz scripts/memory-bench/embedder.log
+
+      # ---------------------------------------------------------------------
       # The dense-arm control, run BEFORE the scored bench so a severed vector
       # arm is named as such rather than showing up as an unexplained score.
       #
@@ -623,6 +686,11 @@ jobs:
         if: steps.scope.outputs.relevant == 'true'
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          # This arm ingests its own haystack then searches it immediately —
+          # see the comment on "Run the recall gate against the branch build"
+          # below for why that races the query-embed against this same
+          # question's write-embeds on the CI-only CPU embedder.
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-ctl
         run: |
@@ -662,6 +730,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-age
           BENCH_BACKDATE_DSN: postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable
@@ -683,6 +752,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-age-neg
           # Deliberately NO BENCH_BACKDATE_DSN: this arm's corpus must be born at
@@ -721,6 +791,7 @@ jobs:
         if: steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture == 'true'
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-c
@@ -788,6 +859,17 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' && steps.mode.outputs.capture != 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          # This job's harness ingests ~45 sessions immediately before searching
+          # each question (mesh_client_stdio.py's `ingest_and_search`, no settle
+          # wait on this path). recall's query-embed then queues behind those
+          # same-question write-embeds on the API's shared embedSem
+          # (memory_service.go's RecallWithStats, intentional read/write fairness
+          # from #3d10774e) — and ci_embedder.py (bge-small on CPU) is slow enough
+          # that the queue alone can exceed mesh-mcp's REST client's default 30s,
+          # failing the whole recall call as "context deadline exceeded" though
+          # nothing is broken (#352a0b11 subtask 7, live evidence: run 32524227911).
+          # 120s is headroom, not a guess at exact worst-case queue depth.
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           LME_TOP_K: '10'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b
@@ -836,8 +918,12 @@ jobs:
                  echo
                  echo "\`arm-mismatch\` means the baseline on disk was captured against a"
                  echo "different target than this run — re-snap with \`--arm branch\`, do not"
-                 echo "hand-edit. A red nobody can clear gets bypassed, so this does not fail"
-                 echo "the check; the alert below is what stops it being silent." ;;
+                 echo "hand-edit. A red nobody can clear gets bypassed on the FIRST such run,"
+                 echo "so this step alone does not fail the check — the alert below opens or"
+                 echo "updates the tracking issue instead. If that issue was ALREADY open when"
+                 echo "this run started (i.e. this is not the first consecutive occurrence),"
+                 echo "the escalation step below this one fails the job on purpose: a first"
+                 echo "occurrence gets a quiet grace period, a second one turns the badge red." ;;
               *) echo "❌ Gate exited $rc." ;;
             esac
             echo
@@ -916,6 +1002,7 @@ jobs:
       # alert, which is why this is not simply `env.MCP_REF == 'main'`.
       # ---------------------------------------------------------------------
       - name: Alert — the required recall gate is blind (INCONCLUSIVE)
+        id: alert
         if: >-
           !cancelled()
           && steps.scope.outputs.relevant == 'true'
@@ -938,6 +1025,55 @@ jobs:
             quality is the advisory prod canary.
           run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------------
+      # ESCALATION — a SECOND consecutive blind run turns THIS run red.
+      #
+      # #352a0b11 AC5: from #587 (opened 2026-08-17) to the run that surfaced
+      # this gap (32447862443, 2026-08-21), this arm sat INCONCLUSIVE across at
+      # least three straight nightlies while every job kept reporting
+      # `success` — the tracking issue existed and nobody read it, because
+      # nothing about the workflow's own colour said "look here". "An issue
+      # was opened" turned out not to be sufficient; the badge has to say it
+      # too, or the next blind spell repeats this one.
+      #
+      # WHY NOT FAIL ON THE FIRST rc=2, THE WAY THIS LOOKED BEFORE THIS PR:
+      # the advisory arm's own exit step (below, `memory-bench` job) already
+      # reasoned this through and landed on "no" — "a check that is red
+      # forever is one people learn to scroll past, which is how the real
+      # rc=1 would get ignored too". A same-day infra blip (a Docker Hub
+      # mirror hiccup, one bad `context deadline exceeded`) is exactly the
+      # transient case that reasoning protects, and this arm sees the same
+      # class of blip. So: the FIRST occurrence behaves exactly as before —
+      # it opens/updates the tracking issue and the job stays green, same as
+      # every arm. Only once `episode-status: existing` comes back — meaning
+      # the SAME episode was still open when this run started, i.e. the LAST
+      # run's alert went unaddressed — does this run fail. That is the
+      # difference between "red on any blip" (rejected, see above) and "red
+      # once the blip has already been visible for a full cycle and nobody
+      # acted" (this).
+      #
+      # SCOPED NARROWER THAN THE ALERT ABOVE, on purpose: this step drops
+      # `merge_group` from the alert's `!= 'pull_request'`. The alert may
+      # still comment on a merge_group run (posting is harmless), but FAILING
+      # a merge_group run would block the queue on an infra cause no queued
+      # PR can fix — precisely the #342 failure mode this whole arm exists to
+      # avoid, and precisely why `pull_request` was already excluded. A
+      # schedule or push run blocks nobody: nothing is waiting on its result,
+      # which is exactly why it is safe to let it go red.
+      - name: Escalate — the merge gate has been blind since the last run
+        if: >-
+          !cancelled()
+          && steps.scope.outputs.relevant == 'true'
+          && steps.gate.outputs.rc == '2'
+          && steps.alert.outputs.episode-status == 'existing'
+          && github.event_name != 'pull_request'
+          && github.event_name != 'merge_group'
+          && (github.event_name != 'workflow_dispatch'
+              || env.MCP_REF == '' || env.MCP_REF == 'main')
+        run: |
+          echo "::error::Memory recall gate has been INCONCLUSIVE (${{ steps.gate.outputs.reason }}) across at least two consecutive runs on this event type, and the tracking issue opened for it is still open. Failing this run so the badge stops reporting green while the merge gate cannot enforce anything. This does not block any PR or merge_group run — only schedule/push/dispatch reach this step."
+          exit 1
 
       # EVENT SCOPING IS IDENTICAL TO THE ALERT ABOVE — read the two `if:`s
       # together. `test_gate_blindness.py` extracts both and fails if they
@@ -978,6 +1114,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
         env:
           MESH_MCP_BIN: ${{ github.workspace }}/mesh-mcp-bin
+          MESH_MCP_HTTP_TIMEOUT_SECS: '120'
           RECALL_GRAPH_ENABLED: 'true'
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-b-pwr
         run: |

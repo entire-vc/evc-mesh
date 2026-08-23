@@ -33,7 +33,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskCard } from "@/components/task-card";
-import { CreateTaskDialog } from "@/components/create-task-dialog";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { toast } from "@/components/ui/toast";
 import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-toolbar";
@@ -186,6 +185,7 @@ function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdi
             size="icon"
             className="h-6 w-6"
             onClick={() => onAddTask(col.status!.id)}
+            title="Add task"
           >
             <Plus className="h-3 w-3" />
           </Button>
@@ -301,10 +301,6 @@ export function BoardPage() {
     useCustomFieldStore();
   const { projectMembers, fetchProjectMembers } = useMemberStore();
 
-  // Dialog state
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [dialogStatusId, setDialogStatusId] = useState<string | undefined>();
-
   // Slide-over state
   const [slideOverTaskId, setSlideOverTaskId] = useState<string | null>(null);
 
@@ -316,6 +312,7 @@ export function BoardPage() {
   const [sortBy, setSortBy] = useState<SortBy>("updated");
   const [showClosed, setShowClosed] = useState(false);
   const [showSubtasks, setShowSubtasks] = useState(false);
+  const [humanGateOnly, setHumanGateOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
@@ -403,6 +400,7 @@ export function BoardPage() {
       }
       setShowClosed(saved.showClosed ?? false);
       setShowSubtasks(saved.showSubtasks ?? false);
+      setHumanGateOnly(saved.humanGateOnly ?? false);
       setSearchQuery(saved.searchQuery ?? "");
       setPriorityFilter(saved.priorityFilter ?? "all");
       setAssigneeFilter(saved.assigneeFilter ?? "all");
@@ -423,6 +421,7 @@ export function BoardPage() {
       sortBy,
       showClosed,
       showSubtasks,
+      humanGateOnly,
       searchQuery,
       priorityFilter,
       assigneeFilter,
@@ -438,6 +437,7 @@ export function BoardPage() {
     sortBy,
     showClosed,
     showSubtasks,
+    humanGateOnly,
     searchQuery,
     priorityFilter,
     assigneeFilter,
@@ -531,6 +531,7 @@ export function BoardPage() {
       ) {
         return false;
       }
+      if (humanGateOnly && !task.human_gate) return false;
       return true;
     });
 
@@ -543,6 +544,7 @@ export function BoardPage() {
     priorityFilter,
     assigneeFilter,
     assigneeIdsFilter,
+    humanGateOnly,
     selectedTags,
     cfFilters,
   ]);
@@ -777,6 +779,7 @@ export function BoardPage() {
         groupBy,
         showClosed,
         showSubtasks,
+        humanGateOnly,
         sortBy,
       }),
     );
@@ -790,6 +793,7 @@ export function BoardPage() {
     groupBy,
     showClosed,
     showSubtasks,
+    humanGateOnly,
     sortBy,
     setCurrentViewState,
   ]);
@@ -807,6 +811,7 @@ export function BoardPage() {
       setGroupBy(restored.groupBy);
       setShowClosed(restored.showClosed);
       setShowSubtasks(restored.showSubtasks);
+      setHumanGateOnly(restored.humanGateOnly);
       // No sort_by on the view: keep whatever sort is currently active.
       if (restored.sortBy) setSortBy(restored.sortBy);
       clearPendingView();
@@ -825,13 +830,18 @@ export function BoardPage() {
     setSelectedTags(BOARD_FILTER_DEFAULTS.selectedTags);
     setShowClosed(BOARD_FILTER_DEFAULTS.showClosed);
     setShowSubtasks(BOARD_FILTER_DEFAULTS.showSubtasks);
+    setHumanGateOnly(BOARD_FILTER_DEFAULTS.humanGateOnly);
     clearResetFiltersRequest();
   }, [resetFiltersRequest, clearResetFiltersRequest]);
 
-  const openCreateDialog = useCallback((statusId?: string) => {
-    setDialogStatusId(statusId);
-    setDialogOpen(true);
-  }, []);
+  const openCreateDialog = useCallback(
+    (statusId?: string) => {
+      if (!wsSlug || !currentProject) return;
+      const query = statusId ? `?status=${statusId}` : "";
+      navigate(`/w/${wsSlug}/p/${currentProject.slug}/new${query}`);
+    },
+    [wsSlug, currentProject, navigate],
+  );
 
   const [recurringOpen, setRecurringOpen] = useState(false);
 
@@ -868,6 +878,8 @@ export function BoardPage() {
           onSortByChange={setSortBy}
           showClosed={showClosed}
           onShowClosedChange={setShowClosed}
+          humanGateOnly={humanGateOnly}
+          onHumanGateOnlyChange={setHumanGateOnly}
           showSubtasks={showSubtasks}
           onShowSubtasksChange={setShowSubtasks}
           searchQuery={searchQuery}
@@ -954,13 +966,6 @@ export function BoardPage() {
           </DragOverlay>
         </DndContext>
       )}
-
-      {/* Create task dialog */}
-      <CreateTaskDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        defaultStatusId={dialogStatusId}
-      />
 
       <CreateRecurringDialog
         open={recurringOpen}

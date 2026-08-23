@@ -32,7 +32,33 @@ services:
   nats:
     image: nats:2-alpine
     restart: unless-stopped
-    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    # No host bind-mount for the config (see nats-server.conf's own header for
+    # why a file is needed at all, and #21e7808a for why it can't come from a
+    # host path): Docker Desktop's file sharing on this fleet's Mac Mini
+    # silently resolves ANY bind mount rooted under /tmp to an empty phantom
+    # location -- proven directly (`docker run -v /tmp/x:/mnt alpine ls /mnt`
+    # shows nothing) and not specific to files or to this compose file. Most
+    # of the fleet's git worktrees live under /tmp/wt-*, so this used to break
+    # `make ci` there. Writing the same content into the container's own
+    # filesystem at startup needs no host path at all.
+    # `$$NATS_STREAM_MAX_BYTES` (doubled `$`) is escaped FROM Compose's own
+    # interpolation -- Compose would otherwise try to substitute it at
+    # parse-time using the host's shell environment, not the container's;
+    # the container's own /bin/sh performs the real substitution below, from
+    # the `environment:` block two lines down.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /etc/nats/nats-server.conf <<CONF
+        jetstream {
+          store_dir: "/data"
+          max_file_store: $$NATS_STREAM_MAX_BYTES
+        }
+        http_port: 8222
+        CONF
+        exec nats-server -c /etc/nats/nats-server.conf
+    environment:
+      NATS_STREAM_MAX_BYTES: ${NATS_STREAM_MAX_BYTES:-10737418240}
     ports:
       - "${NATS_PORT:-4223}:4222"
       - "${NATS_MONITOR_PORT:-8223}:8222"

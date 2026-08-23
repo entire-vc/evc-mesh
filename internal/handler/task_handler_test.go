@@ -1179,6 +1179,52 @@ func TestTaskHandler_List_StatusIDFilter(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestTaskHandler_List_HumanGateFilter (#098468fa subtask): human_gate=true and
+// human_gate=false are each forwarded as the matching TaskFilter.HumanGate value;
+// an absent or unparseable value must NOT silently constrain the query (nil).
+func TestTaskHandler_List_HumanGateFilter(t *testing.T) {
+	projectID := uuid.New()
+
+	cases := []struct {
+		name      string
+		query     string
+		wantNil   bool
+		wantValue bool
+	}{
+		{name: "true", query: "?human_gate=true", wantValue: true},
+		{name: "false", query: "?human_gate=false", wantValue: false},
+		{name: "absent", query: "", wantNil: true},
+		{name: "garbage_value_not_silently_false", query: "?human_gate=maybe", wantNil: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockSvc := &MockTaskService{
+				ListFunc: func(_ context.Context, _ uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+					if tc.wantNil {
+						assert.Nil(t, filter.HumanGate)
+					} else {
+						require.NotNil(t, filter.HumanGate)
+						assert.Equal(t, tc.wantValue, *filter.HumanGate)
+					}
+					return pagination.NewPage([]domain.Task{}, 0, pg), nil
+				},
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.query, http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/projects/:proj_id/tasks")
+			c.SetParamNames("proj_id")
+			c.SetParamValues(projectID.String())
+
+			require.NoError(t, h.List(c))
+			assert.Equal(t, http.StatusOK, rec.Code)
+		})
+	}
+}
+
 // TestTaskHandler_List_OffsetPagination verifies that offset=50 advances to page 2.
 func TestTaskHandler_List_OffsetPagination(t *testing.T) {
 	projectID := uuid.New()
@@ -2269,6 +2315,74 @@ func TestTaskHandler_List_SizeCeiling_SmallListUnaffected(t *testing.T) {
 	_, hasTruncatedField := raw["truncated"]
 	assert.False(t, hasTruncatedField, "omitempty must keep the field off the wire when nothing was dropped")
 	assert.Equal(t, "a perfectly ordinary spec", items[0]["description"])
+}
+
+// TestTaskHandler_List_StaleRevision_Returns410WithExactBodyShape pins
+// ADR-0004 Decision 4's contract: a stale list_revision must produce HTTP 410
+// with a distinct error code (not the SSE handler's cursor_expired — the
+// recovery action differs), the concrete before/after numbers in both the
+// message and as typed fields, and no silent fallback (no 200, no page-1
+// substitution).
+func TestTaskHandler_List_StaleRevision_Returns410WithExactBodyShape(t *testing.T) {
+	mockSvc := &MockTaskService{
+		ListFunc: func(ctx context.Context, pid uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			assert.Equal(t, int64(47), pg.ListRevision, "the handler must bind list_revision from the query string")
+			return nil, &service.ListRevisionStaleError{Requested: 47, Current: 52}
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/?list_revision=47", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(uuid.New().String())
+
+	require.NoError(t, h.List(c))
+	require.Equal(t, http.StatusGone, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+
+	assert.Equal(t, "list_revision_stale", raw["error"], "distinct code from the SSE handler's cursor_expired — different recovery action")
+	assert.Equal(t, float64(47), raw["requested_revision"])
+	assert.Equal(t, float64(52), raw["current_revision"])
+	msg, _ := raw["message"].(string)
+	assert.Contains(t, msg, "47")
+	assert.Contains(t, msg, "52")
+	assert.Contains(t, msg, "restart pagination from page 1")
+}
+
+// TestTaskHandler_List_FreshRevision_EchoesListRevisionOnPage confirms the
+// happy path: a fresh page (or a matching list_revision) round-trips the
+// current revision on the response so the caller has something to echo back
+// on its next page request.
+func TestTaskHandler_List_FreshRevision_EchoesListRevisionOnPage(t *testing.T) {
+	now := time.Now()
+	mockSvc := &MockTaskService{
+		ListFunc: func(ctx context.Context, pid uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+			tasks := []domain.Task{{ID: uuid.New(), Title: "t", CreatedAt: now, UpdatedAt: now}}
+			page := pagination.NewPage(tasks, len(tasks), pg)
+			page.ListRevision = 47
+			return page, nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(uuid.New().String())
+
+	require.NoError(t, h.List(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, float64(47), raw["list_revision"])
 }
 
 // ListSubtasks is a third list-shaped endpoint (list-view.tsx's inline subtask

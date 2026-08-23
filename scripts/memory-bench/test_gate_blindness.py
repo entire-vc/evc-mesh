@@ -1092,6 +1092,24 @@ class TestSilentToolErrorIsSurfaced(unittest.TestCase):
         self.assertIn("error", payload)
         self.assertNotIn("text", payload, "the old silent-swallow shape must be gone")
 
+    def test_non_json_body_preserves_the_cause_past_a_long_url(self):
+        # #352a0b11: a real recall/remember call builds a long query string
+        # (workspace_id + query + tags_any=bench-<nonce>-<question_id> + ...),
+        # and Go's url.Error puts the transport-layer CAUSE after the quoted
+        # URL: `Get "http://...long-url...": dial tcp ...: connection
+        # refused`. At the old 200-char cutoff, every gate run for 5+ days
+        # lost the "dial tcp ... connection refused" suffix and kept only
+        # the URL — undiagnosable by construction. The fix must not
+        # reintroduce a cutoff shorter than a realistic URL plus its cause.
+        long_url = "http://127.0.0.1:8005/api/v1/memories/search?" + "&".join(
+            f"param{i}=value{i}" for i in range(20)
+        )
+        text = f'Get "{long_url}": dial tcp 127.0.0.1:8099: connect: connection refused'
+        self.assertGreater(len(text), 200, "the fixture must reproduce the real cutoff")
+        result = _ToolResult(text=text, is_error=False)
+        payload = mc._parse_tool_payload(result)
+        self.assertIn("dial tcp 127.0.0.1:8099: connect: connection refused", payload["error"])
+
     def test_valid_json_dict_on_success_passes_through_unchanged(self):
         result = _ToolResult(
             text='{"items": [], "search_mode": "bm25-only", "degraded": true}'
@@ -1582,6 +1600,12 @@ class _AlertHarness(unittest.TestCase):
             calls.write_text("", encoding="utf-8")
             step = tmp / "step.sh"
             step.write_text(script, encoding="utf-8")
+            # Real Actions runners always provide this file; the script writes
+            # `key=value` lines to it (composite-action outputs) under `set -u`,
+            # so an unset var here is not "no outputs", it is a crash — the
+            # exact failure this harness must not blur into "script is broken".
+            github_output = tmp / "github_output.txt"
+            github_output.write_text("", encoding="utf-8")
 
             env = dict(os.environ)
             # Every input the action declares, because the shipped step always
@@ -1603,6 +1627,7 @@ class _AlertHarness(unittest.TestCase):
                 STUB_ISSUE_NUM="397",
                 STUB_ISSUE_JSON=str(issue),
                 STUB_CALLS=str(calls),
+                GITHUB_OUTPUT=str(github_output),
             )
             if open_title is not None:
                 env["STUB_OPEN_TITLE"] = open_title
@@ -1616,7 +1641,174 @@ class _AlertHarness(unittest.TestCase):
                 f"the script itself failed:\nstdout={done.stdout}\nstderr={done.stderr}",
             )
             recorded = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if ln]
+            # Parsed the same simple way the real runner does for a single-line
+            # value: `key=value` per line, last write for a key wins. Every
+            # value this script ever writes is single-line, so this is not a
+            # simplification of the real `key<<EOF ... EOF` multiline form —
+            # it is the whole form this script uses.
+            self.outputs = {}
+            for ln in github_output.read_text(encoding="utf-8").splitlines():
+                if "=" in ln:
+                    k, _, v = ln.partition("=")
+                    self.outputs[k] = v
             return done.stdout, recorded
+
+
+class TestEpisodeStatusOutput(_AlertHarness):
+    """`episode-status` (#352a0b11 AC5) is the signal a caller reads to decide
+    whether it may escalate: `new` on the first occurrence — quiet, exactly
+    like before this output existed — `existing` when the SAME episode was
+    already open, `closed`/`none` on resolve.
+
+    Exercised directly against the action, per arm, rather than trusted from
+    the workflow's own escalation step alone: a wrong value here makes every
+    caller that reads it wrong in the same way, and invisibly — the escalation
+    step's own tests (`TestEscalationStepScoping`) only pin its `if:`, not
+    what the action hands it.
+    """
+
+    def test_a_fresh_episode_reports_new(self):
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                self.run_script(
+                    arm=arm, body="", comments=[], open_title="no-such-open-issue",
+                )
+                self.assertEqual(
+                    "new", self.outputs.get("episode-status"),
+                    f"{label}: opening a fresh episode must report "
+                    f"episode-status=new. A caller that escalates on anything "
+                    f"else fails the job on the FIRST occurrence — the exact "
+                    f"alarm-fatigue failure this output exists to let it avoid.",
+                )
+
+    def test_an_already_open_episode_reports_existing_even_when_deduped(self):
+        """The dedup path (this reason-kind already posted) is still a
+        CONTINUING episode. A caller escalating on it must not be starved of
+        the signal just because the storm guard suppressed the comment."""
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                marker = self.marker(arm, "version-mismatch")
+                self.run_script(
+                    arm=arm,
+                    body=f"{marker}\n\nOpened by the first alert.",
+                    comments=[],
+                    kind="version-mismatch",
+                    open_title=arm["title"],
+                )
+                self.assertEqual("existing", self.outputs.get("episode-status"))
+
+    def test_an_already_open_episode_reports_existing_on_a_new_reason_kind(self):
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                self.run_script(
+                    arm=arm,
+                    body=f"{self.marker(arm, 'no-baseline')}\n\nOpened by a different kind.",
+                    comments=[],
+                    kind="version-mismatch",
+                    open_title=arm["title"],
+                )
+                self.assertEqual("existing", self.outputs.get("episode-status"))
+
+    def test_resolve_with_nothing_open_reports_none(self):
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                self.run_script(
+                    arm=arm, mode="resolve", body="", comments=[],
+                    open_title="no-such-open-issue",
+                )
+                self.assertEqual("none", self.outputs.get("episode-status"))
+
+    def test_resolve_that_closes_an_episode_reports_closed(self):
+        for label, arm in self.arms().items():
+            with self.subTest(arm=label):
+                self.run_script(
+                    arm=arm, mode="resolve", body="", comments=[],
+                    open_title=arm["title"],
+                )
+                self.assertEqual("closed", self.outputs.get("episode-status"))
+
+
+class TestEscalationStepScoping(unittest.TestCase):
+    """The required arm's escalation step (#352a0b11 AC5, subtask 5/6): a
+    SECOND consecutive blind run fails the job, so the badge stops reporting
+    green while the merge gate cannot enforce anything. Measured incident:
+    #587 sat open across at least three straight nightlies (2026-08-17 to
+    2026-08-21) with every job reporting `success` throughout.
+
+    These pin the step's `if:` rather than executing it (unlike
+    `TestEpisodeStatusOutput` above) because there is nothing here for `gh` to
+    stand in for — it is a plain `run:` step with no side effects to fake.
+    """
+
+    STEP = "Escalate — the merge gate has been blind since the last run"
+
+    def test_it_exists_exactly_once_and_only_on_the_required_arm(self):
+        job_blocks = _job_blocks()
+        hits = {job: block.count(f"- name: {self.STEP}") for job, block in job_blocks.items()}
+        present = {j: n for j, n in hits.items() if n}
+        self.assertEqual(
+            {"recall-gate-branch": 1}, present,
+            f"expected the escalation step in exactly recall-gate-branch, got "
+            f"{present}. The advisory and prod-canary arms deliberately keep "
+            f"their own 'never fail on rc=2' reasoning (see their exit steps "
+            f"in memory-bench.yml) — copying this step there without a "
+            f"matching, explicit decision would silently reopen the exact "
+            f"alarm-fatigue question they already answered.",
+        )
+
+    def test_it_never_runs_on_pull_request_or_merge_group(self):
+        expr = _step_if(self.STEP)
+        for clause in (
+            "github.event_name != 'pull_request'",
+            "github.event_name != 'merge_group'",
+        ):
+            with self.subTest(clause=clause):
+                self.assertIn(
+                    clause, expr,
+                    f"the escalation step lost {clause!r}. Failing on "
+                    f"pull_request blocks a PR author who cannot fix infra "
+                    f"(the #342 rule this whole arm exists to honour); failing "
+                    f"on merge_group blocks the merge queue on the same infra "
+                    f"cause. Both are exactly what the required arm's "
+                    f"leniency toward rc=2 exists to prevent.",
+                )
+
+    def test_it_only_fires_on_a_continuing_episode(self):
+        expr = _step_if(self.STEP)
+        self.assertIn(
+            "steps.alert.outputs.episode-status == 'existing'", expr,
+            "the escalation step must gate on episode-status == 'existing'. "
+            "Without it, it fails on the FIRST rc=2 too — the alarm-fatigue "
+            "failure the advisory arm's own exit-step comment already "
+            "rejected for its own rc=2 handling ('a check that is red forever "
+            "is one people learn to scroll past').",
+        )
+
+    def test_it_shares_the_alerts_drill_guard(self):
+        expr = _step_if(self.STEP)
+        self.assertIn(
+            "github.event_name != 'workflow_dispatch' || env.MCP_REF == '' "
+            "|| env.MCP_REF == 'main'",
+            expr,
+            "the escalation step must not fire on a dispatch that measures a "
+            "different mesh-mcp client on purpose (mcp_ref) — that is not an "
+            "incident, and the alert step it reads from already excludes it.",
+        )
+
+    def test_it_reads_the_alert_steps_own_output_not_a_copy(self):
+        """The escalation step's episode-status must come from THIS run's
+        alert step (`steps.alert...`), not some other job's or a restated
+        constant — a copy is exactly the kind of drift this suite exists to
+        catch (cf. the file header's own history of copies losing something
+        on the way across)."""
+        block = _job_blocks()["recall-gate-branch"]
+        self.assertIn(
+            "        id: alert\n", block,
+            "the required arm's alert step must carry `id: alert` — the "
+            "escalation step reads `steps.alert.outputs.episode-status`, and "
+            "a renamed id would silently make that expression always empty "
+            "(GitHub does not error on a reference to an unknown step id).",
+        )
 
 
 class TestAcknowledgingAnAlertDoesNotReArmIt(_AlertHarness):

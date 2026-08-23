@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -54,6 +55,68 @@ func TestWorkspaceHandler_Create_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Test Workspace", result.Name)
 	assert.Equal(t, "test-ws", result.Slug)
+}
+
+// TestWorkspaceHandler_Create_AgentRefused is the regression test for
+// #85fd1ef2: an agent-key caller used to reach the service with no user_id to
+// set as owner, producing a workspace with owner_id all-zero and no
+// membership row — reachable by nothing, including its own creator. The fix
+// refuses the request before the service is ever called.
+func TestWorkspaceHandler_Create_AgentRefused(t *testing.T) {
+	mockSvc := &MockWorkspaceService{
+		CreateFunc: func(ctx context.Context, ws *domain.Workspace) error {
+			t.Fatal("service.Create must not be called for an agent caller")
+			return nil
+		},
+	}
+
+	h, e := setupWorkspaceTest(mockSvc)
+
+	body := `{"name":"Agent Workspace"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/workspaces")
+	c.Set(mw.ContextKeyAuthType, mw.AuthTypeAgent)
+	c.Set(mw.ContextKeyAgentID, uuid.New())
+
+	err := h.Create(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+
+	var apiErr apierror.Error
+	err = json.Unmarshal(rec.Body.Bytes(), &apiErr)
+	require.NoError(t, err)
+	assert.Equal(t, "agents cannot create workspaces", apiErr.Message)
+}
+
+// TestWorkspaceHandler_Create_UserStillWorks is the positive control paired
+// with the refusal above: a real user-authenticated caller is completely
+// unaffected by the agent guard, same as TestWorkspaceHandler_Create_Success
+// but named to make the pairing explicit for anyone reading the two side by
+// side.
+func TestWorkspaceHandler_Create_UserStillWorks(t *testing.T) {
+	mockSvc := &MockWorkspaceService{
+		CreateFunc: func(ctx context.Context, ws *domain.Workspace) error {
+			return nil
+		},
+	}
+
+	h, e := setupWorkspaceTest(mockSvc)
+
+	body := `{"name":"Human Workspace"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/workspaces")
+	c.Set(mw.ContextKeyAuthType, mw.AuthTypeUser)
+	c.Set("user_id", uuid.New())
+
+	err := h.Create(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
 }
 
 func TestWorkspaceHandler_Create_MissingName(t *testing.T) {

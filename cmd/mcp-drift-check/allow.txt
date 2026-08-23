@@ -1,0 +1,62 @@
+# mcp-drift-check allowlist.
+#
+# One line per "<func-key>\t<reason>". func-key is "Name" for a package-level
+# function or "Receiver.Name" for a method (see cmd/mcp-drift-check/main.go).
+# A key here is exempt from the drift gate — the function is allowed to
+# differ between evc-mesh/internal/mcp and evc-mesh-mcp/internal/mcp.
+#
+# BASELINE (2026-08-21, task #46233e08): every line below was already
+# diverged before this gate existed. Investigation found the drift is almost
+# entirely ONE-DIRECTIONAL — evc-mesh-mcp (the fleet's stdio binary, actively
+# developed) has moved ahead of evc-mesh/cmd/mcp (the mesh-vm SSE binary,
+# stale). This is NOT 37 reviewed "these are fine to differ forever" verdicts
+# — it is 37 items of undecided debt, allowlisted so the gate can start
+# working today instead of blocking on a full reconciliation first. A
+# concrete elimination path exists (evc-mesh-mcp's own binary already
+# supports --transport sse, so mesh-vm could run it directly and delete
+# evc-mesh's copy outright) and is tracked as follow-up task #3bc9f59d — that
+# task's job is to either execute that path (making this whole file moot) or
+# adjudicate each line for real. Do not read a line's presence here as "this
+# was reviewed and is intentional" — read it as "not yet reconciled, see
+# #3bc9f59d".
+#
+# Adding a NEW line for a genuinely-intentional future difference is fine —
+# just write the actual reason, not this baseline note.
+
+NewRESTClient	baseline drift 2026-08-21 (#46233e08): evc-mesh's ctor also reads MESH_BASIC_AUTH for proxy basic-auth (a self-hosted-instance feature); evc-mesh-mcp's copy has no such logic. Direction corrected 2026-08-21 after verifier caught the reason stated backwards. See #3bc9f59d.
+NewServer	baseline drift 2026-08-21: evc-mesh-mcp wires a ReadCounter into Server that evc-mesh's copy doesn't have. See #3bc9f59d.
+RESTClient.CheckoutTask	baseline drift 2026-08-21: evc-mesh's version conditionally omits ttl_minutes from the request body; evc-mesh-mcp always sends it. Behaviorally different, not just refactored. See #3bc9f59d.
+RESTClient.ExtendCheckout	baseline drift 2026-08-21: same class as CheckoutTask above (conditional vs unconditional ttl_minutes in the body). See #3bc9f59d.
+RESTClient.GetProjectKnowledge	baseline drift 2026-08-21: evc-mesh-mcp added limit/offset/min_importance/tags_any query params; evc-mesh's signature is the old no-params form. See #3bc9f59d.
+RESTClient.GetTask	baseline drift 2026-08-21: evc-mesh-mcp resolves short task IDs via /by-short-id/; evc-mesh's copy only ever calls /tasks/<id> and would 404 on a short ID. See #3bc9f59d.
+RESTClient.GetTaskDependencies	baseline drift 2026-08-21: evc-mesh-mcp returns a typed *TaskDependencies struct; evc-mesh's copy still hand-parses two legacy JSON shapes into a map. See #3bc9f59d.
+RESTClient.RecallMemories	baseline drift 2026-08-21: evc-mesh-mcp's params struct has ImportanceMin/IncludeArchived and dropped RecencyWeight; evc-mesh's copy is the pre-importance-score param shape. See #3bc9f59d.
+RESTClient.ReleaseTask	baseline drift 2026-08-21: request body type only (map[string]any vs map[string]string) — same wire JSON, cosmetic. See #3bc9f59d.
+RESTClient.UploadArtifact	baseline drift 2026-08-21: THE incident function (#9855f866/#4222c17d lineage). As of evc-mesh-mcp PR #65 (merged 2026-08-21, same day) both sides now do the same checksum/magic-byte validation upstream in handleUploadArtifact — this is pure signature drift now (param order, metadata pre-marshaled string vs map[string]any), not a functional gap. A caller written against one signature will not compile against the other. See #3bc9f59d.
+RESTClient.do	baseline drift 2026-08-21: evc-mesh-mcp sets the auth header directly; evc-mesh routes through a shared applyAuth() that also attaches optional proxy basic-auth (MESH_BASIC_AUTH). Auth-relevant — flag for review in #3bc9f59d, not just cosmetic.
+RESTClient.doJSON	baseline drift 2026-08-21: evc-mesh-mcp returns a typed *APIError (StatusCode/Message/Body) instead of a formatted error string — callers that type-assert on error would behave differently. See #3bc9f59d.
+RESTClient.doMultipart	baseline drift 2026-08-21: evc-mesh-mcp uses mime.FormatMediaType for the Content-Disposition header (handles unicode filenames) and the same applyAuth/APIError differences as `do`/`doJSON` above. See #3bc9f59d.
+RESTClient.doRaw	baseline drift 2026-08-21: same applyAuth-vs-direct-header difference as `do`. See #3bc9f59d.
+Server.handleCheckoutTask	baseline drift 2026-08-21: evc-mesh-mcp defaults ttl_minutes to 120 and caches the returned checkout_token server-side (session state) for release_task/extend_checkout to reuse; evc-mesh's copy requires the caller to pass the token back explicitly. Real behavior difference in the tool contract. See #3bc9f59d.
+Server.handleCreateSubtask	baseline drift 2026-08-21: evc-mesh-mcp defaults assignee_type to "agent" and resolves status_slug via a task-scoped helper (resolveStatusSlugForTask) instead of a manual GetTask+resolveStatusSlug pair. See #3bc9f59d.
+Server.handleCreateTask	baseline drift 2026-08-21: evc-mesh-mcp rejects creating a task directly in "review" status and added delegation_level; evc-mesh's copy still has the older reviewer_id/reviewer_type fields evc-mesh-mcp dropped. See #3bc9f59d.
+Server.handleExtendCheckout	baseline drift 2026-08-21: same checkout-token-caching difference as handleCheckoutTask — evc-mesh-mcp no longer takes checkout_token as a param at all. See #3bc9f59d.
+Server.handleGetContext	baseline drift 2026-08-21: evc-mesh-mcp added a `since` filter and calls the new GetProjectKnowledge signature; also records a memory-read for the read-counter (evc-mesh has no ReadCounter, see NewServer). See #3bc9f59d.
+Server.handleGetProjectKnowledge	baseline drift 2026-08-21: evc-mesh-mcp added limit/offset/min_importance/tags_any pass-through, matching the RESTClient.GetProjectKnowledge signature change. See #3bc9f59d.
+Server.handleGetTask	baseline drift 2026-08-21: evc-mesh-mcp splits dependencies into outgoing/incoming (matching the typed TaskDependencies struct); evc-mesh returns the old undifferentiated shape. See #3bc9f59d.
+Server.handleGetTaskContext	baseline drift 2026-08-21: read-counter instrumentation only, same class as handleGetContext. See #3bc9f59d.
+Server.handleHeartbeat	baseline drift 2026-08-21: evc-mesh-mcp includes mesh_version (BuildSHA) in the response; evc-mesh's copy doesn't. See #3bc9f59d.
+Server.handleListTasks	baseline drift 2026-08-21: evc-mesh-mcp added workspace_id-scoped cross-project search (SearchTasks); evc-mesh's copy only supports project_id-scoped listing and would reject a workspace_id-only call. See #3bc9f59d.
+Server.handleMoveTask	baseline drift 2026-08-21: evc-mesh-mcp resolves the target status via resolveStatusSlugForTask (task-scoped) instead of GetTask+resolveStatusSlug, and evc-mesh's copy has an expected_status CAS precondition param that evc-mesh-mcp dropped. Behaviorally real. See #3bc9f59d.
+Server.handleRecall	baseline drift 2026-08-21: the deepest divergence in the set — evc-mesh-mcp added min_importance, include_archived, recall_profile classification, and optional KG-graph expansion (RECALL_GRAPH_ENABLED); evc-mesh's copy is the pre-importance-score, pre-graph implementation. See #3bc9f59d.
+Server.handleReleaseTask	baseline drift 2026-08-21: same checkout-token-caching difference as handleCheckoutTask/handleExtendCheckout. See #3bc9f59d.
+Server.handleRemember	baseline drift 2026-08-21: evc-mesh-mcp auto-attaches source_task_id/thread_id from the fiddler side-channel and the active-project/active-task session state; evc-mesh's copy has neither. See #3bc9f59d.
+Server.handleSessionReport	baseline drift 2026-08-21: evc-mesh-mcp persists the session report server-side (ReportSession) and widened token counters to int64; evc-mesh's copy only returns local in-memory stats. See #3bc9f59d.
+Server.handleSetProjectKnowledge	baseline drift 2026-08-21: same fiddler-context auto-attach difference as handleRemember. See #3bc9f59d.
+Server.handleUpdateTask	baseline drift 2026-08-21: evc-mesh-mcp added delegation_level and completion_signal fields; evc-mesh's copy predates both. See #3bc9f59d.
+Server.handleUploadArtifact	baseline drift 2026-08-21: the SIBLING of the RESTClient.UploadArtifact incident function. As of evc-mesh-mcp PR #65 (merged 2026-08-21) both sides now share the same decodeArtifactContent/verifyArtifactChecksum/validateArtifactMagic validation (evc-mesh-mcp's artifact_content.go now matches evc-mesh's) — the remaining diff is only where metadata gets JSON-marshaled (inline here vs upstream in evc-mesh) to match each side's differing RESTClient.UploadArtifact signature. No functional gap remains. See #3bc9f59d.
+Server.registerAdvancedTools	baseline drift 2026-08-21: evc-mesh-mcp registers ~7 more tools (list_docs/get_doc/create_doc/update_doc/comment_doc/list_doc_comments/get_canonical) that evc-mesh's SSE surface doesn't expose at all, plus updated tool-schema descriptions/params on tools both sides share. See #3bc9f59d.
+Server.registerCoreTools	baseline drift 2026-08-21: evc-mesh-mcp registers add_vcs_link/recall_with_graph/pavel_decision/get_canonical_updates plus expanded params on shared tools (get_project_knowledge, list_tasks, create_task, update_task, move_task, recall, remember, set_project_knowledge); evc-mesh's copy is the pre-expansion tool schema. See #3bc9f59d.
+Server.resolveStatusSlug	baseline drift 2026-08-21: evc-mesh-mcp's version also returns statusCategory (used by handleCreateTask's review-status rejection) and delegates matching to a shared pickStatusBySlug helper; evc-mesh's copy has the 2-value signature and inline loop. See #3bc9f59d.
+SessionTracker.ComplianceScore	baseline drift 2026-08-21: cosmetic only — named-return `score =` vs local `score :=`. No behavior difference; flagged for completeness of the baseline. See #3bc9f59d.
+SessionTracker.RecordToolCall	baseline drift 2026-08-21: evc-mesh-mcp calls pkgmetrics.RecordMCPToolCall for a Prometheus counter; evc-mesh's copy doesn't emit that metric. See #3bc9f59d.

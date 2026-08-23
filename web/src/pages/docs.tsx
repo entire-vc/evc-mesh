@@ -18,7 +18,9 @@ import {
   NotebookText,
   Pencil,
   Plus,
+  Search,
   Unlink,
+  X,
 } from "lucide-react";
 import { DocBreadcrumbs } from "@/components/doc-breadcrumbs";
 import {
@@ -66,6 +68,11 @@ import {
 import { useDocComments } from "@/lib/doc-comments/use-doc-comments";
 import { ApiRequestError } from "@/lib/api";
 import {
+  type DocumentSearchHit,
+  searchDocuments,
+  splitSnippet,
+} from "@/lib/docs/document-search";
+import {
   DOC_TREE_DEFAULT_WIDTH,
   DOC_TREE_MAX_WIDTH,
   DOC_TREE_MIN_WIDTH,
@@ -81,6 +88,10 @@ import type { ProjectDocument } from "@/types";
 // The body is autosaved this long after the last keystroke — same figure as the
 // task description editor, so the two do not feel like different applications.
 const AUTOSAVE_DEBOUNCE_MS = 2000;
+
+// Same figure as the `[[` link menu's search debounce (use-doc-link-picker.ts) —
+// this is the same server call, wired to a second surface.
+const DOC_SEARCH_DEBOUNCE_MS = 200;
 
 type SaveState =
   | { status: "idle" }
@@ -193,6 +204,41 @@ function TitleDialog({
  * list also states the illegal moves by omission — the document's own subtree is
  * simply not in it.
  */
+/**
+ * A destination row, and the row that is currently picked.
+ *
+ * Same pairing the tree itself uses (`doc-tree.tsx`), and for the same reason:
+ * `--accent` is a saturated teal, not a tint, so filling a row with it and
+ * leaving the inherited body foreground on top measures 2.82:1 in light and
+ * 1.73:1 in dark — under the 4.5:1 AA floor. The dialog shipped with exactly
+ * that pairing on both the pick and the hover, which is what "the highlight is
+ * dark, it was supposed to be the light green one" is reporting. `--secondary`
+ * is the light teal-green of the palette and carries its own foreground.
+ *
+ * `--secondary` and `--muted` (the hover tint) sit close in lightness on
+ * purpose, so the pick is not left to the fill alone: it also gets the brand
+ * bar at the row edge and heavier text — again as in the tree, so a picked row
+ * looks the same in both places.
+ */
+const MOVE_OPTION =
+  "group relative flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-muted";
+const MOVE_OPTION_SELECTED = "bg-secondary font-medium text-secondary-foreground";
+
+/**
+ * The second cue on a picked row. A real element rather than a border: the row
+ * encodes tree depth in its left padding, and a border would shift every nested
+ * title by 3px.
+ */
+function SelectedBar() {
+  return (
+    <span
+      aria-hidden="true"
+      data-selected-bar=""
+      className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-primary"
+    />
+  );
+}
+
 function MoveDialog({
   open,
   doc,
@@ -230,10 +276,11 @@ function MoveDialog({
                 aria-selected={selected === null}
                 onClick={() => setSelected(null)}
                 className={cn(
-                  "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent",
-                  selected === null && "bg-accent font-medium",
+                  MOVE_OPTION,
+                  selected === null && MOVE_OPTION_SELECTED,
                 )}
               >
+                {selected === null && <SelectedBar />}
                 <NotebookText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">Top level</span>
                 {currentParent === null && (
@@ -251,11 +298,12 @@ function MoveDialog({
                   aria-selected={selected === target.id}
                   onClick={() => setSelected(target.id)}
                   className={cn(
-                    "flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent",
-                    selected === target.id && "bg-accent font-medium",
+                    MOVE_OPTION,
+                    selected === target.id && MOVE_OPTION_SELECTED,
                   )}
                   style={{ paddingLeft: `${8 + depth * 12}px` }}
                 >
+                  {selected === target.id && <SelectedBar />}
                   <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <span className="truncate">{target.title}</span>
                   {currentParent === target.id && (
@@ -429,6 +477,48 @@ export function DocsPage() {
 
   const [railOpen, setRailOpen] = useState(loadDocCommentsRailOpen);
   const [showResolved, setShowResolved] = useState(false);
+
+  // ---- Search (D-search-surface) --------------------------------------------
+  // Reuses the `documents/search` endpoint the `[[` link menu already calls
+  // (document-search.ts) — the server-side search and its content indexing were
+  // built for D9, only never given a place to live outside that menu.
+  const [docSearchQuery, setDocSearchQuery] = useState("");
+  const [docSearchResults, setDocSearchResults] = useState<DocumentSearchHit[] | null>(
+    null,
+  );
+  const [docSearchLoading, setDocSearchLoading] = useState(false);
+  const searching = docSearchQuery.trim() !== "";
+
+  useEffect(() => {
+    const query = docSearchQuery.trim();
+    if (!projectId || query === "") {
+      setDocSearchResults(null);
+      setDocSearchLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDocSearchLoading(true);
+    const timer = setTimeout(() => {
+      searchDocuments(projectId, query)
+        .then((hits) => {
+          if (!cancelled) setDocSearchResults(hits);
+        })
+        // A failed search reads as "nothing found" rather than silently keeping
+        // stale results on screen from a query the user has since changed.
+        .catch(() => {
+          if (!cancelled) setDocSearchResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setDocSearchLoading(false);
+        });
+    }, DOC_SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [docSearchQuery, projectId]);
+
+  const clearDocSearch = useCallback(() => setDocSearchQuery(""), []);
 
   // The body last known to be on the server. The autosave compares against this
   // rather than against openDoc.body so that a failed save leaves the editor
@@ -795,8 +885,88 @@ export function DocsPage() {
           </Button>
         </div>
 
+        <div className="relative pb-2">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            value={docSearchQuery}
+            onChange={(e) => setDocSearchQuery(e.target.value)}
+            placeholder="Search documents..."
+            aria-label="Search documents"
+            disabled={!projectId}
+            className="h-8 pl-8 pr-7 text-xs"
+          />
+          {searching && (
+            <button
+              type="button"
+              onClick={clearDocSearch}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
         <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-          {isLoading ? (
+          {searching ? (
+            docSearchLoading && docSearchResults === null ? (
+              <div className="space-y-2 p-1">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-4/5" />
+              </div>
+            ) : !docSearchResults || docSearchResults.length === 0 ? (
+              <p className="p-2 text-xs text-muted-foreground">
+                {docSearchLoading ? "Searching..." : "No documents match"}
+              </p>
+            ) : (
+              <ul>
+                {docSearchResults.map((hit) => (
+                  <li key={hit.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigate(`${docsPath}/${hit.id}`);
+                        clearDocSearch();
+                      }}
+                      className={cn(
+                        "flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent",
+                        hit.id === docId && "bg-accent",
+                      )}
+                    >
+                      <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{hit.title}</span>
+                        {hit.snippet && (
+                          <span
+                            data-snippet={hit.snippetIsMatch ? "match" : "preview"}
+                            className={cn(
+                              "block truncate text-[10px]",
+                              hit.snippetIsMatch
+                                ? "text-muted-foreground"
+                                : "italic text-muted-foreground/70",
+                            )}
+                          >
+                            {hit.snippetIsMatch
+                              ? splitSnippet(hit.snippet).map((part, i) =>
+                                  part.match ? (
+                                    <mark key={i} className="bg-primary/25 text-foreground">
+                                      {part.text}
+                                    </mark>
+                                  ) : (
+                                    <span key={i}>{part.text}</span>
+                                  ),
+                                )
+                              : hit.snippet}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : isLoading ? (
             <div className="space-y-2 p-1">
               <Skeleton className="h-5 w-full" />
               <Skeleton className="h-5 w-4/5" />
@@ -1050,12 +1220,23 @@ export function DocsPage() {
                       flattened into "the text of this document" to locate each
                       quote, so a discussion rendered inside it would become part
                       of the haystack and anchors would start matching comment
-                      bodies. See doc-comment-tree.tsx. */}
-                  <DocCommentTree
-                    controller={comments}
-                    showResolved={showResolved}
-                    onShowResolvedChange={setShowResolved}
-                  />
+                      bodies. See doc-comment-tree.tsx.
+
+                      Mounted only while the rail is closed. The rail and the
+                      tree are the same threads through the same controller —
+                      mounting both at once (railOpen === true) painted every
+                      thread twice, which is exactly the bug `#a4a8db69`
+                      intended to close by defaulting the rail to closed and
+                      never did for a reader who opens it (`#a9df0f4a`). They
+                      are two views of one surface, not two surfaces: one is
+                      shown at a time. */}
+                  {!railOpen && (
+                    <DocCommentTree
+                      controller={comments}
+                      showResolved={showResolved}
+                      onShowResolvedChange={setShowResolved}
+                    />
+                  )}
                 </article>
 
                 {railOpen && (

@@ -19,6 +19,7 @@ import {
   Link,
   ListTree,
   Loader2,
+  Lock,
   Package,
   Pencil,
   RefreshCw,
@@ -64,13 +65,24 @@ import {
   toDateTimeLocal,
 } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
-import type { AssigneeType, DodCheck, DodGateConfig, Priority, DelegationLevel } from "@/types";
+import type {
+  AssigneeType,
+  CreateTaskRequest,
+  DodCheck,
+  DodGateConfig,
+  Priority,
+  DelegationLevel,
+  Task,
+} from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 import {
   getTaskCostSummary,
+  recordHumanGateDecision,
   type TaskCostSummary,
 } from "@/lib/api";
 import { CostQualityBlock } from "@/components/cost-quality-block";
+import { type PendingImage } from "@/lib/task-artifacts";
+import { uploadPendingImages } from "@/lib/pending-images";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -103,6 +115,13 @@ const MOBILE_TABS: { id: MobileTabId; label: string }[] = [
 
 export interface TaskPanelProps {
   taskId: string | null;
+  /** Default "view". "create" renders an editable draft form instead of fetching taskId. */
+  mode?: "view" | "create";
+  /** Required when mode === "create" — the project the new task will be created in. */
+  createProjectId?: string;
+  createDefaults?: { statusId?: string; dueDate?: string };
+  /** Called after a successful create-mode submit, with the newly created task. */
+  onCreated?: (task: Task) => void;
   onClose?: () => void;
   onBack?: () => void;
   backLabel?: string;
@@ -116,6 +135,10 @@ export interface TaskPanelProps {
 
 export function TaskPanel({
   taskId,
+  mode = "view",
+  createProjectId,
+  createDefaults,
+  onCreated,
   onClose,
   onBack,
   backLabel = "Back",
@@ -123,6 +146,7 @@ export function TaskPanel({
   className,
 }: TaskPanelProps) {
   const navigate = useNavigate();
+  const isCreateMode = mode === "create";
 
   // Task navigation stack — must be declared before selectors that depend on it
   const [taskIdStack, setTaskIdStack] = useState<string[]>([]);
@@ -141,7 +165,8 @@ export function TaskPanel({
   const backTask = useTaskStore((state) =>
     backTaskId ? state.tasksById[backTaskId] ?? null : null,
   );
-  const { fetchTask, updateTask, moveTask, moveToProject } = useTaskStore();
+  const { fetchTask, createTask, updateTask, moveTask, moveToProject } =
+    useTaskStore();
   const { statuses, fetchStatuses, currentProject, projects } =
     useProjectStore();
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
@@ -158,6 +183,7 @@ export function TaskPanel({
   const [hideEmpty, setHideEmpty] = useState(true);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
+  const [clearingGate, setClearingGate] = useState(false);
   // Bumped whenever DependencyList reports a change, so both SubtaskList
   // mounts (mobile + desktop tabs) refetch — an is_child_of edge added or
   // removed there changes the Subtasks tab without the user reopening the card.
@@ -185,6 +211,80 @@ export function TaskPanel({
   const [addingLabel, setAddingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState("");
   const labelInputRef = useRef<HTMLInputElement>(null);
+
+  // ---- Create-mode draft state ----------------------------------------------
+  // Mirrors create-task-dialog.tsx's local state — mode="create" renders these
+  // fields instead of fetching/reading currentTask. Initialized once from
+  // createDefaults (lazy useState initializer) so a re-render with a new
+  // createDefaults object reference never wipes what the user already typed.
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftPriority, setDraftPriority] = useState<Priority>("none");
+  const [draftDelegationLevel, setDraftDelegationLevel] =
+    useState<DelegationLevel>("review");
+  const [draftLabels, setDraftLabels] = useState<string[]>([]);
+  const [draftAddingLabel, setDraftAddingLabel] = useState(false);
+  const [draftLabelDraft, setDraftLabelDraft] = useState("");
+  const draftLabelInputRef = useRef<HTMLInputElement>(null);
+  const [draftStatusId, setDraftStatusId] = useState(
+    createDefaults?.statusId ?? "",
+  );
+  const [draftDueDate, setDraftDueDate] = useState(createDefaults?.dueDate ?? "");
+  // "unassigned" | "user:{id}" | "agent:{id}"
+  const [draftAssigneeValue, setDraftAssigneeValue] = useState("unassigned");
+  const [draftReviewerValue, setDraftReviewerValue] = useState("unassigned");
+  // Images pasted into the description before the task exists — uploaded
+  // right after createTask() succeeds, same as create-task-dialog.tsx.
+  const draftPendingImagesRef = useRef<PendingImage[]>([]);
+  const [draftSubmitting, setDraftSubmitting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+
+  // Snapshot of what the draft looked like on mount (createDefaults baked
+  // in), so "empty" means "still what was presented", not "falsy" — a
+  // board/calendar "create in this status/date" flow pre-fills
+  // draftStatusId/draftDueDate before the user types anything, and that
+  // pre-fill must not itself count as a dirty draft.
+  const draftInitialRef = useRef({
+    statusId: createDefaults?.statusId ?? "",
+    dueDate: createDefaults?.dueDate ?? "",
+  });
+  const isDraftDirty =
+    isCreateMode &&
+    (draftTitle.trim() !== "" ||
+      draftDescription.trim() !== "" ||
+      draftPriority !== "none" ||
+      draftDelegationLevel !== "review" ||
+      draftLabels.length > 0 ||
+      draftStatusId !== draftInitialRef.current.statusId ||
+      draftDueDate !== draftInitialRef.current.dueDate ||
+      draftAssigneeValue !== "unassigned" ||
+      draftReviewerValue !== "unassigned");
+
+  // Warn on tab close/reload with an unsaved draft. This does NOT cover
+  // in-app route navigation elsewhere (sidebar links, browser back) —
+  // react-router's useBlocker requires a data router (createBrowserRouter +
+  // RouterProvider), and this app mounts a plain <BrowserRouter> (App.tsx).
+  // Flagged to the task rather than silently left unguarded or silently
+  // migrating the router.
+  useEffect(() => {
+    if (!isDraftDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDraftDirty]);
+
+  const handleBackClick = () => {
+    if (
+      isDraftDirty &&
+      !window.confirm("Discard this task? Your unsaved changes will be lost.")
+    ) {
+      return;
+    }
+    onBack?.();
+  };
 
   // Reset navigation stack when the root task changes
   useEffect(() => {
@@ -240,6 +340,19 @@ export function TaskPanel({
     }
   }, [currentWorkspace, teamDirectory, fetchTeamDirectory]);
 
+  // Create mode: fetch project members (assignee/reviewer pickers) and
+  // statuses for createProjectId directly — currentProject/statuses in the
+  // store may still reflect whatever the user last viewed, not necessarily
+  // createProjectId, if this panel was opened straight onto a create route.
+  useEffect(() => {
+    if (!isCreateMode || !createProjectId) return;
+    void fetchProjectMembers(createProjectId);
+    if (statuses.length === 0 || statuses[0]?.project_id !== createProjectId) {
+      void fetchStatuses(createProjectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreateMode, createProjectId, fetchProjectMembers, fetchStatuses]);
+
   // Fetch recurring schedules if task belongs to a series
   useEffect(() => {
     if (currentTask?.recurring_schedule_id && currentTask.project_id) {
@@ -274,6 +387,13 @@ export function TaskPanel({
       setTimeout(() => labelInputRef.current?.focus(), 0);
     }
   }, [addingLabel]);
+
+  // Focus draft label input when adding (create mode)
+  useEffect(() => {
+    if (draftAddingLabel) {
+      setTimeout(() => draftLabelInputRef.current?.focus(), 0);
+    }
+  }, [draftAddingLabel]);
 
   // Close on Escape key (drawer mode only — only when onClose is provided)
   useEffect(() => {
@@ -380,6 +500,44 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to change status");
+    }
+  };
+
+  // Clears human_gate the only legitimate way: records a decision via
+  // POST /tasks/:id/human-gate-decisions (task #c56339b1), never a raw
+  // PATCH {human_gate:false} — that 403s for every caller by design (task
+  // #295). Only rendered for an authenticated human user (see JSX below);
+  // the handler independently re-enforces this — provenance="direct"
+  // requires the authenticated caller to BE decided_by, so an agent
+  // session cannot call this path even if it reached the button.
+  const handleClearHumanGate = async () => {
+    if (!currentTask || !user) return;
+    const questionRef = currentTask.human_gate_info?.marker_comment_id;
+    if (!questionRef) return; // no live marker to answer — nothing to reference
+    if (
+      !window.confirm(
+        "Clear the human gate on this task? This records that the question was answered and unfreezes the task.",
+      )
+    ) {
+      return;
+    }
+    setClearingGate(true);
+    try {
+      await recordHumanGateDecision(currentTask.id, {
+        question_ref: questionRef,
+        decided_by: user.id,
+        provenance: "direct",
+        channel: "mesh",
+      });
+      if (taskId) await fetchTask(taskId);
+      onTaskUpdated?.();
+      toast.success("Gate cleared");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to clear human gate",
+      );
+    } finally {
+      setClearingGate(false);
     }
   };
 
@@ -563,6 +721,113 @@ export function TaskPanel({
     [currentTask, updateTask, onTaskUpdated],
   );
 
+  // ---- Create-mode handlers --------------------------------------------------
+
+  const handleDraftAddLabel = useCallback(() => {
+    const newLabel = draftLabelDraft.trim();
+    setDraftAddingLabel(false);
+    setDraftLabelDraft("");
+    if (!newLabel) return;
+    if (draftLabels.some((l) => l.toLowerCase() === newLabel.toLowerCase())) return;
+    setDraftLabels((prev) => [...prev, newLabel]);
+  }, [draftLabelDraft, draftLabels]);
+
+  const handleDraftRemoveLabel = useCallback((label: string) => {
+    setDraftLabels((prev) => prev.filter((l) => l !== label));
+  }, []);
+
+  const handleDraftLabelKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleDraftAddLabel();
+    }
+    if (e.key === "Escape") {
+      setDraftAddingLabel(false);
+      setDraftLabelDraft("");
+    }
+  };
+
+  const handleCreateSubmit = useCallback(async () => {
+    if (!createProjectId) return;
+    if (!draftTitle.trim()) {
+      setDraftError("Title is required");
+      return;
+    }
+
+    setDraftSubmitting(true);
+    setDraftError(null);
+
+    try {
+      let assigneeId: string | undefined;
+      let assigneeType: AssigneeType | undefined;
+      if (draftAssigneeValue !== "unassigned") {
+        const [type, id] = draftAssigneeValue.split(":");
+        assigneeId = id;
+        assigneeType = type as AssigneeType;
+      }
+
+      let reviewerId: string | undefined;
+      let reviewerType: AssigneeType | undefined;
+      if (draftReviewerValue !== "unassigned") {
+        const [type, id] = draftReviewerValue.split(":");
+        reviewerId = id;
+        reviewerType = type as AssigneeType;
+      }
+
+      const req: CreateTaskRequest = {
+        title: draftTitle.trim(),
+        description: draftDescription.trim() || undefined,
+        priority: draftPriority,
+        delegation_level: draftDelegationLevel,
+        labels: draftLabels.length > 0 ? draftLabels : undefined,
+        assignee_id: assigneeId,
+        assignee_type: assigneeType,
+        reviewer_id: reviewerId,
+        reviewer_type: reviewerType,
+        due_date: draftDueDate ? `${draftDueDate}T00:00:00Z` : undefined,
+        status_id: draftStatusId || undefined,
+      };
+
+      const createdTask = await createTask(createProjectId, req);
+
+      // Upload any images that were pasted before the task existed
+      if (draftPendingImagesRef.current.length > 0 && createdTask?.id) {
+        const updatedDescription = await uploadPendingImages(
+          createdTask.id,
+          draftPendingImagesRef.current,
+          draftDescription.trim(),
+        );
+        if (updatedDescription !== draftDescription.trim()) {
+          try {
+            await updateTask(createdTask.id, { description: updatedDescription });
+          } catch {
+            // non-fatal: task is created, images are uploaded, link is cosmetic
+          }
+        }
+      }
+
+      onCreated?.(createdTask);
+    } catch (err) {
+      setDraftError(err instanceof Error ? err.message : "Failed to create task");
+    } finally {
+      setDraftSubmitting(false);
+    }
+  }, [
+    createProjectId,
+    draftTitle,
+    draftDescription,
+    draftPriority,
+    draftDelegationLevel,
+    draftLabels,
+    draftAssigneeValue,
+    draftReviewerValue,
+    draftDueDate,
+    draftStatusId,
+    createTask,
+    updateTask,
+    onCreated,
+  ]);
+
   // ---- Derived state -------------------------------------------------------
 
   const currentStatus =
@@ -574,15 +839,251 @@ export function TaskPanel({
     return false;
   }
 
-  const showDueDate = !hideEmpty || !isEmpty(currentTask?.due_date);
-  const showLabels = !hideEmpty || (currentTask?.labels ?? []).length > 0;
+  // Create mode always shows Due Date / Labels rows (matching create-task-dialog.tsx) —
+  // the hideEmpty toggle only applies to an existing task's already-populated Properties.
+  const showDueDate = isCreateMode || !hideEmpty || !isEmpty(currentTask?.due_date);
+  const showLabels = isCreateMode || !hideEmpty || (currentTask?.labels ?? []).length > 0;
   const showHours = !hideEmpty || currentTask?.estimated_hours != null;
   const showVcsLinks = !hideEmpty || (currentTask?.vcs_link_count ?? 0) > 0;
   const showDependencies = !hideEmpty;
 
+  const sortedStatuses = [...statuses].sort((a, b) => a.position - b.position);
+  const createProject = createProjectId
+    ? projects.find((p) => p.id === createProjectId)
+    : undefined;
+
   // ---- Shared sub-components -----------------------------------------------
 
-  const propertiesGrid = currentTask && (
+  const propertiesGrid = isCreateMode ? (
+    <div className="rounded-lg border border-border bg-muted/20 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Properties
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
+        {/* Project — fixed by the route/prop, not editable here */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          <FolderKanban className="h-3 w-3" />
+          Project
+        </label>
+        <Select
+          value={createProjectId ?? ""}
+          disabled
+          className="h-7 text-xs"
+          onChange={() => {}}
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+          {createProjectId && !projects.some((p) => p.id === createProjectId) && (
+            <option value={createProjectId}>{createProject?.name ?? createProjectId}</option>
+          )}
+        </Select>
+
+        {/* Status */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          {(() => {
+            const s = sortedStatuses.find((st) => st.id === draftStatusId);
+            return s ? (
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: s.color }}
+              />
+            ) : null;
+          })()}
+          Status
+        </label>
+        <Select
+          value={draftStatusId}
+          onChange={(e) => setDraftStatusId(e.target.value)}
+          className="h-7 text-xs"
+        >
+          <option value="">Default</option>
+          {sortedStatuses.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </Select>
+
+        {/* Priority */}
+        <label className="pt-1 text-xs text-muted-foreground">Priority</label>
+        <Select
+          value={draftPriority}
+          onChange={(e) => setDraftPriority(e.target.value as Priority)}
+          className="h-7 text-xs"
+        >
+          {priorities.map((p) => (
+            <option key={p} value={p}>
+              {priorityConfig[p].label}
+            </option>
+          ))}
+        </Select>
+
+        {/* Delegation mode */}
+        <label className="pt-1 text-xs text-muted-foreground">Delegation</label>
+        <DelegationLevelSelect
+          value={draftDelegationLevel}
+          onChange={setDraftDelegationLevel}
+        />
+
+        {/* Assignee */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          {draftAssigneeValue.startsWith("agent:") ? (
+            <Bot className="h-3 w-3" />
+          ) : (
+            <User className="h-3 w-3" />
+          )}
+          Assignee
+        </label>
+        <Select
+          value={draftAssigneeValue}
+          onChange={(e) => setDraftAssigneeValue(e.target.value)}
+          className="h-7 text-xs"
+        >
+          <option value="unassigned">Unassigned</option>
+          {user && !projectMembers.some((m) => m.user_id === user.id) && (
+            <option value={`user:${user.id}`}>{user.name} (you)</option>
+          )}
+          {(() => {
+            const ownerId = currentWorkspace?.owner_id;
+            if (!ownerId || user?.id === ownerId) return null;
+            if (projectMembers.some((m) => m.user_id === ownerId)) return null;
+            const ownerName = teamDirectory?.humans.find((h) => h.id === ownerId)?.name;
+            if (!ownerName) return null;
+            return <option key={`draft-owner-${ownerId}`} value={`user:${ownerId}`}>{ownerName}</option>;
+          })()}
+          {projectMembers.map((m) => {
+            if (m.user_id && m.user) {
+              const isSelf = user?.id === m.user_id;
+              return (
+                <option key={`draft-assignee-${m.id}`} value={`user:${m.user_id}`}>
+                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                </option>
+              );
+            }
+            if (m.agent_id) {
+              const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
+              return (
+                <option key={`draft-assignee-${m.id}`} value={`agent:${m.agent_id}`}>
+                  {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                </option>
+              );
+            }
+            return null;
+          })}
+        </Select>
+
+        {/* Reviewer */}
+        <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+          {draftReviewerValue.startsWith("agent:") ? (
+            <Bot className="h-3 w-3" />
+          ) : (
+            <User className="h-3 w-3" />
+          )}
+          Reviewer
+        </label>
+        <Select
+          value={draftReviewerValue}
+          onChange={(e) => setDraftReviewerValue(e.target.value)}
+          className="h-7 text-xs"
+        >
+          <option value="unassigned">No reviewer</option>
+          {user && !projectMembers.some((m) => m.user_id === user.id) && (
+            <option value={`user:${user.id}`}>{user.name} (you)</option>
+          )}
+          {(() => {
+            const ownerId = currentWorkspace?.owner_id;
+            if (!ownerId || user?.id === ownerId) return null;
+            if (projectMembers.some((m) => m.user_id === ownerId)) return null;
+            const ownerName = teamDirectory?.humans.find((h) => h.id === ownerId)?.name;
+            if (!ownerName) return null;
+            return <option key={`draft-reviewer-owner-${ownerId}`} value={`user:${ownerId}`}>{ownerName}</option>;
+          })()}
+          {projectMembers.map((m) => {
+            if (m.user_id && m.user) {
+              const isSelf = user?.id === m.user_id;
+              return (
+                <option key={`draft-reviewer-${m.id}`} value={`user:${m.user_id}`}>
+                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                </option>
+              );
+            }
+            if (m.agent_id) {
+              const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
+              return (
+                <option key={`draft-reviewer-${m.id}`} value={`agent:${m.agent_id}`}>
+                  {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                </option>
+              );
+            }
+            return null;
+          })}
+        </Select>
+
+        {/* Due Date */}
+        {showDueDate && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              Due Date
+            </label>
+            <DatePickerPopover
+              value={draftDueDate || null}
+              onChange={(val) => setDraftDueDate(val ?? "")}
+              placeholder="Set due date"
+            />
+          </>
+        )}
+
+        {/* Labels */}
+        {showLabels && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              <Tag className="h-3 w-3" />
+              Labels
+            </label>
+            <div className="flex flex-wrap items-center gap-1">
+              {draftLabels.map((label) => (
+                <Badge
+                  key={label}
+                  variant="secondary"
+                  className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
+                  onClick={() => handleDraftRemoveLabel(label)}
+                  title="Click to remove"
+                >
+                  {label}
+                  <X className="h-2 w-2" />
+                </Badge>
+              ))}
+              {draftAddingLabel ? (
+                <Input
+                  ref={draftLabelInputRef}
+                  value={draftLabelDraft}
+                  onChange={(e) => setDraftLabelDraft(e.target.value)}
+                  onBlur={() => handleDraftAddLabel()}
+                  onKeyDown={handleDraftLabelKeyDown}
+                  className="h-5 w-20 px-1 text-[10px]"
+                  placeholder="Label..."
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="rounded border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-foreground"
+                  onClick={() => setDraftAddingLabel(true)}
+                >
+                  + Add
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  ) : currentTask && (
     <div className="rounded-lg border border-border bg-muted/20 p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -638,6 +1139,60 @@ export function TaskPanel({
               </option>
             ))}
         </Select>
+
+        {/* Human gate */}
+        {currentTask.human_gate && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              <Lock className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+              Human gate
+            </label>
+            <div className="flex flex-col items-start gap-1 pt-0.5">
+              <Badge
+                variant="secondary"
+                className="gap-1 border-amber-300 bg-amber-100 text-[10px] font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                data-testid="human-gate-badge"
+                data-human-gate-class={currentTask.human_gate_class ?? "hard"}
+              >
+                {currentTask.human_gate_class === "soft"
+                  ? "Soft gate — awaiting sign-off"
+                  : "Hard gate — awaiting sign-off"}
+              </Badge>
+              {currentTask.human_gate_info?.owner_name && (
+                <span className="text-[11px] text-muted-foreground">
+                  Raised by {currentTask.human_gate_info.owner_name}
+                  {currentTask.human_gate_info.marker_created_at && (
+                    <>
+                      {" "}
+                      · {formatRelative(currentTask.human_gate_info.marker_created_at)}
+                    </>
+                  )}
+                </span>
+              )}
+              {/* Human-only: an authenticated agent session does not exist
+                  in this app (agents call the REST API directly, never this
+                  SPA), and the backend independently 403s provenance=direct
+                  for anyone who isn't the decided_by user — this check is
+                  belt, the handler is suspenders. */}
+              {user && currentTask.human_gate_info?.marker_comment_id && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  data-testid="human-gate-clear-button"
+                  disabled={clearingGate}
+                  onClick={() => void handleClearHumanGate()}
+                >
+                  {clearingGate ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    "Clear gate"
+                  )}
+                </Button>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Priority */}
         <label className="pt-1 text-xs text-muted-foreground">
@@ -1102,7 +1657,23 @@ export function TaskPanel({
     </div>
   );
 
-  const descriptionPanel = currentTask && (
+  const descriptionPanel = isCreateMode ? (
+    <div>
+      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Description
+      </h3>
+      <RichTextEditor
+        value={draftDescription}
+        onChange={setDraftDescription}
+        placeholder="Add a description..."
+        projId={createProjectId}
+        minHeight="5rem"
+        onPendingImage={(pending) => {
+          draftPendingImagesRef.current.push(pending);
+        }}
+      />
+    </div>
+  ) : currentTask && (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1186,7 +1757,17 @@ export function TaskPanel({
     </div>
   );
 
-  const titleBlock = currentTask && (
+  const titleBlock = isCreateMode ? (
+    <div className="group">
+      <Input
+        value={draftTitle}
+        onChange={(e) => setDraftTitle(e.target.value)}
+        placeholder="Task title *"
+        autoFocus
+        className="h-auto border-none bg-transparent p-0 text-xl font-bold tracking-tight shadow-none focus-visible:ring-1"
+      />
+    </div>
+  ) : currentTask && (
     <div className="group">
       {editingTitle ? (
         <Input
@@ -1238,7 +1819,7 @@ export function TaskPanel({
               {onBack && (
                 <button
                   type="button"
-                  onClick={onBack}
+                  onClick={handleBackClick}
                   className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   aria-label={backLabel}
                   title={backLabel}
@@ -1246,23 +1827,29 @@ export function TaskPanel({
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               )}
-              {currentTask && (
-                <>
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                    {currentTask.id.slice(0, 8).toUpperCase()}
-                  </span>
-                  {currentProject && (
-                    <span className="truncate text-xs text-muted-foreground">
-                      {currentProject.name}
+              {isCreateMode ? (
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                  New task{createProject ? ` · ${createProject.name}` : ""}
+                </span>
+              ) : (
+                currentTask && (
+                  <>
+                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                      {currentTask.id.slice(0, 8).toUpperCase()}
                     </span>
-                  )}
-                </>
+                    {currentProject && (
+                      <span className="truncate text-xs text-muted-foreground">
+                        {currentProject.name}
+                      </span>
+                    )}
+                  </>
+                )
               )}
             </>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {currentTask && (
+          {!isCreateMode && currentTask && (
             <>
               <a
                 href={`/t/${currentTask.id}`}
@@ -1321,9 +1908,53 @@ export function TaskPanel({
       )}
 
       {/* ------------------------------------------------------------------ */}
+      {/* Create-mode content — single-column draft form, no task yet so no   */}
+      {/* comments/subtasks/artifacts/activity tabs to show.                  */}
+      {/* ------------------------------------------------------------------ */}
+      {!loading && isCreateMode && (
+        <div className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-2xl space-y-5 px-5 py-4">
+            {titleBlock}
+            {propertiesGrid}
+            {descriptionPanel}
+            {draftError && <p className="text-sm text-destructive">{draftError}</p>}
+            {/* Below `lg` the submit is pinned to the bottom of the scrollport.
+                The draft runs ~1100px (title + properties + description), so an
+                inline submit sits below the fold on a 393x852 screen and costs a
+                scroll — while the way OUT (`Cancel`, sticky in the header) is
+                always one tap. Making the primary action harder to reach than the
+                escape hatch is backwards, and the modal this route replaced kept
+                its submit visible via `DialogFooter`. Desktop is unchanged: it
+                has no fold problem, so the row stays in the scroll flow. */}
+            <div className="sticky bottom-0 -mx-5 flex items-center justify-end gap-2 border-t border-border bg-background px-5 py-3 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0 lg:py-0 lg:pt-2">
+              {onClose && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onClose}
+                  disabled={draftSubmitting}
+                >
+                  Cancel
+                </Button>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void handleCreateSubmit()}
+                disabled={draftSubmitting}
+              >
+                {draftSubmitting ? "Creating..." : "Create Task"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
       {/* Content                                                             */}
       {/* ------------------------------------------------------------------ */}
-      {!loading && currentTask && (
+      {!loading && !isCreateMode && currentTask && (
         <>
           {/* ============================================================= */}
           {/* MOBILE LAYOUT (<1024px): title + 6-tab bar                     */}
@@ -1411,10 +2042,10 @@ export function TaskPanel({
                       projectSettings={
                         (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
                       }
-                      onRelayDocSelect={(url) => {
+                      onDocInsert={(markdown) => {
                         setDescDraft((prev) => {
                           const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                          return prev + sep + url + "\n";
+                          return prev + sep + markdown + "\n";
                         });
                         setEditingDescription(true);
                         setActiveMobileTab("description");
@@ -1533,10 +2164,10 @@ export function TaskPanel({
                     projectSettings={
                       (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
                     }
-                    onRelayDocSelect={(url) => {
+                    onDocInsert={(markdown) => {
                       setDescDraft((prev) => {
                         const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                        return prev + sep + url + "\n";
+                        return prev + sep + markdown + "\n";
                       });
                       setEditingDescription(true);
                     }}
@@ -1555,7 +2186,7 @@ export function TaskPanel({
       )}
 
       {/* No task loaded */}
-      {!loading && !currentTask && taskId && (
+      {!isCreateMode && !loading && !currentTask && taskId && (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           <p className="text-sm">Task not found.</p>
         </div>

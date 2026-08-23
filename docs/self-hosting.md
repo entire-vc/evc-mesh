@@ -103,6 +103,11 @@ The services will be available at:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NATS_URL` | `nats://localhost:4223` | NATS connection URL |
+| `NATS_MONITOR_URL` | `http://localhost:8223` | NATS monitoring HTTP endpoint (nats-server `--http_port`). Used only to discover the host's real JetStream storage limit if `NATS_STREAM_MAX_BYTES` turns out to be more than the host can give the `MESH_EVENTS` stream. |
+| `NATS_STREAM_MAX_BYTES` | `10737418240` (10 GB) | Max total size of the `MESH_EVENTS` JetStream stream. On a host with a smaller storage quota, the API detects the rejection at startup, retries once with the host's real reported limit, and only fails to boot if even that isn't enough. |
+| `NATS_STREAM_MAX_AGE` | `720h` (30 days) | Max age of a message before it's dropped from the stream. |
+| `NATS_MAX_MSG_SIZE` | `262144` (256 KB) | Max size of a single event message. |
+| `NATS_REPLICAS` | `1` | JetStream replica count for the stream (only meaningful with a NATS cluster). |
 
 ### S3 / MinIO
 

@@ -2,11 +2,14 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "@/components/ui/toast";
 import { useNavigate, useParams } from "react-router";
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowRight,
   ArrowUp,
   Bot,
+  CheckCircle2,
   Eye,
+  FolderTree,
   GitBranch,
   GripVertical,
   History,
@@ -21,6 +24,7 @@ import {
   Trash2,
   Users,
   X,
+  XCircle,
   Zap,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/project";
@@ -53,7 +57,7 @@ import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { RecurringHistoryPanel } from "@/components/recurring-history-panel";
 import { useRecurringStore } from "@/stores/recurring";
 import { useTemplateStore } from "@/stores/template";
-import { statusCategoryConfig } from "@/lib/utils";
+import { formatDate, formatRelative, statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
@@ -1132,6 +1136,24 @@ export function ProjectSettingsPage() {
   const [trIncludeSlug, setTrIncludeSlug] = useState(true);
   const [trSaving, setTrSaving] = useState(false);
   const [trError, setTrError] = useState<string | null>(null);
+  const [trConfigured, setTrConfigured] = useState(false);
+
+  // --- Team Relay mount point / key expiry / sync state (R5-C) ---
+  // docsMountPath mirrors the server's single-switch model (empty = the
+  // share's subtree IS the project's Docs root; non-empty = the path it's
+  // grafted under) — mountMode is a UI-only derived view over that one value,
+  // not a second independent flag.
+  const [trDocsMountPath, setTrDocsMountPath] = useState("");
+  const [trMountMode, setTrMountMode] = useState<"root" | "path">("root");
+  const [trMountPathDraft, setTrMountPathDraft] = useState("");
+  const [trMountSaving, setTrMountSaving] = useState(false);
+  const [trMountError, setTrMountError] = useState<string | null>(null);
+  const [trKeyExpiresAt, setTrKeyExpiresAt] = useState<string | null>(null);
+  const [trKeyExpirySource, setTrKeyExpirySource] = useState<string | null>(null);
+  const [trKeyExpiringSoon, setTrKeyExpiringSoon] = useState(false);
+  const [trLastSyncCheckedAt, setTrLastSyncCheckedAt] = useState<string | null>(null);
+  const [trLastSyncStatus, setTrLastSyncStatus] = useState<string | null>(null);
+  const [trLastSyncError, setTrLastSyncError] = useState<string | null>(null);
 
   // --- Tab state ---
   const [activeTab, setActiveTab] = useState("general");
@@ -1228,26 +1250,56 @@ export function ProjectSettingsPage() {
     }
   }, [currentWorkspace?.id, fetchWorkspaceMembers]);
 
+  type TeamRelayResponse = {
+    id: string;
+    enabled: boolean;
+    share_slug: string;
+    agent_key_hint: string;
+    subfolder: string;
+    include_project_slug: boolean;
+    docs_mount_path?: string;
+    key_expires_at?: string;
+    key_expiry_source?: string;
+    key_expiring_soon?: boolean;
+    last_sync_checked_at?: string;
+    last_sync_status?: string;
+    last_sync_error?: string;
+  };
+
+  const applyTeamRelayResponse = useCallback((data: TeamRelayResponse) => {
+    setTrConfigured(true);
+    setTrEnabled(data.enabled);
+    setTrShareSlug(data.share_slug);
+    setTrAgentKeyHint(data.agent_key_hint);
+    setTrSubfolder(data.subfolder || "Mesh/Mesh dev");
+    setTrIncludeSlug(data.include_project_slug);
+    setTrAgentKey("");
+    const mountPath = data.docs_mount_path || "";
+    setTrDocsMountPath(mountPath);
+    setTrMountMode(mountPath ? "path" : "root");
+    setTrMountPathDraft(mountPath);
+    setTrKeyExpiresAt(data.key_expires_at || null);
+    setTrKeyExpirySource(data.key_expiry_source || null);
+    setTrKeyExpiringSoon(Boolean(data.key_expiring_soon));
+    setTrLastSyncCheckedAt(data.last_sync_checked_at || null);
+    setTrLastSyncStatus(data.last_sync_status || null);
+    setTrLastSyncError(data.last_sync_error || null);
+  }, []);
+
   // Fetch Team Relay integration settings
   useEffect(() => {
     if (!currentProject?.id || activeTab !== "integrations") return;
     setTrLoading(true);
-    api<{ id: string; enabled: boolean; share_slug: string; agent_key_hint: string; subfolder: string; include_project_slug: boolean }>(
+    api<TeamRelayResponse>(
       `/api/v1/projects/${currentProject.id}/integrations/team-relay`
     )
-      .then((data) => {
-        setTrEnabled(data.enabled);
-        setTrShareSlug(data.share_slug);
-        setTrAgentKeyHint(data.agent_key_hint);
-        setTrSubfolder(data.subfolder || "Mesh/Mesh dev");
-        setTrIncludeSlug(data.include_project_slug);
-        setTrAgentKey("");
-      })
+      .then(applyTeamRelayResponse)
       .catch(() => {
         // 404 = not configured yet — keep defaults
+        setTrConfigured(false);
       })
       .finally(() => setTrLoading(false));
-  }, [currentProject?.id, activeTab]);
+  }, [currentProject?.id, activeTab, applyTeamRelayResponse]);
 
   const handleSaveTeamRelay = async () => {
     if (!currentProject?.id) return;
@@ -1259,15 +1311,15 @@ export function ProjectSettingsPage() {
         share_slug: trShareSlug,
         subfolder: trSubfolder,
         include_project_slug: trIncludeSlug,
+        docs_mount_path: trDocsMountPath,
       };
       if (trAgentKey) body.agent_key = trAgentKey;
 
-      const data = await api<{ agent_key_hint: string }>(
+      const data = await api<TeamRelayResponse>(
         `/api/v1/projects/${currentProject.id}/integrations/team-relay`,
         { method: "PATCH", body }
       );
-      setTrAgentKeyHint(data.agent_key_hint);
-      setTrAgentKey("");
+      applyTeamRelayResponse(data);
       toast("Team Relay settings saved.");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to save settings";
@@ -1276,6 +1328,44 @@ export function ProjectSettingsPage() {
       setTrSaving(false);
     }
   };
+
+  // Saves ONLY the mount point. The API is a full-settings replace (there is
+  // no partial-PATCH semantics server-side — see the PATCH handler), so this
+  // resends every other already-loaded field unchanged rather than only
+  // docs_mount_path, to avoid silently clearing enabled/share_slug/subfolder/
+  // include_project_slug the same way a bare mount-point PATCH once silently
+  // cleared docs_mount_path before that was fixed.
+  const handleSaveMountPoint = async () => {
+    if (!currentProject?.id) return;
+    const nextPath = trMountMode === "root" ? "" : trMountPathDraft.trim();
+    setTrMountSaving(true);
+    setTrMountError(null);
+    try {
+      const data = await api<TeamRelayResponse>(
+        `/api/v1/projects/${currentProject.id}/integrations/team-relay`,
+        {
+          method: "PATCH",
+          body: {
+            enabled: trEnabled,
+            share_slug: trShareSlug,
+            subfolder: trSubfolder,
+            include_project_slug: trIncludeSlug,
+            docs_mount_path: nextPath,
+          },
+        }
+      );
+      applyTeamRelayResponse(data);
+      toast("Mount point saved.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save mount point";
+      setTrMountError(msg);
+    } finally {
+      setTrMountSaving(false);
+    }
+  };
+
+  const trMountPointDirty =
+    (trMountMode === "root" ? "" : trMountPathDraft.trim()) !== trDocsMountPath;
 
   // --- General info handlers ---
   const handleSaveGeneral = async (e: FormEvent) => {
@@ -2679,6 +2769,7 @@ export function ProjectSettingsPage() {
 
       {/* Section 10: Integrations — Team Relay */}
       {activeTab === "integrations" && (
+        <>
         <Card>
           <CardHeader>
             <CardTitle>Team Relay</CardTitle>
@@ -2784,6 +2875,174 @@ export function ProjectSettingsPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Section 10b: Integrations — Team Relay mount (R5-C). Copy in this
+            card is DRAFT — not yet approved per §1r.A; PR carries a hold
+            label until sign-off. */}
+        <Card data-testid="tr-mount-card">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FolderTree className="h-4 w-4" />
+              Team Relay — Docs mount
+            </CardTitle>
+            <CardDescription>
+              Where the connected share shows up in this project&apos;s Docs,
+              and whether the connection is healthy.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {trLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
+              </div>
+            ) : !trConfigured ? (
+              <p className="text-sm text-muted-foreground" data-testid="tr-mount-empty">
+                No Team Relay share connected to this project yet — configure
+                one above first.
+              </p>
+            ) : (
+              <>
+                {/* Connected share */}
+                <div className="space-y-1.5">
+                  <span className="text-sm font-medium">Connected share</span>
+                  <div>
+                    <Badge variant="outline" data-testid="tr-mount-share-slug">
+                      {trShareSlug || "(none)"}
+                    </Badge>
+                  </div>
+                </div>
+
+                {/* Mount point — one switch, not two flags */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="tr-mount-mode">
+                    Mount point
+                  </label>
+                  <Select
+                    id="tr-mount-mode"
+                    data-testid="tr-mount-mode"
+                    value={trMountMode}
+                    onChange={(e) => setTrMountMode(e.target.value as "root" | "path")}
+                  >
+                    <option value="root">At the project&apos;s Docs root</option>
+                    <option value="path">At a path inside Docs</option>
+                  </Select>
+                  {trMountMode === "path" && (
+                    <Input
+                      className="mt-2"
+                      data-testid="tr-mount-path"
+                      value={trMountPathDraft}
+                      onChange={(e) => setTrMountPathDraft(e.target.value)}
+                      placeholder="e.g. External/Notes"
+                    />
+                  )}
+                  {trMountError && (
+                    <p className="text-sm text-destructive">{trMountError}</p>
+                  )}
+                  <div className="flex justify-end pt-1">
+                    <Button
+                      size="sm"
+                      onClick={handleSaveMountPoint}
+                      disabled={trMountSaving || !trMountPointDirty}
+                      data-testid="tr-mount-save"
+                    >
+                      {trMountSaving ? "Saving…" : "Save mount point"}
+                    </Button>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Last sync check */}
+                <div className="space-y-1.5">
+                  <span className="text-sm font-medium">Last sync check</span>
+                  <div className="flex items-center gap-2 text-sm" data-testid="tr-mount-sync-state">
+                    {trLastSyncStatus === "ok" && (
+                      <>
+                        <CheckCircle2 className="h-4 w-4 text-success" />
+                        <span>
+                          Reachable
+                          {trLastSyncCheckedAt && (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — {formatRelative(trLastSyncCheckedAt)}
+                            </span>
+                          )}
+                        </span>
+                      </>
+                    )}
+                    {trLastSyncStatus === "key_expired" && (
+                      <>
+                        <XCircle className="h-4 w-4 text-destructive" />
+                        <span>
+                          Key expired
+                          {trLastSyncCheckedAt && (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — last checked {formatRelative(trLastSyncCheckedAt)}
+                            </span>
+                          )}
+                        </span>
+                      </>
+                    )}
+                    {trLastSyncStatus === "error" && (
+                      <>
+                        <XCircle className="h-4 w-4 text-destructive" />
+                        <span>
+                          {trLastSyncError || "Sync check failed"}
+                          {trLastSyncCheckedAt && (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — {formatRelative(trLastSyncCheckedAt)}
+                            </span>
+                          )}
+                        </span>
+                      </>
+                    )}
+                    {!trLastSyncStatus && (
+                      <span className="text-muted-foreground">Not checked yet</span>
+                    )}
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Key expiry */}
+                <div className="space-y-1.5">
+                  <span className="text-sm font-medium">Key expiry</span>
+                  <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="tr-mount-key-expiry">
+                    {trKeyExpiresAt ? (
+                      <>
+                        <span>{formatDate(trKeyExpiresAt)}</span>
+                        {trKeyExpirySource && (
+                          <Badge variant="outline">
+                            {trKeyExpirySource === "manual"
+                              ? "Set manually"
+                              : "From Team Relay"}
+                          </Badge>
+                        )}
+                        {trKeyExpiringSoon && (
+                          <Badge
+                            variant="warning"
+                            className="flex items-center gap-1"
+                            data-testid="tr-mount-key-expiring-soon"
+                          >
+                            <AlertTriangle className="h-3 w-3" />
+                            Expiring soon
+                          </Badge>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">Unknown</span>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        </>
       )}
 
       {/* Section 9: Danger Zone */}

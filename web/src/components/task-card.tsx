@@ -1,5 +1,5 @@
 import { forwardRef, type HTMLAttributes } from "react";
-import { AlignLeft, ExternalLink, GitBranch, Hand, Paperclip, Pencil, RefreshCw } from "lucide-react";
+import { AlignLeft, CircleCheck, ExternalLink, GitBranch, Hand, Lock, Paperclip, Pencil, RefreshCw, Snowflake } from "lucide-react";
 import { parseISO } from "date-fns";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
@@ -147,6 +147,46 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
             type={task.assignee_type}
             size="sm"
           />
+
+          {task.human_gate && (
+            <span
+              className="inline-flex items-center text-amber-600 dark:text-amber-400"
+              title={
+                task.human_gate_class === "soft"
+                  ? "Waiting on a human sign-off (soft — auto-releases after a timeout)"
+                  : "Waiting on a human sign-off"
+              }
+              data-testid="human-gate-indicator"
+              data-human-gate-class={task.human_gate_class ?? "hard"}
+            >
+              <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="sr-only">Waiting on a human sign-off</span>
+            </span>
+          )}
+
+          {task.false_open?.all_children_closed && (
+            <span
+              className="inline-flex items-center text-emerald-600 dark:text-emerald-400"
+              title={`False-open: все подзадачи закрыты, карточка без изменений ${task.false_open.stale_days} дн. — стоит пересмотреть приоритет`}
+              data-testid="false-open-indicator"
+              data-false-open-kind="all-children-closed"
+            >
+              <CircleCheck className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="sr-only">False-open: all subtasks closed</span>
+            </span>
+          )}
+
+          {task.false_open?.only_parked_children_left && (
+            <span
+              className="inline-flex items-center text-sky-600 dark:text-sky-400"
+              title={`Остались только backlog-подзадачи (${task.false_open.open_children_count}), карточка без изменений ${task.false_open.stale_days} дн. — работа есть, но не движется`}
+              data-testid="false-open-indicator"
+              data-false-open-kind="only-parked-children-left"
+            >
+              <Snowflake className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="sr-only">False-open: only parked subtasks left</span>
+            </span>
+          )}
 
           {task.reviewer_id && (
             <AssigneeAvatar

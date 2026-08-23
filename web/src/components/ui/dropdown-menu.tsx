@@ -1,4 +1,5 @@
 import {
+  type ButtonHTMLAttributes,
   type HTMLAttributes,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -53,7 +54,7 @@ export function DropdownMenuTrigger({
   className,
   onClick,
   ...props
-}: HTMLAttributes<HTMLButtonElement> & {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 }) {
   const { open, setOpen } = useContext(DropdownMenuContext);

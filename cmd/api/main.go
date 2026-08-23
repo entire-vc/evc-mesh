@@ -355,6 +355,10 @@ func main() {
 		// user assignment, so this wiring is load-bearing, not optional —
 		// TestTaskServiceWiresTheAssigneeTenancyGuard reads it back out of this file.
 		service.WithWorkspaceMembershipReader(postgres.NewWorkspaceMembershipReader(db)),
+		// Enables stale-cursor rejection on list_tasks (ADR-0004). Without
+		// this, List behaves exactly as it did before the option existed —
+		// see WithTaskListRevisionRepo's doc comment.
+		service.WithTaskListRevisionRepo(postgres.NewTaskListRevisionRepo(db)),
 	)
 
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
@@ -569,14 +573,25 @@ func main() {
 	// 6a. Connect to NATS and Redis for the event bus (graceful: continue without if unavailable).
 	var eb *eventbus.EventBus
 	ebCfg := eventbus.EventBusConfig{
-		NATSUrl:       cfg.NATS.URL,
-		RedisAddr:     cfg.Redis.Addr(),
-		RedisPassword: cfg.Redis.Password,
-		RedisDB:       cfg.Redis.DB,
+		NATSUrl:        cfg.NATS.URL,
+		NATSMonitorURL: cfg.NATS.MonitorURL,
+		RedisAddr:      cfg.Redis.Addr(),
+		RedisPassword:  cfg.Redis.Password,
+		RedisDB:        cfg.Redis.DB,
+		NATSReplicas:   cfg.NATS.Replicas,
+		StreamMaxAge:   cfg.NATS.StreamMaxAge,
+		StreamMaxBytes: cfg.NATS.StreamMaxBytes,
+		MaxMsgSize:     cfg.NATS.MaxMsgSize,
 	}
 	eb, err = eventbus.New(context.Background(), ebCfg, eventBusRepo)
 	if err != nil {
-		log.Printf("WARNING: Event bus unavailable, running without NATS/Redis: %v", err)
+		// Loud degradation, not silent — mirrors the MESH_TRUSTED_PROXIES
+		// pattern below: a control nobody can see failing gets trusted and
+		// stops being checked. Surfaced three ways: this WARN, the /health
+		// field below, and the mesh_event_bus_enabled gauge on /metrics.
+		log.Printf("WARNING: Event bus unavailable, running without NATS/Redis: %v — "+
+			"event publishing (WS broadcast, cross-agent notifications, event history) "+
+			"is disabled for this process", err)
 		eb = nil
 	} else {
 		// Wire the event bus publisher into the event bus service.
@@ -586,6 +601,7 @@ func main() {
 		// Start background workers (PG writer + cleanup).
 		eb.Start()
 	}
+	metrics.SetEventBusEnabled(eb != nil)
 	// Wire memory service into eventBusService for memory extraction on Publish().
 	// Done outside the NATS block so memory extraction works even without NATS.
 	if configurable, ok := eventBusService.(service.EventBusServiceConfigurable); ok {
@@ -756,6 +772,7 @@ func main() {
 			"status":            "ok",
 			"service":           "evc-mesh-api",
 			"client_ip_trusted": ipTrusted,
+			"event_bus_enabled": eb != nil,
 		})
 	})
 

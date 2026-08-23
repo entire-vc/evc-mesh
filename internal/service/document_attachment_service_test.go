@@ -67,11 +67,19 @@ func setupDocumentAttachmentService(t *testing.T) *documentAttachmentFixture {
 // upload is the happy-path upload most tests start from.
 func (f *documentAttachmentFixture) upload(t *testing.T, name, content string) *domain.DocumentAttachment {
 	t.Helper()
+	return f.uploadWithMimeType(t, name, "image/png", content)
+}
+
+// uploadWithMimeType is upload with an explicit MimeType, for tests that need
+// something other than the image/png default (e.g. proving a type outside
+// the inline allowlist still downloads).
+func (f *documentAttachmentFixture) uploadWithMimeType(t *testing.T, name, mimeType, content string) *domain.DocumentAttachment {
+	t.Helper()
 	att, err := f.svc.Upload(context.Background(), UploadDocumentAttachmentInput{
 		DocumentID:     f.documentID,
 		WorkspaceID:    f.wsID,
 		Name:           name,
-		MimeType:       "image/png",
+		MimeType:       mimeType,
 		Size:           int64(len(content)),
 		Reader:         strings.NewReader(content),
 		UploadedBy:     uuid.New(),
@@ -363,6 +371,21 @@ func TestDocumentAttachmentService_GetDownloadURL_AttachmentPassesTheFilename(t 
 	require.NoError(t, err)
 	assert.Equal(t, "spec.pdf", f.storage.lastFilename,
 		"a non-inline download names the file so the browser saves it under that name")
+}
+
+// TestDocumentAttachmentService_GetDownloadURL_HTMLNeverInlines is the same
+// regression as TestArtifactService_GetDownloadURL_HTMLNeverInlines
+// (b2f7ba41): document attachments share the same presigned-URL-through-our-
+// own-origin exposure, and att.MimeType is uploader-supplied with no
+// validation (see inferMimeType), so this must not trust it either.
+func TestDocumentAttachmentService_GetDownloadURL_HTMLNeverInlines(t *testing.T) {
+	f := setupDocumentAttachmentService(t)
+	att := f.uploadWithMimeType(t, "report.html", "text/html; charset=utf-8", "<script>alert(1)</script>")
+
+	_, err := f.svc.GetDownloadURL(context.Background(), att.ID, f.wsID, true)
+	require.NoError(t, err)
+	assert.Equal(t, "report.html", f.storage.lastFilename,
+		"text/html must always get Content-Disposition: attachment, even when inline=true was requested")
 }
 
 func TestDocumentAttachmentService_GetDownloadURL_UsesTheOneHourExpiry(t *testing.T) {

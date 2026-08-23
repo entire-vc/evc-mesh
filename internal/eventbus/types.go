@@ -4,10 +4,22 @@ import "time"
 
 // EventBusConfig holds configuration for the NATS JetStream event bus.
 type EventBusConfig struct {
-	NATSUrl           string
-	RedisAddr         string
-	RedisPassword     string
-	RedisDB           int
+	NATSUrl       string
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+	// NATSMonitorURL is the base URL of the NATS monitoring HTTP endpoint
+	// (e.g. "http://localhost:8223" in dev, "http://nats:8222" inside the
+	// prod compose network). Used ONLY on the ensureStream() error path to
+	// discover the server's REAL storage limit via GET {url}/jsz?config=1
+	// after a stream creation is rejected as "insufficient storage
+	// resources" — see the doc comment on ensureStream in nats.go for why
+	// this is necessary (jetstream.JetStream.AccountInfo() does not report
+	// this correctly for a standard single-account deployment). Empty
+	// disables the discovery/retry path: the original NATS error is still
+	// wrapped into a clear message, just without a discovered "available"
+	// figure.
+	NATSMonitorURL    string
 	NATSReplicas      int           // default 1
 	StreamMaxAge      time.Duration // default 30 days
 	StreamMaxBytes    int64         // default 10 GB

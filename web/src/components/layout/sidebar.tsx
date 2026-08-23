@@ -48,6 +48,93 @@ interface SidebarProps {
   collapsed: boolean;
 }
 
+type WorkspaceLogoVariant = "collapsed" | "expanded";
+
+// One size table for both sidebar states instead of two hand-tuned literals
+// that only happen to look alike today. Root cause of the "logo and its
+// container drift apart when collapsed" report: the collapsed header never
+// read `icon_url` at all — it unconditionally rendered the generic MeshIcon
+// mark, which sits inside its box with padding, while the expanded header's
+// <img> fills its box edge-to-edge via `h-full w-full object-cover`. So the
+// moment a workspace had a real uploaded logo, collapsing it silently swapped
+// a full-bleed image for a padded fallback mark — a visible size/fill jump
+// that read as "the logo got bigger, the box got smaller". Fixing it means
+// both states must obey the SAME two rules, not just similar-looking ones:
+//   1. the image, when present and loaded, always fills 100% of its box
+//      (`h-full w-full object-cover`) — identical rule in both variants.
+//   2. the fallback mark is always sized as a fixed PERCENTAGE of its box
+//      (not a fixed px number picked per-variant), so scaling the box
+//      (24px expanded vs 32px collapsed) scales the mark by construction.
+const WORKSPACE_LOGO_CONTAINER: Record<WorkspaceLogoVariant, string> = {
+  expanded: "h-6 w-6 rounded",
+  collapsed: "h-8 w-8 rounded-lg",
+};
+const WORKSPACE_LOGO_ICON_FILL = "h-[58%] w-[58%]";
+
+type ImageStatus = "pending" | "loaded" | "error";
+
+interface WorkspaceLogoProps {
+  iconUrl: string | null | undefined;
+  name: string | undefined;
+  variant: WorkspaceLogoVariant;
+}
+
+/**
+ * Renders the workspace mark shown in the sidebar header, in both its
+ * collapsed and expanded forms, off one shared sizing rule (see the table
+ * above) so the two states cannot drift apart again the way they did before.
+ *
+ * Placeholder policy for the two states that are NOT "logo present and
+ * loaded" (§2 of the task):
+ *  - no icon_url at all            → mark + tinted box (unchanged default).
+ *  - icon_url set, still loading   → mark + tinted box, same as "no icon" —
+ *    never an empty hole while the <img> fetch is in flight.
+ *  - icon_url set, failed to load  → `onError` falls back to the identical
+ *    mark + tinted box rather than leaving a broken-image icon or a hole.
+ *  - icon_url set and loaded       → bare image, tinted box removed, so a
+ *    logo with transparent regions never shows the teal placeholder
+ *    bleeding through behind it.
+ */
+function WorkspaceLogo({ iconUrl, name, variant }: WorkspaceLogoProps) {
+  const [status, setStatus] = useState<ImageStatus>("pending");
+
+  // Re-arm on URL change (workspace switch, or a fresh upload replacing the
+  // old icon) so a stale loaded/error flag from the previous image can never
+  // survive onto this one.
+  useEffect(() => {
+    setStatus("pending");
+  }, [iconUrl]);
+
+  const isLoaded = Boolean(iconUrl) && status === "loaded";
+
+  return (
+    <div
+      data-testid="workspace-logo"
+      data-variant={variant}
+      data-status={iconUrl ? status : "none"}
+      className={cn(
+        "flex shrink-0 items-center justify-center overflow-hidden text-primary-foreground",
+        WORKSPACE_LOGO_CONTAINER[variant],
+        !isLoaded && "bg-sidebar-primary",
+      )}
+    >
+      {iconUrl && (
+        <img
+          data-testid="workspace-logo-img"
+          src={iconUrl}
+          alt={name || "Workspace"}
+          className={cn("h-full w-full object-cover", !isLoaded && "hidden")}
+          onLoad={() => setStatus("loaded")}
+          onError={() => setStatus("error")}
+        />
+      )}
+      {!isLoaded && (
+        <MeshIcon className={WORKSPACE_LOGO_ICON_FILL} />
+      )}
+    </div>
+  );
+}
+
 export function Sidebar({ collapsed }: SidebarProps) {
   const { wsSlug, projectSlug } = useParams();
   const location = useLocation();
@@ -156,9 +243,11 @@ export function Sidebar({ collapsed }: SidebarProps) {
     return (
       <aside className="flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar">
         <div className="flex h-14 w-full items-center justify-center border-b border-sidebar-border">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary text-primary-foreground">
-            <MeshIcon size={18} />
-          </div>
+          <WorkspaceLogo
+            iconUrl={currentWorkspace?.icon_url}
+            name={currentWorkspace?.name}
+            variant="collapsed"
+          />
         </div>
         <nav className="flex flex-col items-center gap-2 py-3">
           {/* Dashboard */}
@@ -307,17 +396,11 @@ export function Sidebar({ collapsed }: SidebarProps) {
       <div className="flex h-14 items-center border-b border-sidebar-border px-3">
         <DropdownMenu>
           <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-sidebar-foreground hover:bg-sidebar-accent">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded bg-sidebar-primary text-primary-foreground">
-              {currentWorkspace?.icon_url ? (
-                <img
-                  src={currentWorkspace.icon_url}
-                  alt={currentWorkspace.name}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <MeshIcon size={14} />
-              )}
-            </div>
+            <WorkspaceLogo
+              iconUrl={currentWorkspace?.icon_url}
+              name={currentWorkspace?.name}
+              variant="expanded"
+            />
             <span className="flex-1 truncate text-left">
               {currentWorkspace?.name || "Select workspace"}
             </span>

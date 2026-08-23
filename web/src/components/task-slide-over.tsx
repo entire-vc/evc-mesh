@@ -1198,10 +1198,10 @@ export function TaskSlideOver({
                       (projects.find((p) => p.id === currentTask.project_id) ??
                         currentProject)?.settings
                     }
-                    onRelayDocSelect={(url) => {
+                    onDocInsert={(markdown) => {
                       setDescDraft((prev) => {
                         const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                        return prev + sep + url + "\n";
+                        return prev + sep + markdown + "\n";
                       });
                       setEditingDescription(true);
                     }}

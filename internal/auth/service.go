@@ -35,6 +35,41 @@ const (
 // timeNow is a package-level variable so tests can override the clock.
 var timeNow = time.Now
 
+// bcryptCompare is a package-level variable wrapping bcrypt.CompareHashAndPassword
+// so tests can substitute a counting/recording fake and assert on the FACT that a
+// comparison happened, rather than on how long it took (a timing-based test would
+// flake in CI — see the constant-time note on Login below). Production always uses
+// the real bcrypt implementation; only tests override this var.
+var bcryptCompare = bcrypt.CompareHashAndPassword
+
+// dummyPasswordHash is a bcrypt hash of a fixed, non-secret placeholder password,
+// computed once at package init at bcryptCost — the SAME cost Register uses for
+// every real user's password (see bcrypt.GenerateFromPassword call in Register).
+// Login compares against this hash whenever the looked-up account does not exist,
+// so the "no such account" branch cost the same CPU as the "account exists, wrong
+// password" branch (see Login's timing-channel doc comment). As of this fix there
+// is exactly ONE hashing cost anywhere in this service — bcryptCost — so reusing
+// that constant here cannot drift from production hashes. If a future migration
+// ever introduces a second, different cost for some subset of users (e.g. a
+// cheaper cost for legacy rows pending rehash), this constant must be revisited:
+// it would then need to match whichever cost gives the WORST-CASE (highest)
+// latency, or the timing channel reopens for the cheaper cohort.
+var dummyPasswordHash = mustGenerateDummyHash()
+
+// mustGenerateDummyHash computes dummyPasswordHash at package init. Panics on
+// failure (bcrypt.GenerateFromPassword only errors on a cost outside its valid
+// range or a >72-byte password, neither of which can happen here — bcryptCost is
+// a repo constant and the literal below is 33 bytes) rather than silently leaving
+// dummyPasswordHash nil, which would make every nonexistent-account Login panic
+// instead at CompareHashAndPassword — better to fail loudly at startup.
+func mustGenerateDummyHash() []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte("not-a-real-password-used-only-for-timing"), bcryptCost)
+	if err != nil {
+		panic(fmt.Sprintf("auth: failed to precompute dummy bcrypt hash: %v", err))
+	}
+	return hash
+}
+
 var (
 	usernameRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$`)
 	nonSlugRe   = regexp.MustCompile(`[^a-z0-9-]`)
@@ -243,22 +278,114 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 }
 
 // Login authenticates a user by email and password and returns a token pair.
+//
+// The password check runs BEFORE the IsActive check, deliberately. The
+// previous order (IsActive first) let anyone probe whether a deactivated
+// account exists at a given email in a single request, with no guessing
+// involved: a garbage password against a deactivated account returned
+// ErrUserInactive, while the identical garbage password against a
+// nonexistent (or active) account returned ErrInvalidCredentials — a
+// distinguishable body for free, no rate limit or brute force needed. On
+// our prod, where self-registration is closed, "an account exists here"
+// is itself the sensitive fact (see #734ca49e).
+//
+// Checking the password first closes that: a WRONG password against a
+// deactivated account now returns the same ErrInvalidCredentials as a
+// nonexistent account, indistinguishable from it. Only the CORRECT
+// password on a deactivated account still surfaces ErrUserInactive — which
+// is correct and intentional: at that point the caller has already proven
+// they own the credential, so telling them plainly that the account is
+// deactivated is not a leak, it's the account owner learning what actually
+// happened to their own account.
+//
+// This does mean bcrypt now runs unconditionally for a deactivated
+// account's login attempts too (previously short-circuited before it) —
+// negligible cost next to a normal login, and irrelevant next to the
+// oracle it closes.
+//
+// Side effect callers must know about: a wrong password against a
+// deactivated account now returns ErrInvalidCredentials instead of
+// ErrUserInactive, so it now counts against mw.LoginLockout's per-account
+// failure budget in internal/handler/auth_handler.go (which keys off
+// errors.Is(err, ErrInvalidCredentials)) — it did not before. That is
+// correct: someone submitting wrong passwords against a deactivated
+// account is still a brute-force attempt and must consume the budget like
+// any other wrong guess. See
+// TestAuthHandler_Login_InactiveAccount_WrongPassword_CountsAgainstLockoutBudget.
+//
+// Second, ORTHOGONAL timing side-channel this function must also close
+// (#c9055b2c, found on the #734ca49e review): before this fix, the
+// user==nil branch returned ErrInvalidCredentials immediately, BEFORE
+// bcrypt ever ran, while the found-user branch always ran bcrypt in full
+// (cost=bcryptCost, ~45ms measured). That made a nonexistent account
+// ~950ns and an existing one ~45ms — a ~4.5-order-of-magnitude gap an
+// attacker can use to enumerate which emails have accounts purely from
+// response LATENCY, independent of the response body/headers (which the
+// #734ca49e fix above already made identical). It is a different channel
+// than the one that fix closed: that one distinguished "deactivated" from
+// "active or none" in the response body; this one distinguishes "exists"
+// from "doesn't", for every account state and every password, in time.
+//
+// Fixed the same way TLS/crypto libraries close this class generally: the
+// missing branch now does equivalent work instead of skipping it. When no
+// user is found, Login still runs one bcrypt comparison — against
+// dummyPasswordHash, a fixed hash at the same cost as real user rows (see
+// its doc comment) — and discards the result. The comparison's result MUST
+// be assigned to something (not simply invoked and ignored via a bare
+// statement) so a future refactor cannot accidentally turn this into a
+// dead call that a compiler or linter strips; it is intentionally unused
+// beyond that, since the branch's outcome (ErrInvalidCredentials) does not
+// and must not depend on whether a password picked at random happens to
+// match a placeholder hash nobody is ever issued.
+//
+// Cost of this fix, stated explicitly per the task's acceptance criteria:
+// a login attempt against a NONEXISTENT account now costs the same CPU as
+// one against a real account (one bcrypt comparison, cost=bcryptCost)
+// instead of being ~4.5 orders of magnitude cheaper. Naively that widens
+// the DoS surface of this endpoint — flooding it with garbage emails used
+// to be nearly free to reject and now is not. But the endpoint's PRIMARY
+// brute-force defense, mw.LoginLockout wired in
+// internal/handler/auth_handler.go, was deliberately built (#5d759aad) to
+// key its failure budget on the SUBMITTED identifier string (via
+// AuthHandler.Login's `identifier := auth.NormalizeEmail(req.Email)`), not
+// on the account row this function resolves — so it already throttles
+// repeated attempts against ANY single identifier, existing or not,
+// unaffected by this change (see
+// TestAuthHandler_Login_LockoutRecordFailureError_FallsThroughTo401 and
+// this package's TestLogin_NonExistentEmail — the nonexistent branch has
+// always returned ErrInvalidCredentials, so it has always tripped that
+// same errors.Is(err, auth.ErrInvalidCredentials) lockout branch). What the
+// per-identifier lockout does NOT cover — before or after this change — is
+// an attacker spreading load across many DISTINCT nonexistent identifiers
+// to burn CPU rather than to guess one account's password; that is a
+// volumetric concern, not a credential-guessing one, and this endpoint's
+// answer to it is the secondary per-IP limiter (loginGroup in
+// cmd/api/main.go, active only when MESH_TRUSTED_PROXIES is configured).
+// That gap is not new — an attacker could already burn a full bcrypt
+// comparison per request against any REAL email before this fix — this
+// change only removes the free ride nonexistent emails previously got.
 func (s *Service) Login(ctx context.Context, email, password string) (*domain.User, *TokenPair, error) {
 	user, err := s.userRepo.GetByEmail(ctx, NormalizeEmail(email))
 	if err != nil {
 		return nil, nil, apierror.Wrap(err)
 	}
 	if user == nil {
+		// Burn the same bcrypt cost the found-user branch below pays, against a
+		// fixed dummy hash, so this branch is not distinguishable by response
+		// time. The comparison always fails (no real password will match a
+		// placeholder hash derived from a different, fixed password) — the
+		// error is intentionally not the branch's return value.
+		_ = bcryptCompare(dummyPasswordHash, []byte(password))
+		return nil, nil, ErrInvalidCredentials
+	}
+
+	err = bcryptCompare([]byte(user.PasswordHash), []byte(password))
+	if err != nil {
 		return nil, nil, ErrInvalidCredentials
 	}
 
 	if !user.IsActive {
 		return nil, nil, ErrUserInactive
-	}
-
-	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
-	if err != nil {
-		return nil, nil, ErrInvalidCredentials
 	}
 
 	tokens, err := s.generateTokenPair(user)

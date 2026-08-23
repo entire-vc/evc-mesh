@@ -63,6 +63,7 @@ type TaskFilter struct {
 	Labels         []string
 	Search         string
 	HasDueDate     *bool
+	HumanGate      *bool
 	CustomFields   map[string]CustomFieldFilter // key = field slug
 }
 
@@ -833,6 +834,23 @@ type VCSLinkRepository interface {
 	ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error)
 }
 
+// TaskListRevisionRepository reads the per-project task_list_revision counter
+// (ADR-0004, dev-docs/adrs/0004-task-list-revision-and-stale-cursor.md). The
+// counter itself is incremented entirely by DB triggers (migration
+// 20260821004) on writes to tasks/artifacts/vcs_links -- there is
+// deliberately no Increment/Bump method here, since no Go code path should
+// ever need to bump it directly (a call site that did would race the
+// trigger-driven writers and double-count). GetRevision is read-only,
+// consumed by the future list_tasks handler (subtask #6, not built here) to
+// stamp/validate the `list_revision` pagination field.
+type TaskListRevisionRepository interface {
+	// GetRevision returns the current revision for projectID, or 0 if no row
+	// exists yet (a project created before the backfill ran, or a project with
+	// zero tasks/artifacts/vcs_links so far -- both self-heal to a real row on
+	// the first trigger-driven bump).
+	GetRevision(ctx context.Context, projectID uuid.UUID) (int64, error)
+}
+
 // RuleRepository manages persistence for governance rules.
 type RuleRepository interface {
 	Create(ctx context.Context, rule *domain.Rule) error
@@ -1184,6 +1202,16 @@ type ProjectIntegrationRepository interface {
 	Upsert(ctx context.Context, pi *domain.ProjectIntegration) error
 	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+	// SetKeyExpiry records the credential's expiry and how the value was
+	// obtained. expiresAt nil clears both fields back to "unknown". Deliberately
+	// separate from Upsert: Upsert is called on every settings save (share,
+	// enabled, subfolder, ...) and folding expiry into it would silently wipe a
+	// previously-recorded date whenever an unrelated field changes.
+	SetKeyExpiry(ctx context.Context, projectID uuid.UUID, intType string, expiresAt *time.Time, source string) error
+	// RecordSyncCheck stamps the outcome of the most recent attempt to reach the
+	// integration's source. errMsg is stored only when status is "error".
+	// Separate from Upsert for the same reason as SetKeyExpiry.
+	RecordSyncCheck(ctx context.Context, projectID uuid.UUID, intType string, checkedAt time.Time, status, errMsg string) error
 }
 
 // SecretRepository manages the write-only secrets store (task #64e84eb1).

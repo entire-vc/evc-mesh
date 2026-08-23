@@ -6,6 +6,7 @@ import { RegisterPage } from "@/pages/register";
 import { BoardPage } from "@/pages/board";
 import { ListViewPage } from "@/pages/list-view";
 import { TaskDetailPage } from "@/pages/task-detail";
+import { TaskCreatePage } from "@/pages/task-create";
 import { ProjectSettingsPage } from "@/pages/project-settings";
 import { EventFeedPage } from "@/pages/event-feed";
 import { TimelinePage } from "@/pages/timeline";
@@ -159,6 +160,10 @@ export function App() {
           <Route
             path="w/:wsSlug/p/:projectSlug/updates"
             element={<ProjectUpdatesPage />}
+          />
+          <Route
+            path="w/:wsSlug/p/:projectSlug/new"
+            element={<TaskCreatePage />}
           />
           <Route
             path="w/:wsSlug/p/:projectSlug/t/:taskId"

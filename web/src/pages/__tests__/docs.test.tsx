@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
+import {
+  AA_NON_TEXT,
+  AA_TEXT,
+  brandkitThemes,
+  contrast,
+} from "@/test-utils/brandkit-contrast";
 
 const mockedNavigate = vi.fn();
 vi.mock("react-router", async () => {
@@ -101,6 +107,7 @@ import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
 import { anchorFromHash, anchorToHash } from "@/lib/docs/anchor";
 import { DOC_TREE_DEFAULT_WIDTH } from "@/lib/docs-layout-storage";
+import { MATCH_END, MATCH_START } from "@/lib/docs/document-search";
 import { DocsPage } from "@/pages/docs";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
@@ -141,13 +148,19 @@ function makeDoc(overrides: Partial<ProjectDocument> & { id: string }): ProjectD
 
 const LIST_PATH = "/api/v1/projects/proj-1/documents";
 
+type MockApiOpts = {
+  method?: string;
+  body?: unknown;
+  params?: Record<string, string | number | undefined>;
+};
+
 /** Answers the list endpoint; anything else must be handled by the test. */
 function mockRoutes(
   docs: ProjectDocument[],
-  extra?: (path: string, opts?: { method?: string; body?: unknown }) => unknown,
+  extra?: (path: string, opts?: MockApiOpts) => unknown,
 ) {
   mockedApi.mockImplementation(
-    (path: string, opts?: { method?: string; body?: unknown }) => {
+    (path: string, opts?: MockApiOpts) => {
       // Method-checked: POST goes to the same path as the list, and a branch
       // that only matched the path answered creates with the listing.
       if (path === LIST_PATH && (opts?.method ?? "GET") === "GET") {
@@ -832,6 +845,61 @@ describe("DocsPage — move", () => {
     fireEvent.click(screen.getByLabelText("Collapse Other"));
     expect(screen.queryByText("Child")).not.toBeInTheDocument();
   });
+
+  it("fills the picked destination with the light secondary surface, not the accent", async () => {
+    // Pinned deliberately, and it is the same pin the tree carries. The dialog
+    // shipped with `--accent` on the picked row and on hover — a saturated teal
+    // block under the inherited near-black text — and that is what was reported
+    // as "the highlight is dark, it was supposed to be the light green one".
+    mockRoutes([parent, child, other]);
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
+
+    const picked = screen.getByRole("option", { name: /Other/ });
+    expect(picked).toHaveClass("bg-secondary");
+    expect(picked).toHaveClass("text-secondary-foreground");
+    expect(picked).not.toHaveClass("bg-accent");
+    // Hover is a neutral tint, not the brand fill: every row the pointer
+    // crossed used to turn into a solid teal block.
+    expect(picked).toHaveClass("hover:bg-muted");
+    expect(picked.className).not.toContain("hover:bg-accent");
+  });
+
+  it("gives the picked destination a cue beyond its fill", async () => {
+    // --secondary and --muted are close in lightness by design, so the pick
+    // cannot rest on the fill alone — same reasoning as the tree row.
+    mockRoutes([parent, child, other]);
+    renderDocs();
+
+    await screen.findByText("Child");
+    openMoveDialogFor("Child");
+    fireEvent.click(await screen.findByRole("option", { name: /Other/ }));
+
+    const picked = screen.getByRole("option", { name: /Other/ });
+    expect(picked).toHaveClass("font-medium");
+    expect(picked.querySelector("[data-selected-bar]")).toBeInTheDocument();
+
+    const notPicked = screen.getByRole("option", { name: /Top level/ });
+    expect(notPicked).not.toHaveClass("bg-secondary");
+    expect(notPicked.querySelector("[data-selected-bar]")).toBeNull();
+  });
+
+  it("keeps the destination list readable in both themes", () => {
+    // The pairing is theme tokens, so the readability check belongs to the
+    // tokens. Eyeballing is what put --accent here in the first place.
+    const { light, dark } = brandkitThemes();
+
+    expect(contrast(light, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrast(dark, "--secondary", "--secondary-foreground")).toBeGreaterThanOrEqual(AA_TEXT);
+    // What it replaced, and why it was reported.
+    expect(contrast(light, "--accent", "--foreground")).toBeLessThan(AA_TEXT);
+    // The bar has to stay visible on the fill it sits on (WCAG 1.4.11).
+    expect(contrast(light, "--secondary", "--primary")).toBeGreaterThanOrEqual(AA_NON_TEXT);
+    expect(contrast(dark, "--secondary", "--primary")).toBeGreaterThanOrEqual(AA_NON_TEXT);
+  });
 });
 
 describe("DocsPage — links to a paragraph", () => {
@@ -1008,6 +1076,140 @@ describe("DocsPage — the discussion under the page", () => {
     await screen.findByTestId("doc-view");
     expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
   });
+
+  describe("the rail and the tree are mutually exclusive (#a9df0f4a)", () => {
+    /** Never resolves in BODY — the server's placement, not ours. */
+    function pageComment() {
+      return {
+        id: "dc-page",
+        document_id: "doc-1",
+        parent_comment_id: null,
+        author_id: "u1",
+        author_type: "user",
+        author_name: "Pavel",
+        body: "A note on the document as a whole.",
+        anchor: null,
+        resolved_at: null,
+        resolved_by: null,
+        resolved_by_type: null,
+        created_at: "2026-08-19T09:00:00Z",
+        updated_at: "2026-08-19T09:00:00Z",
+      };
+    }
+
+    /** A quote the current page text no longer contains — orphaned by the server. */
+    function orphanedComment() {
+      return {
+        id: "dc-orphan",
+        document_id: "doc-1",
+        parent_comment_id: null,
+        author_id: "u1",
+        author_type: "user",
+        author_name: "Pavel",
+        body: "This text isn't here any more.",
+        anchor: {
+          exact: "a sentence that got deleted",
+          prefix: "",
+          suffix: "",
+          start: null,
+          end: null,
+          orphaned: true,
+        },
+        resolved_at: null,
+        resolved_by: null,
+        resolved_by_type: null,
+        created_at: "2026-08-19T08:00:00Z",
+        updated_at: "2026-08-19T08:00:00Z",
+      };
+    }
+
+    /**
+     * Pavel's report on `#a9df0f4a`: with the rail open, the same three
+     * threads — one anchored to text, one on the page as a whole, one
+     * orphaned — painted twice on one screen. The data was never duplicated
+     * (`Comments 3` in the header was always right); only the rendering was.
+     * `#a4a8db69` made the rail start closed, which hides the bug on first
+     * load but does nothing once a reader opens it — this is the composition
+     * test that catches the open state, which no test inside
+     * doc-comment-rail.test.tsx or doc-comment-tree.test.tsx can see, because
+     * neither component knows the other is mounted.
+     */
+    it("renders each thread exactly once with the rail open, and hides the tree", async () => {
+      mockWithComments([comment(), pageComment(), orphanedComment()]);
+      localStorage.setItem("mesh_docs_comments_rail", "1");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-rail");
+      await waitFor(() => {
+        expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(3);
+      });
+      // If the tree were still mounted alongside the rail, this list would
+      // have 6 entries, not 3 — and the tree would be findable at all.
+      expect(screen.queryByTestId("doc-comment-tree")).not.toBeInTheDocument();
+    });
+
+    it("NEGATIVE CONTROL: with the rail closed, the tree alone carries all three", async () => {
+      // Guards the test above from going vacuous on a future refactor that
+      // renamed or removed one surface entirely rather than fixing the
+      // composition: closed, the tree must still show everything.
+      mockWithComments([comment(), pageComment(), orphanedComment()]);
+      localStorage.setItem("mesh_docs_comments_rail", "0");
+      renderDocs("doc-1");
+
+      await screen.findByTestId("doc-comment-tree");
+      await waitFor(() => {
+        expect(screen.getAllByTestId("doc-comment-thread")).toHaveLength(3);
+      });
+      expect(screen.queryByTestId("doc-comment-rail")).not.toBeInTheDocument();
+    });
+
+    /**
+     * Acceptance criterion 2 — the entry for a comment on the document as a
+     * whole is not lost by hiding one of the two surfaces.
+     *
+     * This was the weakest part of the fix's evidence: it held only by
+     * reading the code (`Composer` lives in the rail, so hiding the tree
+     * cannot take it away). Reading is not a check — a later refactor that
+     * moved the composer into the tree would break the criterion while every
+     * other test here stayed green, because none of them looks at whether the
+     * discussion is still *writable*.
+     *
+     * What makes the claim true is structural: `doc-comment-tree.tsx` imports
+     * the very same `Thread` from `doc-comment-rail.tsx`, so whichever
+     * surface is on screen carries the same reply entry. The assertion below
+     * pins that, on the page-as-a-whole thread specifically — the one class
+     * of thread that has nowhere else to live.
+     */
+    it("AC2: the page-as-a-whole thread stays writable in BOTH rail states", async () => {
+      for (const railOpen of [true, false] as const) {
+        mockWithComments([comment(), pageComment(), orphanedComment()]);
+        localStorage.setItem("mesh_docs_comments_rail", railOpen ? "1" : "0");
+        const { unmount } = renderDocs("doc-1");
+
+        await screen.findByTestId(
+          railOpen ? "doc-comment-rail" : "doc-comment-tree",
+        );
+        // The thread that exists only as "the document as a whole" — it has no
+        // anchor to fall back to, so if a surface drops it, it is unreachable.
+        const whole = await screen.findByText("On the page as a whole");
+        const card = whole.closest('[data-testid="doc-comment-thread"]');
+        expect(card).not.toBeNull();
+
+        // Writable, not merely visible: a reply entry inside that very thread.
+        expect(
+          within(card as HTMLElement).getByRole("button", { name: /reply/i }),
+        ).toBeInTheDocument();
+
+        // And the switch between the two surfaces is always on screen, so the
+        // reader is never stranded on the one that is currently hidden.
+        expect(screen.getByTestId("doc-comment-toggle")).toBeInTheDocument();
+
+        unmount();
+        localStorage.clear();
+        vi.clearAllMocks();
+      }
+    });
+  });
 });
 
 describe("DocsPage — narrow screens: the route decides which column you get", () => {
@@ -1106,5 +1308,88 @@ describe("DocsPage — narrow screens: the route decides which column you get", 
     // has yielded the screen — a dead link would otherwise be a dead end.
     fireEvent.click(screen.getByRole("button", { name: /^Documents$/ }));
     expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs");
+  });
+});
+
+describe("DocsPage — search", () => {
+  const SEARCH_PATH = "/api/v1/projects/proj-1/documents/search";
+
+  it("renders a search box in the tree column", async () => {
+    mockRoutes([]);
+    renderDocs();
+
+    expect(
+      await screen.findByRole("searchbox", { name: /search documents/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("finds a document by a phrase from its body, not just its title", async () => {
+    const docs = [makeDoc({ id: "doc-1", title: "Runbook" })];
+    mockRoutes(docs, (path, opts) => {
+      if (path === SEARCH_PATH && (opts?.method ?? "GET") === "GET") {
+        expect(opts?.params).toMatchObject({ q: "rotate the key" });
+        return Promise.resolve({
+          items: [
+            {
+              id: "doc-1",
+              title: "Runbook",
+              snippet: `...${MATCH_START}rotate the key${MATCH_END} before...`,
+              snippet_is_match: true,
+            },
+          ],
+        });
+      }
+      return undefined;
+    });
+
+    renderDocs();
+    fireEvent.change(
+      await screen.findByRole("searchbox", { name: /search documents/i }),
+      { target: { value: "rotate the key" } },
+    );
+
+    // The highlighted run, not a plain title match — this is the search
+    // reaching the body, which is what the tree's own title list never did.
+    const hit = await screen.findByText("rotate the key");
+    expect(hit.tagName).toBe("MARK");
+  });
+
+  it("opens the matched document and restores the tree", async () => {
+    const docs = [makeDoc({ id: "doc-1", title: "Other" })];
+    mockRoutes(docs, (path, opts) => {
+      if (path === SEARCH_PATH && (opts?.method ?? "GET") === "GET") {
+        return Promise.resolve({
+          items: [{ id: "doc-1", title: "Other", snippet: "", snippet_is_match: false }],
+        });
+      }
+      return undefined;
+    });
+
+    renderDocs();
+    const box = await screen.findByRole("searchbox", { name: /search documents/i });
+    fireEvent.change(box, { target: { value: "other" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: /Other/ }));
+
+    expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs/doc-1");
+    // Picking a result is a way to a document, not a new column — the query
+    // clears and the ordinary tree comes back.
+    expect(box).toHaveValue("");
+  });
+
+  it("does not query the server for an empty query", async () => {
+    mockRoutes([makeDoc({ id: "doc-1", title: "Runbook" })], (path) => {
+      if (path === SEARCH_PATH) throw new Error("must not search on an empty query");
+      return undefined;
+    });
+
+    renderDocs();
+    const box = await screen.findByRole("searchbox", { name: /search documents/i });
+    fireEvent.change(box, { target: { value: "x" } });
+    fireEvent.change(box, { target: { value: "" } });
+
+    // Nothing to assert on directly — the mock above throws if it is called.
+    // Give the debounce window a chance to fire before the test ends.
+    await new Promise((r) => setTimeout(r, 250));
   });
 });
