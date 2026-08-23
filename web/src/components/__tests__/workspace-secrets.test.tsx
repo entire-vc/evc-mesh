@@ -80,7 +80,7 @@ describe("WorkspaceSecrets", () => {
 
     await waitFor(() => {
       expect(mockedApi).toHaveBeenCalledWith(
-        `/workspaces/${WS}/secrets`,
+        `/api/v1/workspaces/${WS}/secrets`,
         expect.objectContaining({ method: "POST" }),
       );
     });
@@ -125,7 +125,7 @@ describe("WorkspaceSecrets", () => {
 
     await waitFor(() => {
       expect(mockedApi).toHaveBeenCalledWith(
-        `/secrets/${secret.id}/rotate`,
+        `/api/v1/secrets/${secret.id}/rotate`,
         expect.objectContaining({ method: "POST" }),
       );
     });
