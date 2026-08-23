@@ -1,5 +1,11 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router";
+import {
+  createBrowserRouter,
+  createRoutesFromElements,
+  Navigate,
+  Route,
+  RouterProvider,
+} from "react-router";
 import { AppLayout } from "@/components/layout/app-layout";
 import { LoginPage } from "@/pages/login";
 import { RegisterPage } from "@/pages/register";
@@ -72,121 +78,129 @@ class ErrorBoundary extends Component<
   }
 }
 
+// Data router: required so useBlocker (react-router) can intercept in-app
+// navigation away from a dirty draft (task #7893ab16) — useBlocker throws
+// outside a data router context. Built once at module scope, not inside
+// App(), so remounts don't tear down router state/history.
+const router = createBrowserRouter(
+  createRoutesFromElements(
+    <>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
+      <Route element={<AppLayout />}>
+        {/* Index route is handled by AppLayout redirects — no element needed */}
+        <Route index element={null} />
+        <Route path="w/:wsSlug" element={<Navigate to="dashboard" replace />} />
+        <Route path="w/:wsSlug/dashboard" element={<DashboardPage />} />
+        <Route
+          path="w/:wsSlug/org-chart"
+          element={<OrgChartPage />}
+        />
+        <Route
+          path="w/:wsSlug/org-chart/grid"
+          element={<OrgChartPage />}
+        />
+        <Route
+          path="w/:wsSlug/team/:kind/:memberSlug"
+          element={<TeamMemberPage />}
+        />
+        <Route
+          path="w/:wsSlug/memories"
+          element={<MemoryBrowserPage />}
+        />
+        <Route
+          path="w/:wsSlug/sessions"
+          element={<SessionDashboardPage />}
+        />
+        <Route
+          path="w/:wsSlug/spark"
+          element={<SparkPage />}
+        />
+        <Route
+          path="w/:wsSlug/events"
+          element={<EventFeedPage />}
+        />
+        <Route
+          path="w/:wsSlug/analytics"
+          element={<AnalyticsPage />}
+        />
+        <Route
+          path="w/:wsSlug/integrations"
+          element={<IntegrationsPage />}
+        />
+        <Route
+          path="w/:wsSlug/initiatives"
+          element={<InitiativesPage />}
+        />
+        <Route
+          path="w/:wsSlug/triage"
+          element={<TriagePage />}
+        />
+        <Route
+          path="w/:wsSlug/activity"
+          element={<ActivityPage />}
+        />
+        <Route path="w/:wsSlug/p/:projectSlug" element={<BoardPage />} />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/list"
+          element={<ListViewPage />}
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/timeline"
+          element={<TimelinePage />}
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/calendar"
+          element={<CalendarPage />}
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/docs"
+          element={<DocsPage />}
+        />
+        {/* A selected document is its own URL so it can be linked and
+            reloaded. It must be registered here: the catch-all below
+            redirects anything unrouted to "/" without a word. */}
+        <Route
+          path="w/:wsSlug/p/:projectSlug/docs/:docId"
+          element={<DocsPage />}
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/updates"
+          element={<ProjectUpdatesPage />}
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/new"
+          element={<TaskCreatePage />}
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/t/:taskId"
+          element={<TaskDetailPage />}
+        />
+        <Route
+          path="w/:wsSlug/settings"
+          element={<WorkspaceSettingsPage />}
+        />
+        <Route
+          path="w/:wsSlug/notifications"
+          element={<NotificationSettingsPage />}
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/settings"
+          element={<ProjectSettingsPage />}
+        />
+        <Route path="t/:taskId" element={<TaskDeepLinkResolver />} />
+        <Route path="tasks/:taskId" element={<TaskDeepLinkResolver />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </>,
+  ),
+);
+
 export function App() {
   return (
     <ErrorBoundary>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
-        <Route element={<AppLayout />}>
-          {/* Index route is handled by AppLayout redirects — no element needed */}
-          <Route index element={null} />
-          <Route path="w/:wsSlug" element={<Navigate to="dashboard" replace />} />
-          <Route path="w/:wsSlug/dashboard" element={<DashboardPage />} />
-          <Route
-            path="w/:wsSlug/org-chart"
-            element={<OrgChartPage />}
-          />
-          <Route
-            path="w/:wsSlug/org-chart/grid"
-            element={<OrgChartPage />}
-          />
-          <Route
-            path="w/:wsSlug/team/:kind/:memberSlug"
-            element={<TeamMemberPage />}
-          />
-          <Route
-            path="w/:wsSlug/memories"
-            element={<MemoryBrowserPage />}
-          />
-          <Route
-            path="w/:wsSlug/sessions"
-            element={<SessionDashboardPage />}
-          />
-          <Route
-            path="w/:wsSlug/spark"
-            element={<SparkPage />}
-          />
-          <Route
-            path="w/:wsSlug/events"
-            element={<EventFeedPage />}
-          />
-          <Route
-            path="w/:wsSlug/analytics"
-            element={<AnalyticsPage />}
-          />
-          <Route
-            path="w/:wsSlug/integrations"
-            element={<IntegrationsPage />}
-          />
-          <Route
-            path="w/:wsSlug/initiatives"
-            element={<InitiativesPage />}
-          />
-          <Route
-            path="w/:wsSlug/triage"
-            element={<TriagePage />}
-          />
-          <Route
-            path="w/:wsSlug/activity"
-            element={<ActivityPage />}
-          />
-          <Route path="w/:wsSlug/p/:projectSlug" element={<BoardPage />} />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/list"
-            element={<ListViewPage />}
-          />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/timeline"
-            element={<TimelinePage />}
-          />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/calendar"
-            element={<CalendarPage />}
-          />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/docs"
-            element={<DocsPage />}
-          />
-          {/* A selected document is its own URL so it can be linked and
-              reloaded. It must be registered here: the catch-all below
-              redirects anything unrouted to "/" without a word. */}
-          <Route
-            path="w/:wsSlug/p/:projectSlug/docs/:docId"
-            element={<DocsPage />}
-          />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/updates"
-            element={<ProjectUpdatesPage />}
-          />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/new"
-            element={<TaskCreatePage />}
-          />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/t/:taskId"
-            element={<TaskDetailPage />}
-          />
-          <Route
-            path="w/:wsSlug/settings"
-            element={<WorkspaceSettingsPage />}
-          />
-          <Route
-            path="w/:wsSlug/notifications"
-            element={<NotificationSettingsPage />}
-          />
-          <Route
-            path="w/:wsSlug/p/:projectSlug/settings"
-            element={<ProjectSettingsPage />}
-          />
-          <Route path="t/:taskId" element={<TaskDeepLinkResolver />} />
-          <Route path="tasks/:taskId" element={<TaskDeepLinkResolver />} />
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+      <RouterProvider router={router} />
     </ErrorBoundary>
   );
 }
