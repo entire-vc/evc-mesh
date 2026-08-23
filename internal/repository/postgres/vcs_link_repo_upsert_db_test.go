@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // No //go:build integration tag, deliberately — same reasoning as
@@ -173,4 +174,179 @@ func TestVCSLinkRepo_Upsert_UpdateBranchReturnsActualPersistedRow(t *testing.T) 
 	all, err := repo.ListByTask(ctx, taskID)
 	require.NoError(t, err)
 	require.Len(t, all, 1, "no second row may exist under the same natural key")
+}
+
+// #0fbed572: re-linking with a CORRECTED provider (the fix path for a URL
+// whose provider was originally mis-inferred, e.g. a self-hosted GitLab URL
+// first recorded as github) must update the existing row in place, not
+// insert a second one — the unique index is keyed on provider too, so the
+// naive ON CONFLICT could never match across a provider change and used to
+// leave two rows behind, one of which the done-evidence gate never reads.
+func TestVCSLinkRepo_Upsert_ProviderCorrectionUpdatesInPlace(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+	taskID := vcsLinkTestTask(t, db)
+
+	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	wrong := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitHub,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
+		URL:    mrURL,
+		Status: domain.VCSLinkStatusOpen, CreatedAt: time.Now().Add(-time.Hour),
+	}
+	created, err := repo.Upsert(ctx, wrong)
+	require.NoError(t, err)
+	require.True(t, created)
+	originalID := wrong.ID
+
+	corrected := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
+		URL:    mrURL,
+		Status: domain.VCSLinkStatusMerged, CreatedAt: time.Now(),
+	}
+	created, err = repo.Upsert(ctx, corrected)
+	require.NoError(t, err)
+	assert.False(t, created, "correcting the provider must update the existing row, not insert a duplicate")
+	assert.Equal(t, originalID, corrected.ID)
+
+	all, err := repo.ListByTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Len(t, all, 1, "exactly one row must remain after the provider correction")
+	assert.Equal(t, domain.VCSProviderGitLab, all[0].Provider, "the surviving row must carry the corrected provider")
+	assert.Equal(t, domain.VCSLinkStatusMerged, all[0].Status)
+}
+
+// seedVCSLink inserts a row directly via SQL, bypassing repo Create/Upsert.
+// Used to reproduce pre-existing corruption (#0fbed572 defect 1) that the
+// FIXED repo methods can no longer produce on their own.
+func seedVCSLink(t *testing.T, db *sqlx.DB, id, taskID uuid.UUID, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID, url string, status domain.VCSLinkStatus, createdAt time.Time) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(), `
+		INSERT INTO vcs_links (id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, '', $7, '{}', $8)
+	`, id, taskID, string(provider), string(linkType), externalID, url, string(status), createdAt)
+	require.NoError(t, err)
+}
+
+// #0fbed572 defect 1 (found by Daedalus's independent review of the first
+// attempt at this fix): a task already carrying TWO rows for the same MR —
+// exactly the shape left behind by the OLD (task_id, provider, link_type,
+// external_id)-only matching, which could never see across a provider
+// correction — must be healed by the next Upsert, not rejected with a raw
+// unique-constraint error. This is the live state #d742efd4 was actually in
+// the day the bug was caught; seeded here via seedVCSLink because the fixed
+// repo methods can no longer produce it on their own.
+func TestVCSLinkRepo_Upsert_HealsPreexistingDuplicateSameURL(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+	taskID := vcsLinkTestTask(t, db)
+
+	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	staleID := uuid.New()
+	freshID := uuid.New()
+	seedVCSLink(t, db, staleID, taskID, domain.VCSProviderGitHub, domain.VCSLinkTypePR, "14", mrURL, domain.VCSLinkStatusOpen, time.Now().Add(-2*time.Hour))
+	seedVCSLink(t, db, freshID, taskID, domain.VCSProviderGitLab, domain.VCSLinkTypePR, "14", mrURL, domain.VCSLinkStatusMerged, time.Now().Add(-time.Hour))
+
+	seeded, err := repo.ListByTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Len(t, seeded, 2, "test setup sanity: both pre-existing dupe rows must be present")
+
+	relink := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
+		URL:    mrURL,
+		Status: domain.VCSLinkStatusMerged, CreatedAt: time.Now(),
+	}
+	created, err := repo.Upsert(ctx, relink)
+	require.NoError(t, err, "healing a pre-existing duplicate must not surface a raw unique-constraint error")
+	assert.False(t, created)
+	assert.Equal(t, staleID, relink.ID, "the OLDEST row must survive")
+
+	all, err := repo.ListByTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Len(t, all, 1, "the duplicate must be merged away, not left behind")
+	assert.Equal(t, staleID, all[0].ID)
+	assert.Equal(t, domain.VCSProviderGitLab, all[0].Provider)
+	assert.Equal(t, domain.VCSLinkStatusMerged, all[0].Status)
+}
+
+// #0fbed572 defect 2: a GitHub PR and a GitLab MR that happen to share the
+// same external_id NUMBER are different objects — matching by url must
+// never collapse them into one row. Regression guard for the shape of fix
+// that matched by (task_id, link_type, external_id) alone: the second
+// Upsert there silently updated — and thereby erased — the first link.
+func TestVCSLinkRepo_Upsert_DifferentProvidersSameExternalIDStayDistinct(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+	taskID := vcsLinkTestTask(t, db)
+
+	githubLink := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitHub,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
+		URL:    "https://github.com/entire-vc/team-relay-ops/pull/14",
+		Status: domain.VCSLinkStatusOpen, CreatedAt: time.Now().Add(-time.Hour),
+	}
+	created, err := repo.Upsert(ctx, githubLink)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	gitlabLink := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
+		URL:    "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14",
+		Status: domain.VCSLinkStatusMerged, CreatedAt: time.Now(),
+	}
+	created, err = repo.Upsert(ctx, gitlabLink)
+	require.NoError(t, err)
+	assert.True(t, created, "a different-url object sharing only external_id must insert as a NEW row, not merge")
+
+	all, err := repo.ListByTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Len(t, all, 2, "the github link must NOT have been silently erased")
+
+	stillGithub, err := repo.GetByID(ctx, githubLink.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stillGithub, "the original github row must still exist")
+	assert.Equal(t, domain.VCSLinkStatusOpen, stillGithub.Status, "and must not have been silently overwritten")
+}
+
+// #0fbed572 defect 3: after a corrected provider inference, a plain
+// add_vcs_link with no status (repo.Create, not Upsert) must refuse — not
+// silently insert a second row — when a link for the same url already
+// exists under a different provider. Before this fix the unique index
+// (task_id, provider, link_type, external_id) simply didn't fire here: the
+// provider differs, so nothing blocked the insert.
+func TestVCSLinkRepo_Create_RefusesDuplicateAcrossProviderCorrection(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+	taskID := vcsLinkTestTask(t, db)
+
+	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	wrong := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitHub,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
+		URL: mrURL, Status: domain.VCSLinkStatusOpen, CreatedAt: time.Now(),
+	}
+	require.NoError(t, repo.Create(ctx, wrong))
+
+	corrected := &domain.VCSLink{
+		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
+		URL: mrURL, Status: "", CreatedAt: time.Now(),
+	}
+	err := repo.Create(ctx, corrected)
+	require.Error(t, err, "a plain Create on an already-linked url must refuse, not silently duplicate")
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.StatusCode())
+
+	all, err := repo.ListByTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Len(t, all, 1, "the refused Create must not have inserted a second row")
+	assert.Equal(t, wrong.ID, all[0].ID)
 }

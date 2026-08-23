@@ -750,9 +750,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 									s.healVCSLinkStatus(ctx, l)
 									continue
 								}
-								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRStatusCheckedLive: true}
+								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRProvider: string(l.Provider), PRStatusCheckedLive: true}
 							}
-							return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRLinkedAt: l.CreatedAt}
+							return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRProvider: string(l.Provider), PRLinkedAt: l.CreatedAt}
 						}
 					}
 				} else if s.commentRepo != nil {
@@ -1759,6 +1759,14 @@ type DoneEvidenceError struct {
 	PRURL    string
 	PRTitle  string
 	PRStatus string
+	// PRProvider is the recorded vcs_links.provider value ("github" or
+	// "gitlab"). It decides the wording of the "could not verify live"
+	// branch below: a GitHub link that failed live verification is a
+	// different fact from a GitLab link, for which no live check is even
+	// attempted (isPRMergedOnGitHub short-circuits on provider != github) —
+	// saying "against GitHub" for a GitLab link names the wrong reason and
+	// sends the reader looking in the wrong place (#0fbed572).
+	PRProvider string
 	// PRStatusCheckedLive is true when this block reflects a GitHub API call
 	// made just now (the gate asked GitHub directly and it said "not merged")
 	// rather than the cached vcs_links.status. This is current truth, not a
@@ -1799,19 +1807,39 @@ func (e *DoneEvidenceError) Error() string {
 	// explicitly plus WHEN that record was made, so the reader understands
 	// "this might be stale" rather than "the PR is genuinely still open".
 	linkedAt := e.PRLinkedAt.UTC().Format(time.RFC3339)
+	verifyNote := unverifiableLiveCheckReason(e.PRProvider)
 	if e.PRStatus == "" {
 		// The likely cause: the link was created for a PR that was already
 		// merged before linking — no webhook will ever arrive to fix that
 		// after the fact.
 		return fmt.Sprintf(
-			"PR «%s» has no recorded merge status (linked %s; could not verify live against GitHub) — if it's "+
+			"PR «%s» has no recorded merge status (linked %s; %s) — if it's "+
 				"actually merged, re-link it with an explicit status (add_vcs_link ... status=merged); if it "+
-				"genuinely isn't merged yet, merge it first", ref, linkedAt)
+				"genuinely isn't merged yet, merge it first", ref, linkedAt, verifyNote)
 	}
 	return fmt.Sprintf(
-		"PR «%s» is not merged (recorded status: %s, linked %s; could not verify live against GitHub) — if "+
+		"PR «%s» is not merged (recorded status: %s, linked %s; %s) — if "+
 			"that's stale, re-link it with an explicit status (add_vcs_link ... status=merged); otherwise merge it first",
-		ref, e.PRStatus, linkedAt)
+		ref, e.PRStatus, linkedAt, verifyNote)
+}
+
+// unverifiableLiveCheckReason explains, per provider, why the done-evidence
+// gate fell back to the cached vcs_links.status instead of a fresh check.
+// A GitHub link that says this genuinely went through isPRMergedOnGitHub and
+// failed (unreachable API, unparseable URL, no checker wired). A GitLab link
+// never reaches that call at all — isPRMergedOnGitHub short-circuits on
+// provider != github — so telling a GitLab-linked reader "could not verify
+// against GitHub" both names the wrong system and implies an attempt that
+// never happened.
+func unverifiableLiveCheckReason(provider string) string {
+	switch domain.VCSProvider(provider) {
+	case domain.VCSProviderGitLab:
+		return "could not verify live: no live GitLab check exists yet, state the status explicitly"
+	case domain.VCSProviderGitHub, "":
+		return "could not verify live against GitHub"
+	default:
+		return fmt.Sprintf("could not verify live: no live check exists yet for provider %q", provider)
+	}
 }
 
 // dodBlockingGates returns the names of required DoD gates that have not yet passed.

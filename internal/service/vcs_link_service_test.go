@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,18 @@ func (r *fakeVCSLinkRepo) Create(_ context.Context, l *domain.VCSLink) error {
 	defer r.mu.Unlock()
 	if r.createErr != nil {
 		return r.createErr
+	}
+	// Mirrors VCSLinkRepo.Create (#0fbed572 defect 3): refuse — rather than
+	// silently insert a second row — when an existing link on this task
+	// already names the same real-world url, regardless of its provider.
+	targetURL := domain.NormalizeVCSURL(l.URL)
+	for _, existing := range r.links {
+		if existing.TaskID == l.TaskID && existing.LinkType == l.LinkType && domain.NormalizeVCSURL(existing.URL) == targetURL {
+			return apierror.Conflict(fmt.Sprintf(
+				"a %s link for this url already exists on this task (id=%s) — re-link with an explicit status to correct it instead of adding a new one",
+				l.LinkType, existing.ID,
+			))
+		}
 	}
 	r.links[l.ID] = l
 	r.upsertKey[conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID)] = l.ID
@@ -971,9 +984,13 @@ func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T)
 // the second call's defaulted "open" would silently overwrite the existing
 // row's real status. It must not — an accidental duplicate/uninformed
 // add_vcs_link call is a distinct case from "I'm correcting the status"
-// (that case is Test_ExplicitStatusUpsertsOnExistingLink above), and must
-// leave the original row exactly as it was.
-func TestVCSLinkService_Create_ImplicitStatusNeverCallsUpsert(t *testing.T) {
+// (that case is Test_ExplicitStatusUpsertsOnExistingLink above).
+//
+// #0fbed572 defect 3: this used to succeed silently and insert a SECOND row
+// (repo.Create had no notion of "this url already exists under a different
+// provider"). The correct behavior is a loud refusal, and the original row
+// must be left exactly as it was either way.
+func TestVCSLinkService_Create_ImplicitStatusOnExistingLinkFailsLoudlyAndLeavesOriginalUntouched(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryReview)
 
@@ -987,21 +1004,66 @@ func TestVCSLinkService_Create_ImplicitStatusNeverCallsUpsert(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.VCSLinkStatusMerged, merged.Status)
 
-	// Same external_id, no status — the exact shape of an accidental
-	// duplicate add_vcs_link call.
+	// Same url, no status — the exact shape of an accidental duplicate
+	// add_vcs_link call.
 	_, _, err = h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "40",
 		URL:        "https://github.com/entire-vc/evc-mesh-mcp/pull/40",
 	})
-	require.NoError(t, err)
+	require.Error(t, err, "an implicit-status add on an already-linked url must fail loudly, not silently duplicate")
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.StatusCode())
 
 	// The original row, addressed by its own ID, must still say 'merged'.
 	stillMerged, err := h.repo.GetByID(context.Background(), merged.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.VCSLinkStatusMerged, stillMerged.Status,
-		"an implicit-status Create on a colliding link must not reset the existing row's status")
+		"a refused implicit-status Create must not reset the existing row's status")
+
+	links, err := h.repo.ListByTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	assert.Len(t, links, 1, "the refused call must not have inserted a second row")
+}
+
+// The same collision, but arriving under a DIFFERENT (corrected) provider —
+// the exact shape of #0fbed572 defect 3's live repro: after the provider
+// inference fix, a plain add_vcs_link with no status on an already-linked
+// GitLab MR previously slipped past the (task_id, provider, link_type,
+// external_id) unique index (different provider = no conflict there) and
+// silently created a second row.
+func TestVCSLinkService_Create_ImplicitStatusDifferentProviderSameURLFailsLoudly(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryReview)
+
+	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	wrong, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		Provider:   domain.VCSProviderGitHub, // mis-inferred, mirrors the pre-!72 bug
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "14",
+		URL:        mrURL,
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
+		TaskID:     task.ID,
+		Provider:   domain.VCSProviderGitLab, // corrected provider, same url
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: "14",
+		URL:        mrURL,
+	})
+	require.Error(t, err, "a corrected-provider implicit-status add on the same url must still refuse")
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.StatusCode())
+
+	links, err := h.repo.ListByTask(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Len(t, links, 1, "the refused call must not have inserted a duplicate under the corrected provider")
+	assert.Equal(t, wrong.ID, links[0].ID)
 }
 
 // ---------------------------------------------------------------------------

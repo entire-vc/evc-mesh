@@ -104,3 +104,55 @@ func TestVCSLinkStatusNamesMatchAcceptedSet(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeVCSURL(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+	}{
+		{"identical", "https://github.com/entire-vc/evc-mesh/pull/40", "https://github.com/entire-vc/evc-mesh/pull/40"},
+		{"trailing slash", "https://github.com/entire-vc/evc-mesh/pull/40", "https://github.com/entire-vc/evc-mesh/pull/40/"},
+		{"http vs https", "http://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14", "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"},
+		{"host case", "https://GIT.entire.host/entire-vc/team-relay-ops/-/merge_requests/14", "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"},
+		{"scheme case", "HTTPS://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14", "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotA, gotB := NormalizeVCSURL(tt.a), NormalizeVCSURL(tt.b)
+			if gotA != gotB {
+				t.Fatalf("NormalizeVCSURL(%q)=%q != NormalizeVCSURL(%q)=%q, want equal", tt.a, gotA, tt.b, gotB)
+			}
+		})
+	}
+}
+
+// #0fbed572 defect 2's negative control: a GitHub PR and a GitLab MR that
+// happen to share the same number must NEVER normalize to the same string —
+// folding that far is what silently collapsed two distinct objects into one.
+func TestNormalizeVCSURL_DifferentProvidersSameNumberStayDistinct(t *testing.T) {
+	github := NormalizeVCSURL("https://github.com/entire-vc/team-relay-ops/pull/14")
+	gitlab := NormalizeVCSURL("https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14")
+	if github == gitlab {
+		t.Fatalf("a GitHub PR and a GitLab MR normalized to the same string: %q", github)
+	}
+}
+
+// Path casing is left alone deliberately — GitHub/GitLab URL paths are not
+// case-insensitive in general, and folding them is not what this function
+// exists to fix (only scheme/host/trailing-slash cosmetics are).
+func TestNormalizeVCSURL_PathCasingIsSignificant(t *testing.T) {
+	lower := NormalizeVCSURL("https://github.com/entire-vc/evc-mesh/pull/40")
+	upper := NormalizeVCSURL("https://github.com/Entire-VC/evc-mesh/pull/40")
+	if lower == upper {
+		t.Fatalf("path casing was folded away: %q", lower)
+	}
+}
+
+func TestNormalizeVCSURL_MalformedInputComparesConsistently(t *testing.T) {
+	a := NormalizeVCSURL("not a url")
+	b := NormalizeVCSURL("not a url")
+	if a != b {
+		t.Fatalf("same malformed input normalized differently: %q vs %q", a, b)
+	}
+}

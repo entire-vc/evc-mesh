@@ -3240,6 +3240,49 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {
 	assert.NotContains(t, doneErr.Error(), "justification comment")
 }
 
+// #0fbed572: a GitLab-provider link with an unmerged cached status must NOT
+// get the GitHub-specific "could not verify live against GitHub" message —
+// isPRMergedOnGitHub short-circuits on provider != github, so no GitHub
+// attempt was ever made, and telling the reader otherwise sends them looking
+// for a webhook/API problem that doesn't exist on this link at all.
+func TestTaskService_MoveTask_DoneGate_BlockedWhenGitLabPROpen_NamesGitLabNotGitHub(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate()
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with open GitLab MR",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:       uuid.New(),
+		TaskID:   taskID,
+		Provider: domain.VCSProviderGitLab,
+		LinkType: domain.VCSLinkTypePR,
+		Status:   domain.VCSLinkStatusOpen,
+		URL:      "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14",
+		Title:    "team-relay-ops !14",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.Contains(t, doneErr.Error(), "GitLab")
+	assert.NotContains(t, doneErr.Error(), "against GitHub")
+}
+
 // #df734dd9: an empty recorded status (a link created before status
 // tracking existed, or one add_vcs_link left blank) gets a message that
 // names the real cause — no webhook can ever arrive for a PR that was
