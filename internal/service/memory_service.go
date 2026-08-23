@@ -830,6 +830,12 @@ func (s *memoryService) acquireEmbedSem(ctx context.Context) (release func(), er
 }
 
 func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
+	// Counted from the moment this goroutine starts, before it ever queues for
+	// embedSem — see MemoryEmbedInFlight's doc: a caller needs the backlog
+	// depth, not just active-slot occupancy.
+	pkgmetrics.StartMemoryEmbedInFlight()
+	defer pkgmetrics.FinishMemoryEmbedInFlight()
+
 	release, _ := s.acquireEmbedSem(context.Background()) // never errors on a Background ctx
 	defer release()
 
@@ -1095,6 +1101,12 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Counted alongside embedAndStore's writes (same embedSem, same
+			// backlog) so MemoryEmbedInFlight reflects total queue depth, not
+			// just the write side.
+			pkgmetrics.StartMemoryEmbedInFlight()
+			defer pkgmetrics.FinishMemoryEmbedInFlight()
+
 			// Query embed shares embedAndStore's embedSem (#3d10774e) — without this,
 			// EMBEDDING_CONCURRENCY bounded only the write path, and every concurrent
 			// recall fired its own unbounded embed call straight at the embedder. Wait
