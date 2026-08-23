@@ -15,11 +15,19 @@ import path from "node:path";
 // its own prose above (the self-referential-grep trap: a naive scan would
 // find this comment's mention of the pattern and "pass" for the wrong
 // reason).
+//
+// The pattern matches ANY identifier via a capture group + backreference
+// (Mesh #e6077830): a first version hardcoded `(err|error)` on both sides of
+// the ternary and missed the idiomatic `catch (e)` spelling entirely — the
+// guard was blind to its own defect class by construction, not by accident.
+// `\1` forces the left- and right-hand identifiers to be the SAME name,
+// which is also what keeps this from flagging two unrelated identifiers
+// that happen to sit on either side of an unrelated ternary.
 const SRC_ROOT = path.resolve(__dirname, "../../");
 const EXCLUDED_FILES = new Set([path.resolve(__dirname, "../api-error.ts")]);
 
 const RAW_PATTERN =
-  /(err|error)\s+instanceof\s+Error\s*\n?\s*\?\s*(err|error)\.message\s*\n?\s*:/g;
+  /([A-Za-z_$][\w$]*)\s+instanceof\s+Error\s*\n?\s*\?\s*\1\.message\s*\n?\s*:/g;
 
 function stripComments(src: string): string {
   return src
@@ -56,9 +64,42 @@ it("no source file re-introduces the raw 'instanceof Error ? .message' leak", ()
 });
 
 describe("mutation control: the guard above actually detects the pattern", () => {
-  it("flags a synthetic reintroduction of the leak", () => {
-    const synthetic = 'toast.error(err instanceof Error ? err.message : "Failed to save");';
+  it("flags a synthetic reintroduction of the leak, spelled with any variable name", () => {
+    for (const name of ["err", "error", "e", "ex", "caughtError"]) {
+      const synthetic = `toast.error(${name} instanceof Error ? ${name}.message : "Failed to save");`;
+      RAW_PATTERN.lastIndex = 0;
+      expect(
+        RAW_PATTERN.test(stripComments(synthetic)),
+        `expected a flag for variable name "${name}"`,
+      ).toBe(true);
+    }
+  });
+
+  it("flags the idiomatic `catch (e)` spelling that the old name-hardcoded regex missed (Mesh #e6077830)", () => {
+    const synthetic = [
+      "try {",
+      "  await save();",
+      "} catch (e) {",
+      '  toast.error(e instanceof Error ? e.message : "Failed to save");',
+      "}",
+    ].join("\n");
     RAW_PATTERN.lastIndex = 0;
     expect(RAW_PATTERN.test(stripComments(synthetic))).toBe(true);
+  });
+
+  it("does not flag the pattern when it appears only in a comment", () => {
+    const synthetic = [
+      "// old code used to do: e instanceof Error ? e.message : fallback",
+      "/* multi-line remark: err instanceof Error ? err.message : fallback */",
+    ].join("\n");
+    RAW_PATTERN.lastIndex = 0;
+    expect(RAW_PATTERN.test(stripComments(synthetic))).toBe(false);
+  });
+
+  it("does not flag two different identifiers either side of the ternary", () => {
+    const synthetic =
+      'toast.error(err instanceof Error ? fallbackMessage.message : "Failed to save");';
+    RAW_PATTERN.lastIndex = 0;
+    expect(RAW_PATTERN.test(stripComments(synthetic))).toBe(false);
   });
 });

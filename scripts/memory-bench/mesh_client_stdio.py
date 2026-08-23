@@ -37,6 +37,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+import corpus_sanitize
 import fixture_ages
 
 logger = logging.getLogger(__name__)
@@ -974,6 +975,23 @@ class MeshMemoryClient:
         # whose ids we never received would be abandoned for good.
 
     async def _store(self, session, content, idx, date):
+        # The write path refuses invisible characters and instruction-override
+        # phrases (memory_sanitizer.go, task #f78232c4), and the corpus carries
+        # both — 9 distractor sessions out of 1150. Normalising here rather than
+        # exempting the bench agent keeps the gate as the single write path into
+        # `memories`; the policy and its measurement are on task #82e42882.
+        #
+        # The pre-flight audit in run_ci has already proven that no
+        # answer-bearing session is touched, so this cannot move recall@k. It is
+        # logged anyway: a rewrite that starts firing on new sessions is worth
+        # seeing in the run log, not just in a test.
+        normalised = corpus_sanitize.normalise(content)
+        if normalised.changed:
+            logger.info(
+                "%s: session %d normalised for write path (%s)",
+                self.qid, idx, ", ".join(normalised.labels),
+            )
+            content = normalised.text
         result = await session.call_tool(
             "remember",
             {
