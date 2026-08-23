@@ -73,6 +73,7 @@ func (s *redisWebhookDedupStore) Claim(ctx context.Context, deliveryID string) (
 type VCSLinkHandler struct {
 	vcsService          service.VCSLinkService
 	githubWebhookSecret string // HMAC-SHA256 secret; empty disables validation.
+	gitlabWebhookSecret string // shared token sent verbatim in X-Gitlab-Token; empty disables validation.
 	dedup               WebhookDedupStore
 }
 
@@ -82,6 +83,14 @@ type VCSLinkHandlerOption func(*VCSLinkHandler)
 // WithGitHubWebhookSecret enables HMAC validation against the given secret.
 func WithGitHubWebhookSecret(secret string) VCSLinkHandlerOption {
 	return func(h *VCSLinkHandler) { h.githubWebhookSecret = secret }
+}
+
+// WithGitLabWebhookSecret enables X-Gitlab-Token validation against the
+// given secret. Unlike GitHub's HMAC-signed body, GitLab webhooks carry the
+// shared secret verbatim in a header — validation is a direct (constant-
+// time) compare, not a signature check.
+func WithGitLabWebhookSecret(secret string) VCSLinkHandlerOption {
+	return func(h *VCSLinkHandler) { h.gitlabWebhookSecret = secret }
 }
 
 // WithWebhookDedupStore wires the dedup store used to drop duplicate
@@ -396,6 +405,114 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// GitLabWebhookPayload holds the fields we care about from a GitLab
+// "Merge Request Hook" webhook event. GitLab's payload shape differs from
+// GitHub's (object_attributes nesting, path_with_namespace instead of
+// full_name, iid instead of a global number) — kept as its own struct
+// rather than shoehorned into GitHubWebhookPayload.
+type GitLabWebhookPayload struct {
+	ObjectKind       string               `json:"object_kind"`
+	Project          gitLabProjectPayload `json:"project"`
+	ObjectAttributes *gitLabMRAttrPayload `json:"object_attributes"`
+	User             gitLabUserRefPayload `json:"user"`
+}
+
+type gitLabProjectPayload struct {
+	PathWithNamespace string `json:"path_with_namespace"`
+	WebURL            string `json:"web_url"`
+}
+
+// gitLabUserRefPayload is unused today (no field of GitLabWebhookEvent reads
+// it) but decoded for parity with the payload GitLab actually sends, should
+// a future change need "who triggered this" (e.g. for the auto-comment).
+type gitLabUserRefPayload struct {
+	Username string `json:"username"`
+}
+
+type gitLabMRAttrPayload struct {
+	IID            int    `json:"iid"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	State          string `json:"state"` // "opened" | "closed" | "merged" | "locked"
+	Action         string `json:"action"`
+	SourceBranch   string `json:"source_branch"`
+	URL            string `json:"url"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
+}
+
+// GitLabWebhook handles POST /webhooks/gitlab. It receives GitLab webhook
+// events, validates the X-Gitlab-Token shared secret when configured, and
+// for "Merge Request Hook" events delegates to the service orchestrator
+// (which manages link upsert + task transition policy) — mirrors
+// GitHubWebhook's structure, adapted to GitLab's auth model (a shared
+// secret sent verbatim, not an HMAC signature over the body) and payload
+// shape. Any other event type (Push Hook, Note Hook, Pipeline Hook, ...) is
+// accepted and ignored, same policy as GitHubWebhook's default case.
+func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
+	event := c.Request().Header.Get("X-Gitlab-Event")
+	if event == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("missing X-Gitlab-Event header"))
+	}
+
+	// GitLab authenticates webhooks with a shared secret sent verbatim in
+	// X-Gitlab-Token — a direct (constant-time) compare against the
+	// configured secret, unlike GitHub's HMAC-SHA256 signature over the
+	// body. No body bytes are needed to validate it, so this can happen
+	// before reading the body at all.
+	if h.gitlabWebhookSecret != "" {
+		token := c.Request().Header.Get("X-Gitlab-Token")
+		if token == "" {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("missing X-Gitlab-Token header"))
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(h.gitlabWebhookSecret)) != 1 {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("invalid webhook token"))
+		}
+	}
+
+	if event != "Merge Request Hook" {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ignored"})
+	}
+
+	rawBody, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("failed to read request body"))
+	}
+
+	var payload GitLabWebhookPayload
+	if jsonErr := decodeJSON(rawBody, &payload); jsonErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid payload"))
+	}
+	if payload.ObjectAttributes == nil {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ignored"})
+	}
+
+	attrs := payload.ObjectAttributes
+	ev := service.GitLabWebhookEvent{
+		Action:      attrs.Action,
+		MRIID:       attrs.IID,
+		MRTitle:     attrs.Title,
+		MRBody:      attrs.Description,
+		MRURL:       attrs.URL,
+		MRState:     attrs.State,
+		MergeSHA:    attrs.MergeCommitSHA,
+		MRBranch:    attrs.SourceBranch,
+		ProjectPath: payload.Project.PathWithNamespace,
+	}
+	result, herr := h.vcsService.HandleGitLabMergeRequestEvent(c.Request().Context(), ev)
+	if herr != nil {
+		c.Logger().Errorf("gitlab webhook: merge_request handler: %v", herr)
+		return c.JSON(http.StatusOK, map[string]string{"status": "error_logged"})
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"status":       "ok",
+		"task_id":      result.TaskID,
+		"transitioned": result.Transitioned,
+		"reason":       result.Reason,
+		"old_status":   result.OldStatus,
+		"new_status":   result.NewStatus,
+	})
 }
 
 // verifyGitHubSignature validates the X-Hub-Signature-256 header value against the

@@ -243,6 +243,27 @@ type WebhookConfig struct {
 	// rate-limited to 60/hour and cannot see private repos, so an empty
 	// token isn't a usable "read-only anonymous" mode for a private org.
 	GitHubToken string
+	// GitLabURL is the base URL of the self-hosted GitLab instance (e.g.
+	// "https://git.entire.host") the done-evidence gate's live MR-status
+	// check and the GitLab client both target. Unlike GitHub, GitLab is
+	// self-hosted here, so there is no fixed default — an empty value
+	// disables the live check exactly like an empty GitLabToken does (both
+	// are required together; see cmd/api/main.go wiring).
+	GitLabURL string
+	// GitLabToken authenticates the done-evidence gate's live MR-status
+	// check against the GitLab REST API (a read-only PAT/project token). If
+	// empty, the live check is disabled entirely (the gate falls back to
+	// the cached vcs_links.status). Our self-hosted GitLab has no public-
+	// anonymous-read equivalent to GitHub's rate-limited path — every
+	// project here is private, so an empty token isn't a usable degraded
+	// mode, it's simply "no live check possible" (#bc39d781).
+	GitLabToken string
+	// GitLabSecret is the shared secret GitLab sends verbatim in the
+	// X-Gitlab-Token header on webhook deliveries (GitLab's webhook auth is
+	// a plain token compare, unlike GitHub's HMAC-signed body). If empty,
+	// token validation is skipped (backward-compatible, same policy as
+	// GitHubSecret).
+	GitLabSecret string
 }
 
 // VAPIDConfig holds Web Push VAPID key material.
@@ -320,6 +341,9 @@ func Load() *Config {
 		Webhook: WebhookConfig{
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),
 			GitHubToken:  getEnvOrFile("MESH_GITHUB_TOKEN", "MESH_GITHUB_TOKEN_FILE"),
+			GitLabURL:    getEnv("MESH_GITLAB_URL", ""),
+			GitLabToken:  getEnvOrFile("MESH_GITLAB_TOKEN", "MESH_GITLAB_TOKEN_FILE"),
+			GitLabSecret: getEnv("MESH_GITLAB_WEBHOOK_SECRET", ""),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:        getEnv("EMBEDDING_PROVIDER", "none"),

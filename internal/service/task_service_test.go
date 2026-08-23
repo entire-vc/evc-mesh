@@ -17,6 +17,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
+	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -3007,6 +3008,194 @@ func setupTaskServiceWithDoneGateAndGitHubChecker(checker githubapi.PullRequestC
 	return svc, taskRepo, statusRepo, vcsRepo, commentRepo
 }
 
+// fakeGitLabMRChecker is gitlabapi.MergeRequestChecker's counterpart to
+// fakeGitHubPRChecker, for the done-evidence gate's GitLab live-check branch
+// (#bc39d781).
+type fakeGitLabMRChecker struct {
+	mu              sync.Mutex
+	state           gitlabapi.MergeRequestState
+	err             error
+	calls           int
+	lastProjectPath string
+	lastIID         int
+}
+
+func (f *fakeGitLabMRChecker) GetMergeRequestState(_ context.Context, projectPath string, iid int) (gitlabapi.MergeRequestState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastProjectPath, f.lastIID = projectPath, iid
+	if f.err != nil {
+		return gitlabapi.MergeRequestState{}, f.err
+	}
+	return f.state, nil
+}
+
+func (f *fakeGitLabMRChecker) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func setupTaskServiceWithDoneGateAndGitLabChecker(checker gitlabapi.MergeRequestChecker) (*taskService, *MockTaskRepository, *MockTaskStatusRepository, *MockVCSLinkRepository, *MockCommentRepository) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	vcsRepo := NewMockVCSLinkRepository()
+	commentRepo := NewMockCommentRepository()
+
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithVCSLinkRepoTask(vcsRepo),
+		WithCommentRepoTask(commentRepo),
+		WithGitLabMRChecker(checker),
+	).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+	return svc, taskRepo, statusRepo, vcsRepo, commentRepo
+}
+
+// The GitLab counterpart of TestTaskService_MoveTask_DoneGate_PassesWhenGitHubReportsLiveMerged:
+// a merged MR whose cached vcs_links.status is still "open" (webhook never
+// arrived, or the link was added after the merge) must not block
+// move_task->done — the gate asks GitLab directly and self-heals the cache.
+func TestTaskService_MoveTask_DoneGate_PassesWhenGitLabReportsLiveMerged(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+	linkID := uuid.New()
+
+	checker := &fakeGitLabMRChecker{state: gitlabapi.MergeRequestState{Merged: true, State: "merged"}}
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGateAndGitLabChecker(checker)
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with an MR merged on GitLab",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:         linkID,
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitLab,
+		LinkType:   domain.VCSLinkTypePR,
+		Status:     domain.VCSLinkStatusOpen, // stale cached record
+		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/769",
+		Title:      "feat: already merged on GitLab",
+		ExternalID: "769",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.NoError(t, err, "a GitLab-merged MR must not block move_task->done without manual intervention")
+	assert.Equal(t, 1, checker.callCount())
+	assert.Equal(t, "entire-vc/evc-mesh", checker.lastProjectPath)
+	assert.Equal(t, 769, checker.lastIID)
+
+	links, lerr := vcsRepo.ListByTask(context.Background(), taskID)
+	require.NoError(t, lerr)
+	require.Len(t, links, 1)
+	assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status, "the cached status should be healed to merged after a live-verified merge")
+}
+
+// The GitLab counterpart of TestTaskService_MoveTask_DoneGate_FallsBackToCachedStatusWhenGitHubUnreachable.
+func TestTaskService_MoveTask_DoneGate_FallsBackToCachedStatusWhenGitLabUnreachable(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+	linkedAt := frozenTime.Add(-9*time.Hour - 30*time.Minute)
+
+	checker := &fakeGitLabMRChecker{err: fmt.Errorf("dial tcp: connection refused")}
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGateAndGitLabChecker(checker)
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with an MR and GitLab unreachable",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitLab,
+		LinkType:   domain.VCSLinkTypePR,
+		Status:     domain.VCSLinkStatusOpen,
+		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/600",
+		Title:      "feat: unknown live state",
+		ExternalID: "600",
+		CreatedAt:  linkedAt,
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.False(t, doneErr.PRStatusCheckedLive, "an unreachable GitLab must not be reported as a live verdict")
+	// A checker IS wired (unlike the "no access configured" case below) —
+	// this attempt genuinely happened and failed, so the message must say
+	// so rather than the "no access configured" wording, which would send
+	// the reader to check a token that is, in fact, already set correctly.
+	assert.Contains(t, doneErr.Error(), "could not verify live against GitLab just now")
+	assert.NotContains(t, doneErr.Error(), "no GitLab access is configured")
+	assert.Contains(t, doneErr.Error(), "open")
+	assert.Contains(t, doneErr.Error(), linkedAt.UTC().Format(time.RFC3339))
+}
+
+// The reported case (#bc39d781): NO GitLab checker wired at all (empty
+// MESH_GITLAB_URL/MESH_GITLAB_TOKEN) — the refusal must say access isn't
+// configured, not something that reads as a failed live attempt.
+func TestTaskService_MoveTask_DoneGate_NoGitLabCheckerWired_NamesNoAccessConfigured(t *testing.T) {
+	projectID := uuid.New()
+	taskID := uuid.New()
+	statusID := uuid.New()
+
+	svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGate() // no checker wired at all
+
+	taskRepo.items[taskID] = &domain.Task{
+		ID:           taskID,
+		ProjectID:    projectID,
+		StatusID:     uuid.New(),
+		Title:        "Task with an MR, no GitLab checker wired",
+		VCSLinkCount: 1,
+	}
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID:        statusID,
+		ProjectID: projectID,
+		Category:  domain.StatusCategoryDone,
+	}
+	vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitLab,
+		LinkType:   domain.VCSLinkTypePR,
+		Status:     domain.VCSLinkStatusOpen,
+		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/601",
+		Title:      "feat: nothing configured",
+		ExternalID: "601",
+	})
+
+	err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+	require.Error(t, err)
+	var doneErr *DoneEvidenceError
+	require.ErrorAs(t, err, &doneErr)
+	assert.False(t, doneErr.PRStatusCheckedLive)
+	assert.Contains(t, doneErr.Error(), "no GitLab access is configured")
+	assert.Contains(t, doneErr.Error(), "MESH_GITLAB_TOKEN")
+}
+
 // The reported incident: PR merged on GitHub, but the cached vcs_links
 // record still says "open" (the webhook that would have updated it never
 // arrived for this link). The gate must ask GitHub directly and let the
@@ -3241,10 +3430,14 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenPROpen(t *testing.T) {
 }
 
 // #0fbed572: a GitLab-provider link with an unmerged cached status must NOT
-// get the GitHub-specific "could not verify live against GitHub" message —
-// isPRMergedOnGitHub short-circuits on provider != github, so no GitHub
-// attempt was ever made, and telling the reader otherwise sends them looking
-// for a webhook/API problem that doesn't exist on this link at all.
+// get the GitHub-specific "could not verify live against GitHub" message.
+// This test uses setupTaskServiceWithDoneGate() — no GitLab checker wired —
+// so isPRMergedLive dispatches to isMRMergedOnGitLab, which short-circuits
+// on s.gitlabMRChecker == nil (#bc39d781 gave GitLab a real live-check path;
+// see TestTaskService_MoveTask_DoneGate_PassesWhenGitLabReportsLiveMerged
+// for the case where a checker IS wired). Either way, no GitHub attempt was
+// ever made for this link, and telling the reader otherwise sends them
+// looking for a webhook/API problem that doesn't exist on this link at all.
 func TestTaskService_MoveTask_DoneGate_BlockedWhenGitLabPROpen_NamesGitLabNotGitHub(t *testing.T) {
 	projectID := uuid.New()
 	taskID := uuid.New()
