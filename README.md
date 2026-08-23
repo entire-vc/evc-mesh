@@ -263,10 +263,7 @@ both implement the same MCP tool set (`internal/mcp` in each — Go's
 modules). `evc-mesh-mcp` is the one under active development and gets new
 tools/fixes first; `./cmd/mcp` here is the copy this repo builds and deploys
 alongside the API. If you are choosing which to run, prefer
-`evc-mesh-mcp`. `cmd/mcp-drift-check` (run in CI on both repos) diffs the two
-`internal/mcp` trees function-by-function and fails the build on
-unreviewed drift — see `cmd/mcp-drift-check/allow.txt` for the currently
-known, tracked differences.
+`evc-mesh-mcp`.
 
 ## Documentation
 
