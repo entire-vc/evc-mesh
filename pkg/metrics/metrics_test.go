@@ -53,3 +53,29 @@ func TestSetEventBusEnabled(t *testing.T) {
 	SetEventBusEnabled(false)
 	assert.Equal(t, float64(0), testutil.ToFloat64(EventBusEnabled))
 }
+
+// mesh_memory_embed_inflight must count the BACKLOG (start-to-finish), not
+// embedSem slot occupancy — a caller (the memory-bench harness, #ebd9dc1c)
+// polls it to know whether it is safe to issue a recall without queueing
+// behind unfinished writes. If this only tracked active semaphore slots it
+// would cap out at EMBEDDING_CONCURRENCY and read as "drained" while a large
+// backlog was still queued for a slot — exactly the false negative that
+// would defeat the wait-for-settle harness fix.
+func TestMemoryEmbedInFlight(t *testing.T) {
+	MemoryEmbedInFlight.Set(0)
+	assert.Equal(t, float64(0), testutil.ToFloat64(MemoryEmbedInFlight))
+
+	StartMemoryEmbedInFlight()
+	StartMemoryEmbedInFlight()
+	StartMemoryEmbedInFlight()
+	assert.Equal(t, float64(3), testutil.ToFloat64(MemoryEmbedInFlight),
+		"three starts with no finish must read as a backlog of 3, not clamp at a slot count")
+
+	FinishMemoryEmbedInFlight()
+	assert.Equal(t, float64(2), testutil.ToFloat64(MemoryEmbedInFlight))
+
+	FinishMemoryEmbedInFlight()
+	FinishMemoryEmbedInFlight()
+	assert.Equal(t, float64(0), testutil.ToFloat64(MemoryEmbedInFlight),
+		"must return to exactly 0 once every started call has finished")
+}
