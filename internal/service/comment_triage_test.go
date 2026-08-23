@@ -1924,6 +1924,14 @@ func TestLastParagraph(t *testing.T) {
 		{"multiple blank lines between paragraphs", "Первое.\n\n\n\nВторое.", "Второе."},
 		{"trailing whitespace trimmed", "Первое.\n\nВторое.  \n\n", "Второе."},
 		{"empty", "", ""},
+		// Fixed 2026-08-24 (#62560d6d, live incident #68df3b62): a trailing
+		// "— Name" sign-off is not the comment's operative last word.
+		{"em-dash signature skipped, negator paragraph found", "Гейт снят — вопрос отвечен.\n\n— Robert", "Гейт снят — вопрос отвечен."},
+		{"hyphen signature skipped", "Гейт снят.\n\n- Howard", "Гейт снят."},
+		{"two-word signature skipped", "Гейт снят.\n\n— The Fleet", "Гейт снят."},
+		{"signature-only body returns empty, not a false paragraph", "— Robert", ""},
+		{"dash BULLET is not a signature — too many words", "Первое.\n\n- Fixed the bug and verified live", "- Fixed the bug and verified live"},
+		{"dash line with punctuation is not a signature", "Первое.\n\n- Done.", "- Done."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
