@@ -29,7 +29,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useBlocker, useNavigate } from "react-router";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
@@ -260,12 +260,8 @@ export function TaskPanel({
       draftAssigneeValue !== "unassigned" ||
       draftReviewerValue !== "unassigned");
 
-  // Warn on tab close/reload with an unsaved draft. This does NOT cover
-  // in-app route navigation elsewhere (sidebar links, browser back) —
-  // react-router's useBlocker requires a data router (createBrowserRouter +
-  // RouterProvider), and this app mounts a plain <BrowserRouter> (App.tsx).
-  // Flagged to the task rather than silently left unguarded or silently
-  // migrating the router.
+  // Warn on tab close/reload with an unsaved draft. useBlocker (below)
+  // cannot cover this case — it only intercepts in-app router navigation.
   useEffect(() => {
     if (!isDraftDirty) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -276,13 +272,37 @@ export function TaskPanel({
     return () => window.removeEventListener("beforeunload", handler);
   }, [isDraftDirty]);
 
-  const handleBackClick = () => {
+  // Set right before the post-submit redirect in handleCreateSubmit so that
+  // navigation isn't itself caught as "discarding the draft" — the fields
+  // are still populated at that point, isDraftDirty is still true.
+  const suppressNavBlockRef = useRef(false);
+
+  // Single mechanism for every in-app way to leave a dirty draft — sidebar
+  // links, the browser back button, the Cancel button below, anywhere else
+  // in the app (task #7893ab16). Requires the data router mounted in
+  // App.tsx; throws under a plain <BrowserRouter>.
+  const blocker = useBlocker(
+    useCallback(
+      ({ currentLocation, nextLocation }) =>
+        isDraftDirty &&
+        !suppressNavBlockRef.current &&
+        currentLocation.pathname !== nextLocation.pathname,
+      [isDraftDirty],
+    ),
+  );
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
     if (
-      isDraftDirty &&
-      !window.confirm("Discard this task? Your unsaved changes will be lost.")
+      window.confirm("Discard this task? Your unsaved changes will be lost.")
     ) {
-      return;
+      blocker.proceed();
+    } else {
+      blocker.reset();
     }
+  }, [blocker]);
+
+  const handleBackClick = () => {
     onBack?.();
   };
 
@@ -806,6 +826,7 @@ export function TaskPanel({
         }
       }
 
+      suppressNavBlockRef.current = true;
       onCreated?.(createdTask);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Failed to create task");
