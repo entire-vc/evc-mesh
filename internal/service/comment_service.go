@@ -1281,6 +1281,12 @@ func (s *commentService) notifyMentions(
 			}
 			if err == nil && user != nil && !seenID[user.ID] {
 				isSelf := actorType == domain.ActorTypeUser && user.ID == actorID
+				if !isSelf {
+					// Before recording HasSubscription, so a first-time mention
+					// is reflected in the very outcome row it produces — not
+					// caught up on the next one.
+					s.ensureMentionDelivery(ctx, workspaceID, user.ID)
+				}
 				outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
 					Slug:            slug,
 					User:            user,
@@ -1432,6 +1438,90 @@ func (s *commentService) userHasMentionSubscription(ctx context.Context, userID 
 		}
 	}
 	return false
+}
+
+// mentionEmailChannel is the notification_preferences channel ensureMentionDelivery
+// provisions. Email, not the in-app bell document_watch_service.go uses for
+// Watch: a person with no preference row at all also has no app open and no
+// Telegram bot bound, and email is the one channel that still reaches them.
+const mentionEmailChannel = "email"
+
+// ensureMentionDelivery gives a person who has never configured notification
+// preferences somewhere for an @-mention to actually arrive, instead of
+// silently recording them as delivered-or-skipped while every channel stays
+// empty either way. Root cause measured on prod 2026-08-23 (#4e1d249f):
+// notification_preferences had rows for none of the humans being @-mentioned
+// in "❓ Blocking" comments, so every one of them landed as skipped/
+// no_subscription regardless of how the mention itself was handled.
+//
+// Deliberately narrow, mirroring documentWatchService.ensureInAppDelivery:
+//   - only the email channel. Being mentioned is not consent to be pushed to
+//     or messaged on Telegram — those need an explicit opt-in same as today.
+//   - only the task.mentioned event, unioned into whatever the row already
+//     carries. Never removes an event, never touches another channel.
+//   - a row the person has switched OFF is left off. An explicit "no email"
+//     outranks the implicit request inside being named in a comment; the
+//     mention is still recorded (HasSubscription reflects the real state),
+//     and the log says why nothing will arrive.
+//
+// Runs only for being addressed directly — @-mentioned by name — never for
+// merely having commented on the same task. See ensureInAppDelivery's own
+// comment for the broader case this deliberately does not cover: silently
+// re-adding an event type to the settings of everyone who ever touched a
+// task is exactly what an unsubscribe exists to prevent. Being named is a
+// narrower, stronger signal than having participated.
+//
+// Best-effort by construction — a mention that was recorded must not be
+// rolled back because the preference row could not be provisioned.
+func (s *commentService) ensureMentionDelivery(ctx context.Context, workspaceID, userID uuid.UUID) {
+	if s.notifySvc == nil {
+		return
+	}
+	prefs, err := s.notifySvc.GetPreferences(ctx, userID)
+	if err != nil {
+		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s but their notification preferences could not be read, so email delivery is unconfirmed: %v",
+			userID, workspaceID, err)
+		return
+	}
+
+	var email *domain.NotificationPreference
+	for i := range prefs {
+		p := &prefs[i]
+		if p.UserID == nil || *p.UserID != userID || p.WorkspaceID != workspaceID {
+			continue
+		}
+		// Any enabled channel that already carries task.mentioned is enough —
+		// someone already reachable by Telegram does not also need email.
+		if p.IsEnabled && coversAll(p.Events, []string{"task.mentioned"}) {
+			return
+		}
+		if p.Channel == mentionEmailChannel {
+			email = p
+		}
+	}
+
+	if email != nil && !email.IsEnabled {
+		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s with email notifications switched off — mention recorded, nothing will be delivered there",
+			userID, workspaceID)
+		return
+	}
+
+	pref := &domain.NotificationPreference{
+		WorkspaceID: workspaceID,
+		UserID:      &userID,
+		Channel:     mentionEmailChannel,
+		Events:      []string{"task.mentioned"},
+		IsEnabled:   true,
+	}
+	if email != nil {
+		pref.ID = email.ID
+		pref.Config = email.Config
+		pref.Events = unionEvents(email.Events, []string{"task.mentioned"})
+	}
+	if _, err := s.notifySvc.UpsertPreferences(ctx, pref); err != nil {
+		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s but the email channel could not be provisioned, so nothing will be delivered there: %v",
+			userID, workspaceID, err)
+	}
 }
 
 // notifyUserMention dispatches the "task.mentioned" notification event for one
