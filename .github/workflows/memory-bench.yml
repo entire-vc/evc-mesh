@@ -134,8 +134,6 @@ on:
       - 'internal/service/memory_service.go'
       - 'internal/repository/postgres/memory_repo.go'
       - 'internal/repository/postgres/memory_edges_repo.go'
-      - 'internal/mcp/tools.go'
-      - 'internal/mcp/server.go'
       - 'internal/reconciler/**'
       - 'scripts/memory-bench/**'
 
@@ -153,6 +151,18 @@ env:
   # touching only `internal/handler/memory_handler.go`, and the gate no-op'd to
   # green because the handler was not listed here. When adding a memory code
   # path, add it here in the same PR.
+  #
+  # ⚠️ NAMED GAP, so nobody reads this list as complete coverage of recall.
+  # `internal/mcp/tools.go` and `internal/mcp/server.go` used to be listed here.
+  # They were this repo's DUPLICATE of the MCP server and were deleted with it
+  # (Mesh #e85e4e05). The surviving implementation — the one every agent's
+  # `recall` actually goes through — lives in entire-vc/evc-mesh-mcp, a
+  # different repository, and a `paths:` filter cannot see across repositories.
+  # Leaving the two entries in place would have been WORSE than removing them:
+  # a path that can never change again is a line that looks like coverage and
+  # measures nothing, which is exactly the #347 failure wearing the opposite
+  # mask. Recall-side changes in evc-mesh-mcp are therefore NOT gated by this
+  # job today. Closing that needs a gate in that repository, not a line here.
   MEMORY_PATHS: |
     internal/handler/memory_handler.go
     internal/domain/memory.go
@@ -162,8 +172,6 @@ env:
     internal/repository/postgres/memory_edges_repo.go
     internal/repository/postgres/memory_chunk_rank.go
     internal/repository/postgres/memory_chunk_repo.go
-    internal/mcp/tools.go
-    internal/mcp/server.go
     internal/reconciler/
     pkg/sdk/memories.go
     scripts/memory-bench/

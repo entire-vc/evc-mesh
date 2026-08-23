@@ -948,8 +948,6 @@ jobs:
         run: pnpm build
       - name: Build API server
         run: go build -o bin/api ./cmd/api
-      - name: Build MCP server
-        run: go build -o bin/mcp ./cmd/mcp
       - name: Upload binaries
         uses: actions/upload-artifact@v7
         with:

@@ -241,9 +241,10 @@ jobs:
           # one ran on every backend merge — so it silently reverted the other
           # (measured: 8 mesh-mcp.rollback-*-ci-auto anchors on mesh-vm over
           # 2026-08-21..22, each one this job overwriting the live binary).
-          # ./cmd/mcp itself still exists and is still built by ci.yml and by
-          # deploy/docker/mesh/Dockerfile — the self-hosted compose stack
-          # serves MCP from it. Only the mesh-vm deploy moved away.
+          # ./cmd/mcp is now gone from this repository entirely (#e85e4e05):
+          # the self-hosted compose stack installs the MCP server from
+          # evc-mesh-mcp at a pinned SHA instead (deploy/docker/mesh/Dockerfile),
+          # so there is no copy left here for anything to build.
 
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.10.0

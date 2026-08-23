@@ -69,8 +69,10 @@ func RecordRateLimitHit(keyType string) { pkgmetrics.RecordRateLimitHit(keyType)
 //
 // This is the base implementation. MetricsAuth (below) is a thin Echo
 // adapter over it — there is exactly one comparison to audit, not one per
-// HTTP stack. Use this directly for servers that don't run Echo (e.g.
-// cmd/mcp's plain net/http mux); do not re-derive the check there.
+// HTTP stack. Use this directly for any server that doesn't run Echo; do not
+// re-derive the check there. (The example that used to stand here — cmd/mcp's
+// plain net/http mux — is gone: that server was a duplicate of
+// entire-vc/evc-mesh-mcp and was deleted, Mesh #e85e4e05.)
 func MetricsAuthHTTP(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next

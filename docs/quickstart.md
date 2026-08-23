@@ -135,9 +135,8 @@ Add to your project's `.mcp.json`:
 {
   "mcpServers": {
     "evc-mesh": {
-      "command": "go",
-      "args": ["run", "./cmd/mcp"],
-      "cwd": "/path/to/evc-mesh",
+      "command": "evc-mesh-mcp",
+      "args": ["--transport", "stdio"],
       "env": {
         "MESH_API_URL": "http://localhost:8005",
         "MESH_AGENT_KEY": "agk_my-team_your-key-here"
