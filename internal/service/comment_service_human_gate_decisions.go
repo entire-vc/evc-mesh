@@ -32,6 +32,22 @@ var ErrHumanGateDecisionAlreadyRevoked = errors.New("human gate decision already
 // be revoked (contract: append-only, no second-order corrections).
 var ErrHumanGateDecisionCannotRevokeRevocation = errors.New("cannot revoke a revocation row")
 
+// HumanGateDecisionValidationError wraps a validateDecisionInput failure
+// (missing question_ref/canonical_key, unknown provenance/channel, missing
+// quote, etc.) so the handler layer can map it to 400 via errors.As, instead
+// of letting a bare error fall through handleError's *apierror.Error type
+// assertion into the generic 500 fallback. That fallthrough was the actual
+// bug behind #62560d6d: POST /tasks/:id/human-gate-decisions returned
+// Internal Server Error for any malformed-but-otherwise-valid body (e.g.
+// {"decided_by": "<uuid>"} with no question_ref/canonical_key) instead of a
+// 400 naming the missing field — validation was correct, only its HTTP
+// status was wrong.
+type HumanGateDecisionValidationError struct {
+	Msg string
+}
+
+func (e *HumanGateDecisionValidationError) Error() string { return e.Msg }
+
 // RecordHumanGateDecision appends a decision record and, if the task's gate
 // is currently live, releases it as a CONSEQUENCE of the write (contract
 // docs/human-gate-decision-recorded.md §3, P1: "гейт снимается следствием
@@ -47,7 +63,7 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 		return nil, errors.New("task service not configured")
 	}
 	if err := validateDecisionInput(input); err != nil {
-		return nil, err
+		return nil, &HumanGateDecisionValidationError{Msg: err.Error()}
 	}
 
 	d := &domain.HumanGateDecision{

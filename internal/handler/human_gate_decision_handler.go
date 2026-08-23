@@ -159,6 +159,17 @@ func (h *HumanGateDecisionHandler) List(c echo.Context) error {
 // fallback isn't what a caller sees for an ordinary "not found" or "already
 // revoked".
 func mapHumanGateDecisionError(err error) error {
+	// Checked first and separately from the sentinel switch below: this is a
+	// *service.HumanGateDecisionValidationError (matched by type, not by
+	// errors.Is on a fixed sentinel), covering every validateDecisionInput
+	// failure — missing question_ref/canonical_key, unknown provenance/
+	// channel, missing quote. Without this, the error reaches handleError as
+	// a bare error, fails every *apierror.Error / typed-error check there,
+	// and falls to the generic 500 (the bug behind #62560d6d).
+	var validationErr *service.HumanGateDecisionValidationError
+	if errors.As(err, &validationErr) {
+		return apierror.BadRequest(validationErr.Error())
+	}
 	switch {
 	case errors.Is(err, service.ErrHumanGateDecisionNotFound):
 		return apierror.NotFound("HumanGateDecision")
