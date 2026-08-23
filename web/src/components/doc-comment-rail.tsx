@@ -110,7 +110,7 @@ function PlacementNotice({ placement }: { placement: ThreadPlacement }) {
 // Composer
 // ---------------------------------------------------------------------------
 
-function Composer({
+export function Composer({
   placeholder,
   initialValue = "",
   submitLabel,
@@ -547,9 +547,6 @@ export function DocCommentRail({
               ? "No comments yet."
               : "No open comments. Turn on “Show resolved” to see the rest."}
           </p>
-          {threads.length === 0 && !controller.readOnly && (
-            <p>Select some text in the page to start one.</p>
-          )}
         </div>
       ) : (
         <div className="space-y-2 pb-8">
