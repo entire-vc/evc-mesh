@@ -30,6 +30,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
+	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/reconciler"
@@ -334,6 +335,18 @@ func main() {
 		log.Printf("[config] MESH_GITHUB_TOKEN not set — done-evidence gate will rely on cached VCS link status only (no live GitHub check)")
 	}
 
+	// gitlabClient mirrors githubClient above (#bc39d781) — unlike GitHub,
+	// self-hosted GitLab needs BOTH a base URL and a token before a live
+	// check can even be attempted, so require both rather than silently
+	// wiring a client that would fail on its first request.
+	var gitlabClient gitlabapi.MergeRequestChecker
+	if cfg.Webhook.GitLabURL != "" && cfg.Webhook.GitLabToken != "" {
+		gitlabClient = gitlabapi.NewClient(cfg.Webhook.GitLabURL, cfg.Webhook.GitLabToken)
+		log.Printf("[config] GitLab live MR-status check enabled for the done-evidence gate (%s)", cfg.Webhook.GitLabURL)
+	} else {
+		log.Printf("[config] MESH_GITLAB_URL/MESH_GITLAB_TOKEN not set — done-evidence gate will rely on cached VCS link status only (no live GitLab check)")
+	}
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
@@ -350,6 +363,7 @@ func main() {
 		service.WithCommentRepoTask(commentRepo),  // enables review-evidence gate
 		service.WithVCSLinkRepoTask(vcsLinkRepo),  // enables done-evidence gate
 		service.WithGitHubPRChecker(githubClient), // live PR-status check for the done-evidence gate (nil-safe if MESH_GITHUB_TOKEN unset — see below)
+		service.WithGitLabMRChecker(gitlabClient), // live MR-status check for the done-evidence gate (nil-safe if MESH_GITLAB_URL/MESH_GITLAB_TOKEN unset — see above)
 		// Human half of the assignee tenancy guard. Without it the user path of
 		// assertAssigneeInProjectWorkspace cannot be decided and refuses every
 		// user assignment, so this wiring is load-bearing, not optional —
@@ -637,6 +651,7 @@ func main() {
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
 	vcsLinkHandler := handler.NewVCSLinkHandler(vcsLinkService,
 		handler.WithGitHubWebhookSecret(cfg.Webhook.GitHubSecret),
+		handler.WithGitLabWebhookSecret(cfg.Webhook.GitLabSecret),
 		handler.WithWebhookDedupStore(handler.NewRedisWebhookDedupStore(agentNotifyRedis)),
 	)
 	integrationHandler := handler.NewIntegrationHandler(integrationService, telegramClient, telegramBotManager)
@@ -1356,6 +1371,12 @@ func main() {
 	// alias documented in the integrations UI.
 	e.POST("/webhooks/github", vcsLinkHandler.GitHubWebhook)
 	e.POST("/api/v1/integrations/github/webhook", vcsLinkHandler.GitHubWebhook)
+
+	// GitLab webhook receiver (public — no auth, X-Gitlab-Token validated
+	// when configured). Mirrors the GitHub route above (#bc39d781) — no
+	// legacy alias needed since this is a new route with no prior configured
+	// callers to stay compatible with.
+	e.POST("/webhooks/gitlab", vcsLinkHandler.GitLabWebhook)
 
 	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
 	// there accepts a user JWT or ANY agent's API key; this route must accept

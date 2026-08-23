@@ -328,18 +328,136 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		return PRHandleResult{TaskID: taskID, Reason: "not_closed"}, nil
 	}
 
+	return s.applyPRTransitionPolicy(ctx, taskID, ev.PRMerged,
+		fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), "github-webhook")
+}
+
+// HandleGitLabMergeRequestEvent applies the same webhook → task transition
+// policy as HandleGitHubPullRequestEvent (#bc39d781) — task-ref resolution,
+// link upsert, and the in_progress→review→done transition are identical
+// once GitHub's "PR" and GitLab's "MR" are reduced to (task ref, terminal
+// state); only the wire-level field names and vocabulary differ.
+func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev GitLabWebhookEvent) (PRHandleResult, error) {
+	if s.taskRepo == nil || s.statusRepo == nil || s.taskSvc == nil || s.commentSvc == nil {
+		return PRHandleResult{}, errors.New("vcsLinkService: missing dependency for HandleGitLabMergeRequestEvent (taskRepo/statusRepo/taskSvc/commentSvc must be wired)")
+	}
+
+	// 1. Resolve task_id from any recognised reference spelling in the title,
+	//    body or source branch, then fall back to a previously-linked
+	//    (provider, link_type, external_id).
+	sources := []TaskRefSource{
+		{Name: "title", Text: ev.MRTitle},
+		{Name: "body", Text: ev.MRBody},
+		{Name: "branch", Text: ev.MRBranch},
+	}
+	taskID, matched, outcome := s.resolveTaskRef(ctx, sources...)
+	if taskID != uuid.Nil {
+		log.Printf("[vcs-webhook] mr=%s!%d resolved task=%s via=%s src=%s raw=%q",
+			ev.ProjectPath, ev.MRIID, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
+		if stale, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitLab, domain.VCSLinkTypePR, strconv.Itoa(ev.MRIID)); err == nil {
+			for _, l := range stale {
+				if l.TaskID != taskID {
+					log.Printf("[vcs-webhook] mr=%s!%d stored link points at task=%s but payload names task=%s; leaving the stale row for review (link_id=%s)",
+						ev.ProjectPath, ev.MRIID, l.TaskID, taskID, l.ID)
+				}
+			}
+		}
+	}
+	if taskID == uuid.Nil && outcome == refAmbiguous {
+		// See the identical guard in HandleGitHubPullRequestEvent: an
+		// ambiguous payload must not fall back to whatever was stored for a
+		// prior delivery of the same MR — that reuse is what let PR #433
+		// stick to the wrong task irreversibly.
+		log.Printf("[vcs-webhook] mr=%s!%d ambiguous_task_ref: refusing to reuse any stored link for this MR",
+			ev.ProjectPath, ev.MRIID)
+		return PRHandleResult{Reason: "ambiguous_task_ref"}, nil
+	}
+	if taskID == uuid.Nil {
+		links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitLab, domain.VCSLinkTypePR, strconv.Itoa(ev.MRIID))
+		if err != nil {
+			return PRHandleResult{}, fmt.Errorf("list vcs links by external_id: %w", err)
+		}
+		switch {
+		case len(links) == 0:
+			log.Printf("[vcs-webhook] mr=%s!%d no_task_ref: candidates=%d title=%q body=%q branch=%q",
+				ev.ProjectPath, ev.MRIID, len(ExtractTaskRefs(sources...)),
+				truncate(ev.MRTitle, 80), truncate(ev.MRBody, 160), truncate(ev.MRBranch, 60))
+			return PRHandleResult{Reason: "no_task_ref"}, nil
+		case len(links) == 1:
+			taskID = links[0].TaskID
+		default:
+			// Multiple historical links; ListByExternalID orders by created_at
+			// DESC so the first row is the newest association.
+			log.Printf("[vcs-webhook] MR !%d has %d historical task links; using newest task_id=%s",
+				ev.MRIID, len(links), links[0].TaskID)
+			taskID = links[0].TaskID
+		}
+	}
+
+	// 2. Compute target link status. GitLab's `state` already distinguishes
+	//    merged from closed (unlike GitHub's open/closed-only `state`, which
+	//    needs the separate `merged` boolean), so this is a direct mapping.
+	var linkStatus domain.VCSLinkStatus
+	switch ev.MRState {
+	case "merged":
+		linkStatus = domain.VCSLinkStatusMerged
+	case "closed":
+		linkStatus = domain.VCSLinkStatusClosed
+	default: // "opened", "locked" (locked is transient while GitLab processes a merge)
+		linkStatus = domain.VCSLinkStatusOpen
+	}
+
+	// 3. Upsert the link so subsequent webhooks update the same row.
+	link := &domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		Provider:   domain.VCSProviderGitLab,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: strconv.Itoa(ev.MRIID),
+		URL:        ev.MRURL,
+		Title:      ev.MRTitle,
+		Status:     linkStatus,
+		Metadata:   []byte("{}"),
+		CreatedAt:  time.Now(),
+	}
+	if _, err := s.repo.Upsert(ctx, link); err != nil {
+		return PRHandleResult{TaskID: taskID}, fmt.Errorf("upsert vcs link: %w", err)
+	}
+
+	// 4. Transitions only happen once the MR reaches a terminal state.
+	//    GitLab has no single boolean equivalent to GitHub's
+	//    action=="closed" gate — `state` already carries this distinction.
+	if linkStatus != domain.VCSLinkStatusMerged && linkStatus != domain.VCSLinkStatusClosed {
+		return PRHandleResult{TaskID: taskID, Reason: "not_closed"}, nil
+	}
+
+	return s.applyPRTransitionPolicy(ctx, taskID, linkStatus == domain.VCSLinkStatusMerged,
+		fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
+}
+
+// applyPRTransitionPolicy runs the merge/close transition policy shared by
+// HandleGitHubPullRequestEvent and HandleGitLabMergeRequestEvent, once each
+// has resolved a task and upserted its link: post a comment and stop for a
+// close-without-merge; wait for sibling PR/MR links to also go terminal;
+// otherwise move the task in_progress→review or review→done. refLabel
+// (e.g. "PR #42" / "MR !17") and mergeRefLabel (a short commit label) are
+// already formatted for the auto-comment text — this function does not
+// know or care which provider it's being called for. source tags the
+// posted comment's metadata ("github-webhook" / "gitlab-webhook") so a
+// reader can tell which webhook actually triggered a given transition.
+func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uuid.UUID, merged bool, refLabel, mergeRefLabel, source string) (PRHandleResult, error) {
 	// 5a. closed without merge — post comment, no status change.
-	if !ev.PRMerged {
-		body := fmt.Sprintf("🤖 Auto: PR #%d closed without merge — no status change.", ev.PRNumber)
-		if cerr := s.postSystemComment(ctx, taskID, body); cerr != nil {
+	if !merged {
+		body := fmt.Sprintf("🤖 Auto: %s closed without merge — no status change.", refLabel)
+		if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
 			log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
 		}
 		return PRHandleResult{TaskID: taskID, Reason: "closed_without_merge"}, nil
 	}
 
-	// 5b. closed + merged. Check that all PRs linked to this task are terminal
-	//     (merged or closed). If not, this is a partial merge in a multi-PR
-	//     task — comment and wait.
+	// 5b. closed + merged. Check that all PR/MR links tied to this task are
+	//     terminal (merged or closed). If not, this is a partial merge in a
+	//     multi-PR task — comment and wait.
 	taskLinks, err := s.repo.ListByTask(ctx, taskID)
 	if err != nil {
 		return PRHandleResult{TaskID: taskID}, fmt.Errorf("list vcs links by task: %w", err)
@@ -354,14 +472,14 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		}
 	}
 	if pendingCount > 0 {
-		body := fmt.Sprintf("🤖 Auto: PR #%d merged. Awaiting %d more PR(s) before status transition.", ev.PRNumber, pendingCount)
-		if cerr := s.postSystemComment(ctx, taskID, body); cerr != nil {
+		body := fmt.Sprintf("🤖 Auto: %s merged. Awaiting %d more PR(s) before status transition.", refLabel, pendingCount)
+		if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
 			log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
 		}
 		return PRHandleResult{TaskID: taskID, Reason: "awaiting_other_prs"}, nil
 	}
 
-	// 5c. All PRs terminal — apply the transition policy.
+	// 5c. All PRs/MRs terminal — apply the transition policy.
 	task, err := s.taskRepo.GetByID(ctx, taskID)
 	if err != nil {
 		return PRHandleResult{TaskID: taskID}, fmt.Errorf("get task %s: %w", taskID, err)
@@ -385,8 +503,8 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 	case domain.StatusCategoryReview:
 		targetSlug = "done"
 	default:
-		body := fmt.Sprintf("🤖 Auto: PR #%d merged. Task in `%s`; no auto-transition.", ev.PRNumber, currentStatus.Slug)
-		if cerr := s.postSystemComment(ctx, taskID, body); cerr != nil {
+		body := fmt.Sprintf("🤖 Auto: %s merged. Task in `%s`; no auto-transition.", refLabel, currentStatus.Slug)
+		if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
 			log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
 		}
 		return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: "source_status_not_eligible"}, nil
@@ -404,8 +522,8 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug}, fmt.Errorf("move task %s to %s: %w", taskID, targetSlug, err)
 	}
 
-	body := fmt.Sprintf("🤖 Auto: PR #%d merged (commit `%s`) → moved to %s.", ev.PRNumber, shortSHA(ev.MergeSHA), targetSlug)
-	if cerr := s.postSystemComment(ctx, taskID, body); cerr != nil {
+	body := fmt.Sprintf("🤖 Auto: %s merged (commit `%s`) → moved to %s.", refLabel, mergeRefLabel, targetSlug)
+	if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
 		log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
 	}
 
@@ -419,14 +537,22 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 }
 
 // postSystemComment writes a non-internal comment authored as Garfield.
-func (s *vcsLinkService) postSystemComment(ctx context.Context, taskID uuid.UUID, body string) error {
+// source tags which webhook triggered it ("github-webhook" /
+// "gitlab-webhook") in the comment's metadata for provenance.
+func (s *vcsLinkService) postSystemComment(ctx context.Context, taskID uuid.UUID, body, source string) error {
+	metadata, err := json.Marshal(map[string]string{"source": source})
+	if err != nil {
+		// Only possible if source somehow isn't valid UTF-8; fall back to a
+		// literal rather than fail the whole webhook over a metadata detail.
+		metadata = []byte(`{"source":"webhook"}`)
+	}
 	c := &domain.Comment{
 		ID:         uuid.New(),
 		TaskID:     taskID,
 		AuthorID:   garfieldAgentID,
 		AuthorType: domain.ActorTypeAgent,
 		Body:       body,
-		Metadata:   json.RawMessage(`{"source":"github-webhook"}`),
+		Metadata:   metadata,
 		IsInternal: false,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
