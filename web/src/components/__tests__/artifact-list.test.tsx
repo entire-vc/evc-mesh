@@ -78,6 +78,33 @@ describe("ArtifactList — Open in new tab", () => {
     expect(screen.getByTitle("Download")).toBeInTheDocument();
   });
 
+  /**
+   * The reported bug, at the level the reader meets it: a `.md` artifact must
+   * offer an in-app preview, and must NOT offer the browser tab that shows it
+   * as raw source. Both halves are asserted — "Preview exists" alone would pass
+   * on a row that shows both buttons, which is still the old behaviour plus a
+   * new one beside it.
+   */
+  it("offers Preview and not a browser tab for a markdown artifact", async () => {
+    const artifact = makeArtifact({
+      name: "audit.md",
+      artifact_type: "report",
+      mime_type: "text/markdown; charset=utf-8",
+    });
+    vi.mocked(api).mockImplementation((path: string) => {
+      if (path === "/api/v1/tasks/task-1/artifacts") {
+        return Promise.resolve({ items: [artifact], total: 1 });
+      }
+      return Promise.reject(new Error(`unexpected path: ${path}`));
+    });
+
+    render(<ArtifactList taskId="task-1" />);
+
+    expect(await screen.findByTitle("Preview")).toBeInTheDocument();
+    expect(screen.queryByTitle("Open in new tab")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Download")).toBeInTheDocument();
+  });
+
   it("still shows the button for a TR-linked artifact regardless of mime type", async () => {
     const artifact = makeArtifact({
       name: "doc.docx",

@@ -40,6 +40,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
 import { useMemberStore } from "@/stores/member";
+import { WorkspaceSecrets } from "@/components/workspace-secrets";
 import {
   Dialog,
   DialogContent,
@@ -834,6 +835,7 @@ export function WorkspaceSettingsPage() {
   const canManageMembers = myRole === "owner" || myRole === "admin";
   const canManageRules = myRole === "owner" || myRole === "admin";
   const canDeleteWorkspace = myRole === "owner" || myRole === "admin";
+  const canManageSecrets = myRole === "owner" || myRole === "admin";
 
   // Count owners to disable remove on last owner
   const ownerCount = workspaceMembers.filter((m) => m.role === "owner").length;
@@ -2074,6 +2076,20 @@ export function WorkspaceSettingsPage() {
           )}
 
           <Separator />
+
+          {/* Secrets — write-only store. Rendered only for owner/admin: the API
+              gates every one of its four routes on PermManageSecrets, so for
+              anyone else this section would be a form whose every submit 403s.
+              The check here is a courtesy, not the guard. */}
+          {canManageSecrets && currentWorkspace && (
+            <>
+              <WorkspaceSecrets
+                workspaceId={currentWorkspace.id}
+                canManage={canManageSecrets}
+              />
+              <Separator />
+            </>
+          )}
 
           {/* Import Team */}
           {canManageRules && (

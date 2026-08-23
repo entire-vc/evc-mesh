@@ -29,7 +29,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useBlocker, useNavigate } from "react-router";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
@@ -77,6 +77,7 @@ import type {
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 import {
   getTaskCostSummary,
+  recordHumanGateDecision,
   type TaskCostSummary,
 } from "@/lib/api";
 import { CostQualityBlock } from "@/components/cost-quality-block";
@@ -182,6 +183,7 @@ export function TaskPanel({
   const [hideEmpty, setHideEmpty] = useState(true);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
+  const [clearingGate, setClearingGate] = useState(false);
   // Bumped whenever DependencyList reports a change, so both SubtaskList
   // mounts (mobile + desktop tabs) refetch — an is_child_of edge added or
   // removed there changes the Subtasks tab without the user reopening the card.
@@ -236,6 +238,73 @@ export function TaskPanel({
   const draftPendingImagesRef = useRef<PendingImage[]>([]);
   const [draftSubmitting, setDraftSubmitting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
+
+  // Snapshot of what the draft looked like on mount (createDefaults baked
+  // in), so "empty" means "still what was presented", not "falsy" — a
+  // board/calendar "create in this status/date" flow pre-fills
+  // draftStatusId/draftDueDate before the user types anything, and that
+  // pre-fill must not itself count as a dirty draft.
+  const draftInitialRef = useRef({
+    statusId: createDefaults?.statusId ?? "",
+    dueDate: createDefaults?.dueDate ?? "",
+  });
+  const isDraftDirty =
+    isCreateMode &&
+    (draftTitle.trim() !== "" ||
+      draftDescription.trim() !== "" ||
+      draftPriority !== "none" ||
+      draftDelegationLevel !== "review" ||
+      draftLabels.length > 0 ||
+      draftStatusId !== draftInitialRef.current.statusId ||
+      draftDueDate !== draftInitialRef.current.dueDate ||
+      draftAssigneeValue !== "unassigned" ||
+      draftReviewerValue !== "unassigned");
+
+  // Warn on tab close/reload with an unsaved draft. useBlocker (below)
+  // cannot cover this case — it only intercepts in-app router navigation.
+  useEffect(() => {
+    if (!isDraftDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDraftDirty]);
+
+  // Set right before the post-submit redirect in handleCreateSubmit so that
+  // navigation isn't itself caught as "discarding the draft" — the fields
+  // are still populated at that point, isDraftDirty is still true.
+  const suppressNavBlockRef = useRef(false);
+
+  // Single mechanism for every in-app way to leave a dirty draft — sidebar
+  // links, the browser back button, the Cancel button below, anywhere else
+  // in the app (task #7893ab16). Requires the data router mounted in
+  // App.tsx; throws under a plain <BrowserRouter>.
+  const blocker = useBlocker(
+    useCallback(
+      ({ currentLocation, nextLocation }) =>
+        isDraftDirty &&
+        !suppressNavBlockRef.current &&
+        currentLocation.pathname !== nextLocation.pathname,
+      [isDraftDirty],
+    ),
+  );
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    if (
+      window.confirm("Discard this task? Your unsaved changes will be lost.")
+    ) {
+      blocker.proceed();
+    } else {
+      blocker.reset();
+    }
+  }, [blocker]);
+
+  const handleBackClick = () => {
+    onBack?.();
+  };
 
   // Reset navigation stack when the root task changes
   useEffect(() => {
@@ -451,6 +520,44 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to change status");
+    }
+  };
+
+  // Clears human_gate the only legitimate way: records a decision via
+  // POST /tasks/:id/human-gate-decisions (task #c56339b1), never a raw
+  // PATCH {human_gate:false} — that 403s for every caller by design (task
+  // #295). Only rendered for an authenticated human user (see JSX below);
+  // the handler independently re-enforces this — provenance="direct"
+  // requires the authenticated caller to BE decided_by, so an agent
+  // session cannot call this path even if it reached the button.
+  const handleClearHumanGate = async () => {
+    if (!currentTask || !user) return;
+    const questionRef = currentTask.human_gate_info?.marker_comment_id;
+    if (!questionRef) return; // no live marker to answer — nothing to reference
+    if (
+      !window.confirm(
+        "Clear the human gate on this task? This records that the question was answered and unfreezes the task.",
+      )
+    ) {
+      return;
+    }
+    setClearingGate(true);
+    try {
+      await recordHumanGateDecision(currentTask.id, {
+        question_ref: questionRef,
+        decided_by: user.id,
+        provenance: "direct",
+        channel: "mesh",
+      });
+      if (taskId) await fetchTask(taskId);
+      onTaskUpdated?.();
+      toast.success("Gate cleared");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to clear human gate",
+      );
+    } finally {
+      setClearingGate(false);
     }
   };
 
@@ -719,6 +826,7 @@ export function TaskPanel({
         }
       }
 
+      suppressNavBlockRef.current = true;
       onCreated?.(createdTask);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Failed to create task");
@@ -1081,6 +1189,27 @@ export function TaskPanel({
                     </>
                   )}
                 </span>
+              )}
+              {/* Human-only: an authenticated agent session does not exist
+                  in this app (agents call the REST API directly, never this
+                  SPA), and the backend independently 403s provenance=direct
+                  for anyone who isn't the decided_by user — this check is
+                  belt, the handler is suspenders. */}
+              {user && currentTask.human_gate_info?.marker_comment_id && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  data-testid="human-gate-clear-button"
+                  disabled={clearingGate}
+                  onClick={() => void handleClearHumanGate()}
+                >
+                  {clearingGate ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    "Clear gate"
+                  )}
+                </Button>
               )}
             </div>
           </>
@@ -1711,7 +1840,7 @@ export function TaskPanel({
               {onBack && (
                 <button
                   type="button"
-                  onClick={onBack}
+                  onClick={handleBackClick}
                   className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   aria-label={backLabel}
                   title={backLabel}
