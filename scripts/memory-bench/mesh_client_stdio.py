@@ -34,6 +34,8 @@ import logging
 import os
 import re
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
@@ -199,6 +201,33 @@ BREAKER_TRIP_AFTER = 2
 # real regression into a pass, only a timing loss into a wait.
 SEARCH_SETTLE_ATTEMPTS = 6
 SEARCH_SETTLE_DELAY_SECS = 0.5
+
+# `SEARCH_SETTLE_*` above closes a SMALL, per-question gap: this question's own
+# write landing before this question's own search. It does not — and by design
+# cannot — close a much bigger one: EVERY prior question's writes still queued
+# for embedSem (#3d10774e, shared by embedAndStore and the recall query-embed)
+# when this question's search fires. `remember()` returns the instant the API
+# accepts the write, long before the write's embed goroutine has even started,
+# so a harness that ingests question after question with no pacing can queue a
+# write backlog faster than a CPU-bound embedder drains it — and once that
+# backlog is deep enough, a later question's query-embed can wait behind it for
+# longer than the REST client's own timeout, surfacing as `context deadline
+# exceeded` with no server-side error at all (measured live on PR #739,
+# #ebd9dc1c: 17-20/24 questions, 120s+ each, after the timeout itself had
+# already been raised 30s -> 120s).
+#
+# EMBED_DRAIN_* below waits for that backlog specifically, using
+# `mesh_memory_embed_inflight` (pkg/metrics/metrics.go) — a real signal, not a
+# guessed sleep: it counts every embed call (write or query) from the moment
+# it is ACCEPTED to the moment it COMPLETES, so it reads the true backlog depth
+# regardless of EMBEDDING_CONCURRENCY, machine speed, or corpus size. Fails
+# OPEN by construction: any error reading it (unreachable /metrics, no
+# MESH_API_URL, metric absent) is logged once and treated as "nothing to wait
+# for" — a bench that cannot observe the backlog must not block on it forever
+# on a CI machine with no way to know if it will ever drain.
+EMBED_DRAIN_MAX_WAIT_SECS = 90.0
+EMBED_DRAIN_POLL_INTERVAL_SECS = 1.0
+EMBED_DRAIN_HTTP_TIMEOUT_SECS = 5.0
 
 
 def is_transient_text(text: str) -> bool:
@@ -460,6 +489,82 @@ def _to_record(item: dict[str, Any]) -> dict[str, Any]:
         "key": item.get("key") or "",
         "tags": item.get("tags") or [],
     }
+
+
+_EMBED_INFLIGHT_METRIC_RE = re.compile(
+    r"^mesh_memory_embed_inflight\s+([0-9eE+\-.]+)\s*$", re.MULTILINE
+)
+_embed_drain_warned = False  # log the "can't observe it" case once, not per question
+
+
+def _read_embed_inflight(base_url: str) -> float | None:
+    """One blocking read of `mesh_memory_embed_inflight` off `{base_url}/metrics`.
+
+    Returns None on ANY failure (unreachable, non-200, metric line absent) —
+    the caller's contract is to fail OPEN on None, exactly like every other
+    "couldn't observe it" case in this module (embedder liveness, settle
+    predicates). Never raises.
+    """
+    global _embed_drain_warned
+    url = base_url.rstrip("/") + "/metrics"
+    try:
+        with urllib.request.urlopen(url, timeout=EMBED_DRAIN_HTTP_TIMEOUT_SECS) as resp:  # noqa: S310
+            body = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        if not _embed_drain_warned:
+            _embed_drain_warned = True
+            logger.warning(
+                "embed-drain wait: could not read %s (%s) — proceeding without "
+                "waiting for the embed backlog to drain; this is a fail-open, "
+                "not a settled-backlog claim",
+                url, exc,
+            )
+        return None
+    m = _EMBED_INFLIGHT_METRIC_RE.search(body)
+    if not m:
+        if not _embed_drain_warned:
+            _embed_drain_warned = True
+            logger.warning(
+                "embed-drain wait: mesh_memory_embed_inflight not found in %s "
+                "— server predates #ebd9dc1c or exposition changed; proceeding "
+                "without waiting for the embed backlog to drain",
+                url,
+            )
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _wait_for_embed_drain_sync(base_url: str, qid: str) -> None:
+    """Block (this thread only — see the `asyncio.to_thread` call site) until
+    `mesh_memory_embed_inflight` reads 0, or `EMBED_DRAIN_MAX_WAIT_SECS` elapses.
+
+    Bounded and fail-open by construction, same shape as `CONNECT_RETRIES` and
+    `SEARCH_SETTLE_ATTEMPTS` elsewhere in this file: a real signal is used when
+    available, but its absence — or a backlog that genuinely never drains in
+    time — degrades to "proceed anyway", never to "hang the job".
+    """
+    deadline = time.monotonic() + EMBED_DRAIN_MAX_WAIT_SECS
+    waited = 0.0
+    while True:
+        depth = _read_embed_inflight(base_url)
+        if depth is None:
+            return  # can't observe it — fail open, see _read_embed_inflight
+        if depth <= 0:
+            if waited > 0:
+                logger.info("%s: embed backlog drained after %.1fs", qid, waited)
+            return
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "%s: embed backlog still %.0f in-flight after %.0fs — "
+                "proceeding anyway (EMBED_DRAIN_MAX_WAIT_SECS budget spent)",
+                qid, depth, EMBED_DRAIN_MAX_WAIT_SECS,
+            )
+            return
+        time.sleep(EMBED_DRAIN_POLL_INTERVAL_SECS)
+        waited += EMBED_DRAIN_POLL_INTERVAL_SECS
 
 
 class MeshMemoryClient:
@@ -771,6 +876,18 @@ class MeshMemoryClient:
                     # BrokenResourceError this client already had to learn to
                     # unwrap.
                     await asyncio.to_thread(self._backdate, dates, question_date)
+                    # Off-loop for the same reason as `_backdate` just above: this
+                    # polls over plain blocking HTTP and must not starve the stdio
+                    # reader task. See EMBED_DRAIN_* for why this exists — this
+                    # question's OWN writes landing (which `_backdate` already
+                    # waited out) is not the same as PRIOR questions' writes having
+                    # drained off the shared embedSem queue that this question's
+                    # own query-embed is about to join.
+                    base_url = os.environ.get("MESH_API_URL")
+                    if base_url:
+                        await asyncio.to_thread(
+                            _wait_for_embed_drain_sync, base_url, self.qid
+                        )
                     return await self._search_settled(
                         session, query, top_k, search_settle_ok
                     )

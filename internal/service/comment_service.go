@@ -229,11 +229,25 @@ func hasRawArmMarker(body string, authorType domain.ActorType) bool {
 
 // triageExitNegators are lower-cased substrings that, when present in a blocking comment,
 // indicate the block was cancelled — so the comment is NOT a live gate.
+//
+// Extended 2026-08-24 (task #62560d6d, live incident #68df3b62): the
+// vocabulary was Russian-only apart from "resolved"/"async",
+// which read as process jargon rather than general negation. A genuine
+// withdrawal written in English ("Retracting the gate marker... not as a
+// second independent ask... nothing further needed here") matched none of
+// it and no-opped silently — same shape as the language gap already closed
+// for blockerStillOpenMarkers ("still blocked") and askWords/repeatPingWords
+// (already bilingual) two sections down, just never carried over to this
+// list. CLAUDE.md asks agents to write task comments in Russian, but the
+// mechanism should not depend on that policy being followed to fail safely.
 var triageExitNegators = []string{
 	"не нужен", "не нужно", "не требуется",
 	"снят", "снято",
 	"resolved", "async",
 	"разблок", "уже ответил", "ответил в коммент",
+	"not needed", "not required", "no longer needed",
+	"withdrawn", "withdrawing", "retracting",
+	"unblocked",
 }
 
 // hasNegatorInScope reports whether body carries a triageExitNegators substring,
@@ -484,7 +498,8 @@ func diagnoseNegatorMiss(body string) negatorMissReason {
 // comment cannot itself be read as a withdrawal by any later scan.
 var withdrawalMissHint = map[negatorMissReason]string{
 	negatorMissOutOfScope: "слова отзыва есть, но вне области, которую читает сервер — " +
-		"при комменте без блокирующего маркера ею является **последний абзац**, и только он.",
+		"при комменте без блокирующего маркера ею является **последний абзац** " +
+		"(не считая завершающей подписи вида «— Имя»), и только он.",
 	negatorMissBlockerStillOpen: "слова отзыва попали в область, но там же стоит утверждение, " +
 		"что блокер всё ещё жив (`не закрыт` / `не забыт` / `still blocked`) — оно перебивает отзыв в той же области.",
 	negatorMissOnlyQuoted: "слова отзыва встречаются только внутри кода, цитаты или блока — " +
@@ -495,11 +510,40 @@ var withdrawalMissHint = map[negatorMissReason]string{
 // lines — the boundary lastParagraph splits on.
 var paragraphBreakRegex = regexp.MustCompile(`\n[ \t]*\n`)
 
-// lastParagraph returns the final non-blank paragraph of body, trimmed of
-// surrounding whitespace. Paragraphs are separated by one or more blank lines.
-// A body with no blank line at all is itself a single paragraph and is returned
-// unchanged (trimmed) — this keeps every existing short, single-paragraph
-// withdrawal comment (the documented ordinary shape) behaving exactly as before.
+// signatureLineRegex matches a paragraph that is nothing but a sign-off: a
+// dash (hyphen or em/en dash) followed by one to three short word-tokens and
+// nothing else — "— Robert", "- Howard", "— The Fleet". Deliberately does not
+// match anything carrying real punctuation or more than a few words, so an
+// actual dash-bulleted sentence ("- Fixed the bug and verified live") is
+// never mistaken for a signature.
+var signatureLineRegex = regexp.MustCompile(`^[-—–]\s*\p{L}[\p{L}'-]*(?:\s+\p{L}[\p{L}'-]*){0,2}$`)
+
+func isSignatureOnlyParagraph(p string) bool {
+	return signatureLineRegex.MatchString(p)
+}
+
+// lastParagraph returns the final SUBSTANTIVE paragraph of body, trimmed of
+// surrounding whitespace. Paragraphs are separated by one or more blank
+// lines. A body with no blank line at all is itself a single paragraph and
+// is returned unchanged (trimmed) — this keeps every existing short,
+// single-paragraph withdrawal comment (the documented ordinary shape)
+// behaving exactly as before.
+//
+// Fixed 2026-08-24 (task #62560d6d, live incident #68df3b62): a genuine
+// withdrawal — "Гейт на Павла снят ... нового решения от него не требуется."
+// — sat in the SECOND-to-last paragraph of a comment that closed with a
+// trailing "— Name" sign-off on its own line. This function returned the
+// signature (zero negators), the gate stayed up, and the system said
+// nothing wrong had happened because nothing had — by the old rule, the
+// signature genuinely was the last paragraph. This convention shows up
+// routinely in real withdrawal attempts, so it was never a one-off: any
+// withdrawal ending in a sign-off line was silently unreachable through the
+// marker-less path. A bare signature asserts nothing, so skipping it to
+// reach the paragraph that actually says something is the same "final SAY,
+// not an earlier one"
+// reasoning #1e5be182 already established for markerless scoping — not a
+// loosening of it. Trailing signature paragraphs are skipped; a body that is
+// ONLY a signature (or only blank) still correctly returns "".
 func lastParagraph(body string) string {
 	trimmed := strings.TrimRight(body, " \t\r\n")
 	if trimmed == "" {
@@ -507,9 +551,11 @@ func lastParagraph(body string) string {
 	}
 	parts := paragraphBreakRegex.Split(trimmed, -1)
 	for i := len(parts) - 1; i >= 0; i-- {
-		if p := strings.TrimSpace(parts[i]); p != "" {
-			return p
+		p := strings.TrimSpace(parts[i])
+		if p == "" || isSignatureOnlyParagraph(p) {
+			continue
 		}
+		return p
 	}
 	return ""
 }
@@ -1281,6 +1327,12 @@ func (s *commentService) notifyMentions(
 			}
 			if err == nil && user != nil && !seenID[user.ID] {
 				isSelf := actorType == domain.ActorTypeUser && user.ID == actorID
+				if !isSelf {
+					// Before recording HasSubscription, so a first-time mention
+					// is reflected in the very outcome row it produces — not
+					// caught up on the next one.
+					s.ensureMentionDelivery(ctx, workspaceID, user.ID)
+				}
 				outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
 					Slug:            slug,
 					User:            user,
@@ -1432,6 +1484,90 @@ func (s *commentService) userHasMentionSubscription(ctx context.Context, userID 
 		}
 	}
 	return false
+}
+
+// mentionEmailChannel is the notification_preferences channel ensureMentionDelivery
+// provisions. Email, not the in-app bell document_watch_service.go uses for
+// Watch: a person with no preference row at all also has no app open and no
+// Telegram bot bound, and email is the one channel that still reaches them.
+const mentionEmailChannel = "email"
+
+// ensureMentionDelivery gives a person who has never configured notification
+// preferences somewhere for an @-mention to actually arrive, instead of
+// silently recording them as delivered-or-skipped while every channel stays
+// empty either way. Root cause measured on prod 2026-08-23 (#4e1d249f):
+// notification_preferences had rows for none of the humans being @-mentioned
+// in "❓ Blocking" comments, so every one of them landed as skipped/
+// no_subscription regardless of how the mention itself was handled.
+//
+// Deliberately narrow, mirroring documentWatchService.ensureInAppDelivery:
+//   - only the email channel. Being mentioned is not consent to be pushed to
+//     or messaged on Telegram — those need an explicit opt-in same as today.
+//   - only the task.mentioned event, unioned into whatever the row already
+//     carries. Never removes an event, never touches another channel.
+//   - a row the person has switched OFF is left off. An explicit "no email"
+//     outranks the implicit request inside being named in a comment; the
+//     mention is still recorded (HasSubscription reflects the real state),
+//     and the log says why nothing will arrive.
+//
+// Runs only for being addressed directly — @-mentioned by name — never for
+// merely having commented on the same task. See ensureInAppDelivery's own
+// comment for the broader case this deliberately does not cover: silently
+// re-adding an event type to the settings of everyone who ever touched a
+// task is exactly what an unsubscribe exists to prevent. Being named is a
+// narrower, stronger signal than having participated.
+//
+// Best-effort by construction — a mention that was recorded must not be
+// rolled back because the preference row could not be provisioned.
+func (s *commentService) ensureMentionDelivery(ctx context.Context, workspaceID, userID uuid.UUID) {
+	if s.notifySvc == nil {
+		return
+	}
+	prefs, err := s.notifySvc.GetPreferences(ctx, userID)
+	if err != nil {
+		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s but their notification preferences could not be read, so email delivery is unconfirmed: %v",
+			userID, workspaceID, err)
+		return
+	}
+
+	var email *domain.NotificationPreference
+	for i := range prefs {
+		p := &prefs[i]
+		if p.UserID == nil || *p.UserID != userID || p.WorkspaceID != workspaceID {
+			continue
+		}
+		// Any enabled channel that already carries task.mentioned is enough —
+		// someone already reachable by Telegram does not also need email.
+		if p.IsEnabled && coversAll(p.Events, []string{"task.mentioned"}) {
+			return
+		}
+		if p.Channel == mentionEmailChannel {
+			email = p
+		}
+	}
+
+	if email != nil && !email.IsEnabled {
+		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s with email notifications switched off — mention recorded, nothing will be delivered there",
+			userID, workspaceID)
+		return
+	}
+
+	pref := &domain.NotificationPreference{
+		WorkspaceID: workspaceID,
+		UserID:      &userID,
+		Channel:     mentionEmailChannel,
+		Events:      []string{"task.mentioned"},
+		IsEnabled:   true,
+	}
+	if email != nil {
+		pref.ID = email.ID
+		pref.Config = email.Config
+		pref.Events = unionEvents(email.Events, []string{"task.mentioned"})
+	}
+	if _, err := s.notifySvc.UpsertPreferences(ctx, pref); err != nil {
+		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s but the email channel could not be provisioned, so nothing will be delivered there: %v",
+			userID, workspaceID, err)
+	}
 }
 
 // notifyUserMention dispatches the "task.mentioned" notification event for one

@@ -14,6 +14,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
+	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	pgRepo "github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
@@ -50,6 +51,7 @@ type taskService struct {
 	commentRepo       repository.CommentRepository
 	vcsLinkRepo       repository.VCSLinkRepository
 	githubPRChecker   githubapi.PullRequestChecker
+	gitlabMRChecker   gitlabapi.MergeRequestChecker
 	autoTransSvc      AutoTransitionService
 	ruleSvc           RuleService
 	rulesConfigSvc    RulesService
@@ -223,6 +225,14 @@ func WithVCSLinkRepoTask(vr repository.VCSLinkRepository) TaskServiceOption {
 // before (fails open on the live check, not on the gate itself).
 func WithGitHubPRChecker(c githubapi.PullRequestChecker) TaskServiceOption {
 	return func(s *taskService) { s.githubPRChecker = c }
+}
+
+// WithGitLabMRChecker enables a LIVE GitLab check in the done-evidence gate,
+// mirroring WithGitHubPRChecker for a linked merge request instead of a pull
+// request (#bc39d781). Optional: if unset, the gate falls back to the
+// cached status exactly as before.
+func WithGitLabMRChecker(c gitlabapi.MergeRequestChecker) TaskServiceOption {
+	return func(s *taskService) { s.gitlabMRChecker = c }
 }
 
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
@@ -735,24 +745,29 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 								continue
 							}
 							// Cached status says not-yet-merged (or unknown).
-							// Before blocking, ask GitHub directly — the cache
-							// is only ever as fresh as the last webhook
-							// delivery, and a delivery can be missed, delayed,
-							// or (the reported incident) simply never arrive
-							// for a link created after the PR was already
+							// Before blocking, ask the provider (GitHub or
+							// GitLab) directly — the cache is only ever as
+							// fresh as the last webhook delivery, and a
+							// delivery can be missed, delayed, or (the
+							// reported incident) simply never arrive for a
+							// link created after the PR/MR was already
 							// merged.
-							if merged, live := s.isPRMergedOnGitHub(ctx, l); live {
+							if merged, live := s.isPRMergedLive(ctx, l); live {
 								if merged {
 									// Self-heal the cache so the next read —
 									// and the next agent hitting this gate —
-									// doesn't pay for another GitHub round
-									// trip or hit the same stale block.
+									// doesn't pay for another live round trip
+									// or hit the same stale block.
 									s.healVCSLinkStatus(ctx, l)
 									continue
 								}
 								return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRProvider: string(l.Provider), PRStatusCheckedLive: true}
 							}
-							return &DoneEvidenceError{PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRProvider: string(l.Provider), PRLinkedAt: l.CreatedAt}
+							return &DoneEvidenceError{
+								PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRProvider: string(l.Provider),
+								PRLinkedAt:                 l.CreatedAt,
+								PRProviderAccessConfigured: s.hasLiveChecker(l.Provider),
+							}
 						}
 					}
 				} else if s.commentRepo != nil {
@@ -1713,6 +1728,44 @@ func (e *HumanGateFrozenError) Error() string {
 // back to the cached status instead (see isPRMergedOnGitHub).
 const githubLiveCheckTimeout = 5 * time.Second
 
+// gitlabLiveCheckTimeout is githubLiveCheckTimeout's GitLab counterpart (see
+// isMRMergedOnGitLab).
+const gitlabLiveCheckTimeout = 5 * time.Second
+
+// isPRMergedLive asks the linked provider (GitHub or GitLab) directly
+// whether the linked PR/MR has been merged, dispatching on l.Provider.
+// Returns live=false when no check could be performed at all for this
+// link's provider — callers MUST treat that as "couldn't verify", never as
+// "not merged", and fall back to the cached status instead.
+func (s *taskService) isPRMergedLive(ctx context.Context, l domain.VCSLink) (merged, live bool) {
+	switch l.Provider {
+	case domain.VCSProviderGitHub:
+		return s.isPRMergedOnGitHub(ctx, l)
+	case domain.VCSProviderGitLab:
+		return s.isMRMergedOnGitLab(ctx, l)
+	default:
+		return false, false
+	}
+}
+
+// hasLiveChecker reports whether a live-check client is wired for the given
+// provider, independent of whether any particular call to it would
+// succeed. Used to distinguish, in the done-evidence gate's refusal
+// message, "we never even tried — no access is configured" from "we tried
+// and it failed" (#bc39d781: the former needs a message that says how to
+// fix it — configure the token — not one implying a merge attempt is being
+// waited on).
+func (s *taskService) hasLiveChecker(provider domain.VCSProvider) bool {
+	switch provider {
+	case domain.VCSProviderGitHub:
+		return s.githubPRChecker != nil
+	case domain.VCSProviderGitLab:
+		return s.gitlabMRChecker != nil
+	default:
+		return false
+	}
+}
+
 // isPRMergedOnGitHub asks GitHub directly whether the linked PR has been
 // merged, bypassing the (possibly stale) cached vcs_links.status. Returns
 // live=false when the check could not be performed at all — no checker
@@ -1733,6 +1786,28 @@ func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink) 
 	if err != nil {
 		log.Printf("[done-evidence-gate] live github check failed for %s/%s#%d (link=%s task=%s): %v — falling back to cached status %q",
 			owner, repo, number, l.ID, l.TaskID, err, l.Status)
+		return false, false
+	}
+	return state.Merged, true
+}
+
+// isMRMergedOnGitLab asks GitLab directly whether the linked MR has been
+// merged — GitLab counterpart of isPRMergedOnGitHub, see its doc comment
+// for the live/merged contract callers must honor.
+func (s *taskService) isMRMergedOnGitLab(ctx context.Context, l domain.VCSLink) (merged, live bool) {
+	if s.gitlabMRChecker == nil || l.Provider != domain.VCSProviderGitLab {
+		return false, false
+	}
+	projectPath, iid, ok := gitlabapi.ParseMergeRequestURL(l.URL)
+	if !ok {
+		return false, false
+	}
+	glCtx, cancel := context.WithTimeout(ctx, gitlabLiveCheckTimeout)
+	defer cancel()
+	state, err := s.gitlabMRChecker.GetMergeRequestState(glCtx, projectPath, iid)
+	if err != nil {
+		log.Printf("[done-evidence-gate] live gitlab check failed for %s!%d (link=%s task=%s): %v — falling back to cached status %q",
+			projectPath, iid, l.ID, l.TaskID, err, l.Status)
 		return false, false
 	}
 	return state.Merged, true
@@ -1761,23 +1836,33 @@ type DoneEvidenceError struct {
 	PRStatus string
 	// PRProvider is the recorded vcs_links.provider value ("github" or
 	// "gitlab"). It decides the wording of the "could not verify live"
-	// branch below: a GitHub link that failed live verification is a
-	// different fact from a GitLab link, for which no live check is even
-	// attempted (isPRMergedOnGitHub short-circuits on provider != github) —
-	// saying "against GitHub" for a GitLab link names the wrong reason and
-	// sends the reader looking in the wrong place (#0fbed572).
+	// branch below: a GitHub link and a GitLab link that both failed live
+	// verification (or never got a checker wired at all) need to name their
+	// own system, not each other's — saying "against GitHub" for a GitLab
+	// link names the wrong reason and sends the reader looking in the wrong
+	// place (#0fbed572).
 	PRProvider string
-	// PRStatusCheckedLive is true when this block reflects a GitHub API call
-	// made just now (the gate asked GitHub directly and it said "not merged")
-	// rather than the cached vcs_links.status. This is current truth, not a
-	// stale cache — the message must not invite a "maybe it's just stale"
-	// re-link when it isn't.
+	// PRStatusCheckedLive is true when this block reflects a provider API
+	// call made just now (the gate asked GitHub/GitLab directly and it said
+	// "not merged") rather than the cached vcs_links.status. This is
+	// current truth, not a stale cache — the message must not invite a
+	// "maybe it's just stale" re-link when it isn't.
 	PRStatusCheckedLive bool
 	// PRLinkedAt is when this VCS link was first recorded. Only rendered
 	// when PRStatusCheckedLive is false, to make clear the cached status
-	// might be stale (e.g. GitHub was unreachable, so the gate fell back to
-	// this recorded value) rather than currently verified.
+	// might be stale (e.g. the provider was unreachable, so the gate fell
+	// back to this recorded value) rather than currently verified.
 	PRLinkedAt time.Time
+	// PRProviderAccessConfigured is whether a live-check client is wired for
+	// PRProvider at all (independent of whether this specific call
+	// succeeded) — set from taskService.hasLiveChecker at construction time,
+	// since DoneEvidenceError itself has no access to the service. Decides
+	// which fallback wording unverifiableLiveCheckReason uses: "no access is
+	// configured, state the status explicitly" reads very differently from
+	// "we asked and couldn't verify" (#bc39d781) — the first tells the
+	// reader how to unblock themselves right now, the second implies a
+	// transient failure worth retrying.
+	PRProviderAccessConfigured bool
 }
 
 func (e *DoneEvidenceError) Error() string {
@@ -1795,19 +1880,22 @@ func (e *DoneEvidenceError) Error() string {
 	// hit the same 422 again, and conclude the gate itself was broken
 	// (#df734dd9).
 	if e.PRStatusCheckedLive {
-		// The gate just asked GitHub and got a definitive "not merged" —
-		// don't suggest "if that's stale", there is no cache involved here.
+		// The gate just asked the provider and got a definitive "not
+		// merged" — don't suggest "if that's stale", there is no cache
+		// involved here. This branch is only reachable when isPRMergedLive
+		// returned live=true, i.e. a real API call against the link's own
+		// provider just succeeded — name that provider, not a hardcoded one.
 		return fmt.Sprintf(
-			"PR «%s» is not merged (verified live against GitHub just now) — merge it first, or if this "+
-				"read is wrong, re-link it with an explicit status (add_vcs_link ... status=merged)", ref)
+			"PR «%s» is not merged (verified live against %s just now) — merge it first, or if this "+
+				"read is wrong, re-link it with an explicit status (add_vcs_link ... status=merged)", ref, liveCheckProviderName(e.PRProvider))
 	}
 	// Live verification was unavailable (no checker wired, the URL doesn't
-	// parse as a GitHub PR, or the GitHub API call itself failed) — fall
-	// back to the cached record, same as before this fix, but say so
-	// explicitly plus WHEN that record was made, so the reader understands
-	// "this might be stale" rather than "the PR is genuinely still open".
+	// parse, or the provider API call itself failed) — fall back to the
+	// cached record, same as before this fix, but say so explicitly plus
+	// WHEN that record was made, so the reader understands "this might be
+	// stale" rather than "the PR/MR is genuinely still open".
 	linkedAt := e.PRLinkedAt.UTC().Format(time.RFC3339)
-	verifyNote := unverifiableLiveCheckReason(e.PRProvider)
+	verifyNote := unverifiableLiveCheckReason(e.PRProvider, e.PRProviderAccessConfigured)
 	if e.PRStatus == "" {
 		// The likely cause: the link was created for a PR that was already
 		// merged before linking — no webhook will ever arrive to fix that
@@ -1823,18 +1911,43 @@ func (e *DoneEvidenceError) Error() string {
 		ref, e.PRStatus, linkedAt, verifyNote)
 }
 
-// unverifiableLiveCheckReason explains, per provider, why the done-evidence
-// gate fell back to the cached vcs_links.status instead of a fresh check.
-// A GitHub link that says this genuinely went through isPRMergedOnGitHub and
-// failed (unreachable API, unparseable URL, no checker wired). A GitLab link
-// never reaches that call at all — isPRMergedOnGitHub short-circuits on
-// provider != github — so telling a GitLab-linked reader "could not verify
-// against GitHub" both names the wrong system and implies an attempt that
-// never happened.
-func unverifiableLiveCheckReason(provider string) string {
+// liveCheckProviderName renders PRProvider as the human-facing name used in
+// the "verified live against X" message (DoneEvidenceError.Error(),
+// PRStatusCheckedLive branch) — that branch is only reachable after a real
+// API call against the link's own provider just succeeded, so the name
+// shown must track which provider that was.
+func liveCheckProviderName(provider string) string {
 	switch domain.VCSProvider(provider) {
 	case domain.VCSProviderGitLab:
-		return "could not verify live: no live GitLab check exists yet, state the status explicitly"
+		return "GitLab"
+	case domain.VCSProviderGitHub, "":
+		return "GitHub"
+	default:
+		return provider
+	}
+}
+
+// unverifiableLiveCheckReason explains, per provider, why the done-evidence
+// gate fell back to the cached vcs_links.status instead of a fresh check.
+// checkerConfigured distinguishes two different facts that both fall back
+// to the cache but call for different reader action (#bc39d781): "no live
+// check client is wired for this provider at all" (the reader's actual next
+// step is to configure access, or state the status explicitly right now —
+// nothing will ever get better on its own) versus "a checker IS wired but
+// this particular attempt failed" (transient — unreachable API, unparseable
+// URL — worth a retry, and the token/URL don't need looking at). Before this
+// distinction existed, an unconfigured GitLab link (the reported case:
+// MESH_GITLAB_TOKEN unset entirely) got a message that read exactly like a
+// live probe had been attempted and failed, when no attempt was possible at
+// all — telling the reader to wait for something that would never resolve
+// itself.
+func unverifiableLiveCheckReason(provider string, checkerConfigured bool) string {
+	switch domain.VCSProvider(provider) {
+	case domain.VCSProviderGitLab:
+		if !checkerConfigured {
+			return "no GitLab access is configured (MESH_GITLAB_URL/MESH_GITLAB_TOKEN unset) — state the status explicitly"
+		}
+		return "could not verify live against GitLab just now — state the status explicitly if this is stale"
 	case domain.VCSProviderGitHub, "":
 		return "could not verify live against GitHub"
 	default:

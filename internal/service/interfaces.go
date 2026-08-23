@@ -812,6 +812,12 @@ type VCSLinkService interface {
 	// caller may log; an error is only returned for DB/RPC failures, never
 	// for "no task ref" or "no transition".
 	HandleGitHubPullRequestEvent(ctx context.Context, ev GitHubWebhookEvent) (PRHandleResult, error)
+	// HandleGitLabMergeRequestEvent applies the same webhook → task
+	// transition policy as HandleGitHubPullRequestEvent, for a GitLab merge
+	// request webhook payload instead of a GitHub pull_request one — the
+	// two providers' MRs/PRs are policy-equivalent once reduced to (task
+	// ref, terminal state), see #bc39d781.
+	HandleGitLabMergeRequestEvent(ctx context.Context, ev GitLabWebhookEvent) (PRHandleResult, error)
 	// ResolveTaskRef finds the first task actually named by any recognised
 	// reference spelling in the given texts — MESH-<uuid>, a /t/<id> link, a
 	// Refs/Closes keyword, a #<short id>, or a branch segment — and verifies it
@@ -834,6 +840,22 @@ type GitHubWebhookEvent struct {
 	MergeSHA   string // pull_request.merge_commit_sha (empty for non-merge close)
 	PRBranch   string // pull_request.head.ref — branches cut from a task often carry its id
 	Repository string // owner/name
+}
+
+// GitLabWebhookEvent is a minimal projection of the fields the orchestrator
+// reads from a GitLab "Merge Request Hook" webhook payload's
+// object_attributes + project. Defined in the service layer so the handler
+// wire format can evolve independently — mirrors GitHubWebhookEvent.
+type GitLabWebhookEvent struct {
+	Action      string // object_attributes.action: "open" | "close" | "reopen" | "update" | "merge" | "approved" | ...
+	MRIID       int    // object_attributes.iid — project-scoped, NOT the global MR id
+	MRTitle     string
+	MRBody      string // object_attributes.description
+	MRURL       string // object_attributes.url
+	MRState     string // object_attributes.state: "opened" | "closed" | "merged" | "locked"
+	MergeSHA    string // object_attributes.merge_commit_sha (empty for non-merge close)
+	MRBranch    string // object_attributes.source_branch — branches cut from a task often carry its id
+	ProjectPath string // project.path_with_namespace, e.g. "entire-vc/evc-mesh"
 }
 
 // PRHandleResult describes what happened when processing a pull_request event.

@@ -160,7 +160,19 @@ func TestVCSLinkRepo_Upsert_UpdateBranchReturnsActualPersistedRow(t *testing.T) 
 	// as the fresh, never-persisted values generated above.
 	assert.False(t, created, "updating an existing row must report created=false")
 	assert.Equal(t, originalID, second.ID, "Upsert must mutate the caller's link back to the row's REAL id")
-	assert.Equal(t, originalCreatedAt.UTC().Truncate(time.Microsecond), second.CreatedAt.UTC().Truncate(time.Microsecond),
+	// Truncate on both sides was wrong and made this test fail about half the
+	// time: Postgres ROUNDS a timestamptz to the nearest microsecond, it does
+	// not truncate. So whenever time.Now()'s sub-microsecond remainder was
+	// >=500ns the stored value came back exactly 1us HIGHER than the truncated
+	// expectation -- always in that direction, which is what gave the flake its
+	// signature (expected ...216512000, actual ...216513000).
+	//
+	// Comparing within a microsecond states the real invariant (same instant,
+	// modulo storage precision) without depending on Go and Postgres agreeing
+	// on a rounding mode. It does not weaken the assertion: the defect this
+	// line guards leaves CreatedAt as a fresh never-persisted value an HOUR
+	// away, which a 1us tolerance still rejects outright.
+	assert.WithinDuration(t, originalCreatedAt.UTC(), second.CreatedAt.UTC(), time.Microsecond,
 		"Upsert must mutate the caller's link back to the row's REAL created_at")
 
 	// Equality against a fresh, independent GET — not just against what

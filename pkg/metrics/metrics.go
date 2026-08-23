@@ -104,6 +104,28 @@ var (
 		[]string{"search_mode"},
 	)
 
+	// MemoryEmbedInFlight counts embed calls (write or query) that have started
+	// and not yet finished — queued for an embedSem slot, actively embedding, or
+	// storing the result. It is a backlog depth, not a slot-occupancy count: it
+	// rises the instant a write is accepted (before the goroutine ever touches
+	// embedSem) and falls only once that goroutine is fully done, so a caller
+	// polling it can tell "the write backlog has drained" from "4 slots are
+	// merely busy right now" — the two read very differently under a burst.
+	//
+	// Added for #ebd9dc1c: the memory-bench CI harness fires many writes ahead
+	// of a per-question recall, and recall's query-embed shares embedSem with
+	// those writes (#3d10774e). Recall waits on its own request context rather
+	// than blocking forever, but nothing told a caller HOW LONG that wait was
+	// likely to be — this gauge lets the harness wait for a real drain signal
+	// instead of a guessed sleep before issuing a search that would otherwise
+	// queue behind an unbounded pile of not-yet-embedded writes.
+	MemoryEmbedInFlight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mesh_memory_embed_inflight",
+			Help: "Embed calls (write or query) accepted but not yet complete — a backlog depth, not embedSem slot occupancy",
+		},
+	)
+
 	// MemoryEmbedTruncatedTotal counts embeddings that represent only a PREFIX of
 	// the text they were computed from.
 	//
@@ -222,6 +244,20 @@ func RecordMemoryEmbedFailure(op string) {
 // was actually served in ("hybrid" or "bm25-only").
 func RecordMemoryRecall(searchMode string) {
 	MemoryRecallTotal.WithLabelValues(searchMode).Inc()
+}
+
+// StartMemoryEmbedInFlight marks one embed call (write or query) as accepted but
+// not yet complete. Pair with a deferred FinishMemoryEmbedInFlight at the same
+// call site, called BEFORE acquiring embedSem so the gauge reflects the queue,
+// not just active slots.
+func StartMemoryEmbedInFlight() {
+	MemoryEmbedInFlight.Inc()
+}
+
+// FinishMemoryEmbedInFlight marks one embed call (write or query), previously
+// counted by StartMemoryEmbedInFlight, as complete.
+func FinishMemoryEmbedInFlight() {
+	MemoryEmbedInFlight.Dec()
 }
 
 // RecordAgentAuth records one agent API-key verification, labelled "hit" when it
