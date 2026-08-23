@@ -349,6 +349,8 @@ jobs:
           python scripts/memory-bench/test_fixture_ages.py
           python scripts/memory-bench/test_search_settle.py
           python scripts/memory-bench/test_confirm_embedder_alive.py
+          python scripts/memory-bench/test_corpus_sanitize.py
+          python scripts/memory-bench/test_corpus_sanitize_wiring.py
           python scripts/memory-bench/dense_arm_control.py --selftest
           python scripts/memory-bench/prod_window.py --selftest
           python scripts/memory-bench/fixture_ages.py --selftest
