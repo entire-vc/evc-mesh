@@ -300,9 +300,7 @@ export function WorkspaceSecrets({ workspaceId, canManage }: WorkspaceSecretsPro
                       ) : (
                         <span className="text-muted-foreground">{formatDate(s.expires_at)}</span>
                       )
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
+                    ) : null}
                   </td>
                   {canManage && (
                     <td className="py-1.5 whitespace-nowrap">
