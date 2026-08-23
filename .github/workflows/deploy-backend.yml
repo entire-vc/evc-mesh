@@ -342,8 +342,39 @@ jobs:
             # service used to be deployed by hand and that convention (a dated
             # rollback copy alongside the live binary) is already established
             # on this host; CI keeps it rather than silently dropping it.
+            #
+            # Anchor name carries a 2-digit sequence after the timestamp
+            # (second-granularity alone collides on same-second retries/reruns
+            # and a later `cp` would silently overwrite the earlier anchor —
+            # exactly the artifact the anchor exists to preserve). Sequence is
+            # one past the HIGHEST existing sequence for this second, parsed
+            # off the -ci-auto suffix so this never collides with the
+            # evc-mesh-mcp pipelines -mcprepo anchors sharing this directory.
+            # Same scheme as evc-mesh-mcp/scripts/mesh-mcp-remote-deploy.sh
+            # new_anchor_name() (task #4222c17d / PR #71).
             if [ -f /opt/evc-mesh/bin/mesh-mcp ]; then
-              cp -p /opt/evc-mesh/bin/mesh-mcp "/opt/evc-mesh/bin/mesh-mcp.rollback-$(date -u +%Y%m%d-%H%M%S)-ci-auto"
+              BIN_DIR=/opt/evc-mesh/bin
+              STAMP=$(date -u +%Y%m%d-%H%M%S)
+              PREFIX="mesh-mcp.rollback-$STAMP-"
+              N=0
+              for f in "$BIN_DIR/$PREFIX"[0-9][0-9]-ci-auto; do
+                [ -e "$f" ] || continue
+                BASE=${f##*/}
+                SEQ=${BASE#$PREFIX}
+                SEQ=${SEQ%-ci-auto}
+                case "$SEQ" in
+                  [0-9][0-9]) ;;
+                  *) continue ;;
+                esac
+                SEQ=$((10#$SEQ))
+                [ "$SEQ" -ge "$N" ] && N=$((SEQ + 1))
+              done
+              if [ "$N" -gt 99 ]; then
+                echo "100 anchors already exist for second $STAMP — refusing to write an unsortable name" >&2
+                exit 1
+              fi
+              ANCHOR=$(printf "%s%02d-ci-auto" "$PREFIX" "$N")
+              cp -p /opt/evc-mesh/bin/mesh-mcp "$BIN_DIR/$ANCHOR"
             fi
             EXPECTED_MCP=$(cat /opt/evc-mesh/bin/mesh-mcp.new.sha256)
             mv /opt/evc-mesh/bin/mesh-mcp.new /opt/evc-mesh/bin/mesh-mcp
@@ -388,6 +419,31 @@ jobs:
             exit 1
           fi
           echo "mesh-mcp deploy verified: running process binary matches upload"
+
+      # Runs only once the mesh-mcp smoke test above has passed (a prior
+      # failed step already stops the job here) — pruning only ever discards
+      # anchors behind a binary that is confirmed live and healthy, never
+      # ahead of one that might still need a manual rollback.
+      #
+      # Scoped strictly to the -ci-auto suffix this pipeline writes: never
+      # touches the -mcprepo anchors evc-mesh-mcp's own pipeline writes into
+      # the same directory, nor the hand-made -pre-* anchors from before CI
+      # anchored on every deploy. Found accumulating unbounded (102 files,
+      # 1.3G) in task #59b6a3cf.
+      - name: Prune old rollback anchors (mesh-mcp)
+        run: |
+          ssh mesh-vm 'set -e
+            BIN_DIR=/opt/evc-mesh/bin
+            KEEP=10
+            COUNT=$(ls -1 "$BIN_DIR"/mesh-mcp.rollback-*-ci-auto 2>/dev/null | wc -l | tr -d " ")
+            if [ "$COUNT" -le "$KEEP" ]; then
+              echo "anchors: $COUNT (keeping $KEEP, nothing to prune)"
+            else
+              ls -1 "$BIN_DIR"/mesh-mcp.rollback-*-ci-auto | sort | head -n -"$KEEP" | while read -r old; do
+                echo "pruning old anchor $(basename "$old")"
+                unlink "$old"
+              done
+            fi'
 
       # Written only after BOTH binaries swapped, restarted, and smoke-tested
       # clean — this timestamp is what the burst-deploy guard reads to decide
