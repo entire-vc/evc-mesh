@@ -501,19 +501,29 @@ export function DocCommentRail({
 
       {draft && (
         <div className="mb-3 rounded-lg border border-yellow-400 bg-yellow-50/60 p-3 dark:bg-yellow-400/10">
-          <Quote
-            text={draft.anchor.exact}
-            placement={draft.unplaceable ? "orphaned" : "anchored"}
-          />
-          {draft.unplaceable && (
-            <p className="mb-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
-              <Link2Off className="mt-0.5 h-3 w-3 shrink-0" />
-              <span>
-                This selection could not be pinned to a position in the page
-                source. The comment will be saved with the quote only, and will
-                show as no longer attached.
-              </span>
-            </p>
+          {draft.anchor ? (
+            <>
+              <Quote
+                text={draft.anchor.exact}
+                placement={draft.unplaceable ? "orphaned" : "anchored"}
+              />
+              {draft.unplaceable && (
+                <p className="mb-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                  <Link2Off className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span>
+                    This selection could not be pinned to a position in the page
+                    source. The comment will be saved with the quote only, and
+                    will show as no longer attached.
+                  </span>
+                </p>
+              )}
+            </>
+          ) : (
+            // No quote to show — this draft has no anchor at all. Reuses the
+            // same wording a page-placed thread already carries once saved
+            // (see PlacementNotice), so the composer doesn't introduce new
+            // copy of its own.
+            <PlacementNotice placement="page" />
           )}
           <Composer
             placeholder="Add a comment… @ to mention"
@@ -593,6 +603,57 @@ export function DocCommentAffordance({
         Comment
       </Button>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The entry point that needs no selection
+// ---------------------------------------------------------------------------
+
+/**
+ * Starts a comment on the document as a whole — the only entry that does not
+ * require selecting text first (`DocCommentAffordance` above does).
+ *
+ * Lives in the page's own action row, not inside the rail or the tree: those
+ * two are mutually exclusive (`#a9df0f4a`), and a button mounted inside
+ * either one would only be reachable while that particular surface happens to
+ * be on screen. This one is not gated on `railOpen` at all — the click opens
+ * the rail itself (`onOpenRail`) so the composer this starts always has
+ * somewhere to render, then starts the draft.
+ *
+ * Icon-only for now: a visible label is copy under §1r.A review on
+ * `#03acfaae`, and `web/**` deploys to prod on merge with no human step in
+ * between (see `#41d01325`) — so the button ships with no visible text at
+ * all rather than an unapproved placeholder. `aria-label`/`title` are exempt
+ * from that gate (they exist for crawlers and screen readers, not as
+ * product copy) and carry the button's only description until the approved
+ * label lands as a follow-up commit.
+ */
+export function DocCommentPageEntry({
+  controller,
+  onOpenRail,
+}: {
+  controller: DocCommentsController;
+  onOpenRail: () => void;
+}) {
+  if (controller.readOnly) return null;
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      data-testid="doc-comment-page-entry"
+      className="h-7 w-7"
+      title="Comment on the whole document"
+      aria-label="Comment on the whole document"
+      onClick={() => {
+        onOpenRail();
+        controller.startPageDraft();
+      }}
+    >
+      <MessageSquarePlus className="h-3.5 w-3.5" />
+    </Button>
   );
 }
 
