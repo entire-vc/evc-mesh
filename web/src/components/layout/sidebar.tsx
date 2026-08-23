@@ -43,6 +43,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -176,7 +177,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
       setWsSlugDraft("");
       navigate(`/w/${ws.slug}`);
     } catch (err) {
-      setWsError(err instanceof Error ? err.message : "Failed to create workspace");
+      setWsError(apiErrorMessage(err, "Failed to create workspace"));
     } finally {
       setWsCreating(false);
     }

@@ -17,6 +17,7 @@ import { InviteLinkBox } from "@/components/invite-link-box";
 import { useMemberStore } from "@/stores/member";
 import { displayName, isNamePlaceholder } from "@/lib/user-display";
 import type { InviteDelivery, UserSearchResult, WorkspaceRole } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface InviteMemberDialogProps {
   open: boolean;
@@ -154,7 +155,7 @@ export function InviteMemberDialog({
         onClose();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add member");
+      setError(apiErrorMessage(err, "Failed to add member"));
     } finally {
       setIsSubmitting(false);
     }

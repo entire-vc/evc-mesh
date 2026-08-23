@@ -56,6 +56,7 @@ import {
 } from "@/lib/docs/anchor";
 import { toast } from "@/components/ui/toast";
 import "@/components/doc-editor.css";
+import { apiErrorMessage } from "@/lib/api-error";
 
 /**
  * Tell the user an upload failed, by name.
@@ -68,7 +69,7 @@ import "@/components/doc-editor.css";
  * indistinguishable from the button being dead.
  */
 function reportUploadFailure(file: File, err: unknown): void {
-  const detail = err instanceof Error ? err.message : "upload failed";
+  const detail = apiErrorMessage(err, "upload failed");
   toast.error(`Could not attach ${file.name}`, { description: detail });
 }
 

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface CreateProjectDialogProps {
   open: boolean;
@@ -80,7 +81,7 @@ export function CreateProjectDialog({
       onOpenChange(false);
       void navigate(`/w/${currentWorkspace.slug}/p/${project.slug}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create project");
+      setError(apiErrorMessage(err, "Failed to create project"));
     } finally {
       setIsSubmitting(false);
     }

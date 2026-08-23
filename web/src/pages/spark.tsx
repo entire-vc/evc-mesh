@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { IntegrationConfig, SparkAgentManifest } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 // Pre-populated domain expertise tags shown as clickable badge-pills.
 const DOMAIN_TAGS = [
@@ -509,7 +510,7 @@ function InstallDialog({
       await install(agent.id, workspaceId);
       setDone(true);
     } catch (err) {
-      setInstallError(err instanceof Error ? err.message : "Installation failed");
+      setInstallError(apiErrorMessage(err, "Installation failed"));
     }
   }, [agent.id, workspaceId, install]);
 
