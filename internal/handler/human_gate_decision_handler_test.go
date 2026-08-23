@@ -16,6 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 func setupHumanGateDecisionTest(mockSvc *MockCommentService) (*HumanGateDecisionHandler, *echo.Echo) {
@@ -155,6 +156,44 @@ func TestHumanGateDecisionHandler_Create_ServiceErrorMapped(t *testing.T) {
 
 	require.NoError(t, h.Create(c))
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+// TestHumanGateDecisionHandler_Create_ValidationError_400NotAny500 pins the
+// #62560d6d fix end-to-end at the handler layer: when the service rejects the
+// input (e.g. missing question_ref/canonical_key — the live repro's exact
+// shape), Create must answer 400, not fall through to the generic 500. Before
+// the fix, every handler test here stubbed RecordHumanGateDecisionFunc to
+// return either nil or one of the ErrHumanGateDecision* sentinels — none of
+// them exercised a *service.HumanGateDecisionValidationError, which is
+// exactly how this regression shipped unnoticed.
+func TestHumanGateDecisionHandler_Create_ValidationError_400NotAny500(t *testing.T) {
+	taskID, pavel := uuid.New(), uuid.New()
+	mockSvc := &MockCommentService{
+		RecordHumanGateDecisionFunc: func(context.Context, domain.RecordHumanGateDecisionInput) (*domain.HumanGateDecision, error) {
+			return nil, &service.HumanGateDecisionValidationError{Msg: "question_ref or canonical_key is required"}
+		},
+	}
+	h, e := setupHumanGateDecisionTest(mockSvc)
+
+	reqBody, _ := json.Marshal(map[string]any{"decided_by": pavel})
+	req, rec := newHGDRequest(http.MethodPost, "/", string(reqBody))
+	req = req.WithContext(actorctx.WithActor(req.Context(), pavel, domain.ActorTypeUser))
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/human-gate-decisions")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.Create(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "a validation failure must be 400, never the generic 500 fallback")
+	assert.Contains(t, rec.Body.String(), "question_ref or canonical_key is required")
+}
+
+func TestMapHumanGateDecisionError_ValidationError(t *testing.T) {
+	err := mapHumanGateDecisionError(&service.HumanGateDecisionValidationError{Msg: "invalid channel \"carrier-pigeon\""})
+	apiErr, ok := err.(*apierror.Error)
+	require.True(t, ok, "must map to *apierror.Error so handleError's type assertion recognizes it")
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
+	assert.Equal(t, `invalid channel "carrier-pigeon"`, apiErr.Message)
 }
 
 // --- Revoke ---

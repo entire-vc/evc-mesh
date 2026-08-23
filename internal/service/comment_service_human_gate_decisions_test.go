@@ -842,6 +842,36 @@ func TestValidateDecisionInput(t *testing.T) {
 	})
 }
 
+// TestRecordHumanGateDecision_ValidationFailure_Returns400NotAny500 pins the
+// #62560d6d fix: a live repro (Riker, then an independent verifier) found
+// POST /tasks/:id/human-gate-decisions returning 500 for a body that fails
+// validateDecisionInput (e.g. decided_by set, no question_ref/canonical_key —
+// exactly what an agent sends after copying the field from a stray "decision"
+// key that was never part of this API). The 500 was not a validation bug —
+// validateDecisionInput already rejected it correctly — it was a mapping bug:
+// RecordHumanGateDecision returned a bare error that handleError's chain of
+// *apierror.Error / typed-error checks doesn't recognize, so it fell to the
+// generic 500 fallback. This proves the service now returns a type the
+// handler's mapHumanGateDecisionError can turn into 400 (see the mirrored
+// assertion in TestMapHumanGateDecisionError_ValidationError in the handler
+// package).
+func TestRecordHumanGateDecision_ValidationFailure_Returns400NotAny500(t *testing.T) {
+	env := setupHGDEnv(t)
+	pavel := uuid.New()
+
+	_, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID:    uuid.New(),
+		DecidedBy: pavel,
+		// No QuestionRef, no CanonicalKey, no Provenance, no Channel — the
+		// exact shape of the live repro.
+	})
+	require.Error(t, err)
+
+	var validationErr *HumanGateDecisionValidationError
+	require.ErrorAs(t, err, &validationErr, "must be the typed validation error, not a bare error the handler can't map")
+	assert.NotEmpty(t, validationErr.Error())
+}
+
 func TestProvenanceLabel_UnknownValue(t *testing.T) {
 	assert.Equal(t, "smoke-signal", provenanceLabel(domain.HumanGateProvenance("smoke-signal")))
 }
