@@ -93,7 +93,7 @@ export function WorkspaceSecrets({ workspaceId, canManage }: WorkspaceSecretsPro
     setIsLoading(true);
     setLoadError(null);
     try {
-      const rows = await api<Secret[]>(`/workspaces/${workspaceId}/secrets`);
+      const rows = await api<Secret[]>(`/api/v1/workspaces/${workspaceId}/secrets`);
       setSecrets(rows ?? []);
     } catch (err) {
       setLoadError(apiErrorMessage(err, "Could not load secrets"));
@@ -133,7 +133,7 @@ export function WorkspaceSecrets({ workspaceId, canManage }: WorkspaceSecretsPro
       ...(expiresAt ? { expires_at: new Date(expiresAt).toISOString() } : {}),
     };
     try {
-      await api<Secret>(`/workspaces/${workspaceId}/secrets`, {
+      await api<Secret>(`/api/v1/workspaces/${workspaceId}/secrets`, {
         method: "POST",
         body: payload,
       });
@@ -159,7 +159,7 @@ export function WorkspaceSecrets({ workspaceId, canManage }: WorkspaceSecretsPro
     setIsRotating(true);
     setRotateError(null);
     try {
-      await api<Secret>(`/secrets/${rotating.id}/rotate`, {
+      await api<Secret>(`/api/v1/secrets/${rotating.id}/rotate`, {
         method: "POST",
         body: { value: rotateValue },
       });
@@ -178,7 +178,7 @@ export function WorkspaceSecrets({ workspaceId, canManage }: WorkspaceSecretsPro
     if (!deleting) return;
     setIsDeleting(true);
     try {
-      await api<void>(`/secrets/${deleting.id}`, { method: "DELETE" });
+      await api<void>(`/api/v1/secrets/${deleting.id}`, { method: "DELETE" });
       toast.success(`${deleting.name} removed`);
       setDeleting(null);
       await load();

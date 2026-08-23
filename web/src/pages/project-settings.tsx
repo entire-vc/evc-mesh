@@ -60,6 +60,7 @@ import { useTemplateStore } from "@/stores/template";
 import { formatDate, formatRelative, statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
 import type {
   Agent,
@@ -209,9 +210,9 @@ function WorkflowRulesSection({
     } catch (err) {
       setFeedback({
         type: "error",
-        message: err instanceof Error ? err.message : "Failed to save rules",
+        message: apiErrorMessage(err, "Failed to save rules"),
       });
-      toast.error(err instanceof Error ? err.message : "Failed to save rules");
+      toast.error(apiErrorMessage(err, "Failed to save rules"));
     }
   };
 
@@ -770,7 +771,7 @@ function ProjectAssignmentRulesSection({
     } catch (err) {
       setFeedback({
         type: "error",
-        message: err instanceof Error ? err.message : "Failed to save rules",
+        message: apiErrorMessage(err, "Failed to save rules"),
       });
     }
   };
@@ -1322,7 +1323,7 @@ export function ProjectSettingsPage() {
       applyTeamRelayResponse(data);
       toast("Team Relay settings saved.");
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to save settings";
+      const msg = apiErrorMessage(err, "Failed to save settings");
       setTrError(msg);
     } finally {
       setTrSaving(false);
@@ -1357,7 +1358,7 @@ export function ProjectSettingsPage() {
       applyTeamRelayResponse(data);
       toast("Mount point saved.");
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to save mount point";
+      const msg = apiErrorMessage(err, "Failed to save mount point");
       setTrMountError(msg);
     } finally {
       setTrMountSaving(false);
@@ -1395,7 +1396,7 @@ export function ProjectSettingsPage() {
       setGeneralFeedback({
         type: "error",
         message:
-          err instanceof Error ? err.message : "Failed to save settings",
+          apiErrorMessage(err, "Failed to save settings"),
       });
     } finally {
       setIsSavingGeneral(false);
@@ -1463,9 +1464,7 @@ export function ProjectSettingsPage() {
       setStatusToDelete(null);
     } catch (err) {
       setStatusError(
-        err instanceof Error
-          ? err.message
-          : "Failed to delete status. It may still have tasks assigned.",
+        apiErrorMessage(err, "Failed to delete status. It may still have tasks assigned."),
       );
     } finally {
       setIsDeletingStatus(false);
@@ -1535,7 +1534,7 @@ export function ProjectSettingsPage() {
       setFieldToDelete(null);
     } catch (err) {
       setFieldError(
-        err instanceof Error ? err.message : "Failed to delete custom field.",
+        apiErrorMessage(err, "Failed to delete custom field."),
       );
     } finally {
       setIsDeletingField(false);
@@ -1597,7 +1596,7 @@ export function ProjectSettingsPage() {
       setMemberToRemove(null);
     } catch (err) {
       setMemberError(
-        err instanceof Error ? err.message : "Failed to remove member",
+        apiErrorMessage(err, "Failed to remove member"),
       );
     } finally {
       setIsRemovingMember(false);
@@ -1618,7 +1617,7 @@ export function ProjectSettingsPage() {
       setAddAgentMemberOpen(false);
     } catch (err) {
       setMemberError(
-        err instanceof Error ? err.message : "Failed to add agent",
+        apiErrorMessage(err, "Failed to add agent"),
       );
     } finally {
       setIsAddingAgent(false);
@@ -2754,7 +2753,7 @@ export function ProjectSettingsPage() {
                     }
                     setTemplateDialogOpen(false);
                   } catch (err) {
-                    setTemplateFormError(err instanceof Error ? err.message : "Failed to save template");
+                    setTemplateFormError(apiErrorMessage(err, "Failed to save template"));
                   } finally {
                     setTemplateActionLoading(null);
                   }

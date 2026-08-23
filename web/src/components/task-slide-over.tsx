@@ -59,6 +59,7 @@ import { toast } from "@/components/ui/toast";
 import type { AssigneeType, Priority, DelegationLevel } from "@/types";
 import { DelegationLevelSelect } from "@/components/delegation-level-select";
 import { CostQualityBlock } from "@/components/cost-quality-block";
+import { apiErrorMessage } from "@/lib/api-error";
 import { getTaskCostSummary, type TaskCostSummary } from "@/lib/api";
 import { inlineLabel } from "@/lib/user-display";
 
@@ -285,7 +286,7 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { title: titleDraft.trim() });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update title");
+      toast.error(apiErrorMessage(err, "Failed to update title"));
     }
   }, [currentTask, titleDraft, updateTask, onTaskUpdated]);
 
@@ -310,7 +311,7 @@ export function TaskSlideOver({
       setTimeout(() => setDescSaved(false), 1500);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save description",
+        apiErrorMessage(err, "Failed to save description"),
       );
     } finally {
       setDescSaving(false);
@@ -336,7 +337,7 @@ export function TaskSlideOver({
       if (taskId) await fetchTask(taskId);
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to change status");
+      toast.error(apiErrorMessage(err, "Failed to change status"));
     }
   };
 
@@ -346,7 +347,7 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { priority });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to change priority");
+      toast.error(apiErrorMessage(err, "Failed to change priority"));
     }
   };
 
@@ -356,7 +357,7 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { delegation_level: level });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to change delegation mode");
+      toast.error(apiErrorMessage(err, "Failed to change delegation mode"));
     }
   };
 
@@ -378,7 +379,7 @@ export function TaskSlideOver({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to change assignee",
+        apiErrorMessage(err, "Failed to change assignee"),
       );
     }
   };
@@ -392,7 +393,7 @@ export function TaskSlideOver({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to change due date",
+        apiErrorMessage(err, "Failed to change due date"),
       );
     }
   };
@@ -408,7 +409,7 @@ export function TaskSlideOver({
       }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to duplicate task",
+        apiErrorMessage(err, "Failed to duplicate task"),
       );
     }
   }, [currentTask, duplicateTask, fetchTask, onTaskUpdated]);
@@ -423,7 +424,7 @@ export function TaskSlideOver({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to update estimate",
+        apiErrorMessage(err, "Failed to update estimate"),
       );
     }
   }, [currentTask, hoursDraft, updateTask, onTaskUpdated]);
@@ -454,7 +455,7 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { labels });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add label");
+      toast.error(apiErrorMessage(err, "Failed to add label"));
     }
   }, [currentTask, labelDraft, updateTask, onTaskUpdated]);
 
@@ -467,7 +468,7 @@ export function TaskSlideOver({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          err instanceof Error ? err.message : "Failed to remove label",
+          apiErrorMessage(err, "Failed to remove label"),
         );
       }
     },
@@ -487,7 +488,7 @@ export function TaskSlideOver({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          err instanceof Error ? err.message : "Failed to update field",
+          apiErrorMessage(err, "Failed to update field"),
         );
       }
     },

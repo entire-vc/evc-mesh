@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
 import { useProjectStore } from "@/stores/project";
 import type { DependencyType, TaskDependency, TaskDependencyList } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -205,7 +206,7 @@ export function DependencyList({
       setForm({ depends_on_task_id: "", dependency_type: "blocks" });
     } catch (err: unknown) {
       setError(
-        err instanceof Error ? err.message : "Failed to add dependency.",
+        apiErrorMessage(err, "Failed to add dependency."),
       );
     } finally {
       setSubmitting(false);

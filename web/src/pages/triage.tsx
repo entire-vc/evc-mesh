@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import type { PaginatedResponse, Task, TaskStatus } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 const PRIORITY_COLORS = {
   urgent: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
@@ -95,7 +96,7 @@ function MoveDialog({
       onMoved(task.id);
       onOpenChange(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to move task");
+      toast.error(apiErrorMessage(err, "Failed to move task"));
     } finally {
       setIsMoving(false);
     }

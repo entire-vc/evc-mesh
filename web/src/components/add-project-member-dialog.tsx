@@ -14,6 +14,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { useMemberStore } from "@/stores/member";
 import type { ProjectRole, WorkspaceMemberWithUser } from "@/types";
 import { inlineLabel } from "@/lib/user-display";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface AddProjectMemberDialogProps {
   open: boolean;
@@ -70,7 +71,7 @@ export function AddProjectMemberDialog({
       await addProjectMember(projectId, selectedUserId, role);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add member");
+      setError(apiErrorMessage(err, "Failed to add member"));
     } finally {
       setIsSubmitting(false);
     }

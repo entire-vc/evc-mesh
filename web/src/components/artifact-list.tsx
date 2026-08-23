@@ -28,6 +28,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { ArtifactPreviewDialog } from "@/components/artifact-preview-dialog";
 import { previewKindFor } from "@/lib/artifact-preview";
 import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface ArtifactListProps {
   taskId: string;
@@ -138,7 +139,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
             setArtifacts((prev) => [...prev, artifact]);
           } catch (err) {
             toast.error(`Could not attach ${file.name}`, {
-              description: err instanceof Error ? err.message : "upload failed",
+              description: apiErrorMessage(err, "upload failed"),
             });
           }
         }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, FileText, Loader2, Search, X } from "lucide-react";
+import { apiErrorMessage } from "@/lib/api-error";
 import {
   Dialog,
   DialogContent,
@@ -109,7 +110,7 @@ export function AttachDocDialog({
         })
         .catch((err) => {
           if (!cancelled && mountedRef.current) {
-            setError(err instanceof Error ? err.message : "Search failed");
+            setError(apiErrorMessage(err, "Search failed"));
             setResults([]);
           }
         })

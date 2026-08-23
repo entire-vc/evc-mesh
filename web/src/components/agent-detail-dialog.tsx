@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import type { Agent, AgentType } from "@/types";
 import { inlineLabel } from "@/lib/user-display";
+import { apiErrorMessage } from "@/lib/api-error";
 
 interface AgentDetailDialogProps {
   open: boolean;
@@ -94,7 +95,7 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { name: nameDraft.trim() });
       setEditingName(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update agent");
+      setError(apiErrorMessage(err, "Failed to update agent"));
     } finally {
       setIsLoading(false);
     }
@@ -114,7 +115,7 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { profile_description: descriptionDraft.trim() });
       setEditingDescription(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update description");
+      setError(apiErrorMessage(err, "Failed to update description"));
     } finally {
       setIsLoading(false);
     }
@@ -134,7 +135,7 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { role: roleDraft.trim() });
       setEditingRole(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update role");
+      setError(apiErrorMessage(err, "Failed to update role"));
     } finally {
       setIsLoading(false);
     }
@@ -154,7 +155,7 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { callback_url: callbackUrlDraft.trim() });
       setEditingCallbackUrl(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update callback URL");
+      setError(apiErrorMessage(err, "Failed to update callback URL"));
     } finally {
       setIsLoading(false);
     }
@@ -169,7 +170,7 @@ export function AgentDetailDialog({
       setNewApiKey(result.api_key);
       setMode("regenerate-key");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to regenerate key");
+      setError(apiErrorMessage(err, "Failed to regenerate key"));
       setMode("detail");
     } finally {
       setIsLoading(false);
@@ -184,7 +185,7 @@ export function AgentDetailDialog({
       await deleteAgent(agent.id);
       handleClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete agent");
+      setError(apiErrorMessage(err, "Failed to delete agent"));
       setMode("detail");
     } finally {
       setIsLoading(false);
@@ -498,7 +499,7 @@ export function AgentDetailDialog({
                     await updateAgent(agent.id, { supervisor_user_id: val.slice(5), parent_agent_id: "" });
                   }
                 } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to update supervisor");
+                  setError(apiErrorMessage(err, "Failed to update supervisor"));
                 } finally {
                   setIsLoading(false);
                 }

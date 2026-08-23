@@ -13,6 +13,7 @@ import { BrowserPushTab } from "./browser-push-tab";
 import { EmailTab } from "./email-tab";
 import { TelegramTab } from "./telegram-tab";
 import type { TabId } from "./constants";
+import { apiErrorMessage } from "@/lib/api-error";
 
 const VALID_TABS: TabId[] = ["in-app", "push", "email", "telegram"];
 
@@ -123,7 +124,7 @@ export default function NotificationSettingsPage() {
       setPushPermission(await getPermissionState());
       setPushSubscribed(true);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to enable browser push");
+      toast.error(apiErrorMessage(err, "Failed to enable browser push"));
     } finally {
       setPushLoading(false);
     }
@@ -135,7 +136,7 @@ export default function NotificationSettingsPage() {
       await unsubscribeUser();
       setPushSubscribed(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to disable browser push");
+      toast.error(apiErrorMessage(err, "Failed to disable browser push"));
     } finally {
       setPushLoading(false);
     }
@@ -163,7 +164,7 @@ export default function NotificationSettingsPage() {
       setTimeout(() => setPushEventsSaved(false), 2000);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save push preferences",
+        apiErrorMessage(err, "Failed to save push preferences"),
       );
     } finally {
       setPushEventsSaving(false);
@@ -259,7 +260,7 @@ export default function NotificationSettingsPage() {
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save notification settings",
+        apiErrorMessage(err, "Failed to save notification settings"),
       );
     } finally {
       setIsSaving(false);
@@ -300,7 +301,7 @@ export default function NotificationSettingsPage() {
       setTimeout(() => setEmailSaved(false), 2000);
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to save email notification settings",
+        apiErrorMessage(err, "Failed to save email notification settings"),
       );
     } finally {
       setEmailSaving(false);
@@ -360,11 +361,10 @@ export default function NotificationSettingsPage() {
       }
     } catch (err) {
       toast.error(
-        err instanceof Error
-          ? err.message
-          : unbind
-            ? "Failed to disconnect Telegram"
-            : "Failed to save Telegram notification settings",
+        apiErrorMessage(
+          err,
+          unbind ? "Failed to disconnect Telegram" : "Failed to save Telegram notification settings",
+        ),
       );
     } finally {
       if (unbind) setTelegramUnbinding(false);

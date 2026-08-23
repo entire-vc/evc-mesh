@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { apiErrorMessage } from "@/lib/api-error";
 import type {
   IntegrationConfig,
   IntegrationProvider,
@@ -152,7 +153,7 @@ export function IntegrationsPage() {
       const botUsername = (updated.config as TelegramIntegrationConfig).bot_username;
       toast.success(botUsername ? `Connected as @${botUsername}` : "Telegram bot connected");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save the Telegram bot token");
+      toast.error(apiErrorMessage(err, "Failed to save the Telegram bot token"));
     } finally {
       setTelegramSaving(false);
     }
