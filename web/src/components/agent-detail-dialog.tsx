@@ -226,7 +226,7 @@ export function AgentDetailDialog({
       await updateAgentProfile(agent.id, req);
       setEditingProfileField(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update agent");
+      setError(apiErrorMessage(err, "Failed to update agent"));
     } finally {
       setIsLoading(false);
     }
