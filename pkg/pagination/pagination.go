@@ -25,6 +25,14 @@ type Params struct {
 	// Normalize folds it into PageSize; nothing downstream reads it.
 	RawLimit int `query:"limit"`
 
+	// Order binds ?order=asc|desc — the REST-conventional spelling a caller
+	// reaches for before checking the docs for the actual name, SortDir. Same
+	// shape as RawLimit above: a separate field because Echo binds one tag per
+	// field, folded into SortDir by Normalize so nothing downstream reads it
+	// directly. An explicit sort_dir wins if both are sent, for the same
+	// reason page_size wins over limit — it's the documented name.
+	Order string `query:"order"`
+
 	// ListRevision, when non-zero, is the task_list_revision (ADR-0004,
 	// dev-docs/adrs/0004-task-list-revision-and-stale-cursor.md) the caller
 	// observed on a previous page of this same walk. A handler that supports
@@ -54,6 +62,9 @@ func (p *Params) Normalize() {
 	}
 	if p.PageSize > MaxPageSize {
 		p.PageSize = MaxPageSize
+	}
+	if p.SortDir == "" && p.Order != "" {
+		p.SortDir = p.Order
 	}
 	if p.SortDir != "asc" && p.SortDir != "desc" {
 		p.SortDir = "asc"
