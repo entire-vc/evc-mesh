@@ -29,8 +29,6 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/handler"
-	githubapi "github.com/entire-vc/evc-mesh/internal/integration/github"
-	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/reconciler"
@@ -320,31 +318,34 @@ func main() {
 		service.WithTelegramService(telegramClient, integrationRepo, workspaceRepo, projectRepo),
 	)
 
-	// githubClient enables the done-evidence gate's live PR-status check
-	// (#5f7f8c6e: a merged PR blocked move_task->done because the cached
-	// vcs_links.status never got updated by a webhook delivery). Left as a
-	// nil PullRequestChecker interface — not a typed nil *Client — when no
-	// token is configured, so the gate's `s.githubPRChecker != nil` check
-	// correctly sees "not wired" rather than a non-nil interface wrapping a
-	// nil pointer.
-	var githubClient githubapi.PullRequestChecker
+	// vcsIntegrationResolver replaces the process-start-only githubClient/
+	// gitlabClient construction that used to live here (#33a4bb57, §C1 of
+	// specsintegration-provider-contract): it resolves a GitHub/GitLab
+	// connection fresh on EVERY call — the done-evidence gate's live
+	// re-check, and the webhook receiver's signature validation — honoring
+	// a workspace's own active integration row over these env values, per
+	// §4's resolution order. The env values below are what governs when no
+	// workspace has configured its own connection (the pre-#33a4bb57
+	// single-instance behavior, unchanged) — logged explicitly here because
+	// that is the one thing genuinely fixed at process start; a workspace
+	// row can flip the effective state on the next request without a
+	// restart.
+	vcsIntegrationResolver := service.NewVCSIntegrationResolver(integrationRepo, service.VCSEnvFallback{
+		GitHubToken:         cfg.Webhook.GitHubToken,
+		GitHubWebhookSecret: cfg.Webhook.GitHubSecret,
+		GitLabBaseURL:       cfg.Webhook.GitLabURL,
+		GitLabToken:         cfg.Webhook.GitLabToken,
+		GitLabWebhookSecret: cfg.Webhook.GitLabSecret,
+	})
 	if cfg.Webhook.GitHubToken != "" {
-		githubClient = githubapi.NewClient(cfg.Webhook.GitHubToken)
-		log.Printf("[config] GitHub live PR-status check enabled for the done-evidence gate")
+		log.Printf("[config] GitHub env fallback: live PR-status check available when no workspace has its own GitHub integration configured")
 	} else {
-		log.Printf("[config] MESH_GITHUB_TOKEN not set — done-evidence gate will rely on cached VCS link status only (no live GitHub check)")
+		log.Printf("[config] MESH_GITHUB_TOKEN not set — GitHub env fallback has no live PR-status check; a workspace can still enable one via its own integration")
 	}
-
-	// gitlabClient mirrors githubClient above (#bc39d781) — unlike GitHub,
-	// self-hosted GitLab needs BOTH a base URL and a token before a live
-	// check can even be attempted, so require both rather than silently
-	// wiring a client that would fail on its first request.
-	var gitlabClient gitlabapi.MergeRequestChecker
 	if cfg.Webhook.GitLabURL != "" && cfg.Webhook.GitLabToken != "" {
-		gitlabClient = gitlabapi.NewClient(cfg.Webhook.GitLabURL, cfg.Webhook.GitLabToken)
-		log.Printf("[config] GitLab live MR-status check enabled for the done-evidence gate (%s)", cfg.Webhook.GitLabURL)
+		log.Printf("[config] GitLab env fallback: live MR-status check available when no workspace has its own GitLab integration configured (%s)", cfg.Webhook.GitLabURL)
 	} else {
-		log.Printf("[config] MESH_GITLAB_URL/MESH_GITLAB_TOKEN not set — done-evidence gate will rely on cached VCS link status only (no live GitLab check)")
+		log.Printf("[config] MESH_GITLAB_URL/MESH_GITLAB_TOKEN not set — GitLab env fallback has no live MR-status check; a workspace can still enable one via its own integration")
 	}
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
@@ -360,10 +361,9 @@ func main() {
 		service.WithProjectMemberRepoTask(projectMemberRepo),
 		service.WithTaskAgentRepo(agentRepo),
 		service.WithUserRepoTask(userRepo),
-		service.WithCommentRepoTask(commentRepo),  // enables review-evidence gate
-		service.WithVCSLinkRepoTask(vcsLinkRepo),  // enables done-evidence gate
-		service.WithGitHubPRChecker(githubClient), // live PR-status check for the done-evidence gate (nil-safe if MESH_GITHUB_TOKEN unset — see below)
-		service.WithGitLabMRChecker(gitlabClient), // live MR-status check for the done-evidence gate (nil-safe if MESH_GITLAB_URL/MESH_GITLAB_TOKEN unset — see above)
+		service.WithCommentRepoTask(commentRepo),                   // enables review-evidence gate
+		service.WithVCSLinkRepoTask(vcsLinkRepo),                   // enables done-evidence gate
+		service.WithVCSIntegrationResolver(vcsIntegrationResolver), // per-workspace GitHub/GitLab live-check client, resolved on every call (see above)
 		// Human half of the assignee tenancy guard. Without it the user path of
 		// assertAssigneeInProjectWorkspace cannot be decided and refuses every
 		// user assignment, so this wiring is load-bearing, not optional —
@@ -650,8 +650,7 @@ func main() {
 	webhookHandler := handler.NewWebhookHandler(webhookService)
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
 	vcsLinkHandler := handler.NewVCSLinkHandler(vcsLinkService,
-		handler.WithGitHubWebhookSecret(cfg.Webhook.GitHubSecret),
-		handler.WithGitLabWebhookSecret(cfg.Webhook.GitLabSecret),
+		handler.WithVCSIntegrationResolver(vcsIntegrationResolver), // resolves webhook secrets fresh per request (see above); supersedes the static WithGitHubWebhookSecret/WithGitLabWebhookSecret options
 		handler.WithWebhookDedupStore(handler.NewRedisWebhookDedupStore(agentNotifyRedis)),
 	)
 	integrationHandler := handler.NewIntegrationHandler(integrationService, telegramClient, telegramBotManager)

@@ -1158,7 +1158,7 @@ export interface CreateVCSLinkRequest {
 
 // Integration types
 
-export type IntegrationProvider = "slack" | "github" | "spark" | "mcp" | "telegram";
+export type IntegrationProvider = "slack" | "github" | "gitlab" | "spark" | "mcp" | "telegram";
 
 // ---------------------------------------------------------------------------
 // Secrets (write-only store)
@@ -1223,6 +1223,22 @@ export interface IntegrationConfig {
 export interface TelegramIntegrationConfig {
   bot_username?: string;
   bot_token_set?: boolean;
+}
+
+// A github IntegrationConfig's `config` is always this shape — the API
+// never returns the token/webhook_secret, only whether each is set
+// (mirrors TelegramIntegrationConfig's bot_token_set).
+export interface GitHubIntegrationConfig {
+  token_set?: boolean;
+  webhook_secret_set?: boolean;
+}
+
+// A gitlab IntegrationConfig's `config` shape. base_url is not a secret and
+// passes through unmasked — useful to show back what was configured.
+export interface GitLabIntegrationConfig {
+  base_url?: string;
+  token_set?: boolean;
+  webhook_secret_set?: boolean;
 }
 
 // A telegram-channel NotificationPreference's `config` is always this shape.

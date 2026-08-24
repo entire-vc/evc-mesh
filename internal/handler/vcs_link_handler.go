@@ -72,8 +72,9 @@ func (s *redisWebhookDedupStore) Claim(ctx context.Context, deliveryID string) (
 // VCSLinkHandler handles HTTP requests for VCS link management.
 type VCSLinkHandler struct {
 	vcsService          service.VCSLinkService
-	githubWebhookSecret string // HMAC-SHA256 secret; empty disables validation.
-	gitlabWebhookSecret string // shared token sent verbatim in X-Gitlab-Token; empty disables validation.
+	githubWebhookSecret string                          // legacy static HMAC-SHA256 secret; used only when vcsIntegrations is nil. Empty disables validation.
+	gitlabWebhookSecret string                          // legacy static shared token; used only when vcsIntegrations is nil. Empty disables validation.
+	vcsIntegrations     *service.VCSIntegrationResolver // resolves secrets fresh on every request (§C1/§C2) — see WithVCSIntegrationResolver
 	dedup               WebhookDedupStore
 }
 
@@ -97,6 +98,53 @@ func WithGitLabWebhookSecret(secret string) VCSLinkHandlerOption {
 // X-GitHub-Delivery values before any HMAC or JSON work happens.
 func WithWebhookDedupStore(store WebhookDedupStore) VCSLinkHandlerOption {
 	return func(h *VCSLinkHandler) { h.dedup = store }
+}
+
+// WithVCSIntegrationResolver switches webhook secret validation from the
+// static WithGitHubWebhookSecret/WithGitLabWebhookSecret values (resolved
+// once, at process start) to a fresh per-request lookup against the
+// workspace integration store, falling back to env exactly as those static
+// options did (§C1/§C2 of specsintegration-provider-contract, #33a4bb57).
+// Takes priority over the static options when both are set. Unlike the
+// static path — where an empty secret means "validation off" — once this
+// resolver is wired, resolving NO secret at all (neither any active
+// workspace row nor env) means the provider is DISABLED and the request is
+// refused with a named reason, not silently accepted. See
+// VCSIntegrationResolver's doc comment for why the webhook path validates
+// against every active workspace's secret rather than one workspace's.
+func WithVCSIntegrationResolver(r *service.VCSIntegrationResolver) VCSLinkHandlerOption {
+	return func(h *VCSLinkHandler) { h.vcsIntegrations = r }
+}
+
+// githubWebhookSecrets returns the set of secrets that should currently
+// validate an inbound GitHub webhook, and whether validation is mandatory
+// at all. When vcsIntegrations is wired, validation is ALWAYS mandatory —
+// an empty secret set means the provider is disabled and the caller must
+// refuse, never fall through to "no secret = allow". When vcsIntegrations
+// is nil, this reproduces the pre-#33a4bb57 static behavior exactly:
+// validation is mandatory only when a secret was configured at
+// construction.
+func (h *VCSLinkHandler) githubWebhookSecrets(ctx context.Context) (secrets []string, required bool) {
+	if h.vcsIntegrations != nil {
+		secrets, _ := h.vcsIntegrations.GitHubWebhookSecrets(ctx)
+		return secrets, true
+	}
+	if h.githubWebhookSecret != "" {
+		return []string{h.githubWebhookSecret}, true
+	}
+	return nil, false
+}
+
+// gitlabWebhookSecrets is githubWebhookSecrets's GitLab counterpart.
+func (h *VCSLinkHandler) gitlabWebhookSecrets(ctx context.Context) (secrets []string, required bool) {
+	if h.vcsIntegrations != nil {
+		secrets, _ := h.vcsIntegrations.GitLabWebhookSecrets(ctx)
+		return secrets, true
+	}
+	if h.gitlabWebhookSecret != "" {
+		return []string{h.gitlabWebhookSecret}, true
+	}
+	return nil, false
 }
 
 // NewVCSLinkHandler creates a new VCSLinkHandler.
@@ -319,13 +367,29 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("failed to read request body"))
 	}
 
-	// Validate HMAC-SHA256 signature when a secret is configured.
-	if h.githubWebhookSecret != "" {
+	// Validate HMAC-SHA256 signature. secrets is every value currently
+	// allowed to sign a delivery (§C1: resolved fresh on every request, not
+	// cached from process start); required tells us whether "no secret
+	// resolved" means "validation is off" (legacy static path, no
+	// vcsIntegrations wired) or "the provider is disabled" (dynamic path —
+	// see githubWebhookSecrets's doc comment).
+	secrets, required := h.githubWebhookSecrets(c.Request().Context())
+	if required {
+		if len(secrets) == 0 {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("github integration is disabled: no active workspace webhook secret and no MESH_GITHUB_WEBHOOK_SECRET fallback configured"))
+		}
 		sig := c.Request().Header.Get("X-Hub-Signature-256")
 		if sig == "" {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("missing X-Hub-Signature-256 header"))
 		}
-		if !verifyGitHubSignature(rawBody, sig, h.githubWebhookSecret) {
+		matched := false
+		for _, secret := range secrets {
+			if verifyGitHubSignature(rawBody, sig, secret) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("invalid webhook signature"))
 		}
 	}
@@ -460,13 +524,26 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 	// X-Gitlab-Token — a direct (constant-time) compare against the
 	// configured secret, unlike GitHub's HMAC-SHA256 signature over the
 	// body. No body bytes are needed to validate it, so this can happen
-	// before reading the body at all.
-	if h.gitlabWebhookSecret != "" {
+	// before reading the body at all. secrets/required follow the same
+	// §C1/§C2 contract as GitHubWebhook above — see gitlabWebhookSecrets's
+	// doc comment.
+	secrets, required := h.gitlabWebhookSecrets(c.Request().Context())
+	if required {
+		if len(secrets) == 0 {
+			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("gitlab integration is disabled: no active workspace webhook secret and no MESH_GITLAB_WEBHOOK_SECRET fallback configured"))
+		}
 		token := c.Request().Header.Get("X-Gitlab-Token")
 		if token == "" {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("missing X-Gitlab-Token header"))
 		}
-		if subtle.ConstantTimeCompare([]byte(token), []byte(h.gitlabWebhookSecret)) != 1 {
+		matched := false
+		for _, secret := range secrets {
+			if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1 {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("invalid webhook token"))
 		}
 	}

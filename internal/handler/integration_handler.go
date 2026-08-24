@@ -73,7 +73,7 @@ func (h *IntegrationHandler) List(c echo.Context) error {
 		cfgs = []domain.IntegrationConfig{}
 	}
 	for i := range cfgs {
-		maskTelegramConfig(&cfgs[i])
+		maskSecrets(&cfgs[i])
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
@@ -99,19 +99,39 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 	}
 
 	provider := domain.IntegrationProvider(req.Provider)
+	var configJSON json.RawMessage
 	switch provider {
-	case domain.IntegrationProviderSlack, domain.IntegrationProviderGitHub, domain.IntegrationProviderSpark, domain.IntegrationProviderMCP:
+	case domain.IntegrationProviderSlack, domain.IntegrationProviderSpark, domain.IntegrationProviderMCP:
+		var jsonErr error
+		configJSON, jsonErr = marshalToRawJSON(req.Config)
+		if jsonErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
+		}
 	case domain.IntegrationProviderTelegram:
 		if apiErr := h.prepareTelegramConfig(c.Request().Context(), req.Config); apiErr != nil {
 			return c.JSON(apiErr.StatusCode(), apiErr)
 		}
+		var jsonErr error
+		configJSON, jsonErr = marshalToRawJSON(req.Config)
+		if jsonErr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
+		}
+	case domain.IntegrationProviderGitHub:
+		existing, _ := h.findExisting(c.Request().Context(), wsID, provider)
+		merged, apiErr := prepareGitHubConfig(existing, req.Config)
+		if apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
+		configJSON = merged
+	case domain.IntegrationProviderGitLab:
+		existing, _ := h.findExisting(c.Request().Context(), wsID, provider)
+		merged, apiErr := prepareGitLabConfig(existing, req.Config)
+		if apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
+		configJSON = merged
 	default:
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("unsupported provider: "+req.Provider))
-	}
-
-	configJSON, err := marshalToRawJSON(req.Config)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
 	}
 
 	input := domain.CreateIntegrationInput{
@@ -130,7 +150,7 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 		h.telegramBots.Reload(c.Request().Context(), cfg.ID)
 	}
 
-	maskTelegramConfig(cfg)
+	maskSecrets(cfg)
 	return c.JSON(http.StatusCreated, cfg)
 }
 
@@ -146,23 +166,42 @@ func (h *IntegrationHandler) Update(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	// Only telegram needs to know the current provider ahead of the update —
-	// to validate/encrypt a new bot_token, or, if none was sent, to leave the
-	// stored one alone. Every other provider's config is opaque here and
-	// passed straight through, matching the pre-telegram behavior.
+	// telegram/github/gitlab each need to know the current provider ahead of
+	// the update — to encrypt (and, for telegram, validate) a new secret
+	// field while merging it onto whatever the workspace already has stored
+	// (Configure/Update replace the whole config JSON blob; see
+	// prepareGitHubConfig's doc comment for why a naive pass-through would
+	// let a webhook_secret-only PATCH silently wipe an existing token).
+	// Every other provider's config is opaque here and passed straight
+	// through, matching the pre-telegram behavior.
 	existing, err := h.integrationService.GetByID(c.Request().Context(), intID)
 	if err != nil {
 		return handleError(c, err)
 	}
 
-	if existing.Provider == domain.IntegrationProviderTelegram && req.Config != nil {
+	var configJSON []byte
+	switch {
+	case existing.Provider == domain.IntegrationProviderTelegram && req.Config != nil:
 		if apiErr := h.prepareTelegramConfig(c.Request().Context(), req.Config); apiErr != nil {
 			return c.JSON(apiErr.StatusCode(), apiErr)
 		}
-	}
-
-	var configJSON []byte
-	if req.Config != nil {
+		configJSON, err = marshalToRawJSON(req.Config)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
+		}
+	case existing.Provider == domain.IntegrationProviderGitHub && req.Config != nil:
+		merged, apiErr := prepareGitHubConfig(existing, req.Config)
+		if apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
+		configJSON = merged
+	case existing.Provider == domain.IntegrationProviderGitLab && req.Config != nil:
+		merged, apiErr := prepareGitLabConfig(existing, req.Config)
+		if apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
+		configJSON = merged
+	case req.Config != nil:
 		configJSON, err = marshalToRawJSON(req.Config)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
@@ -183,7 +222,7 @@ func (h *IntegrationHandler) Update(c echo.Context) error {
 		h.telegramBots.Reload(c.Request().Context(), cfg.ID)
 	}
 
-	maskTelegramConfig(cfg)
+	maskSecrets(cfg)
 	return c.JSON(http.StatusOK, cfg)
 }
 
@@ -279,4 +318,183 @@ func maskTelegramConfig(cfg *domain.IntegrationConfig) {
 		return
 	}
 	cfg.Config = masked
+}
+
+// maskSecrets dispatches to the right provider-specific masking function —
+// the single call site List/Configure/Update use instead of picking a
+// provider-specific function themselves.
+func maskSecrets(cfg *domain.IntegrationConfig) {
+	if cfg == nil {
+		return
+	}
+	switch cfg.Provider {
+	case domain.IntegrationProviderTelegram:
+		maskTelegramConfig(cfg)
+	case domain.IntegrationProviderGitHub:
+		maskGitHubConfig(cfg)
+	case domain.IntegrationProviderGitLab:
+		maskGitLabConfig(cfg)
+	}
+}
+
+// maskGitHubConfig is maskTelegramConfig's GitHub counterpart: strips
+// token/webhook_secret from an API response, replacing each with a boolean
+// the UI can render a masked placeholder from.
+func maskGitHubConfig(cfg *domain.IntegrationConfig) {
+	if cfg == nil || cfg.Provider != domain.IntegrationProviderGitHub {
+		return
+	}
+	var parsed service.GitHubIntegrationConfig
+	if len(cfg.Config) > 0 {
+		_ = json.Unmarshal(cfg.Config, &parsed)
+	}
+	masked, err := json.Marshal(map[string]any{
+		"token_set":          parsed.Token != "",
+		"webhook_secret_set": parsed.WebhookSecret != "",
+	})
+	if err != nil {
+		cfg.Config = json.RawMessage(`{}`)
+		return
+	}
+	cfg.Config = masked
+}
+
+// maskGitLabConfig mirrors maskGitHubConfig. BaseURL is not a secret and
+// passes through unmasked — it is the self-hosted instance's URL, useful
+// for the settings page to display back to whoever configured it.
+func maskGitLabConfig(cfg *domain.IntegrationConfig) {
+	if cfg == nil || cfg.Provider != domain.IntegrationProviderGitLab {
+		return
+	}
+	var parsed service.GitLabIntegrationConfig
+	if len(cfg.Config) > 0 {
+		_ = json.Unmarshal(cfg.Config, &parsed)
+	}
+	masked, err := json.Marshal(map[string]any{
+		"base_url":           parsed.BaseURL,
+		"token_set":          parsed.Token != "",
+		"webhook_secret_set": parsed.WebhookSecret != "",
+	})
+	if err != nil {
+		cfg.Config = json.RawMessage(`{}`)
+		return
+	}
+	cfg.Config = masked
+}
+
+// findExisting looks up a workspace's already-stored config for provider,
+// or nil if none exists yet — used by Configure's github/gitlab branch to
+// merge a fresh token/webhook_secret onto whatever is already stored,
+// exactly as Update's existing (fetched via GetByID) does. Uses
+// ListByWorkspace + filter rather than a new IntegrationService method: the
+// integration list per workspace is small (one row per provider), and this
+// avoids widening IntegrationService's interface for a single call site.
+func (h *IntegrationHandler) findExisting(ctx context.Context, workspaceID uuid.UUID, provider domain.IntegrationProvider) (*domain.IntegrationConfig, error) {
+	cfgs, err := h.integrationService.ListByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cfgs {
+		if cfgs[i].Provider == provider {
+			return &cfgs[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// prepareGitHubConfig validates and encrypts token/webhook_secret fields
+// present in config (a map[string]any from the request body), merging them
+// onto whatever the workspace already has stored (existing, nil if this is
+// a brand-new integration) so that a caller updating ONLY one field (e.g.
+// rotating just the webhook_secret) does not silently wipe the other —
+// Configure/Update replace the whole config JSON blob wholesale
+// (repository.IntegrationRepository has no per-field merge; see
+// IntegrationRepo.Upsert/Update), so this handler-level read-merge-write
+// stands in for it.
+//
+//   - A key absent from the map: left at whatever existing already had
+//     (possibly nothing, for a brand-new integration).
+//   - An empty string: explicitly clears that field.
+//   - A non-empty string: AES-256-GCM encrypted via pkg/encryption before
+//     it is allowed anywhere near Configure/Update — the DB never sees the
+//     plaintext, mirroring prepareTelegramConfig's bot_token handling.
+func prepareGitHubConfig(existing *domain.IntegrationConfig, config interface{}) (json.RawMessage, *apierror.Error) {
+	var merged service.GitHubIntegrationConfig
+	if existing != nil && len(existing.Config) > 0 {
+		_ = json.Unmarshal(existing.Config, &merged)
+	}
+	raw, _ := config.(map[string]interface{})
+	if v, ok := raw["token"]; ok {
+		s, _ := v.(string)
+		if s == "" {
+			merged.Token = ""
+		} else {
+			enc, err := encryption.Encrypt(s)
+			if err != nil {
+				return nil, apierror.BadRequestWithDetails("failed to store GitHub token", err.Error())
+			}
+			merged.Token = enc
+		}
+	}
+	if v, ok := raw["webhook_secret"]; ok {
+		s, _ := v.(string)
+		if s == "" {
+			merged.WebhookSecret = ""
+		} else {
+			enc, err := encryption.Encrypt(s)
+			if err != nil {
+				return nil, apierror.BadRequestWithDetails("failed to store GitHub webhook secret", err.Error())
+			}
+			merged.WebhookSecret = enc
+		}
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return nil, apierror.BadRequestWithDetails("invalid config", err.Error())
+	}
+	return out, nil
+}
+
+// prepareGitLabConfig mirrors prepareGitHubConfig, plus a plaintext
+// base_url field (not a secret — the self-hosted instance's URL, e.g.
+// "https://git.entire.host" — so it is never encrypted or masked-out).
+func prepareGitLabConfig(existing *domain.IntegrationConfig, config interface{}) (json.RawMessage, *apierror.Error) {
+	var merged service.GitLabIntegrationConfig
+	if existing != nil && len(existing.Config) > 0 {
+		_ = json.Unmarshal(existing.Config, &merged)
+	}
+	raw, _ := config.(map[string]interface{})
+	if v, ok := raw["base_url"]; ok {
+		s, _ := v.(string)
+		merged.BaseURL = s
+	}
+	if v, ok := raw["token"]; ok {
+		s, _ := v.(string)
+		if s == "" {
+			merged.Token = ""
+		} else {
+			enc, err := encryption.Encrypt(s)
+			if err != nil {
+				return nil, apierror.BadRequestWithDetails("failed to store GitLab token", err.Error())
+			}
+			merged.Token = enc
+		}
+	}
+	if v, ok := raw["webhook_secret"]; ok {
+		s, _ := v.(string)
+		if s == "" {
+			merged.WebhookSecret = ""
+		} else {
+			enc, err := encryption.Encrypt(s)
+			if err != nil {
+				return nil, apierror.BadRequestWithDetails("failed to store GitLab webhook secret", err.Error())
+			}
+			merged.WebhookSecret = enc
+		}
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return nil, apierror.BadRequestWithDetails("invalid config", err.Error())
+	}
+	return out, nil
 }
