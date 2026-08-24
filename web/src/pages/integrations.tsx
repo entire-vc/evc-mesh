@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Circle,
   GitBranch,
+  GitMerge,
   MessageSquare,
   Send,
   Server,
@@ -21,6 +22,8 @@ import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { apiErrorMessage } from "@/lib/api-error";
 import type {
+  GitHubIntegrationConfig,
+  GitLabIntegrationConfig,
   IntegrationConfig,
   IntegrationProvider,
   TelegramIntegrationConfig,
@@ -45,6 +48,13 @@ const PROVIDERS: ProviderMeta[] = [
     description:
       "Link pull requests and commits to tasks. Receive webhook events to auto-update task status.",
     icon: GitBranch,
+  },
+  {
+    id: "gitlab",
+    name: "GitLab",
+    description:
+      "Link merge requests to tasks on a self-hosted GitLab instance. Receive webhook events to auto-update task status.",
+    icon: GitMerge,
   },
   {
     id: "slack",
@@ -93,6 +103,17 @@ export function IntegrationsPage() {
   const [telegramTokenInput, setTelegramTokenInput] = useState("");
   const [telegramEditingToken, setTelegramEditingToken] = useState(false);
   const [telegramSaving, setTelegramSaving] = useState(false);
+
+  // GitHub/GitLab connection form state — one editing flag + field values per
+  // provider, keyed by provider id. Mirrors the Telegram token form above;
+  // token_set/webhook_secret_set (from the masked API response) decide
+  // whether "Connected" or the raw form renders, the same way
+  // telegramTokenSet does for Telegram.
+  const [vcsEditing, setVcsEditing] = useState<Record<string, boolean>>({});
+  const [vcsFormValues, setVcsFormValues] = useState<
+    Record<string, { base_url: string; token: string; webhook_secret: string }>
+  >({});
+  const [vcsSaving, setVcsSaving] = useState<string | null>(null);
 
   const canManageTelegram = myRole === "owner" || myRole === "admin";
 
@@ -156,6 +177,51 @@ export function IntegrationsPage() {
       toast.error(apiErrorMessage(err, "Failed to save the Telegram bot token"));
     } finally {
       setTelegramSaving(false);
+    }
+  };
+
+  // handleSaveVcsConfig saves a GitHub/GitLab connection. Only non-empty
+  // fields are sent — Configure/Update replace the whole config JSON blob
+  // server-side, but the handler merges a partial submission onto whatever
+  // is already stored (rotating just the webhook_secret does not wipe an
+  // already-configured token), so leaving a field blank here means "keep
+  // what's already saved", not "clear it".
+  const handleSaveVcsConfig = async (provider: "github" | "gitlab") => {
+    if (!currentWorkspace) return;
+    const values = vcsFormValues[provider] ?? { base_url: "", token: "", webhook_secret: "" };
+    const config: Record<string, string> = {};
+    if (provider === "gitlab" && values.base_url.trim()) config.base_url = values.base_url.trim();
+    if (values.token.trim()) config.token = values.token.trim();
+    if (values.webhook_secret.trim()) config.webhook_secret = values.webhook_secret.trim();
+    if (Object.keys(config).length === 0) {
+      toast.error("Enter at least one field to save");
+      return;
+    }
+
+    const label = provider === "github" ? "GitHub" : "GitLab";
+    setVcsSaving(provider);
+    try {
+      const existing = getConfig(provider);
+      const updated = existing
+        ? await api<IntegrationConfig>(`/api/v1/integrations/${existing.id}`, {
+            method: "PATCH",
+            body: { config, is_active: true },
+          })
+        : await api<IntegrationConfig>(
+            `/api/v1/workspaces/${currentWorkspace.id}/integrations`,
+            { method: "POST", body: { provider, config, is_active: true } },
+          );
+
+      setConfigs((prev) =>
+        existing ? prev.map((c) => (c.id === updated.id ? updated : c)) : [...prev, updated],
+      );
+      setVcsFormValues((prev) => ({ ...prev, [provider]: { base_url: "", token: "", webhook_secret: "" } }));
+      setVcsEditing((prev) => ({ ...prev, [provider]: false }));
+      toast.success(`${label} connection saved`);
+    } catch (err) {
+      toast.error(apiErrorMessage(err, `Failed to save the ${label} connection`));
+    } finally {
+      setVcsSaving(null);
     }
   };
 
@@ -231,6 +297,16 @@ export function IntegrationsPage() {
                   ? ((cfg?.config as TelegramIntegrationConfig | undefined) ?? {})
                   : undefined;
               const telegramTokenSet = telegramCfg?.bot_token_set === true;
+              const githubCfg =
+                provider.id === "github"
+                  ? ((cfg?.config as GitHubIntegrationConfig | undefined) ?? {})
+                  : undefined;
+              const gitlabCfg =
+                provider.id === "gitlab"
+                  ? ((cfg?.config as GitLabIntegrationConfig | undefined) ?? {})
+                  : undefined;
+              const vcsValues =
+                vcsFormValues[provider.id] ?? { base_url: "", token: "", webhook_secret: "" };
 
               return (
                 <Card key={provider.id}>
@@ -303,26 +379,170 @@ export function IntegrationsPage() {
                     </div>
                   </CardHeader>
 
-                  {provider.id === "github" && isActive && (
-                    <CardContent className="pt-0">
+                  {provider.id === "github" && (
+                    <CardContent className="pt-0 space-y-3">
                       <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                         <p className="text-xs font-medium text-muted-foreground mb-1">
-                          Webhook URL
+                          Connection
                         </p>
-                        <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
-                          {window.location.origin}/webhooks/github
-                        </code>
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          Add this URL to your GitHub repository under{" "}
-                          <strong>Settings &rarr; Webhooks</strong>. Select{" "}
-                          <em>Pull requests</em> and <em>Pushes</em> events.
-                          Include{" "}
-                          <code className="rounded bg-background px-1">
-                            MESH-{"<task-id>"}
-                          </code>{" "}
-                          in commit messages or PR titles to auto-link tasks.
-                        </p>
+                        {githubCfg?.token_set || githubCfg?.webhook_secret_set ? (
+                          !vcsEditing.github ? (
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs text-muted-foreground">
+                                Using a workspace-configured token
+                                {githubCfg.webhook_secret_set ? " and webhook secret" : ""}.
+                              </p>
+                              <button
+                                onClick={() =>
+                                  setVcsEditing((prev) => ({ ...prev, github: true }))
+                                }
+                                className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              >
+                                Change
+                              </button>
+                            </div>
+                          ) : (
+                            <VcsConnectForm
+                              provider="github"
+                              values={vcsValues}
+                              saving={vcsSaving === "github"}
+                              onChange={(next) =>
+                                setVcsFormValues((prev) => ({ ...prev, github: next }))
+                              }
+                              onSave={() => void handleSaveVcsConfig("github")}
+                              onCancel={() =>
+                                setVcsEditing((prev) => ({ ...prev, github: false }))
+                              }
+                              showCancel
+                            />
+                          )
+                        ) : (
+                          <>
+                            <p className="text-xs text-muted-foreground mb-2">
+                              Optional: connect a personal access token for live PR-status
+                              checks and to set a workspace-specific webhook secret. Without
+                              one, this deployment's instance-wide default is used.
+                            </p>
+                            <VcsConnectForm
+                              provider="github"
+                              values={vcsValues}
+                              saving={vcsSaving === "github"}
+                              onChange={(next) =>
+                                setVcsFormValues((prev) => ({ ...prev, github: next }))
+                              }
+                              onSave={() => void handleSaveVcsConfig("github")}
+                            />
+                          </>
+                        )}
                       </div>
+
+                      {isActive && (
+                        <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">
+                            Webhook URL
+                          </p>
+                          <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
+                            {window.location.origin}/webhooks/github
+                          </code>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Add this URL to your GitHub repository under{" "}
+                            <strong>Settings &rarr; Webhooks</strong>. Select{" "}
+                            <em>Pull requests</em> and <em>Pushes</em> events.
+                            Include{" "}
+                            <code className="rounded bg-background px-1">
+                              MESH-{"<task-id>"}
+                            </code>{" "}
+                            in commit messages or PR titles to auto-link tasks.
+                          </p>
+                        </div>
+                      )}
+                    </CardContent>
+                  )}
+
+                  {provider.id === "gitlab" && (
+                    <CardContent className="pt-0 space-y-3">
+                      <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                        <p className="text-xs font-medium text-muted-foreground mb-1">
+                          Connection
+                        </p>
+                        {gitlabCfg?.token_set || gitlabCfg?.webhook_secret_set || gitlabCfg?.base_url ? (
+                          !vcsEditing.gitlab ? (
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs text-muted-foreground">
+                                {gitlabCfg.base_url ? (
+                                  <>
+                                    Connected to{" "}
+                                    <span className="font-medium text-foreground">
+                                      {gitlabCfg.base_url}
+                                    </span>
+                                    .
+                                  </>
+                                ) : (
+                                  "Connected."
+                                )}
+                              </p>
+                              <button
+                                onClick={() =>
+                                  setVcsEditing((prev) => ({ ...prev, gitlab: true }))
+                                }
+                                className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              >
+                                Change
+                              </button>
+                            </div>
+                          ) : (
+                            <VcsConnectForm
+                              provider="gitlab"
+                              values={vcsValues}
+                              saving={vcsSaving === "gitlab"}
+                              onChange={(next) =>
+                                setVcsFormValues((prev) => ({ ...prev, gitlab: next }))
+                              }
+                              onSave={() => void handleSaveVcsConfig("gitlab")}
+                              onCancel={() =>
+                                setVcsEditing((prev) => ({ ...prev, gitlab: false }))
+                              }
+                              showCancel
+                            />
+                          )
+                        ) : (
+                          <>
+                            <p className="text-xs text-muted-foreground mb-2">
+                              Connect your self-hosted GitLab instance: base URL, an access
+                              token for live MR-status checks, and a webhook secret.
+                            </p>
+                            <VcsConnectForm
+                              provider="gitlab"
+                              values={vcsValues}
+                              saving={vcsSaving === "gitlab"}
+                              onChange={(next) =>
+                                setVcsFormValues((prev) => ({ ...prev, gitlab: next }))
+                              }
+                              onSave={() => void handleSaveVcsConfig("gitlab")}
+                            />
+                          </>
+                        )}
+                      </div>
+
+                      {isActive && (
+                        <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">
+                            Webhook URL
+                          </p>
+                          <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
+                            {window.location.origin}/webhooks/gitlab
+                          </code>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Add this URL to your GitLab project under{" "}
+                            <strong>Settings &rarr; Webhooks</strong>. Select{" "}
+                            <em>Merge request events</em>. Include{" "}
+                            <code className="rounded bg-background px-1">
+                              MESH-{"<task-id>"}
+                            </code>{" "}
+                            in commit messages or MR titles to auto-link tasks.
+                          </p>
+                        </div>
+                      )}
                     </CardContent>
                   )}
 
@@ -464,6 +684,85 @@ export function IntegrationsPage() {
               );
             })}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// VcsConnectForm — shared GitHub/GitLab connection form
+// ---------------------------------------------------------------------------
+
+interface VcsFormValues {
+  base_url: string;
+  token: string;
+  webhook_secret: string;
+}
+
+// VcsConnectForm is the token/webhook_secret (+ base_url for GitLab) input
+// shared by the GitHub and GitLab cards. Every field is optional per save —
+// see handleSaveVcsConfig's comment: a blank field means "leave whatever is
+// already stored", not "clear it" (an explicit empty string, which this
+// form never sends, is what clears a field).
+function VcsConnectForm({
+  provider,
+  values,
+  saving,
+  onChange,
+  onSave,
+  onCancel,
+  showCancel,
+}: {
+  provider: "github" | "gitlab";
+  values: VcsFormValues;
+  saving: boolean;
+  onChange: (next: VcsFormValues) => void;
+  onSave: () => void;
+  onCancel?: () => void;
+  showCancel?: boolean;
+}) {
+  const canSave =
+    !saving &&
+    (values.token.trim() !== "" ||
+      values.webhook_secret.trim() !== "" ||
+      (provider === "gitlab" && values.base_url.trim() !== ""));
+
+  return (
+    <div className="space-y-2">
+      {provider === "gitlab" && (
+        <Input
+          placeholder="https://git.example.com"
+          value={values.base_url}
+          onChange={(e) => onChange({ ...values, base_url: e.target.value })}
+          disabled={saving}
+          className="font-mono text-xs"
+        />
+      )}
+      <Input
+        type="password"
+        placeholder={provider === "github" ? "Personal access token" : "Access token"}
+        value={values.token}
+        onChange={(e) => onChange({ ...values, token: e.target.value })}
+        disabled={saving}
+        className="font-mono text-xs"
+      />
+      <Input
+        type="password"
+        placeholder="Webhook secret"
+        value={values.webhook_secret}
+        onChange={(e) => onChange({ ...values, webhook_secret: e.target.value })}
+        disabled={saving}
+        className="font-mono text-xs"
+      />
+      <div className="flex gap-2">
+        <Button size="sm" onClick={onSave} disabled={!canSave}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        {showCancel && onCancel && (
+          <Button size="sm" variant="outline" disabled={saving} onClick={onCancel}>
+            Cancel
+          </Button>
         )}
       </div>
     </div>

@@ -50,8 +50,9 @@ type taskService struct {
 	userRepo          repository.UserRepository
 	commentRepo       repository.CommentRepository
 	vcsLinkRepo       repository.VCSLinkRepository
-	githubPRChecker   githubapi.PullRequestChecker
-	gitlabMRChecker   gitlabapi.MergeRequestChecker
+	githubPRChecker   githubapi.PullRequestChecker  // legacy static client; used only when vcsIntegrations is nil
+	gitlabMRChecker   gitlabapi.MergeRequestChecker // legacy static client; used only when vcsIntegrations is nil
+	vcsIntegrations   *VCSIntegrationResolver       // resolves a per-workspace client on every call (§C1) — see WithVCSIntegrationResolver
 	autoTransSvc      AutoTransitionService
 	ruleSvc           RuleService
 	rulesConfigSvc    RulesService
@@ -233,6 +234,20 @@ func WithGitHubPRChecker(c githubapi.PullRequestChecker) TaskServiceOption {
 // cached status exactly as before.
 func WithGitLabMRChecker(c gitlabapi.MergeRequestChecker) TaskServiceOption {
 	return func(s *taskService) { s.gitlabMRChecker = c }
+}
+
+// WithVCSIntegrationResolver enables PER-WORKSPACE GitHub/GitLab checkers
+// (#33a4bb57, §C1 of specsintegration-provider-contract): instead of the one
+// process-wide client WithGitHubPRChecker/WithGitLabMRChecker wire at
+// construction, the done-evidence gate resolves a fresh client for the
+// link's own workspace on every call, honoring that workspace's active
+// integration row (or the env fallback, or "disabled" — see
+// VCSIntegrationResolver's doc comment). Takes priority over
+// WithGitHubPRChecker/WithGitLabMRChecker when both are set; they remain
+// the fallback path for callers (mainly tests) that construct a taskService
+// without a repository.IntegrationRepository to resolve against.
+func WithVCSIntegrationResolver(r *VCSIntegrationResolver) TaskServiceOption {
+	return func(s *taskService) { s.vcsIntegrations = r }
 }
 
 // SetAutoTransitionService implements TaskServiceAutoTransitionConfigurable,
@@ -740,6 +755,10 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 				if task.VCSLinkCount > 0 {
 					links, linksErr := s.vcsLinkRepo.ListByTask(ctx, taskID)
 					if linksErr == nil {
+						// Resolved once per gate check, not per link: every
+						// link on this task belongs to the same task, hence
+						// the same workspace.
+						workspaceID, _ := s.resolveProjectWorkspace(ctx, task.ProjectID)
 						for _, l := range links {
 							if l.LinkType != domain.VCSLinkTypePR || l.Status == domain.VCSLinkStatusMerged || l.Status == domain.VCSLinkStatusClosed {
 								continue
@@ -752,7 +771,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 							// reported incident) simply never arrive for a
 							// link created after the PR/MR was already
 							// merged.
-							if merged, live := s.isPRMergedLive(ctx, l); live {
+							if merged, live := s.isPRMergedLive(ctx, l, workspaceID); live {
 								if merged {
 									// Self-heal the cache so the next read —
 									// and the next agent hitting this gate —
@@ -766,7 +785,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 							return &DoneEvidenceError{
 								PRURL: l.URL, PRTitle: l.Title, PRStatus: string(l.Status), PRProvider: string(l.Provider),
 								PRLinkedAt:                 l.CreatedAt,
-								PRProviderAccessConfigured: s.hasLiveChecker(l.Provider),
+								PRProviderAccessConfigured: s.hasLiveChecker(ctx, l.Provider, workspaceID),
 							}
 						}
 					}
@@ -1734,46 +1753,108 @@ const gitlabLiveCheckTimeout = 5 * time.Second
 
 // isPRMergedLive asks the linked provider (GitHub or GitLab) directly
 // whether the linked PR/MR has been merged, dispatching on l.Provider.
-// Returns live=false when no check could be performed at all for this
-// link's provider — callers MUST treat that as "couldn't verify", never as
-// "not merged", and fall back to the cached status instead.
-func (s *taskService) isPRMergedLive(ctx context.Context, l domain.VCSLink) (merged, live bool) {
+// workspaceID is the link's OWN task's project's workspace — resolved once
+// by the caller (resolveLinkWorkspace) — used to pick a per-workspace
+// client when vcsIntegrations is wired (§C1). Returns live=false when no
+// check could be performed at all for this link's provider — callers MUST
+// treat that as "couldn't verify", never as "not merged", and fall back to
+// the cached status instead.
+func (s *taskService) isPRMergedLive(ctx context.Context, l domain.VCSLink, workspaceID uuid.UUID) (merged, live bool) {
 	switch l.Provider {
 	case domain.VCSProviderGitHub:
-		return s.isPRMergedOnGitHub(ctx, l)
+		return s.isPRMergedOnGitHub(ctx, l, workspaceID)
 	case domain.VCSProviderGitLab:
-		return s.isMRMergedOnGitLab(ctx, l)
+		return s.isMRMergedOnGitLab(ctx, l, workspaceID)
 	default:
 		return false, false
 	}
 }
 
-// hasLiveChecker reports whether a live-check client is wired for the given
-// provider, independent of whether any particular call to it would
-// succeed. Used to distinguish, in the done-evidence gate's refusal
-// message, "we never even tried — no access is configured" from "we tried
-// and it failed" (#bc39d781: the former needs a message that says how to
-// fix it — configure the token — not one implying a merge attempt is being
-// waited on).
-func (s *taskService) hasLiveChecker(provider domain.VCSProvider) bool {
+// hasLiveChecker reports whether a live-check client can be resolved for
+// the given provider and workspace, independent of whether any particular
+// call to it would succeed. Used to distinguish, in the done-evidence
+// gate's refusal message, "we never even tried — no access is configured"
+// from "we tried and it failed" (#bc39d781: the former needs a message that
+// says how to fix it — configure the token — not one implying a merge
+// attempt is being waited on).
+func (s *taskService) hasLiveChecker(ctx context.Context, provider domain.VCSProvider, workspaceID uuid.UUID) bool {
 	switch provider {
 	case domain.VCSProviderGitHub:
-		return s.githubPRChecker != nil
+		_, ok := s.resolveGitHubChecker(ctx, workspaceID)
+		return ok
 	case domain.VCSProviderGitLab:
-		return s.gitlabMRChecker != nil
+		_, ok := s.resolveGitLabChecker(ctx, workspaceID)
+		return ok
 	default:
 		return false
 	}
 }
 
+// resolveGitHubChecker returns the GitHub live-check client that governs
+// workspaceID right now. When vcsIntegrations is wired (§C1, production),
+// it resolves fresh on every call — an active workspace row wins wholly,
+// then env, then disabled — exactly mirroring the config.go/main.go
+// start-of-process wiring this replaces, just re-evaluated per call instead
+// of baked in at boot. When vcsIntegrations is nil (tests, and any caller
+// that still only wires WithGitHubPRChecker), the legacy static client is
+// used unconditionally — workspaceID is ignored in that path, matching the
+// pre-#33a4bb57 behavior exactly.
+func (s *taskService) resolveGitHubChecker(ctx context.Context, workspaceID uuid.UUID) (githubapi.PullRequestChecker, bool) {
+	if s.vcsIntegrations == nil {
+		return s.githubPRChecker, s.githubPRChecker != nil
+	}
+	cfg, _, ok := s.vcsIntegrations.ResolveGitHub(ctx, workspaceID)
+	if !ok || cfg.Token == "" {
+		return nil, false
+	}
+	return githubapi.NewClient(cfg.Token), true
+}
+
+// resolveGitLabChecker is resolveGitHubChecker's GitLab counterpart. GitLab
+// needs BOTH a base URL and a token before a live check can even be
+// attempted (self-hosted, no fixed API host like GitHub's) — same gate the
+// pre-#33a4bb57 env-only wiring used.
+func (s *taskService) resolveGitLabChecker(ctx context.Context, workspaceID uuid.UUID) (gitlabapi.MergeRequestChecker, bool) {
+	if s.vcsIntegrations == nil {
+		return s.gitlabMRChecker, s.gitlabMRChecker != nil
+	}
+	cfg, _, ok := s.vcsIntegrations.ResolveGitLab(ctx, workspaceID)
+	if !ok || cfg.BaseURL == "" || cfg.Token == "" {
+		return nil, false
+	}
+	return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
+}
+
+// resolveProjectWorkspace looks up the workspace that owns projectID —
+// the done-evidence gate already has the task's project loaded (task,
+// above), so this takes the project id directly rather than re-fetching the
+// task. Returns ok=false when the project can't be resolved (e.g.
+// projectRepo not wired in a test) so callers fall back to the legacy
+// static-client path instead of blocking on an unresolvable workspace.
+func (s *taskService) resolveProjectWorkspace(ctx context.Context, projectID uuid.UUID) (uuid.UUID, bool) {
+	if s.projectRepo == nil {
+		return uuid.Nil, false
+	}
+	proj, err := s.projectRepo.GetByID(ctx, projectID)
+	if err != nil || proj == nil {
+		return uuid.Nil, false
+	}
+	return proj.WorkspaceID, true
+}
+
 // isPRMergedOnGitHub asks GitHub directly whether the linked PR has been
 // merged, bypassing the (possibly stale) cached vcs_links.status. Returns
 // live=false when the check could not be performed at all — no checker
-// wired, the URL doesn't parse as a GitHub PR, or the API call itself
-// failed — callers MUST treat that as "couldn't verify", never as "not
-// merged", and fall back to the cached status instead.
-func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink) (merged, live bool) {
-	if s.githubPRChecker == nil || l.Provider != domain.VCSProviderGitHub {
+// resolvable for this workspace, the URL doesn't parse as a GitHub PR, or
+// the API call itself failed — callers MUST treat that as "couldn't
+// verify", never as "not merged", and fall back to the cached status
+// instead.
+func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink, workspaceID uuid.UUID) (merged, live bool) {
+	if l.Provider != domain.VCSProviderGitHub {
+		return false, false
+	}
+	checker, ok := s.resolveGitHubChecker(ctx, workspaceID)
+	if !ok {
 		return false, false
 	}
 	owner, repo, number, ok := githubapi.ParsePullRequestURL(l.URL)
@@ -1782,7 +1863,7 @@ func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink) 
 	}
 	ghCtx, cancel := context.WithTimeout(ctx, githubLiveCheckTimeout)
 	defer cancel()
-	state, err := s.githubPRChecker.GetPullRequestState(ghCtx, owner, repo, number)
+	state, err := checker.GetPullRequestState(ghCtx, owner, repo, number)
 	if err != nil {
 		log.Printf("[done-evidence-gate] live github check failed for %s/%s#%d (link=%s task=%s): %v — falling back to cached status %q",
 			owner, repo, number, l.ID, l.TaskID, err, l.Status)
@@ -1794,8 +1875,12 @@ func (s *taskService) isPRMergedOnGitHub(ctx context.Context, l domain.VCSLink) 
 // isMRMergedOnGitLab asks GitLab directly whether the linked MR has been
 // merged — GitLab counterpart of isPRMergedOnGitHub, see its doc comment
 // for the live/merged contract callers must honor.
-func (s *taskService) isMRMergedOnGitLab(ctx context.Context, l domain.VCSLink) (merged, live bool) {
-	if s.gitlabMRChecker == nil || l.Provider != domain.VCSProviderGitLab {
+func (s *taskService) isMRMergedOnGitLab(ctx context.Context, l domain.VCSLink, workspaceID uuid.UUID) (merged, live bool) {
+	if l.Provider != domain.VCSProviderGitLab {
+		return false, false
+	}
+	checker, ok := s.resolveGitLabChecker(ctx, workspaceID)
+	if !ok {
 		return false, false
 	}
 	projectPath, iid, ok := gitlabapi.ParseMergeRequestURL(l.URL)
@@ -1804,7 +1889,7 @@ func (s *taskService) isMRMergedOnGitLab(ctx context.Context, l domain.VCSLink) 
 	}
 	glCtx, cancel := context.WithTimeout(ctx, gitlabLiveCheckTimeout)
 	defer cancel()
-	state, err := s.gitlabMRChecker.GetMergeRequestState(glCtx, projectPath, iid)
+	state, err := checker.GetMergeRequestState(glCtx, projectPath, iid)
 	if err != nil {
 		log.Printf("[done-evidence-gate] live gitlab check failed for %s!%d (link=%s task=%s): %v — falling back to cached status %q",
 			projectPath, iid, l.ID, l.TaskID, err, l.Status)
@@ -1853,10 +1938,11 @@ type DoneEvidenceError struct {
 	// might be stale (e.g. the provider was unreachable, so the gate fell
 	// back to this recorded value) rather than currently verified.
 	PRLinkedAt time.Time
-	// PRProviderAccessConfigured is whether a live-check client is wired for
-	// PRProvider at all (independent of whether this specific call
-	// succeeded) — set from taskService.hasLiveChecker at construction time,
-	// since DoneEvidenceError itself has no access to the service. Decides
+	// PRProviderAccessConfigured is whether a live-check client resolves for
+	// PRProvider (and the link's workspace) at all, independent of whether
+	// this specific call succeeded — set from taskService.hasLiveChecker at
+	// the moment the gate runs, since DoneEvidenceError itself has no access
+	// to the service. Decides
 	// which fallback wording unverifiableLiveCheckReason uses: "no access is
 	// configured, state the status explicitly" reads very differently from
 	// "we asked and couldn't verify" (#bc39d781) — the first tells the

@@ -228,41 +228,43 @@ type AuthConfig struct {
 	AllowRegistration bool
 }
 
-// WebhookConfig holds inbound webhook validation settings, plus the token
-// used for the one OUTBOUND GitHub call the done-evidence gate makes (live
-// PR-status verification, #5f7f8c6e) — kept alongside the webhook secret
-// since both are "how Mesh talks to GitHub about PRs" settings.
+// WebhookConfig holds the INSTANCE-WIDE fallback for GitHub/GitLab —
+// webhook validation secrets, plus the token used for the done-evidence
+// gate's live PR/MR-status re-check. As of #33a4bb57 (§C1/§4 of
+// specsintegration-provider-contract) these fields are no longer the sole
+// source of truth: service.VCSIntegrationResolver (wired in cmd/api/main.go)
+// checks a workspace's own active `github`/`gitlab` integration_configs row
+// FIRST on every call, and only falls back to the values here when that
+// workspace has none configured — the "one instance, one GitHub org, one
+// GitLab install" behavior these fields originally implemented is now the
+// fallback, not the only mode. See VCSIntegrationResolver's doc comment for
+// the full resolution order.
 type WebhookConfig struct {
-	// GitHubSecret is the HMAC-SHA256 secret for validating GitHub webhook payloads.
-	// If empty, signature validation is skipped (backward-compatible).
+	// GitHubSecret is the HMAC-SHA256 secret validating GitHub webhook
+	// payloads when no workspace has its own — see the type doc comment.
 	GitHubSecret string
 	// GitHubToken authenticates the done-evidence gate's live PR-status
-	// check against the GitHub REST API. If empty, the live check is
-	// disabled entirely (the gate falls back to the cached vcs_links.status,
-	// exactly as it did before this existed) — anonymous GitHub reads are
-	// rate-limited to 60/hour and cannot see private repos, so an empty
-	// token isn't a usable "read-only anonymous" mode for a private org.
+	// check against the GitHub REST API when no workspace has its own —
+	// see the type doc comment. Anonymous GitHub reads are rate-limited to
+	// 60/hour and cannot see private repos, so an empty token isn't a
+	// usable "read-only anonymous" mode for a private org.
 	GitHubToken string
 	// GitLabURL is the base URL of the self-hosted GitLab instance (e.g.
-	// "https://git.entire.host") the done-evidence gate's live MR-status
-	// check and the GitLab client both target. Unlike GitHub, GitLab is
-	// self-hosted here, so there is no fixed default — an empty value
-	// disables the live check exactly like an empty GitLabToken does (both
-	// are required together; see cmd/api/main.go wiring).
+	// "https://git.entire.host") used when no workspace has its own GitLab
+	// connection configured — see the type doc comment. Unlike GitHub,
+	// GitLab is self-hosted here, so there is no fixed default; both this
+	// and GitLabToken are required together for the env fallback to apply.
 	GitLabURL string
-	// GitLabToken authenticates the done-evidence gate's live MR-status
-	// check against the GitLab REST API (a read-only PAT/project token). If
-	// empty, the live check is disabled entirely (the gate falls back to
-	// the cached vcs_links.status). Our self-hosted GitLab has no public-
-	// anonymous-read equivalent to GitHub's rate-limited path — every
-	// project here is private, so an empty token isn't a usable degraded
-	// mode, it's simply "no live check possible" (#bc39d781).
+	// GitLabToken authenticates the env-fallback live MR-status check
+	// against the GitLab REST API (a read-only PAT/project token) — see the
+	// type doc comment. Our self-hosted GitLab has no public-anonymous-read
+	// equivalent to GitHub's rate-limited path — every project here is
+	// private, so an empty token isn't a usable degraded mode (#bc39d781).
 	GitLabToken string
-	// GitLabSecret is the shared secret GitLab sends verbatim in the
-	// X-Gitlab-Token header on webhook deliveries (GitLab's webhook auth is
-	// a plain token compare, unlike GitHub's HMAC-signed body). If empty,
-	// token validation is skipped (backward-compatible, same policy as
-	// GitHubSecret).
+	// GitLabSecret is the env-fallback shared secret GitLab sends verbatim
+	// in the X-Gitlab-Token header on webhook deliveries (GitLab's webhook
+	// auth is a plain token compare, unlike GitHub's HMAC-signed body) —
+	// see the type doc comment.
 	GitLabSecret string
 }
 

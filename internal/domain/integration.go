@@ -13,6 +13,7 @@ type IntegrationProvider string
 const (
 	IntegrationProviderSlack    IntegrationProvider = "slack"
 	IntegrationProviderGitHub   IntegrationProvider = "github"
+	IntegrationProviderGitLab   IntegrationProvider = "gitlab"
 	IntegrationProviderSpark    IntegrationProvider = "spark"
 	IntegrationProviderMCP      IntegrationProvider = "mcp"
 	IntegrationProviderTelegram IntegrationProvider = "telegram"
