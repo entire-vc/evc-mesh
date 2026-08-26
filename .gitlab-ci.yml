@@ -15,12 +15,14 @@
 # This is NOT a port of all 22 GitHub check-runs. It carries the four that
 # catch the most per minute spent — lint, race-enabled tests against real
 # Postgres/Redis/NATS, the Go build, the frontend typecheck+build — plus the
-# hold gate, plus self-host-env (config-only, no live daemon needed — see
-# below). Deliberately still absent, and worth their own cards: Authed E2E,
-# Go coverage ≥80% (affected-set), Repo tests (integration), Memory recall
-# gate, Tenancy & RBAC gate, Vendor trailer gate, CodeQL. A stub that looks
-# like full CI is more dangerous than a gap you can see, so the gap is named
-# here rather than implied.
+# hold gate, self-host-env (config-only, no live daemon needed), and
+# repo-integration (Postgres only — see that job's own header for why it does
+# NOT need NATS/MinIO despite carrying the same `integration` build tag as
+# Tenancy & RBAC gate). Deliberately still absent, and worth their own cards:
+# Authed E2E, Go coverage ≥80% (affected-set), Memory recall gate, Tenancy &
+# RBAC gate, Vendor trailer gate, CodeQL. A stub that looks like full CI is
+# more dangerous than a gap you can see, so the gap is named here rather than
+# implied.
 #
 # ## The half that is not in this file
 #
@@ -192,6 +194,54 @@ test:
     when: always
     paths: [coverage.out]
     expire_in: 1 week
+
+# ── repo-integration ────────────────────────────────────────────────────────
+# Ported from .github/workflows/ci.yml:repo-integration ("Repo tests
+# (integration)"). internal/repository/postgres/*_db_test.go and
+# integration_test.go (`//go:build integration`, ~30 files) are invisible to
+# the `test` job above: it runs `go test ./...` with NO build tag, so every
+# integration-tagged file is excluded from compilation entirely. Net effect
+# without this job: the class of bug this guards — a field present in an
+# UPDATE but missing from the matching INSERT — never ran in CI (the
+# reviewer_id incident, #564).
+#
+# Despite carrying the same `integration` tag as the Tenancy & RBAC gate job,
+# this one does NOT need NATS/MinIO: the GitHub source job's own `services:`
+# block declares only postgres, and grepping every integration-tagged file
+# under internal/repository/postgres/ for nats/minio/jetstream imports finds
+# none — confirmed by reading the source, not by pattern-matching the task
+# description that (incorrectly) generalised from the Tenancy & RBAC gate
+# job's needs. Manual NATS+JetStream/MinIO containers belong to that other
+# job, not this one.
+repo-integration:
+  stage: test
+  image: golang:1.25-alpine
+  timeout: 20m
+  needs: [lint]
+  services:
+    - name: postgres:16
+      alias: postgres
+  cache:
+    key: go-mod-$CI_COMMIT_REF_SLUG
+    paths: [.gocache/, .gomodcache/]
+    policy: pull
+  variables:
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+    GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+    # TEST_DATABASE_URL is what integration_test.go's testDB() actually reads;
+    # DATABASE_URL (already set globally) covers the *_db_test.go files that
+    # carry no build tag and connect the same way the `test` job's non-race
+    # DB tests do — setting it here too means this job doesn't accidentally
+    # skip them.
+    TEST_DATABASE_URL: "postgres://mesh:mesh@postgres:5432/mesh?sslmode=disable"
+  before_script:
+    - apk add --no-cache git build-base postgresql-client
+    - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
+    - pg_isready -h postgres -U mesh
+    - go install github.com/pressly/goose/v3/cmd/goose@latest
+  script:
+    - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
+    - go test ./internal/repository/postgres/... -v -race -tags=integration
 
 # ── build ───────────────────────────────────────────────────────────────────
 build:api:
