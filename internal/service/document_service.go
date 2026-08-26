@@ -285,9 +285,19 @@ func (s *documentService) GetByIDInWorkspace(ctx context.Context, id, workspaceI
 	// and refusing to serve it because the source could not be re-checked
 	// would make a transient relay hiccup take down every mounted page at
 	// once. The next open tries again.
+	versionBeforeRefresh := doc.Version
+	bodyRewrittenByRefresh := false
 	if s.trRefresher != nil && doc.SourceKind == domain.DocumentSourceTeamRelay {
 		if refreshErr := s.trRefresher.RefreshIfStale(ctx, doc); refreshErr != nil {
 			log.Printf("[documents] team relay refresh failed for %s: %v — serving last synced copy", doc.ID, refreshErr)
+		} else {
+			// RefreshIfStale bumps the version only on the branch where it
+			// actually rewrote the body — a same-hash refresh that merely
+			// stamps synced_at leaves it untouched (see the bumpVersion
+			// parameter on RefreshSyncedCopy). That bump is the only signal
+			// available here that the anchors stored against this document
+			// now describe a body that no longer exists.
+			bodyRewrittenByRefresh = doc.Version != versionBeforeRefresh
 		}
 	}
 
@@ -299,6 +309,15 @@ func (s *documentService) GetByIDInWorkspace(ctx context.Context, id, workspaceI
 		return nil, err
 	}
 	doc.Body = body
+
+	if bodyRewrittenByRefresh {
+		// Same reason as the Update path below: the markdown every stored
+		// comment offset addresses has just been replaced, only this time by
+		// a source edit the comment's author never saw happen. Without this,
+		// a mounted copy that changes upstream silently detaches every
+		// comment on it the moment the freshness check catches up — R4.
+		s.reanchorComments(ctx, doc.ID, body)
+	}
 
 	return doc, nil
 }
