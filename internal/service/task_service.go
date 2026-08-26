@@ -2151,6 +2151,11 @@ func (s *taskService) evaluateRulesForMove(ctx context.Context, task *domain.Tas
 // defect — it manufactured the project_members row that made the foreign
 // principal look native to every later check.
 //
+// A second, narrower refusal sits right after: assertAssigneeAcceptsAssignments
+// rejects an agent whose accepts_from is the explicit empty array [] — a lane's
+// own declaration that it accepts no assignments at all. Same ordering reason:
+// it runs before ensureAgentProjectMember for exactly the reason above.
+//
 // EVERY write path that sets assignee_id must call this AND propagate its error.
 // As of this commit that is: Create, Update (and BulkUpdate through it), MoveTask,
 // AssignTask, CreateSubtask, applyReviewAssignee and restorePreReviewAssignee —
@@ -2192,6 +2197,16 @@ func (s *taskService) ensureAssigneeProjectMember(ctx context.Context, projectID
 	}
 	// Tenancy second: refuse before granting anything.
 	if err := s.assertAssigneeInProjectWorkspace(ctx, projectID, assigneeID, assigneeType); err != nil {
+		return err
+	}
+	// accepts_from=[] third, same reason tenancy runs before enrolment: the
+	// agent is real, typed, and native to this workspace, and has declared —
+	// in its own profile — that it accepts no assignments at all. Enrolling it
+	// first (below) would manufacture the project_members row that makes a
+	// refused agent look native to every check that runs after this one — see
+	// assertAssigneeAcceptsAssignments and AssigneeRefusesAssignmentsError in
+	// task_assignee_workspace.go.
+	if err := s.assertAssigneeAcceptsAssignments(ctx, projectID, assigneeID, assigneeType); err != nil {
 		return err
 	}
 	switch assigneeType {
