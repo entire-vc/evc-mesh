@@ -178,5 +178,21 @@ func (r *IntegrationRepo) ListActiveByProvider(ctx context.Context, provider dom
 	return result, nil
 }
 
+// ListByProvider returns every integration for one provider across all
+// workspaces, active or not. See the interface doc for why this differs
+// from ListActiveByProvider.
+func (r *IntegrationRepo) ListByProvider(ctx context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error) {
+	const q = `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE provider = $1 ORDER BY workspace_id ASC`
+	var rows []integrationConfigRow
+	if err := r.db.SelectContext(ctx, &rows, q, string(provider)); err != nil {
+		return nil, err
+	}
+	result := make([]domain.IntegrationConfig, len(rows))
+	for i := range rows {
+		result[i] = rows[i].toDomain()
+	}
+	return result, nil
+}
+
 // Ensure IntegrationRepo satisfies the repository.IntegrationRepository interface.
 var _ repository.IntegrationRepository = (*IntegrationRepo)(nil)

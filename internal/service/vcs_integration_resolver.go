@@ -34,27 +34,35 @@ type GitLabIntegrationConfig struct {
 }
 
 // decodeGitHubIntegration extracts a usable GitHubIntegrationConfig (token
-// and webhook secret already decrypted) from an integration row, or
-// ok=false for every "this row cannot govern anything" case: nil, inactive,
-// wrong provider, or a row that carries neither a token nor a webhook
-// secret. That last case is deliberate, not an oversight: an active row
-// with a fully empty config carries no information, so treating it as
-// "governs, with empty values" would let a placeholder row (created before
-// this feature existed — see the resolver's package doc) silently disable a
-// working env-configured secret. Absence of USABLE configuration is folded
-// into the same "no row" outcome the caller falls through to env for.
-func decodeGitHubIntegration(cfg *domain.IntegrationConfig) (GitHubIntegrationConfig, bool) {
-	if cfg == nil || !cfg.IsActive || cfg.Provider != domain.IntegrationProviderGitHub {
-		return GitHubIntegrationConfig{}, false
+// and webhook secret already decrypted) from an integration row. Three
+// outcomes a caller needs to tell apart:
+//   - usable=true: the row governs, use `parsed`.
+//   - usable=false, disabled=true: the row EXISTS and says `is_active=false`
+//     — the provider is explicitly turned off for this row's scope. The
+//     caller MUST NOT fall through to env; doing so is the exact bug
+//     #33a4bb57's AC2 exists to close (a workspace turning its GitHub/GitLab
+//     integration off must actually turn it off, not silently keep working
+//     off the instance-wide fallback).
+//   - usable=false, disabled=false: nil row, wrong provider, unparseable
+//     config, or an ACTIVE row with neither a token nor a webhook secret
+//     (a placeholder row — e.g. the pre-#33a4bb57 prod row, active=true,
+//     config={} — carries no information, so treating it as "governs, with
+//     empty values" would let it silently shadow a working env secret). The
+//     caller falls through to env for all of these.
+func decodeGitHubIntegration(cfg *domain.IntegrationConfig) (parsed GitHubIntegrationConfig, usable, disabled bool) {
+	if cfg == nil || cfg.Provider != domain.IntegrationProviderGitHub {
+		return GitHubIntegrationConfig{}, false, false
 	}
-	var parsed GitHubIntegrationConfig
+	if !cfg.IsActive {
+		return GitHubIntegrationConfig{}, false, true
+	}
 	if len(cfg.Config) > 0 {
 		if err := json.Unmarshal(cfg.Config, &parsed); err != nil {
-			return GitHubIntegrationConfig{}, false
+			return GitHubIntegrationConfig{}, false, false
 		}
 	}
 	if parsed.Token == "" && parsed.WebhookSecret == "" {
-		return GitHubIntegrationConfig{}, false
+		return GitHubIntegrationConfig{}, false, false
 	}
 	if parsed.Token != "" {
 		if plain, err := encryption.Decrypt(parsed.Token); err == nil {
@@ -70,24 +78,27 @@ func decodeGitHubIntegration(cfg *domain.IntegrationConfig) (GitHubIntegrationCo
 			parsed.WebhookSecret = ""
 		}
 	}
-	return parsed, true
+	return parsed, true, false
 }
 
-// decodeGitLabIntegration is decodeGitHubIntegration's GitLab counterpart.
-// BaseURL is not encrypted (it is not a secret) so it round-trips as-is;
-// Token and WebhookSecret follow the same decrypt-or-drop rule.
-func decodeGitLabIntegration(cfg *domain.IntegrationConfig) (GitLabIntegrationConfig, bool) {
-	if cfg == nil || !cfg.IsActive || cfg.Provider != domain.IntegrationProviderGitLab {
-		return GitLabIntegrationConfig{}, false
+// decodeGitLabIntegration is decodeGitHubIntegration's GitLab counterpart —
+// same three-outcome contract (usable / disabled / neither). BaseURL is not
+// encrypted (it is not a secret) so it round-trips as-is; Token and
+// WebhookSecret follow the same decrypt-or-drop rule.
+func decodeGitLabIntegration(cfg *domain.IntegrationConfig) (parsed GitLabIntegrationConfig, usable, disabled bool) {
+	if cfg == nil || cfg.Provider != domain.IntegrationProviderGitLab {
+		return GitLabIntegrationConfig{}, false, false
 	}
-	var parsed GitLabIntegrationConfig
+	if !cfg.IsActive {
+		return GitLabIntegrationConfig{}, false, true
+	}
 	if len(cfg.Config) > 0 {
 		if err := json.Unmarshal(cfg.Config, &parsed); err != nil {
-			return GitLabIntegrationConfig{}, false
+			return GitLabIntegrationConfig{}, false, false
 		}
 	}
 	if parsed.BaseURL == "" && parsed.Token == "" && parsed.WebhookSecret == "" {
-		return GitLabIntegrationConfig{}, false
+		return GitLabIntegrationConfig{}, false, false
 	}
 	if parsed.Token != "" {
 		if plain, err := encryption.Decrypt(parsed.Token); err == nil {
@@ -103,7 +114,7 @@ func decodeGitLabIntegration(cfg *domain.IntegrationConfig) (GitLabIntegrationCo
 			parsed.WebhookSecret = ""
 		}
 	}
-	return parsed, true
+	return parsed, true, false
 }
 
 // VCSEnvFallback carries the instance-wide env values (MESH_GITHUB_*,
@@ -167,8 +178,13 @@ func (r *VCSIntegrationResolver) ResolveGitHub(ctx context.Context, workspaceID 
 		row, err := r.repo.GetByProvider(ctx, workspaceID, domain.IntegrationProviderGitHub)
 		if err != nil {
 			log.Printf("[vcs-integration] github lookup failed for workspace %s: %v — falling back to env", workspaceID, err)
-		} else if parsed, usable := decodeGitHubIntegration(row); usable {
+		} else if parsed, usable, disabled := decodeGitHubIntegration(row); usable {
 			return parsed, "workspace", true
+		} else if disabled {
+			// The workspace has a row and it says is_active=false — that is
+			// this workspace's explicit decision and env does not override
+			// it, however env is configured.
+			return GitHubIntegrationConfig{}, "", false
 		}
 	}
 	if r.env.GitHubToken != "" || r.env.GitHubWebhookSecret != "" {
@@ -183,8 +199,10 @@ func (r *VCSIntegrationResolver) ResolveGitLab(ctx context.Context, workspaceID 
 		row, err := r.repo.GetByProvider(ctx, workspaceID, domain.IntegrationProviderGitLab)
 		if err != nil {
 			log.Printf("[vcs-integration] gitlab lookup failed for workspace %s: %v — falling back to env", workspaceID, err)
-		} else if parsed, usable := decodeGitLabIntegration(row); usable {
+		} else if parsed, usable, disabled := decodeGitLabIntegration(row); usable {
 			return parsed, "workspace", true
+		} else if disabled {
+			return GitLabIntegrationConfig{}, "", false
 		}
 	}
 	if r.env.GitLabBaseURL != "" && r.env.GitLabToken != "" {
@@ -203,19 +221,40 @@ func (r *VCSIntegrationResolver) ResolveGitLab(ctx context.Context, workspaceID 
 // parent spec's comments flagged).
 func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secrets []string, source string) {
 	if r.repo != nil {
-		rows, err := r.repo.ListActiveByProvider(ctx, domain.IntegrationProviderGitHub)
+		rows, err := r.repo.ListByProvider(ctx, domain.IntegrationProviderGitHub)
 		if err != nil {
-			log.Printf("[vcs-integration] github active-list failed: %v — falling back to env", err)
+			log.Printf("[vcs-integration] github list failed: %v — falling back to env", err)
 		} else {
+			// A row only takes the provider away from env if it is
+			// informative — usable (governs it, contributes its secret) or
+			// explicitly disabled (governs it, contributes nothing, on
+			// purpose: env acting as a fallback here is exactly what let a
+			// disabled row keep validating webhooks via the instance-wide
+			// secret, #33a4bb57 AC2). A row that is neither — the
+			// active=true/config={} placeholder shape ResolveGitHub itself
+			// falls through to env for — does not claim ownership: existing,
+			// uninformative rows must not be able to permanently blind every
+			// workspace's webhook validation to a perfectly good env secret.
+			owned := false
 			for i := range rows {
-				if cfg, ok := decodeGitHubIntegration(&rows[i]); ok && cfg.WebhookSecret != "" {
-					secrets = append(secrets, cfg.WebhookSecret)
+				cfg, usable, disabled := decodeGitHubIntegration(&rows[i])
+				switch {
+				case usable:
+					owned = true
+					if cfg.WebhookSecret != "" {
+						secrets = append(secrets, cfg.WebhookSecret)
+					}
+				case disabled:
+					owned = true
 				}
 			}
+			if owned {
+				if len(secrets) > 0 {
+					return secrets, "workspace"
+				}
+				return nil, ""
+			}
 		}
-	}
-	if len(secrets) > 0 {
-		return secrets, "workspace"
 	}
 	if r.env.GitHubWebhookSecret != "" {
 		return []string{r.env.GitHubWebhookSecret}, "env"
@@ -226,19 +265,30 @@ func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secr
 // GitLabWebhookSecrets is GitHubWebhookSecrets's GitLab counterpart.
 func (r *VCSIntegrationResolver) GitLabWebhookSecrets(ctx context.Context) (secrets []string, source string) {
 	if r.repo != nil {
-		rows, err := r.repo.ListActiveByProvider(ctx, domain.IntegrationProviderGitLab)
+		rows, err := r.repo.ListByProvider(ctx, domain.IntegrationProviderGitLab)
 		if err != nil {
-			log.Printf("[vcs-integration] gitlab active-list failed: %v — falling back to env", err)
+			log.Printf("[vcs-integration] gitlab list failed: %v — falling back to env", err)
 		} else {
+			owned := false
 			for i := range rows {
-				if cfg, ok := decodeGitLabIntegration(&rows[i]); ok && cfg.WebhookSecret != "" {
-					secrets = append(secrets, cfg.WebhookSecret)
+				cfg, usable, disabled := decodeGitLabIntegration(&rows[i])
+				switch {
+				case usable:
+					owned = true
+					if cfg.WebhookSecret != "" {
+						secrets = append(secrets, cfg.WebhookSecret)
+					}
+				case disabled:
+					owned = true
 				}
 			}
+			if owned {
+				if len(secrets) > 0 {
+					return secrets, "workspace"
+				}
+				return nil, ""
+			}
 		}
-	}
-	if len(secrets) > 0 {
-		return secrets, "workspace"
 	}
 	if r.env.GitLabWebhookSecret != "" {
 		return []string{r.env.GitLabWebhookSecret}, "env"

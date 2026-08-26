@@ -20,6 +20,7 @@ import (
 type fakeVCSIntegrationRepo struct {
 	byWorkspaceProvider map[string]*domain.IntegrationConfig
 	activeByProvider    map[domain.IntegrationProvider][]domain.IntegrationConfig
+	byProvider          map[domain.IntegrationProvider][]domain.IntegrationConfig
 	getErr              error
 	listErr             error
 }
@@ -28,6 +29,7 @@ func newFakeVCSIntegrationRepo() *fakeVCSIntegrationRepo {
 	return &fakeVCSIntegrationRepo{
 		byWorkspaceProvider: make(map[string]*domain.IntegrationConfig),
 		activeByProvider:    make(map[domain.IntegrationProvider][]domain.IntegrationConfig),
+		byProvider:          make(map[domain.IntegrationProvider][]domain.IntegrationConfig),
 	}
 }
 
@@ -37,6 +39,7 @@ func (f *fakeVCSIntegrationRepo) put(workspaceID uuid.UUID, cfg domain.Integrati
 	if cfg.IsActive {
 		f.activeByProvider[cfg.Provider] = append(f.activeByProvider[cfg.Provider], cfg)
 	}
+	f.byProvider[cfg.Provider] = append(f.byProvider[cfg.Provider], cfg)
 }
 
 func (f *fakeVCSIntegrationRepo) Upsert(context.Context, *domain.IntegrationConfig) error {
@@ -64,6 +67,12 @@ func (f *fakeVCSIntegrationRepo) ListActiveByProvider(_ context.Context, provide
 	}
 	return f.activeByProvider[provider], nil
 }
+func (f *fakeVCSIntegrationRepo) ListByProvider(_ context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.byProvider[provider], nil
+}
 
 func githubCfg(token, webhookSecret string) json.RawMessage {
 	raw, _ := json.Marshal(GitHubIntegrationConfig{Token: token, WebhookSecret: webhookSecret})
@@ -79,35 +88,46 @@ func gitlabCfg(baseURL, token, webhookSecret string) json.RawMessage {
 // decodeGitHubIntegration / decodeGitLabIntegration
 // ---------------------------------------------------------------------------
 
-func TestDecodeGitHubIntegration_NilOrInactiveOrWrongProvider(t *testing.T) {
-	if _, ok := decodeGitHubIntegration(nil); ok {
-		t.Fatal("nil config must not be usable")
-	}
-	inactive := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: false, Config: githubCfg("tok", "sec")}
-	if _, ok := decodeGitHubIntegration(inactive); ok {
-		t.Fatal("inactive row must not be usable")
+func TestDecodeGitHubIntegration_NilOrWrongProvider_NotUsableNotDisabled(t *testing.T) {
+	if _, usable, disabled := decodeGitHubIntegration(nil); usable || disabled {
+		t.Fatalf("nil config must be neither usable nor disabled, got usable=%v disabled=%v", usable, disabled)
 	}
 	wrongProvider := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: githubCfg("tok", "sec")}
-	if _, ok := decodeGitHubIntegration(wrongProvider); ok {
-		t.Fatal("wrong-provider row must not be usable")
+	if _, usable, disabled := decodeGitHubIntegration(wrongProvider); usable || disabled {
+		t.Fatalf("wrong-provider row must be neither usable nor disabled, got usable=%v disabled=%v", usable, disabled)
 	}
 }
 
-// An active row with a fully empty config must be treated as "no row" — see
-// decodeGitHubIntegration's doc comment: this is what keeps a pre-existing
-// placeholder row (active=true, config={}) from silently shadowing env.
-func TestDecodeGitHubIntegration_ActiveButEmptyConfig_NotUsable(t *testing.T) {
+// An inactive row is a THIRD outcome distinct from "no row" — usable=false
+// AND disabled=true, so callers refuse instead of falling through to env
+// (#33a4bb57 AC2; this is the exact distinction the fix adds).
+func TestDecodeGitHubIntegration_InactiveRow_DisabledNotUsable(t *testing.T) {
+	inactive := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: false, Config: githubCfg("tok", "sec")}
+	_, usable, disabled := decodeGitHubIntegration(inactive)
+	if usable {
+		t.Fatal("inactive row must not be usable")
+	}
+	if !disabled {
+		t.Fatal("inactive row must be reported as disabled, not folded into the same outcome as a missing row")
+	}
+}
+
+// An active row with a fully empty config must be treated as "no row" (not
+// usable, not disabled) — see decodeGitHubIntegration's doc comment: this is
+// what keeps a pre-existing placeholder row (active=true, config={}) from
+// silently shadowing env.
+func TestDecodeGitHubIntegration_ActiveButEmptyConfig_NotUsableNotDisabled(t *testing.T) {
 	cfg := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: json.RawMessage(`{}`)}
-	if _, ok := decodeGitHubIntegration(cfg); ok {
-		t.Fatal("an active row with neither token nor webhook_secret must not be usable")
+	if _, usable, disabled := decodeGitHubIntegration(cfg); usable || disabled {
+		t.Fatalf("an active row with neither token nor webhook_secret must fall to env, not disable: usable=%v disabled=%v", usable, disabled)
 	}
 }
 
 func TestDecodeGitHubIntegration_UsableRow_RoundTripsThroughEncryption(t *testing.T) {
 	cfg := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: githubCfg("plaintext-in-test-env", "whsec_123")}
-	parsed, ok := decodeGitHubIntegration(cfg)
-	if !ok {
-		t.Fatal("row with a token must be usable")
+	parsed, usable, disabled := decodeGitHubIntegration(cfg)
+	if !usable || disabled {
+		t.Fatalf("row with a token must be usable and not disabled: usable=%v disabled=%v", usable, disabled)
 	}
 	if parsed.Token != "plaintext-in-test-env" || parsed.WebhookSecret != "whsec_123" {
 		t.Fatalf("got %+v", parsed)
@@ -119,24 +139,32 @@ func TestDecodeGitHubIntegration_UsableRow_RoundTripsThroughEncryption(t *testin
 // which separately requires Token!="" before building a live-check client.
 func TestDecodeGitHubIntegration_WebhookSecretOnly_Usable(t *testing.T) {
 	cfg := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: githubCfg("", "whsec_only")}
-	parsed, ok := decodeGitHubIntegration(cfg)
-	if !ok || parsed.WebhookSecret != "whsec_only" || parsed.Token != "" {
-		t.Fatalf("got parsed=%+v ok=%v", parsed, ok)
+	parsed, usable, disabled := decodeGitHubIntegration(cfg)
+	if !usable || disabled || parsed.WebhookSecret != "whsec_only" || parsed.Token != "" {
+		t.Fatalf("got parsed=%+v usable=%v disabled=%v", parsed, usable, disabled)
 	}
 }
 
-func TestDecodeGitLabIntegration_ActiveButEmptyConfig_NotUsable(t *testing.T) {
+func TestDecodeGitLabIntegration_ActiveButEmptyConfig_NotUsableNotDisabled(t *testing.T) {
 	cfg := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: json.RawMessage(`{}`)}
-	if _, ok := decodeGitLabIntegration(cfg); ok {
-		t.Fatal("an active row with no base_url/token/webhook_secret must not be usable")
+	if _, usable, disabled := decodeGitLabIntegration(cfg); usable || disabled {
+		t.Fatalf("an active row with no base_url/token/webhook_secret must fall to env, not disable: usable=%v disabled=%v", usable, disabled)
+	}
+}
+
+func TestDecodeGitLabIntegration_InactiveRow_DisabledNotUsable(t *testing.T) {
+	inactive := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://git.entire.host", "tok", "sec")}
+	_, usable, disabled := decodeGitLabIntegration(inactive)
+	if usable || !disabled {
+		t.Fatalf("inactive row must be disabled, not usable: usable=%v disabled=%v", usable, disabled)
 	}
 }
 
 func TestDecodeGitLabIntegration_UsableRow(t *testing.T) {
 	cfg := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: gitlabCfg("https://git.entire.host", "glpat-xxx", "whsec")}
-	parsed, ok := decodeGitLabIntegration(cfg)
-	if !ok {
-		t.Fatal("expected usable")
+	parsed, usable, disabled := decodeGitLabIntegration(cfg)
+	if !usable || disabled {
+		t.Fatalf("expected usable, not disabled: usable=%v disabled=%v", usable, disabled)
 	}
 	if parsed.BaseURL != "https://git.entire.host" || parsed.Token != "glpat-xxx" || parsed.WebhookSecret != "whsec" {
 		t.Fatalf("got %+v", parsed)
@@ -173,15 +201,35 @@ func TestVCSIntegrationResolver_ResolveGitHub_NoRow_FallsToEnv(t *testing.T) {
 	}
 }
 
-func TestVCSIntegrationResolver_ResolveGitHub_InactiveRow_FallsToEnv(t *testing.T) {
+// A row that exists and explicitly says is_active=false must disable the
+// provider for this workspace OUTRIGHT — env is not consulted, even though
+// env has something usable. Falling through to env here is the exact
+// #33a4bb57 AC2 defect: a workspace turning its integration off would
+// silently keep working off the instance-wide fallback. (This test used to
+// assert the opposite — "InactiveRow_FallsToEnv" — which locked the bug in
+// as expected behavior; corrected together with the fix.)
+func TestVCSIntegrationResolver_ResolveGitHub_InactiveRow_EnvConfigured_StillDisabled(t *testing.T) {
 	ws := uuid.New()
 	repo := newFakeVCSIntegrationRepo()
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: false, Config: githubCfg("workspace-token", "workspace-secret")})
 	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitHubToken: "env-token", GitHubWebhookSecret: "env-secret"})
 
 	cfg, source, ok := r.ResolveGitHub(context.Background(), ws)
-	if !ok || source != "env" || cfg.Token != "env-token" {
-		t.Fatalf("is_active=false must fall through to env, got cfg=%+v source=%q ok=%v", cfg, source, ok)
+	if ok || source != "" {
+		t.Fatalf("is_active=false must disable outright, not fall through to env: got cfg=%+v source=%q ok=%v", cfg, source, ok)
+	}
+}
+
+// GitLab counterpart of the above.
+func TestVCSIntegrationResolver_ResolveGitLab_InactiveRow_EnvConfigured_StillDisabled(t *testing.T) {
+	ws := uuid.New()
+	repo := newFakeVCSIntegrationRepo()
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://git.entire.host", "workspace-token", "workspace-secret")})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "env-token", GitLabWebhookSecret: "env-secret"})
+
+	cfg, source, ok := r.ResolveGitLab(context.Background(), ws)
+	if ok || source != "" {
+		t.Fatalf("is_active=false must disable outright, not fall through to env: got cfg=%+v source=%q ok=%v", cfg, source, ok)
 	}
 }
 
@@ -290,6 +338,86 @@ func TestVCSIntegrationResolver_GitHubWebhookSecrets_ToggledOff_NoEnv_Disabled(t
 	secrets, source := r.GitHubWebhookSecrets(context.Background())
 	if len(secrets) != 0 || source != "" {
 		t.Fatalf("expected disabled, got secrets=%v source=%q", secrets, source)
+	}
+}
+
+// The realistic prod case #33a4bb57 AC2 is actually about: env IS
+// configured (as it is on prod — MESH_GITHUB_WEBHOOK_SECRET), and a
+// workspace toggles its own row off. ListActiveByProvider alone can't tell
+// this apart from "no workspace ever configured GitHub" (both come back as
+// zero active rows), so the pre-fix code fell through to env and kept
+// validating webhooks off the instance-wide secret even though the
+// workspace explicitly disabled its integration. Reproduced red against the
+// pre-fix code (secrets=[env-secret], source="env") before the
+// ListByProvider-based fix landed.
+func TestVCSIntegrationResolver_GitHubWebhookSecrets_ToggledOff_WithEnvConfigured_StillDisabled(t *testing.T) {
+	ws := uuid.New()
+	repo := newFakeVCSIntegrationRepo()
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: false, Config: githubCfg("tok", "sec")})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitHubWebhookSecret: "env-secret"})
+
+	secrets, source := r.GitHubWebhookSecrets(context.Background())
+	if len(secrets) != 0 || source != "" {
+		t.Fatalf("a disabled workspace row must not fall through to env even though env is configured: got secrets=%v source=%q", secrets, source)
+	}
+}
+
+// GitLab counterpart.
+func TestVCSIntegrationResolver_GitLabWebhookSecrets_ToggledOff_WithEnvConfigured_StillDisabled(t *testing.T) {
+	ws := uuid.New()
+	repo := newFakeVCSIntegrationRepo()
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://git.entire.host", "", "sec")})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok", GitLabWebhookSecret: "env-secret"})
+
+	secrets, source := r.GitLabWebhookSecrets(context.Background())
+	if len(secrets) != 0 || source != "" {
+		t.Fatalf("a disabled workspace row must not fall through to env even though env is configured: got secrets=%v source=%q", secrets, source)
+	}
+}
+
+// The regression this MR itself introduced: a placeholder row (active=true,
+// empty config — the exact shape ResolveGitHub/ResolveGitLab already fall
+// through to env for, see ..._ActiveEmptyPlaceholderRow_FallsToEnv) must not
+// be able to claim the provider away from a perfectly good env secret just
+// by existing. Only a row that is usable or explicitly disabled may do that.
+func TestVCSIntegrationResolver_GitHubWebhookSecrets_PlaceholderRowOnly_FallsToEnv(t *testing.T) {
+	ws := uuid.New()
+	repo := newFakeVCSIntegrationRepo()
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: json.RawMessage(`{}`)})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitHubWebhookSecret: "env-secret"})
+
+	secrets, source := r.GitHubWebhookSecrets(context.Background())
+	if source != "env" || len(secrets) != 1 || secrets[0] != "env-secret" {
+		t.Fatalf("a placeholder-only row must not blind env fallback: got secrets=%v source=%q", secrets, source)
+	}
+}
+
+// GitLab counterpart.
+func TestVCSIntegrationResolver_GitLabWebhookSecrets_PlaceholderRowOnly_FallsToEnv(t *testing.T) {
+	ws := uuid.New()
+	repo := newFakeVCSIntegrationRepo()
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: json.RawMessage(`{}`)})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok", GitLabWebhookSecret: "env-secret"})
+
+	secrets, source := r.GitLabWebhookSecrets(context.Background())
+	if source != "env" || len(secrets) != 1 || secrets[0] != "env-secret" {
+		t.Fatalf("a placeholder-only row must not blind env fallback: got secrets=%v source=%q", secrets, source)
+	}
+}
+
+// A placeholder row alongside a genuinely disabled row: the disabled row
+// governs (owned=true), so this must still refuse — the placeholder must not
+// be able to weaken an explicit disable either.
+func TestVCSIntegrationResolver_GitHubWebhookSecrets_PlaceholderPlusDisabledRow_StillDisabled(t *testing.T) {
+	wsPlaceholder, wsDisabled := uuid.New(), uuid.New()
+	repo := newFakeVCSIntegrationRepo()
+	repo.put(wsPlaceholder, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: json.RawMessage(`{}`)})
+	repo.put(wsDisabled, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: false, Config: githubCfg("tok", "sec")})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitHubWebhookSecret: "env-secret"})
+
+	secrets, source := r.GitHubWebhookSecrets(context.Background())
+	if len(secrets) != 0 || source != "" {
+		t.Fatalf("an explicitly disabled row must still govern even alongside a placeholder: got secrets=%v source=%q", secrets, source)
 	}
 }
 
