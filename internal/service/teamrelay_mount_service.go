@@ -43,6 +43,11 @@ const DefaultTeamRelaySyncTTL = 5 * time.Minute
 type RelaySyncClient interface {
 	FilesIndex(ctx context.Context, relayURL, shareID, agentKey string) ([]teamrelay.SyncIndexEntry, error)
 	Download(ctx context.Context, relayURL, shareID, path, agentKey string) (*teamrelay.SyncDocument, error)
+	// Write is the conditional write-back (R8). ifMatchSHA256 is the hash of
+	// the version being replaced; the relay refuses anything else, including
+	// the wildcard. A refused write returns teamrelay.ErrSyncConflict and has
+	// changed nothing on their side.
+	Write(ctx context.Context, relayURL, shareID, path, agentKey, ifMatchSHA256 string, body []byte) (*teamrelay.SyncWriteResult, error)
 }
 
 // realRelaySyncClient is RelaySyncClient backed by the actual sync-protocol
@@ -55,6 +60,10 @@ func (realRelaySyncClient) FilesIndex(ctx context.Context, relayURL, shareID, ag
 
 func (realRelaySyncClient) Download(ctx context.Context, relayURL, shareID, filePath, agentKey string) (*teamrelay.SyncDocument, error) {
 	return teamrelay.SyncDownload(ctx, relayURL, shareID, filePath, agentKey)
+}
+
+func (realRelaySyncClient) Write(ctx context.Context, relayURL, shareID, filePath, agentKey, ifMatchSHA256 string, body []byte) (*teamrelay.SyncWriteResult, error) {
+	return teamrelay.SyncWrite(ctx, relayURL, shareID, filePath, agentKey, ifMatchSHA256, body)
 }
 
 // MountStatus names why SyncMount did or did not materialize a share, in a
@@ -134,10 +143,29 @@ type TeamRelayRefresher interface {
 	RefreshIfStale(ctx context.Context, doc *domain.Document) error
 }
 
+// TeamRelayWriter pushes an edit made to a copy back to the original, R8.
+//
+// Optional in exactly the way TeamRelayRefresher is: unwired, a copy is
+// read-only in practice — an edit to it is refused rather than silently kept
+// local, because a copy that has drifted from its original is the state the
+// refresher will later resolve by discarding the local side.
+type TeamRelayWriter interface {
+	// WriteBack sends body to the document's source, conditional on the
+	// sha256 the copy was last synced at, and returns the source's new hash.
+	//
+	// It returns ErrExternalSourceConflict when the original moved since we
+	// read it. That is not a failure to write — it is a refusal, and the
+	// caller MUST treat it as one: nothing was written on either side, and the
+	// only correct response is to re-read and rebuild the edit on the new
+	// original.
+	WriteBack(ctx context.Context, doc *domain.Document, body string) (newSHA256 string, err error)
+}
+
 // TeamRelayMountService materializes a Team Relay share as a Docs subtree and
 // keeps individual copies fresh on open.
 type TeamRelayMountService interface {
 	TeamRelayRefresher
+	TeamRelayWriter
 	// SyncMount walks the project's configured share's files-index once and
 	// creates a copy document for every entry that has no copy yet, and any
 	// intermediate folder placeholders the mount point or the entries'
@@ -297,6 +325,52 @@ func (s *teamRelayMountService) RefreshIfStale(ctx context.Context, doc *domain.
 	doc.Version = newVersion
 	doc.Body = string(remote.Content)
 	return nil
+}
+
+// ErrExternalSourceConflict is what a refused write-back surfaces as: the
+// original changed in Team Relay between our last read of it and this write.
+//
+// Wrapped rather than returned bare so a caller can errors.Is it while the log
+// line still names the document and path involved.
+var ErrExternalSourceConflict = errors.New("external source changed since it was read")
+
+// WriteBack is the R8 mechanism: an edit to a copy is pushed to the original
+// conditionally on the hash the copy was last synced at, so a concurrent edit
+// on their side is detected and refused instead of overwritten.
+//
+// The precondition is source_sha256 — the hash of the version whose text the
+// editor was actually shown. It is never a wildcard and never empty: the
+// client refuses both locally, before any request leaves the process.
+func (s *teamRelayMountService) WriteBack(ctx context.Context, doc *domain.Document, body string) (string, error) {
+	if doc == nil || doc.SourceKind != domain.DocumentSourceTeamRelay {
+		return "", fmt.Errorf("teamrelay: write-back called for a document that is not a Team Relay copy")
+	}
+	if doc.SourceShare == nil || doc.SourcePath == nil || doc.SourceSHA256 == nil || *doc.SourceSHA256 == "" {
+		// Same reasoning as RefreshIfStale's equivalent guard: the CHECK
+		// constraint makes this unreachable, and a copy that cannot say which
+		// version it holds is precisely the row that must not be allowed to
+		// write anywhere.
+		return "", fmt.Errorf("teamrelay: copy %s is missing source metadata, refusing to write back", doc.ID)
+	}
+
+	rs, err := s.settingsFor(ctx, doc.ProjectID)
+	if err != nil {
+		return "", err
+	}
+
+	result, err := s.client.Write(ctx, rs.relayURL, *doc.SourceShare, *doc.SourcePath, rs.agentKey, *doc.SourceSHA256, []byte(body))
+	if err != nil {
+		if errors.Is(err, teamrelay.ErrSyncConflict) {
+			// Deliberately NOT retried here, at any count. The rebuild this
+			// needs is the user's — their edit was made against text that no
+			// longer exists, and re-sending the same bytes with a refreshed
+			// hash would resolve the conflict by discarding whatever the other
+			// writer put there. That is the blind overwrite with an extra step.
+			return "", fmt.Errorf("%w: copy %s (%s)", ErrExternalSourceConflict, doc.ID, *doc.SourcePath)
+		}
+		return "", fmt.Errorf("teamrelay: write back copy %s: %w", doc.ID, err)
+	}
+	return result.SHA256, nil
 }
 
 // SyncMount is called identically whether the share mounts at a configured

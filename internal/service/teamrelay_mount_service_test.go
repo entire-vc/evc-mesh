@@ -53,6 +53,29 @@ type fakeRelaySyncClient struct {
 	// detect -- and a control that fails for the wrong reason is a broken
 	// control, indistinguishable from a working one at a glance.
 	defaultDocs map[string]*teamrelay.SyncDocument
+
+	// Write-back (R8) recording. writeReqs keeps the full request rather than a
+	// count, because the load-bearing assertions are about WHAT was sent — the
+	// If-Match hash above all — and a counter cannot distinguish a conditional
+	// write from an unconditional one.
+	writeCalls int
+	writeReqs  []fakeWriteRequest
+	writeErr   error
+}
+
+// fakeWriteRequest is one recorded sync-write.
+type fakeWriteRequest struct {
+	Path    string
+	IfMatch string
+	Body    string
+}
+
+// fakeSHA is a stand-in content hash for the double. It is NOT sha256 and does
+// not need to be: every assertion here is about whether two hashes are the
+// same value, never about the algorithm. Using a distinguishable prefix keeps
+// a real sha256 from being confused with a fixture one when a test fails.
+func fakeSHA(body string) string {
+	return fmt.Sprintf("fakesha-%d-%s", len(body), strings.ReplaceAll(strings.TrimSpace(body), " ", "_"))
 }
 
 // seedRemote registers the default response for path: a source whose content
@@ -97,6 +120,59 @@ func (f *fakeRelaySyncClient) Download(_ context.Context, _, _, path, _ string) 
 	// Never (nil, nil): an unscripted path is a fixture gap, and it must say so
 	// by name instead of handing the caller a nil document to dereference.
 	return nil, fmt.Errorf("fakeRelaySyncClient: no download fixture for path %q", path)
+}
+
+// Write simulates the relay's conditional write faithfully enough for the
+// negative control to mean something: it compares If-Match against the hash it
+// currently holds and, on a mismatch, returns ErrSyncConflict having changed
+// NOTHING. The real server gets that property from doing the compare and the
+// swap inside one row lock; this double gets it from doing the compare before
+// the assignment. A fixture that mutated first and reported the conflict after
+// would let a broken write-back pass the very test written to catch it.
+func (f *fakeRelaySyncClient) Write(_ context.Context, _, _, path, _, ifMatchSHA256 string, body []byte) (*teamrelay.SyncWriteResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.writeCalls++
+	f.writeReqs = append(f.writeReqs, fakeWriteRequest{Path: path, IfMatch: ifMatchSHA256, Body: string(body)})
+
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	if f.defaultDocs == nil {
+		f.defaultDocs = map[string]*teamrelay.SyncDocument{}
+	}
+	current, ok := f.defaultDocs[path]
+	if !ok {
+		return nil, fmt.Errorf("fakeRelaySyncClient: no write fixture for path %q", path)
+	}
+	if ifMatchSHA256 != current.SHA256 {
+		// Refused. Deliberately no mutation above this line.
+		return nil, teamrelay.ErrSyncConflict
+	}
+
+	newSHA := fakeSHA(string(body))
+	f.defaultDocs[path] = &teamrelay.SyncDocument{Content: append([]byte(nil), body...), SHA256: newSHA}
+	return &teamrelay.SyncWriteResult{Path: path, SHA256: newSHA, Size: int64(len(body))}, nil
+}
+
+// remoteBody reports what the double currently holds for path, so a test can
+// assert the original is byte-for-byte unchanged after a refused write rather
+// than merely trusting the error.
+func (f *fakeRelaySyncClient) remoteBody(path string) (body, sha256 string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.defaultDocs[path]
+	if !ok {
+		return "", ""
+	}
+	return string(d.Content), d.SHA256
+}
+
+func (f *fakeRelaySyncClient) writeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.writeCalls
 }
 
 func (f *fakeRelaySyncClient) callCount() int {

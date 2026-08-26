@@ -36,6 +36,14 @@ func (m *mockTeamRelayMountService) RefreshIfStale(_ context.Context, _ *domain.
 	return nil
 }
 
+// WriteBack is part of the service's interface but not of this handler's job —
+// mounting a share never writes back. Present only to satisfy the interface,
+// and it returns an error rather than a plausible hash so that a handler which
+// somehow started calling it would fail loudly instead of appearing to work.
+func (m *mockTeamRelayMountService) WriteBack(_ context.Context, _ *domain.Document, _ string) (string, error) {
+	return "", errors.New("mockTeamRelayMountService: WriteBack must not be called by the mount handler")
+}
+
 var _ service.TeamRelayMountService = (*mockTeamRelayMountService)(nil)
 
 func trMountRequest(t *testing.T, h *TrMountHandler, projIDParam string) *httptest.ResponseRecorder {
