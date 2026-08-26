@@ -566,8 +566,8 @@ func (m *MockTaskService) Search(ctx context.Context, workspaceID uuid.UUID, fil
 	return nil, nil
 }
 
-func (m *MockTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uuid.UUID) error {
-	return nil
+func (m *MockTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uuid.UUID) (worked, missed int, err error) {
+	return 0, 0, nil
 }
 
 func (m *MockTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }

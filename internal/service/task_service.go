@@ -2966,37 +2966,79 @@ func (s *taskService) resolveSetReviewer(ctx context.Context, projectID uuid.UUI
 }
 
 // SupersedeRecurringInstances closes all non-terminal instances of scheduleID
-// (excluding newTaskID) by moving them to the project's done status.
-// Errors on individual tasks are logged and skipped — fail-open.
-func (s *taskService) SupersedeRecurringInstances(ctx context.Context, scheduleID, newTaskID uuid.UUID) error {
+// (excluding newTaskID). Each instance closes as done if it had real work —
+// an artifact, a VCS link, or a comment that isn't a duplicate of the others
+// (see instanceHadRealWork) — or as missed (the project's cancelled-category
+// status) otherwise, so a rollover can neither manufacture a false done on a
+// zero-work instance nor leave one stuck open forever waiting for evidence
+// that will never arrive. Errors on individual tasks are logged and skipped
+// — fail-open.
+func (s *taskService) SupersedeRecurringInstances(ctx context.Context, scheduleID, newTaskID uuid.UUID) (worked, missed int, err error) {
 	openTasks, err := s.taskRepo.ListOpenByRecurringScheduleID(ctx, scheduleID, newTaskID)
 	if err != nil {
-		return fmt.Errorf("SupersedeRecurringInstances: %w", err)
+		return 0, 0, fmt.Errorf("SupersedeRecurringInstances: %w", err)
 	}
 	if len(openTasks) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 	statuses, err := s.statusRepo.ListByProject(ctx, openTasks[0].ProjectID)
 	if err != nil {
-		return fmt.Errorf("SupersedeRecurringInstances ListByProject: %w", err)
+		return 0, 0, fmt.Errorf("SupersedeRecurringInstances ListByProject: %w", err)
 	}
-	var doneStatusID uuid.UUID
+	var doneStatusID, missedStatusID uuid.UUID
 	for _, st := range statuses {
-		if st.Category == domain.StatusCategoryDone {
+		if st.Category == domain.StatusCategoryDone && doneStatusID == uuid.Nil {
 			doneStatusID = st.ID
-			break
+		}
+		if st.Category == domain.StatusCategoryCancelled && missedStatusID == uuid.Nil {
+			missedStatusID = st.ID
 		}
 	}
 	if doneStatusID == uuid.Nil {
 		log.Printf("[recurring] WARNING: SupersedeRecurringInstances: no done status for project %s", openTasks[0].ProjectID)
-		return nil
+		return 0, 0, nil
 	}
 	for _, task := range openTasks {
-		if err := s.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &doneStatusID}); err != nil {
-			log.Printf("[recurring] WARNING: SupersedeRecurringInstances: failed to close task %s: %v", task.ID, err)
+		hadWork, workErr := s.instanceHadRealWork(ctx, task)
+		if workErr != nil {
+			log.Printf("[recurring] WARNING: SupersedeRecurringInstances: evidence check failed for task %s: %v — closing as done", task.ID, workErr)
+			hadWork = true // fail open toward the pre-fix behavior on evidence-check error
+		}
+		targetStatusID := doneStatusID
+		asMissed := false
+		if !hadWork {
+			if missedStatusID != uuid.Nil {
+				targetStatusID = missedStatusID
+				asMissed = true
+			} else {
+				log.Printf("[recurring] WARNING: SupersedeRecurringInstances: task %s had no real work but project %s has no cancelled-category status — closing as done", task.ID, task.ProjectID)
+			}
+		}
+		if moveErr := s.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &targetStatusID}); moveErr != nil {
+			log.Printf("[recurring] WARNING: SupersedeRecurringInstances: failed to close task %s: %v", task.ID, moveErr)
+			continue
+		}
+		if asMissed {
+			missed++
+		} else {
+			worked++
 		}
 	}
-	return nil
+	return worked, missed, nil
+}
+
+// instanceHadRealWork reports whether a recurring-schedule instance received
+// real work before being superseded: an artifact, a VCS link, or at least one
+// comment that isn't an exact duplicate of the others (the signature left by
+// an automated nudge reposting the same idle-lane line on a timer).
+func (s *taskService) instanceHadRealWork(ctx context.Context, task domain.Task) (bool, error) {
+	if task.ArtifactCount > 0 || task.VCSLinkCount > 0 {
+		return true, nil
+	}
+	if s.commentRepo == nil {
+		return false, nil
+	}
+	return s.commentRepo.HasSubstantiveComment(ctx, task.ID)
 }
 
 // SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.

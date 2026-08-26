@@ -52,6 +52,8 @@ type recurringRow struct {
 	ConsecutiveFailures int                       `db:"consecutive_failures"`
 	QuarantinedAt       *time.Time                `db:"quarantined_at"`
 	LastError           *string                   `db:"last_error"`
+	ConsecutiveMissed   int                       `db:"consecutive_missed_outcomes"`
+	LastMissedAt        *time.Time                `db:"last_missed_at"`
 	CreatedBy           uuid.UUID                 `db:"created_by"`
 	CreatedByType       domain.ActorType          `db:"created_by_type"`
 	CreatedAt           time.Time                 `db:"created_at"`
@@ -61,34 +63,36 @@ type recurringRow struct {
 
 func (r *recurringRow) toDomain() domain.RecurringSchedule {
 	return domain.RecurringSchedule{
-		ID:                  r.ID,
-		WorkspaceID:         r.WorkspaceID,
-		ProjectID:           r.ProjectID,
-		TitleTemplate:       r.TitleTemplate,
-		DescriptionTemplate: r.DescriptionTemplate,
-		Frequency:           r.Frequency,
-		CronExpr:            r.CronExpr,
-		Timezone:            r.Timezone,
-		AssigneeID:          r.AssigneeID,
-		AssigneeType:        r.AssigneeType,
-		Priority:            r.Priority,
-		Labels:              r.Labels,
-		StatusID:            r.StatusID,
-		IsActive:            r.IsActive,
-		StartsAt:            r.StartsAt,
-		EndsAt:              r.EndsAt,
-		MaxInstances:        r.MaxInstances,
-		NextRunAt:           r.NextRunAt,
-		LastTriggeredAt:     r.LastTriggeredAt,
-		InstanceCount:       r.InstanceCount,
-		ConsecutiveFailures: r.ConsecutiveFailures,
-		QuarantinedAt:       r.QuarantinedAt,
-		LastError:           r.LastError,
-		CreatedBy:           r.CreatedBy,
-		CreatedByType:       r.CreatedByType,
-		CreatedAt:           r.CreatedAt,
-		UpdatedAt:           r.UpdatedAt,
-		DeletedAt:           r.DeletedAt,
+		ID:                        r.ID,
+		WorkspaceID:               r.WorkspaceID,
+		ProjectID:                 r.ProjectID,
+		TitleTemplate:             r.TitleTemplate,
+		DescriptionTemplate:       r.DescriptionTemplate,
+		Frequency:                 r.Frequency,
+		CronExpr:                  r.CronExpr,
+		Timezone:                  r.Timezone,
+		AssigneeID:                r.AssigneeID,
+		AssigneeType:              r.AssigneeType,
+		Priority:                  r.Priority,
+		Labels:                    r.Labels,
+		StatusID:                  r.StatusID,
+		IsActive:                  r.IsActive,
+		StartsAt:                  r.StartsAt,
+		EndsAt:                    r.EndsAt,
+		MaxInstances:              r.MaxInstances,
+		NextRunAt:                 r.NextRunAt,
+		LastTriggeredAt:           r.LastTriggeredAt,
+		InstanceCount:             r.InstanceCount,
+		ConsecutiveFailures:       r.ConsecutiveFailures,
+		QuarantinedAt:             r.QuarantinedAt,
+		LastError:                 r.LastError,
+		ConsecutiveMissedOutcomes: r.ConsecutiveMissed,
+		LastMissedAt:              r.LastMissedAt,
+		CreatedBy:                 r.CreatedBy,
+		CreatedByType:             r.CreatedByType,
+		CreatedAt:                 r.CreatedAt,
+		UpdatedAt:                 r.UpdatedAt,
+		DeletedAt:                 r.DeletedAt,
 	}
 }
 
@@ -141,6 +145,7 @@ func (r *RecurringRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Recu
 			is_active, starts_at, ends_at, max_instances,
 			next_run_at, last_triggered_at, instance_count,
 			consecutive_failures, quarantined_at, last_error,
+			consecutive_missed_outcomes, last_missed_at,
 			created_by, created_by_type, created_at, updated_at, deleted_at
 		FROM recurring_schedules
 		WHERE id = $1 AND deleted_at IS NULL
@@ -246,6 +251,7 @@ func (r *RecurringRepo) ListByProject(ctx context.Context, projectID uuid.UUID, 
 			is_active, starts_at, ends_at, max_instances,
 			next_run_at, last_triggered_at, instance_count,
 			consecutive_failures, quarantined_at, last_error,
+			consecutive_missed_outcomes, last_missed_at,
 			created_by, created_by_type, created_at, updated_at, deleted_at
 		FROM recurring_schedules
 		WHERE project_id = $1 AND deleted_at IS NULL
@@ -278,6 +284,7 @@ func (r *RecurringRepo) FindDue(ctx context.Context) ([]domain.RecurringSchedule
 			is_active, starts_at, ends_at, max_instances,
 			next_run_at, last_triggered_at, instance_count,
 			consecutive_failures, quarantined_at, last_error,
+			consecutive_missed_outcomes, last_missed_at,
 			created_by, created_by_type, created_at, updated_at, deleted_at
 		FROM recurring_schedules
 		WHERE is_active = TRUE
@@ -417,6 +424,49 @@ func (r *RecurringRepo) ResetConsecutiveFailures(ctx context.Context, id uuid.UU
 	res, err := r.db.ExecContext(ctx, q, id)
 	if err != nil {
 		return fmt.Errorf("recurring ResetConsecutiveFailures: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("RecurringSchedule")
+	}
+	return nil
+}
+
+// RecordMissedOutcome increments consecutive_missed_outcomes and stamps last_missed_at,
+// returning the post-increment count so the caller can compare against a threshold
+// without a second round trip. Called when a rollover supersedes an instance that
+// received no real work.
+func (r *RecurringRepo) RecordMissedOutcome(ctx context.Context, id uuid.UUID) (int, error) {
+	const q = `
+		UPDATE recurring_schedules
+		SET consecutive_missed_outcomes = consecutive_missed_outcomes + 1,
+			last_missed_at              = NOW(),
+			updated_at                  = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING consecutive_missed_outcomes
+	`
+	var count int
+	if err := r.db.QueryRowContext(ctx, q, id).Scan(&count); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, apierror.NotFound("RecurringSchedule")
+		}
+		return 0, fmt.Errorf("recurring RecordMissedOutcome: %w", err)
+	}
+	return count, nil
+}
+
+// ResetConsecutiveMissedOutcomes clears the missed-outcome counter after a rollover
+// finds at least one superseded instance that had real work.
+func (r *RecurringRepo) ResetConsecutiveMissedOutcomes(ctx context.Context, id uuid.UUID) error {
+	const q = `
+		UPDATE recurring_schedules
+		SET consecutive_missed_outcomes = 0,
+			updated_at                  = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	res, err := r.db.ExecContext(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("recurring ResetConsecutiveMissedOutcomes: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

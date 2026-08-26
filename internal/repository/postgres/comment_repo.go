@@ -297,3 +297,27 @@ func (r *CommentRepo) HasRecentCommentBy(ctx context.Context, taskID, authorID u
 		)`, taskID, authorID, since, minLength).Scan(&exists)
 	return exists, err
 }
+
+// HasSubstantiveComment returns false when the task's comments are all exact
+// duplicates of each other (2+ comments, all sharing one body) — the signature
+// left by an automated nudge reposting the same line on a timer — and true
+// otherwise (zero comments count as false; one comment of any content counts
+// as true). Used by SupersedeRecurringInstances to tell a worked instance from
+// one where a recurring nudge was the only activity before rollover.
+func (r *CommentRepo) HasSubstantiveComment(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	var total, distinctBodies int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(DISTINCT body)
+		FROM comments
+		WHERE task_id = $1`, taskID).Scan(&total, &distinctBodies)
+	if err != nil {
+		return false, err
+	}
+	if total == 0 {
+		return false, nil
+	}
+	if total >= 2 && distinctBodies == 1 {
+		return false, nil
+	}
+	return true, nil
+}

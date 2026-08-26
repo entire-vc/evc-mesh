@@ -1164,6 +1164,30 @@ func (m *MockCommentRepository) HasRecentCommentBy(_ context.Context, taskID, au
 	return false, nil
 }
 
+func (m *MockCommentRepository) HasSubstantiveComment(_ context.Context, taskID uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	total := 0
+	distinct := make(map[string]struct{})
+	for _, c := range m.items {
+		if c.TaskID != taskID {
+			continue
+		}
+		total++
+		distinct[c.Body] = struct{}{}
+	}
+	if total == 0 {
+		return false, nil
+	}
+	if total >= 2 && len(distinct) == 1 {
+		return false, nil
+	}
+	return true, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockArtifactRepository
 // ---------------------------------------------------------------------------

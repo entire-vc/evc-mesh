@@ -4046,3 +4046,193 @@ func TestTaskService_Update_RepoErrorPropagates(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError, "a read failure must propagate, not be reported as NotFound")
 }
+
+// ---------------------------------------------------------------------------
+// TestTaskService_SupersedeRecurringInstances — #8b57630b
+//
+// A rollover must not manufacture a false `done` on a zero-work instance
+// (schedule 18388503's bug: 130 identical automated nudge comments read as
+// "evidence"), and must not leave a zero-evidence instance stuck open forever
+// waiting for evidence that will never arrive either (schedule 404ae199's
+// opposite bug: the done-evidence gate refuses it and the caller ignores the
+// refusal). Both are the same code path — see the acceptance table on
+// #8b57630b for the ПОЗИТИВНЫЙ/НЕГАТИВНЫЙ shape these tests mirror.
+// ---------------------------------------------------------------------------
+
+func setupSupersedeProject(statusRepo *MockTaskStatusRepository) (projectID, doneStatusID, cancelledStatusID, openStatusID uuid.UUID) {
+	projectID = uuid.New()
+	doneStatusID = uuid.New()
+	cancelledStatusID = uuid.New()
+	openStatusID = uuid.New()
+	statusRepo.items[doneStatusID] = &domain.TaskStatus{ID: doneStatusID, ProjectID: projectID, Category: domain.StatusCategoryDone}
+	statusRepo.items[cancelledStatusID] = &domain.TaskStatus{ID: cancelledStatusID, ProjectID: projectID, Category: domain.StatusCategoryCancelled}
+	statusRepo.items[openStatusID] = &domain.TaskStatus{ID: openStatusID, ProjectID: projectID, Category: domain.StatusCategoryInProgress}
+	return
+}
+
+func makeOpenRecurringInstance(taskRepo *MockTaskRepository, projectID, statusID, scheduleID uuid.UUID) uuid.UUID {
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, StatusID: statusID,
+		Title: "recurring instance", RecurringScheduleID: &scheduleID,
+	}
+	return taskID
+}
+
+// ПОЗИТИВНЫЙ: an instance with real work (VCS link, or artifact, or a single
+// genuine comment) closes as done.
+func TestTaskService_SupersedeRecurringInstances_RealWork_ClosesDone(t *testing.T) {
+	scheduleID, newTaskID := uuid.New(), uuid.New()
+
+	t.Run("VCS link counts as work", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		projectID, doneStatusID, _, openStatusID := setupSupersedeProject(statusRepo)
+		taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+		taskRepo.items[taskID].VCSLinkCount = 1
+
+		worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+		require.NoError(t, err)
+		assert.Equal(t, 1, worked)
+		assert.Equal(t, 0, missed)
+		assert.Equal(t, doneStatusID, taskRepo.items[taskID].StatusID)
+	})
+
+	t.Run("artifact counts as work", func(t *testing.T) {
+		svc, taskRepo, statusRepo := setupTaskService()
+		projectID, doneStatusID, _, openStatusID := setupSupersedeProject(statusRepo)
+		taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+		taskRepo.items[taskID].ArtifactCount = 1
+
+		worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+		require.NoError(t, err)
+		assert.Equal(t, 1, worked)
+		assert.Equal(t, 0, missed)
+		assert.Equal(t, doneStatusID, taskRepo.items[taskID].StatusID)
+	})
+
+	t.Run("a single genuine comment counts as work", func(t *testing.T) {
+		svc, taskRepo, statusRepo, commentRepo := setupTaskServiceWithCommentRepo()
+		projectID, doneStatusID, _, openStatusID := setupSupersedeProject(statusRepo)
+		taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+		require.NoError(t, commentRepo.Create(context.Background(), &domain.Comment{
+			ID: uuid.New(), TaskID: taskID, Body: "PR merged, deployed, verified.",
+		}))
+
+		worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+		require.NoError(t, err)
+		assert.Equal(t, 1, worked)
+		assert.Equal(t, 0, missed)
+		assert.Equal(t, doneStatusID, taskRepo.items[taskID].StatusID)
+	})
+}
+
+// НЕГАТИВНЫЙ (несущий): zero evidence closes as missed — not done (the
+// 18388503 bug), and not stuck open forever (the 404ae199 bug, since moving
+// to cancelled doesn't run the done-evidence gate).
+func TestTaskService_SupersedeRecurringInstances_ZeroEvidence_ClosesMissed(t *testing.T) {
+	scheduleID, newTaskID := uuid.New(), uuid.New()
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID, _, cancelledStatusID, openStatusID := setupSupersedeProject(statusRepo)
+	taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+
+	worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, worked)
+	assert.Equal(t, 1, missed)
+	assert.Equal(t, cancelledStatusID, taskRepo.items[taskID].StatusID, "zero-evidence instance must close as missed (cancelled), not done")
+}
+
+// НЕГАТИВНЫЙ variant: N identical automated-nudge comments are not evidence
+// of work — this is the literal shape of the incident (130/133 identical
+// `[fiddler] ...` lines, zero substantive).
+func TestTaskService_SupersedeRecurringInstances_OnlyIdenticalComments_ClosesMissed(t *testing.T) {
+	scheduleID, newTaskID := uuid.New(), uuid.New()
+	svc, taskRepo, statusRepo, commentRepo := setupTaskServiceWithCommentRepo()
+	projectID, _, cancelledStatusID, openStatusID := setupSupersedeProject(statusRepo)
+	taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, commentRepo.Create(context.Background(), &domain.Comment{
+			ID: uuid.New(), TaskID: taskID,
+			Body: "[fiddler] Сессия лейна стоит у пустого приглашения 10м…",
+		}))
+	}
+
+	worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, worked)
+	assert.Equal(t, 1, missed)
+	assert.Equal(t, cancelledStatusID, taskRepo.items[taskID].StatusID, "a wall of identical nudge comments is not evidence of work")
+}
+
+// A mix of nudge noise AND one genuine comment must still read as worked —
+// the noise must not be able to mask real activity either.
+func TestTaskService_SupersedeRecurringInstances_NoiseAndOneGenuineComment_ClosesDone(t *testing.T) {
+	scheduleID, newTaskID := uuid.New(), uuid.New()
+	svc, taskRepo, statusRepo, commentRepo := setupTaskServiceWithCommentRepo()
+	projectID, doneStatusID, _, openStatusID := setupSupersedeProject(statusRepo)
+	taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+	for i := 0; i < 4; i++ {
+		require.NoError(t, commentRepo.Create(context.Background(), &domain.Comment{
+			ID: uuid.New(), TaskID: taskID,
+			Body: "[fiddler] Сессия лейна стоит у пустого приглашения 10м…",
+		}))
+	}
+	require.NoError(t, commentRepo.Create(context.Background(), &domain.Comment{
+		ID: uuid.New(), TaskID: taskID, Body: "Actually did the thing, PR #123.",
+	}))
+
+	worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, worked)
+	assert.Equal(t, 0, missed)
+	assert.Equal(t, doneStatusID, taskRepo.items[taskID].StatusID)
+}
+
+// НЕГАТИВНЫЙ-2 (via recurring_repo counters, exercised at the taskService
+// layer here only for the mixed-batch shape): one worked + one missed
+// instance in the same supersede pass must be reported and closed
+// independently — a real instance's evidence must not "cover for" a
+// neighboring zero-work one, and vice versa.
+func TestTaskService_SupersedeRecurringInstances_MixedBatch_ClosesIndependently(t *testing.T) {
+	scheduleID, newTaskID := uuid.New(), uuid.New()
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID, doneStatusID, cancelledStatusID, openStatusID := setupSupersedeProject(statusRepo)
+	workedTaskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+	taskRepo.items[workedTaskID].ArtifactCount = 1
+	missedTaskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+
+	worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, worked)
+	assert.Equal(t, 1, missed)
+	assert.Equal(t, doneStatusID, taskRepo.items[workedTaskID].StatusID)
+	assert.Equal(t, cancelledStatusID, taskRepo.items[missedTaskID].StatusID)
+}
+
+// No cancelled-category status configured on the project: the zero-evidence
+// instance degrades to the pre-fix done close rather than getting stuck —
+// worse than "missed" but strictly better than never resolving.
+func TestTaskService_SupersedeRecurringInstances_NoCancelledStatus_FallsBackToDone(t *testing.T) {
+	scheduleID, newTaskID := uuid.New(), uuid.New()
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID := uuid.New()
+	doneStatusID := uuid.New()
+	openStatusID := uuid.New()
+	statusRepo.items[doneStatusID] = &domain.TaskStatus{ID: doneStatusID, ProjectID: projectID, Category: domain.StatusCategoryDone}
+	statusRepo.items[openStatusID] = &domain.TaskStatus{ID: openStatusID, ProjectID: projectID, Category: domain.StatusCategoryInProgress}
+	taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+
+	worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), scheduleID, newTaskID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, worked)
+	assert.Equal(t, 0, missed)
+	assert.Equal(t, doneStatusID, taskRepo.items[taskID].StatusID)
+}
+
+func TestTaskService_SupersedeRecurringInstances_NothingOpen_NoOp(t *testing.T) {
+	svc, _, _ := setupTaskService()
+	worked, missed, err := svc.SupersedeRecurringInstances(context.Background(), uuid.New(), uuid.New())
+	require.NoError(t, err)
+	assert.Equal(t, 0, worked)
+	assert.Equal(t, 0, missed)
+}

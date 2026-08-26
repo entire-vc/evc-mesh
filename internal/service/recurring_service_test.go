@@ -33,6 +33,8 @@ type MockRecurringRepository struct {
 	resetFailureCalls   int
 	incrementCalls      int
 	updateCalls         int
+	recordMissedCalls   int
+	resetMissedCalls    int
 }
 
 func NewMockRecurringRepository() *MockRecurringRepository {
@@ -163,6 +165,32 @@ func (m *MockRecurringRepository) ResetConsecutiveFailures(_ context.Context, id
 	return nil
 }
 
+func (m *MockRecurringRepository) RecordMissedOutcome(_ context.Context, id uuid.UUID) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recordMissedCalls++
+	s, ok := m.schedules[id]
+	if !ok {
+		return 0, errors.New("schedule not found")
+	}
+	s.ConsecutiveMissedOutcomes++
+	now := time.Now()
+	s.LastMissedAt = &now
+	return s.ConsecutiveMissedOutcomes, nil
+}
+
+func (m *MockRecurringRepository) ResetConsecutiveMissedOutcomes(_ context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetMissedCalls++
+	s, ok := m.schedules[id]
+	if !ok {
+		return errors.New("schedule not found")
+	}
+	s.ConsecutiveMissedOutcomes = 0
+	return nil
+}
+
 func (m *MockRecurringRepository) GetInstanceHistory(_ context.Context, scheduleID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringInstanceSummary], error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -185,6 +213,13 @@ type StubTaskService struct {
 	// tests exercising the tenancy-refusal path set this instead of building a
 	// real cross-workspace fixture, matching how createErr is used above.
 	validateAssigneeErr error
+	// supersedeWorked/supersedeMissed configure SupersedeRecurringInstances's
+	// return values; supersedeErr configures its error. Zero values (0, 0, nil)
+	// mean "nothing was open to supersede", matching the common single-instance
+	// case in most tests.
+	supersedeWorked int
+	supersedeMissed int
+	supersedeErr    error
 }
 
 func NewStubTaskService() *StubTaskService {
@@ -272,8 +307,10 @@ func (s *StubTaskService) Search(_ context.Context, _ uuid.UUID, _ repository.Ta
 	panic("StubTaskService.Search not implemented")
 }
 
-func (s *StubTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uuid.UUID) error {
-	return nil
+func (s *StubTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uuid.UUID) (worked, missed int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.supersedeWorked, s.supersedeMissed, s.supersedeErr
 }
 
 func (s *StubTaskService) ValidateAssigneeForProject(_ context.Context, _ uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error) {
@@ -1087,11 +1124,11 @@ func newSpyTaskService() *spyTaskService {
 	return &spyTaskService{StubTaskService: NewStubTaskService()}
 }
 
-func (s *spyTaskService) SupersedeRecurringInstances(_ context.Context, scheduleID, newTaskID uuid.UUID) error {
+func (s *spyTaskService) SupersedeRecurringInstances(_ context.Context, scheduleID, newTaskID uuid.UUID) (worked, missed int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.supersedeCalls = append(s.supersedeCalls, struct{ scheduleID, newTaskID uuid.UUID }{scheduleID, newTaskID})
-	return nil
+	return s.supersedeWorked, s.supersedeMissed, s.supersedeErr
 }
 
 func TestRunOneSchedule_CallsSupersede(t *testing.T) {
@@ -1127,6 +1164,127 @@ func TestRunOneSchedule_CallsSupersede(t *testing.T) {
 	spy.StubTaskService.mu.Unlock()
 	if calls[0].newTaskID != createdTask.ID {
 		t.Errorf("supersede newTaskID = %v, want %v", calls[0].newTaskID, createdTask.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// recordMissedOutcome — consecutive-miss counter and owner-alert comment.
+// #8b57630b НЕГАТИВНЫЙ-2: two consecutive missed rollovers must signal the
+// schedule's owner, not silently continue forever.
+// ---------------------------------------------------------------------------
+
+func TestRecordMissedOutcome_RealWorkResetsCounter(t *testing.T) {
+	schedule := newMinimalSchedule()
+	schedule.ConsecutiveMissedOutcomes = 1
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	svc := NewRecurringService(repo, NewStubTaskService()).(*recurringService)
+	svc.recordMissedOutcome(context.Background(), schedule, uuid.New(), 1, 0)
+
+	if repo.resetMissedCalls != 1 {
+		t.Fatalf("ResetConsecutiveMissedOutcomes called %d times, want 1", repo.resetMissedCalls)
+	}
+	if repo.recordMissedCalls != 0 {
+		t.Fatalf("RecordMissedOutcome called %d times, want 0 (this rollover had real work)", repo.recordMissedCalls)
+	}
+	stored, _ := repo.GetByID(context.Background(), schedule.ID)
+	if stored.ConsecutiveMissedOutcomes != 0 {
+		t.Fatalf("ConsecutiveMissedOutcomes = %d, want 0 after real work", stored.ConsecutiveMissedOutcomes)
+	}
+}
+
+func TestRecordMissedOutcome_NothingSuperseded_NoOp(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	svc := NewRecurringService(repo, NewStubTaskService()).(*recurringService)
+	svc.recordMissedOutcome(context.Background(), schedule, uuid.New(), 0, 0)
+
+	if repo.recordMissedCalls != 0 || repo.resetMissedCalls != 0 {
+		t.Fatalf("expected no counter calls when nothing was superseded, got record=%d reset=%d",
+			repo.recordMissedCalls, repo.resetMissedCalls)
+	}
+}
+
+func TestRecordMissedOutcome_BelowThreshold_NoAlertComment(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+	commentRepo := NewMockCommentRepository()
+
+	svc := NewRecurringService(repo, NewStubTaskService(), WithCommentRepoForRecurring(commentRepo)).(*recurringService)
+	newTaskID := uuid.New()
+	svc.recordMissedOutcome(context.Background(), schedule, newTaskID, 0, 1)
+
+	if repo.recordMissedCalls != 1 {
+		t.Fatalf("RecordMissedOutcome called %d times, want 1", repo.recordMissedCalls)
+	}
+	hasComment, _ := commentRepo.HasAnyComment(context.Background(), newTaskID)
+	if hasComment {
+		t.Fatal("expected no alert comment below maxConsecutiveMissed threshold")
+	}
+}
+
+func TestRecordMissedOutcome_ReachesThreshold_PostsAlertComment(t *testing.T) {
+	schedule := newMinimalSchedule()
+	schedule.ConsecutiveMissedOutcomes = maxConsecutiveMissed - 1 // one more miss reaches the threshold
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+	commentRepo := NewMockCommentRepository()
+
+	svc := NewRecurringService(repo, NewStubTaskService(), WithCommentRepoForRecurring(commentRepo)).(*recurringService)
+	newTaskID := uuid.New()
+	svc.recordMissedOutcome(context.Background(), schedule, newTaskID, 0, 1)
+
+	hasComment, err := commentRepo.HasAnyComment(context.Background(), newTaskID)
+	if err != nil {
+		t.Fatalf("HasAnyComment: %v", err)
+	}
+	if !hasComment {
+		t.Fatal("expected an owner-alert comment once maxConsecutiveMissed is reached")
+	}
+	stored, _ := repo.GetByID(context.Background(), schedule.ID)
+	if stored.ConsecutiveMissedOutcomes != maxConsecutiveMissed {
+		t.Fatalf("ConsecutiveMissedOutcomes = %d, want %d", stored.ConsecutiveMissedOutcomes, maxConsecutiveMissed)
+	}
+}
+
+func TestRecordMissedOutcome_NoCommentRepo_DoesNotPanic(t *testing.T) {
+	schedule := newMinimalSchedule()
+	schedule.ConsecutiveMissedOutcomes = maxConsecutiveMissed - 1
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	svc := NewRecurringService(repo, NewStubTaskService()).(*recurringService) // no WithCommentRepoForRecurring
+	svc.recordMissedOutcome(context.Background(), schedule, uuid.New(), 0, 1)
+
+	stored, _ := repo.GetByID(context.Background(), schedule.ID)
+	if stored.ConsecutiveMissedOutcomes != maxConsecutiveMissed {
+		t.Fatalf("counter must still advance even without a comment repo wired: got %d, want %d",
+			stored.ConsecutiveMissedOutcomes, maxConsecutiveMissed)
+	}
+}
+
+// End-to-end: runOneSchedule wires SupersedeRecurringInstances's return values
+// into recordMissedOutcome without the caller having to do anything extra.
+func TestRunOneSchedule_MissedOutcome_IncrementsCounter(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	stub := NewStubTaskService()
+	stub.supersedeWorked = 0
+	stub.supersedeMissed = 1
+	svc := NewRecurringService(repo, stub).(*recurringService)
+
+	if _, err := svc.runOneSchedule(context.Background(), schedule); err != nil {
+		t.Fatalf("runOneSchedule failed: %v", err)
+	}
+
+	if repo.recordMissedCalls != 1 {
+		t.Fatalf("RecordMissedOutcome called %d times, want 1", repo.recordMissedCalls)
 	}
 }
 
