@@ -1,9 +1,67 @@
 {
-  "knowledge-update": 0.75,
-  "multi-session": 0.75,
-  "single-session-assistant": 1.0,
-  "single-session-preference": 0.5,
-  "single-session-user": 0.75,
-  "temporal-reasoning": 0.25,
-  "overall": 0.6666666666666666
+  "search_mode": "hybrid",
+  "arm": "prod",
+  "fixture_age_mode": "ingest-now",
+  "mcp_ref": "main",
+  "captured_at": "2026-08-26T17:35:36Z",
+  "top_k": 10,
+  "n_runs": 3,
+  "scores": {
+    "knowledge-update": 0.75,
+    "multi-session": 0.4166666666666667,
+    "overall": 0.7083333333333334,
+    "single-session-assistant": 1.0,
+    "single-session-preference": 0.5833333333333334,
+    "single-session-user": 1.0,
+    "temporal-reasoning": 0.5
+  },
+  "within_capture_spread": {
+    "knowledge-update": 0.0,
+    "multi-session": 0.25,
+    "overall": 0.08333333333333337,
+    "single-session-assistant": 0.0,
+    "single-session-preference": 0.25,
+    "single-session-user": 0.0,
+    "temporal-reasoning": 0.0
+  },
+  "spread": {
+    "knowledge-update": 0.0,
+    "multi-session": 0.25,
+    "overall": 0.08333333333333337,
+    "single-session-assistant": 0.0,
+    "single-session-preference": 0.25,
+    "single-session-user": 0.0,
+    "temporal-reasoning": 0.0
+  },
+  "commit": "99e4e040a6714f929fcdd1169edafafcc45386ad",
+  "sample_sizes": {
+    "knowledge-update": [
+      4,
+      4
+    ],
+    "multi-session": [
+      4,
+      4
+    ],
+    "overall": [
+      24,
+      24
+    ],
+    "single-session-assistant": [
+      4,
+      4
+    ],
+    "single-session-preference": [
+      4,
+      4
+    ],
+    "single-session-user": [
+      4,
+      4
+    ],
+    "temporal-reasoning": [
+      4,
+      4
+    ]
+  }
 }
