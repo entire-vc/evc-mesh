@@ -67,6 +67,14 @@ type documentService struct {
 	// the alternative anyway, since no document there is ever SourceKind
 	// team_relay in the first place.
 	trRefresher TeamRelayRefresher
+
+	// trWriter is the R8 write-back. Unwired (the default), an edit to a Team
+	// Relay copy is REFUSED rather than kept locally — see updateOnce. That is
+	// the conservative direction on purpose: a copy that silently diverges from
+	// its original is a copy the refresher will later reconcile by discarding
+	// the local text, i.e. by losing the edit some time after the user was told
+	// it was saved.
+	trWriter TeamRelayWriter
 }
 
 // DocumentServiceOption configures optional collaborators.
@@ -83,6 +91,12 @@ func WithDocumentWatch(w DocumentWatchService) DocumentServiceOption {
 // see the call site there for what it does and does not do on failure.
 func WithTeamRelayRefresher(r TeamRelayRefresher) DocumentServiceOption {
 	return func(s *documentService) { s.trRefresher = r }
+}
+
+// WithTeamRelayWriter wires the R8 write-back into Update — without it, edits
+// to a Team Relay copy are refused.
+func WithTeamRelayWriter(w TeamRelayWriter) DocumentServiceOption {
+	return func(s *documentService) { s.trWriter = w }
 }
 
 // NewDocumentService returns a DocumentService backed by the given repositories
@@ -350,9 +364,31 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 	}
 
 	for attempt := 0; ; attempt++ {
-		doc, err := s.updateOnce(ctx, id, workspaceID, input)
+		doc, landed, err := s.updateOnce(ctx, id, workspaceID, input)
 		if err == nil {
 			return doc, nil
+		}
+		// The retry below re-runs the WHOLE read-modify-write, and that is only
+		// sound while updateOnce has no side effect outside this database. Once
+		// the edit has reached Team Relay, it does: retrying would append to the
+		// already-appended text and push it a second time, using a precondition
+		// that is now stale by construction (the stamp only happens after the
+		// local write wins, which is exactly what just failed).
+		//
+		// So a landed external write ends the loop. What happened is not "nothing
+		// was written" — the user's text is on the source of truth and the next
+		// open pulls it back down — and saying otherwise would be the precise lie
+		// this unit exists to prevent, just pointed at the other side.
+		if landed != nil {
+			var conflict *DocumentVersionConflictError
+			if errors.As(err, &conflict) {
+				return nil, &ExternalSourceWriteLandedError{
+					SourcePath:     landed.sourcePath,
+					SHA256:         landed.sha256,
+					CurrentVersion: conflict.CurrentVersion,
+				}
+			}
+			return nil, err
 		}
 		// An append is a read-modify-write, so a version it loses is not a conflict
 		// to report — it is a stale read to redo. Re-running it re-downloads the
@@ -369,16 +405,28 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 	}
 }
 
+// landedExternalWrite records that this attempt already pushed the edit to the
+// document's external source. Its presence is what makes the attempt
+// non-repeatable: everything else updateOnce does is confined to our own
+// database and can simply be run again.
+type landedExternalWrite struct {
+	sourcePath string
+	sha256     string
+}
+
 // updateOnce is one attempt at Update: read, validate, claim the version, write
 // the body. Split out so that an append can retry the whole read-modify-write
 // rather than half of it.
-func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentInput) (*domain.Document, error) {
+//
+// The second return value is non-nil once the edit has reached the external
+// source. The caller MUST NOT retry after that — see the loop in Update.
+func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentInput) (*domain.Document, *landedExternalWrite, error) {
 	doc, err := s.documentRepo.GetByIDInWorkspace(ctx, id, workspaceID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if doc == nil {
-		return nil, apierror.NotFound("Document")
+		return nil, nil, apierror.NotFound("Document")
 	}
 
 	// Refuse a stale base_version against what we just read, before anything is
@@ -387,7 +435,7 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// what stops an append's retry loop from spinning on a caller who asked to be
 	// told about conflicts.
 	if input.BaseVersion != nil && *input.BaseVersion != doc.Version {
-		return nil, &DocumentVersionConflictError{CurrentVersion: doc.Version}
+		return nil, nil, &DocumentVersionConflictError{CurrentVersion: doc.Version}
 	}
 
 	// Read before anything mutates doc, so the notice can name the span it
@@ -397,7 +445,7 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	if input.Title != nil {
 		title := strings.TrimSpace(*input.Title)
 		if title == "" {
-			return nil, apierror.ValidationError(map[string]string{
+			return nil, nil, apierror.ValidationError(map[string]string{
 				"title": "title cannot be empty",
 			})
 		}
@@ -409,22 +457,22 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 		doc.ParentID = nil
 	case input.ParentID != nil:
 		if *input.ParentID == doc.ID {
-			return nil, apierror.ValidationError(map[string]string{
+			return nil, nil, apierror.ValidationError(map[string]string{
 				"parent_id": "a document cannot be its own parent",
 			})
 		}
 		if perr := s.requireParentInProject(ctx, *input.ParentID, doc.ProjectID); perr != nil {
-			return nil, perr
+			return nil, nil, perr
 		}
 		// A document moved under one of its own descendants takes the whole
 		// subtree out of the tree: the cycle is reachable from nothing that walks
 		// down from the roots, so it disappears from every listing at once.
 		descendant, hasErr := s.documentRepo.HasAncestor(ctx, *input.ParentID, doc.ID)
 		if hasErr != nil {
-			return nil, hasErr
+			return nil, nil, hasErr
 		}
 		if descendant {
-			return nil, apierror.ValidationError(map[string]string{
+			return nil, nil, apierror.ValidationError(map[string]string{
 				"parent_id": "a document cannot be moved under one of its own descendants",
 			})
 		}
@@ -442,7 +490,65 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// replace the document with its own last paragraph.
 	newBody, err := s.resolveBodyWrite(ctx, doc, input)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	// ## Write-back to an external source happens BEFORE the local write
+	//
+	// This deliberately inverts the ordering the rest of this function argues
+	// for, and the inversion is the point, so it is spelled out here rather
+	// than left to be "tidied up" later.
+	//
+	// For an own document, the local conditional UPDATE is the authority: it
+	// decides whether the write happens, so nothing may precede it. For a copy
+	// of a Team Relay document, the authority is on the OTHER side — the
+	// relay's If-Match compare-and-swap is what actually adjudicates this edit,
+	// and our row is a cache of the answer. Writing locally first would mean
+	// asking the cache for permission to change the source.
+	//
+	// The failure that ordering would produce is not hypothetical, and it is
+	// silent. Suppose we wrote locally and only then got refused by the relay:
+	// the local body now holds the user's edit, source_sha256 still names the
+	// old original, and the copy has diverged. Nobody is told. The next time
+	// that document is opened, RefreshIfStale sees a source hash that differs
+	// from ours and does exactly what it is built to do — it pulls the original
+	// down over the top. The user's edit is destroyed, minutes later, by a
+	// component behaving correctly. Refusing before writing anything is what
+	// keeps the copy and its original in a state the refresher can never
+	// resolve by throwing away work.
+	//
+	// So on a refusal, nothing is written on either side, the caller gets a
+	// 409, and the text is still in their editor to re-apply against the
+	// original they will now be shown. That is AC-2 and AC-3 in one ordering.
+	//
+	// The residual race — the relay accepts, then our local UPDATE loses to a
+	// concurrent Mesh editor — resolves the safe way: the bytes now in the
+	// relay are the user's own, and the next open pulls them back down. It
+	// trades a rare, self-healing divergence for the elimination of a silent,
+	// permanent one.
+	// landed stays nil until the edit is on the external source. From the moment
+	// it is non-nil this attempt is no longer repeatable, and every return below
+	// must carry it — otherwise Update retries a write that already happened.
+	var landed *landedExternalWrite
+	var newSourceSHA256 string
+	if doc.SourceKind == domain.DocumentSourceTeamRelay && newBody != nil {
+		if s.trWriter == nil {
+			return nil, nil, apierror.ValidationError(map[string]string{
+				"body": "this document is a copy of a Team Relay document and the Team Relay integration is not configured, so the edit cannot be sent to its source; editing it locally would be discarded on the next sync",
+			})
+		}
+		pushed, writeErr := s.trWriter.WriteBack(ctx, doc, *newBody)
+		if writeErr != nil {
+			if errors.Is(writeErr, ErrExternalSourceConflict) {
+				return nil, nil, &ExternalSourceConflictError{
+					SourcePath: derefOr(doc.SourcePath, ""),
+					BaseSHA256: derefOr(doc.SourceSHA256, ""),
+				}
+			}
+			return nil, nil, writeErr
+		}
+		newSourceSHA256 = pushed
+		landed = &landedExternalWrite{sourcePath: derefOr(doc.SourcePath, ""), sha256: pushed}
 	}
 
 	// The version tracks the document's CONTENT. A move in the tree changes where
@@ -471,10 +577,10 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 
 	newVersion, upErr := s.documentRepo.Update(ctx, doc, expected, contentChanged)
 	if errors.Is(upErr, repository.ErrDocumentVersionMismatch) {
-		return nil, &DocumentVersionConflictError{CurrentVersion: newVersion}
+		return nil, landed, &DocumentVersionConflictError{CurrentVersion: newVersion}
 	}
 	if upErr != nil {
-		return nil, upErr
+		return nil, landed, upErr
 	}
 	doc.Version = newVersion
 
@@ -482,9 +588,31 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// the body: a refused write must leave the previous markdown intact.
 	if newBody != nil {
 		if err = s.storage.Upload(ctx, doc.StorageKey, strings.NewReader(*newBody), int64(len(*newBody)), documentContentType); err != nil {
-			return nil, apierror.InternalError("failed to upload document body to storage")
+			return nil, landed, apierror.InternalError("failed to upload document body to storage")
 		}
 		doc.Body = *newBody
+	}
+
+	// The relay accepted this text, so the version the copy now mirrors is the
+	// one it just returned. Stamped without bumping the version: the local
+	// UPDATE above already accounted for the content change, and bumping again
+	// here would 409 the very editor that just wrote successfully.
+	//
+	// A failure to stamp is logged, not fatal. Both writes landed; what is lost
+	// is only our record of which version we are now level with, and the next
+	// open repairs it — RefreshIfStale finds a hash that differs from the stale
+	// one we kept and re-downloads bytes identical to what we just sent.
+	// Answering 500 here would tell the user their edit failed when it is
+	// stored on both sides.
+	if newSourceSHA256 != "" {
+		if _, stampErr := s.documentRepo.RefreshSyncedCopy(ctx, doc.ID, newSourceSHA256, doc.UpdatedAt, false); stampErr != nil {
+			log.Printf("teamrelay: write-back for copy %s landed but stamping source_sha256 failed: %v", doc.ID, stampErr)
+		} else {
+			sha := newSourceSHA256
+			doc.SourceSHA256 = &sha
+			syncedAt := doc.UpdatedAt
+			doc.SyncedAt = &syncedAt
+		}
 	}
 
 	// Only when the body actually changed. A rename or a move must not rewrite a
@@ -523,10 +651,10 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// edit was lost when it was not.
 	if enriched, getErr := s.documentRepo.GetByIDInWorkspace(ctx, doc.ID, workspaceID); getErr == nil && enriched != nil {
 		enriched.Body = doc.Body
-		return enriched, nil
+		return enriched, landed, nil
 	}
 
-	return doc, nil
+	return doc, landed, nil
 }
 
 // resolveBodyWrite returns the markdown this update should store, or nil when it
@@ -589,6 +717,74 @@ type DocumentVersionConflictError struct {
 
 func (e *DocumentVersionConflictError) Error() string {
 	return fmt.Sprintf("document_version_conflict: document is at version %d", e.CurrentVersion)
+}
+
+// ExternalSourceConflictError is returned when an edit to a copy of an external
+// document was refused because the original changed since we read it.
+//
+// Distinct from DocumentVersionConflictError on purpose, even though both are
+// 409s about a stale read. That one means "another Mesh editor got there
+// first"; this one means "the document changed where it actually lives", and
+// the recovery differs: re-reading the copy is not enough, because the copy is
+// only refreshed from its source on open. Collapsing the two would tell the
+// user to retry against a version Mesh cannot yet show them.
+//
+// Nothing was written on either side. The relay compares and swaps inside one
+// row lock, so a refused write leaves its index and its object store untouched,
+// and this path returns before Mesh writes anything of its own.
+type ExternalSourceConflictError struct {
+	SourcePath string `json:"source_path"`
+	BaseSHA256 string `json:"base_sha256"`
+}
+
+func (e *ExternalSourceConflictError) Error() string {
+	return fmt.Sprintf("external_source_conflict: %s changed since it was read at %s", e.SourcePath, e.BaseSHA256)
+}
+
+// ExternalSourceWriteLandedError is the honest answer to a narrow, real race:
+// the edit REACHED Team Relay, and then the local write lost to a concurrent
+// Mesh editor.
+//
+// It exists because the alternative was to report ExternalSourceConflictError
+// here, whose message promises "nothing was written — your text is unsaved and
+// the original is untouched". In this case every clause of that is false. The
+// user's text is on the source of truth; what failed is our own copy catching
+// up.
+//
+// ⚠️ That catching-up is TTL-gated and this path does not advance synced_at —
+// the stamp only runs after a local write wins, which is exactly what failed
+// here. So the copy refreshes on its next open AFTER the project's sync
+// interval has elapsed (DefaultTeamRelaySyncTTL, 5 min), not instantly. The
+// handler's message says so in those terms on purpose: an author told "re-open
+// and it will be there" who then re-opens inside the window sees their text
+// missing and pastes it again — the same misreport this type exists to remove,
+// displaced by one step rather than fixed.
+//
+// Telling someone their work was lost when it was saved is the same defect as
+// telling them it was saved when it was lost — the direction differs, the
+// broken thing (a report that does not match reality) does not. This unit is
+// about not lying to a writer about their text, and that obligation does not
+// stop at the boundary of our own database.
+type ExternalSourceWriteLandedError struct {
+	SourcePath     string `json:"source_path"`
+	SHA256         string `json:"sha256"`
+	CurrentVersion int    `json:"current_version"`
+}
+
+func (e *ExternalSourceWriteLandedError) Error() string {
+	return fmt.Sprintf(
+		"external_source_write_landed: %s was written to the source (sha256 %s), but the local copy is at version %d",
+		e.SourcePath, e.SHA256, e.CurrentVersion)
+}
+
+// derefOr is a nil-safe read for the optional source columns. They are
+// non-nil on every copy by CHECK constraint; this exists so that building an
+// error message can never be the thing that panics.
+func derefOr(p *string, fallback string) string {
+	if p == nil {
+		return fallback
+	}
+	return *p
 }
 
 // Delete soft-deletes the document and its descendants.

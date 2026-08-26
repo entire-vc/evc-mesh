@@ -541,7 +541,12 @@ func main() {
 	// argument, not an option — see the field's note in documentService.
 	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo, documentCommentRepo,
 		service.WithDocumentWatch(documentWatchService),
-		service.WithTeamRelayRefresher(teamRelayMountService))
+		service.WithTeamRelayRefresher(teamRelayMountService),
+		// Same collaborator on both sides of the copy's lifecycle: it refreshes a
+		// copy from its original on open, and pushes an edit back to that original
+		// on save. Wiring one without the other is what produces a copy that can
+		// drift — see the write-back ordering note in updateOnce.
+		service.WithTeamRelayWriter(teamRelayMountService))
 
 	// The attachment service takes the full StorageClient, not documentStore: an
 	// attachment is fetched by the browser through a presigned URL (an <img> cannot

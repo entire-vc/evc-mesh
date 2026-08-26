@@ -1549,6 +1549,51 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var extConflictErr *service.ExternalSourceConflictError
+	if errors.As(err, &extConflictErr) {
+		// A separate code from document_version_conflict because the recovery is
+		// different: this document lives in Team Relay, and re-reading the copy
+		// does not by itself show the new original — the copy is refreshed from
+		// its source when it is opened. Telling the caller to "retry with the
+		// new base_version" here would send them at a version Mesh has not
+		// fetched yet.
+		//
+		// Nothing was written on either side, which is the part worth relying on.
+		return c.JSON(http.StatusConflict, map[string]any{
+			"code": "external_source_conflict",
+			"message": "This document is a copy of a Team Relay document, and the original changed since you opened it. " +
+				"Nothing was written — your text is unsaved and the original is untouched. Re-open the document to load " +
+				"the current original, re-apply your change, and save again.",
+			"source_path": extConflictErr.SourcePath,
+			"base_sha256": extConflictErr.BaseSHA256,
+		})
+	}
+
+	var extLandedErr *service.ExternalSourceWriteLandedError
+	if errors.As(err, &extLandedErr) {
+		// Deliberately NOT external_source_conflict. The edit reached Team Relay;
+		// only our copy is behind, and it heals itself on the next open. Reusing
+		// the conflict message here would tell the author their text was lost
+		// while it sits safely on the source.
+		return c.JSON(http.StatusConflict, map[string]any{
+			"code": "external_source_write_landed",
+			// The wording is deliberately "within the sync interval", not "on the
+			// next open". RefreshIfStale is TTL-gated, and this path does NOT
+			// advance synced_at (the stamp only runs after a local write wins,
+			// which is what just failed) — so a re-open inside the window makes
+			// no network call and shows the copy unchanged. Promising an instant
+			// refresh would send the author looking for text that is not there
+			// yet and invite them to paste it again, which is the same misreport
+			// this error exists to remove, one step further along.
+			"message": "Your change was saved to Team Relay, but another edit to this document in Mesh won the local update, " +
+				"so this copy is behind. Do not re-apply your change — it is already on the source. The copy catches up on its " +
+				"next open once the project's sync interval has elapsed (5 minutes by default).",
+			"source_path":     extLandedErr.SourcePath,
+			"sha256":          extLandedErr.SHA256,
+			"current_version": extLandedErr.CurrentVersion,
+		})
+	}
+
 	var casErr *service.CASConflictError
 	if errors.As(err, &casErr) {
 		return c.JSON(http.StatusConflict, map[string]interface{}{

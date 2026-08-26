@@ -1,6 +1,7 @@
 package teamrelay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -202,6 +203,12 @@ type fileTokenResponse struct {
 // on fileTokenRequest.
 const unverifiedPlaceholderSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
 
+// syncWriteContentType is what a Mesh document is: markdown. The relay keys
+// its storage layout off this (text/* is content-addressed and dedup'd for the
+// plugin; anything else is treated as a binary asset and filed by path), so
+// sending octet-stream here would file our documents where attachments live.
+const syncWriteContentType = "text/markdown"
+
 // RequestFileToken exchanges scoped access for one attachment path via
 // POST /v1/shares/{shareID}/file-token (shares.py:671-726). sha256Hint and
 // contentLength may be left as "" / 0 when unknown — see fileTokenRequest's
@@ -330,4 +337,114 @@ func FetchAttachment(ctx context.Context, baseURL, fileToken string) ([]byte, er
 		return nil, fmt.Errorf("teamrelay: attachment fetch: unexpected status %d", presignedResp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(presignedResp.Body, maxDocumentBytes))
+}
+
+// ErrSyncConflict means the original changed in Team Relay since we read it:
+// the If-Match sha256 no longer matches what the relay holds (412). Nothing
+// was written — the relay compares and swaps inside one row lock, so a refused
+// write touches neither its index nor its object store.
+//
+// This is the sentinel the whole of R8 exists to produce. It must never be
+// swallowed into a generic error: a caller that cannot tell "the original
+// moved under you" from "the relay is down" has no way to do the one correct
+// thing, which is to re-read and rebuild the edit on top of the new original.
+var ErrSyncConflict = errors.New("teamrelay: original changed since it was read")
+
+// ErrSyncPreconditionMissing means the relay answered 428: the request carried
+// no If-Match/If-None-Match, or carried the wildcard `If-Match: *`.
+//
+// Deliberately NOT retryable, and deliberately distinct from ErrSyncConflict.
+// A 428 is not a race we lost — it is this client having sent an unconditional
+// write, i.e. a bug in us. Retrying reproduces it forever. The relay refuses
+// the wildcard for the same reason we refuse to send it: `If-Match: *` asserts
+// only that *some* version exists, which is a blind overwrite wearing the
+// syntax of a conditional one.
+var ErrSyncPreconditionMissing = errors.New("teamrelay: conditional-write precondition missing or wildcard")
+
+// SyncWriteResult is the relay's answer to an accepted sync-write: the state
+// the document now has on their side. SHA256 is the hash OF WHAT WE JUST
+// WROTE, and it is what the caller must store as the new base version — the
+// next conditional write sends it back as If-Match.
+type SyncWriteResult struct {
+	Path      string `json:"path"`
+	SHA256    string `json:"sha256"`
+	Size      int64  `json:"size"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// SyncWrite calls PUT /v1/shares/{shareID}/sync-write?path= — the ONLY write
+// path in this integration, and a conditional one by construction.
+//
+// ifMatchSHA256 is the hash of the version this write replaces, i.e. the
+// source_sha256 the copy was last synced at. It is REQUIRED and it is never a
+// wildcard: passing the empty string is refused here, locally, before any
+// request is made. That local refusal is not belt-and-braces for the relay's
+// 428 — it is what stops a future caller from discovering that an empty hash
+// happens to produce a wildcard-shaped header.
+//
+// Creating a path that does not exist yet is a different operation with a
+// different precondition (If-None-Match: *) and is not offered here: R8 writes
+// back edits to documents it has already read. A "create" that silently
+// happened because the read half was skipped is the same blind write by
+// another name.
+//
+// The relay requires the `write` scope on the agent key; keys minted as
+// read-only get 403 (ErrForeignShare's sibling — classifySyncError maps it).
+func SyncWrite(ctx context.Context, relayURL, shareID, path, agentKey, ifMatchSHA256 string, body []byte) (*SyncWriteResult, error) {
+	if relayURL == "" {
+		return nil, fmt.Errorf("teamrelay: relay URL not configured")
+	}
+	if ifMatchSHA256 == "" {
+		// Refused here rather than sent: an empty If-Match is exactly the blind
+		// overwrite this whole unit exists to make impossible, and the caller
+		// that produced it has a bug we want named at its origin.
+		return nil, fmt.Errorf("%w: sync-write requires the sha256 of the version being replaced", ErrSyncPreconditionMissing)
+	}
+
+	endpoint := fmt.Sprintf("%s/v1/shares/%s/sync-write?path=%s",
+		strings.TrimRight(relayURL, "/"), url.PathEscape(shareID), url.QueryEscape(path))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("teamrelay: build sync-write request: %w", err)
+	}
+	req.Header.Set("X-Agent-Key", agentKey)
+	req.Header.Set("Content-Type", syncWriteContentType)
+	// Quoted per HTTP convention — the relay strips the quotes and lowercases
+	// before comparing, the same shape SyncDownload's ETag arrives in.
+	req.Header.Set("If-Match", `"`+ifMatchSHA256+`"`)
+	req.ContentLength = int64(len(body))
+
+	resp, err := relayHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxDocumentBytes))
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// fall through to parse
+	case http.StatusPreconditionFailed:
+		log.Printf("teamrelay: sync-write refused — original changed since read (share %s, path %s, sent If-Match %s)", shareID, path, ifMatchSHA256)
+		return nil, ErrSyncConflict
+	case http.StatusPreconditionRequired:
+		log.Printf("teamrelay: sync-write refused — precondition missing or wildcard (share %s, path %s): %s", shareID, path, respBody)
+		return nil, ErrSyncPreconditionMissing
+	default:
+		return nil, classifySyncError("sync-write", shareID, resp.StatusCode, respBody)
+	}
+
+	var result SyncWriteResult
+	if jsonErr := json.Unmarshal(respBody, &result); jsonErr != nil {
+		return nil, fmt.Errorf("teamrelay: parse sync-write response: %w", jsonErr)
+	}
+	if result.SHA256 == "" {
+		// The new base version is the entire point of the response. Without it
+		// the next write has no If-Match to send, and a caller that stored an
+		// empty hash would be refused locally forever (see the guard above).
+		// Better to fail the write here, while the caller still knows its edit
+		// did land, than to return a result that poisons the next one.
+		return nil, fmt.Errorf("teamrelay: sync-write returned no sha256 for %s", path)
+	}
+	return &result, nil
 }

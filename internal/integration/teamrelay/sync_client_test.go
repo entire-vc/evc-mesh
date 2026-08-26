@@ -449,3 +449,110 @@ func TestRequestFileToken_PropagatesServerRejection_AcceptedPathSucceeds(t *test
 	assert.Equal(t, "t", token)
 	assert.Equal(t, "x", baseURL)
 }
+
+// ---------------------------------------------------------------------------
+// SyncWrite — the conditional write-back (R8)
+// ---------------------------------------------------------------------------
+
+// The wire contract in one test: method, path family, the quoted If-Match, and
+// the body. Asserted against what the server actually receives, because every
+// one of these is a place a blind write could hide.
+func TestSyncWrite_SendsConditionalPutOnTheSyncFamily(t *testing.T) {
+	var gotMethod, gotPath, gotQuery, gotIfMatch, gotKey, gotCT, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotQuery = r.Method, r.URL.Path, r.URL.Query().Get("path")
+		gotIfMatch = r.Header.Get("If-Match")
+		gotKey = r.Header.Get("X-Agent-Key")
+		gotCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"path":"notes/a.md","sha256":"newhash","size":7}`))
+	}))
+	defer srv.Close()
+
+	res, err := SyncWrite(context.Background(), srv.URL, "share-uuid", "notes/a.md", "key", "oldhash", []byte("content"))
+	require.NoError(t, err)
+
+	assert.Equal(t, http.MethodPut, gotMethod)
+	assert.Equal(t, "/v1/shares/share-uuid/sync-write", gotPath)
+	assert.NotContains(t, gotPath, "/v1/web/", "the write must never address the web-publish family")
+	assert.Equal(t, "notes/a.md", gotQuery)
+	assert.Equal(t, `"oldhash"`, gotIfMatch, "If-Match must carry the prior sha256, quoted per HTTP convention")
+	assert.Equal(t, "key", gotKey)
+	assert.Equal(t, "text/markdown", gotCT, "markdown must be declared as text so the relay files it as a document, not an asset")
+	assert.Equal(t, "content", gotBody)
+	assert.Equal(t, "newhash", res.SHA256)
+}
+
+// 412 is the whole point: it must arrive as ErrSyncConflict and nothing else,
+// because that is the only signal that distinguishes "the original moved" from
+// "the relay is broken".
+func TestSyncWrite_PreconditionFailedIsErrSyncConflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		_, _ = w.Write([]byte(`{"detail":"sha256 mismatch: the file changed since it was read"}`))
+	}))
+	defer srv.Close()
+
+	_, err := SyncWrite(context.Background(), srv.URL, "s", "p.md", "key", "stale", []byte("x"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSyncConflict)
+	assert.NotErrorIs(t, err, ErrSyncPreconditionMissing, "a lost race is not the same fault as a malformed request")
+}
+
+// 428 means we sent an unconditional write — our bug, and deliberately a
+// different sentinel so no caller can "handle" it by retrying.
+func TestSyncWrite_PreconditionRequiredIsItsOwnSentinel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPreconditionRequired)
+	}))
+	defer srv.Close()
+
+	_, err := SyncWrite(context.Background(), srv.URL, "s", "p.md", "key", "somehash", []byte("x"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSyncPreconditionMissing)
+	assert.NotErrorIs(t, err, ErrSyncConflict)
+}
+
+// An empty precondition never reaches the network. If it did, the only thing
+// standing between us and a blind overwrite would be the relay's own 428.
+func TestSyncWrite_EmptyPreconditionNeverLeavesTheProcess(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	_, err := SyncWrite(context.Background(), srv.URL, "s", "p.md", "key", "", []byte("x"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSyncPreconditionMissing)
+	assert.False(t, called, "a write with no precondition must be refused locally, not sent and rejected")
+}
+
+// A key without the write scope is a 403, and must stay legible as one — this
+// is the error an operator sees if the agent key was minted read-only.
+func TestSyncWrite_MissingWriteScopeIsErrForeignShare(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"detail":"agent key lacks required scope: write"}`))
+	}))
+	defer srv.Close()
+
+	_, err := SyncWrite(context.Background(), srv.URL, "s", "p.md", "key", "h", []byte("x"))
+	assert.ErrorIs(t, err, ErrForeignShare)
+}
+
+// A 200 with no sha256 poisons the next write's precondition, so it is refused
+// here rather than stored.
+func TestSyncWrite_ResponseWithoutHashIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"path":"p.md","size":1}`))
+	}))
+	defer srv.Close()
+
+	_, err := SyncWrite(context.Background(), srv.URL, "s", "p.md", "key", "h", []byte("x"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no sha256")
+}
