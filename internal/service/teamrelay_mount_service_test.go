@@ -183,6 +183,40 @@ func (f *fakeRelaySyncClient) callCount() int {
 
 var _ RelaySyncClient = (*fakeRelaySyncClient)(nil)
 
+// fakeKeyDescriber is a no-op KeyDescriber double — every test in this file
+// exercises RefreshIfStale/SyncMount for reasons unrelated to #218d5847's
+// AC4 key-expiry producers, so a canned "no expiry known" response is enough
+// to keep recordSyncOutcome's introspection call from either reaching a real
+// Team Relay server or needing per-test fixture setup it doesn't care about.
+// The producer wiring itself is covered by its own dedicated tests.
+type fakeKeyDescriber struct {
+	mu    sync.Mutex
+	calls int
+	desc  *teamrelay.AgentKeyDescription
+	err   error
+}
+
+func (f *fakeKeyDescriber) DescribeAgentKey(context.Context, string, string, string) (*teamrelay.AgentKeyDescription, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.desc != nil {
+		return f.desc, nil
+	}
+	return &teamrelay.AgentKeyDescription{}, nil
+}
+
+func (f *fakeKeyDescriber) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+var _ KeyDescriber = (*fakeKeyDescriber)(nil)
+
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
@@ -231,7 +265,7 @@ func setupMountFixture(t *testing.T, mountPath string) *mountFixture {
 	timeNow = func() time.Time { return frozenTime }
 	t.Cleanup(func() { timeNow = time.Now })
 
-	svc := NewTeamRelayMountService(repo, storage, piService, WithRelaySyncClient(client)).(*teamRelayMountService)
+	svc := NewTeamRelayMountService(repo, storage, piService, piRepo, WithRelaySyncClient(client), WithKeyDescriber(&fakeKeyDescriber{})).(*teamRelayMountService)
 
 	return &mountFixture{
 		svc:       svc,
@@ -408,6 +442,7 @@ func TestSyncMount_SentinelErrorsAreDistinct(t *testing.T) {
 		expect MountStatus
 	}{
 		{"key rejected", teamrelay.ErrKeyRejected, MountStatusKeyRejected},
+		{"key expired", teamrelay.ErrKeyExpired, MountStatusKeyExpired},
 		{"foreign share", teamrelay.ErrForeignShare, MountStatusForeignShare},
 		{"unreachable", teamrelay.ErrUnreachable, MountStatusUnreachable},
 		{"not found", teamrelay.ErrNotFound, MountStatusShareNotFound},
@@ -428,7 +463,7 @@ func TestSyncMount_SentinelErrorsAreDistinct(t *testing.T) {
 		})
 	}
 
-	assert.Len(t, seen, len(cases), "all four sentinel outcomes must be pairwise distinct — a shared status defeats AC-4")
+	assert.Len(t, seen, len(cases), "all sentinel outcomes must be pairwise distinct — a shared status defeats AC-4")
 	assert.NotContains(t, seen, MountStatusOK, "none of these failures may present as ok")
 }
 
@@ -440,7 +475,7 @@ func TestSyncMount_NotConfigured_IsItsOwnDistinctState(t *testing.T) {
 	storage := NewMockStorageClient()
 	piRepo := NewMockProjectIntegrationRepository()
 	piService := NewProjectIntegrationService(piRepo)
-	svc := NewTeamRelayMountService(repo, storage, piService, WithRelaySyncClient(&fakeRelaySyncClient{}))
+	svc := NewTeamRelayMountService(repo, storage, piService, piRepo, WithRelaySyncClient(&fakeRelaySyncClient{}), WithKeyDescriber(&fakeKeyDescriber{}))
 
 	result, err := svc.SyncMount(context.Background(), projectID)
 	require.NoError(t, err)
@@ -544,4 +579,114 @@ func TestSyncMount_ReRun_IsIdempotentAndDoesNotRedownload(t *testing.T) {
 	assert.Equal(t, 0, second.Mounted, "nothing new to mount on a re-run")
 	assert.Equal(t, 2, second.Skipped)
 	assert.Equal(t, callsAfterFirst, f.client.callCount(), "an already-mounted file must not be downloaded again")
+}
+
+// ---------------------------------------------------------------------------
+// #218d5847 AC4 — the producers Bill's 2026-08-26 correction found unwired:
+// R5-A built the schema and the UI, but nothing ever called RecordSyncCheck
+// or SetKeyExpiry, so key_expires_at/last_sync_status stayed NULL forever
+// for every real integration. These tests are the positive/negative pair
+// Bill's own acceptance text demanded: "интеграция с заведомо истекающим
+// ключом показывает предупреждение, интеграция со свежим — не показывает" —
+// proven here at the layer that actually produces the data the handler's
+// existing KeyExpiringSoon computation reads, not by seeding SQL by hand.
+// ---------------------------------------------------------------------------
+
+// TestSyncMount_Success_RecordsOkAndFetchesKeyExpiry is the POSITIVE case:
+// a successful sync records last_sync_status="ok" AND asks Team Relay's own
+// self-describe endpoint for the key's real expiry, storing it with
+// key_expiry_source="source" — a fact from the relay, not a manual claim.
+func TestSyncMount_Success_RecordsOkAndFetchesKeyExpiry(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = nil // empty share is fine; only the accounting matters here
+
+	soon := timeNow().Add(3 * 24 * time.Hour) // "заведомо истекающий" — inside any reasonable warning window
+	describer := &fakeKeyDescriber{desc: &teamrelay.AgentKeyDescription{ExpiresAt: &soon, Scopes: []string{"read", "write"}}}
+	f.svc.keyDescriber = describer
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	pi, getErr := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, getErr)
+	require.NotNil(t, pi.LastSyncCheckedAt, "a real attempt was made — this must not stay unset")
+	require.NotNil(t, pi.LastSyncStatus)
+	assert.Equal(t, "ok", *pi.LastSyncStatus)
+	assert.Nil(t, pi.LastSyncError)
+	require.NotNil(t, pi.KeyExpiresAt, "the fact fetched from Team Relay must be stored, not discarded")
+	assert.WithinDuration(t, soon, *pi.KeyExpiresAt, time.Second)
+	require.NotNil(t, pi.KeyExpirySource)
+	assert.Equal(t, "source", *pi.KeyExpirySource, "must be the schema's own 'source' value, not an invented string that would violate the DB CHECK constraint")
+	assert.Equal(t, 1, describer.callCount())
+}
+
+// TestSyncMount_KeyExpired_RecordsKeyExpiredStatusAndSkipsDescribe is the
+// NEGATIVE case: when the sync call itself fails because the key expired,
+// last_sync_status must read "key_expired" — not the generic "error" that
+// left every real integration looking identical to a misconfigured one before
+// this fix — and the introspection endpoint must NOT be called (the same
+// auth check would just reject it too; calling it anyway would double-log an
+// identical failure and gives nothing to store).
+func TestSyncMount_KeyExpired_RecordsKeyExpiredStatusAndSkipsDescribe(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexErr = teamrelay.ErrKeyExpired
+	describer := &fakeKeyDescriber{}
+	f.svc.keyDescriber = describer
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Equal(t, MountStatusKeyExpired, result.Status)
+
+	pi, getErr := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, getErr)
+	require.NotNil(t, pi.LastSyncStatus)
+	assert.Equal(t, "key_expired", *pi.LastSyncStatus, "must be distinguishable from a generic error — this is the whole point of AC4")
+	assert.Nil(t, pi.KeyExpiresAt, "no fact was obtained — nothing must be written to key_expires_at")
+	assert.Equal(t, 0, describer.callCount(), "a key that just failed must not be asked to describe itself in the same breath")
+}
+
+// TestRefreshIfStale_Success_RecordsOkAndFetchesKeyExpiry mirrors the SyncMount
+// positive case above, on the OTHER producer path — the one that actually
+// fires on ordinary document opens, which is what makes AC4's "заранее, а не
+// в момент, когда дерево уже пустое" achievable without anyone clicking
+// "Sync now".
+func TestRefreshIfStale_Success_RecordsOkAndFetchesKeyExpiry(t *testing.T) {
+	f := setupMountFixture(t, "")
+	stale := timeNow().Add(-2 * DefaultTeamRelaySyncTTL)
+	doc := f.seedCopy(t, "notes/a.md", "body-a", "sha-a", stale)
+
+	soon := timeNow().Add(3 * 24 * time.Hour)
+	describer := &fakeKeyDescriber{desc: &teamrelay.AgentKeyDescription{ExpiresAt: &soon}}
+	f.svc.keyDescriber = describer
+
+	require.NoError(t, f.svc.RefreshIfStale(context.Background(), doc))
+
+	pi, getErr := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, getErr)
+	require.NotNil(t, pi.LastSyncStatus)
+	assert.Equal(t, "ok", *pi.LastSyncStatus)
+	require.NotNil(t, pi.KeyExpiresAt)
+	assert.WithinDuration(t, soon, *pi.KeyExpiresAt, time.Second)
+	require.NotNil(t, pi.KeyExpirySource)
+	assert.Equal(t, "source", *pi.KeyExpirySource)
+}
+
+// TestRefreshIfStale_KeyExpired_RecordsKeyExpiredStatus mirrors the SyncMount
+// negative case above on the RefreshIfStale path.
+func TestRefreshIfStale_KeyExpired_RecordsKeyExpiredStatus(t *testing.T) {
+	f := setupMountFixture(t, "")
+	stale := timeNow().Add(-2 * DefaultTeamRelaySyncTTL)
+	doc := f.seedCopy(t, "notes/a.md", "body-a", "sha-a", stale)
+	f.client.downloadErr = teamrelay.ErrKeyExpired
+	describer := &fakeKeyDescriber{}
+	f.svc.keyDescriber = describer
+
+	err := f.svc.RefreshIfStale(context.Background(), doc)
+	require.Error(t, err, "the document refresh itself must still surface the failure to its caller")
+
+	pi, getErr := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, getErr)
+	require.NotNil(t, pi.LastSyncStatus)
+	assert.Equal(t, "key_expired", *pi.LastSyncStatus)
+	assert.Equal(t, 0, describer.callCount())
 }

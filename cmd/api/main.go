@@ -539,7 +539,7 @@ func main() {
 	// optional Team Relay refresher needs it to resolve a project's share/agent
 	// key on every open of a mounted copy.
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
-	teamRelayMountService := service.NewTeamRelayMountService(documentRepo, documentStore, projectIntegrationService)
+	teamRelayMountService := service.NewTeamRelayMountService(documentRepo, documentStore, projectIntegrationService, projectIntegrationRepo)
 
 	// The comment repository is here because a body write moves the comments
 	// anchored into that body: PATCH re-resolves every anchor against the markdown
