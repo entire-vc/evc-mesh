@@ -15,14 +15,16 @@
 # This is NOT a port of all 22 GitHub check-runs. It carries the four that
 # catch the most per minute spent — lint, race-enabled tests against real
 # Postgres/Redis/NATS, the Go build, the frontend typecheck+build — plus the
-# hold gate, self-host-env (config-only, no live daemon needed), and
+# hold gate, self-host-env (config-only, no live daemon needed),
 # repo-integration (Postgres only — see that job's own header for why it does
 # NOT need NATS/MinIO despite carrying the same `integration` build tag as
-# Tenancy & RBAC gate). Deliberately still absent, and worth their own cards:
-# Authed E2E, Go coverage ≥80% (affected-set), Memory recall gate, Tenancy &
-# RBAC gate, Vendor trailer gate, CodeQL. A stub that looks like full CI is
-# more dangerous than a gap you can see, so the gap is named here rather than
-# implied.
+# tenancy-rbac-gate), and tenancy-rbac-gate itself (Postgres + NATS-with-
+# JetStream + MinIO, a live API server, and a two-part guard against the gate
+# quietly guarding nothing — see that job's own header). Deliberately still
+# absent, and worth their own cards: Authed E2E, Go coverage ≥80%
+# (affected-set), Memory recall gate, Vendor trailer gate, CodeQL. A stub
+# that looks like full CI is more dangerous than a gap you can see, so the
+# gap is named here rather than implied.
 #
 # ## The half that is not in this file
 #
@@ -242,6 +244,159 @@ repo-integration:
   script:
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
     - go test ./internal/repository/postgres/... -v -race -tags=integration
+
+# ── tenancy-rbac-gate ──────────────────────────────────────────────────────
+# Ports `.github/workflows/ci.yml`'s "Tenancy & RBAC gate" (#e64a383f /
+# #3b12e7ce). Needs a live API server on top of Postgres, unlike
+# repo-integration above — the tests under ./tests/integration/ drive the
+# HTTP surface, not the repository layer directly — plus NATS WITH JetStream
+# and MinIO, which a plain `services:` entry cannot give: the image's default
+# CMD runs neither with JetStream nor as an object server (see the `test`
+# job's own nats service above, which deliberately has no `command:` and is
+# JetStream-less for exactly that reason). `probe-docker-nested`/
+# `probe-services-command` (MR !806, pipelines #321/#322) settled which of
+# the two candidate fixes this runner actually allows: `docker run` inside a
+# job fails outright here (`NO DAEMON REACHABLE` — hel01's docker executor
+# gives jobs no daemon socket), while a `services:` entry with an overridden
+# `command:` works and is what both NATS and MinIO use below.
+#
+# Two independent guards, because a selection floor alone is not enough (see
+# TENANCY_MIN_PASSED below):
+tenancy-rbac-gate:
+  stage: test
+  image: golang:1.25-alpine
+  timeout: 20m
+  needs: [lint]
+  services:
+    - name: postgres:16
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+    - name: nats:2-alpine
+      alias: nats
+      command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    - name: minio/minio
+      alias: minio
+      command: ["server", "/data"]
+  cache:
+    key: go-mod-$CI_COMMIT_REF_SLUG
+    paths: [.gocache/, .gomodcache/]
+    policy: pull
+  variables:
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+    GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+    # Single source of truth for what this gate covers — both the guard step
+    # and the run step read it, so they cannot disagree about the selection.
+    TENANCY_RUN_RE: "^(TestCrossTenant|TestCrossWorkspace|TestRBACLite|TestSecretsRBAC|TestSecretsPlaintext|TestWorkspaceListing|TestAgentTaskFeedIsWorkspaceScoped)"
+    # Measured on the tree that introduced this job (locally, against the
+    # exact services/versions below, before ever pushing — the shared runner
+    # queue on this project currently runs 30-90+ minutes per pipeline,
+    # #22f4efcc, so both guards were red/green-proven off-CI first): 50 tests
+    # match. Raise this number when tenancy tests are added; lowering it is a
+    # deliberate act that must be explained.
+    TENANCY_MIN_TESTS: "50"
+    # ...and 46 of those 50 actually EXECUTE. Selection is not execution: 4
+    # selected tests skip today — TestRBACLite_{Owner,Member,Agent}* are
+    # unconditional `t.Skip("TODO: implement RBAC lite first")` placeholders,
+    # and TestCrossTenant_SparkInstallRequiresMembership is env-gated on
+    # TEST_SPARK_ENABLED (unset here — the Spark catalog is not part of this
+    # gate's own service list). A selection floor alone would accept a tree
+    # where every real assertion had been replaced by t.Skip: the count
+    # holds, the job is green, and the gate guards nothing. So the run step
+    # below asserts on tests that PASSED, the number with teeth. The
+    # RBACLite placeholders stay in the pattern deliberately — implement
+    # RBAC lite and they come under the gate for free, and this floor moves
+    # to 49.
+    TENANCY_MIN_PASSED: "46"
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_USER: mesh
+    DB_PASSWORD: mesh
+    DB_NAME: mesh
+    DB_SSL_MODE: disable
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    NATS_URL: "nats://nats:4222"
+    S3_ENDPOINT: "minio:9000"
+    S3_ACCESS_KEY_ID: minioadmin
+    S3_SECRET_ACCESS_KEY: minioadmin
+    S3_BUCKET: mesh-artifacts
+    S3_REGION: us-east-1
+    S3_USE_SSL: "false"
+    JWT_SECRET: "ci-test-secret-32chars-minimum!!"
+    JWT_ISSUER: "mesh-ci"
+    MESH_RATE_LIMIT_ENABLED: "false"
+    # Same fixed, published, CI-only key the other jobs use — it protects a
+    # throwaway Postgres that dies with the runner. REQUIRED=1 so a key
+    # mistake fails loudly instead of silently downgrading to plaintext.
+    MESH_INTEGRATION_ENCRYPTION_KEY: "ZXZjLW1lc2gtY2ktaW50ZWdyYXRpb24tdGVzdC1rMzI="
+    MESH_INTEGRATION_ENCRYPTION_REQUIRED: "1"
+    APP_ENV: test
+  before_script:
+    - apk add --no-cache git build-base curl postgresql-client
+  script:
+    # Guard 1 — the selection is not empty. A `-run` regex that matches
+    # nothing exits 0 with "testing: warning: no tests to run" and paints the
+    # job green; that failure is invisible in exactly the way this whole job
+    # exists to prevent. `-list` compiles the package but starts nothing, so
+    # this needs no database and runs before any service wait below.
+    - |
+      go test ./tests/integration/ -tags=integration -list "$TENANCY_RUN_RE" \
+        | grep -E '^Test' | sort > /tmp/selected.txt
+      n=$(wc -l < /tmp/selected.txt | tr -d ' ')
+      echo "selected $n test(s), floor is $TENANCY_MIN_TESTS"
+      cat /tmp/selected.txt
+      if [ "$n" -lt "$TENANCY_MIN_TESTS" ]; then
+        echo "Tenancy gate selects $n tests, below the floor of $TENANCY_MIN_TESTS."
+        echo "Either tests were removed/renamed out of the pattern, or TENANCY_RUN_RE no longer matches. Refusing to run a gate that guards less than it claims."
+        exit 1
+      fi
+    - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
+    - pg_isready -h postgres -U mesh
+    - for i in $(seq 30); do curl -sf http://nats:8222/healthz && break; sleep 1; done
+    - curl -sf http://nats:8222/healthz
+    - for i in $(seq 30); do curl -sf http://minio:9000/minio/health/live && break; sleep 1; done
+    - curl -sf http://minio:9000/minio/health/live
+    - go install github.com/pressly/goose/v3/cmd/goose@latest
+    - GOOSE_DRIVER=postgres GOOSE_DBSTRING="postgres://mesh:mesh@postgres:5432/mesh?sslmode=disable" $GOPATH/bin/goose -dir migrations up
+    - go build -o /tmp/mesh-api ./cmd/api
+    - /tmp/mesh-api &
+    # The GitHub original waited on GET /healthz, a path this codebase has
+    # never had (only /api/v1/healthz/version) — its own for-loop then fell
+    # through to "API server ready" unconditionally on timeout, which is the
+    # exact §0x class this job exists to police, just one layer up. Fixed
+    # here to the real endpoint and a loop that actually fails when the
+    # server never comes up, instead of an unverified "ready" echo.
+    - |
+      ok=0
+      for i in $(seq 15); do
+        if curl -sf http://localhost:8005/api/v1/healthz/version >/dev/null; then ok=1; break; fi
+        sleep 1
+      done
+      if [ "$ok" -ne 1 ]; then
+        echo "API server did not become healthy on :8005"
+        exit 1
+      fi
+      echo "API server ready"
+    # pipefail, or `tee` returns 0 and a failing suite reads as a pass.
+    - |
+      set -o pipefail
+      TEST_API_URL="http://localhost:8005" \
+      TEST_DB_DSN="host=postgres port=5432 user=mesh password=mesh dbname=mesh sslmode=disable" \
+      go test ./tests/integration/ -v -tags=integration -timeout=300s -run "$TENANCY_RUN_RE" 2>&1 | tee /tmp/tenancy.log
+    # Guard 2 — selection is not execution (see TENANCY_MIN_PASSED above).
+    # `--- PASS:` at column 0 is a top-level test; subtests are indented and
+    # excluded so a parent isn't double-counted with its children.
+    - |
+      passed=$(grep -cE '^--- PASS: ' /tmp/tenancy.log || true)
+      skipped=$(grep -cE '^--- SKIP: ' /tmp/tenancy.log || true)
+      echo "executed: $passed passed, $skipped skipped (floor is $TENANCY_MIN_PASSED passed)"
+      grep -E '^--- SKIP: ' /tmp/tenancy.log || true
+      if [ "$passed" -lt "$TENANCY_MIN_PASSED" ]; then
+        echo "Tenancy gate: $passed tests passed, below the floor of $TENANCY_MIN_PASSED."
+        echo "go test exited 0, so nothing FAILED — tests were skipped or removed instead. A gate that guards fewer assertions than it claims is not a gate."
+        exit 1
+      fi
 
 # ── build ───────────────────────────────────────────────────────────────────
 build:api:
