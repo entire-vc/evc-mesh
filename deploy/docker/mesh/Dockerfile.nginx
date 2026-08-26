@@ -6,6 +6,10 @@ FROM node:20-alpine AS web-builder
 RUN corepack enable
 WORKDIR /app
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+# pnpm-workspace.yaml declares patchedDependencies -> patches/@milkdown__ctx@7.22.1.patch.
+# --frozen-lockfile applies patches during install, so the patch file has to be here
+# BEFORE the install, not with the rest of web/ after it.
+COPY web/patches/ ./patches/
 RUN pnpm install --frozen-lockfile
 COPY web/ .
 RUN pnpm build
