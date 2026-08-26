@@ -40,6 +40,9 @@ func (f *fakeIntegrationRepo) ListByWorkspace(context.Context, uuid.UUID) ([]dom
 func (f *fakeIntegrationRepo) ListActiveByProvider(context.Context, domain.IntegrationProvider) ([]domain.IntegrationConfig, error) {
 	return nil, nil
 }
+func (f *fakeIntegrationRepo) ListByProvider(context.Context, domain.IntegrationProvider) ([]domain.IntegrationConfig, error) {
+	return nil, nil
+}
 
 // activeSlackConfig builds an active Slack integration config posting to webhookURL.
 func activeSlackConfig(webhookURL string) *domain.IntegrationConfig {

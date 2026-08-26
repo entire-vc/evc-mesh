@@ -967,6 +967,15 @@ type IntegrationRepository interface {
 	// to start long-polling — ListByWorkspace only answers "what does one
 	// workspace have configured", not "what needs a poller right now".
 	ListActiveByProvider(ctx context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error)
+	// ListByProvider returns EVERY integration for one provider across all
+	// workspaces, active or not — unlike ListActiveByProvider, an explicitly
+	// disabled row still shows up. VCSIntegrationResolver's webhook-secret
+	// resolution (#33a4bb57) needs this to tell "no workspace has ever
+	// configured this provider" (env fallback applies) apart from "a
+	// workspace configured it and then turned it off" (workspace governance
+	// owns the provider from then on, full stop — env is not consulted even
+	// though the active-only list would come back empty in both cases).
+	ListByProvider(ctx context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error)
 }
 
 // MemoryRepository manages persistence for agent memories (knowledge base).

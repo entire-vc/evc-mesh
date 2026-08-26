@@ -53,6 +53,12 @@ func (f *fakeResolverIntegrationRepo) ListActiveByProvider(_ context.Context, pr
 	}
 	return nil, nil
 }
+func (f *fakeResolverIntegrationRepo) ListByProvider(_ context.Context, provider domain.IntegrationProvider) ([]domain.IntegrationConfig, error) {
+	if f.row != nil && f.row.Provider == provider {
+		return []domain.IntegrationConfig{*f.row}, nil
+	}
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // GitHub — the AC1/AC2/AC3 sequence from specsintegration-provider-contract
@@ -105,6 +111,70 @@ func TestGitHubWebhook_DynamicResolver_ToggleSequence(t *testing.T) {
 	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(req3, rec3)))
 	assert.Equal(t, http.StatusOK, rec3.Code, "re-enabling must restore delivery")
 	assert.Len(t, svc.handleCalls, 2, "service must have been invoked again after re-enable")
+}
+
+// TestGitHubWebhook_DynamicResolver_DisabledRow_WithEnvAlsoConfigured_MustRefuse
+// is the case TestGitHubWebhook_DynamicResolver_ToggleSequence's AC2 leg
+// does NOT cover: that test runs with VCSEnvFallback{} (no env secret at
+// all), so "disabled row → refuse" was proven only for the case where env
+// had nothing to fall back to anyway. On real prod config
+// (MESH_GITHUB_WEBHOOK_SECRET set), a disabled workspace row silently kept
+// validating via the env secret — GitHubWebhookSecrets/ResolveGitHub folded
+// "no row" and "row present but is_active=false" into the same "nothing
+// usable, try env" outcome. Reproduced red against the pre-fix code
+// (expected 401, got 200) before the decodeGitHub/GitLabIntegration +
+// GitHubWebhookSecrets/GitLabWebhookSecrets fix landed; asserts the fixed
+// contract now.
+func TestGitHubWebhook_DynamicResolver_DisabledRow_WithEnvAlsoConfigured_MustRefuse(t *testing.T) {
+	const wsSecret, envSecret = "workspace-secret", "env-secret"
+	repo := &fakeResolverIntegrationRepo{row: &domain.IntegrationConfig{
+		Provider: domain.IntegrationProviderGitHub,
+		IsActive: false, // explicitly turned off
+		Config:   githubIntegrationCfgJSON(t, "", wsSecret),
+	}}
+	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{GitHubWebhookSecret: envSecret})
+
+	svc := &stubVCSLinkService{handleResult: service.PRHandleResult{Transitioned: true}}
+	h := NewVCSLinkHandler(svc, WithVCSIntegrationResolver(resolver), WithWebhookDedupStore(newMemDedupStore()))
+
+	body := newPullRequestPayload(t, "closed", 4, "MESH-"+uuid.New().String(), "", true, "sha4")
+
+	// Neither the (now-revoked) workspace secret nor the env secret must
+	// validate — the row exists and says off, and env is not a fallback
+	// once a workspace has taken ownership of this provider.
+	for _, secret := range []string{wsSecret, envSecret} {
+		req := newPullRequestRequest(t, body, "delivery-disabled-"+secret, secret)
+		rec := httptest.NewRecorder()
+		require.NoError(t, h.GitHubWebhook(echo.New().NewContext(req, rec)))
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "disabled workspace row must refuse even with %q even though env is configured", secret)
+	}
+	assert.Empty(t, svc.handleCalls, "service must never have been invoked")
+}
+
+// TestGitLabWebhook_DynamicResolver_DisabledRow_WithEnvAlsoConfigured_MustRefuse
+// is TestGitHubWebhook_DynamicResolver_DisabledRow_WithEnvAlsoConfigured_MustRefuse's
+// GitLab counterpart.
+func TestGitLabWebhook_DynamicResolver_DisabledRow_WithEnvAlsoConfigured_MustRefuse(t *testing.T) {
+	const wsSecret, envSecret = "gl-workspace-secret", "gl-env-secret"
+	repo := &fakeResolverIntegrationRepo{row: &domain.IntegrationConfig{
+		Provider: domain.IntegrationProviderGitLab,
+		IsActive: false,
+		Config:   gitlabIntegrationCfgJSON(t, "https://git.entire.host", "", wsSecret),
+	}}
+	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok", GitLabWebhookSecret: envSecret})
+
+	svc := &stubVCSLinkService{gitlabHandleResult: service.PRHandleResult{Transitioned: true}}
+	h := NewVCSLinkHandler(svc, WithVCSIntegrationResolver(resolver))
+
+	body := newMergeRequestPayload(t, "merge", 4, "MESH-"+uuid.New().String(), "", "merged", "sha4")
+
+	for _, secret := range []string{wsSecret, envSecret} {
+		req := newMergeRequestRequest(t, body, "Merge Request Hook", secret)
+		rec := httptest.NewRecorder()
+		require.NoError(t, h.GitLabWebhook(echo.New().NewContext(req, rec)))
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "disabled workspace row must refuse even with %q even though env is configured", secret)
+	}
+	assert.Empty(t, svc.gitlabHandleCalls, "service must never have been invoked")
 }
 
 // AC4 (partial — see task_service_test.go for the live-check half): a

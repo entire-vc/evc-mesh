@@ -59,6 +59,33 @@ func TestIntegrationRepo_ListActiveByProvider_Empty(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestIntegrationRepo_ListByProvider_IncludesInactiveRows(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rawDB.Close() })
+	repo := NewIntegrationRepo(sqlx.NewDb(rawDB, "postgres"))
+
+	wsActive, wsInactive := uuid.New(), uuid.New()
+	now := time.Now()
+	cfg, _ := json.Marshal(map[string]string{"token": "enc"})
+
+	// Unlike ListActiveByProvider, no "AND is_active = true" — both rows
+	// come back regardless of state (#33a4bb57 fix: the resolver needs to
+	// tell "no row anywhere" apart from "a row exists and is inactive").
+	mock.ExpectQuery("FROM integration_configs WHERE provider = \\$1 ORDER BY workspace_id").
+		WithArgs("github").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "workspace_id", "provider", "config", "is_active", "created_at", "updated_at"}).
+			AddRow(uuid.New(), wsActive, "github", cfg, true, now, now).
+			AddRow(uuid.New(), wsInactive, "github", cfg, false, now, now))
+
+	result, err := repo.ListByProvider(context.Background(), domain.IntegrationProviderGitHub)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	assert.True(t, result[0].IsActive)
+	assert.False(t, result[1].IsActive)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestProjectRepo_ListForUserInWorkspace(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	require.NoError(t, err)
