@@ -476,6 +476,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.Priority != task.Priority {
 		changes["priority"] = map[string]interface{}{"old": string(existing.Priority), "new": string(task.Priority)}
 	}
+	if uuidPtrChanged(existing.ParentTaskID, task.ParentTaskID) {
+		changes["parent_task_id"] = map[string]interface{}{"old": existing.ParentTaskID, "new": task.ParentTaskID}
+	}
 	// existing and task come from two separate GetByID calls, so their
 	// AssigneeID pointers never compare equal even when unchanged — compare
 	// by value. Shares uuidPtrChanged with the reviewer diff above rather than

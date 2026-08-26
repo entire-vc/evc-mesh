@@ -116,11 +116,40 @@ func (f *flexTime) UnmarshalJSON(b []byte) error {
 	return errors.New("due_date must be RFC3339 or YYYY-MM-DD")
 }
 
+// flexUUID is a *uuid.UUID that also tracks whether the JSON key was present
+// at all — the same "wasSet" contract as flexTime above. A plain *uuid.UUID
+// field cannot distinguish "field omitted" from "field explicitly set to
+// null" (both unmarshal to a nil pointer), which matters here: omitted means
+// "leave parent_task_id alone", explicit null means "detach this task from
+// its parent" (#204c0311 — detaching a subtask was the only workaround for a
+// parent stuck behind a broken governance rule, and the PATCH silently
+// no-op'd instead of detaching).
+type flexUUID struct {
+	ID     *uuid.UUID
+	wasSet bool
+}
+
+func (f *flexUUID) UnmarshalJSON(b []byte) error {
+	f.wasSet = true
+	s := strings.Trim(string(b), `"`)
+	if s == "null" || s == "" {
+		f.ID = nil
+		return nil
+	}
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return errors.New("parent_task_id must be a valid UUID or null")
+	}
+	f.ID = &id
+	return nil
+}
+
 // updateTaskRequest represents the JSON body for partially updating a task.
 type updateTaskRequest struct {
 	Title            *string                 `json:"title"`
 	Description      *string                 `json:"description"`
 	Priority         *domain.Priority        `json:"priority"`
+	ParentTaskID     flexUUID                `json:"parent_task_id"`
 	AssigneeID       *uuid.UUID              `json:"assignee_id"`
 	AssigneeType     *domain.AssigneeType    `json:"assignee_type"`
 	ReviewerID       *uuid.UUID              `json:"reviewer_id"`
@@ -595,6 +624,18 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 	if req.Priority != nil {
 		task.Priority = *req.Priority
+	}
+	// #204c0311: parent_task_id used to be silently dropped here — updateTaskRequest
+	// had no field for it at all, so Bind() ignored the JSON key, task.ParentTaskID
+	// kept whatever GetByID fetched, and the PATCH round-tripped it unchanged while
+	// still answering 200. flexUUID's wasSet distinguishes "field omitted" (leave
+	// alone) from "field present, possibly null" (apply the change, including
+	// detaching via explicit null) — same contract as DueDate above.
+	if req.ParentTaskID.wasSet {
+		if req.ParentTaskID.ID != nil && *req.ParentTaskID.ID == task.ID {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("parent_task_id cannot be the task's own id"))
+		}
+		task.ParentTaskID = req.ParentTaskID.ID
 	}
 	if req.AssigneeID != nil {
 		task.AssigneeID = req.AssigneeID

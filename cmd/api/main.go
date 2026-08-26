@@ -166,9 +166,15 @@ func main() {
 	customFieldService := service.NewCustomFieldService(customFieldDefRepo, activityLogRepo)
 
 	// Rule service is created before taskService so it can be injected as an option.
+	// WithRuleTaskStatusRepo is required for transition_gate.require_subtasks_done's
+	// allow_cancelled option: without it, evalRequireSubtasksDone silently skips the
+	// cancelled-subtask check (deps.taskStatusRepo == nil), so a parent with even one
+	// legitimately-cancelled subtask can never reach done/review no matter how the
+	// rule is configured (#204c0311, live incident #815f703b).
 	ruleService := service.NewRuleService(ruleRepo, activityLogRepo,
 		service.WithRuleCommentRepo(commentRepo),
 		service.WithRuleTaskRepo(taskRepo),
+		service.WithRuleTaskStatusRepo(taskStatusRepo),
 	)
 
 	// Event bus service is created early so it can be injected into taskService.

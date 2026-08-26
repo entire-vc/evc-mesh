@@ -197,6 +197,190 @@ func TestEvalRequireComment_SkipsWhenTargetCategoryNotMatched(t *testing.T) {
 }
 
 // ============================================================================
+// transition_gate.require_subtasks_done
+// ============================================================================
+
+// makeRequireSubtasksDoneRule builds a transition_gate.require_subtasks_done rule
+// with the given allow_cancelled setting.
+func makeRequireSubtasksDoneRule(allowCancelled bool, targetCategories ...string) domain.Rule {
+	cfg, _ := json.Marshal(map[string]interface{}{
+		"target_status_categories": targetCategories,
+		"allow_cancelled":          allowCancelled,
+	})
+	return domain.Rule{
+		ID:          uuid.New(),
+		Name:        "Require subtasks done before close",
+		RuleType:    "transition_gate.require_subtasks_done",
+		Enforcement: domain.RuleEnforcementBlock,
+		Config:      cfg,
+	}
+}
+
+func requireSubtasksDoneInput(taskID uuid.UUID, status *domain.TaskStatus) EvaluateInput {
+	actorID := uuid.New()
+	return EvaluateInput{
+		Action:       "move_task",
+		TaskID:       &taskID,
+		TargetStatus: status,
+		ActorID:      actorID,
+		ActorType:    domain.ActorTypeAgent,
+		WorkspaceID:  uuid.New(),
+	}
+}
+
+func makeCancelledStatus() *domain.TaskStatus {
+	return &domain.TaskStatus{ID: uuid.New(), Name: "Cancelled", Category: domain.StatusCategoryCancelled}
+}
+
+func makeTodoStatus() *domain.TaskStatus {
+	return &domain.TaskStatus{ID: uuid.New(), Name: "Todo", Category: domain.StatusCategoryTodo}
+}
+
+// TestEvalRequireSubtasksDone_CancelledSubtask_AllowedWhenConfigured is the POSITIVE
+// case for #204c0311: allow_cancelled:true + a wired taskStatusRepo must let a parent
+// with only a cancelled subtask pass — this is the live shape of task #815f703b /
+// subtask #67f1b3f4, and the config value ("allow_cancelled":true) is the ACTUAL
+// workspace rule config read live off task #204c0311's workspace via get_my_rules.
+func TestEvalRequireSubtasksDone_CancelledSubtask_AllowedWhenConfigured(t *testing.T) {
+	parentID := uuid.New()
+
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+
+	cancelledStatus := makeCancelledStatus()
+	require.NoError(t, statusRepo.Create(context.Background(), cancelledStatus))
+
+	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: cancelledStatus.ID}
+	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+
+	rule := makeRequireSubtasksDoneRule(true, "done", "review")
+	status := makeDoneStatus()
+	input := requireSubtasksDoneInput(parentID, status)
+
+	deps := evaluatorDeps{taskRepo: taskRepo, taskStatusRepo: statusRepo}
+	violation, err := evalRequireSubtasksDone(context.Background(), rule, input, deps)
+	require.NoError(t, err)
+	assert.Nil(t, violation, "a parent whose only subtask is cancelled must be allowed to close when allow_cancelled=true and taskStatusRepo is wired")
+}
+
+// TestEvalRequireSubtasksDone_OpenSubtask_StillBlocks is the NEGATIVE control for the
+// same fix: allow_cancelled must not turn the rule into a no-op for genuinely
+// unfinished subtasks. A subtask in todo/in_progress must still block, same as before
+// the fix — proving the fix doesn't overcorrect into "subtasks never block".
+func TestEvalRequireSubtasksDone_OpenSubtask_StillBlocks(t *testing.T) {
+	parentID := uuid.New()
+
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+
+	todoStatus := makeTodoStatus()
+	require.NoError(t, statusRepo.Create(context.Background(), todoStatus))
+
+	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: todoStatus.ID}
+	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+
+	rule := makeRequireSubtasksDoneRule(true, "done", "review")
+	status := makeDoneStatus()
+	input := requireSubtasksDoneInput(parentID, status)
+
+	deps := evaluatorDeps{taskRepo: taskRepo, taskStatusRepo: statusRepo}
+	violation, err := evalRequireSubtasksDone(context.Background(), rule, input, deps)
+	require.NoError(t, err)
+	require.NotNil(t, violation, "a subtask still in todo/in_progress must still block the parent from closing")
+	assert.Contains(t, violation.Message, "All subtasks must be completed")
+}
+
+// TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenTaskStatusRepoNil documents
+// the ROOT CAUSE of the live incident at the evaluator level: even with
+// allow_cancelled:true in the rule config, if deps.taskStatusRepo is nil (exactly what
+// happened in production before main.go wired WithRuleTaskStatusRepo), the evaluator
+// cannot resolve the subtask's status category and treats the cancelled subtask as a
+// blocker forever. This is the evaluator half of the regression; the wiring half is
+// covered by TestRuleServiceWiresTaskStatusRepoForAllowCancelled in cmd/api.
+func TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenTaskStatusRepoNil(t *testing.T) {
+	parentID := uuid.New()
+
+	taskRepo := NewMockTaskRepository()
+
+	// Same cancelled subtask as the positive case above, but no taskStatusRepo —
+	// this is the exact state prod was in: allow_cancelled:true, dependency missing.
+	cancelledStatusID := uuid.New()
+	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: cancelledStatusID}
+	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+
+	rule := makeRequireSubtasksDoneRule(true, "done", "review")
+	status := makeDoneStatus()
+	input := requireSubtasksDoneInput(parentID, status)
+
+	deps := evaluatorDeps{taskRepo: taskRepo, taskStatusRepo: nil}
+	violation, err := evalRequireSubtasksDone(context.Background(), rule, input, deps)
+	require.NoError(t, err)
+	require.NotNil(t, violation, "without taskStatusRepo wired, allow_cancelled cannot be honored — this reproduces the live #815f703b incident")
+}
+
+// TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenAllowCancelledFalse verifies
+// the rule still enforces terminal-but-not-done subtasks as blockers when the project
+// has NOT opted into allow_cancelled — the config is respected in both directions.
+func TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenAllowCancelledFalse(t *testing.T) {
+	parentID := uuid.New()
+
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+
+	cancelledStatus := makeCancelledStatus()
+	require.NoError(t, statusRepo.Create(context.Background(), cancelledStatus))
+
+	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: cancelledStatus.ID}
+	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+
+	rule := makeRequireSubtasksDoneRule(false, "done", "review") // allow_cancelled explicitly off
+	status := makeDoneStatus()
+	input := requireSubtasksDoneInput(parentID, status)
+
+	deps := evaluatorDeps{taskRepo: taskRepo, taskStatusRepo: statusRepo}
+	violation, err := evalRequireSubtasksDone(context.Background(), rule, input, deps)
+	require.NoError(t, err)
+	require.NotNil(t, violation, "allow_cancelled=false must keep blocking on a cancelled subtask — the config, not the mere presence of a cancelled status, decides")
+}
+
+// TestEvalRequireSubtasksDone_NoSubtasks_Passes ensures the trivial case is untouched.
+func TestEvalRequireSubtasksDone_NoSubtasks_Passes(t *testing.T) {
+	parentID := uuid.New()
+	taskRepo := NewMockTaskRepository()
+
+	rule := makeRequireSubtasksDoneRule(true, "done")
+	status := makeDoneStatus()
+	input := requireSubtasksDoneInput(parentID, status)
+
+	deps := evaluatorDeps{taskRepo: taskRepo, taskStatusRepo: NewMockTaskStatusRepository()}
+	violation, err := evalRequireSubtasksDone(context.Background(), rule, input, deps)
+	require.NoError(t, err)
+	assert.Nil(t, violation, "a task with no subtasks trivially satisfies the rule")
+}
+
+// TestEvalRequireSubtasksDone_SkipsWhenTargetCategoryNotMatched ensures the rule is a
+// no-op when moving to a category not listed in target_status_categories.
+func TestEvalRequireSubtasksDone_SkipsWhenTargetCategoryNotMatched(t *testing.T) {
+	parentID := uuid.New()
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+
+	todoStatus := makeTodoStatus()
+	require.NoError(t, statusRepo.Create(context.Background(), todoStatus))
+	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: todoStatus.ID}
+	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+
+	rule := makeRequireSubtasksDoneRule(true, "done") // only "done" triggers the rule
+	reviewStatus := &domain.TaskStatus{ID: uuid.New(), Name: "In Review", Category: domain.StatusCategoryReview}
+	input := requireSubtasksDoneInput(parentID, reviewStatus)
+
+	deps := evaluatorDeps{taskRepo: taskRepo, taskStatusRepo: statusRepo}
+	violation, err := evalRequireSubtasksDone(context.Background(), rule, input, deps)
+	require.NoError(t, err)
+	assert.Nil(t, violation, "moving to 'review' should not trigger a rule scoped to 'done' only")
+}
+
+// ============================================================================
 // capacity_limit.max_in_progress
 // ============================================================================
 
