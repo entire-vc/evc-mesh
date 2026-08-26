@@ -1264,6 +1264,17 @@ func (s *commentService) notifyMentions(
 		resolved := false
 
 		// Try agent lookup first.
+		//
+		// Deliberately does NOT `continue` past a match: an agent slug and a
+		// human username live in separate namespaces that nothing keeps
+		// disjoint (task f4f47938). A `continue` here used to let the agent
+		// match eat the slug — @hugh always resolved to the QA agent, and the
+		// person hugh@entire.vc was never notified and never even got a
+		// recorded "skipped" row, while enforceBlockingTriage (a fully
+		// independent lookup) still resolved the user and froze the card. The
+		// two addressing paths do not compete for one delivery slot, so both
+		// must run for the same slug — this block falls through into the user
+		// lookup below on purpose.
 		if s.agentSvc != nil {
 			agent, err := s.agentSvc.GetBySlug(ctx, workspaceID, slug)
 			if err == nil && agent != nil {
@@ -1315,11 +1326,11 @@ func (s *commentService) notifyMentions(
 						OnPersistErr: s.markDeliveryFailed(comment.ID, slug),
 					})
 				}
-				continue
 			}
 		}
 
-		// Fall back to user lookup.
+		// User lookup — always attempted, not just when the agent lookup
+		// missed. See the comment above the agent block for why.
 		if s.userRepo != nil {
 			user, err := s.userRepo.GetByUsername(ctx, workspaceID, slug)
 			if err == nil && user != nil {
