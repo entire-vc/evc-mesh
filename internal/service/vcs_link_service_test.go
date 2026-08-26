@@ -344,8 +344,8 @@ func (t *fakeTaskService) GetStatusByID(context.Context, uuid.UUID) (*domain.Tas
 func (t *fakeTaskService) GetUserActiveTasks(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
-func (t *fakeTaskService) SupersedeRecurringInstances(context.Context, uuid.UUID, uuid.UUID) error {
-	return nil
+func (t *fakeTaskService) SupersedeRecurringInstances(context.Context, uuid.UUID, uuid.UUID) (worked, missed int, err error) {
+	return 0, 0, nil
 }
 
 func (t *fakeTaskService) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }

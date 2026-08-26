@@ -51,6 +51,13 @@ type RecurringSchedule struct {
 	QuarantinedAt       *time.Time `json:"quarantined_at,omitempty" db:"quarantined_at"`
 	LastError           *string    `json:"last_error,omitempty" db:"last_error"`
 
+	// Missed-outcome tracking: the instance was created fine (unlike the failure
+	// tracking above) but rolled over having received no real work. Separate from
+	// ConsecutiveFailures because it's a different pathology with a different
+	// remedy — the schedule itself is healthy, its assignee/lane isn't picking it up.
+	ConsecutiveMissedOutcomes int        `json:"consecutive_missed_outcomes" db:"consecutive_missed_outcomes"`
+	LastMissedAt              *time.Time `json:"last_missed_at,omitempty" db:"last_missed_at"`
+
 	CreatedBy     uuid.UUID  `json:"created_by" db:"created_by"`
 	CreatedByType ActorType  `json:"created_by_type" db:"created_by_type"`
 	CreatedAt     time.Time  `json:"created_at" db:"created_at"`

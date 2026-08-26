@@ -103,6 +103,13 @@ func NewRecurringService(
 // triggers schedule quarantine (is_active=false) and an alert.
 const maxConsecutiveFailures = 3
 
+// maxConsecutiveMissed is the number of consecutive rollovers superseding only
+// zero-work instances that triggers a comment on the new instance, alerting
+// the schedule's owner. Unlike maxConsecutiveFailures this does NOT quarantine
+// the schedule — the schedule itself is healthy, its assignee/lane is not
+// picking the work up, and deactivating it would only make that harder to see.
+const maxConsecutiveMissed = 2
+
 // prevSummaryMaxRunes is the maximum number of Unicode code points kept from the
 // previous instance's last comment when injecting into {{.PrevSummary}}.
 const prevSummaryMaxRunes = 500
@@ -535,9 +542,11 @@ func (s *recurringService) TriggerNow(ctx context.Context, id uuid.UUID) (*domai
 	}
 
 	// Supersede any open instances from the same schedule (same as runOneSchedule).
-	if err := s.taskSvc.SupersedeRecurringInstances(ctx, schedule.ID, task.ID); err != nil {
-		log.Printf("[recurring] WARNING: TriggerNow SupersedeRecurringInstances for schedule %s: %v", schedule.ID, err)
+	workedCount, missedCount, superErr := s.taskSvc.SupersedeRecurringInstances(ctx, schedule.ID, task.ID)
+	if superErr != nil {
+		log.Printf("[recurring] WARNING: TriggerNow SupersedeRecurringInstances for schedule %s: %v", schedule.ID, superErr)
 	}
+	s.recordMissedOutcome(ctx, schedule, task.ID, workedCount, missedCount)
 
 	return task, nil
 }
@@ -691,9 +700,11 @@ func (s *recurringService) runOneSchedule(ctx context.Context, schedule *domain.
 
 	// Supersede any previous open instances of this schedule so they don't pile up
 	// in review/in-progress waiting for an agent that will never pick them up again.
-	if superErr := s.taskSvc.SupersedeRecurringInstances(ctx, schedule.ID, newTask.ID); superErr != nil {
+	workedCount, missedCount, superErr := s.taskSvc.SupersedeRecurringInstances(ctx, schedule.ID, newTask.ID)
+	if superErr != nil {
 		log.Printf("[recurring] WARNING: SupersedeRecurringInstances for schedule %s: %v", schedule.ID, superErr)
 	}
+	s.recordMissedOutcome(ctx, schedule, newTask.ID, workedCount, missedCount)
 
 	// Atomically update instance_count, last_triggered_at, next_run_at.
 	if err := s.recurringRepo.IncrementInstance(ctx, schedule.ID, nextRun); err != nil {
@@ -701,6 +712,60 @@ func (s *recurringService) runOneSchedule(ctx context.Context, schedule *domain.
 	}
 
 	return true, nil
+}
+
+// recordMissedOutcome updates the schedule's consecutive-missed-outcome counter
+// after a supersede pass and, once the counter reaches maxConsecutiveMissed,
+// leaves a comment on the newly created instance so the schedule's owner sees
+// it in the one place they're already looking — the current instance — rather
+// than needing to notice a pattern across several closed ones.
+//
+// workedCount/missedCount come from SupersedeRecurringInstances for this
+// rollover: any real work resets the counter (the lane is not idle); a
+// supersede pass that closed at least one instance and none of them had real
+// work increments it; a pass that superseded nothing (first run, or nothing
+// was open) leaves the counter untouched — there's no signal either way.
+func (s *recurringService) recordMissedOutcome(ctx context.Context, schedule *domain.RecurringSchedule, newTaskID uuid.UUID, workedCount, missedCount int) {
+	if workedCount > 0 {
+		if schedule.ConsecutiveMissedOutcomes > 0 {
+			if err := s.recurringRepo.ResetConsecutiveMissedOutcomes(ctx, schedule.ID); err != nil {
+				log.Printf("[recurring] WARNING: ResetConsecutiveMissedOutcomes for schedule %s: %v", schedule.ID, err)
+			}
+		}
+		return
+	}
+	if missedCount == 0 {
+		return
+	}
+	count, err := s.recurringRepo.RecordMissedOutcome(ctx, schedule.ID)
+	if err != nil {
+		log.Printf("[recurring] WARNING: RecordMissedOutcome for schedule %s: %v", schedule.ID, err)
+		return
+	}
+	if count < maxConsecutiveMissed {
+		return
+	}
+	log.Printf("[recurring] WARNING: schedule %s missed %d consecutive instance(s) (no real work before rollover)", schedule.ID, count)
+	if s.commentRepo == nil {
+		return
+	}
+	body := fmt.Sprintf(
+		"⚠️ **Recurring schedule missed %d consecutive instances** — the last %d rollover(s) superseded an instance with no real work (no artifact, no VCS link, no comment beyond an exact duplicate of the others) before the next one was created. Schedule template: %q. Check whether the assignee/lane for this schedule is actually running.",
+		count, count, schedule.TitleTemplate,
+	)
+	now := time.Now()
+	comment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     newTaskID,
+		AuthorID:   uuid.Nil,
+		AuthorType: domain.ActorTypeSystem,
+		Body:       body,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.commentRepo.Create(ctx, comment); err != nil {
+		log.Printf("[recurring] WARNING: failed to post consecutive-miss alert comment on task %s: %v", newTaskID, err)
+	}
 }
 
 // createInstance creates a task for the given schedule and run time.

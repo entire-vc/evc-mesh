@@ -188,9 +188,14 @@ type TaskService interface {
 	// Returns an error if the task is already in the target project.
 	MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
 	// SupersedeRecurringInstances closes all non-terminal instances of the given
-	// recurring schedule (except newTaskID) by moving them to the project's done status.
-	// Individual failures are logged and skipped to avoid blocking the new instance.
-	SupersedeRecurringInstances(ctx context.Context, scheduleID, newTaskID uuid.UUID) error
+	// recurring schedule (except newTaskID). An instance that received real work
+	// (an artifact, a VCS link, or a comment that isn't a duplicate of the
+	// others) closes as done; an instance nothing touched closes as missed
+	// instead (the project's cancelled-category status), so a rollover can
+	// neither manufacture a false done nor leave zero-work instances piling up
+	// forever. Returns how many instances closed each way. Individual failures
+	// are logged and skipped to avoid blocking the new instance.
+	SupersedeRecurringInstances(ctx context.Context, scheduleID, newTaskID uuid.UUID) (worked, missed int, err error)
 	// SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
 	// When armed, only a human actor may move the task to backlog/done/cancelled.
 	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error

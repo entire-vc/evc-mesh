@@ -241,6 +241,11 @@ type CommentRepository interface {
 	// HasRecentCommentBy returns true when the task has a non-internal comment by authorID
 	// created on or after `since` whose body is at least minLength characters long.
 	HasRecentCommentBy(ctx context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error)
+	// HasSubstantiveComment returns false when every comment on the task is an
+	// exact duplicate of the others (2+ comments, one distinct body) — the
+	// signature of an automated nudge reposting the same line on a timer.
+	// Zero comments is also false; a single comment of any content is true.
+	HasSubstantiveComment(ctx context.Context, taskID uuid.UUID) (bool, error)
 }
 
 // HumanGateDecisionRepository persists the append-only ledger backing the
@@ -932,6 +937,13 @@ type RecurringRepository interface {
 	Quarantine(ctx context.Context, id uuid.UUID) error
 	// ResetConsecutiveFailures clears the failure counter and last_error after a successful instance creation.
 	ResetConsecutiveFailures(ctx context.Context, id uuid.UUID) error
+	// RecordMissedOutcome increments consecutive_missed_outcomes and stamps last_missed_at,
+	// returning the post-increment count. Called when a rollover supersedes an instance
+	// that received no real work (separate pathology from RecordFailure/createInstance erroring).
+	RecordMissedOutcome(ctx context.Context, id uuid.UUID) (int, error)
+	// ResetConsecutiveMissedOutcomes clears the missed-outcome counter after a rollover
+	// finds at least one superseded instance that had real work.
+	ResetConsecutiveMissedOutcomes(ctx context.Context, id uuid.UUID) error
 	// GetInstanceHistory returns lightweight summaries for all task instances of a schedule.
 	GetInstanceHistory(ctx context.Context, scheduleID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.RecurringInstanceSummary], error)
 }
