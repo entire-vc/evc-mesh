@@ -34,6 +34,18 @@ var (
 	// ErrForeignShare means the key is real but is not valid for the share ID
 	// requested (403 — measured live on this exact protocol, task #ee1745ce).
 	ErrForeignShare = errors.New("teamrelay: agent key not valid for this share")
+	// ErrKeyExpired means the key was once valid for this share but its TTL has
+	// passed (403, body detail "Agent key has expired" — verified against the
+	// Team Relay source, the exact string two call sites in
+	// apps/control-plane/app/api/routers/web.py and one in
+	// apps/control-plane/app/services/share_service.py raise). Distinguished from
+	// ErrForeignShare by body content, not status code alone: both are 403, and
+	// collapsing them was the actual defect #218d5847's AC4 was built to catch
+	// and never wired up — a caller told only "forbidden" cannot tell "your key
+	// died of old age, renew it" from "this key was never valid here", and the
+	// spec's whole point is that the first case gets a warning BEFORE the tree
+	// goes empty, not a generic refusal after.
+	ErrKeyExpired = errors.New("teamrelay: agent key has expired")
 	// ErrUnreachable means the request never got a response at all — DNS,
 	// connection refused, timeout. Distinct from a rejected key: this is "we
 	// could not ask", not "we asked and were told no".
@@ -42,6 +54,31 @@ var (
 	// it does not exist. Ordinary — the caller answers "not found", not "broken".
 	ErrNotFound = errors.New("teamrelay: not found")
 )
+
+// keyExpiredMessage is the exact string Team Relay's control-plane raises for
+// an expired agent key — two call sites in
+// apps/control-plane/app/api/routers/web.py and one in services/share_service.py,
+// all `HTTPException(status_code=403, detail="Agent key has expired")`. Match
+// on this exact text, not a substring or a status code alone: 403 is also
+// what a foreign-share key gets (ErrForeignShare), and a caller told only
+// "forbidden" cannot tell "renew your key" from "this key was never valid
+// here" — the distinction #218d5847's AC4 exists to surface.
+const keyExpiredMessage = "Agent key has expired"
+
+// relayErrorEnvelope is Team Relay's actual error response shape
+// (middleware/errors.py:http_exception_handler) — NOT FastAPI's default bare
+// {"detail": "..."}. Verified against the Team Relay source directly rather
+// than assumed: guessing the default shape here would have silently made
+// keyExpiredMessage unmatchable against the real wire format forever, since a
+// JSON field that doesn't exist just unmarshals to the zero value with no
+// error.
+type relayErrorEnvelope struct {
+	Error struct {
+		Code      int    `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"request_id"`
+	} `json:"error"`
+}
 
 // classifySyncError maps a non-200 sync-protocol response to one of the
 // sentinels above and logs the distinguishing detail. This is what was missing
@@ -56,6 +93,11 @@ func classifySyncError(op, shareID string, statusCode int, body []byte) error {
 		log.Printf("teamrelay: %s rejected — agent key missing or unrecognized (share %s, status 401): %s", op, shareID, body)
 		return ErrKeyRejected
 	case http.StatusForbidden:
+		var envelope relayErrorEnvelope
+		if jsonErr := json.Unmarshal(body, &envelope); jsonErr == nil && envelope.Error.Message == keyExpiredMessage {
+			log.Printf("teamrelay: %s rejected — agent key expired (share %s, status 403)", op, shareID)
+			return ErrKeyExpired
+		}
 		log.Printf("teamrelay: %s rejected — agent key not valid for share %s (status 403): %s", op, shareID, body)
 		return ErrForeignShare
 	case http.StatusNotFound:

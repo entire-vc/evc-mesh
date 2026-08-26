@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"sort"
@@ -66,6 +67,19 @@ func (realRelaySyncClient) Write(ctx context.Context, relayURL, shareID, filePat
 	return teamrelay.SyncWrite(ctx, relayURL, shareID, filePath, agentKey, ifMatchSHA256, body)
 }
 
+// KeyDescriber is the seam over teamrelay.DescribeAgentKey — same reasoning as
+// RelaySyncClient above: a test substitutes a fake instead of reaching a real
+// Team Relay server.
+type KeyDescriber interface {
+	DescribeAgentKey(ctx context.Context, relayURL, shareID, agentKey string) (*teamrelay.AgentKeyDescription, error)
+}
+
+type realKeyDescriber struct{}
+
+func (realKeyDescriber) DescribeAgentKey(ctx context.Context, relayURL, shareID, agentKey string) (*teamrelay.AgentKeyDescription, error) {
+	return teamrelay.DescribeAgentKey(ctx, relayURL, shareID, agentKey)
+}
+
 // MountStatus names why SyncMount did or did not materialize a share, in a
 // form the caller can render as a distinct, legible state — AC-4's negative
 // control is exactly this: a protoken key or an unreachable relay must not
@@ -86,6 +100,11 @@ const (
 	// MountStatusForeignShare mirrors teamrelay.ErrForeignShare: a real key, but
 	// not valid for the configured share.
 	MountStatusForeignShare MountStatus = "foreign_share"
+	// MountStatusKeyExpired mirrors teamrelay.ErrKeyExpired: the key was once
+	// valid for this share but its TTL has passed. Distinct from
+	// MountStatusForeignShare — see ErrKeyExpired's own doc comment for why
+	// collapsing the two was the actual defect #218d5847's AC4 exists to close.
+	MountStatusKeyExpired MountStatus = "key_expired"
 	// MountStatusUnreachable mirrors teamrelay.ErrUnreachable: the relay could
 	// not be asked at all (DNS/connection/timeout) — distinct from being asked
 	// and refused.
@@ -107,6 +126,8 @@ func classifyMountError(err error) MountStatus {
 	switch {
 	case errors.Is(err, teamrelay.ErrKeyRejected):
 		return MountStatusKeyRejected
+	case errors.Is(err, teamrelay.ErrKeyExpired):
+		return MountStatusKeyExpired
 	case errors.Is(err, teamrelay.ErrForeignShare):
 		return MountStatusForeignShare
 	case errors.Is(err, teamrelay.ErrUnreachable):
@@ -180,7 +201,9 @@ type teamRelayMountService struct {
 	documentRepo repository.DocumentRepository
 	storage      DocumentStore
 	piService    ProjectIntegrationService
+	piRepo       repository.ProjectIntegrationRepository
 	client       RelaySyncClient
+	keyDescriber KeyDescriber
 }
 
 // TeamRelayMountServiceOption configures optional collaborators, the same
@@ -193,20 +216,33 @@ func WithRelaySyncClient(c RelaySyncClient) TeamRelayMountServiceOption {
 	return func(s *teamRelayMountService) { s.client = c }
 }
 
+// WithKeyDescriber overrides the real Team Relay agent-key introspection
+// call — the seam #218d5847's AC4 producer tests need, same reasoning as
+// WithRelaySyncClient.
+func WithKeyDescriber(d KeyDescriber) TeamRelayMountServiceOption {
+	return func(s *teamRelayMountService) { s.keyDescriber = d }
+}
+
 // NewTeamRelayMountService returns a TeamRelayMountService. storage may be nil
 // the same way documentService's can be — every call that needs it answers a
-// clear "storage not configured" error rather than a nil-pointer panic.
+// clear "storage not configured" error rather than a nil-pointer panic. piRepo
+// may also be nil (recordSyncOutcome no-ops without it) — kept optional
+// rather than required so existing callers/tests that construct this service
+// without touching R5-A's accounting columns at all keep compiling.
 func NewTeamRelayMountService(
 	documentRepo repository.DocumentRepository,
 	storage DocumentStore,
 	piService ProjectIntegrationService,
+	piRepo repository.ProjectIntegrationRepository,
 	opts ...TeamRelayMountServiceOption,
 ) TeamRelayMountService {
 	s := &teamRelayMountService{
 		documentRepo: documentRepo,
 		storage:      storage,
 		piService:    piService,
+		piRepo:       piRepo,
 		client:       realRelaySyncClient{},
+		keyDescriber: realKeyDescriber{},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -260,6 +296,65 @@ func syncTTL(settings domain.TeamRelaySettings) time.Duration {
 	return time.Duration(settings.SyncTTLSeconds) * time.Second
 }
 
+// recordSyncOutcome stamps R5-A's accounting columns
+// (last_sync_checked_at/status/error, key_expires_at/source) after an actual
+// attempt to reach Team Relay — the two producers #218d5847's AC4 named and
+// never wired to anything:
+//
+//  1. (mandatory) the call's own outcome is always recorded, distinguishing
+//     key_expired from a generic error rather than leaving §3.9's empty tree
+//     unexplained.
+//  2. (load-bearing, now that evc-team-relay#230/#bc11d499 is live) a
+//     successful call also asks the key's own self-describe endpoint for its
+//     real expires_at, so key_expiry_source="source" is a fact Team Relay
+//     reports — not a date typed into a form ("manual", still supported by
+//     the schema but deliberately NOT given a write path by this change; see
+//     the commit message for why leaving it unbuilt was Bill's own accepted
+//     minimal bar for this reopening, not a corner cut).
+//
+// Best-effort throughout: a failure to write these columns, or to reach the
+// introspection endpoint, is logged and never propagates. By the time this
+// runs, the caller's actual document refresh or mount walk has already
+// succeeded or failed on its own terms — a bookkeeping hiccup on top of that
+// must not turn a successful sync into a reported failure, or a real failure
+// into two different errors racing to be returned.
+func (s *teamRelayMountService) recordSyncOutcome(ctx context.Context, projectID uuid.UUID, rs *relaySettings, callErr error) {
+	if s.piRepo == nil {
+		return
+	}
+
+	status := "ok"
+	errMsg := ""
+	switch {
+	case callErr == nil:
+		// status/errMsg already "ok"/"".
+	case errors.Is(callErr, teamrelay.ErrKeyExpired):
+		status = "key_expired"
+	default:
+		status = "error"
+		errMsg = callErr.Error()
+	}
+	if recErr := s.piRepo.RecordSyncCheck(ctx, projectID, "team_relay", timeNow(), status, errMsg); recErr != nil {
+		log.Printf("teamrelay: record sync check for project %s: %v", projectID, recErr)
+	}
+
+	if status != "ok" {
+		// A key that just came back expired (or any other failure) will not
+		// usefully self-describe either — the same auth check gates both
+		// routes on the Team Relay side. Skip the extra round trip rather
+		// than log an identical failure twice.
+		return
+	}
+	desc, descErr := s.keyDescriber.DescribeAgentKey(ctx, rs.relayURL, rs.settings.ShareID, rs.agentKey)
+	if descErr != nil {
+		log.Printf("teamrelay: describe agent key for project %s: %v", projectID, descErr)
+		return
+	}
+	if setErr := s.piRepo.SetKeyExpiry(ctx, projectID, "team_relay", desc.ExpiresAt, "source"); setErr != nil {
+		log.Printf("teamrelay: set key expiry for project %s: %v", projectID, setErr)
+	}
+}
+
 // RefreshIfStale is the AC-2/AC-3 mechanism: a document opened inside its TTL
 // costs zero network calls; opened after the TTL has elapsed costs exactly
 // one, and the body is rewritten only when that one call's hash differs from
@@ -291,6 +386,15 @@ func (s *teamRelayMountService) RefreshIfStale(ctx context.Context, doc *domain.
 	}
 
 	remote, err := s.client.Download(ctx, rs.relayURL, *doc.SourceShare, *doc.SourcePath, rs.agentKey)
+	// #218d5847 AC4: every actual attempt to reach Team Relay — success or
+	// failure — stamps the sync-check accounting columns, and a successful
+	// one also refreshes key_expires_at from the relay's own introspection
+	// endpoint. This is the ONLY place that used to make this exact call and
+	// silently discard everything about the outcome except "did the copy
+	// refresh" — RefreshIfStale fires on ordinary document opens, which is
+	// what makes it the passive, no-explicit-action path the spec's "заранее"
+	// requirement needs, unlike SyncMount's explicit button.
+	s.recordSyncOutcome(ctx, doc.ProjectID, rs, err)
 	if err != nil {
 		return fmt.Errorf("teamrelay: refresh copy %s: %w", doc.ID, err)
 	}
@@ -389,6 +493,11 @@ func (s *teamRelayMountService) SyncMount(ctx context.Context, projectID uuid.UU
 	}
 
 	entries, err := s.client.FilesIndex(ctx, rs.relayURL, rs.settings.ShareID, rs.agentKey)
+	// Same accounting as RefreshIfStale's Download call — see that call site's
+	// comment. SyncMount is the explicit "Sync now" action, so this is what
+	// keeps the settings screen's freshness fact current for a project whose
+	// documents nobody has opened recently enough to hit the passive path.
+	s.recordSyncOutcome(ctx, projectID, rs, err)
 	if err != nil {
 		return &MountResult{Status: classifyMountError(err)}, nil
 	}

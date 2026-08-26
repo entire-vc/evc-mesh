@@ -84,6 +84,48 @@ func TestSyncFilesIndex_ForeignShareIsErrForeignShare(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrKeyRejected)
 }
 
+// TestSyncFilesIndex_ExpiredKeyIsErrKeyExpired is the direct regression test
+// for #218d5847's AC4: an expired key and a foreign-share key are BOTH 403,
+// and before this the distinction was thrown away — classifySyncError
+// returned ErrForeignShare for either, so nothing downstream could ever tell
+// "renew your key" from "this key was never valid here". The body shape here
+// is Team Relay's REAL error envelope (middleware/errors.py), not FastAPI's
+// bare {"detail": "..."} default — verified against the Team Relay source
+// directly, not assumed.
+func TestSyncFilesIndex_ExpiredKeyIsErrKeyExpired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"message":"Agent key has expired","request_id":"req-1"}}`))
+	}))
+	defer srv.Close()
+
+	_, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "k")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrKeyExpired)
+	assert.NotErrorIs(t, err, ErrForeignShare)
+}
+
+// TestSyncFilesIndex_ForeignShareWithRealEnvelope_IsStillErrForeignShare is
+// the negative control for the test above: a 403 whose real envelope carries
+// a DIFFERENT message must not accidentally match keyExpiredMessage and must
+// still classify as ErrForeignShare. Without this, a change that made the
+// match too loose (a substring check instead of an exact one, say) would
+// pass the positive test above for the wrong reason.
+func TestSyncFilesIndex_ForeignShareWithRealEnvelope_IsStillErrForeignShare(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"message":"Agent key not valid for this share","request_id":"req-2"}}`))
+	}))
+	defer srv.Close()
+
+	_, err := SyncFilesIndex(context.Background(), srv.URL, "share-id", "k")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrForeignShare)
+	assert.NotErrorIs(t, err, ErrKeyExpired)
+}
+
 func TestSyncFilesIndex_UnreachableIsErrUnreachable(t *testing.T) {
 	// A closed server: connection refused, not a status code. This is the
 	// "we could not ask" case, distinct from "we asked and were told no".
