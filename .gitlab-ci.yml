@@ -15,11 +15,12 @@
 # This is NOT a port of all 22 GitHub check-runs. It carries the four that
 # catch the most per minute spent — lint, race-enabled tests against real
 # Postgres/Redis/NATS, the Go build, the frontend typecheck+build — plus the
-# hold gate. Deliberately still absent, and worth their own cards: Authed
-# E2E, Go coverage ≥80% (affected-set), Repo tests (integration), Memory
-# recall gate, Tenancy & RBAC gate, Vendor trailer gate, CodeQL, Self-host
-# env. A stub that looks like full CI is more dangerous than a gap you can
-# see, so the gap is named here rather than implied.
+# hold gate, plus self-host-env (config-only, no live daemon needed — see
+# below). Deliberately still absent, and worth their own cards: Authed E2E,
+# Go coverage ≥80% (affected-set), Repo tests (integration), Memory recall
+# gate, Tenancy & RBAC gate, Vendor trailer gate, CodeQL. A stub that looks
+# like full CI is more dangerous than a gap you can see, so the gap is named
+# here rather than implied.
 #
 # ## The half that is not in this file
 #
@@ -102,6 +103,43 @@ hold-gate:
         exit 1
       fi
       echo "no hold label present ✓"
+
+# ── self-host-env ──────────────────────────────────────────────────────────
+# Ported from .github/workflows/ci.yml's "Self-host env (no new required
+# vars)". Guards the class of defect that broke the 2026-07-29 upgrade of an
+# external self-host instance: a compose variable made required (`${VAR:?}`)
+# without also being added to check-required-env.sh's allowlist and
+# .env.prod.example — invisible on our own prod, which has always had the
+# variable, and fatal for every existing self-host install that does not.
+#
+# `docker compose config` is a client-side render of the compose spec — it
+# does not talk to a running engine (verified locally: `DOCKER_HOST` pointed
+# at a nonexistent socket, still exits 0 with valid output). That is what
+# makes this portable onto a plain image instead of needing docker:dind and
+# a privileged runner, unlike every job on this fleet's shared hel01 runner
+# that has needed a live daemon so far.
+self-host-env:
+  stage: lint
+  image: docker:27-cli
+  timeout: 10m
+  before_script:
+    - apk add --no-cache bash
+  script:
+    - bash deploy/docker/mesh/check-required-env.sh
+    # Same second half as the GitHub job: an .env from the FIRST installable
+    # release must still parse against today's compose files — the exact
+    # upgrade that failed on 2026-07-29 (mesh.prototypes.ventures,
+    # 5b672a6 -> 9d7ac87). Both compose files, not just the prod one — see
+    # check-required-env.sh's own header for why "just the prod file" is a
+    # gap that gets believed and stops being watched.
+    - |
+      cd deploy/docker/mesh
+      sed -E 's/^([A-Z_]+)=$/\1=ci-placeholder/' \
+        testdata/first-release.env.example > /tmp/first-release.env
+      for f in docker-compose.prod.yml docker-compose.yml; do
+        echo "--- $f"
+        docker compose -f "$f" --env-file /tmp/first-release.env config >/dev/null
+      done
 
 # ── lint ────────────────────────────────────────────────────────────────────
 lint:
