@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -228,4 +229,106 @@ func (s *taskService) assertAssigneeInProjectWorkspace(
 	}
 
 	return nil
+}
+
+// AssigneeRefusesAssignmentsError reports an attempt to assign a task to an
+// agent whose accepts_from is the explicit empty JSON array [] — that lane's
+// own declaration "I accept no assignments at all".
+//
+// It is deliberately a distinct type from AssigneeNotInWorkspaceError: the
+// principal named here is real, correctly typed, and native to this task's
+// workspace. What refuses the request is the agent's OWN profile, not a
+// tenancy mismatch — answering with the tenancy error's message would send the
+// caller to compare workspaces for an agent that is already in the right one.
+type AssigneeRefusesAssignmentsError struct {
+	PrincipalID uuid.UUID
+	ProjectID   uuid.UUID
+	// AgentSlug names the lane in the message when known, so the caller does
+	// not have to look the id up separately to understand the refusal.
+	AgentSlug string
+}
+
+func (e *AssigneeRefusesAssignmentsError) Error() string {
+	who := e.PrincipalID.String()
+	if e.AgentSlug != "" {
+		who = e.AgentSlug
+	}
+	return fmt.Sprintf(
+		"agent %s declares accepts_from=[] (\"I accept no assignments\") and may not be "+
+			"assigned a task in project %s — assign a different, active lane instead",
+		who, e.ProjectID)
+}
+
+// acceptsFromRefusesAll reports whether raw is the explicit empty JSON array
+// [] — a lane's own declaration that it accepts no assignments at all.
+//
+// nil/empty raw is NOT refusing. AgentRepo.Create and .Update coerce a nil
+// accepts_from to ["*"] before it is ever persisted (agent_repo.go), so an
+// agent read back with a nil/empty RawMessage here has never explicitly
+// declared anything and must not be treated as if it declared an empty list.
+// A value that fails to parse as a []string is left alone too: this
+// function's whole job is recognising one exact shape, not validating the
+// column in general.
+func acceptsFromRefusesAll(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return false
+	}
+	return len(list) == 0
+}
+
+// assertAssigneeAcceptsAssignments refuses an agent whose accepts_from is the
+// explicit empty array — today Sage, mesh-dispatcher-svc and agent-ops-probe,
+// the no-agent/service lanes that already say this in prose in
+// responsibility_zone.
+//
+// Deliberately narrow, matching the scope decision in ADR
+// `adrs-accepts-from-routing-gate`: this checks ONLY the exact accepts_from=[]
+// case.
+//   - It does NOT compare the acting caller against accepts_from's contents —
+//     no ["*"] matching, no specific-list matching. The incident that
+//     prompted the general idea was an assignment made by Bill (701
+//     assignments fleet-wide) onto a target whose accepts_from was ["*"], so a
+//     caller-vs-list gate would not even have caught it.
+//   - It does NOT touch max_concurrent_tasks.
+//   - It does NOT key anything on assigned_by.
+//
+// Only the agent path is checked — accepts_from has no meaning for a human
+// assignee — so this is a no-op for any other assigneeType.
+//
+// On an unreadable directory or a missing agent this returns nil rather than
+// refusing: that failure belongs to assertAssigneeInProjectWorkspace, which
+// runs immediately before this one in ensureAssigneeProjectMember and already
+// fails closed on exactly those cases with its own, correct error. Refusing
+// again here would shadow that message with a misleading one.
+func (s *taskService) assertAssigneeAcceptsAssignments(
+	ctx context.Context,
+	projectID uuid.UUID,
+	assigneeID *uuid.UUID,
+	assigneeType domain.AssigneeType,
+) error {
+	if assigneeID == nil || *assigneeID == uuid.Nil {
+		return nil
+	}
+	if assigneeType != domain.AssigneeTypeAgent {
+		return nil
+	}
+	if s.agentRepo == nil {
+		return nil
+	}
+	agent, err := s.agentRepo.GetByID(ctx, *assigneeID)
+	if err != nil || agent == nil {
+		return nil
+	}
+	if !acceptsFromRefusesAll(agent.AcceptsFrom) {
+		return nil
+	}
+	return &AssigneeRefusesAssignmentsError{
+		PrincipalID: *assigneeID,
+		ProjectID:   projectID,
+		AgentSlug:   agent.Slug,
+	}
 }

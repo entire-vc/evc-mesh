@@ -1471,6 +1471,25 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var refusesAssignmentsErr *service.AssigneeRefusesAssignmentsError
+	if errors.As(err, &refusesAssignmentsErr) {
+		lane := refusesAssignmentsErr.PrincipalID.String()
+		if refusesAssignmentsErr.AgentSlug != "" {
+			lane = refusesAssignmentsErr.AgentSlug
+		}
+		// 422, matching the tenancy refusal above: the caller is a legitimate
+		// member acting on a real, native agent, and it is that agent's own
+		// accepts_from=[] declaration that refuses the request — not a 500, and
+		// not a silent no-op that leaves the caller thinking the assignment
+		// went through.
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code": "assignee_refuses_assignments",
+			"message": fmt.Sprintf(
+				"agent %q has accepts_from=[] — it has declared it accepts no assignments at all. "+
+					"Assign this task to a different, active agent instead.", lane),
+		})
+	}
+
 	var doneEvidenceErr *service.DoneEvidenceError
 	if errors.As(err, &doneEvidenceErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
