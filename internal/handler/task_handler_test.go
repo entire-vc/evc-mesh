@@ -666,6 +666,242 @@ func TestTaskHandler_Update_PartialLabels(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// --- TestTaskHandler_Update_ParentTaskID (#204c0311) ---
+//
+// Before this fix, updateTaskRequest had no parent_task_id field at all: Bind()
+// silently dropped the JSON key, task.ParentTaskID kept whatever GetByID fetched,
+// and the handler still answered 200 with the field unchanged. This is the
+// "detach a subtask from a cancelled-blocked parent" workaround from task
+// #815f703b that got a false-success response.
+
+// TestTaskHandler_Update_ParentTaskID_Reparent verifies PATCH with a new
+// parent_task_id actually reaches the service layer with the new value applied —
+// not silently dropped.
+func TestTaskHandler_Update_ParentTaskID_Reparent(t *testing.T) {
+	taskID := uuid.New()
+	oldParentID := uuid.New()
+	newParentID := uuid.New()
+	now := time.Now()
+	existingTask := &domain.Task{
+		ID:           taskID,
+		Title:        "Existing",
+		ParentTaskID: &oldParentID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	var applied *domain.Task
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(ctx context.Context, task *domain.Task) error {
+			applied = task
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := fmt.Sprintf(`{"parent_task_id":%q}`, newParentID.String())
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, applied, "service Update must have been called")
+	require.NotNil(t, applied.ParentTaskID, "parent_task_id must be applied, not silently dropped")
+	assert.Equal(t, newParentID, *applied.ParentTaskID)
+
+	// Also confirm the response body reflects the change — re-fetch semantics.
+	var result domain.Task
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	require.NotNil(t, result.ParentTaskID)
+	assert.Equal(t, newParentID, *result.ParentTaskID)
+}
+
+// TestTaskHandler_Update_ParentTaskID_DetachViaExplicitNull verifies that sending
+// parent_task_id:null actually detaches (clears) the parent — the exact workaround
+// attempted, and silently no-op'd, in the live incident #815f703b.
+func TestTaskHandler_Update_ParentTaskID_DetachViaExplicitNull(t *testing.T) {
+	taskID := uuid.New()
+	oldParentID := uuid.New()
+	now := time.Now()
+	existingTask := &domain.Task{
+		ID:           taskID,
+		Title:        "Existing",
+		ParentTaskID: &oldParentID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	var applied *domain.Task
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(ctx context.Context, task *domain.Task) error {
+			applied = task
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"parent_task_id":null}`
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, applied, "service Update must have been called")
+	assert.Nil(t, applied.ParentTaskID, "explicit null must detach — this is the false-success case from #815f703b")
+}
+
+// TestTaskHandler_Update_ParentTaskID_OmittedLeavesUnchanged verifies the other
+// half of the flexUUID contract: when parent_task_id is simply not present in the
+// PATCH body, the existing value must be left alone (not implicitly cleared).
+func TestTaskHandler_Update_ParentTaskID_OmittedLeavesUnchanged(t *testing.T) {
+	taskID := uuid.New()
+	oldParentID := uuid.New()
+	now := time.Now()
+	existingTask := &domain.Task{
+		ID:           taskID,
+		Title:        "Existing",
+		ParentTaskID: &oldParentID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	var applied *domain.Task
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(ctx context.Context, task *domain.Task) error {
+			applied = task
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"New Title"}` // parent_task_id key absent entirely
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, applied)
+	require.NotNil(t, applied.ParentTaskID, "omitted parent_task_id must leave the existing parent untouched")
+	assert.Equal(t, oldParentID, *applied.ParentTaskID)
+}
+
+// TestTaskHandler_Update_ParentTaskID_SelfParentRejected verifies the handler
+// returns an explicit error rather than persisting a self-referencing parent.
+func TestTaskHandler_Update_ParentTaskID_SelfParentRejected(t *testing.T) {
+	taskID := uuid.New()
+	now := time.Now()
+	existingTask := &domain.Task{
+		ID:        taskID,
+		Title:     "Existing",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	updateCalled := false
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(ctx context.Context, task *domain.Task) error {
+			updateCalled = true
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := fmt.Sprintf(`{"parent_task_id":%q}`, taskID.String())
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "self-parent must be an explicit error, not a silent 200")
+	assert.False(t, updateCalled, "service Update must not be called for a rejected self-parent")
+}
+
+// TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors verifies the
+// negative-2 case from #204c0311's acceptance criteria: PATCH parent_task_id
+// to a well-formed but nonexistent task id must fail, not silently succeed
+// with 200. flexUUID applies any syntactically valid UUID unconditionally —
+// existence is enforced by the DB's `parent_task_id REFERENCES tasks(id)` FK
+// (migrations/20260224009_create_tasks.sql), which the service layer surfaces
+// as a *pq.Error with code 23503. This test proves the handler propagates
+// that error through handleError's existing foreign_key_violation mapping
+// rather than swallowing it — the same silent-no-op class this whole fix
+// exists to close, just triggered at the DB boundary instead of Bind().
+func TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors(t *testing.T) {
+	taskID := uuid.New()
+	nonexistentParentID := uuid.New()
+	now := time.Now()
+	existingTask := &domain.Task{
+		ID:        taskID,
+		Title:     "Existing",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+			return existingTask, nil
+		},
+		UpdateFunc: func(ctx context.Context, task *domain.Task) error {
+			return &pq.Error{Code: "23503", Message: "insert or update on table \"tasks\" violates foreign key constraint"}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := fmt.Sprintf(`{"parent_task_id":%q}`, nonexistentParentID.String())
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.NotEqual(t, http.StatusOK, rec.Code, "a nonexistent parent_task_id must not silently succeed with 200")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 // --- TestTaskHandler_Delete ---
 
 // --- TestTaskHandler_Update_HumanGate ---
