@@ -105,7 +105,7 @@ func TestAuthFlow_RegisterLoginLogout(t *testing.T) {
 	t.Run("RefreshTokenReuse", func(t *testing.T) {
 		req, err := http.NewRequest(http.MethodPost, env.BaseURL+"/api/v1/auth/refresh", nil)
 		require.NoError(t, err)
-		req.AddCookie(&http.Cookie{Name: "refresh_token", Value: preRefreshToken})
+		req.AddCookie(&http.Cookie{Name: "refresh_token", Value: preRefreshToken}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- AddCookie on an http.Request only serializes Name=Value into the Cookie request header; Secure/HttpOnly are response-cookie attributes and meaningless here
 
 		// A plain, jar-less client — env.HTTPClient's own jar already holds
 		// the ROTATED cookie, and a Jar-backed Do() would silently append

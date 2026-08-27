@@ -197,7 +197,7 @@ class ResumeAfterDeploy(unittest.TestCase):
         url = f"http://127.0.0.1:{srv.server_address[1]}/api/version"
         seen = []
         for _ in range(FLIP_AFTER + 2):
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            with urllib.request.urlopen(url, timeout=5) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- test-local httpserver on 127.0.0.1, url built from srv.server_address in this same test, not attacker input
                 seen.append(json.load(resp)["commit"])
         self.assertEqual(seen[0], self.base, f"stub did not start on the old commit: {seen}")
         self.assertEqual(seen[-1], self.deployable, f"stub never flipped: {seen}")

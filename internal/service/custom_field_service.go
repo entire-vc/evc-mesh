@@ -413,7 +413,7 @@ func validateFieldValue(def *domain.CustomFieldDefinition, val interface{}) stri
 		if err != nil {
 			return "must be valid JSON"
 		}
-		var tmp interface{}
+		var tmp interface{} // nosemgrep: go.lang.security.deserialization.unsafe-deserialization-interface.go-unsafe-deserialization-interface — round-trip validates our OWN just-marshaled bytes (b, above), not attacker-supplied wire data; tmp is discarded, never used
 		if err := json.Unmarshal(b, &tmp); err != nil {
 			return "must be valid JSON"
 		}

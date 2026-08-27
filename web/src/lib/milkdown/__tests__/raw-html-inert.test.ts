@@ -55,7 +55,7 @@ const PAYLOADS: Record<string, string> = {
 function assertInert(html: string, label: string) {
   const probe = document.createElement("div");
   probe.innerHTML = html;
-  expect(probe.querySelector("script"), `${label}: <script> reached the DOM`).toBeNull();
+  expect(probe.querySelector("script"), `${label}: <script> reached the DOM`).toBeNull(); // nosemgrep: javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag -- this IS the test asserting the payload stays inert; PAYLOADS above are fixed test fixtures, never live user input
   expect(probe.querySelector("iframe"), `${label}: <iframe> reached the DOM`).toBeNull();
   expect(
     probe.querySelector("[onerror],[onload],[onclick]"),

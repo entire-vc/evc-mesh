@@ -225,7 +225,8 @@ func (r *RuleRepo) CountTasksByAssigneeAndCategory(ctx context.Context, workspac
 		args = append(args, cat)
 	}
 
-	q := fmt.Sprintf(`
+	q := fmt.Sprintf( // nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- %s below is filled by strings.Join(placeholders, ", ") of literal "$N" positional placeholders built from the loop index above (fmt.Sprintf("$%d", i+4)); every actual value still travels as a bound arg, none are interpolated
+		`
 		SELECT COUNT(*)
 		FROM tasks t
 		JOIN task_statuses ts ON ts.id = t.status_id

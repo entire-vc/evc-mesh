@@ -343,7 +343,8 @@ func (r *DocumentCommentRepo) UpdateAnchorPositions(ctx context.Context, positio
 		args = append(args, p.ID, nullIfEmpty(p.Prefix), nullIfEmpty(p.Suffix), p.Start, p.End)
 	}
 
-	q := `
+	q := // nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- strings.Join(values, ", ") below only concatenates literal "$N::type" placeholder tuples (built from the loop index above); every actual value travels as a bound arg via ExecContext, none are interpolated
+		`
 		UPDATE document_comments dc
 		   SET anchor_prefix = v.prefix,
 		       anchor_suffix = v.suffix,

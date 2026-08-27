@@ -35,7 +35,7 @@ func mintToken(t *testing.T, userID uuid.UUID) string {
 		Email: "unit@test.local",
 		Name:  "Unit Test",
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testJWTSecret))
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testJWTSecret)) // nosemgrep: go.jwt-go.security.jwt.hardcoded-jwt-key -- testJWTSecret (defined above) is a literal test-only fixture, never a real credential; it signs and verifies exclusively within this test file
 	require.NoError(t, err)
 	return signed
 }
@@ -118,7 +118,7 @@ func TestHandler_RejectsMissingAndInvalidCredentials(t *testing.T) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute)),
 			Issuer:    "evc-mesh",
 		},
-	}).SignedString([]byte(testJWTSecret))
+	}).SignedString([]byte(testJWTSecret)) // nosemgrep: go.jwt-go.security.jwt.hardcoded-jwt-key -- same test-only fixture secret as above, not a real credential
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusUnauthorized, callHandler(t, "token="+badSubject, authz).Code)
 }
