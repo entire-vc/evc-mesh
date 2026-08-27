@@ -233,7 +233,11 @@ test:
     - go install github.com/pressly/goose/v3/cmd/goose@latest
   script:
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
-    - go test ./... -race -coverprofile=coverage.out -covermode=atomic
+    # go-test-stall-watchdog wraps `go test` so a wedge (Mesh #405872aa: 28min of
+    # silence, the runner's only slot held, the whole fleet's queue stalled) fails
+    # fast with a goroutine dump naming what's blocked, instead of running out the
+    # job timeout with nothing to diagnose.
+    - sh scripts/ci/go-test-stall-watchdog.sh ./... -race -coverprofile=coverage.out -covermode=atomic
   artifacts:
     when: always
     paths: [coverage.out]
