@@ -1,0 +1,39 @@
+# Mesh #48f243e4 — semgrep baseline triage for the upcoming GitLab CI gate.
+#
+# .github/workflows/** and the rest of .github/ belong to the GitHub showcase
+# mirror of this repo (see CLAUDE-task-workflow.md §0z) — canon CI for evc-mesh
+# is .gitlab-ci.yml on GitLab, and .github/ is not what runs against this repo's
+# real pipeline. The semgrep job being added here gates GitLab CI, so scanning
+# the mirror's own workflow files is out of scope for it.
+#
+# This is NOT a silent dismissal of what semgrep finds there: 87 real findings
+# (mostly github-actions-mutable-action-tag: workflows pinning a third-party
+# Action by a mutable tag like `@v4` instead of a commit SHA, plus a handful of
+# run-shell-injection findings from untrusted `${{ }}` interpolation directly
+# into a `run:` shell step) are a genuine pre-existing supply-chain issue on
+# the mirror. They are tracked as their own follow-up card rather than folded
+# into this baseline.
+.github/
+
+# ---------------------------------------------------------------------------
+# A repo-level .semgrepignore REPLACES semgrep's built-in defaults — it does not
+# add to them. Measured on this tree (`semgrep scan --x-ls`, target-file count):
+#
+#   with this file, before the block below   24609 targets, 21716 in node_modules
+#   with this file removed entirely           2548 targets,     0 in node_modules
+#
+# So the moment any job scans a checkout that has dependencies installed, an
+# ignore file written as "just the one extra path we want excluded" silently
+# turns the whole vendor tree into scan surface — minutes of runtime and
+# findings in code we do not own. `:include .gitignore` pulls our own ignore
+# rules back in; the literals below cover what .gitignore does not.
+:include .gitignore
+
+node_modules/
+.git/
+dist/
+build/
+coverage/
+vendor/
+*.min.js
+*.min.css

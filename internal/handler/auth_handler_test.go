@@ -376,7 +376,7 @@ func TestAuthHandler_Refresh_RotatesCookie(t *testing.T) {
 	firstCookie := findRefreshCookie(t, regRec)
 
 	req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
-	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value})
+	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- AddCookie on an http.Request only serializes Name=Value into the Cookie request header; Secure/HttpOnly are response-cookie attributes and meaningless here
 	rec := httptest.NewRecorder()
 	require.NoError(t, h.Refresh(e.NewContext(req, rec)))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -397,7 +397,7 @@ func TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401(t *testing.T)
 
 	// First use rotates it.
 	req1 := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
-	req1.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value})
+	req1.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- AddCookie on an http.Request only serializes Name=Value into the Cookie request header; Secure/HttpOnly are response-cookie attributes and meaningless here
 	rec1 := httptest.NewRecorder()
 	require.NoError(t, h.Refresh(e.NewContext(req1, rec1)))
 	require.Equal(t, http.StatusOK, rec1.Code)
@@ -406,7 +406,7 @@ func TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401(t *testing.T)
 	// detection (the whole point of AC7 — a tolerant server would defeat
 	// the theft-detection this task's Web Locks coordination relies on).
 	req2 := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
-	req2.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value})
+	req2.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- AddCookie on an http.Request only serializes Name=Value into the Cookie request header; Secure/HttpOnly are response-cookie attributes and meaningless here
 	rec2 := httptest.NewRecorder()
 	require.NoError(t, h.Refresh(e.NewContext(req2, rec2)))
 	assert.Equal(t, http.StatusUnauthorized, rec2.Code)

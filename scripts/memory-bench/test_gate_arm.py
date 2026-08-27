@@ -414,7 +414,7 @@ def _eval_raw(expr: str, ctx: dict):
         "cancelled": lambda: bool(ctx.get("cancelled", False)),
         "__builtins__": {},
     }
-    return eval(py, ns)  # noqa: S307 — fixed grammar, no external input
+    return eval(py, ns)  # noqa: S307 — fixed grammar, no external input -- nosemgrep: python.lang.security.audit.eval-detected.eval-detected (ns has empty __builtins__, py is derived from fixed GitHub Actions expression grammar, not attacker input)
 
 
 def _evaluate(expr: str, ctx: dict) -> bool:

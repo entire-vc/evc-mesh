@@ -32,4 +32,5 @@ COPY --from=web-builder /app/dist /srv/web
 COPY migrations/ /app/migrations/
 WORKDIR /app
 EXPOSE 8005
+# nosemgrep: dockerfile.security.missing-user.missing-user — deliberately root for now (self-hosting.md); switching to a non-root USER here without also fixing volume ownership on migrations/uploads can silently break writes at container start, and that would only surface in prod. Tracked as a separate hardening card, not fixed in Mesh #48f243e4.
 CMD ["mesh-api"]

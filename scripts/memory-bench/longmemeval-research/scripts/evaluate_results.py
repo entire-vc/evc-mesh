@@ -76,7 +76,7 @@ def main() -> int:
     ]
     _redacted = ["***REDACTED***" if cmd[i - 1] == "--judge-api-key" else c for i, c in enumerate(cmd)]
     print("Running:", " ".join(_redacted))
-    completed = subprocess.run(cmd, env=env, check=False)
+    completed = subprocess.run(cmd, env=env, check=False)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- cmd is a literal arg list (no shell=True), env only adds judge-config keys from the operator's own CLI flags/env; offline benchmark tooling, no network-facing input
     return completed.returncode
 
 

@@ -134,7 +134,7 @@ def fetch_serving_commit(base_url: str, timeout: float = DEFAULT_HTTP_TIMEOUT) -
     """
     url = version_url(base_url)
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 -- nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected (dev/bench tooling; url is version_url(base_url), an operator-supplied CLI arg, not attacker input)
             body = resp.read().decode("utf-8", "replace")
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         raise VersionUnreadable(f"{url} did not answer ({exc})") from exc

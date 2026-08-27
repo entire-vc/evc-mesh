@@ -124,7 +124,7 @@ def download_datasets(variants: list[str] | None = None) -> None:
             print(f"  {filepath.name} already exists ({size_mb:.1f} MB), skipping")
             continue
         print(f"  Downloading {filepath.name} ...")
-        urllib.request.urlretrieve(url, filepath)
+        urllib.request.urlretrieve(url, filepath)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- dev/bench tooling; url comes from a hardcoded dataset manifest in this same file, not attacker input
         size_mb = filepath.stat().st_size / (1024 * 1024)
         print(f"  Saved {filepath.name} ({size_mb:.1f} MB)")
 

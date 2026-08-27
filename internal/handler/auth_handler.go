@@ -53,7 +53,7 @@ const (
 // the token's actual database lifetime (auth.Service.RefreshTokenTTL) so the
 // cookie never outlives, or gets dropped before, the token it carries.
 func setRefreshCookie(c echo.Context, token string, ttl time.Duration) {
-	c.SetCookie(&http.Cookie{
+	c.SetCookie(&http.Cookie{ // nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure — Secure IS set via isRequestSecure(c.Request()); the rule only recognises a literal `true`
 		Name:     refreshCookieName,
 		Value:    token,
 		Path:     refreshCookiePath,
@@ -68,7 +68,7 @@ func setRefreshCookie(c echo.Context, token string, ttl time.Duration) {
 // setRefreshCookie's exactly — browsers key cookie deletion on Name+Path
 // (+Domain), so a mismatched Path silently leaves the old cookie in place.
 func clearRefreshCookie(c echo.Context) {
-	c.SetCookie(&http.Cookie{
+	c.SetCookie(&http.Cookie{ // nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure — Secure IS set via isRequestSecure(c.Request()); the rule only recognises a literal `true`
 		Name:     refreshCookieName,
 		Value:    "",
 		Path:     refreshCookiePath,

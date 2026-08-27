@@ -35,13 +35,13 @@ func TestSelectStarBreaksOnAdditiveMigration_LiveDB(t *testing.T) {
 	suffix := strings.ReplaceAll(uuid.New().String(), "-", "")[:12]
 	table := "select_star_negative_control_" + suffix
 
-	_, err := db.ExecContext(ctx, `CREATE TABLE `+table+` (id integer PRIMARY KEY, name text NOT NULL)`)
+	_, err := db.ExecContext(ctx, `CREATE TABLE `+table+` (id integer PRIMARY KEY, name text NOT NULL)`) // nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- scratch table name is `"select_star_negative_control_" + suffix` where suffix is a locally-generated uuid.New() (see above), never external/attacker input
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = db.ExecContext(context.Background(), `DROP TABLE IF EXISTS `+table)
+		_, _ = db.ExecContext(context.Background(), `DROP TABLE IF EXISTS `+table) // nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- scratch table name is `"select_star_negative_control_" + suffix` where suffix is a locally-generated uuid.New() (see above), never external/attacker input
 	})
 
-	_, err = db.ExecContext(ctx, `INSERT INTO `+table+` (id, name) VALUES (1, 'widget')`)
+	_, err = db.ExecContext(ctx, `INSERT INTO `+table+` (id, name) VALUES (1, 'widget')`) // nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- scratch table name is `"select_star_negative_control_" + suffix` where suffix is a locally-generated uuid.New() (see above), never external/attacker input
 	require.NoError(t, err)
 
 	// widgetRow mirrors the table's ORIGINAL two-column shape — the struct a
@@ -66,7 +66,7 @@ func TestSelectStarBreaksOnAdditiveMigration_LiveDB(t *testing.T) {
 	// failure mode itself: the already-running binary has no idea the new
 	// column exists, and sqlx's strict struct-scan refuses to scan a column
 	// with no matching struct field rather than silently dropping it.
-	_, err = db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN color text`)
+	_, err = db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN color text`) // nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- scratch table name is `"select_star_negative_control_" + suffix` where suffix is a locally-generated uuid.New() (see above), never external/attacker input
 	require.NoError(t, err)
 
 	var afterOldStruct widgetRow

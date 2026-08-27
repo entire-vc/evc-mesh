@@ -2351,7 +2351,7 @@ def evaluate_if(expr: str, *, context: dict, success: bool, cancelled: bool) -> 
         expr = expr[3:-2].strip()
     if not _STATUS_FN.search(expr):
         expr = f"success() && ({expr})"
-    return bool(eval(  # noqa: S307 - fixed grammar, tokenized above, no builtins
+    return bool(eval(  # noqa: S307 - fixed grammar, tokenized above, no builtins -- nosemgrep: python.lang.security.audit.eval-detected.eval-detected (namespace __builtins__ is empty, expr is derived from fixed GitHub Actions expression grammar, not attacker input)
         _translate_if(expr),
         {"__builtins__": {}},
         {

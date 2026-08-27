@@ -55,7 +55,7 @@ def _req(method: str, url: str, body=None, token: str | None = None, timeout: in
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- dev/CI bootstrap tooling; req is built from an operator-supplied base url, not attacker input
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
         # HTTPError's str() discards the body, which is where the API says what
@@ -78,7 +78,7 @@ def wait_for_api(api_url: str, attempts: int = 60) -> None:
     """
     for i in range(attempts):
         try:
-            with urllib.request.urlopen(f"{api_url}/health", timeout=3) as resp:
+            with urllib.request.urlopen(f"{api_url}/health", timeout=3) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- dev/CI bootstrap tooling; api_url is an operator-supplied CLI arg, not attacker input
                 if resp.status == 200:
                     print(f"# api ready after {i}s", file=sys.stderr)
                     return

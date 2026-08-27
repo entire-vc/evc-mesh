@@ -5,7 +5,7 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"math/rand" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- integration benchmark tooling (see go:build tag above), used only to sample/jitter test workload, never for anything cryptographic
 	"os"
 	"sort"
 	"strings"

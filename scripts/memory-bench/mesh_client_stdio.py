@@ -508,7 +508,7 @@ def _read_embed_inflight(base_url: str) -> float | None:
     global _embed_drain_warned
     url = base_url.rstrip("/") + "/metrics"
     try:
-        with urllib.request.urlopen(url, timeout=EMBED_DRAIN_HTTP_TIMEOUT_SECS) as resp:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=EMBED_DRAIN_HTTP_TIMEOUT_SECS) as resp:  # noqa: S310 -- nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected (base_url is an operator-supplied CLI arg for a local bench client, not attacker input)
             body = resp.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, OSError, ValueError) as exc:
         if not _embed_drain_warned:
