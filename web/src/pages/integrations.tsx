@@ -335,7 +335,7 @@ export function IntegrationsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0 ml-4">
-                        {cfg && !provider.comingSoon && (
+                        {cfg && !provider.comingSoon && provider.id !== "mcp" && (
                           <button
                             onClick={() => void handleDelete(provider.id)}
                             className="text-xs text-muted-foreground hover:text-destructive transition-colors"
@@ -344,10 +344,15 @@ export function IntegrationsPage() {
                             Remove
                           </button>
                         )}
+                        {/* mcp is a reference-only connection card — a static
+                            .mcp.json snippet, not a channel. No enable/disable:
+                            nothing on the backend reads is_active for it
+                            (#4a3195a5), so a toggle here would control nothing. */}
                         {/* Telegram has nothing to toggle until a bot token has
                             been saved — the button here would just enable an
                             integration that can never poll anything. */}
-                        {provider.id !== "telegram" || telegramTokenSet ? (
+                        {provider.id !== "mcp" &&
+                        (provider.id !== "telegram" || telegramTokenSet) ? (
                           <Button
                             size="sm"
                             variant={isActive ? "default" : "outline"}
@@ -572,7 +577,11 @@ export function IntegrationsPage() {
                     </CardContent>
                   )}
 
-                  {provider.id === "mcp" && isActive && (
+                  {/* Always shown, not gated on is_active — mcp has no
+                      enable/disable state (see the toggle-suppression above);
+                      this is reference material, not something a workspace
+                      turns on. */}
+                  {provider.id === "mcp" && (
                     <CardContent className="pt-0">
                       <div className="space-y-3">
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
