@@ -317,6 +317,22 @@ tenancy-rbac-gate:
     REDIS_HOST: redis
     REDIS_PORT: "6379"
     NATS_URL: "nats://nats:4222"
+    # Alias, not localhost — and here it is not cosmetic. On startup the API asks
+    # JetStream for a 10 GiB stream; this runner's NATS has far less, and the
+    # recovery path is to read the host's real limit from
+    # {NATS_MONITOR_URL}/jsz?config=1 and retry with it. Left at its default
+    # (http://localhost:8223) that query dials the job container itself, is
+    # refused, and the API disables the event bus for the whole process:
+    # "event publishing (WS broadcast, cross-agent notifications, event
+    # history) is disabled". Every WebSocket assertion then fails with no NATS
+    # error anywhere near it, because the publish never happens. Measured on
+    # pipelines 391/394/404/405 (red) vs 416 (green).
+    #
+    # Deliberately NOT in the global `variables:` block: the `test` job runs
+    # unit tests, and config's own defaults test asserts this var is UNSET.
+    # A global value there is environment leaking into an assertion about
+    # defaults — pipeline 416 failed exactly that way.
+    NATS_MONITOR_URL: "http://nats:8222"   # --http_port 8222 in the nats service
     S3_ENDPOINT: "minio:9000"
     S3_ACCESS_KEY_ID: minioadmin
     S3_SECRET_ACCESS_KEY: minioadmin
