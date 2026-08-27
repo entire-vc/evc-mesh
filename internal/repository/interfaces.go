@@ -644,7 +644,7 @@ type CommentMentionRepository interface {
 // survives a handle resolving to nothing.
 type CommentDeliveryOutcomeRepository interface {
 	InsertBatch(ctx context.Context, rows []domain.CommentDeliveryOutcome) error
-	MarkFailed(ctx context.Context, commentID uuid.UUID, slug, reason string) error
+	MarkFailed(ctx context.Context, commentID uuid.UUID, slug, kind, reason string) error
 	ListByCommentIDs(ctx context.Context, commentIDs []uuid.UUID) (map[uuid.UUID][]domain.CommentDeliveryOutcome, error)
 }
 

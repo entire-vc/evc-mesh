@@ -34,7 +34,7 @@ func (f *fakeDeliveryRepo) InsertBatch(_ context.Context, rows []domain.CommentD
 	return nil
 }
 
-func (f *fakeDeliveryRepo) MarkFailed(_ context.Context, _ uuid.UUID, slug, _ string) error {
+func (f *fakeDeliveryRepo) MarkFailed(_ context.Context, _ uuid.UUID, slug, _kind, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failed = append(f.failed, slug)
@@ -208,11 +208,11 @@ func TestMarkDeliveryFailed_NilWithoutARepoAndDowngradesWithOne(t *testing.T) {
 	env := setupCommentServiceWithMentions()
 	commentID := uuid.New()
 
-	assert.Nil(t, env.svc.markDeliveryFailed(commentID, "somebody"))
+	assert.Nil(t, env.svc.markDeliveryFailed(commentID, "somebody", domain.RecipientKindAgent))
 
 	repo := &fakeDeliveryRepo{}
 	env.svc.deliveryRepo = repo
-	hook := env.svc.markDeliveryFailed(commentID, "somebody")
+	hook := env.svc.markDeliveryFailed(commentID, "somebody", domain.RecipientKindAgent)
 	require.NotNil(t, hook)
 
 	hook(errors.New("event store rejected the write"))

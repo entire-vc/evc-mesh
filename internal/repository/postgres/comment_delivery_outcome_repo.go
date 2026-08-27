@@ -26,6 +26,14 @@ func NewCommentDeliveryOutcomeRepo(db *sqlx.DB) *CommentDeliveryOutcomeRepo {
 // ON CONFLICT DO UPDATE rather than DO NOTHING: editing a comment re-runs the
 // mention pass, and a handle whose situation changed between the two writes
 // should show its current verdict, not the first one ever recorded.
+//
+// The conflict target is the full (comment_id, recipient_slug, recipient_kind)
+// key, not just the first two columns. A slug can resolve to both an agent
+// and a user (task f4f47938) — two genuinely different recipients sharing one
+// handle, not two opinions about one recipient. Conflicting on the pair alone
+// let the second write upsert over the first, silently erasing whichever side
+// was recorded first; recipient_kind is part of the row's identity, not just
+// a value on it (migration 20260827001).
 func (r *CommentDeliveryOutcomeRepo) InsertBatch(ctx context.Context, rows []domain.CommentDeliveryOutcome) error {
 	if len(rows) == 0 {
 		return nil
@@ -35,9 +43,8 @@ func (r *CommentDeliveryOutcomeRepo) InsertBatch(ctx context.Context, rows []dom
 			(comment_id, recipient_slug, recipient_id, recipient_kind,
 			 outcome, reason, channel, recipient_presence, decided_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (comment_id, recipient_slug) DO UPDATE SET
+		ON CONFLICT (comment_id, recipient_slug, recipient_kind) DO UPDATE SET
 			recipient_id       = EXCLUDED.recipient_id,
-			recipient_kind     = EXCLUDED.recipient_kind,
 			outcome            = EXCLUDED.outcome,
 			reason             = EXCLUDED.reason,
 			channel            = EXCLUDED.channel,
@@ -60,17 +67,23 @@ func (r *CommentDeliveryOutcomeRepo) InsertBatch(ctx context.Context, rows []dom
 // verdict is written synchronously with the comment, and the dispatch that
 // actually persists the event runs afterwards in its own goroutine.
 //
+// kind addresses the row alongside comment_id and slug because slug alone no
+// longer identifies one row — a colliding slug can carry both an agent row
+// and a user row for the same comment, and this downgrade must land on the
+// one whose async write actually failed, not on whichever row the two-column
+// address happened to reach first.
+//
 // The `outcome <> 'failed'` guard makes it idempotent under retries without
 // letting a later success overwrite an earlier failure — nothing on this path
 // ever upgrades a row back to delivered, deliberately: a store that rejected
 // the event is a fact about this comment that a subsequent retry does not undo.
-func (r *CommentDeliveryOutcomeRepo) MarkFailed(ctx context.Context, commentID uuid.UUID, slug, reason string) error {
+func (r *CommentDeliveryOutcomeRepo) MarkFailed(ctx context.Context, commentID uuid.UUID, slug, kind, reason string) error {
 	const q = `
 		UPDATE comment_delivery_outcomes
-		   SET outcome = 'failed', reason = $3, decided_at = NOW()
-		 WHERE comment_id = $1 AND recipient_slug = $2 AND outcome <> 'failed'
+		   SET outcome = 'failed', reason = $4, decided_at = NOW()
+		 WHERE comment_id = $1 AND recipient_slug = $2 AND recipient_kind = $3 AND outcome <> 'failed'
 	`
-	_, err := r.db.ExecContext(ctx, q, commentID, slug, reason)
+	_, err := r.db.ExecContext(ctx, q, commentID, slug, kind, reason)
 	return err
 }
 
