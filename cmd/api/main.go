@@ -34,7 +34,6 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/reconciler"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
-	"github.com/entire-vc/evc-mesh/internal/spark"
 	"github.com/entire-vc/evc-mesh/internal/storage"
 	wsHub "github.com/entire-vc/evc-mesh/internal/ws"
 )
@@ -370,6 +369,23 @@ func main() {
 		log.Printf("[config] Team Relay env fallback: relay URL available when no workspace has its own team_relay integration configured (%s)", cfg.TeamRelay.RelayURL)
 	} else {
 		log.Printf("[config] MESH_TEAMRELAY_RELAY_URL not set — Team Relay env fallback has no relay URL; a workspace can still enable one via its own integration")
+	}
+
+	// sparkIntegrationResolver replaces the process-start-only cfg.Spark.Enabled
+	// gate that used to decide, once and for all, whether /spark/* routes existed
+	// at all — the exact C1/C2 violation #4a3195a5 exists to close: is_active on a
+	// workspace's own spark row could never gate anything, because by the time a
+	// request arrived the client (or its absence) had already been baked in.
+	// Routes are now always registered (below); this resolver is consulted fresh
+	// on every request instead.
+	sparkIntegrationResolver := service.NewSparkIntegrationResolver(integrationRepo, service.SparkEnvFallback{
+		URL:     cfg.Spark.URL,
+		Enabled: cfg.Spark.Enabled,
+	})
+	if cfg.Spark.Enabled && cfg.Spark.URL != "" {
+		log.Printf("[config] Spark env fallback: catalog URL available when no workspace has its own spark integration configured (%s)", cfg.Spark.URL)
+	} else {
+		log.Printf("[config] MESH_SPARK_ENABLED/MESH_SPARK_URL not fully set — Spark env fallback unavailable; a workspace can still enable one via its own integration")
 	}
 
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
@@ -822,10 +838,13 @@ func main() {
 	// Build version — public, no auth. All three paths route through Caddy's /api/* block.
 	// spark_enabled/spark_url ride along here rather than a dedicated endpoint: they're
 	// the instance capabilities the frontend needs to know before the user picks a
-	// workspace (the Spark Catalog nav link, gated by cfg.Spark.Enabled above — same
-	// source of truth the route registration itself uses — and the "View on Spark"
-	// links, which must point at whatever catalog this deployment configured rather
-	// than a hardcoded vendor domain).
+	// workspace (the Spark Catalog nav link, and the "View on Spark" links, which must
+	// point at whatever catalog this deployment configured rather than a hardcoded
+	// vendor domain). This reflects the ENV fallback only — it has no workspace
+	// context to check a per-workspace override against (that check happens
+	// per-request via sparkIntegrationResolver, once a workspace is known); a
+	// workspace that has disabled Spark still sees this nav link, and gets refused
+	// with a named reason if it actually tries to browse the catalog.
 	versionHandler := func(c echo.Context) error {
 		return c.JSON(200, map[string]any{
 			"commit":        BuildSHA,
@@ -1612,16 +1631,16 @@ func main() {
 	// C1 canonical updates feed — returns privacy:public canonical-decision memories since a cursor.
 	api.GET("/canonical_updates", canonicalUpdatesHandler.GetCanonicalUpdates)
 
-	// Spark catalog routes (optional; only registered when MESH_SPARK_ENABLED=true).
-	if cfg.Spark.Enabled {
-		sparkClient := spark.NewClient(cfg.Spark.URL)
-		sparkHandler := handler.NewSparkHandler(sparkClient, agentService, workspaceMemberRepo)
-		api.GET("/spark/agents", sparkHandler.Search)
-		api.GET("/spark/agents/popular", sparkHandler.Popular)
-		api.GET("/spark/agents/:agent_id", sparkHandler.GetByID)
-		api.POST("/spark/agents/:agent_id/install", sparkHandler.Install)
-		log.Printf("Spark catalog integration enabled (base URL: %s)", cfg.Spark.URL)
-	}
+	// Spark catalog routes — always registered now (C1: is_active must live on
+	// the request path, not on whether the route exists at all). Each request
+	// resolves its own base URL via sparkIntegrationResolver and refuses with a
+	// named reason when Spark is disabled for the resolved workspace, rather
+	// than 404ing the whole route the old cfg.Spark.Enabled gate produced.
+	sparkHandler := handler.NewSparkHandler(sparkIntegrationResolver, agentService, workspaceMemberRepo)
+	api.GET("/spark/agents", sparkHandler.Search)
+	api.GET("/spark/agents/popular", sparkHandler.Popular)
+	api.GET("/spark/agents/:agent_id", sparkHandler.GetByID)
+	api.POST("/spark/agents/:agent_id/install", sparkHandler.Install)
 
 	// 10. Start recurring task scheduler.
 	schedulerShutdownCh := make(chan struct{})
