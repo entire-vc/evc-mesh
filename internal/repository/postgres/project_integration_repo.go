@@ -126,6 +126,27 @@ func (r *ProjectIntegrationRepo) GetByShareSlug(ctx context.Context, shareSlug s
 	return &pi, nil
 }
 
+// ListEnabledByType returns every enabled integration of the given type,
+// across all projects. Ordered by project_id only for deterministic test
+// output — callers that care about priority (e.g. never-checked first) sort
+// after fetching.
+func (r *ProjectIntegrationRepo) ListEnabledByType(ctx context.Context, intType string) ([]domain.ProjectIntegration, error) {
+	const q = `SELECT id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE type = $1 AND enabled = true ORDER BY project_id ASC`
+	var rows []projectIntegrationRow
+	if err := r.db.SelectContext(ctx, &rows, q, intType); err != nil {
+		return nil, err
+	}
+	result := make([]domain.ProjectIntegration, 0, len(rows))
+	for i := range rows {
+		pi, err := rows[i].toDomain()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, pi)
+	}
+	return result, nil
+}
+
 // Upsert inserts or updates a project integration. When agent_key is NULL, the existing value is preserved.
 //
 // The write runs in a transaction because of the plaintext escape hatch below;

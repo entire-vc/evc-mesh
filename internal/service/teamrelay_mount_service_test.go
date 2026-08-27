@@ -690,3 +690,87 @@ func TestRefreshIfStale_KeyExpired_RecordsKeyExpiredStatus(t *testing.T) {
 	assert.Equal(t, "key_expired", *pi.LastSyncStatus)
 	assert.Equal(t, 0, describer.callCount())
 }
+
+// ---------------------------------------------------------------------------
+// RefreshSleepingKeyExpiries (#bab2e6be)
+// ---------------------------------------------------------------------------
+
+// TestRefreshSleepingKeyExpiries_NeverTouched_GetsKeyExpiryWithoutAnyUserAction
+// is the task's AC1: an integration that has NEVER gone through RefreshIfStale
+// or SyncMount — nobody opened a document, nobody clicked "Sync now" — still
+// gets key_expires_at populated by this sweep alone. LastSyncCheckedAt/Status
+// staying nil throughout is the proof this path is independent of both
+// existing producers, not a redundant third caller of the same code.
+func TestRefreshSleepingKeyExpiries_NeverTouched_GetsKeyExpiryWithoutAnyUserAction(t *testing.T) {
+	f := setupMountFixture(t, "")
+
+	pre, getErr := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, getErr)
+	require.Nil(t, pre.KeyExpiresAt, "fixture precondition: a genuinely untouched integration")
+	require.Nil(t, pre.LastSyncCheckedAt, "fixture precondition: never synced")
+
+	soon := timeNow().Add(3 * 24 * time.Hour)
+	describer := &fakeKeyDescriber{desc: &teamrelay.AgentKeyDescription{ExpiresAt: &soon}}
+	f.svc.keyDescriber = describer
+
+	checked, updated, err := f.svc.RefreshSleepingKeyExpiries(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, checked)
+	assert.Equal(t, 1, updated)
+
+	pi, getErr := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, getErr)
+	require.NotNil(t, pi.KeyExpiresAt, "the fact fetched from Team Relay must be stored — this is the whole point of the task")
+	assert.WithinDuration(t, soon, *pi.KeyExpiresAt, time.Second)
+	require.NotNil(t, pi.KeyExpirySource)
+	assert.Equal(t, "source", *pi.KeyExpirySource)
+	assert.Nil(t, pi.LastSyncCheckedAt, "this sweep must not masquerade as a sync attempt — it never touched a document or the relay's file-index")
+	assert.Nil(t, pi.LastSyncStatus)
+}
+
+// TestRefreshSleepingKeyExpiries_Unreachable_DoesNotFlagHealthyIntegration is
+// the task's AC2, the red control: Team Relay being unreachable is "we could
+// not ask", not "we asked and the key is bad". A healthy integration must
+// come out of a failed sweep exactly as healthy as it went in — nil stays
+// nil, not flipped to an "error" status that would read as a real problem to
+// anyone looking at the integrations page.
+func TestRefreshSleepingKeyExpiries_Unreachable_DoesNotFlagHealthyIntegration(t *testing.T) {
+	f := setupMountFixture(t, "")
+	describer := &fakeKeyDescriber{err: teamrelay.ErrUnreachable}
+	f.svc.keyDescriber = describer
+
+	checked, updated, err := f.svc.RefreshSleepingKeyExpiries(context.Background())
+	require.NoError(t, err, "one integration's failure must not fail the whole sweep")
+	assert.Equal(t, 1, checked)
+	assert.Equal(t, 0, updated)
+
+	pi, getErr := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, getErr)
+	assert.Nil(t, pi.KeyExpiresAt, "no fact was obtained — nothing must be written")
+	assert.Nil(t, pi.LastSyncStatus, "unreachable must not be recorded as a status at all — RecordSyncCheck is never called from this path")
+	assert.Nil(t, pi.LastSyncError)
+}
+
+// TestRefreshSleepingKeyExpiries_DisabledIntegration_IsNeverChecked confirms
+// the sweep only ever asks about integrations someone has actually turned on
+// — a disabled row (someone unplugged Team Relay for this project) must not
+// generate outbound traffic or a describe-key call on its behalf.
+func TestRefreshSleepingKeyExpiries_DisabledIntegration_IsNeverChecked(t *testing.T) {
+	f := setupMountFixture(t, "")
+	require.NoError(t, f.piRepo.Upsert(context.Background(), &domain.ProjectIntegration{
+		ID:        uuid.New(),
+		ProjectID: uuid.New(),
+		Type:      "team_relay",
+		Enabled:   false,
+		Settings:  []byte(`{"share_id":"` + testRelayShareID + `"}`),
+		AgentKey:  "tr_agent_secret_at_least_20_chars",
+	}))
+	describer := &fakeKeyDescriber{desc: &teamrelay.AgentKeyDescription{}}
+	f.svc.keyDescriber = describer
+
+	checked, updated, err := f.svc.RefreshSleepingKeyExpiries(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, checked, "only the ONE enabled integration from the fixture, not the disabled one just added")
+	assert.Equal(t, 1, updated)
+	assert.Equal(t, 1, describer.callCount())
+}
