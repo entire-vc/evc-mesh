@@ -917,6 +917,37 @@ func main() {
 	}()
 	defer watchSweepCancel()
 
+	// Team Relay key-expiry sweep (#bab2e6be): recordSyncOutcome only ever
+	// runs as a REACTION to a document open or an explicit "Sync now" — an
+	// integration nobody touches keeps key_expires_at NULL until the moment
+	// someone finally opens it and the key has already died, the exact
+	// "warning arrives with the breakage" failure AC4 (#218d5847) was built
+	// to prevent, just on a trigger that never fires for a sleeping project.
+	// This sweep is the third, PASSIVE producer: it asks every enabled
+	// integration's own describe-key endpoint on a schedule, independent of
+	// any user action, and only ever writes on success — see
+	// RefreshSleepingKeyExpiries's doc comment for why a failure here must
+	// never be recorded as a status.
+	trKeyRefreshCtx, trKeyRefreshCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(service.DefaultTeamRelayKeyExpiryRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				checked, updated, err := teamRelayMountService.RefreshSleepingKeyExpiries(trKeyRefreshCtx)
+				if err != nil {
+					log.Printf("[tr-key-refresh] ERROR: %v", err)
+				} else {
+					log.Printf("[tr-key-refresh] checked %d integration(s), updated %d", checked, updated)
+				}
+			case <-trKeyRefreshCtx.Done():
+				return
+			}
+		}
+	}()
+	defer trKeyRefreshCancel()
+
 	// Checkout reaper: periodically releases orphan task-locks whose TTL has expired.
 	// Complements the lazy expiry in AtomicCheckout — handles tasks that no agent
 	// retries after the original holder's session dies.

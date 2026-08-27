@@ -195,6 +195,16 @@ type TeamRelayMountService interface {
 	// per-tree-read path (§3.6): the expensive walk happens here, on an
 	// explicit call, never implicitly inside a Docs tree GET.
 	SyncMount(ctx context.Context, projectID uuid.UUID) (*MountResult, error)
+	// RefreshSleepingKeyExpiries asks Team Relay's own introspection endpoint
+	// for every enabled integration's key expiry, independent of any user
+	// having opened a document or clicked "Sync now" — the two triggers
+	// recordSyncOutcome already covers. Without this, an integration nobody
+	// touches keeps key_expires_at NULL until the moment someone finally opens
+	// it and the key has already died: the same "warning arrives with the
+	// breakage, not before it" failure AC4 (#218d5847) was built to prevent,
+	// just on a trigger that never fires (#bab2e6be). Meant to be called
+	// periodically by a caller-owned scheduler, not on any request path.
+	RefreshSleepingKeyExpiries(ctx context.Context) (checked, updated int, err error)
 }
 
 type teamRelayMountService struct {
@@ -353,6 +363,65 @@ func (s *teamRelayMountService) recordSyncOutcome(ctx context.Context, projectID
 	if setErr := s.piRepo.SetKeyExpiry(ctx, projectID, "team_relay", desc.ExpiresAt, "source"); setErr != nil {
 		log.Printf("teamrelay: set key expiry for project %s: %v", projectID, setErr)
 	}
+}
+
+// DefaultTeamRelayKeyExpiryRefreshInterval is how often
+// RefreshSleepingKeyExpiries should be run by its caller. Keys live 90 days;
+// once a day is far more than enough to give AC4's warning window (days, not
+// hours) time to appear before anything breaks, and anything much more
+// frequent is unjustified traffic against a service we don't own (#bab2e6be).
+const DefaultTeamRelayKeyExpiryRefreshInterval = 24 * time.Hour
+
+// RefreshSleepingKeyExpiries is documented on the TeamRelayMountService
+// interface. It is best-effort PER INTEGRATION and deliberately narrower than
+// recordSyncOutcome: unlike that function, a failure here — DescribeAgentKey
+// returning teamrelay.ErrUnreachable or any other error — is logged and the
+// integration is skipped, NEVER written to RecordSyncCheck. "Could not ask"
+// must never read as "asked, and the key is bad" — that would turn every
+// integration this one sweep happens not to reach into a false warning, which
+// is worse than the NULL it already shows (the same lesson #218d5847 decided
+// this task is closing a gap in, not repeating). Only a successful describe
+// call writes anything, via SetKeyExpiry — the one column this task's AC
+// needs populated without a user ever touching the integration.
+//
+// One malformed or misconfigured integration (bad settings JSON, no share ID,
+// no key) does not stop the sweep for the rest — each is independent, so a
+// single bad row degrades to "one integration stays NULL", never "nobody's
+// key expiry refreshes today".
+func (s *teamRelayMountService) RefreshSleepingKeyExpiries(ctx context.Context) (checked, updated int, err error) {
+	if s.piRepo == nil {
+		return 0, 0, nil
+	}
+	integrations, err := s.piRepo.ListEnabledByType(ctx, "team_relay")
+	if err != nil {
+		return 0, 0, fmt.Errorf("teamrelay: list enabled integrations: %w", err)
+	}
+	relayURL := os.Getenv(teamRelayRelayURLEnvVar)
+	if relayURL == "" {
+		return 0, 0, fmt.Errorf("teamrelay: %s not configured", teamRelayRelayURLEnvVar)
+	}
+	for _, pi := range integrations {
+		checked++
+		var settings domain.TeamRelaySettings
+		if jsonErr := json.Unmarshal(pi.Settings, &settings); jsonErr != nil {
+			log.Printf("teamrelay: refresh key expiry: parse settings for project %s: %v", pi.ProjectID, jsonErr)
+			continue
+		}
+		if settings.ShareID == "" || pi.AgentKey == "" {
+			continue
+		}
+		desc, descErr := s.keyDescriber.DescribeAgentKey(ctx, relayURL, settings.ShareID, pi.AgentKey)
+		if descErr != nil {
+			log.Printf("teamrelay: refresh key expiry for project %s: %v", pi.ProjectID, descErr)
+			continue
+		}
+		if setErr := s.piRepo.SetKeyExpiry(ctx, pi.ProjectID, "team_relay", desc.ExpiresAt, "source"); setErr != nil {
+			log.Printf("teamrelay: refresh key expiry: set for project %s: %v", pi.ProjectID, setErr)
+			continue
+		}
+		updated++
+	}
+	return checked, updated, nil
 }
 
 // RefreshIfStale is the AC-2/AC-3 mechanism: a document opened inside its TTL

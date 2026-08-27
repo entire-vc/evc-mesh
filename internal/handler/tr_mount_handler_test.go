@@ -44,6 +44,13 @@ func (m *mockTeamRelayMountService) WriteBack(_ context.Context, _ *domain.Docum
 	return "", errors.New("mockTeamRelayMountService: WriteBack must not be called by the mount handler")
 }
 
+// RefreshSleepingKeyExpiries is a periodic sweep this handler never triggers
+// (it's called by a scheduler, not a request) — present only to satisfy the
+// interface.
+func (m *mockTeamRelayMountService) RefreshSleepingKeyExpiries(_ context.Context) (checked, updated int, err error) {
+	return 0, 0, nil
+}
+
 var _ service.TeamRelayMountService = (*mockTeamRelayMountService)(nil)
 
 func trMountRequest(t *testing.T, h *TrMountHandler, projIDParam string) *httptest.ResponseRecorder {

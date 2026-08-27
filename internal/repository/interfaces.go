@@ -1239,6 +1239,12 @@ type ProjectIntegrationRepository interface {
 	Upsert(ctx context.Context, pi *domain.ProjectIntegration) error
 	Delete(ctx context.Context, projectID uuid.UUID, intType string) error
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+	// ListEnabledByType returns every enabled integration of the given type,
+	// across ALL projects — unlike ListByProject, which only ever sees the one
+	// project a caller already knows about. This is what a background
+	// refresher needs: it has no request to hang a project ID off of, and its
+	// whole job is to reach integrations nobody's request has touched (#bab2e6be).
+	ListEnabledByType(ctx context.Context, intType string) ([]domain.ProjectIntegration, error)
 	// SetKeyExpiry records the credential's expiry and how the value was
 	// obtained. expiresAt nil clears both fields back to "unknown". Deliberately
 	// separate from Upsert: Upsert is called on every settings save (share,
