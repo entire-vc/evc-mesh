@@ -543,6 +543,22 @@ func (m *MockTaskRepository) ReleaseExpiredCheckouts(_ context.Context) (int64, 
 	return released, nil
 }
 
+func (m *MockTaskRepository) FindStaleUnleasedInProgress(_ context.Context, olderThan time.Duration) ([]domain.Task, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-olderThan)
+	var out []domain.Task
+	for _, t := range m.items {
+		if t.CheckedOutBy == nil && t.CheckoutExpires == nil && t.UpdatedAt.Before(cutoff) {
+			out = append(out, *t)
+		}
+	}
+	return out, nil
+}
+
 func (m *MockTaskRepository) FindExpiredInProgressCheckouts(_ context.Context) ([]domain.Task, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
