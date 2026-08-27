@@ -111,13 +111,34 @@ func New(ctx context.Context, cfg EventBusConfig, repo repository.EventBusMessag
 // workspaceSlug and projectSlug are used to construct the NATS subject.
 // The msg must have a valid ID (used as Nats-Msg-Id for deduplication).
 func (eb *EventBus) PublishEvent(ctx context.Context, msg *domain.EventBusMessage, workspaceSlug, projectSlug string) error {
-	// 1. Serialize the event for NATS.
+	// 1. Serialize the event once; NATS and Redis both send this exact payload.
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	// 2. Publish to NATS JetStream with dedup ID.
+	// 2. Broadcast to Redis pub/sub for WebSocket consumers FIRST and
+	// unconditionally, ahead of the NATS publish below. Live WebSocket
+	// delivery and JetStream's durable agent-consumer stream are two
+	// independent transports for the same event, and one's health must
+	// never gate the other's. Before this fix, the Redis broadcast lived
+	// after the NATS publish and was skipped entirely whenever that publish
+	// errored (JetStream store under disk/I-O pressure, a network blip to
+	// the broker, etc.) — every WebSocket client went silently, permanently
+	// dark for that event, while the HTTP request that triggered it still
+	// returned 200/201 as if nothing were wrong. That is the exact defect
+	// #2d73f037 caught as "the workspace owner received no event for a task
+	// created in their own workspace": not a timing flake, an early return
+	// that dropped the WS fan-out whenever JetStream misbehaved.
+	redisChannel := fmt.Sprintf("ws:%s", workspaceSlug)
+	if pubErr := eb.rdb.Publish(ctx, redisChannel, data).Err(); pubErr != nil {
+		log.Printf("[eventbus] WARNING: failed to broadcast event %s to Redis channel %s: %v", msg.ID, redisChannel, pubErr)
+	}
+
+	// 3. Publish to NATS JetStream with dedup ID (durable delivery for agent
+	// consumers). A failure here is reported as before — the caller falls
+	// back to a direct PostgreSQL write — but it no longer un-does the
+	// Redis broadcast that already happened above.
 	subject := BuildSubject(workspaceSlug, projectSlug, string(msg.EventType))
 	ack, err := eb.js.Publish(ctx, subject, data,
 		jetstream.WithMsgID(msg.ID.String()),
@@ -127,15 +148,9 @@ func (eb *EventBus) PublishEvent(ctx context.Context, msg *domain.EventBusMessag
 	}
 	log.Printf("[eventbus] Published event %s to %s (seq=%d)", msg.ID, subject, ack.Sequence)
 
-	// 3. Persist to PostgreSQL (best-effort: log error but don't fail the publish).
+	// 4. Persist to PostgreSQL (best-effort: log error but don't fail the publish).
 	if err := eb.repo.Create(ctx, msg); err != nil {
 		log.Printf("[eventbus] WARNING: failed to persist event %s to PostgreSQL: %v", msg.ID, err)
-	}
-
-	// 4. Broadcast to Redis pub/sub for WebSocket consumers.
-	redisChannel := fmt.Sprintf("ws:%s", workspaceSlug)
-	if err := eb.rdb.Publish(ctx, redisChannel, data).Err(); err != nil {
-		log.Printf("[eventbus] WARNING: failed to broadcast event %s to Redis channel %s: %v", msg.ID, redisChannel, err)
 	}
 
 	return nil
