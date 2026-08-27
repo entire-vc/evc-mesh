@@ -307,6 +307,23 @@ export function TaskPanel({
     onBack?.();
   };
 
+  // The overlay/drawer close paths below (header X, footer Cancel, Escape)
+  // never navigate, so useBlocker above never fires for them by
+  // construction — they call onClose directly, which discards a dirty
+  // draft silently. One helper, wired into all three, instead of a guard
+  // per call site (task #4eb72e3e). Same confirm text as the useBlocker
+  // branch above — this is a reuse of an already-shipped string, not a new
+  // one, so §1r.A does not apply.
+  const requestClose = useCallback(() => {
+    if (
+      isDraftDirty &&
+      !window.confirm("Discard this task? Your unsaved changes will be lost.")
+    ) {
+      return;
+    }
+    onClose?.();
+  }, [isDraftDirty, onClose]);
+
   // Reset navigation stack when the root task changes
   useEffect(() => {
     setTaskIdStack([]);
@@ -420,11 +437,11 @@ export function TaskPanel({
   useEffect(() => {
     if (!onClose) return;
     const handleKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") requestClose();
     };
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose]);
+  }, [onClose, requestClose]);
 
   // Lazy-fetch cost/quality summary when task opens (silent fail — block is hidden on error)
   useEffect(() => {
@@ -1899,7 +1916,7 @@ export function TaskPanel({
           {onClose && (
             <button
               type="button"
-              onClick={onClose}
+              onClick={requestClose}
               className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               aria-label="Close"
             >
@@ -1954,7 +1971,7 @@ export function TaskPanel({
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={onClose}
+                  onClick={requestClose}
                   disabled={draftSubmitting}
                 >
                   Cancel

@@ -63,6 +63,31 @@ const CREATED_TASK: Task = {
   completed_at: null,
 };
 
+function renderCreatePanelWithOnClose(onClose: () => void) {
+  const router = createMemoryRouter(
+    [
+      {
+        path: "/new",
+        element: (
+          <TaskPanel
+            taskId={null}
+            mode="create"
+            createProjectId={PROJECT.id}
+            onClose={onClose}
+            onCreated={(task) =>
+              router.navigate(`/created/${task.id}`, { replace: true })
+            }
+          />
+        ),
+      },
+      { path: "/created/:id", element: <div data-testid="created" /> },
+    ],
+    { initialEntries: ["/new"] },
+  );
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
 function renderCreatePanel(initialEntries: string[] = ["/new"]) {
   const router = createMemoryRouter(
     [
@@ -203,4 +228,74 @@ describe("TaskPanel create mode — useBlocker guards every in-app exit", () => 
     expect(confirmSpy).not.toHaveBeenCalled();
     void titleInput;
   });
+});
+
+/**
+ * The overlay/drawer close affordances (header X, footer Cancel, Escape)
+ * never navigate — they call onClose directly — so useBlocker above never
+ * fires for them by construction (task #4eb72e3e). requestClose is the
+ * separate guard that covers this class of exit.
+ */
+describe("TaskPanel create mode — requestClose guards every overlay-close affordance", () => {
+  const CLOSE_PATHS: Array<[string, (container: HTMLElement) => void]> = [
+    ["header X button", () => fireEvent.click(screen.getByLabelText("Close"))],
+    [
+      "footer Cancel button",
+      () =>
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" })),
+    ],
+    [
+      "Escape key",
+      () => fireEvent.keyDown(document, { key: "Escape" }),
+    ],
+  ];
+
+  it.each(CLOSE_PATHS)(
+    "%s: clean draft calls onClose without prompting",
+    async (_label, trigger) => {
+      const onClose = vi.fn();
+      renderCreatePanelWithOnClose(onClose);
+      await screen.findByPlaceholderText("Task title *");
+      const confirmSpy = vi.spyOn(window, "confirm");
+
+      trigger(document.body);
+
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(CLOSE_PATHS)(
+    "%s: dirty draft prompts with the exact discard text before closing",
+    async (_label, trigger) => {
+      const onClose = vi.fn();
+      renderCreatePanelWithOnClose(onClose);
+      await typeDirtyTitle();
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+      trigger(document.body);
+
+      expect(confirmSpy).toHaveBeenCalledWith(
+        "Discard this task? Your unsaved changes will be lost.",
+      );
+      expect(onClose).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(CLOSE_PATHS)(
+    "%s: dirty draft + cancelling the confirm keeps the draft open",
+    async (_label, trigger) => {
+      const onClose = vi.fn();
+      renderCreatePanelWithOnClose(onClose);
+      await typeDirtyTitle();
+      vi.spyOn(window, "confirm").mockReturnValue(false);
+
+      trigger(document.body);
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText("Task title *")).toHaveValue(
+        "Something unsaved",
+      );
+    },
+  );
 });
