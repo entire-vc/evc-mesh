@@ -123,8 +123,8 @@ export function SparkPage() {
 
   const handleSearch = useCallback(async () => {
     setHasSearched(true);
-    await search(query, allActiveTags, 20, agentType);
-  }, [query, allActiveTags, agentType, search]);
+    await search(query, allActiveTags, 20, agentType, currentWorkspace?.id);
+  }, [query, allActiveTags, agentType, search, currentWorkspace?.id]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -177,9 +177,9 @@ export function SparkPage() {
   // Load popular agents on mount — only when Spark is enabled.
   useEffect(() => {
     if (sparkEnabled) {
-      fetchPopular(20);
+      fetchPopular(20, currentWorkspace?.id);
     }
-  }, [fetchPopular, sparkEnabled]);
+  }, [fetchPopular, sparkEnabled, currentWorkspace?.id]);
 
   // Show a loading state until the integration check resolves.
   if (sparkEnabled === null) {

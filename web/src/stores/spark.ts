@@ -16,9 +16,14 @@ interface SparkState {
   lastInstallResult: SparkInstallResponse | null;
 
   // Actions
-  search: (query: string, tags: string[], limit?: number, agentType?: string) => Promise<void>;
-  fetchPopular: (limit?: number) => Promise<void>;
-  fetchAgent: (agentId: string) => Promise<SparkAgentManifest | null>;
+  // workspaceId is optional on the read actions for backward compat with any
+  // caller that doesn't have one yet, but the integrations page always has
+  // one in scope (currentWorkspace) and must pass it — omitting it means
+  // "whatever this deployment's env fallback is", not "the current
+  // workspace's own choice of catalog / on-off state" (#4a3195a5).
+  search: (query: string, tags: string[], limit?: number, agentType?: string, workspaceId?: string) => Promise<void>;
+  fetchPopular: (limit?: number, workspaceId?: string) => Promise<void>;
+  fetchAgent: (agentId: string, workspaceId?: string) => Promise<SparkAgentManifest | null>;
   selectAgent: (agent: SparkAgentManifest | null) => void;
   install: (sparkAgentId: string, workspaceId: string) => Promise<SparkInstallResponse>;
   clearInstallResult: () => void;
@@ -34,13 +39,14 @@ export const useSparkStore = create<SparkState>((set) => ({
   error: null,
   lastInstallResult: null,
 
-  search: async (query: string, tags: string[], limit = 20, agentType?: string) => {
+  search: async (query: string, tags: string[], limit = 20, agentType?: string, workspaceId?: string) => {
     set({ isLoading: true, error: null });
     try {
       const params: Record<string, string | number | undefined> = { limit };
       if (query) params.q = query;
       if (tags.length > 0) params.tags = tags.join(",");
       if (agentType && agentType !== "all") params.agent_type = agentType;
+      if (workspaceId) params.workspace_id = workspaceId;
 
       const response = await api<{ items: SparkAgentManifest[]; count: number }>(
         "/api/v1/spark/agents",
@@ -53,12 +59,14 @@ export const useSparkStore = create<SparkState>((set) => ({
     }
   },
 
-  fetchPopular: async (limit = 20) => {
+  fetchPopular: async (limit = 20, workspaceId?: string) => {
     set({ isLoading: true, error: null });
     try {
+      const params: Record<string, string | number | undefined> = { limit };
+      if (workspaceId) params.workspace_id = workspaceId;
       const response = await api<{ items: SparkAgentManifest[]; count: number }>(
         "/api/v1/spark/agents/popular",
-        { params: { limit } },
+        { params },
       );
       set({ popularAgents: response.items ?? [], isLoading: false });
     } catch (err) {
@@ -67,11 +75,12 @@ export const useSparkStore = create<SparkState>((set) => ({
     }
   },
 
-  fetchAgent: async (agentId: string): Promise<SparkAgentManifest | null> => {
+  fetchAgent: async (agentId: string, workspaceId?: string): Promise<SparkAgentManifest | null> => {
     set({ isLoading: true, error: null });
     try {
       const manifest = await api<SparkAgentManifest>(
         `/api/v1/spark/agents/${agentId}`,
+        workspaceId ? { params: { workspace_id: workspaceId } } : undefined,
       );
       set({ selectedAgent: manifest, isLoading: false });
       return manifest;

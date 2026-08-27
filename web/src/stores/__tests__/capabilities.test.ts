@@ -55,11 +55,14 @@ describe("useCapabilitiesStore", () => {
     expect(useCapabilitiesStore.getState().sparkEnabled).toBe(true);
   });
 
-  // The server route registration (cmd/api/main.go: routes only exist when
-  // MESH_SPARK_ENABLED=true) is the real gate — a network failure here must
-  // fail OPEN (leave the nav link visible) rather than hide a feature that
-  // might actually be enabled, matching the same choice web/src/pages/spark.tsx
-  // already makes for the same reason.
+  // The real gate is per-workspace now (SparkIntegrationResolver, resolved
+  // fresh on every /spark/* request — #4a3195a5; routes are always
+  // registered, unlike the pre-fix cmd/api/main.go which only wired them up
+  // at all when MESH_SPARK_ENABLED=true). A network failure fetching THIS
+  // capabilities flag must still fail OPEN (leave the nav link visible)
+  // rather than hide a feature that might actually be enabled for this
+  // workspace, matching the same choice web/src/pages/spark.tsx already
+  // makes for the same reason.
   it("fails open (sparkEnabled stays true) when the fetch rejects", async () => {
     mockedApi.mockRejectedValueOnce(new Error("network error"));
 

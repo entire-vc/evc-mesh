@@ -136,6 +136,21 @@ var declaredQueryTenantParams = map[string]string{
 	// uses.
 	"notification_handler.go:telegramBotInfoQuery.workspace_id": "checked: NotificationHandler.requireWorkspaceMember",
 
+	// GET /spark/agents(/popular|/:agent_id) — an optional workspace_id lets a
+	// caller ask "what does MY workspace's spark integration resolve to"
+	// (#4a3195a5: the catalog base URL and on/off state are now workspace-scoped,
+	// where previously they were a single instance-wide env value nothing could
+	// override per workspace). NOT eligible for narrows: — an authorized
+	// workspace's row can point Mesh's server at a DIFFERENT catalog host than
+	// this deployment's env fallback, so a foreign workspace_id would make the
+	// server proxy back real results from wherever THAT workspace pointed it,
+	// not an empty answer. requireWorkspaceAccess checks the caller against
+	// wsID before clientFor ever resolves it: a user via workspace_members
+	// (mirrors NotificationHandler.requireWorkspaceMember above), an agent by
+	// requiring wsID equal the one agents.workspace_id hard-binds it to.
+	"spark_handler.go:parseOptionalWorkspaceID.workspace_id": "checked: SparkHandler.requireWorkspaceAccess",
+	"spark_handler.go:sparkSearchQuery.workspace_id":         "checked: SparkHandler.requireWorkspaceAccess",
+
 	// --- Conjuncts on a query pinned elsewhere -------------------------------
 	//
 	// A project_id inside an already-checked workspace can only make the answer
