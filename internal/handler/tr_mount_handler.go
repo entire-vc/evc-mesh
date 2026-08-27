@@ -27,12 +27,19 @@ func NewTrMountHandler(mountService service.TeamRelayMountService) *TrMountHandl
 // sees. Every one of these is a distinct, named outcome in the JSON body too —
 // AC-4 is specifically that a protoken key or an unreachable relay must not
 // read like "this share has no documents", so the mapping never collapses two
-// different statuses onto the same response shape.
+// different statuses onto the same response shape. KeyExpired and
+// ForeignShare are the one deliberate exception to "same shape" meaning "same
+// code": both are 403 (mirroring Team Relay's own wire protocol, see
+// teamrelay.ErrKeyExpired's doc comment), distinguished by the "status" field
+// in the body rather than by the HTTP code — #4d4ae33a, wired up here after
+// #218d5847's AC-4 shipped without it, which is exactly the "collapses into a
+// generic error" defect this map exists to prevent.
 var trMountStatusHTTP = map[service.MountStatus]int{
 	service.MountStatusOK:            http.StatusOK,
 	service.MountStatusNotConfigured: http.StatusOK,
 	service.MountStatusKeyRejected:   http.StatusUnauthorized,
 	service.MountStatusForeignShare:  http.StatusForbidden,
+	service.MountStatusKeyExpired:    http.StatusForbidden,
 	service.MountStatusUnreachable:   http.StatusBadGateway,
 	service.MountStatusShareNotFound: http.StatusNotFound,
 	service.MountStatusError:         http.StatusInternalServerError,

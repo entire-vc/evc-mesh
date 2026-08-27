@@ -80,6 +80,11 @@ func TestTrMountHandler_EachStatusGetsItsOwnHTTPCode(t *testing.T) {
 		{"not configured is not a failure", service.MountStatusNotConfigured, nil, http.StatusOK, ""},
 		{"key rejected", service.MountStatusKeyRejected, errors.New("agent key rejected"), http.StatusUnauthorized, "agent key rejected"},
 		{"foreign share", service.MountStatusForeignShare, errors.New("key not valid for share"), http.StatusForbidden, "key not valid for share"},
+		// Deliberately the SAME code as foreign_share, mirroring Team Relay's
+		// own wire behavior (both are 403 there too, per ErrKeyExpired's doc
+		// comment) — the two are distinguished by the "status" field in the
+		// body, not by HTTP code. See the seenCodes exception below.
+		{"key expired", service.MountStatusKeyExpired, errors.New("agent key has expired"), http.StatusForbidden, "agent key has expired"},
 		{"unreachable", service.MountStatusUnreachable, errors.New("dial tcp: timeout"), http.StatusBadGateway, "dial tcp: timeout"},
 		{"share not found", service.MountStatusShareNotFound, errors.New("no such share"), http.StatusNotFound, "no such share"},
 		{"unclassified error", service.MountStatusError, errors.New("boom"), http.StatusInternalServerError, "boom"},
@@ -114,11 +119,21 @@ func TestTrMountHandler_EachStatusGetsItsOwnHTTPCode(t *testing.T) {
 		seenCodes[tc.wantCode] = append(seenCodes[tc.wantCode], string(tc.status))
 	}
 
-	// The four *failure* sentinels must be mutually distinguishable by code
-	// alone. (ok/not_configured deliberately share 200 — neither is a failure.)
+	// The failure sentinels must be mutually distinguishable by code alone,
+	// with two named exceptions: ok/not_configured deliberately share 200
+	// (neither is a failure), and foreign_share/key_expired deliberately
+	// share 403 (both are 403 on Team Relay's own wire protocol too —
+	// distinguished by the body's "status" field, not the code).
 	assert.Equal(t, []string{"ok", "not_configured"}, seenCodes[http.StatusOK])
+	knownSharedFailureCodes := map[int][]string{
+		http.StatusForbidden: {"foreign_share", "key_expired"},
+	}
 	for code, statuses := range seenCodes {
 		if code == http.StatusOK {
+			continue
+		}
+		if want, shared := knownSharedFailureCodes[code]; shared {
+			assert.ElementsMatch(t, want, statuses, "HTTP %d is deliberately shared, but only by %v", code, want)
 			continue
 		}
 		assert.Len(t, statuses, 1, "HTTP %d is shared by %v — two different failures became indistinguishable", code, statuses)
