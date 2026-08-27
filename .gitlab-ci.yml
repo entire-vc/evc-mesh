@@ -23,9 +23,11 @@
 # quietly guarding nothing — see that job's own header), and vendor-trailer-gate
 # (adapted, not a literal port — see that job's own header and
 # `.gitlab/scripts/vendor_trailer_gate.py` for why GitLab's squash mechanics
-# change what it can actually check). Deliberately still absent, and worth
+# change what it can actually check). CodeQL's job — SAST — is now
+# carried by `semgrep` (see that job's own header for why it is a
+# re-implementation rather than a port). Deliberately still absent, and worth
 # their own cards: Authed E2E, Go coverage ≥80% (affected-set), Memory recall
-# gate, CodeQL. A stub that looks like full CI is more dangerous than a gap
+# gate. A stub that looks like full CI is more dangerous than a gap
 # you can see, so the gap is named here rather than implied.
 #
 # ## The half that is not in this file
@@ -52,7 +54,7 @@ workflow:
       when: never
     - if: $CI_COMMIT_BRANCH
 
-stages: [gate, lint, test, build]
+stages: [gate, sast, lint, test, build]
 
 variables:
   # Services are reachable by their image alias on the docker executor, NOT on
@@ -186,6 +188,130 @@ self-host-env:
         echo "--- $f"
         docker compose -f "$f" --env-file /tmp/first-release.env config >/dev/null
       done
+
+# ── sast ────────────────────────────────────────────────────────────────────
+# The GitLab-side replacement for GitHub's `CodeQL` required check (Mesh
+# #48f243e4). Modeled on entire-vc/evc-argus, which ported this same class of
+# control the same way (`#10fea634`).
+#
+# ## Why this is a re-implementation and not a port
+#
+# There is no `.github/workflows/codeql.yml` in this repository to translate.
+# CodeQL here is GitHub's *default setup* — a repository setting, not code:
+#
+#     code-scanning/default-setup → {"state":"configured",
+#       "languages":["actions","go","javascript","javascript-typescript",
+#                    "python","typescript"],
+#       "query_suite":"default","schedule":"weekly"}
+#
+# (readable only under `robert-j-evc`; an agent token gets 403 there, which is
+# indistinguishable from "not configured" unless you re-check under an account
+# that can actually see it.) So nothing could be copied line-for-line. The
+# `// codeql[...]` suppression comments that exist in the Go sources belong to
+# that scanner and mean nothing to semgrep; semgrep's own suppressions are
+# `nosemgrep:` comments, each carrying a written reason.
+#
+# ## What this does NOT reproduce
+#
+# CodeQL's cross-function dataflow/taint analysis. semgrep here is pattern-level
+# SAST: it matches shapes in a file, it does not follow a tainted value across
+# call boundaries. Treat the two as the same *class* of control, not as
+# equivalent engines — writing "CodeQL is covered" without this paragraph would
+# overstate what was carried across.
+#
+# ## `semgrep ci`, and why NOT `semgrep scan --config ...`
+#
+# They are not interchangeable inside this image, and picking the wrong one
+# produces a job that fails without ever having scanned anything. Measured on
+# this runner (pipeline 438, job 3982), `semgrep scan --config ...` gives:
+#
+#     Detected Docker environment without a code volume, please include
+#     '-v "${PWD}:/src"'
+#     ERROR: Job failed: exit code 2
+#
+# `semgrep scan` calls adjust_for_docker(), which insists the code live at
+# /src; GitLab's docker executor clones into $CI_PROJECT_DIR and leaves /src
+# empty, so it raises before the first rule runs. The danger is not the crash —
+# it is that the job goes red and *looks like a gate that caught something*.
+# Exit 2 with an empty scan is indistinguishable from exit 1 with a real
+# finding if you only read the job's status dot (§0x).
+#
+# `semgrep ci` does not take that path.
+#
+# ## What a green here does and does not mean — read this before trusting it
+#
+# `semgrep ci` scopes itself differently depending on the pipeline, and the
+# difference decides what the green tick is evidence of. Measured on evc-argus,
+# same image, same runner:
+#
+#   main-branch run (job 2201)  → Scanning 393 files tracked by git
+#                                 = the whole tracked tree
+#   MR-pipeline run (job 2152)  → Scanning 1 file tracked by git
+#                                 "Scan was limited to files changed since
+#                                  baseline commit."
+#
+# So on a merge request this gate asks "does this MR ADD anything insecure?",
+# NOT "is the repository clean?". That is the right question for a merge gate —
+# it means a newly-shipped registry rule firing on years-old code cannot wall
+# off every open MR — but it does mean an MR's green tick is not a statement
+# about the tree. The whole-tree statement comes from the `main` run, which is
+# why the rules below deliberately keep `main` in scope rather than running on
+# merge requests alone.
+#
+# The full-tree baseline at the time this job was added was measured off-CI,
+# for the same reason: 0 findings on 1194 files (and 38 under --disable-nosem).
+# An MR pipeline could not have told us that.
+#
+# ## Rule sets
+#
+# `p/security-audit p/secrets p/owasp-top-ten` are argus's three, unchanged.
+# The fourth is argus's `p/python` swapped for `p/golang`, this being a Go
+# service. Python and TypeScript here (scripts/memory-bench, web/) are not left
+# unscanned: security-audit and owasp-top-ten are multi-language and do cover
+# them — measured, not assumed, in the baseline below.
+#
+# ## The baseline this job was allowed to become a gate on
+#
+# A gate is worth nothing if it is switched on red and then made to
+# `allow_failure` (§0x). Measured on canon `main` @36ab94e, same four rule sets,
+# before this job was written:
+#
+#     Ran 428 rules on 1194 files: 0 findings.        exit 0
+#
+# and, with suppressions switched off, to prove those suppressions are live
+# rather than annotations that stopped matching some time ago:
+#
+#     --disable-nosem → 38 findings                   exit 1
+#
+# 0 with them, 38 without: every `nosemgrep:` in this tree is currently doing
+# work. The triage that got the baseline to 0 (and the 90 findings under
+# `.github/`, which are real but belong to the showcase mirror, not to this
+# pipeline) is `.semgrepignore` in the repo root — read its comments before
+# editing it, especially the part about a repo-level ignore file REPLACING
+# semgrep's built-in defaults instead of adding to them.
+#
+# ## Known hazard: the rule registry moves under you
+#
+# `p/...` packs are fetched from the semgrep registry at run time and are not
+# version-pinned — there is no pinned form of them to use. New rules ship
+# continuously, so this job can go red on a commit that changed nothing
+# relevant. Measured live during this card's own triage: 15 findings appeared
+# between two scans of the same tree hours apart. When that happens the answer
+# is to triage the new finding — fix it, or `nosemgrep:` it with a written
+# reason, the way every existing suppression here is written — NOT to set
+# `allow_failure: true`, which converts the gate back into a lamp nobody reads.
+semgrep:
+  stage: sast
+  image: semgrep/semgrep
+  timeout: 10m
+  allow_failure: false   # explicit: a red scan must block the merge, not decorate it
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+  variables:
+    SEMGREP_RULES: "p/security-audit p/secrets p/owasp-top-ten p/golang"
+  script:
+    - semgrep ci
 
 # ── lint ────────────────────────────────────────────────────────────────────
 lint:
