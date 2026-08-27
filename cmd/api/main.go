@@ -968,10 +968,27 @@ func main() {
 					log.Printf("[lease-reaper] moved %d expired lease(s) back to todo", n)
 				}
 				// Phase 2: clear stale checkout fields on any remaining tasks.
+				//
+				// NOTE this runs even when phase 1 returned an error, and it nulls
+				// checkout_expires unconditionally — so a task phase 1 failed to move
+				// loses the very field phase 1 keys on and can never be found by it
+				// again. That is one of the routes into the in_progress-with-no-lease
+				// state phase 3 exists to clear up; phase 3 keys on the resulting
+				// state rather than on the routes in, so it covers this one without
+				// having to make the two phases transactional.
 				if n, err := taskRepo.ReleaseExpiredCheckouts(reaperCtx); err != nil {
 					log.Printf("[checkout-reaper] ERROR releasing expired locks: %v", err)
 				} else if n > 0 {
 					log.Printf("[checkout-reaper] released %d expired checkout lock(s)", n)
+				}
+				// Phase 3: return in_progress tasks that hold NO checkout at all and
+				// have gone quiet. Phase 1 cannot see them (it needs a non-null
+				// checkout_expires) and neither can the agent feed (it polls
+				// status_category=todo), so without this they sit in_progress forever.
+				if n, err := leaseReaper.SweepUnleasedInProgress(reaperCtx, service.DefaultUnleasedGrace); err != nil {
+					log.Printf("[lease-reaper] ERROR sweeping unleased in_progress tasks: %v", err)
+				} else if n > 0 {
+					log.Printf("[lease-reaper] returned %d unleased in_progress task(s) to todo", n)
 				}
 			case <-reaperCtx.Done():
 				return

@@ -205,6 +205,9 @@ func (r *fakeTaskRepo) MoveToProject(context.Context, uuid.UUID, uuid.UUID, uuid
 }
 func (r *fakeTaskRepo) ForceReleaseCheckout(context.Context, uuid.UUID) error  { return nil }
 func (r *fakeTaskRepo) ReleaseExpiredCheckouts(context.Context) (int64, error) { return 0, nil }
+func (r *fakeTaskRepo) FindStaleUnleasedInProgress(context.Context, time.Duration) ([]domain.Task, error) {
+	return nil, nil
+}
 func (r *fakeTaskRepo) FindExpiredInProgressCheckouts(context.Context) ([]domain.Task, error) {
 	return nil, nil
 }

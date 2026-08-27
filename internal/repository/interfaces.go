@@ -134,6 +134,15 @@ type TaskRepository interface {
 	// past and whose status category is in_progress. These tasks have an expired
 	// lease and are candidates for auto-return to todo by the lease reaper.
 	FindExpiredInProgressCheckouts(ctx context.Context) ([]domain.Task, error)
+	// FindStaleUnleasedInProgress returns tasks in the in_progress category that
+	// hold NO checkout at all and have not been touched for olderThan.
+	//
+	// This is the blind spot of FindExpiredInProgressCheckouts, which requires a
+	// non-null checkout_expires: a task whose lease is gone rather than expired is
+	// invisible to it, and equally invisible to the agent feed (which polls
+	// status_category=todo). Nothing returns such a task to circulation, so it sits
+	// in_progress indefinitely — measured at 245h on prod.
+	FindStaleUnleasedInProgress(ctx context.Context, olderThan time.Duration) ([]domain.Task, error)
 	// FindDueMonitorBacklogTasks returns tasks in "backlog" category, labelled
 	// "kind:monitor", whose due_date has passed. These are candidates for
 	// auto-promotion back to "todo" by the monitor promotion sweeper.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -22,7 +23,16 @@ type leaseTaskMover interface {
 // a heartbeat and returns them to todo, freeing their capacity slot.
 type CheckoutLeaseReaper interface {
 	SweepExpiredLeases(ctx context.Context) (int, error)
+	// SweepUnleasedInProgress returns in_progress tasks that hold no checkout at
+	// all and have been idle for olderThan. See FindStaleUnleasedInProgress.
+	SweepUnleasedInProgress(ctx context.Context, olderThan time.Duration) (int, error)
 }
+
+// DefaultUnleasedGrace is how long an in_progress task may sit with no checkout
+// before the reaper returns it to todo. Equal to the default checkout TTL: a card
+// with no lease and no activity for longer than the system's own holding limit is
+// abandoned by that same standard.
+const DefaultUnleasedGrace = 120 * time.Minute
 
 type checkoutLeaseReaper struct {
 	taskRepo       repository.TaskRepository
@@ -59,8 +69,43 @@ func (r *checkoutLeaseReaper) SweepExpiredLeases(ctx context.Context) (int, erro
 	if err != nil {
 		return 0, err
 	}
+	return r.returnToTodo(ctx, tasks, expiredLeaseComment), nil
+}
+
+// SweepUnleasedInProgress returns in_progress tasks that hold NO checkout at all
+// and have been idle for olderThan.
+//
+// SweepExpiredLeases cannot see these: its query requires a non-null
+// checkout_expires, so it only ever finds a lease that EXPIRED, never one that was
+// CLEARED. A cleared lease leaves the task in_progress with nothing watching it —
+// the agent feed polls status_category=todo, and the dependency auto-promotion
+// hook (tryUnblockTask) returns early on anything that is not backlog. Measured on
+// prod 2026-08-27: 4 of 7 in_progress tasks held no lease, the oldest idle 245h.
+func (r *checkoutLeaseReaper) SweepUnleasedInProgress(ctx context.Context, olderThan time.Duration) (int, error) {
+	tasks, err := r.taskRepo.FindStaleUnleasedInProgress(ctx, olderThan)
+	if err != nil {
+		return 0, err
+	}
+	return r.returnToTodo(ctx, tasks, unleasedComment), nil
+}
+
+const (
+	expiredLeaseComment = "🔄 Checkout TTL истёк — задача возвращена в todo, слот ёмкости освобождён. " +
+		"Чтобы удержать задачу дольше, зовите extend_checkout до истечения TTL (heartbeat на это не влияет)."
+
+	unleasedComment = "🔄 Задача висела в in_progress **без чекаута** и без активности дольше допустимого — " +
+		"возвращена в todo, чтобы снова попадать в подачу. Такую карточку не видит ни lease-reaper " +
+		"(он ищет истёкший чекаут, а не отсутствующий), ни поллер агента (он смотрит только todo). " +
+		"Если работа ещё идёт — сделайте checkout_task заново: без чекаута карточка не удерживается."
+)
+
+// returnToTodo moves each task to its project's first todo status, commenting and
+// notifying as it goes. Shared by both sweeps so they cannot drift in how they
+// hand a task back. A task that cannot be moved is skipped and logged, never
+// silently dropped.
+func (r *checkoutLeaseReaper) returnToTodo(ctx context.Context, tasks []domain.Task, comment string) int {
 	if len(tasks) == 0 {
-		return 0, nil
+		return 0
 	}
 
 	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
@@ -87,12 +132,12 @@ func (r *checkoutLeaseReaper) SweepExpiredLeases(ctx context.Context) (int, erro
 			continue
 		}
 
-		r.postSystemComment(sysCtx, task)
+		r.postSystemComment(sysCtx, task, comment)
 		r.notifyAssignee(ctx, task)
 		pkgmetrics.RecordLeaseRelease(task.ProjectID.String())
 		moved++
 	}
-	return moved, nil
+	return moved
 }
 
 // findTodoStatusID returns the ID of the first todo-category status for the project,
@@ -113,14 +158,14 @@ func (r *checkoutLeaseReaper) findTodoStatusID(ctx context.Context, projectID uu
 }
 
 // postSystemComment writes an audit comment on the task explaining the auto-release.
-func (r *checkoutLeaseReaper) postSystemComment(ctx context.Context, task *domain.Task) {
+func (r *checkoutLeaseReaper) postSystemComment(ctx context.Context, task *domain.Task, body string) {
 	if r.commentRepo == nil {
 		return
 	}
 	comment := &domain.Comment{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
-		Body:       "🔄 Checkout TTL истёк — задача возвращена в todo, слот ёмкости освобождён. Чтобы удержать задачу дольше, зовите extend_checkout до истечения TTL (heartbeat на это не влияет).",
+		Body:       body,
 		AuthorID:   uuid.Nil,
 		AuthorType: domain.ActorTypeSystem,
 		CreatedAt:  timeNow(),
