@@ -284,11 +284,19 @@ self-host-env:
 #     --disable-nosem → 38 findings                   exit 1
 #
 # 0 with them, 38 without: every `nosemgrep:` in this tree is currently doing
-# work. The triage that got the baseline to 0 (and the 90 findings under
-# `.github/`, which are real but belong to the showcase mirror, not to this
-# pipeline) is `.semgrepignore` in the repo root — read its comments before
-# editing it, especially the part about a repo-level ignore file REPLACING
-# semgrep's built-in defaults instead of adding to them.
+# work. The triage that got the baseline to 0 is `.semgrepignore` in the repo
+# root — read its comments before editing it, especially the part about a
+# repo-level ignore file REPLACING semgrep's built-in defaults instead of
+# adding to them.
+#
+# `.github/` IS scanned, as of #5fe7fb4b. This comment used to say its 90
+# findings "belong to the showcase mirror, not to this pipeline"; that was the
+# exclusion's rationale, and it stopped being true when the exclusion was
+# lifted. All 90 are gone — 75 mutable action tags pinned to commit SHAs, 12
+# `${{ }}` interpolations moved out of `run:` bodies, and 3
+# `dependabot-missing-cooldown` retired with the file itself (#5f017e34). The
+# mirror's workflows do still execute, with a real GITHUB_TOKEN in scope, so
+# "belongs to the mirror" was never the same thing as "is not our perimeter".
 #
 # ## Known hazard: the rule registry moves under you
 #
