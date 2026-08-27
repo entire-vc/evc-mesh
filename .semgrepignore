@@ -1,19 +1,17 @@
-# Mesh #48f243e4 — semgrep baseline triage for the upcoming GitLab CI gate.
+# Mesh #5fe7fb4b — `.github/` IS scanned.
 #
-# .github/workflows/** and the rest of .github/ belong to the GitHub showcase
-# mirror of this repo (see CLAUDE-task-workflow.md §0z) — canon CI for evc-mesh
-# is .gitlab-ci.yml on GitLab, and .github/ is not what runs against this repo's
-# real pipeline. The semgrep job being added here gates GitLab CI, so scanning
-# the mirror's own workflow files is out of scope for it.
+# It used to be excluded here, with the exclusion carrying a note that the 87
+# findings inside it (75 `github-actions-mutable-action-tag`, 12
+# `run-shell-injection`) were tracked separately rather than dismissed. They
+# were, and they are fixed: every Action is pinned to a commit SHA, and every
+# `${{ }}` that reached a `run:` body now reaches it through the environment.
 #
-# This is NOT a silent dismissal of what semgrep finds there: 87 real findings
-# (mostly github-actions-mutable-action-tag: workflows pinning a third-party
-# Action by a mutable tag like `@v4` instead of a commit SHA, plus a handful of
-# run-shell-injection findings from untrusted `${{ }}` interpolation directly
-# into a `run:` shell step) are a genuine pre-existing supply-chain issue on
-# the mirror. They are tracked as their own follow-up card rather than folded
-# into this baseline.
-.github/
+# The exclusion is gone rather than kept-and-empty on purpose. `.github/`
+# workflows still execute on the GitHub showcase mirror (hold-gate,
+# showcase-migrated-gate, ci, trivy, memory-bench …) with a real GITHUB_TOKEN in
+# scope, so the perimeter is live — it just stopped being the primary one when
+# canon moved to GitLab (CLAUDE-task-workflow.md §0z). An excluded live
+# perimeter is the shape where the next mutable tag lands unnoticed.
 
 # ---------------------------------------------------------------------------
 # A repo-level .semgrepignore REPLACES semgrep's built-in defaults — it does not

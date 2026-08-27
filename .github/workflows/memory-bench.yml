@@ -307,12 +307,12 @@ jobs:
 
     steps:
       - name: Checkout evc-mesh
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Python (gate self-checks)
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
@@ -368,9 +368,13 @@ jobs:
       # inferred from a property of a different trigger.
       - name: Capture or judge?
         id: mode
+        env:
+          # Evaluated by GitHub into the environment, not interpolated into the
+          # shell body — `${{ }}` on a `run:` line is the script-injection shape,
+          # and `test_gate_arm.py` reads the expression from here.
+          CAPTURE: ${{ (github.event_name != 'pull_request' && inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch') && 'true' || 'false' }}
         run: |
-          echo "capture=${{ (github.event_name != 'pull_request' && inputs.update_baseline && inputs.baseline_arm == 'retrieval-branch') && 'true' || 'false' }}" \
-            >> "$GITHUB_OUTPUT"
+          echo "capture=$CAPTURE" >> "$GITHUB_OUTPUT"
 
       # One predicate, two callers — see scope_relevant.sh for why merge_group is
       # diffed rather than short-circuited, and for the fail-closed rules. The
@@ -493,7 +497,7 @@ jobs:
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -502,7 +506,7 @@ jobs:
       # than silently serving the old weights against the new baseline.
       - name: Cache the CI embedder model
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: scripts/memory-bench/.fastembed_cache
           key: fastembed-bge-small-en-v1.5-v1
@@ -590,7 +594,7 @@ jobs:
 
       - name: Checkout evc-mesh-mcp
         if: steps.scope.outputs.relevant == 'true'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: entire-vc/evc-mesh-mcp
           # Empty is not the same as absent to a reader, but it IS the same to
@@ -813,6 +817,10 @@ jobs:
           # a regression on every open PR at once.
           BENCH_FIXTURE_AGE_MODE: question-anchored
           BENCH_BACKDATE_DSN: postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable
+          # Operator-supplied dispatch input: it reaches the script through the
+          # environment, never spliced into the shell body. A `${{ }}` on a `run:`
+          # line is the standard Actions script-injection shape.
+          BENCH_REPEAT: ${{ inputs.repeat || '3' }}
         run: |
           cd scripts/memory-bench
           # PIPESTATUS, not the pipeline's status. There is no `shell:` key and no
@@ -828,7 +836,7 @@ jobs:
           # omission, dropped when #394 copied the prod arm to make the branch arm.
           set +e
           python run_ci.py --retrieval-only --arm branch --update-baseline \
-            --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+            --repeat "$BENCH_REPEAT" 2>&1 | tee resnap.log
           rc=${PIPESTATUS[0]}
           set -e
 
@@ -857,7 +865,7 @@ jobs:
       # same not-comparable this workflow already exits 2 over (`arm-mismatch`).
       - name: Upload the re-snapped branch baseline
         if: ${{ !cancelled() && steps.resnap.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: baseline-retrieval-branch
           path: |
@@ -895,11 +903,15 @@ jobs:
           # than an inference from this variable existing.
           BENCH_FIXTURE_AGE_MODE: question-anchored
           BENCH_BACKDATE_DSN: postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable
+          # Operator-supplied dispatch input: it reaches the script through the
+          # environment, never spliced into the shell body. A `${{ }}` on a `run:`
+          # line is the standard Actions script-injection shape.
+          BENCH_TOLERANCE: ${{ inputs.tolerance || '0.25' }}
         run: |
           cd scripts/memory-bench
           set +e
           python run_ci.py --retrieval-only --arm branch \
-            --tolerance "${{ inputs.tolerance || '0.25' }}" 2>&1 | tee gate.log
+            --tolerance "$BENCH_TOLERANCE" 2>&1 | tee gate.log
           rc=${PIPESTATUS[0]}
           set -e
 
@@ -916,7 +928,7 @@ jobs:
           {
             echo "## Memory recall gate (branch build)"
             echo
-            echo "Target: \`cmd/api\` built from \`${{ github.sha }}\`, ephemeral postgres,"
+            echo "Target: \`cmd/api\` built from \`$GITHUB_SHA\`, ephemeral postgres,"
             echo "local \`BAAI/bge-small-en-v1.5\`. Not comparable with the prod canary's numbers."
             echo
             case "$rc" in
@@ -1168,7 +1180,7 @@ jobs:
 
       - name: Upload branch-arm results
         if: always() && steps.scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recall-gate-branch-results
           path: |
@@ -1345,7 +1357,7 @@ jobs:
 
     steps:
       - name: Checkout evc-mesh
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -1359,7 +1371,7 @@ jobs:
       # IS a legitimate merge block, and unlike an infra failure the author can
       # clear it: list the file.
       - name: Set up Python (gate self-checks)
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
@@ -1386,9 +1398,13 @@ jobs:
       # or neither.
       - name: Capture or judge?
         id: mode
+        env:
+          # Evaluated by GitHub into the environment, not interpolated into the
+          # shell body — `${{ }}` on a `run:` line is the script-injection shape,
+          # and `test_gate_arm.py` reads the expression from here.
+          CAPTURE: ${{ (inputs.update_baseline && (inputs.baseline_arm == 'retrieval' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}
         run: |
-          echo "capture=${{ (inputs.update_baseline && (inputs.baseline_arm == 'retrieval' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}" \
-            >> "$GITHUB_OUTPUT"
+          echo "capture=$CAPTURE" >> "$GITHUB_OUTPUT"
 
       # One predicate, two callers — see scope_relevant.sh for why merge_group is
       # diffed rather than short-circuited, and for the fail-closed rules. The
@@ -1449,8 +1465,8 @@ jobs:
           # push to main / schedule / dispatch on main: github.sha IS main's tip,
           # which deploy-backend.yml ships. This job never runs on pull_request.
           expect="${EXPECT_COMMIT_INPUT:-}"
-          if [ -z "$expect" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            expect="${{ github.sha }}"
+          if [ -z "$expect" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            expect="$GITHUB_SHA"
           fi
 
           if [ -n "$expect" ]; then
@@ -1462,7 +1478,7 @@ jobs:
             rc=${PIPESTATUS[0]}
             set -e
           else
-            echo "No pin: ${{ github.event_name }} on ${{ github.ref }} is not a commit prod serves."
+            echo "No pin: $GITHUB_EVENT_NAME on $GITHUB_REF is not a commit prod serves."
             set +e
             python3 scripts/memory-bench/check_serving_version.py --record 2>&1 | tee version.log
             rc=${PIPESTATUS[0]}
@@ -1500,7 +1516,7 @@ jobs:
 
       - name: Checkout evc-mesh-mcp
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # See the branch arm's copy of this key for why '' == default branch.
           ref: ${{ inputs.mcp_ref }}
@@ -1525,7 +1541,7 @@ jobs:
 
       - name: Set up Go
         if: steps.scope.outputs.relevant == 'true' && steps.version.outputs.rc == '0'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
@@ -1606,12 +1622,16 @@ jobs:
           # The commit the pre-flight pin confirmed prod was serving. Empty only when
           # no pin applied and the endpoint could not be read.
           SERVED_AT_START: ${{ steps.version.outputs.served }}
+          # Operator-supplied dispatch input: it reaches the script through the
+          # environment, never spliced into the shell body. A `${{ }}` on a `run:`
+          # line is the standard Actions script-injection shape.
+          BENCH_REPEAT: ${{ inputs.repeat || '3' }}
         run: |
           cd scripts/memory-bench
           set +e
           python run_ci.py --retrieval-only --update-baseline \
             --served-commit "${SERVED_AT_START:-}" \
-            --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+            --repeat "$BENCH_REPEAT" 2>&1 | tee resnap.log
           rc=${PIPESTATUS[0]}
           set -e
 
@@ -1653,7 +1673,7 @@ jobs:
             echo "## Recall baseline re-snap (required arm)"
             echo
             if [ "$rc" = "0" ]; then
-              echo "Captured over \`${{ inputs.repeat || '3' }}\` pass(es) on a complete,"
+              echo "Captured over \`$BENCH_REPEAT\` pass(es) on a complete,"
               echo "\`hybrid\`-served run. Download the \`recall-gate-baseline\` artifact and"
               echo "commit \`scripts/memory-bench/baseline_retrieval.json\`."
               echo
@@ -1686,7 +1706,7 @@ jobs:
 
       - name: Upload the re-snapped recall baseline
         if: always() && steps.mode.outputs.capture == 'true' && steps.scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recall-gate-baseline
           path: |
@@ -1731,13 +1751,17 @@ jobs:
           # measurement began. Empty when no pin applied and the endpoint could
           # not be read, in which case the stability check below is skipped.
           SERVED_AT_START: ${{ steps.version.outputs.served }}
+          # Operator-supplied dispatch input: it reaches the script through the
+          # environment, never spliced into the shell body. A `${{ }}` on a `run:`
+          # line is the standard Actions script-injection shape.
+          BENCH_TOLERANCE: ${{ inputs.tolerance || '0.25' }}
         run: |
           cd scripts/memory-bench
           set +e
           # 2>&1: the harness prints its tracebacks to stderr, so without this the
           # uploaded gate.log — the only artifact anyone reads after the fact —
           # contains the "could not measure" verdict but not the reason for it.
-          python run_ci.py --retrieval-only --tolerance "${{ inputs.tolerance || '0.25' }}" 2>&1 | tee gate.log
+          python run_ci.py --retrieval-only --tolerance "$BENCH_TOLERANCE" 2>&1 | tee gate.log
           rc=${PIPESTATUS[0]}
           set -e
 
@@ -1998,7 +2022,7 @@ jobs:
 
       - name: Upload recall-gate results
         if: always() && steps.scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recall-gate-results
           path: |
@@ -2120,12 +2144,16 @@ jobs:
       # is no longer that question — it now also means the other arm.
       - name: Capture or judge?
         id: mode
+        env:
+          # Evaluated by GitHub into the environment, not interpolated into the
+          # shell body — `${{ }}` on a `run:` line is the script-injection shape,
+          # and `test_gate_arm.py` reads the expression from here.
+          CAPTURE: ${{ (inputs.update_baseline && (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}
         run: |
-          echo "capture=${{ (inputs.update_baseline && (inputs.baseline_arm == 'end-to-end' || inputs.baseline_arm == 'both')) && 'true' || 'false' }}" \
-            >> "$GITHUB_OUTPUT"
+          echo "capture=$CAPTURE" >> "$GITHUB_OUTPUT"
 
       - name: Checkout evc-mesh
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # `check_serving_version.py` decides "prod is close enough" by DIFFING
           # prod's commit against this one and asking whether anything
@@ -2190,8 +2218,8 @@ jobs:
           # Pin only where `github.sha` names a commit prod is expected to serve.
           # A capture is dispatched on main, which deploy-backend.yml ships.
           expect="${EXPECT_COMMIT_INPUT:-}"
-          if [ -z "$expect" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            expect="${{ github.sha }}"
+          if [ -z "$expect" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            expect="$GITHUB_SHA"
           fi
 
           if [ -n "$expect" ]; then
@@ -2203,7 +2231,7 @@ jobs:
             rc=${PIPESTATUS[0]}
             set -e
           else
-            echo "No pin: ${{ github.event_name }} on ${{ github.ref }} is not a commit prod serves."
+            echo "No pin: $GITHUB_EVENT_NAME on $GITHUB_REF is not a commit prod serves."
             set +e
             python3 scripts/memory-bench/check_serving_version.py --record 2>&1 | tee version.log
             rc=${PIPESTATUS[0]}
@@ -2240,7 +2268,7 @@ jobs:
           exit $rc
 
       - name: Checkout evc-mesh-mcp
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # See the branch arm's copy of this key for why '' == default branch.
           ref: ${{ inputs.mcp_ref }}
@@ -2263,7 +2291,7 @@ jobs:
           echo "mesh-mcp client: ref=$branch commit=$(git -C evc-mesh-mcp rev-parse --short HEAD)"
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: evc-mesh-mcp/go.mod
           cache-dependency-path: evc-mesh-mcp/go.sum
@@ -2287,7 +2315,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
@@ -2343,12 +2371,16 @@ jobs:
           # The commit the pre-flight pin confirmed prod was serving. Empty only
           # when no pin applied and the endpoint could not be read.
           SERVED_AT_START: ${{ steps.version.outputs.served }}
+          # Operator-supplied dispatch input: it reaches the script through the
+          # environment, never spliced into the shell body. A `${{ }}` on a `run:`
+          # line is the standard Actions script-injection shape.
+          BENCH_REPEAT: ${{ inputs.repeat || '3' }}
         run: |
           cd scripts/memory-bench
           set +e
           python run_ci.py --update-baseline \
             --served-commit "${SERVED_AT_START:-}" \
-            --repeat "${{ inputs.repeat || '3' }}" 2>&1 | tee resnap.log
+            --repeat "$BENCH_REPEAT" 2>&1 | tee resnap.log
           rc=${PIPESTATUS[0]}
           set -e
 
@@ -2381,7 +2413,7 @@ jobs:
             echo "## LongMemEval-S baseline re-snap"
             echo
             if [ "$rc" = "0" ]; then
-              echo "Captured over \`${{ inputs.repeat || '3' }}\` pass(es). Download the"
+              echo "Captured over \`$BENCH_REPEAT\` pass(es). Download the"
               echo "\`memory-bench-baseline\` artifact and commit \`scripts/memory-bench/baseline.json\`."
               echo
               echo '```json'
@@ -2410,7 +2442,7 @@ jobs:
 
       - name: Upload the re-snapped baseline
         if: always() && steps.mode.outputs.capture == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: memory-bench-baseline
           path: |
@@ -2457,12 +2489,16 @@ jobs:
           # Derived from the run id rather than random so an orphaned row names
           # the run that abandoned it.
           BENCH_RUN_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-e
+          # Operator-supplied dispatch input: it reaches the script through the
+          # environment, never spliced into the shell body. A `${{ }}` on a `run:`
+          # line is the standard Actions script-injection shape.
+          BENCH_TOLERANCE: ${{ inputs.tolerance || '0.25' }}
         run: |
           cd scripts/memory-bench
           set +e
           # 2>&1 for the same reason as the recall gate: the harness prints its
           # tracebacks to stderr, and bench.log is the only artifact anyone reads.
-          python run_ci.py --tolerance "${{ inputs.tolerance || '0.25' }}" 2>&1 | tee bench.log
+          python run_ci.py --tolerance "$BENCH_TOLERANCE" 2>&1 | tee bench.log
           rc=${PIPESTATUS[0]}
           set -e
 
@@ -2595,7 +2631,7 @@ jobs:
 
       - name: Upload benchmark results
         if: always() && steps.mode.outputs.capture != 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: memory-bench-results
           path: |
@@ -2724,10 +2760,10 @@ jobs:
       # unfalsifiable; reproducing the OLD one is the free calibration.
       # ---------------------------------------------------------------------
       - name: Checkout evc-mesh
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
