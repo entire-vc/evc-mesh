@@ -35,14 +35,16 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Check migration version ordering
         run: |
-          git fetch origin ${{ github.base_ref || 'main' }} --depth=1
+          # $GITHUB_BASE_REF is GitHub's own default env var (empty off a PR).
+          # A branch name interpolated into the shell body would be injectable.
+          git fetch origin "${GITHUB_BASE_REF:-main}" --depth=1
           bash scripts/check-migration-version.sh migrations
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: Install goose

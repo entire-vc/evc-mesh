@@ -370,10 +370,22 @@ def _extract_if(text: str, job: str) -> str:
 
 
 def _extract_capture_expr(text: str, marker: str) -> str:
-    """The `capture=${{ ... }}` expression from the step following `marker`."""
+    """The `CAPTURE: ${{ ... }}` expression from the step following `marker`.
+
+    The expression lives in the step's `env:`, not on the `echo` line: a
+    `${{ }}` interpolated straight into a `run:` body is the Actions
+    script-injection shape (semgrep `run-shell-injection`, Mesh #5fe7fb4b), so
+    every one of them in this workflow was moved into the environment. This
+    reader follows it there.
+
+    It deliberately does NOT fall back to the old `echo "capture=${{ ... }}"`
+    form. A reader that accepts both would keep passing if someone reverted the
+    fix, which is exactly the drift these tests exist to catch — an unfindable
+    expression must raise, not silently match a different one.
+    """
     idx = text.index(marker)
     frag = text[idx:]
-    open_at = frag.index('echo "capture=${{') + len('echo "capture=${{')
+    open_at = frag.index("CAPTURE: ${{") + len("CAPTURE: ${{")
     close_at = frag.index("}}", open_at)
     return frag[open_at:close_at].strip()
 

@@ -56,7 +56,7 @@ jobs:
       # unknown — but for a reason that has nothing to do with commit messages,
       # and a required check red for the wrong reason is a wedged repository.
       - name: Check out the gate
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             .github/vendor-trailer-terms.txt
