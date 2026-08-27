@@ -18,20 +18,27 @@
 # hold gate, self-host-env (config-only, no live daemon needed),
 # repo-integration (Postgres only — see that job's own header for why it does
 # NOT need NATS/MinIO despite carrying the same `integration` build tag as
-# tenancy-rbac-gate), and tenancy-rbac-gate itself (Postgres + NATS-with-
+# tenancy-rbac-gate), tenancy-rbac-gate itself (Postgres + NATS-with-
 # JetStream + MinIO, a live API server, and a two-part guard against the gate
-# quietly guarding nothing — see that job's own header). Deliberately still
-# absent, and worth their own cards: Authed E2E, Go coverage ≥80%
-# (affected-set), Memory recall gate, Vendor trailer gate, CodeQL. A stub
-# that looks like full CI is more dangerous than a gap you can see, so the
-# gap is named here rather than implied.
+# quietly guarding nothing — see that job's own header), and vendor-trailer-gate
+# (adapted, not a literal port — see that job's own header and
+# `.gitlab/scripts/vendor_trailer_gate.py` for why GitLab's squash mechanics
+# change what it can actually check). Deliberately still absent, and worth
+# their own cards: Authed E2E, Go coverage ≥80% (affected-set), Memory recall
+# gate, CodeQL. A stub that looks like full CI is more dangerous than a gap
+# you can see, so the gap is named here rather than implied.
 #
 # ## The half that is not in this file
 #
 # A pipeline is a display until `only_allow_merge_if_pipeline_succeeds` is
 # true on the project — until then GitLab will happily merge over a red run.
-# That setting needs Maintainer; every agent account on this group is
-# Developer(30) and the sole holder of 40+ is `pavel`. Asked for separately.
+# That setting is now TRUE (read back 2026-08-27 from the project API, not
+# assumed), so a red pipeline here genuinely blocks the merge. It needed
+# Maintainer to set: every agent account on this group is Developer(30) and
+# the sole holder of 40+ is `pavel`.
+#
+# Consequence worth knowing before you wonder why your MR will not merge: a
+# job that is red on `main` blocks every MR, not just the one that broke it.
 
 workflow:
   rules:
@@ -107,6 +114,41 @@ hold-gate:
         exit 1
       fi
       echo "no hold label present ✓"
+
+# ── vendor-trailer-gate ──────────────────────────────────────────────────────
+# Adapted from `.github/workflows/vendor-trailer-gate.yml`, not a literal
+# port. Reads every commit on this MR's source branch not yet on the target
+# branch (`git log origin/<target>..HEAD`, computed locally in the job's own
+# checkout — see `.gitlab/scripts/vendor_trailer_gate.py`'s header for why
+# not the GitLab API) and refuses any whose message carries a
+# `Co-Authored-By:`/`Generated with/by` trailer naming a development tool.
+# Detector, term list (`.github/vendor-trailer-terms.txt`, reused not copied)
+# and self-test are the same as the GitHub script's; the *scope* differs —
+# short version: GitLab's squash commit message is the MR title only, body
+# discarded, so this cannot check what lands on `main` (there is nothing left
+# to check by the time it gets there) — it checks whether the branch commits
+# followed the convention, which is what the squash step used to hide.
+#
+# Known residual gap, same shape as GitHub's own accepted one (see that
+# workflow's header): a human hand-editing the squash/merge commit message in
+# GitLab's merge widget, after this job has already passed, is invisible to
+# it — no pipeline re-runs on that edit. Not closed here; stated.
+vendor-trailer-gate:
+  stage: gate
+  image: python:3.12-alpine
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    # Full clone: the script diffs `origin/<target>..HEAD` itself (see its
+    # own header for why — CI_JOB_TOKEN cannot read this project's own
+    # merge_requests/:iid/commits API, measured live as a 404). A shallow
+    # clone risks that diff silently missing history past the cutoff; GIT_DEPTH:0
+    # removes the question rather than picking a depth and hoping.
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache git
+  script:
+    - python3 .gitlab/scripts/vendor_trailer_gate.py
 
 # ── self-host-env ──────────────────────────────────────────────────────────
 # Ported from .github/workflows/ci.yml's "Self-host env (no new required
