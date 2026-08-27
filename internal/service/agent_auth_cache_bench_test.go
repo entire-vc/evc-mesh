@@ -26,7 +26,7 @@ func benchAuthFixture(b *testing.B) (inner, cached AgentService, rawKey string) 
 
 	timeNow = func() time.Time { return frozenTime }
 
-	inner = NewAgentService(agentRepo, activityRepo, wsRepo)
+	inner = NewAgentService(agentRepo, activityRepo, wsRepo, NewMockUserRepository())
 	out, err := inner.Register(context.Background(), RegisterAgentInput{
 		WorkspaceID: ws.ID,
 		Name:        "Bench Agent",

@@ -116,10 +116,14 @@ type Service struct {
 	refreshTokenRepo    repository.RefreshTokenRepository
 	workspaceRepo       repository.WorkspaceRepository
 	workspaceMemberRepo repository.WorkspaceMemberRepository
-	jwtSecret           []byte
-	accessTokenTTL      time.Duration
-	refreshTokenTTL     time.Duration
-	allowRegistration   bool
+	// agentRepo is optional (nil in tests that don't exercise it) — set via
+	// WithAgentRepo. It backs usernameCollidesWithAgentSlug, the only reason
+	// this package needs to know about agents at all.
+	agentRepo         repository.AgentRepository
+	jwtSecret         []byte
+	accessTokenTTL    time.Duration
+	refreshTokenTTL   time.Duration
+	allowRegistration bool
 }
 
 // Option configures optional Service behavior.
@@ -132,6 +136,14 @@ type Option func(*Service)
 // bootstrapped. See docs/self-hosting.md#closing-registration.
 func WithAllowRegistration(allow bool) Option {
 	return func(s *Service) { s.allowRegistration = allow }
+}
+
+// WithAgentRepo enables the username↔agent-slug collision guard on
+// UpdateProfile/CheckUsername (task fee35355). Without it (nil, the default —
+// most tests never call this), the guard is a no-op: usernameCollidesWithAgentSlug
+// short-circuits on a nil agentRepo before touching anything.
+func WithAgentRepo(agentRepo repository.AgentRepository) Option {
+	return func(s *Service) { s.agentRepo = agentRepo }
 }
 
 // NewService creates a new auth Service with the given dependencies.
@@ -579,6 +591,42 @@ func (s *Service) RefreshTokenTTL() time.Duration {
 	return s.refreshTokenTTL
 }
 
+// usernameCollidesWithAgentSlug reports whether username matches an existing
+// agent's slug in any workspace userID is a member of, as an apierror.Conflict
+// naming the agent and workspace — or nil if it's free.
+//
+// agents.slug is unique per-workspace (uq_agents_workspace_slug); users.username
+// is unique globally (ix_users_username). Nothing before task fee35355 kept the
+// two namespaces disjoint, so a workspace could end up with an agent and a human
+// both answering to the same @-mention — task f4f47938 stopped that from being
+// a SILENT loss (both branches now resolve and both get their own delivery row),
+// but did nothing to stop the collision from being created in the first place.
+//
+// Scoped to the user's OWN workspaces, not global: a slug taken by an agent in a
+// workspace this user has never joined can never actually collide with them —
+// their @-mentions are only ever resolved inside workspaces they belong to.
+func (s *Service) usernameCollidesWithAgentSlug(ctx context.Context, userID uuid.UUID, username string) error {
+	if s.agentRepo == nil || s.workspaceRepo == nil {
+		return nil
+	}
+	workspaces, err := s.workspaceRepo.ListForUser(ctx, userID)
+	if err != nil {
+		return apierror.Wrap(err)
+	}
+	for _, ws := range workspaces {
+		agent, err := s.agentRepo.GetBySlug(ctx, ws.ID, username)
+		if err != nil {
+			return apierror.Wrap(err)
+		}
+		if agent != nil {
+			return apierror.Conflict(fmt.Sprintf(
+				"this handle is already used by agent %q in workspace %q — choose a different username",
+				agent.Slug, ws.Name))
+		}
+	}
+	return nil
+}
+
 // UpdateProfile updates the display_name, username (optional), and avatar_url for the given user.
 // name is trimmed and must be non-empty, max 100 runes. username is validated and checked for global uniqueness.
 func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, username, avatarURL string) (*domain.User, error) {
@@ -600,6 +648,9 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, use
 		}
 		if existing != nil && existing.ID != userID {
 			return nil, ErrUsernameConflict
+		}
+		if conflictErr := s.usernameCollidesWithAgentSlug(ctx, userID, username); conflictErr != nil {
+			return nil, conflictErr
 		}
 	}
 
@@ -640,10 +691,13 @@ func (s *Service) CheckUsername(ctx context.Context, userID uuid.UUID, username 
 	if err != nil {
 		return false, apierror.Wrap(err)
 	}
-	if existing == nil || existing.ID == userID {
-		return true, nil
+	if existing != nil && existing.ID != userID {
+		return false, nil
 	}
-	return false, nil
+	if conflictErr := s.usernameCollidesWithAgentSlug(ctx, userID, username); conflictErr != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 // GetUserByID retrieves a user by ID. Used by the /auth/me endpoint.

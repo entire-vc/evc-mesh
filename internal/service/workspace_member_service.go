@@ -24,6 +24,10 @@ type workspaceMemberService struct {
 	userRepo          repository.UserRepository
 	projectMemberRepo repository.ProjectMemberRepository
 	activityRepo      repository.ActivityLogRepository
+	// agentRepo backs generateUniqueUsername's agent-slug skip (task fee35355)
+	// — optional, nil in tests that don't exercise it, in which case candidates
+	// are only checked against other usernames, same as before.
+	agentRepo repository.AgentRepository
 }
 
 // NewWorkspaceMemberService returns a new WorkspaceMemberService.
@@ -32,12 +36,14 @@ func NewWorkspaceMemberService(
 	userRepo repository.UserRepository,
 	projectMemberRepo repository.ProjectMemberRepository,
 	activityRepo repository.ActivityLogRepository,
+	agentRepo repository.AgentRepository,
 ) WorkspaceMemberService {
 	return &workspaceMemberService{
 		memberRepo:        memberRepo,
 		userRepo:          userRepo,
 		projectMemberRepo: projectMemberRepo,
 		activityRepo:      activityRepo,
+		agentRepo:         agentRepo,
 	}
 }
 
@@ -180,7 +186,7 @@ func (s *workspaceMemberService) AddMemberWithCreate(ctx context.Context, worksp
 		if hashErr != nil {
 			return nil, apierror.InternalError("failed to hash password")
 		}
-		username, unameErr := s.generateUniqueUsername(ctx, email)
+		username, unameErr := s.generateUniqueUsername(ctx, workspaceID, email)
 		if unameErr != nil {
 			return nil, fmt.Errorf("workspace_member_service.AddMemberWithCreate: %w", unameErr)
 		}
@@ -283,15 +289,28 @@ func usernameBaseFromEmail(email string) string {
 }
 
 // generateUniqueUsername returns a username derived from the email that is not
-// already taken (case-insensitive, global). On collision it appends an
-// incrementing numeric suffix, mirroring the migration backfill.
-func (s *workspaceMemberService) generateUniqueUsername(ctx context.Context, email string) (string, error) {
+// already taken (case-insensitive, global) AND does not collide with an
+// existing agent's slug in workspaceID (task fee35355 — this is the "заведение
+// пользователя" entry point that used to have no such check at all, silently
+// creating exactly the ambiguous-@-mention state task f4f47938 had to cope
+// with after the fact). On collision it appends an incrementing numeric
+// suffix, mirroring the migration backfill; an agent-slug collision is treated
+// the same way as a username-taken collision — just another reason to try the
+// next candidate, since this path never surfaces the name to a human anyway.
+func (s *workspaceMemberService) generateUniqueUsername(ctx context.Context, workspaceID uuid.UUID, email string) (string, error) {
 	base := usernameBaseFromEmail(email)
 	candidate := base
 	for i := 1; i <= 10000; i++ {
 		exists, err := s.userRepo.UsernameExists(ctx, candidate)
 		if err != nil {
 			return "", err
+		}
+		if !exists && s.agentRepo != nil {
+			agent, err := s.agentRepo.GetBySlug(ctx, workspaceID, candidate)
+			if err != nil {
+				return "", err
+			}
+			exists = agent != nil
 		}
 		if !exists {
 			return candidate, nil

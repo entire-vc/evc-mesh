@@ -138,6 +138,7 @@ func main() {
 		workspaceMemberRepo,
 		cfg.Auth.JWTSecret,
 		auth.WithAllowRegistration(cfg.Auth.AllowRegistration),
+		auth.WithAgentRepo(agentRepo),
 	)
 
 	// Create the first admin on a fresh install — and always say what happened.
@@ -245,7 +246,7 @@ func main() {
 	// already-known key. Successful verifications only; failures still run
 	// bcrypt, and rotation/deletion evict explicitly.
 	agentService := service.NewCachedAgentAuth(
-		service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo),
+		service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo, userRepo),
 		service.AgentAuthCacheTTL,
 	)
 	// Wire agent activity log repository for monitoring.
@@ -430,7 +431,7 @@ func main() {
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 
 	// Member services.
-	workspaceMemberService := service.NewWorkspaceMemberService(workspaceMemberRepo, userRepo, projectMemberRepo, activityLogRepo)
+	workspaceMemberService := service.NewWorkspaceMemberService(workspaceMemberRepo, userRepo, projectMemberRepo, activityLogRepo, agentRepo)
 	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo,
 		service.WithAgentRepo(agentRepo),
 	)

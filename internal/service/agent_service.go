@@ -40,18 +40,27 @@ type agentService struct {
 	agentActLogRepo repository.AgentActivityLogRepository
 	// workspaceRepo is used to resolve workspace slugs during authentication.
 	workspaceRepo repository.WorkspaceRepository
+	// userRepo backs the username↔slug collision guard in Register (task
+	// fee35355) — optional, nil in tests that don't exercise it, in which case
+	// the guard is a no-op (see the nil check in Register).
+	userRepo repository.UserRepository
 }
 
 // NewAgentService returns a new AgentService backed by the given repositories.
+// userRepo may be nil — Register's username-collision guard is then skipped,
+// which is fine for tests that don't touch it but means a caller wiring this
+// for real (see cmd/api/main.go) must pass a real one for the guard to apply.
 func NewAgentService(
 	agentRepo repository.AgentRepository,
 	activityRepo repository.ActivityLogRepository,
 	workspaceRepo repository.WorkspaceRepository,
+	userRepo repository.UserRepository,
 ) AgentService {
 	return &agentService{
 		agentRepo:     agentRepo,
 		activityRepo:  activityRepo,
 		workspaceRepo: workspaceRepo,
+		userRepo:      userRepo,
 	}
 }
 
@@ -112,6 +121,28 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 		return nil, apierror.NotFound("Workspace")
 	}
 
+	slug := slugify(input.Name)
+
+	// Task fee35355: agents.slug and users.username live in separate namespaces
+	// that nothing else keeps disjoint. If a member of this workspace already
+	// answers to this handle, a new agent taking the same slug would make
+	// @<slug> in a comment here ambiguous between the two — the exact class of
+	// collision task f4f47938 stopped from being a SILENT loss (both branches
+	// now resolve and get their own delivery) without stopping it from being
+	// created. Fail before spending a bcrypt hash on a request we're about to
+	// reject. userRepo is nil in tests that don't care about this.
+	if s.userRepo != nil {
+		existingUser, userErr := s.userRepo.GetByUsername(ctx, input.WorkspaceID, slug)
+		if userErr != nil {
+			return nil, apierror.Wrap(userErr)
+		}
+		if existingUser != nil {
+			return nil, apierror.Conflict(fmt.Sprintf(
+				"this handle is already used by user %q in this workspace — choose a different agent name",
+				existingUser.Username))
+		}
+	}
+
 	rawKey, err := generateAPIKey(ws.Slug)
 	if err != nil {
 		return nil, apierror.InternalError("failed to generate API key")
@@ -131,7 +162,7 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 		WorkspaceID:   input.WorkspaceID,
 		ParentAgentID: input.ParentAgentID,
 		Name:          input.Name,
-		Slug:          slugify(input.Name),
+		Slug:          slug,
 		AgentType:     input.AgentType,
 		APIKeyHash:    string(hash),
 		// Written at issue time, the one moment the plaintext exists, so a

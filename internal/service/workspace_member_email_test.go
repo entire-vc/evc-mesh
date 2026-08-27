@@ -20,6 +20,7 @@ func newMemberServiceForEmailTests() (WorkspaceMemberService, *MockUserRepositor
 		userRepo,
 		NewMockProjectMemberRepository(),
 		nil, // activityRepo: only touched on the success path
+		nil, // agentRepo: not exercised by these tests
 	), userRepo
 }
 
