@@ -3,8 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -29,11 +29,18 @@ import (
 // in a URL, and never reaches the browser — which is the whole reason this is a
 // server endpoint rather than a fetch from the page.
 type TrDocumentHandler struct {
-	piService service.ProjectIntegrationService
+	piService     service.ProjectIntegrationService
+	projectSvc    service.ProjectService
+	relayResolver *service.TeamRelayIntegrationResolver
 }
 
-func NewTrDocumentHandler(piService service.ProjectIntegrationService) *TrDocumentHandler {
-	return &TrDocumentHandler{piService: piService}
+// NewTrDocumentHandler creates a new TrDocumentHandler. relayResolver answers
+// "where does the relay live for this workspace" (specsintegration-provider-contract
+// §4) — it replaces a raw environment-variable read that used to live inline
+// here. projectSvc resolves the project's workspace_id, which the resolver
+// needs.
+func NewTrDocumentHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver *service.TeamRelayIntegrationResolver) *TrDocumentHandler {
+	return &TrDocumentHandler{piService: piService, projectSvc: projectSvc, relayResolver: relayResolver}
 }
 
 // Get handles GET /projects/:proj_id/tr/document?relay_url=<encoded>
@@ -91,7 +98,21 @@ func (h *TrDocumentHandler) Get(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"available": false})
 	}
 
-	relayURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
+	project, err := h.projectSvc.GetByID(c.Request().Context(), projectID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	relayURL, _, ok := h.relayResolver.ResolveRelayURL(c.Request().Context(), project.WorkspaceID)
+	if !ok {
+		// The link itself is fine (right share, real path) — what's missing is
+		// the relay's base URL for this whole workspace, which is not this
+		// caller's problem to see as an error: the page still has "Open in Team
+		// Relay" to fall back to. Named and logged so a misconfiguration doesn't
+		// look, from the ops side, like a relay that is simply unreachable.
+		log.Printf("[tr-document] relay URL not configured for workspace %s: no active team_relay integration and no MESH_TEAMRELAY_RELAY_URL fallback", project.WorkspaceID)
+		return c.JSON(http.StatusOK, map[string]any{"available": false})
+	}
+
 	doc, err := teamrelay.FetchDocument(c.Request().Context(), relayURL, settings.ShareSlug, docPath, pi.AgentKey)
 	if err != nil {
 		// The relay was unreachable, or refused the key. Reported as unavailable

@@ -23,6 +23,24 @@ type Config struct {
 	Embedding EmbeddingConfig
 	VAPID     VAPIDConfig
 	Email     EmailConfig
+	TeamRelay TeamRelayConfig
+}
+
+// TeamRelayConfig holds the INSTANCE-WIDE fallback for the Team Relay
+// CONNECTION layer (where the relay lives). As of the fix for the two
+// tr_*_handler.go call sites that used to read MESH_TEAMRELAY_RELAY_URL via
+// os.Getenv directly (§4/§C1 of specsintegration-provider-contract),
+// service.TeamRelayIntegrationResolver (wired in cmd/api/main.go) checks a
+// workspace's own active `team_relay` integration_configs row FIRST on every
+// call, and only falls back to RelayURL below when that workspace has none
+// configured. This is the CONNECTION layer only — the per-project BINDING
+// (which share, which subfolder, the sync agent key) lives in
+// project_integrations and is untouched by this config.
+type TeamRelayConfig struct {
+	// RelayURL is the Team Relay instance's base URL (e.g.
+	// "https://cp.tr.entire.vc") used when no workspace has configured its
+	// own team_relay connection — see the type doc comment.
+	RelayURL string
 }
 
 // EmailConfig holds SMTP settings for outbound email (workspace invites, notifications).
@@ -346,6 +364,9 @@ func Load() *Config {
 			GitLabURL:    getEnv("MESH_GITLAB_URL", ""),
 			GitLabToken:  getEnvOrFile("MESH_GITLAB_TOKEN", "MESH_GITLAB_TOKEN_FILE"),
 			GitLabSecret: getEnv("MESH_GITLAB_WEBHOOK_SECRET", ""),
+		},
+		TeamRelay: TeamRelayConfig{
+			RelayURL: getEnv("MESH_TEAMRELAY_RELAY_URL", ""),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:        getEnv("EMBEDDING_PROVIDER", "none"),

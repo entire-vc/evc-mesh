@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -17,12 +16,19 @@ import (
 
 // TrSearchHandler handles TR document search for a project.
 type TrSearchHandler struct {
-	piService service.ProjectIntegrationService
+	piService     service.ProjectIntegrationService
+	projectSvc    service.ProjectService
+	relayResolver *service.TeamRelayIntegrationResolver
 }
 
-// NewTrSearchHandler creates a new TrSearchHandler.
-func NewTrSearchHandler(piService service.ProjectIntegrationService) *TrSearchHandler {
-	return &TrSearchHandler{piService: piService}
+// NewTrSearchHandler creates a new TrSearchHandler. relayResolver answers
+// "where does the relay live for this workspace" (specsintegration-provider-contract
+// §4) — it replaces a raw environment-variable read that used to live inline
+// here, which meant a typo in the variable's name only surfaced at request
+// time. projectSvc resolves the project's workspace_id, which the resolver
+// needs and this handler otherwise has no reason to look up.
+func NewTrSearchHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver *service.TeamRelayIntegrationResolver) *TrSearchHandler {
+	return &TrSearchHandler{piService: piService, projectSvc: projectSvc, relayResolver: relayResolver}
 }
 
 // Search handles GET /projects/:proj_id/tr/search?q=&limit=
@@ -53,9 +59,13 @@ func (h *TrSearchHandler) Search(c echo.Context) error {
 		return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest("TR integration not configured: missing share_slug"))
 	}
 
-	relayURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
-	if relayURL == "" {
-		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("relay URL not configured"))
+	project, err := h.projectSvc.GetByID(c.Request().Context(), projectID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	relayURL, _, ok := h.relayResolver.ResolveRelayURL(c.Request().Context(), project.WorkspaceID)
+	if !ok {
+		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("relay URL not configured: no active team_relay integration for this workspace and no MESH_TEAMRELAY_RELAY_URL fallback"))
 	}
 
 	docs, err := teamrelay.SearchDocs(c.Request().Context(), relayURL, settings.ShareSlug, pi.AgentKey, q, limit)

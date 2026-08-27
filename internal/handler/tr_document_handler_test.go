@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
 // Reading a Team Relay document server-side, so that Docs can render it with our
@@ -53,10 +54,38 @@ func trIntegration(t *testing.T, slug string, enabled bool) *MockProjectIntegrat
 	}
 }
 
+// trProjectService is a MockProjectService that resolves any project ID to a
+// project with a fixed (arbitrary — the resolver below never keys the env
+// fallback off it) workspace ID, which is all TrDocumentHandler needs from it.
+func trProjectService(t *testing.T) *MockProjectService {
+	t.Helper()
+	return &MockProjectService{
+		GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Project, error) {
+			return &domain.Project{ID: id, WorkspaceID: uuid.New()}, nil
+		},
+	}
+}
+
+// trRelayResolver builds a TeamRelayIntegrationResolver that resolves straight
+// to relayURL via the env-fallback tier (nil repo — no workspace row in play),
+// the same role t.Setenv("MESH_TEAMRELAY_RELAY_URL", ...) played before the
+// handler was moved off a direct os.Getenv read. An empty relayURL models "not
+// configured at all" (resolver returns ok=false).
+func trRelayResolver(relayURL string) *service.TeamRelayIntegrationResolver {
+	return service.NewTeamRelayIntegrationResolver(nil, service.TeamRelayEnvFallback{RelayURL: relayURL})
+}
+
+// newTestTrDocumentHandler wires a TrDocumentHandler the way main.go does,
+// with test doubles standing in for projectSvc and the relay resolver.
+func newTestTrDocumentHandler(t *testing.T, pi *MockProjectIntegrationService, relayURL string) *TrDocumentHandler {
+	t.Helper()
+	return NewTrDocumentHandler(pi, trProjectService(t), trRelayResolver(relayURL))
+}
+
 func TestTrDocumentHandler_FolderLinkIsUnavailableNotAnError(t *testing.T) {
 	// A link to the share root has no document behind it. That is an ordinary
 	// state of a link somebody pasted months ago, not a failure.
-	h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), "")
 	c, rec := trDocRequest(echo.New(), uuid.New().String(), "relay://demo")
 
 	require.NoError(t, h.Get(c))
@@ -68,7 +97,7 @@ func TestTrDocumentHandler_FolderLinkIsUnavailableNotAnError(t *testing.T) {
 func TestTrDocumentHandler_ForeignShareIsRefused(t *testing.T) {
 	// Reading it would mean using THIS project's credential to fetch content the
 	// caller has no relationship with.
-	h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), "")
 	c, rec := trDocRequest(echo.New(), uuid.New().String(), "relay://someone-else/Notes.md")
 
 	require.NoError(t, h.Get(c))
@@ -78,7 +107,7 @@ func TestTrDocumentHandler_ForeignShareIsRefused(t *testing.T) {
 }
 
 func TestTrDocumentHandler_DisabledIntegrationIsUnavailable(t *testing.T) {
-	h := NewTrDocumentHandler(trIntegration(t, "demo", false))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", false), "")
 	c, rec := trDocRequest(echo.New(), uuid.New().String(), "relay://demo/Notes.md")
 
 	require.NoError(t, h.Get(c))
@@ -87,7 +116,7 @@ func TestTrDocumentHandler_DisabledIntegrationIsUnavailable(t *testing.T) {
 }
 
 func TestTrDocumentHandler_RefusesPathTraversal(t *testing.T) {
-	h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), "")
 	c, rec := trDocRequest(echo.New(), uuid.New().String(), "relay://demo/../../etc/passwd")
 
 	require.NoError(t, h.Get(c))
@@ -98,7 +127,7 @@ func TestTrDocumentHandler_RefusesPathTraversal(t *testing.T) {
 }
 
 func TestTrDocumentHandler_RejectsANonRelayURL(t *testing.T) {
-	h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), "")
 	c, rec := trDocRequest(echo.New(), uuid.New().String(), "https://example.com/x.md")
 
 	require.NoError(t, h.Get(c))
@@ -107,7 +136,7 @@ func TestTrDocumentHandler_RejectsANonRelayURL(t *testing.T) {
 }
 
 func TestTrDocumentHandler_RejectsAMissingRelayURL(t *testing.T) {
-	h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), "")
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := echo.New().NewContext(req, rec)
@@ -120,12 +149,29 @@ func TestTrDocumentHandler_RejectsAMissingRelayURL(t *testing.T) {
 }
 
 func TestTrDocumentHandler_RejectsAMalformedProjectID(t *testing.T) {
-	h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), "")
 	c, rec := trDocRequest(echo.New(), "not-a-uuid", "relay://demo/Notes.md")
 
 	require.NoError(t, h.Get(c))
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// AC3: a valid, matching link with the workspace's relay URL missing entirely
+// (no active team_relay row, no MESH_TEAMRELAY_RELAY_URL fallback) degrades to
+// "available: false" like every other ordinary state this handler absorbs —
+// this handler's whole point is that a broken/unreachable relay is not this
+// caller's problem, it just falls back to "Open in Team Relay". The refusal
+// is still NAMED, just on the server log rather than in the response body
+// (verified by the resolver's own unit tests, not re-asserted on stdout here).
+func TestTrDocumentHandler_RelayNotConfigured_IsUnavailableNotAnError(t *testing.T) {
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), "")
+	c, rec := trDocRequest(echo.New(), uuid.New().String(), "relay://demo/Notes.md")
+
+	require.NoError(t, h.Get(c))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"available":false`)
 }
 
 // The one that matters. Every path this handler can take, checked for the key —
@@ -143,7 +189,6 @@ func TestTrDocumentHandler_NeverPutsTheIntegrationKeyInAResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{"path":"Notes.md","name":"Notes","type":"doc","content":"# Notes"}`))
 	}))
 	defer relay.Close()
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", relay.URL)
 
 	cases := map[string]string{
 		"folder link":   "relay://demo",
@@ -157,7 +202,7 @@ func TestTrDocumentHandler_NeverPutsTheIntegrationKeyInAResponse(t *testing.T) {
 
 	for name, relayURL := range cases {
 		t.Run(name, func(t *testing.T) {
-			h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+			h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), relay.URL)
 			c, rec := trDocRequest(echo.New(), uuid.New().String(), relayURL)
 
 			require.NoError(t, h.Get(c))
@@ -183,9 +228,8 @@ func TestTrDocumentHandler_ReturnsTheDocumentSource(t *testing.T) {
 		_, _ = w.Write([]byte(`{"path":"Notes.md","name":"Notes","type":"doc","content":"---\ntitle: x\n---\n\n# Notes"}`))
 	}))
 	defer relay.Close()
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", relay.URL)
 
-	h := NewTrDocumentHandler(trIntegration(t, "demo", true))
+	h := newTestTrDocumentHandler(t, trIntegration(t, "demo", true), relay.URL)
 	c, rec := trDocRequest(echo.New(), uuid.New().String(), "relay://demo/Notes.md")
 
 	require.NoError(t, h.Get(c))

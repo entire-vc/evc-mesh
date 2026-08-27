@@ -354,6 +354,23 @@ func main() {
 		log.Printf("[config] MESH_GITLAB_URL/MESH_GITLAB_TOKEN not set — GitLab env fallback has no live MR-status check; a workspace can still enable one via its own integration")
 	}
 
+	// teamRelayIntegrationResolver is the Team Relay CONNECTION layer's
+	// counterpart to vcsIntegrationResolver above: it replaces the
+	// os.Getenv("MESH_TEAMRELAY_RELAY_URL") reads that used to live directly in
+	// tr_search_handler.go and tr_document_handler.go, resolving a workspace's
+	// own active team_relay integration_configs row before falling back to this
+	// env value (§4 of specsintegration-provider-contract). It does not touch
+	// project_integrations — the per-project BINDING (share/subfolder/agent
+	// key) that table already implements correctly.
+	teamRelayIntegrationResolver := service.NewTeamRelayIntegrationResolver(integrationRepo, service.TeamRelayEnvFallback{
+		RelayURL: cfg.TeamRelay.RelayURL,
+	})
+	if cfg.TeamRelay.RelayURL != "" {
+		log.Printf("[config] Team Relay env fallback: relay URL available when no workspace has its own team_relay integration configured (%s)", cfg.TeamRelay.RelayURL)
+	} else {
+		log.Printf("[config] MESH_TEAMRELAY_RELAY_URL not set — Team Relay env fallback has no relay URL; a workspace can still enable one via its own integration")
+	}
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
@@ -683,8 +700,8 @@ func main() {
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	documentMentionHandler := handler.NewDocumentMentionHandler(documentMentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
-	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService)
-	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService)
+	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService, projectService, teamRelayIntegrationResolver)
+	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService, projectService, teamRelayIntegrationResolver)
 	trMountHandler := handler.NewTrMountHandler(teamRelayMountService)
 	canonicalUpdatesHandler := handler.NewCanonicalUpdatesHandler(memoryService, sessionRepo, agentService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
