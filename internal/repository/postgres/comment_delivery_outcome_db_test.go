@@ -184,7 +184,7 @@ func TestDeliveryOutcomeDB_MarkFailedDowngradesAndDoesNotResurrect(t *testing.T)
 		Channel: domain.ChannelTaskQueue, RecipientPresence: "online", DecidedAt: time.Now(),
 	}}))
 
-	require.NoError(t, repo.MarkFailed(ctx, commentID, "bart", domain.ReasonEventPersistFailed))
+	require.NoError(t, repo.MarkFailed(ctx, commentID, "bart", domain.RecipientKindAgent, domain.ReasonEventPersistFailed))
 
 	byComment, err := repo.ListByCommentIDs(ctx, []uuid.UUID{commentID})
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestDeliveryOutcomeDB_MarkFailedDowngradesAndDoesNotResurrect(t *testing.T)
 	assert.Equal(t, domain.ReasonEventPersistFailed, byComment[commentID][0].Reason)
 
 	// Idempotent under a retry, and a second call must not blank the reason.
-	require.NoError(t, repo.MarkFailed(ctx, commentID, "bart", domain.ReasonEventPersistFailed))
+	require.NoError(t, repo.MarkFailed(ctx, commentID, "bart", domain.RecipientKindAgent, domain.ReasonEventPersistFailed))
 	byComment, err = repo.ListByCommentIDs(ctx, []uuid.UUID{commentID})
 	require.NoError(t, err)
 	require.Len(t, byComment[commentID], 1)
@@ -201,10 +201,135 @@ func TestDeliveryOutcomeDB_MarkFailedDowngradesAndDoesNotResurrect(t *testing.T)
 	assert.NotEmpty(t, byComment[commentID][0].Reason)
 
 	// A handle nobody recorded is a no-op, not an error and not a new row.
-	require.NoError(t, repo.MarkFailed(ctx, commentID, "never-recorded", domain.ReasonEventPersistFailed))
+	require.NoError(t, repo.MarkFailed(ctx, commentID, "never-recorded", domain.RecipientKindAgent, domain.ReasonEventPersistFailed))
 	byComment, err = repo.ListByCommentIDs(ctx, []uuid.UUID{commentID})
 	require.NoError(t, err)
 	assert.Len(t, byComment[commentID], 1, "MarkFailed must not invent rows for unknown handles")
+}
+
+// MarkFailed must address the row by kind too, not just comment+slug — a
+// colliding slug can carry both an agent row and a user row for the same
+// comment_id + recipient_slug, and downgrading the wrong one would silently
+// mark the untouched side as failed while leaving the actually-broken side
+// standing as delivered.
+func TestDeliveryOutcomeDB_MarkFailedTargetsOnlyItsOwnKind(t *testing.T) {
+	db := deliveryOutcomeTestDB(t)
+	ctx := context.Background()
+	commentID := newDeliveryOutcomeComment(t, db)
+	repo := NewCommentDeliveryOutcomeRepo(db)
+
+	require.NoError(t, repo.InsertBatch(ctx, []domain.CommentDeliveryOutcome{
+		{
+			CommentID: commentID, RecipientSlug: "hugh", RecipientKind: domain.RecipientKindAgent,
+			Outcome: domain.DeliveryDelivered, Reason: domain.ReasonTaskQueue,
+			Channel: domain.ChannelTaskQueue, RecipientPresence: "online", DecidedAt: time.Now(),
+		},
+		{
+			CommentID: commentID, RecipientSlug: "hugh", RecipientKind: domain.RecipientKindUser,
+			Outcome: domain.DeliveryDelivered, Reason: domain.ReasonNotification,
+			Channel: domain.ChannelNotification, RecipientPresence: "unknown", DecidedAt: time.Now(),
+		},
+	}))
+
+	require.NoError(t, repo.MarkFailed(ctx, commentID, "hugh", domain.RecipientKindAgent, domain.ReasonEventPersistFailed))
+
+	byComment, err := repo.ListByCommentIDs(ctx, []uuid.UUID{commentID})
+	require.NoError(t, err)
+	rows := byComment[commentID]
+	require.Len(t, rows, 2, "the downgrade must not remove or merge either row")
+
+	var agentRow, userRow *domain.CommentDeliveryOutcome
+	for i := range rows {
+		switch rows[i].RecipientKind {
+		case domain.RecipientKindAgent:
+			agentRow = &rows[i]
+		case domain.RecipientKindUser:
+			userRow = &rows[i]
+		}
+	}
+	require.NotNil(t, agentRow)
+	require.NotNil(t, userRow)
+	assert.Equal(t, domain.DeliveryFailed, agentRow.Outcome, "the kind actually named must be downgraded")
+	assert.Equal(t, domain.DeliveryDelivered, userRow.Outcome, "the other kind sharing the slug must be untouched")
+}
+
+// This is the acceptance criterion the addendum names directly: a comment
+// naming a colliding slug must leave TWO rows on a real database, one per
+// side, and re-recording (an edit re-running the mention pass) must update
+// each in place rather than one clobbering the other.
+//
+// RED CONTROL (run manually before this migration existed, recorded here so
+// the claim is checkable and not just asserted): against the pre-20260827001
+// schema (PRIMARY KEY (comment_id, recipient_slug)), this same InsertBatch
+// call left exactly ONE row — RecipientKind == "user", the second write in
+// the batch — reproducing the exact defect from task f4f47938's addendum
+// comment. `require.Len(t, rows, 2, ...)` below failed with "1 != 2" against
+// that schema and passes against this migration.
+func TestDeliveryOutcomeDB_CollidingSlugPersistsBothKinds(t *testing.T) {
+	db := deliveryOutcomeTestDB(t)
+	ctx := context.Background()
+	commentID := newDeliveryOutcomeComment(t, db)
+	repo := NewCommentDeliveryOutcomeRepo(db)
+
+	agentID, userID := uuid.New(), uuid.New()
+
+	// One batch, same shape notifyMentions produces for a colliding slug: two
+	// rows, same comment_id + recipient_slug, different recipient_kind.
+	require.NoError(t, repo.InsertBatch(ctx, []domain.CommentDeliveryOutcome{
+		{
+			CommentID: commentID, RecipientSlug: "hugh", RecipientID: &agentID,
+			RecipientKind: domain.RecipientKindAgent, Outcome: domain.DeliverySkipped,
+			Reason: domain.ReasonNoQueuePath, Channel: domain.ChannelNone,
+			RecipientPresence: "online", DecidedAt: time.Now(),
+		},
+		{
+			CommentID: commentID, RecipientSlug: "hugh", RecipientID: &userID,
+			RecipientKind: domain.RecipientKindUser, Outcome: domain.DeliveryDelivered,
+			Reason: domain.ReasonNotification, Channel: domain.ChannelNotification,
+			RecipientPresence: "unknown", DecidedAt: time.Now(),
+		},
+	}))
+
+	byComment, err := repo.ListByCommentIDs(ctx, []uuid.UUID{commentID})
+	require.NoError(t, err)
+	rows := byComment[commentID]
+	require.Len(t, rows, 2, "a colliding slug must leave one row per addressed party — this is the bug the addendum found: the second write was silently upserting over the first")
+
+	var agentRow, userRow *domain.CommentDeliveryOutcome
+	for i := range rows {
+		switch rows[i].RecipientKind {
+		case domain.RecipientKindAgent:
+			agentRow = &rows[i]
+		case domain.RecipientKindUser:
+			userRow = &rows[i]
+		}
+	}
+	require.NotNil(t, agentRow, "agent side of the collision has no recorded verdict")
+	require.NotNil(t, userRow, "human side of the collision has no recorded verdict")
+	assert.Equal(t, agentID, *agentRow.RecipientID)
+	assert.Equal(t, userID, *userRow.RecipientID)
+
+	// Re-recording (an edit re-running the mention pass) must update each
+	// side in place, not add a third row and not merge the two.
+	updatedAgentID := agentID
+	require.NoError(t, repo.InsertBatch(ctx, []domain.CommentDeliveryOutcome{{
+		CommentID: commentID, RecipientSlug: "hugh", RecipientID: &updatedAgentID,
+		RecipientKind: domain.RecipientKindAgent, Outcome: domain.DeliveryDelivered,
+		Reason: domain.ReasonTaskQueue, Channel: domain.ChannelTaskQueue,
+		RecipientPresence: "online", DecidedAt: time.Now().Add(time.Minute),
+	}}))
+
+	byComment, err = repo.ListByCommentIDs(ctx, []uuid.UUID{commentID})
+	require.NoError(t, err)
+	rows = byComment[commentID]
+	require.Len(t, rows, 2, "updating one side of the collision must not add a row or drop the other side")
+	for _, r := range rows {
+		if r.RecipientKind == domain.RecipientKindAgent {
+			assert.Equal(t, domain.DeliveryDelivered, r.Outcome, "the updated side must reflect the new verdict")
+		} else {
+			assert.Equal(t, domain.DeliveryDelivered, r.Outcome, "the untouched side must be unaffected by the other side's update")
+		}
+	}
 }
 
 // Deleting the comment must take its delivery record with it — the record is

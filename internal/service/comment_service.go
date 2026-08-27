@@ -1323,7 +1323,7 @@ func (s *commentService) notifyMentions(
 						// rather than leaving a confident "delivered" standing
 						// over a write that did not happen — a stale optimistic
 						// record is the failure mode this whole table replaces.
-						OnPersistErr: s.markDeliveryFailed(comment.ID, slug),
+						OnPersistErr: s.markDeliveryFailed(comment.ID, slug, domain.RecipientKindAgent),
 					})
 				}
 			}
@@ -1424,7 +1424,12 @@ func (s *commentService) notifyMentions(
 // Returns nil when there is no repository to write to, which is what keeps the
 // notification payload free of a closure that would do nothing — and keeps the
 // hook's own "is it set" check meaningful.
-func (s *commentService) markDeliveryFailed(commentID uuid.UUID, slug string) func(error) {
+//
+// kind is fixed to the caller's recipient, not re-derived here: this hook is
+// only ever attached to the agent-notify path (see the call site below), so
+// it always downgrades the agent-kind row — never the user row a colliding
+// slug may also carry for the same comment_id + slug.
+func (s *commentService) markDeliveryFailed(commentID uuid.UUID, slug, kind string) func(error) {
 	if s.deliveryRepo == nil {
 		return nil
 	}
@@ -1434,9 +1439,9 @@ func (s *commentService) markDeliveryFailed(commentID uuid.UUID, slug string) fu
 		// own goroutine, long after the request that created the comment has
 		// returned and its context has been cancelled. Reusing that context
 		// would make the downgrade fail exactly when it is needed.
-		if err := repo.MarkFailed(context.Background(), commentID, slug, domain.ReasonEventPersistFailed); err != nil {
-			log.Printf("[comment-delivery] could not downgrade %s/@%s to failed after persist error %v: %v",
-				commentID, slug, persistErr, err)
+		if err := repo.MarkFailed(context.Background(), commentID, slug, kind, domain.ReasonEventPersistFailed); err != nil {
+			log.Printf("[comment-delivery] could not downgrade %s/@%s(%s) to failed after persist error %v: %v",
+				commentID, slug, kind, persistErr, err)
 		}
 	}
 }
