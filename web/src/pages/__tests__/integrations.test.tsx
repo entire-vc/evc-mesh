@@ -172,3 +172,40 @@ describe("IntegrationsPage — Telegram token flow", () => {
     expect(screen.getByText("Change token")).toBeInTheDocument();
   });
 });
+
+// mcp is a reference-only connection card (#4a3195a5) — no handler or
+// service ever reads a stored row back for behavior, so is_active was a
+// switch that switched nothing. It has no Enable/Disable and no Remove, and
+// — unlike before this fix — its connection snippet is NOT gated behind
+// is_active, since after this change no mcp row can ever exist to be active.
+describe("IntegrationsPage — mcp is reference-only (#4a3195a5)", () => {
+  it("renders an Enable toggle for every configurable provider except mcp (and telegram, gated separately)", async () => {
+    useMemberStore.setState({ myRole: "owner" });
+    mockApiByRoute({ integrations: [] });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("MCP Server")).toBeInTheDocument());
+    // With no stored config for anyone, every provider that DOES show a
+    // toggle renders it as "Enable" (isActive=false). Of the 6 providers on
+    // this page (github, gitlab, slack, spark, mcp, telegram), telegram is
+    // excluded pre-existing (no bot token set) and mcp is excluded by this
+    // fix — leaving exactly 4. Before the fix this count was 5 (mcp had a
+    // switch that switched nothing); after it, mcp contributes none.
+    expect(screen.getAllByRole("button", { name: "Enable" })).toHaveLength(4);
+  });
+
+  it("always renders the .mcp.json connection snippet, with no row and no is_active required", async () => {
+    useMemberStore.setState({ myRole: "owner" });
+    // Deliberately empty — proves the snippet does not depend on a stored,
+    // active mcp row (the pre-fix code gated it on `isActive`, which after
+    // #4a3195a5's cleanup migration can never again be true for mcp).
+    mockApiByRoute({ integrations: [] });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText("Claude Code / Cline — .mcp.json")).toBeInTheDocument(),
+    );
+  });
+});

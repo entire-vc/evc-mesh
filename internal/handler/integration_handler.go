@@ -101,7 +101,14 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 	provider := domain.IntegrationProvider(req.Provider)
 	var configJSON json.RawMessage
 	switch provider {
-	case domain.IntegrationProviderSlack, domain.IntegrationProviderSpark, domain.IntegrationProviderMCP:
+	case domain.IntegrationProviderMCP:
+		// mcp is a reference-only card — a static .mcp.json connection
+		// snippet, not a channel. No handler or service has ever read this
+		// row back for behavior (#4a3195a5), so a toggle here would control
+		// nothing. Reject rather than silently store a row nobody consults.
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			"mcp is a reference-only connection card and cannot be configured or toggled"))
+	case domain.IntegrationProviderSlack, domain.IntegrationProviderSpark:
 		var jsonErr error
 		configJSON, jsonErr = marshalToRawJSON(req.Config)
 		if jsonErr != nil {
