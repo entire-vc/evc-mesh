@@ -34,7 +34,7 @@ func setupAgentService() (
 	}
 	wsRepo.items[ws.ID] = ws
 
-	svc := NewAgentService(agentRepo, activityRepo, wsRepo).(*agentService)
+	svc := NewAgentService(agentRepo, activityRepo, wsRepo, NewMockUserRepository()).(*agentService)
 
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }

@@ -85,7 +85,7 @@ func registerAgentForDigest(t *testing.T) (
 
 	timeNow = func() time.Time { return frozenTime }
 
-	svc := NewAgentService(agentRepo, NewMockActivityLogRepository(), wsRepo).(*agentService)
+	svc := NewAgentService(agentRepo, NewMockActivityLogRepository(), wsRepo, NewMockUserRepository()).(*agentService)
 	out, err := svc.Register(context.Background(), RegisterAgentInput{
 		WorkspaceID: ws.ID, Name: "Digest Agent", AgentType: domain.AgentTypeClaudeCode,
 	})
@@ -223,7 +223,7 @@ func TestAuthenticate_BackfillFailureDoesNotBreakAuthentication(t *testing.T) {
 	wsRepo.items[ws.ID] = ws
 	timeNow = func() time.Time { return frozenTime }
 
-	svc := NewAgentService(agentRepo, NewMockActivityLogRepository(), wsRepo).(*agentService)
+	svc := NewAgentService(agentRepo, NewMockActivityLogRepository(), wsRepo, NewMockUserRepository()).(*agentService)
 	out, err := svc.Register(context.Background(), RegisterAgentInput{
 		WorkspaceID: ws.ID, Name: "Digest Agent", AgentType: domain.AgentTypeClaudeCode,
 	})

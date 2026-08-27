@@ -18,7 +18,7 @@ import (
 func newIdentityFixture() (WorkspaceMemberService, *MockUserRepository, *minimalWorkspaceMemberRepo) {
 	userRepo := NewMockUserRepository()
 	memberRepo := &minimalWorkspaceMemberRepo{}
-	svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil)
+	svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil, nil)
 	return svc, userRepo, memberRepo
 }
 
@@ -395,7 +395,7 @@ func TestSetMemberDisplayName_PropagatesRepositoryFailures(t *testing.T) {
 	t.Run("member lookup fails", func(t *testing.T) {
 		userRepo := NewMockUserRepository()
 		memberRepo := &failingMemberLookupRepo{err: errors.New("connection reset by peer")}
-		svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil)
+		svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil, nil)
 
 		err := svc.SetMemberDisplayName(ctx, ws, target, "Whoever")
 		require.Error(t, err)
@@ -408,7 +408,7 @@ func TestSetMemberDisplayName_PropagatesRepositoryFailures(t *testing.T) {
 		require.NoError(t, memberRepo.Create(ctx, &domain.WorkspaceMember{
 			ID: uuid.New(), WorkspaceID: ws, UserID: target, Role: domain.RoleMember,
 		}))
-		svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil)
+		svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil, nil)
 
 		err := svc.SetMemberDisplayName(ctx, ws, target, "Whoever")
 		require.Error(t, err)
@@ -426,7 +426,7 @@ func TestSetMemberDisplayName_PropagatesRepositoryFailures(t *testing.T) {
 		require.NoError(t, memberRepo.Create(ctx, &domain.WorkspaceMember{
 			ID: uuid.New(), WorkspaceID: ws, UserID: target, Role: domain.RoleMember,
 		}))
-		svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil)
+		svc := NewWorkspaceMemberService(memberRepo, userRepo, NewMockProjectMemberRepository(), nil, nil)
 
 		userRepo.errToReturn = errors.New("disk full")
 		err := svc.SetMemberDisplayName(ctx, ws, target, "Whoever")
@@ -446,7 +446,7 @@ func TestGetMember_MembershipWithoutAnAccountIs404(t *testing.T) {
 	require.NoError(t, memberRepo.Create(ctx, &domain.WorkspaceMember{
 		ID: uuid.New(), WorkspaceID: ws, UserID: target, Role: domain.RoleMember,
 	}))
-	svc := NewWorkspaceMemberService(memberRepo, NewMockUserRepository(), NewMockProjectMemberRepository(), nil)
+	svc := NewWorkspaceMemberService(memberRepo, NewMockUserRepository(), NewMockProjectMemberRepository(), nil, nil)
 
 	_, err := svc.GetMember(ctx, ws, target)
 	require.Error(t, err)
@@ -459,7 +459,7 @@ func TestGetMember_MembershipWithoutAnAccountIs404(t *testing.T) {
 func TestGetMember_PropagatesLookupFailures(t *testing.T) {
 	svc := NewWorkspaceMemberService(
 		&failingMemberLookupRepo{err: errors.New("connection reset by peer")},
-		NewMockUserRepository(), NewMockProjectMemberRepository(), nil)
+		NewMockUserRepository(), NewMockProjectMemberRepository(), nil, nil)
 
 	_, err := svc.GetMember(context.Background(), uuid.New(), uuid.New())
 	require.Error(t, err)
