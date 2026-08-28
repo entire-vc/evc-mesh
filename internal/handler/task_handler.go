@@ -805,6 +805,13 @@ func (h *TaskHandler) List(c echo.Context) error {
 			pg.Page = n/ps + 1
 		}
 	}
+	// A direction this endpoint cannot honour must be refused, not quietly
+	// rewritten to "asc" by Normalize. Silently defaulting is what made a
+	// "newest first" walk return the OLDEST tasks inside a well-formed page,
+	// so the caller read "nothing changed" and had no signal anything was off.
+	if refused, jsonErr := rejectBadSortDir(c, pg); refused {
+		return jsonErr
+	}
 	pg.Normalize()
 
 	filter := repository.TaskFilter{
