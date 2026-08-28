@@ -62,19 +62,11 @@ func (h *CommentHandler) List(c echo.Context) error {
 	}
 	// A garbage sort_dir/order value used to be accepted and silently
 	// normalized to "asc" (Params.Normalize), which is indistinguishable from
-	// the caller's request having been honoured — the exact shape of bug that
-	// made "?order=desc" look like it worked when only "?sort_dir=desc" did
-	// anything. Reject it here instead of letting it default quietly;
-	// whichever of the two fields actually carries the bad value is the one
-	// named in the error.
-	sortDirParam, sortDirValue := "sort_dir", pg.SortDir
-	if sortDirValue == "" {
-		sortDirParam, sortDirValue = "order", pg.Order
-	}
-	if sortDirValue != "" && sortDirValue != "asc" && sortDirValue != "desc" {
-		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
-			sortDirParam: "must be \"asc\" or \"desc\"",
-		}))
+	// the caller's request having been honoured. Now shared with the task list,
+	// which needed the identical rule — see rejectBadSortDir for why this is
+	// one function rather than the two copies it briefly was.
+	if refused, jsonErr := rejectBadSortDir(c, pg); refused {
+		return jsonErr
 	}
 	pg.Normalize()
 
