@@ -55,11 +55,74 @@ export function utf16ToByteOffset(text: string, index: number): number {
 }
 
 /**
+ * Snap a UTF-16 index back to the nearest grapheme-cluster boundary at or below
+ * it.
+ *
+ * `snapToCodePoint` is not enough, and the difference is measurable rather than
+ * theoretical. A code point is not a character a reader can see:
+ *
+ *   - `"café"` written as `e` + U+0301 is two code points and one glyph. An index
+ *     landing between them is a legal code-point boundary, and a range starting
+ *     there begins with a bare combining acute — which renders attached to
+ *     whatever precedes it, so the highlight starts on the wrong letter.
+ *   - `👩‍👧` is three code points (woman, ZWJ, girl) and one glyph. An index after
+ *     the woman is again a legal code-point boundary, and a range from there
+ *     begins with a zero-width joiner and half a family.
+ *
+ * Both were measured against this module before this function existed: an offset
+ * inside `"café latte"` came back pointing at the combining mark, and one inside
+ * the family emoji came back pointing at the joiner.
+ *
+ * `Intl.Segmenter` is the only correct way to do this — the rules are Unicode
+ * data, not a regex — and it is available in every browser this app supports.
+ * Where it is absent the code-point snap is kept rather than a hand-rolled
+ * approximation: a wrong grapheme rule is harder to notice than a missing one.
+ */
+/** The slice of `Intl.Segmenter` this module uses. See snapToGrapheme. */
+interface GraphemeSegmenterCtor {
+  new (
+    locales: undefined,
+    options: { granularity: "grapheme" },
+  ): { segment(input: string): Iterable<{ index: number }> };
+}
+
+export function snapToGrapheme(text: string, index: number): number {
+  const at = snapToCodePoint(text, Math.max(0, Math.min(index, text.length)));
+  if (at <= 0 || at >= text.length) return at;
+
+  // Typed locally rather than from the standard library: tsconfig.app targets
+  // lib ES2020, where Intl.Segmenter is not declared. Raising the whole app's
+  // lib for one call is a change with a blast radius; this is the part of the
+  // API actually used, and nothing else has to move.
+  const Segmenter = (Intl as unknown as { Segmenter?: GraphemeSegmenterCtor })
+    .Segmenter;
+  if (!Segmenter) return at;
+
+  // Segment only the neighbourhood: a cluster is bounded in practice, and
+  // segmenting a whole 5 MiB body to place one offset would be paid on every
+  // anchor of every render.
+  const WINDOW = 64;
+  const from = Math.max(0, at - WINDOW);
+  const segmenter = new Segmenter(undefined, { granularity: "grapheme" });
+
+  let boundary = from;
+  for (const { index: offset } of segmenter.segment(text.slice(from, at + WINDOW))) {
+    const absolute = from + offset;
+    if (absolute > at) break;
+    boundary = absolute;
+  }
+  return boundary;
+}
+
+/**
  * UTF-8 byte offset -> UTF-16 index.
  *
  * A byte offset that lands inside a multi-byte character resolves to the start
  * of that character rather than throwing: the stored offset may predate an edit,
  * and answering "here, roughly" beats refusing to draw the highlight at all.
+ *
+ * "Roughly" stops at a grapheme boundary, not a code-point one — see
+ * snapToGrapheme for what the difference looks like on screen.
  */
 export function byteToUtf16Offset(text: string, byteOffset: number): number {
   if (byteOffset <= 0) return 0;
@@ -72,10 +135,10 @@ export function byteToUtf16Offset(text: string, byteOffset: number): number {
     const units = cp > 0xffff ? 2 : 1;
     const width = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
 
-    if (bytes + width > byteOffset) return i;
+    if (bytes + width > byteOffset) return snapToGrapheme(text, i);
     bytes += width;
     i += units;
-    if (bytes === byteOffset) return i;
+    if (bytes === byteOffset) return snapToGrapheme(text, i);
   }
   return text.length;
 }
