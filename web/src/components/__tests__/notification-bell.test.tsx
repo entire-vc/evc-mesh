@@ -229,7 +229,10 @@ describe("NotificationBell — merged @-mention inbox", () => {
         method: "POST",
       }),
     );
-    expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/t/task-1");
+    // Carries `?comment=` now, so task-panel.tsx can focus and scroll to the
+    // specific comment the mention names, same as the document branch always
+    // has (see #8d097e67).
+    expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/t/task-1?comment=c-task-1");
   });
 
   it("marks a clicked document mention seen on the document endpoint and opens the comment", async () => {

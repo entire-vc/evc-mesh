@@ -170,8 +170,12 @@ describe("Activity → Mentions", () => {
 
     fireEvent.click(await screen.findByTestId("mention-card-task"));
 
+    // Carries `?comment=` now, so task-panel.tsx can focus/scroll to the
+    // specific comment the mention names (#8d097e67).
     await waitFor(() =>
-      expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/t/task-1"),
+      expect(mockedNavigate).toHaveBeenCalledWith(
+        "/w/acme/p/demo/t/task-1?comment=c-task-1",
+      ),
     );
     expect(mockedApi).toHaveBeenCalledWith(`${TASK_PATH}/c-task-1/seen`, {
       method: "POST",

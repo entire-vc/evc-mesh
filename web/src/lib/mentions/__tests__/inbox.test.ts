@@ -190,9 +190,9 @@ describe("markMentionSeen", () => {
 });
 
 describe("mentionHref", () => {
-  it("opens the task for a task mention", () => {
+  it("opens the task AND names the comment, so the thread can be focused", () => {
     expect(mentionHref(toTaskMentionItem(TASK_MENTION), "acme", "core")).toBe(
-      "/w/acme/p/core/t/t-1",
+      "/w/acme/p/core/t/t-1?comment=c-task-1",
     );
   });
 

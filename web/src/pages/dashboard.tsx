@@ -144,7 +144,7 @@ function MentionsWidget() {
               // project — without it there is nowhere honest to point.
               const to =
                 m.source === "task"
-                  ? `/t/${m.task_id}`
+                  ? `/t/${m.task_id}?comment=${m.comment_id}`
                   : mentionHref(m, wsSlug, project?.slug);
               const SourceIcon = m.source === "document" ? FileText : ListTodo;
               return (

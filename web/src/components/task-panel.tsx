@@ -3,6 +3,7 @@ import {
   type KeyboardEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -29,7 +30,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useBlocker, useNavigate } from "react-router";
+import { useBlocker, useLocation, useNavigate } from "react-router";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
@@ -147,7 +148,19 @@ export function TaskPanel({
   className,
 }: TaskPanelProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const isCreateMode = mode === "create";
+
+  // Arriving from a mention: `?comment=<id>` names the comment somebody was
+  // tagged in — mirrors docs.tsx's read of the same param for document
+  // threads (D6/#8d097e67). TaskPanel is only ever mounted at the real task
+  // route (task-detail.tsx) or in create mode (task-create.tsx, where this is
+  // simply absent), so reading the page's own location here is safe — there
+  // is no other caller whose unrelated query string this could pick up.
+  const focusCommentId = useMemo(
+    () => new URLSearchParams(location.search).get("comment"),
+    [location.search],
+  );
 
   // Task navigation stack — must be declared before selectors that depend on it
   const [taskIdStack, setTaskIdStack] = useState<string[]>([]);
@@ -181,6 +194,16 @@ export function TaskPanel({
   const [loading, setLoading] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState<MobileTabId>("details");
   const [activeDesktopTab, setActiveDesktopTab] = useState<RightTabId>("comments");
+
+  // The mobile layout starts on "details" and only mounts CommentList once
+  // the reader taps into the "comments" tab — so a mention arriving on
+  // mobile would otherwise have nothing in the DOM to scroll to at all.
+  // Desktop already defaults activeDesktopTab to "comments" above, which is
+  // exactly why a passing "the rail is visible" check proves nothing here:
+  // it would pass on desktop even with no focus/scroll logic implemented.
+  useEffect(() => {
+    if (focusCommentId) setActiveMobileTab("comments");
+  }, [focusCommentId]);
   const [hideEmpty, setHideEmpty] = useState(true);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
@@ -2050,7 +2073,11 @@ export function TaskPanel({
                 single scrollable wrapper. */}
             {activeMobileTab === "comments" ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-                <CommentList taskId={currentTask.id} projId={currentTask.project_id} />
+                <CommentList
+                  taskId={currentTask.id}
+                  projId={currentTask.project_id}
+                  focusCommentId={focusCommentId}
+                />
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto">
@@ -2184,7 +2211,11 @@ export function TaskPanel({
 
               {/* Tab content */}
               {activeDesktopTab === "comments" && (
-                <CommentList taskId={currentTask.id} projId={currentTask.project_id} />
+                <CommentList
+                  taskId={currentTask.id}
+                  projId={currentTask.project_id}
+                  focusCommentId={focusCommentId}
+                />
               )}
               {activeDesktopTab === "subtasks" && (
                 <div className="flex-1 overflow-y-auto p-3">

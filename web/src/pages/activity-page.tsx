@@ -268,7 +268,9 @@ export function ActivityPage() {
     (comment: CommentView) => {
       const project = projects.find((p) => p.id === comment.project_id);
       if (wsSlug && project) {
-        navigate(`/w/${wsSlug}/p/${project.slug}/t/${comment.task_id}`);
+        navigate(
+          `/w/${wsSlug}/p/${project.slug}/t/${comment.task_id}?comment=${comment.comment_id}`,
+        );
       }
     },
     [wsSlug, navigate, projects],
