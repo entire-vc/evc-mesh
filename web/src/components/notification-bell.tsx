@@ -187,7 +187,13 @@ export function NotificationBell() {
       const taskId = meta?.task_id as string | undefined;
 
       if (taskId) {
-        navigate(`/t/${taskId}`);
+        // notifyUserMention (task.mentioned) puts comment_id in metadata
+        // alongside task_id — carry it through the /t/:id resolver so
+        // task-panel.tsx can focus that comment, same as the document branch
+        // below already does.
+        const commentId = meta?.comment_id as string | undefined;
+        const query = commentId ? `?comment=${commentId}` : "";
+        navigate(`/t/${taskId}${query}`);
         setOpen(false);
         return;
       }

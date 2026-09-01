@@ -168,9 +168,11 @@ export function mentionHref(
 ): string | null {
   if (!wsSlug || !projectSlug) return null;
   const base = `/w/${wsSlug}/p/${projectSlug}`;
-  if (item.source === "task") return `${base}/t/${item.task_id}`;
-  // The comment id rides in the query so the document page can focus that
-  // thread on arrival. The hash is already taken by paragraph anchors (D6).
+  // The comment id rides in the query on both branches, so the destination
+  // page can focus that thread on arrival — task-panel.tsx reads it the same
+  // way docs.tsx already did. The hash is already taken by paragraph anchors
+  // on the document side (D6), which is why this is a query param there too.
+  if (item.source === "task") return `${base}/t/${item.task_id}?comment=${item.comment_id}`;
   return `${base}/docs/${item.document_id}?comment=${item.comment_id}`;
 }
 

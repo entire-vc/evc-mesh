@@ -41,7 +41,11 @@ export function TaskDeepLinkResolver() {
           setError("Task is in a workspace or project you don't have access to.");
           return;
         }
-        setTarget(`/w/${wsSlug}/p/${projectSlug}/t/${task.id}`);
+        // Preserve the query string (namely `?comment=<id>` from a mention
+        // link) across the redirect — this resolver exists to add the
+        // workspace/project slugs the caller doesn't have, not to drop what
+        // it does have.
+        setTarget(`/w/${wsSlug}/p/${projectSlug}/t/${task.id}${location.search}`);
       } catch {
         setError("Task not found or you don't have access.");
       }

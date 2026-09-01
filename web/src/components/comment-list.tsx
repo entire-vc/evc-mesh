@@ -29,6 +29,12 @@ import type {
 interface CommentListProps {
   taskId: string;
   projId: string;
+  /**
+   * A comment (root or reply) to scroll to and highlight on arrival — the id
+   * named by a mention's `?comment=` query param (see task-panel.tsx). May
+   * live on a page not yet loaded; CommentList paginates to find it.
+   */
+  focusCommentId?: string | null;
 }
 
 function ActorIcon({ type }: { type: ActorType }) {
@@ -105,6 +111,7 @@ interface CommentItemProps {
   projId?: string;
   mentionables?: Map<string, MentionEntry>;
   wsSlug?: string;
+  focusCommentId?: string | null;
 }
 
 function CommentItem({
@@ -117,12 +124,23 @@ function CommentItem({
   projId,
   mentionables,
   wsSlug,
+  focusCommentId,
 }: CommentItemProps) {
   const [hovering, setHovering] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editBody, setEditBody] = useState(comment.body);
   const [saving, setSaving] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
+  const focused = focusCommentId != null && comment.id === focusCommentId;
+  const focusRef = useRef<HTMLDivElement>(null);
+
+  // Arrived via a mention's `?comment=` link: scroll this comment into view
+  // and hold a highlight on it, the same treatment doc-comment-rail.tsx gives
+  // an active thread — a rail that opens to its default scroll position
+  // (top) does not, on its own, prove the right comment was ever reached.
+  useEffect(() => {
+    if (focused) focusRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focused]);
 
   const handleEditClick = () => {
     setEditBody(comment.body);
@@ -149,7 +167,12 @@ function CommentItem({
   return (
     <div className={cn("group", isReply && "ml-8 border-l-2 border-border pl-4")}>
       <div
-        className="rounded-lg p-3 hover:bg-muted/50"
+        ref={focusRef}
+        data-comment-id={comment.id}
+        className={cn(
+          "rounded-lg border border-transparent p-3 transition-colors hover:bg-muted/50",
+          focused && "border-yellow-400 bg-yellow-50/60 dark:bg-yellow-400/10",
+        )}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
       >
@@ -256,6 +279,7 @@ function CommentItem({
               projId={projId}
               mentionables={mentionables}
               wsSlug={wsSlug}
+              focusCommentId={focusCommentId}
             />
           ))}
         </div>
@@ -268,7 +292,10 @@ function byNewestFirst(a: Comment, b: Comment): number {
   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 }
 
-export function CommentList({ taskId, projId }: CommentListProps) {
+/** Safety bound on how many older pages a focus-comment search will walk. */
+const MAX_AUTO_FOCUS_PAGES = 25;
+
+export function CommentList({ taskId, projId, focusCommentId }: CommentListProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
@@ -351,6 +378,41 @@ export function CommentList({ taskId, projId }: CommentListProps) {
     setLoadingMore(true);
     await fetchComments(page + 1, true);
   };
+
+  // A mention's `?comment=` id can name a comment on any page — sort_dir=desc
+  // means page 1 is only the newest slice of the thread, so an older target
+  // is invisible (and un-scrollable-to) until its page is fetched. Keep
+  // asking for the next page until the target shows up or the server says
+  // there is no more (`hasMore === false`) — the latter is the explicit
+  // "not found" outcome: the target was deleted, or belongs to a different
+  // task, and auto-loading stops rather than silently doing nothing forever.
+  // Capped independently of `hasMore` in case a future response bug ever
+  // reports more pages than truly exist.
+  const autoPageCountRef = useRef(0);
+  useEffect(() => {
+    autoPageCountRef.current = 0;
+  }, [taskId, focusCommentId]);
+
+  useEffect(() => {
+    if (!focusCommentId || loading || loadingMore || !hasMore) return;
+    const target = comments.find((c) => c.id === focusCommentId);
+    // A reply's own id can be in `comments` — the flat, unpaginated-by-thread
+    // state — while its root sits on a page not yet fetched. It won't be
+    // rendered until then: `topLevel`/`repliesByParent` below only nest a
+    // reply under a root that's actually loaded, and replies never nest
+    // further than one level (see CommentItem — the reply button only
+    // appears on `!isReply` comments), so a defined parent id is always a
+    // root, never another reply. Treating bare presence in `comments` as
+    // "found" here stopped pagination one page too early and left the reply
+    // permanently un-rendered — silently, with no highlight and no scroll.
+    const found =
+      target != null &&
+      (!target.parent_comment_id || comments.some((c) => c.id === target.parent_comment_id));
+    if (found) return;
+    if (autoPageCountRef.current >= MAX_AUTO_FOCUS_PAGES) return;
+    autoPageCountRef.current += 1;
+    void handleLoadEarlier();
+  }, [focusCommentId, comments, hasMore, loading, loadingMore]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -464,6 +526,7 @@ export function CommentList({ taskId, projId }: CommentListProps) {
               projId={projId}
               mentionables={mentionables}
               wsSlug={wsSlug}
+              focusCommentId={focusCommentId}
             />
           ))}
         </div>
