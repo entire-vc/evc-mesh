@@ -34,6 +34,13 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Kept in step with .gitlab-ci.yml's GOOSE_VERSION and go.mod's goose
+  # library requirement — @latest resolves at job run time, not pinned to a
+  # commit, and broke every job here when v3.28.0 raised its go.mod floor to
+  # go 1.26 while these runners are on 1.25 (#b97dfc58).
+  GOOSE_VERSION: "v3.27.3"
+
 # Every job carries `timeout-minutes`. GitHub's default is 360 (six hours), and
 # this workflow runs on `merge_group` — so a job that hangs holds the whole merge
 # queue behind it, which is how #72d1bf09 (queue stalled 5h) started life as
@@ -170,7 +177,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install goose
-        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+        run: go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
       - name: Run migrations
         env:
           GOOSE_DRIVER: postgres
@@ -273,7 +280,7 @@ jobs:
           GOOSE_DRIVER: postgres
           GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
         run: |
-          go install github.com/pressly/goose/v3/cmd/goose@latest
+          go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
           goose -dir migrations up
 
       - name: Build + start API server
@@ -472,7 +479,7 @@ jobs:
           GOOSE_DRIVER: postgres
           GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
         run: |
-          go install github.com/pressly/goose/v3/cmd/goose@latest
+          go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
           goose -dir migrations up
 
       - name: Build + start API server
@@ -566,7 +573,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install goose
-        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+        run: go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
       - name: Run migrations
         env:
           GOOSE_DRIVER: postgres
@@ -633,7 +640,7 @@ jobs:
           GOOSE_DRIVER: postgres
           GOOSE_DBSTRING: "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
         run: |
-          go install github.com/pressly/goose/v3/cmd/goose@latest
+          go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
           goose -dir migrations up
 
       # BASE is resolved ONCE here and republished as an output, because the
