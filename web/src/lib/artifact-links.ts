@@ -92,25 +92,71 @@ export function renderArtifactAwareLink(labelHtml: string, url: string): string 
   return `<a href="${safe}" target="_blank" rel="noopener noreferrer" class="text-primary underline underline-offset-2 hover:opacity-80">${labelHtml}</a>`;
 }
 
+// A resolve attempt can lose to a transient condition that has nothing to do
+// with the image itself — most commonly the access token still being
+// restored from the refresh cookie on a just-opened tab (api() retries a 401
+// once internally, but the retry-after-refresh can itself still lose a race
+// on a cold load), or an ordinary network blip. One short-delayed retry
+// clears almost all of those without the reader having to do anything.
+const ARTIFACT_RETRY_DELAY_MS = 1500;
+
+// Images currently waiting on their one scheduled retry. Guards against a
+// second concurrent attempt for the same element if resolveArtifactImages
+// runs again (e.g. content changes) while the retry timer is still pending.
+const pendingRetries = new WeakSet<HTMLImageElement>();
+
+async function resolveOne(img: HTMLImageElement, path: string, isRetry = false): Promise<void> {
+  try {
+    const data = await api<{ url: string }>(path);
+    img.src = data.url;
+    // Only clear the marker (and any earlier failure styling) once the
+    // fetch has actually succeeded — see the comment below on why it isn't
+    // cleared up front.
+    img.removeAttribute("data-artifact-src");
+    img.classList.remove("opacity-50");
+    if (img.alt.endsWith(" (failed to load)")) {
+      img.alt = img.alt.slice(0, -" (failed to load)".length);
+    }
+  } catch {
+    img.classList.add("opacity-50");
+    if (!img.alt.endsWith(" (failed to load)")) {
+      img.alt = `${img.alt} (failed to load)`;
+    }
+    // data-artifact-src is deliberately left in place on failure (unlike the
+    // old behavior of stripping it unconditionally before the fetch): a
+    // transient failure must not make the image permanently broken. The
+    // retry below self-heals almost all of these; if it also fails, the
+    // attribute is still there for the next natural re-render (content
+    // change, or reopening the task) to try again — instead of requiring an
+    // unrelated Edit→Done to regenerate the <img> tag from scratch.
+    if (!isRetry && !pendingRetries.has(img)) {
+      pendingRetries.add(img);
+      setTimeout(() => {
+        pendingRetries.delete(img);
+        // The element may have been detached, or already resolved/replaced
+        // by a newer render, by the time this fires.
+        if (img.isConnected && img.getAttribute("data-artifact-src") === path) {
+          void resolveOne(img, path, true);
+        }
+      }, ARTIFACT_RETRY_DELAY_MS);
+    }
+  }
+}
+
 /**
  * Resolve every unresolved artifact/attachment <img> inside `container` to a
- * fresh presigned URL. Clears data-artifact-src as it goes so a re-run over
- * already-resolved images (e.g. an unrelated re-render) is a no-op.
+ * fresh presigned URL. A failed resolve keeps data-artifact-src (and gets one
+ * delayed retry) instead of being stripped and left permanently broken, so a
+ * re-run over already-resolved images is the only case that's a no-op.
  */
 export async function resolveArtifactImages(container: HTMLElement): Promise<void> {
   const imgs = container.querySelectorAll<HTMLImageElement>("img[data-artifact-src]");
   await Promise.all(
-    Array.from(imgs).map(async (img) => {
+    Array.from(imgs).map((img) => {
+      if (pendingRetries.has(img)) return Promise.resolve();
       const path = img.getAttribute("data-artifact-src");
-      if (!path) return;
-      img.removeAttribute("data-artifact-src");
-      try {
-        const data = await api<{ url: string }>(path);
-        img.src = data.url;
-      } catch {
-        img.alt = `${img.alt} (failed to load)`;
-        img.classList.add("opacity-50");
-      }
+      if (!path) return Promise.resolve();
+      return resolveOne(img, path);
     }),
   );
 }
