@@ -369,7 +369,14 @@ test:
     # build-base is not optional: `go test -race` needs cgo, and alpine has no
     # C toolchain by default. Without it the race detector fails to link and
     # the failure looks like a broken test rather than a missing package.
-    - apk add --no-cache git build-base postgresql-client
+    #
+    # poppler-utils (pdftotext) is the PDF export tests' own acceptance check
+    # — it extracts text back out of a rendered PDF to prove the embedded
+    # Cyrillic font actually produces real, selectable glyphs rather than a
+    # rasterized or boxed-off image (Export 4/7, #25ac04d2). It is a CI/test
+    # tool only: the PDF renderer itself ships zero external binaries to
+    # prod, which is the whole point of embedding the font in the Go binary.
+    - apk add --no-cache git build-base postgresql-client poppler-utils
     - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
     - pg_isready -h postgres -U mesh
     - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
