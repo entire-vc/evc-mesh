@@ -562,7 +562,7 @@ function KPICard({
           {icon}
           <span className="text-xs text-muted-foreground">{label}</span>
         </div>
-        <span className="text-3xl font-bold tracking-tight">{value.toLocaleString()}</span>
+        <span className="text-3xl font-bold tracking-tight">{value.toLocaleString("en-US")}</span>
       </CardContent>
     </Card>
   );

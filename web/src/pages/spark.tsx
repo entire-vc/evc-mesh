@@ -443,7 +443,7 @@ function SparkAgentCard({
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
               <Download className="h-3 w-3" />
-              {agent.downloads.toLocaleString()}
+              {agent.downloads.toLocaleString("en-US")}
             </span>
             <span className="flex items-center gap-1">
               <Star className="h-3 w-3" />

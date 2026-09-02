@@ -263,7 +263,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 							<div className="rounded-lg border bg-card px-3 py-2.5">
 								<p className="text-[11px] text-muted-foreground">Sessions</p>
 								<p className="text-lg font-semibold tabular-nums">
-									{cost.session_count.toLocaleString()}
+									{cost.session_count.toLocaleString("en-US")}
 								</p>
 							</div>
 							<div className="rounded-lg border bg-card px-3 py-2.5">
