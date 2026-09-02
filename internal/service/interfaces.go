@@ -477,6 +477,15 @@ type DocumentExportService interface {
 	// DOCX renderers (later subtasks of #2a467980) build from this, not
 	// from WalkExportTree's raw document list directly.
 	MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID) (*MergedExportDoc, error)
+
+	// ExportPDF renders the live subtree (via MergeForExport) as a single
+	// PDF: pure Go, no headless Chrome and no other external binary — see
+	// the PDF renderer's own doc comment for why that constraint exists and
+	// how the Cyrillic requirement is met without one.
+	//
+	// Returns the rendered bytes, a filename (<slug>-<date>.pdf), and the
+	// MIME type to serve it as.
+	ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error)
 }
 
 // TOCEntry is one line of a merged export's table of contents.
