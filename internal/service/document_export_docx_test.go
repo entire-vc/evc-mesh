@@ -99,7 +99,7 @@ func TestExportDOCX(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Guide", "# Heading\n\nProse.")
 
-		data, filename, contentType, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID)
+		data, filename, contentType, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 		assert.Equal(t, "guide-"+exportDateTag()+".docx", filename)
 		assert.Equal(t, docxContentType, contentType)
@@ -120,7 +120,7 @@ func TestExportDOCX(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Guide", "# Heading one\n\nSome prose.\n\n```bash\necho hi\n```\n")
 
-		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID)
+		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		paras := extractDOCXParagraphs(t, data)
@@ -133,7 +133,7 @@ func TestExportDOCX(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Guide", "# "+cyrillicFixture+"\n\nProse follows.")
 
-		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID)
+		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		paras := extractDOCXParagraphs(t, data)
@@ -144,7 +144,7 @@ func TestExportDOCX(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Guide", "# H\n\n```bash\n    indented line\n```\n")
 
-		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID)
+		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		paras := extractDOCXParagraphs(t, data)
@@ -158,7 +158,7 @@ func TestExportDOCX(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Guide", "# Heading\n\nProse.")
 
-		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID)
+		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		corrupted := corruptZipEntry(t, data, "word/document.xml")
@@ -177,7 +177,7 @@ func TestExportDOCX(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Diagram page", "# Diagram\n\n```mermaid\ngraph TD; A-->B;\n```\n")
 
-		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID)
+		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		paras := extractDOCXParagraphs(t, data)
@@ -194,7 +194,7 @@ func TestExportDOCX(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Confidential", "# secret")
 
-		data, filename, contentType, err := f.export.ExportDOCX(context.Background(), root.ID, uuid.New())
+		data, filename, contentType, err := f.export.ExportDOCX(context.Background(), root.ID, uuid.New(), ExportScopeTree)
 
 		var apiErr *apierror.Error
 		require.ErrorAs(t, err, &apiErr)
@@ -202,6 +202,29 @@ func TestExportDOCX(t *testing.T) {
 		assert.Nil(t, data)
 		assert.Empty(t, filename)
 		assert.Empty(t, contentType)
+	})
+
+	t.Run("scope=self renders only the requested document, a child's text is absent", func(t *testing.T) {
+		f := setupExportService(t)
+		root := f.create(t, "Root", "# "+cyrillicFixture+"\n\nRoot prose.")
+		f.createChild(t, root.ID, 0, "Child", "# Child heading\n\nChild-only sentinel.")
+
+		data, _, _, err := f.export.ExportDOCX(context.Background(), root.ID, f.wsID, ExportScopeSelf)
+		require.NoError(t, err)
+
+		paras := extractDOCXParagraphs(t, data)
+		found, foundChild := false, false
+		for _, p := range paras {
+			if strings.Contains(p, cyrillicFixture) {
+				found = true
+			}
+			if strings.Contains(p, "Child-only sentinel") {
+				foundChild = true
+			}
+		}
+		assert.True(t, found, "the root's own content must still be present")
+		assert.False(t, foundChild,
+			"the export dialog's 'just this document' choice must not silently become 'with children' at the DOCX layer either")
 	})
 }
 

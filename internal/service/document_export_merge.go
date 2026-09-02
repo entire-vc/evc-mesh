@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 )
 
@@ -28,15 +29,34 @@ const mermaidCaption = "_Diagram source (mermaid — not rendered):_"
 // newline of its own), but the pre-check would then always skip.
 var mermaidFenceOpenRE = regexp.MustCompile(`(?m)^ {0,3}(?:` + "`{3,}|~{3,}" + `)[ \t]*[Mm][Ee][Rr][Mm][Aa][Ii][Dd][ \t]*$`)
 
-func (s *documentExportService) MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID) (*MergedExportDoc, error) {
+// MergeForExport's scope mirrors ExportMarkdown's: ExportScopeSelf merges
+// only rootID itself (no descendants walked at all — not "walk then keep
+// one"), ExportScopeTree merges the live subtree via WalkExportTree. This is
+// what lets a PDF/DOCX renderer honor the "just this document" choice in the
+// export dialog: without it, ExportPDF/ExportDOCX had no way to produce
+// anything narrower than the full subtree (Export 4/7 and 5/7 both always
+// called this with the equivalent of tree scope, because the "self" choice
+// didn't exist yet at their level).
+func (s *documentExportService) MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (*MergedExportDoc, error) {
+	if scope != ExportScopeSelf && scope != ExportScopeTree {
+		return nil, apierror.ValidationError(map[string]string{
+			"scope": `must be "self" or "tree"`,
+		})
+	}
+
 	root, err := s.documents.GetByIDInWorkspace(ctx, rootID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 
-	docs, err := s.documents.WalkExportTree(ctx, rootID, workspaceID)
-	if err != nil {
-		return nil, err
+	var docs []domain.Document
+	if scope == ExportScopeTree {
+		docs, err = s.documents.WalkExportTree(ctx, rootID, workspaceID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		docs = []domain.Document{*root}
 	}
 	byID := make(map[uuid.UUID]domain.Document, len(docs))
 	for _, d := range docs {

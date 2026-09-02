@@ -43,8 +43,8 @@ const (
 	pdfFontMono = "DejaVuSansMono"
 )
 
-func (s *documentExportService) ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error) {
-	merged, err := s.MergeForExport(ctx, rootID, workspaceID)
+func (s *documentExportService) ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (data []byte, filename, contentType string, err error) {
+	merged, err := s.MergeForExport(ctx, rootID, workspaceID, scope)
 	if err != nil {
 		return nil, "", "", err
 	}

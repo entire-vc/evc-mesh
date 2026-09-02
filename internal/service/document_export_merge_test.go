@@ -19,7 +19,7 @@ func TestExportMerge(t *testing.T) {
 		child := f.createChild(t, root.ID, 0, "Child", "# Child heading\n\n## Child subheading\n\nChild prose.")
 		grandchild := f.createChild(t, child.ID, 0, "Grandchild", "# Grandchild heading\n\nGrandchild prose.")
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID)
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		body := merged.Body
@@ -54,7 +54,7 @@ func TestExportMerge(t *testing.T) {
 		}
 		deepest := f.createChild(t, cur.ID, 0, "L6", "###### Already at the ceiling\n\nDeep prose.")
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID)
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		assert.Contains(t, merged.Body, "###### Already at the ceiling")
@@ -82,7 +82,7 @@ func TestExportMerge(t *testing.T) {
 		// depth 5, an h2 heading: 2 + 5 = 7, must cap to 6.
 		f.createChild(t, cur.ID, 0, "L5", "## Second-level heading\n\nprose.")
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID)
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		assert.Contains(t, merged.Body, "###### Second-level heading")
@@ -95,7 +95,7 @@ func TestExportMerge(t *testing.T) {
 		f.createChild(t, a.ID, 0, "A-child", "# A-child heading")
 		f.createChild(t, root.ID, 1, "B", "# B heading")
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID)
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		var texts []string
@@ -115,7 +115,7 @@ func TestExportMerge(t *testing.T) {
 		_, err = f.svc.Update(context.Background(), root.ID, f.wsID, UpdateDocumentInput{Body: strPtr("v3 body")})
 		require.NoError(t, err)
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID)
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		require.Equal(t, 3, merged.Version, "must be the document's real Version, not a placeholder")
@@ -131,7 +131,7 @@ func TestExportMerge(t *testing.T) {
 		child := f.createChild(t, root.ID, 0, "Child", "some prose only")
 		_ = child
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID)
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		assert.Contains(t, merged.Body, "```bash\n# rebuild the index\necho hi\n```",
@@ -143,7 +143,7 @@ func TestExportMerge(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Root", "# Diagram page\n\n```mermaid\ngraph TD; A-->B;\n```\n")
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID)
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		assert.Contains(t, merged.Body, "```mermaid\ngraph TD; A-->B;\n```",
@@ -158,12 +158,77 @@ func TestExportMerge(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Confidential", "# secret")
 
-		merged, err := f.export.MergeForExport(context.Background(), root.ID, uuid.New())
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, uuid.New(), ExportScopeTree)
 
 		var apiErr *apierror.Error
 		require.ErrorAs(t, err, &apiErr)
 		assert.Equal(t, 404, apiErr.StatusCode())
 		assert.Nil(t, merged)
+	})
+
+	t.Run("an unsupported scope is a validation error, not a silent default", func(t *testing.T) {
+		f := setupExportService(t)
+		root := f.create(t, "Doc", "# body")
+
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScope("branch"))
+
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, 400, apiErr.StatusCode())
+		assert.Nil(t, merged)
+	})
+}
+
+// TestExportMerge_Self proves scope=self merges ONLY the requested document —
+// not "walk the tree then keep one", which would still pay the walk's cost
+// and, more importantly, would still be exposed to whatever WalkExportTree's
+// own bugs are. A child's heading appearing in a self-scope merge would mean
+// the export dialog's "just this document" choice silently became "with
+// children" — exactly the false promise #2a467980 was decomposed to avoid.
+func TestExportMerge_Self(t *testing.T) {
+	t.Run("a child's heading and body text do not appear in a self-scope merge", func(t *testing.T) {
+		f := setupExportService(t)
+		root := f.create(t, "Root", "# Root heading\n\nRoot prose only.")
+		f.createChild(t, root.ID, 0, "Child", "# Child heading\n\nChild-only sentinel text.")
+
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeSelf)
+
+		require.NoError(t, err)
+		assert.Contains(t, merged.Body, "Root prose only.")
+		assert.NotContains(t, merged.Body, "Child-only sentinel text.",
+			"scope=self must never pull in a child's body — that is the 'just this document' promise")
+		assert.NotContains(t, merged.Body, "Child heading")
+		require.Len(t, merged.TOC, 1, "self-scope TOC must carry only the root's own heading(s)")
+		assert.Equal(t, "Root heading", merged.TOC[0].Text)
+	})
+
+	t.Run("the root's own heading is NOT shifted — depth is 0 when no ancestors are walked", func(t *testing.T) {
+		f := setupExportService(t)
+		// Three levels deep, so if depth were (wrongly) computed from the
+		// document's REAL position in the live tree rather than from what
+		// this merge actually walked, the shift would be nonzero and this
+		// assertion would catch it.
+		grandparent := f.create(t, "Grandparent", "# GP")
+		parent := f.createChild(t, grandparent.ID, 0, "Parent", "# P")
+		leaf := f.createChild(t, parent.ID, 0, "Leaf", "# Leaf heading\n\nLeaf prose.")
+
+		merged, err := f.export.MergeForExport(context.Background(), leaf.ID, f.wsID, ExportScopeSelf)
+
+		require.NoError(t, err)
+		assert.Contains(t, merged.Body, "# Leaf heading", "at depth 0 (nothing else walked), the heading keeps its own original level")
+		require.Len(t, merged.TOC, 1)
+		assert.Equal(t, 1, merged.TOC[0].Level)
+	})
+
+	t.Run("colophon (title/version/exported-at) is the requested document's own, same as tree scope", func(t *testing.T) {
+		f := setupExportService(t)
+		root := f.create(t, "Standalone", "# Standalone\n\nBody.")
+
+		merged, err := f.export.MergeForExport(context.Background(), root.ID, f.wsID, ExportScopeSelf)
+
+		require.NoError(t, err)
+		assert.Equal(t, "Standalone", merged.Title)
+		assert.Equal(t, root.Version, merged.Version)
 	})
 }
 
