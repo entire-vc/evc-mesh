@@ -468,6 +468,71 @@ type DocumentExportService interface {
 	// Returns the rendered bytes, a filename (<slug>-<date>.md or .zip), and
 	// the MIME type to serve it as.
 	ExportMarkdown(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (data []byte, filename, contentType string, err error)
+
+	// MergeForExport assembles the live subtree into ONE format-agnostic
+	// intermediate document — heading levels shifted into a single coherent
+	// hierarchy, a table of contents, and the colophon fields (title,
+	// version, export time) every rendered format needs. It carries no
+	// format-specific decision (fonts, page breaks, styling): the PDF and
+	// DOCX renderers (later subtasks of #2a467980) build from this, not
+	// from WalkExportTree's raw document list directly.
+	MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID) (*MergedExportDoc, error)
+}
+
+// TOCEntry is one line of a merged export's table of contents.
+type TOCEntry struct {
+	// Level is 1 for the shallowest heading down to 6 — see
+	// MergedExportDoc's doc comment for how a document's own headings are
+	// shifted into this shared numbering.
+	Level int
+	Text  string
+	// Anchor addresses the heading within the document it came from (see
+	// mdoc.Heading.Anchor). It is NOT guaranteed unique across the whole
+	// merged document — two different source documents can each have a
+	// heading named "Overview" — because de-duplicating it would mean either
+	// rewriting heading text (a visible content change nobody asked for) or
+	// injecting HTML anchor ids into the body (a format decision this type
+	// deliberately does not make). A renderer that needs cross-document
+	// unique addressing builds its own from Level+DocumentID+Anchor.
+	Anchor string
+	// DocumentID is which document in the subtree this heading came from.
+	DocumentID uuid.UUID
+}
+
+// MergedExportDoc is the format-agnostic intermediate MergeForExport
+// produces: the live subtree concatenated into one document.
+//
+// Heading levels are shifted per document by that document's depth in the
+// tree (0 for the root) — a document's own `#` becomes `##` one level down,
+// capped at h6 — so that after concatenation the headings form one coherent
+// hierarchy instead of every document restarting at h1. Code fences (mermaid
+// included) are never touched by the shift: heading detection is
+// fence-aware (see pkg/mdoc.Outline), so a `#` inside a shell example is
+// never mistaken for a heading needing to move.
+//
+// A mermaid code fence gets one addition beyond staying untouched: an
+// inserted caption immediately above it. There is no headless-Chrome and no
+// mature Go-native mermaid renderer available to this service (see the
+// parent card #2a467980), so a mermaid block ships as its literal source —
+// captioned, so a reader knows that's deliberate rather than a rendering
+// failure, exactly what the parent card's own §3.7 requires.
+type MergedExportDoc struct {
+	// Title, Version and ExportedAt describe the ROOT document the export
+	// was requested for — the export is a snapshot of that document (and
+	// its subtree), and Version is what lets someone holding the file tell,
+	// a week later, exactly which revision they are looking at.
+	Title      string
+	Version    int
+	ExportedAt time.Time
+
+	TOC []TOCEntry
+
+	// Body is the concatenated, heading-shifted, mermaid-captioned markdown
+	// for the whole subtree, in WalkExportTree's order — TOC and colophon
+	// NOT included. A renderer building its own native TOC (PDF bookmarks, a
+	// DOCX field code) or its own native footer uses the structured fields
+	// above instead of parsing this back out.
+	Body string
 }
 
 // DocumentOutline is a document's heading structure.
