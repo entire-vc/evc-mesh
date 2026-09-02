@@ -165,6 +165,13 @@ type pdfBlock struct {
 // Everything inside a fence is collected into one pdfBlockCode block and
 // rendered in the monospace font, line breaks preserved exactly — no
 // reflow, since reflowing code is how code stops running.
+//
+// Despite the pdf-prefixed name, this is also the DOCX renderer's block
+// classifier (document_export_docx.go) — Export 4/7's own next-touch note
+// flagged the fence-tracking logic as worth sharing "when a second consumer
+// shows up", and DOCX is that second consumer. The classification itself
+// (heading/code/prose/blank) has no PDF-specific behavior in it; only the
+// caller decides what to do with each block kind.
 func splitMergedBodyIntoPDFBlocks(body string) []pdfBlock {
 	headingByLine := make(map[int]mdoc.Heading)
 	for _, h := range mdoc.Outline(body) {

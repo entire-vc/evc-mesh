@@ -486,6 +486,16 @@ type DocumentExportService interface {
 	// Returns the rendered bytes, a filename (<slug>-<date>.pdf), and the
 	// MIME type to serve it as.
 	ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error)
+
+	// ExportDOCX renders the live subtree (via MergeForExport) as a real
+	// OOXML .docx — direct generation of word/document.xml and its
+	// supporting parts, no pandoc and no HTML-wrapped-as-.doc: see the DOCX
+	// renderer's own doc comment for why both were ruled out and how
+	// Cyrillic is handled differently from the PDF renderer.
+	//
+	// Returns the rendered bytes, a filename (<slug>-<date>.docx), and the
+	// MIME type to serve it as.
+	ExportDOCX(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error)
 }
 
 // TOCEntry is one line of a merged export's table of contents.
