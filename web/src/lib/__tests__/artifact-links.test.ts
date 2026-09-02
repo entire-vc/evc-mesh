@@ -101,19 +101,87 @@ describe("resolveArtifactImages", () => {
     expect(api).toHaveBeenCalledWith(path);
   });
 
-  it("marks an image as failed instead of throwing when resolution fails", async () => {
-    const path = artifactDownloadPath("artifact-1");
-    vi.mocked(api).mockRejectedValue(new Error("boom"));
+  it("marks an image as failed instead of throwing when resolution fails, but does not strip data-artifact-src", async () => {
+    vi.useFakeTimers();
+    try {
+      const path = artifactDownloadPath("artifact-1");
+      vi.mocked(api).mockRejectedValue(new Error("boom"));
 
-    const container = document.createElement("div");
-    container.innerHTML = `<img data-artifact-src="${path}" alt="shot" />`;
-    document.body.appendChild(container);
+      const container = document.createElement("div");
+      container.innerHTML = `<img data-artifact-src="${path}" alt="shot" />`;
+      document.body.appendChild(container);
 
-    await resolveArtifactImages(container);
+      await resolveArtifactImages(container);
 
-    const img = container.querySelector("img")!;
-    expect(img.alt).toContain("failed to load");
-    expect(img.classList.contains("opacity-50")).toBe(true);
+      const img = container.querySelector("img")!;
+      expect(img.alt).toContain("failed to load");
+      expect(img.classList.contains("opacity-50")).toBe(true);
+      // A transient failure must stay retryable: stripping this attribute is
+      // exactly what used to make the image permanently broken until an
+      // unrelated Edit→Done regenerated the tag from scratch.
+      expect(img.getAttribute("data-artifact-src")).toBe(path);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("auto-retries once after a transient failure and self-heals without any external action", async () => {
+    vi.useFakeTimers();
+    try {
+      const path = artifactDownloadPath("artifact-1");
+      vi.mocked(api)
+        .mockRejectedValueOnce(new Error("boom"))
+        .mockResolvedValueOnce({ url: "https://s3.example.com/fresh" });
+
+      const container = document.createElement("div");
+      container.innerHTML = `<img data-artifact-src="${path}" alt="shot" />`;
+      document.body.appendChild(container);
+
+      await resolveArtifactImages(container);
+      const img = container.querySelector("img")!;
+      expect(img.alt).toContain("failed to load");
+
+      await vi.advanceTimersByTimeAsync(1500);
+
+      expect(img.src).toBe("https://s3.example.com/fresh");
+      expect(img.hasAttribute("data-artifact-src")).toBe(false);
+      expect(img.classList.contains("opacity-50")).toBe(false);
+      expect(img.alt).toBe("shot");
+      expect(api).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a later re-run still retries an image whose one scheduled retry also failed", async () => {
+    vi.useFakeTimers();
+    try {
+      const path = artifactDownloadPath("artifact-1");
+      vi.mocked(api).mockRejectedValue(new Error("boom"));
+
+      const container = document.createElement("div");
+      container.innerHTML = `<img data-artifact-src="${path}" alt="shot" />`;
+      document.body.appendChild(container);
+
+      await resolveArtifactImages(container);
+      await vi.advanceTimersByTimeAsync(1500);
+      const img = container.querySelector("img")!;
+      // Both the initial attempt and the one scheduled retry failed.
+      expect(api).toHaveBeenCalledTimes(2);
+      expect(img.getAttribute("data-artifact-src")).toBe(path);
+
+      // A later re-render (content change, reopening the task) calls
+      // resolveArtifactImages again — this must still find the image and
+      // try it, not skip it as already-handled.
+      vi.mocked(api).mockReset();
+      vi.mocked(api).mockResolvedValue({ url: "https://s3.example.com/fresh-2" });
+      await resolveArtifactImages(container);
+
+      expect(img.src).toBe("https://s3.example.com/fresh-2");
+      expect(img.hasAttribute("data-artifact-src")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("is a no-op for images that carry no data-artifact-src", async () => {
