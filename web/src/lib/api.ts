@@ -250,6 +250,84 @@ export async function api<T>(
   return data as T;
 }
 
+// apiBlob fetches a same-origin BINARY response — currently the document
+// export endpoint, the first in this app to stream bytes directly from our
+// own backend rather than handing back a presigned URL for an unauthenticated
+// follow-up fetch (see handleDownload in artifact-list.tsx for that other
+// shape). api<T>() can't be reused as-is: it unconditionally calls
+// res.json(), which would throw on a PDF/DOCX/zip body. This mirrors api()'s
+// auth header and 401-refresh-and-replay instead of dropping them — the same
+// reasoning serializeBody's own comment gives for why file uploads needed
+// the same treatment rather than a bare, unauthenticated fetch.
+export async function apiBlob(
+  path: string,
+  params?: Record<string, string | number | undefined>,
+): Promise<{ blob: Blob; filename: string }> {
+  let url = `${BASE_URL}${path}`;
+  if (params) {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) {
+        searchParams.set(key, String(value));
+      }
+    }
+    const qs = searchParams.toString();
+    if (qs) url += `?${qs}`;
+  }
+
+  const doFetch = (token: string | null) => {
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    return fetch(url, { headers, credentials: "same-origin" });
+  };
+
+  let res = await doFetch(accessToken);
+
+  if (res.status === 401) {
+    if (!refreshPromise) {
+      refreshPromise = refreshAccessToken().finally(() => {
+        refreshPromise = null;
+      });
+    }
+    try {
+      const newToken = await refreshPromise;
+      res = await doFetch(newToken);
+    } catch {
+      accessToken = null;
+      window.location.href = "/login";
+      throw new ApiRequestError("Session expired", "UNAUTHORIZED", 401);
+    }
+  }
+
+  if (!res.ok) {
+    // The export endpoint's error responses are JSON (apierror), same shape
+    // api()'s own error handling above already expects.
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      throw new ApiRequestError(`Server error (${res.status})`, "SERVER_ERROR", res.status);
+    }
+    const err = data as ApiError;
+    throw new ApiRequestError(
+      err.message || err.error || "Request failed",
+      String(err.code || "UNKNOWN"),
+      res.status,
+      err.validation || err.details,
+    );
+  }
+
+  // The server always sets this (document_export_handler.go) with a quoted
+  // filename — parsed here rather than trusting the caller to separately
+  // reconstruct it, so the downloaded file's name can never drift from what
+  // the server actually decided (slug + date, per format-specific extension).
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  const filename = match?.[1] ?? "download";
+
+  return { blob: await res.blob(), filename };
+}
+
 export async function getMentionables(
   workspaceId: string,
   query: string,

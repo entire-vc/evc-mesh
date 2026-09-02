@@ -21,7 +21,7 @@ func NewDocumentExportHandler(es service.DocumentExportService) *DocumentExportH
 	return &DocumentExportHandler{exportService: es}
 }
 
-// Export handles GET /documents/:doc_id/export?format=md&scope=self|tree.
+// Export handles GET /documents/:doc_id/export?format=md|pdf|docx&scope=self|tree.
 //
 // docID and the workspace both come from documentScope, the same helper every
 // other /documents/:doc_id route uses — this endpoint is not a special path
@@ -37,9 +37,9 @@ func (h *DocumentExportHandler) Export(c echo.Context) error {
 	}
 
 	format := c.QueryParam("format")
-	if format != "md" {
+	if format != "md" && format != "pdf" && format != "docx" {
 		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
-			"format": `must be "md" — pdf and docx are not implemented yet`,
+			"format": `must be "md", "pdf", or "docx"`,
 		}))
 	}
 
@@ -50,7 +50,18 @@ func (h *DocumentExportHandler) Export(c echo.Context) error {
 		}))
 	}
 
-	data, filename, contentType, err := h.exportService.ExportMarkdown(c.Request().Context(), docID, wsID, scope)
+	ctx := c.Request().Context()
+	var data []byte
+	var filename, contentType string
+	var err error
+	switch format {
+	case "md":
+		data, filename, contentType, err = h.exportService.ExportMarkdown(ctx, docID, wsID, scope)
+	case "pdf":
+		data, filename, contentType, err = h.exportService.ExportPDF(ctx, docID, wsID, scope)
+	case "docx":
+		data, filename, contentType, err = h.exportService.ExportDOCX(ctx, docID, wsID, scope)
+	}
 	if err != nil {
 		return handleError(c, err)
 	}

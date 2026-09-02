@@ -50,7 +50,7 @@ func TestExportPDF(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Guide", "# "+cyrillicFixture+"\n\nProse follows.\n\n```bash\n# rebuild\necho hi\n```\n")
 
-		data, filename, contentType, err := f.export.ExportPDF(context.Background(), root.ID, f.wsID)
+		data, filename, contentType, err := f.export.ExportPDF(context.Background(), root.ID, f.wsID, ExportScopeTree)
 
 		require.NoError(t, err)
 		assert.Equal(t, "guide-"+exportDateTag()+".pdf", filename)
@@ -87,7 +87,7 @@ func TestExportPDF(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Diagram page", "# Diagram\n\n```mermaid\ngraph TD; A-->B;\n```\n")
 
-		data, _, _, err := f.export.ExportPDF(context.Background(), root.ID, f.wsID)
+		data, _, _, err := f.export.ExportPDF(context.Background(), root.ID, f.wsID, ExportScopeTree)
 		require.NoError(t, err)
 
 		text := extractPDFText(t, data)
@@ -98,7 +98,7 @@ func TestExportPDF(t *testing.T) {
 		f := setupExportService(t)
 		root := f.create(t, "Confidential", "# secret")
 
-		data, filename, contentType, err := f.export.ExportPDF(context.Background(), root.ID, uuid.New())
+		data, filename, contentType, err := f.export.ExportPDF(context.Background(), root.ID, uuid.New(), ExportScopeTree)
 
 		var apiErr *apierror.Error
 		require.ErrorAs(t, err, &apiErr)
@@ -106,6 +106,20 @@ func TestExportPDF(t *testing.T) {
 		assert.Nil(t, data)
 		assert.Empty(t, filename)
 		assert.Empty(t, contentType)
+	})
+
+	t.Run("scope=self renders only the requested document, a child's text is absent", func(t *testing.T) {
+		f := setupExportService(t)
+		root := f.create(t, "Root", "# "+cyrillicFixture+"\n\nRoot prose.")
+		f.createChild(t, root.ID, 0, "Child", "# Child heading\n\nChild-only sentinel.")
+
+		data, _, _, err := f.export.ExportPDF(context.Background(), root.ID, f.wsID, ExportScopeSelf)
+		require.NoError(t, err)
+
+		text := extractPDFText(t, data)
+		assert.Contains(t, text, cyrillicFixture)
+		assert.NotContains(t, text, "Child-only sentinel",
+			"the export dialog's 'just this document' choice must not silently become 'with children' at the PDF layer either")
 	})
 }
 
@@ -213,7 +227,7 @@ func TestExportPDF_TOCIndentGrowsWithLevel(t *testing.T) {
 	f := setupExportService(t)
 	root := f.create(t, "Root", "# Top\n\n## Nested\n")
 
-	data, _, _, err := f.export.ExportPDF(context.Background(), root.ID, f.wsID)
+	data, _, _, err := f.export.ExportPDF(context.Background(), root.ID, f.wsID, ExportScopeTree)
 	require.NoError(t, err)
 
 	text := extractPDFText(t, data)

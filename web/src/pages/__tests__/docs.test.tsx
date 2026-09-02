@@ -20,7 +20,7 @@ vi.mock("@/lib/api", async () => {
   // mock that dropped the class would make that check throw instead of just
   // being false.
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
-  return { ...actual, api: vi.fn(), getAccessToken: vi.fn(() => null) };
+  return { ...actual, api: vi.fn(), apiBlob: vi.fn(), getAccessToken: vi.fn(() => null) };
 });
 
 vi.mock("@/components/ui/toast", () => ({
@@ -102,7 +102,7 @@ vi.mock("@/components/doc-editor", () => ({
 
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(() => Promise.resolve()) }));
 
-import { api, ApiRequestError } from "@/lib/api";
+import { api, apiBlob, ApiRequestError } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
 import { anchorFromHash, anchorToHash } from "@/lib/docs/anchor";
@@ -114,6 +114,7 @@ import { useProjectStore } from "@/stores/project";
 import type { Project, ProjectDocument } from "@/types";
 
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
+const mockedApiBlob = apiBlob as unknown as ReturnType<typeof vi.fn>;
 
 const PROJECT: Project = {
   id: "proj-1",
@@ -188,6 +189,7 @@ function renderDocs(docId?: string, hash = "") {
 beforeEach(() => {
   mockedNavigate.mockReset();
   mockedApi.mockReset();
+  mockedApiBlob.mockReset();
   vi.mocked(toast.error).mockReset();
   useProjectStore.setState({ currentProject: PROJECT });
   useDocumentStore.getState().reset();
@@ -616,6 +618,150 @@ describe("DocsPage — the page's own header", () => {
 
     await waitFor(() => expect(deleted).toBe(true));
     expect(mockedNavigate).toHaveBeenCalledWith("/w/acme/p/demo/docs");
+  });
+});
+
+// Export 6/7 (#015491ee). What "download actually happened in a real
+// browser" means is not something jsdom can observe — that half of the AC is
+// the mandatory authed Playwright scenario (§1n), not this file. What these
+// tests own: the three menu items exist with the pre-approved labels, the
+// dialog appears only when there ARE children to choose from (and not
+// otherwise — the point of #2a467980 §2's "лишний шаг... раздражение без
+// пользы"), and the chosen scope reaches apiBlob correctly either way.
+describe("DocsPage — export", () => {
+  const parent = makeDoc({ id: "p", title: "Engineering" });
+  const child = makeDoc({ id: "c", title: "ADR-004", parent_id: "p" });
+  const lonely = makeDoc({ id: "lonely", title: "Standalone" });
+
+  function mockOpen(docs: ProjectDocument[], target: ProjectDocument) {
+    mockRoutes(docs, (path) => {
+      if (path === `/api/v1/documents/${target.id}`) {
+        return Promise.resolve({ ...target, body: "text" });
+      }
+      return undefined;
+    });
+  }
+
+  function stubBlobDownload() {
+    mockedApiBlob.mockResolvedValue({
+      blob: new Blob(["fake-bytes"]),
+      filename: "export.pdf",
+    });
+  }
+
+  it("all three formats are offered, pre-approved labels", async () => {
+    mockOpen([lonely], lonely);
+    renderDocs("lonely");
+    stubBlobDownload();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+
+    expect(screen.getByRole("menuitem", { name: "Export as PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Export as Markdown" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Export as DOCX" })).toBeInTheDocument();
+  });
+
+  it("a document with no children downloads immediately, scope=self, no dialog", async () => {
+    mockOpen([lonely], lonely);
+    renderDocs("lonely");
+    stubBlobDownload();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as PDF" }));
+
+    await waitFor(() => expect(mockedApiBlob).toHaveBeenCalledTimes(1));
+    expect(mockedApiBlob).toHaveBeenCalledWith("/api/v1/documents/lonely/export", {
+      format: "pdf",
+      scope: "self",
+    });
+    expect(screen.queryByText(/Export "/)).not.toBeInTheDocument();
+  });
+
+  it("a document WITH children shows the dialog instead of downloading immediately", async () => {
+    mockOpen([parent, child], parent);
+    renderDocs("p");
+    stubBlobDownload();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as Markdown" }));
+
+    expect(await screen.findByText('Export "Engineering"')).toBeInTheDocument();
+    expect(screen.getByText("Include sub-documents (1)")).toBeInTheDocument();
+    expect(mockedApiBlob).not.toHaveBeenCalled();
+  });
+
+  it("Cancel closes the dialog without exporting anything", async () => {
+    mockOpen([parent, child], parent);
+    renderDocs("p");
+    stubBlobDownload();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as DOCX" }));
+    await screen.findByText('Export "Engineering"');
+
+    fireEvent.click(within(screen.getByTestId("export-dialog")).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText('Export "Engineering"')).not.toBeInTheDocument();
+    expect(mockedApiBlob).not.toHaveBeenCalled();
+  });
+
+  it("default choice is 'just this document' — scope=self even though children exist", async () => {
+    mockOpen([parent, child], parent);
+    renderDocs("p");
+    stubBlobDownload();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as PDF" }));
+    await screen.findByText('Export "Engineering"');
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    await waitFor(() => expect(mockedApiBlob).toHaveBeenCalledTimes(1));
+    expect(mockedApiBlob).toHaveBeenCalledWith("/api/v1/documents/p/export", {
+      format: "pdf",
+      scope: "self",
+    });
+  });
+
+  it("picking 'include sub-documents' sends scope=tree", async () => {
+    mockOpen([parent, child], parent);
+    renderDocs("p");
+    stubBlobDownload();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as PDF" }));
+    await screen.findByText('Export "Engineering"');
+    fireEvent.click(screen.getByRole("radio", { name: /Include sub-documents/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    await waitFor(() => expect(mockedApiBlob).toHaveBeenCalledTimes(1));
+    expect(mockedApiBlob).toHaveBeenCalledWith("/api/v1/documents/p/export", {
+      format: "pdf",
+      scope: "tree",
+    });
+  });
+
+  it("a failed export is reported, not silent", async () => {
+    mockOpen([lonely], lonely);
+    renderDocs("lonely");
+    mockedApiBlob.mockRejectedValue(new ApiRequestError("too large", "export_too_large", 400));
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as DOCX" }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+  });
+
+  it("counts only DESCENDANTS of the open document as children, not siblings or the doc itself", async () => {
+    // A sibling of `child` under a different parent must not inflate the count.
+    const other = makeDoc({ id: "other", title: "Unrelated", parent_id: null });
+    mockOpen([parent, child, other], parent);
+    renderDocs("p");
+    stubBlobDownload();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as Markdown" }));
+
+    expect(await screen.findByText("Include sub-documents (1)")).toBeInTheDocument();
   });
 });
 

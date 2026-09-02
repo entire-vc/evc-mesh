@@ -68,7 +68,7 @@ import {
   anchorToHash,
 } from "@/lib/docs/anchor";
 import { useDocComments } from "@/lib/doc-comments/use-doc-comments";
-import { ApiRequestError } from "@/lib/api";
+import { ApiRequestError, apiBlob } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
   type DocumentSearchHit,
@@ -95,6 +95,17 @@ const AUTOSAVE_DEBOUNCE_MS = 2000;
 // Same figure as the `[[` link menu's search debounce (use-doc-link-picker.ts) —
 // this is the same server call, wired to a second surface.
 const DOC_SEARCH_DEBOUNCE_MS = 200;
+
+type ExportFormat = "pdf" | "md" | "docx";
+
+// Labels are a direct translation of Pavel's own directive (2026-09-02) —
+// not gated by the visible-copy approval this feature's dialog text is
+// still waiting on (§1r.A, Mesh task #6a0c7ae3).
+const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
+  pdf: "Export as PDF",
+  md: "Export as Markdown",
+  docx: "Export as DOCX",
+};
 
 type SaveState =
   | { status: "idle" }
@@ -343,6 +354,76 @@ function MoveDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Export dialog — only shown when the document has children (see
+// handleExportClick). The choice text below is DRAFT copy pending Pavel's
+// approval on Mesh task #6a0c7ae3 (§1r.A copy gate) — the epic that
+// decomposed this feature explicitly authorizes shipping with draft strings
+// rather than blocking the feature on that answer (#2a467980, Garfield,
+// 2026-09-02): "если ответа не будет — катим с черновыми строками".
+// ---------------------------------------------------------------------------
+
+function ExportDialog({
+  doc,
+  childCount,
+  isLoading,
+  onClose,
+  onSubmit,
+}: {
+  doc: ProjectDocument;
+  childCount: number;
+  isLoading: boolean;
+  onClose: () => void;
+  onSubmit: (scope: "self" | "tree") => void;
+}) {
+  const [scope, setScope] = useState<"self" | "tree">("self");
+
+  return (
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent onClose={onClose} data-testid="export-dialog">
+        <DialogHeader>
+          <DialogTitle>Export "{doc.title}"</DialogTitle>
+        </DialogHeader>
+
+        <fieldset className="mt-2 space-y-2">
+          <legend className="sr-only">What to include</legend>
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted">
+            <input
+              type="radio"
+              name="export-scope"
+              value="self"
+              checked={scope === "self"}
+              onChange={() => setScope("self")}
+              className="h-4 w-4"
+            />
+            Just this document
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted">
+            <input
+              type="radio"
+              name="export-scope"
+              value="tree"
+              checked={scope === "tree"}
+              onChange={() => setScope("tree")}
+              className="h-4 w-4"
+            />
+            Include sub-documents ({childCount})
+          </label>
+        </fieldset>
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={() => onSubmit(scope)} disabled={isLoading}>
+            {isLoading ? "Exporting..." : "Export"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Save indicator — says what actually happened, including when it failed
 // ---------------------------------------------------------------------------
 
@@ -471,6 +552,15 @@ export function DocsPage() {
   const [moving, setMoving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectDocument | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Set only when the target has children — a document with none has no
+  // choice to make, so the dialog never appears for it (see handleExportClick).
+  const [exportPrompt, setExportPrompt] = useState<{
+    doc: ProjectDocument;
+    format: ExportFormat;
+    childCount: number;
+  } | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   // Read once, at mount: the stored width is the starting point, not a live
   // source, or a second tab would yank the column mid-read.
@@ -845,6 +935,51 @@ export function DocsPage() {
     }
   };
 
+  // Fetches the file and forces a real browser download — same blob+anchor
+  // mechanism artifact-list.tsx's handleDownload already uses for artifacts,
+  // now needed here because this endpoint streams bytes directly from our own
+  // backend rather than handing back a presigned URL (see apiBlob's own
+  // comment for why api<T>() couldn't be reused as-is).
+  const handleExport = async (doc: ProjectDocument, format: ExportFormat, scope: "self" | "tree") => {
+    setExporting(true);
+    try {
+      const { blob, filename } = await apiBlob(`/api/v1/documents/${doc.id}/export`, {
+        format,
+        scope,
+      });
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+      setExportPrompt(null);
+    } catch (err) {
+      toast.error(errorMessage(err, "Failed to export"));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // The dialog only earns its place when there is an actual choice to make —
+  // a document with no children has nothing to include or exclude, so this
+  // downloads immediately rather than making the reader click through a
+  // dialog offering one option (per #2a467980 §2: "лишний шаг там, где выбора
+  // не существует, — раздражение без пользы").
+  const handleExportClick = (format: ExportFormat) => {
+    if (!openDoc) return;
+    const childCount = documents.filter(
+      (d) => d.id !== openDoc.id && isSelfOrDescendant(documents, d.id, openDoc.id),
+    ).length;
+    if (childCount > 0) {
+      setExportPrompt({ doc: openDoc, format, childCount });
+    } else {
+      void handleExport(openDoc, format, "self");
+    }
+  };
+
   const childCount = deleteTarget
     ? documents.filter(
         (d) => d.id !== deleteTarget.id && isSelfOrDescendant(documents, d.id, deleteTarget.id),
@@ -1170,6 +1305,16 @@ export function DocsPage() {
                         Move
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => handleExportClick("pdf")}>
+                        {EXPORT_FORMAT_LABEL.pdf}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleExportClick("md")}>
+                        {EXPORT_FORMAT_LABEL.md}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleExportClick("docx")}>
+                        {EXPORT_FORMAT_LABEL.docx}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => setDeleteTarget(openDoc)}
                         className="text-destructive"
@@ -1341,6 +1486,16 @@ export function DocsPage() {
           isLoading={moving}
           onClose={() => setMoveTarget(null)}
           onSubmit={(parentId) => void handleMove(parentId)}
+        />
+      )}
+
+      {exportPrompt && (
+        <ExportDialog
+          doc={exportPrompt.doc}
+          childCount={exportPrompt.childCount}
+          isLoading={exporting}
+          onClose={() => setExportPrompt(null)}
+          onSubmit={(scope) => void handleExport(exportPrompt.doc, exportPrompt.format, scope)}
         />
       )}
 

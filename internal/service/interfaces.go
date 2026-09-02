@@ -469,25 +469,28 @@ type DocumentExportService interface {
 	// the MIME type to serve it as.
 	ExportMarkdown(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (data []byte, filename, contentType string, err error)
 
-	// MergeForExport assembles the live subtree into ONE format-agnostic
-	// intermediate document — heading levels shifted into a single coherent
-	// hierarchy, a table of contents, and the colophon fields (title,
-	// version, export time) every rendered format needs. It carries no
-	// format-specific decision (fonts, page breaks, styling): the PDF and
-	// DOCX renderers (later subtasks of #2a467980) build from this, not
-	// from WalkExportTree's raw document list directly.
-	MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID) (*MergedExportDoc, error)
+	// MergeForExport assembles rootID into ONE format-agnostic intermediate
+	// document — heading levels shifted into a single coherent hierarchy, a
+	// table of contents, and the colophon fields (title, version, export
+	// time) every rendered format needs. It carries no format-specific
+	// decision (fonts, page breaks, styling): the PDF and DOCX renderers
+	// build from this, not from WalkExportTree's raw document list directly.
+	//
+	// scope mirrors ExportMarkdown's: ExportScopeSelf merges only rootID
+	// (no descendants walked), ExportScopeTree merges the live subtree via
+	// WalkExportTree.
+	MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (*MergedExportDoc, error)
 
-	// ExportPDF renders the live subtree (via MergeForExport) as a single
+	// ExportPDF renders rootID (via MergeForExport, per scope) as a single
 	// PDF: pure Go, no headless Chrome and no other external binary — see
 	// the PDF renderer's own doc comment for why that constraint exists and
 	// how the Cyrillic requirement is met without one.
 	//
 	// Returns the rendered bytes, a filename (<slug>-<date>.pdf), and the
 	// MIME type to serve it as.
-	ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error)
+	ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (data []byte, filename, contentType string, err error)
 
-	// ExportDOCX renders the live subtree (via MergeForExport) as a real
+	// ExportDOCX renders rootID (via MergeForExport, per scope) as a real
 	// OOXML .docx — direct generation of word/document.xml and its
 	// supporting parts, no pandoc and no HTML-wrapped-as-.doc: see the DOCX
 	// renderer's own doc comment for why both were ruled out and how
@@ -495,7 +498,7 @@ type DocumentExportService interface {
 	//
 	// Returns the rendered bytes, a filename (<slug>-<date>.docx), and the
 	// MIME type to serve it as.
-	ExportDOCX(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error)
+	ExportDOCX(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (data []byte, filename, contentType string, err error)
 }
 
 // TOCEntry is one line of a merged export's table of contents.

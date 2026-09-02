@@ -76,21 +76,78 @@ func TestDocumentExportHandler_Export(t *testing.T) {
 		assert.Equal(t, `attachment; filename="guide-2026-09-02.zip"`, rec.Header().Get(echo.HeaderContentDisposition))
 	})
 
-	t.Run("an unrecognized format is refused before the service is called", func(t *testing.T) {
-		called := false
+	t.Run("format=pdf routes to ExportPDF, not ExportMarkdown", func(t *testing.T) {
+		docID, wsID := uuid.New(), uuid.New()
+		var gotRoot, gotWS uuid.UUID
+		var gotScope service.ExportScope
+		mdCalled := false
 		mockSvc := &MockDocumentExportService{
 			ExportMarkdownFunc: func(context.Context, uuid.UUID, uuid.UUID, service.ExportScope) ([]byte, string, string, error) {
-				called = true
+				mdCalled = true
 				return nil, "", "", nil
+			},
+			ExportPDFFunc: func(_ context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) ([]byte, string, string, error) {
+				gotRoot, gotWS, gotScope = rootID, workspaceID, scope
+				return []byte("%PDF-fake"), "guide-2026-09-02.pdf", "application/pdf", nil
 			},
 		}
 		h, e := setupExportTest(mockSvc)
 
-		c, rec := exportRequest(e, uuid.New().String(), uuidPtr(uuid.New()), "/?format=pdf&scope=self")
+		c, rec := exportRequest(e, docID.String(), &wsID, "/?format=pdf&scope=tree")
+		require.NoError(t, h.Export(c))
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/pdf", rec.Header().Get(echo.HeaderContentType))
+		assert.Equal(t, `attachment; filename="guide-2026-09-02.pdf"`, rec.Header().Get(echo.HeaderContentDisposition))
+		assert.Equal(t, docID, gotRoot)
+		assert.Equal(t, wsID, gotWS)
+		assert.Equal(t, service.ExportScopeTree, gotScope)
+		assert.False(t, mdCalled, "format=pdf must not call through to ExportMarkdown")
+	})
+
+	t.Run("format=docx routes to ExportDOCX, not ExportMarkdown", func(t *testing.T) {
+		docID, wsID := uuid.New(), uuid.New()
+		var gotScope service.ExportScope
+		mdCalled := false
+		mockSvc := &MockDocumentExportService{
+			ExportMarkdownFunc: func(context.Context, uuid.UUID, uuid.UUID, service.ExportScope) ([]byte, string, string, error) {
+				mdCalled = true
+				return nil, "", "", nil
+			},
+			ExportDOCXFunc: func(_ context.Context, _, _ uuid.UUID, scope service.ExportScope) ([]byte, string, string, error) {
+				gotScope = scope
+				return []byte("PK\x03\x04fake-docx"), "guide-2026-09-02.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", nil
+			},
+		}
+		h, e := setupExportTest(mockSvc)
+
+		c, rec := exportRequest(e, docID.String(), &wsID, "/?format=docx&scope=self")
+		require.NoError(t, h.Export(c))
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, `attachment; filename="guide-2026-09-02.docx"`, rec.Header().Get(echo.HeaderContentDisposition))
+		assert.Equal(t, service.ExportScopeSelf, gotScope)
+		assert.False(t, mdCalled, "format=docx must not call through to ExportMarkdown")
+	})
+
+	t.Run("an unrecognized format is refused before any service method is called", func(t *testing.T) {
+		called := false
+		markCalled := func(context.Context, uuid.UUID, uuid.UUID, service.ExportScope) ([]byte, string, string, error) {
+			called = true
+			return nil, "", "", nil
+		}
+		mockSvc := &MockDocumentExportService{
+			ExportMarkdownFunc: markCalled,
+			ExportPDFFunc:      markCalled,
+			ExportDOCXFunc:     markCalled,
+		}
+		h, e := setupExportTest(mockSvc)
+
+		c, rec := exportRequest(e, uuid.New().String(), uuidPtr(uuid.New()), "/?format=doc&scope=self")
 		require.NoError(t, h.Export(c))
 
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.False(t, called, "pdf is not implemented — the handler must not call through to the export service for it")
+		assert.False(t, called, "an unrecognized format must not call through to any export service method")
 	})
 
 	t.Run("a missing or unrecognized scope is refused before the service is called", func(t *testing.T) {

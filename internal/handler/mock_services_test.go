@@ -1247,9 +1247,9 @@ func (m *MockProjectIntegrationService) SearchTR(ctx context.Context, shareSlug,
 
 type MockDocumentExportService struct {
 	ExportMarkdownFunc func(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) ([]byte, string, string, error)
-	MergeForExportFunc func(ctx context.Context, rootID, workspaceID uuid.UUID) (*service.MergedExportDoc, error)
-	ExportPDFFunc      func(ctx context.Context, rootID, workspaceID uuid.UUID) ([]byte, string, string, error)
-	ExportDOCXFunc     func(ctx context.Context, rootID, workspaceID uuid.UUID) ([]byte, string, string, error)
+	MergeForExportFunc func(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) (*service.MergedExportDoc, error)
+	ExportPDFFunc      func(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) ([]byte, string, string, error)
+	ExportDOCXFunc     func(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) ([]byte, string, string, error)
 }
 
 func (m *MockDocumentExportService) ExportMarkdown(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) (data []byte, filename, contentType string, err error) {
@@ -1259,23 +1259,23 @@ func (m *MockDocumentExportService) ExportMarkdown(ctx context.Context, rootID, 
 	return nil, "", "", nil
 }
 
-func (m *MockDocumentExportService) MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID) (*service.MergedExportDoc, error) {
+func (m *MockDocumentExportService) MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) (*service.MergedExportDoc, error) {
 	if m.MergeForExportFunc != nil {
-		return m.MergeForExportFunc(ctx, rootID, workspaceID)
+		return m.MergeForExportFunc(ctx, rootID, workspaceID, scope)
 	}
 	return nil, nil
 }
 
-func (m *MockDocumentExportService) ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error) {
+func (m *MockDocumentExportService) ExportPDF(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) (data []byte, filename, contentType string, err error) {
 	if m.ExportPDFFunc != nil {
-		return m.ExportPDFFunc(ctx, rootID, workspaceID)
+		return m.ExportPDFFunc(ctx, rootID, workspaceID, scope)
 	}
 	return nil, "", "", nil
 }
 
-func (m *MockDocumentExportService) ExportDOCX(ctx context.Context, rootID, workspaceID uuid.UUID) (data []byte, filename, contentType string, err error) {
+func (m *MockDocumentExportService) ExportDOCX(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) (data []byte, filename, contentType string, err error) {
 	if m.ExportDOCXFunc != nil {
-		return m.ExportDOCXFunc(ctx, rootID, workspaceID)
+		return m.ExportDOCXFunc(ctx, rootID, workspaceID, scope)
 	}
 	return nil, "", "", nil
 }
