@@ -312,6 +312,41 @@
   outline: 2px solid hsl(var(--ring));
 }
 
+/* ---- inline attachment delete ----
+   One small button per image/file-link attachment in a task description or
+   comment (rich-text-editor.tsx, attachment-controls.ts), positioned with JS
+   as a sibling of the ProseMirror root rather than inside it. Subtle until
+   hovered, so a description with several images does not read as covered in
+   overlapping "×" badges. */
+
+.mesh-doc-editor-body {
+  position: relative;
+}
+
+.mesh-attachment-delete-btn {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: none;
+  border-radius: 9999px;
+  background: hsl(var(--destructive) / 0.85);
+  color: hsl(var(--destructive-foreground));
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.1s ease;
+  z-index: 1;
+}
+
+.mesh-attachment-delete-btn:hover {
+  opacity: 1;
+}
+
 /* ---- linked paragraph ----
    The target of a "copy link to this paragraph" link, revealed on arrival. The
    tint fades on its own rather than on a timer in JS: the highlight is a hint
