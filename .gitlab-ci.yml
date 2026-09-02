@@ -67,6 +67,14 @@ variables:
   REDIS_URL: "redis://redis:6379"
   NATS_URL: "nats://nats:4222"
   GOLANGCI_LINT_VERSION: "v2.11.3"   # keep in step with Makefile:81
+  # Pinned, NOT `@latest`. `go install ...@latest` resolves against upstream
+  # at job time, so a release requiring a newer Go breaks every job here
+  # without a commit in this repo. That happened on 2026-09-02: goose v3.28.0
+  # requires go >= 1.26 while these images are golang:1.25-alpine, and the
+  # three jobs that run migrations (test, repo-integration, tenancy-rbac-gate)
+  # all failed at `go install`, before a single test ran. Keep in step with
+  # the goose version in go.mod — the tool and the library must not drift.
+  GOOSE_VERSION: "v3.27.3"   # keep in step with go.mod
   GOFLAGS: "-buildvcs=false"
 
 default:
@@ -364,7 +372,7 @@ test:
     - apk add --no-cache git build-base postgresql-client
     - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
     - pg_isready -h postgres -U mesh
-    - go install github.com/pressly/goose/v3/cmd/goose@latest
+    - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
   script:
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
     # go-test-stall-watchdog wraps `go test` so a wedge (Mesh #405872aa: 28min of
@@ -420,7 +428,7 @@ repo-integration:
     - apk add --no-cache git build-base postgresql-client
     - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
     - pg_isready -h postgres -U mesh
-    - go install github.com/pressly/goose/v3/cmd/goose@latest
+    - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
   script:
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
     - go test ./internal/repository/postgres/... -v -race -tags=integration
@@ -553,7 +561,7 @@ tenancy-rbac-gate:
     - curl -sf http://nats:8222/healthz
     - for i in $(seq 30); do curl -sf http://minio:9000/minio/health/live && break; sleep 1; done
     - curl -sf http://minio:9000/minio/health/live
-    - go install github.com/pressly/goose/v3/cmd/goose@latest
+    - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="postgres://mesh:mesh@postgres:5432/mesh?sslmode=disable" $GOPATH/bin/goose -dir migrations up
     - go build -o /tmp/mesh-api ./cmd/api
     - /tmp/mesh-api &
