@@ -49,6 +49,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # Kept in step with .gitlab-ci.yml's GOOSE_VERSION and go.mod's goose
+  # library requirement — @latest resolves at job run time, not pinned to a
+  # commit, and broke every job here when v3.28.0 raised its go.mod floor to
+  # go 1.26 while these runners are on 1.25 (#b97dfc58).
+  GOOSE_VERSION: "v3.27.3"
+
 # Sequential deploys — never cancel an in-flight deploy.
 concurrency:
   group: backend-deploy-prod
@@ -113,7 +120,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install goose
-        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+        run: go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
       - name: Run migrations
         env:
           GOOSE_DRIVER: postgres
@@ -179,7 +186,7 @@ jobs:
       # Ref: CLAUDE-workflow.md §1b Deploy Discipline
       - name: Build and upload goose to prod
         run: |
-          GOBIN=$(pwd) GOOS=linux GOARCH=amd64 go install github.com/pressly/goose/v3/cmd/goose@latest
+          GOBIN=$(pwd) GOOS=linux GOARCH=amd64 go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
           rsync -avz goose mesh-vm:/opt/evc-mesh/bin/goose
           ssh mesh-vm 'chmod +x /opt/evc-mesh/bin/goose'
 
