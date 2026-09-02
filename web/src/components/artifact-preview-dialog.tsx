@@ -171,7 +171,7 @@ export function ArtifactPreviewDialog({
               {state.truncated && (
                 <div className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
                   Showing the first {formatBytes(PREVIEW_MAX_CHARS)} of this file
-                  &mdash; {state.omittedChars.toLocaleString()} more characters are
+                  &mdash; {state.omittedChars.toLocaleString("en-US")} more characters are
                   not shown. Download it to read the whole thing.
                 </div>
               )}
