@@ -1008,6 +1008,14 @@ type MockDocumentService struct {
 	SectionFunc            func(ctx context.Context, id, workspaceID uuid.UUID, ref string) (*service.DocumentSection, error)
 	GetByPathFunc          func(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error)
 	ResolveAnchorFunc      func(ctx context.Context, id, workspaceID uuid.UUID, input service.ResolveAnchorInput) (*mdoc.Anchor, error)
+	WalkExportTreeFunc     func(ctx context.Context, rootID, workspaceID uuid.UUID) ([]domain.Document, error)
+}
+
+func (m *MockDocumentService) WalkExportTree(ctx context.Context, rootID, workspaceID uuid.UUID) ([]domain.Document, error) {
+	if m.WalkExportTreeFunc != nil {
+		return m.WalkExportTreeFunc(ctx, rootID, workspaceID)
+	}
+	return nil, nil
 }
 
 func (m *MockDocumentService) Outline(ctx context.Context, id, workspaceID uuid.UUID) (*service.DocumentOutline, error) {

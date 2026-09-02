@@ -371,6 +371,62 @@ func (r *DocumentRepo) HasAncestor(ctx context.Context, docID, ancestorID uuid.U
 	return found, nil
 }
 
+// documentSortKeySQL is one level's sortable key, built the same way at the base
+// case and inside the recursion: position shifted into an unsigned range (so a
+// negative position — the column has no CHECK against one — still sorts
+// correctly as text) then zero-padded to 10 digits, followed by the created_at
+// tiebreak and finally the id, matching ListByProject's
+// "position ASC, created_at ASC, id ASC" exactly.
+const documentSortKeySQL = `lpad((d.position::bigint + 2147483648)::text, 10, '0')
+		|| ':' || to_char(d.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US') || ':' || d.id::text`
+
+// SubtreeInProject returns rootID and its live descendants within projectID, in
+// deterministic depth-first order.
+//
+// The recursion accumulates sort_path, one key per level (see
+// documentSortKeySQL), and the final ORDER BY sort_path is what makes the
+// result depth-first: Postgres compares arrays element by element and treats a
+// shorter array that is a prefix of a longer one as the lesser value, so a
+// parent's one-element-shorter path always sorts immediately before its
+// children's, and siblings — which share every element up to their own last
+// one — sort against each other by that last element, the same
+// (position, created_at, id) tiebreak every other listing here uses.
+//
+// project_id is filtered in BOTH arms of the recursion (base case and the
+// recursive step), not once at the top — see the interface doc for why: a row
+// whose parent_id points inside this tree but whose own project_id does not
+// match projectID must never be able to join by riding the pointer.
+func (r *DocumentRepo) SubtreeInProject(ctx context.Context, rootID, projectID uuid.UUID) ([]domain.Document, error) {
+	q := `
+		WITH RECURSIVE subtree AS (
+			SELECT d.id, d.parent_id, ARRAY[` + documentSortKeySQL + `] AS sort_path
+			  FROM documents d
+			 WHERE d.id = $1 AND d.project_id = $2 AND d.deleted_at IS NULL
+			UNION ALL
+			SELECT d.id, d.parent_id, s.sort_path || (` + documentSortKeySQL + `)
+			  FROM documents d
+			  JOIN subtree s ON d.parent_id = s.id
+			 WHERE d.project_id = $2 AND d.deleted_at IS NULL
+		)
+		` + documentEnrichedSelect + `
+		  FROM documents d
+		  JOIN subtree s ON s.id = d.id
+		 ORDER BY s.sort_path`
+
+	var rows []documentRow
+	if err := r.db.SelectContext(ctx, &rows, q, rootID, projectID); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	items := make([]domain.Document, len(rows))
+	for i := range rows {
+		items[i] = rows[i].toDomain()
+	}
+	return items, nil
+}
+
 // GetBySourceInProject looks up a copy by (project_id, source_share,
 // source_path) — see uq_documents_source. Only ever matches a non-'own' row:
 // an 'own' document's source_share is always NULL, and NULL never equals a
