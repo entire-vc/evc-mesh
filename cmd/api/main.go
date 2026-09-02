@@ -596,6 +596,13 @@ func main() {
 	// not nil, and the service's "storage not configured" branch tests exactly that.
 	documentAttachmentService := service.NewDocumentAttachmentService(documentAttachmentRepo, documentRepo, attachmentStore)
 
+	// Reuses documentAttachmentRepo and documentStore rather than depending on
+	// documentAttachmentService: an export reads attachment ROWS across an
+	// entire subtree (already proven in-scope by WalkExportTree), not one
+	// attachment behind its own wsAccess-checked id, so the narrower
+	// repository call is the right shape here, not the presigned-URL service.
+	documentExportService := service.NewDocumentExportService(documentService, documentAttachmentRepo, documentStore)
+
 	// It takes the document repository so every entry point can resolve the
 	// document inside the caller's workspace before touching a comment, and the
 	// document SERVICE for the one path that needs the markdown itself: checking
@@ -682,6 +689,7 @@ func main() {
 	humanGateDecisionHandler := handler.NewHumanGateDecisionHandler(commentService, taskService)
 	artifactHandler := handler.NewArtifactHandler(artifactService, taskService)
 	documentHandler := handler.NewDocumentHandler(documentService)
+	documentExportHandler := handler.NewDocumentExportHandler(documentExportService)
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
 	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
 	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
@@ -1340,6 +1348,7 @@ func main() {
 	api.GET("/documents/:doc_id/outline", documentHandler.Outline, wsAccess)
 	api.GET("/documents/:doc_id/section", documentHandler.Section, wsAccess)
 	api.POST("/documents/:doc_id/resolve-anchor", documentHandler.ResolveAnchor, wsAccess)
+	api.GET("/documents/:doc_id/export", documentExportHandler.Export, wsAccess)
 
 	// Subscribing to a document's changes. No RBAC beyond workspace access on
 	// purpose: asking to be told about a page you can already read grants
