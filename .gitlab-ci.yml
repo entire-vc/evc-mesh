@@ -376,7 +376,15 @@ test:
     # rasterized or boxed-off image (Export 4/7, #25ac04d2). It is a CI/test
     # tool only: the PDF renderer itself ships zero external binaries to
     # prod, which is the whole point of embedding the font in the Go binary.
-    - apk add --no-cache git build-base postgresql-client poppler-utils
+    #
+    # python-docx is the same role for the DOCX export tests (Export 5/7,
+    # #91ce6291): an independent, non-project-controlled parser proving the
+    # hand-written OOXML actually opens as a real .docx, not just bytes our
+    # own writer and a hand-rolled unzip agree on. Also CI/test only — the
+    # DOCX renderer itself ships zero external binaries to prod either, same
+    # as PDF.
+    - apk add --no-cache git build-base postgresql-client poppler-utils python3 py3-pip
+    - pip install --break-system-packages --no-cache-dir python-docx
     - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
     - pg_isready -h postgres -U mesh
     - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
