@@ -426,15 +426,23 @@ function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
 
   return (
     <li
-      className={`flex cursor-pointer items-start gap-2.5 border-b border-border/50 px-3 py-2.5 text-sm transition-colors last:border-b-0 hover:bg-accent ${
+      className={`group flex cursor-pointer items-start gap-2.5 border-b border-border/50 px-3 py-2.5 text-sm transition-colors last:border-b-0 hover:bg-accent ${
         !row.isRead ? "bg-accent/30" : ""
       }`}
       onClick={onClick}
     >
-      {/* Unread indicator */}
+      {/* Unread indicator. --primary and --accent are the same token value in
+          both themes (brandkit.css), so at rest bg-primary reads fine against
+          this row's bg-accent/30 (measured 3.95:1 light / 4.57:1 dark) but
+          collapses to exactly 1.00:1 the instant the row is hovered — the
+          dot and the now-solid bg-accent background become the identical
+          color. group-hover switches it to accent-foreground, the token
+          this codebase already uses to read on top of accent (measured
+          6.33:1 light / 10.38:1 dark) — the same pairing established for
+          this row's text. */}
       <span
         className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
-          !row.isRead ? "bg-primary" : "bg-transparent"
+          !row.isRead ? "bg-primary group-hover:bg-accent-foreground" : "bg-transparent"
         }`}
       />
 

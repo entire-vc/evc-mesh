@@ -72,7 +72,8 @@ function resolveToken(scope: Theme, name: string): [number, number, number] {
   return [Number(parts[0]), Number(parts[1]) / 100, Number(parts[2]) / 100];
 }
 
-function relativeLuminance([h, s, l]: [number, number, number]): number {
+/** HSL (h in degrees, s/l in 0-1) to sRGB, each channel 0-1. */
+function hslToRgb01([h, s, l]: [number, number, number]): [number, number, number] {
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
   const m = l - c / 2;
@@ -85,18 +86,60 @@ function relativeLuminance([h, s, l]: [number, number, number]): number {
     [x, 0, c],
     [c, 0, x],
   ][seg]!.map((v) => v + m);
-  const lin = rgb.map((v) =>
+  return [rgb[0]!, rgb[1]!, rgb[2]!];
+}
+
+function relativeLuminanceRGB01([r, g, b]: [number, number, number]): number {
+  const lin = [r, g, b].map((v) =>
     v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4,
   );
   return 0.2126 * lin[0]! + 0.7152 * lin[1]! + 0.0722 * lin[2]!;
 }
 
-/** WCAG 2.x contrast ratio between two semantic tokens, in one theme. */
-export function contrast(scope: Theme, a: string, b: string): number {
-  const la = relativeLuminance(resolveToken(scope, a));
-  const lb = relativeLuminance(resolveToken(scope, b));
+function relativeLuminance(hsl: [number, number, number]): number {
+  return relativeLuminanceRGB01(hslToRgb01(hsl));
+}
+
+function contrastFromLuminance(la: number, lb: number): number {
   const [hi, lo] = la > lb ? [la, lb] : [lb, la];
   return (hi + 0.05) / (lo + 0.05);
+}
+
+/** WCAG 2.x contrast ratio between two semantic tokens, in one theme. */
+export function contrast(scope: Theme, a: string, b: string): number {
+  return contrastFromLuminance(
+    relativeLuminance(resolveToken(scope, a)),
+    relativeLuminance(resolveToken(scope, b)),
+  );
+}
+
+/**
+ * Contrast of an opaque token (`fg`) against another token (`bg`) rendered at
+ * `alpha` opacity OVER a third, fully-opaque token (`base`) — the shape
+ * Tailwind's `bg-accent/30` produces: a translucent fill blended with
+ * whatever surface actually sits behind it, not `bg` at full strength.
+ * `contrast()` alone cannot express this — it only ever compares two tokens
+ * at face value, and an alpha-suffixed utility class is not a token.
+ */
+export function contrastOverBlend(
+  scope: Theme,
+  fg: string,
+  bg: string,
+  alpha: number,
+  base: string,
+): number {
+  const fgRgb = hslToRgb01(resolveToken(scope, fg));
+  const bgRgb = hslToRgb01(resolveToken(scope, bg));
+  const baseRgb = hslToRgb01(resolveToken(scope, base));
+  const blended: [number, number, number] = [
+    bgRgb[0] * alpha + baseRgb[0] * (1 - alpha),
+    bgRgb[1] * alpha + baseRgb[1] * (1 - alpha),
+    bgRgb[2] * alpha + baseRgb[2] * (1 - alpha),
+  ];
+  return contrastFromLuminance(
+    relativeLuminanceRGB01(fgRgb),
+    relativeLuminanceRGB01(blended),
+  );
 }
 
 /** WCAG AA for body text. */
