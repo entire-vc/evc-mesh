@@ -431,6 +431,11 @@ type DocumentService interface {
 	// current body: byte offsets plus the quote and its neighbours, the shape
 	// document_comments stores.
 	ResolveAnchor(ctx context.Context, id, workspaceID uuid.UUID, input ResolveAnchorInput) (*mdoc.Anchor, error)
+	// WalkExportTree returns rootID and its live descendants, authorized and
+	// ordered for export — the foundation the MD/PDF/DOCX export formats build
+	// on. See its implementation for the authorization and ordering contract,
+	// and ExportTreeTooLargeError for the size ceiling it enforces.
+	WalkExportTree(ctx context.Context, rootID, workspaceID uuid.UUID) ([]domain.Document, error)
 }
 
 // DocumentOutline is a document's heading structure.

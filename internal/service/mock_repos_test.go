@@ -1942,6 +1942,10 @@ type MockStorageClient struct {
 	objects      map[string][]byte
 	errToReturn  error
 	lastFilename string
+	// downloads counts calls to Download — how a test proves a size ceiling
+	// was enforced BEFORE bodies were fetched, not just that the final result
+	// was correctly rejected.
+	downloads int
 }
 
 func NewMockStorageClient() *MockStorageClient {
@@ -1983,6 +1987,9 @@ func (m *MockStorageClient) Delete(_ context.Context, key string) error {
 }
 
 func (m *MockStorageClient) Download(_ context.Context, key string) (io.ReadCloser, error) {
+	m.mu.Lock()
+	m.downloads++
+	m.mu.Unlock()
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}
@@ -2948,6 +2955,59 @@ func (m *MockDocumentRepository) HasAncestor(_ context.Context, docID, ancestorI
 		cur, ok = m.items[*cur.ParentID]
 	}
 	return false, nil
+}
+
+// SubtreeInProject mirrors DocumentRepo.SubtreeInProject: rootID and its live
+// descendants within projectID, depth-first, siblings by (Position, CreatedAt,
+// ID) — including the same defense the real recursive CTE has: a child is
+// walked to only when ITS OWN project_id also equals projectID, so a row
+// seeded directly with a parent_id that points into this tree but a different
+// project_id (the shape a test drives with Seed, since Create refuses it)
+// never appears in the result.
+func (m *MockDocumentRepository) SubtreeInProject(_ context.Context, rootID, projectID uuid.UUID) ([]domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	root, ok := m.items[rootID]
+	if !ok || root.DeletedAt != nil || root.ProjectID != projectID {
+		return nil, nil
+	}
+
+	childrenOf := map[uuid.UUID][]*domain.Document{}
+	for _, d := range m.items {
+		if d.DeletedAt != nil || d.ProjectID != projectID || d.ParentID == nil {
+			continue
+		}
+		childrenOf[*d.ParentID] = append(childrenOf[*d.ParentID], d)
+	}
+	for parent := range childrenOf {
+		siblings := childrenOf[parent]
+		sort.Slice(siblings, func(i, j int) bool {
+			if siblings[i].Position != siblings[j].Position {
+				return siblings[i].Position < siblings[j].Position
+			}
+			if !siblings[i].CreatedAt.Equal(siblings[j].CreatedAt) {
+				return siblings[i].CreatedAt.Before(siblings[j].CreatedAt)
+			}
+			return siblings[i].ID.String() < siblings[j].ID.String()
+		})
+		childrenOf[parent] = siblings
+	}
+
+	var walk func(*domain.Document, *[]domain.Document)
+	walk = func(node *domain.Document, out *[]domain.Document) {
+		copied := *node
+		*out = append(*out, copied)
+		for _, child := range childrenOf[node.ID] {
+			walk(child, out)
+		}
+	}
+	var result []domain.Document
+	walk(root, &result)
+	return result, nil
 }
 
 // GetBySourceInProject mirrors uq_documents_source: a match on

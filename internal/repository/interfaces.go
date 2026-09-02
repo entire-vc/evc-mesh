@@ -337,6 +337,21 @@ type DocumentRepository interface {
 	// chain. Re-parenting uses it to refuse the cycles that would otherwise
 	// detach a subtree from every listing that walks down from the roots.
 	HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error)
+	// SubtreeInProject returns rootID and its live descendants within
+	// projectID, in deterministic depth-first order: preorder, siblings by
+	// Position with the same (position, created_at, id) tiebreak
+	// ListByProject uses. Two calls against an unchanged tree return the same
+	// order — export.WalkExportTree relies on that for a stable export.
+	//
+	// project_id is checked on every row the walk considers, not only the
+	// root: a document whose parent_id merely points into this tree but whose
+	// own project_id differs (a row written directly to the table — the
+	// API's own requireParentInProject already refuses this on write) cannot
+	// enter the result by riding along on that pointer.
+	//
+	// Returns nil, nil (not an error) when rootID does not exist, is
+	// soft-deleted, or does not belong to projectID.
+	SubtreeInProject(ctx context.Context, rootID, projectID uuid.UUID) ([]domain.Document, error)
 	// GetBySourceInProject finds a copy by its origin — (project_id, source_share,
 	// source_path), the partial unique index migration 20260820110 enforces for
 	// every non-'own' row (uq_documents_source). Nil, nil when no such copy
