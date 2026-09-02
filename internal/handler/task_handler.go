@@ -1686,6 +1686,20 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var tooLargeErr *service.ExportTreeTooLargeError
+	if errors.As(err, &tooLargeErr) {
+		// 413, not 400: the request itself is well-formed, the thing it asks
+		// for is too big to hand back — the same distinction the HTTP spec
+		// draws between a bad request and an entity too large to represent.
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]any{
+			"code":    "export_tree_too_large",
+			"message": fmt.Sprintf("export exceeds the %s limit: %d > %d", tooLargeErr.Kind, tooLargeErr.Actual, tooLargeErr.Limit),
+			"kind":    tooLargeErr.Kind,
+			"actual":  tooLargeErr.Actual,
+			"limit":   tooLargeErr.Limit,
+		})
+	}
+
 	if apiErr, ok := err.(*apierror.Error); ok {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}

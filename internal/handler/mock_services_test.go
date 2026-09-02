@@ -1244,3 +1244,14 @@ func (m *MockProjectIntegrationService) SearchTR(ctx context.Context, shareSlug,
 	}
 	return nil, nil
 }
+
+type MockDocumentExportService struct {
+	ExportMarkdownFunc func(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) ([]byte, string, string, error)
+}
+
+func (m *MockDocumentExportService) ExportMarkdown(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) (data []byte, filename, contentType string, err error) {
+	if m.ExportMarkdownFunc != nil {
+		return m.ExportMarkdownFunc(ctx, rootID, workspaceID, scope)
+	}
+	return nil, "", "", nil
+}

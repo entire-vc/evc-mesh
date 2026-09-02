@@ -438,6 +438,38 @@ type DocumentService interface {
 	WalkExportTree(ctx context.Context, rootID, workspaceID uuid.UUID) ([]domain.Document, error)
 }
 
+// ExportScope is which part of a document's tree an export includes.
+type ExportScope string
+
+const (
+	// ExportScopeSelf is just the requested document, no descendants.
+	ExportScopeSelf ExportScope = "self"
+	// ExportScopeTree is the requested document plus its live descendants —
+	// what DocumentService.WalkExportTree returns.
+	ExportScopeTree ExportScope = "tree"
+)
+
+// DocumentExportService renders a document — optionally with its live subtree
+// — into a downloadable file. It is the HTTP-facing counterpart to
+// DocumentService.WalkExportTree: the walk decides WHAT is in an export and
+// whether the caller may see it, this decides what bytes get sent.
+type DocumentExportService interface {
+	// ExportMarkdown renders scope as markdown.
+	//
+	// ExportScopeSelf returns rootID's stored body verbatim — there is
+	// nothing to render, it is markdown already — as a single .md file.
+	//
+	// ExportScopeTree returns a .zip mirroring the live subtree: one .md file
+	// per document, nested under directories named by ancestor slug so the
+	// archive's structure matches the tree in Mesh, with every document's
+	// live attachments bundled under _attachments/ and the body's attachment
+	// links rewritten to the relative path inside the archive.
+	//
+	// Returns the rendered bytes, a filename (<slug>-<date>.md or .zip), and
+	// the MIME type to serve it as.
+	ExportMarkdown(ctx context.Context, rootID, workspaceID uuid.UUID, scope ExportScope) (data []byte, filename, contentType string, err error)
+}
+
 // DocumentOutline is a document's heading structure.
 type DocumentOutline struct {
 	DocumentID uuid.UUID `json:"document_id"`
