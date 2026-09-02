@@ -31,6 +31,7 @@ import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
 import { callCommand, replaceAll } from "@milkdown/kit/utils";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
 import { cn } from "@/lib/cn";
+import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { DocLinkMenu } from "@/components/doc-link-menu";
 import { MentionMenu, type Mentionable } from "@/components/mention-menu";
@@ -46,6 +47,11 @@ import {
   uploadArtifact,
 } from "@/lib/task-artifacts";
 import { makeDocEditor } from "@/lib/milkdown/editor";
+import { type AttachmentSpan, findAttachmentSpans } from "@/lib/milkdown/attachment-spans";
+import {
+  clearAttachmentControls,
+  syncAttachmentControls,
+} from "@/lib/milkdown/attachment-controls";
 import {
   type Suggestion,
   caretCoords,
@@ -326,6 +332,83 @@ function RichTextEditorInner({
     if (loading || !containerRef.current) return;
     void resolveArtifactImages(containerRef.current);
   }, [value, loading, uploading]);
+
+  // Removing an image or a file link from the text (select + backspace) has
+  // always worked — that is plain ProseMirror editing. What did not exist was
+  // a way to remove the underlying task artifact along with it: the bytes
+  // stayed uploaded, invisible unless the writer went looking in the separate
+  // artifact panel. This is the other half — a small button on every inline
+  // attachment that deletes both.
+  //
+  // deletingIdRef, not state: a second click on the same button mid-flight
+  // must not fire a second DELETE at an id whose transaction is already
+  // pending — state would re-render (and rebuild the buttons) before the
+  // guard could take effect on a synchronous double-click.
+  const deletingIdRef = useRef<string | null>(null);
+
+  // Shared by the effect below and by deleteAttachment itself: a deletion
+  // dispatches straight into the ProseMirror view, which does not touch the
+  // `value`/`uploading` props this component re-renders on — onChange is
+  // debounced 200ms, and in a controlled parent the new value only comes back
+  // on the render after that. Without this direct call the button for a
+  // just-deleted attachment would linger, clickable, for up to 200ms.
+  const resyncControls = useCallback(
+    (view: EditorView) => {
+      if (!containerRef.current) return;
+      const spans = findAttachmentSpans(view.state.doc);
+      syncAttachmentControls(containerRef.current, view, spans, {
+        onDelete: (span) => void deleteAttachment(span),
+      });
+    },
+    // deleteAttachment is defined below and closes over this function; the ref
+    // breaks the cycle without a forward declaration.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const resyncControlsRef = useRef(resyncControls);
+  resyncControlsRef.current = resyncControls;
+
+  const deleteAttachment = useCallback(
+    async (span: AttachmentSpan) => {
+      if (deletingIdRef.current === span.artifactId) return;
+      deletingIdRef.current = span.artifactId;
+      try {
+        await api(`/api/v1/artifacts/${span.artifactId}`, { method: "DELETE" });
+      } catch (err) {
+        // Left exactly as it was: a failed delete must not also corrupt the
+        // document by removing a reference to an artifact that is still there.
+        toast.error("Could not remove attachment", {
+          description: apiErrorMessage(err, "delete failed"),
+        });
+        deletingIdRef.current = null;
+        return;
+      }
+      withView((view) => {
+        // Re-resolve the span against the CURRENT document rather than
+        // trusting the captured positions: the delete request was async, and
+        // an edit elsewhere in the description during that round trip would
+        // have shifted them.
+        const current = findAttachmentSpans(view.state.doc).find(
+          (s) => s.artifactId === span.artifactId,
+        );
+        if (current) view.dispatch(view.state.tr.delete(current.from, current.to));
+        resyncControlsRef.current(view);
+      });
+      deletingIdRef.current = null;
+    },
+    [withView],
+  );
+
+  useEffect(() => {
+    if (loading || !containerRef.current) return;
+    const container = containerRef.current;
+    const view = withView((v) => v);
+    if (!view) return;
+    resyncControls(view);
+    return () => clearAttachmentControls(container);
+    // uploading: a finished upload changes the document (and so the spans)
+    // without necessarily changing `value` first — onChange is debounced.
+  }, [value, loading, uploading, withView, resyncControls]);
 
   // ---- inline menus -------------------------------------------------------
 
@@ -650,7 +733,7 @@ function RichTextEditorInner({
         onClick={handleClick}
         onKeyDown={handleKeyDown}
         data-placeholder={placeholder}
-        style={{ minHeight }}
+        style={{ minHeight, position: "relative" }}
         className="mesh-doc-editor-body mesh-rich-text-body flex flex-1 flex-col px-3 py-2"
       >
         <Milkdown />

@@ -21,12 +21,25 @@ import { toast } from "@/components/ui/toast";
 // traversal (`/download/../../evil`), a second path segment, and an absolute URL
 // on another origin, all of which would otherwise pass through the renderers as
 // an internal reference.
-const ARTIFACT_DOWNLOAD_PATH_RE = /^\/api\/v1\/artifacts\/[^/?]+\/download(\?.*)?$/;
+const ARTIFACT_DOWNLOAD_PATH_RE = /^\/api\/v1\/artifacts\/([^/?]+)\/download(\?.*)?$/;
 const DOCUMENT_ATTACHMENT_DOWNLOAD_PATH_RE =
   /^\/api\/v1\/document-attachments\/[^/?]+\/download(\?.*)?$/;
 
 export function artifactDownloadPath(artifactId: string): string {
   return `/api/v1/artifacts/${artifactId}/download?disposition=inline`;
+}
+
+/**
+ * The task-artifact id embedded in a resolvable download path, or null.
+ *
+ * Deliberately narrower than isResolvableAttachmentPath: it only recognises the
+ * task-artifact shape, because the one caller (rich-text-editor's inline
+ * attachment delete) only ever needs to call DELETE /api/v1/artifacts/:id — a
+ * document attachment is a different resource with a different delete route,
+ * and task descriptions never reference one.
+ */
+export function artifactIdFromDownloadPath(path: string): string | null {
+  return ARTIFACT_DOWNLOAD_PATH_RE.exec(path)?.[1] ?? null;
 }
 
 export function documentAttachmentDownloadPath(attachmentId: string): string {
