@@ -1247,6 +1247,7 @@ func (m *MockProjectIntegrationService) SearchTR(ctx context.Context, shareSlug,
 
 type MockDocumentExportService struct {
 	ExportMarkdownFunc func(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) ([]byte, string, string, error)
+	MergeForExportFunc func(ctx context.Context, rootID, workspaceID uuid.UUID) (*service.MergedExportDoc, error)
 }
 
 func (m *MockDocumentExportService) ExportMarkdown(ctx context.Context, rootID, workspaceID uuid.UUID, scope service.ExportScope) (data []byte, filename, contentType string, err error) {
@@ -1254,4 +1255,11 @@ func (m *MockDocumentExportService) ExportMarkdown(ctx context.Context, rootID, 
 		return m.ExportMarkdownFunc(ctx, rootID, workspaceID, scope)
 	}
 	return nil, "", "", nil
+}
+
+func (m *MockDocumentExportService) MergeForExport(ctx context.Context, rootID, workspaceID uuid.UUID) (*service.MergedExportDoc, error) {
+	if m.MergeForExportFunc != nil {
+		return m.MergeForExportFunc(ctx, rootID, workspaceID)
+	}
+	return nil, nil
 }
