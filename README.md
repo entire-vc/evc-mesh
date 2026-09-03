@@ -3,7 +3,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
-[![MCP](https://img.shields.io/badge/MCP-49_tools-8B5CF6)](docs/mcp-reference.md)
+[![MCP](https://img.shields.io/badge/MCP-61_tools-8B5CF6)](docs/mcp-reference.md)
 [![Status](https://img.shields.io/badge/Status-Alpha-orange)](https://github.com/entire-vc/evc-mesh/releases)
 
 > **Alpha Release** — Mesh is under active development. APIs may change between versions. We welcome early adopters and feedback.
@@ -278,7 +278,7 @@ copy here was 12 tools behind when it was removed. Only
 | [Architecture](docs/architecture.md) | System architecture and design decisions |
 | [API Authentication](docs/api-authentication.md) | JWT, agent keys, and RBAC |
 | [Agent Onboarding](docs/agent-onboarding.md) | Issue agent keys, connect over stdio or SSE, run MCP behind a proxy |
-| [MCP Reference](docs/mcp-reference.md) | Tool catalogue with parameters and examples — 41 of the 61 tools |
+| [MCP Reference](docs/mcp-reference.md) | Tool catalogue with parameters and examples — all 61 tools |
 | [Custom Fields](docs/custom-fields.md) | Guide for 12 custom field types |
 | [Webhooks](docs/webhooks.md) | Webhook setup with HMAC-SHA256 validation |
 | [Agent Push Notifications](docs/agent-push-notifications.md) | Callback URL, SSE, and long-polling |
