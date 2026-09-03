@@ -376,9 +376,21 @@ func TestExtractMentionSlugs(t *testing.T) {
 		{"multiple unique", "@alice and @bob", []string{"alice", "bob"}},
 		{"dedup same slug", "@alice @alice again", []string{"alice"}},
 		{"email address excluded", "email bar@foo.com is not a mention", nil},
+		{"go install ...@latest excluded (no boundary before @)",
+			"go install golang.org/x/tools/cmd/goimports@latest", nil},
+		{"tight code span excluded (backtick is not a boundary char)",
+			"see `@daedalus` for details", nil},
 		{"hyphenated slug", "@bill-the-cat", []string{"bill-the-cat"}},
 		{"single char (too short)", "@a", nil},
-		{"uppercase normalized", "@BILL", nil}, // regex is lowercase only
+		// #e0a6ff03 (2026-09-03): before this fix the regex's character class was
+		// [a-z0-9] only, so an uppercase-led handle never matched AT ALL — not
+		// "resolved to nobody", it never became a candidate, and this comment used
+		// to read "nil // regex is lowercase only" documenting exactly that. Now
+		// (?i) widens the character class; strings.ToLower normalizes the result,
+		// same as the all-lowercase cases above.
+		{"uppercase handle normalized to lowercase slug", "@BILL", []string{"bill"}},
+		{"leading-capital handle normalized (the live #e0a6ff03 case)", "@Daedalus", []string{"daedalus"}},
+		{"mixed-case hyphenated handle normalized", "@Bill-The-Cat", []string{"bill-the-cat"}},
 		{"no mentions", "plain text here", nil},
 		{"slug starting with hyphen rejected", "@-foo", nil},
 	}
@@ -491,6 +503,66 @@ func TestNotifyMentions_UnknownSlugSkipped(t *testing.T) {
 		return nil
 	}())
 
+	assert.Empty(t, env.notifySvc.Calls())
+}
+
+// #e0a6ff03 (2026-09-03): AC1 — an uppercase-led handle must resolve IDENTICALLY
+// to the same handle written lowercase. Before the mentionRegex fix, "@Bill"
+// never even matched the extraction regex — not "resolved to nobody", it never
+// became a candidate at all — so this produced ZERO notify calls where the
+// lowercase form produces one. Mirrors TestNotifyMentions_BasicMention with the
+// leading letter capitalized; same fixture, same agent, must give the same result.
+func TestNotifyMentions_UppercaseHandleResolvesLikeLowercase(t *testing.T) {
+	env := setupCommentServiceWithMentions()
+
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "bill", Name: "Bill"}
+	env.agentSvc.AddAgent(env.wsID, agent)
+
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID, Title: "T"}
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "hey @Bill check this"}
+	task := env.taskRepo.items[taskID]
+
+	env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
+
+	calls := env.notifySvc.Calls()
+	require.Len(t, calls, 1, "an uppercase-led handle must deliver exactly like its lowercase form")
+	assert.Equal(t, "task.mentioned", calls[0].EventType)
+	assert.Equal(t, agent.ID, calls[0].AgentID)
+	// The stored slug is the normalized lowercase form regardless of how it was
+	// typed — matches agents.slug, which is lowercase-only by DB constraint.
+	assert.Equal(t, map[string]any{"mentioned_slug": "bill"}, calls[0].Payload)
+}
+
+// #e0a6ff03 AC2 (reverse control) — an uppercase-led handle that resolves to
+// NOBODY must take the exact same silent-no-crash path as a lowercase unknown
+// handle (TestNotifyMentions_UnknownSlugSkipped), not error or panic. Before the
+// fix this case was invisible in a DIFFERENT way than a lowercase unknown handle:
+// the lowercase one at least reaches decideDelivery and would be recorded
+// recipient_unknown (proven by TestDecideDelivery_UnknownHandleIsRecordedNotDropped
+// in comment_delivery_outcome_test.go); the uppercase one never reached it because
+// extractMentionSlugs never produced a candidate for it in the first place — a
+// SILENT MISS WITH NO TRACE ANYWHERE, which is the defect this task fixes: now
+// both shapes reach the same "resolved to nobody" branch in decideDelivery.
+func TestNotifyMentions_UnknownUppercaseSlugTakesSamePathAsLowercase(t *testing.T) {
+	env := setupCommentServiceWithMentions()
+
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID}
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "@NoSuchAgentXyz please check"}
+	task := env.taskRepo.items[taskID]
+
+	require.NoError(t, func() error {
+		env.svc.notifyMentions(context.Background(), comment, task, "", env.wsID)
+		return nil
+	}())
+
+	// Same observable outcome as the lowercase-unknown case: no notify call.
+	// (The row-level "recipient_unknown skipped, not silently dropped" claim is
+	// covered at the decideDelivery unit-test layer, which this candidate now
+	// actually reaches — see extractMentionSlugs' "leading-capital handle" case.)
 	assert.Empty(t, env.notifySvc.Calls())
 }
 

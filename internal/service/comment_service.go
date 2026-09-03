@@ -26,7 +26,23 @@ import (
 // mentionRegex matches @-slug references in comment bodies.
 // Slug pattern mirrors agents.slug and users.username: starts/ends with alnum, middle may contain hyphens, 2-40 chars total.
 // The leading boundary allows start-of-string, whitespace, or open bracket/paren/brace.
-var mentionRegex = regexp.MustCompile(`(?:^|[\s(\[{])@([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\b`)
+//
+// Case-insensitive (#e0a6ff03, 2026-09-03): `agents.slug`/`users.username` are
+// stored lowercase and looked up exact-match, but a HANDLE as written in prose
+// is not — "@Daedalus", "@Linus" are ordinary capitalized words to a human or an
+// agent typing naturally, same as `blockingMarkerRegex`/`blockingMarkerClassRegex`
+// below already treat their own slug/keyword text. Before this fix the character
+// class was `[a-z0-9]` only, so an uppercase-led handle did not match this regex
+// AT ALL — not "resolved to nobody", simply never became a candidate — and
+// `extractMentionSlugs`'s `strings.ToLower` never got a chance to run. That made
+// the failure invisible from both ends: `notifyMentions` only ever writes a
+// delivery-outcome row for a slug it extracted, so an uppercase handle produced
+// no comment_mentions row AND no `recipient_unknown` outcome row — a silent miss
+// indistinguishable from "nobody was mentioned", live-measured on prod (`@Linus`
+// vs `@linus` on an identical fixture, 0 delivery records vs 1). `(?i)` widens
+// only the two `[a-z0-9]` character classes to `[A-Za-z0-9]`; the boundary
+// anchors (`\s`, brackets, `\b`) are untouched by it.
+var mentionRegex = regexp.MustCompile(`(?i)(?:^|[\s(\[{])@([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\b`)
 
 // blockingMarkerRegex matches the "❓ **Blocking @<user>**" workflow marker
 // (CLAUDE-workflow.md §0b) anchored to the start of a line. It tolerates the optional
