@@ -2,11 +2,20 @@
 
 ## Overview
 
-evc-mesh exposes **49 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **61 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
 
 New to this? [Agent Onboarding](agent-onboarding.md) walks through issuing a key
 and connecting a client end to end. This page is the tool catalogue.
+
+**Coverage of this page, measured 2026-09-03 against `evc-mesh-mcp` `internal/mcp/server.go`:**
+the server registers **61** tools; this page catalogues **41** of them, plus 4
+auto-transition tools that are documented below but *not* registered by the
+server. **20 registered tools are not documented here yet:** add_vcs_link, comment_doc, create_doc, delete_recurring_schedule, forget, get_canonical, get_canonical_updates, get_doc, get_project_knowledge, list_doc_comments, list_docs, pavel_decision, recall, recall_with_graph, remember, search_docs, session_report, set_project_knowledge, update_doc, update_recurring_schedule.
+
+The per-category counts below predate that measurement and do not add up to
+either number — treat the catalogue entries, not this table, as the record of
+what is documented, and `server.go` as the record of what exists.
 
 Tools are organized into 11 categories:
 
