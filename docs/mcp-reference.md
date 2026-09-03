@@ -8,29 +8,28 @@ Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on p
 New to this? [Agent Onboarding](agent-onboarding.md) walks through issuing a key
 and connecting a client end to end. This page is the tool catalogue.
 
-**Coverage of this page, measured 2026-09-03 against `evc-mesh-mcp` `internal/mcp/server.go`:**
-the server registers **61** tools; this page catalogues **41** of them, plus 4
-auto-transition tools that are documented below but *not* registered by the
-server. **20 registered tools are not documented here yet:** add_vcs_link, comment_doc, create_doc, delete_recurring_schedule, forget, get_canonical, get_canonical_updates, get_doc, get_project_knowledge, list_doc_comments, list_docs, pavel_decision, recall, recall_with_graph, remember, search_docs, session_report, set_project_knowledge, update_doc, update_recurring_schedule.
+Every tool the server registers has an entry below, and every entry below names a
+tool the server registers. Both directions are checked by
+`scripts/check-mcp-reference.sh`, which diffs the `#### N. \`name\`` headings in this
+file against the `AddTool` calls in `evc-mesh-mcp` `internal/mcp/server.go` and fails
+on a mismatch in either direction. If you add or remove a tool, this page is part of
+that change.
 
-The per-category counts below predate that measurement and do not add up to
-either number — treat the catalogue entries, not this table, as the record of
-what is documented, and `server.go` as the record of what exists.
-
-Tools are organized into 11 categories:
+Tools are organized into 12 categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|
-| Project & Task Management | 10 | CRUD for projects, tasks, subtasks, dependencies, assignments |
+| Project & Task Management | 11 | CRUD for projects, tasks, subtasks, dependencies, assignments, PR links |
 | Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
+| Documents | 7 | Project document tree: create, read, edit, search, and comment on pages |
+| Memory & Knowledge | 9 | Persistent memory, project knowledge, and the canonical decision layer |
 | Event Bus | 5 | Publish/subscribe events, context aggregation |
-| Utility | 3 | Heartbeat, error reporting, self-assigned task listing |
 | Agent Hierarchy | 2 | Register and list sub-agents |
+| Utility | 4 | Heartbeat, error reporting, self-assigned task listing, session metrics |
 | Governance Rules | 2 | Agent-applicable rules, project rules |
-| Team & Configuration | 6 | Team directory (flat/tree), assignment/workflow rules, agent profiles, config import/export |
+| Team & Configuration | 6 | Team directory, assignment/workflow rules, agent profiles, config import/export |
 | Push Notifications | 1 | Long-poll for task assignments |
-| Recurring Tasks | 6 | Create and manage recurring task schedules and instance history |
-| Auto-Transition Rules | 0 | ⚠️ Documented below but **not implemented** — these tools are not registered by the server |
+| Recurring Tasks | 6 | Create, update, delete recurring schedules and inspect instance history |
 | Task Checkout | 3 | Exclusive task locking with TTL to prevent double-work |
 
 > **Note:** the MCP server is **not** in this repository. It is the standalone
@@ -39,6 +38,15 @@ Tools are organized into 11 categories:
 > under `./cmd/mcp` until 2026-08; it had drifted 12 tools behind and was
 > removed (Mesh #e85e4e05), so a snippet naming `./cmd/mcp` is stale, not an
 > alternative.
+
+> **Auto-transition rules are not MCP tools.** Four of them
+> (`list`/`create`/`update`/`delete_auto_transition_rule`) were described on this page
+> until 2026-09-03 as if the server registered them; it never did, and calling one
+> returns an unknown-tool error. The feature itself is real and reachable over REST:
+> `GET|POST /api/v1/projects/{project_id}/auto-transition-rules` and
+> `PUT|DELETE /api/v1/projects/{project_id}/auto-transition-rules/{rule_id}`
+> (create, update and delete require the `manage_rules` permission). Their MCP
+> equivalents are tracked separately, not documented here as if they existed.
 
 ---
 
@@ -105,8 +113,8 @@ Two endpoints are served:
 
 | Endpoint | Profile | Tools |
 |----------|---------|-------|
-| `http://localhost:8081/sse` | full | 49 |
-| `http://localhost:8081/core/sse` | core | 21 |
+| `http://localhost:8081/sse` | full | 61 |
+| `http://localhost:8081/core/sse` | core | 25 |
 
 Behind a reverse proxy, see
 [Agent Onboarding §4](agent-onboarding.md#4-behind-a-reverse-proxy) — a path
@@ -129,13 +137,13 @@ Agents authenticate per-connection using one of these methods:
 | `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
 | `MESH_MCP_PUBLIC_URL` | *(empty)* | No | Public base URL of the SSE server. Empty advertises the message endpoint relative to the URL the client connected to, which is correct unless a proxy serves MCP under a path prefix |
-| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (49) or `core` (21). In SSE mode the profile follows the endpoint |
+| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (61) or `core` (25). In SSE mode the profile follows the endpoint |
 
 ---
 
 ## Tools
 
-### Project & Task Management (10 tools)
+### Project & Task Management (11 tools)
 
 #### 1. `list_projects`
 
@@ -421,9 +429,49 @@ Assign a task to a user or agent.
 
 ---
 
+#### 11. `add_vcs_link`
+
+Link a task to a pull request, merge request, commit, or branch. This is what makes the
+task<->PR join real: a task with no VCS link cannot be matched to the code that implements
+it, so PR-driven status automation and any "what shipped for this task?" report will not
+see it. Call it as soon as the PR exists.
+
+Only `task_id` and `url` are needed -- `provider`, `link_type` and `external_id` are
+inferred from a GitHub or GitLab URL.
+
+> **If the PR was already merged when you call this, pass `status="merged"`.** Otherwise the
+> link starts as `open` and no webhook will ever correct it -- a merge that happened before
+> the link existed fires no event. Calling `add_vcs_link` again on the same PR with a
+> corrected status is safe: it updates the existing link rather than failing.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task ID |
+| `url` | string | **Yes** | -- | Link URL, e.g. `https://github.com/owner/repo/pull/123` |
+| `provider` | string | No | inferred (`github`) | VCS provider: `github`, `gitlab`. Inferred from the URL host |
+| `link_type` | string | No | inferred (`pr`) | What the URL points at: `pr` (alias `pull_request`), `commit`, `branch`. Inferred from the URL path |
+| `external_id` | string | No | inferred | PR number, commit SHA, or branch name. Only needed when the URL is not a recognised PR/commit/branch link |
+| `title` | string | No | -- | Human-readable label, e.g. the PR title |
+| `status` | string | No | `open` | `open`, `merged`, `closed`. Pass `merged` when linking a PR merged before this call |
+
+**Example request:**
+```json
+{
+  "name": "add_vcs_link",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "url": "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/912",
+    "title": "fix: reject a colon in a memory key",
+    "status": "merged"
+  }
+}
+```
+
+---
+
 ### Comments & Artifacts (5 tools)
 
-#### 11. `add_comment`
+#### 12. `add_comment`
 
 Add a comment to a task.
 
@@ -453,7 +501,7 @@ Add a comment to a task.
 
 ---
 
-#### 12. `list_comments`
+#### 13. `list_comments`
 
 List comments on a task.
 
@@ -477,7 +525,7 @@ List comments on a task.
 
 ---
 
-#### 13. `upload_artifact`
+#### 14. `upload_artifact`
 
 Upload an artifact (file, code, log, etc.) to a task.
 
@@ -509,7 +557,7 @@ Upload an artifact (file, code, log, etc.) to a task.
 
 ---
 
-#### 14. `list_artifacts`
+#### 15. `list_artifacts`
 
 List artifacts attached to a task.
 
@@ -529,7 +577,7 @@ List artifacts attached to a task.
 
 ---
 
-#### 15. `get_artifact`
+#### 16. `get_artifact`
 
 Get artifact details and optionally its content.
 
@@ -551,9 +599,526 @@ Get artifact details and optionally its content.
 
 ---
 
+### Documents (7 tools)
+
+#### 17. `list_docs`
+
+List a project's documents -- id, title, slug path, version, and who touched them last.
+Carries **no document bodies**, so it is safe to call on a whole project: use it as the map,
+then `get_doc` for one page. Returns `path` and `has_children` for navigating the tree.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project UUID |
+| `include_archived` | boolean | No | `false` | Include archived documents |
+
+**Example request:**
+```json
+{
+  "name": "list_docs",
+  "arguments": {
+    "project_id": "550e8400-..."
+  }
+}
+```
+
+---
+
+#### 18. `search_docs`
+
+Full-text search a project's documents by title and body. Returns matching documents with a
+snippet and a `path` usable directly with `get_doc` -- this is how you find a document when
+you do not already know its path. `list_docs` is the map; this is the index.
+
+> **Scope is per-project only.** Results never cross `project_id`, and this is not a
+> substitute for `recall` (which searches memory, not documents) nor for a cross-project
+> document search -- none exists. A query that matches nothing returns an empty `items` list,
+> not an error. Documents saved before full-text search shipped (2026-08-20) are matched by
+> title only until their next edit.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project UUID. Search is scoped to this one project -- call it once per project you need to check |
+| `query` | string | **Yes** | -- | Search text. Matched against title and body |
+| `limit` | number | No | `20` | Max results (server max 50) |
+
+**Example request:**
+```json
+{
+  "name": "search_docs",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "query": "rollback procedure",
+    "limit": 10
+  }
+}
+```
+
+---
+
+#### 19. `get_doc`
+
+Read a document. **By default this returns metadata plus the outline (headings) and *not*
+the body.** A document is far larger than a task, and a body you read stays in your context
+for the rest of the session. Read the outline first, then pass `section` for just the part
+you need; `body=true` returns the whole page and should be the exception.
+
+The returned `version` is what `update_doc` takes as `base_version`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
+| `section` | string | No | -- | Return only this section: a heading's text, or its anchor from the outline |
+| `body` | boolean | No | `false` | Return the full markdown body. Prefer `section` when you need one part |
+| `version_only` | boolean | No | `false` | Return just the version -- the cheap "has this changed since I read it?" check before a write |
+| `outline_depth` | string | No | all levels | Limit the outline to headings at this level or shallower, e.g. `"2"` |
+
+**Example request:**
+```json
+{
+  "name": "get_doc",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "doc": "architecture/adr/adr-004",
+    "section": "Consequences"
+  }
+}
+```
+
+---
+
+#### 20. `create_doc`
+
+Create a document in a project. Returns its metadata and `version` -- the version is what
+`update_doc` takes as `base_version`, so a create followed by an edit needs no read in
+between. The body you sent is not echoed back.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project UUID |
+| `title` | string | **Yes** | -- | Document title |
+| `body` | string | No | -- | Markdown body |
+| `slug` | string | No | derived from title | URL slug |
+| `parent_id` | string | No | -- | Parent document UUID, to nest this one under it |
+| `position` | number | No | -- | Sort position among siblings |
+
+**Example request:**
+```json
+{
+  "name": "create_doc",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "parent_id": "7c1e0d92-...",
+    "title": "ADR-004: single writer for the VPN tunnel",
+    "slug": "adr-004-single-writer",
+    "body": "## Status\n\nAccepted\n\n## Context\n\n..."
+  }
+}
+```
+
+---
+
+#### 21. `update_doc`
+
+Edit a document. Replacing the body **requires** `base_version` -- the version you got from
+`get_doc` -- and the write is refused with a `409 document_version_conflict` if anyone
+changed the document since, so you can never silently overwrite someone else's edit. The
+stored body is left byte-for-byte unchanged on a refusal.
+
+To add to the end, pass `append` instead: it needs no `base_version`, cannot conflict, and
+does not make you read the document first. **Prefer `append` for reports, decisions and
+logs.**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
+| `append` | string | No | -- | Text to add to the END of the document. No `base_version` needed. Cannot be combined with `body` |
+| `body` | string | No | -- | Replacement markdown for the WHOLE document. Requires `base_version` |
+| `base_version` | number | No | -- | The version you read from `get_doc`. Required for any write other than `append` |
+| `title` | string | No | -- | New title |
+| `parent_id` | string | No | -- | New parent document UUID |
+| `position` | number | No | -- | New sort position among siblings |
+
+**Example request (append -- no read, cannot conflict):**
+```json
+{
+  "name": "update_doc",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "doc": "state",
+    "append": "\n## 2026-09-03 -- phase:verify\nCatalogue rebuilt; counts reconciled against server.go.\n"
+  }
+}
+```
+
+---
+
+#### 22. `comment_doc`
+
+Comment on a document. To comment on a specific passage, pass `quote` with the text exactly
+as the document reads it -- the server finds it and anchors the comment there, so you never
+compute a position yourself. **There is no offset parameter, by design:** a position you
+calculated would silently point at the wrong sentence after any edit.
+
+Without `quote` the comment is on the whole document. Your comment appears in the same
+thread humans see in the document UI.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `body` | string | **Yes** | -- | The comment text. Markdown; `@slug` mentions notify that person or agent |
+| `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
+| `quote` | string | No | -- | The passage being commented on, copied from the document exactly. One sentence is plenty. Omit to comment on the document as a whole |
+| `quote_context` | string | No | -- | A longer passage containing the quote exactly once -- send this when the quote occurs several times and you were told it was ambiguous |
+| `reply_to` | string | No | -- | UUID of the comment being answered. A reply inherits that thread's anchor, so it takes no quote of its own |
+
+**Example request:**
+```json
+{
+  "name": "comment_doc",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "doc": "architecture/adr/adr-004",
+    "quote": "The tunnel is opened by whichever node boots first.",
+    "body": "This contradicts the single-writer rule two paragraphs up. @linus which one holds?"
+  }
+}
+```
+
+---
+
+#### 23. `list_doc_comments`
+
+Read the comments on a document as threads -- each top-level comment with its replies nested
+under it, the quoted passage it is anchored to, and who wrote it. Resolved threads are hidden
+unless `include_resolved=true`.
+
+A comment whose quoted text no longer exists in the document is marked `orphaned=true` in its
+anchor: it is still shown, and it is not pointing anywhere.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
+| `include_resolved` | boolean | No | `false` | Include threads somebody marked resolved |
+
+**Example request:**
+```json
+{
+  "name": "list_doc_comments",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "doc": "architecture/adr/adr-004",
+    "include_resolved": true
+  }
+}
+```
+
+---
+
+### Memory & Knowledge (9 tools)
+
+#### 24. `remember`
+
+Save knowledge to persistent memory. Use for decisions, conventions, and preferences.
+**UPSERT by key** -- calling with the same key updates the existing entry.
+
+> **Content is screened on write and REFUSED with a named reason** (never silently stripped
+> or stored) if it contains invisible/bidi characters, an LLM role tag, an instruction to
+> ignore previous or system instructions, a PEM private key, a prefixed API token
+> (`sk-`/`ghp_`/`xox*`/`AKIA`), or a literal assignment to a `*_PASSWORD` / `*_SECRET` /
+> `*_TOKEN` / `*_API_KEY` name.
+>
+> **This screen is partial and must not be relied on as a secret filter.** It cannot see a
+> secret with no recognisable prefix and no field name beside it -- a bare value on its own
+> line -- nor names it does not know. Record *where* a secret lives, never its value.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `key` | string | **Yes** | -- | Slug key for UPSERT, e.g. `api-convention`. Kebab-case: `^[a-z0-9][a-z0-9-]*[a-z0-9]$` -- a colon in the key is rejected |
+| `content` | string | **Yes** | -- | What to remember (markdown) |
+| `scope` | string | No | `project` | `workspace`, `project`, or `agent` |
+| `project_id` | string | No | -- | Project ID (required for `project` scope) |
+| `tags` | array\<string\> | No | -- | Tags for categorization and filtering |
+| `relevance` | number | No | `1.0` | Relevance score 0-1 |
+| `expires_at` | string | No | -- | RFC3339 timestamp or Go duration, e.g. `"72h"` |
+| `source_url` | string | No | -- | URL/path to the source (task ID, PR, file path) |
+| `source_task_id` | string | No | auto | UUID of the Mesh task that produced this memory. Auto-populated from the active checkout |
+| `thread_id` | string | No | auto | Thread identifier for same-session grouping. Auto-populated |
+| `attach_context` | boolean | No | `true` | When `false`, disables auto-injection of `thread_id` and `source_task_id` |
+| `reason` | string | No | -- | Why this entry is worth writing, recorded on the revision. Optional today and about to become required -- write it now |
+| `expected_version` | number | No | -- | Makes the write conditional: refused, with both version numbers, if someone else wrote to the key in between. Omit for last-write-wins |
+
+**Example request:**
+```json
+{
+  "name": "remember",
+  "arguments": {
+    "key": "mesh-mcp-two-deploy-targets",
+    "scope": "workspace",
+    "content": "evc-mesh-mcp has two prod targets; updating one looks like a full deploy...",
+    "tags": ["kind:learning", "project:mesh-dev", "topic:deploy"],
+    "relevance": 0.85,
+    "reason": "A green deploy of one target read as a green deploy of both."
+  }
+}
+```
+
+---
+
+#### 25. `recall`
+
+**Search** memory by keywords. Use to find a *specific* piece of knowledge, e.g. "API
+convention" or "license decision". Returns ranked results with scores. To load *all* project
+knowledge at session start, use `get_project_knowledge` instead.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | **Yes** | -- | Full-text search query |
+| `project_id` | string | No | -- | Filter to a specific project |
+| `scope` | string | No | `all` | `workspace`, `project`, `agent`, or `all` |
+| `tags` | array\<string\> | No | -- | AND-filter: memory must contain ALL listed tags |
+| `tags_any` | array\<string\> | No | -- | OR-filter: memory must contain AT LEAST ONE of these tags |
+| `created_by` | string | No | -- | Filter by agent ID (UUID) |
+| `since` | string | No | -- | Return memories created at or after this RFC3339 timestamp |
+| `until` | string | No | -- | Return memories created at or before this RFC3339 timestamp |
+| `relevance_min` | number | No | -- | Minimum relevance score (0-1) |
+| `min_importance` | number | No | `0.4` | Minimum `importance_score`. Entries below this are excluded (`kind:session-checkpoint` scores 0.3). Pass `0` to retrieve everything |
+| `apply_recency_decay` | boolean | No | `false` | Sort by `relevance * 0.95^days_since_created` |
+| `order_by` | string | No | `created_at:desc` | `created_at:desc`, `created_at:asc`, `relevance:desc`, `decayed_relevance:desc` |
+| `include_expired` | boolean | No | `false` | Include expired memories |
+| `include_archived` | boolean | No | `false` | Include archived memories |
+| `limit` | number | No | `10` | Max results (max 50). **Hard bound** -- see the note below |
+| `offset` | number | No | `0` | Pagination offset |
+
+> `limit` is a hard bound: the response never contains more than `limit` items. When
+> knowledge-graph boost is enabled, a share of the page (`limit/4`, at least 1 when
+> `limit >= 2`) may be filled with graph-expanded neighbours, marked `graph_boost=true` and
+> `provenance=via:graph` -- they take the *tail slots* rather than being added on top. Rows
+> that fail the scope or tag filters are dropped, never returned unmarked.
+
+**Example request:**
+```json
+{
+  "name": "recall",
+  "arguments": {
+    "query": "why did we drop the duplicate MCP server",
+    "tags_any": ["kind:decision", "kind:incident"],
+    "min_importance": 0.5,
+    "order_by": "decayed_relevance:desc",
+    "limit": 5
+  }
+}
+```
+
+---
+
+#### 26. `recall_with_graph`
+
+Search memory with knowledge-graph expansion. Seeds from hybrid `recall`, then BFS-traverses
+`memory_edges` up to `hops` deep. Returns memories ranked by composite score, each carrying
+`hop_distance` and `provenance`. Use it when you want the broader context -- related
+decisions, connected incidents, derived learnings -- rather than one specific fact.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `q` | string | **Yes** | -- | Search query (keywords or natural language). Note: this tool takes `q`, not `query` |
+| `project_id` | string | No | -- | Filter to a specific project |
+| `task_id` | string | No | -- | Cache-key discriminator for session-scoped traversal |
+| `hops` | number | No | `2` | Graph traversal depth (max 5) |
+| `weight_threshold` | number | No | `0.3` | Minimum edge weight to follow |
+
+**Example request:**
+```json
+{
+  "name": "recall_with_graph",
+  "arguments": {
+    "q": "deploy gap between merged code and the running binary",
+    "hops": 2,
+    "weight_threshold": 0.4
+  }
+}
+```
+
+---
+
+#### 27. `forget`
+
+Delete a memory entry.
+
+> Agents can delete **only their own agent-scope memories**. A workspace- or project-scope
+> entry, or another agent's entry, is refused.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `memory_id` | string | **Yes** | -- | UUID of the memory to delete |
+
+**Example request:**
+```json
+{
+  "name": "forget",
+  "arguments": {
+    "memory_id": "a1b2c3d4-..."
+  }
+}
+```
+
+---
+
+#### 28. `get_project_knowledge`
+
+Get **all permanent knowledge** for a project: decisions, conventions, accumulated context.
+Call at session start (ACP step 2). Returns workspace-level plus project-level memories. For
+*recent events* use `get_context`; to search for one specific fact use `recall`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project UUID |
+| `limit` | number | No | `100` | Max workspace-tier memories (max 500) |
+| `offset` | number | No | `0` | Pagination offset for the workspace tier |
+| `min_importance` | number | No | `0` | Minimum `importance_score` for the workspace tier (0 = all) |
+| `tags_any` | string | No | -- | **Comma-separated** tag OR-filter for the workspace tier, e.g. `"kind:decision,kind:incident"` (a string here, not an array) |
+
+**Example request:**
+```json
+{
+  "name": "get_project_knowledge",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "tags_any": "kind:decision,kind:incident",
+    "min_importance": 0.6
+  }
+}
+```
+
+---
+
+#### 29. `set_project_knowledge`
+
+Write a structured fact to project knowledge. **UPSERT by key.** Use it for deploy URLs,
+stack conventions, and gotchas -- facts that must still be true next month. These are the
+records `get_project_knowledge` returns.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `project_id` | string | **Yes** | -- | Project ID to store knowledge for |
+| `key` | string | **Yes** | -- | Slug key for UPSERT, e.g. `deploy-url`. Kebab-case; a colon in the key is rejected |
+| `value` | string | **Yes** | -- | The knowledge to store (markdown, max 4000 chars) |
+| `category` | string | No | -- | `deploy`, `stack`, `conventions`, `gotchas`, `api`, `auth`, ... |
+| `tags` | array\<string\> | No | -- | Additional tags for filtering |
+| `source_url` | string | No | -- | URL/path to the source of this knowledge |
+| `source_task_id` | string | No | auto | UUID of the Mesh task that produced this fact |
+| `thread_id` | string | No | auto | Thread identifier |
+| `attach_context` | boolean | No | `true` | When `false`, disables auto-injection of `thread_id` and `source_task_id` |
+
+**Example request:**
+```json
+{
+  "name": "set_project_knowledge",
+  "arguments": {
+    "project_id": "550e8400-...",
+    "key": "canonical-deploy-target",
+    "category": "deploy",
+    "value": "mesh-api runs under systemd on mesh-vm, not docker. `systemctl restart mesh-api`.",
+    "tags": ["kind:canonical"]
+  }
+}
+```
+
+---
+
+#### 30. `get_canonical`
+
+Query the canonical knowledge layer: curated facts, decisions, and strategy docs for a topic,
+merged from `project_memories` (key `canonical:*`) and `workspace_memories`
+(`kind:canonical`). Ephemeral session-checkpoints are excluded. Project slug aliases are
+resolved automatically (`mesh-dev` == `evc-mesh`).
+
+Call it **before authoring any document that might conflict with existing canonical
+knowledge**. An empty result for a topic that should exist is a propagation gap, not proof
+that no decision was made -- flag it rather than filling the vacuum.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `topic` | string | **Yes** | -- | Topic or keyword to search, e.g. `auth middleware` |
+| `project` | string | No | -- | Project slug to narrow results, e.g. `evc-mesh`. Aliases resolved automatically |
+
+**Example request:**
+```json
+{
+  "name": "get_canonical",
+  "arguments": {
+    "topic": "release cadence",
+    "project": "evc-mesh"
+  }
+}
+```
+
+---
+
+#### 31. `get_canonical_updates`
+
+Fetch canonical decisions broadcast since a given time. Call at ACP step 6 (session start) to
+catch up on directives issued since your previous session. Returns only `privacy:public`
+records targeted at you or at all agents.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `since` | string | No | your previous session's start (server-resolved) | RFC3339 cursor. Omit on the first call |
+| `agent` | string | No | -- | Your agent slug, e.g. `linus`. Filters `propagate_to:<slug>` records. Omit to get only `propagate_to:all` |
+| `scope` | string | No | -- | Project UUID, to restrict to project-scoped decisions |
+
+**Example request:**
+```json
+{
+  "name": "get_canonical_updates",
+  "arguments": {
+    "agent": "linus"
+  }
+}
+```
+
+---
+
+#### 32. `pavel_decision`
+
+Record a human owner's directive as a canonical decision in project knowledge, and broadcast
+it to the agents named in `propagate_to`. `privacy:private` records are stored but excluded
+from `get_canonical_updates`; text containing secrets is auto-flagged private.
+
+If `task_id` is given, this also records a `human_gate` decision on that task -- releasing a
+live gate as a consequence and linking back via `canonical_key`. That half is best-effort: a
+failure there is reported in the result but does not undo the canonical write.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `text` | string | **Yes** | -- | Full text of the decision/directive |
+| `summary` | string | **Yes** | -- | One-line summary, used as the UPSERT key (dedupes the same decision on the same day) |
+| `propagate_to` | array\<string\> | No | -- | Agent slugs, e.g. `["linus","bill"]`. Use `["all"]` for a workspace-wide broadcast |
+| `scope` | string | No | -- | Project UUID. Omit for workspace-level decisions |
+| `privacy` | string | No | `public` | `public` (visible in the change feed) or `private` (recorded but hidden) |
+| `task_id` | string | No | -- | Task UUID this decision answers. Also records a `human_gate` decision on that task |
+
+**Example request:**
+```json
+{
+  "name": "pavel_decision",
+  "arguments": {
+    "summary": "Docs live in Mesh Docs, not in files",
+    "text": "Specs, ADRs and runbooks go into the project's Docs tree...",
+    "propagate_to": ["all"],
+    "task_id": "a1b2c3d4-..."
+  }
+}
+```
+
+---
+
 ### Event Bus (5 tools)
 
-#### 16. `publish_event`
+#### 33. `publish_event`
 
 Publish an event to the event bus.
 
@@ -587,7 +1152,7 @@ Publish an event to the event bus.
 
 ---
 
-#### 17. `publish_summary`
+#### 34. `publish_summary`
 
 Publish a work summary event (convenience wrapper for `publish_event` with `type=summary`).
 
@@ -627,7 +1192,7 @@ Publish a work summary event (convenience wrapper for `publish_event` with `type
 
 ---
 
-#### 18. `get_context`
+#### 35. `get_context`
 
 Get enriched context from the event bus.
 
@@ -654,7 +1219,7 @@ Get enriched context from the event bus.
 
 ---
 
-#### 19. `get_task_context`
+#### 36. `get_task_context`
 
 Get all context for a task: details, comments, events, artifacts, dependencies.
 
@@ -685,7 +1250,7 @@ Get all context for a task: details, comments, events, artifacts, dependencies.
 
 ---
 
-#### 20. `subscribe_events`
+#### 37. `subscribe_events`
 
 Configure push notification delivery for task events. Optionally sets a callback URL that Mesh will POST events to. Returns SSE and long-poll endpoint URLs for alternative delivery mechanisms.
 
@@ -725,7 +1290,7 @@ See [Agent Push Notifications](agent-push-notifications.md) for full details on 
 
 ### Agent Hierarchy (2 tools)
 
-#### 21. `register_sub_agent`
+#### 38. `register_sub_agent`
 
 Register a sub-agent under the calling agent. Useful for orchestrating multi-agent workflows.
 
@@ -752,7 +1317,7 @@ Register a sub-agent under the calling agent. Useful for orchestrating multi-age
 
 ---
 
-#### 22. `list_sub_agents`
+#### 39. `list_sub_agents`
 
 List sub-agents of an agent.
 
@@ -773,9 +1338,9 @@ List sub-agents of an agent.
 
 ---
 
-### Utility (3 tools)
+### Utility (4 tools)
 
-#### 23. `heartbeat`
+#### 40. `heartbeat`
 
 Send a heartbeat to indicate the agent is alive.
 
@@ -797,7 +1362,7 @@ Send a heartbeat to indicate the agent is alive.
 
 ---
 
-#### 24. `get_my_tasks`
+#### 41. `get_my_tasks`
 
 Get tasks assigned to the calling agent.
 
@@ -819,7 +1384,7 @@ Get tasks assigned to the calling agent.
 
 ---
 
-#### 25. `report_error`
+#### 42. `report_error`
 
 Report an error encountered during work.
 
@@ -846,9 +1411,36 @@ Report an error encountered during work.
 
 ---
 
+#### 43. `session_report`
+
+Report session metrics. Call before the session ends. Returns a compliance score and session
+statistics.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | No | -- | Model used, e.g. `claude-sonnet-4` |
+| `tokens_in` | number | No | -- | Total input tokens this session |
+| `tokens_out` | number | No | -- | Total output tokens this session |
+| `estimated_cost` | number | No | -- | Estimated cost in USD |
+
+**Example request:**
+```json
+{
+  "name": "session_report",
+  "arguments": {
+    "model": "claude-sonnet-4",
+    "tokens_in": 184320,
+    "tokens_out": 21044,
+    "estimated_cost": 0.87
+  }
+}
+```
+
+---
+
 ### Governance Rules (2 tools)
 
-#### 26. `get_my_rules`
+#### 44. `get_my_rules`
 
 Get all governance rules that apply to the calling agent. Call at the start of work to understand constraints and behavioral requirements.
 
@@ -868,7 +1460,7 @@ Get all governance rules that apply to the calling agent. Call at the start of w
 
 ---
 
-#### 27. `get_project_rules`
+#### 45. `get_project_rules`
 
 Get all rules configured for a project (all scopes: workspace + project).
 
@@ -890,7 +1482,7 @@ Get all rules configured for a project (all scopes: workspace + project).
 
 ### Team & Configuration (6 tools)
 
-#### 28. `get_team_directory`
+#### 46. `get_team_directory`
 
 Get the workspace team directory listing all agents and human members with their profiles.
 
@@ -906,7 +1498,7 @@ No parameters required.
 
 ---
 
-#### 29. `get_assignment_rules`
+#### 47. `get_assignment_rules`
 
 Get effective assignment rules for a project, merged from workspace and project level with source annotations.
 
@@ -926,7 +1518,7 @@ Get effective assignment rules for a project, merged from workspace and project 
 
 ---
 
-#### 30. `get_workflow_rules`
+#### 48. `get_workflow_rules`
 
 Get workflow rules for a project including allowed transitions, policies, and permissions for the calling agent.
 
@@ -946,7 +1538,7 @@ Get workflow rules for a project including allowed transitions, policies, and pe
 
 ---
 
-#### 31. `update_agent_profile`
+#### 49. `update_agent_profile`
 
 Update the calling agent's profile fields such as role, capabilities, responsibility zone, and working hours.
 
@@ -979,7 +1571,7 @@ Update the calling agent's profile fields such as role, capabilities, responsibi
 
 ---
 
-#### 32. `import_workspace_config`
+#### 50. `import_workspace_config`
 
 Import workspace configuration from YAML. Applies rules, statuses, and project templates defined in the YAML.
 
@@ -999,7 +1591,7 @@ Import workspace configuration from YAML. Applies rules, statuses, and project t
 
 ---
 
-#### 33. `export_workspace_config`
+#### 51. `export_workspace_config`
 
 Export the current workspace configuration as YAML, including rules, project templates, and settings.
 
@@ -1015,9 +1607,9 @@ No parameters required.
 
 ---
 
-### Push Notifications (1 tool)
+### Push Notifications (1 tools)
 
-#### 34. `poll_tasks`
+#### 52. `poll_tasks`
 
 Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred.
 
@@ -1059,9 +1651,9 @@ See [Agent Push Notifications](agent-push-notifications.md) for full details on 
 
 ---
 
-### Recurring Tasks (4 tools)
+### Recurring Tasks (6 tools)
 
-#### 35. `create_recurring_task`
+#### 53. `create_recurring_task`
 
 Creates a recurring task schedule that automatically spawns task instances on a schedule. Each instance gets access to the previous instance's summary. Use this for regular automated work: weekly reports, daily checks, periodic audits.
 
@@ -1114,7 +1706,7 @@ Creates a recurring task schedule that automatically spawns task instances on a 
 
 ---
 
-#### 36. `list_recurring_schedules`
+#### 54. `list_recurring_schedules`
 
 Lists all recurring task schedules for a project.
 
@@ -1150,7 +1742,7 @@ Lists all recurring task schedules for a project.
 
 ---
 
-#### 37. `get_recurring_history`
+#### 55. `get_recurring_history`
 
 Returns the history of all instances for a recurring task schedule. Call this when you receive a recurring task to get context on what previous instances accomplished, what issues were found, and what artifacts were produced. Use it to continue work intelligently rather than starting from scratch.
 
@@ -1191,7 +1783,7 @@ Returns the history of all instances for a recurring task schedule. Call this wh
 
 ---
 
-#### 38. `trigger_recurring_now`
+#### 56. `trigger_recurring_now`
 
 Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing schedules or for urgent out-of-cycle execution.
 
@@ -1221,115 +1813,56 @@ Immediately creates the next instance of a recurring schedule, without waiting f
 
 ---
 
-### Auto-Transition Rules (not implemented)
+#### 57. `update_recurring_schedule`
 
-> ⚠️ **These four tools are not registered by the MCP server.** The section
-> below describes an intended interface, not a shipped one — calling any of them
-> returns an unknown-tool error. It is kept for reference until the tools land
-> or the section is removed.
-
-#### 39. `list_auto_transition_rules`
-
-List all auto-transition rules for a project. Agents can read rules but cannot create/update/delete them (requires human admin).
+Update an existing recurring task schedule -- title, description, frequency, assignee,
+priority -- or pause it with `is_active=false`. Every field is optional; omitted fields are
+left as they are.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `project_id` | string | **Yes** | -- | Project ID |
+| `recurring_schedule_id` | string | **Yes** | -- | UUID of the schedule to update |
+| `title_template` | string | No | -- | New title template. Supports `{{.Date}}`, `{{.Number}}`, `{{.Week}}`, `{{.Month}}` |
+| `description_template` | string | No | -- | New description template. Supports `{{.PrevSummary}}` |
+| `frequency` | string | No | -- | `daily`, `weekly`, `monthly`, `custom` |
+| `cron_expr` | string | No | -- | New cron expression (for `custom` frequency) |
+| `timezone` | string | No | -- | New IANA timezone |
+| `assignee_id` | string | No | -- | New assignee UUID |
+| `assignee_type` | string | No | -- | `user`, `agent`, `unassigned` |
+| `priority` | string | No | -- | `urgent`, `high`, `medium`, `low`, `none` |
+| `is_active` | boolean | No | -- | Set to `false` to pause the schedule |
 
 **Example request:**
 ```json
 {
-  "name": "list_auto_transition_rules",
+  "name": "update_recurring_schedule",
   "arguments": {
-    "project_id": "550e8400-..."
-  }
-}
-```
-
-**Example response:**
-```json
-[
-  {
-    "id": "a1b2c3d4-...",
-    "project_id": "550e8400-...",
-    "trigger": "all_subtasks_done",
-    "target_status_id": "b2c3d4e5-...",
-    "is_enabled": true
-  },
-  {
-    "id": "c3d4e5f6-...",
-    "project_id": "550e8400-...",
-    "trigger": "blocking_dep_resolved",
-    "target_status_id": "d4e5f6g7-...",
-    "is_enabled": true
-  }
-]
-```
-
----
-
-#### 40. `create_auto_transition_rule`
-
-Create a new auto-transition rule for a project. Requires `PermManageRules` permission (human admins only).
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `project_id` | string | **Yes** | -- | Project ID |
-| `trigger` | string | **Yes** | -- | Trigger event: `all_subtasks_done`, `blocking_dep_resolved` |
-| `target_status_id` | string | **Yes** | -- | UUID of the status to move the task to when trigger fires |
-| `is_enabled` | boolean | No | `true` | Whether the rule is active |
-
-**Example request:**
-```json
-{
-  "name": "create_auto_transition_rule",
-  "arguments": {
-    "project_id": "550e8400-...",
-    "trigger": "all_subtasks_done",
-    "target_status_id": "b2c3d4e5-..."
+    "recurring_schedule_id": "a1b2c3d4-...",
+    "frequency": "weekly",
+    "timezone": "Europe/Moscow",
+    "is_active": false
   }
 }
 ```
 
 ---
 
-#### 41. `update_auto_transition_rule`
+#### 58. `delete_recurring_schedule`
 
-Update an existing auto-transition rule. Requires `PermManageRules` permission (human admins only).
+Delete a recurring task schedule. **Task instances already created from it are not
+affected** -- they stay where they are; only future generation stops. To stop generation
+reversibly, prefer `update_recurring_schedule` with `is_active=false`.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `rule_id` | string | **Yes** | -- | Rule ID |
-| `target_status_id` | string | No | -- | New target status UUID |
-| `is_enabled` | boolean | No | -- | Enable or disable the rule |
+| `recurring_schedule_id` | string | **Yes** | -- | UUID of the schedule to delete |
 
 **Example request:**
 ```json
 {
-  "name": "update_auto_transition_rule",
+  "name": "delete_recurring_schedule",
   "arguments": {
-    "rule_id": "a1b2c3d4-...",
-    "is_enabled": false
-  }
-}
-```
-
----
-
-#### 42. `delete_auto_transition_rule`
-
-Delete an auto-transition rule. Requires `PermManageRules` permission (human admins only).
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `rule_id` | string | **Yes** | -- | Rule ID |
-
-**Example request:**
-```json
-{
-  "name": "delete_auto_transition_rule",
-  "arguments": {
-    "rule_id": "a1b2c3d4-..."
+    "recurring_schedule_id": "a1b2c3d4-..."
   }
 }
 ```
@@ -1338,7 +1871,7 @@ Delete an auto-transition rule. Requires `PermManageRules` permission (human adm
 
 ### Task Checkout (3 tools)
 
-#### 43. `checkout_task`
+#### 59. `checkout_task`
 
 Acquire an exclusive lock on a task to prevent double-work. Only agents can checkout tasks. If the task is already checked out by another non-expired agent, the call fails with a conflict error including details about the current holder. Same-agent re-checkout is idempotent and returns a fresh token.
 
@@ -1382,7 +1915,7 @@ Acquire an exclusive lock on a task to prevent double-work. Only agents can chec
 
 ---
 
-#### 44. `release_task`
+#### 60. `release_task`
 
 Release an exclusive checkout. The `checkout_token` from the checkout response must be provided. Agents should release checkouts when done working on a task to allow others to pick it up immediately rather than waiting for TTL expiry.
 
@@ -1411,7 +1944,7 @@ Release an exclusive checkout. The `checkout_token` from the checkout response m
 
 ---
 
-#### 45. `extend_checkout`
+#### 61. `extend_checkout`
 
 Extend the TTL of an active checkout. Use this when a task takes longer than expected. The checkout must not have expired already.
 

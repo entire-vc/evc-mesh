@@ -197,6 +197,27 @@ self-host-env:
         docker compose -f "$f" --env-file /tmp/first-release.env config >/dev/null
       done
 
+# ── mcp-reference-gate ──────────────────────────────────────────
+# docs/mcp-reference.md is the public catalogue of the MCP tools, but the tools
+# themselves live in a DIFFERENT repository (evc-mesh-mcp). Nothing in this
+# repo's CI could notice a tool added or removed there, and over time the page
+# drifted to 20 undocumented tools plus 4 documented tools the server never
+# registered (Mesh #1f0ee22c) — while stating three mutually inconsistent
+# totals about itself.
+#
+# The script fetches the server source and fails on a mismatch in EITHER
+# direction. It fails closed: a source it cannot fetch, or fetches and cannot
+# parse, is a refusal, not a pass — "I could not look" must not read the same
+# as "I looked and it was fine".
+mcp-reference-gate:
+  stage: lint
+  image: alpine:3.20
+  timeout: 5m
+  before_script:
+    - apk add --no-cache bash curl coreutils
+  script:
+    - bash scripts/check-mcp-reference.sh
+
 # ── sast ────────────────────────────────────────────────────────────────────
 # The GitLab-side replacement for GitHub's `CodeQL` required check (Mesh
 # #48f243e4). Modeled on entire-vc/evc-argus, which ported this same class of
