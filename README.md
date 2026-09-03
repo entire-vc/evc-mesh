@@ -34,7 +34,7 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 - Bulk operations and inline editing in list view
 
 ### Agent Integration
-- **MCP server** with 49 tools across 11 categories (stdio + HTTP SSE transports)
+- **MCP server** with 61 tools (stdio + HTTP SSE transports)
 - **REST API** with 125+ routes at `/api/v1`
 - **Go SDK** (`pkg/sdk/`) for building custom integrations
 - Agent authentication via API keys (`X-Agent-Key`)
@@ -278,7 +278,7 @@ copy here was 12 tools behind when it was removed. Only
 | [Architecture](docs/architecture.md) | System architecture and design decisions |
 | [API Authentication](docs/api-authentication.md) | JWT, agent keys, and RBAC |
 | [Agent Onboarding](docs/agent-onboarding.md) | Issue agent keys, connect over stdio or SSE, run MCP behind a proxy |
-| [MCP Reference](docs/mcp-reference.md) | All 49 MCP tools with parameters and examples |
+| [MCP Reference](docs/mcp-reference.md) | Tool catalogue with parameters and examples — 41 of the 61 tools |
 | [Custom Fields](docs/custom-fields.md) | Guide for 12 custom field types |
 | [Webhooks](docs/webhooks.md) | Webhook setup with HMAC-SHA256 validation |
 | [Agent Push Notifications](docs/agent-push-notifications.md) | Callback URL, SSE, and long-polling |
