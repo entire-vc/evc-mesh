@@ -269,6 +269,19 @@ import the other, so the two copies were maintained by hand and drifted — the
 copy here was 12 tools behind when it was removed. Only
 [`evc-mesh-mcp`](https://github.com/entire-vc/evc-mesh-mcp) remains.
 
+### Running a fleet, not one agent
+
+The section above connects a single agent. Running several — each with its own
+lane, workspace and identity, fed tasks from Mesh — is a separate concern, and
+there is a starter kit for it:
+[`evc-mesh-fleet-starter`](https://github.com/entire-vc/evc-mesh-fleet-starter).
+
+It ships the two drivers we run ourselves (a feeder that keeps persistent agent
+sessions, and an SSE dispatcher that spawns one per task), the registry that
+renders each agent's `.mcp.json`, example agent instructions, and launchd units.
+It works against any Mesh instance, including one behind an HTTP basic-auth
+proxy.
+
 ## Documentation
 
 | Document | Description |
