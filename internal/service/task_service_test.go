@@ -1706,6 +1706,92 @@ func TestTaskService_Create_ExplicitAssigneeIDNotClobbered(t *testing.T) {
 		"auto-assign default must not override an explicit assignee_id")
 }
 
+// seedTestAgentWithCapabilities registers an agent carrying an arbitrary
+// capabilities blob (e.g. `{"no_lane": true}`) — seedTestAgents always seeds a
+// plain agent with nil Capabilities, which can't exercise the no_lane skip.
+func seedTestAgentWithCapabilities(t *testing.T, svc *taskService, id uuid.UUID, capabilities json.RawMessage) {
+	t.Helper()
+	repo, ok := svc.agentRepo.(*MockAgentRepository)
+	require.True(t, ok, "service is not wired to a MockAgentRepository")
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	repo.items[id] = &domain.Agent{ID: id, Slug: "seeded", Capabilities: capabilities}
+}
+
+// TestTaskService_applyAutoAssign_SkipsNoLaneCandidate is the negative
+// control for #042c09d0: a registry `capabilities.no_lane: true` marking
+// (used for form-intake/webhook-receiver identities like Sage, CRM,
+// mesh-dispatcher-svc — see registry docs) is documentation until
+// applyAutoAssign itself refuses to assign onto it. Run this test against
+// the pre-fix applyAutoAssign (drop the no_lane lookup) and it MUST fail —
+// otherwise it isn't proving anything (§0x).
+func TestTaskService_applyAutoAssign_SkipsNoLaneCandidate(t *testing.T) {
+	noLaneAgent := uuid.New()
+
+	rules := &domain.EffectiveAssignmentRules{
+		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: noLaneAgent.String(), Source: "project"},
+	}
+	svc, taskRepo := setupTaskServiceWithRules(rules)
+	ctx := context.Background()
+
+	seedTestAgentWithCapabilities(t, svc, noLaneAgent, json.RawMessage(`{"no_lane": true}`))
+
+	task := &domain.Task{
+		ProjectID:    uuid.New(),
+		StatusID:     uuid.New(),
+		Title:        "Task whose only candidate is a no-lane identity",
+		Priority:     domain.PriorityMedium,
+		AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+
+	require.NoError(t, svc.Create(ctx, task))
+
+	stored, err := taskRepo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	assert.Nil(t, stored.AssigneeID, "no live candidate exists — task must stay unassigned, not pinned on the no-lane identity")
+	assert.Equal(t, domain.AssigneeTypeUnassigned, stored.AssigneeType)
+}
+
+// TestTaskService_applyAutoAssign_NoLaneCandidateSkippedForNextInChain proves
+// the no_lane check doesn't just refuse — it moves on to the next candidate
+// in the same priority-ordered chain.
+func TestTaskService_applyAutoAssign_NoLaneCandidateSkippedForNextInChain(t *testing.T) {
+	noLaneAgent := uuid.New()
+	liveAgent := uuid.New()
+
+	rules := &domain.EffectiveAssignmentRules{
+		ByPriority: map[string]domain.EffectiveAssignmentRule{
+			"high": {Value: noLaneAgent.String(), Source: "project"},
+		},
+		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: liveAgent.String(), Source: "workspace"},
+	}
+	svc, taskRepo := setupTaskServiceWithRules(rules)
+	ctx := context.Background()
+
+	seedTestAgentWithCapabilities(t, svc, noLaneAgent, json.RawMessage(`{"no_lane": true}`))
+	seedTestAgents(t, svc, liveAgent)
+
+	task := &domain.Task{
+		ProjectID:    uuid.New(),
+		StatusID:     uuid.New(),
+		Title:        "High priority task, primary candidate is no-lane",
+		Priority:     domain.PriorityHigh,
+		AssigneeType: domain.AssigneeTypeUnassigned,
+	}
+
+	require.NoError(t, svc.Create(ctx, task))
+
+	stored, err := taskRepo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	require.NotNil(t, stored.AssigneeID, "expected fallthrough to the live candidate")
+	assert.Equal(t, liveAgent, *stored.AssigneeID)
+	assert.Equal(t, domain.AssigneeTypeAgent, stored.AssigneeType)
+}
+
 func TestTaskService_applyAutoAssign_RulesServiceError(t *testing.T) {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
