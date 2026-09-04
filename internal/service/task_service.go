@@ -1341,7 +1341,7 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 		candidates = append(candidates, effective.FallbackChain[0])
 	}
 
-	// Try each candidate until one parses successfully.
+	// Try each candidate until one parses successfully AND resolves to a live lane.
 	for _, assigneeID := range candidates {
 		assigneeType := domain.AssigneeTypeAgent
 		rawID := assigneeID
@@ -1359,11 +1359,49 @@ func (s *taskService) applyAutoAssign(ctx context.Context, task *domain.Task) {
 			continue
 		}
 
+		// A no-lane identity (e.g. a form-intake or webhook-receiver agent
+		// with no session behind it — see registry.capabilities.no_lane) is
+		// syntactically a valid candidate but has nobody to pick the task up.
+		// Skip it and try the next candidate rather than stranding the task.
+		if assigneeType == domain.AssigneeTypeAgent && s.agentRepo != nil {
+			if agent, agErr := s.agentRepo.GetByID(ctx, parsed); agErr != nil {
+				log.Printf("[auto-assign] WARNING: failed to look up candidate agent %s, trying next candidate: %v", rawID, agErr)
+				continue
+			} else if agent != nil && agentHasNoLane(agent.Capabilities) {
+				log.Printf("[auto-assign] WARNING: candidate agent %s is marked no_lane, trying next candidate", rawID)
+				continue
+			}
+		}
+
 		task.AssigneeID = &parsed
 		task.AssigneeType = assigneeType
 		log.Printf("[auto-assign] assigned task %q to %s %s via rules", task.Title, assigneeType, rawID)
 		return
 	}
+
+	// No live candidate — leave the task unassigned rather than pin it on a
+	// dead identity nobody will ever pick up.
+	log.Printf("[auto-assign] WARNING: no live assignable candidate for task %q, leaving unassigned", task.Title)
+}
+
+// agentHasNoLane reports whether an agent's capabilities blob marks it as a
+// no-agent lane (registry convention: capabilities.no_lane == true — see
+// Sage / mesh-dispatcher-svc / CRM). Capabilities is caller-controlled raw
+// JSON and may also be a plain string array (the older tag-list shape); in
+// that case, or on any parse failure, this reports false — a candidate is
+// only ever skipped on an explicit, readable no_lane:true, never on "we
+// couldn't tell".
+func agentHasNoLane(capabilities json.RawMessage) bool {
+	if len(capabilities) == 0 {
+		return false
+	}
+	var flags struct {
+		NoLane bool `json:"no_lane"`
+	}
+	if err := json.Unmarshal(capabilities, &flags); err != nil {
+		return false
+	}
+	return flags.NoLane
 }
 
 // buildTaskSnapshot creates a map representation of a task for webhook payloads.
