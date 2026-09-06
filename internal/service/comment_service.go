@@ -1566,19 +1566,26 @@ const mentionEmailChannel = "email"
 // Deliberately narrow, mirroring documentWatchService.ensureInAppDelivery:
 //   - only the email channel. Being mentioned is not consent to be pushed to
 //     or messaged on Telegram — those need an explicit opt-in same as today.
-//   - only the task.mentioned event, unioned into whatever the row already
-//     carries. Never removes an event, never touches another channel.
-//   - a row the person has switched OFF is left off. An explicit "no email"
-//     outranks the implicit request inside being named in a comment; the
-//     mention is still recorded (HasSubscription reflects the real state),
-//     and the log says why nothing will arrive.
+//   - only for a person with NO existing email-channel row at all. An
+//     existing row — enabled or not, whatever events it lists — reflects a
+//     configuration someone already made and must not be silently widened.
+//
+// This used to union task.mentioned into whatever an existing email row
+// already carried, on the theory that only an explicit disable should be
+// respected. That broke within hours of Pavel narrowing his own row to
+// {task.blocking_triage} only (2026-09-02 decision, "только блокеры",
+// task #4e1d249f): the very next plain @-mention silently re-added
+// task.mentioned to his row, because the row existed but didn't cover it —
+// exactly the case the union branch was written to handle. There is no way
+// to tell "never configured" apart from "deliberately narrowed" from the
+// array alone, so the row's mere existence is now what's respected — same
+// direction as the disabled-row case just below, generalized to any prior
+// configuration rather than only an explicit off. Being named is a strong
+// signal for someone who has configured NOTHING; it is not a license to
+// override someone who has.
 //
 // Runs only for being addressed directly — @-mentioned by name — never for
-// merely having commented on the same task. See ensureInAppDelivery's own
-// comment for the broader case this deliberately does not cover: silently
-// re-adding an event type to the settings of everyone who ever touched a
-// task is exactly what an unsubscribe exists to prevent. Being named is a
-// narrower, stronger signal than having participated.
+// merely having commented on the same task.
 //
 // Best-effort by construction — a mention that was recorded must not be
 // rolled back because the preference row could not be provisioned.
@@ -1609,9 +1616,14 @@ func (s *commentService) ensureMentionDelivery(ctx context.Context, workspaceID,
 		}
 	}
 
-	if email != nil && !email.IsEnabled {
-		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s with email notifications switched off — mention recorded, nothing will be delivered there",
-			userID, workspaceID)
+	if email != nil {
+		if !email.IsEnabled {
+			log.Printf("[comment-mention] user %s was @-mentioned in workspace %s with email notifications switched off — mention recorded, nothing will be delivered there",
+				userID, workspaceID)
+		} else {
+			log.Printf("[comment-mention] user %s was @-mentioned in workspace %s but their existing email preference (events=%v) does not cover task.mentioned — respecting it as configured, mention recorded but not delivered on this channel",
+				userID, workspaceID, []string(email.Events))
+		}
 		return
 	}
 
@@ -1621,11 +1633,6 @@ func (s *commentService) ensureMentionDelivery(ctx context.Context, workspaceID,
 		Channel:     mentionEmailChannel,
 		Events:      []string{"task.mentioned"},
 		IsEnabled:   true,
-	}
-	if email != nil {
-		pref.ID = email.ID
-		pref.Config = email.Config
-		pref.Events = unionEvents(email.Events, []string{"task.mentioned"})
 	}
 	if _, err := s.notifySvc.UpsertPreferences(ctx, pref); err != nil {
 		log.Printf("[comment-mention] user %s was @-mentioned in workspace %s but the email channel could not be provisioned, so nothing will be delivered there: %v",

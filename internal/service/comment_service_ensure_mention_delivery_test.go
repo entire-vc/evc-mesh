@@ -134,10 +134,16 @@ func TestEnsureMentionDelivery_AlreadyReachableViaAnotherChannel_NoEmailAdded(t 
 	assert.Equal(t, "telegram", prefs[0].Channel)
 }
 
-// TestEnsureMentionDelivery_ExistingEmailRowMissingEvent_UnionsEventIntoIt:
-// a person who already has an enabled email row for some other event type
-// gets task.mentioned unioned into the SAME row, not a duplicate.
-func TestEnsureMentionDelivery_ExistingEmailRowMissingEvent_UnionsEventIntoIt(t *testing.T) {
+// TestEnsureMentionDelivery_ExistingEmailRowMissingEvent_NotWidened pins the
+// fix for the regression found live on #4e1d249f (2026-09-06): this used to
+// union task.mentioned into ANY existing email row that didn't cover it. That
+// silently undid Pavel's own "только блокеры" narrowing (events pared down to
+// {task.blocking_triage}) within hours of setting it — the very next plain
+// @-mention re-added task.mentioned right back. There is no way to tell
+// "never configured this" apart from "deliberately narrowed" from the events
+// array alone, so an existing row of any shape is now left untouched, exactly
+// like the already-disabled case below.
+func TestEnsureMentionDelivery_ExistingEmailRowMissingEvent_NotWidened(t *testing.T) {
 	env := setupCommentServiceWithUserMentions()
 
 	user := &domain.User{ID: uuid.New(), Username: "pavel", Name: "Pavel"}
@@ -163,10 +169,9 @@ func TestEnsureMentionDelivery_ExistingEmailRowMissingEvent_UnionsEventIntoIt(t 
 	env.svc.notifyMentions(ctx, comment, task, "", env.wsID)
 
 	prefs := env.notifySvc.Preferences()
-	require.Len(t, prefs, 1, "must union into the existing row, not create a second one")
+	require.Len(t, prefs, 1, "must not create a second row alongside the existing one")
 	assert.Equal(t, existingID, prefs[0].ID)
-	assert.Contains(t, []string(prefs[0].Events), "task.assigned", "must not drop the event the person already had")
-	assert.Contains(t, []string(prefs[0].Events), "task.mentioned")
+	assert.Equal(t, []string{"task.assigned"}, []string(prefs[0].Events), "an existing row's events must be left exactly as configured, not widened")
 }
 
 // TestEnsureMentionDelivery_SelfMention_DoesNotProvision: naming yourself
