@@ -327,6 +327,18 @@ func (m *mockMemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUI
 	return nil, nil
 }
 
+func (m *mockMemoryRepo) ListReviewNeeded(_ context.Context, _ int) ([]domain.Memory, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) FindNewerMatch(_ context.Context, _ uuid.UUID, _ string, _ *int64, _ uuid.UUID, _ time.Time) (*domain.Memory, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryRepo) AppendTag(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+
 // Verify mockMemoryRepo satisfies the interface at compile time.
 var _ repository.MemoryRepository = (*mockMemoryRepo)(nil)
 
@@ -1951,6 +1963,227 @@ func TestRemember_SlugResolution(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, upserted.ProjectID)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_SourceTaskIDProjectInference
+//
+// Audit #1b010be6 (plan:1.11): 4484/5161 memories carried no project_id.
+// TestRemember_SlugResolution above covers the pre-existing project:<slug>
+// tag path; this covers the new fallback added alongside it — inferring
+// project_id from the source task when the write carries source_task_id but
+// no resolvable project tag. This is the dominant real-world shape: the MCP
+// client's active-task auto-populate (evc-mesh-mcp#44) stamps source_task_id,
+// not a project:<slug> tag.
+// ---------------------------------------------------------------------------
+
+func TestRemember_SourceTaskIDProjectInference(t *testing.T) {
+	wsID := uuid.New()
+	taskID := uuid.New()
+	taskProjID := uuid.New()
+
+	t.Run("infers project_id from source_task_id when no project tag resolves", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				require.Equal(t, taskID, id)
+				return &domain.Task{ID: taskID, ProjectID: taskProjID}, nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithTaskRepo(taskRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "checkpoint-from-task",
+			Content:      "session end",
+			Scope:        domain.ScopeProject,
+			Tags:         []string{"kind:session-checkpoint", "owner:garfield"},
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+		require.NoError(t, err)
+		require.NotNil(t, upserted.ProjectID, "project_id must be inferred from source_task_id when scope=project and no tag resolves")
+		assert.Equal(t, taskProjID, *upserted.ProjectID)
+	})
+
+	t.Run("tag resolution takes priority over source_task_id", func(t *testing.T) {
+		tagProjID := uuid.New()
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		projRepo := &mockProjectRepo{
+			getBySlugFn: func(_ context.Context, _ uuid.UUID, slug string) (*domain.Project, error) {
+				if slug == "mesh-dev" {
+					return &domain.Project{ID: tagProjID}, nil
+				}
+				return nil, nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+				// Deliberately a DIFFERENT project than the tag resolves to, so the
+				// assertion can tell which source actually won.
+				return &domain.Task{ID: taskID, ProjectID: taskProjID}, nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil,
+			MemoryWithProjectRepo(projRepo),
+			MemoryWithTaskRepo(taskRepo),
+		)
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "checkpoint-both-signals",
+			Content:      "session end",
+			Scope:        domain.ScopeProject,
+			Tags:         []string{"project:mesh", "kind:session-checkpoint"},
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+		require.NoError(t, err)
+		require.NotNil(t, upserted.ProjectID)
+		assert.Equal(t, tagProjID, *upserted.ProjectID, "an explicit resolvable project:<slug> tag must win over the source_task_id fallback")
+	})
+
+	// Same scope guard as the slug path (TestRemember_SlugResolution) — project_id
+	// is meaningless outside scope=project (see the unconditional-nil normalization
+	// in Remember()), so the fallback must never populate it there either.
+	t.Run("does NOT infer project_id from source_task_id on scope=workspace", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+				return &domain.Task{ID: taskID, ProjectID: taskProjID}, nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithTaskRepo(taskRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "checkpoint-ws-scope",
+			Content:      "session end",
+			Scope:        domain.ScopeWorkspace,
+			Tags:         []string{"kind:session-checkpoint"},
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID, "scope=workspace must never get an auto-populated project_id, even via source_task_id")
+	})
+
+	t.Run("leaves project_id nil when task lookup errors", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{
+			getByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+				return nil, fmt.Errorf("task not found")
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithTaskRepo(taskRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "checkpoint-task-lookup-fails",
+			Content:      "session end",
+			Scope:        domain.ScopeProject,
+			Tags:         []string{"kind:session-checkpoint"},
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID, "a failed task lookup must not error the write — it just skips the inference")
+	})
+
+	t.Run("leaves project_id nil when task repo not wired", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil) // no MemoryWithTaskRepo
+
+		mem := &domain.Memory{
+			WorkspaceID:  wsID,
+			Key:          "checkpoint-no-task-repo",
+			Content:      "session end",
+			Scope:        domain.ScopeProject,
+			Tags:         []string{"kind:session-checkpoint"},
+			SourceTaskID: &taskID,
+		}
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID)
+	})
+
+	t.Run("leaves project_id nil when source_task_id is nil", func(t *testing.T) {
+		var upserted *domain.Memory
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				upserted = m
+				return nil
+			},
+		}
+		taskRepo := &mockTaskRepo{} // should never be called
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil, MemoryWithTaskRepo(taskRepo))
+
+		mem := &domain.Memory{
+			WorkspaceID: wsID,
+			Key:         "checkpoint-no-source-task",
+			Content:     "session end",
+			Scope:       domain.ScopeProject,
+			Tags:        []string{"kind:session-checkpoint"},
+		}
+		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+		require.NoError(t, err)
+		assert.Nil(t, upserted.ProjectID)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestResolveProjectSlugForTags_MatchesUnexported
+//
+// ResolveProjectSlugForTags is the exported entry point cmd/backfill-memory-
+// project-id uses to reuse the exact same slug/alias table as Remember() —
+// see the comment on the function. This test is the guard that the export is
+// a pure passthrough, not a second implementation that could drift.
+// ---------------------------------------------------------------------------
+
+func TestResolveProjectSlugForTags_MatchesUnexported(t *testing.T) {
+	cases := [][]string{
+		{"project:mesh"},
+		{"project:evc-mesh", "kind:fact"},
+		{"project:mesh-dev", "project:spark"},
+		{"project:nonexistent"},
+		{"owner:riker"},
+	}
+	for _, tags := range cases {
+		wantSlug, wantOK := resolveProjectSlug(tags)
+		gotSlug, gotOK := ResolveProjectSlugForTags(tags)
+		assert.Equal(t, wantOK, gotOK, "tags=%v", tags)
+		assert.Equal(t, wantSlug, gotSlug, "tags=%v", tags)
+	}
 }
 
 // ---------------------------------------------------------------------------

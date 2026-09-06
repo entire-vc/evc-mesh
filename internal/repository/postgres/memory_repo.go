@@ -2007,3 +2007,76 @@ func (r *MemoryRepo) FindBySourceTaskIDs(ctx context.Context, workspaceID uuid.U
 	}
 	return memories, nil
 }
+
+// ListReviewNeeded returns up to limit memories with status='review_needed', across all
+// workspaces, ordered by created_at ASC (oldest-waiting first) — see the interface doc for
+// why this exists as a standalone query rather than reusing ListCreatedSince's window.
+func (r *MemoryRepo) ListReviewNeeded(ctx context.Context, limit int) ([]domain.Memory, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	var rows []memoryRow
+	err := r.db.SelectContext(ctx, &rows,
+		fmt.Sprintf(`SELECT %s FROM memories
+			WHERE status = 'review_needed'
+			ORDER BY created_at ASC
+			LIMIT $1`, memoryColumns),
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list review needed: %w", err)
+	}
+	memories := make([]domain.Memory, len(rows))
+	for i, row := range rows {
+		memories[i] = row.toDomain()
+	}
+	return memories, nil
+}
+
+// FindNewerMatch returns the most-recently-created memory in workspaceID matching either
+// key or contentSimhash, created strictly after `after`, excluding excludeID, restricted to
+// status IN ('active','stale') — see the interface doc for why review_needed/superseded/
+// archived/conflicted rows are not eligible superseding targets. Returns nil, nil when
+// nothing matches. contentSimhash may be nil (a memory with no stored simhash only matches
+// on key).
+func (r *MemoryRepo) FindNewerMatch(ctx context.Context, workspaceID uuid.UUID, key string, contentSimhash *int64, excludeID uuid.UUID, after time.Time) (*domain.Memory, error) {
+	var row memoryRow
+	err := r.db.GetContext(ctx, &row,
+		fmt.Sprintf(`SELECT %s FROM memories
+			WHERE workspace_id = $1
+			  AND id          != $2
+			  AND created_at   > $3
+			  AND status IN ('active', 'stale')
+			  AND (
+			        key = $4
+			     OR ($5::bigint IS NOT NULL AND content_simhash = $5)
+			  )
+			ORDER BY created_at DESC
+			LIMIT 1`, memoryColumns),
+		workspaceID, excludeID, after, key, contentSimhash,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find newer match: %w", err)
+	}
+	mem := row.toDomain()
+	return &mem, nil
+}
+
+// AppendTag adds tag to a memory's tags array if not already present, and bumps updated_at.
+// Idempotent — safe to call every time a caller wants "make sure this tag is set" without
+// checking first.
+func (r *MemoryRepo) AppendTag(ctx context.Context, id uuid.UUID, tag string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE memories
+		SET tags       = CASE WHEN $1 = ANY(tags) THEN tags ELSE array_append(tags, $1) END,
+		    updated_at = NOW()
+		WHERE id = $2
+	`, tag, id)
+	if err != nil {
+		return fmt.Errorf("append tag: %w", err)
+	}
+	return nil
+}

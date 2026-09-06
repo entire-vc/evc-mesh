@@ -23,6 +23,19 @@ const (
 	autoActThreshold  = 0.70
 	highImportance    = float32(0.8)
 	defaultStaleAfter = 30 * 24 * time.Hour
+
+	// reviewTriageBatchCap bounds one nightly runReviewTriage pass, mirroring the
+	// existing monitorBatchCap style: a backlog bigger than the cap drains over
+	// multiple nightly runs rather than in one go.
+	reviewTriageBatchCap = 500
+	// defaultReviewStaleAfter is the "no обращений" window from audit #1b010be6
+	// (plan:1.11) — a review_needed memory untouched (no recall hit, no update)
+	// for this long with no newer match is marked stale rather than active.
+	defaultReviewStaleAfter = 60 * 24 * time.Hour
+	// autoReviewedTag marks a review_needed row the nightly job resolved to
+	// active on its own, so a later reader can tell it was auto-triaged rather
+	// than written active in the first place.
+	autoReviewedTag = "auto-reviewed"
 )
 
 // Config holds runtime configuration for MemoryReconciler.
@@ -33,21 +46,27 @@ type Config struct {
 	// StaleAfter is the inactivity window before a memory is marked stale.
 	// Defaults to 30 days when zero.
 	StaleAfter time.Duration
+	// ReviewStaleAfter is the inactivity window used by the nightly review-triage
+	// phase (runReviewTriage) to decide stale vs. active for a review_needed
+	// memory with no newer match. Defaults to 60 days when zero (audit #1b010be6).
+	ReviewStaleAfter time.Duration
 }
 
 // MemoryReconciler runs the monitor, linker, and decision-engine phases for the
 // memory freshness lifecycle. It plugs into the existing 6h scheduler in cmd/api/main.go.
 type MemoryReconciler struct {
-	memRepo    repository.MemoryRepository
-	edgeRepo   repository.MemoryEdgeRepository
-	embedder   embedding.Embedder
-	epoch      time.Time
-	staleAfter time.Duration
+	memRepo          repository.MemoryRepository
+	edgeRepo         repository.MemoryEdgeRepository
+	embedder         embedding.Embedder
+	epoch            time.Time
+	staleAfter       time.Duration
+	reviewStaleAfter time.Duration
 }
 
 // New creates a MemoryReconciler. If cfg.Epoch is zero, the current time is used
 // (safe default: only future memories are eligible for stale marking).
-// If cfg.StaleAfter is zero, defaults to 30 days.
+// If cfg.StaleAfter is zero, defaults to 30 days. If cfg.ReviewStaleAfter is zero,
+// defaults to 60 days.
 // embedder may be nil (or embedding.NewNoopEmbedder()); linker phase is skipped when it is a noop.
 func New(memRepo repository.MemoryRepository, edgeRepo repository.MemoryEdgeRepository, embedder embedding.Embedder, cfg Config) *MemoryReconciler {
 	epoch := cfg.Epoch
@@ -58,20 +77,26 @@ func New(memRepo repository.MemoryRepository, edgeRepo repository.MemoryEdgeRepo
 	if staleAfter == 0 {
 		staleAfter = defaultStaleAfter
 	}
+	reviewStaleAfter := cfg.ReviewStaleAfter
+	if reviewStaleAfter == 0 {
+		reviewStaleAfter = defaultReviewStaleAfter
+	}
 	if embedder == nil {
 		embedder = embedding.NewNoopEmbedder()
 	}
 	return &MemoryReconciler{
-		memRepo:    memRepo,
-		edgeRepo:   edgeRepo,
-		embedder:   embedder,
-		epoch:      epoch,
-		staleAfter: staleAfter,
+		memRepo:          memRepo,
+		edgeRepo:         edgeRepo,
+		embedder:         embedder,
+		epoch:            epoch,
+		staleAfter:       staleAfter,
+		reviewStaleAfter: reviewStaleAfter,
 	}
 }
 
-// Run executes all reconciler phases sequentially. Errors in one phase are logged
-// but do not abort subsequent phases (monitor failure should not block linker).
+// Run executes the monitor and linker phases sequentially. Errors in one phase are
+// logged but do not abort subsequent phases (monitor failure should not block linker).
+// Plugs into the existing 6h scheduler in cmd/api/main.go.
 func (r *MemoryReconciler) Run(ctx context.Context) error {
 	if err := r.runMonitor(ctx); err != nil {
 		log.Printf("reconciler: monitor phase error: %v", err)
@@ -82,6 +107,18 @@ func (r *MemoryReconciler) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// RunReviewTriage runs the nightly review_needed triage phase (audit #1b010be6,
+// plan:1.11) and returns its stats — see runReviewTriage's doc for the decision
+// rules. Deliberately a separate entry point from Run(), on its own ~24h ticker in
+// cmd/api/main.go, rather than folded into the 6-hourly Run(): the two answer
+// different questions over different populations (Run() looks at recently-created
+// memories; this walks the whole review_needed backlog) and a caller who wants to
+// know "how did last night's triage go" should not have to disentangle it from
+// Run()'s expire/stale/link counts.
+func (r *MemoryReconciler) RunReviewTriage(ctx context.Context) (ReviewTriageStats, error) {
+	return r.runReviewTriage(ctx)
 }
 
 // runMonitor executes the two bulk UPDATE steps (expire + stale detection).
@@ -101,6 +138,113 @@ func (r *MemoryReconciler) runMonitor(ctx context.Context) error {
 	if n > 0 {
 		log.Printf("reconciler: marked %d memories as stale (age > %v)", n, r.staleAfter)
 	}
+	return nil
+}
+
+// ReviewTriageStats reports the disposition of one runReviewTriage pass — the
+// "статистика джоба в лог" requirement from audit #1b010be6 (plan:1.11).
+type ReviewTriageStats struct {
+	// Considered is how many review_needed rows this run looked at (bounded by
+	// reviewTriageBatchCap — a backlog larger than the cap needs more than one
+	// nightly run to fully drain; that is a rate-limit, not a bug).
+	Considered int
+	Superseded int
+	Stale      int
+	Active     int
+	// Errored counts rows this run could NOT classify (a repository call
+	// failed). These rows are left exactly as they were — still
+	// review_needed — and are retried on the next run. This is a distinct
+	// bucket from Active on purpose: "processed and judged current" and
+	// "not processed at all" must never be collapsed into the same number,
+	// or a run that fails halfway looks identical in the log to a quiet
+	// night with nothing to do (CLAUDE-workflow §0x — "не смог посмотреть"
+	// must never read the same as "посмотрел, чисто").
+	Errored int
+}
+
+// runReviewTriage is the nightly job for audit #1b010be6 (plan:1.11): the reconciler's
+// existing linker phase (runLinker, below) only ever compares memories created in the
+// last 24h against similar history — a memory it parks at review_needed is never
+// revisited by that phase once the 24h window passes, no matter what newer evidence
+// piles up later. This phase closes that gap by walking the review_needed backlog
+// itself, on its own cadence (see the caller in cmd/api/main.go for why this is wired
+// as its own ~24h ticker rather than folded into the 6-hourly Run()).
+//
+// Per review_needed memory M, in order:
+//  1. A newer memory sharing the same key or the same content_simhash, in a settled
+//     status (active/stale) → M is superseded by it (reuses the same supersede() path
+//     runLinker's decision engine uses, at confidence 1.0 — this is a direct match, not
+//     a probabilistic one).
+//  2. Otherwise, no access (recall hit) or update in reviewStaleAfter (60 days, per the
+//     task) → M is marked stale.
+//  3. Otherwise → M is marked active and tagged auto-reviewed, so a later reader can
+//     tell this row was resolved by the nightly job rather than written that way.
+//
+// A repository error on one row is logged and counted in Stats.Errored; it does not
+// abort the run — one bad row must not stall the whole backlog (same principle as
+// Run()'s phase isolation above).
+func (r *MemoryReconciler) runReviewTriage(ctx context.Context) (ReviewTriageStats, error) {
+	var stats ReviewTriageStats
+
+	mems, err := r.memRepo.ListReviewNeeded(ctx, reviewTriageBatchCap)
+	if err != nil {
+		// Deliberately NOT swallowed into stats.Errored=0/silence: a failure to even
+		// LIST the backlog must surface as an error to the caller, not as "0 rows to
+		// review_needed today" — those two states must never look the same in the log.
+		return stats, fmt.Errorf("list review_needed: %w", err)
+	}
+	stats.Considered = len(mems)
+
+	for _, mem := range mems {
+		if err := r.triageOne(ctx, mem, &stats); err != nil {
+			stats.Errored++
+			log.Printf("reconciler: review-triage error memory_id=%s: %v", mem.ID, err)
+		}
+	}
+
+	log.Printf("reconciler: review-triage considered=%d superseded=%d stale=%d active=%d errored=%d",
+		stats.Considered, stats.Superseded, stats.Stale, stats.Active, stats.Errored)
+	return stats, nil
+}
+
+// triageOne applies the three-way decision above to a single review_needed memory and
+// bumps the matching counter in stats on success. On error, stats is left untouched —
+// the caller is responsible for counting the row as errored.
+func (r *MemoryReconciler) triageOne(ctx context.Context, mem domain.Memory, stats *ReviewTriageStats) error {
+	newer, err := r.memRepo.FindNewerMatch(ctx, mem.WorkspaceID, mem.Key, mem.ContentSimhash, mem.ID, mem.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("find newer match: %w", err)
+	}
+	if newer != nil {
+		if err := r.supersede(ctx, mem, *newer, 1.0); err != nil {
+			return fmt.Errorf("supersede: %w", err)
+		}
+		stats.Superseded++
+		return nil
+	}
+
+	// "No обращений" (no accesses) reads off last_accessed_at when present; a
+	// review_needed row that was never recalled at all falls back to created_at —
+	// it has had exactly zero chances to be touched since it was written.
+	reference := mem.CreatedAt
+	if mem.LastAccessedAt != nil {
+		reference = *mem.LastAccessedAt
+	}
+	if time.Since(reference) > r.reviewStaleAfter {
+		if err := r.memRepo.SetMemoryStatus(ctx, mem.ID, domain.MemoryStatusStale, nil); err != nil {
+			return fmt.Errorf("set stale status: %w", err)
+		}
+		stats.Stale++
+		return nil
+	}
+
+	if err := r.memRepo.SetMemoryStatus(ctx, mem.ID, domain.MemoryStatusActive, nil); err != nil {
+		return fmt.Errorf("set active status: %w", err)
+	}
+	if err := r.memRepo.AppendTag(ctx, mem.ID, autoReviewedTag); err != nil {
+		return fmt.Errorf("append auto-reviewed tag: %w", err)
+	}
+	stats.Active++
 	return nil
 }
 
