@@ -439,6 +439,18 @@ func resolveProjectSlug(tags []string) (string, bool) {
 	return "", false
 }
 
+// ResolveProjectSlugForTags exposes resolveProjectSlug to callers outside this
+// package — specifically the one-off cmd/backfill-memory-project-id batch tool
+// (audit #1b010be6, plan:1.11). The alternative is a second copy of
+// projectSlugAliases in the batch tool; that is exactly the "one source of
+// truth split into two, drifting silently" failure class called out in
+// CLAUDE-workflow.md §1q (the `hold`-label incident) — a batch job resolving
+// slugs differently than the live write path would backfill some rows to the
+// wrong project without anyone noticing until a recall query landed strangely.
+func ResolveProjectSlugForTags(tags []string) (string, bool) {
+	return resolveProjectSlug(tags)
+}
+
 // Remember upserts a memory entry. It returns "created" if the key did not exist before,
 // or "updated" if an existing entry was overwritten.
 // After a successful upsert, it asynchronously embeds the content when an embedder is configured.
@@ -559,6 +571,18 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 		mem.ProjectID = nil
 	}
 
+	// Cache the source-task lookup — used by the project_id inference fallback
+	// right below, by thread_id propagation, and by the Amendment 2/3 edge hooks
+	// further down. One query, three consumers. Moved up from its original spot
+	// (just before Upsert) so the project_id fallback can use it; the two other
+	// consumers are unaffected since this is a read-only lookup.
+	var sourceTask *domain.Task
+	if mem.SourceTaskID != nil && s.taskRepo != nil {
+		if task, taskErr := s.taskRepo.GetByID(ctx, *mem.SourceTaskID); taskErr == nil && task != nil {
+			sourceTask = task
+		}
+	}
+
 	// ── Slug resolution: if no project_id given but tags contain exactly one
 	// resolvable project:<slug>, look up the project and populate project_id. ──
 	// Scoped to scope=project only: identity for workspace/agent scope does not
@@ -572,6 +596,20 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 				mem.ProjectID = &proj.ID
 			}
 		}
+	}
+
+	// ── source_task_id fallback: if the tag resolution above didn't resolve a
+	// project_id, but the write carries a source_task_id, inherit the task's
+	// project. Audit #1b010be6 (plan:1.11): 87% of memories were missing
+	// project_id, and the dominant write shape is the MCP client's active-task
+	// auto-populate (evc-mesh-mcp#44), which stamps source_task_id — not a
+	// project:<slug> tag. Tag resolution alone only ever covered writes an
+	// agent tagged by hand. Same scope=project gate as the slug path above, for
+	// the same reason (project_id is meaningless outside scope=project — see
+	// the unconditional-nil normalization right above this block).
+	if mem.Scope == domain.ScopeProject && mem.ProjectID == nil && sourceTask != nil && sourceTask.ProjectID != uuid.Nil {
+		pid := sourceTask.ProjectID
+		mem.ProjectID = &pid
 	}
 
 	// Determine whether this is a create or update by checking for an existing entry.
@@ -628,15 +666,8 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	// reconciler uses it for consolidation, which is a different question asked
 	// over a different population, and is not affected by this removal.
 
-	// Cache the source-task lookup — used for both thread_id propagation and
-	// Amendment 2/3 edge hooks below. One query, two consumers.
-	var sourceTask *domain.Task
-	if mem.SourceTaskID != nil && s.taskRepo != nil {
-		if task, taskErr := s.taskRepo.GetByID(ctx, *mem.SourceTaskID); taskErr == nil && task != nil {
-			sourceTask = task
-		}
-	}
 	// Propagate thread_id from the source task when the caller has not set it explicitly.
+	// (sourceTask was already looked up above, for the project_id inference fallback.)
 	if sourceTask != nil && mem.ThreadID == nil {
 		mem.ThreadID = sourceTask.ThreadID
 	}

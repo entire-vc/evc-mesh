@@ -1179,6 +1179,23 @@ type MemoryRepository interface {
 	// as is the shared scope/tags eligibility filter — the SAME filter VectorSearch applies.
 	// Used as the sparse BM25 arm in the RRF fusion of service.Recall.
 	FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
+	// ListReviewNeeded returns up to limit memories with status='review_needed', across all
+	// workspaces, ordered by created_at ASC (oldest-waiting first). Used by the reconciler's
+	// nightly review-triage phase (audit #1b010be6, plan:1.11) to finally act on the backlog
+	// nothing else revisits: runLinker's decision engine only ever looks at memories created
+	// in the last 24h, so a memory it once parked at review_needed is never looked at again by
+	// that phase, no matter how much newer evidence accumulates later.
+	ListReviewNeeded(ctx context.Context, limit int) ([]domain.Memory, error)
+	// FindNewerMatch returns the single most-recently-created memory in workspaceID that either
+	// shares the exact same key, or (when contentSimhash is non-nil) the exact same
+	// content_simhash, was created strictly after after, is not excludeID itself, and is
+	// currently in a "settled" status (active or stale — NOT archived, superseded, conflicted,
+	// or itself review_needed: an undecided row is not a fit candidate to declare something
+	// else superseded by). Returns nil, nil when no such row exists.
+	FindNewerMatch(ctx context.Context, workspaceID uuid.UUID, key string, contentSimhash *int64, excludeID uuid.UUID, after time.Time) (*domain.Memory, error)
+	// AppendTag adds tag to a memory's tags array if not already present (idempotent — a
+	// second call with the same tag is a no-op), and bumps updated_at.
+	AppendTag(ctx context.Context, id uuid.UUID, tag string) error
 }
 
 // MemoryChunkRepository stores and retrieves per-chunk embeddings for long

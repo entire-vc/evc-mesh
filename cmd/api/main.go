@@ -1789,6 +1789,34 @@ func main() {
 	}()
 	log.Println("Memory decay scheduler started (6h interval)")
 
+	// 10a-bis. Memory review-triage nightly job (audit #1b010be6, plan:1.11):
+	// disposes of the review_needed backlog that the 6h reconciler's linker phase
+	// above never revisits (it only ever compares memories created in the last 24h
+	// against similar history — once a memory is parked at review_needed, that
+	// phase never looks at it again). Deliberately its own ~24h ticker rather than
+	// folded into the 6h loop above — see RunReviewTriage's doc.
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				recCtx, recCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				stats, err := memReconciler.RunReviewTriage(recCtx)
+				if err != nil {
+					log.Printf("[memory-review-triage] ERROR: %v", err)
+				} else {
+					log.Printf("[memory-review-triage] considered=%d superseded=%d stale=%d active=%d errored=%d",
+						stats.Considered, stats.Superseded, stats.Stale, stats.Active, stats.Errored)
+				}
+				recCancel()
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("Memory review-triage scheduler started (24h interval)")
+
 	// 10b. Agent events sweeper — delete expired rows from agent_events every 5 minutes.
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
