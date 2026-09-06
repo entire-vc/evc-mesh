@@ -57,6 +57,13 @@ type ArmHumanGateInput struct {
 	// fail-closed, matching the column default and SetHumanGate's release behaviour.
 	Class  HumanGateClass
 	Source ArmHumanGateSource
+	// Predicate is the four-question check from task #5d3dc714. REQUIRED for
+	// ArmHumanGateSourceAPI; nil is allowed for ArmHumanGateSourceMarker, for the same
+	// reason RecommendedDefault is (see ArmHumanGateSourceMarker's note) — a marker is a
+	// live ask arriving through a channel we do not control, and refusing it is silent
+	// to its author. Marker arms are still LOGGED, with the predicate recorded as absent,
+	// so the two populations can be told apart when the ratio is read.
+	Predicate *GateArmPredicate
 }
 
 // ArmHumanGateValidationError names the single field that failed, so the handler can
@@ -95,6 +102,19 @@ func (in *ArmHumanGateInput) Validate() error {
 			Field: "recommended_default",
 			Message: "required — a gate with no stated default cannot time out, " +
 				"so it can only ever be answered by a human",
+		}
+	}
+	if in.Source == ArmHumanGateSourceAPI {
+		if in.Predicate == nil {
+			return &ArmHumanGateValidationError{
+				Field: "predicate",
+				Message: "required — answer credential_exists / reversible / " +
+					"blocked_by_other_task / customer_visible_now, each with one line of " +
+					"justification, before asking a human",
+			}
+		}
+		if err := in.Predicate.Validate(); err != nil {
+			return err
 		}
 	}
 	return nil

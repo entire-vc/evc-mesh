@@ -49,6 +49,7 @@ type taskService struct {
 	agentRepo         repository.AgentRepository
 	userRepo          repository.UserRepository
 	commentRepo       repository.CommentRepository
+	gatePredicateLog  repository.GatePredicateLogRepository
 	vcsLinkRepo       repository.VCSLinkRepository
 	githubPRChecker   githubapi.PullRequestChecker  // legacy static client; used only when vcsIntegrations is nil
 	gitlabMRChecker   gitlabapi.MergeRequestChecker // legacy static client; used only when vcsIntegrations is nil
@@ -191,6 +192,17 @@ func WithTaskListRevisionRepo(r repository.TaskListRevisionRepository) TaskServi
 func WithTaskAgentRepo(ar repository.AgentRepository) TaskServiceOption {
 	return func(s *taskService) {
 		s.agentRepo = ar
+	}
+}
+
+// WithGatePredicateLog wires the append-only log of gate-arming predicate evaluations
+// (task #5d3dc714). Optional: when unset, arming still enforces the predicate — the
+// guard must not depend on the recorder being present, or "the log was not wired" would
+// silently become "the guard is off", which is the disarm-by-omission shape this fleet
+// keeps paying for.
+func WithGatePredicateLog(r repository.GatePredicateLogRepository) TaskServiceOption {
+	return func(s *taskService) {
+		s.gatePredicateLog = r
 	}
 }
 
@@ -3118,7 +3130,74 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 			"recommended_default — the gate can only be resolved by a human answering it "+
 			"(author %s/%s)", in.TaskID, in.AuthorType, in.Author)
 	}
+
+	// Predicate gate (task #5d3dc714). Evaluated BEFORE the write, and its refusal is
+	// returned instead of arming — the audit found 40-45% of asks to Pavel were
+	// decidable from a rule already written down.
+	outcome := domain.GatePredicateAllowed
+	if in.Predicate != nil {
+		outcome = in.Predicate.Decide()
+	}
+
+	// Record the evaluation regardless of outcome. Refusals alone have no denominator:
+	// a count of "times the guard fired" reads identically whether it is preventing
+	// everything or nothing (the measurement trap in
+	// [[count-of-events-is-not-a-measure-of-a-guard]]).
+	s.recordGatePredicate(ctx, in, outcome)
+
+	if outcome != domain.GatePredicateAllowed {
+		return &domain.ArmHumanGateValidationError{
+			Field:   "predicate",
+			Message: outcome.RefusalMessage(),
+		}
+	}
+
 	return s.taskRepo.ArmHumanGate(ctx, in)
+}
+
+// recordGatePredicate appends one evaluation to gate_predicate_log. Best-effort by
+// design: a logging failure must never turn into a failure to ENFORCE, nor into an arm
+// that should have been refused. Failures are logged loudly instead of swallowed, so a
+// silently empty table is distinguishable from a genuinely quiet one when the two-week
+// ratio is read.
+func (s *taskService) recordGatePredicate(ctx context.Context, in domain.ArmHumanGateInput, outcome domain.GatePredicateOutcome) {
+	if s.gatePredicateLog == nil {
+		return
+	}
+	p := in.Predicate
+	if p == nil {
+		// Marker-sourced arms carry no predicate (see ArmHumanGateInput.Predicate).
+		// Recorded anyway, with the answers false and the reasons naming their own
+		// absence, so marker and API populations can be separated when reading the
+		// ratio rather than silently averaged together.
+		p = &domain.GateArmPredicate{
+			CredentialReason: "(not stated: armed from a Blocking marker)",
+			ReversibleReason: "(not stated: armed from a Blocking marker)",
+			BlockedReason:    "(not stated: armed from a Blocking marker)",
+			CustomerReason:   "(not stated: armed from a Blocking marker)",
+		}
+	}
+	entry := &domain.GatePredicateLogEntry{
+		ID:                 uuid.New(),
+		TaskID:             in.TaskID,
+		ActorID:            in.Author,
+		ActorType:          in.AuthorType,
+		Outcome:            outcome,
+		CredentialExists:   p.CredentialExists,
+		Reversible:         p.Reversible,
+		BlockedByOtherTask: p.BlockedByOtherTask,
+		CustomerVisibleNow: p.CustomerVisibleNow,
+		CredentialReason:   p.CredentialReason,
+		ReversibleReason:   p.ReversibleReason,
+		BlockedReason:      p.BlockedReason,
+		CustomerReason:     p.CustomerReason,
+		Source:             in.Source,
+		CreatedAt:          timeNow(),
+	}
+	if err := s.gatePredicateLog.Record(ctx, entry); err != nil {
+		log.Printf("[human-gate] WARNING: gate_predicate_log record for task %s failed: %v "+
+			"(the predicate itself was still enforced: outcome=%s)", in.TaskID, err, outcome)
+	}
 }
 
 // ClearHumanGate releases the gate. The ask metadata (author, reason, recommended
