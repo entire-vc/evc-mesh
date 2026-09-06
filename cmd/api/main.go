@@ -1918,6 +1918,44 @@ func main() {
 	}()
 	log.Println("Monitor promotion sweeper started (60s interval)")
 
+	// 10b-quater. Backlog promotion ADVISORY sweeper (task #9f3f4064, parent #00327dc6,
+	// unit 1 of 4). Mirrors bob/scripts/mesh-intake-sweep.py's backlog→todo decision
+	// server-side, log-only — it NEVER calls MoveTask. Runs alongside the live Python
+	// sweep for a 7-day parallel comparison (#f928e5af); only after that comparison
+	// shows zero unexplained divergence (#e96abbff) does a LATER task flip this to
+	// enforcing and retire the sweep (#56ec28e8). Same 60s cadence as the monitor
+	// sweeper above so a day of logs lines up 1:1 with a day of sweep runs.
+	backlogPromotionAdvisorySvc := service.NewBacklogPromotionAdvisoryService(
+		taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
+	)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				decisions, err := backlogPromotionAdvisorySvc.SweepAdvisory(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("[backlog-promotion-advisory] ERROR sweeping backlog tasks: %v", err)
+					continue
+				}
+				var promotable int
+				for _, d := range decisions {
+					if d.Promote {
+						promotable++
+					}
+				}
+				log.Printf("[backlog-promotion-advisory] evaluated %d backlog task(s), %d advisory-promotable (advisory only, no moves made)",
+					len(decisions), promotable)
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("Backlog promotion advisory sweeper started (60s interval, advisory-only)")
+
 	// 10b-ter. human_gate soft-timeout sweeper (task #b1d5c742, contract
 	// docs/human-gate-decision-recorded.md §5). Releases soft-classified gates armed
 	// past DefaultHumanGateSoftTimeout; a hard-classified gate is structurally

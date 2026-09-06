@@ -450,6 +450,25 @@ func (m *MockTaskRepository) ListByStatusCategory(_ context.Context, _ uuid.UUID
 	return pagination.NewPage([]domain.Task{}, 0, pg), nil
 }
 
+// ListAllBacklogTasks mirrors FindDueMonitorBacklogTasks's category-filter pattern
+// (via the wired statusCategoryOf resolver) but without the due_date/label narrowing —
+// every task currently sitting in a backlog-category status.
+func (m *MockTaskRepository) ListAllBacklogTasks(_ context.Context) ([]domain.Task, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.Task
+	for _, t := range m.items {
+		if m.statusCategoryOf == nil || m.statusCategoryOf(t.StatusID) != domain.StatusCategoryBacklog {
+			continue
+		}
+		out = append(out, *t)
+	}
+	return out, nil
+}
+
 func (m *MockTaskRepository) AtomicCheckout(_ context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
