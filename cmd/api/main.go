@@ -906,6 +906,18 @@ func main() {
 	go activityTracker.Run(activityCtx)
 	log.Println("Agent activity tracker started")
 
+	// Tool-breakdown tracker: batches agent_sessions.tool_breakdown/tool_calls
+	// increments for API-calling agents (§1.6 audit — tool_breakdown was empty
+	// across all 5,595 sessions because nothing wrote to it). Same batching
+	// shape as activityTracker above, for the same reason: this middleware
+	// runs on the hottest path in the system (every MCP tool call), so counts
+	// are accumulated in memory and flushed periodically rather than written
+	// synchronously per call.
+	toolBreakdownTracker := mw.NewToolBreakdownTracker(sessionRepo)
+	toolBreakdownCtx, toolBreakdownCancel := context.WithCancel(context.Background())
+	go toolBreakdownTracker.Run(toolBreakdownCtx)
+	log.Println("Tool-breakdown tracker started")
+
 	// Document-watch sweeper: turns pending change-notices into notifications
 	// once their author has stopped typing for the quiet window.
 	//
@@ -1152,6 +1164,7 @@ func main() {
 	api := v1.Group("")
 	api.Use(mw.DualAuth(authService, agentService))
 	api.Use(activityTracker.Middleware())
+	api.Use(toolBreakdownTracker.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
 	// Cross-tenant guard. Applies to every route in this group that carries a
 	// :ws_id parameter, and is inert on the rest. Group-level on purpose: the
@@ -1927,6 +1940,10 @@ func main() {
 	// Flush activity tracker and cancel its background loop.
 	activityCancel()
 	activityTracker.Flush(shutdownCtx)
+
+	// Flush tool-breakdown tracker and cancel its background loop.
+	toolBreakdownCancel()
+	toolBreakdownTracker.Flush(shutdownCtx)
 
 	// Close WebSocket hub and shared Redis (also used by the rate limiter).
 	hubCancel()
