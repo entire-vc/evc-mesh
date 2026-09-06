@@ -664,6 +664,137 @@ func TestEnforceBlockingTriage_AutoMode_SetsHumanGateFlag(t *testing.T) {
 	assert.True(t, gateCalls[0].value, "SetHumanGate must arm the flag (value=true)")
 }
 
+// blockingTriageCalls filters a MockNotificationService's calls down to
+// "task.blocking_triage" events. The same comment body also fires
+// "task.mentioned" (generic @-mention) and "comment.created" (assignee
+// notification) on the same mock — both real, unrelated events this file
+// doesn't test — so a bare Calls() count would conflate all three.
+func blockingTriageCalls(notifySvc *MockNotificationService) []domain.NotificationEvent {
+	var out []domain.NotificationEvent
+	for _, c := range notifySvc.Calls() {
+		if c.EventType == "task.blocking_triage" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// TestEnforceBlockingTriage_AutoMode_StillNotifiesTargetUser pins the fix for
+// #4e1d249f: before it, the "task.blocking_triage" notify lived downstream of
+// the triage MOVE, which auto-mode tasks skip — so a live ask on an auto task
+// armed human_gate (freezing the card) but never told the named human anything.
+// Measured live on prod 2026-09-06: 103 of 107 currently-armed human_gate tasks
+// were delegation_level=auto, i.e. the vast majority of real blockers never
+// reached this notification path at all. The notify must fire for auto tasks
+// exactly like it does for any other, even though the triage MOVE itself
+// stays suppressed for them.
+func TestEnforceBlockingTriage_AutoMode_StillNotifiesTargetUser(t *testing.T) {
+	notifySvc := NewMockNotificationService()
+	env := setupTriageEnvWithOptions(t, true, WithCommentNotificationService(notifySvc))
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.inProgressID,
+		Title: "Auto task", DelegationLevel: domain.DelegationLevelAuto,
+	}
+	pavel, err := env.userRepo.GetByUsername(context.Background(), env.wsID, "pavel")
+	require.NoError(t, err)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need sign-off",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	// The triage move must still NOT happen for auto tasks.
+	assert.Empty(t, env.taskMover.calls(), "auto-mode must not trigger triage move")
+
+	calls := blockingTriageCalls(notifySvc)
+	require.Len(t, calls, 1, "the named human must still be notified even though the task self-manages")
+	assert.Equal(t, "task.blocking_triage", calls[0].EventType)
+	require.NotNil(t, calls[0].TargetUserID, "must be targeted at the named user, not broadcast to every subscriber")
+	assert.Equal(t, pavel.ID, *calls[0].TargetUserID)
+}
+
+// TestEnforceBlockingTriage_BlockingHuman_NotifiesTargetUser covers the
+// non-auto path: the notify must still fire (moved earlier in the function,
+// ahead of the triage MOVE) and stay targeted at the named user.
+func TestEnforceBlockingTriage_BlockingHuman_NotifiesTargetUser(t *testing.T) {
+	notifySvc := NewMockNotificationService()
+	env := setupTriageEnvWithOptions(t, true, WithCommentNotificationService(notifySvc))
+	taskID := env.seedTask(env.inProgressID)
+	pavel, err := env.userRepo.GetByUsername(context.Background(), env.wsID, "pavel")
+	require.NoError(t, err)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need decision X",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	require.Len(t, env.taskMover.calls(), 1, "non-auto task must still move to triage")
+
+	calls := blockingTriageCalls(notifySvc)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "task.blocking_triage", calls[0].EventType)
+	require.NotNil(t, calls[0].TargetUserID)
+	assert.Equal(t, pavel.ID, *calls[0].TargetUserID)
+}
+
+// TestEnforceBlockingTriage_AlreadyTriage_NoNotify: a repeat marker on a task
+// already parked in triage is not a new ask (mirrors the pre-existing
+// no-re-move idempotency) — must not re-notify either, now that notify no
+// longer lives strictly downstream of the move.
+func TestEnforceBlockingTriage_AlreadyTriage_NoNotify(t *testing.T) {
+	notifySvc := NewMockNotificationService()
+	env := setupTriageEnvWithOptions(t, true, WithCommentNotificationService(notifySvc))
+	taskID := env.seedTask(env.triageID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: still blocked",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, blockingTriageCalls(notifySvc), "must not re-notify a task already in triage")
+}
+
+// TestEnforceBlockingTriage_AssigneeCompletionReport_NoNotify: the completion-
+// report heuristic suppresses the triage MOVE because the marker may be
+// handoff context rather than a genuine blocker (see the doc comment on
+// isAssigneeCompletionReport) — it must suppress the notify for the same
+// reason, not just the move.
+func TestEnforceBlockingTriage_AssigneeCompletionReport_NoNotify(t *testing.T) {
+	notifySvc := NewMockNotificationService()
+	env := setupTriageEnvWithOptions(t, true, WithCommentNotificationService(notifySvc))
+	taskID := uuid.New()
+	assigneeID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, StatusID: env.inProgressID,
+		Title: "T", AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &assigneeID,
+	}
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   assigneeID,
+		AuthorType: domain.ActorTypeAgent,
+		Body: `## Все 4 фикса выполнены — работа завершена
+
+Фикс 1: ✅ Фикс 2: ✅ Фикс 3: ✅ Фикс 4: ✅
+
+❓ **Blocking @pavel**: задача на supervised — закрой вручную.`,
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls(), "completion report must not trigger triage move")
+	assert.Empty(t, blockingTriageCalls(notifySvc), "completion report must not notify either")
+}
+
 // ---------------------------------------------------------------------------
 // releaseHumanGate (via Create)
 // ---------------------------------------------------------------------------
