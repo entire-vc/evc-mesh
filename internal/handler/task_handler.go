@@ -163,6 +163,18 @@ type updateTaskRequest struct {
 	ThreadID         *string                 `json:"thread_id"`
 	HumanGate        *bool                   `json:"human_gate"`
 	CompletionSignal *bool                   `json:"completion_signal"`
+
+	// #64b74e58: NOT applied to task.Status anywhere below — their only job is
+	// to be seen. Before these fields existed, encoding/json's default
+	// unknown-field tolerance meant Bind() silently dropped status_id/
+	// status_slug/status here and Update still answered 200: a caller asking
+	// to change status via the wrong endpoint got a success code and no
+	// change, discoverable only by re-reading the task afterward (which the
+	// 200 exists precisely to make unnecessary). See the reject block in
+	// Update() below — presence of any of these is a 422, not a silent no-op.
+	StatusID   *uuid.UUID `json:"status_id"`
+	StatusSlug *string    `json:"status_slug"`
+	Status     *string    `json:"status"`
 }
 
 // moveTaskRequest represents the JSON body for moving a task.
@@ -607,6 +619,19 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	var req updateTaskRequest
 	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	// #64b74e58: status is not a PATCH field — reject before touching the
+	// service at all, rather than silently dropping it and answering 200.
+	if req.StatusID != nil || req.StatusSlug != nil || req.Status != nil {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code": "status_change_via_patch_rejected",
+			"message": "status_id/status_slug/status cannot be changed via PATCH /tasks/:id " +
+				"(this endpoint used to silently ignore them and still answer 200 — task " +
+				"#64b74e58). Use POST /tasks/:id/move with status_id instead; resolve a " +
+				"slug to status_id first via GET /projects/:proj_id/statuses, or use the " +
+				"move_task tool, which resolves slugs for you.",
+		})
 	}
 
 	// Fetch existing task first

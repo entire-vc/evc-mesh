@@ -2305,6 +2305,98 @@ func TestTaskHandler_Update_OmittedReviewerLeavesItUntouched(t *testing.T) {
 	assert.Equal(t, domain.AssigneeTypeAgent, *got.ReviewerType)
 }
 
+// --- status change via PATCH is rejected, not silently ignored (#64b74e58) --
+//
+// updateTaskRequest has no status field at all, so Bind() used to drop
+// status_id/status_slug/status on the floor and still answer 200 — the caller
+// walked away believing the status changed. These pin the fix: presence of
+// any status-shaped key is a 422 naming the real endpoint, and — the part
+// that actually matters — the service's Update is never even called, so a
+// same-body PATCH can't race a stray status write in behind the rejection.
+
+func TestTaskHandler_Update_StatusSlugRejected(t *testing.T) {
+	existing := &domain.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Untouched", Priority: domain.PriorityLow}
+	updateCalled := false
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) { return existing, nil },
+		UpdateFunc:  func(ctx context.Context, task *domain.Task) error { updateCalled = true; return nil },
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"status_slug":"backlog"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(existing.ID.String())
+
+	require.NoError(t, h.Update(c))
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code,
+		"PATCH must refuse a status change attempt, not silently no-op with 200 (#64b74e58)")
+	assert.False(t, updateCalled, "status_slug must never reach taskService.Update")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "status_change_via_patch_rejected", body["code"])
+	assert.Contains(t, body["message"], "/tasks/:id/move")
+}
+
+func TestTaskHandler_Update_StatusIDRejected(t *testing.T) {
+	existing := &domain.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Untouched", Priority: domain.PriorityLow}
+	updateCalled := false
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) { return existing, nil },
+		UpdateFunc:  func(ctx context.Context, task *domain.Task) error { updateCalled = true; return nil },
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	body := fmt.Sprintf(`{"status_id":%q}`, uuid.New().String())
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(existing.ID.String())
+
+	require.NoError(t, h.Update(c))
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.False(t, updateCalled)
+}
+
+func TestTaskHandler_Update_BareStatusStringRejected(t *testing.T) {
+	existing := &domain.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Untouched", Priority: domain.PriorityLow}
+	updateCalled := false
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) { return existing, nil },
+		UpdateFunc:  func(ctx context.Context, task *domain.Task) error { updateCalled = true; return nil },
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"status":"todo"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(existing.ID.String())
+
+	require.NoError(t, h.Update(c))
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.False(t, updateCalled)
+}
+
+// Negative control: POST /tasks/:id/move — the real status-change path — must
+// keep working after the PATCH rejection lands. TestTaskHandler_MoveTask_* above
+// already cover it; this just pins that Update() itself doesn't start moving
+// tasks (it must reject, not silently redirect the intent to MoveTask either).
+func TestTaskHandler_Update_UnrelatedFieldsStillWork(t *testing.T) {
+	existing := &domain.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Old", Priority: domain.PriorityLow}
+	got := updateTaskWithBody(t, existing, `{"title":"New Title"}`)
+	assert.Equal(t, "New Title", got.Title)
+}
+
 // --- include_description projection (#32f4c087) ------------------------------
 //
 // The board's task list was 77% description bytes for cards that never render a
