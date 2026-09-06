@@ -202,6 +202,10 @@ type failSetHumanGateRepo struct {
 	err error
 }
 
+func (r *failSetHumanGateRepo) ArmHumanGate(context.Context, domain.ArmHumanGateInput) error {
+	return nil
+}
+
 func (r *failSetHumanGateRepo) SetHumanGate(context.Context, uuid.UUID, bool) error {
 	return r.err
 }

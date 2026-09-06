@@ -3097,7 +3097,45 @@ func (s *taskService) instanceHadRealWork(ctx context.Context, task domain.Task)
 	return s.commentRepo.HasSubstantiveComment(ctx, task.ID)
 }
 
+// ArmHumanGate is the ONE arming path (task #4545660b). Everything a reader needs in
+// order to know the card is waiting on a human — and on whom, for what, and what happens
+// if nobody answers — is written here, on the task, so no client has to re-derive it by
+// grepping comment text. That re-derivation existed in 21 places across the fleet and was
+// the direct cause of the phantom-gate class (#84ab54fd), where one driver read another
+// driver's instructional boilerplate back as a raised blocker.
+//
+// Returns *domain.ArmHumanGateValidationError (mapped to 422 by the handler) when
+// gate_author is missing, or when recommended_default is missing on an API-sourced arm.
+// A marker-sourced arm with no stated default is allowed through with a WARNING — see
+// domain.ArmHumanGateSourceMarker for why refusing it there would be worse than the bug.
+func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error {
+	in = in.Normalized()
+	if err := in.Validate(); err != nil {
+		return err
+	}
+	if in.Source == domain.ArmHumanGateSourceMarker && in.RecommendedDefault == "" {
+		log.Printf("[human-gate] WARNING: task %s armed from a Blocking marker with no "+
+			"recommended_default — the gate can only be resolved by a human answering it "+
+			"(author %s/%s)", in.TaskID, in.AuthorType, in.Author)
+	}
+	return s.taskRepo.ArmHumanGate(ctx, in)
+}
+
+// ClearHumanGate releases the gate. The ask metadata (author, reason, recommended
+// default, deadline, class) is dropped with it — those fields describe a LIVE question,
+// and leaving them on a released task would be residue every reader has to learn to
+// ignore. The history stays in the marker comment and in human_gate_decisions.
+func (s *taskService) ClearHumanGate(ctx context.Context, taskID uuid.UUID) error {
+	return s.taskRepo.SetHumanGate(ctx, taskID, false)
+}
+
 // SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
+//
+// Deprecated for ARMING: it leaves the gate authorless, with no reason and no default,
+// which is the state task #4545660b exists to eliminate. Use ArmHumanGate to arm and
+// ClearHumanGate to release. Kept because the release paths (releaseHumanGate, the
+// withdrawal path, the soft-timeout sweep, PATCH {human_gate:false}) legitimately pass
+// false, and because the raw PATCH/UI arm has no author to attribute by construction.
 func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error {
 	return s.taskRepo.SetHumanGate(ctx, taskID, value)
 }

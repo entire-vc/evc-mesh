@@ -161,6 +161,12 @@ type TaskRepository interface {
 	// SetHumanGateClass most recently set, default 'hard'); clearing resets
 	// human_gate_class back to 'hard' — fail-closed, so a class configured for one ask
 	// never silently carries over onto the task's next, unrelated ask.
+	// ArmHumanGate arms the gate and writes the full ask (author, reason,
+	// recommended default, deadline, class) in ONE statement. The only supported
+	// way to arm a gate — SetHumanGate(true) survives for legacy callers but leaves
+	// the gate authorless. Re-arming an already-armed gate refreshes the ask without
+	// resetting human_gate_armed_at (so a repeat ping cannot keep a soft gate alive).
+	ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error
 	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
 	// SetHumanGateClass classifies the task's (currently armed or next) human_gate as
 	// domain.HumanGateClassHard (never timed out) or domain.HumanGateClassSoft (eligible

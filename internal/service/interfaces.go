@@ -198,6 +198,12 @@ type TaskService interface {
 	SupersedeRecurringInstances(ctx context.Context, scheduleID, newTaskID uuid.UUID) (worked, missed int, err error)
 	// SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
 	// When armed, only a human actor may move the task to backlog/done/cancelled.
+	// ArmHumanGate is the single arming path (task #4545660b). Validates the input
+	// and returns a 422 apierror naming the offending field when gate_author is
+	// missing, or when recommended_default is missing on an API-sourced arm.
+	ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error
+	// ClearHumanGate releases the gate and drops the ask metadata with it.
+	ClearHumanGate(ctx context.Context, taskID uuid.UUID) error
 	SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error
 	// SetHumanGateClass classifies the task's human_gate as hard (never timed out) or
 	// soft (eligible for HumanGateSoftTimeoutService once armed past its window). See

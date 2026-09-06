@@ -387,6 +387,8 @@ func (m *MockActivityLogService) Export(ctx context.Context, workspaceID uuid.UU
 
 // MockTaskService implements service.TaskService for testing.
 type MockTaskService struct {
+	ArmHumanGateFunc         func(ctx context.Context, in domain.ArmHumanGateInput) error
+	ClearHumanGateFunc       func(ctx context.Context, id uuid.UUID) error
 	CreateFunc               func(ctx context.Context, task *domain.Task) error
 	GetByIDFunc              func(ctx context.Context, id uuid.UUID) (*domain.Task, error)
 	GetByShortIDFunc         func(ctx context.Context, prefix string) (*domain.Task, error)
@@ -570,6 +572,18 @@ func (m *MockTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uu
 	return 0, 0, nil
 }
 
+func (m *MockTaskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error {
+	if m.ArmHumanGateFunc != nil {
+		return m.ArmHumanGateFunc(ctx, in)
+	}
+	return nil
+}
+func (m *MockTaskService) ClearHumanGate(ctx context.Context, id uuid.UUID) error {
+	if m.ClearHumanGateFunc != nil {
+		return m.ClearHumanGateFunc(ctx, id)
+	}
+	return nil
+}
 func (m *MockTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *MockTaskService) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
 	return nil

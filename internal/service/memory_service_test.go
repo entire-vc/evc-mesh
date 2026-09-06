@@ -2108,7 +2108,8 @@ func (m *mockTaskRepo) ListOpenByRecurringScheduleID(_ context.Context, _, _ uui
 	return nil, nil
 }
 
-func (m *mockTaskRepo) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+func (m *mockTaskRepo) ArmHumanGate(_ context.Context, _ domain.ArmHumanGateInput) error { return nil }
+func (m *mockTaskRepo) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error        { return nil }
 func (m *mockTaskRepo) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
 	return nil
 }

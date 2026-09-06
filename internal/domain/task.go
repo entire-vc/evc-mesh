@@ -122,6 +122,26 @@ type Task struct {
 	// HumanGateArmedAt is when human_gate was last flipped false->true, or nil if never
 	// armed. Read-only here for the same reason as HumanGateClass above.
 	HumanGateArmedAt *time.Time `json:"human_gate_armed_at,omitempty" db:"human_gate_armed_at"`
+	// GateAuthor / GateAuthorType / GateReason / RecommendedDefault / GateDeadline
+	// carry the rest of the "waiting on a human" answer on the TASK, so a client's
+	// is_human_gated collapses to reading HumanGate instead of re-deriving it from
+	// comment text (task #4545660b — the fleet had 21 such re-derivations, and the
+	// phantom-gate class #84ab54fd came from one driver reading another's boilerplate).
+	//
+	// All five are read-only here for the same reason as HumanGateClass: they are
+	// written only through TaskRepository.ArmHumanGate/.SetHumanGate, never Update().
+	// GateAuthor is nil only for a gate raw-armed via PATCH/UI; ArmHumanGate rejects a
+	// nil author with 422.
+	GateAuthor     *uuid.UUID `json:"gate_author,omitempty" db:"gate_author"`
+	GateAuthorType *ActorType `json:"gate_author_type,omitempty" db:"gate_author_type"`
+	GateReason     *string    `json:"gate_reason,omitempty" db:"gate_reason"`
+	// RecommendedDefault is what the gate's author will do if nobody answers. Consumed
+	// by the default-on-timeout sweep (task #060ccaae); nil means the gate can only
+	// ever be resolved by a human answering it.
+	RecommendedDefault *string `json:"recommended_default,omitempty" db:"recommended_default"`
+	// GateDeadline is when RecommendedDefault applies. Nil means no deadline — which
+	// the sweep must read as "out of scope", never as "already expired".
+	GateDeadline *time.Time `json:"gate_deadline,omitempty" db:"gate_deadline"`
 	// IsShipped marks the task as terminally shipped. Once set, MoveTask to any
 	// non-done category returns 422. Cleared only by an explicit PATCH /tasks/:id/unship.
 	IsShipped bool `json:"is_shipped" db:"is_shipped"`

@@ -664,6 +664,31 @@ func (m *MockTaskRepository) ListOpenByRecurringScheduleID(_ context.Context, sc
 	return result, nil
 }
 
+func (m *MockTaskRepository) ArmHumanGate(_ context.Context, in domain.ArmHumanGateInput) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.items[in.TaskID]; ok {
+		t.HumanGate = true
+		t.HumanGateClass = in.Class
+		author, authorType := in.Author, in.AuthorType
+		t.GateAuthor, t.GateAuthorType = &author, &authorType
+		if in.Reason != "" {
+			reason := in.Reason
+			t.GateReason = &reason
+		}
+		if in.RecommendedDefault != "" {
+			def := in.RecommendedDefault
+			t.RecommendedDefault = &def
+		}
+		t.GateDeadline = in.Deadline
+		m.items[in.TaskID] = t
+	}
+	return nil
+}
+
 func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, value bool) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
@@ -672,6 +697,16 @@ func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, v
 	defer m.mu.Unlock()
 	if t, ok := m.items[taskID]; ok {
 		t.HumanGate = value
+		// Mirror the real SQL's clear branch (task_repo.go SetHumanGate): releasing
+		// resets the class to hard and drops the ask metadata. Modelled here because a
+		// mock that keeps a soft class or a stale recommended_default across a release
+		// would let a test pass on behaviour prod does not have — and the field being
+		// dropped is the one #060ccaae's timeout sweep acts on.
+		if !value {
+			t.HumanGateClass = domain.HumanGateClassHard
+			t.GateAuthor, t.GateAuthorType = nil, nil
+			t.GateReason, t.RecommendedDefault, t.GateDeadline = nil, nil, nil
+		}
 		m.items[taskID] = t
 	}
 	return nil
@@ -2300,9 +2335,14 @@ type classSetCall struct {
 
 type fakeTaskMover struct {
 	TaskService
-	mu            sync.Mutex
-	moves         []moveCall
-	gateSetCalls  []humanGateCall
+	mu           sync.Mutex
+	moves        []moveCall
+	gateSetCalls []humanGateCall
+	// armCalls records the full ArmHumanGateInput of every arm. gateSetCalls above
+	// still gets a value:true entry per arm, so the pre-#4545660b assertions ("the
+	// gate was armed / was not armed") keep asserting exactly what they always did —
+	// the arming CALL changed shape, the delivery it stands for did not.
+	armCalls      []domain.ArmHumanGateInput
 	classSetCalls []classSetCall
 	err           error
 }
@@ -2312,6 +2352,27 @@ func (f *fakeTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, input Move
 	defer f.mu.Unlock()
 	f.moves = append(f.moves, moveCall{taskID: taskID, input: input})
 	return f.err
+}
+
+func (f *fakeTaskMover) ArmHumanGate(_ context.Context, in domain.ArmHumanGateInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.armCalls = append(f.armCalls, in)
+	f.gateSetCalls = append(f.gateSetCalls, humanGateCall{taskID: in.TaskID, value: true})
+	if in.Class != "" {
+		f.classSetCalls = append(f.classSetCalls, classSetCall{taskID: in.TaskID, class: in.Class})
+	}
+	return nil
+}
+
+func (f *fakeTaskMover) humanGateArmCalls() []domain.ArmHumanGateInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]domain.ArmHumanGateInput(nil), f.armCalls...)
+}
+
+func (f *fakeTaskMover) ClearHumanGate(ctx context.Context, taskID uuid.UUID) error {
+	return f.SetHumanGate(ctx, taskID, false)
 }
 
 func (f *fakeTaskMover) SetHumanGate(_ context.Context, taskID uuid.UUID, value bool) error {
