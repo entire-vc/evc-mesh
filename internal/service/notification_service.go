@@ -377,6 +377,13 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 					// recipient the server refused.
 					log.Printf("[notification][email] NOT DELIVERED: send to %s failed for user %s (event %s, workspace %s): %v",
 						addr, userID, event.EventType, event.WorkspaceID, err)
+				} else {
+					// The success side had no line at all until now (#4e1d249f,
+					// 2026-09-06): "no error was logged" and "this code path never
+					// ran" produced byte-identical silence, which an independent
+					// verifier correctly refused to accept as proof of delivery.
+					log.Printf("[notification][email] delivered: event %s to user %s at %s (workspace %s)",
+						event.EventType, userID, addr, event.WorkspaceID)
 				}
 			}(p.Config)
 		}

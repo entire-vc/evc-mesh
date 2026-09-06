@@ -247,3 +247,149 @@ func TestNotifyUserMention_TitleIncludesActorNameWhenPresent(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, "Garfield mentioned you on: Ship the thing", calls[0].Title)
 }
+
+// ---------------------------------------------------------------------------
+// HasSubscription must consider the event a comment ACTUALLY carries (#4e1d249f)
+//
+// Found by an independent verifier 2026-09-06: the per-comment delivery
+// outcome — the field agents actually check to tell whether a mention landed
+// — hardcoded task.mentioned regardless of what the comment asked for. Once a
+// person's subscription is narrowed to task.blocking_triage only (Pavel's
+// "только блокеры" decision), every future "❓ Blocking @pavel" recorded
+// outcome=skipped/no_subscription even though enforceBlockingTriage's own
+// Notify() call delivered it correctly — a false negative in exactly the
+// field this whole notification-delivery task exists to make trustworthy.
+// ---------------------------------------------------------------------------
+
+func TestUserHasSubscriptionForAnyEvent_MatchesAnyListedEvent(t *testing.T) {
+	env := setupCommentServiceWithUserMentions()
+
+	userID := uuid.New()
+	env.notifySvc.SeedPreference(domain.NotificationPreference{
+		ID:          uuid.New(),
+		WorkspaceID: env.wsID,
+		UserID:      &userID,
+		Channel:     "email",
+		Events:      []string{"task.blocking_triage"},
+		IsEnabled:   true,
+	})
+
+	assert.False(t,
+		env.svc.userHasSubscriptionForAnyEvent(context.Background(), userID, []string{"task.mentioned"}),
+		"a row scoped to task.blocking_triage must not report a task.mentioned-only subscription",
+	)
+	assert.True(t,
+		env.svc.userHasSubscriptionForAnyEvent(context.Background(), userID, []string{"task.mentioned", "task.blocking_triage"}),
+		"the same row must count once task.blocking_triage is itself one of the wanted events",
+	)
+}
+
+// deliveryRepoUserMentionEnv wires a fakeDeliveryRepo (from
+// comment_delivery_recording_test.go) alongside the user-mention env, so
+// notifyMentions's recorded outcome can be inspected end to end rather than
+// only at the userHasSubscriptionForAnyEvent unit level above.
+type deliveryRepoUserMentionEnv struct {
+	userMentionTestEnv
+	deliveryRepo *fakeDeliveryRepo
+}
+
+func setupCommentServiceWithUserMentionsAndDeliveryRepo() deliveryRepoUserMentionEnv {
+	commentRepo := NewMockCommentRepository()
+	taskRepo := NewMockTaskRepository()
+	activityRepo := NewMockActivityLogRepository()
+	projectRepo := NewMockProjectRepository()
+	userRepo := NewMockUserRepository()
+	agentSvc := NewMockAgentService()
+	agentNotify := NewMockAgentNotifyService()
+	notifySvc := NewMockNotificationService()
+	deliveryRepo := &fakeDeliveryRepo{}
+
+	wsID := uuid.New()
+	projID := uuid.New()
+	projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	timeNow = func() time.Time { return frozenTime }
+
+	svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+		WithCommentAgentService(agentSvc),
+		WithCommentAgentNotify(agentNotify),
+		WithCommentUserRepo(userRepo),
+		WithCommentProjectRepo(projectRepo),
+		WithCommentNotificationService(notifySvc),
+		WithCommentDeliveryOutcomeRepo(deliveryRepo),
+	).(*commentService)
+
+	return deliveryRepoUserMentionEnv{
+		userMentionTestEnv{svc, commentRepo, taskRepo, userRepo, agentSvc, agentNotify, notifySvc, wsID, projID},
+		deliveryRepo,
+	}
+}
+
+// TestNotifyMentions_BlockingMarker_RecordsDeliveredViaBlockingTriageSubscription
+// pins the end-to-end fix: a genuine "❓ Blocking @pavel" comment against a
+// user subscribed ONLY to task.blocking_triage must record outcome=delivered,
+// not skipped/no_subscription.
+func TestNotifyMentions_BlockingMarker_RecordsDeliveredViaBlockingTriageSubscription(t *testing.T) {
+	env := setupCommentServiceWithUserMentionsAndDeliveryRepo()
+
+	user := &domain.User{ID: uuid.New(), Username: "pavel", Name: "Pavel"}
+	env.userRepo.AddUser(env.wsID, user)
+	env.notifySvc.SeedPreference(domain.NotificationPreference{
+		ID:          uuid.New(),
+		WorkspaceID: env.wsID,
+		UserID:      &user.ID,
+		Channel:     "email",
+		Events:      []string{"task.blocking_triage"},
+		IsEnabled:   true,
+	})
+
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID, Title: "T"}
+	task := env.taskRepo.items[taskID]
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "❓ **Blocking @pavel**: need a decision"}
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+
+	env.svc.notifyMentions(ctx, comment, task, "", env.wsID)
+
+	require.Len(t, env.deliveryRepo.rows, 1)
+	row := env.deliveryRepo.rows[0]
+	assert.Equal(t, domain.DeliveryDelivered, row.Outcome,
+		"a blocking-marker comment must be recorded as delivered when the person is subscribed to task.blocking_triage, even without a task.mentioned row")
+	assert.Equal(t, domain.ReasonNotification, row.Reason)
+}
+
+// TestNotifyMentions_PlainMention_StaysSkippedOnBlockingTriageOnlySubscription
+// is the negative control: a PLAIN @-mention (no blocking marker) against the
+// same task.blocking_triage-only subscription must still record
+// skipped/no_subscription — being subscribed to blockers only must not make
+// every ordinary mention look delivered too.
+func TestNotifyMentions_PlainMention_StaysSkippedOnBlockingTriageOnlySubscription(t *testing.T) {
+	env := setupCommentServiceWithUserMentionsAndDeliveryRepo()
+
+	user := &domain.User{ID: uuid.New(), Username: "pavel", Name: "Pavel"}
+	env.userRepo.AddUser(env.wsID, user)
+	env.notifySvc.SeedPreference(domain.NotificationPreference{
+		ID:          uuid.New(),
+		WorkspaceID: env.wsID,
+		UserID:      &user.ID,
+		Channel:     "email",
+		Events:      []string{"task.blocking_triage"},
+		IsEnabled:   true,
+	})
+
+	taskID := uuid.New()
+	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID, Title: "T"}
+	task := env.taskRepo.items[taskID]
+
+	comment := &domain.Comment{ID: uuid.New(), TaskID: taskID, Body: "please look, @pavel"}
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+
+	env.svc.notifyMentions(ctx, comment, task, "", env.wsID)
+
+	require.Len(t, env.deliveryRepo.rows, 1)
+	row := env.deliveryRepo.rows[0]
+	assert.Equal(t, domain.DeliverySkipped, row.Outcome,
+		"a plain mention must not ride along on a blocking_triage-only subscription")
+	assert.Equal(t, domain.ReasonNoSubscription, row.Reason)
+}

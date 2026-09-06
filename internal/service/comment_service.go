@@ -1304,6 +1304,19 @@ func (s *commentService) notifyMentions(
 	// before it existed, an unresolvable handle wrote nothing anywhere.
 	outcomes := make([]domain.CommentDeliveryOutcome, 0, len(newSlugs))
 
+	// Slugs actually named by a "❓ Blocking @slug" marker in this comment,
+	// not just anywhere in the body — a person addressed by the marker itself
+	// can also be reached via their task.blocking_triage subscription, not
+	// only task.mentioned. Computed once: the recorded delivery outcome for
+	// THAT slug must reflect the wider set of events that could actually
+	// carry it, or a Pavel-style narrowed subscription reads as a permanent
+	// "skipped" here even while enforceBlockingTriage's own Notify() call
+	// (a separate code path) delivers it correctly.
+	blockingSlugSet := make(map[string]bool)
+	for _, sl := range blockingMarkerSlugs(comment.Body) {
+		blockingSlugSet[sl] = true
+	}
+
 	for _, slug := range newSlugs {
 		// Whether this handle named somebody at all. A handle that resolves to
 		// nothing is the case with no trace today, so it gets its own row at
@@ -1391,11 +1404,15 @@ func (s *commentService) notifyMentions(
 					// caught up on the next one.
 					s.ensureMentionDelivery(ctx, workspaceID, user.ID)
 				}
+				relevantEvents := []string{"task.mentioned"}
+				if blockingSlugSet[slug] {
+					relevantEvents = append(relevantEvents, "task.blocking_triage")
+				}
 				outcomes = append(outcomes, newOutcomeRow(comment.ID, deliveryFacts{
 					Slug:            slug,
 					User:            user,
 					SelfMention:     isSelf,
-					HasSubscription: s.userHasMentionSubscription(ctx, user.ID),
+					HasSubscription: s.userHasSubscriptionForAnyEvent(ctx, user.ID, relevantEvents),
 				}, now))
 				if isSelf {
 					// Recorded above as skipped/self_mention; nothing to send,
@@ -1513,14 +1530,37 @@ func (s *commentService) taskIsInTodoCategory(ctx context.Context, task *domain.
 }
 
 // userHasMentionSubscription reports whether the mentioned person has any
-// notification preference row that could carry a mention.
-//
-// Fails CLOSED for the same reason as above, with one extra consideration: a
-// person who has never opened notification settings has no preference row at
-// all, and dispatch then produces nothing on any channel without erroring.
-// That is the state this answer is mostly reporting, and calling it
-// "subscribed" because the lookup failed would hide precisely it.
+// notification preference row that could carry a plain task.mentioned event.
+// Kept as its own named entry point (rather than inlining the single-event
+// call below) because it is exercised directly by
+// TestUserHasMentionSubscription_FailsClosedWithoutANotifyService.
 func (s *commentService) userHasMentionSubscription(ctx context.Context, userID uuid.UUID) bool {
+	return s.userHasSubscriptionForAnyEvent(ctx, userID, []string{"task.mentioned"})
+}
+
+// userHasSubscriptionForAnyEvent reports whether the mentioned person has any
+// enabled notification preference row that lists at least one of wantEvents.
+//
+// Generalized from a task.mentioned-only check (#4e1d249f, found by an
+// independent verifier 2026-09-06): a comment's own recorded delivery outcome
+// — the field agents actually look at to tell whether an @-mention landed —
+// used to hardcode task.mentioned regardless of what the comment actually
+// asked for. Once a person's subscription is scoped to task.blocking_triage
+// only (e.g. Pavel's "только блокеры" narrowing), every future
+// "❓ Blocking @pavel" comment recorded outcome=skipped/no_subscription in
+// this field even though enforceBlockingTriage's own Notify() call — a
+// completely separate code path — delivered it correctly. A false "skipped"
+// here is exactly the failure mode this whole notification-delivery task
+// exists to kill, just inverted: agents would read the comment's own visible
+// delivery field and wrongly conclude the ask never reached anyone.
+//
+// Fails CLOSED for the same reason as the other checks in this file, with one
+// extra consideration: a person who has never opened notification settings
+// has no preference row at all, and dispatch then produces nothing on any
+// channel without erroring. That is the state this answer is mostly
+// reporting, and calling it "subscribed" because the lookup failed would hide
+// precisely it.
+func (s *commentService) userHasSubscriptionForAnyEvent(ctx context.Context, userID uuid.UUID, wantEvents []string) bool {
 	if s.notifySvc == nil {
 		return false
 	}
@@ -1529,9 +1569,9 @@ func (s *commentService) userHasMentionSubscription(ctx context.Context, userID 
 		return false
 	}
 	// The same three conditions dispatch applies, in the same order: a row
-	// belonging to this user, enabled, and listing this event. Re-deriving the
-	// gate loosely here would produce a report that disagrees with the code it
-	// is reporting on, which is worse than no report.
+	// belonging to this user, enabled, and listing one of these events.
+	// Re-deriving the gate loosely here would produce a report that disagrees
+	// with the code it is reporting on, which is worse than no report.
 	for i := range prefs {
 		p := prefs[i]
 		if p.UserID == nil || *p.UserID != userID {
@@ -1541,8 +1581,10 @@ func (s *commentService) userHasMentionSubscription(ctx context.Context, userID 
 			continue
 		}
 		for _, ev := range p.Events {
-			if ev == "task.mentioned" {
-				return true
+			for _, want := range wantEvents {
+				if ev == want {
+					return true
+				}
 			}
 		}
 	}
@@ -1798,10 +1840,23 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	// mechanism exists for essentially never reached anyone.
 	if s.notifySvc != nil {
 		targetUser, uErr := s.userRepo.GetByUsername(ctx, wsID, userSlug)
-		if uErr == nil && targetUser != nil {
+		if uErr != nil || targetUser == nil {
+			// Was the one branch here that could eat a failure with zero trace
+			// (found live 2026-09-06, #4e1d249f: an independent verifier posted
+			// three real "❓ Blocking @pavel" comments and found no log evidence,
+			// on either the success or failure side, that this dispatch was ever
+			// reached — this line is what tells the two apart from here on).
+			// firstResolvedUserSlug already resolved this exact slug moments ago
+			// with the same ctx/wsID to arm the gate, so a failure here means the
+			// two lookups disagree, not that the slug is unknown.
+			log.Printf("[comment-triage] WARNING: task.blocking_triage notify for task %s SKIPPED — GetByUsername(%q) failed after the gate already armed for it: %v",
+				task.ID, userSlug, uErr)
+		} else {
 			taskIDCopy := task.ID
 			projIDCopy := task.ProjectID
 			targetIDCopy := targetUser.ID
+			log.Printf("[comment-triage] dispatching task.blocking_triage notify for task %s to user %s (slug %q)",
+				task.ID, targetIDCopy, userSlug)
 			s.notifySvc.Notify(ctx, domain.NotificationEvent{
 				WorkspaceID:  wsID,
 				TaskID:       &taskIDCopy,
