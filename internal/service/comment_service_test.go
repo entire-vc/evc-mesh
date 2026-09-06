@@ -587,8 +587,23 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "garfield"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
+	// Real queue path: the task is already garfield's and sitting in a
+	// todo-category status — the InTaskQueue fact the mention-handoff gate
+	// (#9d8f7606) reuses from the delivery-outcome ledger. Without this the
+	// gate now refuses the comment before it fires anything — see
+	// TestEnforceMentionHandoffGate_PlainMentionWithNoQueuePathIsRefused.
+	statusRepo := NewMockTaskStatusRepository()
+	statusID := uuid.New()
+	statusRepo.items[statusID] = &domain.TaskStatus{
+		ID: statusID, ProjectID: env.projID, Category: domain.StatusCategoryTodo, Name: "Todo",
+	}
+	env.svc.statusRepo = statusRepo
+
 	taskID := uuid.New()
-	env.taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: env.projID, Title: "Test"}
+	env.taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: env.projID, Title: "Test", StatusID: statusID,
+		AssigneeType: domain.AssigneeTypeAgent, AssigneeID: &agent.ID,
+	}
 
 	comment := &domain.Comment{
 		TaskID:     taskID,

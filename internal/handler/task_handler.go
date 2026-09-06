@@ -1516,6 +1516,24 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var mentionHandoffErr *service.MentionHandoffRequiredError
+	if errors.As(err, &mentionHandoffErr) {
+		// 422: the comment body itself is well-formed, but what it asks for —
+		// handing work to a fiddler-driven lane via a bare @-mention — has no
+		// path to happen (CLAUDE-communication.md "How @-mentions wake";
+		// measured audit §3.1: 606 mentions/week, 72% unanswered, 3.8%
+		// delivered). Name the fix, don't just refuse.
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code": "mention_handoff_required",
+			"message": fmt.Sprintf(
+				"меншен не будит агента: @%s не имеет пути доставки. "+
+					"assign_task + move_task(\"todo\"), или create_subtask — "+
+					"или, если это просто FYI без хендоффа, повтори с префиксом \"fyi: @%s\".",
+				strings.Join(mentionHandoffErr.Slugs, ", @"), mentionHandoffErr.Slugs[0]),
+			"slugs": mentionHandoffErr.Slugs,
+		})
+	}
+
 	var unresolvedAssigneeErr *service.AssigneeUnresolvedError
 	if errors.As(err, &unresolvedAssigneeErr) {
 		// 422 for the same reason as the sibling above, but a distinct code and a

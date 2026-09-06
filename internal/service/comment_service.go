@@ -937,6 +937,25 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		}
 	}
 
+	// Resolve workspace ID once — needed below by the mention-handoff gate
+	// (must run BEFORE the comment is persisted, not just before it is
+	// notified) and again afterwards for agent/user notification.
+	var wsID uuid.UUID
+	if s.projectRepo != nil {
+		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+			wsID = proj.WorkspaceID
+		}
+	}
+
+	// Mention-handoff gate (audit §3.1, task #9d8f7606): refuse to persist a
+	// comment that @-mentions a fiddler-driven agent lane with no real path
+	// for them to see it. Must run before commentRepo.Create — the whole
+	// point is that the dead-letter comment never gets written, not merely
+	// that it goes un-notified.
+	if err := s.enforceMentionHandoffGate(ctx, comment, task, wsID); err != nil {
+		return err
+	}
+
 	if comment.ID == uuid.Nil {
 		comment.ID = uuid.New()
 	}
@@ -954,14 +973,6 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, comment.TaskID)
-	}
-
-	// Resolve workspace ID once for all agent notifications.
-	var wsID uuid.UUID
-	if s.projectRepo != nil {
-		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
-			wsID = proj.WorkspaceID
-		}
 	}
 
 	// Notify assigned agent about the new comment, but suppress for terminal tasks
