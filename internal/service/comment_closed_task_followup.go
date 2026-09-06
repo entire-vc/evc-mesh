@@ -7,11 +7,14 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // This file closes the gap measured in audit item 1.14 (task #754173eb), from
@@ -188,6 +191,96 @@ func followUpTitleExcerpt(body string) string {
 	return strings.TrimRight(string(runes[:followUpTitleExcerptRunes]), " ") + "…"
 }
 
+// closingReportWindow is how recently the card's own close must have happened
+// for a comment by the SAME actor to read as that close's report rather than as
+// a remark on already-shipped work.
+//
+// Sized to "the same action", not tuned: `move_task` with a comment is two
+// separate API calls from the client (MoveTaskInput carries no comment field),
+// so the two land milliseconds apart with nothing on the wire tying them
+// together. A minute is generous for that gap and far short of anything a
+// person would experience as "later".
+const closingReportWindow = 60 * time.Second
+
+// commentIsOwnClosingReport reports whether this comment is the closing note of
+// the actor who just closed this card.
+//
+// This is the defect the live acceptance run found, and it is not a small one:
+// the fleet's own rule is that ANY agent may close ANY card, and the governance
+// rule REQUIRES a comment before the move to done. So an orchestrator closing a
+// colleague's superseded card — routine, many times a day — would have opened a
+// follow-up card for that colleague every single time, titled with the first 60
+// characters of "Закрываю: …". A mechanism whose whole purpose is to stop noise
+// reaching an agent's queue would have become the fleet's largest single source
+// of it.
+//
+// Measured live on prod 2026-09-06 (`#754173eb`): `move_task(done, comment=…)`
+// produced follow-up card `#0da96e03` from the closer's own closing note within
+// the same second.
+//
+// The signal is deliberately about WHO and WHEN, never about what the text
+// says: the most recent move on this card was made by this comment's author,
+// moments ago, and the card is terminal now — so that move is the one that
+// closed it, and this comment is that move's report. A text heuristic
+// ("Закрываю", "closing") would be a second, weaker way to answer a question
+// the activity log already answers exactly, and it would miss every language
+// and phrasing nobody thought of.
+//
+// Fails OPEN (false → the follow-up is created) when the activity log cannot be
+// read. That direction is chosen deliberately and it is the opposite of the
+// usual fail-closed instinct: the cost of a wrong "true" is a swallowed remark,
+// which is the defect this whole file exists to fix; the cost of a wrong
+// "false" is one extra card the assignee can close.
+func (s *commentService) commentIsOwnClosingReport(
+	ctx context.Context,
+	comment *domain.Comment,
+	task *domain.Task,
+) bool {
+	if s.activityRepo == nil {
+		return false
+	}
+	page, err := s.activityRepo.ListByTask(ctx, task.ID, pagination.Params{Page: 1, PageSize: 10})
+	if err != nil || page == nil {
+		return false
+	}
+
+	// Scan for the latest move rather than trusting position. Postgres returns
+	// this page created_at DESC, but the test double returns map order, and a
+	// guard that is correct only under one repository's ordering is a guard
+	// whose test cannot see it break.
+	var lastMove *domain.ActivityLog
+	for i := range page.Items {
+		e := &page.Items[i]
+		if e.Action != "task.moved" {
+			continue
+		}
+		if lastMove == nil || e.CreatedAt.After(lastMove.CreatedAt) {
+			lastMove = e
+		}
+	}
+	if lastMove == nil {
+		return false
+	}
+
+	// The comment's own author, not the request's — a comment carries the
+	// identity it was written under, and that is the one being judged.
+	authorID, authorType := comment.AuthorID, comment.AuthorType
+	if authorID == uuid.Nil {
+		// Fall back to the authenticated actor when the comment carries no
+		// author of its own.
+		authorID, authorType = actorctx.FromContext(ctx)
+	}
+	if lastMove.ActorID != authorID || lastMove.ActorType != authorType {
+		return false
+	}
+
+	gap := comment.CreatedAt.Sub(lastMove.CreatedAt)
+	if gap < 0 {
+		gap = -gap
+	}
+	return gap <= closingReportWindow
+}
+
 // createClosedTaskFollowUp opens a follow-up card for a comment written on a
 // closed card by someone other than its assignee.
 //
@@ -243,6 +336,12 @@ func (s *commentService) createClosedTaskFollowUp(
 	// post-mortem, a link, a correction to their own report — routing that back
 	// to the person who just wrote it is a loop, not a delivery.
 	if comment.AuthorID == *task.AssigneeID && comment.AuthorType == domain.ActorTypeAgent {
+		return
+	}
+	// Branch: this comment IS the closing note of whoever just closed the card.
+	// See commentIsOwnClosingReport — without this the mechanism turns every
+	// routine cross-agent close into a follow-up card.
+	if s.commentIsOwnClosingReport(ctx, comment, task) {
 		return
 	}
 
