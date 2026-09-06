@@ -24,6 +24,12 @@ const (
 	// an external channel. Forgeable by construction — the control is
 	// visibility (always labeled) and revocability, never prevention.
 	HumanGateProvenanceAttested HumanGateProvenance = "attested"
+	// HumanGateProvenanceDefaultApplied means the OPPOSITE of the three above:
+	// nobody answered by gate_deadline, and the gate's own pre-stated
+	// recommended_default was applied mechanically by the default-on-timeout
+	// sweep (task #060ccaae). Never conflate with attested — that means a human
+	// answer was transcribed; this means no answer arrived at all.
+	HumanGateProvenanceDefaultApplied HumanGateProvenance = "default_applied"
 )
 
 // HumanGateChannel is where the decision was actually communicated.

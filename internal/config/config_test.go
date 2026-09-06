@@ -135,6 +135,36 @@ func TestLoad_NATSStreamMaxBytesInvalidFallsBackToDefault(t *testing.T) {
 	assert.Equal(t, int64(10*1024*1024*1024), cfg.NATS.StreamMaxBytes)
 }
 
+// TestLoad_HumanGateDefaultTimeoutHours_Defaults pins the value itself, not just that
+// SOME default exists: task #060ccaae / Pavel decision 2026-09-06 is specifically 24,
+// not the original 72h spec — a silently-reverted default would ship the wrong policy
+// with every other test in this file staying green.
+func TestLoad_HumanGateDefaultTimeoutHours_Defaults(t *testing.T) {
+	cfg := Load()
+
+	assert.Equal(t, 24, cfg.HumanGate.DefaultTimeoutHours)
+}
+
+func TestLoad_HumanGateDefaultTimeoutHours_Override(t *testing.T) {
+	t.Setenv("HUMAN_GATE_DEFAULT_TIMEOUT_H", "48")
+
+	cfg := Load()
+
+	assert.Equal(t, 48, cfg.HumanGate.DefaultTimeoutHours)
+}
+
+// A malformed HUMAN_GATE_DEFAULT_TIMEOUT_H must fall back to the default rather than
+// zeroing out the window — getEnvInt's own parse-failure path, pinned here because a
+// zeroed window would (absent TaskRepo's own defaultGateTimeoutHoursOrDefault floor)
+// mean every soft gate's auto-deadline computes as "right now".
+func TestLoad_HumanGateDefaultTimeoutHours_InvalidFallsBackToDefault(t *testing.T) {
+	t.Setenv("HUMAN_GATE_DEFAULT_TIMEOUT_H", "not-a-number")
+
+	cfg := Load()
+
+	assert.Equal(t, 24, cfg.HumanGate.DefaultTimeoutHours)
+}
+
 // A NATS_MAX_MSG_SIZE outside int32's range must fall back to the default,
 // not wrap silently. int32(getEnvInt(...)) truncated a value like this into
 // an unrelated, possibly negative, number instead — caught by CodeQL on

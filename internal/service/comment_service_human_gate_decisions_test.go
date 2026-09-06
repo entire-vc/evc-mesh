@@ -897,6 +897,60 @@ func TestProvenanceLabel_UnknownValue(t *testing.T) {
 	assert.Equal(t, "smoke-signal", provenanceLabel(domain.HumanGateProvenance("smoke-signal")))
 }
 
+// TestValidateDecisionInput_AcceptsDefaultApplied proves the new provenance value
+// (task #060ccaae) is a valid choice, not just an unrecognized string that happens to
+// fall through validateDecisionInput's default case.
+func TestValidateDecisionInput_AcceptsDefaultApplied(t *testing.T) {
+	key := "default-timeout:test"
+	quote := "merge; the gateway is inactive so no client can be charged"
+	in := domain.RecordHumanGateDecisionInput{
+		TaskID: uuid.New(), CanonicalKey: &key, DecidedBy: uuid.New(),
+		Provenance: domain.HumanGateProvenanceDefaultApplied, Channel: domain.HumanGateChannelMesh,
+		Quote: &quote,
+	}
+	assert.NoError(t, validateDecisionInput(in))
+}
+
+// TestValidateDecisionInput_DefaultApplied_StillRequiresQuote proves default_applied
+// does not silently exempt itself from the same quote requirement every non-direct
+// provenance has — the applied text IS the quote, and a decision with none would say
+// nothing about what actually happened.
+func TestValidateDecisionInput_DefaultApplied_StillRequiresQuote(t *testing.T) {
+	key := "default-timeout:test"
+	in := domain.RecordHumanGateDecisionInput{
+		TaskID: uuid.New(), CanonicalKey: &key, DecidedBy: uuid.New(),
+		Provenance: domain.HumanGateProvenanceDefaultApplied, Channel: domain.HumanGateChannelMesh,
+	}
+	require.Error(t, validateDecisionInput(in))
+}
+
+// TestRecordHumanGateDecision_DefaultApplied_UsesTaskSpecificWording proves the
+// comment body says exactly what task #060ccaae's acceptance criterion names
+// ("дефолт применён: <recommended_default>"), not the generic "human_gate снят —
+// решение зафиксировано (..., зафиксировал Pavel напрямую)" template — which would be
+// an outright false claim here, since nobody (least of all Pavel) answered anything.
+func TestRecordHumanGateDecision_DefaultApplied_UsesTaskSpecificWording(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID, gateAuthor := uuid.New(), uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	key := "default-timeout:" + taskID.String()
+	quote := "merge as-is; nothing customer-visible changes"
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, CanonicalKey: &key, DecidedBy: gateAuthor,
+		Provenance: domain.HumanGateProvenanceDefaultApplied, Channel: domain.HumanGateChannelMesh,
+		Quote: &quote,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, d)
+	assert.False(t, env.taskSvc.humanGate(taskID), "gate must be released as a consequence of recording")
+
+	comments := env.systemComments(taskID)
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "дефолт применён: "+quote)
+	assert.NotContains(t, comments[0].Body, "Pavel напрямую", "no one answered — this must not read as if Pavel did")
+}
+
 // errInjectedTest is a plain sentinel used across this file's error-injection
 // tests — its identity doesn't matter, only that Create/GetByID/SetHumanGate
 // return it and the code under test propagates or logs it correctly.

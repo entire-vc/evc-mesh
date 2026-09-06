@@ -92,6 +92,10 @@ func main() {
 	workspaceRepo := postgres.NewWorkspaceRepo(db)
 	projectRepo := postgres.NewProjectRepo(db)
 	taskRepo := postgres.NewTaskRepo(db)
+	// HUMAN_GATE_DEFAULT_TIMEOUT_H (task #060ccaae, Pavel decision 2026-09-06: 24h
+	// default) — wired here rather than a NewTaskRepo parameter to avoid touching
+	// its 60+ existing call sites for one optional knob.
+	taskRepo.SetDefaultGateTimeoutHours(cfg.HumanGate.DefaultTimeoutHours)
 	taskStatusRepo := postgres.NewTaskStatusRepo(db)
 	taskDependencyRepo := postgres.NewTaskDependencyRepo(db)
 	commentRepo := postgres.NewCommentRepo(db)
@@ -1926,6 +1930,37 @@ func main() {
 		}
 	}()
 	log.Println("human_gate soft-timeout sweeper started (15m interval)")
+
+	// 10b-quater. human_gate default-on-timeout sweeper (task #060ccaae). Applies each
+	// expired gate's own stated recommended_default, records it as a decision, releases
+	// the gate, and returns the task to todo. Deliberately a separate sweep from the one
+	// above rather than a parameter on it — see FindSoftTimedOutGates' doc for why the
+	// two must not both act on the same row, and human_gate_default_timeout.go for the
+	// rest of the contract. Same 15-minute cadence as the sweep above; a hard-classified
+	// gate is structurally unreachable here too (FindExpiredDefaultGates' class literal).
+	humanGateDefaultTimeoutSvc := service.NewHumanGateDefaultTimeoutService(
+		taskRepo, taskStatusRepo, projectRepo, commentService, taskService, notificationService,
+	)
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				n, err := humanGateDefaultTimeoutSvc.SweepExpiredDefaultGates(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("[human-gate-default-timeout] ERROR sweeping expired default gates: %v", err)
+				} else if n > 0 {
+					log.Printf("[human-gate-default-timeout] applied %d recommended default(s)", n)
+				}
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("human_gate default-timeout sweeper started (15m interval)")
 
 	// 10c. Stale session sweeper — end agent sessions left active longer than 6h every hour.
 	go func() {

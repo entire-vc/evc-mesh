@@ -2352,6 +2352,9 @@ func (m *mockTaskRepo) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domai
 func (m *mockTaskRepo) FindSoftTimedOutGates(_ context.Context, _ time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) FindExpiredDefaultGates(_ context.Context, _ time.Time) ([]domain.HumanGateDefaultTimeoutCandidate, error) {
+	return nil, nil
+}
 func (m *mockTaskRepo) SetShipped(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *mockTaskRepo) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil

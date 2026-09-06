@@ -96,10 +96,25 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 		return d, nil
 	}
 
-	body := fmt.Sprintf(
-		"🔓 Auto: human_gate снят — решение зафиксировано (%s, канал %s, зафиксировал %s).\n\n> %s",
-		provenanceLabel(input.Provenance), input.Channel, recorderLabel(input.RecordedBy), quoteOrDash(input.Quote),
-	)
+	// default_applied gets its own wording (task #060ccaae): the generic template below
+	// reads as "someone answered" (recorderLabel defaults an absent RecordedBy to "Pavel
+	// напrямую", which would be an outright lie here), and the task's own acceptance
+	// criterion names this exact phrase so a reader — human or the pavel-digest.py
+	// counter — can find it without parsing provenance out of the ledger row.
+	var body string
+	if input.Provenance == domain.HumanGateProvenanceDefaultApplied {
+		body = fmt.Sprintf(
+			"⏰ Auto: дефолт применён: %s\n\nГейт не получил ответа до дедлайна — сработал "+
+				"заявленный при постановке recommended_default. Решение зафиксировано (%s), "+
+				"human_gate снят.",
+			quoteOrDash(input.Quote), provenanceLabel(input.Provenance),
+		)
+	} else {
+		body = fmt.Sprintf(
+			"🔓 Auto: human_gate снят — решение зафиксировано (%s, канал %s, зафиксировал %s).\n\n> %s",
+			provenanceLabel(input.Provenance), input.Channel, recorderLabel(input.RecordedBy), quoteOrDash(input.Quote),
+		)
+	}
 	sysComment := &domain.Comment{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
@@ -119,7 +134,11 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 	if input.RecordedBy != nil {
 		actor = *input.RecordedBy
 	}
-	s.notifyHumanGateDecision(ctx, task, "task.human_gate_released", actor, sysComment)
+	releaseEvent := "task.human_gate_released"
+	if input.Provenance == domain.HumanGateProvenanceDefaultApplied {
+		releaseEvent = "task.human_gate_default_applied"
+	}
+	s.notifyHumanGateDecision(ctx, task, releaseEvent, actor, sysComment)
 
 	return d, nil
 }
@@ -301,7 +320,8 @@ func validateDecisionInput(input domain.RecordHumanGateDecisionInput) error {
 		return errors.New("question_ref or canonical_key is required")
 	}
 	switch input.Provenance {
-	case domain.HumanGateProvenanceDirect, domain.HumanGateProvenanceBridged, domain.HumanGateProvenanceAttested:
+	case domain.HumanGateProvenanceDirect, domain.HumanGateProvenanceBridged, domain.HumanGateProvenanceAttested,
+		domain.HumanGateProvenanceDefaultApplied:
 	default:
 		return fmt.Errorf("invalid provenance %q", input.Provenance)
 	}
@@ -325,6 +345,8 @@ func provenanceLabel(p domain.HumanGateProvenance) string {
 		return "bridged"
 	case domain.HumanGateProvenanceAttested:
 		return "attested — агент переписал ответ, не аутентифицировано криптографически"
+	case domain.HumanGateProvenanceDefaultApplied:
+		return "default_applied — ответа не было, применён заявленный дефолт"
 	default:
 		return string(p)
 	}
