@@ -772,10 +772,48 @@ func (m *MockTaskRepository) FindSoftTimedOutGates(_ context.Context, cutoff tim
 		if !t.HumanGate || t.HumanGateClass != domain.HumanGateClassSoft || t.HumanGateArmedAt == nil {
 			continue
 		}
+		// A gate with a stated deadline is owned exclusively by FindExpiredDefaultGates
+		// — see that method's doc in task_repo.go for why the two must not both fire on
+		// the same row.
+		if t.GateDeadline != nil {
+			continue
+		}
 		if t.HumanGateArmedAt.After(cutoff) {
 			continue
 		}
 		out = append(out, domain.HumanGateSoftTimeoutCandidate{TaskID: t.ID, ArmedAt: *t.HumanGateArmedAt})
+	}
+	return out, nil
+}
+
+func (m *MockTaskRepository) FindExpiredDefaultGates(_ context.Context, now time.Time) ([]domain.HumanGateDefaultTimeoutCandidate, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.HumanGateDefaultTimeoutCandidate
+	for _, t := range m.items {
+		if !t.HumanGate || t.HumanGateClass == domain.HumanGateClassHard {
+			continue
+		}
+		if t.RecommendedDefault == nil || *t.RecommendedDefault == "" {
+			continue
+		}
+		if t.GateDeadline == nil || t.GateDeadline.After(now) {
+			continue
+		}
+		if t.GateAuthor == nil || t.GateAuthorType == nil || t.HumanGateArmedAt == nil {
+			continue
+		}
+		out = append(out, domain.HumanGateDefaultTimeoutCandidate{
+			TaskID:             t.ID,
+			RecommendedDefault: *t.RecommendedDefault,
+			GateAuthor:         *t.GateAuthor,
+			GateAuthorType:     *t.GateAuthorType,
+			ArmedAt:            *t.HumanGateArmedAt,
+			Deadline:           *t.GateDeadline,
+		})
 	}
 	return out, nil
 }

@@ -24,6 +24,20 @@ type Config struct {
 	VAPID     VAPIDConfig
 	Email     EmailConfig
 	TeamRelay TeamRelayConfig
+	HumanGate HumanGateConfig
+}
+
+// HumanGateConfig holds the server-side default-on-timeout policy for
+// non-hard human gates (task #060ccaae, Pavel decision 2026-09-06: 24h, not
+// the original 72h spec — kept configurable exactly so the NEXT change to
+// this number is a config edit, not a code change).
+type HumanGateConfig struct {
+	// DefaultTimeoutHours is how long a non-hard gate with a stated
+	// recommended_default waits before that default is auto-applied.
+	// Hard-classed gates never get an auto-deadline regardless of this value
+	// (see ArmHumanGate's own CASE) — this only governs soft/unclassified
+	// gates that carry a real fallback.
+	DefaultTimeoutHours int
 }
 
 // TeamRelayConfig holds the INSTANCE-WIDE fallback for the Team Relay
@@ -367,6 +381,9 @@ func Load() *Config {
 		},
 		TeamRelay: TeamRelayConfig{
 			RelayURL: getEnv("MESH_TEAMRELAY_RELAY_URL", ""),
+		},
+		HumanGate: HumanGateConfig{
+			DefaultTimeoutHours: getEnvInt("HUMAN_GATE_DEFAULT_TIMEOUT_H", 24),
 		},
 		Embedding: EmbeddingConfig{
 			Provider:        getEnv("EMBEDDING_PROVIDER", "none"),

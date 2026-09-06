@@ -186,7 +186,17 @@ type TaskRepository interface {
 	// human_gate_armed_at is at or before cutoff. A hard-classified gate is excluded by
 	// the human_gate_class predicate itself, never by cutoff — passing an arbitrarily
 	// far-future cutoff still cannot select one (see task_repo_human_gate_class_db_test.go).
+	// A gate with a gate_deadline set is EXCLUDED here regardless of class or age — it
+	// is owned end to end by FindExpiredDefaultGates instead (task #060ccaae); see that
+	// method's doc for why the two must not both act on the same row.
 	FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error)
+	// FindExpiredDefaultGates returns armed, non-hard gates whose gate_deadline is at or
+	// before now AND which carry a non-empty recommended_default — the default-on-timeout
+	// sweep (task #060ccaae) applies each one's own stated fallback and records it as a
+	// decision. A hard-classified gate is excluded by the class predicate itself, and a
+	// gate with no stated default never reaches here because it never had a gate_deadline
+	// computed for it in the first place (see ArmHumanGate).
+	FindExpiredDefaultGates(ctx context.Context, now time.Time) ([]domain.HumanGateDefaultTimeoutCandidate, error)
 	// SetShipped atomically sets the is_shipped flag. Pass true to mark the task as
 	// terminally shipped; false to clear the flag (unship).
 	SetShipped(ctx context.Context, taskID uuid.UUID, value bool) error

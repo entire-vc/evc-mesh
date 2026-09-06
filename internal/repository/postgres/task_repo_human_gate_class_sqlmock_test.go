@@ -196,3 +196,127 @@ func TestTaskRepo_FindSoftTimedOutGates_DBError_Propagates(t *testing.T) {
 	require.ErrorIs(t, err, dbErr)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestTaskRepo_FindSoftTimedOutGates_QueryPinsDeadlineExclusion is the sqlmock half of
+// the handoff to FindExpiredDefaultGates (task #060ccaae): a gate with gate_deadline set
+// must be structurally excluded from THIS query's text, the same literal-predicate style
+// used for the class exclusion above. The real-Postgres proof that this actually
+// excludes a live row lives in task_repo_default_timeout_db_test.go.
+func TestTaskRepo_FindSoftTimedOutGates_QueryPinsDeadlineExclusion(t *testing.T) {
+	repo, mock := newTaskRepoMock(t)
+	cutoff := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(regexp.QuoteMeta("gate_deadline IS NULL")).
+		WithArgs(cutoff).WillReturnRows(sqlmock.NewRows([]string{"id", "human_gate_armed_at"}))
+
+	got, err := repo.FindSoftTimedOutGates(context.Background(), cutoff)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ---------------------------------------------------------------------------
+// TaskRepo.FindExpiredDefaultGates (task #060ccaae)
+// ---------------------------------------------------------------------------
+
+// TestTaskRepo_FindExpiredDefaultGates_QueryPinsStructuralLiterals is the sqlmock half
+// of the structural proof: asserts the exact fixed-literal predicates that make a hard
+// gate, or a gate with no stated default, unreachable regardless of `now`. The
+// real-Postgres test proves these literals actually exclude live rows, not just that
+// the string was sent.
+func TestTaskRepo_FindExpiredDefaultGates_QueryPinsStructuralLiterals(t *testing.T) {
+	repo, mock := newTaskRepoMock(t)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	rows := sqlmock.NewRows([]string{
+		"id", "recommended_default", "gate_author", "gate_author_type",
+		"human_gate_armed_at", "gate_deadline",
+	})
+	mock.ExpectQuery(regexp.QuoteMeta("human_gate_class != 'hard'")).
+		WithArgs(now).WillReturnRows(rows)
+
+	got, err := repo.FindExpiredDefaultGates(context.Background(), now)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTaskRepo_FindExpiredDefaultGates_QueryPinsRecommendedDefaultLiteral(t *testing.T) {
+	repo, mock := newTaskRepoMock(t)
+	now := time.Now().UTC()
+
+	rows := sqlmock.NewRows([]string{
+		"id", "recommended_default", "gate_author", "gate_author_type",
+		"human_gate_armed_at", "gate_deadline",
+	})
+	mock.ExpectQuery(regexp.QuoteMeta("recommended_default IS NOT NULL AND recommended_default != ''")).
+		WithArgs(now).WillReturnRows(rows)
+
+	_, err := repo.FindExpiredDefaultGates(context.Background(), now)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTaskRepo_FindExpiredDefaultGates_HydratesRows(t *testing.T) {
+	repo, mock := newTaskRepoMock(t)
+	now := time.Now().UTC()
+	id := uuid.New()
+	author := uuid.New()
+	armedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	deadline := time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC)
+
+	rows := sqlmock.NewRows([]string{
+		"id", "recommended_default", "gate_author", "gate_author_type",
+		"human_gate_armed_at", "gate_deadline",
+	}).AddRow(id, "merge as-is", author, string(domain.ActorTypeAgent), armedAt, deadline)
+	mock.ExpectQuery(regexp.QuoteMeta("human_gate_class != 'hard'")).
+		WithArgs(now).WillReturnRows(rows)
+
+	got, err := repo.FindExpiredDefaultGates(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, id, got[0].TaskID)
+	assert.Equal(t, "merge as-is", got[0].RecommendedDefault)
+	assert.Equal(t, author, got[0].GateAuthor)
+	assert.Equal(t, domain.ActorTypeAgent, got[0].GateAuthorType)
+	assert.True(t, armedAt.Equal(got[0].ArmedAt))
+	assert.True(t, deadline.Equal(got[0].Deadline))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestTaskRepo_FindExpiredDefaultGates_SkipsIncompleteRow is the defensive-hydration
+// mirror of TestTaskRepo_FindSoftTimedOutGates_SkipsNullArmedAt: a row missing any field
+// the candidate needs (should be unreachable given the query's own predicates, but the
+// Go code does not trust that blindly) is skipped rather than producing a candidate with
+// a zero-value GateAuthor that would apply an empty UUID's "decision".
+func TestTaskRepo_FindExpiredDefaultGates_SkipsIncompleteRow(t *testing.T) {
+	repo, mock := newTaskRepoMock(t)
+	now := time.Now().UTC()
+	id := uuid.New()
+
+	rows := sqlmock.NewRows([]string{
+		"id", "recommended_default", "gate_author", "gate_author_type",
+		"human_gate_armed_at", "gate_deadline",
+	}).AddRow(id, "merge as-is", uuid.NullUUID{Valid: false}, sql.NullString{Valid: false},
+		sql.NullTime{Valid: false}, sql.NullTime{Valid: false})
+	mock.ExpectQuery(regexp.QuoteMeta("human_gate_class != 'hard'")).
+		WithArgs(now).WillReturnRows(rows)
+
+	got, err := repo.FindExpiredDefaultGates(context.Background(), now)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTaskRepo_FindExpiredDefaultGates_DBError_Propagates(t *testing.T) {
+	repo, mock := newTaskRepoMock(t)
+	now := time.Now().UTC()
+	dbErr := errors.New("connection reset")
+
+	mock.ExpectQuery(regexp.QuoteMeta("human_gate_class != 'hard'")).
+		WithArgs(now).WillReturnError(dbErr)
+
+	_, err := repo.FindExpiredDefaultGates(context.Background(), now)
+	require.ErrorIs(t, err, dbErr)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

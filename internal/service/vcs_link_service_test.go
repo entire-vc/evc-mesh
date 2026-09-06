@@ -232,6 +232,9 @@ func (r *fakeTaskRepo) SetHumanGateClass(context.Context, uuid.UUID, domain.Huma
 func (r *fakeTaskRepo) FindSoftTimedOutGates(context.Context, time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error) {
 	return nil, nil
 }
+func (r *fakeTaskRepo) FindExpiredDefaultGates(context.Context, time.Time) ([]domain.HumanGateDefaultTimeoutCandidate, error) {
+	return nil, nil
+}
 func (r *fakeTaskRepo) SetShipped(context.Context, uuid.UUID, bool) error { return nil }
 func (r *fakeTaskRepo) SetDodCheck(context.Context, uuid.UUID, string, string, string) error {
 	return nil

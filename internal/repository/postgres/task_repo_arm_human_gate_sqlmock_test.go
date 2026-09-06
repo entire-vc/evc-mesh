@@ -70,10 +70,12 @@ func TestTaskRepo_ArmHumanGate_SetsEveryGateColumn(t *testing.T) {
 	deadline := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 
 	// Arg order is asserted too: a statement can name every column and still bind them
-	// in the wrong order, which no column-name check would catch.
+	// in the wrong order, which no column-name check would catch. The 8th arg is the
+	// configured default-on-timeout window (task #060ccaae) — unused by this particular
+	// call since an explicit Deadline is given, but still always bound.
 	mock.ExpectExec("").
 		WithArgs(taskID, domain.HumanGateClassSoft, author, string(domain.ActorTypeAgent),
-			"why", "what I will do otherwise", deadline).
+			"why", "what I will do otherwise", deadline, DefaultGateTimeoutHours).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
@@ -151,6 +153,129 @@ func TestTaskRepo_ArmHumanGate_MissingTaskIsNotFound(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Task")
+}
+
+// TestTaskRepo_ArmHumanGate_DeadlineCASE_ExplicitAlwaysWins pins the FIRST branch of the
+// gate_deadline CASE (task #060ccaae): a caller-supplied deadline is used verbatim,
+// regardless of class or recommended_default — the auto-default exists to fill in what
+// the caller left unset, never to override what they actually said.
+func TestTaskRepo_ArmHumanGate_DeadlineCASE_ExplicitAlwaysWins(t *testing.T) {
+	repo, mock, captured := captureTaskRepoSQL(t)
+	mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Class: domain.HumanGateClassHard,
+	}))
+	assert.Regexp(t, `gate_deadline\s*=\s*CASE\s+WHEN\s+\$7::timestamptz\s+IS\s+NOT\s+NULL\s+THEN\s+\$7::timestamptz`,
+		*captured, "an explicitly passed deadline must be the first, unconditional branch")
+}
+
+// TestTaskRepo_ArmHumanGate_DeadlineCASE_HardNeverAutoDefaults pins the second branch:
+// a hard-classified gate gets NULL when no explicit deadline was given, never a computed
+// one — HumanGateClassHard's whole contract is that no code path releases it on a clock,
+// and an auto-computed deadline sitting unused on the row would be exactly the residue
+// a future reader could mistake for a live one.
+func TestTaskRepo_ArmHumanGate_DeadlineCASE_HardNeverAutoDefaults(t *testing.T) {
+	repo, mock, captured := captureTaskRepoSQL(t)
+	mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		RecommendedDefault: "merge as-is", Class: domain.HumanGateClassHard,
+	}))
+	assert.Regexp(t, `WHEN\s+\$2\s*=\s*'hard'\s+THEN\s+NULL`, *captured,
+		"a hard gate must fall to NULL, not an auto-computed deadline, when none was given")
+}
+
+// TestTaskRepo_ArmHumanGate_DeadlineCASE_NoDefaultMeansNoDeadline pins the third branch:
+// a gate with no stated recommended_default gets NULL too, on any class — nothing would
+// exist for the timeout sweep to apply, so a computed deadline would be reachable dead
+// data (see domain.HumanGateDefaultTimeoutCandidate's doc for why the sweep never needs
+// to represent this case at all).
+func TestTaskRepo_ArmHumanGate_DeadlineCASE_NoDefaultMeansNoDeadline(t *testing.T) {
+	repo, mock, captured := captureTaskRepoSQL(t)
+	mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Class: domain.HumanGateClassSoft, // no RecommendedDefault
+	}))
+	assert.Regexp(t, `WHEN\s+NULLIF\(\$6,\s*''\)\s+IS\s+NULL\s+THEN\s+NULL`, *captured,
+		"a soft gate with no stated default must still get no auto-deadline")
+}
+
+// TestTaskRepo_ArmHumanGate_DeadlineCASE_SoftWithDefaultComputesFromConfiguredHours pins
+// the final branch AND that the interval is a BOUND parameter, not a literal: the one case
+// that actually produces a computed deadline is non-hard class + a real
+// recommended_default + no explicit deadline, and the window is
+// HUMAN_GATE_DEFAULT_TIMEOUT_H (default 24h, task #060ccaae / Pavel decision 2026-09-06 —
+// the original spec said 72h, changed before ship), never baked into the query text.
+func TestTaskRepo_ArmHumanGate_DeadlineCASE_SoftWithDefaultComputesFromConfiguredHours(t *testing.T) {
+	repo, mock, captured := captureTaskRepoSQL(t)
+	mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		RecommendedDefault: "merge; gateway is inactive", Class: domain.HumanGateClassSoft,
+	}))
+	assert.Regexp(t,
+		`ELSE\s+\(CASE\s+WHEN\s+human_gate\s+THEN\s+human_gate_armed_at\s+ELSE\s+NOW\(\)\s+END\)\s+\+\s+make_interval\(hours\s*=>\s*\$8\)`,
+		*captured,
+		"the computed default must be armed_at (old on re-arm, NOW() on first arm) + the "+
+			"CONFIGURED window — the SAME CASE the armed_at column itself uses, so a re-arm "+
+			"cannot silently push the deadline out from under an already-running clock; and "+
+			"the window must be a bound parameter make_interval(hours => $8), not a literal "+
+			"INTERVAL string — a literal would mean every config change is a code change")
+	assert.NotRegexp(t, `INTERVAL\s+'\d+\s+hours?'`, *captured,
+		"the interval must never be baked into the query text as a literal again")
+}
+
+// TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_UsesBuiltinDefaultWhenUnset proves the
+// zero-value TaskRepo (every one of NewTaskRepo's 60+ pre-existing call sites, and every
+// other test in this file) computes the deadline using DefaultGateTimeoutHours (24), not
+// zero hours — a misconfiguration or an un-migrated call site must not turn every soft
+// gate's deadline into "right now".
+func TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_UsesBuiltinDefaultWhenUnset(t *testing.T) {
+	repo, mock, _ := captureTaskRepoSQL(t)
+	mock.ExpectExec("").WithArgs(
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), DefaultGateTimeoutHours,
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		RecommendedDefault: "merge; gateway is inactive", Class: domain.HumanGateClassSoft,
+	}))
+}
+
+// TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_UsesConfiguredValue proves
+// SetDefaultGateTimeoutHours actually changes what gets bound — the whole point of making
+// this configurable is that HUMAN_GATE_DEFAULT_TIMEOUT_H=48 (say) must reach this call,
+// not just exist in code.
+func TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_UsesConfiguredValue(t *testing.T) {
+	repo, mock, _ := captureTaskRepoSQL(t)
+	repo.SetDefaultGateTimeoutHours(48)
+	mock.ExpectExec("").WithArgs(
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 48,
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		RecommendedDefault: "merge; gateway is inactive", Class: domain.HumanGateClassSoft,
+	}))
+}
+
+// TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_NonPositiveOverrideFallsBack: a caller
+// that sets a zero or negative window (a bug upstream, since config.go's own getEnvInt
+// parse-failure path already falls back before this point) must still floor to the
+// built-in default, not compute a deadline of "right now" or "in the past".
+func TestTaskRepo_ArmHumanGate_DefaultTimeoutHours_NonPositiveOverrideFallsBack(t *testing.T) {
+	repo, mock, _ := captureTaskRepoSQL(t)
+	repo.SetDefaultGateTimeoutHours(-5)
+	mock.ExpectExec("").WithArgs(
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), DefaultGateTimeoutHours,
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		RecommendedDefault: "merge; gateway is inactive", Class: domain.HumanGateClassSoft,
+	}))
 }
 
 func TestTaskRepo_ArmHumanGate_PropagatesDriverError(t *testing.T) {

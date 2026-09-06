@@ -349,11 +349,46 @@ func taskRowsToSlice(rows []taskRow) []domain.Task {
 // TaskRepo implements repository.TaskRepository with PostgreSQL.
 type TaskRepo struct {
 	db *sqlx.DB
+	// defaultGateTimeoutHours is ArmHumanGate's auto-deadline window (task
+	// #060ccaae). Zero (the zero value, and every one of NewTaskRepo's 60+
+	// existing call sites that never call SetDefaultGateTimeoutHours) means
+	// "use the built-in default" — see defaultGateTimeoutHoursOrDefault.
+	// Optional post-construction setter rather than a constructor parameter,
+	// same reason as every other single-knob config value threaded into an
+	// existing wide-fanout constructor in this codebase (e.g.
+	// AgentServiceConfigurable): changing NewTaskRepo's signature would touch
+	// every call site instead of just cmd/api/main.go.
+	defaultGateTimeoutHours int
 }
 
 // NewTaskRepo creates a new TaskRepo.
 func NewTaskRepo(db *sqlx.DB) *TaskRepo {
 	return &TaskRepo{db: db}
+}
+
+// DefaultGateTimeoutHours is the auto-deadline window used when nobody has
+// configured HUMAN_GATE_DEFAULT_TIMEOUT_H (Pavel decision 2026-09-06, task
+// #060ccaae: 24h, not the original 72h spec).
+const DefaultGateTimeoutHours = 24
+
+// SetDefaultGateTimeoutHours wires the configured default-on-timeout window
+// (HUMAN_GATE_DEFAULT_TIMEOUT_H) into ArmHumanGate's auto-deadline
+// computation. Not calling this (the case for all but one live construction
+// in cmd/api/main.go, and every test) leaves the built-in default in effect.
+func (r *TaskRepo) SetDefaultGateTimeoutHours(hours int) {
+	r.defaultGateTimeoutHours = hours
+}
+
+// defaultGateTimeoutHoursOrDefault is nil-safe in the sense that mirrors the
+// domain package's *Config accessors: an unset (zero) or invalid
+// (non-positive) value reads as "use the default", never as "wait zero
+// hours" — a misconfiguration must not turn every soft gate's deadline into
+// NOW().
+func (r *TaskRepo) defaultGateTimeoutHoursOrDefault() int {
+	if r.defaultGateTimeoutHours <= 0 {
+		return DefaultGateTimeoutHours
+	}
+	return r.defaultGateTimeoutHours
 }
 
 // isTaskNumberConflict reports whether err is a PostgreSQL unique-constraint
@@ -634,6 +669,26 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 // SetHumanGateClass already lets a hard marker downgrade a soft one) but must NOT reset
 // the age the soft-timeout sweep measures — otherwise a driver's repeat ping would keep
 // a soft gate alive forever, the latch shape of #84ab54fd.
+//
+// gate_deadline auto-defaults to armed_at + the configured default-on-timeout window
+// (task #060ccaae; Pavel decision 2026-09-06 set this to 24h — see
+// TaskRepo.defaultGateTimeoutHoursOrDefault, HUMAN_GATE_DEFAULT_TIMEOUT_H) when the
+// caller left it nil — but ONLY when there is a stated recommended_default to apply at
+// that deadline (an ask with no default cannot time out, matching
+// ArmHumanGateInput.Validate's own reasoning for the API source) AND the class is not
+// hard (a hard gate's whole point is that no code path ever releases it on a clock;
+// auto-computing a deadline it will never use would just be dead data inviting a future
+// reader to trust it). An EXPLICITLY passed deadline ($7 non-nil) always wins over the
+// auto-default, on any class — the caller said what they meant. The armed_at half of the
+// CASE mirrors the column's own CASE two lines up: a re-arm of an already-armed gate must
+// compute the default off the ORIGINAL armed_at, not NOW(), for the same reason it must
+// not reset armed_at itself.
+//
+// The window itself ($8) is bound as an integer-hours parameter rather than baked into
+// the query text as a literal INTERVAL — it is per-server config
+// (HUMAN_GATE_DEFAULT_TIMEOUT_H), and a literal would mean every config change is a code
+// change. `make_interval(hours => $8)` takes an int directly; no string concatenation
+// into the query, so no injection surface and no need to validate $8 is numeric.
 func (r *TaskRepo) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error {
 	const q = `
 		UPDATE tasks SET
@@ -644,13 +699,19 @@ func (r *TaskRepo) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput
 			gate_author_type = $4,
 			gate_reason = NULLIF($5, ''),
 			recommended_default = NULLIF($6, ''),
-			gate_deadline = $7,
+			gate_deadline = CASE
+				WHEN $7::timestamptz IS NOT NULL THEN $7::timestamptz
+				WHEN $2 = 'hard' THEN NULL
+				WHEN NULLIF($6, '') IS NULL THEN NULL
+				ELSE (CASE WHEN human_gate THEN human_gate_armed_at ELSE NOW() END) + make_interval(hours => $8)
+			END,
 			updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL`
 	dbStart := time.Now()
 	res, err := r.db.ExecContext(ctx, q,
 		in.TaskID, in.Class, in.Author, string(in.AuthorType),
 		in.Reason, in.RecommendedDefault, in.Deadline,
+		r.defaultGateTimeoutHoursOrDefault(),
 	)
 	pkgmetrics.RecordDBQuery("task.arm_human_gate", time.Since(dbStart))
 	if err != nil {
@@ -730,6 +791,16 @@ func (r *TaskRepo) SetHumanGateClass(ctx context.Context, taskID uuid.UUID, clas
 // what cutoff is passed, including an arbitrarily far-future one. See
 // task_repo_human_gate_class_db_test.go for the live negative control (a hard fixture
 // armed decades ago, queried with a decades-future cutoff, still absent from the result).
+//
+// `gate_deadline IS NULL` (added task #060ccaae) hands a soft gate that names a real
+// recommended_default off to FindExpiredDefaultGates exclusively: that gate WILL be
+// resolved (default applied, decision recorded) at its 72h deadline, and this blunt
+// "unfreeze but leave the question open" release at the 24h window would otherwise fire
+// FIRST — wiping gate_deadline/recommended_default/gate_author via SetHumanGate(false)
+// before the more useful mechanism ever got to run, silently making it dead code for
+// every gate that actually has a stated default. A soft gate with NO stated default (no
+// deadline was ever computed for it — see ArmHumanGate) still gets the original blunt
+// release at the window below; that is the one case this sweep still owns end to end.
 func (r *TaskRepo) FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error) {
 	const q = `
 		SELECT id, human_gate_armed_at
@@ -737,6 +808,7 @@ func (r *TaskRepo) FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) 
 		WHERE deleted_at IS NULL
 		  AND human_gate = true
 		  AND human_gate_class = 'soft'
+		  AND gate_deadline IS NULL
 		  AND human_gate_armed_at IS NOT NULL
 		  AND human_gate_armed_at <= $1`
 	type row struct {
@@ -758,6 +830,71 @@ func (r *TaskRepo) FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) 
 		out = append(out, domain.HumanGateSoftTimeoutCandidate{
 			TaskID:  rw.ID,
 			ArmedAt: rw.HumanGateArmedAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// FindExpiredDefaultGates returns armed gates whose gate_deadline has passed with no
+// answer — the sweep this feeds (task #060ccaae) applies each one's own stated
+// recommended_default and records that as a decision.
+//
+// Three predicates are fixed literals in this query text, the same structural-proof
+// style FindSoftTimedOutGates uses for its class literal — none is derived from now, so
+// none can be defeated by what now happens to be:
+//   - `human_gate_class != 'hard'` — a hard gate never gets an auto-computed
+//     gate_deadline (see ArmHumanGate), but an operator could still PATCH one in by
+//     hand; this is the second, independent line of defense, matching
+//     HumanGateClassHard's own doc that no code path may release a hard gate on a
+//     clock regardless of how it got the timestamp.
+//   - `recommended_default IS NOT NULL AND recommended_default != ”` — mirrors
+//     ArmHumanGate's own precondition for computing a deadline at all (a gate with no
+//     stated default cannot time out), so a row reaching here always has something
+//     real to apply. See domain.HumanGateDefaultTimeoutCandidate's doc.
+func (r *TaskRepo) FindExpiredDefaultGates(ctx context.Context, now time.Time) ([]domain.HumanGateDefaultTimeoutCandidate, error) {
+	const q = `
+		SELECT id, recommended_default, gate_author, gate_author_type,
+		       human_gate_armed_at, gate_deadline
+		FROM tasks
+		WHERE deleted_at IS NULL
+		  AND human_gate = true
+		  AND human_gate_class != 'hard'
+		  AND recommended_default IS NOT NULL AND recommended_default != ''
+		  AND gate_deadline IS NOT NULL
+		  AND gate_deadline <= $1`
+	type row struct {
+		ID                 uuid.UUID      `db:"id"`
+		RecommendedDefault sql.NullString `db:"recommended_default"`
+		GateAuthor         uuid.NullUUID  `db:"gate_author"`
+		GateAuthorType     sql.NullString `db:"gate_author_type"`
+		HumanGateArmedAt   sql.NullTime   `db:"human_gate_armed_at"`
+		GateDeadline       sql.NullTime   `db:"gate_deadline"`
+	}
+	var rows []row
+	dbStart := time.Now()
+	err := r.db.SelectContext(ctx, &rows, q, now)
+	pkgmetrics.RecordDBQuery("task.find_expired_default_gates", time.Since(dbStart))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.HumanGateDefaultTimeoutCandidate, 0, len(rows))
+	for _, rw := range rows {
+		// Defensive, not trusting the query's own predicates blindly — same posture
+		// FindSoftTimedOutGates takes for a NULL human_gate_armed_at. A row failing
+		// any of these did not pass the WHERE clause above unless something changed
+		// concurrently between the SELECT and this loop; skip rather than guess.
+		if !rw.RecommendedDefault.Valid || rw.RecommendedDefault.String == "" ||
+			!rw.GateAuthor.Valid || !rw.GateAuthorType.Valid ||
+			!rw.HumanGateArmedAt.Valid || !rw.GateDeadline.Valid {
+			continue
+		}
+		out = append(out, domain.HumanGateDefaultTimeoutCandidate{
+			TaskID:             rw.ID,
+			RecommendedDefault: rw.RecommendedDefault.String,
+			GateAuthor:         rw.GateAuthor.UUID,
+			GateAuthorType:     domain.ActorType(rw.GateAuthorType.String),
+			ArmedAt:            rw.HumanGateArmedAt.Time,
+			Deadline:           rw.GateDeadline.Time,
 		})
 	}
 	return out, nil

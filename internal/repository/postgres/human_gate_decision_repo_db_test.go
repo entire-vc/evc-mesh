@@ -226,3 +226,39 @@ func TestHumanGateDecisionRepo_ListByTask_NewestFirst(t *testing.T) {
 	assert.Equal(t, second.ID, list[0].ID)
 	assert.Equal(t, first.ID, list[1].ID)
 }
+
+// TestHumanGateDecisionRepo_DefaultAppliedProvenance_InsertsAgainstRealEnum proves
+// migration 20260906007 actually widened the live human_gate_decision_provenance
+// Postgres ENUM — a sqlmock test cannot catch an enum value the database itself would
+// reject, since the mock driver never validates against a real type. This is also the
+// strongest available proof the migration's own StatementBegin/End wrapping (needed to
+// get goose to parse the multi-line COMMENT statement at all — see the migration file's
+// history) did not silently drop the ALTER TYPE it wraps.
+func TestHumanGateDecisionRepo_DefaultAppliedProvenance_InsertsAgainstRealEnum(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	taskRepo := NewTaskRepo(db)
+	taskID := createTestTaskForComments(t, taskRepo, proj.ID, status.ID)
+	gateAuthor := createTestUser(t, db, "default-applied-author")
+
+	repo := NewHumanGateDecisionRepo(db)
+	key := "default-timeout:" + taskID.String()
+	quote := "merge; the gateway is inactive so no client can be charged"
+	d := &domain.HumanGateDecision{
+		TaskID:       taskID,
+		CanonicalKey: &key,
+		DecidedBy:    gateAuthor,
+		Provenance:   provPtr(domain.HumanGateProvenanceDefaultApplied),
+		Channel:      chanPtr(domain.HumanGateChannelMesh),
+		Quote:        &quote,
+	}
+	require.NoError(t, repo.Create(context.Background(), d))
+
+	got, err := repo.GetByID(context.Background(), d.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Provenance)
+	assert.Equal(t, domain.HumanGateProvenanceDefaultApplied, *got.Provenance)
+	require.NotNil(t, got.Quote)
+	assert.Equal(t, quote, *got.Quote)
+}
