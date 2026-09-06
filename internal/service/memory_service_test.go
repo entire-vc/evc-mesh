@@ -2324,6 +2324,9 @@ func (m *mockTaskRepo) CountByStatusCategory(_ context.Context, _ uuid.UUID) (ma
 func (m *mockTaskRepo) ListByStatusCategory(_ context.Context, _ uuid.UUID, _ domain.StatusCategory, _ pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) ListAllBacklogTasks(_ context.Context) ([]domain.Task, error) {
+	return nil, nil
+}
 func (m *mockTaskRepo) AtomicCheckout(_ context.Context, _, _, _ uuid.UUID, _ time.Time) error {
 	return nil
 }

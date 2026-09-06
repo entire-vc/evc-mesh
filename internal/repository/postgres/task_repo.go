@@ -1565,6 +1565,24 @@ func (r *TaskRepo) FindDueMonitorBacklogTasks(ctx context.Context) ([]domain.Tas
 	return taskRowsToSlice(rows), nil
 }
 
+// ListAllBacklogTasks returns every non-deleted task currently in a backlog-category
+// status, across all workspaces — deliberately unscoped, mirroring
+// FindDueMonitorBacklogTasks above rather than the workspace-scoped ListByStatusCategory.
+func (r *TaskRepo) ListAllBacklogTasks(ctx context.Context) ([]domain.Task, error) {
+	const q = `
+		SELECT ` + taskBaseColsNoAlias + `
+		FROM tasks
+		WHERE deleted_at IS NULL
+		  AND status_id IN (
+		      SELECT id FROM task_statuses WHERE category = 'backlog'
+		  )`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, q); err != nil {
+		return nil, err
+	}
+	return taskRowsToSlice(rows), nil
+}
+
 // ExtendCheckout pushes the checkout_expires deadline forward. The token must match
 // and the existing checkout must not already be expired (to prevent hijacking an
 // expired slot via extend).

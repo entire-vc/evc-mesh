@@ -113,6 +113,13 @@ type TaskRepository interface {
 	CountByStatus(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]int, error)
 	CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error)
 	ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	// ListAllBacklogTasks returns every non-deleted task currently in a backlog-category
+	// status, across ALL workspaces — global by design, mirroring FindDueMonitorBacklogTasks
+	// rather than the workspace-scoped ListByStatusCategory. Used by
+	// BacklogPromotionAdvisoryService (task #9f3f4064), which must see every backlog card
+	// the way bob/scripts/mesh-intake-sweep.py does (full visibility under its own agent
+	// key), not one caller's workspace.
+	ListAllBacklogTasks(ctx context.Context) ([]domain.Task, error)
 	// AtomicCheckout acquires an exclusive application-level lock on the task for the
 	// given agent. Returns ErrCheckoutConflict if locked by another non-expired agent.
 	AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error
