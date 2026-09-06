@@ -305,3 +305,101 @@ func TestPark_CommentExplainsParkNotTodoReturn(t *testing.T) {
 		t.Errorf("park comment claims the task went back to todo, which is the OTHER outcome: %s", body)
 	}
 }
+
+// ── retrying a park whose move is permanently refused ─────────────────────
+
+// A park whose MoveTask is refused must not re-arm the alarm on every retry.
+//
+// parkTask arms before it moves, deliberately (a half-park with no due_date and
+// no label is invisible to everything and sleeps until a human finds it). But the
+// original code re-armed unconditionally, so a MoveTask that fails *permanently*
+// — a human-gated task, a shipped task, a project rule — turned the 60s reaper
+// tick into a write loop that pushed due_date another dueHours out every pass.
+// The wake-up the park depends on therefore receded once per minute and could
+// never arrive. Measured on prod 2026-09-06, #2921ff07: 145 attempts, due_date
+// rewritten to now+24h each time.
+//
+// The clock is ADVANCED between the two attempts on purpose. Under this package's
+// usual frozen clock both attempts would compute the same due_date and the test
+// would pass against the unfixed code — a control that cannot fail.
+func TestPark_RetryAfterRefusedMove_DoesNotSlideTheAlarm(t *testing.T) {
+	h := newParkHarness(t, &domain.MidPipelineConfig{AutoParkStalled: true})
+	task := h.addUnleasedTask(t, h.projectID, 4*time.Hour)
+
+	realNow := timeNow
+	defer func() { timeNow = realNow }()
+	clock := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	timeNow = func() time.Time { return clock }
+
+	// MoveTask refuses the way a human-gated task refuses: the same way, every time.
+	h.mover.moveErr = errors.New("task is human-gated: awaiting human sign-off")
+
+	reaper := h.reaper.(*checkoutLeaseReaper)
+
+	load := func() *domain.Task { return h.stored(t, task.ID) }
+
+	// Tick 1.
+	if reaper.parkTask(context.Background(), load(), 24) {
+		t.Fatal("parkTask reported success while MoveTask refused the move")
+	}
+	afterFirst := load()
+	if afterFirst.DueDate == nil {
+		t.Fatal("first attempt did not arm the alarm at all — the pre-arm ordering is gone")
+	}
+	firstDue := *afterFirst.DueDate
+
+	// A minute passes, as it does between reaper ticks.
+	clock = clock.Add(1 * time.Minute)
+
+	// Tick 2, on the task as it now stands in the store.
+	if reaper.parkTask(context.Background(), load(), 24) {
+		t.Fatal("parkTask reported success on retry while MoveTask still refused")
+	}
+	afterSecond := load()
+	if afterSecond.DueDate == nil {
+		t.Fatal("retry cleared the due_date that the first attempt armed")
+	}
+
+	if !afterSecond.DueDate.Equal(firstDue) {
+		t.Errorf("retry SLID the park alarm: %v → %v (+%v). Every refused tick pushes the wake-up further away, so it never fires",
+			firstDue, *afterSecond.DueDate, afterSecond.DueDate.Sub(firstDue))
+	}
+
+	// The label must survive the retry too — monitor-promotion filters on it.
+	if !containsInStringArray(afterSecond.Labels, parkMonitorLabel) {
+		t.Errorf("retry lost the %q label; labels=%v", parkMonitorLabel, afterSecond.Labels)
+	}
+}
+
+// The companion to the test above: a park alarm that has already FIRED (due_date
+// in the past) must be re-armed, not treated as still-armed. Otherwise a card that
+// parked, woke on its due_date, was worked, and stalled again would inherit a
+// deadline that is already behind it and never wake a second time.
+func TestPark_ExpiredAlarmIsRearmedNotTreatedAsArmed(t *testing.T) {
+	h := newParkHarness(t, &domain.MidPipelineConfig{AutoParkStalled: true})
+	task := h.addUnleasedTask(t, h.projectID, 4*time.Hour)
+
+	realNow := timeNow
+	defer func() { timeNow = realNow }()
+	clock := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	timeNow = func() time.Time { return clock }
+
+	// A stale alarm from a previous park: label present, deadline long past.
+	stale := clock.Add(-72 * time.Hour)
+	seed := h.stored(t, task.ID)
+	seed.DueDate = &stale
+	seed.Labels = append(seed.Labels, parkMonitorLabel)
+	if err := h.taskRepo.Update(context.Background(), seed); err != nil {
+		t.Fatalf("seed stale alarm: %v", err)
+	}
+
+	if !h.reaper.(*checkoutLeaseReaper).parkTask(context.Background(), h.stored(t, task.ID), 24) {
+		t.Fatal("parkTask failed on a task carrying an expired alarm")
+	}
+
+	got := h.stored(t, task.ID)
+	if got.DueDate == nil || !got.DueDate.After(clock) {
+		t.Fatalf("expired alarm was treated as still-armed: due_date=%v is not in the future relative to %v — the card would never wake",
+			got.DueDate, clock)
+	}
+}
