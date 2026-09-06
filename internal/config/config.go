@@ -25,6 +25,32 @@ type Config struct {
 	Email     EmailConfig
 	TeamRelay TeamRelayConfig
 	HumanGate HumanGateConfig
+	Telegram  TelegramConfig
+}
+
+// TelegramConfig holds the per-INSTANCE switch for the Telegram notification
+// channel. It is not a per-workspace setting: a workspace already opts in by
+// having (or not having) an `integration_configs` row with its own bot, and
+// that stays the mechanism. This flag answers a different question — whether
+// this DEPLOYMENT offers the channel at all.
+//
+// Why it exists (task #4c642bd7, Pavel 2026-09-06): the fleet runs two
+// instances off this one binary. `mesh.prototypes.ventures` has the channel
+// configured and in use; `mesh.entire.host` does not use it, and the decision
+// there was verbatim "не выпиливать, а просто выключить" — turn it off, keep
+// the code. Deleting the channel to satisfy one instance would have broken the
+// other, and leaving it wired means entire.vc keeps a bot-connect UI that can
+// be filled in and then delivers nothing.
+type TelegramConfig struct {
+	// Enabled controls whether the Telegram channel is wired up on this
+	// instance at all: the notification dispatch fan-out, the bot manager's
+	// getUpdates poller, and the Integrations page's ability to connect a bot.
+	//
+	// Default TRUE — the flag is a deliberate opt-OUT. A default of false would
+	// silently disable a working channel on any deployment that has not yet
+	// learned the variable exists, which is exactly the instance (prototypes)
+	// this change must not touch. Disabling is the thing you have to ask for.
+	Enabled bool
 }
 
 // HumanGateConfig holds the server-side default-on-timeout policy for
@@ -371,6 +397,9 @@ func Load() *Config {
 		Spark: SparkConfig{
 			URL:     getEnv("MESH_SPARK_URL", ""),
 			Enabled: getEnvBool("MESH_SPARK_ENABLED", false),
+		},
+		Telegram: TelegramConfig{
+			Enabled: getEnvBool("MESH_TELEGRAM_ENABLED", true),
 		},
 		Webhook: WebhookConfig{
 			GitHubSecret: getEnv("MESH_GITHUB_WEBHOOK_SECRET", ""),

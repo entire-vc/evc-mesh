@@ -176,3 +176,28 @@ func TestLoad_NATSMaxMsgSizeOutOfInt32RangeFallsBackToDefault(t *testing.T) {
 
 	assert.Equal(t, int32(256*1024), cfg.NATS.MaxMsgSize)
 }
+
+// The Telegram channel's instance switch (#4c642bd7). The default is the whole
+// point of the flag: mesh.prototypes.ventures runs the channel and never sets
+// the variable, so a default of false would have turned OFF a working channel
+// on the instance this change was required not to touch. Disabling is opt-in.
+func TestLoad_TelegramEnabledDefaultsToTrue(t *testing.T) {
+	cfg := Load()
+
+	assert.True(t, cfg.Telegram.Enabled,
+		"an instance that has not heard of MESH_TELEGRAM_ENABLED must keep the Telegram channel")
+}
+
+func TestLoad_TelegramEnabledOverride(t *testing.T) {
+	// Both spellings, because the entire.host deploy writes one of them and a
+	// flag that only understands the other reads as "still on" with no error.
+	for _, off := range []string{"false", "0"} {
+		t.Run(off, func(t *testing.T) {
+			t.Setenv("MESH_TELEGRAM_ENABLED", off)
+
+			cfg := Load()
+
+			assert.False(t, cfg.Telegram.Enabled)
+		})
+	}
+}
