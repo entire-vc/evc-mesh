@@ -104,6 +104,64 @@ func (m *mockSessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UU
 	return nil, nil
 }
 
+// IncrementToolBreakdown mirrors the real repo's merge semantics (additive,
+// task-scoped when taskID != nil else agent-wide, create-on-miss) closely
+// enough to exercise ReportSession's client-tool_breakdown merge path in
+// TestReportSession_MergesClientToolBreakdown below — it is not a stand-in
+// for the real UPDATE/jsonb_set behavior, which is covered separately by
+// internal/repository/postgres session_repo_tool_breakdown_sqlmock_test.go.
+func (m *mockSessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, counts map[string]int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var target *domain.AgentSession
+	if taskID != nil {
+		target = m.byAgentTask[agentTaskKey(agentID, *taskID)]
+	} else {
+		target = m.byAgent[agentID]
+	}
+
+	merged := map[string]int64{}
+	if target != nil && len(target.ToolBreakdown) > 0 {
+		_ = json.Unmarshal(target.ToolBreakdown, &merged)
+	}
+	var total int64
+	for k, v := range counts {
+		if k == "" || v <= 0 {
+			continue
+		}
+		merged[k] += v
+		total += v
+	}
+	if total == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+
+	if target == nil {
+		target = &domain.AgentSession{
+			ID:          uuid.New(),
+			WorkspaceID: workspaceID,
+			AgentID:     agentID,
+			TaskID:      taskID,
+			StartedAt:   time.Now(),
+			Status:      domain.AgentSessionStatusActive,
+		}
+		m.createN++
+	}
+	target.ToolBreakdown = raw
+	target.ToolCalls += int(total)
+	cp := *target
+	m.byAgent[agentID] = &cp
+	if taskID != nil {
+		m.byAgentTask[agentTaskKey(agentID, *taskID)] = &cp
+	}
+	return nil
+}
+
 // setupSessionTest builds an AgentHandler wired with a session repo and an agent
 // service that resolves agents to a fixed workspace.
 func setupSessionTest(repo *mockSessionRepo, workspaceID uuid.UUID) (*AgentHandler, *echo.Echo) {
@@ -327,4 +385,68 @@ func TestReportSession_ConcurrentReports(t *testing.T) {
 	// No lost-update guarantee from the read-modify-write mock under concurrency,
 	// but the session must remain a single active row with a positive total.
 	assert.GreaterOrEqual(t, stored.TokensIn, int64(11))
+}
+
+// session_report accepts a client-computed tool_breakdown and merges it
+// additively into the session, same as tokens_in/tokens_out/estimated_cost.
+// This is the "session_report принимает и мержит breakdown от клиента" half
+// of task ce1bc187 — the per-request middleware (ToolBreakdownTracker) is
+// the primary write path, but the dispatcher/fiddler side can also report a
+// running tally it kept itself, e.g. for a spawn whose HTTP calls it proxied.
+func TestReportSession_MergesClientToolBreakdown(t *testing.T) {
+	repo := newMockSessionRepo()
+	agentID := uuid.New()
+	h, e := setupSessionTest(repo, uuid.New())
+
+	rec := postReport(t, h, e, &agentID,
+		`{"tokens_in":100,"tool_breakdown":{"recall":3,"remember":1}}`)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	stored, _ := repo.GetActive(context.Background(), agentID)
+	require.NotNil(t, stored)
+	var breakdown map[string]int64
+	require.NoError(t, json.Unmarshal(stored.ToolBreakdown, &breakdown))
+	assert.Equal(t, int64(3), breakdown["recall"])
+	assert.Equal(t, int64(1), breakdown["remember"])
+	assert.Equal(t, 4, stored.ToolCalls)
+}
+
+// A second report's tool_breakdown accumulates onto the first, same additive
+// semantics as every other numeric field on this endpoint — including the
+// consequence that a naive retry of an identical report double-counts, which
+// is the existing, accepted behavior for tokens_in/tokens_out/estimated_cost
+// on this same endpoint (there is no idempotency key on any of them). This
+// test documents that this is a deliberate, pre-existing tradeoff extended
+// to tool_breakdown for consistency, not a new one introduced by it.
+func TestReportSession_ToolBreakdownAccumulatesAcrossReports(t *testing.T) {
+	repo := newMockSessionRepo()
+	agentID := uuid.New()
+	h, e := setupSessionTest(repo, uuid.New())
+
+	postReport(t, h, e, &agentID, `{"tool_breakdown":{"recall":2}}`)
+	postReport(t, h, e, &agentID, `{"tool_breakdown":{"recall":2}}`) // e.g. a retried report
+
+	stored, _ := repo.GetActive(context.Background(), agentID)
+	require.NotNil(t, stored)
+	var breakdown map[string]int64
+	require.NoError(t, json.Unmarshal(stored.ToolBreakdown, &breakdown))
+	assert.Equal(t, int64(4), breakdown["recall"], "additive merge — a retried report is expected to double-count, same as tokens_in already does")
+}
+
+// No tool_breakdown field at all must not touch the session's existing
+// breakdown or manufacture a session with an empty one where none was asked
+// for — session_report's other fields (tokens/cost/model) still work exactly
+// as before this change for a caller that never sends tool_breakdown.
+func TestReportSession_NoToolBreakdownFieldLeavesNothingToMerge(t *testing.T) {
+	repo := newMockSessionRepo()
+	agentID := uuid.New()
+	h, e := setupSessionTest(repo, uuid.New())
+
+	rec := postReport(t, h, e, &agentID, `{"tokens_in":50}`)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	stored, _ := repo.GetActive(context.Background(), agentID)
+	require.NotNil(t, stored)
+	assert.Equal(t, int64(50), stored.TokensIn)
+	assert.Equal(t, 0, stored.ToolCalls)
 }

@@ -136,11 +136,20 @@ func (r *SessionRepo) Create(ctx context.Context, s *domain.AgentSession) error 
 }
 
 // Update persists all mutable fields of an agent session.
+// Update persists the mutable fields of an agent session EXCEPT tool_calls and
+// tool_breakdown. Those two columns are owned exclusively by
+// IncrementToolBreakdown's atomic read-and-add UPDATE (below): a caller here
+// always carries a plain copy of whatever ToolCalls/ToolBreakdown looked like
+// at the time it fetched the session (GetActive/GetActiveForTask never zero
+// them), and if this method wrote that copy back it would silently clobber
+// any increment IncrementToolBreakdown applied to the row in between the
+// fetch and this call — a classic read-modify-write lost update, and not a
+// hypothetical one: ReportSession does exactly that fetch-then-Update() round
+// trip on every /agents/me/sessions/report call, concurrently with the
+// tool-breakdown flush loop (ToolBreakdownTracker) writing to the same row
+// every ~15s. Leaving these two columns out of the SET list is what makes
+// that concurrency safe.
 func (r *SessionRepo) Update(ctx context.Context, s *domain.AgentSession) error {
-	toolBreakdown := s.ToolBreakdown
-	if toolBreakdown == nil {
-		toolBreakdown = json.RawMessage(`{}`)
-	}
 	complianceDetail := s.ComplianceDetail
 	if complianceDetail == nil {
 		complianceDetail = json.RawMessage(`{}`)
@@ -155,23 +164,20 @@ func (r *SessionRepo) Update(ctx context.Context, s *domain.AgentSession) error 
 		UPDATE agent_sessions
 		SET ended_at          = $1,
 		    status            = $2,
-		    tool_calls        = $3,
-		    tool_breakdown    = $4,
-		    tasks_touched     = $5,
-		    events_published  = $6,
-		    memories_created  = $7,
-		    model_used        = $8,
-		    tokens_in         = $9,
-		    tokens_out        = $10,
-		    estimated_cost    = $11,
-		    compliance_score  = $12,
-		    compliance_detail = $13,
-		    task_id           = COALESCE(task_id, $14)
-		WHERE id = $15
+		    tasks_touched     = $3,
+		    events_published  = $4,
+		    memories_created  = $5,
+		    model_used        = $6,
+		    tokens_in         = $7,
+		    tokens_out        = $8,
+		    estimated_cost    = $9,
+		    compliance_score  = $10,
+		    compliance_detail = $11,
+		    task_id           = COALESCE(task_id, $12)
+		WHERE id = $13
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		s.EndedAt, s.Status,
-		s.ToolCalls, toolBreakdown,
 		pq.Array(taskStrs), s.EventsPublished, s.MemoriesCreated,
 		s.ModelUsed, s.TokensIn, s.TokensOut, s.EstimatedCost,
 		s.ComplianceScore, complianceDetail,
@@ -179,6 +185,138 @@ func (r *SessionRepo) Update(ctx context.Context, s *domain.AgentSession) error 
 		s.ID,
 	)
 	return err
+}
+
+// incrementToolBreakdownAgentWide and incrementToolBreakdownTaskScoped are
+// the two — and only two — query shapes IncrementToolBreakdown ever runs.
+// Both are fixed string constants: no fmt.Sprintf, no "+"-concatenation with
+// a variable, nothing built at request time. The per-call variability
+// (which tool names, how many, what their counts are) travels entirely
+// inside $1, a single jsonb value built in Go and bound as one argument —
+// the query text itself never changes shape no matter how many distinct
+// tool names appear in a given batch.
+//
+// This is deliberately stricter than an earlier version of this method that
+// assembled the query by concatenating one jsonb_set(...) call per tool name
+// (with placeholder NUMBERS, never raw values, computed via strconv.Itoa).
+// That version was still parameterized correctly — nothing but placeholders
+// ever reached the query text — but it read as "$QUERY = $X + ..." to
+// go.lang.security.audit.database.string-formatted-query, which flags any
+// dynamically-assembled query string reaching ExecContext regardless of
+// what actually produced it, precisely because it can't prove a given
+// caller only ever concatenates safe fragments — that's the exact
+// assumption a scanner exists to not have to trust. Two constants selected
+// by a plain if/else, with every value bound as an argument, is what lets
+// the scanner verify the query is safe by construction instead of a human
+// asserting it.
+//
+// `tool_breakdown->>d.key` inside the merge reads the OLD value from the
+// SAME row being updated (Postgres evaluates a SET expression against the
+// row's pre-update values), so this is still one atomic read-and-add per
+// call — Postgres's row lock during the UPDATE serializes concurrent
+// increments to the same session instead of losing one to a read-then-write
+// race, same guarantee the jsonb_set version had.
+const incrementToolBreakdownAgentWide = `
+	UPDATE agent_sessions
+	SET tool_breakdown = COALESCE(tool_breakdown, '{}'::jsonb) || (
+			SELECT jsonb_object_agg(
+				d.key,
+				COALESCE((tool_breakdown ->> d.key)::bigint, 0) + d.value::bigint
+			)
+			FROM jsonb_each_text($1::jsonb) AS d(key, value)
+		),
+	    tool_calls = tool_calls + $2
+	WHERE id = (
+		SELECT id FROM agent_sessions
+		WHERE agent_id = $3 AND status = 'active'
+		ORDER BY started_at DESC
+		LIMIT 1
+	)
+`
+
+const incrementToolBreakdownTaskScoped = `
+	UPDATE agent_sessions
+	SET tool_breakdown = COALESCE(tool_breakdown, '{}'::jsonb) || (
+			SELECT jsonb_object_agg(
+				d.key,
+				COALESCE((tool_breakdown ->> d.key)::bigint, 0) + d.value::bigint
+			)
+			FROM jsonb_each_text($1::jsonb) AS d(key, value)
+		),
+	    tool_calls = tool_calls + $2
+	WHERE id = (
+		SELECT id FROM agent_sessions
+		WHERE agent_id = $3 AND status = 'active' AND task_id = $4
+		ORDER BY started_at DESC
+		LIMIT 1
+	)
+`
+
+// IncrementToolBreakdown atomically adds each entry in counts onto
+// tool_breakdown[tool] and their sum onto tool_calls, for the agent's active
+// session (task-scoped when taskID != nil, else agent-wide — see the
+// interface doc comment for the precedence this mirrors, and the two
+// constants above for the actual queries).
+//
+// When neither query matches a row (no active session yet for this
+// agent/task), one is created seeded with these counts. This is deliberately
+// allowed to be the very first thing that creates an agent_sessions row for a
+// spawn — ahead of the dispatcher's session_report call at the end of the
+// spawn — so a spawn that crashes or times out before ever reporting still
+// leaves a populated tool_breakdown behind instead of no row existing at all.
+func (r *SessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, counts map[string]int64) error {
+	filtered := make(map[string]int64, len(counts))
+	var total int64
+	for k, v := range counts {
+		if k == "" || v <= 0 {
+			continue
+		}
+		filtered[k] = v
+		total += v
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	delta, err := json.Marshal(filtered)
+	if err != nil {
+		return err
+	}
+
+	var (
+		q    string
+		args []interface{}
+	)
+	if taskID != nil {
+		q = incrementToolBreakdownTaskScoped
+		args = []interface{}{delta, total, agentID, *taskID}
+	} else {
+		q = incrementToolBreakdownAgentWide
+		args = []interface{}{delta, total, agentID}
+	}
+
+	res, err := r.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+
+	// No active session matched — seed a new one with this batch.
+	return r.Create(ctx, &domain.AgentSession{
+		ID:            uuid.New(),
+		WorkspaceID:   workspaceID,
+		AgentID:       agentID,
+		TaskID:        taskID,
+		StartedAt:     time.Now(),
+		Status:        domain.AgentSessionStatusActive,
+		ToolCalls:     int(total),
+		ToolBreakdown: delta,
+	})
 }
 
 // GetActive returns the active session for an agent, or nil if none exists.

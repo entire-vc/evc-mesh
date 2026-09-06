@@ -1212,6 +1212,9 @@ func (m *MockAgentSessionRepository) GetPreviousStartedAt(ctx context.Context, a
 func (m *MockAgentSessionRepository) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error) {
 	return nil, nil
 }
+func (m *MockAgentSessionRepository) IncrementToolBreakdown(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, counts map[string]int64) error {
+	return nil
+}
 
 func (m *MockDocumentService) Search(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error) {
 	if m.SearchFunc != nil {

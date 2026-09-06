@@ -644,12 +644,27 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 // All fields are optional; semantics are additive — the reported usage is
 // accumulated onto the agent's active session (one Mesh session may span
 // several agent spawns reported separately by the dispatcher).
+//
+// ToolBreakdown is a client-computed running count of MCP tool calls (e.g.
+// a dispatcher/fiddler's own tally from the spawn it just reaped) and is
+// MERGED ADDITIVELY into the session's tool_breakdown, same as every other
+// field on this request — there is no idempotency key, so a retried report
+// double-counts here exactly as a retry already double-counts tokens_in/
+// tokens_out/estimated_cost today. That's a pre-existing property of this
+// endpoint (it's called once per reaped spawn, not retried in normal
+// operation), not a new risk introduced by this field. Values are likewise
+// unverified: like every other number on this request, they're trusted
+// because the caller authenticated as the agent whose session they're
+// reporting on — Mesh has no independent count to check a self-report
+// against. Non-positive counts and empty keys are dropped rather than
+// erroring (see AgentSessionRepository.IncrementToolBreakdown).
 type reportSessionRequest struct {
-	TokensIn      int64   `json:"tokens_in"`
-	TokensOut     int64   `json:"tokens_out"`
-	Model         string  `json:"model"`
-	EstimatedCost float64 `json:"estimated_cost"`
-	TaskID        *string `json:"task_id"`
+	TokensIn      int64            `json:"tokens_in"`
+	TokensOut     int64            `json:"tokens_out"`
+	Model         string           `json:"model"`
+	EstimatedCost float64          `json:"estimated_cost"`
+	TaskID        *string          `json:"task_id"`
+	ToolBreakdown map[string]int64 `json:"tool_breakdown"`
 }
 
 // ReportSession handles POST /agents/me/sessions/report
@@ -737,6 +752,19 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 			active.TaskID = reqTaskID
 		}
 		if err := h.sessionRepo.Update(ctx, active); err != nil {
+			return handleError(c, err)
+		}
+	}
+
+	// Merge client-reported tool_breakdown, if any, onto whichever session
+	// row tokens/cost just landed on above (freshly created or the existing
+	// active one) — via the same atomic increment the per-request
+	// ToolBreakdownTracker flush uses, not a field on active.ToolBreakdown:
+	// SessionRepo.Update above intentionally never writes that column (see
+	// its doc comment), so setting it on the in-memory active struct here
+	// would have no effect on the row.
+	if len(req.ToolBreakdown) > 0 {
+		if err := h.sessionRepo.IncrementToolBreakdown(ctx, agentID, active.WorkspaceID, active.TaskID, req.ToolBreakdown); err != nil {
 			return handleError(c, err)
 		}
 	}

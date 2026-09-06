@@ -1269,6 +1269,18 @@ type AgentSessionRepository interface {
 	// GetTaskCostSummary aggregates session metrics for a task and computes rework count
 	// from the activity_log. Returns a zero-value summary when no sessions exist.
 	GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error)
+	// IncrementToolBreakdown atomically adds each count in counts onto
+	// tool_breakdown[tool] and the total onto tool_calls, for the agent's active
+	// session — task-scoped (task_id = *taskID) when taskID is non-nil, else
+	// agent-wide, mirroring the precedence a session_report with a task_id already
+	// resolves by (GetActiveForTask, falling back to GetActive). When no matching
+	// active session exists yet, one is created seeded with these counts and
+	// workspaceID — this is deliberately allowed to be the FIRST thing that creates
+	// an agent_sessions row for a spawn, so a spawn that ends without ever calling
+	// session_report (crash, timeout) still leaves a populated tool_breakdown
+	// behind instead of no session at all. Entries with a non-positive count or an
+	// empty key are ignored; a counts map with nothing left after that is a no-op.
+	IncrementToolBreakdown(ctx context.Context, agentID, workspaceID uuid.UUID, taskID *uuid.UUID, counts map[string]int64) error
 }
 
 // PushSubscriptionRepository manages persistence for Web Push subscriptions.
