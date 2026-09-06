@@ -212,6 +212,7 @@ func main() {
 	// gets embedded from its first ~15% (#e8063a65).
 	memoryService := service.NewMemoryService(memoryRepo, memoryEdgesRepo, embedder,
 		service.MemoryWithProjectRepo(projectRepo),
+		service.MemoryWithWorkspaceRepo(workspaceRepo),
 		service.MemoryWithTaskRepo(taskRepo),
 		service.MemoryWithDepRepo(taskDependencyRepo),
 		service.MemoryWithEmbedConcurrency(cfg.Embedding.Concurrency),

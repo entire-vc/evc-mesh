@@ -54,6 +54,60 @@ INIT_TIMEOUT = 60.0
 # Sequential stores: the mesh-mcp stdio server closes under high concurrency.
 STORE_CONCURRENCY = 1
 
+# ---------------------------------------------------------------------------
+# Client-side workspace guard (task #0104878c, layer 1 of 2).
+#
+# Isolation from a live workspace is held by which workspace MESH_AGENT_KEY
+# resolves to — a VALUE, not code. This CI harness had no check on that value
+# at all: the local bench harness (metronix-memory/benchmarks/longmemeval/
+# scripts/mesh_client.py) has carried this exact guard since the July leak
+# (#4045f449, 32 fixtures landed in prod), but this file — the one that runs
+# on a schedule against prod and gates merges — never got the port. A wrong
+# secret, or someone hand-running this script with a prod key, would silently
+# write ~49 fixtures per question straight into a live workspace, and the only
+# way anyone would find out is the same way as last time: garbage in someone
+# else's recall().
+#
+# Mirrors mesh_client.py's parseWorkspaceSlugFromKey exactly: an agent key is
+# `agk_<workspace-slug>_<random>`, and the slug is everything between the
+# `agk_` prefix and the LAST underscore (slugs may themselves contain
+# hyphens, so this is not a plain split). The key's random suffix is never
+# logged or otherwise included in any message this raises.
+BENCH_WORKSPACE_SLUG = os.environ.get("BENCH_WORKSPACE_SLUG", "lme-bench")
+
+
+def _key_workspace_slug(api_key: str) -> str:
+    """The workspace slug the SERVER will resolve `api_key` to."""
+    if not api_key.startswith("agk_"):
+        raise RuntimeError("MESH_AGENT_KEY is not an agent key (no `agk_` prefix)")
+    rest = api_key[4:]
+    idx = rest.rfind("_")
+    if idx <= 0:
+        raise RuntimeError("MESH_AGENT_KEY is malformed (no slug separator)")
+    return rest[:idx]
+
+
+def assert_bench_workspace() -> str:
+    """Fail CLOSED before a single fixture is written if MESH_AGENT_KEY points
+    anywhere other than the dedicated bench workspace. Read at call time, not
+    at import, so a `.env`/secret loaded after this module is imported is
+    still seen."""
+    key = os.environ.get("MESH_AGENT_KEY", "")
+    if not key:
+        raise RuntimeError("MESH_AGENT_KEY is unset — refusing to run the bench")
+    slug = _key_workspace_slug(key)
+    if slug != BENCH_WORKSPACE_SLUG:
+        raise RuntimeError(
+            f"REFUSING TO RUN: MESH_AGENT_KEY resolves to workspace '{slug}', not "
+            f"the dedicated bench workspace '{BENCH_WORKSPACE_SLUG}'. This harness "
+            f"writes ~49 fixtures per question at scope=workspace; against a live "
+            f"workspace they are visible to every agent's recall() and pollute "
+            f"every count over the memories table. Point MESH_AGENT_KEY at the "
+            f"bench workspace key (or set BENCH_WORKSPACE_SLUG if you really mean "
+            f"to bench elsewhere)."
+        )
+    return slug
+
 # The measurement window: how many rows one `recall` may return, and therefore
 # the CEILING on `rows_returned`. It has to clear the LARGEST haystack in the
 # dataset, or those questions are unreachable by construction — no filter and no
@@ -825,6 +879,15 @@ class MeshMemoryClient:
         self, sessions, dates, format_session_text, query, top_k, question_date="",
         search_settle_ok=None,
     ):
+        # Fail closed before spawning mesh-mcp, let alone writing anything — a
+        # wrong workspace does not become right on a later retry, and every
+        # retry re-enters here. See assert_bench_workspace. Placed inside _run
+        # (not in ingest_and_search, which calls this) because _run is exactly
+        # what test_gate_blindness.py stubs out to exercise the retry/backoff
+        # logic without a real mesh-mcp or MESH_AGENT_KEY — that test suite is
+        # documented (memory-bench.yml) to run on every PR with no secrets.
+        assert_bench_workspace()
+
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 

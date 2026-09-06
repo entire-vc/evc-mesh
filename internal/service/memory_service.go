@@ -38,6 +38,16 @@ var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 // does not supply an explicit min_importance. Entries below this score are noise.
 const defaultMinImportance float32 = 0.4
 
+// reservedMemoryTags is the single source of truth for tags a normal write may
+// not carry — each is gated to a specific, DB-flagged workspace via
+// enforceReservedTags. A second copy (e.g. in a test asserting the set) would
+// be exactly the drift class described in CLAUDE-workflow §1q (the `hold`
+// merge-label incident): the set and the enforcement point must never
+// disagree about what is reserved. Task #0104878c.
+var reservedMemoryTags = map[string]struct{}{
+	"lme-bench": {},
+}
+
 // entityKeywords are canonical domain terms that boost importance_score when found
 // in memory content, signalling higher decision-relevance.
 var entityKeywords = []string{"icp", "architecture", "license", "security", "money"}
@@ -268,15 +278,21 @@ const defaultHalfLifeDays = 30.0
 const candidateMultiplier = 3
 
 type memoryService struct {
-	memRepo      repository.MemoryRepository
-	edgeRepo     repository.MemoryEdgeRepository
-	embedder     embedding.Embedder
-	projectRepo  repository.ProjectRepository        // optional; nil → slug resolution skipped
-	taskRepo     repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
-	depRepo      repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
-	chunkRepo    repository.MemoryChunkRepository    // optional; nil → legacy single-vector embed path (memories.embedding)
-	halfLifeDays float64                             // half-life for exp decay; default defaultHalfLifeDays
-	embedSem     chan struct{}                       // optional bound on concurrent embed goroutines; nil = unbounded (default)
+	memRepo     repository.MemoryRepository
+	edgeRepo    repository.MemoryEdgeRepository
+	embedder    embedding.Embedder
+	projectRepo repository.ProjectRepository // optional; nil → slug resolution skipped
+	// workspaceRepo backs enforceReservedTags. Unlike the other optional repos
+	// above, nil here does NOT skip the check it backs — a reserved-tag write
+	// is refused when there is no way to confirm the workspace is privileged,
+	// exactly as when the workspace IS resolved but is_bench is false. See
+	// enforceReservedTags.
+	workspaceRepo repository.WorkspaceRepository
+	taskRepo      repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
+	depRepo       repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
+	chunkRepo     repository.MemoryChunkRepository    // optional; nil → legacy single-vector embed path (memories.embedding)
+	halfLifeDays  float64                             // half-life for exp decay; default defaultHalfLifeDays
+	embedSem      chan struct{}                       // optional bound on concurrent embed goroutines; nil = unbounded (default)
 
 	// RRF arm weights, resolved once at construction. Held per-service rather than as
 	// package globals so a weight sweep cannot race across concurrently-built services
@@ -294,6 +310,17 @@ type MemoryServiceOption func(*memoryService)
 func MemoryWithProjectRepo(pr repository.ProjectRepository) MemoryServiceOption {
 	return func(s *memoryService) {
 		s.projectRepo = pr
+	}
+}
+
+// MemoryWithWorkspaceRepo enables the reserved-tag guard (enforceReservedTags):
+// a write carrying a reserved tag (e.g. `lme-bench`) is only accepted into a
+// workspace flagged is_bench. Omitting this option does NOT disable the guard
+// — it makes every reserved-tag write fail closed, since there is then no way
+// to confirm any workspace is privileged. Production wiring always sets this.
+func MemoryWithWorkspaceRepo(wr repository.WorkspaceRepository) MemoryServiceOption {
+	return func(s *memoryService) {
+		s.workspaceRepo = wr
 	}
 }
 
@@ -498,6 +525,9 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 				"tags": "each tag must be 64 characters or fewer",
 			})
 		}
+	}
+	if err := s.enforceReservedTags(ctx, mem); err != nil {
+		return RememberResult{}, err
 	}
 
 	// Validate expires_at: if provided it must be in the future.
@@ -746,6 +776,54 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	}
 
 	return RememberResult{Outcome: outcome, Version: mem.Version, EmbeddingPending: embeddingPending}, nil
+}
+
+// enforceReservedTags refuses a write carrying a tag in reservedMemoryTags
+// unless mem's workspace is flagged as the correspondingly-privileged
+// workspace (today: is_bench for `lme-bench`). This is the ONE point both the
+// `remember` MCP tool and a direct `POST /api/v1/memories` call go through —
+// the MCP tool's own `remember` handler (evc-mesh-mcp's RESTClient.Remember)
+// is itself an HTTP client of this same endpoint, so there is no second
+// server-side path to separately gate. See task #0104878c.
+//
+// Fails CLOSED in every ambiguous case, deliberately mirroring
+// enforceReservedTags's own name: a lookup error, a missing workspace repo, or
+// a workspace whose is_bench flag was never set are all treated identically
+// to "not privileged" — never as "skip the check". A silent pass-through here
+// is exactly the regression this function exists to prevent (the July leak,
+// #4045f449, was a value silently failing open, not a code path with no
+// guard at all).
+//
+// Rejects with a named 400 rather than stripping the tag: a stripped tag
+// still upserts (now unreserved and untagged), which would break the bench
+// harness's age-based GC and leave the fixture as undeletable garbage instead
+// of a loud, retryable failure.
+func (s *memoryService) enforceReservedTags(ctx context.Context, mem *domain.Memory) error {
+	var hit string
+	for _, tag := range mem.Tags {
+		if _, ok := reservedMemoryTags[tag]; ok {
+			hit = tag
+			break
+		}
+	}
+	if hit == "" {
+		return nil
+	}
+
+	privileged := false
+	if s.workspaceRepo != nil {
+		if ws, err := s.workspaceRepo.GetByID(ctx, mem.WorkspaceID); err == nil && ws != nil {
+			privileged = ws.IsBench
+		}
+		// err != nil or ws == nil: privileged stays false — fail closed, do not
+		// propagate the lookup error as if it excused the check.
+	}
+	if !privileged {
+		return apierror.ValidationError(map[string]string{
+			"tags": fmt.Sprintf("tag `%s` is reserved for the benchmark workspace", hit),
+		})
+	}
+	return nil
 }
 
 // defaultExpiresAt applies the server-side TTL policy when the caller does not supply expires_at.

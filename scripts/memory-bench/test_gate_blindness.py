@@ -968,6 +968,15 @@ class TestCleanupSurvivesTheConnectionDying(unittest.TestCase):
         patcher = mock.patch.object(mc.time, "sleep")
         patcher.start()
         self.addCleanup(patcher.stop)
+        # This class drives the real `_run`, which now opens with
+        # assert_bench_workspace() (task #0104878c). No real key or secret is
+        # needed — the fake resolves to the module's own BENCH_WORKSPACE_SLUG
+        # default ("lme-bench"), so the guard passes and this class keeps
+        # testing what it exists to test: retry/cleanup, not the guard itself
+        # (that has its own tests below).
+        key_patcher = mock.patch.dict(os.environ, {"MESH_AGENT_KEY": "agk_lme-bench_faketoken"})
+        key_patcher.start()
+        self.addCleanup(key_patcher.stop)
 
     def _install_transport(self, sessions: list[_FakeSession]):
         """Inject fake `mcp` modules; `_run` imports them at call time."""
@@ -1278,6 +1287,11 @@ class TestToolErrorSurvivesTheTransportTeardown(unittest.TestCase):
         patcher = mock.patch.object(mc.time, "sleep")
         self.sleep = patcher.start()
         self.addCleanup(patcher.stop)
+        # See the matching comment in TestCleanupSurvivesTheConnectionDying.setUp:
+        # this class also drives the real `_run`, past assert_bench_workspace().
+        key_patcher = mock.patch.dict(os.environ, {"MESH_AGENT_KEY": "agk_lme-bench_faketoken"})
+        key_patcher.start()
+        self.addCleanup(key_patcher.stop)
 
     def _install(self, *, teardown_raises: bool):
         import contextlib

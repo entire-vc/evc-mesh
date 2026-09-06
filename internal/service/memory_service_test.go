@@ -596,6 +596,127 @@ func TestRemember_InvalidKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestRemember_ReservedTags — task #0104878c
+// ---------------------------------------------------------------------------
+
+// newMemoryServiceWithWorkspaceRepo wires the reserved-tag guard the way
+// production does (MemoryWithWorkspaceRepo). Tests that omit this option
+// entirely (there is no "nil repo" variant of the option) exercise the other
+// fail-closed branch: no workspace repo configured at all.
+func newMemoryServiceWithWorkspaceRepo(repo *mockMemoryRepo, wsRepo *MockWorkspaceRepository) MemoryService {
+	return NewMemoryService(repo, &mockMemoryEdgeRepo{}, nil, MemoryWithWorkspaceRepo(wsRepo))
+}
+
+func TestRemember_ReservedTag_RejectedOutsideBenchWorkspace(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: false}))
+
+	repo := &mockMemoryRepo{}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	mem := baseMemory(wsID)
+	mem.Tags = []string{"lme-bench"}
+
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+	assert.Contains(t, apiErr.Validation["tags"], "lme-bench")
+	assert.Contains(t, apiErr.Validation["tags"], "reserved")
+	assert.Equal(t, 0, repo.upsertCalls, "a reserved-tag write must not reach the repo")
+}
+
+func TestRemember_ReservedTag_AllowedInBenchWorkspace(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: true}))
+
+	repo := &mockMemoryRepo{}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	mem := baseMemory(wsID)
+	mem.Tags = []string{"lme-bench", "bench-abcd1234-q1"}
+
+	result, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+	require.NoError(t, err)
+	assert.Equal(t, "created", result.Outcome)
+	assert.Equal(t, 1, repo.upsertCalls)
+}
+
+// TestRemember_ReservedTag_FailsClosedWithoutWorkspaceRepo covers production
+// wiring dropping the option entirely — e.g. a future cmd/ binary that
+// constructs MemoryService without MemoryWithWorkspaceRepo. The absence of a
+// way to confirm a workspace is privileged must reject the write, not admit
+// it: this is the same "disarm by omission" class the DB-flag design (vs. an
+// env var) exists to close at the workspace layer, applied to the service's
+// own wiring.
+func TestRemember_ReservedTag_FailsClosedWithoutWorkspaceRepo(t *testing.T) {
+	repo := &mockMemoryRepo{}
+	svc := newMemoryService(repo) // no MemoryWithWorkspaceRepo option at all
+
+	mem := baseMemory(uuid.New())
+	mem.Tags = []string{"lme-bench"}
+
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+	assert.Equal(t, 0, repo.upsertCalls)
+}
+
+// TestRemember_ReservedTag_FailsClosedOnUnknownWorkspace covers acceptance
+// criterion 6: a workspace with no is_bench row (never migrated, or deleted)
+// must reject, not be treated as "flag not found, skip the check".
+func TestRemember_ReservedTag_FailsClosedOnUnknownWorkspace(t *testing.T) {
+	wsRepo := NewMockWorkspaceRepository() // empty — GetByID finds nothing
+	repo := &mockMemoryRepo{}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	mem := baseMemory(uuid.New())
+	mem.Tags = []string{"lme-bench"}
+
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+}
+
+// TestRemember_ReservedTag_FleetTagsUnaffected covers acceptance criterion 5:
+// the real agent tags `memory-bench` / `bench-*` (genuine notes about the
+// bench, not fixtures) are NOT in reservedMemoryTags and must pass through
+// exactly as before, including outside the bench workspace.
+func TestRemember_ReservedTag_FleetTagsUnaffected(t *testing.T) {
+	wsID := uuid.New() // NOT flagged is_bench
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: false}))
+
+	for _, tag := range []string{"memory-bench", "bench-recap-2026-09-06"} {
+		t.Run(tag, func(t *testing.T) {
+			repo := &mockMemoryRepo{}
+			svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+			mem := baseMemory(wsID)
+			mem.Key = "test-key-" + tag
+			mem.Tags = []string{tag}
+
+			result, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+			require.NoError(t, err)
+			assert.Equal(t, "created", result.Outcome)
+			assert.Equal(t, 1, repo.upsertCalls)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestRecall_BasicSearch
 // ---------------------------------------------------------------------------
 
