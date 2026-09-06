@@ -1362,6 +1362,25 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 // uploaded artifact. GREATEST over them and updated_at gives "last sign of life
 // by any route", which is the quantity the grace window was always meant to
 // measure.
+//
+// human_gate and is_shipped are excluded because a system actor is FORBIDDEN to
+// move such a task, so selecting one produces a retry loop that can never end:
+// MoveTask returns HumanGateFrozenError (backlog/done/cancelled are user-only
+// while a gate is armed) or TaskShippedError (no move to any non-done category),
+// the sweep logs and skips, nothing about the task changes, and the next tick
+// selects it again. Unlike phase 1 — which cannot loop, because phase 2 nulls the
+// checkout_expires it keys on — nothing here clears the selection condition.
+//
+// Measured on prod 2026-09-06: #2921ff07 (human_gate armed 14:45) failed to park
+// 145 times, once per 60s tick across restarts, and was the reaper's ONLY
+// observable output. Each attempt also rewrote due_date to now+24h, sliding the
+// park alarm permanently out of reach, because parkTask arms before it moves.
+//
+// Excluding them is not a hole in the original defect. A gated task's wake-up
+// path IS the human the gate is waiting on, and the gate already freezes the
+// feed, so the card is effectively parked already; a shipped task is terminal by
+// definition. Neither is abandoned, which is the only state this sweep exists to
+// clear up.
 func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan time.Duration) ([]domain.Task, error) {
 	const q = `
 		SELECT ` + taskBaseColsNoAlias + `
@@ -1369,6 +1388,8 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 		WHERE t.checked_out_by IS NULL
 		  AND t.checkout_expires IS NULL
 		  AND t.deleted_at IS NULL
+		  AND t.human_gate = false
+		  AND t.is_shipped = false
 		  AND t.status_id IN (
 		      SELECT id FROM task_statuses WHERE category = 'in_progress'
 		  )

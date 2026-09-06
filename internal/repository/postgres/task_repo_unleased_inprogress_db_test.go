@@ -162,3 +162,78 @@ func TestFindStaleUnleasedInProgress_GraceIsApplied(t *testing.T) {
 	require.True(t, contains(2*time.Hour), "idle 3h with a 2h grace should be returned")
 	require.False(t, contains(4*time.Hour), "idle 3h with a 4h grace must NOT be returned — the grace argument is ignored")
 }
+
+// A task a system actor is FORBIDDEN to move must not be selected at all.
+//
+// This is not tidiness — selecting one is unrecoverable. MoveTask rejects a
+// human-gated task moving to backlog/done/cancelled (HumanGateFrozenError) and a
+// shipped task moving anywhere but done (TaskShippedError). The sweep logs the
+// refusal and skips, nothing about the task changes, and the next tick selects it
+// again: an infinite retry at the reaper's 60s cadence. Phase 1 cannot loop this
+// way because phase 2 nulls the checkout_expires it keys on; phase 3 has no such
+// escape, so the exclusion has to live in the query.
+//
+// Measured on prod 2026-09-06 before this fix: #2921ff07 (human_gate armed 14:45)
+// failed to park 145 consecutive times and was the reaper's ONLY output.
+//
+// Both rows differ from the positive control in exactly one boolean, so a
+// predicate that stopped filtering fails here instead of silently returning.
+func TestFindStaleUnleasedInProgress_SkipsUnmovableTasks(t *testing.T) {
+	db := testDB(t)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	_, proj, _ := createTestProject(t, db)
+	inProg := &domain.TaskStatus{
+		ID: uuid.New(), ProjectID: proj.ID, Name: "In Progress", Slug: "in-progress",
+		Color: "#0000FF", Position: 1, Category: domain.StatusCategoryInProgress,
+	}
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO task_statuses (id, project_id, name, slug, color, position, category, is_default)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,false)`,
+		inProg.ID, inProg.ProjectID, inProg.Name, inProg.Slug, inProg.Color, inProg.Position, inProg.Category)
+	require.NoError(t, err)
+
+	stale := time.Now().Add(-8 * time.Hour)
+
+	// Force the flags by UPDATE and then read them back, for the same reason the
+	// checkout columns are forced above: a control row that did not actually take
+	// the property under test cannot fail, and reads exactly like a passing one.
+	mk := func(title string, gated, shipped bool) uuid.UUID {
+		task := makeTestTask(proj.ID, inProg.ID, title)
+		require.NoError(t, repo.Create(ctx, task))
+		_, err := db.ExecContext(ctx,
+			`UPDATE tasks SET updated_at=$1, human_gate=$2, is_shipped=$3 WHERE id=$4`,
+			stale, gated, shipped, task.ID)
+		require.NoError(t, err)
+
+		var gotGate, gotShipped bool
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT human_gate, is_shipped FROM tasks WHERE id=$1`, task.ID).Scan(&gotGate, &gotShipped))
+		require.Equal(t, gated, gotGate, "fixture did not persist human_gate for %q", title)
+		require.Equal(t, shipped, gotShipped, "fixture did not persist is_shipped for %q", title)
+
+		return task.ID
+	}
+
+	movableID := mk("unleased, idle, movable — MUST be returned", false, false)
+	gatedID := mk("human-gated — a system actor may not move it", true, false)
+	shippedID := mk("shipped — may not move to any non-done status", false, true)
+
+	got, err := repo.FindStaleUnleasedInProgress(ctx, 120*time.Minute)
+	require.NoError(t, err)
+
+	found := make(map[uuid.UUID]bool, len(got))
+	for _, task := range got {
+		found[task.ID] = true
+	}
+
+	// Positive control: without this, a query that returned nothing at all would
+	// pass both negatives below and look like a working filter.
+	require.True(t, found[movableID],
+		"the movable unleased idle task was NOT returned — the sweep has stopped doing its job entirely")
+	require.False(t, found[gatedID],
+		"a HUMAN-GATED task was returned — MoveTask will refuse it every tick, forever (prod #2921ff07, 145 failures)")
+	require.False(t, found[shippedID],
+		"a SHIPPED task was returned — MoveTask refuses any non-done move, so this retries forever")
+}

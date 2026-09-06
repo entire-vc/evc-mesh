@@ -360,18 +360,33 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 		return r.returnToTodo(ctx, []domain.Task{*task}, activityCheckoutUnleasedReturned) == 1
 	}
 
-	due := timeNow().Add(time.Duration(dueHours) * time.Hour)
-	labels := task.Labels
-	if !containsInStringArray(labels, parkMonitorLabel) {
-		labels = append(append([]string{}, labels...), parkMonitorLabel)
-	}
+	// Arm only if not already armed. The alarm is (label + a due_date still in the
+	// future); when both already hold, this is a retry of a park whose MoveTask
+	// failed, and rewriting the same alarm buys nothing while doing real harm:
+	// each rewrite pushes due_date another dueHours out, so the wake-up the park
+	// depends on recedes once per tick and can never arrive. Measured on prod
+	// 2026-09-06, #2921ff07: 145 rewrites, due_date sliding to now+24h every 60s.
+	//
+	// A previously-fired alarm (due_date in the past) is deliberately NOT treated
+	// as armed, so a card that parked, woke, and stalled again is re-armed with a
+	// fresh deadline rather than inheriting a stale one.
+	needsLabel := !containsInStringArray(task.Labels, parkMonitorLabel)
+	alreadyArmed := !needsLabel && task.DueDate != nil && task.DueDate.After(timeNow())
 
-	updated := *task
-	updated.DueDate = &due
-	updated.Labels = labels
-	if err := r.taskRepo.Update(sysCtx, &updated); err != nil {
-		log.Printf("[lease-reaper] failed to arm park alarm on task %s, leaving it in_progress: %v", task.ID, err)
-		return false
+	if !alreadyArmed {
+		due := timeNow().Add(time.Duration(dueHours) * time.Hour)
+		labels := task.Labels
+		if needsLabel {
+			labels = append(append([]string{}, labels...), parkMonitorLabel)
+		}
+
+		updated := *task
+		updated.DueDate = &due
+		updated.Labels = labels
+		if err := r.taskRepo.Update(sysCtx, &updated); err != nil {
+			log.Printf("[lease-reaper] failed to arm park alarm on task %s, leaving it in_progress: %v", task.ID, err)
+			return false
+		}
 	}
 
 	if err := r.taskMover.MoveTask(sysCtx, task.ID, MoveTaskInput{StatusID: backlogID, Source: "stall_park"}); err != nil {
