@@ -1242,11 +1242,17 @@ func TestComputeImportanceScore_BaseByKind(t *testing.T) {
 		tag  string
 		want float32
 	}{
+		{"kind:pinned", 1.00},
 		{"kind:incident", 0.85},
 		{"kind:decision", 0.80},
+		{"kind:preference", 0.80},
 		{"kind:learning", 0.70},
 		{"kind:fact", 0.60},
 		{"kind:session-checkpoint", 0.30},
+		// Not a recognised kind: it falls through to the 0.50 default. Pinned
+		// because bob/CLAUDE-memory.md documented it at 0.80 for months and
+		// nothing contradicted the claim (#17840d1b).
+		{"kind:canonical-decision", 0.50},
 	}
 	for _, tc := range cases {
 		got := computeImportanceScore([]string{tc.tag}, "some content")
