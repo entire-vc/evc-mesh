@@ -220,8 +220,18 @@ Only set the variables below if you want Mesh to send the mail itself.
 ### Telegram notifications
 
 The Telegram channel is configured per workspace from the **Integrations**
-page, not through environment variables. It has one infrastructure
-requirement, and it is easy to miss because nothing else in Mesh has it:
+page. One environment variable governs it, and it is a switch for the whole
+instance rather than a per-workspace setting:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESH_TELEGRAM_ENABLED` | `true` | Offer the Telegram channel on this instance at all. Set to `false` to turn it off: no bot polling, no Telegram notifications, and the Integrations page refuses to connect a bot (it answers *"Telegram is not available on this instance"*). Existing `integration_configs` rows are left untouched, so unsetting the variable restores the channel with its bots intact. |
+
+Leave it alone unless you mean to disable the channel — the default is on, so
+an instance that has never heard of the variable behaves exactly as before.
+
+The channel has one infrastructure requirement beyond that, and it is easy to
+miss because nothing else in Mesh has it:
 
 > **The `api` container must be able to reach `api.telegram.org` on port 443.**
 > Either allow outbound HTTPS to that host, or give the container an
@@ -248,7 +258,10 @@ bind their accounts successfully — and no message is ever delivered, because
 every send times out. Mesh reports this rather than leaving you to guess:
 
 - **Notification settings** shows *"Telegram notifications cannot be delivered
-  right now"* with the reason, above the Telegram controls.
+  right now"* with the reason, above the Telegram controls. On an instance
+  running with `MESH_TELEGRAM_ENABLED=false` the reason given is *"The Telegram
+  channel is not enabled on this instance."* — that is the switch, not a
+  misconfigured bot.
 - **The API log** names the host and the fix on every failed call, e.g.
   `telegram sendMessage: cannot reach https://api.telegram.org — check that
   this host has outbound HTTPS (443) access to it, or set HTTPS_PROXY ...`

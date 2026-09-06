@@ -316,18 +316,36 @@ func main() {
 	// workspace bot and handles /start. Created here, ahead of
 	// notificationService, for the same reason as emailSvc: the dispatch
 	// channel below needs it as a dependency.
-	telegramClient := service.NewTelegramClient()
-	telegramBotManager := service.NewTelegramBotManager(
-		telegramClient, integrationRepo, notificationRepo, userRepo, projectRepo, workspaceRepo,
-	)
+	//
+	// MESH_TELEGRAM_ENABLED=false leaves BOTH nil, which is a state every
+	// telegram code path downstream already handles and already explains:
+	// dispatch logs "the Telegram channel is not wired up on this instance",
+	// TelegramReachable answers "not enabled on this instance", TelegramBotInfo
+	// reports no bot, and the Integrations handler refuses a bot_token with
+	// "Telegram is not available on this instance". None of that is new code —
+	// the nil case was written for tests, and it says the true thing here too.
+	var telegramClient service.TelegramClient
+	var telegramBotManager *service.TelegramBotManager
+	if cfg.Telegram.Enabled {
+		telegramClient = service.NewTelegramClient()
+		telegramBotManager = service.NewTelegramBotManager(
+			telegramClient, integrationRepo, notificationRepo, userRepo, projectRepo, workspaceRepo,
+		)
+	} else {
+		log.Println("Telegram channel disabled on this instance (MESH_TELEGRAM_ENABLED=false): no bot polling, no Telegram notifications, and the Integrations page will refuse to connect a bot. Existing integration_configs rows are left untouched — unset the variable to turn the channel back on.")
+	}
 
 	// Notification service for in-app push notifications to workspace users.
 	// Created before taskService and commentService so it can be injected as a dependency.
-	notificationService := service.NewNotificationService(notificationRepo,
+	notificationOpts := []service.NotificationServiceOption{
 		service.WithPushService(pushService),
 		service.WithEmailService(emailSvc, userRepo, cfg.Email.BaseURL),
-		service.WithTelegramService(telegramClient, integrationRepo, workspaceRepo, projectRepo),
-	)
+	}
+	if cfg.Telegram.Enabled {
+		notificationOpts = append(notificationOpts,
+			service.WithTelegramService(telegramClient, integrationRepo, workspaceRepo, projectRepo))
+	}
+	notificationService := service.NewNotificationService(notificationRepo, notificationOpts...)
 
 	// vcsIntegrationResolver replaces the process-start-only githubClient/
 	// gitlabClient construction that used to live here (#33a4bb57, §C1 of
@@ -1049,8 +1067,10 @@ func main() {
 	// active bot, so a fresh /start lands within one poll cycle of being sent
 	// rather than waiting for the next deploy/restart.
 	telegramCtx, telegramCancel := context.WithCancel(context.Background())
-	go telegramBotManager.Start(telegramCtx)
-	log.Println("Telegram bot manager started")
+	if telegramBotManager != nil {
+		go telegramBotManager.Start(telegramCtx)
+		log.Println("Telegram bot manager started")
+	}
 	log.Println("Checkout reaper started (interval: 60s)")
 
 	// WebSocket upgrade endpoint. It sits on the root instance, ahead of the
