@@ -33,7 +33,7 @@ func recallOneAged(t *testing.T, ageDays float64, opts domain.RecallOpts) float6
 			ID:      uuid.New(),
 			Key:     "aged-memory",
 			Content: "decision recorded a while ago",
-			// Above the service's default MinImportance floor (0.4) — below it the
+			// Above the service's default MinImportance floor (0.3 since #a9752575) — below it the
 			// row is filtered out before the decay step and every assertion here
 			// becomes vacuous. The require.Len in the caller is what surfaces that.
 			ImportanceScore: 0.8,

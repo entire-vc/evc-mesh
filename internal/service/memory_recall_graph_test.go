@@ -64,7 +64,7 @@ func newGraphService(mem *mockMemoryRepo, edge *testEdgeRepo) MemoryService {
 }
 
 // graphSeed builds a ScoredMemory suitable for use as a RecallGraph seed.
-// importance must be >= defaultMinImportance (0.4) to survive the Recall filter.
+// importance must be >= defaultMinImportance (0.3 since #a9752575) to survive the Recall filter.
 func graphSeed(id uuid.UUID, importance float32) domain.ScoredMemory {
 	return domain.ScoredMemory{
 		Memory: domain.Memory{
@@ -311,7 +311,8 @@ func TestRecallGraph_LowImportanceSuppressed(t *testing.T) {
 
 // TestRecallGraph_LowImportanceAllowed_ForSeeds verifies that the graphMinImportance
 // filter (0.4) is NOT applied to seeds (ProvenanceRecall nodes). The Recall step has
-// its own defaultMinImportance filter (also 0.4), so seeds at exactly 0.4 pass both
+// its own defaultMinImportance filter (0.3 since #a9752575 — the two are no longer
+// equal), so seeds at 0.4 pass both
 // checks. What matters is that seeds survive without going through GetByID + graphMinImportance.
 func TestRecallGraph_LowImportanceAllowed_ForSeeds(t *testing.T) {
 	clearRecallGraphCache()
@@ -319,7 +320,7 @@ func TestRecallGraph_LowImportanceAllowed_ForSeeds(t *testing.T) {
 
 	mem := &mockMemoryRepo{
 		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
-			// importance 0.4 — at the boundary: survives Recall's defaultMinImportance filter.
+			// importance 0.4 — at the graph boundary: also clears Recall's lower default.
 			return []domain.ScoredMemory{graphSeed(seedID, 0.4)}, nil
 		},
 	}
