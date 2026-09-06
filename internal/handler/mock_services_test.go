@@ -588,6 +588,13 @@ func (m *MockTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) e
 func (m *MockTaskService) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
 	return nil
 }
+func (m *MockTaskService) TriageEntryGate(_ context.Context, _ *domain.Task) (ok, strict bool) {
+	return true, false
+}
+func (m *MockTaskService) TriageEntryStrict(_ context.Context, _ uuid.UUID) bool { return false }
+func (m *MockTaskService) TriageParkDueHours(_ context.Context, _ uuid.UUID) int {
+	return domain.DefaultTriageParkDueHours
+}
 func (m *MockTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *MockTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil

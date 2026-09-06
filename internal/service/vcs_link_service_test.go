@@ -358,6 +358,13 @@ func (t *fakeTaskService) SetHumanGate(context.Context, uuid.UUID, bool) error  
 func (t *fakeTaskService) SetHumanGateClass(context.Context, uuid.UUID, domain.HumanGateClass) error {
 	return nil
 }
+func (t *fakeTaskService) TriageEntryGate(context.Context, *domain.Task) (ok, strict bool) {
+	return true, false
+}
+func (t *fakeTaskService) TriageEntryStrict(context.Context, uuid.UUID) bool { return false }
+func (t *fakeTaskService) TriageParkDueHours(context.Context, uuid.UUID) int {
+	return domain.DefaultTriageParkDueHours
+}
 func (t *fakeTaskService) ShipTask(context.Context, uuid.UUID, bool) error { return nil }
 func (t *fakeTaskService) SetDodCheck(context.Context, uuid.UUID, string, string, string) error {
 	return nil

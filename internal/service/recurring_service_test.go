@@ -333,6 +333,13 @@ func (s *StubTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) e
 func (s *StubTaskService) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
 	return nil
 }
+func (s *StubTaskService) TriageEntryGate(_ context.Context, _ *domain.Task) (ok, strict bool) {
+	return true, false
+}
+func (s *StubTaskService) TriageEntryStrict(_ context.Context, _ uuid.UUID) bool { return false }
+func (s *StubTaskService) TriageParkDueHours(_ context.Context, _ uuid.UUID) int {
+	return domain.DefaultTriageParkDueHours
+}
 func (s *StubTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (s *StubTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil

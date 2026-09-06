@@ -209,6 +209,21 @@ type TaskService interface {
 	// soft (eligible for HumanGateSoftTimeoutService once armed past its window). See
 	// domain.HumanGateClass and docs/human-gate-decision-recorded.md §5.
 	SetHumanGateClass(ctx context.Context, taskID uuid.UUID, class domain.HumanGateClass) error
+	// TriageEntryGate reports whether task currently qualifies to sit in the
+	// triage status category (see qualifiesForTriage, triage_entry.go), and
+	// whether the project has mid_pipeline.triage_entry_strict enabled. Used by
+	// MoveTask itself, where the task argument is always freshly fetched.
+	TriageEntryGate(ctx context.Context, task *domain.Task) (ok, strict bool)
+	// TriageEntryStrict reports whether a project has mid_pipeline.triage_entry_strict
+	// enabled, without requiring a task. enforceBlockingTriage (comment_service.go)
+	// uses this to decide, BEFORE the just-armed gate is even persisted, whether a
+	// disqualified gate should be routed to backlog instead of attempting a triage
+	// move that TriageEntryGate would refuse anyway — the task it holds in memory
+	// predates the ArmHumanGate call and cannot answer that question itself.
+	TriageEntryStrict(ctx context.Context, projectID uuid.UUID) bool
+	// TriageParkDueHours returns the project's configured triage-fallback wake-up
+	// delay (MidPipelineConfig.TriageParkDue), for the same caller as above.
+	TriageParkDueHours(ctx context.Context, projectID uuid.UUID) int
 	// ShipTask marks the task as terminally shipped (is_shipped=true). Once set,
 	// MoveTask to any non-done category returns TaskShippedError (422).
 	// Pass shipped=false to clear the flag (unship).

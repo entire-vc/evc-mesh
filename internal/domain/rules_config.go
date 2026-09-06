@@ -118,11 +118,37 @@ type MidPipelineConfig struct {
 
 	// AutoParkDueHours is how far ahead the park sets due_date. 0 = default (24).
 	AutoParkDueHours int `json:"auto_park_due_hours,omitempty"`
+
+	// TriageEntryStrict gates entry into the triage status category: a move is
+	// allowed only when the task's human_gate metadata says a human genuinely
+	// needs to look at it — the gate was authored by a human directly
+	// (GateAuthorType == user), or its class is hard (the fail-closed default
+	// for a "❓ Blocking @user" marker, regardless of who posted it).
+	//
+	// Off by default for the same reason as the other two flags: triage today
+	// has four inputs (the comment-marker path this gate protects, an explicit
+	// PATCH arm, and two dispatcher-side paths outside this repo — a stale-
+	// redispatch auto-triage and a manual escalation, neither of which ever
+	// sets human_gate at all) and one exit that only reliably fires for the
+	// gated ones. Turning this on for every project at once would 422 the
+	// dispatcher's un-gated triage moves fleet-wide before its callers have
+	// been adapted to the new refusal; per-project opt-in lets Lab and Mesh
+	// dev absorb that first.
+	TriageEntryStrict bool `json:"triage_entry_strict,omitempty"`
+
+	// TriageParkDueHours is how far ahead the triage-entry fallback (see
+	// enforceBlockingTriage) sets due_date when it parks a disqualified gate to
+	// backlog instead of moving it to triage. 0 = default (48).
+	TriageParkDueHours int `json:"triage_park_due_hours,omitempty"`
 }
 
 // DefaultAutoParkDueHours is the wake-up delay applied to an auto-parked task
 // when the project config does not name one.
 const DefaultAutoParkDueHours = 24
+
+// DefaultTriageParkDueHours is the wake-up delay applied when a disqualified
+// gate is parked to backlog instead of triage.
+const DefaultTriageParkDueHours = 48
 
 // AutoParkDue returns the configured wake-up delay, falling back to the default.
 // Safe on a nil receiver: a project with no mid_pipeline block still answers.
@@ -143,6 +169,21 @@ func (c *MidPipelineConfig) ReviewStrict() bool {
 // than returned to todo. Nil-safe, same reason as ReviewStrict.
 func (c *MidPipelineConfig) ParkStalled() bool {
 	return c != nil && c.AutoParkStalled
+}
+
+// TriageStrict reports whether the triage-entry gate is enabled. Nil-safe,
+// same reason as ReviewStrict.
+func (c *MidPipelineConfig) TriageStrict() bool {
+	return c != nil && c.TriageEntryStrict
+}
+
+// TriageParkDue returns the configured triage-fallback wake-up delay, falling
+// back to the default. Nil-safe, same reason as AutoParkDue.
+func (c *MidPipelineConfig) TriageParkDue() int {
+	if c == nil || c.TriageParkDueHours <= 0 {
+		return DefaultTriageParkDueHours
+	}
+	return c.TriageParkDueHours
 }
 
 // TransitionRule defines allowed transitions from a given status.
