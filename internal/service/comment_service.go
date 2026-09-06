@@ -1759,11 +1759,6 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		log.Printf("[comment-triage] WARNING: ArmHumanGate on task %s failed: %v", task.ID, setErr)
 	}
 
-	// auto-mode tasks self-manage; triage escalation is suppressed (flag already set above).
-	if task.DelegationLevel == domain.DelegationLevelAuto {
-		return
-	}
-
 	// Completion reports from the task's own assignee must not trigger the triage MOVE —
 	// the blocking marker may appear as handoff/escalation context rather than a
 	// genuine work blocker (e.g. "Done. ❓ Blocking @pavel: please close manually").
@@ -1772,13 +1767,56 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
-	// Idempotency: never re-triage a task already in triage or a terminal category.
+	// Idempotency: never re-notify/re-triage a task already in triage or a terminal
+	// category. Checked before the notify below (not just before the move) — a repeat
+	// marker on a task already parked in triage is not a new ask.
 	curStatus, err := s.statusRepo.GetByID(ctx, task.StatusID)
 	if err != nil || curStatus == nil {
 		return
 	}
 	switch curStatus.Category {
 	case domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled:
+		return
+	}
+
+	// Emit blocking_triage notification so the named user is actually alerted. Fired
+	// regardless of delegation level and regardless of the triage-entry-strict park
+	// decision below — human_gate was just armed unconditionally above for the same
+	// reason (a live ask naming a real human always delivers), and an auto-mode task's
+	// own workflow choice not to self-triage (or a soft-gate's park instead of a full
+	// triage move) has nothing to do with whether the person it names should hear about
+	// it. Before this moved here, the notify lived after the triage MOVE below and never
+	// fired for auto-mode tasks — which was 103 of 107 currently-armed human_gate tasks
+	// in prod (measured 2026-09-06, task #4e1d249f), i.e. the notification this whole
+	// mechanism exists for essentially never reached anyone.
+	if s.notifySvc != nil {
+		targetUser, uErr := s.userRepo.GetByUsername(ctx, wsID, userSlug)
+		if uErr == nil && targetUser != nil {
+			taskIDCopy := task.ID
+			projIDCopy := task.ProjectID
+			targetIDCopy := targetUser.ID
+			s.notifySvc.Notify(ctx, domain.NotificationEvent{
+				WorkspaceID:  wsID,
+				TaskID:       &taskIDCopy,
+				ProjectID:    &projIDCopy,
+				EventType:    "task.blocking_triage",
+				Title:        "Blocking question: " + task.Title,
+				Body:         fmt.Sprintf("@%s asked a blocking question on this task.", userSlug),
+				TargetUserID: &targetIDCopy,
+				Labels:       []string(task.Labels),
+				Metadata: map[string]any{
+					"task_id":    task.ID,
+					"task_title": task.Title,
+					"project_id": task.ProjectID,
+					"user_slug":  userSlug,
+				},
+			})
+		}
+	}
+
+	// auto-mode tasks self-manage; the triage MOVE below is suppressed for them (the
+	// flag and the notification above are already delivered unconditionally).
+	if task.DelegationLevel == domain.DelegationLevelAuto {
 		return
 	}
 
@@ -1833,27 +1871,6 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, task.ID)
-	}
-
-	// Emit blocking_triage notification so the mentioned user is actually alerted.
-	if s.notifySvc != nil {
-		taskIDCopy := task.ID
-		projIDCopy := task.ProjectID
-		s.notifySvc.Notify(ctx, domain.NotificationEvent{
-			WorkspaceID: wsID,
-			TaskID:      &taskIDCopy,
-			ProjectID:   &projIDCopy,
-			EventType:   "task.blocking_triage",
-			Title:       "Task moved to triage: " + task.Title,
-			Body:        fmt.Sprintf("@%s marked this task as blocking — auto-moved to triage.", userSlug),
-			Labels:      []string(task.Labels),
-			Metadata: map[string]any{
-				"task_id":    task.ID,
-				"task_title": task.Title,
-				"project_id": task.ProjectID,
-				"user_slug":  userSlug,
-			},
-		})
 	}
 }
 
