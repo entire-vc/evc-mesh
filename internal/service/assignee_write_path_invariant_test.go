@@ -79,6 +79,16 @@ var assigneeWriteVerdict = map[string]string{
 	"recurringService.Create":                    "delegated: taskService.Create refuses a foreign principal when the schedule fires",
 	"recurringService.Update":                    "delegated: taskService.Create refuses a foreign principal when the schedule fires",
 	"recurringService.createInstance":            "delegated: taskService.Create performs the write and the funnel",
+
+	// The closed-card follow-up copies the SOURCE task's assignee onto a new
+	// task in the SAME project, so the principal is one the source card already
+	// carries — but that is an argument about the input, and this guard exists
+	// because arguments about inputs are exactly what stopped holding. The
+	// check is real regardless: taskService.Create runs
+	// ensureAssigneeProjectMember before taskRepo.Create, and
+	// createClosedTaskFollowUp does not swallow its error — a refused assignee
+	// creates no follow-up card at all.
+	"commentService.createClosedTaskFollowUp": "delegated: taskService.Create performs the write and the funnel",
 }
 
 // assigneeFields are the struct fields whose write hands a task to a principal.

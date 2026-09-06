@@ -725,6 +725,7 @@ type commentService struct {
 	wsPublisher    WSPublisher
 	taskSvc        TaskService
 	hgdRepo        repository.HumanGateDecisionRepository
+	depRepo        repository.TaskDependencyRepository
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
@@ -804,6 +805,15 @@ func WithCommentTaskService(ts TaskService) CommentServiceOption {
 // feature existed).
 func WithHumanGateDecisionRepo(repo repository.HumanGateDecisionRepository) CommentServiceOption {
 	return func(s *commentService) { s.hgdRepo = repo }
+}
+
+// WithCommentDependencyRepo injects the task-dependency repository, used by the
+// closed-card follow-up mechanism (comment_closed_task_followup.go) to link the
+// follow-up card back to the closed one with a relates_to edge, and to
+// recognise its own earlier output when deduping. Optional: unset, follow-up
+// cards are still created, just unlinked and undeduped.
+func WithCommentDependencyRepo(repo repository.TaskDependencyRepository) CommentServiceOption {
+	return func(s *commentService) { s.depRepo = repo }
 }
 
 // NewCommentService returns a new CommentService backed by the given repositories.
@@ -1030,6 +1040,16 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		// General triage EXIT: human user responds on a non-gated triage task → in_progress.
 		s.enforceTriageExit(ctx, comment, task, wsID)
 	}
+
+	// Closed-card follow-up (audit 1.14, task #754173eb). The suppression a few
+	// lines above is correct and stays — a task.commented on a closed card used
+	// to reopen shipped work (#56a6d5b2). But suppressing the only channel left
+	// the remark with no recipient at all: a comment on a done card reaches
+	// nobody, and nothing about writing one looks unusual. So instead of waking
+	// the closed card, route the remark onto a card the feed actually polls.
+	// Deliberately placed AFTER the comment is persisted: this routes a remark,
+	// it never rejects one.
+	s.createClosedTaskFollowUp(ctx, comment, task, terminalTask)
 
 	// Dispatch in-app notification to subscribed workspace users for comment.created.
 	if s.notifySvc != nil && s.projectRepo != nil {

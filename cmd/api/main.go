@@ -449,6 +449,7 @@ func main() {
 		service.WithCommentNotificationService(notificationService),
 		service.WithCommentTaskService(taskService),
 		service.WithHumanGateDecisionRepo(humanGateDecisionRepo),
+		service.WithCommentDependencyRepo(taskDependencyRepo),
 	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
