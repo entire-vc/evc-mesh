@@ -1586,6 +1586,14 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var triageEntryErr *service.TriageEntryError
+	if errors.As(err, &triageEntryErr) {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":    "triage_entry_requires_human_gate",
+			"message": triageEntryErr.Error(),
+		})
+	}
+
 	var humanGateErr *service.HumanGateFrozenError
 	if errors.As(err, &humanGateErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{

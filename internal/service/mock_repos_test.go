@@ -2378,6 +2378,11 @@ type fakeTaskMover struct {
 	armCalls      []domain.ArmHumanGateInput
 	classSetCalls []classSetCall
 	err           error
+	// triageStrict/triageParkDueHours let a test opt this fake into the
+	// triage-entry gate's non-default (strict) behaviour; zero-value (false, 0)
+	// matches every pre-existing test's expectation of the old, ungated path.
+	triageStrict       bool
+	triageParkDueHours int
 }
 
 func (f *fakeTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, input MoveTaskInput) error {
@@ -2420,6 +2425,20 @@ func (f *fakeTaskMover) SetHumanGateClass(_ context.Context, taskID uuid.UUID, c
 	defer f.mu.Unlock()
 	f.classSetCalls = append(f.classSetCalls, classSetCall{taskID: taskID, class: class})
 	return nil
+}
+
+func (f *fakeTaskMover) TriageEntryGate(_ context.Context, task *domain.Task) (ok, strict bool) {
+	if !f.triageStrict {
+		return true, false
+	}
+	return qualifiesForTriage(task), true
+}
+func (f *fakeTaskMover) TriageEntryStrict(_ context.Context, _ uuid.UUID) bool { return f.triageStrict }
+func (f *fakeTaskMover) TriageParkDueHours(_ context.Context, _ uuid.UUID) int {
+	if f.triageParkDueHours <= 0 {
+		return domain.DefaultTriageParkDueHours
+	}
+	return f.triageParkDueHours
 }
 
 func (f *fakeTaskMover) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }

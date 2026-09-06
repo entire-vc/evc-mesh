@@ -305,6 +305,95 @@ func TestEnforceBlockingTriage_NoTag_SetsClassHard(t *testing.T) {
 	assert.Equal(t, domain.HumanGateClassHard, classCalls[0].class)
 }
 
+// ---------------------------------------------------------------------------
+// enforceBlockingTriage — triage-entry gate fallback (mid_pipeline.triage_entry_strict)
+// ---------------------------------------------------------------------------
+
+// TestEnforceBlockingTriage_Strict_SoftAgentGate_ParksToBacklogInstead is the
+// task's own item 2 acceptance criterion in miniature: a soft-classed marker
+// posted by an agent (not a human) does not qualify for triage under strict
+// mode, so the task must be parked to backlog with a due_date and an
+// explanatory comment instead of attempted-and-refused into triage.
+func TestEnforceBlockingTriage_Strict_SoftAgentGate_ParksToBacklogInstead(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	env.taskMover.triageStrict = true
+	backlogID := uuid.New()
+	env.statusRepo.items[backlogID] = &domain.TaskStatus{
+		ID: backlogID, ProjectID: env.projID, Category: domain.StatusCategoryBacklog, Name: "Backlog",
+	}
+	taskID := env.seedTask(env.inProgressID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel** [soft]: can this wait a day?",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	// Never attempted (and never refused) a triage move.
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1)
+	require.NotNil(t, moves[0].input.StatusID)
+	assert.Equal(t, backlogID, *moves[0].input.StatusID, "should park to backlog, not attempt triage")
+
+	task := env.taskRepo.items[taskID]
+	require.NotNil(t, task.DueDate, "due_date must be armed on the park")
+	assert.True(t, task.DueDate.After(frozenTime), "due_date must be in the future")
+
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "НЕ ушла в triage")
+	assert.Contains(t, sys[0].Body, "backlog")
+}
+
+// TestEnforceBlockingTriage_Strict_HardGate_StillMovesToTriage is the control:
+// strict mode must not touch the common case (an ordinary, undecorated
+// marker, hard-classed by default) even though it is also agent-authored.
+func TestEnforceBlockingTriage_Strict_HardGate_StillMovesToTriage(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	env.taskMover.triageStrict = true
+	taskID := env.seedTask(env.inProgressID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel**: need decision X",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1)
+	require.NotNil(t, moves[0].input.StatusID)
+	assert.Equal(t, env.triageID, *moves[0].input.StatusID)
+
+	sys := env.systemComments()
+	require.Len(t, sys, 1)
+	assert.Contains(t, sys[0].Body, "переведена в triage")
+}
+
+// TestEnforceBlockingTriage_Strict_NoBacklogColumn_GracefulNoOp mirrors
+// TestEnforceBlockingTriage_NoTriageColumn_GracefulNoOp: a project with no
+// backlog status must not panic or half-apply the park — it logs and leaves
+// the task exactly where it was, same as the pre-existing no-triage-column path.
+func TestEnforceBlockingTriage_Strict_NoBacklogColumn_GracefulNoOp(t *testing.T) {
+	env := setupTriageEnv(t, true) // has triage, but no backlog status registered
+	env.taskMover.triageStrict = true
+	taskID := env.seedTask(env.inProgressID)
+
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "❓ **Blocking @pavel** [soft]: can this wait a day?",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+
+	assert.Empty(t, env.taskMover.calls())
+	assert.Empty(t, env.systemComments())
+}
+
 // TestEnforceBlockingTriage_SubsequentHardMarker_DowngradesFromSoft is the other half of
 // AC4's "does not stick soft": a soft-tagged marker followed (same unreleased task, no
 // SetHumanGate(false) in between) by an ordinary hard marker must re-classify back to

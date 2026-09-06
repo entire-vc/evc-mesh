@@ -1782,6 +1782,23 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
+	// Triage-entry gate (mid_pipeline.triage_entry_strict, MoveTask's own copy
+	// of this same rule in task_service.go): a soft-classed gate armed by
+	// anyone other than a human is not a reason to occupy the "needs human eyes
+	// now" column — it is designed to resolve itself via the default-on-timeout
+	// sweep instead. Evaluated from armIn directly rather than re-fetching task,
+	// because ArmHumanGate above already committed exactly these values and a
+	// re-read would answer the identical question at the cost of a round trip.
+	//
+	// Checked BEFORE resolving triageID: when disqualified, this task never
+	// attempts the triage move at all, so a project with no triage column still
+	// gets the backlog park it would get anyway.
+	qualifies := armIn.AuthorType == domain.ActorTypeUser || armIn.Class == domain.HumanGateClassHard
+	if !qualifies && s.taskSvc.TriageEntryStrict(ctx, task.ProjectID) {
+		s.parkDisqualifiedGate(ctx, task, userSlug)
+		return
+	}
+
 	// Resolve the project's triage column; graceful no-op if it has none.
 	triageID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryTriage)
 	if err != nil || triageID == uuid.Nil {
@@ -1837,6 +1854,75 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 				"user_slug":  userSlug,
 			},
 		})
+	}
+}
+
+// parkDisqualifiedGate is enforceBlockingTriage's fallback for a gate that does
+// not qualify for triage under mid_pipeline.triage_entry_strict (see
+// qualifiesForTriage, triage_entry.go): a soft-classed marker posted by anyone
+// other than a human. Rather than leave the task wherever it already was —
+// which is what happens if the caller just lets the disqualified MoveTask
+// attempt fail — this parks it to backlog with a due_date, mirroring the
+// arm-before-move ordering task_lease_reaper.parkTask uses for the same
+// reason: a task armed with a due_date but not yet moved is simply a task
+// with a due_date, harmless and retryable, whereas moved-but-unarmed is a
+// silent, invisible park.
+//
+// No kind:monitor label is added here, unlike parkTask's stall park: this
+// task carries human_gate=true, and Pavel's weekly digest already walks
+// gate_scope_backlog (canon-human-gate-digest-weekly-full-backlog) — a second
+// wake path would be redundant, not protective.
+func (s *commentService) parkDisqualifiedGate(ctx context.Context, task *domain.Task, userSlug string) {
+	if s.taskRepo == nil || s.statusRepo == nil || s.taskSvc == nil {
+		return
+	}
+	backlogID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryBacklog)
+	if err != nil || backlogID == uuid.Nil {
+		log.Printf("[triage-entry] project %s has no backlog status; leaving task %s wherever the disqualified gate found it", task.ProjectID, task.ID)
+		return
+	}
+
+	dueHours := s.taskSvc.TriageParkDueHours(ctx, task.ProjectID)
+	due := timeNow().Add(time.Duration(dueHours) * time.Hour)
+
+	fresh, err := s.taskRepo.GetByID(ctx, task.ID)
+	if err != nil || fresh == nil {
+		log.Printf("[triage-entry] WARNING: re-fetch of task %s before park failed: %v", task.ID, err)
+		return
+	}
+	updated := *fresh
+	updated.DueDate = &due
+	if err := s.taskRepo.Update(ctx, &updated); err != nil {
+		log.Printf("[triage-entry] WARNING: failed to arm due_date on task %s, leaving it unparked: %v", task.ID, err)
+		return
+	}
+
+	if err := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &backlogID}); err != nil {
+		log.Printf("[triage-entry] WARNING: failed to park task %s to backlog: %v", task.ID, err)
+		return
+	}
+
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🤖 Auto: «❓ Blocking @%s» — гейт мягкого класса (soft), поставлен не человеком, поэтому карточка "+
+				"НЕ ушла в triage, а припаркована в backlog с `due_date` через %d ч (per audit §2.3 C2 / "+
+				"mid_pipeline.triage_entry_strict). Ответ Pavel'я снимет гейт как обычно; жёсткие и человеком "+
+				"поставленные гейты по-прежнему уходят прямо в triage.",
+			userSlug, dueHours,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[triage-entry] WARNING: create system comment on task %s failed: %v", task.ID, err)
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
 }
 

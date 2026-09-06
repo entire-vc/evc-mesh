@@ -768,6 +768,23 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			}
 		}
 
+		// Triage-entry gate: block moves into the triage category unless the task's
+		// human_gate metadata says a human genuinely needs to look at it now — see
+		// qualifiesForTriage (triage_entry.go). Behind
+		// mid_pipeline.triage_entry_strict, default OFF (MidPipelineConfig doc):
+		// this refuses the dispatcher's un-gated auto-triage paths (stale-
+		// redispatch count==3, manual escalation) with 422 rather than adding a
+		// fifth silent way into a column that already has one barely-reachable
+		// exit. Not exempted for any actor type: unlike the review/done gates,
+		// which trust system-authored auto_transition, the whole point here is
+		// that NO caller — including one running as system — may move a task into
+		// triage without a qualifying gate already armed on it.
+		if status.Category == domain.StatusCategoryTriage {
+			if ok, _ := s.passesTriageEntryGate(ctx, task); !ok {
+				return &TriageEntryError{}
+			}
+		}
+
 		// Done-evidence gate: block moves to done when a linked PR is not yet merged,
 		// or when the task has no evidence at all (no VCS links, no artifact, no comment).
 		// System actors (auto_transition) are exempt; gate fails open if vcsLinkRepo is not wired.
@@ -1785,6 +1802,18 @@ func (e *ReviewEvidenceError) Error() string {
 			"or a comment containing a URL to the proof (a pipeline, MR, deployed page or log) before moving to review"
 	}
 	return "review requires evidence: add a PR/VCS link, artifact upload, or comment with proof before moving to review"
+}
+
+// TriageEntryError is returned when a caller attempts to move a task into the
+// triage status category without a qualifying, actively-armed human_gate (see
+// qualifiesForTriage in triage_entry.go). Only refused under
+// mid_pipeline.triage_entry_strict — see MidPipelineConfig.
+type TriageEntryError struct{}
+
+func (e *TriageEntryError) Error() string {
+	return "triage requires a qualifying human_gate: either a human authored the blocking marker directly, " +
+		"or the gate is hard-classed (the default for \"❓ Blocking @user\"); arm it first via a Blocking comment " +
+		"or POST /tasks/:id/human-gate, then retry the move"
 }
 
 // TaskShippedError is returned when a caller attempts to move a shipped task to a
@@ -3239,6 +3268,27 @@ func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value 
 // domain.HumanGateClass.
 func (s *taskService) SetHumanGateClass(ctx context.Context, taskID uuid.UUID, class domain.HumanGateClass) error {
 	return s.taskRepo.SetHumanGateClass(ctx, taskID, class)
+}
+
+// TriageEntryGate exposes passesTriageEntryGate (triage_entry.go) through the
+// TaskService interface so callers outside this package — enforceBlockingTriage
+// in comment_service.go, specifically — can decide whether to attempt a triage
+// move or route around a doomed one without duplicating the config read.
+func (s *taskService) TriageEntryGate(ctx context.Context, task *domain.Task) (ok, strict bool) {
+	return s.passesTriageEntryGate(ctx, task)
+}
+
+// TriageEntryStrict exposes midPipelineConfig(...).TriageStrict() through the
+// TaskService interface. See the interface doc for why this project-scoped,
+// task-less form exists alongside TriageEntryGate.
+func (s *taskService) TriageEntryStrict(ctx context.Context, projectID uuid.UUID) bool {
+	return s.midPipelineConfig(ctx, projectID).TriageStrict()
+}
+
+// TriageParkDueHours exposes midPipelineConfig(...).TriageParkDue() through the
+// TaskService interface, for the same caller as TriageEntryStrict.
+func (s *taskService) TriageParkDueHours(ctx context.Context, projectID uuid.UUID) int {
+	return s.midPipelineConfig(ctx, projectID).TriageParkDue()
 }
 
 // ShipTask marks the task as terminally shipped when shipped=true. Once shipped,
