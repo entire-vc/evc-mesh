@@ -282,6 +282,35 @@ func (r *CommentRepo) HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool
 	return exists, err
 }
 
+// HasCommentWithURL returns true when the task has at least one comment whose
+// body carries an http(s) URL.
+//
+// This is the evidence arm of the strict review gate. HasAnyComment cannot serve
+// that purpose: fleet convention already requires a comment on every status
+// change, so "has a comment" is true on essentially every card by the time it
+// reaches review and the gate degenerates into "something happened here once".
+// A URL is the cheapest machine-checkable stand-in for "there is something to
+// go and look at" — a pipeline, an MR, a deployed page, a log.
+//
+// It is deliberately a weak proof and not a strong one: it says a link is
+// present, never that the link is relevant or that whatever it points at is
+// green. Making it stronger would mean fetching it, and a gate that makes
+// outbound requests on every move to review is a different and worse thing.
+//
+// Matching is case-insensitive on the scheme and requires at least one
+// non-whitespace character after "//", so a bare "https://" typed in prose does
+// not pass.
+func (r *CommentRepo) HasCommentWithURL(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM comments
+			WHERE task_id = $1
+			  AND body ~* '(^|[^a-z0-9])https?://[^[:space:]]'
+		)`, taskID).Scan(&exists)
+	return exists, err
+}
+
 // HasRecentCommentBy returns true when the task has a non-internal comment by authorID
 // created on or after `since` whose body is at least minLength characters long.
 func (r *CommentRepo) HasRecentCommentBy(ctx context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error) {

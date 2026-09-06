@@ -15,7 +15,7 @@ file against the `AddTool` calls in `evc-mesh-mcp` `internal/mcp/server.go` and 
 on a mismatch in either direction. If you add or remove a tool, this page is part of
 that change.
 
-Tools are organized into 12 categories:
+Tools are organized into 13 categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|

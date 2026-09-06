@@ -1483,9 +1483,22 @@ type ruleViolationAPIResponse struct {
 func handleError(c echo.Context, err error) error {
 	var evidenceErr *service.ReviewEvidenceError
 	if errors.As(err, &evidenceErr) {
+		msg := "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review."
+		if evidenceErr.Strict {
+			// Under strict mode the loose message is actively misleading: it
+			// says "a comment with proof" while the gate is counting URLs, so a
+			// caller who follows it gets refused a second time for the same
+			// reason. Name the four things that actually pass.
+			msg = "Task cannot be moved to review without evidence (this project runs mid_pipeline.review_evidence_strict). " +
+				"A comment on its own is no longer enough. Add at least one of: a PR/VCS link (add_dependency or the vcs field); " +
+				"an artifact upload; a passing dod_check (PATCH /tasks/:id/dod-check); or a comment containing a URL to the proof " +
+				"— the pipeline, MR, deployed page or log a reviewer can open (see §1c). " +
+				"To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review."
+		}
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"code":    "review_evidence_required",
-			"message": "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review.",
+			"strict":  evidenceErr.Strict,
+			"message": msg,
 		})
 	}
 
