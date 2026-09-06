@@ -389,7 +389,13 @@ func main() {
 		log.Printf("[config] MESH_SPARK_ENABLED/MESH_SPARK_URL not fully set — Spark env fallback unavailable; a workspace can still enable one via its own integration")
 	}
 
+	// Append-only record of gate-arming predicate evaluations (task #5d3dc714). The
+	// guard enforces with or without it; this only makes the two-week refusals-vs-arms
+	// ratio the card asks for answerable.
+	gatePredicateLogRepo := postgres.NewGatePredicateLogRepo(db)
+
 	taskService := service.NewTaskService(taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
+		service.WithGatePredicateLog(gatePredicateLogRepo),
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
 		service.WithRuleService(ruleService),

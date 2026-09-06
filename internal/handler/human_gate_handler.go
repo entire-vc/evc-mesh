@@ -28,6 +28,11 @@ type ArmHumanGateRequest struct {
 	// Class is "hard" (default, never timed out) or "soft". Omitted means hard —
 	// fail-closed, matching the column default: a gate is never softened by omission.
 	Class string `json:"class"`
+	// Predicate is the four-question check (task #5d3dc714) and is REQUIRED on this
+	// route. The audit measured that 40-45% of asks to Pavel were decidable from a rule
+	// already written down; making the caller state the four answers, with reasons, is
+	// what turns "I felt unsure" into something a reviewer can check afterwards.
+	Predicate *domain.GateArmPredicate `json:"predicate"`
 }
 
 // ArmHumanGate handles POST /tasks/:task_id/human-gate.
@@ -65,6 +70,7 @@ func (h *TaskHandler) ArmHumanGate(c echo.Context) error {
 		Deadline:           req.Deadline,
 		Class:              class,
 		Source:             domain.ArmHumanGateSourceAPI,
+		Predicate:          req.Predicate,
 	}
 
 	if armErr := h.taskService.ArmHumanGate(c.Request().Context(), in); armErr != nil {

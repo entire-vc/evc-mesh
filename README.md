@@ -3,7 +3,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
-[![MCP](https://img.shields.io/badge/MCP-61_tools-8B5CF6)](docs/mcp-reference.md)
+[![MCP](https://img.shields.io/badge/MCP-63_tools-8B5CF6)](docs/mcp-reference.md)
 [![Status](https://img.shields.io/badge/Status-Alpha-orange)](https://github.com/entire-vc/evc-mesh/releases)
 
 > **Alpha Release** — Mesh is under active development. APIs may change between versions. We welcome early adopters and feedback.
@@ -34,7 +34,7 @@ Traditional project management tools treat AI agents as an afterthought. Mesh is
 - Bulk operations and inline editing in list view
 
 ### Agent Integration
-- **MCP server** with 61 tools (stdio + HTTP SSE transports)
+- **MCP server** with 63 tools (stdio + HTTP SSE transports)
 - **REST API** with 125+ routes at `/api/v1`
 - **Go SDK** (`pkg/sdk/`) for building custom integrations
 - Agent authentication via API keys (`X-Agent-Key`)
@@ -260,7 +260,7 @@ Or connect via SSE for remote agents:
 }
 ```
 
-The MCP server exposes 61 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
+The MCP server exposes 63 tools for managing projects, tasks, comments, artifacts, events, rules, memory, and more. See [MCP Reference](docs/mcp-reference.md) for the full tool catalog, and [Agent Onboarding](docs/agent-onboarding.md) for connecting an agent to a self-hosted instance.
 
 **There is one implementation, and it is not in this repository.** Until
 2026-08 this repo carried a second copy of the same server under `./cmd/mcp`
@@ -291,7 +291,7 @@ proxy.
 | [Architecture](docs/architecture.md) | System architecture and design decisions |
 | [API Authentication](docs/api-authentication.md) | JWT, agent keys, and RBAC |
 | [Agent Onboarding](docs/agent-onboarding.md) | Issue agent keys, connect over stdio or SSE, run MCP behind a proxy |
-| [MCP Reference](docs/mcp-reference.md) | Tool catalogue with parameters and examples — all 61 tools |
+| [MCP Reference](docs/mcp-reference.md) | Tool catalogue with parameters and examples — all 63 tools |
 | [Custom Fields](docs/custom-fields.md) | Guide for 12 custom field types |
 | [Webhooks](docs/webhooks.md) | Webhook setup with HMAC-SHA256 validation |
 | [Agent Push Notifications](docs/agent-push-notifications.md) | Callback URL, SSE, and long-polling |

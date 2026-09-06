@@ -2,7 +2,7 @@
 
 ## Overview
 
-evc-mesh exposes **61 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **63 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
 
 New to this? [Agent Onboarding](agent-onboarding.md) walks through issuing a key
@@ -31,6 +31,7 @@ Tools are organized into 12 categories:
 | Push Notifications | 1 | Long-poll for task assignments |
 | Recurring Tasks | 6 | Create, update, delete recurring schedules and inspect instance history |
 | Task Checkout | 3 | Exclusive task locking with TTL to prevent double-work |
+| Human Gate | 2 | Arm and release the "waiting on a human" gate, with the four-question predicate |
 
 > **Note:** the MCP server is **not** in this repository. It is the standalone
 > module [github.com/entire-vc/evc-mesh-mcp](https://github.com/entire-vc/evc-mesh-mcp),
@@ -113,7 +114,7 @@ Two endpoints are served:
 
 | Endpoint | Profile | Tools |
 |----------|---------|-------|
-| `http://localhost:8081/sse` | full | 61 |
+| `http://localhost:8081/sse` | full | 63 |
 | `http://localhost:8081/core/sse` | core | 25 |
 
 Behind a reverse proxy, see
@@ -137,7 +138,7 @@ Agents authenticate per-connection using one of these methods:
 | `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
 | `MESH_MCP_PUBLIC_URL` | *(empty)* | No | Public base URL of the SSE server. Empty advertises the message endpoint relative to the URL the client connected to, which is correct unless a proxy serves MCP under a path prefix |
-| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (61) or `core` (25). In SSE mode the profile follows the endpoint |
+| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (63) or `core` (25). In SSE mode the profile follows the endpoint |
 
 ---
 
@@ -1975,6 +1976,55 @@ Extend the TTL of an active checkout. Use this when a task takes longer than exp
   "expires_at": "2026-03-10T13:00:00Z"
 }
 ```
+
+---
+
+### Human Gate (2 tools)
+
+#### 62. `set_human_gate`
+
+Arm the human gate on a task: freeze it and record **who** is waiting, **what** was asked, and **what happens if nobody answers**. Use this instead of hand-writing a `❓ Blocking @pavel` comment — the marker still works, but this path records the whole ask on the task itself, so no reader has to re-derive it from comment text.
+
+`gate_author` is deliberately **not** a parameter: the server takes it from the authenticated identity, so the answer to "who is waiting" cannot be attributed to somebody else.
+
+The four predicate answers are required, each with one line of justification. The server **refuses the arm** when your own answers say nobody needs to be asked — if you hold the credential, the action is reversible, and nothing a customer sees or pays changes right now, capture a rollback anchor and just do it. If the blocker is another card, the server tells you to use `add_dependency` instead.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task to gate |
+| `reason` | string | **Yes** | -- | The question itself, in your own words |
+| `recommended_default` | string | **Yes** | -- | What you will do if nobody answers. An ask with no default can never time out |
+| `class` | string | No | `hard` | `hard` (never auto-released) or `soft` (released by timeout; the release does **not** answer the question) |
+| `deadline` | string | No | -- | RFC3339 timestamp when `recommended_default` applies |
+| `credential_exists` | boolean | **Yes** | -- | Do you already hold the credential this needs? |
+| `credential_reason` | string | **Yes** | -- | Which credential, and where you checked |
+| `reversible` | boolean | **Yes** | -- | Is there a rollback anchor? If you can *manufacture* one, this is `true` |
+| `reversible_reason` | string | **Yes** | -- | The exact rollback path, or why none exists |
+| `blocked_by_other_task` | boolean | **Yes** | -- | Is the blocker actually another card? |
+| `blocked_reason` | string | **Yes** | -- | Which card, or why none |
+| `customer_visible_now` | boolean | **Yes** | -- | Does this change what a customer sees or pays **right now**? |
+| `customer_reason` | string | **Yes** | -- | What the customer would see, or why nothing changes for them now |
+
+**Example response (refused):**
+```json
+{
+  "error": "Unprocessable Entity",
+  "field": "predicate",
+  "message": "cannot arm human_gate: predicate the predicate says nobody needs to be asked: you hold the credential, the action is reversible, and nothing a customer sees or pays changes right now..."
+}
+```
+
+---
+
+#### 63. `clear_human_gate`
+
+Release a human gate. Server-enforced **user-only**: an agent key receives a 403 whose message names the exits an agent *can* reach — withdraw your own marker with a short negator comment if you raised it, or record the human's answer as a human-gate decision. Read `human_gate_info.clearable_by_owner` on `get_task` first.
+
+Releasing also drops the ask metadata (author, reason, recommended default, deadline) and resets the class to `hard`: those fields describe a *live* question, and one left on a settled task is a default something would eventually apply.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | Task whose gate to clear |
 
 ---
 

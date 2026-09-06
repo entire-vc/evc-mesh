@@ -26,6 +26,24 @@ import (
 // a call count: after arming, everything a client needs must be readable from the task,
 // because that is the only property that lets `is_human_gated` collapse to one field.
 
+// allowingPredicate is a four-answer set that legitimately needs a human: the action is
+// NOT reversible, so the "just do it" refusal does not apply (task #5d3dc714). Used by
+// the pre-existing #4545660b tests, which predate the predicate requirement and are
+// about a different property — they must keep testing THAT property, not accidentally
+// become predicate tests.
+func allowingPredicate() *domain.GateArmPredicate {
+	return &domain.GateArmPredicate{
+		CredentialExists:   true,
+		CredentialReason:   "gateway token is in keys.env",
+		Reversible:         false,
+		ReversibleReason:   "an outbound payment cannot be un-sent",
+		BlockedByOtherTask: false,
+		BlockedReason:      "no other card owns this",
+		CustomerVisibleNow: false,
+		CustomerReason:     "gateway is inactive, nobody can be charged",
+	}
+}
+
 func newArmingTestService(t *testing.T) (TaskService, *MockTaskRepository, uuid.UUID) {
 	t.Helper()
 	taskRepo := NewMockTaskRepository()
@@ -53,6 +71,7 @@ func TestArmHumanGate_WritesWholeAskOntoTask(t *testing.T) {
 		Deadline:           &deadline,
 		Class:              domain.HumanGateClassSoft,
 		Source:             domain.ArmHumanGateSourceAPI,
+		Predicate:          allowingPredicate(),
 	})
 	require.NoError(t, err)
 
@@ -111,6 +130,7 @@ func TestArmHumanGate_RejectsIncompleteAsk(t *testing.T) {
 				Reason:             "why",
 				RecommendedDefault: "what I will do otherwise",
 				Source:             domain.ArmHumanGateSourceAPI,
+				Predicate:          allowingPredicate(),
 			}
 			tc.mutate(&in)
 
@@ -164,6 +184,7 @@ func TestArmHumanGate_MarkerSourceAllowsMissingDefault(t *testing.T) {
 		AuthorType: domain.ActorTypeAgent,
 		Reason:     "какой шлюз выбираем?",
 		Source:     domain.ArmHumanGateSourceAPI,
+		Predicate:  allowingPredicate(),
 	})
 	require.Error(t, err, "the same incomplete ask from the API path must be refused")
 	assert.False(t, repo2.items[taskID2].HumanGate)
@@ -180,6 +201,7 @@ func TestClearHumanGate_DropsTheAskWithIt(t *testing.T) {
 		TaskID: taskID, Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
 		Reason: "r", RecommendedDefault: "d", Deadline: &deadline,
 		Class: domain.HumanGateClassSoft, Source: domain.ArmHumanGateSourceAPI,
+		Predicate: allowingPredicate(),
 	}))
 	require.True(t, repo.items[taskID].HumanGate, "precondition: gate is armed")
 
@@ -205,6 +227,7 @@ func TestArmHumanGate_NormalizesFailClosed(t *testing.T) {
 	require.NoError(t, svc.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
 		TaskID: taskID, Author: uuid.New(), AuthorType: domain.ActorTypeUser,
 		Reason: "r", RecommendedDefault: "d",
+		Predicate: allowingPredicate(),
 		// Class and Source deliberately omitted.
 	}))
 	assert.Equal(t, domain.HumanGateClassHard, repo.items[taskID].HumanGateClass)

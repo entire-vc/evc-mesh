@@ -29,6 +29,22 @@ import (
 //     shape that made agents lose their first remember() write silently — it gets
 //     retried verbatim or read as "I'm not allowed to do this at all".
 
+// allowingPredicateBody is the four-answer set as it arrives over JSON: a genuine stop
+// (not reversible), so these tests keep testing what they were written for rather than
+// silently turning into predicate tests (task #5d3dc714 added the requirement).
+func allowingPredicateBody() map[string]any {
+	return map[string]any{
+		"credential_exists":     true,
+		"credential_reason":     "gateway token is in keys.env",
+		"reversible":            false,
+		"reversible_reason":     "an outbound payment cannot be un-sent",
+		"blocked_by_other_task": false,
+		"blocked_reason":        "no other card owns this",
+		"customer_visible_now":  false,
+		"customer_reason":       "gateway is inactive, nobody can be charged",
+	}
+}
+
 func armRequest(t *testing.T, h *TaskHandler, taskID, actorID uuid.UUID,
 	actorType domain.ActorType, body map[string]any,
 ) (*httptest.ResponseRecorder, error) {
@@ -68,6 +84,7 @@ func TestArmHumanGateEndpoint_AuthorComesFromIdentityNotBody(t *testing.T) {
 			// A caller trying to attribute the ask to somebody else. The field is not
 			// in ArmHumanGateRequest at all, so it must be inert.
 			"gate_author": bodyClaimedAuthor.String(),
+			"predicate":   allowingPredicateBody(),
 		})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -98,7 +115,7 @@ func TestArmHumanGateEndpoint_IncompleteAskIs422NamingTheField(t *testing.T) {
 	}
 
 	rec, err := armRequest(t, NewTaskHandler(mockSvc), taskID, actorID, domain.ActorTypeAgent,
-		map[string]any{"reason": "мёржим?"}) // no recommended_default
+		map[string]any{"reason": "мёржим?", "predicate": allowingPredicateBody()}) // no recommended_default
 	require.NoError(t, err)
 	require.True(t, armCalled, "the request must reach validation, not be dropped earlier")
 
@@ -114,7 +131,8 @@ func TestArmHumanGateEndpoint_IncompleteAskIs422NamingTheField(t *testing.T) {
 	// missing field turns the 422 into a 200. Without this, a handler that returned 422
 	// unconditionally would pass the assertions above.
 	rec2, err := armRequest(t, NewTaskHandler(mockSvc), taskID, actorID, domain.ActorTypeAgent,
-		map[string]any{"reason": "мёржим?", "recommended_default": "жду"})
+		map[string]any{"reason": "мёржим?", "recommended_default": "жду",
+			"predicate": allowingPredicateBody()})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec2.Code, "the same request WITH a default must be accepted")
 }

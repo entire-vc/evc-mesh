@@ -1348,3 +1348,11 @@ type SecretMaterializer interface {
 	// a loud failure).
 	ResolveCurrentValues(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error)
 }
+
+// GatePredicateLogRepository is the append-only record of gate-arming predicate
+// evaluations (task #5d3dc714). No Update, no Delete: a refusal must not be editable
+// into an allow after the fact.
+type GatePredicateLogRepository interface {
+	Record(ctx context.Context, entry *domain.GatePredicateLogEntry) error
+	CountByOutcome(ctx context.Context, since time.Time) (map[domain.GatePredicateOutcome]int, error)
+}
