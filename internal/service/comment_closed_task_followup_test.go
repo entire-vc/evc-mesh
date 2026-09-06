@@ -503,6 +503,13 @@ func TestClosedFollowUp_DifferentAuthorAfterACloseStillRoutes(t *testing.T) {
 }
 
 // And the same actor coming back LATER is writing a remark, not a closing note.
+//
+// "Later" is measured in SECONDS, not hours, and that is the point of the
+// second case below: the window was 60s for one deploy, and a live run caught it
+// swallowing an ordinary "close it, then think of something" remark written 28
+// seconds after the close. The guard has to be narrow enough that the pairing
+// it recognises is one client round-trip (measured: 139ms), not a train of
+// thought.
 func TestClosedFollowUp_SameCloserLongAfterTheCloseStillRoutes(t *testing.T) {
 	env := setupFollowUpEnv(t)
 	closer := uuid.New()
@@ -515,6 +522,40 @@ func TestClosedFollowUp_SameCloserLongAfterTheCloseStillRoutes(t *testing.T) {
 
 	assert.Len(t, env.taskSvc.createdTasks(), 1,
 		"the exemption is for the note that accompanies the close, not for the closer forever")
+}
+
+// The live regression, pinned: 28 seconds after their own close, the same actor
+// writes a genuine remark. Under the original 60s window this was silently
+// swallowed — no card, no notice, and nothing anywhere saying a remark had been
+// dropped.
+func TestClosedFollowUp_SameCloserTwentyEightSecondsLaterStillRoutes(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	closer := uuid.New()
+	env.logMove(closer, domain.ActorTypeAgent, frozenTime.Add(-28*time.Second))
+
+	env.comment(t, "И ещё: ширина 1120 вместо 1240 — заметил уже после закрытия.", func(c *domain.Comment) {
+		c.AuthorID = closer
+		c.AuthorType = domain.ActorTypeAgent
+	})
+
+	assert.Len(t, env.taskSvc.createdTasks(), 1,
+		"28s after a close is a second thought, not the close's own note — measured live on prod")
+}
+
+// The pairing the guard DOES have to catch: the closing note of the same call,
+// which lands a fraction of a second after the move.
+func TestClosedFollowUp_ClosingNoteOneRoundTripAfterTheMoveIsStillExempt(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	closer := uuid.New()
+	env.logMove(closer, domain.ActorTypeAgent, frozenTime.Add(-139*time.Millisecond))
+
+	env.comment(t, "Закрываю: отгружено.", func(c *domain.Comment) {
+		c.AuthorID = closer
+		c.AuthorType = domain.ActorTypeAgent
+	})
+
+	assert.Empty(t, env.taskSvc.createdTasks(),
+		"139ms is the measured move→comment gap of one move_task call; that pairing must stay exempt")
 }
 
 // Fails OPEN when the activity log cannot be read: a duplicate card is

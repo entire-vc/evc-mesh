@@ -195,12 +195,25 @@ func followUpTitleExcerpt(body string) string {
 // for a comment by the SAME actor to read as that close's report rather than as
 // a remark on already-shipped work.
 //
-// Sized to "the same action", not tuned: `move_task` with a comment is two
-// separate API calls from the client (MoveTaskInput carries no comment field),
-// so the two land milliseconds apart with nothing on the wire tying them
-// together. A minute is generous for that gap and far short of anything a
-// person would experience as "later".
-const closingReportWindow = 60 * time.Second
+// This window is the whole precision of the guard, and it was measured, not
+// guessed. `move_task` with a comment is two separate API calls from the client
+// (MoveTaskInput carries no comment field), so the pairing this window has to
+// span is one client round-trip. Measured on prod: the move landed at
+// 17:44:13.735 and its own closing note at 17:44:13.875 — **139 milliseconds**.
+//
+// It was 60s for one deploy, on the reasoning that a minute is "the same
+// breath". A live run showed that reasoning is wrong in the direction that
+// costs something: a genuine, unrelated remark written 28 seconds after a close
+// — the ordinary "close it, then think of something" — was swallowed, and the
+// mechanism silently did not fire for exactly the case it exists for. A guard
+// that suppresses real remarks is worse than the noise it was added to stop,
+// because the noise is visible and the suppression is not.
+//
+// 10s keeps a ~70x margin over the measured round-trip (covering a slow or
+// retried client) while sitting far below any deliberate second thought. The
+// asymmetry that sets the direction: too WIDE swallows real remarks silently;
+// too NARROW produces one extra card somebody closes. Prefer too narrow.
+const closingReportWindow = 10 * time.Second
 
 // commentIsOwnClosingReport reports whether this comment is the closing note of
 // the actor who just closed this card.
