@@ -253,6 +253,9 @@ type CommentRepository interface {
 	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter CommentViewFilter) ([]domain.CommentView, *domain.CommentCursor, error)
 	// HasAnyComment returns true when the task has at least one comment.
 	HasAnyComment(ctx context.Context, taskID uuid.UUID) (bool, error)
+	// HasCommentWithURL returns true when the task has at least one comment whose
+	// body carries an http(s) URL. Evidence arm of the strict review gate.
+	HasCommentWithURL(ctx context.Context, taskID uuid.UUID) (bool, error)
 	// HasRecentCommentBy returns true when the task has a non-internal comment by authorID
 	// created on or after `since` whose body is at least minLength characters long.
 	HasRecentCommentBy(ctx context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error)

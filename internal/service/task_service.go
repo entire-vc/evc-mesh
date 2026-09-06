@@ -747,16 +747,23 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		}
 
 		// Review-evidence gate: block evidence-less moves to review.
-		// Requires at least one of: artifact, VCS link, or comment.
+		//
+		// Two conditions, selected per project by mid_pipeline.review_evidence_strict:
+		//   loose (default)  — artifact, VCS link, or ANY comment
+		//   strict (opt-in)  — artifact, VCS link, a PASSING dod_check, or a
+		//                      comment carrying a URL
+		//
+		// The loose form is what shipped in June and is preserved byte-for-byte
+		// for every project that has not opted in, so enabling strict mode
+		// somewhere cannot change behaviour anywhere else.
+		//
 		// Gate is skipped when commentRepo is not wired (e.g. tests without it).
 		// System actors (auto_transition) are exempt, consistent with the done-evidence gate.
 		if status.Category == domain.StatusCategoryReview && s.commentRepo != nil {
 			_, actorType := actorctx.FromContext(ctx)
 			if actorType != domain.ActorTypeSystem {
-				if task.ArtifactCount == 0 && task.VCSLinkCount == 0 {
-					if hasComment, gateErr := s.commentRepo.HasAnyComment(ctx, taskID); gateErr == nil && !hasComment {
-						return &ReviewEvidenceError{}
-					}
+				if ok, strict := s.passesReviewEvidenceGate(ctx, task); !ok {
+					return &ReviewEvidenceError{Strict: strict}
 				}
 			}
 		}
@@ -1763,11 +1770,20 @@ func (e *RuleViolationError) Error() string {
 	return fmt.Sprintf("action blocked by %d governance rule(s)", len(e.Violations))
 }
 
-// ReviewEvidenceError is returned when a task is moved to review without any
-// evidence: no artifact, no VCS link, and no comment.
-type ReviewEvidenceError struct{}
+// ReviewEvidenceError is returned when a task is moved to review without
+// evidence. Strict records which condition refused it, so the caller can be told
+// what would actually satisfy the gate rather than a generic list — under strict
+// mode "add a comment" is no longer an answer, and saying otherwise would send
+// the caller round the loop a second time.
+type ReviewEvidenceError struct {
+	Strict bool
+}
 
 func (e *ReviewEvidenceError) Error() string {
+	if e.Strict {
+		return "review requires evidence: add a PR/VCS link, an artifact upload, a passing dod_check, " +
+			"or a comment containing a URL to the proof (a pipeline, MR, deployed page or log) before moving to review"
+	}
 	return "review requires evidence: add a PR/VCS link, artifact upload, or comment with proof before moving to review"
 }
 

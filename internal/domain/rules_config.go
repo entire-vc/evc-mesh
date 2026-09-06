@@ -74,6 +74,75 @@ type WorkflowRulesConfig struct {
 	EnforcementMode     string                    `json:"enforcement_mode,omitempty"`
 	Policies            map[string]PolicyRule     `json:"policies,omitempty"`
 	EnforceSystemActors bool                      `json:"enforce_system_actors,omitempty"` // if true, system actors are not exempt
+	MidPipeline         *MidPipelineConfig        `json:"mid_pipeline,omitempty"`
+}
+
+// MidPipelineConfig configures the mid-pipeline guard: the two transitions that
+// had no writer other than an agent following a prompt (todo→in_progress is
+// already written by CheckoutTask; these are the two that remain).
+//
+// Both flags default to OFF and both are additive: with the block absent — which
+// is every project until someone opts in — the server behaves exactly as it did
+// before this type existed. That is deliberate. Each flag tightens a gate that
+// the whole fleet moves tasks through, so the blast radius of getting one wrong
+// is every lane at once; the safe default is the behaviour already in production,
+// and enabling is a per-project data change rather than a release.
+//
+// Note the asymmetry with the progress signal used by the auto-park sweep: that
+// is a CORRECTNESS fix (updated_at alone cannot see a comment) and is therefore
+// unconditional, not flagged. A flag guards a change of policy; it must not
+// guard a change from wrong to right.
+type MidPipelineConfig struct {
+	// ReviewEvidenceStrict tightens the existing review-evidence gate from
+	// "has any comment" to "has evidence": an artifact, a VCS link, a passing
+	// dod_check, or a comment that actually carries a URL.
+	//
+	// The loose form is close to vacuous in practice — fleet convention already
+	// requires a comment on every status change, so the third arm is true on
+	// essentially every card by the time it reaches review, and the gate only
+	// ever refuses a card nothing has happened on. Strict mode is what makes
+	// "70% of closes bypassed review" distinguishable from "the gate works".
+	ReviewEvidenceStrict bool `json:"review_evidence_strict,omitempty"`
+
+	// AutoParkStalled changes where a stalled in_progress task is sent by the
+	// lease reaper's unleased sweep: backlog with a due_date and a kind:monitor
+	// label, instead of straight back to todo.
+	//
+	// Sending it to todo returns it to the feed immediately, which is how a
+	// stalled card gets re-fed to the same lane over and over (measured: 320
+	// cards fed >=3 times, 109 >=5). Parking breaks that loop, and the
+	// kind:monitor label is what lets MonitorPromotionService pick it back up
+	// when the due_date arrives — without the label the park has no wake-up
+	// path at all and the card sleeps indefinitely.
+	AutoParkStalled bool `json:"auto_park_stalled,omitempty"`
+
+	// AutoParkDueHours is how far ahead the park sets due_date. 0 = default (24).
+	AutoParkDueHours int `json:"auto_park_due_hours,omitempty"`
+}
+
+// DefaultAutoParkDueHours is the wake-up delay applied to an auto-parked task
+// when the project config does not name one.
+const DefaultAutoParkDueHours = 24
+
+// AutoParkDue returns the configured wake-up delay, falling back to the default.
+// Safe on a nil receiver: a project with no mid_pipeline block still answers.
+func (c *MidPipelineConfig) AutoParkDue() int {
+	if c == nil || c.AutoParkDueHours <= 0 {
+		return DefaultAutoParkDueHours
+	}
+	return c.AutoParkDueHours
+}
+
+// ReviewStrict reports whether strict review evidence is enabled. Nil-safe so
+// callers do not have to nil-check a block that is absent on most projects.
+func (c *MidPipelineConfig) ReviewStrict() bool {
+	return c != nil && c.ReviewEvidenceStrict
+}
+
+// ParkStalled reports whether stalled in_progress tasks should be parked rather
+// than returned to todo. Nil-safe, same reason as ReviewStrict.
+func (c *MidPipelineConfig) ParkStalled() bool {
+	return c != nil && c.AutoParkStalled
 }
 
 // TransitionRule defines allowed transitions from a given status.

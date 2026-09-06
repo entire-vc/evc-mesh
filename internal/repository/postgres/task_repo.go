@@ -1342,17 +1342,42 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 // without renewal, so a card with no lease AND no activity for longer than that is
 // abandoned by the system's own standard. Measured on 30d of prod releases: 83%
 // (669/809) see follow-up activity inside 120 min and so never reach this query.
+//
+// Idleness is measured against comments, artifacts and VCS links as well as
+// updated_at, and NOT against updated_at alone.
+//
+// This is load-bearing, not belt-and-braces. `add_comment` does not touch
+// tasks.updated_at — only a status change does (measured 2026-08-20 on
+// #603f340a: updated_at 20:47:07, last comment 21:02:32, no write in between).
+// So an agent that reports progress the way the fleet workflow tells it to —
+// a comment every few minutes, status unchanged because the work is unfinished —
+// is, to an updated_at-only query, indistinguishable from a dead session. This
+// sweep would then take the card away from a lane that is actively working it,
+// which is a false positive in the expensive direction: the previous behaviour
+// merely re-fed the card, the park behind mid_pipeline.auto_park_stalled hides
+// it for a day.
+//
+// The three extra signals are exactly the three the acceptance criterion names
+// as progress ("комментарий/коммит/артефакт"): a comment, a linked commit/PR, an
+// uploaded artifact. GREATEST over them and updated_at gives "last sign of life
+// by any route", which is the quantity the grace window was always meant to
+// measure.
 func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan time.Duration) ([]domain.Task, error) {
 	const q = `
 		SELECT ` + taskBaseColsNoAlias + `
-		FROM tasks
-		WHERE checked_out_by IS NULL
-		  AND checkout_expires IS NULL
-		  AND updated_at < now() - $1::interval
-		  AND deleted_at IS NULL
-		  AND status_id IN (
+		FROM tasks t
+		WHERE t.checked_out_by IS NULL
+		  AND t.checkout_expires IS NULL
+		  AND t.deleted_at IS NULL
+		  AND t.status_id IN (
 		      SELECT id FROM task_statuses WHERE category = 'in_progress'
-		  )`
+		  )
+		  AND GREATEST(
+		        t.updated_at,
+		        COALESCE((SELECT max(c.created_at)  FROM comments c  WHERE c.task_id  = t.id), t.updated_at),
+		        COALESCE((SELECT max(a.created_at)  FROM artifacts a WHERE a.task_id  = t.id), t.updated_at),
+		        COALESCE((SELECT max(v.created_at)  FROM vcs_links v WHERE v.task_id  = t.id), t.updated_at)
+		      ) < now() - $1::interval`
 	var rows []taskRow
 	iv := fmt.Sprintf("%d seconds", int64(olderThan.Seconds()))
 	if err := r.db.SelectContext(ctx, &rows, q, iv); err != nil {

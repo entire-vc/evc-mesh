@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -543,6 +544,16 @@ func (m *MockTaskRepository) ReleaseExpiredCheckouts(_ context.Context) (int64, 
 	return released, nil
 }
 
+// FindStaleUnleasedInProgress mirrors only the LEASE and STATUS predicates of the
+// real query, deliberately not its freshness join.
+//
+// The production query measures idleness against comments, artifacts and VCS
+// links as well as updated_at, because add_comment does not move updated_at. A
+// mock cannot express that — it has no comments table — so nothing here should be
+// read as evidence about the progress signal. That behaviour is covered against a
+// real Postgres in internal/repository/postgres/mid_pipeline_gate_db_test.go,
+// with a red control. Tests in this package use this mock to exercise ROUTING
+// (park vs return-to-todo), which is where the reaper's own logic lives.
 func (m *MockTaskRepository) FindStaleUnleasedInProgress(_ context.Context, olderThan time.Duration) ([]domain.Task, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
@@ -1194,6 +1205,28 @@ func (m *MockCommentRepository) HasAnyComment(_ context.Context, taskID uuid.UUI
 	}
 	return false, nil
 }
+
+// HasCommentWithURL mirrors the postgres regex arm of the strict review gate.
+// Kept deliberately close to the SQL: scheme case-insensitive, at least one
+// non-space character after "//", and the scheme must not be glued to a
+// preceding word character — so "nothttps://x" does not count, same as in SQL.
+func (m *MockCommentRepository) HasCommentWithURL(_ context.Context, taskID uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.items {
+		if c.TaskID == taskID && mockBodyHasURL(c.Body) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+var mockURLRe = regexp.MustCompile(`(?i)(^|[^a-z0-9])https?://\S`)
+
+func mockBodyHasURL(body string) bool { return mockURLRe.MatchString(body) }
 
 func (m *MockCommentRepository) HasRecentCommentBy(_ context.Context, taskID, authorID uuid.UUID, since time.Time, minLength int) (bool, error) {
 	if m.errToReturn != nil {
