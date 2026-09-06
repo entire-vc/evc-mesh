@@ -1430,6 +1430,40 @@ func (r *TaskRepo) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, 
 	return nil
 }
 
+// ExtendCheckoutsOnHeartbeat pushes checkout_expires forward for every live
+// checkout the agent holds, in projects that have opted into
+// mid_pipeline.heartbeat_extends_checkout. One statement rather than a
+// list-then-loop from the service layer: the extension window itself is
+// per-project config (mid_pipeline.heartbeat_checkout_extend_minutes,
+// default 30), so it is computed per row here rather than passed in as a
+// single bound parameter that could only be right for one project at a time.
+//
+// checked_out_by is the ownership check, not a checkout token — heartbeat
+// authenticates the agent, not any specific checkout, and an agent may
+// legitimately hold more than one.
+func (r *TaskRepo) ExtendCheckoutsOnHeartbeat(ctx context.Context, agentID uuid.UUID) (int64, error) {
+	const query = `
+		UPDATE tasks t
+		SET checkout_expires = now() + (
+		      COALESCE((pr.config -> 'mid_pipeline' ->> 'heartbeat_checkout_extend_minutes')::int, 30)
+		      || ' minutes'
+		    )::interval,
+		    updated_at = now()
+		FROM project_rules pr
+		WHERE t.checked_out_by = $1
+		  AND t.checkout_expires IS NOT NULL
+		  AND t.deleted_at IS NULL
+		  AND pr.project_id = t.project_id
+		  AND pr.rule_type = 'workflow'
+		  AND COALESCE((pr.config -> 'mid_pipeline' ->> 'heartbeat_extends_checkout')::boolean, false) = true`
+	res, err := r.db.ExecContext(ctx, query, agentID)
+	if err != nil {
+		return 0, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows, nil
+}
+
 // ListByUserActive returns active tasks (excluding done/cancelled) assigned to the given user in a workspace.
 func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
 	pg.Normalize()

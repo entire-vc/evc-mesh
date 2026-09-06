@@ -270,6 +270,14 @@ func (c *cachedAgentAuth) SetAgentActivityLogRepo(repo repository.AgentActivityL
 	}
 }
 
+// SetCheckoutHeartbeatExtender forwards the optional dependency, same reason
+// as SetAgentActivityLogRepo above.
+func (c *cachedAgentAuth) SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExtender) {
+	if configurable, ok := c.AgentService.(AgentServiceConfigurable); ok {
+		configurable.SetCheckoutHeartbeatExtender(ext)
+	}
+}
+
 // Compile-time proof that the wrapper still satisfies the optional-dependency
 // interface the wiring code asserts on.
 var _ AgentServiceConfigurable = (*cachedAgentAuth)(nil)

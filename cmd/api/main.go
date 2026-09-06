@@ -430,6 +430,23 @@ func main() {
 		configurable.SetAutoTransitionService(autoTransitionSvc)
 	}
 
+	// Wire taskService into agentService's Heartbeat path so a live heartbeat can
+	// extend the agent's checkout leases (audit §1.2, mid_pipeline.heartbeat_extends_checkout).
+	// Same back-injection reason as SetAutoTransitionService above: agentService is
+	// constructed long before taskService exists (nearly everything else, including
+	// taskService's own middleware chain, depends on agentService.Authenticate first).
+	//
+	// Two type assertions, not one: taskService here is typed as the wide
+	// TaskService interface (NewTaskService's return type), which deliberately
+	// does NOT declare ExtendCheckoutsOnHeartbeat — see CheckoutHeartbeatExtender's
+	// doc comment for why it stays off that interface. The concrete *taskService
+	// value underneath satisfies it structurally; this asserts that back out.
+	if configurable, ok := agentService.(service.AgentServiceConfigurable); ok {
+		if extender, ok := taskService.(service.CheckoutHeartbeatExtender); ok {
+			configurable.SetCheckoutHeartbeatExtender(extender)
+		}
+	}
+
 	taskStatusService := service.NewTaskStatusService(taskStatusRepo, taskRepo, activityLogRepo)
 
 	// Real service implementations (replacing stubs from earlier sprints).
@@ -981,7 +998,7 @@ func main() {
 	// retries after the original holder's session dies.
 	// leaseReaper additionally moves expired in_progress tasks back to todo so that
 	// the capacity slot (max_in_progress) is freed for other agents.
-	leaseReaper := service.NewCheckoutLeaseReaper(taskRepo, taskStatusRepo, commentRepo, taskService, agentNotifySvc, rulesService)
+	leaseReaper := service.NewCheckoutLeaseReaper(taskRepo, taskStatusRepo, commentRepo, taskService, agentNotifySvc, rulesService, activityLogRepo, projectRepo)
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)

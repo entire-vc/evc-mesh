@@ -767,6 +767,26 @@ type RegisterAgentOutput struct {
 // AgentServiceConfigurable allows optional dependencies to be injected after construction.
 type AgentServiceConfigurable interface {
 	SetAgentActivityLogRepo(repo repository.AgentActivityLogRepository)
+	// SetCheckoutHeartbeatExtender wires the optional checkout-lease extension
+	// hook (see CheckoutHeartbeatExtender) into Heartbeat. Injected post-
+	// construction, same reason as SetAgentActivityLogRepo: cmd/api/main.go
+	// builds agentService before taskService (agentService's own
+	// authentication is a dependency of almost everything else), so the
+	// concrete value satisfying this interface does not exist yet at
+	// NewAgentService's call site.
+	SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExtender)
+}
+
+// CheckoutHeartbeatExtender is the narrow slice of TaskService that
+// agentService.Heartbeat needs to push checkout_expires forward on a live
+// heartbeat. Kept separate from the wide TaskService interface deliberately:
+// depending on TaskService itself here would need it to exist before
+// agentService is constructed, and cmd/api/main.go's wiring order is the
+// other way around (agentService's Authenticate is what nearly everything
+// else — including taskService's own middleware chain — depends on first).
+// *taskService satisfies this structurally; no explicit assertion needed.
+type CheckoutHeartbeatExtender interface {
+	ExtendCheckoutsOnHeartbeat(ctx context.Context, agentID uuid.UUID)
 }
 
 // HeartbeatInput holds optional fields for the heartbeat update.

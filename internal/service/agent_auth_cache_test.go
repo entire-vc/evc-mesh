@@ -78,6 +78,8 @@ func (s *countingAgentService) SetAgentActivityLogRepo(repo repository.AgentActi
 	s.configedRepo = repo
 }
 
+func (s *countingAgentService) SetCheckoutHeartbeatExtender(_ CheckoutHeartbeatExtender) {}
+
 // newCacheFixture returns a wrapper over a counting inner service, plus a
 // controllable clock.
 func newCacheFixture(t *testing.T, ttl time.Duration) (*cachedAgentAuth, *countingAgentService, *time.Time) {
