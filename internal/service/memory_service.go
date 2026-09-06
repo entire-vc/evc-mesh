@@ -35,8 +35,31 @@ import (
 var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 
 // defaultMinImportance is the threshold applied to recall queries when the caller
-// does not supply an explicit min_importance. Entries below this score are noise.
-const defaultMinImportance float32 = 0.4
+// does not supply an explicit min_importance.
+//
+// It is 0.30 to match the LOWEST score this service itself assigns, which is
+// kind:session-checkpoint (see importanceFor below). At 0.40 the default was a
+// filter whose only effect was hiding that one class: measured on prod
+// 2026-09-06, 89 of 2527 active memories scored below 0.40 and ALL 89 were
+// session-checkpoints, every one at exactly 0.300 — no other kind ever lands
+// there. So "entries below this score are noise" (the comment that used to
+// stand here) described nothing but the fleet's own session hand-offs.
+//
+// The consequence was a default that every real caller overrode. The spawn
+// prompts carried a literal `min_importance=0.3` with the note "REQUIRED:
+// prior-session handoffs sit at 0.3", and the memory-eval harness passed the
+// same 0.3 — i.e. the contract was documented in three prompt strings instead
+// of in the code. Task #a9752575 (audit §4.6, the "episodic 17%" trap).
+//
+// Aligning the THRESHOLD rather than raising the checkpoint SCORE is deliberate:
+// importance_score still has to rank a 7-day hand-off below a durable decision,
+// and lifting checkpoints to 0.40 would have erased exactly that distinction to
+// fix a visibility problem. Threshold and ranking are different jobs.
+//
+// graphMinImportance is intentionally NOT changed with it — a graph-expanded
+// neighbour is a speculative addition rather than something the caller asked
+// for, so a stricter bar there is a separate decision, and not this task's.
+const defaultMinImportance float32 = 0.3
 
 // reservedMemoryTags is the single source of truth for tags a normal write may
 // not carry — each is gated to a specific, DB-flagged workspace via
