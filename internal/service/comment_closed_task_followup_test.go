@@ -68,18 +68,19 @@ func (f *followUpTaskCreator) createdTasks() []*domain.Task {
 }
 
 type followUpEnv struct {
-	svc         *commentService
-	commentRepo *MockCommentRepository
-	taskRepo    *MockTaskRepository
-	statusRepo  *MockTaskStatusRepository
-	depRepo     *MockTaskDependencyRepository
-	taskSvc     *followUpTaskCreator
-	projID      uuid.UUID
-	wsID        uuid.UUID
-	doneID      uuid.UUID
-	todoID      uuid.UUID
-	assignee    uuid.UUID
-	sourceID    uuid.UUID
+	svc          *commentService
+	commentRepo  *MockCommentRepository
+	taskRepo     *MockTaskRepository
+	statusRepo   *MockTaskStatusRepository
+	depRepo      *MockTaskDependencyRepository
+	activityRepo *MockActivityLogRepository
+	taskSvc      *followUpTaskCreator
+	projID       uuid.UUID
+	wsID         uuid.UUID
+	doneID       uuid.UUID
+	todoID       uuid.UUID
+	assignee     uuid.UUID
+	sourceID     uuid.UUID
 }
 
 // setupFollowUpEnv builds a closed ("done") card assigned to an agent, in a
@@ -129,7 +130,7 @@ func setupFollowUpEnv(t *testing.T, opts ...func(*followUpEnv)) followUpEnv {
 
 	env := followUpEnv{
 		svc: svc, commentRepo: commentRepo, taskRepo: taskRepo, statusRepo: statusRepo,
-		depRepo: depRepo, taskSvc: taskSvc,
+		depRepo: depRepo, activityRepo: activityRepo, taskSvc: taskSvc,
 		projID: projID, wsID: wsID, doneID: doneID, todoID: todoID,
 		assignee: assignee, sourceID: sourceID,
 	}
@@ -453,4 +454,82 @@ func utf8Valid(s string) bool {
 		}
 	}
 	return true
+}
+
+// --- The closing-report branch (found by the live acceptance run) -----------
+//
+// This branch does not come from the task's four criteria. It comes from
+// running the shipped mechanism against prod: `move_task(done, comment=…)` is
+// two API calls, so the closing note lands on an ALREADY-closed card, and the
+// closer is usually not the assignee. Every routine cross-agent close —
+// which the fleet's own rules both permit and require a comment for — opened a
+// follow-up card. Live instance: `#0da96e03`, from the closer's own
+// "Закрываю: …" note, within the same second.
+
+// logMove records a task.moved activity entry by actor at t.
+func (env followUpEnv) logMove(actorID uuid.UUID, actorType domain.ActorType, t time.Time) {
+	id := uuid.New()
+	env.activityRepo.items[id] = &domain.ActivityLog{
+		ID: id, EntityType: "task", EntityID: env.sourceID,
+		Action: "task.moved", ActorID: actorID, ActorType: actorType, CreatedAt: t,
+	}
+}
+
+func TestClosedFollowUp_ClosersOwnClosingNoteCreatesNothing(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	closer := uuid.New()
+	env.logMove(closer, domain.ActorTypeAgent, frozenTime)
+
+	env.comment(t, "Закрываю: работа отгружена, PR смёржен.", func(c *domain.Comment) {
+		c.AuthorID = closer
+		c.AuthorType = domain.ActorTypeAgent
+	})
+
+	assert.Empty(t, env.taskSvc.createdTasks(),
+		"the closer's own note about closing is that close's report, not a remark to route back")
+	assert.Empty(t, env.systemNotices())
+}
+
+// The narrowness is the whole point: a remark from someone who did NOT close
+// the card must still be routed, however soon after the close it arrives.
+func TestClosedFollowUp_DifferentAuthorAfterACloseStillRoutes(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	env.logMove(uuid.New(), domain.ActorTypeAgent, frozenTime) // somebody else closed it
+
+	env.comment(t, "Шапка не sticky — вернулось.")
+
+	assert.Len(t, env.taskSvc.createdTasks(), 1,
+		"only the CLOSER's own note is exempt; a colleague's remark seconds later is the real case")
+}
+
+// And the same actor coming back LATER is writing a remark, not a closing note.
+func TestClosedFollowUp_SameCloserLongAfterTheCloseStillRoutes(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	closer := uuid.New()
+	env.logMove(closer, domain.ActorTypeAgent, frozenTime.Add(-2*time.Hour))
+
+	env.comment(t, "Вернулся на следующий день: ширина 1120 вместо 1240.", func(c *domain.Comment) {
+		c.AuthorID = closer
+		c.AuthorType = domain.ActorTypeAgent
+	})
+
+	assert.Len(t, env.taskSvc.createdTasks(), 1,
+		"the exemption is for the note that accompanies the close, not for the closer forever")
+}
+
+// Fails OPEN when the activity log cannot be read: a duplicate card is
+// recoverable, a swallowed remark is the defect this file exists to fix.
+func TestClosedFollowUp_UnreadableActivityLogStillRoutes(t *testing.T) {
+	env := setupFollowUpEnv(t)
+	closer := uuid.New()
+	env.logMove(closer, domain.ActorTypeAgent, frozenTime)
+	env.activityRepo.errToReturn = assert.AnError
+
+	env.comment(t, "Закрываю.", func(c *domain.Comment) {
+		c.AuthorID = closer
+		c.AuthorType = domain.ActorTypeAgent
+	})
+
+	assert.Len(t, env.taskSvc.createdTasks(), 1,
+		"could-not-look must not read as could-not-find — this guard fails open by design")
 }
