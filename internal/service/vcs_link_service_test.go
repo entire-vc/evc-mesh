@@ -221,7 +221,8 @@ func (r *fakeTaskRepo) ListOpenByRecurringScheduleID(context.Context, uuid.UUID,
 	return nil, nil
 }
 
-func (r *fakeTaskRepo) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
+func (r *fakeTaskRepo) ArmHumanGate(context.Context, domain.ArmHumanGateInput) error { return nil }
+func (r *fakeTaskRepo) SetHumanGate(context.Context, uuid.UUID, bool) error          { return nil }
 func (r *fakeTaskRepo) SetHumanGateClass(context.Context, uuid.UUID, domain.HumanGateClass) error {
 	return nil
 }
@@ -351,7 +352,9 @@ func (t *fakeTaskService) SupersedeRecurringInstances(context.Context, uuid.UUID
 	return 0, 0, nil
 }
 
-func (t *fakeTaskService) SetHumanGate(context.Context, uuid.UUID, bool) error { return nil }
+func (t *fakeTaskService) ArmHumanGate(context.Context, domain.ArmHumanGateInput) error { return nil }
+func (t *fakeTaskService) ClearHumanGate(context.Context, uuid.UUID) error              { return nil }
+func (t *fakeTaskService) SetHumanGate(context.Context, uuid.UUID, bool) error          { return nil }
 func (t *fakeTaskService) SetHumanGateClass(context.Context, uuid.UUID, domain.HumanGateClass) error {
 	return nil
 }

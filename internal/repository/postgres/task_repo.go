@@ -86,7 +86,8 @@ const taskBaseColsNoAlias = `
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
 	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
 	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type,
-	reviewer_id, reviewer_type, human_gate_class, human_gate_armed_at`
+	reviewer_id, reviewer_type, human_gate_class, human_gate_armed_at,
+	gate_author, gate_author_type, gate_reason, recommended_default, gate_deadline`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -203,11 +204,19 @@ type taskRow struct {
 	RecurringScheduleID     *uuid.UUID `db:"recurring_schedule_id"`
 	RecurringInstanceNumber *int       `db:"recurring_instance_number"`
 
-	DelegationLevel  domain.DelegationLevel  `db:"delegation_level"`
-	ThreadID         *string                 `db:"thread_id"`
-	HumanGate        bool                    `db:"human_gate"`
-	HumanGateClass   domain.HumanGateClass   `db:"human_gate_class"`
-	HumanGateArmedAt *time.Time              `db:"human_gate_armed_at"`
+	DelegationLevel  domain.DelegationLevel `db:"delegation_level"`
+	ThreadID         *string                `db:"thread_id"`
+	HumanGate        bool                   `db:"human_gate"`
+	HumanGateClass   domain.HumanGateClass  `db:"human_gate_class"`
+	HumanGateArmedAt *time.Time             `db:"human_gate_armed_at"`
+
+	// Gate authorship + default (task #4545660b) — see domain.Task doc comment.
+	GateAuthor         *uuid.UUID        `db:"gate_author"`
+	GateAuthorType     *domain.ActorType `db:"gate_author_type"`
+	GateReason         *string           `db:"gate_reason"`
+	RecommendedDefault *string           `db:"recommended_default"`
+	GateDeadline       *time.Time        `db:"gate_deadline"`
+
 	IsShipped        bool                    `db:"is_shipped"`
 	AssignedBy       domain.AssignmentSource `db:"assigned_by"`
 	DodChecks        domain.DodChecks        `db:"dod_checks"`
@@ -272,6 +281,11 @@ func (r *taskRow) toDomain() domain.Task {
 		HumanGate:               r.HumanGate,
 		HumanGateClass:          r.HumanGateClass,
 		HumanGateArmedAt:        r.HumanGateArmedAt,
+		GateAuthor:              r.GateAuthor,
+		GateAuthorType:          r.GateAuthorType,
+		GateReason:              r.GateReason,
+		RecommendedDefault:      r.RecommendedDefault,
+		GateDeadline:            r.GateDeadline,
 		IsShipped:               r.IsShipped,
 		AssignedBy:              r.AssignedBy,
 		DodChecks:               r.DodChecks,
@@ -609,17 +623,73 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 	return nil
 }
 
+// ArmHumanGate atomically arms the gate AND writes the whole "waiting on a human"
+// answer in one statement (task #4545660b): who asked, what they asked, what happens by
+// default and by when. One statement rather than a SetHumanGate + SetHumanGateClass +
+// three more calls, because a partially-armed gate is exactly the state every client
+// used to paper over by going back to the comment text.
+//
+// human_gate_armed_at is stamped only on a false->true transition. Re-arming an already
+// armed gate refreshes the ask (a later marker supersedes an earlier one, matching how
+// SetHumanGateClass already lets a hard marker downgrade a soft one) but must NOT reset
+// the age the soft-timeout sweep measures — otherwise a driver's repeat ping would keep
+// a soft gate alive forever, the latch shape of #84ab54fd.
+func (r *TaskRepo) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error {
+	const q = `
+		UPDATE tasks SET
+			human_gate = true,
+			human_gate_class = $2,
+			human_gate_armed_at = CASE WHEN human_gate THEN human_gate_armed_at ELSE NOW() END,
+			gate_author = $3,
+			gate_author_type = $4,
+			gate_reason = NULLIF($5, ''),
+			recommended_default = NULLIF($6, ''),
+			gate_deadline = $7,
+			updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL`
+	dbStart := time.Now()
+	res, err := r.db.ExecContext(ctx, q,
+		in.TaskID, in.Class, in.Author, string(in.AuthorType),
+		in.Reason, in.RecommendedDefault, in.Deadline,
+	)
+	pkgmetrics.RecordDBQuery("task.arm_human_gate", time.Since(dbStart))
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Task")
+	}
+	return nil
+}
+
 // SetHumanGate atomically sets the human_gate column without touching other task fields.
 // Arming (value=true) also stamps human_gate_armed_at = NOW() and leaves
 // human_gate_class as-is (default 'hard' unless SetHumanGateClass overrode it before this
 // call). Clearing (value=false) resets human_gate_class back to 'hard' — fail-closed, so a
 // soft classification never survives past the ask it was set for.
+//
+// Clearing ALSO nulls the four authorship/default columns ArmHumanGate writes. They
+// describe a LIVE ask; leaving them behind on a released gate would leave a
+// recommended_default sitting on a task that no longer has a question, which is exactly
+// the kind of residue every reader would have to learn to ignore. History is not lost —
+// it stays in the marker comment and in human_gate_decisions.
+//
+// NOTE this is the legacy bool-shaped entry point, kept because the release paths
+// (releaseHumanGate, withdrawal, soft-timeout sweep, PATCH) only ever pass false. Arming
+// through it is still possible and still leaves the gate authorless; new arm callers must
+// use ArmHumanGate.
 func (r *TaskRepo) SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error {
 	const q = `
 		UPDATE tasks SET
 			human_gate = $2,
 			human_gate_class = CASE WHEN $2 THEN human_gate_class ELSE 'hard' END,
 			human_gate_armed_at = CASE WHEN $2 THEN NOW() ELSE human_gate_armed_at END,
+			gate_author = CASE WHEN $2 THEN gate_author ELSE NULL END,
+			gate_author_type = CASE WHEN $2 THEN gate_author_type ELSE NULL END,
+			gate_reason = CASE WHEN $2 THEN gate_reason ELSE NULL END,
+			recommended_default = CASE WHEN $2 THEN recommended_default ELSE NULL END,
+			gate_deadline = CASE WHEN $2 THEN gate_deadline ELSE NULL END,
 			updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL`
 	dbStart := time.Now()

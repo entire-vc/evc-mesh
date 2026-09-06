@@ -1715,18 +1715,17 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	// Arming is what DELIVERS the ask (freezes the card, queues it for the named user);
 	// the completion-report heuristic exists to suppress the TRIAGE MOVE, and gating
 	// delivery on it made a live ask vanish silently — see the check's own note.
-	if setErr := s.taskSvc.SetHumanGate(ctx, task.ID, true); setErr != nil {
-		log.Printf("[comment-triage] WARNING: SetHumanGate on task %s failed: %v", task.ID, setErr)
-	}
-
-	// Classify the gate this exact marker requests (contract §5, task #4dc9467b).
-	// Computed from userSlug's own marker line, not the whole body — see
-	// blockingMarkerClassForSlug's doc. Set unconditionally (not only when soft) so a
-	// later hard marker on an unreleased task correctly downgrades it back — the same
-	// fail-closed direction SetHumanGate(false) already applies on release.
-	gateClass := blockingMarkerClassForSlug(comment.Body, userSlug)
-	if setErr := s.taskSvc.SetHumanGateClass(ctx, task.ID, gateClass); setErr != nil {
-		log.Printf("[comment-triage] WARNING: SetHumanGateClass(%s) on task %s failed: %v", gateClass, task.ID, setErr)
+	//
+	// Since task #4545660b this goes through the SAME ArmHumanGate the explicit
+	// set_human_gate API uses, with gate_author taken from the comment's authenticated
+	// author — so the marker path is one CALLER of the single arming implementation,
+	// not a second implementation of it. Class is included in that one call (contract
+	// §5, task #4dc9467b): computed from userSlug's own marker line rather than the
+	// whole body (see blockingMarkerClassForSlug), and always set — never only when
+	// soft — so a later hard marker on an unreleased task correctly downgrades it back.
+	armIn := armInputFromMarker(comment, task, userSlug)
+	if setErr := s.taskSvc.ArmHumanGate(ctx, armIn); setErr != nil {
+		log.Printf("[comment-triage] WARNING: ArmHumanGate on task %s failed: %v", task.ID, setErr)
 	}
 
 	// auto-mode tasks self-manage; triage escalation is suppressed (flag already set above).

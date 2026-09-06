@@ -1284,6 +1284,14 @@ func main() {
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext, wsAccess)
 	api.GET("/tasks/:task_id/cost-summary", taskHandler.GetCostSummary, wsAccess)
 	api.PATCH("/tasks/:task_id/dod-check", taskHandler.SetDodCheck, wsAccess, rbac(mw.PermUpdateTask))
+	// The single arming path for "this card is waiting on a human" (task #4545660b).
+	// Arm records WHO asked (from the authenticated identity, not the body), WHAT was
+	// asked, WHAT happens by default and BY WHEN, so a client's is_human_gated collapses
+	// to reading task.human_gate instead of re-deriving it from comment text.
+	// Clear enforces the same user-only rule as PATCH {human_gate:false}, inside the
+	// handler (mirroring the human-gate-decisions revoke route above).
+	api.POST("/tasks/:task_id/human-gate", taskHandler.ArmHumanGate, wsAccess, rbac(mw.PermUpdateTask))
+	api.DELETE("/tasks/:task_id/human-gate", taskHandler.ClearHumanGate, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)
 
 	// Dependency routes.

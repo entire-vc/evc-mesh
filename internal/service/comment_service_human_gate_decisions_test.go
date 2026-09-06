@@ -159,6 +159,27 @@ func (f *fakeHumanGateTaskService) GetByID(_ context.Context, id uuid.UUID) (*do
 	return &cp, nil
 }
 
+func (f *fakeHumanGateTaskService) ArmHumanGate(_ context.Context, in domain.ArmHumanGateInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.setGateErr != nil {
+		err := f.setGateErr
+		f.setGateErr = nil
+		return err
+	}
+	if t, ok := f.tasks[in.TaskID]; ok {
+		t.HumanGate = true
+		t.HumanGateClass = in.Class
+		author, authorType := in.Author, in.AuthorType
+		t.GateAuthor, t.GateAuthorType = &author, &authorType
+	}
+	return nil
+}
+
+func (f *fakeHumanGateTaskService) ClearHumanGate(ctx context.Context, id uuid.UUID) error {
+	return f.SetHumanGate(ctx, id, false)
+}
+
 func (f *fakeHumanGateTaskService) SetHumanGate(_ context.Context, id uuid.UUID, value bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

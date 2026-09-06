@@ -325,6 +325,10 @@ func (s *StubTaskService) ValidateAssigneeForProject(_ context.Context, _ uuid.U
 	return assigneeType, nil
 }
 
+func (s *StubTaskService) ArmHumanGate(_ context.Context, _ domain.ArmHumanGateInput) error {
+	return nil
+}
+func (s *StubTaskService) ClearHumanGate(_ context.Context, _ uuid.UUID) error       { return nil }
 func (s *StubTaskService) SetHumanGate(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (s *StubTaskService) SetHumanGateClass(_ context.Context, _ uuid.UUID, _ domain.HumanGateClass) error {
 	return nil
