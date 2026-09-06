@@ -2325,6 +2325,9 @@ func (m *mockTaskRepo) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) error 
 func (m *mockTaskRepo) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
 	return nil
 }
+func (m *mockTaskRepo) ExtendCheckoutsOnHeartbeat(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
 func (m *mockTaskRepo) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) error { return nil }
 func (m *mockTaskRepo) ReleaseExpiredCheckouts(_ context.Context) (int64, error)  { return 0, nil }
 func (m *mockTaskRepo) FindExpiredInProgressCheckouts(_ context.Context) ([]domain.Task, error) {

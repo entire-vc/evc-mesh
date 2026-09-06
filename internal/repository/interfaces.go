@@ -122,6 +122,15 @@ type TaskRepository interface {
 	// ExtendCheckout extends the checkout deadline. Returns ErrInvalidCheckoutToken when
 	// the provided token does not match or the checkout has already expired.
 	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, newExpires time.Time) error
+	// ExtendCheckoutsOnHeartbeat pushes checkout_expires forward, by each
+	// project's own mid_pipeline.heartbeat_checkout_extend_minutes (default 30),
+	// for every live checkout the given agent currently holds in a project that
+	// has mid_pipeline.heartbeat_extends_checkout enabled. Ownership-verified by
+	// checked_out_by = agentID, not a checkout token — heartbeat authenticates
+	// the agent itself, not any one specific checkout. Returns the number of
+	// checkouts extended (0 is a normal, non-error outcome: the agent may hold
+	// no checkout, or hold one in a project that has not opted in).
+	ExtendCheckoutsOnHeartbeat(ctx context.Context, agentID uuid.UUID) (int64, error)
 	// ForceReleaseCheckout clears the checkout fields without token verification.
 	// Used by the service layer for auto-release on terminal status transitions
 	// and for admin force-unlock. Returns nil even when no checkout was held.

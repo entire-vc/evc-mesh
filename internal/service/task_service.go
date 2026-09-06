@@ -3291,6 +3291,24 @@ func (s *taskService) TriageParkDueHours(ctx context.Context, projectID uuid.UUI
 	return s.midPipelineConfig(ctx, projectID).TriageParkDue()
 }
 
+// ExtendCheckoutsOnHeartbeat pushes checkout_expires forward for every live
+// checkout the agent holds, in projects that have opted into
+// mid_pipeline.heartbeat_extends_checkout (see task_repo.go for the actual
+// per-project gating). Best-effort and silent on the happy path — this is
+// called from the agent heartbeat request path (agentService.Heartbeat via
+// CheckoutHeartbeatExtender), which must not fail or slow down because a
+// checkout extension had trouble; only a real error gets logged.
+//
+// *taskService satisfies CheckoutHeartbeatExtender structurally — no import
+// cycle risk from adding it to the TaskService interface, since agentService
+// is constructed before taskService in cmd/api/main.go and only needs this
+// one narrow method.
+func (s *taskService) ExtendCheckoutsOnHeartbeat(ctx context.Context, agentID uuid.UUID) {
+	if _, err := s.taskRepo.ExtendCheckoutsOnHeartbeat(ctx, agentID); err != nil {
+		log.Printf("[heartbeat] WARNING: failed to extend checkouts for agent %s: %v", agentID, err)
+	}
+}
+
 // ShipTask marks the task as terminally shipped when shipped=true. Once shipped,
 // MoveTask to any non-done category is rejected with TaskShippedError.
 // Pass shipped=false to clear the flag (unship).

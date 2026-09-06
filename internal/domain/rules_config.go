@@ -140,6 +140,25 @@ type MidPipelineConfig struct {
 	// enforceBlockingTriage) sets due_date when it parks a disqualified gate to
 	// backlog instead of moving it to triage. 0 = default (48).
 	TriageParkDueHours int `json:"triage_park_due_hours,omitempty"`
+
+	// HeartbeatExtendsCheckout, when enabled, makes an agent's heartbeat push
+	// checkout_expires forward for every live checkout that agent currently
+	// holds in this project, instead of leaving checkout expiry purely
+	// TTL-based (audit §1.2: 98% of checkouts were being reclaimed by the
+	// system, not released by the agent — the TTL alone cannot tell "still
+	// working" from "session died", and heartbeat is exactly that signal).
+	//
+	// Off by default for the same reason as the other flags on this block: it
+	// changes when the lease reaper reclaims a card fleet-wide, and a hung
+	// (process alive, heartbeating, but stuck) agent would now hold its
+	// checkout for as long as it keeps heartbeating instead of losing it on
+	// TTL — a real behavior change, not a pure correctness fix, so it gets a
+	// rollout lever rather than landing everywhere at once.
+	HeartbeatExtendsCheckout bool `json:"heartbeat_extends_checkout,omitempty"`
+
+	// HeartbeatCheckoutExtendMinutes is how far ahead each heartbeat pushes
+	// checkout_expires when HeartbeatExtendsCheckout is on. 0 = default (30).
+	HeartbeatCheckoutExtendMinutes int `json:"heartbeat_checkout_extend_minutes,omitempty"`
 }
 
 // DefaultAutoParkDueHours is the wake-up delay applied to an auto-parked task
@@ -149,6 +168,10 @@ const DefaultAutoParkDueHours = 24
 // DefaultTriageParkDueHours is the wake-up delay applied when a disqualified
 // gate is parked to backlog instead of triage.
 const DefaultTriageParkDueHours = 48
+
+// DefaultHeartbeatCheckoutExtendMinutes is how far ahead a heartbeat pushes
+// checkout_expires when the project config does not name a value.
+const DefaultHeartbeatCheckoutExtendMinutes = 30
 
 // AutoParkDue returns the configured wake-up delay, falling back to the default.
 // Safe on a nil receiver: a project with no mid_pipeline block still answers.
@@ -184,6 +207,21 @@ func (c *MidPipelineConfig) TriageParkDue() int {
 		return DefaultTriageParkDueHours
 	}
 	return c.TriageParkDueHours
+}
+
+// ExtendsCheckoutOnHeartbeat reports whether heartbeat should push
+// checkout_expires forward. Nil-safe, same reason as ReviewStrict.
+func (c *MidPipelineConfig) ExtendsCheckoutOnHeartbeat() bool {
+	return c != nil && c.HeartbeatExtendsCheckout
+}
+
+// HeartbeatExtendMinutes returns the configured heartbeat checkout-extension
+// window, falling back to the default. Nil-safe, same reason as AutoParkDue.
+func (c *MidPipelineConfig) HeartbeatExtendMinutes() int {
+	if c == nil || c.HeartbeatCheckoutExtendMinutes <= 0 {
+		return DefaultHeartbeatCheckoutExtendMinutes
+	}
+	return c.HeartbeatCheckoutExtendMinutes
 }
 
 // TransitionRule defines allowed transitions from a given status.

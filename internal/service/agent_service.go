@@ -44,6 +44,11 @@ type agentService struct {
 	// fee35355) — optional, nil in tests that don't exercise it, in which case
 	// the guard is a no-op (see the nil check in Register).
 	userRepo repository.UserRepository
+	// checkoutExtender is optional (nil until SetCheckoutHeartbeatExtender is
+	// called); a nil value makes Heartbeat's checkout-extension step a no-op,
+	// which is the pre-existing behavior for anyone who never wires it (tests
+	// included).
+	checkoutExtender CheckoutHeartbeatExtender
 }
 
 // NewAgentService returns a new AgentService backed by the given repositories.
@@ -67,6 +72,11 @@ func NewAgentService(
 // SetAgentActivityLogRepo wires the optional agent activity log repository.
 func (s *agentService) SetAgentActivityLogRepo(repo repository.AgentActivityLogRepository) {
 	s.agentActLogRepo = repo
+}
+
+// SetCheckoutHeartbeatExtender wires the optional checkout-lease extension hook.
+func (s *agentService) SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExtender) {
+	s.checkoutExtender = ext
 }
 
 // generateAPIKey creates a raw API key in the format: agk_{workspaceSlug}_{random_hex}.
@@ -289,6 +299,14 @@ func (s *agentService) Heartbeat(ctx context.Context, agentID uuid.UUID, input *
 	}
 	if err := s.agentRepo.UpdateHeartbeat(ctx, agentID, params); err != nil {
 		return err
+	}
+
+	// Push checkout_expires forward for this agent's live checkouts, in
+	// projects that opted into mid_pipeline.heartbeat_extends_checkout
+	// (audit §1.2). Best-effort: never blocks or fails the heartbeat itself,
+	// and a nil extender (not wired, e.g. in most tests) is a silent no-op.
+	if s.checkoutExtender != nil {
+		s.checkoutExtender.ExtendCheckoutsOnHeartbeat(ctx, agentID)
 	}
 
 	// Write to agent activity log (best-effort).

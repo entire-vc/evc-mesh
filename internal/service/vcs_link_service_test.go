@@ -200,6 +200,9 @@ func (r *fakeTaskRepo) ReleaseCheckout(context.Context, uuid.UUID, uuid.UUID) er
 func (r *fakeTaskRepo) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, time.Time) error {
 	return nil
 }
+func (r *fakeTaskRepo) ExtendCheckoutsOnHeartbeat(context.Context, uuid.UUID) (int64, error) {
+	return 0, nil
+}
 func (r *fakeTaskRepo) MoveToProject(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
 	return nil
 }

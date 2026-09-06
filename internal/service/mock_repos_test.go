@@ -506,6 +506,31 @@ func (m *MockTaskRepository) ExtendCheckout(_ context.Context, taskID, _ uuid.UU
 	return nil
 }
 
+// ExtendCheckoutsOnHeartbeat is a simplified stand-in for the real per-project
+// gated query in postgres/task_repo.go: it extends every live checkout owned
+// by agentID unconditionally (the mock has no project_rules to consult), by a
+// fixed 30-minute window. Good enough for testing the service-layer caller's
+// plumbing (agentService.Heartbeat / taskService.ExtendCheckoutsOnHeartbeat);
+// the actual per-project flag gating is covered by a real-Postgres
+// integration test instead, since a mock cannot meaningfully fake a
+// cross-table JSONB config read.
+func (m *MockTaskRepository) ExtendCheckoutsOnHeartbeat(_ context.Context, agentID uuid.UUID) (int64, error) {
+	if m.errToReturn != nil {
+		return 0, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	newExpires := timeNow().Add(30 * time.Minute)
+	for _, t := range m.items {
+		if t.CheckedOutBy != nil && *t.CheckedOutBy == agentID && t.CheckoutExpires != nil {
+			t.CheckoutExpires = &newExpires
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (m *MockTaskRepository) ForceReleaseCheckout(_ context.Context, taskID uuid.UUID) error {
 	if m.errToReturn != nil {
 		return m.errToReturn

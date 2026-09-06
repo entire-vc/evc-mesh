@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -50,6 +51,11 @@ type checkoutLeaseReaper struct {
 	taskMover      leaseTaskMover
 	agentNotifySvc AgentNotifyService
 	rulesSvc       midPipelineSource
+	// activityRepo/projectRepo back logLeaseActivity (audit §1.2): both may be
+	// nil, in which case that write is a no-op, same fail-open convention as
+	// postSystemComment's nil commentRepo check above it.
+	activityRepo repository.ActivityLogRepository
+	projectRepo  repository.ProjectRepository
 }
 
 // NewCheckoutLeaseReaper constructs a CheckoutLeaseReaper.
@@ -58,6 +64,8 @@ type checkoutLeaseReaper struct {
 // in main.go pass the full service without a cast.
 // rulesSvc may be nil, in which case no project ever parks and every sweep hands
 // tasks back to todo exactly as before this option existed.
+// activityRepo/projectRepo may be nil, in which case logLeaseActivity is a no-op
+// (the pre-existing behavior for every caller before this pair existed).
 func NewCheckoutLeaseReaper(
 	taskRepo repository.TaskRepository,
 	statusRepo repository.TaskStatusRepository,
@@ -65,6 +73,8 @@ func NewCheckoutLeaseReaper(
 	taskSvc TaskService,
 	agentNotifySvc AgentNotifyService,
 	rulesSvc midPipelineSource,
+	activityRepo repository.ActivityLogRepository,
+	projectRepo repository.ProjectRepository,
 ) CheckoutLeaseReaper {
 	return &checkoutLeaseReaper{
 		taskRepo:       taskRepo,
@@ -73,6 +83,8 @@ func NewCheckoutLeaseReaper(
 		taskMover:      taskSvc,
 		agentNotifySvc: agentNotifySvc,
 		rulesSvc:       rulesSvc,
+		activityRepo:   activityRepo,
+		projectRepo:    projectRepo,
 	}
 }
 
@@ -83,7 +95,7 @@ func (r *checkoutLeaseReaper) SweepExpiredLeases(ctx context.Context) (int, erro
 	if err != nil {
 		return 0, err
 	}
-	return r.returnToTodo(ctx, tasks, expiredLeaseComment), nil
+	return r.returnToTodo(ctx, tasks, activityCheckoutLeaseExpired), nil
 }
 
 // SweepUnleasedInProgress returns in_progress tasks that hold NO checkout at all
@@ -103,15 +115,18 @@ func (r *checkoutLeaseReaper) SweepUnleasedInProgress(ctx context.Context, older
 	return r.handBack(ctx, tasks), nil
 }
 
+// Activity-log actions for the two returnToTodo call sites (audit §1.2: these
+// were previously posted as task-thread comments — 2,205 of them, 7.1% of the
+// fleet's total, pure rotating boilerplate on cards nobody was reading them
+// on). notifyAssignee's separate event already tells the holder directly;
+// activity_log is the durable structured record for anyone who later needs
+// to know WHY, without cluttering the comment thread everyone else reads.
 const (
-	expiredLeaseComment = "🔄 Checkout TTL истёк — задача возвращена в todo, слот ёмкости освобождён. " +
-		"Чтобы удержать задачу дольше, зовите extend_checkout до истечения TTL (heartbeat на это не влияет)."
+	activityCheckoutLeaseExpired     = "task.checkout_lease_expired"
+	activityCheckoutUnleasedReturned = "task.checkout_unleased_returned"
+)
 
-	unleasedComment = "🔄 Задача висела в in_progress **без чекаута** и без активности дольше допустимого — " +
-		"возвращена в todo, чтобы снова попадать в подачу. Такую карточку не видит ни lease-reaper " +
-		"(он ищет истёкший чекаут, а не отсутствующий), ни поллер агента (он смотрит только todo). " +
-		"Если работа ещё идёт — сделайте checkout_task заново: без чекаута карточка не удерживается."
-
+const (
 	parkedCommentFmt = "🅿️ Задача висела в in_progress **без чекаута** и без признаков работы " +
 		"(ни комментария, ни артефакта, ни VCS-link) дольше допустимого — **запаркована в backlog** " +
 		"c `due_date` через %d ч и меткой `kind:monitor`.\n\n" +
@@ -122,11 +137,11 @@ const (
 		"Если работа ещё идёт — сделайте `checkout_task` заново: без чекаута карточка не удерживается."
 )
 
-// returnToTodo moves each task to its project's first todo status, commenting and
-// notifying as it goes. Shared by both sweeps so they cannot drift in how they
-// hand a task back. A task that cannot be moved is skipped and logged, never
-// silently dropped.
-func (r *checkoutLeaseReaper) returnToTodo(ctx context.Context, tasks []domain.Task, comment string) int {
+// returnToTodo moves each task to its project's first todo status, logging to
+// activity_log and notifying as it goes. Shared by both sweeps so they cannot
+// drift in how they hand a task back. A task that cannot be moved is skipped
+// and logged, never silently dropped.
+func (r *checkoutLeaseReaper) returnToTodo(ctx context.Context, tasks []domain.Task, activityAction string) int {
 	if len(tasks) == 0 {
 		return 0
 	}
@@ -155,7 +170,7 @@ func (r *checkoutLeaseReaper) returnToTodo(ctx context.Context, tasks []domain.T
 			continue
 		}
 
-		r.postSystemComment(sysCtx, task, comment)
+		r.logLeaseActivity(sysCtx, task, activityAction)
 		r.notifyAssignee(ctx, task)
 		pkgmetrics.RecordLeaseRelease(task.ProjectID.String())
 		moved++
@@ -195,6 +210,48 @@ func (r *checkoutLeaseReaper) postSystemComment(ctx context.Context, task *domai
 	}
 	if err := r.commentRepo.Create(ctx, comment); err != nil {
 		log.Printf("[lease-reaper] warning: failed to post comment on task %s: %v", task.ID, err)
+	}
+}
+
+// logLeaseActivity records a checkout/lease outcome to the workspace
+// activity log instead of the task's comment thread (audit §1.2). Mirrors
+// taskService.logActivity's shape (resolve workspace_id from the project,
+// fail closed if it cannot), kept as its own small copy here rather than a
+// shared helper because the reaper and taskService have deliberately
+// different, narrow dependency sets (see leaseTaskMover/midPipelineSource
+// above) and a shared helper would need to widen one of them to match the
+// other for no real gain.
+func (r *checkoutLeaseReaper) logLeaseActivity(ctx context.Context, task *domain.Task, action string) {
+	if r.activityRepo == nil || r.projectRepo == nil {
+		return
+	}
+	var wsID uuid.UUID
+	if proj, err := r.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+		wsID = proj.WorkspaceID
+	}
+	if wsID == uuid.Nil {
+		log.Printf("[lease-reaper] WARNING: could not resolve workspace_id for project %s, skipping activity log", task.ProjectID)
+		return
+	}
+
+	payload := map[string]interface{}{}
+	if task.CheckedOutBy != nil {
+		payload["previous_holder"] = task.CheckedOutBy.String()
+	}
+	changesJSON, _ := json.Marshal(payload)
+	entry := &domain.ActivityLog{
+		ID:          uuid.New(),
+		WorkspaceID: wsID,
+		EntityType:  "task",
+		EntityID:    task.ID,
+		Action:      action,
+		ActorID:     uuid.Nil,
+		ActorType:   domain.ActorTypeSystem,
+		Changes:     changesJSON,
+		CreatedAt:   timeNow(),
+	}
+	if err := r.activityRepo.Create(ctx, entry); err != nil {
+		log.Printf("[lease-reaper] WARNING: failed to log %s for task %s: %v", action, task.ID, err)
 	}
 }
 
@@ -250,7 +307,7 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task)
 		toTodo = append(toTodo, task)
 	}
 
-	moved := r.returnToTodo(ctx, toTodo, unleasedComment)
+	moved := r.returnToTodo(ctx, toTodo, activityCheckoutUnleasedReturned)
 	for i := range toPark {
 		cfg := cfgCache[toPark[i].ProjectID]
 		if r.parkTask(ctx, &toPark[i], cfg.AutoParkDue()) {
@@ -300,7 +357,7 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 		// of left in_progress forever.
 		log.Printf("[lease-reaper] project %s has no backlog status, returning task %s to todo instead of parking",
 			task.ProjectID, task.ID)
-		return r.returnToTodo(ctx, []domain.Task{*task}, unleasedComment) == 1
+		return r.returnToTodo(ctx, []domain.Task{*task}, activityCheckoutUnleasedReturned) == 1
 	}
 
 	due := timeNow().Add(time.Duration(dueHours) * time.Hour)

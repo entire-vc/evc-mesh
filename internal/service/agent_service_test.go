@@ -352,6 +352,84 @@ func TestAgentService_Heartbeat(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestAgentService_Heartbeat — checkout-extension wiring (audit §1.2)
+// ---------------------------------------------------------------------------
+
+// fakeCheckoutExtender records every agentID it was asked to extend checkouts
+// for, so a test can assert Heartbeat actually calls through to it.
+type fakeCheckoutExtender struct {
+	calls []uuid.UUID
+}
+
+func (f *fakeCheckoutExtender) ExtendCheckoutsOnHeartbeat(_ context.Context, agentID uuid.UUID) {
+	f.calls = append(f.calls, agentID)
+}
+
+func TestAgentService_Heartbeat_ExtendsCheckoutsWhenExtenderWired(t *testing.T) {
+	svc, _, ws := setupAgentService()
+	out, err := svc.Register(context.Background(), RegisterAgentInput{
+		WorkspaceID: ws.ID,
+		Name:        "Extender Agent",
+		AgentType:   domain.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	extender := &fakeCheckoutExtender{}
+	svc.SetCheckoutHeartbeatExtender(extender)
+
+	require.NoError(t, svc.Heartbeat(context.Background(), out.Agent.ID, nil))
+
+	require.Len(t, extender.calls, 1)
+	assert.Equal(t, out.Agent.ID, extender.calls[0])
+}
+
+// TestAgentService_Heartbeat_NoExtenderWired_NoOp is the pre-existing
+// behavior for every caller before SetCheckoutHeartbeatExtender ever ran —
+// this is the default in most tests (setupAgentService never wires one) and
+// must stay a plain no-op, not a panic or an error.
+func TestAgentService_Heartbeat_NoExtenderWired_NoOp(t *testing.T) {
+	svc, _, ws := setupAgentService()
+	out, err := svc.Register(context.Background(), RegisterAgentInput{
+		WorkspaceID: ws.ID,
+		Name:        "No Extender Agent",
+		AgentType:   domain.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	assert.NotPanics(t, func() {
+		require.NoError(t, svc.Heartbeat(context.Background(), out.Agent.ID, nil))
+	})
+}
+
+// TestCachedAgentAuth_SetCheckoutHeartbeatExtender_Forwards guards the wiring
+// through the caching decorator: cmd/api wires SetCheckoutHeartbeatExtender on
+// the WRAPPED value returned by NewCachedAgentAuth, and if the wrapper does
+// not forward the call, the extension silently never happens in prod even
+// though every unit test above (which talks to *agentService directly) stays
+// green.
+func TestCachedAgentAuth_SetCheckoutHeartbeatExtender_Forwards(t *testing.T) {
+	svc, _, ws := setupAgentService()
+	wrapped := NewCachedAgentAuth(svc, time.Minute)
+
+	configurable, ok := wrapped.(AgentServiceConfigurable)
+	require.True(t, ok, "wrapper must satisfy AgentServiceConfigurable")
+
+	extender := &fakeCheckoutExtender{}
+	configurable.SetCheckoutHeartbeatExtender(extender)
+
+	out, err := svc.Register(context.Background(), RegisterAgentInput{
+		WorkspaceID: ws.ID,
+		Name:        "Wrapped Extender Agent",
+		AgentType:   domain.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, wrapped.Heartbeat(context.Background(), out.Agent.ID, nil))
+	require.Len(t, extender.calls, 1)
+	assert.Equal(t, out.Agent.ID, extender.calls[0])
+}
+
+// ---------------------------------------------------------------------------
 // TestAgentService_RotateAPIKey
 // ---------------------------------------------------------------------------
 

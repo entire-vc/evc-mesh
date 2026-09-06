@@ -37,19 +37,28 @@ func (m *mockLeaseNotify) NotifyAgent(_ context.Context, agentID uuid.UUID, _ Ag
 // ── test harness ──────────────────────────────────────────────────────────
 
 type reaperHarness struct {
-	taskRepo    *MockTaskRepository
-	statusRepo  *MockTaskStatusRepository
-	commentRepo *MockCommentRepository
-	mover       *mockLeaseTaskMover
-	notify      *mockLeaseNotify
-	reaper      CheckoutLeaseReaper
+	taskRepo     *MockTaskRepository
+	statusRepo   *MockTaskStatusRepository
+	commentRepo  *MockCommentRepository
+	activityRepo *MockActivityLogRepository
+	projectRepo  *MockProjectRepository
+	mover        *mockLeaseTaskMover
+	notify       *mockLeaseNotify
+	reaper       CheckoutLeaseReaper
 }
 
 func newReaperHarness() *reaperHarness {
 	h := &reaperHarness{
-		taskRepo:    NewMockTaskRepository(),
-		statusRepo:  NewMockTaskStatusRepository(),
-		commentRepo: NewMockCommentRepository(),
+		taskRepo:     NewMockTaskRepository(),
+		statusRepo:   NewMockTaskStatusRepository(),
+		commentRepo:  NewMockCommentRepository(),
+		activityRepo: NewMockActivityLogRepository(),
+		// WithDefaultWorkspace: every test here mints an ad-hoc projectID via
+		// uuid.New() without registering a Project row (they predate
+		// logLeaseActivity's need for one) — a single default tenant lets
+		// logLeaseActivity resolve workspace_id for all of them without
+		// touching every existing test's setup.
+		projectRepo: NewMockProjectRepository().WithDefaultWorkspace(uuid.New()),
 		mover:       &mockLeaseTaskMover{},
 		notify:      &mockLeaseNotify{},
 	}
@@ -59,8 +68,21 @@ func newReaperHarness() *reaperHarness {
 		commentRepo:    h.commentRepo,
 		taskMover:      h.mover,
 		agentNotifySvc: h.notify,
+		activityRepo:   h.activityRepo,
+		projectRepo:    h.projectRepo,
 	}
 	return h
+}
+
+// leaseActivities returns all activity_log entries the reaper recorded.
+func (h *reaperHarness) leaseActivities() []domain.ActivityLog {
+	h.activityRepo.mu.RLock()
+	defer h.activityRepo.mu.RUnlock()
+	out := make([]domain.ActivityLog, 0, len(h.activityRepo.items))
+	for _, e := range h.activityRepo.items {
+		out = append(out, *e)
+	}
+	return out
 }
 
 func (h *reaperHarness) addTodoStatus(t *testing.T, projectID uuid.UUID) *domain.TaskStatus {
@@ -115,11 +137,25 @@ func TestLeaseReaper_HappyPath_MovesToTodo(t *testing.T) {
 		t.Errorf("MoveTask not called with correct task ID")
 	}
 
+	// Audit §1.2: this class of outcome is recorded to activity_log, not as a
+	// task-thread comment (2,205 of these were pure boilerplate, 7.1% of the
+	// fleet's total comments) — notifyAssignee's separate event already tells
+	// the holder directly.
 	h.commentRepo.mu.Lock()
 	numComments := len(h.commentRepo.items)
 	h.commentRepo.mu.Unlock()
-	if numComments != 1 {
-		t.Errorf("expected 1 system comment, got %d", numComments)
+	if numComments != 0 {
+		t.Errorf("expected 0 system comments (moved to activity_log), got %d", numComments)
+	}
+	activities := h.leaseActivities()
+	if len(activities) != 1 {
+		t.Fatalf("expected 1 activity_log entry, got %d", len(activities))
+	}
+	if activities[0].Action != activityCheckoutLeaseExpired {
+		t.Errorf("expected action %q, got %q", activityCheckoutLeaseExpired, activities[0].Action)
+	}
+	if activities[0].EntityID != task.ID {
+		t.Errorf("activity logged against the wrong task: got %s, want %s", activities[0].EntityID, task.ID)
 	}
 
 	if len(h.notify.notified) != 1 || h.notify.notified[0] != *task.AssigneeID {
@@ -127,12 +163,15 @@ func TestLeaseReaper_HappyPath_MovesToTodo(t *testing.T) {
 	}
 }
 
-// TestLeaseReaper_SystemComment_NamesCheckoutTTLNotHeartbeat guards against the
-// misleading comment text: FindExpiredInProgressCheckouts (task_repo.go) sweeps
-// purely on checkout_expires < now() and never reads heartbeat/last_heartbeat, so
-// the audit comment must name checkout TTL expiry + extend_checkout as the real
-// cause/remedy, not heartbeat (see task fe8ddfa0 for the misdiagnosis this fixes).
-func TestLeaseReaper_SystemComment_NamesCheckoutTTLNotHeartbeat(t *testing.T) {
+// TestLeaseReaper_ExpiredLease_DoesNotBlameHeartbeat guards against the
+// misdiagnosis fixed in task fe8ddfa0: FindExpiredInProgressCheckouts
+// (task_repo.go) sweeps purely on checkout_expires < now() and never reads
+// heartbeat/last_heartbeat, so nothing this sweep records may name heartbeat
+// as the cause. Since audit §1.2 moved this outcome off the task thread
+// entirely (see TestLeaseReaper_HappyPath_MovesToTodo above), there is no
+// comment body left to misdiagnose — this checks the one text surface that
+// remains: the activity_log action name itself.
+func TestLeaseReaper_ExpiredLease_DoesNotBlameHeartbeat(t *testing.T) {
 	h := newReaperHarness()
 	projectID := uuid.New()
 	h.addTodoStatus(t, projectID)
@@ -143,23 +182,16 @@ func TestLeaseReaper_SystemComment_NamesCheckoutTTLNotHeartbeat(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	h.commentRepo.mu.RLock()
-	defer h.commentRepo.mu.RUnlock()
-	if len(h.commentRepo.items) != 1 {
-		t.Fatalf("expected 1 system comment, got %d", len(h.commentRepo.items))
+	activities := h.leaseActivities()
+	if len(activities) != 1 {
+		t.Fatalf("expected 1 activity_log entry, got %d", len(activities))
 	}
-	var body string
-	for _, c := range h.commentRepo.items {
-		body = c.Body
+	action := activities[0].Action
+	if strings.Contains(action, "heartbeat") {
+		t.Errorf("activity action still blames heartbeat, got: %q", action)
 	}
-	if strings.Contains(body, "without heartbeat") || strings.Contains(body, "без heartbeat") {
-		t.Errorf("comment still blames heartbeat, got: %q", body)
-	}
-	if !strings.Contains(body, "extend_checkout") {
-		t.Errorf("comment must name extend_checkout as the remedy, got: %q", body)
-	}
-	if !strings.Contains(body, "TTL") {
-		t.Errorf("comment must name checkout TTL expiry as the cause, got: %q", body)
+	if !strings.Contains(action, "lease_expired") {
+		t.Errorf("activity action must name lease/TTL expiry as the cause, got: %q", action)
 	}
 }
 
@@ -400,7 +432,7 @@ func TestLeaseReaper_UnleasedInProgress_WithinGraceUntouched(t *testing.T) {
 // The two sweeps must stay distinguishable in the audit trail: an operator
 // reading a task's comments has to be able to tell "your lease expired" from
 // "you held no lease at all", because the corrective action differs.
-func TestLeaseReaper_UnleasedInProgress_CommentNamesTheMissingCheckout(t *testing.T) {
+func TestLeaseReaper_UnleasedInProgress_ActivityDistinctFromExpiredLease(t *testing.T) {
 	h := newReaperHarness()
 	projectID := uuid.New()
 	h.addTodoStatus(t, projectID)
@@ -410,20 +442,24 @@ func TestLeaseReaper_UnleasedInProgress_CommentNamesTheMissingCheckout(t *testin
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// Audit §1.2: no comment either, same as the expired-lease case above.
 	h.commentRepo.mu.Lock()
-	defer h.commentRepo.mu.Unlock()
-	if len(h.commentRepo.items) != 1 {
-		t.Fatalf("expected exactly 1 system comment, got %d", len(h.commentRepo.items))
+	numComments := len(h.commentRepo.items)
+	h.commentRepo.mu.Unlock()
+	if numComments != 0 {
+		t.Errorf("expected 0 system comments (moved to activity_log), got %d", numComments)
 	}
-	var body string
-	for _, c := range h.commentRepo.items {
-		body = c.Body
+
+	activities := h.leaseActivities()
+	if len(activities) != 1 {
+		t.Fatalf("expected exactly 1 activity_log entry, got %d", len(activities))
 	}
-	if !strings.Contains(body, "без чекаута") {
-		t.Errorf("comment does not name the missing checkout, so it reads as the TTL case: %q", body)
+	action := activities[0].Action
+	if action != activityCheckoutUnleasedReturned {
+		t.Errorf("expected action %q, got %q", activityCheckoutUnleasedReturned, action)
 	}
-	if strings.Contains(body, "TTL истёк") {
-		t.Errorf("unleased sweep posted the expired-TTL comment — the two cases are indistinguishable: %q", body)
+	if action == activityCheckoutLeaseExpired {
+		t.Errorf("unleased sweep recorded the expired-TTL action — the two cases are indistinguishable: %q", action)
 	}
 }
 
