@@ -18,6 +18,13 @@ import {
   Target,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import {
+  PROJECT_RAIL_ICON_LABEL,
+  WORKSPACE_LOGO_ICON_FILL,
+  projectRailIconStateClasses,
+  workspaceLogoContainerParts,
+} from "./rail-icon-classes";
+import type { WorkspaceLogoVariant } from "./rail-icon-classes";
 import { MeshIcon } from "@/components/mesh-icon";
 import { fetchUnseenMentionCount } from "@/lib/mentions/inbox";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -49,28 +56,11 @@ interface SidebarProps {
   collapsed: boolean;
 }
 
-type WorkspaceLogoVariant = "collapsed" | "expanded";
-
-// One size table for both sidebar states instead of two hand-tuned literals
-// that only happen to look alike today. Root cause of the "logo and its
-// container drift apart when collapsed" report: the collapsed header never
-// read `icon_url` at all — it unconditionally rendered the generic MeshIcon
-// mark, which sits inside its box with padding, while the expanded header's
-// <img> fills its box edge-to-edge via `h-full w-full object-cover`. So the
-// moment a workspace had a real uploaded logo, collapsing it silently swapped
-// a full-bleed image for a padded fallback mark — a visible size/fill jump
-// that read as "the logo got bigger, the box got smaller". Fixing it means
-// both states must obey the SAME two rules, not just similar-looking ones:
-//   1. the image, when present and loaded, always fills 100% of its box
-//      (`h-full w-full object-cover`) — identical rule in both variants.
-//   2. the fallback mark is always sized as a fixed PERCENTAGE of its box
-//      (not a fixed px number picked per-variant), so scaling the box
-//      (24px expanded vs 32px collapsed) scales the mark by construction.
-const WORKSPACE_LOGO_CONTAINER: Record<WorkspaceLogoVariant, string> = {
-  expanded: "h-6 w-6 rounded",
-  collapsed: "h-8 w-8 rounded-lg",
-};
-const WORKSPACE_LOGO_ICON_FILL = "h-[58%] w-[58%]";
+// The sizing/tint recipes this component renders live in `rail-icon-classes.ts`
+// — an import-free module so the contrast guard
+// (`scripts/assert-rail-icon-contrast.mjs`) can measure the SAME definitions
+// rather than restating them and drifting out of sync. The reasoning behind
+// each rule is documented there. See `#bb8f1092`.
 
 type ImageStatus = "pending" | "loaded" | "error";
 
@@ -78,25 +68,55 @@ interface WorkspaceLogoProps {
   iconUrl: string | null | undefined;
   name: string | undefined;
   variant: WorkspaceLogoVariant;
+  /**
+   * What to show in the tinted box while there is no loaded image
+   * (`#bb8f1092`). Defaults to the generic `MeshIcon` mark used by the
+   * workspace header. A caller with its own glyph (e.g. a project's
+   * single-character `icon` in the collapsed rail) passes it here instead
+   * of duplicating the container/sizing/tint logic in a second component.
+   */
+  fallback?: React.ReactNode;
+  /** Overrides `data-testid` on the container — needed when this component
+   * renders many times on one page (one per rail item) and a single shared
+   * testid would no longer identify a specific instance. */
+  testId?: string;
+  /** Extra classes merged (via `cn`/tailwind-merge, so conflicts resolve
+   * last-wins) onto the container — lets a caller add interactive states
+   * (hover/active) without forking the container styling itself. */
+  className?: string;
 }
 
 /**
- * Renders the workspace mark shown in the sidebar header, in both its
- * collapsed and expanded forms, off one shared sizing rule (see the table
- * above) so the two states cannot drift apart again the way they did before.
+ * Renders an icon tile in the sidebar — the workspace mark in the header
+ * (collapsed and expanded), and, since `#bb8f1092`, a project's rail icon in
+ * the collapsed rail — off one shared sizing/tint rule (see the table above)
+ * so the two states/callers cannot drift apart again the way header vs.
+ * project-list once did (`#eeabc2dc`: header got a proper container, the
+ * project list next to it did not).
  *
  * Placeholder policy for the two states that are NOT "logo present and
  * loaded" (§2 of the task):
- *  - no icon_url at all            → mark + tinted box (unchanged default).
- *  - icon_url set, still loading   → mark + tinted box, same as "no icon" —
+ *  - no icon_url at all            → fallback + tinted box (unchanged default).
+ *  - icon_url set, still loading   → fallback + tinted box, same as "no icon" —
  *    never an empty hole while the <img> fetch is in flight.
  *  - icon_url set, failed to load  → `onError` falls back to the identical
- *    mark + tinted box rather than leaving a broken-image icon or a hole.
+ *    fallback + tinted box rather than leaving a broken-image icon or a hole.
  *  - icon_url set and loaded       → bare image, tinted box removed, so a
  *    logo with transparent regions never shows the teal placeholder
  *    bleeding through behind it.
+ * A caller that never has an `iconUrl` (e.g. projects — they only ever have
+ * a plain-text/emoji `icon`, no uploaded-image field exists for them) always
+ * takes the fallback branch, which is exactly the "always show the tile"
+ * behavior `#bb8f1092` asks for.
  */
-function WorkspaceLogo({ iconUrl, name, variant }: WorkspaceLogoProps) {
+function WorkspaceLogo({
+  iconUrl,
+  name,
+  variant,
+  fallback,
+  testId = "workspace-logo",
+  className,
+}: WorkspaceLogoProps) {
   const [status, setStatus] = useState<ImageStatus>("pending");
 
   // Re-arm on URL change (workspace switch, or a fresh upload replacing the
@@ -110,13 +130,11 @@ function WorkspaceLogo({ iconUrl, name, variant }: WorkspaceLogoProps) {
 
   return (
     <div
-      data-testid="workspace-logo"
+      data-testid={testId}
       data-variant={variant}
       data-status={iconUrl ? status : "none"}
       className={cn(
-        "flex shrink-0 items-center justify-center overflow-hidden text-primary-foreground",
-        WORKSPACE_LOGO_CONTAINER[variant],
-        !isLoaded && "bg-sidebar-primary",
+        workspaceLogoContainerParts({ variant, isLoaded, className }),
       )}
     >
       {iconUrl && (
@@ -129,9 +147,8 @@ function WorkspaceLogo({ iconUrl, name, variant }: WorkspaceLogoProps) {
           onError={() => setStatus("error")}
         />
       )}
-      {!isLoaded && (
-        <MeshIcon className={WORKSPACE_LOGO_ICON_FILL} />
-      )}
+      {!isLoaded &&
+        (fallback ?? <MeshIcon className={WORKSPACE_LOGO_ICON_FILL} />)}
     </div>
   );
 }
@@ -266,15 +283,27 @@ export function Sidebar({ collapsed }: SidebarProps) {
             <Link
               key={project.id}
               to={`/w/${wsSlug}/p/${project.slug}`}
-              className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-                project.slug === projectSlug &&
-                  "bg-sidebar-accent text-sidebar-primary",
-              )}
+              className="flex items-center justify-center"
             >
-              <span className="text-xs font-medium">
-                {project.icon || project.name.charAt(0).toUpperCase()}
-              </span>
+              {/* `#bb8f1092`: reuse WorkspaceLogo's container/tint instead of
+                  a bare <span> — projects never have an uploaded image
+                  (iconUrl is always null for them), so this always takes the
+                  fallback branch and always shows the tile, which is exactly
+                  what a project without its own `icon` needs here. */}
+              <WorkspaceLogo
+                iconUrl={null}
+                name={project.name}
+                variant="collapsed"
+                testId="project-icon"
+                fallback={
+                  <span className={PROJECT_RAIL_ICON_LABEL}>
+                    {project.icon || project.name.charAt(0).toUpperCase()}
+                  </span>
+                }
+                className={projectRailIconStateClasses(
+                  project.slug === projectSlug,
+                )}
+              />
             </Link>
           ))}
           <div className="my-1 w-6 border-t border-sidebar-border" />
