@@ -2524,6 +2524,7 @@ func (m *mockTaskRepo) SetShipped(_ context.Context, _ uuid.UUID, _ bool) error 
 func (m *mockTaskRepo) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }
+func (m *mockTaskRepo) TouchUpdatedAt(_ context.Context, _ uuid.UUID) error { return nil }
 
 var _ repository.TaskRepository = (*mockTaskRepo)(nil)
 

@@ -70,6 +70,58 @@ func TestTaskHandler_Create_Success(t *testing.T) {
 	assert.Contains(t, []string(result.Labels), "urgent")
 }
 
+// PossibleDuplicate is db:"-" — TaskService.Create sets it on the in-memory
+// task, but the handler's post-create GetByID returns a SEPARATE object that
+// knows nothing about it. This asserts the handler carries it over rather
+// than silently dropping it (the whole point of the create-time check is that
+// the caller sees it in THIS response, not by re-reading the task later).
+func TestTaskHandler_Create_PossibleDuplicate_PropagatedFromServiceToEnrichedResponse(t *testing.T) {
+	projectID := uuid.New()
+	dupID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		CreateFunc: func(ctx context.Context, task *domain.Task) error {
+			// Simulate what TaskService.Create actually does: set the transient
+			// field and append the persisted label.
+			task.PossibleDuplicate = &dupID
+			task.Labels = append(task.Labels, "dup-candidate")
+			return nil
+		},
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+			// A fresh object from the "DB" — no PossibleDuplicate set here,
+			// matching the field's db:"-" contract.
+			return &domain.Task{
+				ID:        id,
+				ProjectID: projectID,
+				Title:     "My Task",
+				Labels:    pq.StringArray{"dup-candidate"},
+			}, nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"My Task"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	err := h.Create(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var result domain.Task
+	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	require.NoError(t, err)
+	require.NotNil(t, result.PossibleDuplicate, "possible_duplicate must survive the GetByID re-fetch")
+	assert.Equal(t, dupID, *result.PossibleDuplicate)
+	assert.Contains(t, []string(result.Labels), "dup-candidate")
+}
+
 func TestTaskHandler_Create_MissingTitle(t *testing.T) {
 	mockSvc := &MockTaskService{}
 	h, e := setupTaskTest(mockSvc)

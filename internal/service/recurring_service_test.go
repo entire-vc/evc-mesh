@@ -220,6 +220,19 @@ type StubTaskService struct {
 	supersedeWorked int
 	supersedeMissed int
 	supersedeErr    error
+	// openInstance, when non-nil, is what FindOpenRecurringInstance returns —
+	// simulating a previous instance still open at tick time. Nil (the zero
+	// value) means "nothing open", matching the common case where the previous
+	// instance already closed before the next tick.
+	openInstance *domain.Task
+	// findOpenErr, when set, makes FindOpenRecurringInstance fail — runOneSchedule
+	// logs a warning and falls through to the normal create path rather than
+	// treating a lookup failure as "nothing open" or aborting the tick.
+	findOpenErr error
+	// repeatedTaskIDs records every RepeatOpenInstance call, so tests can assert
+	// it was (or wasn't) invoked without needing a real comment/task backend.
+	repeatedTaskIDs []uuid.UUID
+	repeatErr       error
 }
 
 func NewStubTaskService() *StubTaskService {
@@ -311,6 +324,22 @@ func (s *StubTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.supersedeWorked, s.supersedeMissed, s.supersedeErr
+}
+
+func (s *StubTaskService) FindOpenRecurringInstance(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.findOpenErr != nil {
+		return nil, s.findOpenErr
+	}
+	return s.openInstance, nil
+}
+
+func (s *StubTaskService) RepeatOpenInstance(_ context.Context, taskID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repeatedTaskIDs = append(s.repeatedTaskIDs, taskID)
+	return s.repeatErr
 }
 
 func (s *StubTaskService) ValidateAssigneeForProject(_ context.Context, _ uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error) {
@@ -1175,6 +1204,285 @@ func TestRunOneSchedule_CallsSupersede(t *testing.T) {
 	spy.StubTaskService.mu.Unlock()
 	if calls[0].newTaskID != createdTask.ID {
 		t.Errorf("supersede newTaskID = %v, want %v", calls[0].newTaskID, createdTask.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runOneSchedule — open previous instance repeats instead of spawning a
+// sibling (recurring-duplicate class fixed alongside #d1eff1c6).
+// ---------------------------------------------------------------------------
+
+func TestRunOneSchedule_PreviousInstanceOpen_RepeatsInsteadOfCreating(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	stub := NewStubTaskService()
+	openTask := &domain.Task{ID: uuid.New(), ProjectID: schedule.ProjectID}
+	stub.openInstance = openTask
+
+	svc := NewRecurringService(repo, stub).(*recurringService)
+
+	created, err := svc.runOneSchedule(context.Background(), schedule)
+	if err != nil {
+		t.Fatalf("runOneSchedule failed: %v", err)
+	}
+	if created {
+		t.Fatal("expected created=false — a sibling must not be created while the previous instance is open")
+	}
+
+	stub.mu.Lock()
+	numCreated := len(stub.created)
+	repeated := append([]uuid.UUID(nil), stub.repeatedTaskIDs...)
+	stub.mu.Unlock()
+
+	if numCreated != 0 {
+		t.Fatalf("taskSvc.Create called %d times, want 0", numCreated)
+	}
+	if len(repeated) != 1 || repeated[0] != openTask.ID {
+		t.Fatalf("RepeatOpenInstance calls = %v, want exactly [%v]", repeated, openTask.ID)
+	}
+
+	// next_run_at must still advance (AdvanceNextRun), but instance_count/
+	// last_triggered_at must NOT (IncrementInstance) — no new instance landed.
+	if repo.advanceNextRunCalls != 1 {
+		t.Fatalf("AdvanceNextRun called %d times, want 1", repo.advanceNextRunCalls)
+	}
+	if repo.incrementCalls != 0 {
+		t.Fatalf("IncrementInstance called %d times, want 0 (repeat path creates nothing)", repo.incrementCalls)
+	}
+	stored, _ := repo.GetByID(context.Background(), schedule.ID)
+	if stored.InstanceCount != 0 {
+		t.Fatalf("InstanceCount = %d, want unchanged (0)", stored.InstanceCount)
+	}
+}
+
+func TestRunOneSchedule_NoOpenInstance_CreatesNormally(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	stub := NewStubTaskService() // openInstance left nil — nothing open
+
+	svc := NewRecurringService(repo, stub).(*recurringService)
+
+	created, err := svc.runOneSchedule(context.Background(), schedule)
+	if err != nil {
+		t.Fatalf("runOneSchedule failed: %v", err)
+	}
+	if !created {
+		t.Fatal("expected created=true when nothing is open")
+	}
+
+	stub.mu.Lock()
+	numCreated := len(stub.created)
+	numRepeated := len(stub.repeatedTaskIDs)
+	stub.mu.Unlock()
+	if numCreated != 1 {
+		t.Fatalf("taskSvc.Create called %d times, want 1", numCreated)
+	}
+	if numRepeated != 0 {
+		t.Fatalf("RepeatOpenInstance called %d times, want 0", numRepeated)
+	}
+}
+
+func TestRunOneSchedule_FindOpenInstanceErr_ProceedsToCreate(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	stub := NewStubTaskService()
+	stub.findOpenErr = errors.New("boom: lookup failed")
+
+	svc := NewRecurringService(repo, stub).(*recurringService)
+
+	created, err := svc.runOneSchedule(context.Background(), schedule)
+	if err != nil {
+		t.Fatalf("runOneSchedule failed: %v — a lookup failure must not abort the tick", err)
+	}
+	if !created {
+		t.Fatal("expected created=true — FindOpenRecurringInstance failing must fall through to a normal create, not silently skip it")
+	}
+
+	stub.mu.Lock()
+	numCreated := len(stub.created)
+	numRepeated := len(stub.repeatedTaskIDs)
+	stub.mu.Unlock()
+	if numCreated != 1 {
+		t.Fatalf("taskSvc.Create called %d times, want 1", numCreated)
+	}
+	if numRepeated != 0 {
+		t.Fatalf("RepeatOpenInstance called %d times, want 0 — nothing was successfully found as open", numRepeated)
+	}
+}
+
+func TestRunOneSchedule_RepeatOpenInstanceErr_ReturnsError(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	_ = repo.Create(context.Background(), schedule)
+
+	stub := NewStubTaskService()
+	openTask := &domain.Task{ID: uuid.New(), ProjectID: schedule.ProjectID}
+	stub.openInstance = openTask
+	stub.repeatErr = errors.New("boom: repeat failed")
+
+	svc := NewRecurringService(repo, stub).(*recurringService)
+
+	created, err := svc.runOneSchedule(context.Background(), schedule)
+	if err == nil {
+		t.Fatal("expected an error when RepeatOpenInstance fails")
+	}
+	if created {
+		t.Fatal("expected created=false on a repeat failure")
+	}
+	if repo.advanceNextRunCalls != 0 {
+		t.Fatalf("AdvanceNextRun called %d times, want 0 — must not advance next_run_at when the repeat itself failed", repo.advanceNextRunCalls)
+	}
+}
+
+func TestRunOneSchedule_AdvanceNextRunErr_ReturnsError(t *testing.T) {
+	schedule := newMinimalSchedule()
+	repo := NewMockRecurringRepository()
+	// Deliberately NOT calling repo.Create — AdvanceNextRun then fails with
+	// "schedule not found", exercising the repeat path's own error return.
+
+	stub := NewStubTaskService()
+	openTask := &domain.Task{ID: uuid.New(), ProjectID: schedule.ProjectID}
+	stub.openInstance = openTask
+
+	svc := NewRecurringService(repo, stub).(*recurringService)
+
+	created, err := svc.runOneSchedule(context.Background(), schedule)
+	if err == nil {
+		t.Fatal("expected an error when AdvanceNextRun fails on the repeat path")
+	}
+	if created {
+		t.Fatal("expected created=false on an AdvanceNextRun failure")
+	}
+	stub.mu.Lock()
+	repeated := len(stub.repeatedTaskIDs)
+	stub.mu.Unlock()
+	if repeated != 1 {
+		t.Fatalf("RepeatOpenInstance called %d times, want 1 — the repeat itself must have succeeded before AdvanceNextRun ran", repeated)
+	}
+}
+
+// RepeatOpenInstance itself (task_service.go) — the "повтор N" comment and the
+// updated_at bump, independent of the recurring engine that calls it.
+func TestTaskService_RepeatOpenInstance_PostsIncrementingRepeatComment(t *testing.T) {
+	svc, taskRepo, statusRepo, commentRepo := setupTaskServiceWithCommentRepo()
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: inProgressStatus.ID, Title: "recurring instance"}
+
+	ctx := context.Background()
+	if err := svc.RepeatOpenInstance(ctx, taskID); err != nil {
+		t.Fatalf("first RepeatOpenInstance: %v", err)
+	}
+	if err := svc.RepeatOpenInstance(ctx, taskID); err != nil {
+		t.Fatalf("second RepeatOpenInstance: %v", err)
+	}
+
+	page, err := commentRepo.ListByTask(ctx, taskID, repository.CommentFilter{}, pagination.Params{PageSize: 50})
+	if err != nil {
+		t.Fatalf("ListByTask: %v", err)
+	}
+	var repeats []string
+	for _, c := range page.Items {
+		if strings.HasPrefix(c.Body, repeatCommentPrefix) {
+			repeats = append(repeats, c.Body)
+		}
+	}
+	if len(repeats) != 2 {
+		t.Fatalf("expected 2 repeat comments, got %d: %v", len(repeats), repeats)
+	}
+	// Both comments share the same frozen timeNow() in this test fixture, so
+	// ListByTask's created_at ASC ordering has two equal keys and their relative
+	// order is whatever Go's randomized map iteration produced before the sort —
+	// not stable across runs. Assert the SET of N values produced, not a position.
+	haveOne, haveTwo := false, false
+	for _, r := range repeats {
+		switch {
+		case strings.HasPrefix(r, repeatCommentPrefix+"1:"):
+			haveOne = true
+		case strings.HasPrefix(r, repeatCommentPrefix+"2:"):
+			haveTwo = true
+		}
+	}
+	if !haveOne || !haveTwo {
+		t.Fatalf("expected one 'Повтор 1:' and one 'Повтор 2:' comment, got %v", repeats)
+	}
+}
+
+func TestTaskService_RepeatOpenInstance_NilCommentRepo_NoOp(t *testing.T) {
+	svc, _, _ := setupTaskService() // no WithCommentRepoTask wired
+	if err := svc.RepeatOpenInstance(context.Background(), uuid.New()); err != nil {
+		t.Fatalf("expected nil error when commentRepo is nil, got: %v", err)
+	}
+}
+
+func TestTaskService_RepeatOpenInstance_ListByTaskErr_DefaultsToRepeatOne(t *testing.T) {
+	svc, taskRepo, statusRepo, commentRepo := setupTaskServiceWithCommentRepo()
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: inProgressStatus.ID, Title: "recurring instance"}
+	commentRepo.listByTaskErr = errors.New("boom: list failed")
+
+	if err := svc.RepeatOpenInstance(context.Background(), taskID); err != nil {
+		t.Fatalf("a ListByTask failure must not fail RepeatOpenInstance, got: %v", err)
+	}
+
+	// Create doesn't consult listByTaskErr, so the comment landed despite the
+	// listing failure — inspect the mock's items directly since ListByTask
+	// itself is still wired to fail.
+	commentRepo.mu.RLock()
+	var body string
+	for _, c := range commentRepo.items {
+		if c.TaskID == taskID {
+			body = c.Body
+		}
+	}
+	commentRepo.mu.RUnlock()
+	if !strings.HasPrefix(body, repeatCommentPrefix+"1:") {
+		t.Fatalf("expected a defaulted 'Повтор 1:' comment when the count lookup fails, got %q", body)
+	}
+}
+
+func TestTaskService_RepeatOpenInstance_CreateCommentErr_ReturnsError(t *testing.T) {
+	svc, taskRepo, statusRepo, commentRepo := setupTaskServiceWithCommentRepo()
+	projectID := uuid.New()
+	inProgressStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryInProgress, "In Progress")
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: inProgressStatus.ID, Title: "recurring instance"}
+	commentRepo.createFailFor = func(c *domain.Comment) bool {
+		return strings.HasPrefix(c.Body, repeatCommentPrefix)
+	}
+
+	err := svc.RepeatOpenInstance(context.Background(), taskID)
+	if err == nil {
+		t.Fatal("expected an error when the repeat comment fails to persist")
+	}
+}
+
+func TestTaskService_RepeatOpenInstance_TouchUpdatedAtErr_ReturnsError(t *testing.T) {
+	svc, _, _, _ := setupTaskServiceWithCommentRepo()
+	// Deliberately not seeding taskID in taskRepo — TouchUpdatedAt then fails
+	// with NotFound, exercising the wrap-and-return after a successful comment.
+	err := svc.RepeatOpenInstance(context.Background(), uuid.New())
+	if err == nil {
+		t.Fatal("expected an error when TouchUpdatedAt fails on an unknown task")
+	}
+}
+
+func TestTaskService_FindOpenRecurringInstance_RepoErr_ReturnsError(t *testing.T) {
+	svc, taskRepo, _ := setupTaskService()
+	taskRepo.errToReturn = errors.New("boom: query failed")
+
+	_, err := svc.FindOpenRecurringInstance(context.Background(), uuid.New())
+	if err == nil {
+		t.Fatal("expected an error when ListOpenByRecurringScheduleID fails")
 	}
 }
 

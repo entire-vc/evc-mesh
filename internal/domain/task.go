@@ -75,9 +75,17 @@ type Task struct {
 	// uses — the little "has a description" glyph on a card — so dropping the text
 	// removes data without removing the affordance. Always set on list responses,
 	// regardless of whether Description itself was included.
-	HasDescription bool         `json:"has_description" db:"-"`
-	AssigneeID     *uuid.UUID   `json:"assignee_id" db:"assignee_id"`
-	AssigneeType   AssigneeType `json:"assignee_type" db:"assignee_type"`
+	HasDescription bool `json:"has_description" db:"-"`
+	// PossibleDuplicate is set on the in-memory task returned from Create when
+	// its title scored ≥0.9 similar (see titleSimilarity) against an open task
+	// already in the same project — the caller sees the candidate's id right in
+	// the create response instead of finding out three cards later. Never
+	// persisted (db:"-"): it answers "was this create suspicious", which is a
+	// one-time question about the moment of creation, not a durable task fact —
+	// the `dup-candidate` LABEL is what persists for anyone re-reading later.
+	PossibleDuplicate *uuid.UUID   `json:"possible_duplicate,omitempty" db:"-"`
+	AssigneeID        *uuid.UUID   `json:"assignee_id" db:"assignee_id"`
+	AssigneeType      AssigneeType `json:"assignee_type" db:"assignee_type"`
 	// AssignedBy records whether the current assignee was set by a human, a rule engine, or the system.
 	// When set to AssignmentSourceHuman, only another human-source call may override the assignment.
 	AssignedBy AssignmentSource `json:"assigned_by" db:"assigned_by"`
