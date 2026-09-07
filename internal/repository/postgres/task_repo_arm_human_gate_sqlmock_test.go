@@ -170,20 +170,49 @@ func TestTaskRepo_ArmHumanGate_DeadlineCASE_ExplicitAlwaysWins(t *testing.T) {
 		*captured, "an explicitly passed deadline must be the first, unconditional branch")
 }
 
-// TestTaskRepo_ArmHumanGate_DeadlineCASE_HardNeverAutoDefaults pins the second branch:
-// a hard-classified gate gets NULL when no explicit deadline was given, never a computed
-// one — HumanGateClassHard's whole contract is that no code path releases it on a clock,
-// and an auto-computed deadline sitting unused on the row would be exactly the residue
-// a future reader could mistake for a live one.
-func TestTaskRepo_ArmHumanGate_DeadlineCASE_HardNeverAutoDefaults(t *testing.T) {
+// TestTaskRepo_ArmHumanGate_DeadlineCASE_HardTakesSameComputedBranchAsSoft pins task
+// 1.4b (#4d61d867 / #4d61d877): the class-based `WHEN $2 = 'hard' THEN NULL` branch that
+// used to force a hard gate's deadline to NULL unconditionally is GONE from the query
+// text — a hard-classified arm with a real recommended_default and no explicit deadline
+// reaches the exact same ELSE branch a soft one does
+// (TestTaskRepo_ArmHumanGate_DeadlineCASE_SoftWithDefaultComputesFromConfiguredHours).
+// This sqlmock test only pins the TEXT; the real-Postgres proof that this actually
+// COMPUTES a deadline lives in
+// TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HardGetsOneWhenDefaultStated in the
+// sibling _db_test.go file, and the proof that this is still SAFE (a hard gate stays
+// structurally unreachable by the auto-release sweep regardless of this column) is
+// TestTaskRepo_FindExpiredDefaultGates_ExcludesHardStructurally in the same file.
+func TestTaskRepo_ArmHumanGate_DeadlineCASE_HardTakesSameComputedBranchAsSoft(t *testing.T) {
 	repo, mock, captured := captureTaskRepoSQL(t)
 	mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 1))
 	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
 		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
 		RecommendedDefault: "merge as-is", Class: domain.HumanGateClassHard,
 	}))
-	assert.Regexp(t, `WHEN\s+\$2\s*=\s*'hard'\s+THEN\s+NULL`, *captured,
-		"a hard gate must fall to NULL, not an auto-computed deadline, when none was given")
+	assert.Regexp(t,
+		`ELSE\s+\(CASE\s+WHEN\s+human_gate\s+THEN\s+human_gate_armed_at\s+ELSE\s+NOW\(\)\s+END\)\s+\+\s+make_interval\(hours\s*=>\s*\$8\)`,
+		*captured,
+		"a hard gate with a real recommended_default must reach the SAME computed-deadline "+
+			"branch a soft gate does — there is no class-specific short-circuit any more")
+	assert.NotRegexp(t, `\$2\s*=\s*'hard'`, *captured,
+		"the old unconditional hard->NULL branch must be gone from the query text entirely")
+}
+
+// TestTaskRepo_ArmHumanGate_DeadlineCASE_NoDefaultMeansNoDeadline_HardClassToo is the
+// class-agnostic sibling of TestTaskRepo_ArmHumanGate_DeadlineCASE_NoDefaultMeansNoDeadline
+// below: the "no default -> no deadline" branch was never conditioned on class, and
+// removing the hard-specific NULL branch above must not be mistaken for having also
+// removed this one. Same query text either way — this just proves a hard-classed call
+// still reaches it.
+func TestTaskRepo_ArmHumanGate_DeadlineCASE_NoDefaultMeansNoDeadline_HardClassToo(t *testing.T) {
+	repo, mock, captured := captureTaskRepoSQL(t)
+	mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: uuid.New(), Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Class: domain.HumanGateClassHard, // no RecommendedDefault
+	}))
+	assert.Regexp(t, `WHEN\s+NULLIF\(\$6,\s*''\)\s+IS\s+NULL\s+THEN\s+NULL`, *captured,
+		"a hard gate with no stated default must still get no auto-deadline")
 }
 
 // TestTaskRepo_ArmHumanGate_DeadlineCASE_NoDefaultMeansNoDeadline pins the third branch:

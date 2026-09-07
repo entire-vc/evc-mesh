@@ -55,6 +55,36 @@ func newArmingTestService(t *testing.T) (TaskService, *MockTaskRepository, uuid.
 	return svc, taskRepo, taskID
 }
 
+// newArmingTestServiceWithComments is newArmingTestService plus a wired
+// MockCommentRepository, for tests that need to observe the WARNING comment
+// ArmHumanGate posts when it auto-fills recommended_default on a marker-sourced arm
+// (task 1.4b, #4d61d877). The plain helper above leaves commentRepo nil, which is
+// exactly the "not wired" state postMarkerDefaultAppliedComment's own nil guard exists
+// for — every pre-existing test using it stays a no-op on this new code path.
+func newArmingTestServiceWithComments(t *testing.T) (TaskService, *MockTaskRepository, *MockCommentRepository, uuid.UUID) {
+	t.Helper()
+	taskRepo := NewMockTaskRepository()
+	commentRepo := NewMockCommentRepository()
+	svc := newTestTaskService(taskRepo, NewMockTaskStatusRepository(),
+		NewMockTaskDependencyRepository(), NewMockActivityLogRepository(),
+		WithCommentRepoTask(commentRepo))
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, Title: "gate arming fixture"}
+	return svc, taskRepo, commentRepo, taskID
+}
+
+// firstCommentOn returns the first comment posted to taskID, for tests that only ever
+// expect exactly one.
+func firstCommentOn(repo *MockCommentRepository, taskID uuid.UUID) *domain.Comment {
+	for _, c := range repo.items {
+		if c.TaskID == taskID {
+			return c
+		}
+	}
+	return nil
+}
+
 // TestArmHumanGate_WritesWholeAskOntoTask is the positive control for AC "API-тест на
 // арм": one call must leave every field a reader needs on the task itself.
 func TestArmHumanGate_WritesWholeAskOntoTask(t *testing.T) {
@@ -155,7 +185,15 @@ func TestArmHumanGate_RejectsIncompleteAsk(t *testing.T) {
 // TestArmHumanGate_MarkerSourceAllowsMissingDefault pins the ONE deliberate asymmetry.
 // Refusing a marker with no stated default would be silent to its author — they post the
 // question, believe it was handed over, and the card keeps being fed. That is #58a6f4ff
-// and #f421ad57, i.e. strictly worse than the bug being fixed. Tightening this is 1.4.
+// and #f421ad57, i.e. strictly worse than the bug being fixed.
+//
+// Task 1.4b (#4d61d877) changed WHAT "allows through" means, but not the asymmetry
+// itself: a marker with no stated default is still armed (never refused), but no longer
+// leaves recommended_default NULL forever — it is auto-filled with
+// domain.DefaultMarkerRecommendedDefault so the gate gets a computed gate_deadline and
+// can be resolved by a clock. This test used to assert the field stayed nil; that
+// assertion is now the very defect this card exists to fix (94 of 97 live gates on
+// 2026-09-07 had exactly that shape).
 func TestArmHumanGate_MarkerSourceAllowsMissingDefault(t *testing.T) {
 	svc, repo, taskID := newArmingTestService(t)
 	author := uuid.New()
@@ -173,7 +211,9 @@ func TestArmHumanGate_MarkerSourceAllowsMissingDefault(t *testing.T) {
 	assert.True(t, got.HumanGate)
 	require.NotNil(t, got.GateAuthor)
 	assert.Equal(t, author, *got.GateAuthor)
-	assert.Nil(t, got.RecommendedDefault, "no default was stated, so none is recorded")
+	require.NotNil(t, got.RecommendedDefault,
+		"no default was stated, so the system default must be auto-filled — a permanently NULL field is the bug")
+	assert.Equal(t, domain.DefaultMarkerRecommendedDefault, *got.RecommendedDefault)
 
 	// NEGATIVE CONTROL for the asymmetry: the SAME input from the API source is refused.
 	// Without this the test above would pass equally on a service that validates nothing.
@@ -188,6 +228,83 @@ func TestArmHumanGate_MarkerSourceAllowsMissingDefault(t *testing.T) {
 	})
 	require.Error(t, err, "the same incomplete ask from the API path must be refused")
 	assert.False(t, repo2.items[taskID2].HumanGate)
+}
+
+// TestArmHumanGate_MarkerWithNoDefault_PostsWarningComment is the positive control for
+// task 1.4b (#4d61d877): a marker-sourced arm that names no recommended_default posts a
+// task comment naming the auto-applied system default AND the computed deadline — the
+// pre-existing log-only WARNING reached nobody in practice.
+func TestArmHumanGate_MarkerWithNoDefault_PostsWarningComment(t *testing.T) {
+	svc, taskRepo, commentRepo, taskID := newArmingTestServiceWithComments(t)
+
+	require.NoError(t, svc.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID:     taskID,
+		Author:     uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Reason:     "какой шлюз выбираем?",
+		Class:      domain.HumanGateClassSoft,
+		Source:     domain.ArmHumanGateSourceMarker,
+	}))
+
+	got := taskRepo.items[taskID]
+	require.NotNil(t, got.RecommendedDefault)
+	assert.Equal(t, domain.DefaultMarkerRecommendedDefault, *got.RecommendedDefault)
+	require.NotNil(t, got.GateDeadline, "soft + a real default (even auto-filled) must get a computed deadline")
+
+	found := firstCommentOn(commentRepo, taskID)
+	require.NotNil(t, found, "the WARNING must reach the task as a comment, not only the server log")
+	assert.Equal(t, domain.ActorTypeSystem, found.AuthorType)
+	assert.Contains(t, found.Body, "системный дефолт")
+	assert.Contains(t, found.Body, domain.DefaultMarkerRecommendedDefault)
+	assert.Contains(t, found.Body, got.GateDeadline.Format(time.RFC3339))
+	assert.Contains(t, found.Body, "применится автоматически",
+		"soft class must say the default applies automatically at the deadline")
+}
+
+// TestArmHumanGate_MarkerWithNoDefault_HardClassNotesEscalationOnly covers the other
+// class message: a hard gate gets the same auto-filled default and computed deadline,
+// but the comment must say the deadline is for escalation/visibility only — no code path
+// auto-releases a hard gate on a clock (FindExpiredDefaultGates's own
+// human_gate_class != 'hard' predicate, task_repo.go).
+func TestArmHumanGate_MarkerWithNoDefault_HardClassNotesEscalationOnly(t *testing.T) {
+	svc, taskRepo, commentRepo, taskID := newArmingTestServiceWithComments(t)
+
+	require.NoError(t, svc.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID:     taskID,
+		Author:     uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Reason:     "перевести партнёру $500?",
+		Class:      domain.HumanGateClassHard,
+		Source:     domain.ArmHumanGateSourceMarker,
+	}))
+
+	got := taskRepo.items[taskID]
+	require.NotNil(t, got.GateDeadline,
+		"hard now gets a deadline too once it has a real default — for escalation, not auto-release")
+
+	found := firstCommentOn(commentRepo, taskID)
+	require.NotNil(t, found)
+	assert.Contains(t, found.Body, "эскалации")
+	assert.NotContains(t, found.Body, "применится автоматически",
+		"a hard gate's deadline must never be described as self-applying — nothing releases it on a clock")
+}
+
+// TestArmHumanGate_APISourceWithDefault_DoesNotPostWarningComment is the negative
+// control: the auto-fill and its comment are specific to a marker-sourced arm with no
+// stated default. An ordinary API arm that already names one must not get a spurious
+// notice.
+func TestArmHumanGate_APISourceWithDefault_DoesNotPostWarningComment(t *testing.T) {
+	svc, _, commentRepo, taskID := newArmingTestServiceWithComments(t)
+
+	require.NoError(t, svc.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: taskID, Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Reason: "r", RecommendedDefault: "d",
+		Source:    domain.ArmHumanGateSourceAPI,
+		Predicate: allowingPredicate(),
+	}))
+
+	assert.Nil(t, firstCommentOn(commentRepo, taskID),
+		"an API arm that already states a default must not get the auto-fill notice")
 }
 
 // TestClearHumanGate_DropsTheAskWithIt: the ask metadata describes a LIVE question.

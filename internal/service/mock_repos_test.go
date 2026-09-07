@@ -726,7 +726,16 @@ func (m *MockTaskRepository) ArmHumanGate(_ context.Context, in domain.ArmHumanG
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if t, ok := m.items[in.TaskID]; ok {
+		// Mirrors task_repo.go's ArmHumanGate SQL: armed_at, and the deadline math that
+		// reuses the SAME "CASE WHEN human_gate THEN human_gate_armed_at ELSE NOW() END"
+		// expression, both read the row's state from BEFORE this call, exactly once — a
+		// re-arm must not push either off an already-running clock.
+		armedAt := timeNow()
+		if t.HumanGate && t.HumanGateArmedAt != nil {
+			armedAt = *t.HumanGateArmedAt
+		}
 		t.HumanGate = true
+		t.HumanGateArmedAt = &armedAt
 		t.HumanGateClass = in.Class
 		author, authorType := in.Author, in.AuthorType
 		t.GateAuthor, t.GateAuthorType = &author, &authorType
@@ -738,7 +747,18 @@ func (m *MockTaskRepository) ArmHumanGate(_ context.Context, in domain.ArmHumanG
 			def := in.RecommendedDefault
 			t.RecommendedDefault = &def
 		}
-		t.GateDeadline = in.Deadline
+		switch {
+		case in.Deadline != nil:
+			t.GateDeadline = in.Deadline
+		case in.RecommendedDefault == "":
+			t.GateDeadline = nil
+		default:
+			// No class-based exception any more (task 1.4b, #4d61d877) — hard and soft
+			// both reach this branch once they have a real default and no explicit
+			// deadline; see task_repo.go's ArmHumanGate for the real SQL this mirrors.
+			computed := armedAt.Add(time.Duration(pgRepo.DefaultGateTimeoutHours) * time.Hour)
+			t.GateDeadline = &computed
+		}
 		m.items[in.TaskID] = t
 	}
 	return nil

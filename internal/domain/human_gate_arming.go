@@ -20,15 +20,28 @@ const (
 	// "❓ Blocking @pavel" comment into the same call, with gate_author taken from the
 	// comment's authenticated author.
 	//
-	// A marker that names no recommended_default is armed anyway, with the field left
-	// NULL and a WARNING logged. Refusing it here would be strictly worse than the bug
-	// being fixed: the marker is the channel that DELIVERS a live ask, and a rejected
-	// arm is silent to its author — they post the question, believe it was handed over,
-	// and the card keeps being fed (the exact shape of #58a6f4ff and #f421ad57).
-	// Tightening this into a refusal is task 1.4 (#060ccaae), which first has to give
-	// the author a way to see the refusal.
+	// A marker that names no recommended_default no longer arms with the field left
+	// NULL: ArmHumanGate (task_service.go) fills it in with
+	// DefaultMarkerRecommendedDefault so the gate can still time out, and posts a task
+	// comment saying so IN ADDITION TO the existing log line (task 1.4b, #4d61d877) —
+	// the log-only WARNING was invisible in practice, which is why 94 of 97 live gates
+	// measured 2026-09-07 had no recommended_default and no gate_deadline at all.
+	// Refusing the arm outright would still be strictly worse than the bug being fixed:
+	// the marker is the channel that DELIVERS a live ask, and a rejected arm is silent
+	// to its author — they post the question, believe it was handed over, and the card
+	// keeps being fed (the exact shape of #58a6f4ff and #f421ad57). Tightening this into
+	// a refusal is still task 1.4's own follow-up, which first has to give the author a
+	// way to see the refusal; auto-filling is the interim fix that makes every gate
+	// resolvable by a clock even before that lands.
 	ArmHumanGateSourceMarker ArmHumanGateSource = "marker"
 )
+
+// DefaultMarkerRecommendedDefault is the system-supplied fallback recommended_default
+// ArmHumanGate applies when an ArmHumanGateSourceMarker arm names none — see
+// ArmHumanGateSourceMarker's doc. Also the value the one-shot backfill (migration
+// 20260907001) writes onto pre-existing gates that predate this fix, so a gate armed
+// before or after the fix reads identically once both have run.
+const DefaultMarkerRecommendedDefault = "применить рекомендацию исполнителя / закрыть как есть"
 
 // ArmHumanGateInput is the ONE input shape for arming a human gate. Before this type
 // existed, "the card is waiting on a human" was recomputed in 21 places from comment
