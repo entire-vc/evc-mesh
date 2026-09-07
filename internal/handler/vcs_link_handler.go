@@ -124,25 +124,33 @@ func WithVCSIntegrationResolver(r *service.VCSIntegrationResolver) VCSLinkHandle
 // is nil, this reproduces the pre-#33a4bb57 static behavior exactly:
 // validation is mandatory only when a secret was configured at
 // construction.
-func (h *VCSLinkHandler) githubWebhookSecrets(ctx context.Context) (secrets []string, required bool) {
+// Both return service.WebhookSecret rather than a bare string so the caller
+// can find out WHICH workspace the secret that actually matched belongs to
+// (see WebhookSecret's doc comment, #839b9897) — a bare string threw that
+// away and let a validated request touch any workspace's tasks, not just
+// its own. The legacy static-secret path (h.githubWebhookSecret /
+// h.gitlabWebhookSecret, used when vcsIntegrations is nil) has no workspace
+// concept at all, so it reports uuid.Nil — the same unscoped behavior as
+// the dynamic resolver's env fallback.
+func (h *VCSLinkHandler) githubWebhookSecrets(ctx context.Context) (secrets []service.WebhookSecret, required bool) {
 	if h.vcsIntegrations != nil {
 		secrets, _ := h.vcsIntegrations.GitHubWebhookSecrets(ctx)
 		return secrets, true
 	}
 	if h.githubWebhookSecret != "" {
-		return []string{h.githubWebhookSecret}, true
+		return []service.WebhookSecret{{Secret: h.githubWebhookSecret, WorkspaceID: uuid.Nil}}, true
 	}
 	return nil, false
 }
 
 // gitlabWebhookSecrets is githubWebhookSecrets's GitLab counterpart.
-func (h *VCSLinkHandler) gitlabWebhookSecrets(ctx context.Context) (secrets []string, required bool) {
+func (h *VCSLinkHandler) gitlabWebhookSecrets(ctx context.Context) (secrets []service.WebhookSecret, required bool) {
 	if h.vcsIntegrations != nil {
 		secrets, _ := h.vcsIntegrations.GitLabWebhookSecrets(ctx)
 		return secrets, true
 	}
 	if h.gitlabWebhookSecret != "" {
-		return []string{h.gitlabWebhookSecret}, true
+		return []service.WebhookSecret{{Secret: h.gitlabWebhookSecret, WorkspaceID: uuid.Nil}}, true
 	}
 	return nil, false
 }
@@ -374,6 +382,13 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	// vcsIntegrations wired) or "the provider is disabled" (dynamic path —
 	// see githubWebhookSecrets's doc comment).
 	secrets, required := h.githubWebhookSecrets(c.Request().Context())
+	// matchedWorkspaceID is the workspace whose secret actually validated
+	// this delivery — uuid.Nil (its zero value) when validation is off
+	// entirely (required==false) or the matching secret was the unscoped
+	// env fallback. Threaded into GitHubWebhookEvent/ResolveTaskRef below so
+	// task-ref resolution can't touch a task outside this workspace
+	// (#839b9897).
+	var matchedWorkspaceID uuid.UUID
 	if required {
 		if len(secrets) == 0 {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("github integration is disabled: no active workspace webhook secret and no MESH_GITHUB_WEBHOOK_SECRET fallback configured"))
@@ -383,9 +398,10 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("missing X-Hub-Signature-256 header"))
 		}
 		matched := false
-		for _, secret := range secrets {
-			if verifyGitHubSignature(rawBody, sig, secret) {
+		for _, s := range secrets {
+			if verifyGitHubSignature(rawBody, sig, s.Secret) {
 				matched = true
+				matchedWorkspaceID = s.WorkspaceID
 				break
 			}
 		}
@@ -408,16 +424,17 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 		}
 		pr := payload.PullRequest
 		ev := service.GitHubWebhookEvent{
-			Action:     payload.Action,
-			PRNumber:   pr.Number,
-			PRTitle:    pr.Title,
-			PRBody:     pr.Body,
-			PRHTMLURL:  pr.HTMLURL,
-			PRState:    pr.State,
-			PRMerged:   pr.Merged,
-			MergeSHA:   pr.MergeCommitSHA,
-			PRBranch:   pr.Head.Ref,
-			Repository: payload.Repository.FullName,
+			Action:      payload.Action,
+			PRNumber:    pr.Number,
+			PRTitle:     pr.Title,
+			PRBody:      pr.Body,
+			PRHTMLURL:   pr.HTMLURL,
+			PRState:     pr.State,
+			PRMerged:    pr.Merged,
+			MergeSHA:    pr.MergeCommitSHA,
+			PRBranch:    pr.Head.Ref,
+			Repository:  payload.Repository.FullName,
+			WorkspaceID: matchedWorkspaceID,
 		}
 		result, herr := h.vcsService.HandleGitHubPullRequestEvent(ctx, ev)
 		if herr != nil {
@@ -441,7 +458,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 		// Same recognition as the pull_request path: a commit message carries
 		// "Refs #<short id>" far more often than MESH-<uuid>, and the branch
 		// (payload.Ref, e.g. refs/heads/linus/<id>-slug) is another free signal.
-		taskID, matched := h.vcsService.ResolveTaskRef(ctx,
+		taskID, matched := h.vcsService.ResolveTaskRef(ctx, matchedWorkspaceID,
 			service.TaskRefSource{Name: "body", Text: commit.Message},
 			service.TaskRefSource{Name: "branch", Text: strings.TrimPrefix(payload.Ref, "refs/heads/")},
 		)
@@ -528,6 +545,10 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 	// §C1/§C2 contract as GitHubWebhook above — see gitlabWebhookSecrets's
 	// doc comment.
 	secrets, required := h.gitlabWebhookSecrets(c.Request().Context())
+	// See the identical comment in GitHubWebhook: this is the workspace
+	// whose secret actually matched, threaded into GitLabWebhookEvent below
+	// so task-ref resolution is scoped to it (#839b9897).
+	var matchedWorkspaceID uuid.UUID
 	if required {
 		if len(secrets) == 0 {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("gitlab integration is disabled: no active workspace webhook secret and no MESH_GITLAB_WEBHOOK_SECRET fallback configured"))
@@ -537,9 +558,10 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 			return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("missing X-Gitlab-Token header"))
 		}
 		matched := false
-		for _, secret := range secrets {
-			if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1 {
+		for _, s := range secrets {
+			if subtle.ConstantTimeCompare([]byte(token), []byte(s.Secret)) == 1 {
 				matched = true
+				matchedWorkspaceID = s.WorkspaceID
 				break
 			}
 		}
@@ -576,6 +598,7 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 		MergeSHA:    attrs.MergeCommitSHA,
 		MRBranch:    attrs.SourceBranch,
 		ProjectPath: payload.Project.PathWithNamespace,
+		WorkspaceID: matchedWorkspaceID,
 	}
 	result, herr := h.vcsService.HandleGitLabMergeRequestEvent(c.Request().Context(), ev)
 	if herr != nil {

@@ -1,8 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -273,6 +278,103 @@ func TestGitHubWebhook_DynamicResolver_NoRowAtAll_FallsToEnvExactlyLikeBefore(t 
 	rec := httptest.NewRecorder()
 	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(req, rec)))
 	assert.Equal(t, http.StatusOK, rec.Code, "no workspace row at all must fall through to env, exactly like the pre-#33a4bb57 static wiring")
+}
+
+// TestGitHubWebhook_DynamicResolver_PropagatesMatchedWorkspaceID and its
+// GitLab counterpart below are #839b9897's handler-level proof: the secret
+// that validates an inbound delivery must have its WorkspaceID threaded all
+// the way into the event handed to the service layer, not just used to
+// decide "accept or refuse". Before this fix the handler discarded which
+// secret matched once validation passed, so every request — whichever
+// workspace's secret it presented — resolved task refs against the whole
+// instance (service-level negative/positive controls for the resulting
+// blast radius live in internal/service/vcs_link_workspace_scope_test.go).
+func TestGitHubWebhook_DynamicResolver_PropagatesMatchedWorkspaceID(t *testing.T) {
+	ws := uuid.New()
+	const secret = "workspace-secret"
+	repo := &fakeResolverIntegrationRepo{row: &domain.IntegrationConfig{
+		WorkspaceID: ws,
+		Provider:    domain.IntegrationProviderGitHub,
+		IsActive:    true,
+		Config:      githubIntegrationCfgJSON(t, "", secret),
+	}}
+	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{})
+
+	svc := &stubVCSLinkService{handleResult: service.PRHandleResult{Reason: "no_task_ref"}}
+	h := NewVCSLinkHandler(svc, WithVCSIntegrationResolver(resolver), WithWebhookDedupStore(newMemDedupStore()))
+
+	body := newPullRequestPayload(t, "opened", 9, "no task ref here", "", false, "")
+	req := newPullRequestRequest(t, body, "delivery-ws-propagate", secret)
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(req, rec)))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	ev, ok := svc.lastHandleEvent()
+	require.True(t, ok)
+	assert.Equal(t, ws, ev.WorkspaceID, "the workspace whose secret validated the request must reach the service layer")
+}
+
+// GitLab counterpart of TestGitHubWebhook_DynamicResolver_PropagatesMatchedWorkspaceID.
+func TestGitLabWebhook_DynamicResolver_PropagatesMatchedWorkspaceID(t *testing.T) {
+	ws := uuid.New()
+	const secret = "gl-workspace-secret"
+	repo := &fakeResolverIntegrationRepo{row: &domain.IntegrationConfig{
+		WorkspaceID: ws,
+		Provider:    domain.IntegrationProviderGitLab,
+		IsActive:    true,
+		Config:      gitlabIntegrationCfgJSON(t, "https://git.entire.host", "", secret),
+	}}
+	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{})
+
+	svc := &stubVCSLinkService{gitlabHandleResult: service.PRHandleResult{Reason: "no_task_ref"}}
+	h := NewVCSLinkHandler(svc, WithVCSIntegrationResolver(resolver))
+
+	body := newMergeRequestPayload(t, "open", 9, "no task ref here", "", "opened", "")
+	req := newMergeRequestRequest(t, body, "Merge Request Hook", secret)
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.GitLabWebhook(echo.New().NewContext(req, rec)))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	ev, ok := svc.lastGitLabHandleEvent()
+	require.True(t, ok)
+	assert.Equal(t, ws, ev.WorkspaceID, "the workspace whose secret validated the request must reach the service layer")
+}
+
+// TestGitHubWebhook_DynamicResolver_Push_PropagatesMatchedWorkspaceID is the
+// push (commit-link) path's counterpart to
+// TestGitHubWebhook_DynamicResolver_PropagatesMatchedWorkspaceID — the push
+// handler calls the exported ResolveTaskRef directly rather than going
+// through GitHubWebhookEvent, so it needs its own proof that the matched
+// secret's workspace reaches the resolver call (#839b9897).
+func TestGitHubWebhook_DynamicResolver_Push_PropagatesMatchedWorkspaceID(t *testing.T) {
+	ws := uuid.New()
+	const secret = "workspace-secret"
+	repo := &fakeResolverIntegrationRepo{row: &domain.IntegrationConfig{
+		WorkspaceID: ws,
+		Provider:    domain.IntegrationProviderGitHub,
+		IsActive:    true,
+		Config:      githubIntegrationCfgJSON(t, "", secret),
+	}}
+	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{})
+
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc, WithVCSIntegrationResolver(resolver), WithWebhookDedupStore(newMemDedupStore()))
+
+	req := newPushRequest(t, "push-propagate-ws", "refs/heads/main", "chore: gofmt")
+	mac := hmac.New(sha256.New, []byte(secret))
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	mac.Write(body)
+	req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(req, rec)))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	got, ok := svc.lastResolveWorkspace()
+	require.True(t, ok, "push path must consult the resolver")
+	assert.Equal(t, ws, got, "the workspace whose secret validated the request must reach ResolveTaskRef")
 }
 
 // ---------------------------------------------------------------------------

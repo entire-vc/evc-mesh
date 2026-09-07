@@ -307,12 +307,12 @@ func TestVCSIntegrationResolver_GitHubWebhookSecrets_UnionOfActiveWorkspaces(t *
 	if source != "workspace" {
 		t.Fatalf("expected workspace source with active rows present, got %q", source)
 	}
-	got := map[string]bool{}
+	got := map[string]uuid.UUID{}
 	for _, s := range secrets {
-		got[s] = true
+		got[s.Secret] = s.WorkspaceID
 	}
-	if len(got) != 2 || !got["secretA"] || !got["secretB"] {
-		t.Fatalf("expected union {secretA, secretB}, got %v", secrets)
+	if len(got) != 2 || got["secretA"] != wsA || got["secretB"] != wsB {
+		t.Fatalf("expected union {secretA:%s, secretB:%s} each tagged with its own workspace, got %v", wsA, wsB, secrets)
 	}
 }
 
@@ -320,7 +320,7 @@ func TestVCSIntegrationResolver_GitHubWebhookSecrets_NoActiveRows_FallsToEnv(t *
 	repo := newFakeVCSIntegrationRepo()
 	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitHubWebhookSecret: "env-secret"})
 	secrets, source := r.GitHubWebhookSecrets(context.Background())
-	if source != "env" || len(secrets) != 1 || secrets[0] != "env-secret" {
+	if source != "env" || len(secrets) != 1 || secrets[0].Secret != "env-secret" || secrets[0].WorkspaceID != uuid.Nil {
 		t.Fatalf("got secrets=%v source=%q", secrets, source)
 	}
 }
@@ -387,7 +387,7 @@ func TestVCSIntegrationResolver_GitHubWebhookSecrets_PlaceholderRowOnly_FallsToE
 	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitHubWebhookSecret: "env-secret"})
 
 	secrets, source := r.GitHubWebhookSecrets(context.Background())
-	if source != "env" || len(secrets) != 1 || secrets[0] != "env-secret" {
+	if source != "env" || len(secrets) != 1 || secrets[0].Secret != "env-secret" {
 		t.Fatalf("a placeholder-only row must not blind env fallback: got secrets=%v source=%q", secrets, source)
 	}
 }
@@ -400,7 +400,7 @@ func TestVCSIntegrationResolver_GitLabWebhookSecrets_PlaceholderRowOnly_FallsToE
 	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok", GitLabWebhookSecret: "env-secret"})
 
 	secrets, source := r.GitLabWebhookSecrets(context.Background())
-	if source != "env" || len(secrets) != 1 || secrets[0] != "env-secret" {
+	if source != "env" || len(secrets) != 1 || secrets[0].Secret != "env-secret" {
 		t.Fatalf("a placeholder-only row must not blind env fallback: got secrets=%v source=%q", secrets, source)
 	}
 }

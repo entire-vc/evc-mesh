@@ -44,13 +44,14 @@ type stubVCSLinkService struct {
 	// that don't care about the upsert-vs-insert distinction keep observing
 	// the historical 201. Set false to simulate the upsert-onto-existing-row
 	// branch (#b73171fa).
-	createReturnCreated *bool
-	listReturn          []domain.VCSLink
-	listReturnErr       error
-	deleteReturnErr     error
-	resolveCalls        [][]service.TaskRefSource
-	resolveTaskID       uuid.UUID
-	resolveRef          service.TaskRef
+	createReturnCreated   *bool
+	listReturn            []domain.VCSLink
+	listReturnErr         error
+	deleteReturnErr       error
+	resolveCalls          [][]service.TaskRefSource
+	resolveWorkspaceCalls []uuid.UUID
+	resolveTaskID         uuid.UUID
+	resolveRef            service.TaskRef
 }
 
 func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLinkInput) (*domain.VCSLink, bool, error) {
@@ -80,14 +81,27 @@ func (s *stubVCSLinkService) ListByTask(_ context.Context, _ uuid.UUID) ([]domai
 	return s.listReturn, s.listReturnErr
 }
 
-// ResolveTaskRef records what the push path asked about and answers with a
-// canned task, so a handler test can assert the branch and message actually
-// reached the resolver.
-func (s *stubVCSLinkService) ResolveTaskRef(_ context.Context, sources ...service.TaskRefSource) (uuid.UUID, service.TaskRef) {
+// ResolveTaskRef records what the push path asked about (including which
+// workspace it was scoped to, #839b9897) and answers with a canned task, so
+// a handler test can assert the branch and message actually reached the
+// resolver.
+func (s *stubVCSLinkService) ResolveTaskRef(_ context.Context, workspaceID uuid.UUID, sources ...service.TaskRefSource) (uuid.UUID, service.TaskRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resolveCalls = append(s.resolveCalls, sources)
+	s.resolveWorkspaceCalls = append(s.resolveWorkspaceCalls, workspaceID)
 	return s.resolveTaskID, s.resolveRef
+}
+
+// lastResolveWorkspace returns the workspaceID the most recent ResolveTaskRef
+// call was scoped to.
+func (s *stubVCSLinkService) lastResolveWorkspace() (uuid.UUID, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.resolveWorkspaceCalls) == 0 {
+		return uuid.Nil, false
+	}
+	return s.resolveWorkspaceCalls[len(s.resolveWorkspaceCalls)-1], true
 }
 
 func (s *stubVCSLinkService) lastResolveSources() ([]service.TaskRefSource, bool) {

@@ -25,11 +25,12 @@ var garfieldAgentID = uuid.MustParse("99a835df-fe8c-424b-84c5-949595fb9eb2")
 
 // vcsLinkService implements VCSLinkService.
 type vcsLinkService struct {
-	repo       repository.VCSLinkRepository
-	taskRepo   repository.TaskRepository
-	statusRepo repository.TaskStatusRepository
-	taskSvc    TaskService
-	commentSvc CommentService
+	repo        repository.VCSLinkRepository
+	taskRepo    repository.TaskRepository
+	statusRepo  repository.TaskStatusRepository
+	taskSvc     TaskService
+	commentSvc  CommentService
+	projectRepo repository.ProjectRepository
 }
 
 // VCSLinkServiceOption configures optional dependencies on vcsLinkService.
@@ -58,6 +59,17 @@ func WithVCSTaskService(svc TaskService) VCSLinkServiceOption {
 // auto-transition comments authored as Garfield.
 func WithVCSCommentService(svc CommentService) VCSLinkServiceOption {
 	return func(s *vcsLinkService) { s.commentSvc = svc }
+}
+
+// WithVCSProjectRepo injects the project repository used to look up a
+// resolved task's workspace, so webhook task-ref resolution can be scoped to
+// the workspace whose secret validated the request (#839b9897). Optional in
+// the same sense the others are documented to be: without it, workspace
+// scoping fails closed (taskInWorkspace refuses rather than guesses) for any
+// caller that actually passes a non-nil workspaceID; a caller that always
+// passes uuid.Nil (unscoped) never touches this dependency at all.
+func WithVCSProjectRepo(r repository.ProjectRepository) VCSLinkServiceOption {
+	return func(s *vcsLinkService) { s.projectRepo = r }
 }
 
 // NewVCSLinkService creates a new VCSLinkService.
@@ -234,7 +246,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		{Name: "body", Text: ev.PRBody},
 		{Name: "branch", Text: ev.PRBranch},
 	}
-	taskID, matched, outcome := s.resolveTaskRef(ctx, sources...)
+	taskID, matched, outcome := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] pr=%s#%d resolved task=%s via=%s src=%s raw=%q",
 			ev.Repository, ev.PRNumber, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
@@ -273,6 +285,12 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		if err != nil {
 			return PRHandleResult{}, fmt.Errorf("list vcs links by external_id: %w", err)
 		}
+		// A PR number is a small, guessable integer with no workspace
+		// component — without this filter, a workspace B secret could
+		// silently reuse a stored link belonging to a task in workspace A
+		// just by naming the right number (#839b9897, same class the
+		// title/body/branch path is scoped against in lookupRef).
+		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, links)
 		switch {
 		case len(links) == 0:
 			// Say what was looked at, not just that nothing was found: for six
@@ -350,7 +368,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		{Name: "body", Text: ev.MRBody},
 		{Name: "branch", Text: ev.MRBranch},
 	}
-	taskID, matched, outcome := s.resolveTaskRef(ctx, sources...)
+	taskID, matched, outcome := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] mr=%s!%d resolved task=%s via=%s src=%s raw=%q",
 			ev.ProjectPath, ev.MRIID, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
@@ -377,6 +395,10 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		if err != nil {
 			return PRHandleResult{}, fmt.Errorf("list vcs links by external_id: %w", err)
 		}
+		// See the identical comment in HandleGitHubPullRequestEvent: an MR
+		// iid is just as guessable as a PR number, so the same workspace
+		// filter applies here (#839b9897).
+		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, links)
 		switch {
 		case len(links) == 0:
 			log.Printf("[vcs-webhook] mr=%s!%d no_task_ref: candidates=%d title=%q body=%q branch=%q",
@@ -597,8 +619,8 @@ const maxRefCandidates = 12
 // attached itself to the unrelated task used as the example.
 //
 // Returns uuid.Nil when nothing resolves or the payload is ambiguous.
-func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
-	id, ref, _ := s.resolveTaskRef(ctx, sources...)
+func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
+	id, ref, _ := s.resolveTaskRef(ctx, workspaceID, sources...)
 	return id, ref
 }
 
@@ -618,7 +640,7 @@ const (
 	refAmbiguous
 )
 
-func (s *vcsLinkService) resolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef, refOutcome) {
+func (s *vcsLinkService) resolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef, refOutcome) {
 	type hit struct {
 		id  uuid.UUID
 		ref TaskRef
@@ -636,7 +658,7 @@ func (s *vcsLinkService) resolveTaskRef(ctx context.Context, sources ...TaskRefS
 		}
 		checked++
 
-		id, ok := s.lookupRef(ctx, ref)
+		id, ok := s.lookupRef(ctx, workspaceID, ref)
 		if !ok || seen[id] {
 			continue
 		}
@@ -673,8 +695,15 @@ func (s *vcsLinkService) resolveTaskRef(ctx context.Context, sources ...TaskRefS
 }
 
 // lookupRef turns one candidate into a task id, reporting whether it named a
-// task that exists.
-func (s *vcsLinkService) lookupRef(ctx context.Context, ref TaskRef) (uuid.UUID, bool) {
+// task that exists AND belongs to workspaceID (uuid.Nil skips the workspace
+// check entirely — see WebhookSecret's doc comment for when that's the
+// deliberate unscoped case vs. §839b9897's bug). A task that exists but
+// belongs to a different workspace is reported exactly like a task that
+// doesn't exist at all — the caller (resolveTaskRef) must not be able to
+// tell "wrong workspace" apart from "no such task", the same way it already
+// cannot tell apart a deleted task from a typo'd id: either distinction
+// would let a probing request fingerprint another workspace's task ids.
+func (s *vcsLinkService) lookupRef(ctx context.Context, workspaceID uuid.UUID, ref TaskRef) (uuid.UUID, bool) {
 	switch {
 	case ref.Full != uuid.Nil:
 		if s.taskRepo == nil {
@@ -688,6 +717,9 @@ func (s *vcsLinkService) lookupRef(ctx context.Context, ref TaskRef) (uuid.UUID,
 			return uuid.Nil, false
 		}
 		if t == nil {
+			return uuid.Nil, false
+		}
+		if !s.projectInWorkspace(ctx, t.ProjectID, workspaceID) {
 			return uuid.Nil, false
 		}
 		return t.ID, true
@@ -707,9 +739,82 @@ func (s *vcsLinkService) lookupRef(ctx context.Context, ref TaskRef) (uuid.UUID,
 		if t == nil {
 			return uuid.Nil, false
 		}
+		if !s.projectInWorkspace(ctx, t.ProjectID, workspaceID) {
+			return uuid.Nil, false
+		}
 		return t.ID, true
 	}
 	return uuid.Nil, false
+}
+
+// projectInWorkspace reports whether projectID belongs to workspaceID.
+// workspaceID==uuid.Nil is the deliberate unscoped case (the request was
+// validated by the instance-wide env fallback secret, which isn't owned by
+// any one workspace — see WebhookSecret's doc comment) and always returns
+// true without touching projectRepo at all.
+//
+// For any other workspaceID this fails CLOSED: no projectRepo wired, a
+// lookup error, or a missing project all return false, never true.
+// "Couldn't verify ownership" must never be silently treated as "verified"
+// — that is exactly how #839b9897 stayed open, and the same fail-open vs.
+// fail-closed distinction CLAUDE-workflow.md §1q Правило 3 draws for the
+// merge train applies here.
+func (s *vcsLinkService) projectInWorkspace(ctx context.Context, projectID, workspaceID uuid.UUID) bool {
+	if workspaceID == uuid.Nil {
+		return true
+	}
+	if s.projectRepo == nil {
+		log.Printf("[vcs-webhook] workspace scope check refused: no projectRepo wired (project=%s workspace=%s)", projectID, workspaceID)
+		return false
+	}
+	proj, err := s.projectRepo.GetByID(ctx, projectID)
+	if err != nil {
+		log.Printf("[vcs-webhook] workspace scope check failed for project=%s: %v — refusing", projectID, err)
+		return false
+	}
+	if proj == nil {
+		return false
+	}
+	return proj.WorkspaceID == workspaceID
+}
+
+// taskInWorkspace is projectInWorkspace's task-id-first counterpart, used by
+// the "no ref in this payload, fall back to a stored link" path in
+// HandleGitHubPullRequestEvent/HandleGitLabMergeRequestEvent — that path
+// finds a task via link_type+external_id (a PR/MR number: a small,
+// guessable integer with no workspace component at all), so it needs the
+// same scoping lookupRef applies to a title/body/branch-named task, just
+// starting from a task id instead of an already-fetched *domain.Task.
+func (s *vcsLinkService) taskInWorkspace(ctx context.Context, taskID, workspaceID uuid.UUID) bool {
+	if workspaceID == uuid.Nil {
+		return true
+	}
+	if s.taskRepo == nil {
+		return false
+	}
+	t, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil || t == nil {
+		return false
+	}
+	return s.projectInWorkspace(ctx, t.ProjectID, workspaceID)
+}
+
+// filterLinksInWorkspace drops every link whose task does not belong to
+// workspaceID (a no-op returning links unchanged when workspaceID is
+// uuid.Nil — the unscoped env-fallback case). Used by the "no ref named in
+// this payload, fall back to whatever's already linked to this PR/MR
+// number" branch of HandleGitHubPullRequestEvent/HandleGitLabMergeRequestEvent.
+func (s *vcsLinkService) filterLinksInWorkspace(ctx context.Context, workspaceID uuid.UUID, links []domain.VCSLink) []domain.VCSLink {
+	if workspaceID == uuid.Nil {
+		return links
+	}
+	out := make([]domain.VCSLink, 0, len(links))
+	for _, l := range links {
+		if s.taskInWorkspace(ctx, l.TaskID, workspaceID) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // stampManualStatusDeclaration records who declared a VCS link's status by

@@ -211,6 +211,21 @@ func (r *VCSIntegrationResolver) ResolveGitLab(ctx context.Context, workspaceID 
 	return GitLabIntegrationConfig{}, "", false
 }
 
+// WebhookSecret pairs a secret value that may currently validate an inbound
+// webhook with the workspace it belongs to. WorkspaceID is uuid.Nil for the
+// env fallback (source="env") — an instance-wide secret is not owned by any
+// one workspace, so a match against it deliberately does NOT scope task
+// resolution (see lookupRef's workspaceID==uuid.Nil branch). This carries
+// the fix for #839b9897: before this type existed, the webhook receiver
+// authenticated a request against the UNION of every workspace's secret but
+// then threw away which one actually matched, so a validated request could
+// resolve and mutate a task in ANY workspace, not just the one whose secret
+// it presented.
+type WebhookSecret struct {
+	Secret      string
+	WorkspaceID uuid.UUID
+}
+
 // GitHubWebhookSecrets returns every secret that should currently validate
 // an inbound GitHub webhook on the single shared endpoint: every active
 // workspace's configured webhook_secret, or — only when NO workspace has
@@ -219,7 +234,7 @@ func (r *VCSIntegrationResolver) ResolveGitLab(ctx context.Context, workspaceID 
 // unvalidated (the pre-C2 behavior this replaces treated an empty secret as
 // "validation off", which is exactly the silently-open door §2 of the
 // parent spec's comments flagged).
-func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secrets []string, source string) {
+func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secrets []WebhookSecret, source string) {
 	if r.repo != nil {
 		rows, err := r.repo.ListByProvider(ctx, domain.IntegrationProviderGitHub)
 		if err != nil {
@@ -242,7 +257,7 @@ func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secr
 				case usable:
 					owned = true
 					if cfg.WebhookSecret != "" {
-						secrets = append(secrets, cfg.WebhookSecret)
+						secrets = append(secrets, WebhookSecret{Secret: cfg.WebhookSecret, WorkspaceID: rows[i].WorkspaceID})
 					}
 				case disabled:
 					owned = true
@@ -257,13 +272,13 @@ func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secr
 		}
 	}
 	if r.env.GitHubWebhookSecret != "" {
-		return []string{r.env.GitHubWebhookSecret}, "env"
+		return []WebhookSecret{{Secret: r.env.GitHubWebhookSecret, WorkspaceID: uuid.Nil}}, "env"
 	}
 	return nil, ""
 }
 
 // GitLabWebhookSecrets is GitHubWebhookSecrets's GitLab counterpart.
-func (r *VCSIntegrationResolver) GitLabWebhookSecrets(ctx context.Context) (secrets []string, source string) {
+func (r *VCSIntegrationResolver) GitLabWebhookSecrets(ctx context.Context) (secrets []WebhookSecret, source string) {
 	if r.repo != nil {
 		rows, err := r.repo.ListByProvider(ctx, domain.IntegrationProviderGitLab)
 		if err != nil {
@@ -276,7 +291,7 @@ func (r *VCSIntegrationResolver) GitLabWebhookSecrets(ctx context.Context) (secr
 				case usable:
 					owned = true
 					if cfg.WebhookSecret != "" {
-						secrets = append(secrets, cfg.WebhookSecret)
+						secrets = append(secrets, WebhookSecret{Secret: cfg.WebhookSecret, WorkspaceID: rows[i].WorkspaceID})
 					}
 				case disabled:
 					owned = true
@@ -291,7 +306,7 @@ func (r *VCSIntegrationResolver) GitLabWebhookSecrets(ctx context.Context) (secr
 		}
 	}
 	if r.env.GitLabWebhookSecret != "" {
-		return []string{r.env.GitLabWebhookSecret}, "env"
+		return []WebhookSecret{{Secret: r.env.GitLabWebhookSecret, WorkspaceID: uuid.Nil}}, "env"
 	}
 	return nil, ""
 }

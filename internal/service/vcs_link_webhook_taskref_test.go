@@ -257,7 +257,7 @@ func TestResolveTaskRef_UsedByPushPath(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTaskWithID(t, fixedTaskID(4), domain.StatusCategoryInProgress)
 
-	id, ref := h.svc.ResolveTaskRef(context.Background(),
+	id, ref := h.svc.ResolveTaskRef(context.Background(), uuid.Nil,
 		TaskRefSource{Name: "body", Text: "fix(gate): stop the train\n\nRefs #" + task.ID.String()[:8]},
 		TaskRefSource{Name: "branch", Text: "garfield/webhook-taskref-formats"},
 	)
@@ -265,7 +265,7 @@ func TestResolveTaskRef_UsedByPushPath(t *testing.T) {
 	assert.Equal(t, RefKindShortID, ref.Kind)
 
 	// And a commit that names nothing resolves to nothing.
-	id, _ = h.svc.ResolveTaskRef(context.Background(),
+	id, _ = h.svc.ResolveTaskRef(context.Background(), uuid.Nil,
 		TaskRefSource{Name: "body", Text: "chore: gofmt"},
 		TaskRefSource{Name: "branch", Text: "garfield/gofmt"},
 	)

@@ -533,6 +533,7 @@ func main() {
 		service.WithVCSStatusRepo(taskStatusRepo),
 		service.WithVCSTaskService(taskService),
 		service.WithVCSCommentService(commentService),
+		service.WithVCSProjectRepo(projectRepo), // scopes webhook task-ref resolution to the workspace whose secret validated the request (#839b9897)
 	)
 	integrationService := service.NewIntegrationService(integrationRepo)
 	analyticsService := service.NewAnalyticsService(db)

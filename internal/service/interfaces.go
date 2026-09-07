@@ -993,7 +993,14 @@ type VCSLinkService interface {
 	// Refs/Closes keyword, a #<short id>, or a branch segment — and verifies it
 	// exists. Returns uuid.Nil when nothing resolves. Exposed so the push
 	// (commit) path gets the same recognition as the pull_request path.
-	ResolveTaskRef(ctx context.Context, sources ...TaskRefSource) (uuid.UUID, TaskRef)
+	//
+	// workspaceID is the workspace whose secret validated the inbound
+	// request (uuid.Nil for the unscoped env fallback — see WebhookSecret's
+	// doc comment). When non-nil, a candidate naming a task outside that
+	// workspace is treated exactly like a candidate naming no task at all —
+	// #839b9897: a secret must only ever be able to touch its own
+	// workspace's tasks.
+	ResolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef)
 }
 
 // GitHubWebhookEvent is a minimal projection of the fields the orchestrator
@@ -1010,6 +1017,12 @@ type GitHubWebhookEvent struct {
 	MergeSHA   string // pull_request.merge_commit_sha (empty for non-merge close)
 	PRBranch   string // pull_request.head.ref — branches cut from a task often carry its id
 	Repository string // owner/name
+	// WorkspaceID is the workspace whose configured webhook_secret validated
+	// this delivery (uuid.Nil when it matched the instance-wide env
+	// fallback instead — see WebhookSecret's doc comment). Task-ref
+	// resolution is scoped to this workspace so a workspace B secret cannot
+	// touch a task in workspace A or C (#839b9897).
+	WorkspaceID uuid.UUID
 }
 
 // GitLabWebhookEvent is a minimal projection of the fields the orchestrator
@@ -1026,6 +1039,10 @@ type GitLabWebhookEvent struct {
 	MergeSHA    string // object_attributes.merge_commit_sha (empty for non-merge close)
 	MRBranch    string // object_attributes.source_branch — branches cut from a task often carry its id
 	ProjectPath string // project.path_with_namespace, e.g. "entire-vc/evc-mesh"
+	// WorkspaceID is GitHubWebhookEvent.WorkspaceID's GitLab counterpart —
+	// the workspace whose webhook_secret validated this delivery (uuid.Nil
+	// for the env fallback). See that field's doc comment (#839b9897).
+	WorkspaceID uuid.UUID
 }
 
 // PRHandleResult describes what happened when processing a pull_request event.
