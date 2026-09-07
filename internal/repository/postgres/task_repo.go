@@ -1725,3 +1725,17 @@ func (r *TaskRepo) ListOpenByRecurringScheduleID(ctx context.Context, scheduleID
 	}
 	return taskRowsToSlice(rows), nil
 }
+
+// TouchUpdatedAt bumps updated_at to now() without touching any other column.
+func (r *TaskRepo) TouchUpdatedAt(ctx context.Context, id uuid.UUID) error {
+	const q = `UPDATE tasks SET updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, q, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Task")
+	}
+	return nil
+}

@@ -572,6 +572,14 @@ func (m *MockTaskService) SupersedeRecurringInstances(_ context.Context, _, _ uu
 	return 0, 0, nil
 }
 
+func (m *MockTaskService) FindOpenRecurringInstance(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+	return nil, nil
+}
+
+func (m *MockTaskService) RepeatOpenInstance(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
 func (m *MockTaskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error {
 	if m.ArmHumanGateFunc != nil {
 		return m.ArmHumanGateFunc(ctx, in)

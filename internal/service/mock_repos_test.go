@@ -720,6 +720,20 @@ func (m *MockTaskRepository) ListOpenByRecurringScheduleID(_ context.Context, sc
 	return result, nil
 }
 
+func (m *MockTaskRepository) TouchUpdatedAt(_ context.Context, id uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.items[id]
+	if !ok {
+		return apierror.NotFound("Task")
+	}
+	t.UpdatedAt = time.Now()
+	return nil
+}
+
 func (m *MockTaskRepository) ArmHumanGate(_ context.Context, in domain.ArmHumanGateInput) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
@@ -1194,6 +1208,11 @@ type MockCommentRepository struct {
 	// comment itself rather than a call counter: a counter is order-dependent
 	// and silently wrong the moment an unrelated write is added ahead of it.
 	createFailFor func(*domain.Comment) bool
+	// listByTaskErr, when set, makes ListByTask fail without touching Create —
+	// same reasoning as createFailFor above, mirrored for the read side: a
+	// caller (e.g. RepeatOpenInstance) that treats a listing failure as
+	// best-effort and still writes afterwards needs Create to keep working.
+	listByTaskErr error
 }
 
 func NewMockCommentRepository() *MockCommentRepository {
@@ -1252,6 +1271,9 @@ func (m *MockCommentRepository) Delete(_ context.Context, id uuid.UUID) error {
 }
 
 func (m *MockCommentRepository) ListByTask(_ context.Context, taskID uuid.UUID, _ repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error) {
+	if m.listByTaskErr != nil {
+		return nil, m.listByTaskErr
+	}
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}

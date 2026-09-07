@@ -269,6 +269,125 @@ func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
 }
 
 // Create validates and persists a new task.
+// dupCandidateLabel marks a newly created task whose title scored ≥0.9
+// similar (titleSimilarity) against an already-open task in the same project.
+const dupCandidateLabel = "dup-candidate"
+
+// dupTitleSimilarityThreshold is deliberately high (not a fuzzy "sounds
+// related" bar): it exists to catch near-verbatim retitles — the recurring-
+// check duplicate class this ships alongside, and a human accidentally
+// re-filing the same ask — not to second-guess two genuinely different tasks
+// that happen to share vocabulary.
+const dupTitleSimilarityThreshold = 0.9
+
+// titleSimilarity returns the Dice coefficient of character trigrams between
+// a and b, in [0,1] — 1.0 only when both normalize to the same string (case,
+// whitespace-collapse insensitive). Computed in application code rather than
+// via a Postgres extension (pg_trgm) — this codebase already computes its
+// other fuzzy-match metric, memory embedding cosine similarity, in Go for the
+// same reason (see memory_repo.go's VectorSearch): no new extension to
+// install, and the score is easy to unit-test in isolation from the DB.
+func titleSimilarity(a, b string) float64 {
+	na, nb := normalizeForSimilarity(a), normalizeForSimilarity(b)
+	if na == nb {
+		return 1.0
+	}
+	ta, tb := trigramSet(na), trigramSet(nb)
+	if len(ta) == 0 || len(tb) == 0 {
+		return 0
+	}
+	common := 0
+	for k := range ta {
+		if tb[k] {
+			common++
+		}
+	}
+	return 2.0 * float64(common) / float64(len(ta)+len(tb))
+}
+
+// normalizeForSimilarity lowercases and collapses internal whitespace so
+// "Fix   the Bug" and "fix the bug" compare as identical before trigrams are
+// even computed.
+func normalizeForSimilarity(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+// trigramSet returns the set of overlapping 3-rune windows of s. A string
+// shorter than 3 runes becomes its own single "trigram" (whatever it is) so a
+// short title can still self-match rather than trivially scoring 0 against
+// everything, itself included.
+func trigramSet(s string) map[string]bool {
+	runes := []rune(s)
+	set := make(map[string]bool)
+	if len(runes) == 0 {
+		return set
+	}
+	if len(runes) < 3 {
+		set[string(runes)] = true
+		return set
+	}
+	for i := 0; i+3 <= len(runes); i++ {
+		set[string(runes[i:i+3])] = true
+	}
+	return set
+}
+
+// findPossibleDuplicateTitle returns the id of the first open (non-done/
+// cancelled) task in projectID whose title is ≥dupTitleSimilarityThreshold
+// similar to title, or nil if none crosses the bar. Best-effort: nil on any
+// lookup failure rather than blocking task creation over a warning that
+// couldn't be computed — a missed duplicate flag costs a human noticing three
+// cards later; a create refused over it would cost the work itself.
+func (s *taskService) findPossibleDuplicateTitle(ctx context.Context, projectID uuid.UUID, title string, excludeTaskID uuid.UUID) *uuid.UUID {
+	open, err := s.openTasksInProject(ctx, projectID)
+	if err != nil {
+		log.Printf("[task] WARNING: findPossibleDuplicateTitle: openTasksInProject for project %s failed: %v", projectID, err)
+		return nil
+	}
+	for _, t := range open {
+		if t.ID == excludeTaskID {
+			continue
+		}
+		if titleSimilarity(title, t.Title) >= dupTitleSimilarityThreshold {
+			id := t.ID
+			return &id
+		}
+	}
+	return nil
+}
+
+// openTasksInProject returns every non-terminal (not done/cancelled) task in
+// projectID. Same category-map-over-List pattern as SupersedeRecurringInstances
+// above — there is no repository method for "list open tasks in a project"
+// directly, only per-status-id and per-single-category variants.
+func (s *taskService) openTasksInProject(ctx context.Context, projectID uuid.UUID) ([]domain.Task, error) {
+	statuses, err := s.statusRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("openTasksInProject ListByProject: %w", err)
+	}
+	terminal := make(map[uuid.UUID]bool, len(statuses))
+	for _, st := range statuses {
+		if st.Category == domain.StatusCategoryDone || st.Category == domain.StatusCategoryCancelled {
+			terminal[st.ID] = true
+		}
+	}
+	// PageSize caps how many open tasks a single project's dedup check looks
+	// at — a best-effort warning, not a correctness guarantee, so a project
+	// with more open tasks than this simply checks its most recent 500 rather
+	// than refusing to create anything.
+	page, err := s.taskRepo.List(ctx, projectID, repository.TaskFilter{}, pagination.Params{PageSize: 500})
+	if err != nil {
+		return nil, fmt.Errorf("openTasksInProject List: %w", err)
+	}
+	open := make([]domain.Task, 0, len(page.Items))
+	for _, t := range page.Items {
+		if !terminal[t.StatusID] {
+			open = append(open, t)
+		}
+	}
+	return open, nil
+}
+
 func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if strings.TrimSpace(task.Title) == "" {
 		return apierror.ValidationError(map[string]string{
@@ -337,6 +456,16 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	if task.ReviewerID != nil && task.ReviewerType != nil {
 		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.ReviewerID, *task.ReviewerType); err != nil {
 			return err
+		}
+	}
+
+	// Duplicate-title warning (server-side dedup hint): an open task in the same
+	// project with a near-identical title flags the new one at creation time
+	// instead of a human noticing three near-duplicate cards later.
+	if dup := s.findPossibleDuplicateTitle(ctx, task.ProjectID, task.Title, task.ID); dup != nil {
+		task.PossibleDuplicate = dup
+		if !hasLabel(task.Labels, dupCandidateLabel) {
+			task.Labels = append(task.Labels, dupCandidateLabel)
 		}
 	}
 
@@ -3190,6 +3319,71 @@ func (s *taskService) SupersedeRecurringInstances(ctx context.Context, scheduleI
 		}
 	}
 	return worked, missed, nil
+}
+
+// FindOpenRecurringInstance returns the oldest non-terminal instance of scheduleID,
+// or nil if every instance has already reached done/cancelled. Reuses the same
+// query SupersedeRecurringInstances closes from — ListOpenByRecurringScheduleID
+// orders oldest-first, so with exceptTaskID=uuid.Nil (no task to exclude — this
+// runs BEFORE any new instance would exist) the first row is the one instance
+// runOneSchedule should repeat onto rather than orphan behind a new sibling.
+func (s *taskService) FindOpenRecurringInstance(ctx context.Context, scheduleID uuid.UUID) (*domain.Task, error) {
+	open, err := s.taskRepo.ListOpenByRecurringScheduleID(ctx, scheduleID, uuid.Nil)
+	if err != nil {
+		return nil, fmt.Errorf("FindOpenRecurringInstance: %w", err)
+	}
+	if len(open) == 0 {
+		return nil, nil
+	}
+	return &open[0], nil
+}
+
+// repeatCommentPrefix marks a RepeatOpenInstance system comment. Counting prior
+// comments with this prefix (rather than a persisted counter column) is what
+// lets N survive across ticks with no schema change — the count only ever grows
+// while the instance stays open, and resets naturally once it closes and a
+// fresh instance starts its own history.
+const repeatCommentPrefix = "🔁 Повтор "
+
+// RepeatOpenInstance posts a "🔁 Повтор N" comment on taskID and bumps its
+// updated_at, in place of creating a new recurring-schedule instance. See the
+// interface doc comment for why this exists.
+func (s *taskService) RepeatOpenInstance(ctx context.Context, taskID uuid.UUID) error {
+	if s.commentRepo == nil {
+		return nil
+	}
+
+	n := 1
+	page, err := s.commentRepo.ListByTask(ctx, taskID, repository.CommentFilter{IncludeInternal: true}, pagination.Params{PageSize: 200})
+	if err != nil {
+		log.Printf("[recurring] WARNING: RepeatOpenInstance: ListByTask for task %s failed: %v — defaulting to Повтор 1", taskID, err)
+	} else {
+		for _, c := range page.Items {
+			if strings.HasPrefix(c.Body, repeatCommentPrefix) {
+				n++
+			}
+		}
+	}
+
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf("%s%d: расписание сработало снова, но этот инстанс ещё не закрыт — новая карточка не создана.",
+			repeatCommentPrefix, n),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		return fmt.Errorf("RepeatOpenInstance: create comment on task %s: %w", taskID, err)
+	}
+
+	if err := s.taskRepo.TouchUpdatedAt(ctx, taskID); err != nil {
+		return fmt.Errorf("RepeatOpenInstance: touch updated_at on task %s: %w", taskID, err)
+	}
+	return nil
 }
 
 // instanceHadRealWork reports whether a recurring-schedule instance received

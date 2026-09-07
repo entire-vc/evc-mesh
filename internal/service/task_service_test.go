@@ -4322,3 +4322,194 @@ func TestTaskService_SupersedeRecurringInstances_NothingOpen_NoOp(t *testing.T) 
 	assert.Equal(t, 0, worked)
 	assert.Equal(t, 0, missed)
 }
+
+// FindOpenRecurringInstance — the pre-createInstance check runOneSchedule uses
+// to decide whether this tick should repeat onto an already-open instance
+// instead of creating a sibling.
+func TestTaskService_FindOpenRecurringInstance_ReturnsTheOpenOne(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	scheduleID := uuid.New()
+	projectID, _, _, openStatusID := setupSupersedeProject(statusRepo)
+	taskID := makeOpenRecurringInstance(taskRepo, projectID, openStatusID, scheduleID)
+
+	got, err := svc.FindOpenRecurringInstance(context.Background(), scheduleID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, taskID, got.ID)
+}
+
+func TestTaskService_FindOpenRecurringInstance_NothingOpen_ReturnsNil(t *testing.T) {
+	svc, _, _ := setupTaskService()
+	got, err := svc.FindOpenRecurringInstance(context.Background(), uuid.New())
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+// ---------------------------------------------------------------------------
+// titleSimilarity — pure function, no fixtures needed.
+// ---------------------------------------------------------------------------
+
+func TestTitleSimilarity(t *testing.T) {
+	tests := []struct {
+		name    string
+		a, b    string
+		wantGTE float64 // score must be >= this
+		wantLT  float64 // score must be < this (0 means "no upper check")
+	}{
+		{"identical", "Fix the login bug", "Fix the login bug", 1.0, 0},
+		{"case+whitespace only differs", "Fix   the login bug", "fix the login bug", 1.0, 0},
+		{"near-identical retitle", "Fix the login page bug", "Fix the login page bug!", dupTitleSimilarityThreshold, 0},
+		{"unrelated titles", "Fix the login bug", "Deploy new billing webhook", 0, 0.3},
+		{"empty vs non-empty", "", "something", 0, 0.01},
+		{"both empty", "", "", 1.0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := titleSimilarity(tt.a, tt.b)
+			if got < tt.wantGTE {
+				t.Errorf("titleSimilarity(%q, %q) = %v, want >= %v", tt.a, tt.b, got, tt.wantGTE)
+			}
+			if tt.wantLT > 0 && got >= tt.wantLT {
+				t.Errorf("titleSimilarity(%q, %q) = %v, want < %v", tt.a, tt.b, got, tt.wantLT)
+			}
+			// Symmetry: order must not matter.
+			if rev := titleSimilarity(tt.b, tt.a); rev != got {
+				t.Errorf("titleSimilarity not symmetric: (a,b)=%v (b,a)=%v", got, rev)
+			}
+		})
+	}
+}
+
+func TestTrigramSet(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want map[string]bool
+	}{
+		{"empty string", "", map[string]bool{}},
+		{"shorter than 3 runes self-matches", "ab", map[string]bool{"ab": true}},
+		{"single rune", "a", map[string]bool{"a": true}},
+		{"exactly 3 runes", "abc", map[string]bool{"abc": true}},
+		{"sliding window", "abcd", map[string]bool{"abc": true, "bcd": true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, trigramSet(tt.in))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// findPossibleDuplicateTitle / openTasksInProject — exclude + best-effort
+// error paths, exercised directly since Create always calls them with a
+// freshly-generated task.ID that can't yet be in the repo (§the exclude
+// branch only fires for a caller that already has a persisted task).
+// ---------------------------------------------------------------------------
+
+func TestFindPossibleDuplicateTitle_ExcludesGivenTaskID(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID, _, _, openStatusID := setupSupersedeProject(statusRepo)
+	existingID := uuid.New()
+	taskRepo.items[existingID] = &domain.Task{
+		ID: existingID, ProjectID: projectID, StatusID: openStatusID,
+		Title: "Fix the login page bug",
+	}
+
+	got := svc.findPossibleDuplicateTitle(context.Background(), projectID, "Fix the login page bug!", existingID)
+	assert.Nil(t, got, "the excluded task's own title must never flag itself as a duplicate")
+}
+
+func TestFindPossibleDuplicateTitle_OpenTasksLookupErr_ReturnsNilNotError(t *testing.T) {
+	svc, _, statusRepo := setupTaskService()
+	statusRepo.errToReturn = errors.New("boom: status lookup failed")
+
+	got := svc.findPossibleDuplicateTitle(context.Background(), uuid.New(), "Fix the login page bug", uuid.New())
+	assert.Nil(t, got, "a lookup failure is best-effort — it must not block or panic, just skip the flag")
+}
+
+func TestOpenTasksInProject_ListByProjectErr_ReturnsError(t *testing.T) {
+	svc, _, statusRepo := setupTaskService()
+	statusRepo.errToReturn = errors.New("boom: status lookup failed")
+
+	_, err := svc.openTasksInProject(context.Background(), uuid.New())
+	require.Error(t, err)
+}
+
+func TestOpenTasksInProject_ListErr_ReturnsError(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID, _, _, _ := setupSupersedeProject(statusRepo)
+	taskRepo.errToReturn = errors.New("boom: task list failed")
+
+	_, err := svc.openTasksInProject(context.Background(), projectID)
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Create — duplicate-title warning (server-side dedup hint alongside the
+// recurring-instance fix).
+// ---------------------------------------------------------------------------
+
+func TestTaskService_Create_SimilarOpenTitle_FlagsPossibleDuplicateAndLabel(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID, _, _, openStatusID := setupSupersedeProject(statusRepo)
+	existingID := uuid.New()
+	taskRepo.items[existingID] = &domain.Task{
+		ID: existingID, ProjectID: projectID, StatusID: openStatusID,
+		Title: "Fix the login page bug",
+	}
+
+	newTask := &domain.Task{ProjectID: projectID, StatusID: openStatusID, Title: "Fix the login page bug!"}
+	require.NoError(t, svc.Create(context.Background(), newTask))
+
+	require.NotNil(t, newTask.PossibleDuplicate, "expected PossibleDuplicate to be set")
+	assert.Equal(t, existingID, *newTask.PossibleDuplicate)
+	assert.True(t, hasLabel(newTask.Labels, dupCandidateLabel), "expected labels %v to contain %q", newTask.Labels, dupCandidateLabel)
+
+	stored, err := taskRepo.GetByID(context.Background(), newTask.ID)
+	require.NoError(t, err)
+	assert.True(t, hasLabel(stored.Labels, dupCandidateLabel), "dup-candidate label must be persisted, not just set on the in-memory task")
+}
+
+func TestTaskService_Create_DissimilarOpenTitle_NoFlag(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID, _, _, openStatusID := setupSupersedeProject(statusRepo)
+	taskRepo.items[uuid.New()] = &domain.Task{
+		ID: uuid.New(), ProjectID: projectID, StatusID: openStatusID,
+		Title: "Deploy new billing webhook",
+	}
+
+	newTask := &domain.Task{ProjectID: projectID, StatusID: openStatusID, Title: "Fix the login page bug"}
+	require.NoError(t, svc.Create(context.Background(), newTask))
+
+	assert.Nil(t, newTask.PossibleDuplicate)
+	assert.False(t, hasLabel(newTask.Labels, dupCandidateLabel))
+}
+
+func TestTaskService_Create_SimilarTitleButClosed_NoFlag(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectID, doneStatusID, _, openStatusID := setupSupersedeProject(statusRepo)
+	taskRepo.items[uuid.New()] = &domain.Task{
+		ID: uuid.New(), ProjectID: projectID, StatusID: doneStatusID, // already closed
+		Title: "Fix the login page bug",
+	}
+
+	newTask := &domain.Task{ProjectID: projectID, StatusID: openStatusID, Title: "Fix the login page bug!"}
+	require.NoError(t, svc.Create(context.Background(), newTask))
+
+	assert.Nil(t, newTask.PossibleDuplicate, "a closed task's title must not trigger the duplicate flag")
+}
+
+func TestTaskService_Create_SimilarTitleInOtherProject_NoFlag(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	projectA, _, _, openStatusA := setupSupersedeProject(statusRepo)
+	projectB, _, _, openStatusB := setupSupersedeProject(statusRepo)
+	taskRepo.items[uuid.New()] = &domain.Task{
+		ID: uuid.New(), ProjectID: projectA, StatusID: openStatusA,
+		Title: "Fix the login page bug",
+	}
+
+	newTask := &domain.Task{ProjectID: projectB, StatusID: openStatusB, Title: "Fix the login page bug!"}
+	require.NoError(t, svc.Create(context.Background(), newTask))
+
+	assert.Nil(t, newTask.PossibleDuplicate, "a same-titled task in a DIFFERENT project must not trigger the flag")
+}

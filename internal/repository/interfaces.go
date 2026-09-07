@@ -172,6 +172,12 @@ type TaskRepository interface {
 	// tasks belonging to the given recurring schedule, excluding exceptTaskID.
 	// Used by SupersedeRecurringInstances to close previous open instances.
 	ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error)
+	// TouchUpdatedAt bumps updated_at to now() without touching any other column.
+	// Used when a recurring tick repeats onto a still-open previous instance instead
+	// of creating a sibling (RepeatOpenInstance) — the comment alone doesn't move
+	// the task's own updated_at, and a single-column update avoids the fetch/blind-
+	// overwrite race a full Update(task) round-trip would risk.
+	TouchUpdatedAt(ctx context.Context, id uuid.UUID) error
 	// SetHumanGate atomically sets the human_gate sticky flag without touching other fields.
 	// Pass true to arm the gate, false to clear it (human sign-off received). Arming also
 	// stamps human_gate_armed_at = now() and leaves human_gate_class untouched (whatever

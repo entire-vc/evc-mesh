@@ -301,6 +301,11 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	// that are populated via SQL JOINs but not available on the in-memory object.
 	if enriched, err := h.taskService.GetByID(c.Request().Context(), task.ID); err == nil && enriched != nil {
 		enriched.URL = computeTaskURL(c.Request(), enriched.ID)
+		// PossibleDuplicate is db:"-" (never persisted) — Create computed it on
+		// the in-memory task above, but this fresh GetByID knows nothing about
+		// it, so it must be carried over explicitly or the response silently
+		// loses the one thing this whole check exists to surface.
+		enriched.PossibleDuplicate = task.PossibleDuplicate
 		return c.JSON(http.StatusCreated, enriched)
 	}
 

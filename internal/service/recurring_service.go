@@ -661,6 +661,26 @@ func (s *recurringService) runOneSchedule(ctx context.Context, schedule *domain.
 		nextRun = nil
 	}
 
+	// If the previous instance is still open, don't spawn a sibling — repeat onto
+	// it instead. This is what keeps a persistently-unresolved daily/weekly check
+	// as ONE card instead of a fresh #id every tick, each asking the same still-open
+	// question separately (the shape of the recurring-duplicate class this fixes).
+	if openTask, findErr := s.taskSvc.FindOpenRecurringInstance(ctx, schedule.ID); findErr != nil {
+		log.Printf("[recurring] WARNING: FindOpenRecurringInstance for schedule %s failed: %v — proceeding to create a new instance", schedule.ID, findErr)
+	} else if openTask != nil {
+		if repeatErr := s.taskSvc.RepeatOpenInstance(ctx, openTask.ID); repeatErr != nil {
+			log.Printf("[recurring] ERROR: RepeatOpenInstance for schedule %s task %s failed: %v", schedule.ID, openTask.ID, repeatErr)
+			return false, fmt.Errorf("runOneSchedule RepeatOpenInstance for schedule %s: %w", schedule.ID, repeatErr)
+		}
+		// No new instance was created, so advance next_run_at only — instance_count,
+		// last_triggered_at stay put (IncrementInstance is exactly "a new instance
+		// landed", which did not happen here).
+		if err := s.recurringRepo.AdvanceNextRun(ctx, schedule.ID, nextRun); err != nil {
+			return false, fmt.Errorf("runOneSchedule AdvanceNextRun (repeat path) for schedule %s: %w", schedule.ID, err)
+		}
+		return false, nil
+	}
+
 	// Create the task instance.
 	newTask, err := s.createInstance(ctx, schedule, runAt)
 	if err != nil {
