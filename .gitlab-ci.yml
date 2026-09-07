@@ -23,12 +23,16 @@
 # quietly guarding nothing — see that job's own header), vendor-trailer-gate
 # (adapted, not a literal port — see that job's own header and
 # `.gitlab/scripts/vendor_trailer_gate.py` for why GitLab's squash mechanics
-# change what it can actually check), and the Go coverage ≥80% (affected-set)
-# gate. CodeQL's job — SAST — is now carried by `semgrep` (see that job's own
-# header for why it is a re-implementation rather than a port). Deliberately
-# still absent, and worth their own cards: Authed E2E, Memory recall gate. A
-# stub that looks like full CI is more dangerous than a gap you can see, so
-# the gap is named here rather than implied.
+# change what it can actually check), the Go coverage ≥80% (affected-set)
+# gate, and now authed-e2e (present in the YAML and gating merges for real —
+# the two GitLab CI/CD variables it needs, E2E_USER_EMAIL/E2E_USER_PASSWORD,
+# were set via `gl-admin set-ci-variable` on 2026-09-07, #d5619f11; do not
+# read an older comment saying otherwise as still current). CodeQL's job —
+# SAST — is now carried by `semgrep` (see that job's own header for why it is
+# a re-implementation rather than a port). Deliberately still absent, and
+# worth its own card: Memory recall gate. A stub that looks like full CI is
+# more dangerous than a gap you can see, so the gap is named here rather than
+# implied.
 #
 # ## The half that is not in this file
 #
@@ -795,6 +799,63 @@ test:web:
     - pnpm test
 
 # ── build ───────────────────────────────────────────────────────────────────
+# ── authed-e2e ──────────────────────────────────────────────────────────────
+# Ported from .github/workflows/ci.yml:playwright-e2e ("Authed E2E"). Despite
+# its name and the task description's assumption, this job stands up NO
+# infrastructure at all — no API/frontend/DB/NATS/MinIO. web/playwright.config.ts
+# points baseURL at the LIVE prod app (https://mesh.entire.host by default) and
+# web/e2e/auth-helper.ts logs in once through the real, deployed
+# /api/v1/auth/login as a dedicated CI-only account (member of exactly one
+# scratch workspace, e2e-ci-sandbox, and of no real workspace). There is no
+# Casdoor/OIDC step to reach — this app authenticates natively
+# (web/src/stores/auth.ts) — so the runner-reachability risk the task
+# description flagged does not apply.
+#
+# Image pinned to the SAME playwright-core version as web/pnpm-lock.yaml, for
+# the reason the GitHub job's own comment records: mismatched, Playwright
+# deletes the image's baked-in browsers and re-downloads from
+# cdn.playwright.dev on every run — which geo-blocked the GitHub runner once
+# and evicted a green PR from the merge queue (2026-08-19). PLAYWRIGHT_DOWNLOAD_HOST
+# black-holes any such download so drift fails in milliseconds instead of
+# quietly reaching the CDN.
+#
+# E2E_USER_EMAIL / E2E_USER_PASSWORD exist as masked+protected GitLab CI/CD
+# variables on this project (set 2026-09-07, task #d5619f11 — reading/writing
+# them needed Maintainer(40); every agent account is Developer(30), same gap
+# as `only_allow_merge_if_pipeline_succeeds`, §1q — cleared via the
+# `gl-admin`/`gitlab-rails` root channel on VM 113, not by hand-editing this
+# repo's settings). The job is wired live and green in prod (pipeline 2184,
+# job `authed-e2e`, 8/8 passed against https://mesh.entire.host) — no `hold`,
+# no open Pavel ask. global-setup.ts still fails loudly, not silently-skips,
+# if the variables ever go missing again (the #40ea4053 incident this job
+# exists to prevent was exactly a green check over a silently skipped suite).
+authed-e2e:
+  stage: test
+  image: mcr.microsoft.com/playwright:v1.62.1-jammy
+  timeout: 20m
+  needs: [lint]
+  variables:
+    APP_BASE_URL: "https://mesh.entire.host"
+    # Same download black-hole as the GitHub job — see header above.
+    PLAYWRIGHT_DOWNLOAD_HOST: "http://127.0.0.1:9"
+  before_script:
+    - corepack enable
+    - cd web && pnpm install --frozen-lockfile
+  script:
+    - |
+      if ! npx playwright install chromium; then
+        echo "Playwright tried to download a browser: the image and web/pnpm-lock.yaml have drifted."
+        echo "Fix: pin this job's image to mcr.microsoft.com/playwright:v<version>-jammy, where"
+        echo "<version> is playwright-core's version in web/pnpm-lock.yaml. Do not delete this"
+        echo "step to make it green — it is what keeps cdn.playwright.dev out of the merge path."
+        exit 1
+      fi
+    - npx playwright test
+  artifacts:
+    when: always
+    paths: [web/playwright-report/]
+    expire_in: 1 week
+
 build:api:
   stage: build
   image: golang:1.25-alpine
