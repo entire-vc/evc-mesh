@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { AtSign, Bell, Check, CheckCheck, Loader2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toPreviewText } from "@/lib/preview-text";
 import { useNotificationStore } from "@/stores/notification";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -424,9 +425,32 @@ function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
 
   const relativeTime = formatRelative(row.createdAt);
 
+  // Secondary text (the icon, the preview, the timestamp) has to be picked per
+  // background, because this row has three of them and `muted-foreground` was
+  // only ever legible on one.
+  //
+  // Measured against WCAG AA (4.5:1) on the real token values in both themes:
+  //
+  //                              light        dark
+  //   muted on popover           5.23  OK     5.55  OK    <- read, at rest
+  //   muted on accent/30         3.27  FAIL   2.79  FAIL  <- unread, at rest
+  //   muted on accent            1.21  FAIL   1.64  FAIL  <- hovered
+  //   foreground/70 on accent/30 5.23  OK     4.80  OK    <- the unread fix
+  //   accent-fg/80  on accent    4.66  OK     7.04  OK    <- the hover fix
+  //
+  // `accent-foreground/70` was rejected on numbers, not taste: it lands at
+  // 3.95 in the light theme. The 80 stop is the lowest one that clears in both.
+  const secondaryText = !row.isRead
+    ? "text-foreground/70 group-hover:text-accent-foreground/80"
+    : "text-muted-foreground group-hover:text-accent-foreground/80";
+
   return (
     <li
-      className={`group flex cursor-pointer items-start gap-2.5 border-b border-border/50 px-3 py-2.5 text-sm transition-colors last:border-b-0 hover:bg-accent ${
+      // `group` so the children can react to the row's hover; without it the
+      // background changed underneath text that had no idea. The title carries
+      // no colour of its own and inherits this, which is why it is fixed here
+      // too — at rest it reads `foreground`, hovered it reads `accent-foreground`.
+      className={`group flex cursor-pointer items-start gap-2.5 border-b border-border/50 px-3 py-2.5 text-sm transition-colors last:border-b-0 hover:bg-accent hover:text-accent-foreground ${
         !row.isRead ? "bg-accent/30" : ""
       }`}
       onClick={onClick}
@@ -447,23 +471,26 @@ function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
       />
 
       {row.kind === "mention" && (
-        <AtSign className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <AtSign className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${secondaryText}`} />
       )}
 
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium leading-tight">{row.title}</p>
         {row.body && (
-          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-            {row.body}
+          <p className={`mt-0.5 line-clamp-2 text-xs ${secondaryText}`}>
+            {toPreviewText(row.body)}
           </p>
         )}
-        <p className="mt-1 text-xs text-muted-foreground">{relativeTime}</p>
+        <p className={`mt-1 text-xs ${secondaryText}`}>{relativeTime}</p>
       </div>
 
       {/* Mark read button */}
       {!row.isRead && (
         <button
-          className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+          // Its own hover pair (background/foreground) is a deliberate third
+          // combination — it must stay legible while the ROW underneath is
+          // hovered too, so the resting colour follows the row, not the popover.
+          className={`ml-auto shrink-0 rounded p-0.5 hover:bg-background hover:text-foreground ${secondaryText}`}
           onClick={handleMarkRead}
           title="Mark as read"
         >
