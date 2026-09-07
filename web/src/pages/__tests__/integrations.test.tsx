@@ -187,12 +187,14 @@ describe("IntegrationsPage — mcp is reference-only (#4a3195a5)", () => {
 
     await waitFor(() => expect(screen.getByText("MCP Server")).toBeInTheDocument());
     // With no stored config for anyone, every provider that DOES show a
-    // toggle renders it as "Enable" (isActive=false). Of the 6 providers on
-    // this page (github, gitlab, slack, spark, mcp, telegram), telegram is
-    // excluded pre-existing (no bot token set) and mcp is excluded by this
-    // fix — leaving exactly 4. Before the fix this count was 5 (mcp had a
-    // switch that switched nothing); after it, mcp contributes none.
-    expect(screen.getAllByRole("button", { name: "Enable" })).toHaveLength(4);
+    // toggle renders it as "Enable" (isActive=false). Of the 5 providers on
+    // this page (github, gitlab, spark, mcp, telegram), telegram is excluded
+    // pre-existing (no bot token set) and mcp is excluded by #4a3195a5 —
+    // leaving exactly 3. This count has stepped down twice: 5 -> 4 when mcp
+    // stopped rendering a switch that switched nothing, 4 -> 3 when slack
+    // left the page (#84599ead — the backend stays, it is just not
+    // advertised). A change here must name which provider moved and why.
+    expect(screen.getAllByRole("button", { name: "Enable" })).toHaveLength(3);
   });
 
   it("always renders the .mcp.json connection snippet, with no row and no is_active required", async () => {

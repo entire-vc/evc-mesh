@@ -5,7 +5,6 @@ import {
   Circle,
   GitBranch,
   GitMerge,
-  MessageSquare,
   Send,
   Server,
   Sparkles,
@@ -15,7 +14,6 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useMemberStore } from "@/stores/member";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
@@ -38,7 +36,6 @@ interface ProviderMeta {
   name: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
-  comingSoon?: boolean;
 }
 
 const PROVIDERS: ProviderMeta[] = [
@@ -55,14 +52,6 @@ const PROVIDERS: ProviderMeta[] = [
     description:
       "Link merge requests to tasks on a self-hosted GitLab instance. Receive webhook events to auto-update task status.",
     icon: GitMerge,
-  },
-  {
-    id: "slack",
-    name: "Slack",
-    description:
-      "Send task updates and agent activity notifications to Slack channels.",
-    icon: MessageSquare,
-    comingSoon: true,
   },
   {
     id: "spark",
@@ -319,14 +308,6 @@ export function IntegrationsPage() {
                         <div>
                           <CardTitle className="flex items-center gap-2 text-base">
                             {provider.name}
-                            {provider.comingSoon && (
-                              <Badge
-                                variant="outline"
-                                className="text-[10px] px-1.5 py-0"
-                              >
-                                Coming soon
-                              </Badge>
-                            )}
                           </CardTitle>
                           <p className="text-xs text-muted-foreground">
                             {provider.description}
@@ -335,7 +316,7 @@ export function IntegrationsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0 ml-4">
-                        {cfg && !provider.comingSoon && provider.id !== "mcp" && (
+                        {cfg && provider.id !== "mcp" && (
                           <button
                             onClick={() => void handleDelete(provider.id)}
                             className="text-xs text-muted-foreground hover:text-destructive transition-colors"
@@ -356,7 +337,7 @@ export function IntegrationsPage() {
                           <Button
                             size="sm"
                             variant={isActive ? "default" : "outline"}
-                            disabled={isLoading || provider.comingSoon}
+                            disabled={isLoading}
                             onClick={() =>
                               void handleToggle(provider.id, !isActive)
                             }
@@ -548,15 +529,6 @@ export function IntegrationsPage() {
                           </p>
                         </div>
                       )}
-                    </CardContent>
-                  )}
-
-                  {provider.id === "slack" && provider.comingSoon && (
-                    <CardContent className="pt-0">
-                      <p className="text-xs text-muted-foreground">
-                        Slack integration is planned for a future release.
-                        Configure notification channels and event triggers.
-                      </p>
                     </CardContent>
                   )}
 
