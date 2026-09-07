@@ -834,11 +834,14 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 
 // enforceReservedTags refuses a write carrying a tag in reservedMemoryTags
 // unless mem's workspace is flagged as the correspondingly-privileged
-// workspace (today: is_bench for `lme-bench`). This is the ONE point both the
-// `remember` MCP tool and a direct `POST /api/v1/memories` call go through —
-// the MCP tool's own `remember` handler (evc-mesh-mcp's RESTClient.Remember)
-// is itself an HTTP client of this same endpoint, so there is no second
-// server-side path to separately gate. See task #0104878c.
+// workspace (today: is_bench for `lme-bench`). Called from every internal
+// path that writes to the memories table: Remember (which both the `remember`
+// MCP tool and a direct `POST /api/v1/memories` call go through — the MCP
+// tool's own handler is itself an HTTP client of this same endpoint, so
+// that's one server-side path, not two), ExtractFromEvent (an event-bus hint
+// can carry caller-set tags), and ImportMemories (a wholly caller-supplied
+// YAML blob). See task #0104878c (original guard, Remember only) and
+// #d378586f (the other two write paths + the case-sensitivity fix below).
 //
 // Fails CLOSED in every ambiguous case, deliberately mirroring
 // enforceReservedTags's own name: a lookup error, a missing workspace repo, or
@@ -848,14 +851,25 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 // #4045f449, was a value silently failing open, not a code path with no
 // guard at all).
 //
-// Rejects with a named 400 rather than stripping the tag: a stripped tag
+// Rejects with a named error rather than stripping the tag: a stripped tag
 // still upserts (now unreserved and untagged), which would break the bench
 // harness's age-based GC and leave the fixture as undeletable garbage instead
-// of a loud, retryable failure.
+// of a loud, retryable failure. Remember's caller sees this as a 400; the two
+// silent-drop callers (ExtractFromEvent, ImportMemories) log it and skip the
+// one item instead, matching how each already treats a sanitizer rejection —
+// there's no request to answer with a 400 from an event-bus or bulk-import
+// path.
 func (s *memoryService) enforceReservedTags(ctx context.Context, mem *domain.Memory) error {
 	var hit string
 	for _, tag := range mem.Tags {
-		if _, ok := reservedMemoryTags[tag]; ok {
+		// Case-insensitive on the lookup key only — mem.Tags itself is left
+		// exactly as the caller sent it (hit keeps the original casing for the
+		// error message). A caller writing `LME-Bench` gets caught exactly like
+		// `lme-bench`; every other tag convention in this file (project:,
+		// kind:, etc.) stays exact-match, untouched by this one entry's
+		// comparison. Task #d378586f — found by the #0104878c acceptance pass,
+		// not by the original write.
+		if _, ok := reservedMemoryTags[strings.ToLower(tag)]; ok {
 			hit = tag
 			break
 		}
@@ -1835,6 +1849,16 @@ func (s *memoryService) ExtractFromEvent(ctx context.Context, event *domain.Even
 		return nil
 	}
 
+	// hint.Tags is caller-supplied (an explicit persist request), so this is a
+	// fourth write path into the same table and needs the same reserved-tag
+	// screen as Remember/ImportMemories — see enforceReservedTags's own doc.
+	// Dropped rather than returned as an error, matching the sanitizer check
+	// just above: there is no caller here to show a validation error to.
+	if err := s.enforceReservedTags(ctx, mem); err != nil {
+		log.Printf("memory extract from event: dropping auto-extracted memory key=%q: %v", mem.Key, err)
+		return nil
+	}
+
 	if err := s.memRepo.Upsert(ctx, mem, domain.MemoryWriteIntent{
 		Reason: "extracted from event payload",
 	}); err != nil {
@@ -2036,6 +2060,25 @@ func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUI
 		// and the rule so the caller can find it.
 		if v := scanMemoryContent(item.Content); v != nil && !memorySanitizerDisabled() {
 			log.Printf("memory import: skipping key=%s: %s", item.Key, v.Error())
+			continue
+		}
+
+		// Reserved-tag screen, same as Remember/ExtractFromEvent. Does not risk
+		// breaking a bench-workspace restore: enforceReservedTags is scoped to
+		// the memory's OWN WorkspaceID (set two lines above from this call's
+		// workspaceID parameter), so an import carrying `lme-bench`-tagged items
+		// INTO the actual bench workspace (is_bench=true) passes through
+		// unchanged — only landing such a tag in a NON-bench workspace is
+		// rejected, which is the leak this guard exists to close. (The one
+		// concrete restore artifact on file, bob/docs/audit-2026-09/lme-bench-
+		// purged.jsonl, is a raw per-row DB dump — id/workspace_id/.../version —
+		// not this function's `memories:` YAML shape, so it was never actually
+		// going to go through ImportMemories; this comment is about what THIS
+		// function does to any YAML blob that does carry the tag, not a claim
+		// about how that specific file gets restored.)
+		// Skipped and counted out, matching the sanitizer check above.
+		if err := s.enforceReservedTags(ctx, mem); err != nil {
+			log.Printf("memory import: skipping key=%s: %v", item.Key, err)
 			continue
 		}
 
