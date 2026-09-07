@@ -3176,6 +3176,34 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 			"(author %s/%s)", in.TaskID, in.AuthorType, in.Author)
 	}
 
+	// Disposable-task guard (task #318de303). A HARD gate on a throwaway/probe card
+	// waits forever for a human who is never coming back to it — soft is fine (it
+	// self-releases on the default-on-timeout sweep instead of sitting in the queue).
+	//
+	// Same asymmetry as the recommended_default check above, for the same reason: an
+	// API-sourced arm is a program we can fix, so it is refused loudly (422) and the
+	// caller can retry with class=soft. A marker-sourced arm is a live human ask
+	// arriving through a channel we do not control — refusing it would drop the ask
+	// silently for its author (the exact failure class #58a6f4ff/#f421ad57 exist to
+	// prevent), so it is downgraded to soft instead of refused.
+	if in.Class == domain.HumanGateClassHard {
+		if task, err := s.taskRepo.GetByID(ctx, in.TaskID); err == nil && task != nil {
+			if marker, disposable := isDisposableGateTarget(task); disposable {
+				if in.Source == domain.ArmHumanGateSourceAPI {
+					return &domain.ArmHumanGateValidationError{
+						Field: "class",
+						Message: "task is marked disposable (" + marker + ") — a hard human_gate " +
+							"on it would wait forever for a human who is never revisiting this card; " +
+							"use class=soft instead, or don't gate a throwaway task at all",
+					}
+				}
+				log.Printf("[human-gate] task %s marked disposable (%s) — Blocking marker downgraded "+
+					"hard→soft instead of refused, so the ask still delivers", in.TaskID, marker)
+				in.Class = domain.HumanGateClassSoft
+			}
+		}
+	}
+
 	// Predicate gate (task #5d3dc714). Evaluated BEFORE the write, and its refusal is
 	// returned instead of arming — the audit found 40-45% of asks to Pavel were
 	// decidable from a rule already written down.
