@@ -12,7 +12,7 @@
 #
 # ## Honest scope
 #
-# This is NOT a port of all 22 GitHub check-runs. It carries the four that
+# This is NOT a port of all 22 GitHub check-runs. It carries the six that
 # catch the most per minute spent — lint, race-enabled tests against real
 # Postgres/Redis/NATS, the Go build, the frontend typecheck+build — plus the
 # hold gate, self-host-env (config-only, no live daemon needed),
@@ -20,15 +20,15 @@
 # NOT need NATS/MinIO despite carrying the same `integration` build tag as
 # tenancy-rbac-gate), tenancy-rbac-gate itself (Postgres + NATS-with-
 # JetStream + MinIO, a live API server, and a two-part guard against the gate
-# quietly guarding nothing — see that job's own header), and vendor-trailer-gate
+# quietly guarding nothing — see that job's own header), vendor-trailer-gate
 # (adapted, not a literal port — see that job's own header and
 # `.gitlab/scripts/vendor_trailer_gate.py` for why GitLab's squash mechanics
-# change what it can actually check). CodeQL's job — SAST — is now
-# carried by `semgrep` (see that job's own header for why it is a
-# re-implementation rather than a port). Deliberately still absent, and worth
-# their own cards: Authed E2E, Go coverage ≥80% (affected-set), Memory recall
-# gate. A stub that looks like full CI is more dangerous than a gap
-# you can see, so the gap is named here rather than implied.
+# change what it can actually check), and the Go coverage ≥80% (affected-set)
+# gate. CodeQL's job — SAST — is now carried by `semgrep` (see that job's own
+# header for why it is a re-implementation rather than a port). Deliberately
+# still absent, and worth their own cards: Authed E2E, Memory recall gate. A
+# stub that looks like full CI is more dangerous than a gap you can see, so
+# the gap is named here rather than implied.
 #
 # ## The half that is not in this file
 #
@@ -637,6 +637,136 @@ tenancy-rbac-gate:
         echo "go test exited 0, so nothing FAILED — tests were skipped or removed instead. A gate that guards fewer assertions than it claims is not a gate."
         exit 1
       fi
+
+# ── coverage gate ───────────────────────────────────────────────────────────
+# Ported from `.github/workflows/ci.yml:coverage-gate` ("Go coverage ≥80%
+# (affected-set)"). Gates on the coverage of the lines THIS diff touches, not
+# the aggregate of the affected set (see the comment inside diff_coverage.py
+# for why — pre-existing debt in packages the author never opened must not
+# hold an unrelated PR hostage). The affected-set / diff-coverage / self-check
+# scripts are shared byte-for-byte with GitHub — only the base-SHA source and
+# the service hostnames differ here.
+#
+# `needs: [lint]` intentionally skips waiting on the `gate` stage explicitly:
+# `lint` itself only starts once `hold-gate` (stage: gate) has completed, so
+# the ordering is preserved through stage sequencing, not duplicated here.
+#
+# Restricted to merge_request pipelines: $CI_MERGE_REQUEST_DIFF_BASE_SHA,
+# which this gate diffs against, only exists in that context — same reason
+# `hold-gate` above carries the same rule.
+coverage-gate:
+  stage: test
+  image: golang:1.25-alpine
+  timeout: 30m
+  needs: [lint]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+    GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+    # Full history: the affected-set script and diff_coverage.py both diff
+    # against $CI_MERGE_REQUEST_DIFF_BASE_SHA, which a shallow clone may not
+    # contain (GitLab's default GIT_DEPTH is a truncated clone).
+    GIT_DEPTH: "0"
+  services:
+    - name: postgres:16
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+    - name: nats:2-alpine
+      alias: nats
+  cache:
+    key: go-mod-$CI_COMMIT_REF_SLUG
+    paths: [.gocache/, .gomodcache/]
+    policy: pull
+  before_script:
+    - apk add --no-cache git build-base bash python3 postgresql-client
+    - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
+    - pg_isready -h postgres -U mesh
+    - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
+    - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
+  script:
+    - |
+      set -eu
+      BASE="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+      # An empty BASE would make `git diff` compare against the working tree
+      # and silently report nothing changed — fail loudly instead.
+      if [ -z "$BASE" ]; then
+        echo "REFUSING: CI_MERGE_REQUEST_DIFF_BASE_SHA is empty — cannot diff"
+        exit 1
+      fi
+      echo "Diff base: $BASE"
+      AFFECTED=$(bash docs/ci-templates/scripts/affected_set_go.sh "$BASE" 2>/dev/null || true)
+      echo "Affected packages: $AFFECTED"
+
+      if [ -z "$AFFECTED" ]; then
+        echo "No Go files in this diff — coverage gate skipped."
+        exit 0
+      fi
+
+      FAILED=0
+      # `<<<` is a bashism; the docker executor runs this script with `sh`
+      # (bash isn't on PATH yet when the runner picks a shell — before_script,
+      # which installs it, hasn't run). Feed the loop from a file instead of a
+      # here-string/pipe: a file redirect keeps the loop in the current shell
+      # under POSIX sh too, so $FAILED set inside it is still visible after.
+      printf '%s\n' "$AFFECTED" > /tmp/affected_packages.txt
+      while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        # Skip main packages. A composition root is wiring that unit tests
+        # never execute — it is covered by the Test job instead. Measuring it
+        # here makes the gate unpassable for any change to cmd/*.
+        if [ "$(go list -f '{{.Name}}' "$pkg" 2>/dev/null)" = "main" ]; then
+          echo "skip (main package, not unit-testable): $pkg"
+          continue
+        fi
+        go test -race -covermode=atomic \
+          -coverprofile="/tmp/cover_$(echo "$pkg" | tr '/' '_').out" \
+          "$pkg" 2>&1 || { FAILED=1; echo "FAIL: $pkg"; }
+      done < /tmp/affected_packages.txt
+
+      if ls /tmp/cover_*.out 1>/dev/null 2>&1; then
+        # Keep exactly one "mode:" line — a plain `cat` of N profiles emits N
+        # of them, which makes `go tool cover` bail out and the total
+        # unparseable (see the incident this exact bug caused: PR #381/#382).
+        echo "mode: atomic" > /tmp/merged_cover.out
+        grep -h -v '^mode:' /tmp/cover_*.out >> /tmp/merged_cover.out
+
+        go tool cover -func=/tmp/merged_cover.out | tee /tmp/cover_summary.txt
+        cp /tmp/cover_summary.txt "$CI_PROJECT_DIR/coverage-affected-summary.txt" || true
+        TOTAL=$(grep '^total:' /tmp/cover_summary.txt | awk '{print $NF}' | tr -d '%')
+        echo "Affected-set total coverage (context, not gated): ${TOTAL}%"
+
+        if [ "$FAILED" -ne 0 ]; then
+          echo "One or more affected packages failed to test"
+          exit 1
+        fi
+      else
+        echo "No coverage profiles produced (affected set was main-only or test-free) — nothing to gate."
+        exit 0
+      fi
+
+      # The threshold is applied to the lines THIS change touches, not the
+      # affected-set aggregate — see diff_coverage.py's module docstring.
+      set +e
+      python3 scripts/ci/diff_coverage.py \
+        --profile /tmp/merged_cover.out --base "$BASE" --threshold 80
+      rc=$?
+      set -e
+      # 2 = could not measure. That is an infrastructure fault, not a verdict
+      # on the author's change, and must not read as "you made it worse" —
+      # so it does NOT skip the self-check below.
+      if [ "$rc" -eq 2 ]; then
+        echo "WARNING: Diff coverage INCONCLUSIVE — gate not applied"
+      elif [ "$rc" -ne 0 ]; then
+        exit "$rc"
+      fi
+
+      python3 scripts/ci/test_diff_coverage.py
+  artifacts:
+    when: always
+    paths: [coverage-affected-summary.txt]
+    expire_in: 1 week
 
 # ── build ───────────────────────────────────────────────────────────────────
 build:api:
