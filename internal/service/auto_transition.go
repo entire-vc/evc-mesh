@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,28 +37,33 @@ type AutoTransitionService interface {
 
 // autoTransitionService implements AutoTransitionService.
 type autoTransitionService struct {
-	taskRepo   repository.TaskRepository
-	statusRepo repository.TaskStatusRepository
-	depRepo    repository.TaskDependencyRepository
-	taskSvc    TaskService
-	ruleRepo   repository.AutoTransitionRuleRepository
+	taskRepo    repository.TaskRepository
+	statusRepo  repository.TaskStatusRepository
+	depRepo     repository.TaskDependencyRepository
+	taskSvc     TaskService
+	ruleRepo    repository.AutoTransitionRuleRepository
+	commentRepo repository.CommentRepository
 }
 
 // NewAutoTransitionService creates a new AutoTransitionService.
-// ruleRepo may be nil for backwards compatibility (falls back to hardcoded category lookup).
+// ruleRepo and commentRepo may both be nil for backwards compatibility (ruleRepo falls
+// back to hardcoded category lookup; commentRepo just means the umbrella-close system
+// comment in postUmbrellaCloseComment is skipped — never a hard failure, see there).
 func NewAutoTransitionService(
 	taskRepo repository.TaskRepository,
 	statusRepo repository.TaskStatusRepository,
 	depRepo repository.TaskDependencyRepository,
 	taskSvc TaskService,
 	ruleRepo repository.AutoTransitionRuleRepository,
+	commentRepo repository.CommentRepository,
 ) AutoTransitionService {
 	return &autoTransitionService{
-		taskRepo:   taskRepo,
-		statusRepo: statusRepo,
-		depRepo:    depRepo,
-		taskSvc:    taskSvc,
-		ruleRepo:   ruleRepo,
+		taskRepo:    taskRepo,
+		statusRepo:  statusRepo,
+		depRepo:     depRepo,
+		taskSvc:     taskSvc,
+		ruleRepo:    ruleRepo,
+		commentRepo: commentRepo,
 	}
 }
 
@@ -112,8 +119,28 @@ func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, pare
 		return nil
 	}
 
-	// Only transition parents that are currently "in_progress".
-	if parentStatus.Category != domain.StatusCategoryInProgress {
+	// A parent already sitting in "review" only auto-closes here when it carries an
+	// explicit kind:epic/kind:umbrella label (see hasUmbrellaLabel) — otherwise this
+	// is unreachable ground exactly as before 2026-09-07 (#d1eff1c6). Fail-closed on
+	// purpose and deliberately NOT an inferred signal (e.g. "no AC in description"):
+	// an unlabeled parent sitting in review may carry its own evidence obligation, and
+	// a false-positive close there would silently hide unfinished work behind a status
+	// that looks routine — invisible and expensive. A false negative (a real umbrella
+	// stays stuck in review because nobody labeled it) just leaves today's problem
+	// exactly as visible as it is now — cheap, and fixed by adding the label.
+	//
+	// Why "review" needs handling at all, separately from "in_progress" below: a
+	// captain/epic parent commonly reaches review once (via this same rule, first
+	// batch of subtasks done), then gains MORE subtasks later as the sprint continues.
+	// Those later subtasks completing re-enters this function, but the old code only
+	// ever looked at "in_progress" — a parent already in review was silently exempt
+	// forever, which is exactly how #52f407e0 and friends sat in review for 27-85 days.
+	isLabeledUmbrella := hasUmbrellaLabel(parent.Labels)
+	fromReview := parentStatus.Category == domain.StatusCategoryReview
+	switch {
+	case fromReview && !isLabeledUmbrella:
+		return nil
+	case !fromReview && parentStatus.Category != domain.StatusCategoryInProgress:
 		return nil
 	}
 
@@ -153,30 +180,105 @@ func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, pare
 		return nil
 	}
 
-	// 6. Check if a configured rule overrides the target status.
-	targetStatusID, err := s.resolveTargetFromRule(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone)
-	if err != nil {
-		return err
-	}
-
-	// Fallback: prefer "review", fall back to "done".
-	// But if a disabled rule exists, respect the explicit disable — don't auto-transition at all.
-	if targetStatusID == uuid.Nil {
-		if s.ruleExistsForTrigger(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone) {
-			return nil // rule exists but is disabled; honour the user's explicit opt-out
-		}
-		targetStatusID, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
+	var targetStatusID uuid.UUID
+	if fromReview {
+		// Labeled umbrella already in review with every (including newly added)
+		// subtask now terminal: close it directly. The configured-rule lookup below
+		// answers a different question — "where does a freshly in_progress parent
+		// land" — and doesn't apply once a parent has already made that trip once.
+		targetStatusID, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryDone)
 		if err != nil {
 			return err
 		}
-	}
-	if targetStatusID == uuid.Nil {
-		return nil // no suitable target status found
+		if targetStatusID == uuid.Nil {
+			return nil // no "done" status in this project — nothing to move to
+		}
+	} else {
+		// 6. Check if a configured rule overrides the target status.
+		targetStatusID, err = s.resolveTargetFromRule(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone)
+		if err != nil {
+			return err
+		}
+
+		// Fallback: prefer "review", fall back to "done".
+		// But if a disabled rule exists, respect the explicit disable — don't auto-transition at all.
+		if targetStatusID == uuid.Nil {
+			if s.ruleExistsForTrigger(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone) {
+				return nil // rule exists but is disabled; honour the user's explicit opt-out
+			}
+			targetStatusID, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
+			if err != nil {
+				return err
+			}
+		}
+		if targetStatusID == uuid.Nil {
+			return nil // no suitable target status found
+		}
 	}
 
 	log.Printf("[auto-transition] Moving parent task %s to review/done because all subtasks are complete", parentTaskID)
 	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
-	return s.taskSvc.MoveTask(sysCtx, parentTaskID, MoveTaskInput{StatusID: &targetStatusID})
+	if err := s.taskSvc.MoveTask(sysCtx, parentTaskID, MoveTaskInput{StatusID: &targetStatusID}); err != nil {
+		return err
+	}
+
+	if fromReview {
+		s.postUmbrellaCloseComment(ctx, parent, subtasks)
+	}
+	return nil
+}
+
+// umbrellaLabels are the ONLY labels that authorize a parent already sitting in
+// "review" to auto-close to "done" once every subtask is terminal. Deliberately
+// narrow and exact-match — not the free-form "epic"/"sprint"/"captain" labels
+// already in casual use on real umbrellas. Measured live against the 10 stale
+// umbrellas #d1eff1c6 was written for (07.09.2026): 0 of 10 carried either of
+// these two tags (3 had a bare "epic" label, 2 had "sprint"+"captain", 5 had
+// neither) — so adopting the label going forward, not just shipping this switch,
+// is what makes the rule fire on the next case. See CheckSubtaskCompletion.
+var umbrellaLabels = map[string]bool{
+	"kind:epic":     true,
+	"kind:umbrella": true,
+}
+
+// hasUmbrellaLabel reports whether labels contains kind:epic or kind:umbrella.
+func hasUmbrellaLabel(labels []string) bool {
+	for _, l := range labels {
+		if umbrellaLabels[strings.ToLower(strings.TrimSpace(l))] {
+			return true
+		}
+	}
+	return false
+}
+
+// postUmbrellaCloseComment records why an umbrella auto-closed and what it closed
+// over — the parent had no chance to say so itself, since nothing moved it here by
+// hand. Best-effort: a failure here must never unwind the move that already
+// happened, only log loudly (same convention as postMarkerDefaultAppliedComment in
+// task_service.go). No-ops if commentRepo wasn't wired in (nil-safe, matches
+// ruleRepo's backward-compat contract on this same constructor).
+func (s *autoTransitionService) postUmbrellaCloseComment(ctx context.Context, parent *domain.Task, subtasks []domain.Task) {
+	if s.commentRepo == nil {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "🤖 Авто-закрытие: все %d потомков в терминальном статусе (done/cancelled), карточка помечена kind:epic/kind:umbrella — перевожу review → done без ожидания повторного приёма.\n\nПотомки:\n", len(subtasks))
+	for _, sub := range subtasks {
+		fmt.Fprintf(&b, "- #%s %s\n", sub.ID.String()[:8], sub.Title)
+	}
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     parent.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body:       b.String(),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[auto-transition] WARNING: create umbrella-close comment on task %s failed: %v", parent.ID, err)
+	}
 }
 
 // CheckDependencyResolution checks if tasks that depend on resolvedTaskID can now be

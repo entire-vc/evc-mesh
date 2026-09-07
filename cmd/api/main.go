@@ -447,7 +447,7 @@ func main() {
 	// Wire auto-transition service. It calls taskService.MoveTask, so taskService must already
 	// exist. We inject it back via the configurable interface to trigger transitions on status
 	// changes without introducing an import cycle.
-	autoTransitionSvc := service.NewAutoTransitionService(taskRepo, taskStatusRepo, taskDependencyRepo, taskService, autoTransRuleRepo)
+	autoTransitionSvc := service.NewAutoTransitionService(taskRepo, taskStatusRepo, taskDependencyRepo, taskService, autoTransRuleRepo, commentRepo)
 	if configurable, ok := taskService.(service.TaskServiceAutoTransitionConfigurable); ok {
 		configurable.SetAutoTransitionService(autoTransitionSvc)
 	}
