@@ -237,7 +237,17 @@ export function RegisterAgentDialog({
                 />
               </div>
 
-              <div className="flex gap-3">
+              {/* items-end (not the flex default of stretch/flex-start): a
+                  wrapped label pushes ITS OWN input down by exactly the
+                  extra label height, and this row's siblings all end with
+                  an Input of the same height — so aligning by the row's
+                  BOTTOM edge cancels that offset and keeps every input on
+                  one baseline regardless of how many lines its label
+                  wraps to. Aligning by the top (the old default) does not
+                  self-correct: found live when "Max concurrent tasks"
+                  wrapped to two lines and its input landed ~12px below
+                  "Working hours"'s (task #1ffb67b5, second pass). */}
+              <div className="flex items-end gap-3">
                 <div className="flex-1 space-y-2">
                   <label
                     htmlFor="agent-working-hours"
@@ -251,25 +261,29 @@ export function RegisterAgentDialog({
                     onChange={(e) => setWorkingHours(e.target.value)}
                   />
                 </div>
-                {/* No shipped copy for this field yet (§1r.A) — icon +
-                    aria-label/title only, no rendered text. */}
-                <div className="w-28 space-y-2">
-                  <div className="flex h-5 items-center text-muted-foreground">
-                    <Layers className="h-3.5 w-3.5" />
-                  </div>
+                <div className="w-32 space-y-2">
+                  <label
+                    htmlFor="agent-max-concurrent"
+                    className="flex items-center gap-1.5 text-sm font-medium leading-none"
+                  >
+                    <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    Max concurrent tasks
+                  </label>
                   <Input
                     id="agent-max-concurrent"
                     type="number"
                     min={0}
-                    aria-label="Max concurrent tasks"
-                    title="Max concurrent tasks"
                     value={maxConcurrentTasks}
                     onChange={(e) => setMaxConcurrentTasks(e.target.value)}
                   />
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              {/* Same items-end reasoning as the row above — "Accepts from"
+                  and "Escalation contact" don't visibly wrap at 1440/393
+                  today, but the row shouldn't rely on that; a longer
+                  future label must not silently reintroduce the bug. */}
+              <div className="flex items-end gap-3">
                 <div className="flex-1 space-y-2">
                   <label
                     htmlFor="agent-accepts-from"
@@ -285,13 +299,15 @@ export function RegisterAgentDialog({
                   />
                 </div>
                 <div className="flex-1 space-y-2">
-                  <div className="flex h-5 items-center gap-1.5 text-muted-foreground">
-                    <ArrowUpCircle className="h-3.5 w-3.5" />
-                  </div>
+                  <label
+                    htmlFor="agent-escalation-to"
+                    className="flex items-center gap-1.5 text-sm font-medium leading-none"
+                  >
+                    <ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    Escalation contact
+                  </label>
                   <Input
                     id="agent-escalation-to"
-                    aria-label="Escalation contact"
-                    title="Escalation contact"
                     value={escalationTo}
                     onChange={(e) => setEscalationTo(e.target.value)}
                   />
