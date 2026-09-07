@@ -1903,7 +1903,7 @@ func main() {
 	// no promotion path. The freeze/human_gate/shipped/open-blocks guards that decide
 	// which candidates actually move live in the service, not the query.
 	monitorPromotionSvc := service.NewMonitorPromotionService(
-		taskRepo, taskStatusRepo, commentRepo, taskDependencyRepo, taskService,
+		taskRepo, taskStatusRepo, commentRepo, taskDependencyRepo, activityLogRepo, taskService,
 	)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)

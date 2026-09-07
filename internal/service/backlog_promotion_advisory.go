@@ -2,16 +2,13 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
-	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // backlogPassiveWaitLabels mirrors PASSIVE_WAIT_LABELS in bob/scripts/mesh-intake-sweep.py
@@ -246,115 +243,15 @@ func (s *backlogPromotionAdvisoryService) allDepsCleared(ctx context.Context, de
 	return true, nil
 }
 
-// activityStatusChange is the shape of the "status" key inside a task.moved activity
-// log entry's Changes JSON — written by task_service.go's MoveTask as
-// moveChanges["status"] = map[string]interface{}{"old": oldName, "new": newName}.
-type activityStatusChange struct {
-	Status *struct {
-		Old string `json:"old"`
-		New string `json:"new"`
-	} `json:"status"`
-}
-
-// backlogActivityPageSize bounds how far back wasDeliberatelyParked looks for the most
-// recent task.moved entry. mesh-intake-sweep.py fetches the task's full activity log
-// (its GET .../activity call is unpaginated server-side); this rule uses a generous
-// but bounded window instead — a card demoted long ago with many intervening
-// activity-log entries (assignment changes, further moves) since could, in principle,
-// fall outside it and read as "never moved" (not parked) where the sweep would still
-// see the demotion. Accepted as a known gap: the #f928e5af parallel run is what would
-// surface such a case as a named divergence to investigate, not something to guess a
-// bigger number against up front.
-const backlogActivityPageSize = 50
-
 // wasDeliberatelyParked mirrors mesh-intake-sweep.py's was_deliberately_parked(),
-// called ONLY when the task has no dependencies (see the caller). Fails CLOSED on an
-// unresolvable status name, exactly like the Python original: backlog is the safe
-// resting state, so an ambiguous read treats the task as parked rather than promotable.
+// called ONLY when the task has no dependencies (see the caller). Delegates to the
+// shared implementation in deliberate_park_guard.go — also used by
+// MonitorPromotionService (#1eb4fd7d) — so the activity-log read and its
+// interpretation live in exactly one place.
 func (s *backlogPromotionAdvisoryService) wasDeliberatelyParked(
 	ctx context.Context,
 	task *domain.Task,
 	nameCatCache map[uuid.UUID]map[string]domain.StatusCategory,
 ) (bool, error) {
-	page, err := s.activityRepo.ListByTask(ctx, task.ID, pagination.Params{Page: 1, PageSize: backlogActivityPageSize})
-	if err != nil {
-		return false, err
-	}
-	if page == nil {
-		return false, nil
-	}
-
-	// Scan for the latest move rather than trusting position: the real repo returns
-	// this page ORDER BY created_at DESC, but the test double returns map order (same
-	// reasoning as commentIsOwnClosingReport in comment_closed_task_followup.go) — a
-	// guard correct only under one repository's ordering is a guard whose test cannot
-	// see it break.
-	var lastMove *domain.ActivityLog
-	for i := range page.Items {
-		e := &page.Items[i]
-		if e.Action != "task.moved" {
-			continue
-		}
-		if lastMove == nil || e.CreatedAt.After(lastMove.CreatedAt) {
-			lastMove = e
-		}
-	}
-	if lastMove == nil {
-		// Never moved (within the window) → born in backlog → genuine intake, not a park.
-		return false, nil
-	}
-
-	var changes activityStatusChange
-	if unmarshalErr := json.Unmarshal(lastMove.Changes, &changes); unmarshalErr != nil || changes.Status == nil {
-		// A task.moved entry with no readable status change (e.g. a pure position
-		// reorder) proves nothing about a demotion — fall through as "never resolved
-		// a status move" rather than guessing.
-		return false, nil
-	}
-
-	nameCat, err := s.projectNameCategories(ctx, task.ProjectID, nameCatCache)
-	if err != nil {
-		return false, err
-	}
-
-	oldName := strings.ToLower(strings.TrimSpace(changes.Status.Old))
-	newName := strings.ToLower(strings.TrimSpace(changes.Status.New))
-
-	if newCat, ok := nameCat[newName]; ok && newCat != domain.StatusCategoryBacklog {
-		// The last move landed somewhere we can positively identify as NOT backlog,
-		// so the task's current backlog residency was not decided by it.
-		return false, nil
-	}
-
-	// Either the move landed in backlog, or the destination name is unresolvable (a
-	// status renamed after the move was logged) — judge by the SOURCE status instead.
-	// Unknown source name → cannot prove it was NOT a demotion → fail closed (parked).
-	oldCat, ok := nameCat[oldName]
-	if !ok {
-		return true, nil
-	}
-	return oldCat != domain.StatusCategoryBacklog, nil
-}
-
-// projectNameCategories returns (and caches) a project's lowercased-trimmed status
-// name → category map, used to interpret the OLD/NEW names an activity log entry
-// carries (task_service.go logs status NAMES, not IDs — see moveChanges).
-func (s *backlogPromotionAdvisoryService) projectNameCategories(
-	ctx context.Context,
-	projectID uuid.UUID,
-	cache map[uuid.UUID]map[string]domain.StatusCategory,
-) (map[string]domain.StatusCategory, error) {
-	if m, ok := cache[projectID]; ok {
-		return m, nil
-	}
-	statuses, err := s.statusRepo.ListByProject(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[string]domain.StatusCategory, len(statuses))
-	for _, st := range statuses {
-		m[strings.ToLower(strings.TrimSpace(st.Name))] = st.Category
-	}
-	cache[projectID] = m
-	return m, nil
+	return wasDeliberatelyParkedFromBacklog(ctx, s.activityRepo, s.statusRepo, task, nameCatCache)
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -37,31 +38,59 @@ import (
 // ---------------------------------------------------------------------------
 
 type monitorHarness struct {
-	taskRepo    *MockTaskRepository
-	statusRepo  *MockTaskStatusRepository
-	commentRepo *MockCommentRepository
-	depRepo     *MockTaskDependencyRepository
-	mover       *mockLeaseTaskMover
-	svc         MonitorPromotionService
+	taskRepo     *MockTaskRepository
+	statusRepo   *MockTaskStatusRepository
+	commentRepo  *MockCommentRepository
+	depRepo      *MockTaskDependencyRepository
+	activityRepo *MockActivityLogRepository
+	mover        *mockLeaseTaskMover
+	svc          MonitorPromotionService
 }
 
 func newMonitorHarness() *monitorHarness {
 	h := &monitorHarness{
-		taskRepo:    NewMockTaskRepository(),
-		statusRepo:  NewMockTaskStatusRepository(),
-		commentRepo: NewMockCommentRepository(),
-		depRepo:     NewMockTaskDependencyRepository(),
-		mover:       &mockLeaseTaskMover{},
+		taskRepo:     NewMockTaskRepository(),
+		statusRepo:   NewMockTaskStatusRepository(),
+		commentRepo:  NewMockCommentRepository(),
+		depRepo:      NewMockTaskDependencyRepository(),
+		activityRepo: NewMockActivityLogRepository(),
+		mover:        &mockLeaseTaskMover{},
 	}
 	h.taskRepo.WithStatusCategoryLookup(h.statusRepo)
 	h.svc = &monitorPromotionService{
-		taskRepo:    h.taskRepo,
-		statusRepo:  h.statusRepo,
-		commentRepo: h.commentRepo,
-		depRepo:     h.depRepo,
-		taskMover:   h.mover,
+		taskRepo:     h.taskRepo,
+		statusRepo:   h.statusRepo,
+		commentRepo:  h.commentRepo,
+		depRepo:      h.depRepo,
+		activityRepo: h.activityRepo,
+		taskMover:    h.mover,
 	}
 	return h
+}
+
+// addMove records a task.moved activity-log entry (old status name -> new status
+// name), for exercising the demotion-into-backlog guard. Mirrors
+// backlog_promotion_advisory_test.go's addMove — same event shape, same reader.
+func (h *monitorHarness) addMove(t *testing.T, task *domain.Task, oldName, newName string, when time.Time) {
+	t.Helper()
+	changes, err := json.Marshal(map[string]any{
+		"status": map[string]string{"old": oldName, "new": newName},
+	})
+	if err != nil {
+		t.Fatalf("marshal changes: %v", err)
+	}
+	entry := &domain.ActivityLog{
+		ID:         uuid.New(),
+		EntityType: "task",
+		EntityID:   task.ID,
+		Action:     "task.moved",
+		ActorType:  domain.ActorTypeSystem,
+		Changes:    changes,
+		CreatedAt:  when,
+	}
+	if err := h.activityRepo.Create(context.Background(), entry); err != nil {
+		t.Fatalf("addMove: %v", err)
+	}
 }
 
 func (h *monitorHarness) addStatus(t *testing.T, projectID uuid.UUID, category domain.StatusCategory) *domain.TaskStatus {
@@ -335,6 +364,129 @@ func TestBacklogPromotion_RelatesToDependency_DoesNotBlock(t *testing.T) {
 
 	if n := h.sweep(t); n != 1 {
 		t.Errorf("relates_to must not block promotion, got n=%d", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Guard 5: demotion-into-backlog (#559270cf amendment, #1eb4fd7d).
+// ---------------------------------------------------------------------------
+
+// A card with no blocks dependency, demoted into backlog from a working status, must
+// NOT be promoted just because "no open blockers" is vacuously true for a card that
+// never had any (#b832d451: the July incident this guard exists to prevent — the
+// original sweep undid such a park in 26 minutes).
+func TestBacklogPromotion_DemotedNoDeps_NotPromoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	task := h.addTask(t, projectID, backlog.ID, nil, hourAgo())
+	h.addMove(t, task, "review", "backlog", time.Now().Add(-2*time.Hour))
+
+	if n := h.sweep(t); n != 0 {
+		t.Errorf("a demoted, dependency-less card must not be promoted, got n=%d", n)
+	}
+	if len(h.mover.movesSeen) != 0 {
+		t.Errorf("MoveTask should not have been called")
+	}
+}
+
+// Positive control: a card that was NEVER moved (born in backlog) is genuine intake,
+// not a deliberate park, and must still promote on a passed due_date. Without this
+// arm, a guard that refused every backlog card would be indistinguishable from one
+// that actually reads move history.
+func TestBacklogPromotion_NeverMoved_Promoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	h.addTask(t, projectID, backlog.ID, nil, hourAgo())
+
+	if n := h.sweep(t); n != 1 {
+		t.Errorf("a card born in backlog must promote on due_date, got n=%d", n)
+	}
+}
+
+// The #bbf3db92 trap, ported: a demoted card that ALSO carries a `blocks` edge must be
+// judged by whether that edge is cleared, never by its move history — once the edge
+// clears, that IS the informative event this due-date sweep exists to catch when the
+// event-triggered auto-transition (tryUnblockTask) missed it because the blocker
+// closed, or the edge was added, before the card was parked. A demotion-check that
+// ran unconditionally here would silently re-park this class of card forever.
+func TestBacklogPromotion_DemotedWithClearedBlocker_Promoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+	done := h.addStatus(t, projectID, domain.StatusCategoryDone)
+
+	blocker := h.addTask(t, projectID, done.ID, nil, nil)
+	task := h.addTask(t, projectID, backlog.ID, nil, hourAgo())
+	h.addBlocks(t, task.ID, blocker.ID)
+	h.addMove(t, task, "review", "backlog", time.Now().Add(-2*time.Hour))
+
+	if n := h.sweep(t); n != 1 {
+		t.Errorf("a demoted card with a cleared blocker must still promote, got n=%d", n)
+	}
+}
+
+// A demoted card with an OPEN blocker is caught by guard 4 (open blockers) before
+// guard 5 is ever reached — the two guards must not fight over the same card in a way
+// that changes the outcome depending on evaluation order.
+func TestBacklogPromotion_DemotedWithOpenBlocker_NotPromoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	todo := h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	blocker := h.addTask(t, projectID, todo.ID, nil, nil) // still open
+	task := h.addTask(t, projectID, backlog.ID, nil, hourAgo())
+	h.addBlocks(t, task.ID, blocker.ID)
+	h.addMove(t, task, "review", "backlog", time.Now().Add(-2*time.Hour))
+
+	if n := h.sweep(t); n != 0 {
+		t.Errorf("an open blocker must hold the card regardless of move history, got n=%d", n)
+	}
+}
+
+// A move that landed IN backlog from another backlog-category status (e.g. one
+// project's two backlog-shaped statuses) is not a demotion — the source was already
+// backlog — and must not be read as one.
+func TestBacklogPromotion_MovedBacklogToBacklog_Promoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	task := h.addTask(t, projectID, backlog.ID, nil, hourAgo())
+	h.addMove(t, task, "backlog", "backlog", time.Now().Add(-2*time.Hour))
+
+	if n := h.sweep(t); n != 1 {
+		t.Errorf("a backlog-to-backlog move is not a demotion, got n=%d", n)
+	}
+}
+
+// Fail-closed: no activity log repository wired at all must read as "possibly
+// demoted", not "never demoted" — same reasoning as the depRepo==nil branch.
+func TestBacklogPromotion_NilActivityRepo_NotPromoted(t *testing.T) {
+	h := newMonitorHarness()
+	h.svc = &monitorPromotionService{
+		taskRepo:     h.taskRepo,
+		statusRepo:   h.statusRepo,
+		commentRepo:  h.commentRepo,
+		depRepo:      h.depRepo,
+		activityRepo: nil,
+		taskMover:    h.mover,
+	}
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+	h.addTask(t, projectID, backlog.ID, nil, hourAgo())
+
+	if n := h.sweep(t); n != 0 {
+		t.Errorf("an unwired activity log repo must fail closed, got n=%d", n)
 	}
 }
 
