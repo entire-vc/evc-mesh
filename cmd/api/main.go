@@ -490,7 +490,7 @@ func main() {
 		service.WithHumanGateDecisionRepo(humanGateDecisionRepo),
 		service.WithCommentDependencyRepo(taskDependencyRepo),
 	)
-	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo)
+	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 
 	// Member services.
@@ -1892,11 +1892,19 @@ func main() {
 	}()
 	log.Println("Agent events sweeper started (5m interval)")
 
-	// 10b-bis. Monitor promotion sweeper — auto-unparks backlog+kind:monitor tasks
-	// whose due_date has passed, moving them back to todo (CLAUDE-workflow-reference.md
-	// §0m passive-wait pattern; complements the event-driven dependency-unblock
-	// auto-transition, which only fires on task completion, with a time-based trigger).
-	monitorPromotionSvc := service.NewMonitorPromotionService(taskRepo, taskStatusRepo, commentRepo, taskService)
+	// 10b-bis. Backlog promotion sweeper — auto-unparks ANY backlog task whose due_date
+	// has passed, moving it back to todo (CLAUDE-workflow-reference.md §0m passive-wait
+	// pattern; complements the event-driven dependency-unblock auto-transition, which
+	// only fires on task completion, with a time-based trigger).
+	//
+	// Scope widened from backlog+kind:monitor to every dated backlog card by #559270cf:
+	// the label filter meant a due_date only woke cards parked by the lease reaper (the
+	// one thing that writes that label), so 8 cards sat with an already-passed date and
+	// no promotion path. The freeze/human_gate/shipped/open-blocks guards that decide
+	// which candidates actually move live in the service, not the query.
+	monitorPromotionSvc := service.NewMonitorPromotionService(
+		taskRepo, taskStatusRepo, commentRepo, taskDependencyRepo, taskService,
+	)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -1904,19 +1912,19 @@ func main() {
 			select {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				n, err := monitorPromotionSvc.SweepDueMonitorTasks(ctx)
+				n, err := monitorPromotionSvc.SweepDueBacklogTasks(ctx)
 				cancel()
 				if err != nil {
-					log.Printf("[monitor-promotion] ERROR sweeping due monitor tasks: %v", err)
+					log.Printf("[monitor-promotion] ERROR sweeping due backlog tasks: %v", err)
 				} else if n > 0 {
-					log.Printf("[monitor-promotion] promoted %d backlog+kind:monitor task(s) to todo", n)
+					log.Printf("[monitor-promotion] promoted %d due backlog task(s) to todo", n)
 				}
 			case <-schedulerShutdownCh:
 				return
 			}
 		}
 	}()
-	log.Println("Monitor promotion sweeper started (60s interval)")
+	log.Println("Backlog due-date promotion sweeper started (60s interval)")
 
 	// 10b-quater. Backlog promotion ADVISORY sweeper (task #9f3f4064, parent #00327dc6,
 	// unit 1 of 4). Mirrors bob/scripts/mesh-intake-sweep.py's backlog→todo decision

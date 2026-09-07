@@ -333,6 +333,28 @@ Move task to a different status.
 | `status_slug` | string | **Yes** | -- | Target status slug (e.g. `in_progress`, `done`) |
 | `comment` | string | No | -- | Optional comment to add when moving |
 
+**Parking in `backlog` needs a wake-up (added 2026-09-07, #559270cf).** A move into a
+`backlog`-category status is refused with `422 park_requires_wakeup` when the task carries a
+passive-wait label (`kind:monitor` or `phase:verify`) and has no **future** `due_date`.
+Nothing polls `backlog` — no agent feed reads it, and the promotion sweeper fires on
+`due_date` — so such a park has no exit at all and sleeps until a human finds it. An
+already-passed `due_date` does not count as a wake-up.
+
+To park: `PATCH /tasks/:id` with a future `due_date` first, then move. To hand the card
+back for pickup instead, drop the label. Projects can opt out with
+`mid_pipeline.require_park_alarm: false` in their workflow rules; it is on by default.
+
+The same refusal covers `update_task`, but only when the update itself **creates** the
+alarmless state (adds the label, or clears/back-dates the date). A card that is already
+parked without an alarm stays fully editable.
+
+**Waking up.** Any `backlog` task whose `due_date` has passed is promoted back to `todo`
+by the sweeper within a minute — whatever its labels — unless it carries a freeze-class
+label (`freeze`, `no-promote`, `no-intake-promote`, `golden`, `eval-harness`), has
+`human_gate` armed, is `is_shipped`, or still has an open `blocks` dependency. Before
+2026-09-07 only `kind:monitor` cards woke this way, so a date on any other card was an
+alarm nothing listened to.
+
 **Example request:**
 ```json
 {
@@ -381,6 +403,18 @@ Add a dependency between two tasks.
 | `task_id` | string | **Yes** | -- | Task ID |
 | `depends_on_task_id` | string | **Yes** | -- | ID of the task this depends on |
 | `dependency_type` | string | No | `blocks` | Dependency type: `blocks`, `relates_to`, `is_child_of` |
+
+**Scope of an edge (changed 2026-09-07, #559270cf).** `blocks` and `relates_to` may cross
+projects, as long as both tasks are in the **same workspace** — real blockers routinely do
+(Billing waiting on a Team Relay rollout, Spark ↔ Lab, Spark ↔ Argus). `is_child_of` still
+has to stay inside one project: it also writes `parent_task_id`, which drives
+`subtask_count` and the Subtasks tab, and a parent in another project renders as a child
+count nobody can open.
+
+An edge whose two ends are in different workspaces is refused with `400
+depends_on_task_id must be a task in the same workspace`. The same refusal is returned when
+the workspace cannot be established at all — that is deliberate, so the response never
+answers "does this id exist?" for a task you do not own.
 
 **Example request:**
 ```json

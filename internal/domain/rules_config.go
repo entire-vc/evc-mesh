@@ -156,6 +156,23 @@ type MidPipelineConfig struct {
 	// rollout lever rather than landing everywhere at once.
 	HeartbeatExtendsCheckout bool `json:"heartbeat_extends_checkout,omitempty"`
 
+	// RequireParkAlarm gates parking a task in backlog under a passive-wait label
+	// (kind:monitor / phase:verify) without a future due_date. Such a park has no
+	// wake-up path at all: no feed polls backlog, and the promotion sweeper fires on
+	// due_date, so a labelled, dateless backlog card sleeps until a human finds it.
+	// Audit 2026-09-07 (#559270cf) counted 34 of these live, 11 already classified
+	// "parked with no exit".
+	//
+	// A POINTER, and ON when nil — the opposite default from the other flags on this
+	// block, deliberately. Those gate behaviour changes whose failure mode is a
+	// refused write where callers expect success, so they earn a per-project rollout.
+	// This one refuses only a write that is already known not to do what its caller
+	// believes it does, and every in-tree system park path (checkoutLeaseReaper.parkTask,
+	// the enforceBlockingTriage backlog fallback) already sets due_date before moving,
+	// so turning it on fleet-wide refuses nothing the server itself does. Set it to
+	// false explicitly to opt a project out.
+	RequireParkAlarm *bool `json:"require_park_alarm,omitempty"`
+
 	// HeartbeatCheckoutExtendMinutes is how far ahead each heartbeat pushes
 	// checkout_expires when HeartbeatExtendsCheckout is on. 0 = default (30).
 	HeartbeatCheckoutExtendMinutes int `json:"heartbeat_checkout_extend_minutes,omitempty"`
@@ -207,6 +224,17 @@ func (c *MidPipelineConfig) TriageParkDue() int {
 		return DefaultTriageParkDueHours
 	}
 	return c.TriageParkDueHours
+}
+
+// ParkAlarmRequired reports whether an alarmless passive-wait park should be
+// refused. Nil-safe AND nil-defaults-TRUE: a project with no mid_pipeline block, and a
+// project that has one without naming this flag, both get the gate. Only an explicit
+// `"require_park_alarm": false` turns it off.
+func (c *MidPipelineConfig) ParkAlarmRequired() bool {
+	if c == nil || c.RequireParkAlarm == nil {
+		return true
+	}
+	return *c.RequireParkAlarm
 }
 
 // ExtendsCheckoutOnHeartbeat reports whether heartbeat should push

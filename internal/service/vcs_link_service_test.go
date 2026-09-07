@@ -217,7 +217,7 @@ func (r *fakeTaskRepo) FindStaleUnleasedInProgress(context.Context, time.Duratio
 func (r *fakeTaskRepo) FindExpiredInProgressCheckouts(context.Context) ([]domain.Task, error) {
 	return nil, nil
 }
-func (r *fakeTaskRepo) FindDueMonitorBacklogTasks(context.Context) ([]domain.Task, error) {
+func (r *fakeTaskRepo) FindDueBacklogTasks(context.Context) ([]domain.Task, error) {
 	return nil, nil
 }
 func (r *fakeTaskRepo) ListByUserActive(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {

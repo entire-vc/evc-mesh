@@ -2501,7 +2501,7 @@ func (m *mockTaskRepo) FindExpiredInProgressCheckouts(_ context.Context) ([]doma
 func (m *mockTaskRepo) FindStaleUnleasedInProgress(_ context.Context, _ time.Duration) ([]domain.Task, error) {
 	return nil, nil
 }
-func (m *mockTaskRepo) FindDueMonitorBacklogTasks(_ context.Context) ([]domain.Task, error) {
+func (m *mockTaskRepo) FindDueBacklogTasks(_ context.Context) ([]domain.Task, error) {
 	return nil, nil
 }
 func (m *mockTaskRepo) MoveToProject(_ context.Context, _, _, _ uuid.UUID) error { return nil }

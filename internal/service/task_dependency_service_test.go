@@ -19,7 +19,7 @@ func setupTaskDependencyService() (*taskDependencyService, *MockTaskDependencyRe
 	depRepo := NewMockTaskDependencyRepository()
 	taskRepo := NewMockTaskRepository()
 	activityRepo := NewMockActivityLogRepository()
-	svc := NewTaskDependencyService(depRepo, taskRepo, activityRepo).(*taskDependencyService)
+	svc := NewTaskDependencyService(depRepo, taskRepo, activityRepo, NewMockProjectRepository()).(*taskDependencyService)
 
 	// Freeze the clock.
 	timeNow = func() time.Time { return frozenTime }
@@ -575,7 +575,7 @@ func TestTaskDependencyService_Create_ErrorPaths(t *testing.T) {
 	t.Run("dependency write failure propagates and sets no parent", func(t *testing.T) {
 		taskRepo := NewMockTaskRepository()
 		depRepo := &createFailDepRepo{NewMockTaskDependencyRepository(), assert.AnError}
-		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository(), NewMockProjectRepository())
 		child, parent := seedPair(taskRepo)
 
 		err := svc.Create(ctx, &domain.TaskDependency{
@@ -594,7 +594,7 @@ func TestTaskDependencyService_Create_ErrorPaths(t *testing.T) {
 		base := NewMockTaskRepository()
 		taskRepo := &updateFailTaskRepo{base, assert.AnError}
 		depRepo := NewMockTaskDependencyRepository()
-		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository(), NewMockProjectRepository())
 		child, parent := seedPair(base)
 
 		err := svc.Create(ctx, &domain.TaskDependency{
@@ -611,7 +611,7 @@ func TestTaskDependencyService_Create_ErrorPaths(t *testing.T) {
 		child, parent := seedPair(base)
 		// Calls 1 and 2 are Create's own endpoint reads; the walk is call 3.
 		taskRepo := &nthGetFailTaskRepo{MockTaskRepository: base, failOn: 3, err: assert.AnError}
-		svc := NewTaskDependencyService(NewMockTaskDependencyRepository(), taskRepo, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(NewMockTaskDependencyRepository(), taskRepo, NewMockActivityLogRepository(), NewMockProjectRepository())
 
 		err := svc.Create(ctx, &domain.TaskDependency{
 			TaskID: child, DependsOnTaskID: parent,
@@ -626,7 +626,7 @@ func TestTaskDependencyService_Create_ErrorPaths(t *testing.T) {
 	// spin. Without the visited set this call would not return.
 	t.Run("pre-existing ancestor cycle terminates the walk", func(t *testing.T) {
 		taskRepo := NewMockTaskRepository()
-		svc := NewTaskDependencyService(NewMockTaskDependencyRepository(), taskRepo, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(NewMockTaskDependencyRepository(), taskRepo, NewMockActivityLogRepository(), NewMockProjectRepository())
 
 		child, a := seedPair(taskRepo)
 		b := uuid.New()
@@ -653,7 +653,7 @@ func TestTaskDependencyService_Delete_ErrorPaths(t *testing.T) {
 		taskRepo := NewMockTaskRepository()
 		inner := NewMockTaskDependencyRepository()
 		depRepo := &getFailDepRepo{inner, assert.AnError}
-		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository(), NewMockProjectRepository())
 
 		child, parent := seedPair(taskRepo)
 		dep := &domain.TaskDependency{
@@ -672,7 +672,7 @@ func TestTaskDependencyService_Delete_ErrorPaths(t *testing.T) {
 
 	t.Run("delete failure propagates", func(t *testing.T) {
 		depRepo := &deleteFailDepRepo{NewMockTaskDependencyRepository(), assert.AnError}
-		svc := NewTaskDependencyService(depRepo, NewMockTaskRepository(), NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(depRepo, NewMockTaskRepository(), NewMockActivityLogRepository(), NewMockProjectRepository())
 
 		require.ErrorIs(t, svc.Delete(ctx, uuid.New()), assert.AnError)
 	})
@@ -681,7 +681,7 @@ func TestTaskDependencyService_Delete_ErrorPaths(t *testing.T) {
 		base := NewMockTaskRepository()
 		child, parent := seedPair(base)
 		depRepo := NewMockTaskDependencyRepository()
-		svc := NewTaskDependencyService(depRepo, base, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(depRepo, base, NewMockActivityLogRepository(), NewMockProjectRepository())
 		dep := &domain.TaskDependency{
 			TaskID: child, DependsOnTaskID: parent,
 			DependencyType: domain.DependencyTypeIsChildOf,
@@ -690,7 +690,7 @@ func TestTaskDependencyService_Delete_ErrorPaths(t *testing.T) {
 
 		// Fail the read Delete performs to find the child.
 		failing := &nthGetFailTaskRepo{MockTaskRepository: base, failOn: 1, err: assert.AnError}
-		svc2 := NewTaskDependencyService(depRepo, failing, NewMockActivityLogRepository())
+		svc2 := NewTaskDependencyService(depRepo, failing, NewMockActivityLogRepository(), NewMockProjectRepository())
 
 		require.ErrorIs(t, svc2.Delete(ctx, dep.ID), assert.AnError)
 	})
@@ -752,7 +752,7 @@ func TestTaskDependencyService_ListByTaskBothDirections(t *testing.T) {
 	t.Run("outgoing read failure propagates", func(t *testing.T) {
 		taskRepo := NewMockTaskRepository()
 		depRepo := &listByTaskFailDepRepo{NewMockTaskDependencyRepository(), assert.AnError}
-		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository(), NewMockProjectRepository())
 
 		_, _, err := svc.ListByTaskBothDirections(ctx, uuid.New())
 		require.ErrorIs(t, err, assert.AnError)
@@ -761,7 +761,7 @@ func TestTaskDependencyService_ListByTaskBothDirections(t *testing.T) {
 	t.Run("incoming read failure propagates", func(t *testing.T) {
 		taskRepo := NewMockTaskRepository()
 		depRepo := &listDependentsFailDepRepo{NewMockTaskDependencyRepository(), assert.AnError}
-		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository())
+		svc := NewTaskDependencyService(depRepo, taskRepo, NewMockActivityLogRepository(), NewMockProjectRepository())
 
 		_, _, err := svc.ListByTaskBothDirections(ctx, uuid.New())
 		require.ErrorIs(t, err, assert.AnError)

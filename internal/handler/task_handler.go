@@ -1619,6 +1619,15 @@ func handleError(c echo.Context, err error) error {
 		})
 	}
 
+	var parkAlarmErr *service.ParkAlarmError
+	if errors.As(err, &parkAlarmErr) {
+		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+			"code":    "park_requires_wakeup",
+			"message": parkAlarmErr.Error(),
+			"label":   parkAlarmErr.Label,
+		})
+	}
+
 	var humanGateErr *service.HumanGateFrozenError
 	if errors.As(err, &humanGateErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
