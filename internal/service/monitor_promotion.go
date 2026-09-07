@@ -74,29 +74,34 @@ type MonitorPromotionService interface {
 }
 
 type monitorPromotionService struct {
-	taskRepo    repository.TaskRepository
-	statusRepo  repository.TaskStatusRepository
-	commentRepo repository.CommentRepository
-	depRepo     repository.TaskDependencyRepository
-	taskMover   leaseTaskMover
+	taskRepo     repository.TaskRepository
+	statusRepo   repository.TaskStatusRepository
+	commentRepo  repository.CommentRepository
+	depRepo      repository.TaskDependencyRepository
+	activityRepo repository.ActivityLogRepository
+	taskMover    leaseTaskMover
 }
 
 // NewMonitorPromotionService constructs a MonitorPromotionService.
 // commentRepo may be nil (audit comment skipped). depRepo may be nil, in which case
-// the blocker guard cannot run and NOTHING is promoted — see skipReason.
+// the blocker guard cannot run and NOTHING is promoted — see skipReason. activityRepo
+// may be nil, in which case the demotion-park guard fails closed (treats every
+// no-blocker card as possibly-demoted and skips it) rather than guessing.
 func NewMonitorPromotionService(
 	taskRepo repository.TaskRepository,
 	statusRepo repository.TaskStatusRepository,
 	commentRepo repository.CommentRepository,
 	depRepo repository.TaskDependencyRepository,
+	activityRepo repository.ActivityLogRepository,
 	taskSvc TaskService,
 ) MonitorPromotionService {
 	return &monitorPromotionService{
-		taskRepo:    taskRepo,
-		statusRepo:  statusRepo,
-		commentRepo: commentRepo,
-		depRepo:     depRepo,
-		taskMover:   taskSvc,
+		taskRepo:     taskRepo,
+		statusRepo:   statusRepo,
+		commentRepo:  commentRepo,
+		depRepo:      depRepo,
+		activityRepo: activityRepo,
+		taskMover:    taskSvc,
 	}
 }
 
@@ -116,11 +121,16 @@ func (s *monitorPromotionService) SweepDueBacklogTasks(ctx context.Context) (int
 	// Cache todo status IDs per project to avoid repeated status list fetches.
 	todoStatusCache := make(map[uuid.UUID]*uuid.UUID)
 
+	// projectID -> lowercased-trimmed status name -> category, for the demotion-park
+	// guard (wasDeliberatelyParkedFromBacklog). Built lazily, once per project touched
+	// this tick — mirrors backlog_promotion_advisory.go's own nameCatCache.
+	nameCatCache := make(map[uuid.UUID]map[string]domain.StatusCategory)
+
 	var promoted int
 	for i := range tasks {
 		task := &tasks[i]
 
-		if reason := s.skipReason(sysCtx, task); reason != "" {
+		if reason := s.skipReason(sysCtx, task, nameCatCache); reason != "" {
 			log.Printf("[monitor-promotion] task=%s NOT promoted: %s", task.ID, reason)
 			continue
 		}
@@ -159,7 +169,11 @@ func (s *monitorPromotionService) SweepDueBacklogTasks(ctx context.Context) (int
 // measured on prod 2026-09-06 on the lease reaper, where #2921ff07 failed to park 145
 // times and was that reaper's only output while it spun. Refusing to select such a card
 // is not the same as trying and handling the error: only the former terminates.
-func (s *monitorPromotionService) skipReason(ctx context.Context, task *domain.Task) string {
+func (s *monitorPromotionService) skipReason(
+	ctx context.Context,
+	task *domain.Task,
+	nameCatCache map[uuid.UUID]map[string]domain.StatusCategory,
+) string {
 	// 1. Explicit human freeze / eval fixture — a date does not outrank a person.
 	if label, frozen := hasAbsoluteNoPromoteLabel(task.Labels); frozen {
 		return fmt.Sprintf("freeze-class label %q (a passed due_date does not override it)", label)
@@ -180,7 +194,7 @@ func (s *monitorPromotionService) skipReason(ctx context.Context, task *domain.T
 	// service's unfiltered dependency read, and matching hasUnresolvedBlockers, which
 	// is the definition auto_transition.go uses for "still blocked". relates_to and
 	// is_child_of are not blocking relationships and must not hold a woken card down.
-	blocked, err := s.hasOpenBlockers(ctx, task.ID)
+	blocked, hasBlocksEdge, err := s.blockerStatus(ctx, task.ID)
 	if err != nil {
 		return fmt.Sprintf("blocker check failed, fail-closed: %v", err)
 	}
@@ -188,20 +202,54 @@ func (s *monitorPromotionService) skipReason(ctx context.Context, task *domain.T
 		return "has open blocks dependencies"
 	}
 
+	// 5. Demotion-into-backlog guard (#559270cf amendment, #1eb4fd7d) — a card whose
+	// most recent status move DEMOTED it into backlog is a deliberate park, and
+	// "no open blocks dependencies" is vacuously true for one that never had any
+	// (#b832d451: the sweep once undid such a park in 26 minutes by reading exactly
+	// that vacuous truth as "ready").
+	//
+	// Gated on hasBlocksEdge being FALSE — mirroring
+	// backlog_promotion_advisory.go's own dep_ids-empty gate on this same check
+	// (#bbf3db92): a card that HAS (or HAD) a `blocks` edge is judged by whether that
+	// edge is now clear (guard 4, above), never by its move history — the edge
+	// clearing IS the informative event this sweep exists to catch when the
+	// event-triggered auto-transition (auto_transition.go tryUnblockTask) missed it
+	// because the edge was added, or the blocker closed, before the card was parked.
+	// A demotion-check running unconditionally would silently re-park that class of
+	// card forever, exchanging a fixed defect for a differently-shaped one.
+	if !hasBlocksEdge {
+		if s.activityRepo == nil {
+			// Not wired. Same fail-closed reasoning as the depRepo==nil branch above:
+			// "cannot look" must not read as "looked and it was never demoted".
+			return "activity log repository not wired, fail-closed"
+		}
+		demoted, err := wasDeliberatelyParkedFromBacklog(ctx, s.activityRepo, s.statusRepo, task, nameCatCache)
+		if err != nil {
+			return fmt.Sprintf("demotion check failed, fail-closed: %v", err)
+		}
+		if demoted {
+			return "parked via demotion into backlog (no blocks dependencies ever recorded)"
+		}
+	}
+
 	return ""
 }
 
-// hasOpenBlockers reports whether the task has at least one `blocks` dependency whose
-// blocker has not reached a terminal (done/cancelled) category.
-func (s *monitorPromotionService) hasOpenBlockers(ctx context.Context, taskID uuid.UUID) (bool, error) {
+// blockerStatus reports (a) whether the task has at least one `blocks` dependency
+// whose blocker has not reached a terminal (done/cancelled) category, and (b) whether
+// the task has any `blocks` dependency edge at all, regardless of the blocker's state
+// — the latter is what guard 5 (skipReason) needs to decide whether the
+// demotion-into-backlog check applies (see its comment for why).
+func (s *monitorPromotionService) blockerStatus(ctx context.Context, taskID uuid.UUID) (blocked, hasBlocksEdge bool, err error) {
 	if s.depRepo == nil {
 		// Not wired. "Cannot look" is not "looked and it was clear" — the one
-		// mistake this whole guard exists to avoid, so it reports blocked.
-		return true, fmt.Errorf("dependency repository not wired")
+		// mistake this whole guard exists to avoid, so it reports blocked (and, to
+		// stay on the fail-closed side of guard 5 too, as if a blocks edge exists).
+		return true, true, fmt.Errorf("dependency repository not wired")
 	}
 	deps, err := s.depRepo.ListByTask(ctx, taskID)
 	if err != nil {
-		return true, err
+		return true, true, err
 	}
 
 	categories := make(map[uuid.UUID]domain.StatusCategory)
@@ -209,27 +257,28 @@ func (s *monitorPromotionService) hasOpenBlockers(ctx context.Context, taskID uu
 		if dep.DependencyType != domain.DependencyTypeBlocks {
 			continue
 		}
+		hasBlocksEdge = true
 		if _, seen := categories[dep.DependsOnTaskID]; seen {
 			continue
 		}
 		blocker, err := s.taskRepo.GetByID(ctx, dep.DependsOnTaskID)
 		if err != nil {
-			return true, err
+			return true, true, err
 		}
 		if blocker == nil {
 			// The blocker row is gone. Cannot prove it completed, so it counts open.
-			return true, nil
+			return true, true, nil
 		}
 		status, err := s.statusRepo.GetByID(ctx, blocker.StatusID)
 		if err != nil {
-			return true, err
+			return true, true, err
 		}
 		if status == nil {
-			return true, nil
+			return true, true, nil
 		}
 		categories[dep.DependsOnTaskID] = status.Category
 	}
-	return hasUnresolvedBlockers(deps, categories), nil
+	return hasUnresolvedBlockers(deps, categories), hasBlocksEdge, nil
 }
 
 // findTodoStatusID returns the ID of the first todo-category status for the project,
