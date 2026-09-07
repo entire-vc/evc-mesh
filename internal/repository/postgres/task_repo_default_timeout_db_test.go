@@ -75,18 +75,53 @@ func TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HonorsConfiguredHours(t *tes
 	assert.False(t, got.GateDeadline.After(after.Add(48*time.Hour+time.Second)))
 }
 
-func TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HardNeverGetsOne(t *testing.T) {
+// TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HardGetsOneWhenDefaultStated is the
+// real-Postgres proof of task 1.4b (#4d61d877): a hard-classified gate now gets the SAME
+// auto-computed deadline a soft one does, once it has a real recommended_default. This
+// used to be the one test proving the opposite (a hard gate NEVER gets an auto-computed
+// deadline) — flipped deliberately, not just relaxed, because the deadline here is for
+// ESCALATION/VISIBILITY only, never for auto-release: see
+// TestTaskRepo_FindExpiredDefaultGates_ExcludesHardStructurally below, which is the
+// other, unchanged half of the safety proof — the structural exclusion in the sweep,
+// independent of whether this column is set.
+func TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HardGetsOneWhenDefaultStated(t *testing.T) {
 	db := testDB(t)
 	_, proj, status := createTestProject(t, db)
 	taskRepo := NewTaskRepo(db)
 	ctx := context.Background()
 	taskID := createTestTaskForComments(t, taskRepo, proj.ID, status.ID)
 
+	before := time.Now().UTC()
 	armGate(t, taskRepo, taskID, uuid.New(), domain.HumanGateClassHard, "merge as-is", nil)
+	after := time.Now().UTC()
 
 	got, err := taskRepo.GetByID(ctx, taskID)
 	require.NoError(t, err)
-	assert.Nil(t, got.GateDeadline, "a hard gate must never get an auto-computed deadline — no code path may release it on a clock")
+	require.NotNil(t, got.GateDeadline,
+		"a hard gate with a stated default must now get an auto-computed deadline (for escalation, not auto-release)")
+	assert.False(t, got.GateDeadline.Before(before.Add(DefaultGateTimeoutHours*time.Hour-time.Second)))
+	assert.False(t, got.GateDeadline.After(after.Add(DefaultGateTimeoutHours*time.Hour+time.Second)))
+	assert.Equal(t, domain.HumanGateClassHard, got.HumanGateClass, "precondition: still hard-classified")
+}
+
+// TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HardWithNoDefaultStillGetsNone covers
+// the other half: a hard gate with NO stated default still gets NULL, on the same
+// class-agnostic "no default -> no deadline" branch a soft gate falls to (see
+// TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_NoDefaultMeansNoDeadline below). This
+// was never conditioned on class, and removing the class-specific NULL branch must not
+// have accidentally made a hard gate compute a deadline out of nothing.
+func TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_HardWithNoDefaultStillGetsNone(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	taskRepo := NewTaskRepo(db)
+	ctx := context.Background()
+	taskID := createTestTaskForComments(t, taskRepo, proj.ID, status.ID)
+
+	armGate(t, taskRepo, taskID, uuid.New(), domain.HumanGateClassHard, "", nil)
+
+	got, err := taskRepo.GetByID(ctx, taskID)
+	require.NoError(t, err)
+	assert.Nil(t, got.GateDeadline, "no stated default means nothing for the sweep to apply, on any class")
 }
 
 func TestTaskRepo_ArmHumanGate_AutoDefaultsDeadline_NoDefaultMeansNoDeadline(t *testing.T) {

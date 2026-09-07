@@ -675,14 +675,22 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 // TaskRepo.defaultGateTimeoutHoursOrDefault, HUMAN_GATE_DEFAULT_TIMEOUT_H) when the
 // caller left it nil — but ONLY when there is a stated recommended_default to apply at
 // that deadline (an ask with no default cannot time out, matching
-// ArmHumanGateInput.Validate's own reasoning for the API source) AND the class is not
-// hard (a hard gate's whole point is that no code path ever releases it on a clock;
-// auto-computing a deadline it will never use would just be dead data inviting a future
-// reader to trust it). An EXPLICITLY passed deadline ($7 non-nil) always wins over the
-// auto-default, on any class — the caller said what they meant. The armed_at half of the
-// CASE mirrors the column's own CASE two lines up: a re-arm of an already-armed gate must
-// compute the default off the ORIGINAL armed_at, not NOW(), for the same reason it must
-// not reset armed_at itself.
+// ArmHumanGateInput.Validate's own reasoning for the API source). An EXPLICITLY passed
+// deadline ($7 non-nil) always wins over the auto-default, on any class — the caller
+// said what they meant. The armed_at half of the CASE mirrors the column's own CASE two
+// lines up: a re-arm of an already-armed gate must compute the default off the ORIGINAL
+// armed_at, not NOW(), for the same reason it must not reset armed_at itself.
+//
+// A hard-classified gate DOES get this auto-computed deadline when it has a
+// recommended_default — task 1.4b (#4d61d877) deliberately removed the earlier
+// `WHEN $2 = 'hard' THEN NULL` branch that forced it to NULL unconditionally. This is
+// safe, not a loosening of HumanGateClassHard's contract: the deadline on a hard gate is
+// for ESCALATION/VISIBILITY (sortable "how long has this been open") only, never for
+// auto-release — FindExpiredDefaultGates's own `human_gate_class != 'hard'` predicate
+// (fixed literal, not derived from this column) is what makes a hard gate structurally
+// unreachable by the default-on-timeout sweep regardless of whether gate_deadline is
+// set. See that function's doc and task_repo_default_timeout_db_test.go's
+// TestTaskRepo_FindExpiredDefaultGates_ExcludesHardStructurally for the proof.
 //
 // The window itself ($8) is bound as an integer-hours parameter rather than baked into
 // the query text as a literal INTERVAL — it is per-server config
@@ -701,7 +709,6 @@ func (r *TaskRepo) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput
 			recommended_default = NULLIF($6, ''),
 			gate_deadline = CASE
 				WHEN $7::timestamptz IS NOT NULL THEN $7::timestamptz
-				WHEN $2 = 'hard' THEN NULL
 				WHEN NULLIF($6, '') IS NULL THEN NULL
 				ELSE (CASE WHEN human_gate THEN human_gate_armed_at ELSE NOW() END) + make_interval(hours => $8)
 			END,

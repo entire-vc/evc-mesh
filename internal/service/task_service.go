@@ -3163,17 +3163,25 @@ func (s *taskService) instanceHadRealWork(ctx context.Context, task domain.Task)
 //
 // Returns *domain.ArmHumanGateValidationError (mapped to 422 by the handler) when
 // gate_author is missing, or when recommended_default is missing on an API-sourced arm.
-// A marker-sourced arm with no stated default is allowed through with a WARNING — see
-// domain.ArmHumanGateSourceMarker for why refusing it there would be worse than the bug.
+// A marker-sourced arm with no stated default is allowed through — see
+// domain.ArmHumanGateSourceMarker for why refusing it there would be worse than the
+// bug — but no longer arms with the field left NULL: it is auto-filled with
+// domain.DefaultMarkerRecommendedDefault (task 1.4b, #4d61d877) so the gate still gets
+// a computed gate_deadline and can be resolved by a clock, not only by a human finding
+// it. The fill is reported twice — the pre-existing log line, and (new) a task comment
+// via postMarkerDefaultAppliedComment, addressed to the gate's own author, once the arm
+// has actually landed.
 func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error {
 	in = in.Normalized()
 	if err := in.Validate(); err != nil {
 		return err
 	}
-	if in.Source == domain.ArmHumanGateSourceMarker && in.RecommendedDefault == "" {
+	autoFilledDefault := in.Source == domain.ArmHumanGateSourceMarker && in.RecommendedDefault == ""
+	if autoFilledDefault {
 		log.Printf("[human-gate] WARNING: task %s armed from a Blocking marker with no "+
-			"recommended_default — the gate can only be resolved by a human answering it "+
-			"(author %s/%s)", in.TaskID, in.AuthorType, in.Author)
+			"recommended_default — applying the system default so the gate still gets a "+
+			"deadline (author %s/%s)", in.TaskID, in.AuthorType, in.Author)
+		in.RecommendedDefault = domain.DefaultMarkerRecommendedDefault
 	}
 
 	// Predicate gate (task #5d3dc714). Evaluated BEFORE the write, and its refusal is
@@ -3197,7 +3205,70 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 		}
 	}
 
-	return s.taskRepo.ArmHumanGate(ctx, in)
+	if err := s.taskRepo.ArmHumanGate(ctx, in); err != nil {
+		return err
+	}
+
+	if autoFilledDefault {
+		s.postMarkerDefaultAppliedComment(ctx, in)
+	}
+	return nil
+}
+
+// postMarkerDefaultAppliedComment tells the gate's own author, on the task itself, that
+// their marker armed the gate with no stated recommended_default and the system default
+// (domain.DefaultMarkerRecommendedDefault) was applied in its place (task 1.4b,
+// #4d61d877) — the log line ArmHumanGate already writes reaches nobody in practice.
+// Best-effort like postAssigneeChangeComment: a comment-post failure must never unwind
+// the arm that already happened, only be logged loudly.
+//
+// Reads the just-armed row back rather than recomputing gate_deadline itself: that math
+// (armed_at old-on-rearm/NOW()-on-first-arm + the CONFIGURED window, never for a gate
+// with no default) lives in exactly one place, TaskRepo.ArmHumanGate's SQL — a second
+// implementation here could silently drift from the one that actually wrote the column.
+func (s *taskService) postMarkerDefaultAppliedComment(ctx context.Context, in domain.ArmHumanGateInput) {
+	if s.commentRepo == nil {
+		return
+	}
+	task, err := s.taskRepo.GetByID(ctx, in.TaskID)
+	if err != nil || task == nil {
+		log.Printf("[human-gate] WARNING: task %s lookup after auto-filling recommended_default failed: %v",
+			in.TaskID, err)
+		return
+	}
+
+	deadlineText := "—"
+	if task.GateDeadline != nil {
+		deadlineText = task.GateDeadline.Format(time.RFC3339)
+	}
+	classNote := "По истечении дедлайна дефолт применится автоматически."
+	if task.HumanGateClass == domain.HumanGateClassHard {
+		classNote = "Класс hard — дедлайн только для эскалации/видимости, авто-применения не будет, " +
+			"вопрос ждёт человека."
+	}
+
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"⚠️ Гейт взведён маркером без явного `recommended_default` — применён системный дефолт:\n"+
+				"«%s», дедлайн %s.\n%s\n"+
+				"Явный дефолт в следующий раз убережёт от этого: `По умолчанию: <текст>` строкой в маркере.",
+			domain.DefaultMarkerRecommendedDefault, deadlineText, classNote,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create default-applied notice on task %s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
 }
 
 // recordGatePredicate appends one evaluation to gate_predicate_log. Best-effort by
