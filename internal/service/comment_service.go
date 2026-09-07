@@ -1776,6 +1776,20 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
+	// Secret-leak/rotation suppression (task #bb1aaa09, tail of #e8388213): Pavel
+	// decided 2026-09-07 that this whole CLASS of ask is already answered — re-asking
+	// is a repeat, not a new question. Checked BEFORE the repeat-question lookup below
+	// (which would find nothing useful for a class that never gets a live decision
+	// recorded in the first place) and before arming: the comment itself was already
+	// persisted by the caller, so nothing is lost, only the ARM is skipped. This is
+	// the server-side half of the agent-lane PreToolUse hook
+	// (secret-rotation-gate-guard.py), which cannot see a marker posted through the
+	// Mesh web UI — there is no PreToolUse there.
+	if reason := secretRotationSuppressionReason(task); reason != "" {
+		s.postSecretRotationSuppressedNotice(ctx, task, reason)
+		return
+	}
+
 	// Repeat-question prevention (contract §6, task #c56339b1): if this marker
 	// is a reply to an already-answered marker thread (comment.ParentCommentID
 	// matches a recorded decision's question_ref), or explicitly cites an
@@ -1929,6 +1943,47 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[comment-triage] WARNING: create system comment on task %s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
+}
+
+// postSecretRotationSuppressedNotice is enforceBlockingTriage's response when
+// secretRotationSuppressionReason finds this card in Pavel's already-decided class
+// (task #bb1aaa09, tail of #e8388213): human_gate is skipped, but the ask itself must
+// not vanish silently — the ORIGINAL comment carrying the marker was already persisted
+// by the caller before enforceBlockingTriage ever runs, and this posts a second,
+// explanatory system comment alongside it. Written directly through commentRepo (not
+// s.Create) so it cannot re-trigger enforcement — same reasoning as the triage-move
+// notice above and postExistingDecisionNotice
+// (comment_service_human_gate_decisions.go).
+func (s *commentService) postSecretRotationSuppressedNotice(ctx context.Context, task *domain.Task, reason string) {
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🔒 Гейт на Павла НЕ взведён — %s.\n\n"+
+				"Павел решил 2026-09-07: «все таски про ротацию ключей надо отменять. Мы к "+
+				"этому вопросу должны вернуться системно после починки попадания в "+
+				"транскрипты, иначе это ветряная мельница». Спросить его снова — не "+
+				"осторожность, а повтор уже отвеченного вопроса.\n\n"+
+				"Что делать: вектор утечки чини сам сейчас, если он в твоём периметре — это не "+
+				"ждёт ничьего решения. Саму ротацию не делай и не спрашивай.\n\n"+
+				"Исключение — подтверждённая АКТИВНАЯ эксплуатация: заводи отдельную карточку "+
+				"с `severity:critical`, на ней этот гейт срабатывает нормально.\n\n"+
+				"Ошибся фильтр? Повесь метку `%s` на карточку и повтори маркер.",
+			reason, secretRotationNotSecretRotationLabel,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[comment-triage] WARNING: create secret-rotation suppression notice on task %s failed: %v", task.ID, err)
 		return
 	}
 	if s.ctxCacheInv != nil {
