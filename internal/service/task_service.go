@@ -469,6 +469,30 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		}
 	}
 
+	// Park-alarm gate, PATCH side. MoveTask guards the move INTO backlog; this guards
+	// the other two ways to reach the same broken state on a card already sitting
+	// there: adding a passive-wait label to it, or clearing/back-dating the due_date
+	// that was its only wake-up.
+	//
+	// Refuses ONLY when this update CHANGES the alarm verdict — see alarmStateUnchanged.
+	// A card that is already an alarmless park stays fully editable: the audit found 34
+	// live ones, and a gate that refused every write to them would make the only route
+	// to fixing a title or an assignee "first satisfy a rule about a field you are not
+	// touching". The gate exists to stop the population growing, not to hold its
+	// existing members hostage.
+	if s.midPipelineConfig(ctx, task.ProjectID).ParkAlarmRequired() {
+		if label, alarmless := wouldBeAlarmlessPark(task.Labels, task.DueDate); alarmless &&
+			!alarmStateUnchanged(existing.Labels, existing.DueDate, task.Labels, task.DueDate) {
+			// Status lookup is deliberately last: it is the only query this gate
+			// adds, and it runs only for an update that has already been shown to
+			// create an alarmless-park shape.
+			if st, stErr := s.statusRepo.GetByID(ctx, existing.StatusID); stErr == nil && st != nil &&
+				isBacklogCategory(st.Category) {
+				return &ParkAlarmError{Label: label}
+			}
+		}
+	}
+
 	task.UpdatedAt = timeNow()
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
@@ -729,6 +753,34 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		if task.IsShipped {
 			if status.Category != domain.StatusCategoryDone {
 				return &TaskShippedError{}
+			}
+		}
+
+		// Park-alarm gate: refuse a move into backlog that leaves the card parked
+		// under a passive-wait label with no future due_date — a park with no exit.
+		// Backlog is polled by no agent feed, so the ONLY thing that can bring such a
+		// card back is MonitorPromotionService firing on due_date; without one it
+		// sleeps until a human happens to find it (audit #559270cf: 34 such cards, 11
+		// already in the "parked with no exit" bucket).
+		//
+		// Not exempted for system actors, on the same reasoning as the triage-entry
+		// gate: the point is that no caller creates an unwakeable park. Every in-tree
+		// system park path already complies by construction — checkoutLeaseReaper.parkTask
+		// and the enforceBlockingTriage backlog fallback both write due_date via
+		// taskRepo.Update BEFORE calling MoveTask, and MoveTask re-reads the task, so
+		// they arrive here already armed.
+		//
+		// ⚠️ Deliberate divergence from midPipelineConfig's documented fail-OPEN
+		// contract: ParkAlarmRequired() answers TRUE on a nil block, so an unreadable
+		// rules service turns this gate ON rather than off. That is the right direction
+		// for THIS gate specifically. The flags that fail open (review evidence, triage
+		// entry) guard transitions the whole fleet's work moves through, where a blip
+		// failing closed stalls the estate. This one refuses a single, narrowly-shaped
+		// write and tells the caller exactly how to satisfy it; a blip costs a project
+		// that opted OUT one extra field on a park, not a stall.
+		if isBacklogCategory(status.Category) && s.midPipelineConfig(ctx, task.ProjectID).ParkAlarmRequired() {
+			if label, alarmless := wouldBeAlarmlessPark(task.Labels, task.DueDate); alarmless {
+				return &ParkAlarmError{Label: label}
 			}
 		}
 

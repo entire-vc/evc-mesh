@@ -1551,17 +1551,27 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 	return taskRowsToSlice(rows), nil
 }
 
-// FindDueMonitorBacklogTasks returns tasks in "backlog" category, labelled
-// "kind:monitor", whose due_date has passed. Used by the monitor promotion
-// sweeper to auto-unpark passive-wait tasks once their gate time is reached.
-func (r *TaskRepo) FindDueMonitorBacklogTasks(ctx context.Context) ([]domain.Task, error) {
+// FindDueBacklogTasks returns every task in a "backlog" category status whose
+// due_date has passed, regardless of labels. Used by the promotion sweeper to
+// auto-unpark a card once the wake-up time it was parked with arrives.
+//
+// The label filter this query used to carry (`'kind:monitor' = ANY(labels)`) was
+// removed by #559270cf. It made due_date a wake-up only for cards that had been parked
+// by one specific mechanism — the lease reaper's auto-park, which is what sets that
+// label — while every card a human or agent parked with a date and any other label (or
+// no label) sat with an alarm that nothing was listening to. The audit measured 8 such
+// cards with a due_date already in the past and no promotion path at all.
+//
+// Widening the SQL widens only the CANDIDATE set; which of those candidates may
+// actually move is decided in Go (MonitorPromotionService.SweepDueBacklogTasks), where
+// the guards are readable and testable. A candidate is not a decision.
+func (r *TaskRepo) FindDueBacklogTasks(ctx context.Context) ([]domain.Task, error) {
 	const q = `
 		SELECT ` + taskBaseColsNoAlias + `
 		FROM tasks
 		WHERE deleted_at IS NULL
 		  AND due_date IS NOT NULL
 		  AND due_date <= now()
-		  AND 'kind:monitor' = ANY(labels)
 		  AND status_id IN (
 		      SELECT id FROM task_statuses WHERE category = 'backlog'
 		  )`
@@ -1574,7 +1584,7 @@ func (r *TaskRepo) FindDueMonitorBacklogTasks(ctx context.Context) ([]domain.Tas
 
 // ListAllBacklogTasks returns every non-deleted task currently in a backlog-category
 // status, across all workspaces — deliberately unscoped, mirroring
-// FindDueMonitorBacklogTasks above rather than the workspace-scoped ListByStatusCategory.
+// FindDueBacklogTasks above rather than the workspace-scoped ListByStatusCategory.
 func (r *TaskRepo) ListAllBacklogTasks(ctx context.Context) ([]domain.Task, error) {
 	const q = `
 		SELECT ` + taskBaseColsNoAlias + `

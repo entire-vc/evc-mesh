@@ -285,7 +285,7 @@ type MockTaskRepository struct {
 	items                    map[uuid.UUID]*domain.Task
 	errToReturn              error
 	// statusCategoryOf, if set, resolves a status ID to its category — used by
-	// FindDueMonitorBacklogTasks to emulate the real query's join against
+	// FindDueBacklogTasks to emulate the real query's join against
 	// task_statuses without this mock needing a direct dependency on
 	// MockTaskStatusRepository. Tests wire it via WithStatusCategoryLookup.
 	statusCategoryOf func(statusID uuid.UUID) domain.StatusCategory
@@ -297,7 +297,7 @@ func NewMockTaskRepository() *MockTaskRepository {
 
 // WithStatusCategoryLookup wires a status-category resolver (typically backed by a
 // MockTaskStatusRepository seeded in the same test) so status-category-filtered
-// mock queries (e.g. FindDueMonitorBacklogTasks) behave like the real SQL join.
+// mock queries (e.g. FindDueBacklogTasks) behave like the real SQL join.
 func (m *MockTaskRepository) WithStatusCategoryLookup(statusRepo *MockTaskStatusRepository) *MockTaskRepository {
 	m.statusCategoryOf = func(statusID uuid.UUID) domain.StatusCategory {
 		statusRepo.mu.RLock()
@@ -450,7 +450,7 @@ func (m *MockTaskRepository) ListByStatusCategory(_ context.Context, _ uuid.UUID
 	return pagination.NewPage([]domain.Task{}, 0, pg), nil
 }
 
-// ListAllBacklogTasks mirrors FindDueMonitorBacklogTasks's category-filter pattern
+// ListAllBacklogTasks mirrors FindDueBacklogTasks's category-filter pattern
 // (via the wired statusCategoryOf resolver) but without the due_date/label narrowing —
 // every task currently sitting in a backlog-category status.
 func (m *MockTaskRepository) ListAllBacklogTasks(_ context.Context) ([]domain.Task, error) {
@@ -630,7 +630,11 @@ func (m *MockTaskRepository) FindExpiredInProgressCheckouts(_ context.Context) (
 	return out, nil
 }
 
-func (m *MockTaskRepository) FindDueMonitorBacklogTasks(_ context.Context) ([]domain.Task, error) {
+// FindDueBacklogTasks mirrors the real query AFTER #559270cf: due_date passed and a
+// backlog-category status, with NO label filter. The label condition the mock used to
+// carry is gone from the SQL too — keeping it here would have made every promotion test
+// pass against a candidate set the database no longer produces.
+func (m *MockTaskRepository) FindDueBacklogTasks(_ context.Context) ([]domain.Task, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}
@@ -640,9 +644,6 @@ func (m *MockTaskRepository) FindDueMonitorBacklogTasks(_ context.Context) ([]do
 	var out []domain.Task
 	for _, t := range m.items {
 		if t.DueDate == nil || t.DueDate.After(now) {
-			continue
-		}
-		if !containsInStringArray(t.Labels, monitorLabelKindMonitor) {
 			continue
 		}
 		if m.statusCategoryOf == nil || m.statusCategoryOf(t.StatusID) != domain.StatusCategoryBacklog {

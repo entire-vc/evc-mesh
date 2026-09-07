@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 
 	"github.com/google/uuid"
 
@@ -14,18 +15,24 @@ type taskDependencyService struct {
 	depRepo      repository.TaskDependencyRepository
 	taskRepo     repository.TaskRepository
 	activityRepo repository.ActivityLogRepository
+	projectRepo  repository.ProjectRepository
 }
 
 // NewTaskDependencyService returns a new TaskDependencyService backed by the given repositories.
+// projectRepo may be nil, in which case cross-project edges are refused outright —
+// the tenancy boundary cannot be checked without it, and an unverifiable boundary is
+// treated as a violated one (see assertSameTenancy).
 func NewTaskDependencyService(
 	depRepo repository.TaskDependencyRepository,
 	taskRepo repository.TaskRepository,
 	activityRepo repository.ActivityLogRepository,
+	projectRepo repository.ProjectRepository,
 ) TaskDependencyService {
 	return &taskDependencyService{
 		depRepo:      depRepo,
 		taskRepo:     taskRepo,
 		activityRepo: activityRepo,
+		projectRepo:  projectRepo,
 	}
 }
 
@@ -55,17 +62,27 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 		return apierror.NotFound("Task")
 	}
 
-	// Both ends of the edge have to be in the same project.
+	// Tenancy check on the far end of the edge.
 	//
-	// depends_on_task_id arrives in the request body, where no route parameter
-	// names it and the workspace guard therefore cannot see it. Until this check
-	// existed, "both tasks exist" was the whole of the validation: a member of any
-	// workspace could point one of their own tasks at a stranger's task id and get
-	// 201, which both wrote an edge across the tenant boundary and — by answering
-	// 404 for an id that does not exist and 201 for one that does — turned the
-	// endpoint into an oracle for enumerating other tenants' task ids.
-	if depTask.ProjectID != task.ProjectID {
-		return apierror.BadRequest("depends_on_task_id must be a task in the same project")
+	// depends_on_task_id arrives in the request body, where no route parameter names
+	// it and the workspace guard therefore cannot see it. Without a check here, "both
+	// tasks exist" would be the whole of the validation: a member of any workspace
+	// could point one of their own tasks at a stranger's task id and get 201, which
+	// both writes an edge across the tenant boundary and — by answering 404 for an id
+	// that does not exist and 201 for one that does — turns the endpoint into an
+	// oracle for enumerating other tenants' task ids.
+	//
+	// The boundary is the WORKSPACE, not the project. It was written as same-project
+	// because that is trivially inside the same workspace and no cross-project case had
+	// been asked for; the guard was never about projects. The cost of the stricter
+	// version was real and measured on 2026-09-07 (#559270cf, Riker): three refusals in
+	// a single triage pass, on blockers that genuinely cross projects — Billing waiting
+	// on a Team Relay site rollout, Spark ↔ Lab, Spark ↔ Argus. With no cross-project
+	// `blocks` edge available, the only way left to park such a card is a due_date,
+	// which is an alarm clock standing in for an event: it fires whether or not the
+	// blocker actually cleared. Same-workspace edges restore the event.
+	if tenancyErr := s.assertSameTenancy(ctx, task, depTask); tenancyErr != nil {
+		return tenancyErr
 	}
 
 	// Check for duplicate.
@@ -92,6 +109,15 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 	// Subtasks tab and subtask_count. Without this, selecting "Child of" in
 	// the Dependencies tab recorded an edge nothing else read.
 	if dep.DependencyType == domain.DependencyTypeIsChildOf {
+		// Hierarchy does NOT cross projects, even inside one workspace. Unlike blocks
+		// and relates_to, an is_child_of edge also writes parent_task_id, which drives
+		// subtask_count, the Subtasks tab and the parent-closes-when-children-close
+		// rule — all of which are read through a project-scoped lens. A parent in
+		// another project would render as a child count nobody can open. Cross-project
+		// work is linked with `blocks`/`relates_to`; hierarchy stays inside a project.
+		if depTask.ProjectID != task.ProjectID {
+			return apierror.BadRequest("is_child_of must stay within one project: a parent in another project would not appear in the child's project views (use blocks or relates_to for cross-project links)")
+		}
 		if task.ParentTaskID != nil && *task.ParentTaskID != dep.DependsOnTaskID {
 			return apierror.Conflict("task already has a parent; remove the existing parent relationship first")
 		}
@@ -297,4 +323,54 @@ func (s *taskDependencyService) dfs(ctx context.Context, current, target uuid.UU
 	}
 
 	return false, nil
+}
+
+// assertSameTenancy refuses an edge whose two ends are not in the same workspace.
+//
+// Fails CLOSED, and that direction is the point: this is a tenancy boundary, so
+// "could not resolve one of the projects" must never read as "they matched". A nil
+// projectRepo, an unreadable project row, or a missing project all refuse. The cost is
+// a legitimate cross-project edge occasionally refused during a database blip; the cost
+// of the other direction is the cross-tenant write and the id-enumeration oracle this
+// check exists to prevent.
+func (s *taskDependencyService) assertSameTenancy(ctx context.Context, task, depTask *domain.Task) error {
+	if task.ProjectID == depTask.ProjectID {
+		return nil
+	}
+	if s.projectRepo == nil {
+		return apierror.BadRequest("cannot verify that both tasks are in the same workspace (project lookup unavailable); cross-project dependencies are refused until it is")
+	}
+	srcWS, srcOK := s.workspaceOf(ctx, task.ProjectID)
+	dstWS, dstOK := s.workspaceOf(ctx, depTask.ProjectID)
+	if !srcOK || !dstOK || srcWS != dstWS {
+		// ONE refusal for all three outcomes — different workspace, unreadable
+		// project, missing project — and deliberately so.
+		//
+		// Distinguishing them would answer, for an id the caller supplied, whether
+		// its project row exists: the same enumeration oracle in a new shape, one
+		// level up from the task ids this check was written to protect. It also keeps
+		// the failure CLOSED: "I could not establish that these are the same tenant"
+		// and "they are not the same tenant" have to reach the caller as the same
+		// refusal, or the first quietly becomes permission.
+		//
+		// The message names only the rule, never the target.
+		return apierror.BadRequest("depends_on_task_id must be a task in the same workspace")
+	}
+	return nil
+}
+
+// workspaceOf resolves a project's workspace. The bool is false for every reason the
+// answer is not trustworthy — repository error, missing row — so the caller has one
+// thing to check rather than an error it might forward as success.
+func (s *taskDependencyService) workspaceOf(ctx context.Context, projectID uuid.UUID) (uuid.UUID, bool) {
+	proj, err := s.projectRepo.GetByID(ctx, projectID)
+	if err != nil {
+		log.Printf("[task-dependency] cannot resolve workspace of project %s, refusing cross-project edge: %v", projectID, err)
+		return uuid.Nil, false
+	}
+	if proj == nil {
+		log.Printf("[task-dependency] project %s has no row, refusing cross-project edge", projectID)
+		return uuid.Nil, false
+	}
+	return proj.WorkspaceID, true
 }

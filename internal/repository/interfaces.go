@@ -114,7 +114,7 @@ type TaskRepository interface {
 	CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error)
 	ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	// ListAllBacklogTasks returns every non-deleted task currently in a backlog-category
-	// status, across ALL workspaces — global by design, mirroring FindDueMonitorBacklogTasks
+	// status, across ALL workspaces — global by design, mirroring FindDueBacklogTasks
 	// rather than the workspace-scoped ListByStatusCategory. Used by
 	// BacklogPromotionAdvisoryService (task #9f3f4064), which must see every backlog card
 	// the way bob/scripts/mesh-intake-sweep.py does (full visibility under its own agent
@@ -159,10 +159,11 @@ type TaskRepository interface {
 	// status_category=todo). Nothing returns such a task to circulation, so it sits
 	// in_progress indefinitely — measured at 245h on prod.
 	FindStaleUnleasedInProgress(ctx context.Context, olderThan time.Duration) ([]domain.Task, error)
-	// FindDueMonitorBacklogTasks returns tasks in "backlog" category, labelled
-	// "kind:monitor", whose due_date has passed. These are candidates for
-	// auto-promotion back to "todo" by the monitor promotion sweeper.
-	FindDueMonitorBacklogTasks(ctx context.Context) ([]domain.Task, error)
+	// FindDueBacklogTasks returns every task in a "backlog" category status whose
+	// due_date has passed, whatever its labels. These are CANDIDATES for
+	// auto-promotion back to "todo"; the promotion sweeper applies the guards that
+	// decide which of them actually move (#559270cf).
+	FindDueBacklogTasks(ctx context.Context) ([]domain.Task, error)
 	// MoveToProject atomically reassigns a task to a different project, assigning it
 	// the given target status and a new task_number within that project.
 	// Returns apierror.NotFound("Task") if the task does not exist or is soft-deleted.
