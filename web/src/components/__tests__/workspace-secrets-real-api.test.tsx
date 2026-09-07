@@ -32,7 +32,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 const WS = "11111111-1111-1111-1111-111111111111";
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([] as Secret[])));
+  // A fresh Response per call, not one shared instance: the component now
+  // also fetches agents/projects (task #73e9b55e's scope selector) alongside
+  // secrets, and a Response body can only be read once — reusing one across
+  // several fetch() calls throws "body stream already read" on the second.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(() => Promise.resolve(jsonResponse([] as Secret[]))),
+  );
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -42,7 +49,13 @@ describe("WorkspaceSecrets — real api()/fetch path", () => {
     await screen.findByTestId("secret-empty");
 
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-    const requestedUrl = String(fetchMock.mock.calls[0]?.[0]);
+    // The secrets endpoint is not necessarily the first call any more —
+    // agents/projects are fetched alongside it — so find it by URL shape
+    // rather than assuming call order.
+    const secretsCall = fetchMock.mock.calls.find((c) =>
+      String(c[0]).includes("/secrets"),
+    );
+    const requestedUrl = String(secretsCall?.[0]);
 
     // The exact failure this guards: a bare `/workspaces/:id/secrets` request
     // (no /api/v1) does not 404 — Caddy/the SPA router serves index.html for
