@@ -705,10 +705,10 @@ export function AgentDetailDialog({
             placeholder="*"
           />
 
-          {/* Max concurrent tasks — no shipped label copy yet (§1r.A): icon + aria-label only. */}
+          {/* Max concurrent tasks */}
           <ProfileFieldRow
             icon={<Layers className="h-3 w-3" />}
-            ariaLabel="Max concurrent tasks"
+            label="Max concurrent tasks"
             displayValue={
               <span className="text-sm">
                 {agent.max_concurrent_tasks ?? 0}
@@ -733,10 +733,10 @@ export function AgentDetailDialog({
             }
           />
 
-          {/* Escalation to — no shipped label copy yet (§1r.A): icon + aria-label only. */}
+          {/* Escalation contact */}
           <ProfileFieldRow
             icon={<ArrowUpCircle className="h-3 w-3" />}
-            ariaLabel="Escalation contact"
+            label="Escalation contact"
             displayValue={
               <span className="text-sm">
                 {agent.escalation_to || "Not set"}
@@ -1006,9 +1006,11 @@ function DetailRow({
 /**
  * Inline-editable row for one of the five profile fields added in task
  * #85714565. `label` renders as visible text when set; when omitted, `icon`
- * + `ariaLabel` carry the field's identity instead (§1r.A — no shipped copy
- * exists yet for "max concurrent tasks" / "escalation to", so those two
- * fields go icon+aria-label-only rather than inventing new visible words).
+ * + `ariaLabel` carry the field's identity instead (input aria-label/title
+ * and "Edit …" tooltip). Field-label copy is tier B (§1r.A) — the lead ships
+ * it directly, no Pavel approval gate — so all five profile fields now pass
+ * `label`; `ariaLabel`-only stays available for a future field that
+ * genuinely has no room for visible text.
  */
 function ProfileFieldRow({
   label,
@@ -1043,7 +1045,15 @@ function ProfileFieldRow({
   saveDisabled?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2">
+    // flex-wrap (not the plain single-line row this used to be): at a
+    // narrow viewport, editing max_concurrent_tasks/escalation_to squeezes
+    // the label span down to ~80px, and its uppercase tracking-wider text
+    // wrapped to THREE lines with the edit Input floating unanchored beside
+    // it (task #1ffb67b5, second pass — found live at 393px in edit mode).
+    // Letting the row wrap moves the value/editor to its own line instead
+    // of shrinking the label — the label then renders on one line at the
+    // row's full width, which is always enough room for these labels.
+    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
       <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
         {icon}
         {label}

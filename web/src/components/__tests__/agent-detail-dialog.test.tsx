@@ -102,7 +102,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
     expect(body.accepts_from).toEqual(["*"]);
   });
 
-  it("edits max concurrent tasks (aria-label only, no shipped label text) via the profile endpoint", async () => {
+  it("edits max concurrent tasks via the profile endpoint", async () => {
     vi.mocked(api).mockImplementation((path: string, opts?: { method?: string }) => {
       if (path === "/api/v1/agents/agent-1/profile" && opts?.method === "PUT") {
         return Promise.resolve(undefined);
@@ -117,7 +117,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
       <AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />,
     );
 
-    fireEvent.click(screen.getByTitle("Edit max concurrent tasks"));
+    fireEvent.click(screen.getByTitle("Edit Max concurrent tasks"));
     const editInput = screen.getByLabelText("Max concurrent tasks");
     fireEvent.change(editInput, { target: { value: "8" } });
     fireEvent.keyDown(editInput, { key: "Enter" });
@@ -149,7 +149,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
 
     render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
 
-    fireEvent.click(screen.getByTitle("Edit escalation contact"));
+    fireEvent.click(screen.getByTitle("Edit Escalation contact"));
     const editInput = screen.getByLabelText("Escalation contact");
     fireEvent.change(editInput, { target: { value: "Garfield" } });
     fireEvent.keyDown(editInput, { key: "Enter" });
@@ -181,7 +181,7 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
       <AgentDetailDialog open onOpenChange={vi.fn()} agent={{ ...baseAgent, max_concurrent_tasks: 5 }} />,
     );
 
-    fireEvent.click(screen.getByTitle("Edit max concurrent tasks"));
+    fireEvent.click(screen.getByTitle("Edit Max concurrent tasks"));
     const editInput = screen.getByLabelText("Max concurrent tasks");
     fireEvent.change(editInput, { target: { value: "" } });
 
@@ -225,8 +225,8 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
     expect(screen.getByTitle("Edit Responsibility zone")).toBeTruthy();
     expect(screen.getByTitle("Edit Working hours")).toBeTruthy();
     expect(screen.getByTitle("Edit Accepts from")).toBeTruthy();
-    expect(screen.getByTitle("Edit max concurrent tasks")).toBeTruthy();
-    expect(screen.getByTitle("Edit escalation contact")).toBeTruthy();
+    expect(screen.getByTitle("Edit Max concurrent tasks")).toBeTruthy();
+    expect(screen.getByTitle("Edit Escalation contact")).toBeTruthy();
     expect(screen.getByTitle("Edit capabilities")).toBeTruthy();
   });
 });
