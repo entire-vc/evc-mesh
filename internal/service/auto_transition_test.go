@@ -32,17 +32,32 @@ func buildAutoTransitionFixture() (
 	*MockTaskStatusRepository,
 	*MockTaskDependencyRepository,
 ) {
+	atSvc, taskRepo, statusRepo, depRepo, _ := buildAutoTransitionFixtureWithComments()
+	return atSvc, taskRepo, statusRepo, depRepo
+}
+
+// buildAutoTransitionFixtureWithComments is buildAutoTransitionFixture plus a
+// MockCommentRepository wired in, for tests that need to assert on the
+// umbrella-close system comment.
+func buildAutoTransitionFixtureWithComments() (
+	AutoTransitionService,
+	*MockTaskRepository,
+	*MockTaskStatusRepository,
+	*MockTaskDependencyRepository,
+	*MockCommentRepository,
+) {
 	taskRepo := NewMockTaskRepository()
 	statusRepo := NewMockTaskStatusRepository()
 	depRepo := NewMockTaskDependencyRepository()
 	activityRepo := NewMockActivityLogRepository()
+	commentRepo := NewMockCommentRepository()
 
 	// Create a real taskService so that MoveTask writes back to taskRepo.
 	taskSvc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo)
 	// Pass nil ruleRepo — falls back to hardcoded category lookup (backward compat).
-	atSvc := NewAutoTransitionService(taskRepo, statusRepo, depRepo, taskSvc, nil)
+	atSvc := NewAutoTransitionService(taskRepo, statusRepo, depRepo, taskSvc, nil, commentRepo)
 
-	return atSvc, taskRepo, statusRepo, depRepo
+	return atSvc, taskRepo, statusRepo, depRepo, commentRepo
 }
 
 // seedStatus creates and stores a TaskStatus in the mock repo.
@@ -199,6 +214,114 @@ func TestAutoTransition_NoSubtasks_NoTransition(t *testing.T) {
 
 	updated := taskRepo.items[parent.ID]
 	assert.Equal(t, inProgressStatus.ID, updated.StatusID, "task with no subtasks should not be auto-transitioned")
+}
+
+// ---------------------------------------------------------------------------
+// review -> done for a labeled umbrella (#d1eff1c6, 2026-09-07)
+// ---------------------------------------------------------------------------
+
+func TestAutoTransition_ReviewParentLabeledUmbrella_AllSubtasksTerminal_ClosesToDone(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _, commentRepo := buildAutoTransitionFixtureWithComments()
+
+	projectID := uuid.New()
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+
+	// Parent already sitting in "review" (e.g. it made this trip once already, then
+	// gained more subtasks later — the exact shape of #52f407e0 and friends).
+	parent := seedTask(taskRepo, projectID, reviewStatus.ID, nil, "Umbrella")
+	parent.Labels = []string{"sprint", "kind:epic"}
+	sub := seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, doneStatus.ID, updated.StatusID, "labeled umbrella in review with all subtasks terminal should close to done")
+
+	// A system comment listing the subtask should have been posted.
+	var found *domain.Comment
+	for _, c := range commentRepo.items {
+		if c.TaskID == parent.ID {
+			found = c
+		}
+	}
+	require.NotNil(t, found, "expected an umbrella-close system comment")
+	assert.Equal(t, domain.ActorTypeSystem, found.AuthorType)
+	assert.Contains(t, found.Body, sub.ID.String()[:8])
+	assert.Contains(t, found.Body, "Subtask A")
+}
+
+func TestAutoTransition_ReviewParentUnlabeled_AllSubtasksTerminal_NoTransition(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+
+	// Parent in review, own evidence obligation implied by having no umbrella label —
+	// e.g. a plain task with subtasks and its own AC, not a captain/epic (#3bc9f59d,
+	// #e04ebd26, #cdaee3e2, #5f71e1b5, #ffdf5a89 in the live measurement — none of
+	// them carried kind:epic/kind:umbrella). Must stay exactly as before this change.
+	parent := seedTask(taskRepo, projectID, reviewStatus.ID, nil, "Real task with subtasks")
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, reviewStatus.ID, updated.StatusID, "unlabeled parent in review must NOT auto-close — fail-closed")
+}
+
+func TestAutoTransition_ReviewParentLabeledUmbrella_NotAllSubtasksTerminal_NoTransition(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+	todoStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryTodo, "To Do")
+
+	parent := seedTask(taskRepo, projectID, reviewStatus.ID, nil, "Umbrella")
+	parent.Labels = []string{"kind:umbrella"}
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+	seedTask(taskRepo, projectID, todoStatus.ID, &parent.ID, "Subtask B (still open)")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, reviewStatus.ID, updated.StatusID, "must not close while a subtask is still open, even if labeled")
+}
+
+func TestAutoTransition_ReviewParentSupervised_NoTransition(t *testing.T) {
+	ctx := context.Background()
+	svc, taskRepo, statusRepo, _ := buildAutoTransitionFixture()
+
+	projectID := uuid.New()
+	reviewStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryReview, "Review")
+	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
+
+	parent := seedTask(taskRepo, projectID, reviewStatus.ID, nil, "Umbrella")
+	parent.Labels = []string{"kind:epic"}
+	parent.DelegationLevel = domain.DelegationLevelSupervised
+	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
+
+	err := svc.CheckSubtaskCompletion(ctx, parent.ID)
+	require.NoError(t, err)
+
+	updated := taskRepo.items[parent.ID]
+	assert.Equal(t, reviewStatus.ID, updated.StatusID, "supervised umbrella still requires a human signoff")
+}
+
+func TestHasUmbrellaLabel(t *testing.T) {
+	assert.True(t, hasUmbrellaLabel([]string{"kind:epic"}))
+	assert.True(t, hasUmbrellaLabel([]string{"sprint", "kind:umbrella", "captain"}))
+	assert.False(t, hasUmbrellaLabel([]string{"epic"}), "bare 'epic' without the kind: prefix does not count")
+	assert.False(t, hasUmbrellaLabel([]string{"sprint", "captain"}))
+	assert.False(t, hasUmbrellaLabel(nil))
 }
 
 // ---------------------------------------------------------------------------
