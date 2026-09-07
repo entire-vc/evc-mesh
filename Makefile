@@ -1,5 +1,5 @@
 .PHONY: build test lint migrate-up migrate-down docker-up docker-down generate clean \
-        ci ci-lint ci-test ci-build ci-services-up ci-services-down ci-install-tools
+        ci ci-lint ci-test ci-test-web ci-build ci-services-up ci-services-down ci-install-tools
 
 # Binary output directory
 BIN_DIR := bin
@@ -127,8 +127,8 @@ CI_NATS_URL     ?= nats://localhost:$(NATS_PORT)
 
 DEPLOY_COMPOSE := $(DEPLOY_DIR)/docker-compose.yml
 
-## ci: Full local CI — lint → test → build. Same gates as .github/workflows/ci.yml.
-ci: ci-install-tools ci-lint ci-test ci-build
+## ci: Full local CI — lint → test → test-web → build. Same gates as .gitlab-ci.yml.
+ci: ci-install-tools ci-lint ci-test ci-test-web ci-build
 	@echo ""
 	@echo "✅  make ci PASSED — safe to push"
 
@@ -232,6 +232,17 @@ ci-test: ci-services-up
 	NATS_URL="$(CI_NATS_URL)" \
 		go test ./... -v -race -coverprofile=coverage.out -covermode=atomic && \
 	echo "── Tests OK ✓"
+
+## ci-test-web: Run the frontend test suite (vitest). Until this target
+## existed, `make ci` compiled and typechecked web/ but never executed a
+## single one of its 94 test files / 851 tests — same gap as the CI
+## pipeline's `test:web` job (see that job's own comment, .gitlab-ci.yml,
+## for the incident this closes: MR !896 went fully green on a web/src/**
+## diff having run zero of the tests that diff should have exercised).
+ci-test-web:
+	@echo "── Frontend: test (vitest) ───────────────────────────────────────"
+	cd web && pnpm install --frozen-lockfile && pnpm test
+	@echo "── Frontend test OK ✓"
 
 ## ci-build: Compile Go binaries + frontend typecheck + build.
 ci-build:

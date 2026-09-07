@@ -768,6 +768,32 @@ coverage-gate:
     paths: [coverage-affected-summary.txt]
     expire_in: 1 week
 
+# ── test:web ─────────────────────────────────────────────────────────────────
+# Until this job existed, NOTHING ran the 94 files / 851 tests under
+# web/src/**/__tests__/**. `make ci` only ever ran `go test` (Makefile's
+# `test:`/`ci-test:` targets); this pipeline's own `build:web` job runs
+# `pnpm typecheck` + `pnpm build`, neither of which executes a single
+# `it()`/`describe()` block. A pipeline could — and on 2026-09-07 did, MR
+# !896 — go fully green on a diff that touched only web/src/** while
+# executing zero of the tests that diff should have exercised (Mesh
+# `#83c53770`). Green with no assertion run is not a passing check, it's an
+# absent one (§0x) — this job is what makes "frontend CI is green" mean the
+# same thing "backend CI is green" already means: assertions ran and held.
+#
+# Unconditional, same as `build:web` right below (no `changes:` filter) — a
+# gate that only runs on a guessed-relevant diff pattern is one commit away
+# from silently not running on the change that needed it.
+test:web:
+  stage: test
+  image: node:22-alpine
+  timeout: 20m
+  before_script:
+    - apk add --no-cache bash git
+    - corepack enable
+    - cd web && pnpm install --frozen-lockfile
+  script:
+    - pnpm test
+
 # ── build ───────────────────────────────────────────────────────────────────
 build:api:
   stage: build
