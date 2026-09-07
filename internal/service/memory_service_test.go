@@ -729,6 +729,162 @@ func TestRemember_ReservedTag_FleetTagsUnaffected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestReservedTag_OtherWritePaths — task #d378586f. enforceReservedTags was
+// wired to Remember only (#0104878c); ExtractFromEvent and ImportMemories are
+// the other two internal callers of memRepo.Upsert and were bypassing it
+// entirely. Same red/green shape as the Remember tests above, on the other
+// two paths.
+// ---------------------------------------------------------------------------
+
+func TestExtractFromEvent_ReservedTag_DroppedOutsideBenchWorkspace(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: false}))
+
+	repo := &mockMemoryRepo{}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	event := &domain.EventBusMessage{ID: uuid.New(), WorkspaceID: wsID, ProjectID: uuid.New()}
+	hint := &domain.MemoryHint{Persist: true, Key: "smuggled-note", Scope: domain.ScopeProject, Tags: []string{"lme-bench"}}
+
+	err := svc.ExtractFromEvent(context.Background(), event, hint)
+
+	require.NoError(t, err, "a reserved-tag hint must be dropped, not fail the event")
+	assert.Equal(t, 0, repo.upsertCalls, "a reserved-tag write must not reach the repo")
+}
+
+func TestExtractFromEvent_ReservedTag_AllowedInBenchWorkspace(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: true}))
+
+	repo := &mockMemoryRepo{}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	event := &domain.EventBusMessage{ID: uuid.New(), WorkspaceID: wsID, ProjectID: uuid.New()}
+	hint := &domain.MemoryHint{Persist: true, Key: "bench-fixture", Scope: domain.ScopeProject, Tags: []string{"lme-bench"}}
+
+	err := svc.ExtractFromEvent(context.Background(), event, hint)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, repo.upsertCalls, "a bench-workspace write must still reach the repo")
+}
+
+func TestImportMemories_ReservedTag_SkippedOutsideBenchWorkspace(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: false}))
+
+	var writtenKeys []string
+	repo := &mockMemoryRepo{
+		upsertFn: func(_ context.Context, mem *domain.Memory) error {
+			writtenKeys = append(writtenKeys, mem.Key)
+			return nil
+		},
+	}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	blob := []byte(`memories:
+  - key: clean-note
+    content: "regular workspace note"
+    scope: workspace
+  - key: smuggled-fixture
+    content: "bench fixture smuggled into a non-bench workspace"
+    scope: workspace
+    tags: ["lme-bench"]
+`)
+
+	count, err := svc.ImportMemories(context.Background(), wsID, blob)
+
+	require.NoError(t, err, "one bad item must not fail the whole import")
+	assert.Equal(t, 1, count)
+	assert.Equal(t, []string{"clean-note"}, writtenKeys, "the reserved-tag item must not be imported outside the bench workspace")
+}
+
+func TestImportMemories_ReservedTag_AllowedInBenchWorkspace(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: true}))
+
+	var writtenKeys []string
+	repo := &mockMemoryRepo{
+		upsertFn: func(_ context.Context, mem *domain.Memory) error {
+			writtenKeys = append(writtenKeys, mem.Key)
+			return nil
+		},
+	}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	blob := []byte(`memories:
+  - key: bench-fixture
+    content: "restored bench fixture"
+    scope: workspace
+    tags: ["lme-bench"]
+`)
+
+	count, err := svc.ImportMemories(context.Background(), wsID, blob)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "an lme-bench-tagged item must still import into the actual bench workspace")
+	assert.Equal(t, []string{"bench-fixture"}, writtenKeys)
+}
+
+// TestEnforceReservedTags_CaseInsensitiveMatch covers the second half of
+// #d378586f: the map lookup used to be an exact match, so `LME-Bench` passed
+// straight through outside the bench workspace. The comparison is now
+// case-insensitive on the lookup key only.
+func TestEnforceReservedTags_CaseInsensitiveMatch(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: false}))
+
+	repo := &mockMemoryRepo{}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	for i, tag := range []string{"LME-Bench", "Lme-Bench", "LME-BENCH"} {
+		t.Run(tag, func(t *testing.T) {
+			mem := baseMemory(wsID)
+			mem.Key = fmt.Sprintf("test-key-%d", i) // tag itself may contain uppercase, invalid in a key
+			mem.Tags = []string{tag}
+
+			_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+			require.Error(t, err, "a differently-cased reserved tag must be caught too")
+			var apiErr *apierror.Error
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+			assert.Contains(t, apiErr.Validation["tags"], tag, "the error should name the tag as the caller wrote it")
+		})
+	}
+}
+
+// TestEnforceReservedTags_FleetTagsCaseUnaffected pins the other direction of
+// the case-insensitive change: ordinary fleet tags must not start matching
+// reservedMemoryTags just because casing is no longer compared exactly —
+// only the one literal entry ("lme-bench", case-insensitively) is reserved.
+func TestEnforceReservedTags_FleetTagsCaseUnaffected(t *testing.T) {
+	wsID := uuid.New()
+	wsRepo := NewMockWorkspaceRepository()
+	require.NoError(t, wsRepo.Create(context.Background(), &domain.Workspace{ID: wsID, IsBench: false}))
+
+	repo := &mockMemoryRepo{}
+	svc := newMemoryServiceWithWorkspaceRepo(repo, wsRepo)
+
+	for i, tag := range []string{"Memory-Bench", "BENCH-recap", "kind:Decision"} {
+		t.Run(tag, func(t *testing.T) {
+			mem := baseMemory(wsID)
+			mem.Key = fmt.Sprintf("test-key-%d", i) // tag itself may contain uppercase/colon, invalid in a key
+			mem.Tags = []string{tag}
+
+			result, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+			require.NoError(t, err)
+			assert.Equal(t, "created", result.Outcome)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestRecall_BasicSearch
 // ---------------------------------------------------------------------------
 
