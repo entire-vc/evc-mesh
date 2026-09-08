@@ -21,7 +21,7 @@ import { cn } from "@/lib/cn";
 import {
   PROJECT_RAIL_ICON_LABEL,
   WORKSPACE_LOGO_ICON_FILL,
-  projectRailIconStateClasses,
+  projectRailIconParts,
   workspaceLogoContainerParts,
 } from "./rail-icon-classes";
 import type { WorkspaceLogoVariant } from "./rail-icon-classes";
@@ -283,27 +283,17 @@ export function Sidebar({ collapsed }: SidebarProps) {
             <Link
               key={project.id}
               to={`/w/${wsSlug}/p/${project.slug}`}
-              className="flex items-center justify-center"
+              data-testid="project-icon"
+              /* `#119078b0`: a project's own muted chip, deliberately NOT
+                 `WorkspaceLogo` — that component's "no image" branch is the
+                 workspace's brand-teal tint, and reusing it here is what
+                 made every project tile in a 13-project workspace look like
+                 the workspace mark above them. See `rail-icon-classes.ts`. */
+              className={cn(projectRailIconParts(project.slug === projectSlug))}
             >
-              {/* `#bb8f1092`: reuse WorkspaceLogo's container/tint instead of
-                  a bare <span> — projects never have an uploaded image
-                  (iconUrl is always null for them), so this always takes the
-                  fallback branch and always shows the tile, which is exactly
-                  what a project without its own `icon` needs here. */}
-              <WorkspaceLogo
-                iconUrl={null}
-                name={project.name}
-                variant="collapsed"
-                testId="project-icon"
-                fallback={
-                  <span className={PROJECT_RAIL_ICON_LABEL}>
-                    {project.icon || project.name.charAt(0).toUpperCase()}
-                  </span>
-                }
-                className={projectRailIconStateClasses(
-                  project.slug === projectSlug,
-                )}
-              />
+              <span className={PROJECT_RAIL_ICON_LABEL}>
+                {project.icon || project.name.charAt(0).toUpperCase()}
+              </span>
             </Link>
           ))}
           <div className="my-1 w-6 border-t border-sidebar-border" />
