@@ -55,6 +55,48 @@ const firstParagraphWithdrawalBody = "Отзываю свой запрос к Pa
 // difference stays measured rather than remembered.
 const blockerStillOpenWithdrawalBody = "Отзываю запрос: ответ больше не нужен, но регресс-тест не закрыт."
 
+// ---------------------------------------------------------------------------
+// Task #6b89fae5 — a live prod incident's `❓ Blocking @pavel` gate on #2aeb7bcf
+// was auto-released the instant the marker's owner wrote he was NOT
+// withdrawing it.
+//
+// liveIncidentNotWithdrawingBody is the VERBATIM comment body (fetched from
+// #2aeb7bcf, comment id a2c6812d, 2026-09-08T07:23:56Z) that triggered the
+// release. Measured directly against the real parser before this fix
+// (TestZZScratchProbeIncidentBody, not committed): the whole second sentence
+// onward is ONE paragraph — there is only one blank-line break in the entire
+// body, right after "23:18Z outage start." — so negatorScope (lastParagraph)
+// returns that whole block, which contains BOTH "not withdrawing it" AND "no
+// action needed there". The incident's own live commentary (Bill's re-arm
+// comment, Riker's reply) both read the trigger as "no action needed" via
+// `not needed` — that is NOT what the parser actually matched: `not needed`
+// is not a substring of `no action needed`. The real match was `withdrawing`
+// (from triageExitNegators) inside the phrase NEGATING it, `not withdrawing`
+// — confirmed live: negatorAsserted(scope) matched `withdrawing` at byte 185,
+// not filtered by isRepeatPingNegation. A negation-of-a-negator is exactly
+// what explicitNonWithdrawalMarkers exists to catch, independent of which
+// specific triageExitNegators word the negation happened to contain.
+const liveIncidentNotWithdrawingBody = "Gate-owner wake-up re-check (7th vantage-point re-verification, ~4h after " +
+	"the last at 03:49Z): `alyssa` (161.104.58.170) is still fully unreachable — `nc` to :22 → `Operation timed " +
+	"out`, `curl --max-time 8` to :443 and to `https://teamrelay.ru/` → both `Connection timed out` " +
+	"(`http_code=000`). No change in ~8h since the 23:18Z outage start.\n\n" +
+	"Blocker is still live and unchanged from what's already on this thread — nothing for me to resolve without " +
+	"Selectel panel access, which the fleet doesn't hold. Gate `❓ Blocking @pavel` stays as-is; not withdrawing " +
+	"it. Also did the mandatory own-backlog triage this session: my other 3 in_progress cards (`#49db02c5`, " +
+	"`#0e4cb248`, `#b4cdd711`) all have comments <24h old with named next steps/blockers already on their " +
+	"threads — no action needed there."
+
+// twoParagraphNotWithdrawingBody covers the OTHER shape the incident's own
+// write-up assumed was live (it was not, for this particular comment — see
+// the doc comment above): an explicit refusal in an EARLIER paragraph than
+// the negator. explicitNonWithdrawalMarkers is checked over the whole body
+// specifically so this shape is also covered, not just the one that actually
+// fired.
+const twoParagraphNotWithdrawingBody = "Blocker is still live and unchanged. Gate `❓ Blocking @pavel` stays " +
+	"as-is; not withdrawing it.\n\n" +
+	"Also did the mandatory own-backlog triage this session: my other 3 in_progress cards all have comments " +
+	"<24h old with named next steps already on their threads — no action needed there."
+
 func TestDiagnoseNegatorMiss(t *testing.T) {
 	tests := []struct {
 		name string
@@ -154,6 +196,41 @@ func TestDiagnoseNegatorMiss(t *testing.T) {
 		{
 			name: "declining to re-ping is not a missed withdrawal (#3948173f)",
 			body: "Разбор.\n\nПовторный ask Pavel'ю здесь не нужен — он уже видел это состояние.",
+			want: "",
+		},
+		{
+			// RED CONTROL: the verbatim body that released a live prod-incident
+			// gate on #2aeb7bcf. Must come back explicitly-refused, not silently
+			// treated as an ordinary comment and not misdiagnosed as
+			// out-of-scope (the negator WAS in scope — the explicit refusal is
+			// what must override it).
+			name: "live incident #2aeb7bcf body: not-withdrawing self-matches its own negator vocabulary",
+			body: liveIncidentNotWithdrawingBody,
+			want: negatorMissExplicitRefusal,
+		},
+		{
+			name: "explicit refusal in an earlier paragraph overrides a negator in the last one",
+			body: twoParagraphNotWithdrawingBody,
+			want: negatorMissExplicitRefusal,
+		},
+		{
+			// POSITIVE CONTROL: an explicit-refusal phrase with no negator
+			// anywhere in the body is just an ordinary comment — nothing to
+			// diagnose. explicitNonWithdrawalMarkers must not turn into its own
+			// noise source. NOTE: "not withdrawing" itself contains the negator
+			// "withdrawing", so it cannot be used here — this uses "stays as-is"
+			// alone, which carries no triageExitNegators substring.
+			name: "explicit refusal alone, no negator anywhere, is not reported",
+			body: "Blocker still live, unchanged. Gate stays as-is. Will keep checking.",
+			want: "",
+		},
+		{
+			// NEGATIVE CONTROL: a genuine one-line withdrawal with none of
+			// explicitNonWithdrawalMarkers present must still release exactly
+			// as before this fix — proof the new veto is scoped to bodies that
+			// actually assert a refusal, not to the negator vocabulary itself.
+			name: "a genuine withdrawal with no refusal phrase anywhere still counts",
+			body: "Отзываю свой запрос: ответ больше не нужен.",
 			want: "",
 		},
 	}
@@ -265,6 +342,100 @@ func TestReleaseHumanGateOnWithdrawal_BlockerStillOpenPhrase_ExplainsWhy(t *test
 	assert.Contains(t, notices[0].Body, "блокер всё ещё жив")
 	assert.NotContains(t, notices[0].Body, "последний абзац",
 		"this body's negator DID reach the scope — do not blame paragraph order")
+}
+
+// TestReleaseHumanGateOnWithdrawal_ExplicitRefusalElsewhere_DoesNotRelease is
+// the end-to-end RED CONTROL for #6b89fae5: the verbatim comment body that, on
+// prod (#2aeb7bcf, 2026-09-08T07:23:56Z), released a live incident's gate the
+// instant its own author wrote "not withdrawing it". Run through the same
+// Create() path enforceBlockingTriage/releaseHumanGateOnWithdrawal share, this
+// must produce ZERO gate-clearing calls and one system notice explaining why —
+// not a live re-run of the incident.
+func TestReleaseHumanGateOnWithdrawal_ExplicitRefusalElsewhere_DoesNotRelease(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: liveIncidentNotWithdrawingBody,
+	}))
+
+	assert.Empty(t, env.taskMover.humanGateCalls(),
+		"the exact body that released #2aeb7bcf's gate on prod must not release this one")
+	notices := env.withdrawalMissNotices()
+	require.Len(t, notices, 1, "the author must be told the gate is still up")
+	assert.Contains(t, notices[0].Body, "НЕ отзывается")
+}
+
+// TestReleaseHumanGateOnWithdrawal_ExplicitRefusalEarlierParagraph_DoesNotRelease
+// is the POSITIVE-for-the-guard case the incident write-up originally assumed
+// was live (a refusal in an EARLIER paragraph than the negator) — not what
+// actually happened on #2aeb7bcf (see liveIncidentNotWithdrawingBody's doc
+// comment), but a real shape the fix must also cover, since
+// explicitNonWithdrawalMarkers is checked over the whole body rather than
+// negatorScope specifically to reach it.
+func TestReleaseHumanGateOnWithdrawal_ExplicitRefusalEarlierParagraph_DoesNotRelease(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: twoParagraphNotWithdrawingBody,
+	}))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+	notices := env.withdrawalMissNotices()
+	require.Len(t, notices, 1)
+	assert.Contains(t, notices[0].Body, "НЕ отзывается")
+}
+
+// TestReleaseHumanGateOnWithdrawal_ExplicitRefusalAlone_NoNegator_IsSilent is
+// the anti-noise control for the new veto: a comment that only states the
+// gate stays up, with no withdrawal vocabulary anywhere, is ordinary traffic
+// on a gated card (like the re-checks Riker posted every ~30-40 minutes
+// throughout #2aeb7bcf) and must not itself provoke a system notice.
+func TestReleaseHumanGateOnWithdrawal_ExplicitRefusalAlone_NoNegator_IsSilent(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Blocker still live, unchanged. Gate stays as-is. Will re-check in 30 min.",
+	}))
+
+	assert.Empty(t, env.taskMover.humanGateCalls())
+	assert.Empty(t, env.withdrawalMissNotices(), "no negator anywhere — nothing to explain")
+}
+
+// TestReleaseHumanGateOnWithdrawal_GenuineWithdrawal_StillReleases is the
+// NEGATIVE control demanded alongside the red control above: an ordinary,
+// genuine one-line withdrawal carrying none of explicitNonWithdrawalMarkers
+// must keep releasing exactly as before this fix.
+func TestReleaseHumanGateOnWithdrawal_GenuineWithdrawal_StillReleases(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	env.seedAgentBlockingComment(taskID, askerID)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: askerID, AuthorType: domain.ActorTypeAgent,
+		Body: "Отзываю свой запрос: ответ больше не нужен.",
+	}))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "this fix must not regress the ordinary withdrawal path")
+	assert.False(t, gateCalls[0].value)
+	assert.Empty(t, env.withdrawalMissNotices())
 }
 
 // ---------------------------------------------------------------------------
