@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -557,7 +558,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	for _, tag := range mem.Tags {
 		if len(tag) > 64 {
 			return RememberResult{}, apierror.ValidationError(map[string]string{
-				"tags": "each tag must be 64 characters or fewer",
+				"tags": fmt.Sprintf("each tag must be 64 bytes or fewer (got %d bytes / %d characters)", len(tag), utf8.RuneCountInString(tag)),
 			})
 		}
 	}
@@ -1597,7 +1598,7 @@ func (s *memoryService) SetProjectKnowledge(ctx context.Context, input SetProjec
 	}
 	if len(input.Key) > 80 {
 		return nil, "", apierror.ValidationError(map[string]string{
-			"key": "key must be 80 characters or fewer",
+			"key": fmt.Sprintf("key must be 80 bytes or fewer (got %d bytes / %d characters)", len(input.Key), utf8.RuneCountInString(input.Key)),
 		})
 	}
 	if !keySlugRegex.MatchString(input.Key) {
@@ -1612,7 +1613,7 @@ func (s *memoryService) SetProjectKnowledge(ctx context.Context, input SetProjec
 	}
 	if len(input.Value) > 4000 {
 		return nil, "", apierror.ValidationError(map[string]string{
-			"value": "value must be 4000 characters or fewer",
+			"value": fmt.Sprintf("value must be 4000 bytes or fewer (got %d bytes / %d characters)", len(input.Value), utf8.RuneCountInString(input.Value)),
 		})
 	}
 

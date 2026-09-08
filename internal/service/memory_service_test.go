@@ -2999,6 +2999,138 @@ func TestSetProjectKnowledge_Amendment4_CanonicalSupersede(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters — task #ddb5cf78, same
+// class of fix as the value limit below, applied to the 80-byte key cap.
+// ---------------------------------------------------------------------------
+
+func TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters(t *testing.T) {
+	key := strings.Repeat("a", 81) // regex-legal charset, only length is at issue here
+	svc := NewMemoryService(&mockMemoryRepo{}, &mockMemoryEdgeRepo{}, nil)
+
+	_, _, err := svc.SetProjectKnowledge(context.Background(), SetProjectKnowledgeInput{
+		WorkspaceID: uuid.New(),
+		ProjectID:   uuid.New(),
+		Key:         key,
+		Value:       "value",
+	})
+
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	msg := apiErr.Validation["key"]
+	assert.Contains(t, msg, "bytes", "error must name the unit actually enforced")
+	assert.Contains(t, msg, fmt.Sprintf("%d bytes", len(key)), "error must print the actual byte size")
+}
+
+// ---------------------------------------------------------------------------
+// TestRemember_TagLimitIsBytesNotCharacters — task #ddb5cf78, same class of
+// fix applied to the 64-byte-per-tag cap.
+// ---------------------------------------------------------------------------
+
+func TestRemember_TagLimitIsBytesNotCharacters(t *testing.T) {
+	// 'ю' is 2 bytes in UTF-8: 33 runes = 66 bytes (>64), well under 64 characters.
+	tag := strings.Repeat("ю", 33)
+	repo := &mockMemoryRepo{}
+	svc := newMemoryService(repo)
+
+	mem := &domain.Memory{
+		WorkspaceID: uuid.New(),
+		Key:         "valid-key",
+		Content:     "content",
+		Scope:       domain.ScopeProject,
+		Tags:        []string{tag},
+	}
+
+	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
+
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	msg := apiErr.Validation["tags"]
+	assert.Contains(t, msg, "bytes", "error must name the unit actually enforced")
+	assert.Contains(t, msg, fmt.Sprintf("%d bytes", len(tag)), "error must print the actual byte size")
+}
+
+// ---------------------------------------------------------------------------
+// TestSetProjectKnowledge_ValueLimitIsBytesNotCharacters — task #ddb5cf78
+//
+// The limit is enforced on len(input.Value), i.e. UTF-8 bytes. The error
+// message used to say "characters", which is wrong on any non-ASCII text
+// (Cyrillic is 2 bytes/char) and sends the caller trimming by the wrong unit.
+// ---------------------------------------------------------------------------
+
+func TestSetProjectKnowledge_ValueLimitIsBytesNotCharacters(t *testing.T) {
+	wsID := uuid.New()
+	projID := uuid.New()
+
+	newInput := func(value string) SetProjectKnowledgeInput {
+		return SetProjectKnowledgeInput{
+			WorkspaceID: wsID,
+			ProjectID:   projID,
+			Key:         "byte-limit-test",
+			Value:       value,
+		}
+	}
+
+	t.Run("red: ~2700 Cyrillic chars (>4000 bytes) is rejected and error names bytes + actual size", func(t *testing.T) {
+		// Each 'ю' is 2 bytes in UTF-8 → 2700 runes = 5400 bytes, well over the 4000-byte limit,
+		// while comfortably under 4000 *characters* — exactly the case that used to confuse callers.
+		value := strings.Repeat("ю", 2700)
+		require.Less(t, len([]rune(value)), 4000, "test fixture must stay under 4000 characters")
+		require.Greater(t, len(value), 4000, "test fixture must exceed 4000 bytes")
+
+		svc := NewMemoryService(&mockMemoryRepo{}, &mockMemoryEdgeRepo{}, nil)
+		_, _, err := svc.SetProjectKnowledge(context.Background(), newInput(value))
+
+		require.Error(t, err)
+		var apiErr *apierror.Error
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+		msg := apiErr.Validation["value"]
+		assert.Contains(t, msg, "bytes", "error must name the unit actually enforced")
+		assert.Contains(t, msg, fmt.Sprintf("%d bytes", len(value)), "error must print the actual byte size")
+	})
+
+	t.Run("green: value just under the 4000-byte limit is accepted and readable back", func(t *testing.T) {
+		// 1999 'ю' (2 bytes each) = 3998 bytes — under the limit despite being far under
+		// 4000 characters too, so this is a clean accept, not an edge-of-both-units case.
+		value := strings.Repeat("ю", 1999)
+		require.Less(t, len(value), 4000)
+
+		upserted := false
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				m.ID = uuid.New()
+				upserted = true
+				return nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil)
+		_, _, err := svc.SetProjectKnowledge(context.Background(), newInput(value))
+
+		require.NoError(t, err)
+		assert.True(t, upserted, "value under the byte limit must be persisted, not silently dropped")
+	})
+
+	t.Run("unit control: 3999 ASCII bytes (== 3999 characters) is accepted", func(t *testing.T) {
+		// Distinguishes "limit is bytes" from "limit got stricter": if the fix had
+		// accidentally tightened the bound, this ASCII case (bytes == chars) would fail too.
+		value := strings.Repeat("a", 3999)
+
+		memRepo := &mockMemoryRepo{
+			upsertFn: func(_ context.Context, m *domain.Memory) error {
+				m.ID = uuid.New()
+				return nil
+			},
+		}
+		svc := NewMemoryService(memRepo, &mockMemoryEdgeRepo{}, nil)
+		_, _, err := svc.SetProjectKnowledge(context.Background(), newInput(value))
+
+		require.NoError(t, err)
+	})
+}
+
+// ---------------------------------------------------------------------------
 // P1-D: Recency-aware recall — decay formula + freshness_score + RecencyScore
 // ---------------------------------------------------------------------------
 
