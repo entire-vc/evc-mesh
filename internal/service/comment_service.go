@@ -340,6 +340,46 @@ var blockerStillOpenMarkers = []string{
 	"не закрыт", "не забыт", "still blocked",
 }
 
+// explicitNonWithdrawalMarkers are phrases that assert, ANYWHERE in the
+// stripped body, that a gate/marker/blocker is explicitly staying up. Present
+// anywhere, they override any triageExitNegators match found in negatorScope —
+// the same kind of override blockerStillOpenMarkers applies, but checked over
+// the WHOLE body rather than just the negator's own scope, because the
+// refusal is typically stated in an EARLIER paragraph than the one
+// negatorScope reads.
+//
+// Added 2026-09-08 (#6b89fae5, live prod incident #2aeb7bcf, found by Bill).
+// Riker's comment on the incident's `❓ Blocking @pavel` card said, second
+// paragraph: "Gate `❓ Blocking @pavel` stays as-is; not withdrawing it." —
+// then, in its own LAST (and therefore only-scoped) paragraph, reported on
+// three OTHER cards: "…no action needed there." negatorScope for a
+// marker-less body is the last paragraph only (see #1e5be182 above), so the
+// explicit refusal one paragraph up was never read, "no action needed"
+// matched "not needed" in triageExitNegators, and the still-live incident
+// gate was released a second after the author had just reaffirmed it in the
+// same breath. blockerStillOpenMarkers does not cover this: it is scoped to
+// the SAME negatorScope as the negator it vetoes, and here the two phrases
+// are in different paragraphs by construction — the veto must read past the
+// scope boundary that everything else in this file deliberately narrows to.
+var explicitNonWithdrawalMarkers = []string{
+	"not withdrawing", "не отзываю", "не снимаю",
+	"stays as-is", "остаётся в силе", "гейт остаётся", "маркер остаётся",
+	"оставляю гейт", "оставляю маркер",
+}
+
+// explicitRefusalInBody reports whether an already-lower-cased, already-
+// stripQuotedSpans'd BODY (not scope — see explicitNonWithdrawalMarkers doc
+// comment for why the whole body and not negatorScope) asserts one of
+// explicitNonWithdrawalMarkers.
+func explicitRefusalInBody(lowerStrippedBody string) bool {
+	for _, m := range explicitNonWithdrawalMarkers {
+		if containsNegatorWholeWord(lowerStrippedBody, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // repeatPingWords / askWords: see isRepeatPingNegation.
 var repeatPingWords = []string{"повторный", "повторно", "дублир", "repeat", "duplicate"}
 var askWords = []string{"ask", "пинг", "вопрос", "ping", "question"}
@@ -429,7 +469,11 @@ func negatorAsserted(lowerScope string) bool {
 }
 
 func hasNegatorInScope(body string) bool {
-	lower := strings.ToLower(negatorScope(stripQuotedSpans(body)))
+	stripped := stripQuotedSpans(body)
+	if explicitRefusalInBody(strings.ToLower(stripped)) {
+		return false
+	}
+	lower := strings.ToLower(negatorScope(stripped))
 	if blockerStillOpenInScope(lower) {
 		return false
 	}
@@ -462,6 +506,14 @@ const (
 	// have counted. Quoted anywhere else it is not reported at all; see
 	// diagnoseNegatorMiss for why (pasted logs match "resolved").
 	negatorMissOnlyQuoted negatorMissReason = "negator-only-inside-quoted-span"
+	// negatorMissExplicitRefusal: the body asserts a negator IN scope, but
+	// somewhere else in the same body it also asserts one of
+	// explicitNonWithdrawalMarkers ("not withdrawing", "гейт остаётся", …),
+	// which overrides it regardless of which paragraph either lands in
+	// (#6b89fae5). Checked before out-of-scope/blocker-still-open below —
+	// an explicit refusal is the most specific explanation available and
+	// should not be shadowed by a narrower one.
+	negatorMissExplicitRefusal negatorMissReason = "explicit-non-withdrawal-stated-elsewhere"
 )
 
 // diagnoseNegatorMiss explains why hasNegatorInScope(body) came back false on a
@@ -483,7 +535,17 @@ const (
 // would be pure noise. See #3948173f for why it stopped counting.
 func diagnoseNegatorMiss(body string) negatorMissReason {
 	stripped := stripQuotedSpans(body)
+	lowerStripped := strings.ToLower(stripped)
 	lowerScope := strings.ToLower(negatorScope(stripped))
+
+	// Checked before scope/blocker-still-open below: an explicit refusal
+	// elsewhere in the body is the most specific explanation available, and a
+	// body carrying one is reported this way even when the negator itself DID
+	// land in scope — hasNegatorInScope vetoes on explicitRefusalInBody first,
+	// so this must match it or the two would disagree about the same comment.
+	if explicitRefusalInBody(lowerStripped) && (negatorAsserted(lowerScope) || negatorAsserted(lowerStripped)) {
+		return negatorMissExplicitRefusal
+	}
 
 	if negatorAsserted(lowerScope) {
 		if blockerStillOpenInScope(lowerScope) {
@@ -491,7 +553,7 @@ func diagnoseNegatorMiss(body string) negatorMissReason {
 		}
 		return "" // it counted — hasNegatorInScope returned true; caller should not be here
 	}
-	if negatorAsserted(strings.ToLower(stripped)) {
+	if negatorAsserted(lowerStripped) {
 		return negatorMissOutOfScope
 	}
 	// The quoted case is scoped on the RAW body deliberately: report it only when
@@ -520,6 +582,9 @@ var withdrawalMissHint = map[negatorMissReason]string{
 		"что блокер всё ещё жив (`не закрыт` / `не забыт` / `still blocked`) — оно перебивает отзыв в той же области.",
 	negatorMissOnlyQuoted: "слова отзыва встречаются только внутри кода, цитаты или блока — " +
 		"процитированный отзыв не считается заявленным.",
+	negatorMissExplicitRefusal: "в этом же комменте где-то ещё сказано, что гейт/маркер НЕ отзывается " +
+		"(`not withdrawing` / `не отзываю` / `гейт остаётся` и т.п.) — это перебивает отзыв, " +
+		"даже если слова отзыва стоят в правильном месте.",
 }
 
 // paragraphBreakRegex matches one or more consecutive blank (or whitespace-only)
