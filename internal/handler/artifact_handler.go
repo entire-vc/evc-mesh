@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"mime"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -48,13 +51,25 @@ func (h *ArtifactHandler) List(c echo.Context) error {
 	return c.JSON(http.StatusOK, page)
 }
 
-// Upload handles POST /tasks/:task_id/artifacts (multipart form)
+// Upload handles POST /tasks/:task_id/artifacts. Dispatches on Content-Type:
+// multipart/form-data (the documented, MCP-client format) or application/json
+// (a direct-REST convenience for callers that already have the file content
+// in memory — e.g. a screenshot captured and base64-encoded in one step, with
+// no multipart writer at hand).
 func (h *ArtifactHandler) Upload(c echo.Context) error {
 	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskSvc)
 	if err != nil {
 		return handleError(c, err)
 	}
 
+	ct := c.Request().Header.Get(echo.HeaderContentType)
+	if strings.HasPrefix(ct, echo.MIMEApplicationJSON) {
+		return h.uploadJSON(c, taskID)
+	}
+	return h.uploadMultipart(c, taskID)
+}
+
+func (h *ArtifactHandler) uploadMultipart(c echo.Context, taskID uuid.UUID) error {
 	// Read multipart form fields.
 	name := c.FormValue("name")
 	artifactType := c.FormValue("artifact_type")
@@ -78,22 +93,6 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 	}
 	defer func() { _ = file.Close() }()
 
-	// Determine uploader from context.
-	var uploadedBy uuid.UUID
-	var uploadedByType domain.UploaderType
-
-	if agentIDVal := c.Get("agent_id"); agentIDVal != nil {
-		if aid, ok := agentIDVal.(uuid.UUID); ok {
-			uploadedBy = aid
-			uploadedByType = domain.UploaderTypeAgent
-		}
-	} else if userIDVal := c.Get("user_id"); userIDVal != nil {
-		if uid, ok := userIDVal.(uuid.UUID); ok {
-			uploadedBy = uid
-			uploadedByType = domain.UploaderTypeUser
-		}
-	}
-
 	// Validate metadata JSON if provided.
 	if metadataStr != "" {
 		if !json.Valid([]byte(metadataStr)) {
@@ -101,10 +100,12 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 		}
 	}
 
+	uploadedBy, uploadedByType := uploaderFromContext(c)
+
 	input := service.UploadArtifactInput{
 		TaskID:         taskID,
 		Name:           name,
-		ArtifactType:   domain.ArtifactType(artifactType),
+		ArtifactType:   normalizeArtifactType(artifactType),
 		MimeType:       inferMimeType(fileHeader.Header.Get("Content-Type"), fileHeader.Filename),
 		UploadedBy:     uploadedBy,
 		UploadedByType: uploadedByType,
@@ -118,6 +119,111 @@ func (h *ArtifactHandler) Upload(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusCreated, artifact)
+}
+
+// uploadArtifactJSONBody is the application/json request shape for
+// POST /tasks/:task_id/artifacts. content_type is accepted as an alias for
+// mime_type — both names have been seen in the wild from direct-REST callers.
+type uploadArtifactJSONBody struct {
+	Name         string          `json:"name"`
+	ArtifactType string          `json:"artifact_type"`
+	MimeType     string          `json:"mime_type"`
+	ContentType  string          `json:"content_type"`
+	Content      string          `json:"content"`
+	Encoding     string          `json:"encoding"` // "base64" (default) or "text"
+	Metadata     json.RawMessage `json:"metadata"`
+}
+
+func (h *ArtifactHandler) uploadJSON(c echo.Context, taskID uuid.UUID) error {
+	var body uploadArtifactJSONBody
+	if err := json.NewDecoder(c.Request().Body).Decode(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid JSON body"))
+	}
+
+	if body.Name == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"name": "name is required",
+		}))
+	}
+	if body.Content == "" {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{
+			"content": "content is required",
+		}))
+	}
+
+	var data []byte
+	switch strings.ToLower(strings.TrimSpace(body.Encoding)) {
+	case "text":
+		data = []byte(body.Content)
+	case "", "base64":
+		decoded, err := base64.StdEncoding.DecodeString(body.Content)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+				`content is not valid base64 (pass "encoding": "text" for raw text content)`))
+		}
+		data = decoded
+	default:
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			`invalid encoding `+strings.TrimSpace(body.Encoding)+`: must be "base64" or "text"`))
+	}
+
+	if len(body.Metadata) > 0 && !json.Valid(body.Metadata) {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("metadata must be valid JSON"))
+	}
+
+	mimeType := body.MimeType
+	if mimeType == "" {
+		mimeType = body.ContentType
+	}
+
+	uploadedBy, uploadedByType := uploaderFromContext(c)
+
+	input := service.UploadArtifactInput{
+		TaskID:         taskID,
+		Name:           body.Name,
+		ArtifactType:   normalizeArtifactType(body.ArtifactType),
+		MimeType:       inferMimeType(mimeType, body.Name),
+		UploadedBy:     uploadedBy,
+		UploadedByType: uploadedByType,
+		Reader:         bytes.NewReader(data),
+		Size:           int64(len(data)),
+	}
+
+	artifact, err := h.artifactService.Upload(c.Request().Context(), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	return c.JSON(http.StatusCreated, artifact)
+}
+
+// uploaderFromContext resolves the agent/user identity attached to the
+// request by the auth middleware.
+func uploaderFromContext(c echo.Context) (uuid.UUID, domain.UploaderType) {
+	if agentIDVal := c.Get("agent_id"); agentIDVal != nil {
+		if aid, ok := agentIDVal.(uuid.UUID); ok {
+			return aid, domain.UploaderTypeAgent
+		}
+	} else if userIDVal := c.Get("user_id"); userIDVal != nil {
+		if uid, ok := userIDVal.(uuid.UUID); ok {
+			return uid, domain.UploaderTypeUser
+		}
+	}
+	return uuid.UUID{}, ""
+}
+
+// normalizeArtifactType defaults an empty artifact_type to "file" — the same
+// default the artifact_type column carries in Postgres (migration
+// 20260224012_create_artifacts.sql). The Go layer must apply the same
+// default explicitly: the INSERT always sets the column, so the DB default
+// never fires, and an empty string is not a valid value of the artifact_type
+// enum — it was reaching Postgres as "" and failing with 22P02, surfaced to
+// the caller as the generic "invalid value for field" (task #82ce594a).
+func normalizeArtifactType(raw string) domain.ArtifactType {
+	if raw == "" {
+		return domain.ArtifactTypeFile
+	}
+	return domain.ArtifactType(raw)
 }
 
 // GetByID handles GET /artifacts/:artifact_id
