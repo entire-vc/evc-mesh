@@ -77,36 +77,57 @@ export function workspaceLogoContainerParts({
 }
 
 /**
- * Interactive state for a project tile in the collapsed rail.
+ * Muted "chip" pair for a collapsed-rail PROJECT tile.
  *
- * Every state here swaps background and foreground TOGETHER, because the
- * letter has to stay readable against whatever the box is filled with:
- *  - resting: inherits the tinted-box pair above (teal box, its own foreground)
- *  - hover:   the accent pair, both halves
- *  - active:  the same accent pair, permanently
- * The bug this replaces set only `text-sidebar-foreground` — a foreground
- * calculated for the sidebar's own surface — over the teal fill, which
- * measured 1.28:1 in light and 1.74:1 in dark: a filled box with an
- * effectively invisible letter in it.
+ * Deliberately NOT `WORKSPACE_LOGO_TINTED_BOX` / `_FOREGROUND`. Reusing the
+ * workspace logo's brand-teal pair here (via `workspaceLogoContainerParts`)
+ * is the defect Pavel rejected on `#119078b0` (2026-09-08): with 13 real
+ * projects, every resting tile turned the same teal as the workspace mark
+ * above them, and the mark stopped reading as an anchor — "было все ок"
+ * pointed straight back at the pre-`#bb8f1092` look, where project tiles had
+ * no fill at rest at all.
+ *
+ * This pair is built from the sidebar's own neutral surfaces, not the brand
+ * one — but the two themes need DIFFERENT tokens to both stay visible AND
+ * stay readable, because `bg-sidebar-accent` (the tile's own hover/active
+ * fill) is only ~1% lighter than the sidebar surface itself in light mode:
+ * contrast-safe as a hover highlight (it's momentary, next to a page the eye
+ * is already scanning), but a chip that faint at REST recreates the exact
+ * defect `#bb8f1092` was filed over — a "container" no one can actually see.
+ * `bg-sidebar-border` is the sidebar's next surface up in light mode (a real,
+ * ~20-unit RGB step, confirmed in the rendered swatch) and stays a valid
+ * pairing with `text-sidebar-foreground`; in dark mode that same token is
+ * too DARK to pair with that foreground (measured 3.56:1, below the 4.5:1
+ * floor — see the guard's negative control), so dark keeps `sidebar-accent`,
+ * which is already both visible (dark mode's "raised" surface) and
+ * contrast-proven there. Two tokens, one per theme, chosen for what's
+ * actually visible AND actually readable in each — not one token reused for
+ * convenience.
  */
-export function projectRailIconStateClasses(isActive: boolean): string {
-  return [
-    "hover:bg-sidebar-accent hover:text-sidebar-primary",
-    isActive ? "bg-sidebar-accent text-sidebar-primary" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
+export const PROJECT_RAIL_RESTING_BOX = "bg-sidebar-border dark:bg-sidebar-accent";
+export const PROJECT_RAIL_RESTING_FOREGROUND = "text-sidebar-foreground";
+export const PROJECT_RAIL_ACTIVE_FOREGROUND = "text-sidebar-primary";
 
-/** Full, unmerged container parts for a collapsed-rail project tile. */
+/**
+ * Full, unmerged container class parts for a collapsed-rail project tile.
+ *
+ * Geometry matches every other rail item (`h-8 w-8 rounded-lg` — same as
+ * Dashboard/Initiatives/Triage), which is the "container of the same size
+ * and roundedness as the rest of the rail" `#bb8f1092` criterion #1 asked
+ * for. The chip fill is constant across resting/hover/active — only the
+ * letter's color moves, from the sidebar's own muted foreground to the
+ * brand accent — so interaction state stays legible without the fill ever
+ * pretending to be the workspace's own mark.
+ */
 export function projectRailIconParts(
   isActive: boolean,
 ): (string | false | undefined)[] {
-  return workspaceLogoContainerParts({
-    variant: "collapsed",
-    isLoaded: false,
-    className: projectRailIconStateClasses(isActive),
-  });
+  return [
+    "flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg",
+    PROJECT_RAIL_RESTING_BOX,
+    isActive ? PROJECT_RAIL_ACTIVE_FOREGROUND : PROJECT_RAIL_RESTING_FOREGROUND,
+    "hover:text-sidebar-primary",
+  ];
 }
 
 /** The letter/emoji inside a project tile. */
