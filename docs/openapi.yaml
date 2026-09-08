@@ -2458,6 +2458,12 @@ paths:
     post:
       tags: [Artifacts]
       summary: Upload an artifact
+      description: >-
+        Accepts either multipart/form-data (a real file upload) or
+        application/json (content inlined as base64 or text — for callers
+        that already hold the bytes in memory and have no multipart writer
+        at hand). artifact_type defaults to "file" when omitted in either
+        format.
       requestBody:
         required: true
         content:
@@ -2477,6 +2483,30 @@ paths:
                 metadata:
                   type: string
                   description: JSON-encoded metadata
+          application/json:
+            schema:
+              type: object
+              required: [name, content]
+              properties:
+                name:
+                  type: string
+                content:
+                  type: string
+                  description: File content, base64-encoded by default (see encoding).
+                encoding:
+                  type: string
+                  enum: [base64, text]
+                  default: base64
+                artifact_type:
+                  type: string
+                  enum: [file, code, log, report, link, image, data]
+                mime_type:
+                  type: string
+                content_type:
+                  type: string
+                  description: Alias for mime_type.
+                metadata:
+                  type: object
       responses:
         "201":
           description: Artifact uploaded

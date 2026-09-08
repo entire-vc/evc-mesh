@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -13,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -104,6 +110,209 @@ func TestArtifactHandler_GetByID_CarriesDownloadPath(t *testing.T) {
 	require.True(t, ok, "metadata should be a JSON object")
 	assert.Equal(t, "https://relay.example.com/f", rawMeta["tr_public_url"],
 		"tr_public_url must remain present and unchanged for existing consumers")
+}
+
+// --- Upload handler tests (task #82ce594a) ---
+
+// buildMultipartUploadRequest mirrors the exact repro from the bug report:
+// name + description + file, no artifact_type. description has no server-side
+// field and is silently ignored — it exists only to prove extra fields don't
+// break the request.
+func buildMultipartUploadRequest(t *testing.T, taskID uuid.UUID, extraFields map[string]string) *http.Request {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range extraFields {
+		require.NoError(t, w.WriteField(k, v))
+	}
+	fw, err := w.CreateFormFile("file", "screenshot.png")
+	require.NoError(t, err)
+	_, err = fw.Write([]byte("fake-png-bytes"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", &buf)
+	req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
+	return req
+}
+
+func newArtifactUploadContext(e *echo.Echo, req *http.Request, taskID uuid.UUID) (echo.Context, *httptest.ResponseRecorder) {
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/artifacts")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+	return c, rec
+}
+
+// TestArtifactHandler_Upload_Multipart_NoArtifactType reproduces the exact
+// multipart repro from the bug report: name + description + file, no
+// artifact_type. Before the fix, the empty artifact_type reached Postgres as
+// "" against the artifact_type enum column, failed with 22P02, and surfaced
+// as a generic 400 "invalid value for field" even though every required
+// field was present.
+func TestArtifactHandler_Upload_Multipart_NoArtifactType(t *testing.T) {
+	var gotInput service.UploadArtifactInput
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, input service.UploadArtifactInput) (*domain.Artifact, error) {
+			gotInput = input
+			return &domain.Artifact{ID: uuid.New(), TaskID: input.TaskID, Name: input.Name, ArtifactType: input.ArtifactType}, nil
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	taskID := uuid.New()
+
+	req := buildMultipartUploadRequest(t, taskID, map[string]string{
+		"name":        "screenshot.png",
+		"description": "1440px desktop screenshot",
+	})
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, domain.ArtifactTypeFile, gotInput.ArtifactType, "empty artifact_type must default to \"file\", matching the DB default")
+	assert.Equal(t, "screenshot.png", gotInput.Name)
+}
+
+// TestArtifactHandler_Upload_Multipart_ExplicitArtifactType proves the
+// default does not clobber a caller-supplied artifact_type.
+func TestArtifactHandler_Upload_Multipart_ExplicitArtifactType(t *testing.T) {
+	var gotInput service.UploadArtifactInput
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, input service.UploadArtifactInput) (*domain.Artifact, error) {
+			gotInput = input
+			return &domain.Artifact{ID: uuid.New()}, nil
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	taskID := uuid.New()
+
+	req := buildMultipartUploadRequest(t, taskID, map[string]string{
+		"name":          "results.json",
+		"artifact_type": "report",
+	})
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, domain.ArtifactTypeReport, gotInput.ArtifactType)
+}
+
+// TestArtifactHandler_Upload_JSON_Base64 reproduces the JSON repro from the
+// bug report: name + description + content(base64). Before the fix, POST
+// /tasks/:task_id/artifacts had no JSON branch at all — c.FormValue on a
+// JSON body always returned "", so every JSON request failed validation with
+// "name is required" regardless of what the body actually contained.
+func TestArtifactHandler_Upload_JSON_Base64(t *testing.T) {
+	var gotInput service.UploadArtifactInput
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, input service.UploadArtifactInput) (*domain.Artifact, error) {
+			gotInput = input
+			data, err := io.ReadAll(input.Reader)
+			require.NoError(t, err)
+			assert.Equal(t, "hello artifact", string(data))
+			return &domain.Artifact{ID: uuid.New(), TaskID: input.TaskID, Name: input.Name, ArtifactType: input.ArtifactType}, nil
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	taskID := uuid.New()
+
+	content := base64.StdEncoding.EncodeToString([]byte("hello artifact"))
+	body, err := json.Marshal(map[string]any{
+		"name":        "notes.txt",
+		"description": "context notes",
+		"content":     content,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", bytes.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "notes.txt", gotInput.Name)
+	assert.Equal(t, domain.ArtifactTypeFile, gotInput.ArtifactType)
+	assert.Equal(t, int64(len("hello artifact")), gotInput.Size)
+}
+
+// TestArtifactHandler_Upload_JSON_TextEncoding covers the explicit
+// "encoding":"text" opt-out for callers that don't have binary content.
+func TestArtifactHandler_Upload_JSON_TextEncoding(t *testing.T) {
+	mockSvc := &MockArtifactService{
+		UploadFunc: func(_ context.Context, input service.UploadArtifactInput) (*domain.Artifact, error) {
+			data, err := io.ReadAll(input.Reader)
+			require.NoError(t, err)
+			assert.Equal(t, `{"passed": 42}`, string(data))
+			return &domain.Artifact{ID: uuid.New()}, nil
+		},
+	}
+	h, e := setupArtifactTest(mockSvc)
+	taskID := uuid.New()
+
+	body, err := json.Marshal(map[string]any{
+		"name":     "results.json",
+		"content":  `{"passed": 42}`,
+		"encoding": "text",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", bytes.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+}
+
+func TestArtifactHandler_Upload_JSON_MissingName(t *testing.T) {
+	h, e := setupArtifactTest(&MockArtifactService{})
+	taskID := uuid.New()
+
+	body, err := json.Marshal(map[string]any{
+		"content": base64.StdEncoding.EncodeToString([]byte("x")),
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", bytes.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "name is required")
+}
+
+func TestArtifactHandler_Upload_JSON_InvalidBase64(t *testing.T) {
+	h, e := setupArtifactTest(&MockArtifactService{})
+	taskID := uuid.New()
+
+	body, err := json.Marshal(map[string]any{
+		"name":    "screenshot.png",
+		"content": "not-valid-base64!!",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/tasks/"+taskID.String()+"/artifacts", bytes.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.True(t, strings.Contains(rec.Body.String(), "base64"), "body: %s", rec.Body.String())
+}
+
+func TestArtifactHandler_Upload_Multipart_MissingName(t *testing.T) {
+	h, e := setupArtifactTest(&MockArtifactService{})
+	taskID := uuid.New()
+
+	req := buildMultipartUploadRequest(t, taskID, nil)
+	c, rec := newArtifactUploadContext(e, req, taskID)
+
+	require.NoError(t, h.Upload(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "name is required")
 }
 
 // --- Download handler tests ---
