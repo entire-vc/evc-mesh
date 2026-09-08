@@ -574,3 +574,76 @@ func TestClosedFollowUp_UnreadableActivityLogStillRoutes(t *testing.T) {
 	assert.Len(t, env.taskSvc.createdTasks(), 1,
 		"could-not-look must not read as could-not-find — this guard fails open by design")
 }
+
+// --- The informational-flag branch (task #df22e695, audit follow-up to
+// #754173eb) --------------------------------------------------------------
+//
+// The task names three branches and all three are here, including the red
+// control (unflagged still routes) the task's own acceptance criteria demand:
+// a guard that refuses everything is indistinguishable from a working one
+// unless something shows the positive case still fires.
+
+func TestClosedFollowUp_InformationalFlagCreatesNothing(t *testing.T) {
+	env := setupFollowUpEnv(t)
+
+	env.comment(t, "Принял, спасибо. Со своей стороны действий не требуется.", func(c *domain.Comment) {
+		c.Metadata = []byte(`{"informational":true}`)
+	})
+
+	assert.Empty(t, env.taskSvc.createdTasks(),
+		"a comment the author declared purely informational must not open a follow-up")
+	assert.Empty(t, env.systemNotices())
+}
+
+// Red control: the exact same wording, unflagged, still opens a card — proving
+// the guard added above is not silently swallowing every acknowledgement (or
+// everything else) regardless of the flag. Without this test, a `return` added
+// unconditionally at the top of createClosedTaskFollowUp would pass the case
+// above and go undetected.
+func TestClosedFollowUp_UnflaggedAcknowledgementStillRoutes(t *testing.T) {
+	env := setupFollowUpEnv(t)
+
+	env.comment(t, "Принял, спасибо. Со своей стороны действий не требуется.")
+
+	assert.Len(t, env.taskSvc.createdTasks(), 1,
+		"forgetting the flag must cost nothing — an unflagged comment keeps today's behaviour")
+}
+
+// A live "❓ Blocking @pavel" marker in the same body overrides the flag: a
+// question addressed to a human must never disappear because the author also
+// (mistakenly, or for the rest of the same comment) marked it informational.
+func TestClosedFollowUp_InformationalFlagDoesNotSuppressABlockingMarker(t *testing.T) {
+	env := setupFollowUpEnv(t)
+
+	env.comment(t, "Со своей стороны действий не требуется.\n\n"+
+		"---\n\n❓ **Blocking @pavel**: но нужно решение по бюджету на этот квартал.",
+		func(c *domain.Comment) {
+			c.Metadata = []byte(`{"informational":true}`)
+		})
+
+	assert.Len(t, env.taskSvc.createdTasks(), 1,
+		"a Blocking marker must win over the informational flag — a question to a human is never dropped")
+}
+
+// The flag is read the same way metadata.source is: self-declared, tolerant of
+// garbage, and honoured only to suppress a side effect on the author's OWN
+// comment. Malformed or absent metadata must read as "not flagged", not error.
+func TestCommentIsInformational(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		want bool
+	}{
+		{"true", []byte(`{"informational":true}`), true},
+		{"false explicit", []byte(`{"informational":false}`), false},
+		{"absent key", []byte(`{"source":"pr-driver"}`), false},
+		{"nil metadata", nil, false},
+		{"empty object", []byte(`{}`), false},
+		{"malformed json", []byte(`not json`), false},
+		{"wrong type", []byte(`{"informational":"yes"}`), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, commentIsInformational(tc.raw))
+		})
+	}
+}
