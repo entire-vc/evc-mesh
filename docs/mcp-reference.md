@@ -516,7 +516,7 @@ Add a comment to a task.
 | `body` | string | **Yes** | -- | Comment body (markdown supported) |
 | `is_internal` | boolean | No | `false` | Mark as internal (agent-only visible) |
 | `parent_comment_id` | string | No | -- | Parent comment ID for threading |
-| `metadata` | object | No | -- | Additional metadata as key-value pairs |
+| `metadata` | object | No | -- | Additional metadata as key-value pairs. `{"informational": true}` on a comment written on an ALREADY done/cancelled task suppresses the server's own follow-up-card mechanism (task #df22e695) — use it for a plain acknowledgement that needs no action; omit it for anything that names a problem or asks a question (an unflagged comment still opens a follow-up as today). A `❓ Blocking @pavel` marker in the same comment always overrides the flag |
 
 **Example request:**
 ```json

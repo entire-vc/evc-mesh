@@ -133,6 +133,43 @@ func commentMetadataSource(raw json.RawMessage) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// commentInformationalFlag is the cooperative field an author sets on their OWN
+// comment (metadata.informational) to say "this is a pure acknowledgement, no
+// action needed — don't route it" (task #df22e695, follow-up to #754173eb).
+//
+// Deliberately NOT a phrase filter over the body. The audit that raised this
+// card (class B1, 2026-09-07) named the exact reason: this fleet's other
+// text-shape guard for the same kind of question — hasNegatorInScope on a
+// human_gate withdrawal — has misfired on real bodies at least five times
+// ("Отзываю запрос." clears the gate; "Отзываю запрос — решение Павла." does
+// not), and a second phrase heuristic here would reproduce that defect inside
+// the very fix meant to remove noise. A structural, self-declared flag cannot
+// misparse a sentence it never reads.
+//
+// The asymmetry this flag is built around is the opposite of driver detection
+// above: a driver comment is recognised so the mechanism does NOT need to be
+// told; an informational comment can ONLY be recognised by being told, because
+// nothing about "нет возражений" vs "нужно поправить X" is structurally
+// distinguishable without reading the words — and reading the words is exactly
+// what the audit forbade. So the default stays "route it": an unflagged
+// acknowledgement still opens a card (unchanged, current behaviour, nothing
+// lost); only an EXPLICITLY flagged one is skipped. Forgetting the flag costs
+// one avoidable card; a caller mistakenly guessing "informational" on a real
+// remark would lose it silently — trust model matches commentMetadataSource
+// just below: self-declared, honoured only to suppress a side effect on the
+// author's OWN comment, never to grant anything.
+func commentIsInformational(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	v, _ := m["informational"].(bool)
+	return v
+}
+
 // isDriverComment reports whether this comment was written by fleet automation.
 func isDriverComment(comment *domain.Comment) bool {
 	if src := commentMetadataSource(comment.Metadata); src != "" && src != "api" && src != "ui" && src != "mcp" {
@@ -332,6 +369,17 @@ func (s *commentService) createClosedTaskFollowUp(
 	// Branch: a driver wrote it. Drivers are not people with remarks; a
 	// follow-up card per lease-reaper line would be pure noise.
 	if isDriverComment(comment) {
+		return
+	}
+	// Branch: the author marked this comment metadata.informational — a pure
+	// acknowledgement, nothing to act on (task #df22e695). Overridden by a live
+	// "❓ Blocking @pavel" marker in the SAME body: a gate marker means a human
+	// still needs to see this, and no self-declared flag is allowed to make a
+	// real ask disappear. Checked with hasBlockingMarker, not by re-deriving
+	// whether the gate actually armed — the marker's presence is the thing that
+	// must not be swallowed, independent of whether enforceBlockingTriage later
+	// accepts it.
+	if commentIsInformational(comment.Metadata) && !hasBlockingMarker(comment.Body) {
 		return
 	}
 	// Only an AGENT assignee is routed. A human assignee already has a real
