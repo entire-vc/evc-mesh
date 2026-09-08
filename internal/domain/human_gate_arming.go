@@ -129,6 +129,17 @@ func (in *ArmHumanGateInput) Validate() error {
 		if err := in.Predicate.Validate(); err != nil {
 			return err
 		}
+		// copy_tier is required exactly when the ask is shaped like a copy-approval
+		// question (task 1.17a, §1r.A) — checked here, not in GateArmPredicate.Validate,
+		// because the regex runs against Reason, which lives on this struct, not on the
+		// predicate.
+		if in.Predicate.CopyTier == "" && RequiresCopyTier(in.Reason) {
+			return &ArmHumanGateValidationError{
+				Field: "predicate.copy_tier",
+				Message: "назови тир копирайта: A (наружу/юр/обещание) или B " +
+					"(подпись внутри интерфейса)",
+			}
+		}
 	}
 	return nil
 }

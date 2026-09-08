@@ -2023,6 +2023,8 @@ Arm the human gate on a task: freeze it and record **who** is waiting, **what** 
 
 The four predicate answers are required, each with one line of justification. The server **refuses the arm** when your own answers say nobody needs to be asked — if you hold the credential, the action is reversible, and nothing a customer sees or pays changes right now, capture a rollback anchor and just do it. If the blocker is another card, the server tells you to use `add_dependency` instead.
 
+`copy_tier` (task 1.17a, §1r.A) is optional in general, but required — and checked before anything else — when `reason` reads like a copy-approval question (a label, a page's prose, a message users read). Answer three questions: (1) is this the company's voice going **out**, or a caption inside the interface? (2) would someone who never opened this screen **notice** the change? (3) does the text carry a **promise** — legal, price, product? Any "yes" → tier `"A"` (external/legal/marketing copy, a promise) and Pavel decides, same as any other ask above. All "no" → tier `"B"` (a field caption, menu item, system/validation message, section name, an existing dictionary string) — the server **refuses the arm outright**: ship it yourself, tag the task `copy:b`, and quote the exact string in your closing comment so Pavel sees it in the weekly digest.
+
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `task_id` | string | **Yes** | -- | Task to gate |
@@ -2038,8 +2040,18 @@ The four predicate answers are required, each with one line of justification. Th
 | `blocked_reason` | string | **Yes** | -- | Which card, or why none |
 | `customer_visible_now` | boolean | **Yes** | -- | Does this change what a customer sees or pays **right now**? |
 | `customer_reason` | string | **Yes** | -- | What the customer would see, or why nothing changes for them now |
+| `copy_tier` | string | Conditional | -- | `"A"` or `"B"` — see above. Required only when `reason` reads as a copy-approval question; omit for any other ask |
 
-**Example response (refused):**
+**Example response (refused, tier B):**
+```json
+{
+  "error": "Unprocessable Entity",
+  "field": "predicate",
+  "message": "cannot arm human_gate: predicate тир B (подписи полей, пункты меню, системные и валидационные сообщения, названия разделов, отдельные строки существующего словаря) шипит лид продукта — отгружай сам, поставь карточке метку `copy:b` и процитируй строку в закрывающем комментарии: Павел увидит правку в недельной сводке и поправит follow-up-карточкой (§1r.A)"
+}
+```
+
+**Example response (refused, self-serve):**
 ```json
 {
   "error": "Unprocessable Entity",
