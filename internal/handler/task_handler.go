@@ -411,6 +411,17 @@ func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, a
 	}
 
 	switch {
+	case info.OwnerAgentID != nil && *info.OwnerAgentID == actorID && info.ClearableByOwner &&
+		info.ClearPath == domain.HumanGateClearPathClearEndpoint:
+		// Task #f933dc05: an API-armed gate has no marker comment, so the negator
+		// advice below would send its owner to a door that does not open — and
+		// fails silently when they try it. Name the one that does.
+		return base + ". You armed this gate through the API and you still own it, so you " +
+			"can clear it yourself right now: DELETE /api/v1/tasks/{task_id}/human-gate " +
+			"(MCP: clear_human_gate). Do NOT post a withdrawal negator — this gate has no " +
+			"marker comment to withdraw, so that path is a silent no-op. Then re-read " +
+			"human_gate to confirm."
+
 	case info.OwnerAgentID != nil && *info.OwnerAgentID == actorID && info.ClearableByOwner:
 		return base + ". You own this ask, so you can clear it yourself right now — but by " +
 			"WITHDRAWING it, not by this PATCH. Post a NEW comment whose LAST PARAGRAPH withdraws " +
@@ -430,6 +441,17 @@ func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, a
 			", and only its author can withdraw it — asking them via a comment will NOT wake them " +
 			"(a gated task is not fed to any lane), so reach them with a separate, ungated task. " +
 			"Otherwise, " + recordDecision + "."
+
+	case info.ReasonIfNot == "marker_scan_truncated":
+		// Task #f933dc05: not "there is no owner", but "this thread is longer than
+		// the one page the marker scan reads, so no-marker cannot be trusted".
+		// Saying "no withdrawal path by construction" here would be a false
+		// statement about the world dressed as a statement about the caller.
+		return base + ". The ownership scan could not see this whole comment thread " +
+			"(reason_if_not=marker_scan_truncated), so the server cannot tell whether a live " +
+			"\"Blocking @\" ask exists further down it — and it will not grant a clearing right " +
+			"on a maybe. If you raised an ask here, withdraw it with a negator comment; " +
+			"otherwise, " + recordDecision + "."
 
 	default:
 		// no_live_marker: armed by raw PATCH or by the UI, so there is no author

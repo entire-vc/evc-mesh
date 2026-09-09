@@ -2064,7 +2064,17 @@ The four predicate answers are required, each with one line of justification. Th
 
 #### 63. `clear_human_gate`
 
-Release a human gate. Server-enforced **user-only**: an agent key receives a 403 whose message names the exits an agent *can* reach — withdraw your own marker with a short negator comment if you raised it, or record the human's answer as a human-gate decision. Read `human_gate_info.clearable_by_owner` on `get_task` first.
+Release a human gate. Read `human_gate_info` on `get_task` first and go by `clear_path` — there are two agent-reachable shapes and they are not interchangeable:
+
+| `clear_path` | what armed it | how it comes down |
+|---|---|---|
+| `clear_endpoint` | you, through `set_human_gate` — no marker comment exists | **this tool**. A withdrawal negator would be a silent no-op: `releaseHumanGateOnWithdrawal` returns early when the comment scan finds no marker |
+| `withdraw_marker` | a `❓ Blocking @…` comment | a NEW comment whose **last paragraph** withdraws the ask. This tool refuses |
+| *(absent)* | a human, or a raw `PATCH`/UI arm with no author | user-only. The 403 names the exit an agent *can* reach: record the human's answer as a human-gate decision |
+
+Clearing your own API arm posts a system comment recording the release — a marker withdrawal documents itself, a `DELETE` does not.
+
+Re-read `human_gate` after any release. A posted comment is not a cleared gate, and the withdrawal path fails silently.
 
 Releasing also drops the ask metadata (author, reason, recommended default, deadline) and resets the class to `hard`: those fields describe a *live* question, and one left on a settled task is a default something would eventually apply.
 

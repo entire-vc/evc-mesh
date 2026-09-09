@@ -3430,6 +3430,40 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 		in.RecommendedDefault = domain.DefaultMarkerRecommendedDefault
 	}
 
+	// Ownership-takeover guard (task #f933dc05). This SQL overwrites gate_author
+	// unconditionally, re-arm included — which was harmless while gate_author decided
+	// nothing, and stops being harmless the moment the recorded author may clear the
+	// gate with its own key. Without this, "take over someone else's gate" is two calls:
+	// POST /human-gate to become its author, then DELETE to release it. That would hand
+	// agents a key to a USER-armed gate through the back door, which is precisely the
+	// control this whole card is protecting.
+	//
+	// Scoped to API arms only. A marker arm must never be refused: it is a live ask
+	// arriving through a channel we do not control, refusing it is SILENT to its author
+	// (#58a6f4ff, #f421ad57), and it needs no guard anyway — a marker-armed gate is
+	// released by the marker scan, which reads the thread, not gate_author.
+	//
+	// Fail-closed on a read error, unlike the disposable guard just below: an API arm is
+	// refused LOUDLY (the caller sees the error and can retry), so "could not verify" is
+	// cheap here and a slipped takeover is not.
+	if in.Source == domain.ArmHumanGateSourceAPI {
+		existing, err := s.taskRepo.GetByID(ctx, in.TaskID)
+		if err != nil {
+			return err
+		}
+		if existing != nil && existing.HumanGate &&
+			existing.GateAuthor != nil && *existing.GateAuthor != uuid.Nil &&
+			*existing.GateAuthor != in.Author {
+			return &domain.ArmHumanGateValidationError{
+				Field: "gate_author",
+				Message: "task already carries a live gate armed by somebody else — re-arming " +
+					"would transfer its authorship to you, and with it the right to clear it. " +
+					"Answer the existing ask instead (POST /api/v1/tasks/{task_id}/" +
+					"human-gate-decisions), or raise yours on a separate task",
+			}
+		}
+	}
+
 	// Disposable-task guard (task #318de303). A HARD gate on a throwaway/probe card
 	// waits forever for a human who is never coming back to it — soft is fine (it
 	// self-releases on the default-on-timeout sweep instead of sitting in the queue).

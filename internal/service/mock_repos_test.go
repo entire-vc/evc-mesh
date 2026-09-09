@@ -284,6 +284,13 @@ type MockTaskRepository struct {
 	mu                       sync.RWMutex
 	items                    map[uuid.UUID]*domain.Task
 	errToReturn              error
+	// getByIDErr fails ONLY GetByID, leaving every other method working. Added
+	// 2026-09-09 (#f933dc05) because errToReturn fails them all, so a test that
+	// sets it and then asserts "the write was refused" passes whether the guard
+	// under test exists or not — it was measured passing at origin/main, where
+	// the guard does not exist at all. Same shape as MockCommentRepository's
+	// listByTaskErr, and for the same reason.
+	getByIDErr error
 	// statusCategoryOf, if set, resolves a status ID to its category — used by
 	// FindDueBacklogTasks to emulate the real query's join against
 	// task_statuses without this mock needing a direct dependency on
@@ -321,6 +328,9 @@ func (m *MockTaskRepository) Create(_ context.Context, t *domain.Task) error {
 }
 
 func (m *MockTaskRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+	if m.getByIDErr != nil {
+		return nil, m.getByIDErr
+	}
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}

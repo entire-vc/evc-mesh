@@ -244,6 +244,10 @@ type FalseOpenSignal struct {
 //     was raw-armed via PATCH/UI before this marker existed
 //     (ReasonIfNot="raw_armed") — → ClearableByOwner=false; it becomes true
 //     once real time passes, with no further action needed.
+//   - no live marker, but the task row records a gate_author that is an AGENT
+//     (an API arm, task #f933dc05) → that agent owns it, ClearableByOwner=true,
+//     and ClearPath="clear_endpoint" because the withdrawal-comment door does
+//     not open for this shape — see ClearPath.
 type HumanGateInfo struct {
 	Gated            bool       `json:"gated"`
 	OwnerAgentID     *uuid.UUID `json:"owner_agent_id,omitempty"`
@@ -252,7 +256,36 @@ type HumanGateInfo struct {
 	MarkerCreatedAt  *time.Time `json:"marker_created_at,omitempty"`
 	ClearableByOwner bool       `json:"clearable_by_owner"`
 	ReasonIfNot      string     `json:"reason_if_not,omitempty"`
+	// ClearPath names WHICH door opens for OwnerAgentID, and exists because
+	// there are now two of them that are not interchangeable (task #f933dc05).
+	// Empty whenever ClearableByOwner is false — there is no door to name.
+	//
+	// Reporting ClearableByOwner=true without saying which path applies would
+	// re-create, for a new shape, the exact failure this whole area keeps
+	// producing: the owner of an API-armed gate would follow the refusal
+	// message's advice, post a negator comment, get NO error and NO release
+	// (releaseHumanGateOnWithdrawal returns early unless the comment scan
+	// found a marker), and conclude the gate is unclearable — the silent
+	// no-op that has cost the fleet a gate at least five times.
+	ClearPath HumanGateClearPath `json:"clear_path,omitempty"`
 }
+
+// HumanGateClearPath is the door open to a gate's owner. The two values are not
+// alternatives to choose between: each shape of gate has exactly one.
+type HumanGateClearPath string
+
+const (
+	// HumanGateClearPathWithdrawMarker — the gate was armed by a "❓ Blocking @user"
+	// comment. Its author releases it by posting a NEW comment whose last paragraph
+	// withdraws the ask. DELETE /tasks/:id/human-gate stays user-only for this shape:
+	// an ask a human can see in the thread is withdrawn where it was raised.
+	HumanGateClearPathWithdrawMarker HumanGateClearPath = "withdraw_marker"
+	// HumanGateClearPathClearEndpoint — the gate was armed through the API by an agent
+	// and carries no marker comment, so there is no ask in the thread TO withdraw and
+	// the negator path is structurally unreachable. Its recorded gate_author releases it
+	// with DELETE /tasks/:id/human-gate (MCP: clear_human_gate).
+	HumanGateClearPathClearEndpoint HumanGateClearPath = "clear_endpoint"
+)
 
 // CheckoutInfo carries checkout state for API responses on GET task endpoints.
 // If the task has no active checkout, the field is omitted (nil pointer in the response struct).
