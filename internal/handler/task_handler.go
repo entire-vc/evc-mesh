@@ -81,6 +81,7 @@ type createTaskRequest struct {
 	ReviewerID      *uuid.UUID             `json:"reviewer_id"`
 	ReviewerType    *domain.AssigneeType   `json:"reviewer_type"`
 	DueDate         *time.Time             `json:"due_date"`
+	StartAfter      *time.Time             `json:"start_after"`
 	EstimatedHours  *float64               `json:"estimated_hours"`
 	Labels          []string               `json:"labels"`
 	CustomFields    json.RawMessage        `json:"custom_fields"`
@@ -156,6 +157,7 @@ type updateTaskRequest struct {
 	ReviewerType     *domain.AssigneeType    `json:"reviewer_type"`
 	ClearReviewer    bool                    `json:"clear_reviewer"`
 	DueDate          flexTime                `json:"due_date"`
+	StartAfter       flexTime                `json:"start_after"`
 	EstimatedHours   *float64                `json:"estimated_hours"`
 	Labels           *[]string               `json:"labels"`
 	CustomFields     json.RawMessage         `json:"custom_fields"`
@@ -284,6 +286,7 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		ReviewerID:      req.ReviewerID,
 		ReviewerType:    req.ReviewerType,
 		DueDate:         req.DueDate,
+		StartAfter:      req.StartAfter,
 		EstimatedHours:  req.EstimatedHours,
 		Labels:          pq.StringArray(req.Labels),
 		CustomFields:    req.CustomFields,
@@ -705,6 +708,9 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if req.DueDate.wasSet {
 		task.DueDate = req.DueDate.Time // nil clears, non-nil sets
 	}
+	if req.StartAfter.wasSet {
+		task.StartAfter = req.StartAfter.Time // nil clears, non-nil sets
+	}
 	if req.EstimatedHours != nil {
 		task.EstimatedHours = req.EstimatedHours
 	}
@@ -1097,6 +1103,7 @@ type createSubtaskRequest struct {
 	Labels         []string            `json:"labels"`
 	CustomFields   json.RawMessage     `json:"custom_fields"`
 	DueDate        *time.Time          `json:"due_date"`
+	StartAfter     *time.Time          `json:"start_after"`
 	EstimatedHours *float64            `json:"estimated_hours"`
 }
 
@@ -1140,6 +1147,7 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 		Labels:         req.Labels,
 		CustomFields:   req.CustomFields,
 		DueDate:        req.DueDate,
+		StartAfter:     req.StartAfter,
 		EstimatedHours: req.EstimatedHours,
 	}
 

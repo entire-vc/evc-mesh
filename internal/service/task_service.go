@@ -658,6 +658,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.DueDate != task.DueDate {
 		changes["due_date"] = map[string]interface{}{"old": existing.DueDate, "new": task.DueDate}
 	}
+	if existing.StartAfter != task.StartAfter {
+		changes["start_after"] = map[string]interface{}{"old": existing.StartAfter, "new": task.StartAfter}
+	}
 	if existing.EstimatedHours != task.EstimatedHours {
 		changes["estimated_hours"] = map[string]interface{}{"old": existing.EstimatedHours, "new": task.EstimatedHours}
 	}
@@ -1350,6 +1353,7 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		Labels:         pq.StringArray(input.Labels),
 		CustomFields:   input.CustomFields,
 		DueDate:        input.DueDate,
+		StartAfter:     input.StartAfter,
 		EstimatedHours: input.EstimatedHours,
 		CreatedAt:      now,
 		UpdatedAt:      now,

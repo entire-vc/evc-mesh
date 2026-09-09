@@ -25,7 +25,7 @@ func taskListRowColumns() []string {
 	return []string{
 		"id", "project_id", "status_id", "title", "description",
 		"assignee_id", "assignee_type", "priority", "parent_task_id", "position",
-		"due_date", "estimated_hours", "custom_fields", "labels",
+		"due_date", "start_after", "estimated_hours", "custom_fields", "labels",
 		"task_number", "created_by", "created_by_type", "created_at", "updated_at",
 		"completed_at", "deleted_at",
 		"recurring_schedule_id", "recurring_instance_number",

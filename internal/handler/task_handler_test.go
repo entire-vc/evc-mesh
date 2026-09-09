@@ -954,6 +954,122 @@ func TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// --- start_after (#246b8fcc, sub1 of #e9ce6b91) -------------------------------
+//
+// start_after mirrors due_date's read/write contract on the same three write
+// paths (Create, Update via flexTime, CreateSubtask) — same wasSet semantics,
+// same RFC3339-or-date-only parsing. due_date itself keeps its own separate
+// meaning (backlog wake-alarm) and must not be affected by writes to
+// start_after or vice versa — that independence is the whole point of the
+// split (#e9ce6b91), so it is asserted explicitly below rather than assumed.
+
+func TestTaskHandler_Create_WithStartAfter(t *testing.T) {
+	projectID := uuid.New()
+	mockSvc := &MockTaskService{
+		CreateFunc: func(ctx context.Context, task *domain.Task) error {
+			require.NotNil(t, task.StartAfter)
+			assert.Equal(t, "2026-09-16T00:00:00Z", task.StartAfter.UTC().Format(time.RFC3339))
+			assert.Nil(t, task.DueDate, "start_after must not implicitly set due_date")
+			return nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Not before next week","start_after":"2026-09-16T00:00:00Z"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	err := h.Create(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var result domain.Task
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	require.NotNil(t, result.StartAfter)
+	assert.Equal(t, "2026-09-16T00:00:00Z", result.StartAfter.UTC().Format(time.RFC3339))
+}
+
+// TestTaskHandler_Update_StartAfter_SetAndClear mirrors the due_date flexTime
+// contract (wasSet distinguishes "omitted" from "present, possibly null") on
+// the new field, and pins that setting start_after leaves the existing
+// due_date on the task completely untouched.
+func TestTaskHandler_Update_StartAfter_SetAndClear(t *testing.T) {
+	existingDue := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	existing := &domain.Task{ID: uuid.New(), Title: "Existing", DueDate: &existingDue}
+
+	got := updateTaskWithBody(t, existing, `{"start_after":"2026-09-16"}`)
+	require.NotNil(t, got.StartAfter, "date-only form must parse, same as due_date")
+	assert.Equal(t, "2026-09-16", got.StartAfter.Format("2006-01-02"))
+	require.NotNil(t, got.DueDate, "an unrelated start_after write must not touch due_date")
+	assert.True(t, existingDue.Equal(*got.DueDate))
+
+	// Explicit null clears it (wasSet=true, Time=nil) — same contract as due_date.
+	existing2 := &domain.Task{ID: uuid.New(), Title: "Existing", StartAfter: &existingDue}
+	got2 := updateTaskWithBody(t, existing2, `{"start_after":null}`)
+	assert.Nil(t, got2.StartAfter, "explicit null must clear start_after")
+}
+
+// TestTaskHandler_Update_StartAfter_OmittedLeavesUnchanged is the other half
+// of the wasSet contract: a PATCH that never mentions start_after must not
+// clear it (the same failure class §204c0311 fixed for parent_task_id).
+func TestTaskHandler_Update_StartAfter_OmittedLeavesUnchanged(t *testing.T) {
+	existingStart := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	existing := &domain.Task{ID: uuid.New(), Title: "Existing", StartAfter: &existingStart}
+
+	got := updateTaskWithBody(t, existing, `{"title":"New Title"}`)
+	require.NotNil(t, got.StartAfter, "omitted start_after must leave the existing value untouched")
+	assert.True(t, existingStart.Equal(*got.StartAfter))
+}
+
+// TestTaskHandler_Update_DueDate_RegressionUnchanged is the AC's required
+// due_date regression test: setting due_date through the same PATCH endpoint,
+// on a task that also carries start_after, must behave exactly as before —
+// start_after is left alone, same wasSet/flexTime parsing as always.
+func TestTaskHandler_Update_DueDate_RegressionUnchanged(t *testing.T) {
+	existingStart := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	existing := &domain.Task{ID: uuid.New(), Title: "Existing", StartAfter: &existingStart}
+
+	got := updateTaskWithBody(t, existing, `{"due_date":"2026-10-01"}`)
+	require.NotNil(t, got.DueDate)
+	assert.Equal(t, "2026-10-01", got.DueDate.Format("2006-01-02"))
+	require.NotNil(t, got.StartAfter, "an unrelated due_date write must not touch start_after")
+	assert.True(t, existingStart.Equal(*got.StartAfter))
+}
+
+func TestTaskHandler_CreateSubtask_WithStartAfter(t *testing.T) {
+	parentID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		CreateSubtaskFunc: func(ctx context.Context, pid uuid.UUID, input service.CreateSubtaskInput) (*domain.Task, error) {
+			require.NotNil(t, input.StartAfter)
+			assert.Equal(t, "2026-09-16T00:00:00Z", input.StartAfter.UTC().Format(time.RFC3339))
+			assert.Nil(t, input.DueDate)
+			return &domain.Task{ID: uuid.New(), Title: input.Title, ParentTaskID: &pid, StartAfter: input.StartAfter}, nil
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"title":"Delayed subtask","start_after":"2026-09-16T00:00:00Z"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/subtasks")
+	c.SetParamNames("task_id")
+	c.SetParamValues(parentID.String())
+
+	err := h.CreateSubtask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
 // --- TestTaskHandler_Delete ---
 
 // --- TestTaskHandler_Update_HumanGate ---

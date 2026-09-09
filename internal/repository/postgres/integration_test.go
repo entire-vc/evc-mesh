@@ -449,6 +449,71 @@ func TestTaskRepo_Update_LabelsRoundTrip(t *testing.T) {
 	assert.Empty(t, afterClear.Labels, "clearing labels via Update must persist as empty, not silently keep the old set")
 }
 
+// TestTaskRepo_StartAfter_RoundTrip is the repository-level regression test for
+// start_after (#246b8fcc, sub1 of #e9ce6b91): a field present in taskBaseColsNoAlias
+// but missing from Create's INSERT or Update's SET clause would silently come back
+// nil, same failure class as TestTaskRepo_Update_LabelsRoundTrip above. Also pins
+// that due_date is untouched by writes to start_after and vice versa — the two
+// fields must stay independent, that independence is the entire point of the split.
+func TestTaskRepo_StartAfter_RoundTrip(t *testing.T) {
+	db := testDB(t)
+	_, proj, status := createTestProject(t, db)
+	repo := NewTaskRepo(db)
+	ctx := context.Background()
+
+	startAfter := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	dueDate := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	task := &domain.Task{
+		ID:            uuid.New(),
+		ProjectID:     proj.ID,
+		StatusID:      status.ID,
+		Title:         "Task for start_after round-trip",
+		AssigneeType:  domain.AssigneeTypeUnassigned,
+		Priority:      domain.PriorityMedium,
+		StartAfter:    &startAfter,
+		DueDate:       &dueDate,
+		CreatedBy:     uuid.New(),
+		CreatedByType: domain.ActorTypeUser,
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	require.NoError(t, repo.Create(ctx, task))
+
+	got, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.StartAfter, "start_after must survive Create, not come back nil")
+	assert.True(t, startAfter.Equal(*got.StartAfter))
+	require.NotNil(t, got.DueDate, "due_date must be unaffected by start_after being set")
+	assert.True(t, dueDate.Equal(*got.DueDate))
+
+	// Update start_after to a new value; due_date must not move.
+	newStartAfter := startAfter.Add(48 * time.Hour)
+	got.StartAfter = &newStartAfter
+	got.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, repo.Update(ctx, got))
+
+	afterUpdate, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, afterUpdate)
+	require.NotNil(t, afterUpdate.StartAfter)
+	assert.True(t, newStartAfter.Equal(*afterUpdate.StartAfter), "start_after set via Update must round-trip through GetByID")
+	require.NotNil(t, afterUpdate.DueDate, "an unrelated start_after Update must not clear due_date")
+	assert.True(t, dueDate.Equal(*afterUpdate.DueDate))
+
+	// Clearing start_after to nil must persist as NULL, not silently keep the old value.
+	afterUpdate.StartAfter = nil
+	afterUpdate.UpdatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, repo.Update(ctx, afterUpdate))
+
+	afterClear, err := repo.GetByID(ctx, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, afterClear)
+	assert.Nil(t, afterClear.StartAfter, "clearing start_after via Update must persist as NULL")
+	require.NotNil(t, afterClear.DueDate, "clearing start_after must not clear due_date")
+	assert.True(t, dueDate.Equal(*afterClear.DueDate))
+}
+
 // TestTaskRepo_Create_ReviewerRoundTrip is the repository-level regression test
 // for the reviewer_id/reviewer_type columns missing from Create's INSERT: a
 // service-layer test with a mocked repo cannot see a real INSERT silently
