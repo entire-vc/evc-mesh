@@ -2328,6 +2328,11 @@ type humanGateMarkerScan struct {
 	markerCreatedAt      time.Time
 	soleMarkerAuthor     bool
 	rawArmPrecedesMarker bool
+	// threadTruncated is true when the thread holds MORE comments than the one
+	// page this scan reads (page.HasMore). It does NOT mean a marker was missed —
+	// only that "no marker found" cannot be trusted to mean "no marker exists".
+	// Load-bearing only for the gate_author fallback; see ownerFromGateAuthor.
+	threadTruncated bool
 }
 
 // scanHumanGateOwnership finds who owns taskID's currently-live human_gate
@@ -2445,6 +2450,7 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 	// majority of real gates, and every pre-existing test fixture, which never
 	// simulate task_handler.go's raw-arm path) leaves today's behavior intact.
 	scan.rawArmPrecedesMarker = scan.found && !lastRawArmAt.IsZero() && !lastRawArmAt.After(scan.markerCreatedAt)
+	scan.threadTruncated = page != nil && page.HasMore
 	return scan, nil
 }
 
@@ -2468,8 +2474,28 @@ func (s *commentService) GetHumanGateOwner(ctx context.Context, taskID uuid.UUID
 
 	info := &domain.HumanGateInfo{Gated: true}
 	if !scan.found {
-		info.ReasonIfNot = "no_live_marker"
-		return info, nil
+		// The gate_author fallback is only sound when "no marker" is a FACT about
+		// the thread, not an artefact of reading one page of it. This scan fetches
+		// PageSize=100 in ascending order and never loops, so on a longer thread a
+		// live "❓ Blocking @pavel" sitting past comment 100 is invisible to it —
+		// and a marker arm ALSO writes gate_author for the marker's own poster.
+		// Without this guard the two together would let that agent clear a real,
+		// still-unanswered ask to a human with its own key, which is precisely the
+		// wall the fallback must not touch. Before the fallback existed the same
+		// blind spot merely misreported such a gate as unclearable, i.e. it failed
+		// CLOSED; it must keep failing closed now that the answer grants a right.
+		//
+		// Found by adversarial verification of task #f933dc05, not in production.
+		// The underlying single-page scan is pre-existing and unchanged — it is
+		// its own defect (a marker past 100 also blocks the legitimate withdrawal
+		// path) and is deliberately NOT widened here.
+		if scan.threadTruncated {
+			log.Printf("[human-gate] task %s: marker scan saw only the first page of a longer "+
+				"thread, so gate_author is not trusted as owner (fail-closed)", taskID)
+			info.ReasonIfNot = "marker_scan_truncated"
+			return info, nil
+		}
+		return s.ownerFromGateAuthor(ctx, taskID), nil
 	}
 
 	ownerID := scan.markerAuthorID
@@ -2490,8 +2516,66 @@ func (s *commentService) GetHumanGateOwner(ctx context.Context, taskID uuid.UUID
 		}
 	} else {
 		info.ClearableByOwner = true
+		info.ClearPath = domain.HumanGateClearPathWithdrawMarker
 	}
 	return info, nil
+}
+
+// ownerFromGateAuthor answers "who owns this gate" for the one shape the comment
+// scan structurally cannot: a gate armed through POST /tasks/:id/human-gate, which
+// leaves no marker comment to find (task #f933dc05).
+//
+// Why the fallback belongs here and not in the handler. Since task #4545660b every
+// arm writes gate_author onto the task row, taken from the caller's AUTHENTICATED
+// identity and unforgeable — so the server has known the author of an API arm all
+// along, and simply never looked there. The old answer, "no_live_marker", is a true
+// statement about the COMMENT THREAD that every reader took as a statement about the
+// gate: "armed without an ask an author could withdraw — there is no withdrawal path
+// here by construction". For a raw PATCH/UI arm that is still exactly right. For an
+// API arm it was never right; it just read the wrong column.
+//
+// The three cases that deliberately do NOT get an owner here, each for its own reason:
+//   - gate_author IS NULL — a raw PATCH/UI arm. Authorless BY CONSTRUCTION (see
+//     TaskRepo.SetHumanGate); there is genuinely nobody to hand this to.
+//   - gate_author_type is user — Pavel (or any human) armed it. An agent releasing a
+//     human's gate with its own key is the precedent this card exists to refuse:
+//     it bypasses not a technical limit but the POINT of the control.
+//   - gate_author_type is system — no session to withdraw it, and a system arm is
+//     resolved by the mechanism that raised it (the timeout sweep) or by a human.
+//
+// Fail-closed throughout: a missing repo or a failed read returns the pre-existing
+// "no_live_marker" answer, never an owner. "I could not look" must not read as
+// "I looked and it is yours".
+func (s *commentService) ownerFromGateAuthor(ctx context.Context, taskID uuid.UUID) *domain.HumanGateInfo {
+	info := &domain.HumanGateInfo{Gated: true, ReasonIfNot: "no_live_marker"}
+	if s.taskRepo == nil {
+		return info
+	}
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil || task == nil {
+		log.Printf("[human-gate] WARNING: gate_author fallback for task %s could not read the task: %v", taskID, err)
+		return info
+	}
+	if task.GateAuthor == nil || *task.GateAuthor == uuid.Nil ||
+		task.GateAuthorType == nil || *task.GateAuthorType != domain.ActorTypeAgent {
+		return info
+	}
+
+	owner := *task.GateAuthor
+	info.OwnerAgentID = &owner
+	info.ClearableByOwner = true
+	info.ReasonIfNot = ""
+	// The withdrawal-comment door is structurally shut for this shape:
+	// releaseHumanGateOnWithdrawal gates on scan.found, and by the time we are in
+	// this function the scan has already come back empty. Naming the wrong door
+	// here would send the owner to a path that fails SILENTLY.
+	info.ClearPath = domain.HumanGateClearPathClearEndpoint
+	if s.agentSvc != nil {
+		if agent, agentErr := s.agentSvc.GetByID(ctx, owner); agentErr == nil && agent != nil {
+			info.OwnerName = agent.Name
+		}
+	}
+	return info
 }
 
 func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {

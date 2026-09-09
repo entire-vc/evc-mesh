@@ -319,6 +319,18 @@ export interface HumanGateInfo {
   marker_created_at?: string | null;
   clearable_by_owner: boolean;
   reason_if_not?: string;
+  /**
+   * Which door is open to owner_agent_id — see domain.HumanGateClearPath.
+   * "withdraw_marker": the ask lives in a "Blocking @" comment and comes down
+   * by a withdrawal comment. "clear_endpoint": armed through the API with no
+   * marker, released by DELETE /tasks/:id/human-gate. Absent when
+   * clearable_by_owner is false: there is no door to name.
+   *
+   * Read-only here — this SPA has no agent session, so neither path is one it
+   * can take. Mirrored so the type does not silently omit a field the API
+   * returns, which is how a type stops being a description of the API.
+   */
+  clear_path?: "withdraw_marker" | "clear_endpoint";
 }
 
 /**
