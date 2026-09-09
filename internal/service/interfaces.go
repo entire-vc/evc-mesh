@@ -85,6 +85,7 @@ type CreateSubtaskInput struct {
 	Labels         []string            `json:"labels,omitempty"`
 	CustomFields   json.RawMessage     `json:"custom_fields,omitempty"`
 	DueDate        *time.Time          `json:"due_date,omitempty"`
+	StartAfter     *time.Time          `json:"start_after,omitempty"`
 	EstimatedHours *float64            `json:"estimated_hours,omitempty"`
 }
 

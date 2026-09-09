@@ -286,6 +286,14 @@ components:
           type: string
           format: date-time
           nullable: true
+        start_after:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            "Not before" — a lane skips feeding this task while start_after
+            is in the future, on any status. Separate from due_date, which
+            stays a deadline (backlog wake-alarm / notification use).
         estimated_hours:
           type: number
           nullable: true
@@ -1746,6 +1754,9 @@ paths:
                 due_date:
                   type: string
                   format: date-time
+                start_after:
+                  type: string
+                  format: date-time
                 estimated_hours:
                   type: number
                 labels:
@@ -1810,6 +1821,10 @@ paths:
                   type: string
                   format: uuid
                 due_date:
+                  type: string
+                  format: date-time
+                  nullable: true
+                start_after:
                   type: string
                   format: date-time
                   nullable: true

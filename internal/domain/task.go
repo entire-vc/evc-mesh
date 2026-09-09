@@ -98,12 +98,19 @@ type Task struct {
 	// ReviewerID/ReviewerType hold the person or agent responsible for checking the
 	// work — independent of AssigneeID, which is who does it. Nil means no reviewer
 	// is set. Unlike AssigneeType, there's no "unassigned" sentinel: absence is nil.
-	ReviewerID     *uuid.UUID      `json:"reviewer_id,omitempty" db:"reviewer_id"`
-	ReviewerType   *AssigneeType   `json:"reviewer_type,omitempty" db:"reviewer_type"`
-	Priority       Priority        `json:"priority" db:"priority"`
-	ParentTaskID   *uuid.UUID      `json:"parent_task_id" db:"parent_task_id"`
-	Position       float64         `json:"position" db:"position"`
-	DueDate        *time.Time      `json:"due_date" db:"due_date"`
+	ReviewerID   *uuid.UUID    `json:"reviewer_id,omitempty" db:"reviewer_id"`
+	ReviewerType *AssigneeType `json:"reviewer_type,omitempty" db:"reviewer_type"`
+	Priority     Priority      `json:"priority" db:"priority"`
+	ParentTaskID *uuid.UUID    `json:"parent_task_id" db:"parent_task_id"`
+	Position     float64       `json:"position" db:"position"`
+	DueDate      *time.Time    `json:"due_date" db:"due_date"`
+	// StartAfter is the "not-before" counterpart to DueDate (a deadline): a
+	// fiddler/dispatcher lane skips feeding this task while StartAfter is in
+	// the future, on ANY status. DueDate keeps its own separate meaning
+	// (a backlog wake-alarm on backlog, a deadline elsewhere) — the two used
+	// to collide on one field, which froze live todo/in_progress work when a
+	// due_date-based backfill ran (#e9ce6b91, #7e6fea59).
+	StartAfter     *time.Time      `json:"start_after" db:"start_after"`
 	EstimatedHours *float64        `json:"estimated_hours" db:"estimated_hours"`
 	CustomFields   json.RawMessage `json:"custom_fields" db:"custom_fields"`
 	Labels         pq.StringArray  `json:"labels" db:"labels"`

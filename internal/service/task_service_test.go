@@ -2294,6 +2294,40 @@ func TestTaskService_Update_DelegationLevelLogged(t *testing.T) {
 	assert.Contains(t, string(found.Changes), `"supervised"`)
 }
 
+// TestTaskService_Update_StartAfterLogged mirrors TestTaskService_Update_DelegationLevelLogged
+// for the start_after diff-tracking line added alongside due_date's own (#246b8fcc).
+func TestTaskService_Update_StartAfterLogged(t *testing.T) {
+	svc, taskRepo, activityRepo, _, projRepo := setupTaskServiceForDelegation()
+	ctx := context.Background()
+
+	projID := uuid.New()
+	wsID := uuid.New()
+	projRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projID, Title: "T"}
+
+	startAfter := frozenTime.Add(48 * time.Hour)
+	err := svc.Update(ctx, &domain.Task{
+		ID: taskID, ProjectID: projID, Title: "T",
+		StartAfter: &startAfter,
+	})
+	require.NoError(t, err)
+
+	activityRepo.mu.RLock()
+	var found *domain.ActivityLog
+	for _, entry := range activityRepo.items {
+		if entry.Action == "task.updated" {
+			found = entry
+			break
+		}
+	}
+	activityRepo.mu.RUnlock()
+
+	require.NotNil(t, found, "expected task.updated activity log entry")
+	assert.Contains(t, string(found.Changes), `"start_after"`)
+}
+
 func TestTaskService_Update_DelegationLevelNotifiesAgent(t *testing.T) {
 	svc, taskRepo, _, notifySvc, projRepo := setupTaskServiceForDelegation()
 	ctx := context.Background()
