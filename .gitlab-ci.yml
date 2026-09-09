@@ -129,6 +129,70 @@ hold-gate:
       fi
       echo "no hold label present ✓"
 
+# ── migration-gate ───────────────────────────────────────────────────────────
+# Ported from `.github/workflows/migration-check.yml`'s first step, because the
+# canon moved to GitLab (2026-08-23) and this control did not come with it. The
+# script `scripts/check-migration-version.sh` was here the whole time and was
+# correct the whole time; nothing on this side ever called it, so between the
+# move and 2026-09-09 migration version numbers were checked by nobody.
+#
+# How that stayed invisible for two weeks, and why this job runs on the SOURCE
+# BRANCH rather than needing merged-results pipelines (#3d18da50):
+#
+#   A branch that predates the colliding file on `main` holds only ONE file
+#   with that version, so its own directory is honestly clean and every job in
+#   its pipeline is honestly green. Git merges the two without a conflict —
+#   git cannot see migration version numbers, only paths. The collision is
+#   created BY the merge and is invisible before it.
+#
+# The script catches it anyway, and that is the whole reason it has a second
+# rule: rule 1 (no duplicates in the directory) is blind to this shape, but
+# rule 2 (every migration new in this branch must have version > max on the
+# base branch) fires on the branch alone. Measured on the real case: gate exits
+# 1 with "20260907002 ≤ max 20260909001 on origin/main" reading nothing but the
+# unmerged branch.
+#
+# What the merge would otherwise cost: goose does NOT skip a duplicate version
+# silently. It panics in `collectMigrationsFS`, before executing any SQL —
+# measured at v3.27.3, the version GOOSE_VERSION pins below. So the failure is
+# loud, but it lands on the migrate step of EVERY subsequent mesh-api deploy,
+# including deploys of unrelated work.
+#
+# Deliberately NOT ported here, and worth its own card rather than a silent
+# omission: the GitHub job's `up → down-to 0 → up` reversibility check. Four
+# jobs in this file already run `goose up` against a real Postgres, so "the
+# migrations apply" is covered; that a migration can be rolled back is not
+# covered anywhere on this side.
+#
+# No `changes:` rule on purpose. The job takes seconds, and a gate that only
+# runs under a condition is a gate you have to re-derive the reachability of
+# every time you trust it.
+migration-gate:
+  stage: gate
+  image: alpine:3.20
+  timeout: 5m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    # The script compares against origin/<target>; a truncated clone can leave
+    # that ref absent, and the script's own guard then SKIPS the comparison and
+    # exits 0 — clean-looking output for a check that did not run.
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache bash git
+  script:
+    - |
+      set -eu
+      # Fail closed if the target branch is not reachable. Without this the
+      # script's "SKIP: origin/<base> not found" path prints OK and exits 0,
+      # which is exactly the shape this gate exists to stop believing.
+      git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=1
+      git rev-parse "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" >/dev/null 2>&1 || {
+        echo "REFUSING: origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME unreachable — cannot compare versions"
+        exit 1
+      }
+      bash scripts/check-migration-version.sh migrations
+
 # ── vendor-trailer-gate ──────────────────────────────────────────────────────
 # Adapted from `.github/workflows/vendor-trailer-gate.yml`, not a literal
 # port. Reads every commit on this MR's source branch not yet on the target
