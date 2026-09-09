@@ -2383,58 +2383,80 @@ type humanGateMarkerScan struct {
 // ORDER BY created_at ASC regardless — see CommentRepo.ListByTask). So "most
 // recent" here means the LAST qualifying match found while iterating in that
 // real ascending order, not the first.
+//
+// Fixed 2026-09-09 (task #3b921ba7, found by Linus reviewing #f933dc05): this
+// scan used to read ONLY page 1 (PageSize 100) of the thread. On a thread
+// longer than 100 comments a live marker sitting past comment 100 was
+// invisible to it — both to the legitimate withdrawal path
+// (releaseHumanGateOnWithdrawal gates on scan.found) and to the read-only
+// GetHumanGateOwner report, which fell back to threadTruncated/
+// marker_scan_truncated instead of the real owner. Now it walks every page
+// (MaxPageSize=200 per round trip, so a 1000-comment thread costs 5 queries,
+// not 1) until the repository itself says there is nothing left — HasMore is
+// therefore always false on the page this function finally inspects, which
+// is what makes threadTruncated below a genuine "read everything" signal
+// again rather than "read the first page and hope".
 func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid.UUID, excludeCommentID *uuid.UUID) (*humanGateMarkerScan, error) {
-	pg := pagination.Params{Page: 1, PageSize: 100}
-	pg.Normalize()
-	page, err := s.commentRepo.ListByTask(ctx, taskID, repository.CommentFilter{IncludeInternal: true}, pg)
-	if err != nil {
-		return nil, err
-	}
-
 	scan := &humanGateMarkerScan{soleMarkerAuthor: true}
 	haveSeenAnyMarkerAuthor := false
 	var firstMarkerAuthorSeen uuid.UUID
 	var lastRawArmAt time.Time
 
-	if page != nil {
-		for _, c := range page.Items {
-			if excludeCommentID != nil && c.ID == *excludeCommentID {
-				continue
-			}
-			// Task #a2e2ac72: track the most recent raw PATCH/UI arm marker
-			// regardless of whether this comment also happens to carry a
-			// blocking marker (it never does — see hasRawArmMarker's doc —
-			// but the two checks are independent on principle).
-			if hasRawArmMarker(c.Body, c.AuthorType) && c.CreatedAt.After(lastRawArmAt) {
-				lastRawArmAt = c.CreatedAt
-			}
-			if !hasBlockingMarker(c.Body) {
-				continue
-			}
-			// Task #9959f201's soleMarkerAuthor scan intentionally counts EVERY
-			// marker-bearing comment ever posted on this thread, negated or not —
-			// unlike the "who owns it right now" scan just below, which only cares
-			// about the live one. A negated marker still PROVES someone else once
-			// held this ask, which is exactly the fact the time-gap guard needs.
-			if !haveSeenAnyMarkerAuthor {
-				firstMarkerAuthorSeen = c.AuthorID
-				haveSeenAnyMarkerAuthor = true
-			} else if c.AuthorID != firstMarkerAuthorSeen {
-				scan.soleMarkerAuthor = false
-			}
-			// Deliberately NOT checking hasNegatorInScope(c.Body) here — see the
-			// function doc above (#5d3d2402). enforceBlockingTriage armed this gate
-			// on hasBlockingMarker alone; ownership must be judged by the same rule,
-			// or an armed gate can end up with no owner at all.
-			scan.found = true
-			scan.markerCommentID = c.ID
-			scan.markerAuthorID = c.AuthorID
-			scan.markerAuthorType = c.AuthorType
-			if c.AuthorName != nil {
-				scan.markerAuthorName = *c.AuthorName
-			}
-			scan.markerCreatedAt = c.CreatedAt
+	pg := pagination.Params{Page: 1, PageSize: pagination.MaxPageSize}
+	pg.Normalize()
+	var lastPage *pagination.Page[domain.Comment]
+	for {
+		page, err := s.commentRepo.ListByTask(ctx, taskID, repository.CommentFilter{IncludeInternal: true}, pg)
+		if err != nil {
+			return nil, err
 		}
+		lastPage = page
+
+		if page != nil {
+			for _, c := range page.Items {
+				if excludeCommentID != nil && c.ID == *excludeCommentID {
+					continue
+				}
+				// Task #a2e2ac72: track the most recent raw PATCH/UI arm marker
+				// regardless of whether this comment also happens to carry a
+				// blocking marker (it never does — see hasRawArmMarker's doc —
+				// but the two checks are independent on principle).
+				if hasRawArmMarker(c.Body, c.AuthorType) && c.CreatedAt.After(lastRawArmAt) {
+					lastRawArmAt = c.CreatedAt
+				}
+				if !hasBlockingMarker(c.Body) {
+					continue
+				}
+				// Task #9959f201's soleMarkerAuthor scan intentionally counts EVERY
+				// marker-bearing comment ever posted on this thread, negated or not —
+				// unlike the "who owns it right now" scan just below, which only cares
+				// about the live one. A negated marker still PROVES someone else once
+				// held this ask, which is exactly the fact the time-gap guard needs.
+				if !haveSeenAnyMarkerAuthor {
+					firstMarkerAuthorSeen = c.AuthorID
+					haveSeenAnyMarkerAuthor = true
+				} else if c.AuthorID != firstMarkerAuthorSeen {
+					scan.soleMarkerAuthor = false
+				}
+				// Deliberately NOT checking hasNegatorInScope(c.Body) here — see the
+				// function doc above (#5d3d2402). enforceBlockingTriage armed this gate
+				// on hasBlockingMarker alone; ownership must be judged by the same rule,
+				// or an armed gate can end up with no owner at all.
+				scan.found = true
+				scan.markerCommentID = c.ID
+				scan.markerAuthorID = c.AuthorID
+				scan.markerAuthorType = c.AuthorType
+				if c.AuthorName != nil {
+					scan.markerAuthorName = *c.AuthorName
+				}
+				scan.markerCreatedAt = c.CreatedAt
+			}
+		}
+
+		if page == nil || !page.HasMore {
+			break
+		}
+		pg.Page++
 	}
 
 	// Task #a2e2ac72: was the currently-live marker itself what armed the gate,
@@ -2450,7 +2472,7 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 	// majority of real gates, and every pre-existing test fixture, which never
 	// simulate task_handler.go's raw-arm path) leaves today's behavior intact.
 	scan.rawArmPrecedesMarker = scan.found && !lastRawArmAt.IsZero() && !lastRawArmAt.After(scan.markerCreatedAt)
-	scan.threadTruncated = page != nil && page.HasMore
+	scan.threadTruncated = lastPage != nil && lastPage.HasMore
 	return scan, nil
 }
 

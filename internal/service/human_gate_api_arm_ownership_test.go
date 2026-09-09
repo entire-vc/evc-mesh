@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
 // Task #f933dc05. A gate armed through POST /tasks/:id/human-gate leaves no marker
@@ -182,18 +183,30 @@ func TestGetHumanGateOwner_TaskMissing_FailsClosed(t *testing.T) {
 
 // Found by adversarial verification of this card, not in production.
 //
-// scanHumanGateOwnership reads ONE page (PageSize=100, ascending, no loop). On a
-// longer thread a live "❓ Blocking @pavel" past comment 100 is invisible to it, and
-// a marker arm ALSO writes gate_author for the marker's own poster. Those two facts
-// together would let that agent clear a real, still-unanswered ask to a human with
-// its own key — the exact wall the fallback must not touch.
+// scanHumanGateOwnership used to read ONE page (PageSize=100, ascending, no
+// loop). On a longer thread a live "❓ Blocking @pavel" past comment 100 was
+// invisible to it, and a marker arm ALSO writes gate_author for the marker's
+// own poster. Those two facts together would have let that agent clear a
+// real, still-unanswered ask to a human with its own key — the exact wall
+// the fallback must not touch.
 //
-// Before the fallback existed the same blind spot merely misreported such a gate as
-// unclearable: it failed CLOSED. It has to keep failing closed now that the answer
-// grants a right, so "I could not read the whole thread" must never become "it is
-// yours".
+// Before the fallback existed the same blind spot merely misreported such a
+// gate as unclearable: it failed CLOSED. It had to keep failing closed while
+// the scan itself could not see past page 1, so "I could not read the whole
+// thread" was not allowed to become "it is yours" — see
+// TestGetHumanGateOwner_MarkerPastFirstPage_NowFound below for the other
+// side of the same coin, now that the scan CAN read the whole thread.
 //
-// seedManyComments fills a thread past one page so page.HasMore is true.
+// Fixed 2026-09-09 (task #3b921ba7): scanHumanGateOwnership now walks every
+// page until the repository says there is nothing left, so "no marker found"
+// on a long thread is a real fact about the thread again, not an artefact of
+// where page 1 happened to end. The fallback below is the direct
+// consequence: a long thread with genuinely no marker anywhere is no longer
+// truncated, so gate_author is safe to trust — which is the whole point of
+// reading the full thread rather than refusing on a maybe.
+//
+// seedManyComments fills a thread past one page so a single-page scan would
+// have missed anything sitting after item 100.
 func seedManyComments(env triageTestEnv, taskID uuid.UUID, n int) {
 	for i := 0; i < n; i++ {
 		cid := uuid.New()
@@ -204,22 +217,27 @@ func seedManyComments(env triageTestEnv, taskID uuid.UUID, n int) {
 	}
 }
 
-func TestGetHumanGateOwner_TruncatedThread_FallbackRefusesToClaimOwner(t *testing.T) {
+// TestGetHumanGateOwner_LongThreadNoMarker_FallbackNowFires is the corrected
+// shape of what used to be TestGetHumanGateOwner_TruncatedThread_
+// FallbackRefusesToClaimOwner. The thread is genuinely marker-free — the scan
+// now reads all 150 ordinary comments, confirms that fact, and the gate_author
+// fallback is free to answer instead of refusing on an unresolved "maybe".
+func TestGetHumanGateOwner_LongThreadNoMarker_FallbackNowFires(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	author := uuid.New()
 	taskID := seedAPIArmedTask(env, author, domain.ActorTypeAgent)
-	seedManyComments(env, taskID, 150) // > the scan's PageSize of 100
+	seedManyComments(env, taskID, 150) // > the scan's old single-page PageSize of 100
 
 	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
 	require.NoError(t, err)
 	require.NotNil(t, info)
 
-	assert.Nil(t, info.OwnerAgentID,
-		"a marker could be sitting past the page this scan read — do not grant a clearing right on a maybe")
-	assert.False(t, info.ClearableByOwner)
-	assert.Empty(t, info.ClearPath)
-	assert.Equal(t, "marker_scan_truncated", info.ReasonIfNot,
-		"and say WHY, so this is not mistaken for the authorless raw-arm shape")
+	require.NotNil(t, info.OwnerAgentID,
+		"the whole thread was read and holds no marker — gate_author is now trustworthy")
+	assert.Equal(t, author, *info.OwnerAgentID)
+	assert.True(t, info.ClearableByOwner)
+	assert.Equal(t, domain.HumanGateClearPathClearEndpoint, info.ClearPath)
+	assert.Empty(t, info.ReasonIfNot)
 }
 
 // TestGetHumanGateOwner_ShortThread_FallbackStillFires is the positive control that
@@ -240,10 +258,9 @@ func TestGetHumanGateOwner_ShortThread_FallbackStillFires(t *testing.T) {
 	assert.Equal(t, domain.HumanGateClearPathClearEndpoint, info.ClearPath)
 }
 
-// TestGetHumanGateOwner_TruncatedThread_MarkerFoundOnFirstPage_Unaffected — the guard
-// is scoped to the fallback only. A marker the scan DID find is judged exactly as
-// before, truncation or not; widening the single-page scan is a separate, pre-existing
-// defect and is deliberately not touched here.
+// TestGetHumanGateOwner_TruncatedThread_MarkerFoundOnFirstPage_Unaffected — a marker
+// the scan finds on the very first page must be judged exactly as before the fix,
+// whether or not the thread continues beyond it.
 func TestGetHumanGateOwner_TruncatedThread_MarkerFoundOnFirstPage_Unaffected(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := env.seedGatedTask(env.inProgressID)
@@ -256,4 +273,81 @@ func TestGetHumanGateOwner_TruncatedThread_MarkerFoundOnFirstPage_Unaffected(t *
 	require.NotNil(t, info.OwnerAgentID)
 	assert.Equal(t, askerID, *info.OwnerAgentID)
 	assert.Equal(t, domain.HumanGateClearPathWithdrawMarker, info.ClearPath)
+}
+
+// ---------------------------------------------------------------------------
+// The mandatory red leg (task #3b921ba7): a marker sitting PAST comment 100
+// ---------------------------------------------------------------------------
+
+// seedMarkerPastPageOne builds a thread of n ordinary comments (chronologically
+// first, so they occupy page 1 of a 100-per-page ascending scan) followed by one
+// real "❓ Blocking @pavel" marker whose CreatedAt sorts strictly AFTER all of
+// them — i.e. past position n in the thread, well past the old single page's
+// first 100 items whenever n > 100. Returns the marker's own comment ID.
+func seedMarkerPastPageOne(env triageTestEnv, taskID, authorID uuid.UUID, n int) uuid.UUID {
+	seedManyComments(env, taskID, n)
+	cid := uuid.New()
+	env.commentRepo.items[cid] = &domain.Comment{
+		ID: cid, TaskID: taskID, AuthorID: authorID, AuthorType: domain.ActorTypeAgent,
+		Body:      "❓ **Blocking @pavel**: нужен выбор варианта A/Б",
+		CreatedAt: frozenTime.Add(time.Duration(n) * time.Minute), // strictly after all n ordinary comments
+	}
+	return cid
+}
+
+// TestGetHumanGateOwner_MarkerPastFirstPage_NowFound is the acceptance test's own
+// non-negotiable red leg: "тест с тредом >100 комментов, где маркер стоит ЗА сотым,
+// должен падать на текущем коде и проходить после" (#3b921ba7). Without the loop in
+// scanHumanGateOwnership this marker sits at position 151 of a 151-comment thread —
+// entirely outside the single PageSize=100 page the old code read — so the scan
+// found nothing, GetHumanGateOwner reported marker_scan_truncated, and the marker's
+// own author had no way to see (let alone use) the withdrawal path. After the fix
+// the scan walks every page and finds it.
+func TestGetHumanGateOwner_MarkerPastFirstPage_NowFound(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	markerID := seedMarkerPastPageOne(env, taskID, askerID, 150)
+
+	info, err := env.svc.GetHumanGateOwner(context.Background(), taskID)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+
+	require.NotNil(t, info.OwnerAgentID,
+		"the marker is real and live — a page boundary must not hide it")
+	assert.Equal(t, askerID, *info.OwnerAgentID)
+	assert.True(t, info.ClearableByOwner)
+	assert.Equal(t, domain.HumanGateClearPathWithdrawMarker, info.ClearPath)
+	require.NotNil(t, info.MarkerCommentID)
+	assert.Equal(t, markerID, *info.MarkerCommentID)
+	assert.Empty(t, info.ReasonIfNot, "a found marker must not also claim the scan was truncated")
+}
+
+// TestReleaseHumanGateOnWithdrawal_MarkerPastFirstPage_StillReleases is acceptance
+// criterion 2 from #3b921ba7: the withdrawal path itself (not just the read-only
+// report) must reach a marker sitting past comment 100. Before the fix this failed
+// SILENTLY — the withdrawal comment published normally, scanHumanGateOwnership
+// found no owner past page 1, and releaseHumanGateOnWithdrawal's own !scan.found
+// guard left the gate permanently stuck, indistinguishable on the wire from success.
+func TestReleaseHumanGateOnWithdrawal_MarkerPastFirstPage_StillReleases(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+	askerID := uuid.New()
+	seedMarkerPastPageOne(env, taskID, askerID, 150)
+
+	ctx := actorctx.WithActor(context.Background(), askerID, domain.ActorTypeAgent)
+	comment := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   askerID,
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "Blocker самоустранился, ask не нужен — снимаю.",
+		CreatedAt:  frozenTime.Add(200 * time.Minute), // after the marker and all ordinary comments
+	}
+	require.NoError(t, env.svc.Create(ctx, comment))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1,
+		"SetHumanGate must be called exactly once — a marker past page 1 must not leave the gate silently stuck")
+	assert.Equal(t, taskID, gateCalls[0].taskID)
+	assert.False(t, gateCalls[0].value, "gate must be cleared (value=false)")
 }
