@@ -569,3 +569,85 @@ func TestBacklogPromotion_NoDueTasks_ReturnsZero(t *testing.T) {
 		t.Errorf("expected 0, got %d", n)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// start_after independence (sub4 of #e9ce6b91, blocked on sub1 #246b8fcc which
+// added the column). FindDueBacklogTasks's SQL selects on due_date alone, and
+// skipReason's five guards never read StartAfter either — this sweep was never
+// wired to the field. These tests exist to catch a FUTURE regression that wires
+// it in by accident, not to test anything currently branching on it.
+// ---------------------------------------------------------------------------
+
+// addTaskWithStartAfter mirrors addTask but also sets StartAfter, to exercise the
+// sweep against a task carrying both time fields.
+func (h *monitorHarness) addTaskWithStartAfter(t *testing.T, projectID, statusID uuid.UUID, labels []string, dueDate, startAfter *time.Time) *domain.Task {
+	t.Helper()
+	task := &domain.Task{
+		ID:         uuid.New(),
+		ProjectID:  projectID,
+		StatusID:   statusID,
+		Title:      "parked task",
+		Labels:     labels,
+		DueDate:    dueDate,
+		StartAfter: startAfter,
+	}
+	if err := h.taskRepo.Create(context.Background(), task); err != nil {
+		t.Fatalf("addTaskWithStartAfter: %v", err)
+	}
+	return task
+}
+
+// Red control: a FUTURE start_after must not hold a past-due backlog card down. If
+// this sweep ever started treating start_after as a second due-date gate (the
+// natural-looking but wrong move, since StartAfter is a "not-before" field
+// elsewhere in the system), this is the test that would fail.
+func TestBacklogPromotion_PastDueFutureStartAfter_Promoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	task := h.addTaskWithStartAfter(t, projectID, backlog.ID, nil, hourAgo(), hourAhead())
+
+	if n := h.sweep(t); n != 1 {
+		t.Fatalf("a future start_after must not hold a past-due backlog card, got n=%d", n)
+	}
+	if len(h.mover.movesSeen) != 1 || h.mover.movesSeen[0] != task.ID {
+		t.Errorf("MoveTask not called for the task, got %v", h.mover.movesSeen)
+	}
+}
+
+// Positive control, same shape but with start_after already in the past too —
+// carrying both fields set must not break the ordinary promote path either.
+func TestBacklogPromotion_PastDuePastStartAfter_Promoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	h.addTaskWithStartAfter(t, projectID, backlog.ID, nil, hourAgo(), hourAgo())
+
+	if n := h.sweep(t); n != 1 {
+		t.Fatalf("a past-due backlog card with a past start_after must still promote, got n=%d", n)
+	}
+}
+
+// start_after with NO due_date at all must not be promoted — FindDueBacklogTasks's
+// candidate query requires due_date IS NOT NULL; start_after is not a substitute
+// wake-up trigger for this sweep (it is only a gate other lanes read, per sub1's
+// doc comment on domain.Task.StartAfter).
+func TestBacklogPromotion_StartAfterOnlyNoDueDate_NotPromoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	h.addTaskWithStartAfter(t, projectID, backlog.ID, nil, nil, hourAgo())
+
+	if n := h.sweep(t); n != 0 {
+		t.Errorf("start_after alone (no due_date) must not trigger promotion, got n=%d", n)
+	}
+	if len(h.mover.movesSeen) != 0 {
+		t.Errorf("MoveTask should not have been called")
+	}
+}
