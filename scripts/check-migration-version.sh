@@ -8,12 +8,20 @@
 # Usage:
 #   ./scripts/check-migration-version.sh [migrations-dir]
 #
-# Environment (set automatically in GitHub Actions pull_request events):
-#   GITHUB_BASE_REF — base branch name (default: main)
+# Environment — the base branch to compare against, first one set wins:
+#   MIGRATION_BASE_REF                    — explicit override, for local runs
+#   CI_MERGE_REQUEST_TARGET_BRANCH_NAME   — GitLab, set on merge_request_event
+#   GITHUB_BASE_REF                       — GitHub Actions, set on pull_request
+#   (default: main)
+#
+# Both CI variables are read because the canon repository moved to GitLab
+# (2026-08-23) while the GitHub workflow still exists on the showcase mirror.
+# Reading only one of them is how this check came to be inert on the canon for
+# two weeks: the script was fine, nothing called it (#3d18da50).
 set -euo pipefail
 
 MIGRATIONS_DIR="${1:-migrations}"
-BASE_REF="${GITHUB_BASE_REF:-main}"
+BASE_REF="${MIGRATION_BASE_REF:-${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${GITHUB_BASE_REF:-main}}}"
 
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
     echo "ERROR: migrations dir '$MIGRATIONS_DIR' not found." >&2
