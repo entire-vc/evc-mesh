@@ -54,6 +54,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { launchRailGateChromium } from "./rail-visual-gate-chromium.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
@@ -295,10 +296,7 @@ console.log(
     `(${glyph.count} icons in the collapsed branch, all agreeing)`,
 );
 
-const { chromium } = await import(path.join(WEB, "node_modules/@playwright/test/index.mjs"));
-const browser = await chromium.launch({
-  executablePath: process.env.RAIL_CONTRAST_CHROMIUM || undefined,
-});
+const browser = await launchRailGateChromium(WEB, fail);
 const page = await browser.newPage();
 
 let exitCode = 0;

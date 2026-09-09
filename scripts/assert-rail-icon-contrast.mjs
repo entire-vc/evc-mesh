@@ -42,6 +42,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { launchRailGateChromium } from "./rail-visual-gate-chromium.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
@@ -218,41 +219,7 @@ const css = findBuiltCss();
 console.log(`\n── rail icon contrast (WCAG AA, min ${MIN_RATIO}:1) ──`);
 console.log(`  stylesheet: ${path.relative(REPO, css.path)} (${css.text.length} bytes)`);
 
-// @playwright/test is CJS; depending on the resolver the namespace object may
-// carry the exports directly or hang them off `default`. Accept both rather
-// than crashing with "cannot read 'launch' of undefined".
-let chromium;
-for (const spec of [
-  path.join(WEB, "node_modules/@playwright/test/index.js"),
-  "@playwright/test",
-]) {
-  try {
-    const mod = await import(spec);
-    chromium = mod.chromium ?? mod.default?.chromium;
-    if (chromium) break;
-  } catch {
-    /* try the next specifier */
-  }
-}
-if (!chromium) {
-  fail(
-    "Could not load Playwright. Install the frontend deps first: cd web && pnpm install",
-  );
-}
-
-const launchOpts = process.env.RAIL_CONTRAST_CHROMIUM
-  ? { executablePath: process.env.RAIL_CONTRAST_CHROMIUM }
-  : {};
-let browser;
-try {
-  browser = await chromium.launch(launchOpts);
-} catch (e) {
-  fail(
-    `Could not launch Chromium: ${String(e).split("\n")[0]}\n` +
-      `Install it (cd web && npx playwright install chromium) or set\n` +
-      `RAIL_CONTRAST_CHROMIUM=/path/to/chrome`,
-  );
-}
+const browser = await launchRailGateChromium(WEB, fail);
 const page = await browser.newPage({ viewport: { width: 400, height: 300 } });
 
 let exitCode = 0;
