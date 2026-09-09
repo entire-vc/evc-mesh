@@ -1301,7 +1301,27 @@ func (m *MockCommentRepository) ListByTask(_ context.Context, taskID uuid.UUID, 
 	// caller that (correctly, per the real repo) relies on chronological order,
 	// not just an inconvenience for one test. Sort here so the mock matches prod.
 	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.Before(all[j].CreatedAt) })
-	return pagination.NewPage(all, len(all), pg), nil
+
+	// Task #3b921ba7: this used to hand back the FULL unsliced set regardless of
+	// pg.Page/pg.PageSize, with only Page.HasMore computed from the arithmetic —
+	// so a caller that (bug) read only "page 1" still silently saw every comment
+	// through this mock, and a caller that (fix) loops until HasMore is false
+	// would have kept looping forever, re-reading the same full set each time.
+	// Neither shape exercises real pagination, which is exactly what the
+	// thread-longer-than-one-page tests for scanHumanGateOwnership need to be
+	// real red/green plumbing rather than "the mock skipped the truncation and
+	// nobody would ever know." Slice like the real repo's LIMIT/OFFSET.
+	pg.Normalize()
+	start := pg.Offset()
+	if start > len(all) {
+		start = len(all)
+	}
+	end := start + pg.Limit()
+	if end > len(all) {
+		end = len(all)
+	}
+	pageItems := append([]domain.Comment(nil), all[start:end]...)
+	return pagination.NewPage(pageItems, len(all), pg), nil
 }
 
 func (m *MockCommentRepository) ListReplies(_ context.Context, parentCommentID uuid.UUID) ([]domain.Comment, error) {
