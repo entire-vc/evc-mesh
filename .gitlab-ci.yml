@@ -989,6 +989,58 @@ build:web:
 # КРАСНЫМ. Проверка, которая не умеет падать, — не проверка; здесь этот
 # негативный контроль прибит к каждому прогону, а не остался скриншотом в
 # комментарии.
+# ── migration-reversibility-gate ──────────────────────────────────────────
+# Closes the gap `migration-gate`'s own header (above) names but deliberately
+# does not close: four jobs in this file (test, repo-integration,
+# tenancy-rbac-gate, coverage-gate) run `goose ... up` against a real
+# Postgres, so "migrations apply" is well covered. None of them ever run
+# `down-to 0`. The retired GitHub job (`.github/workflows/migration-check.yml`)
+# did the full `up → down-to 0 → up` cycle, and that meaning did not survive
+# the move to GitLab — moving CI does not move a control by itself, the same
+# lesson `check-migration-version.sh` taught (it was also correct and also
+# uncalled from 2026-08-23 until `migration-gate` above wired it back in).
+#
+# A `-- +goose Down` section is written for every migration and verified by
+# NOTHING today: it can fail to compile, reference an object a later
+# migration dropped, or silently no-op. That is discovered mid-incident, the
+# moment §1b's rollback path ("revert the image, then the migration") is
+# actually invoked — the worst time to learn a Down is broken.
+#
+# Full `down-to 0` chosen over "only migrations new in this branch" — a
+# deliberate cost decision, not the default. Measured locally against a
+# throwaway postgres:16 container on the unmodified tree (130 migrations,
+# 600K on disk): up 2.87s, down-to 0 1.40s, re-up 2.37s — 6.64s of goose
+# runtime for the whole history. That is small next to the apk-install +
+# `go install goose` overhead every migration-running job in this file
+# already pays once per run (the same fixed cost this job also pays), so
+# checking the FULL history costs barely more than checking only the MR's
+# diff would — and it is strictly more coverage: it also catches an old
+# migration whose Down rotted after a later migration removed something it
+# depended on, not just migrations new in this MR.
+migration-reversibility-gate:
+  stage: test
+  image: golang:1.25-alpine
+  timeout: 10m
+  services:
+    - name: postgres:16
+      alias: postgres
+  cache:
+    key: go-mod-$CI_COMMIT_REF_SLUG
+    paths: [.gocache/, .gomodcache/]
+    policy: pull
+  variables:
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+    GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+  before_script:
+    - apk add --no-cache git build-base postgresql-client
+    - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
+    - pg_isready -h postgres -U mesh
+    - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
+  script:
+    - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
+    - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations down-to 0
+    - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
+
 rail-visual-gates:
   stage: build
   # Тот же образ и та же версия, что у `authed-e2e`: браузер уже внутри, и
