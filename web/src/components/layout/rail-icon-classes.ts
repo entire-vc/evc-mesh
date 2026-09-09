@@ -39,8 +39,42 @@ export const WORKSPACE_LOGO_CONTAINER: Record<WorkspaceLogoVariant, string> = {
   collapsed: "h-8 w-8 rounded-lg",
 };
 
-/** Fallback mark sized as a percentage of its box, never a fixed px. */
-export const WORKSPACE_LOGO_ICON_FILL = "h-[58%] w-[58%]";
+/**
+ * Fallback mark sized as a percentage of its box, never a fixed px — and the
+ * percentage is DERIVED from the rail, not from the mark's own history.
+ *
+ * The collapsed rail draws one glyph size: every navigation item renders a
+ * 16px icon inside a 32px tile. The workspace mark stands in the same column,
+ * in an identically-sized tile, so it is the same kind of glyph and takes the
+ * same size — 16 of 32 is one half, and that is where this number comes from.
+ * The expanded header (24px tile) then inherits 12px by construction, which is
+ * the point of expressing it as a ratio at all.
+ *
+ * It used to be 58%, and 58 had no derivation. It was reverse-engineered in
+ * `1a63877f` to reproduce the two hand-tuned literals that commit replaced
+ * (`MeshIcon size={18}` collapsed, `size={14}` expanded — 18/32 = 56.3%,
+ * 14/24 = 58.3%). So the one number in this module that looked principled was
+ * in fact the old ad-hoc pair wearing a percentage sign, and it carried the
+ * collapsed rail's oldest visual defect through three consecutive fixes of
+ * that rail without any of them touching it: at 58% the mark rendered
+ * 18.55×18.55 while all ten of its neighbours rendered 16×16.
+ *
+ * Why that reads as "the icon slides" even though nothing moves: measured on
+ * the collapsed rail, every tile is 32×32 at cx=23.5 and every glyph's ink is
+ * centred to within 0.01px — there is no offset to find, and three separate
+ * measurement passes correctly found none. What differs is ink WIDTH. This
+ * mark's paths span its whole viewBox horizontally, so its ink width equals
+ * its svg width: 18.55px at 58%, against 13.33–14.67px for every lucide
+ * neighbour. A mark a quarter wider than the column it sits in breaks the
+ * column's vertical edge, and a broken edge is read as the odd item being
+ * out of line — the one thing a coordinate assert can never catch, because
+ * the coordinates are right.
+ *
+ * At 50% the svg is 16×16 (identical to every neighbour) and the ink is
+ * 16×11.46, whose geometric mean is 13.54px against the lucide design box's
+ * 13.33px — the same optical size, not merely the same declared box.
+ */
+export const WORKSPACE_LOGO_ICON_FILL = "h-1/2 w-1/2";
 
 /**
  * The tinted-box treatment used whenever there is no loaded image.

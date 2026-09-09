@@ -8,6 +8,14 @@
 // 16x16 — that could read as "off-center" without any coordinate being
 // wrong. This script repeats his exact measurement with 13 seeded projects,
 // both themes, AND grabs a mid-transition frame.
+//
+// UPDATE (`#13ff4803`): this script's own conclusion held — there is no
+// coordinate offset, at any capture point, in either theme. The size
+// asymmetry it flagged in (c) turned out to be the whole of the defect and is
+// fixed; the mark is now 16x16 like every neighbour. What this script cannot
+// see is size, by design — it reports the <svg> box and nothing about the ink
+// inside it. `measure-rail-ink.mjs` next to it answers that question, and
+// `scripts/assert-rail-icon-size.mjs` refuses a regression.
 import { chromium } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
