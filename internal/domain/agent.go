@@ -72,6 +72,14 @@ type Agent struct {
 	LastRotatedAt      *time.Time       `json:"last_rotated_at,omitempty" db:"last_rotated_at"`
 	CreatedAt          time.Time        `json:"created_at" db:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at" db:"updated_at"`
+	// WorkspaceRole is set by agentService.Authenticate from the
+	// AgentWorkspaceGrant that resolved this login (workspace_role enum:
+	// owner/admin/member/viewer) — NOT persisted on the agents row and not
+	// populated by GetByID/List/etc. It is transient, request-scoped
+	// authentication context, deliberately kept off this struct's db columns
+	// (see agent_workspace_grant.go for why it is a separate concept from
+	// Role above).
+	WorkspaceRole string `json:"-" db:"-"`
 }
 
 // IsKeyExpired returns true when the agent's API key has a set expiry that has passed.

@@ -792,6 +792,13 @@ type AgentServiceConfigurable interface {
 	// concrete value satisfying this interface does not exist yet at
 	// NewAgentService's call site.
 	SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExtender)
+	// SetAgentWorkspaceGrantRepo wires the optional agent-workspace connection
+	// repository (task U2). A nil value (never called) makes Authenticate skip
+	// the connection lookup entirely and always use the pre-U2 agents-table
+	// path — the same behavior every caller had before U2, so an environment
+	// that forgets to wire this, or a test that doesn't care, degrades to the
+	// old working code path rather than failing.
+	SetAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository)
 }
 
 // CheckoutHeartbeatExtender is the narrow slice of TaskService that

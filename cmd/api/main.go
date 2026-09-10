@@ -243,6 +243,10 @@ func main() {
 	mw.CheckSpawnTokenConfigured()
 
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
+	// agent_workspace_grants (migration 20260909001, task U1) — the login
+	// path Authenticate now resolves through first (task U2); agents.* is
+	// only the fallback for a connection-less agent.
+	agentWorkspaceGrantRepo := postgres.NewAgentWorkspaceGrantRepo(db)
 	// The cache wrapper is applied at construction so that EVERY consumer of
 	// AgentService gets it — the three auth middlewares and the WebSocket
 	// handshake all call Authenticate, and each of them was paying a full
@@ -253,9 +257,11 @@ func main() {
 		service.NewAgentService(agentRepo, activityLogRepo, workspaceRepo, userRepo),
 		service.AgentAuthCacheTTL,
 	)
-	// Wire agent activity log repository for monitoring.
+	// Wire agent activity log repository for monitoring, and the connection
+	// repository Authenticate reads through.
 	if configurable, ok := agentService.(service.AgentServiceConfigurable); ok {
 		configurable.SetAgentActivityLogRepo(agentActLogRepo)
+		configurable.SetAgentWorkspaceGrantRepo(agentWorkspaceGrantRepo)
 	}
 
 	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).

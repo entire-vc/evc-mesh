@@ -88,6 +88,12 @@ func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
 			c.Set(ContextKeyAuthType, AuthTypeAgent)
 			c.Set(ContextKeyAgentID, agent.ID)
 			c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+			// Role comes from whatever connection resolved this login
+			// (Authenticate sets it, grant-backed or legacy-default — see
+			// agentService.authenticateViaGrant/authenticateLegacy), never
+			// implied here. WorkspaceRLS's own role resolution skips agents
+			// entirely (!IsAgent(c)), so this is the only place it is set.
+			c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
 
 			// Propagate actor into Go context for service layer.
 			goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
@@ -127,6 +133,7 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
 						goCtx = actorctx.WithActorName(goCtx, agent.Name)
@@ -170,6 +177,7 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
 						goCtx = actorctx.WithActorName(goCtx, agent.Name)

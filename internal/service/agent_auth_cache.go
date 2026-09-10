@@ -278,6 +278,17 @@ func (c *cachedAgentAuth) SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExte
 	}
 }
 
+// SetAgentWorkspaceGrantRepo forwards the optional dependency, same reason as
+// SetAgentActivityLogRepo above. Without this forward, wiring the repo in
+// cmd/api would silently no-op against the cache wrapper instead of reaching
+// the wrapped *agentService, and Authenticate would keep using the legacy
+// path forever.
+func (c *cachedAgentAuth) SetAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository) {
+	if configurable, ok := c.AgentService.(AgentServiceConfigurable); ok {
+		configurable.SetAgentWorkspaceGrantRepo(repo)
+	}
+}
+
 // Compile-time proof that the wrapper still satisfies the optional-dependency
 // interface the wiring code asserts on.
 var _ AgentServiceConfigurable = (*cachedAgentAuth)(nil)
