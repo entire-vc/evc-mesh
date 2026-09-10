@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,43 @@ const documentContentType = "text/markdown"
 // to be hashed into an object of known length, so it needs a ceiling that is not
 // "whatever the client sent".
 const maxDocumentBodyBytes = 5 << 20 // 5 MiB
+
+// binarySignaturePrefixes are magic-byte prefixes of formats a document body
+// must never be — a document is stored and served as text/markdown, and
+// anything else belongs in a task artifact, not here.
+//
+// This exists because task 3e6f8029-88e2-41b4-8dfc-e60a19ca78dc found 140
+// documents whose "body" was a raw PNG's bytes: SyncMount/RefreshIfStale
+// (teamrelay_mount_service.go) walk a Team Relay share's files-index and
+// upload whatever bytes come back with no check that they are text at all —
+// a share containing PNG screenshots got every one of them mounted as a
+// document. Create and updateOnce below had the identical gap on the
+// human-facing path. rejectBinaryBody is the one check both paths call.
+var binarySignaturePrefixes = []struct {
+	name string
+	sig  []byte
+}{
+	{"PNG", []byte("\x89PNG\r\n\x1a\n")},
+	{"GIF", []byte("GIF8")}, // covers both GIF87a and GIF89a
+	{"JPEG", []byte{0xFF, 0xD8, 0xFF}},
+	{"PDF", []byte("%PDF")},
+}
+
+// rejectBinaryBody refuses a body that starts with a known binary-format
+// signature. A prefix check, not a full format sniff — deliberately: these
+// four signatures are not valid UTF-8 and are not a realistic way for a real
+// markdown document to legitimately begin, so there is no false-positive
+// case worth the cost of a heavier content-sniffing library here.
+func rejectBinaryBody(body []byte) error {
+	for _, sig := range binarySignaturePrefixes {
+		if bytes.HasPrefix(body, sig.sig) {
+			return apierror.ValidationError(map[string]string{
+				"body": fmt.Sprintf("body looks like a binary %s file, not markdown — upload it as a task artifact instead", sig.name),
+			})
+		}
+	}
+	return nil
+}
 
 // DocumentStore is the slice of object storage a document body needs.
 //
@@ -165,6 +203,9 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 		return nil, apierror.ValidationError(map[string]string{
 			"body": fmt.Sprintf("body must be at most %d bytes", maxDocumentBodyBytes),
 		})
+	}
+	if verr := rejectBinaryBody([]byte(input.Body)); verr != nil {
+		return nil, verr
 	}
 	if s.storage == nil {
 		return nil, apierror.ServiceUnavailable("storage backend not configured; set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET")
@@ -510,6 +551,11 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	newBody, err := s.resolveBodyWrite(ctx, doc, input)
 	if err != nil {
 		return nil, nil, err
+	}
+	if newBody != nil {
+		if verr := rejectBinaryBody([]byte(*newBody)); verr != nil {
+			return nil, nil, verr
+		}
 	}
 
 	// ## Write-back to an external source happens BEFORE the local write

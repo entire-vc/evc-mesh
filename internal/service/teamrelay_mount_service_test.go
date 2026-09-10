@@ -581,6 +581,74 @@ func TestSyncMount_ReRun_IsIdempotentAndDoesNotRedownload(t *testing.T) {
 	assert.Equal(t, callsAfterFirst, f.client.callCount(), "an already-mounted file must not be downloaded again")
 }
 
+// Red control for task 3e6f8029-88e2-41b4-8dfc-e60a19ca78dc: SyncMount is the
+// actual source of the 140 corrupt documents found on prod — it downloaded
+// whatever bytes a files-index entry pointed at and stored them as a document
+// body with no check that they were text. A share with a PNG entry among
+// ordinary markdown files must skip that one entry (counted as Rejected) and
+// still mount the rest — not abort the whole sync on the first bad file,
+// which would trade "140 corrupt documents" for "sync looks completely
+// broken" and is exactly the overcorrection this fix must not make.
+func TestSyncMount_BinaryEntry_SkippedNotMountedAndSyncContinues(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+		{Path: "screenshots/hero-1440.png", SHA256: "sha-png", Size: 12345, Type: "doc"},
+		{Path: "Notes/Plan.md", SHA256: "sha-plan", Size: 20, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if strings.HasSuffix(path, ".png") {
+			return &teamrelay.SyncDocument{Content: []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("x", 40)), SHA256: "sha-for-" + path}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 2, result.Mounted, "the two markdown entries must still mount")
+	assert.Equal(t, 1, result.Rejected, "the PNG entry must be counted as rejected, not silently dropped")
+	assert.Equal(t, 0, result.Skipped)
+
+	welcome, err := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Welcome.md")
+	require.NoError(t, err)
+	require.NotNil(t, welcome, "an entry after the rejected one in sorted order must still be reached")
+
+	png, err := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "screenshots/hero-1440.png")
+	require.NoError(t, err)
+	assert.Nil(t, png, "the binary entry must never become a document row")
+}
+
+// RefreshIfStale's write path shares the same gap: if a source that was
+// legitimately text ever returns binary content on refresh, the existing
+// (good) body must be left alone rather than overwritten — the failure mode
+// this guards is silent corruption of a document that used to be fine.
+func TestRefreshIfStale_SourceTurnedBinary_RefusesAndKeepsOldBody(t *testing.T) {
+	f := setupMountFixture(t, "")
+	share, path, sha := testRelayShareID, "Notes/Plan.md", "sha-old"
+	syncedAt := frozenTime.Add(-time.Hour)
+	doc := &domain.Document{
+		ID:           uuid.New(),
+		ProjectID:    f.projectID,
+		StorageKey:   "documents/" + f.projectID.String() + "/copy.md",
+		SourceKind:   domain.DocumentSourceTeamRelay,
+		SourceShare:  &share,
+		SourcePath:   &path,
+		SourceSHA256: &sha,
+		SyncedAt:     &syncedAt,
+	}
+	require.NoError(t, f.storage.Upload(context.Background(), doc.StorageKey, strings.NewReader("old good markdown"), 18, "text/markdown"))
+
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("x", 40)), SHA256: "sha-new-binary"}, nil
+	}
+
+	err := f.svc.RefreshIfStale(context.Background(), doc)
+	require.Error(t, err)
+	assert.Equal(t, "sha-old", *doc.SourceSHA256, "must not adopt the new hash when the refresh is refused")
+	assert.Equal(t, "old good markdown", string(f.storage.objects[doc.StorageKey]), "the existing body must survive a refused refresh")
+}
+
 // ---------------------------------------------------------------------------
 // #218d5847 AC4 — the producers Bill's 2026-08-26 correction found unwired:
 // R5-A built the schema and the UI, but nothing ever called RecordSyncCheck
