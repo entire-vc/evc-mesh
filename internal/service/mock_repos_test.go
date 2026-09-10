@@ -1555,7 +1555,36 @@ type MockAgentRepository struct {
 	defaultWorkspace uuid.UUID
 	mu               sync.RWMutex
 	items            map[uuid.UUID]*domain.Agent
-	errToReturn      error
+	// grants is the in-memory stand-in for the transactional agent_workspace_grants
+	// write CreateWithHomeGrant/RotateHomeGrantKey perform against the real
+	// Postgres table — keyed by agent ID since there is at most one home grant
+	// per agent (uq_agent_ws_grant). Deliberately NOT shared with
+	// MockAgentWorkspaceGrantRepository: in production the two live in the same
+	// table by construction (same transaction, same DB), but every existing test
+	// wiring a separate grantRepo mock (agent_service_grant_auth_test.go) relies
+	// on it holding ONLY what it was explicitly Seed()-ed with, so keeping this
+	// bookkeeping local avoids changing what those tests see.
+	grants      map[uuid.UUID]*domain.AgentWorkspaceGrant
+	errToReturn error
+	// grantMirror, when set via WithGrantRepoMirror, additionally receives
+	// every home-grant write CreateWithHomeGrant/RotateHomeGrantKey make —
+	// the SAME *domain.AgentWorkspaceGrant pointer as the local `grants` map,
+	// so a later in-place mutation (RotateHomeGrantKey) is visible through
+	// BOTH. Wiring a test's MockAgentWorkspaceGrantRepository here (the same
+	// instance passed to agentService.SetAgentWorkspaceGrantRepo) makes
+	// Authenticate see the atomic grant write exactly as it would against
+	// real Postgres, where both writes land in the one shared table. nil by
+	// default, so every test that doesn't call the setter is unaffected.
+	grantMirror *MockAgentWorkspaceGrantRepository
+}
+
+// WithGrantRepoMirror wires g so CreateWithHomeGrant/RotateHomeGrantKey also
+// write into it — see the grantMirror field doc.
+func (m *MockAgentRepository) WithGrantRepoMirror(g *MockAgentWorkspaceGrantRepository) *MockAgentRepository {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.grantMirror = g
+	return m
 }
 
 func NewMockAgentRepository() *MockAgentRepository {
@@ -1563,6 +1592,7 @@ func NewMockAgentRepository() *MockAgentRepository {
 	// agent seeded WITH one keeps it, which is how a foreign principal is built.
 	return &MockAgentRepository{
 		items:            make(map[uuid.UUID]*domain.Agent),
+		grants:           make(map[uuid.UUID]*domain.AgentWorkspaceGrant),
 		defaultWorkspace: testDefaultWorkspaceID,
 	}
 }
@@ -1759,6 +1789,62 @@ func (m *MockAgentRepository) GetBySlug(_ context.Context, workspaceID uuid.UUID
 
 func (m *MockAgentRepository) SearchByPrefix(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.Agent, error) {
 	return nil, nil
+}
+
+// CreateWithHomeGrant mirrors the real repository's atomic write: stores the
+// agent AND a home agent_workspace_grants row (see the grants field doc).
+func (m *MockAgentRepository) CreateWithHomeGrant(_ context.Context, a *domain.Agent) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	m.items[a.ID] = a
+	grant := &domain.AgentWorkspaceGrant{
+		ID:           uuid.New(),
+		AgentID:      a.ID,
+		WorkspaceID:  a.WorkspaceID,
+		Role:         domain.RoleMember,
+		APIKeyPrefix: a.APIKeyPrefix,
+		APIKeyHash:   a.APIKeyHash,
+		CreatedAt:    a.CreatedAt,
+	}
+	m.grants[a.ID] = grant
+	mirror := m.grantMirror
+	m.mu.Unlock()
+	if mirror != nil {
+		// Same pointer as m.grants[a.ID] — a later RotateHomeGrantKey mutates
+		// it in place, so the mirror sees the update too without a second
+		// write path to keep in sync.
+		mirror.Seed(grant)
+	}
+	return nil
+}
+
+// RotateHomeGrantKey mirrors the real repository's atomic write: updates the
+// agent AND, if a home grant row exists for it (see the interface doc — a
+// legacy agent that was never backfilled has none, and that's not an error),
+// its key material.
+func (m *MockAgentRepository) RotateHomeGrantKey(_ context.Context, a *domain.Agent) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[a.ID] = a
+	if g, ok := m.grants[a.ID]; ok {
+		g.APIKeyPrefix = a.APIKeyPrefix
+		g.APIKeyHash = a.APIKeyHash
+	}
+	return nil
+}
+
+// HomeGrant returns the in-memory home agent_workspace_grants row
+// CreateWithHomeGrant created for agentID, or nil if none was ever created
+// (or the agent was seeded directly via Create, bypassing it) — test helper.
+func (m *MockAgentRepository) HomeGrant(agentID uuid.UUID) *domain.AgentWorkspaceGrant {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.grants[agentID]
 }
 
 // ---------------------------------------------------------------------------

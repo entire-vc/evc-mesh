@@ -75,6 +75,8 @@ func (m *activityMockRepo) GetBySlug(_ context.Context, _ uuid.UUID, _ string) (
 func (m *activityMockRepo) SearchByPrefix(_ context.Context, _ uuid.UUID, _ string, _ int) ([]domain.Agent, error) {
 	return nil, nil
 }
+func (m *activityMockRepo) CreateWithHomeGrant(_ context.Context, _ *domain.Agent) error { return nil }
+func (m *activityMockRepo) RotateHomeGrantKey(_ context.Context, _ *domain.Agent) error  { return nil }
 
 // Ensure compile-time interface compliance.
 var _ repository.AgentRepository = (*activityMockRepo)(nil)

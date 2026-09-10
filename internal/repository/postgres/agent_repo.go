@@ -212,6 +212,172 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 	return err
 }
 
+// createAgentTx and updateAgentTx run the exact same INSERT/UPDATE as Create
+// and Update above, against a transaction instead of r.db directly, so
+// CreateWithHomeGrant/RotateHomeGrantKey can share them instead of drifting
+// from the non-transactional versions over time.
+func createAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error {
+	const q = `
+		INSERT INTO agents (
+			id, workspace_id, parent_agent_id, supervisor_user_id, name, slug, agent_type,
+			api_key_hash, api_key_prefix, capabilities, status,
+			last_heartbeat, current_task_id, settings,
+			total_tasks_completed, total_errors,
+			role, responsibility_zone, escalation_to, accepts_from,
+			max_concurrent_tasks, working_hours, profile_description,
+			callback_url,
+			expires_at, last_rotated_at,
+			created_at, updated_at,
+			api_key_sha256
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11,
+			$12, $13, $14,
+			$15, $16,
+			$17, $18, $19, $20,
+			$21, $22, $23,
+			$24,
+			$25, $26,
+			$27, $28,
+			$29
+		)
+	`
+	capabilities := agent.Capabilities
+	if capabilities == nil {
+		capabilities = json.RawMessage(`{}`)
+	}
+	settings := agent.Settings
+	if settings == nil {
+		settings = json.RawMessage(`{}`)
+	}
+	acceptsFrom := agent.AcceptsFrom
+	if acceptsFrom == nil {
+		acceptsFrom = json.RawMessage(`["*"]`)
+	}
+	_, err := tx.ExecContext(ctx, q,
+		agent.ID, agent.WorkspaceID, agent.ParentAgentID, agent.SupervisorUserID, agent.Name, agent.Slug, agent.AgentType,
+		agent.APIKeyHash, agent.APIKeyPrefix, capabilities, agent.Status,
+		agent.LastHeartbeat, agent.CurrentTaskID, settings,
+		agent.TotalTasksCompleted, agent.TotalErrors,
+		agent.Role, agent.ResponsibilityZone, agent.EscalationTo, acceptsFrom,
+		agent.MaxConcurrentTasks, agent.WorkingHours, agent.ProfileDescription,
+		agent.CallbackURL,
+		agent.ExpiresAt, agent.LastRotatedAt,
+		agent.CreatedAt, agent.UpdatedAt,
+		nullIfEmpty(agent.APIKeySHA256),
+	)
+	return err
+}
+
+func updateAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error {
+	const q = `
+		UPDATE agents
+		SET parent_agent_id = $2, supervisor_user_id = $3, name = $4, slug = $5, agent_type = $6,
+		    api_key_hash = $7, api_key_prefix = $8,
+		    capabilities = $9, status = $10,
+		    last_heartbeat = $11, current_task_id = $12,
+		    settings = $13, total_tasks_completed = $14,
+		    total_errors = $15,
+		    role = $16, responsibility_zone = $17, escalation_to = $18, accepts_from = $19,
+		    max_concurrent_tasks = $20, working_hours = $21, profile_description = $22,
+		    callback_url = $23,
+		    expires_at = $24, last_rotated_at = $25,
+		    updated_at = $26,
+		    api_key_sha256 = $27
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	capabilities := agent.Capabilities
+	if capabilities == nil {
+		capabilities = json.RawMessage(`{}`)
+	}
+	settings := agent.Settings
+	if settings == nil {
+		settings = json.RawMessage(`{}`)
+	}
+	acceptsFrom := agent.AcceptsFrom
+	if acceptsFrom == nil {
+		acceptsFrom = json.RawMessage(`["*"]`)
+	}
+	res, err := tx.ExecContext(ctx, q,
+		agent.ID, agent.ParentAgentID, agent.SupervisorUserID, agent.Name, agent.Slug, agent.AgentType,
+		agent.APIKeyHash, agent.APIKeyPrefix,
+		capabilities, agent.Status,
+		agent.LastHeartbeat, agent.CurrentTaskID,
+		settings, agent.TotalTasksCompleted,
+		agent.TotalErrors,
+		agent.Role, agent.ResponsibilityZone, agent.EscalationTo, acceptsFrom,
+		agent.MaxConcurrentTasks, agent.WorkingHours, agent.ProfileDescription,
+		agent.CallbackURL,
+		agent.ExpiresAt, agent.LastRotatedAt,
+		agent.UpdatedAt,
+		nullIfEmpty(agent.APIKeySHA256),
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Agent")
+	}
+	return nil
+}
+
+// CreateWithHomeGrant inserts agent and its home agent_workspace_grants row
+// in one transaction — see the interface doc for why atomicity is the point.
+func (r *AgentRepo) CreateWithHomeGrant(ctx context.Context, agent *domain.Agent) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	if err := createAgentTx(ctx, tx, agent); err != nil {
+		return err
+	}
+
+	const grantQ = `
+		INSERT INTO agent_workspace_grants
+			(id, agent_id, workspace_id, role, api_key_prefix, api_key_hash, invited_by, created_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULL, $6)
+	`
+	if _, err := tx.ExecContext(ctx, grantQ,
+		agent.ID, agent.WorkspaceID, domain.RoleMember, agent.APIKeyPrefix, agent.APIKeyHash, agent.CreatedAt,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// RotateHomeGrantKey updates agent's key material and, in the same
+// transaction, the key material on its home agent_workspace_grants row (if
+// any — see the interface doc for why a zero-row match there is not an
+// error).
+func (r *AgentRepo) RotateHomeGrantKey(ctx context.Context, agent *domain.Agent) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	if err := updateAgentTx(ctx, tx, agent); err != nil {
+		return err
+	}
+
+	const grantQ = `
+		UPDATE agent_workspace_grants
+		SET api_key_prefix = $3, api_key_hash = $4
+		WHERE agent_id = $1 AND workspace_id = $2
+	`
+	if _, err := tx.ExecContext(ctx, grantQ,
+		agent.ID, agent.WorkspaceID, agent.APIKeyPrefix, agent.APIKeyHash,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (r *AgentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
 	const q = `SELECT ` + agentSelectCols + ` FROM agents WHERE id = $1 AND deleted_at IS NULL`
 	var row agentRow

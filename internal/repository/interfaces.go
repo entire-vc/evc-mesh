@@ -581,6 +581,29 @@ type AgentRepository interface {
 	TouchLastSeenBatch(ctx context.Context, ids []uuid.UUID) error
 	// SearchByPrefix returns agents in the workspace whose name or slug contain the prefix (ILIKE), sorted by exact-prefix match first then name, up to limit results.
 	SearchByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Agent, error)
+	// CreateWithHomeGrant inserts agent AND, in the SAME transaction, a home
+	// agent_workspace_grants row for it (workspace_id == agent.WorkspaceID,
+	// role "member", invited_by NULL, key material copied from agent —
+	// exactly what U1's backfill would have produced had this agent existed
+	// before the migration). Atomicity matters here specifically: Register
+	// calling AgentWorkspaceGrantRepository.Create as a second, separate
+	// write would leave a live-but-grantless agent (task #44f461a9) on ANY
+	// crash between the two — including a plain request timeout — not just
+	// on a rare double failure.
+	CreateWithHomeGrant(ctx context.Context, agent *domain.Agent) error
+	// RotateHomeGrantKey updates agent's key material AND, in the SAME
+	// transaction, the key material on its home agent_workspace_grants row
+	// (agent_id = agent.ID, workspace_id = agent.WorkspaceID) — whichever row
+	// the unique index (agent_id, workspace_id) currently holds, revoked or
+	// not. Matching zero grant rows is NOT an error: an agent that predates
+	// U1/U2 and was never backfilled or explicitly invited into its own
+	// workspace has none yet, and that is the pre-existing legacy state, not
+	// a fault this call introduces. Without the atomic grant-side update, the
+	// grant row keeps the KEY MATERIAL that was just rotated away and
+	// continues to authenticate under it forever (task #44f461a9's second
+	// half — the more dangerous one, since rotation is what you reach for
+	// after a suspected leak).
+	RotateHomeGrantKey(ctx context.Context, agent *domain.Agent) error
 }
 
 // AgentWorkspaceGrantRepository manages persistence for agent-workspace
