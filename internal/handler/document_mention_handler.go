@@ -75,14 +75,20 @@ func (h *DocumentMentionHandler) MarkSeen(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// UnseenCount returns the number of unseen document mentions for the caller.
+// UnseenCount returns the number of unseen document mentions for the caller,
+// scoped to one workspace (required, same as List — see parseMentionFilter).
 func (h *DocumentMentionHandler) UnseenCount(c echo.Context) error {
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
 	if actorID == uuid.Nil {
 		return apierror.Unauthorized("authentication required")
 	}
 
-	count, err := h.mentionService.CountUnseen(c.Request().Context(), actorID, mentionKind(actorType))
+	workspaceID, err := parseRequiredWorkspaceID(c)
+	if err != nil {
+		return err
+	}
+
+	count, err := h.mentionService.CountUnseen(c.Request().Context(), actorID, mentionKind(actorType), workspaceID)
 	if err != nil {
 		return err
 	}
@@ -91,8 +97,22 @@ func (h *DocumentMentionHandler) UnseenCount(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]int64{"count": count})
 }
 
+// parseRequiredWorkspaceID reads and validates the workspace_id query
+// parameter shared by every /me/mentions and /me/document-mentions route —
+// the same choice GetCurrentUserTasks (task_handler.go) makes for /me/tasks.
+// Required, not optional: an optional workspace_id would let an unmigrated
+// caller keep not sending it and get every workspace back unfiltered, same as
+// before this field existed.
+func parseRequiredWorkspaceID(c echo.Context) (uuid.UUID, error) {
+	workspaceID, err := uuid.Parse(c.QueryParam("workspace_id"))
+	if err != nil {
+		return uuid.Nil, apierror.ValidationError(map[string]string{"workspace_id": "required UUID"})
+	}
+	return workspaceID, nil
+}
+
 // parseMentionFilter reads the filter query parameters shared by both mention
-// inboxes.
+// inboxes' List endpoints.
 //
 // Shared rather than copied because the two endpoints are the same query over
 // two tables: a limit accepted by one and rejected by the other would be a
@@ -100,15 +120,9 @@ func (h *DocumentMentionHandler) UnseenCount(c echo.Context) error {
 func parseMentionFilter(c echo.Context) (repository.MentionFilter, error) {
 	filter := repository.MentionFilter{Limit: 50}
 
-	// workspace_id is required, not optional like the filters below — the same
-	// choice GetCurrentUserTasks (task_handler.go) makes for /me/tasks. An
-	// optional workspace_id would let an unmigrated caller keep not sending it
-	// and get every workspace back unfiltered, same as before this field
-	// existed; requiring it means the caller cannot silently regress.
-	wsIDStr := c.QueryParam("workspace_id")
-	workspaceID, err := uuid.Parse(wsIDStr)
+	workspaceID, err := parseRequiredWorkspaceID(c)
 	if err != nil {
-		return filter, apierror.ValidationError(map[string]string{"workspace_id": "required UUID"})
+		return filter, err
 	}
 	filter.WorkspaceID = &workspaceID
 

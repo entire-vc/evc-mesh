@@ -94,7 +94,7 @@ func (m *MockDocumentCommentMentionRepository) Seen() [][2]uuid.UUID {
 	return out
 }
 
-func (m *MockDocumentCommentMentionRepository) CountUnseen(_ context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error) {
+func (m *MockDocumentCommentMentionRepository) CountUnseen(_ context.Context, mentionedID uuid.UUID, mentionedKind string, _ uuid.UUID) (int64, error) {
 	if m.errToReturn != nil {
 		return 0, m.errToReturn
 	}
@@ -661,7 +661,7 @@ func TestDocumentMentionService_PassesThroughToTheRepository(t *testing.T) {
 	require.Len(t, views, 1)
 	assert.Equal(t, "pavel", views[0].MentionedSlug)
 
-	count, err := svc.CountUnseen(ctx, recipient, "user")
+	count, err := svc.CountUnseen(ctx, recipient, "user", uuid.New())
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
 
@@ -677,7 +677,7 @@ func TestDocumentMentionService_SurfacesRepositoryErrors(t *testing.T) {
 	_, err := svc.List(ctx, uuid.New(), "user", repository.MentionFilter{})
 	assert.ErrorIs(t, err, boom)
 
-	_, err = svc.CountUnseen(ctx, uuid.New(), "user")
+	_, err = svc.CountUnseen(ctx, uuid.New(), "user", uuid.New())
 	assert.ErrorIs(t, err, boom)
 
 	assert.ErrorIs(t, svc.MarkSeen(ctx, uuid.New(), uuid.New()), boom)

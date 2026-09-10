@@ -790,6 +790,12 @@ func main() {
 	e := echo.New()
 	e.HideBanner = true
 
+	// Echo's own DefaultHTTPErrorHandler only recognizes *echo.HTTPError;
+	// every handler in this codebase returns *apierror.Error instead, which
+	// fell through to a bare 500 for what were actually 400s/404s/etc — see
+	// handler.NewHTTPErrorHandler's doc comment for the incident this fixes.
+	e.HTTPErrorHandler = handler.NewHTTPErrorHandler(e.HTTPErrorHandler)
+
 	// MESH_TRUSTED_PROXIES gates whether c.RealIP() (used by
 	// mw.RateLimitKeyByIP, and therefore by the /auth/login per-IP limiter
 	// registered below) can be trusted. See RateLimitKeyByIP's doc comment

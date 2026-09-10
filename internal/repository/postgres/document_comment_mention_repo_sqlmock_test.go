@@ -276,12 +276,13 @@ func TestDocumentCommentMentionRepo_MarkSeen_SurfacesAWriteFailure(t *testing.T)
 func TestDocumentCommentMentionRepo_CountUnseen(t *testing.T) {
 	repo, mock := newDocumentCommentMentionRepoMock(t)
 	mentionedID := uuid.New()
+	workspaceID := uuid.New()
 
 	mock.ExpectQuery("SELECT COUNT").
-		WithArgs(mentionedID, "agent").
+		WithArgs(mentionedID, "agent", workspaceID).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 
-	count, err := repo.CountUnseen(context.Background(), mentionedID, "agent")
+	count, err := repo.CountUnseen(context.Background(), mentionedID, "agent", workspaceID)
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), count)
@@ -292,7 +293,7 @@ func TestDocumentCommentMentionRepo_CountUnseen_SurfacesAQueryFailure(t *testing
 	repo, mock := newDocumentCommentMentionRepoMock(t)
 	mock.ExpectQuery("SELECT COUNT").WillReturnError(errDBUnavailable)
 
-	_, err := repo.CountUnseen(context.Background(), uuid.New(), "user")
+	_, err := repo.CountUnseen(context.Background(), uuid.New(), "user", uuid.New())
 
 	assert.ErrorIs(t, err, errDBUnavailable)
 }
@@ -301,10 +302,12 @@ func TestDocumentCommentMentionRepo_CountUnseen_SurfacesAQueryFailure(t *testing
 // rows the list then hides is a badge that can never be cleared.
 func TestDocumentCommentMentionRepo_CountUnseen_AgreesWithTheList(t *testing.T) {
 	sql := captureSQL(t, true, func(repo *DocumentCommentMentionRepo) {
-		_, _ = repo.CountUnseen(context.Background(), uuid.New(), "user")
+		_, _ = repo.CountUnseen(context.Background(), uuid.New(), "user", uuid.New())
 	})
 
 	assert.Contains(t, sql, "dcm.seen_at IS NULL")
 	assert.Contains(t, sql, "dc.deleted_at IS NULL")
 	assert.Contains(t, sql, "d.deleted_at IS NULL")
+	assert.Contains(t, sql, "p.workspace_id = $3",
+		"badge must be scoped to the same workspace the List query is")
 }

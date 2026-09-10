@@ -137,25 +137,29 @@ func (r *DocumentCommentMentionRepo) MarkSeen(ctx context.Context, commentID, me
 	return err
 }
 
-// CountUnseen is the badge number, over the same live-row filter List applies.
+// CountUnseen is the badge number, over the same live-row filter List applies,
+// scoped to the same workspace so the badge and the list agree.
 func (r *DocumentCommentMentionRepo) CountUnseen(
 	ctx context.Context,
 	mentionedID uuid.UUID,
 	mentionedKind string,
+	workspaceID uuid.UUID,
 ) (int64, error) {
 	const q = `
 		SELECT COUNT(*)
 		FROM document_comment_mentions dcm
 		JOIN document_comments dc ON dc.id = dcm.comment_id
 		JOIN documents d          ON d.id = dc.document_id
+		JOIN projects p           ON p.id = d.project_id
 		WHERE dcm.mentioned_id = $1
 		  AND dcm.mentioned_kind = $2
 		  AND dcm.seen_at IS NULL
 		  AND dc.deleted_at IS NULL
 		  AND d.deleted_at IS NULL
+		  AND p.workspace_id = $3
 	`
 	var count int64
-	if err := r.db.GetContext(ctx, &count, q, mentionedID, mentionedKind); err != nil {
+	if err := r.db.GetContext(ctx, &count, q, mentionedID, mentionedKind, workspaceID); err != nil {
 		return 0, err
 	}
 	return count, nil

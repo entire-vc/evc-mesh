@@ -63,7 +63,8 @@ func (h *MentionHandler) MarkSeen(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// UnseenCount returns the number of unseen mentions for the caller.
+// UnseenCount returns the number of unseen mentions for the caller, scoped to
+// one workspace (required, same as List — see parseMentionFilter).
 // Response: {"count": N}  Cache-Control: max-age=10
 func (h *MentionHandler) UnseenCount(c echo.Context) error {
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
@@ -71,8 +72,13 @@ func (h *MentionHandler) UnseenCount(c echo.Context) error {
 		return apierror.Unauthorized("authentication required")
 	}
 
+	workspaceID, err := parseRequiredWorkspaceID(c)
+	if err != nil {
+		return err
+	}
+
 	kind := mentionKind(actorType)
-	count, err := h.mentionService.CountUnseen(c.Request().Context(), actorID, kind)
+	count, err := h.mentionService.CountUnseen(c.Request().Context(), actorID, kind, workspaceID)
 	if err != nil {
 		return err
 	}

@@ -129,12 +129,13 @@ func TestCommentMentionRepo_List_OmitsTheWorkspaceClauseWhenUnset(t *testing.T) 
 func TestCommentMentionRepo_CountUnseen_ExcludesMentionsOnADeletedTask(t *testing.T) {
 	repo, mock := newCommentMentionRepoMock(t)
 	mentionedID := uuid.New()
+	workspaceID := uuid.New()
 
 	mock.ExpectQuery("FROM comment_mentions cm").
-		WithArgs(mentionedID, "user").
+		WithArgs(mentionedID, "user", workspaceID).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	count, err := repo.CountUnseen(context.Background(), mentionedID, "user")
+	count, err := repo.CountUnseen(context.Background(), mentionedID, "user", workspaceID)
 	require.NoError(t, err)
 	assert.Zero(t, count)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -153,9 +154,12 @@ func TestCommentMentionRepo_CountUnseen_SQL(t *testing.T) {
 	repo := NewCommentMentionRepo(sqlx.NewDb(rawDB, "postgres"))
 	mock.ExpectQuery(".*").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	_, err = repo.CountUnseen(context.Background(), uuid.New(), "user")
+	_, err = repo.CountUnseen(context.Background(), uuid.New(), "user", uuid.New())
 	require.NoError(t, err)
 
 	assert.Contains(t, captured, "JOIN tasks t ON t.id = c.task_id")
 	assert.Contains(t, captured, "t.deleted_at IS NULL")
+	assert.Contains(t, captured, "JOIN projects p ON p.id = t.project_id")
+	assert.Contains(t, captured, "p.workspace_id = $3",
+		"workspace_id is the third arg: mentionedID, mentionedKind, then this")
 }

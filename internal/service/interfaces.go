@@ -1454,7 +1454,7 @@ type WSPublisher interface {
 type MentionService interface {
 	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter repository.MentionFilter) ([]domain.CommentMentionView, error)
 	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
-	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error)
 }
 
 // DocumentMentionService is MentionService for @-mentions inside document
@@ -1467,7 +1467,7 @@ type MentionService interface {
 type DocumentMentionService interface {
 	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter repository.MentionFilter) ([]domain.DocumentCommentMentionView, error)
 	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
-	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error)
 }
 
 // RelayPublisher is the optional interface for publishing artifacts to Team Relay.

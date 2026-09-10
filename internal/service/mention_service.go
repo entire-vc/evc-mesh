@@ -26,6 +26,6 @@ func (s *mentionService) MarkSeen(ctx context.Context, commentID, mentionedID uu
 	return s.mentionRepo.MarkSeen(ctx, commentID, mentionedID)
 }
 
-func (s *mentionService) CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error) {
-	return s.mentionRepo.CountUnseen(ctx, mentionedID, mentionedKind)
+func (s *mentionService) CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error) {
+	return s.mentionRepo.CountUnseen(ctx, mentionedID, mentionedKind, workspaceID)
 }

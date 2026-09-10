@@ -720,7 +720,11 @@ type CommentMentionRepository interface {
 	InsertBatch(ctx context.Context, mentions []domain.CommentMention) error
 	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter MentionFilter) ([]domain.CommentMentionView, error)
 	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
-	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+	// CountUnseen is scoped to one workspace, the same join List uses for
+	// WorkspaceID — the badge and the list must agree on which workspace they
+	// are counting, or a caller viewing an empty workspace sees a nonzero
+	// badge for mentions the list on the same page never shows.
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error)
 }
 
 // CommentDeliveryOutcomeRepository manages persistence for
@@ -748,7 +752,7 @@ type DocumentCommentMentionRepository interface {
 	InsertBatch(ctx context.Context, mentions []domain.DocumentCommentMention) error
 	List(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, filter MentionFilter) ([]domain.DocumentCommentMentionView, error)
 	MarkSeen(ctx context.Context, commentID, mentionedID uuid.UUID) error
-	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string) (int64, error)
+	CountUnseen(ctx context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID) (int64, error)
 }
 
 // DocumentWatchRepository manages document subscriptions and the pending
