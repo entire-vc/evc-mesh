@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUpCircle, Check, Clock, Copy, Layers, Pencil, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowUpCircle, Check, Clock, Layers, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, agentTypeConfig, asCapabilityList, getEffectiveStatus, isAgentStale, splitList } from "@/lib/agent-utils";
 import { formatDate, formatRelative } from "@/lib/utils";
 import { useAgentStore } from "@/stores/agent";
 import { useMemberStore } from "@/stores/member";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ApiKeyRevealPanel } from "@/components/api-key-reveal";
 import type { Agent, AgentProfileUpdateRequest, AgentType } from "@/types";
 import { inlineLabel } from "@/lib/user-display";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -39,12 +41,28 @@ export function AgentDetailDialog({
   const { agents, updateAgent, updateAgentProfile, deleteAgent, regenerateKey } = useAgentStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { workspaceMembers, fetchWorkspaceMembers } = useMemberStore();
+  const {
+    agentWorkspaces,
+    isLoadingAgentWorkspaces,
+    agentWorkspacesForbidden,
+    fetchAgentWorkspaces,
+  } = useAgentWorkspaceGrantStore();
 
   useEffect(() => {
     if (open && currentWorkspace) {
       void fetchWorkspaceMembers(currentWorkspace.id);
     }
   }, [open, currentWorkspace, fetchWorkspaceMembers]);
+
+  useEffect(() => {
+    if (open && agent) {
+      void fetchAgentWorkspaces(agent.id);
+    }
+    // Keyed on agent?.id rather than the whole agent object: agent comes from
+    // a list that gets a new array/object identity on every unrelated field
+    // update (heartbeat, status), which would otherwise refetch on every poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, agent?.id, fetchAgentWorkspaces]);
 
   const [mode, setMode] = useState<DialogMode>("detail");
   const [editingName, setEditingName] = useState(false);
@@ -64,7 +82,6 @@ export function AgentDetailDialog({
   >(null);
   const [profileFieldDraft, setProfileFieldDraft] = useState("");
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,7 +98,6 @@ export function AgentDetailDialog({
     setEditingProfileField(null);
     setProfileFieldDraft("");
     setNewApiKey(null);
-    setCopied(false);
     setIsLoading(false);
     setError(null);
   }, []);
@@ -263,24 +279,6 @@ export function AgentDetailDialog({
     }
   }, [agent, deleteAgent, handleClose]);
 
-  const handleCopy = useCallback(async () => {
-    if (!newApiKey) return;
-    try {
-      await navigator.clipboard.writeText(newApiKey);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      const textArea = document.createElement("textarea");
-      textArea.value = newApiKey;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }, [newApiKey]);
-
   // Other agents that can be a parent (exclude self and own children to prevent cycles)
   const parentCandidates = useMemo(
     () => (agent ? agents.filter((a) => a.id !== agent.id) : []),
@@ -362,50 +360,9 @@ export function AgentDetailDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="mt-2 space-y-4">
-            <div className="rounded-lg border border-border bg-muted p-4">
-              <p className="mb-2 text-xs font-medium text-muted-foreground">
-                API Key
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 break-all font-mono text-sm">
-                  {newApiKey}
-                </code>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => void handleCopy()}
-                  className="shrink-0"
-                >
-                  {copied ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            <div
-              className={cn(
-                "flex items-start gap-2 rounded-lg border border-yellow-200 bg-yellow-50 p-3",
-                "dark:border-yellow-900 dark:bg-yellow-950",
-              )}
-            >
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-600" />
-              <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                This key will only be shown once. Store it securely. You will
-                not be able to retrieve it later.
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button onClick={handleClose}>
-              {copied ? "Done" : "Close"}
-            </Button>
-          </DialogFooter>
+          {newApiKey && (
+            <ApiKeyRevealPanel apiKey={newApiKey} onClose={handleClose} />
+          )}
         </DialogContent>
       </Dialog>
     );
@@ -957,6 +914,49 @@ export function AgentDetailDialog({
               );
             })()}
           </div>
+
+          {/* Workspaces (task U4) — where this agent is connected, home
+              marked separately (agent.workspace_id === grant.workspace_id,
+              no cross-referencing needed here unlike the Members-tab list).
+              Hidden entirely on 403, not shown as an error: this dialog
+              opens from agent-dashboard/org-chart/team-member too, where a
+              rank-and-file viewer without manage_members in the agent's
+              HOME workspace hitting 403 here is the expected case, not a
+              failure to report. */}
+          {!agentWorkspacesForbidden &&
+            (isLoadingAgentWorkspaces || agentWorkspaces.length > 0) && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Workspaces
+                </p>
+                {isLoadingAgentWorkspaces ? (
+                  <p className="text-sm text-muted-foreground">Loading…</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {agentWorkspaces.map((grant) => (
+                      <div
+                        key={grant.id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-1.5"
+                      >
+                        <span className="truncate text-sm">
+                          {grant.workspace.name}
+                        </span>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {grant.workspace_id === agent.workspace_id && (
+                            <Badge variant="outline" className="text-xs">
+                              Home
+                            </Badge>
+                          )}
+                          <Badge variant="secondary" className="text-xs capitalize">
+                            {grant.role}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
         </div>
 

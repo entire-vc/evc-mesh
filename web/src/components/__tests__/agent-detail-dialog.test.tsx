@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { AgentDetailDialog } from "@/components/agent-detail-dialog";
+import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
 import type { Agent } from "@/types";
 
 vi.mock("@/lib/api", () => ({
@@ -190,8 +191,17 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
     fireEvent.click(saveButton);
 
     // Give any accidental async save a tick to fire, then confirm nothing did.
+    // Scoped to the profile PUT rather than "api not called at all": the
+    // dialog also fires GET /agents/:id/workspaces on open (task U4,
+    // unrelated to this save path), which would otherwise make this
+    // assertion fail for a reason that has nothing to do with what it's
+    // actually testing.
     await new Promise((r) => setTimeout(r, 20));
-    expect(api).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(api).mock.calls.some(
+        ([p]) => typeof p === "string" && p.includes("/profile"),
+      ),
+    ).toBe(false);
   });
 
   it("disables Cancel while a save is in flight, so cancelling can't be silently overwritten by the pending save landing later", async () => {
@@ -228,5 +238,81 @@ describe("AgentDetailDialog — profile fields (task #85714565)", () => {
     expect(screen.getByTitle("Edit Max concurrent tasks")).toBeTruthy();
     expect(screen.getByTitle("Edit Escalation contact")).toBeTruthy();
     expect(screen.getByTitle("Edit capabilities")).toBeTruthy();
+  });
+});
+
+describe("AgentDetailDialog — Workspaces section (task U4)", () => {
+  beforeEach(() => {
+    vi.mocked(api).mockReset();
+    useAgentWorkspaceGrantStore.setState({
+      agentWorkspaces: [],
+      isLoadingAgentWorkspaces: false,
+      agentWorkspacesForbidden: false,
+    });
+  });
+
+  it("hides the Workspaces section on 403 instead of showing an error or dropping the dialog (AC4)", async () => {
+    vi.mocked(api).mockImplementation((path: string) => {
+      if (path === "/api/v1/agents/agent-1/workspaces") {
+        return Promise.reject(
+          Object.assign(new Error("workspace access denied"), {
+            code: "FORBIDDEN",
+            status: 403,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected call: ${path}`));
+    });
+
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/v1/agents/agent-1/workspaces"),
+    );
+    // The dialog is still up — an unrelated detail row proves it didn't
+    // unmount or throw.
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.queryByText("Workspaces")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/workspace access denied/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lists the agent's workspaces with a Home badge on its own workspace, none on the rest", async () => {
+    vi.mocked(api).mockImplementation((path: string) => {
+      if (path === "/api/v1/agents/agent-1/workspaces") {
+        return Promise.resolve({
+          workspaces: [
+            {
+              id: "grant-home",
+              agent_id: "agent-1",
+              workspace_id: baseAgent.workspace_id,
+              role: "admin",
+              api_key_prefix: "agk_ws1",
+              created_at: "2026-08-01T00:00:00Z",
+              workspace: { id: baseAgent.workspace_id, name: "Home WS", slug: "home-ws" },
+            },
+            {
+              id: "grant-guest",
+              agent_id: "agent-1",
+              workspace_id: "ws-2",
+              role: "viewer",
+              api_key_prefix: "agk_ws2",
+              created_at: "2026-08-02T00:00:00Z",
+              workspace: { id: "ws-2", name: "Guest WS", slug: "guest-ws" },
+            },
+          ],
+          count: 2,
+        });
+      }
+      return Promise.reject(new Error(`unexpected call: ${path}`));
+    });
+
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+
+    await screen.findByText("Home WS");
+    expect(screen.getByText("Guest WS")).toBeInTheDocument();
+    // Exactly one Home badge — the guest row gets only its role badge.
+    expect(screen.getAllByText("Home")).toHaveLength(1);
   });
 });

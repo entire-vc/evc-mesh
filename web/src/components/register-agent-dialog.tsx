@@ -1,6 +1,5 @@
 import { type FormEvent, useCallback, useState } from "react";
-import { ArrowUpCircle, Check, Copy, AlertTriangle, Layers } from "lucide-react";
-import { cn } from "@/lib/cn";
+import { ArrowUpCircle, Layers } from "lucide-react";
 import { agentTypeConfig, splitList } from "@/lib/agent-utils";
 import { useAgentStore } from "@/stores/agent";
 import { Button } from "@/components/ui/button";
@@ -14,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ApiKeyRevealPanel } from "@/components/api-key-reveal";
 import type { AgentType } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
 
@@ -54,7 +54,6 @@ export function RegisterAgentDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const resetForm = useCallback(() => {
     setStep("form");
@@ -70,7 +69,6 @@ export function RegisterAgentDialog({
     setIsSubmitting(false);
     setError(null);
     setApiKey(null);
-    setCopied(false);
   }, []);
 
   const handleClose = useCallback(() => {
@@ -132,25 +130,6 @@ export function RegisterAgentDialog({
       registerAgent,
     ],
   );
-
-  const handleCopy = useCallback(async () => {
-    if (!apiKey) return;
-    try {
-      await navigator.clipboard.writeText(apiKey);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback for older browsers
-      const textArea = document.createElement("textarea");
-      textArea.value = apiKey;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  }, [apiKey]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -357,50 +336,9 @@ export function RegisterAgentDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="mt-4 space-y-4">
-              <div className="rounded-lg border border-border bg-muted p-4">
-                <p className="mb-2 text-xs font-medium text-muted-foreground">
-                  API Key
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 break-all font-mono text-sm">
-                    {apiKey}
-                  </code>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={handleCopy}
-                    className="shrink-0"
-                  >
-                    {copied ? (
-                      <Check className="h-4 w-4 text-green-500" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-
-              <div
-                className={cn(
-                  "flex items-start gap-2 rounded-lg border border-yellow-200 bg-yellow-50 p-3",
-                  "dark:border-yellow-900 dark:bg-yellow-950",
-                )}
-              >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-600" />
-                <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                  This key will only be shown once. Store it securely. You will
-                  not be able to retrieve it later.
-                </p>
-              </div>
-            </div>
-
-            <DialogFooter>
-              <Button onClick={handleClose}>
-                {copied ? "Done" : "Close"}
-              </Button>
-            </DialogFooter>
+            {apiKey && (
+              <ApiKeyRevealPanel apiKey={apiKey} onClose={handleClose} />
+            )}
           </div>
         )}
       </DialogContent>

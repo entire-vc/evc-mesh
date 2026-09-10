@@ -788,6 +788,50 @@ export interface RegisterAgentResponse {
   api_key: string; // Only returned once at registration
 }
 
+// Agent workspace grants (task U3/U4) — a connection between an agent and a
+// workspace other than (or including) its home one. Mirrors
+// internal/domain/agent_workspace_grant.go field-for-field.
+
+export interface AgentBrief {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+export interface WorkspaceBrief {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+export interface AgentWorkspaceGrant {
+  id: string;
+  agent_id: string;
+  workspace_id: string;
+  role: WorkspaceRole;
+  api_key_prefix: string;
+  invited_by?: string | null;
+  created_at: string;
+  revoked_at?: string | null;
+}
+
+/** GET /workspaces/:ws_id/agent-grants item shape — active grants only, the
+ *  server already excludes revoked ones. */
+export interface AgentWorkspaceGrantWithAgent extends AgentWorkspaceGrant {
+  agent: AgentBrief;
+}
+
+/** GET /agents/:agent_id/workspaces item shape — active grants only. */
+export interface AgentWorkspaceGrantWithWorkspace extends AgentWorkspaceGrant {
+  workspace: WorkspaceBrief;
+}
+
+/** POST /workspaces/:ws_id/agent-grants response — the ONLY place the raw
+ *  key is ever returned; every other shape above carries no key material. */
+export interface InviteAgentGrantResponse extends AgentWorkspaceGrant {
+  api_key: string;
+}
+
 // Spark catalog types
 
 export interface SparkAgentManifest {
