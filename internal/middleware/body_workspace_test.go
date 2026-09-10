@@ -79,9 +79,9 @@ func TestRequireBodyWorkspace_AgentKeyIsRefused(t *testing.T) {
 	victimWS := uuid.New()
 	intruderAgent := uuid.New()
 
-	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
-		WithArgs(intruderAgent).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(uuid.New()))
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(intruderAgent, victimWS).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
 
 	c, rec := bodyWSContext(`{"workspace_id":"`+victimWS.String()+`"}`, AuthTypeAgent, intruderAgent)
 
@@ -265,9 +265,9 @@ func TestActorMayAccessWorkspace(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		wsID, agentID := uuid.New(), uuid.New()
-		mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
-			WithArgs(agentID).
-			WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID))
+		mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+			WithArgs(agentID, wsID).
+			WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
 
 		c, _ := bodyWSContext(`{}`, AuthTypeAgent, agentID)
 		assert.True(t, ActorMayAccessWorkspace(c, sqlx.NewDb(db, "postgres"), wsID))

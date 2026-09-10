@@ -125,7 +125,12 @@ func TestUserOwnsWorkspace(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestAgentIsInWorkspace(t *testing.T) {
+// agentIsInWorkspaceQueryPattern matches AgentIsInWorkspace's UNION query
+// regardless of formatting — a change in this pattern must be a deliberate
+// review of the function above, not silent drift.
+const agentIsInWorkspaceQueryPattern = `SELECT 1 FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.workspace_id = \$2 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL\s+UNION ALL\s+SELECT 1 FROM agent_workspace_grants g\s+JOIN workspaces w ON w\.id = g\.workspace_id\s+WHERE g\.agent_id = \$1 AND g\.workspace_id = \$2 AND g\.revoked_at IS NULL AND w\.deleted_at IS NULL\s+LIMIT 1`
+
+func TestAgentIsInWorkspace_HomeWorkspaceMatch(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
@@ -133,21 +138,33 @@ func TestAgentIsInWorkspace(t *testing.T) {
 
 	wsID := uuid.New()
 	agentID := uuid.New()
-	mock.ExpectQuery(`SELECT a.workspace_id FROM agents a\s+JOIN workspaces w ON w.id = a.workspace_id\s+WHERE a.id = \$1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`).
-		WithArgs(agentID).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID))
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
 	assert.True(t, AgentIsInWorkspace(context.Background(), sqlxDB, wsID, agentID))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
 
-	// An agent of a different workspace.
-	mock.ExpectQuery(`SELECT a.workspace_id FROM agents a\s+JOIN workspaces w ON w.id = a.workspace_id\s+WHERE a.id = \$1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`).
-		WithArgs(agentID).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(uuid.New()))
+// An agent whose home is elsewhere and who holds no active connection either
+// — the UNION returns no rows at all.
+func TestAgentIsInWorkspace_NoHomeNoGrant_NotAMember(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	sqlxDB := sqlx.NewDb(db, "postgres")
+
+	wsID := uuid.New()
+	agentID := uuid.New()
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
 	assert.False(t, AgentIsInWorkspace(context.Background(), sqlxDB, wsID, agentID))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestAgentIsInWorkspace_DeletedWorkspaceIsNotMembership: an agent whose own
-// row is untouched must still be refused once its workspace is deleted.
+// row is untouched must still be refused once its workspace is deleted — the
+// mock's empty result stands in for both JOINs excluding it via w.deleted_at.
 func TestAgentIsInWorkspace_DeletedWorkspaceIsNotMembership(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -156,11 +173,34 @@ func TestAgentIsInWorkspace_DeletedWorkspaceIsNotMembership(t *testing.T) {
 
 	wsID := uuid.New()
 	agentID := uuid.New()
-	mock.ExpectQuery(`SELECT a.workspace_id FROM agents a\s+JOIN workspaces w ON w.id = a.workspace_id\s+WHERE a.id = \$1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`).
-		WithArgs(agentID).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}))
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
 
 	assert.False(t, AgentIsInWorkspace(context.Background(), sqlxDB, wsID, agentID))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAgentIsInWorkspace_GrantOnlyMatch is the U3 regression: an agent whose
+// HOME is a different workspace, but who holds an ACTIVE
+// agent_workspace_grants connection to wsID, must be recognized as a member
+// of wsID — this is the exact gap that let U3's own invited key
+// authenticate successfully and then 403 on every workspace-scoped route.
+func TestAgentIsInWorkspace_GrantOnlyMatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	sqlxDB := sqlx.NewDb(db, "postgres")
+
+	guestWS := uuid.New()
+	agentID := uuid.New()
+	// The mock can't distinguish which UNION branch produced the row (both
+	// SELECT the literal 1), which is correct: the caller only needs to know
+	// membership holds, not through which mechanism.
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, guestWS).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
+	assert.True(t, AgentIsInWorkspace(context.Background(), sqlxDB, guestWS, agentID))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

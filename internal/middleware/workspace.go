@@ -142,6 +142,11 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                                JOIN projects p ON t.project_id = p.id
 	                               WHERE a.id = $1`), notFoundResource: "Artifact"},
 	{param: "agent_id", resolve: uuidResolver(`SELECT workspace_id FROM agents WHERE id = $1 AND deleted_at IS NULL`)},
+	// grant_id (task U3, DELETE /workspaces/:ws_id/agent-grants/:grant_id) — a
+	// connection row belongs to exactly one workspace (agent_workspace_grants.workspace_id),
+	// same shape as task_id/artifact_id above: a real existence query, so a
+	// resolve failure means the grant itself doesn't exist, not "wrong tenant".
+	{param: "grant_id", resolve: uuidResolver(`SELECT workspace_id FROM agent_workspace_grants WHERE id = $1`), notFoundResource: "AgentWorkspaceGrant"},
 	{param: "field_id", resolve: uuidResolver(`SELECT p.workspace_id
 	                             FROM custom_field_definitions cf
 	                             JOIN projects p ON cf.project_id = p.id
@@ -704,21 +709,44 @@ func UserIsWorkspaceMember(ctx context.Context, db *sqlx.DB, wsID, userID uuid.U
 	return UserOwnsWorkspace(ctx, db, wsID, userID)
 }
 
-// AgentIsInWorkspace reports whether the agent belongs to wsID.
+// AgentIsInWorkspace reports whether the agent belongs to wsID — either as its
+// HOME workspace (agents.workspace_id) or via an ACTIVE connection (task U3,
+// agent_workspace_grants, revoked_at IS NULL).
+//
+// The grant branch was missing until task U3: this function backs
+// RequireWorkspaceMember/RequireWorkspaceMemberScoped, which run globally on
+// nearly every :ws_id route (see that function's own doc — only 2 of 46
+// :ws_id routes ever had a route-local guard). Before this fix, an agent that
+// authenticated into a GUEST workspace via U2's grant-based Authenticate()
+// path got a context correctly carrying the guest workspace_id, and then was
+// 403'd by this check on the very next route, because it only ever looked at
+// the agent's HOME row — the entire U1-U3 multi-workspace feature produced
+// working keys that could authenticate but not actually reach the workspace
+// they were invited into. Caught live while verifying U3's own AC1
+// ("сходить им — 200"): the invite call succeeded, the guest key
+// authenticated, and GET /workspaces/:ws_id/members on the JUST-INVITED
+// workspace still came back 403 — same class as the events-cross-tenant
+// "check resolvers first" lesson, but the missing side here is home vs.
+// grant, not missing vs. present.
 func AgentIsInWorkspace(ctx context.Context, db *sqlx.DB, wsID, agentID uuid.UUID) bool {
 	if db == nil {
 		return false
 	}
-	var agentWsID uuid.UUID
-	if err := db.QueryRowContext(ctx,
-		`SELECT a.workspace_id FROM agents a
+	const q = `
+		SELECT 1 FROM agents a
 		 JOIN workspaces w ON w.id = a.workspace_id
-		 WHERE a.id = $1 AND a.deleted_at IS NULL AND w.deleted_at IS NULL`,
-		agentID,
-	).Scan(&agentWsID); err != nil {
+		 WHERE a.id = $1 AND a.workspace_id = $2 AND a.deleted_at IS NULL AND w.deleted_at IS NULL
+		UNION ALL
+		SELECT 1 FROM agent_workspace_grants g
+		 JOIN workspaces w ON w.id = g.workspace_id
+		 WHERE g.agent_id = $1 AND g.workspace_id = $2 AND g.revoked_at IS NULL AND w.deleted_at IS NULL
+		LIMIT 1
+	`
+	var found int
+	if err := db.QueryRowContext(ctx, q, agentID, wsID).Scan(&found); err != nil {
 		return false
 	}
-	return agentWsID == wsID
+	return true
 }
 
 // RequireWorkspaceMemberScoped enforces workspace membership on every route whose

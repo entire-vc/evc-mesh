@@ -246,13 +246,29 @@ var declaredBodyTenantFields = map[string]string{
 	// Scoped by something other than the id in the body: the row these end up on is
 	// already pinned to a tenant the guard checked, and the id is stored as an
 	// opaque reference that is never resolved across the boundary.
-	"event_handler.go:createEventRequest.task_id":                 "benign: a reference on an event already scoped to the guarded :proj_id",
-	"agent_handler.go:CreateAgentActivity.task_id":                "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
-	"agent_handler.go:reportSessionRequest.task_id":               "benign: a reference on the calling agent's own session",
-	"rule_handler.go:createRuleRequest.agent_id":                  "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
-	"project_integration_handler.go:teamRelayResponse.project_id": "benign: a response struct, never bound from a request",
-	"secret_handler.go:secretResponse.project_id":                 "benign: a response struct, never bound from a request",
-	"secret_handler.go:secretResponse.agent_id":                   "benign: a response struct, never bound from a request",
+	"event_handler.go:createEventRequest.task_id":                            "benign: a reference on an event already scoped to the guarded :proj_id",
+	"agent_handler.go:CreateAgentActivity.task_id":                           "benign: a reference on a log row whose workspace_id is the guarded :agent_id's own",
+	"agent_handler.go:reportSessionRequest.task_id":                          "benign: a reference on the calling agent's own session",
+	"rule_handler.go:createRuleRequest.agent_id":                             "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
+	"project_integration_handler.go:teamRelayResponse.project_id":            "benign: a response struct, never bound from a request",
+	"secret_handler.go:secretResponse.project_id":                            "benign: a response struct, never bound from a request",
+	"secret_handler.go:secretResponse.agent_id":                              "benign: a response struct, never bound from a request",
+	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.agent_id":     "benign: a response struct, never bound from a request",
+	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.workspace_id": "response: a response struct, never bound from a request — see the workspace_id-specific test for why this needs its own prefix instead of benign:",
+
+	// Deliberately UNRESTRICTED cross-tenant reference, unlike
+	// project_member_handler.go:addAgentMemberRequest.agent_id above (which
+	// DOES require same-workspace): task U3's entire purpose is connecting an
+	// agent whose home workspace differs from :ws_id (migration 20260909001's
+	// own comment calls this "the agent-multi-workspace feature") — a
+	// same-workspace check here would defeat the feature outright. The
+	// authorization is rbac(mw.PermManageMembers) on :ws_id, checked by
+	// route middleware before the handler ever runs, same permission shape
+	// as workspace_member_handler.go:addMemberRequest.email inviting any
+	// existing human by address regardless of their other workspaces
+	// (that field is exempt from this map because email isn't a UUID this
+	// scanner recognizes — the design precedent is the same).
+	"agent_workspace_grant_handler.go:inviteAgentGrantRequest.agent_id": "checked: rbac(PermManageMembers) on :ws_id IS the authorization — see the comment above this entry for why no same-workspace check on agent_id is correct, not an oversight",
 
 	// POST /internal/secrets/materialize is the one route in this codebase
 	// deliberately registered outside the `api` group (e.* not api.*, see

@@ -69,6 +69,10 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/agents", map[string]string{"name": "intruder-agent"}},
 	{http.MethodGet, "/agents/status", nil},
 
+	{http.MethodGet, "/agent-grants", nil},
+	{http.MethodPost, "/agent-grants", map[string]string{"agent_id": dummyUUID, "role": "member"}},
+	{http.MethodDelete, "/agent-grants/" + dummyUUID, nil},
+
 	{http.MethodPost, "/webhooks", map[string]string{"url": "https://example.invalid/hook"}},
 	{http.MethodGet, "/webhooks", nil},
 
@@ -255,6 +259,7 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		}
 		suffix = strings.ReplaceAll(suffix, "/members/"+dummyUUID, "/members/:user_id")
 		suffix = strings.ReplaceAll(suffix, "/invites/"+dummyUUID, "/invites/:invite_id")
+		suffix = strings.ReplaceAll(suffix, "/agent-grants/"+dummyUUID, "/agent-grants/:grant_id")
 		return suffix
 	}
 

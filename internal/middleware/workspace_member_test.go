@@ -144,9 +144,9 @@ func TestRequireWorkspaceMember_Agent_SameWorkspace(t *testing.T) {
 	agentID := uuid.New()
 
 	db, mock := newMockDB(t)
-	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
-		WithArgs(agentID).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(wsID.String()))
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
 
 	c, rec := setupAgentCtx(e, wsID, agentID)
 
@@ -165,16 +165,16 @@ func TestRequireWorkspaceMember_Agent_SameWorkspace(t *testing.T) {
 // caller belonged to B. This test documents the expected 403 after the fix.
 func TestRequireWorkspaceMember_Agent_CrossWorkspace_IDOR(t *testing.T) {
 	e := echo.New()
-	workspaceA := uuid.New() // agent's own workspace
-	workspaceB := uuid.New() // target task's workspace — different
+	workspaceB := uuid.New() // target task's workspace — the agent has no home or grant here
 
 	agentID := uuid.New()
 
 	db, mock := newMockDB(t)
-	// DB returns agent's real workspace (A); context has the target workspace (B).
-	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
-		WithArgs(agentID).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(workspaceA.String()))
+	// Neither the agent's real home nor any grant matches the target
+	// workspace (B) the query is actually run against — no rows.
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, workspaceB).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
 
 	// Context workspace_id = B (set by WorkspaceRLS resolving from the task's project).
 	c, rec := setupAgentCtx(e, workspaceB, agentID)
@@ -198,9 +198,9 @@ func TestRequireWorkspaceMember_Agent_NotFound(t *testing.T) {
 	agentID := uuid.New()
 
 	db, mock := newMockDB(t)
-	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
-		WithArgs(agentID).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"})) // empty result set → sql.ErrNoRows
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, wsID).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"})) // empty result set → no membership
 
 	c, rec := setupAgentCtx(e, wsID, agentID)
 
