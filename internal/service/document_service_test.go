@@ -396,6 +396,27 @@ func TestDocumentService_Update_BodyTooLarge(t *testing.T) {
 	assert.Equal(t, "small", string(f.storage.objects[created.StorageKey]), "the oversized body was not stored")
 }
 
+// Same red control as Create's, on the update path: an edit that replaces the
+// body with binary content is refused, and the document's existing (good)
+// body is left exactly as it was — not overwritten, not versioned forward.
+func TestDocumentService_Update_RejectsBinaryBody(t *testing.T) {
+	f := setupDocumentService(t)
+	created := f.create(t, "Draft", "original markdown")
+
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)
+	_, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Body: &png})
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Equal(t, "original markdown", string(f.storage.objects[created.StorageKey]),
+		"the binary body must not overwrite the existing markdown")
+
+	reread, err := f.repo.GetByID(context.Background(), created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, reread.Version, "a refused write must not bump the version")
+}
+
 // The delete is reversible by design, so the body has to survive it — a restored
 // document whose row still claims content but whose object is gone is silent
 // data loss.
@@ -495,6 +516,55 @@ func TestDocumentService_Create_BodyTooLarge(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 400, apiErr.StatusCode())
 	assert.Empty(t, f.storage.objects, "an oversized body was streamed to storage before being refused")
+}
+
+// Red control for task 3e6f8029-88e2-41b4-8dfc-e60a19ca78dc: a document body
+// that is actually a binary file must be refused, with a clear error, before
+// anything is uploaded or a row is created. Without this check, 140 documents
+// on prod ended up with a raw PNG's bytes as their "body".
+func TestDocumentService_Create_RejectsBinaryBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"PNG", "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 20)},
+		{"GIF", "GIF89a" + strings.Repeat("x", 20)},
+		{"JPEG", "\xff\xd8\xff" + strings.Repeat("x", 20)},
+		{"PDF", "%PDF-1.4" + strings.Repeat("x", 20)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupDocumentService(t)
+
+			_, err := f.svc.Create(context.Background(), CreateDocumentInput{
+				ProjectID: f.projectID,
+				Title:     "Screenshot",
+				Body:      tc.body,
+			})
+
+			var apiErr *apierror.Error
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, 400, apiErr.StatusCode())
+			assert.Empty(t, f.storage.objects, "a binary body was streamed to storage before being refused")
+		})
+	}
+}
+
+// Green control for the same guard: an ordinary markdown body — including one
+// that happens to start with characters a naive substring check could
+// confuse for something else — is created exactly as before.
+func TestDocumentService_Create_OrdinaryMarkdownStillWorks(t *testing.T) {
+	f := setupDocumentService(t)
+
+	doc, err := f.svc.Create(context.Background(), CreateDocumentInput{
+		ProjectID: f.projectID,
+		Title:     "Normal note",
+		Body:      "# Heading\n\nSome **markdown** text.",
+	})
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, f.storage.objects, "an ordinary body must still be uploaded")
+	_ = doc
 }
 
 // An upload that fails must not leave a row pointing at an object that is not

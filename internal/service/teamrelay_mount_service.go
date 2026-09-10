@@ -144,11 +144,21 @@ func classifyMountError(err error) MountStatus {
 // happened" from the tree alone — Status is what a caller renders instead of
 // guessing from Mounted==0.
 type MountResult struct {
-	Status  MountStatus
-	Mounted int // rows created this run
-	Skipped int // files-index entries that already had a copy row
-	Err     error
+	Status   MountStatus
+	Mounted  int // rows created this run
+	Skipped  int // files-index entries that already had a copy row
+	Rejected int // files-index entries whose content was binary, not text — never mounted (see errBinaryFileEntry)
+	Err      error
 }
+
+// errBinaryFileEntry marks a files-index entry SyncMount must count as
+// Rejected and move past, never as a fatal MountStatusError. Without this
+// distinction, one PNG in an otherwise-normal share would abort the loop in
+// SyncMount before any later entry in sorted order was even looked at — the
+// bug this guards against would trade "140 corrupt documents" for "zero
+// documents mounted, whole sync appears broken" instead of just skipping the
+// one file that cannot be a document body.
+var errBinaryFileEntry = errors.New("teamrelay: file content is binary, not text — refusing to mount as a document")
 
 // TeamRelayRefresher is what a document read calls to keep a Team Relay copy
 // fresh before serving it. Optional on documentService, the same way watch is
@@ -482,6 +492,13 @@ func (s *teamRelayMountService) RefreshIfStale(ctx context.Context, doc *domain.
 		return nil
 	}
 
+	if verr := rejectBinaryBody(remote.Content); verr != nil {
+		// The source changed to something that cannot be a document body. Refuse
+		// the refresh rather than overwrite a good, previously-synced body with
+		// binary content — the existing copy stays exactly as it was, still
+		// stamped at its old (still-valid) sha256, so the next open tries again.
+		return fmt.Errorf("teamrelay: refresh copy %s: source is now binary, not text: %w", doc.ID, verr)
+	}
 	if s.storage == nil {
 		return fmt.Errorf("teamrelay: storage not configured, cannot refresh copy %s", doc.ID)
 	}
@@ -598,7 +615,11 @@ func (s *teamRelayMountService) SyncMount(ctx context.Context, projectID uuid.UU
 		}
 
 		if cerr := s.createCopyDocument(ctx, projectID, parentID, name, entry, rs); cerr != nil {
-			return &MountResult{Status: classifyMountError(cerr), Mounted: result.Mounted, Err: cerr}, nil
+			if errors.Is(cerr, errBinaryFileEntry) {
+				result.Rejected++
+				continue
+			}
+			return &MountResult{Status: classifyMountError(cerr), Mounted: result.Mounted, Skipped: result.Skipped, Rejected: result.Rejected, Err: cerr}, nil
 		}
 		result.Mounted++
 	}
@@ -715,6 +736,10 @@ func (s *teamRelayMountService) createCopyDocument(ctx context.Context, projectI
 	remote, err := s.client.Download(ctx, rs.relayURL, rs.settings.ShareID, entry.Path, rs.agentKey)
 	if err != nil {
 		return fmt.Errorf("teamrelay: download %q: %w", entry.Path, err)
+	}
+	if verr := rejectBinaryBody(remote.Content); verr != nil {
+		log.Printf("teamrelay: skipping %q — %v", entry.Path, verr)
+		return errBinaryFileEntry
 	}
 
 	title := titleFromFileName(name)
