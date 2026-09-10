@@ -94,7 +94,7 @@ func (s *agentWorkspaceGrantService) InviteAgent(ctx context.Context, workspaceI
 	if err != nil {
 		return nil, fmt.Errorf("agent_workspace_grant_service.InviteAgent: %w", err)
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(rawKey), bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword(bcryptInput(rawKey), bcryptCost)
 	if err != nil {
 		return nil, fmt.Errorf("agent_workspace_grant_service.InviteAgent: %w", err)
 	}
