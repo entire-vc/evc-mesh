@@ -147,24 +147,24 @@ func agentAuthCacheKey(workspaceSlug, apiKey string) [sha256.Size]byte {
 // Authenticate returns the cached agent for a key verified within the TTL, and
 // otherwise delegates to the wrapped service and caches a success.
 //
-// A grant-derived hit (agent.GrantID != nil) additionally gets a fresh
-// revocation re-check (cachedGrantStillValid) before being trusted — see that
-// method's doc for why a cache hit alone is not enough for AC4's "revoked
-// denies immediately".
+// Every hit gets a fresh validity re-check (cachedAuthStillValid) before
+// being trusted — see that method's doc for what it covers and why a cache
+// hit alone is not enough for either half.
 func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error) {
 	key := agentAuthCacheKey(workspaceSlug, apiKey)
 	now := c.now()
 
 	if agent, ok := c.lookup(key, now); ok {
-		if c.cachedGrantStillValid(ctx, agent) {
+		if c.cachedAuthStillValid(ctx, agent) {
 			metrics.RecordAgentAuth("hit")
 			return agent, nil
 		}
-		// The grant backing this entry reads as revoked (or the freshness
-		// check itself failed — see cachedGrantStillValid) — evict and fall
-		// through to a full, uncached Authenticate below, so the denial (or
-		// success) comes from the one place that already knows how to
-		// construct it, instead of being synthesized here a second time.
+		// The grant backing this entry reads as revoked, or its workspace as
+		// deleted (or the freshness check itself failed — see
+		// cachedAuthStillValid) — evict and fall through to a full, uncached
+		// Authenticate below, so the denial (or success) comes from the one
+		// place that already knows how to construct it, instead of being
+		// synthesized here a second time.
 		c.evict(key, agent.ID)
 	}
 
@@ -179,36 +179,48 @@ func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKe
 	return agent, nil
 }
 
-// cachedGrantStillValid re-checks a grant-derived cache hit's revocation
-// status directly against the database before trusting it.
+// cachedAuthStillValid re-checks a cache hit's continuing validity directly
+// against the database before trusting it — two independent things, both
+// skipped by construction on a hit:
 //
-// Why a cache hit alone is not enough (task U2 AC4, `#fbc12881`): a grant can
-// be revoked by ANY process against the same database — as of this task the
-// ONLY revoke path that exists is a direct SQL UPDATE (U3 adds an API) — and
-// nothing calls InvalidateAgent for that. RotateAPIKey/Delete above cover the
-// two cases THIS process can be told about explicitly; this covers
-// everything else, at the cost of one indexed-by-PK lookup per grant-derived
-// cache hit instead of zero. That lookup is cheap next to the ~163ms bcrypt
-// compare the cache exists to avoid in the first place, so caching's whole
-// reason to exist survives.
+//  1. Grant revocation (task U2 AC4, `#fbc12881`): a grant-derived hit
+//     (agent.GrantID != nil) can have been revoked by ANY process against the
+//     same database — as of U2 the ONLY revoke path is a direct SQL UPDATE
+//     (U3 adds an API) — and nothing calls InvalidateAgent for that.
+//     RotateAPIKey/Delete below cover the two cases THIS process can be told
+//     about explicitly; this covers everything else.
+//  2. Workspace soft-delete (`#315d9a52`): Authenticate resolves the
+//     workspace via workspaceRepo.GetBySlug/GetByID, both of which already
+//     filter deleted_at IS NULL — but a hit skips Authenticate entirely, so a
+//     workspace soft-deleted mid-TTL kept answering from a still-warm entry
+//     as if it still existed. Unlike the revocation half, this applies to
+//     EVERY hit, grant-derived or legacy — a legacy entry's agent has a home
+//     workspace that can be soft-deleted exactly the same way.
 //
-// A legacy-path entry (GrantID == nil) has no grant to re-check and is
-// trusted for the remainder of its TTL, same as before this method existed —
-// U2's revoke semantics only apply to grant-derived logins.
+// Both checks are one indexed-by-PK lookup apiece instead of zero. That cost
+// is cheap next to the ~163ms bcrypt compare the cache exists to avoid in the
+// first place, so caching's whole reason to exist survives.
 //
-// On an error from the freshness check itself, the entry is NOT trusted:
-// "couldn't tell" is treated the same as "looks revoked", so a transient
-// failure here narrows to "fall through to the uncached path" rather than
-// "silently keep serving a key we could not actually verify is still good".
-func (c *cachedAgentAuth) cachedGrantStillValid(ctx context.Context, agent *domain.Agent) bool {
+// On an error from either check, the entry is NOT trusted: "couldn't tell" is
+// treated the same as "looks bad", so a transient failure here narrows to
+// "fall through to the uncached path" rather than "silently keep serving a
+// key we could not actually verify is still good".
+func (c *cachedAgentAuth) cachedAuthStillValid(ctx context.Context, agent *domain.Agent) bool {
+	if wsChecker, ok := c.AgentService.(WorkspaceDeletionChecker); ok {
+		deleted, err := wsChecker.IsWorkspaceDeleted(ctx, agent.WorkspaceID)
+		if err != nil || deleted {
+			return false
+		}
+	}
+
 	if agent.GrantID == nil {
 		return true
 	}
-	checker, ok := c.AgentService.(GrantRevocationChecker)
+	grantChecker, ok := c.AgentService.(GrantRevocationChecker)
 	if !ok {
 		return true
 	}
-	revoked, err := checker.IsGrantRevoked(ctx, *agent.GrantID)
+	revoked, err := grantChecker.IsGrantRevoked(ctx, *agent.GrantID)
 	if err != nil {
 		return false
 	}

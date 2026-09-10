@@ -78,6 +78,11 @@ type agentService struct {
 // the AC4 hole this method exists to close.
 var _ GrantRevocationChecker = (*agentService)(nil)
 
+// Compile-time proof that *agentService still satisfies WorkspaceDeletionChecker
+// — same silent-no-op risk as above, for the workspace-soft-delete freshness
+// re-check (#315d9a52).
+var _ WorkspaceDeletionChecker = (*agentService)(nil)
+
 // NewAgentService returns a new AgentService backed by the given repositories.
 // userRepo may be nil — Register's username-collision guard is then skipped,
 // which is fine for tests that don't touch it but means a caller wiring this
@@ -480,6 +485,21 @@ func (s *agentService) IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (b
 		return false, nil
 	}
 	return s.grantRepo.IsRevoked(ctx, grantID)
+}
+
+// IsWorkspaceDeleted implements WorkspaceDeletionChecker: reports whether
+// workspaceID no longer resolves — soft-deleted or never existed, same
+// question workspaceRepo.GetByID already answers for every other caller.
+// See the interface doc for why cachedAgentAuth needs this on a cache hit
+// (#315d9a52): Authenticate itself always gets this right via
+// GetBySlug/GetByID's own deleted_at filter, but a hit never reaches
+// Authenticate at all.
+func (s *agentService) IsWorkspaceDeleted(ctx context.Context, workspaceID uuid.UUID) (bool, error) {
+	ws, err := s.workspaceRepo.GetByID(ctx, workspaceID)
+	if err != nil {
+		return false, err
+	}
+	return ws == nil, nil
 }
 
 // authenticateLegacy is the pre-U2 lookup: find the agent directly by

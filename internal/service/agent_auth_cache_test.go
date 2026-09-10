@@ -44,14 +44,21 @@ type countingAgentService struct {
 
 	// revoked/revokeCheckErr drive IsGrantRevoked, below. A test that never
 	// authenticates a GrantID-bearing agent never reaches this method at all
-	// (cachedGrantStillValid short-circuits on a nil GrantID) — every
+	// (cachedAuthStillValid short-circuits on a nil GrantID) — every
 	// pre-existing test in this file is exactly that case, unchanged.
 	revoked        bool
 	revokeCheckErr error
+
+	// wsDeleted/wsCheckErr drive IsWorkspaceDeleted, below — same shape as
+	// the grant pair above, but this one runs on EVERY hit (see
+	// cachedAuthStillValid), not just grant-derived ones.
+	wsDeleted           atomic.Bool
+	wsDeletedCheckErr   atomic.Pointer[error]
+	wsDeletedCheckCalls atomic.Int64
 }
 
 // IsGrantRevoked implements GrantRevocationChecker, so this fixture doubles
-// as both branches cachedGrantStillValid can take for a grant-derived agent:
+// as both branches cachedAuthStillValid can take for a grant-derived agent:
 // checker present, revoked/valid per s.revoked, or erroring per
 // s.revokeCheckErr.
 func (s *countingAgentService) IsGrantRevoked(_ context.Context, _ uuid.UUID) (bool, error) {
@@ -62,6 +69,18 @@ func (s *countingAgentService) IsGrantRevoked(_ context.Context, _ uuid.UUID) (b
 		return false, s.revokeCheckErr
 	}
 	return s.revoked, nil
+}
+
+// IsWorkspaceDeleted implements WorkspaceDeletionChecker, so this fixture
+// doubles as both branches cachedAuthStillValid can take for the
+// workspace-deletion half: present, deleted/live per s.wsDeleted, or erroring
+// per s.wsDeletedCheckErr.
+func (s *countingAgentService) IsWorkspaceDeleted(_ context.Context, _ uuid.UUID) (bool, error) {
+	s.wsDeletedCheckCalls.Add(1)
+	if errPtr := s.wsDeletedCheckErr.Load(); errPtr != nil {
+		return false, *errPtr
+	}
+	return s.wsDeleted.Load(), nil
 }
 
 func (s *countingAgentService) Authenticate(_ context.Context, _, _ string) (*domain.Agent, error) {
@@ -432,6 +451,29 @@ func TestCachedAgentAuth_GrantRevocationCheckErrors_IsNotTrusted(t *testing.T) {
 		"an unreadable freshness check must fall through to a real re-authenticate, not trust the cache")
 }
 
+// newFrozenCachedRealAgentService wraps a real *agentService (as produced by
+// setupGrantAuthFixture) in cachedAgentAuth, pinning the cache's OWN clock to
+// frozenTime — the same clock seedHomeAgent/seedGrant's ExpiresAt is computed
+// against, via the package-level timeNow var setupGrantAuthFixture overrides.
+//
+// Without this, cachedAgentAuth defaults to real time.Now(), which drifts
+// arbitrarily far past a key minted under frozenTime as wall-clock time
+// passes — and IsKeyExpiredAt on a cache lookup starts returning true for a
+// reason that has nothing to do with whatever the test is actually trying to
+// exercise. That is exactly how independent review found
+// TestCachedAgentAuth_WrappingRealAgentService_WorkspaceSoftDeletedDenies
+// Immediately vacuous (#315d9a52): it kept passing even with the fix
+// reverted, because by the time this suite runs in 2026, the "hit" it
+// exercised was never a hit at all — the entry had already fallen through to
+// a real, unrelated re-Authenticate on key expiry before cachedAuthStillValid
+// ever ran. Its older sibling below shared the same latent bug — passing for
+// the same wrong reason since before this fix existed.
+func newFrozenCachedRealAgentService(inner AgentService, ttl time.Duration) *cachedAgentAuth {
+	wrapped := NewCachedAgentAuth(inner, ttl).(*cachedAgentAuth)
+	wrapped.now = func() time.Time { return frozenTime }
+	return wrapped
+}
+
 // TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately
 // wires the EXACT composition cmd/api/main.go uses in prod —
 // NewCachedAgentAuth(NewAgentService(...), ttl) over a real *agentService,
@@ -453,7 +495,7 @@ func TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately(
 	f.svc.workspaceRepo.(*MockWorkspaceRepository).items[guestWS.ID] = guestWS
 	guestKey := seedGrant(t, f, agent.ID, guestWS, "admin", false)
 
-	cached := NewCachedAgentAuth(f.svc, time.Hour)
+	cached := newFrozenCachedRealAgentService(f.svc, time.Hour)
 	ctx := context.Background()
 
 	first, err := cached.Authenticate(ctx, guestWS.Slug, guestKey)
@@ -468,10 +510,128 @@ func TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately(
 	requireUnauthorized(t, err)
 }
 
+// ---------------------------------------------------------------------------
+// Workspace soft-delete freshness (`#315d9a52`) — Khan's live side-finding
+// against the #7661fc5d deploy: a guest key already warm in cache kept
+// reading its own now-soft-deleted, now-empty workspace's member routes for
+// the rest of the TTL, because a cache hit skips the very Authenticate call
+// that would otherwise have re-run workspaceRepo.GetBySlug/GetByID's own
+// deleted_at IS NULL filter.
+// ---------------------------------------------------------------------------
+
+// The workspace-deletion analogue of TestCachedAgentAuth_GrantRevokedMidTTL_
+// DeniesImmediately: a key is cached warm, its workspace is soft-deleted mid-
+// TTL by something outside this process (nothing here calls InvalidateAgent),
+// and the SAME key must be denied on the very next request — not up to
+// AgentAuthCacheTTL later.
+func TestCachedAgentAuth_WorkspaceSoftDeletedMidTTL_DeniesImmediately(t *testing.T) {
+	c, inner, _ := newGrantCacheFixture(t, time.Hour)
+	ctx := context.Background()
+
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), inner.authCalls.Load(), "first call must be a real verification")
+
+	// Simulate a soft-delete via a DELETE /workspaces/:id request handled by
+	// a different request (or process): nothing here touches InvalidateAgent
+	// or the cache entry itself — only what the workspace repo would now
+	// report has changed.
+	inner.wsDeleted.Store(true)
+	inner.mu.Lock()
+	inner.authErr = apierror.Unauthorized("invalid API key")
+	inner.mu.Unlock()
+
+	_, err = c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.Error(t, err, "a key for a soft-deleted workspace must not be served from a still-warm cache entry")
+	assert.Equal(t, int64(1), inner.wsDeletedCheckCalls.Load(),
+		"the freshness check must have run to notice the soft-delete")
+	assert.Equal(t, int64(2), inner.authCalls.Load(),
+		"denial must come from a real re-authenticate, not be synthesized by the cache")
+}
+
+// Same property, but for a legacy-path entry (GrantID nil) — the deletion
+// check is not conditional on there being a grant to also check.
+func TestCachedAgentAuth_WorkspaceSoftDeletedMidTTL_LegacyEntry_DeniesImmediately(t *testing.T) {
+	c, inner, _ := newCacheFixture(t, time.Hour) // GrantID nil — see newCacheFixture
+	ctx := context.Background()
+
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+
+	inner.wsDeleted.Store(true)
+	inner.mu.Lock()
+	inner.authErr = apierror.Unauthorized("invalid API key")
+	inner.mu.Unlock()
+
+	_, err = c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.Error(t, err, "a legacy-path key for a soft-deleted workspace must not be served from cache either")
+	assert.Zero(t, inner.revokeCheckCalls.Load(), "still no grant to check")
+}
+
+// If the freshness check itself cannot answer (a transient DB error), the
+// entry must NOT be trusted on the strength of "we couldn't prove it's bad" —
+// that would quietly reopen exactly the hole this fix closes. Mirrors
+// TestCachedAgentAuth_GrantRevocationCheckErrors_IsNotTrusted for the
+// workspace-deletion half.
+func TestCachedAgentAuth_WorkspaceDeletionCheckErrors_IsNotTrusted(t *testing.T) {
+	c, inner, _ := newGrantCacheFixture(t, time.Hour)
+	ctx := context.Background()
+
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+
+	dbErr := errors.New("db unavailable")
+	inner.wsDeletedCheckErr.Store(&dbErr)
+
+	_, err = c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err, "the inner service is still healthy; only the freshness check errored")
+	assert.Equal(t, int64(2), inner.authCalls.Load(),
+		"an unreadable freshness check must fall through to a real re-authenticate, not trust the cache")
+}
+
+// TestCachedAgentAuth_WrappingRealAgentService_WorkspaceSoftDeletedDeniesImmediately
+// wires the EXACT composition cmd/api/main.go uses in prod, same as
+// TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately
+// above, but reproduces Khan's live #315d9a52 finding instead: a grant-
+// derived guest key cached warm, then its OWN workspace soft-deleted via
+// workspaceRepo.Delete (the same row DELETE /workspaces/:id acts on), must
+// deny the same key on the very next request. Deleting the fix's check in
+// cachedAuthStillValid (revert cachedAuthStillValid to only look at
+// IsGrantRevoked) reproduces the pre-fix 200-from-cache behavior this test
+// exists to catch.
+func TestCachedAgentAuth_WrappingRealAgentService_WorkspaceSoftDeletedDeniesImmediately(t *testing.T) {
+	f, homeWS := setupGrantAuthFixture()
+	agent, _ := seedHomeAgent(t, f, homeWS, "Grant Agent")
+
+	guestWS := &domain.Workspace{ID: uuid.New(), Name: "Guest Co", Slug: "guest"}
+	wsRepo := f.svc.workspaceRepo.(*MockWorkspaceRepository)
+	wsRepo.items[guestWS.ID] = guestWS
+	guestKey := seedGrant(t, f, agent.ID, guestWS, "admin", false)
+
+	cached := newFrozenCachedRealAgentService(f.svc, time.Hour)
+	ctx := context.Background()
+
+	first, err := cached.Authenticate(ctx, guestWS.Slug, guestKey)
+	require.NoError(t, err)
+	require.NotNil(t, first.GrantID)
+
+	// Soft-delete the guest workspace itself — the grant row is untouched,
+	// same as Khan's live probe (explicit revoke is a separate, already-
+	// covered case). Nothing here touches InvalidateAgent.
+	require.NoError(t, wsRepo.Delete(ctx, guestWS.ID))
+
+	_, err = cached.Authenticate(ctx, guestWS.Slug, guestKey)
+	requireUnauthorized(t, err)
+}
+
 // A legacy-path entry (no connection row exists — GrantID is nil) has no
-// grant to re-check. It must keep behaving exactly as it did before this
-// fix: trusted for its full TTL, zero extra DB calls per hit.
-func TestCachedAgentAuth_LegacyEntry_SkipsRevocationCheck(t *testing.T) {
+// grant to re-check, so the revocation half of the freshness check keeps
+// being skipped exactly as before this fix. It is NOT exempt from the
+// workspace-deletion half, though (#315d9a52) — a legacy agent's home
+// workspace can be soft-deleted the same as any grant-derived one's, and
+// before that check existed a legacy hit was trusted for its full TTL with
+// zero re-verification of anything at all.
+func TestCachedAgentAuth_LegacyEntry_SkipsRevocationCheckButNotWorkspaceDeletionCheck(t *testing.T) {
 	c, inner, _ := newCacheFixture(t, time.Hour) // GrantID nil — see newCacheFixture
 	ctx := context.Background()
 
@@ -482,7 +642,9 @@ func TestCachedAgentAuth_LegacyEntry_SkipsRevocationCheck(t *testing.T) {
 
 	assert.Equal(t, int64(1), inner.authCalls.Load())
 	assert.Zero(t, inner.revokeCheckCalls.Load(),
-		"a legacy (non-grant) login has nothing for the freshness check to look at")
+		"a legacy (non-grant) login has no grant for the revocation check to look at")
+	assert.Equal(t, int64(4), inner.wsDeletedCheckCalls.Load(),
+		"but its workspace is re-checked on every one of the 4 subsequent hits")
 }
 
 // ---------------------------------------------------------------------------

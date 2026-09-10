@@ -594,6 +594,14 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 // agent_workspace_grants (or the legacy home row) to produce that value, and
 // a revoked/expired grant never reaches it in the first place.
 //
+// That proof depends on Authenticate having actually run against live data
+// for THIS request — which cachedAgentAuth's cache hit path does not do by
+// itself. See cachedAuthStillValid (agent_auth_cache.go) for the freshness
+// re-check that keeps this guard's zero-DB-query design honest without
+// reintroducing a query here (#315d9a52: a soft-deleted workspace's guest key
+// kept passing this equality check for the rest of the cache TTL before that
+// existed).
+//
 // Must run after DualAuth and WorkspaceRLS.
 func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

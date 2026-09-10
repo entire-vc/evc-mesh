@@ -818,6 +818,26 @@ type GrantRevocationChecker interface {
 	IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (bool, error)
 }
 
+// WorkspaceDeletionChecker is an optional capability of AgentService, the
+// same shape as GrantRevocationChecker above but for the OTHER thing that can
+// go stale under a cache hit: the workspace itself.
+//
+// A cache hit skips Authenticate entirely, which is also the only place that
+// resolves the workspace via workspaceRepo.GetBySlug/GetByID — both of which
+// already filter deleted_at IS NULL. So a workspace soft-deleted mid-TTL kept
+// answering from a still-warm cache entry as if it still existed, for
+// EVERY agent-scoped route, not just ones a revoked grant would also have
+// caught (#315d9a52 — measured live: a guest key kept reading its own
+// now-deleted, now-empty workspace's member routes for the rest of the
+// cache window). *agentService implements this by delegating to
+// workspaceRepo.GetByID; a nil workspaceRepo (never happens outside a
+// misconfigured test) would need its own nil guard the same way grantRepo
+// gets one in IsGrantRevoked, but there is no code path that constructs
+// agentService without one, so none exists here.
+type WorkspaceDeletionChecker interface {
+	IsWorkspaceDeleted(ctx context.Context, workspaceID uuid.UUID) (bool, error)
+}
+
 // CheckoutHeartbeatExtender is the narrow slice of TaskService that
 // agentService.Heartbeat needs to push checkout_expires forward on a live
 // heartbeat. Kept separate from the wide TaskService interface deliberately:
