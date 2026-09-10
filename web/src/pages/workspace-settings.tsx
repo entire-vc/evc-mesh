@@ -36,11 +36,14 @@ import { Avatar } from "@/components/ui/avatar";
 import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { InviteMemberDialog } from "@/components/invite-member-dialog";
+import { InviteAgentDialog } from "@/components/invite-agent-dialog";
 import { InviteLinkBox } from "@/components/invite-link-box";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
 import { useMemberStore } from "@/stores/member";
+import { useAgentStore } from "@/stores/agent";
+import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
 import { WorkspaceSecrets } from "@/components/workspace-secrets";
 import {
   Dialog,
@@ -55,6 +58,7 @@ import { cn } from "@/lib/cn";
 import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
 import { apiErrorMessage } from "@/lib/api-error";
 import type {
+  AgentWorkspaceGrantWithAgent,
   AssignmentRulesConfig,
   ImportResult,
   InviteDelivery,
@@ -649,6 +653,14 @@ export function WorkspaceSettingsPage() {
     revokeInvite,
   } = useMemberStore();
 
+  const { agents, fetchAgents } = useAgentStore();
+  const {
+    workspaceAgentGrants,
+    isLoadingWorkspaceAgentGrants,
+    fetchWorkspaceAgentGrants,
+    revokeAgentGrant,
+  } = useAgentWorkspaceGrantStore();
+
   const {
     teamDirectory,
     isTeamLoading,
@@ -696,6 +708,13 @@ export function WorkspaceSettingsPage() {
     useState<WorkspaceMemberWithUser | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+
+  // Agent grants state (task U4)
+  const [inviteAgentDialogOpen, setInviteAgentDialogOpen] = useState(false);
+  const [grantToRevoke, setGrantToRevoke] =
+    useState<AgentWorkspaceGrantWithAgent | null>(null);
+  const [isRevokingGrant, setIsRevokingGrant] = useState(false);
+  const [revokeGrantError, setRevokeGrantError] = useState<string | null>(null);
   const [memberToRename, setMemberToRename] =
     useState<WorkspaceMemberWithUser | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -778,6 +797,8 @@ export function WorkspaceSettingsPage() {
       void fetchViolations(currentWorkspace.id);
       void fetchWorkflowTemplates(currentWorkspace.id);
       void fetchWorkspaceInvites(currentWorkspace.id);
+      void fetchAgents(currentWorkspace.id);
+      void fetchWorkspaceAgentGrants(currentWorkspace.id);
     }
   }, [
     currentWorkspace?.id,
@@ -788,6 +809,8 @@ export function WorkspaceSettingsPage() {
     fetchViolations,
     fetchWorkflowTemplates,
     fetchWorkspaceInvites,
+    fetchAgents,
+    fetchWorkspaceAgentGrants,
   ]);
 
   // Sync templates editor when store data arrives
@@ -834,6 +857,16 @@ export function WorkspaceSettingsPage() {
 
   // Count owners to disable remove on last owner
   const ownerCount = workspaceMembers.filter((m) => m.role === "owner").length;
+
+  // Agent grants (task U4). The list endpoint returns every active
+  // connection including the workspace's own home agents (migration U1
+  // backfilled one grant per pre-existing agent) — home vs guest is decided
+  // client-side by intersecting with `agents`, the SAME
+  // GET /workspaces/:ws_id/agents this page already loads.
+  const homeAgentIds = new Set(agents.map((a) => a.id));
+  const connectedAgentIds = new Set(
+    workspaceAgentGrants.map((g) => g.agent_id),
+  );
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -988,6 +1021,33 @@ export function WorkspaceSettingsPage() {
       setRemoveError(apiErrorMessage(err, "Failed to remove member"));
     } finally {
       setIsRemoving(false);
+    }
+  };
+
+  // Revoking a HOME connection is never offered in this UI (see the
+  // homeAgentIds guard around the revoke button below) — it would take the
+  // agent out of service entirely rather than just changing this
+  // workspace's membership, since agentService.Authenticate treats a
+  // revoked grant as an immediate 401 with no fallback. This handler only
+  // ever runs against a guest row.
+  const handleOpenRevokeGrant = (grant: AgentWorkspaceGrantWithAgent) => {
+    setGrantToRevoke(grant);
+    setRevokeGrantError(null);
+  };
+
+  const handleConfirmRevokeGrant = async () => {
+    if (!currentWorkspace || !grantToRevoke) return;
+    setIsRevokingGrant(true);
+    setRevokeGrantError(null);
+    try {
+      await revokeAgentGrant(currentWorkspace.id, grantToRevoke.id);
+      setGrantToRevoke(null);
+    } catch (err) {
+      setRevokeGrantError(
+        apiErrorMessage(err, "Failed to revoke agent connection"),
+      );
+    } finally {
+      setIsRevokingGrant(false);
     }
   };
 
@@ -1440,10 +1500,20 @@ export function WorkspaceSettingsPage() {
               </CardDescription>
             </div>
             {canManageMembers && (
-              <Button size="sm" onClick={() => setInviteDialogOpen(true)}>
-                <Users className="h-4 w-4" />
-                Invite Member
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => setInviteDialogOpen(true)}>
+                  <Users className="h-4 w-4" />
+                  Invite Member
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setInviteAgentDialogOpen(true)}
+                >
+                  <Bot className="h-4 w-4" />
+                  Invite Agent
+                </Button>
+              </div>
             )}
           </div>
         </CardHeader>
@@ -1575,6 +1645,85 @@ export function WorkspaceSettingsPage() {
               })}
             </div>
           )}
+
+          {/* Connected agents — same card as members, per §U4: the invite
+              button starts on the workspace side, so the list it fills
+              belongs next to the people it mirrors, not on a separate tab. */}
+          <div className="mt-6 border-t border-border pt-4">
+            <p className="mb-3 text-sm font-medium">
+              Agents ({workspaceAgentGrants.length})
+            </p>
+            {isLoadingWorkspaceAgentGrants ? (
+              <div className="space-y-3">
+                {[1, 2].map((i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-32" />
+                    </div>
+                    <Skeleton className="h-8 w-20" />
+                  </div>
+                ))}
+              </div>
+            ) : workspaceAgentGrants.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No agents connected.
+              </p>
+            ) : (
+              <div className="divide-y divide-border">
+                {workspaceAgentGrants.map((grant) => {
+                  const isHome = homeAgentIds.has(grant.agent_id);
+                  return (
+                    <div
+                      key={grant.id}
+                      className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
+                    >
+                      <Avatar name={grant.agent.name} size="md" />
+                      <div className="flex-1 min-w-0">
+                        <span className="truncate text-sm font-medium">
+                          {grant.agent.name}
+                        </span>
+                      </div>
+
+                      {/* A home connection has no revoke button by design —
+                          revoking it would take the agent out of service
+                          entirely (agentService.Authenticate 401s the home
+                          key too, immediately, with no fallback), not just
+                          change this workspace's membership. Remove or
+                          transfer the agent instead. */}
+                      {isHome && (
+                        <Badge
+                          variant="outline"
+                          className="text-xs"
+                          title="Home connection — remove or transfer the agent to change it, not revoke."
+                        >
+                          Home
+                        </Badge>
+                      )}
+                      <Badge
+                        variant={roleBadgeVariant(grant.role)}
+                        className="capitalize"
+                      >
+                        {grant.role}
+                      </Badge>
+
+                      {canManageMembers && !isHome && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => handleOpenRevokeGrant(grant)}
+                          title="Revoke connection"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
       )}
@@ -2203,6 +2352,36 @@ export function WorkspaceSettingsPage() {
         variant="destructive"
         isLoading={isRemoving}
       />
+
+      {/* Invite Agent Dialog */}
+      <InviteAgentDialog
+        open={inviteAgentDialogOpen}
+        onClose={() => setInviteAgentDialogOpen(false)}
+        workspaceId={currentWorkspace.id}
+        connectedAgentIds={connectedAgentIds}
+      />
+
+      {/* Revoke Agent Connection Confirmation */}
+      <ConfirmDialog
+        open={!!grantToRevoke}
+        onClose={() => {
+          setGrantToRevoke(null);
+          setRevokeGrantError(null);
+        }}
+        onConfirm={() => void handleConfirmRevokeGrant()}
+        title="Revoke Agent Connection"
+        description={
+          grantToRevoke
+            ? `${grantToRevoke.agent.name}'s API key for this workspace will stop working immediately. This does not affect its access to any other workspace.`
+            : ""
+        }
+        confirmText="Revoke Connection"
+        variant="destructive"
+        isLoading={isRevokingGrant}
+      />
+      {revokeGrantError && (
+        <p className="text-sm text-destructive">{revokeGrantError}</p>
+      )}
 
       {/* Rename member. Scoped to a display name that nobody has claimed: the
           API answers 403 once its owner has set it themselves, because the name
