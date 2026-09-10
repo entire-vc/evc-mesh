@@ -23,6 +23,22 @@ const (
 	ContextKeyEmail       = "email"
 )
 
+// ContextKeyAgentAuthWorkspaceID stores the workspace the PRESENTED agent key
+// actually authenticated into — agent.WorkspaceID as agentService.Authenticate
+// resolved it (the matching grant's workspace, or the legacy home row's own
+// workspace), set once here and never touched again.
+//
+// It exists because ContextKeyWorkspaceID does not stay that value: WorkspaceRLS
+// (internal/middleware/workspace.go) overwrites it with whatever workspace the
+// route's OWN path parameter names, for every route that has one — that is a
+// different question ("which tenant is this request ABOUT") from the one this
+// key answers ("which tenant did this key PROVE it belongs to"). A multi-
+// workspace agent's key is scoped to exactly one workspace per Authenticate()
+// call (see authenticateViaGrant's resolved.WorkspaceID doc comment); collapsing
+// both questions onto one context key made every :ws_id route ask the wrong one
+// — see RequireWorkspaceMember, which is the actual consumer of this value.
+const ContextKeyAgentAuthWorkspaceID = "agent_auth_workspace_id"
+
 // Auth types set in the Echo context.
 const (
 	AuthTypeUser  = "user"
@@ -88,6 +104,7 @@ func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
 			c.Set(ContextKeyAuthType, AuthTypeAgent)
 			c.Set(ContextKeyAgentID, agent.ID)
 			c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+			c.Set(ContextKeyAgentAuthWorkspaceID, agent.WorkspaceID)
 			// Role comes from whatever connection resolved this login
 			// (Authenticate sets it, grant-backed or legacy-default — see
 			// agentService.authenticateViaGrant/authenticateLegacy), never
@@ -133,6 +150,7 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						c.Set(ContextKeyAgentAuthWorkspaceID, agent.WorkspaceID)
 						c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
@@ -177,6 +195,7 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 						c.Set(ContextKeyAuthType, AuthTypeAgent)
 						c.Set(ContextKeyAgentID, agent.ID)
 						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+						c.Set(ContextKeyAgentAuthWorkspaceID, agent.WorkspaceID)
 						c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
 						// Propagate actor into Go context for service layer.
 						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
@@ -217,6 +236,21 @@ func GetWorkspaceID(c echo.Context) (uuid.UUID, error) {
 	id, ok := v.(uuid.UUID)
 	if !ok {
 		return uuid.Nil, errors.New("workspace_id has invalid type in context")
+	}
+	return id, nil
+}
+
+// GetAgentAuthWorkspaceID extracts the workspace the current request's agent
+// key actually authenticated into — see ContextKeyAgentAuthWorkspaceID. Only
+// meaningful when IsAgent(c); unset (and this returns an error) for user auth.
+func GetAgentAuthWorkspaceID(c echo.Context) (uuid.UUID, error) {
+	v := c.Get(ContextKeyAgentAuthWorkspaceID)
+	if v == nil {
+		return uuid.Nil, errors.New("agent_auth_workspace_id not found in context")
+	}
+	id, ok := v.(uuid.UUID)
+	if !ok {
+		return uuid.Nil, errors.New("agent_auth_workspace_id has invalid type in context")
 	}
 	return id, nil
 }

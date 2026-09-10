@@ -131,6 +131,11 @@ func bodyTenantWorkspace(c echo.Context, db *sqlx.DB, wsID, projID *uuid.UUID) (
 // exactly this since the memories endpoints were found trusting a client-supplied
 // workspace_id; writing it once is what keeps the next handler that has to do the
 // same from inventing a weaker version of it.
+//
+// For agents this is the same equality check as RequireWorkspaceMember's agent
+// branch, and for the same reason (#7661fc5d) — "member of wsID via some grant"
+// is not "this request's key is the one scoped to wsID". See
+// GetAgentAuthWorkspaceID's doc comment.
 func ActorMayAccessWorkspace(c echo.Context, db *sqlx.DB, wsID uuid.UUID) bool {
 	if db == nil || wsID == uuid.Nil {
 		return false
@@ -138,11 +143,8 @@ func ActorMayAccessWorkspace(c echo.Context, db *sqlx.DB, wsID uuid.UUID) bool {
 	ctx := c.Request().Context()
 
 	if IsAgent(c) {
-		agentID, err := GetAgentID(c)
-		if err != nil {
-			return false
-		}
-		return AgentIsInWorkspace(ctx, db, wsID, agentID)
+		authWsID, err := GetAgentAuthWorkspaceID(c)
+		return err == nil && authWsID == wsID
 	}
 
 	userID, err := GetUserID(c)

@@ -85,8 +85,11 @@ func (m *mockNotificationService) TelegramReachable(context.Context, uuid.UUID) 
 // --- harness ----------------------------------------------------------------
 
 // putPreferences serves PUT /notifications/preferences through the same guard the
-// router puts in front of it, as the given actor.
-func putPreferences(t *testing.T, db *sqlx.DB, authType string, actorID uuid.UUID, body string) (*mockNotificationService, *httptest.ResponseRecorder) {
+// router puts in front of it, as the given actor. authWsID is only meaningful
+// for an agent actor — it is the workspace the agent's PRESENTED KEY actually
+// authenticated into (mw.ContextKeyAgentAuthWorkspaceID), independent of
+// whatever workspace_id the request body names; pass uuid.Nil for a user actor.
+func putPreferences(t *testing.T, db *sqlx.DB, authType string, actorID, authWsID uuid.UUID, body string) (*mockNotificationService, *httptest.ResponseRecorder) {
 	t.Helper()
 
 	svc := &mockNotificationService{}
@@ -98,6 +101,7 @@ func putPreferences(t *testing.T, db *sqlx.DB, authType string, actorID uuid.UUI
 			c.Set(mw.ContextKeyAuthType, authType)
 			if authType == mw.AuthTypeAgent {
 				c.Set(mw.ContextKeyAgentID, actorID)
+				c.Set(mw.ContextKeyAgentAuthWorkspaceID, authWsID)
 			} else {
 				c.Set(mw.ContextKeyUserID, actorID)
 				c.Set("user_id", actorID)
@@ -139,7 +143,7 @@ func TestUpdatePreferences_ForeignWorkspaceIsRefused(t *testing.T) {
 		WithArgs(victimWS).
 		WillReturnRows(sqlmock.NewRows([]string{"owner_id"}).AddRow(uuid.New()))
 
-	svc, rec := putPreferences(t, db, mw.AuthTypeUser, stranger,
+	svc, rec := putPreferences(t, db, mw.AuthTypeUser, stranger, uuid.Nil,
 		`{"workspace_id":"`+victimWS.String()+`","channel":"web_push","events":["comment.created"]}`)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
@@ -154,24 +158,51 @@ func TestUpdatePreferences_ForeignWorkspaceIsRefused(t *testing.T) {
 // route in this class, because rbac() short-circuits to a static capability map
 // on an agent key and never looks at the workspace being addressed.
 func TestUpdatePreferences_ForeignWorkspaceIsRefusedForAgentKey(t *testing.T) {
-	db, mock := newSQLMock(t)
+	db, _ := newSQLMock(t)
 
 	victimWS := uuid.New()
+	intruderOwnWS := uuid.New() // the workspace the intruder's OWN key authenticated into
 	intruder := uuid.New()
 
-	// AgentIsInWorkspace (task U3): a single UNION query checking both the
-	// agent's home workspace and any active agent_workspace_grants connection.
-	// Neither matches victimWS here — no rows.
-	mock.ExpectQuery(`SELECT 1 FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.workspace_id = \$2 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL\s+UNION ALL\s+SELECT 1 FROM agent_workspace_grants g\s+JOIN workspaces w ON w\.id = g\.workspace_id\s+WHERE g\.agent_id = \$1 AND g\.workspace_id = \$2 AND g\.revoked_at IS NULL AND w\.deleted_at IS NULL\s+LIMIT 1`).
-		WithArgs(intruder, victimWS).
-		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
-
-	svc, rec := putPreferences(t, db, mw.AuthTypeAgent, intruder,
+	// RequireBodyWorkspace's agent path (ActorMayAccessWorkspace) is now an
+	// in-memory equality check against ContextKeyAgentAuthWorkspaceID — no DB
+	// query. The mismatch between intruderOwnWS and victimWS is the whole proof.
+	svc, rec := putPreferences(t, db, mw.AuthTypeAgent, intruder, intruderOwnWS,
 		`{"workspace_id":"`+victimWS.String()+`"}`)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.False(t, svc.upsertCalled, "an agent key subscribed to another tenant's workspace")
-	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdatePreferences_AgentGrantElsewhereDoesNotGrantAccess is the direct
+// regression test for #7661fc5d on this route: an agent that genuinely holds
+// an active grant in victimWS must still be refused when the key PRESENTED on
+// this particular request authenticated into a different workspace.
+//
+// The mock answers the way the PRE-FIX AgentIsInWorkspace query would have —
+// a real matching row for (agentID, guestWS) — so that reverting the fix
+// flips this test red instead of leaving it vacuously green on an
+// unconfigured mock (which fails closed under the old code regardless of the
+// actual security property, and proves nothing — caught on this exact test
+// during independent verification of the fix). ExpectationsWereMet is
+// deliberately NOT asserted: the fixed code never reaches the DB.
+func TestUpdatePreferences_AgentGrantElsewhereDoesNotGrantAccess(t *testing.T) {
+	db, mock := newSQLMock(t)
+
+	guestWS := uuid.New() // a workspace the agent legitimately holds a grant in
+	homeWS := uuid.New()  // the workspace THIS request's key authenticated into
+	agentID := uuid.New()
+
+	mock.ExpectQuery(`SELECT 1 FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.workspace_id = \$2 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL\s+UNION ALL\s+SELECT 1 FROM agent_workspace_grants g\s+JOIN workspaces w ON w\.id = g\.workspace_id\s+WHERE g\.agent_id = \$1 AND g\.workspace_id = \$2 AND g\.revoked_at IS NULL AND w\.deleted_at IS NULL\s+LIMIT 1`).
+		WithArgs(agentID, guestWS).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	svc, rec := putPreferences(t, db, mw.AuthTypeAgent, agentID, homeWS,
+		`{"workspace_id":"`+guestWS.String()+`"}`)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.False(t, svc.upsertCalled,
+		"a real grant in guestWS must not be reachable through a key scoped to homeWS")
 }
 
 // TestUpdatePreferences_OwnWorkspaceStillWorks is the half that decides whether
@@ -187,7 +218,7 @@ func TestUpdatePreferences_OwnWorkspaceStillWorks(t *testing.T) {
 		WithArgs(ownWS, member).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("member"))
 
-	svc, rec := putPreferences(t, db, mw.AuthTypeUser, member,
+	svc, rec := putPreferences(t, db, mw.AuthTypeUser, member, uuid.Nil,
 		`{"workspace_id":"`+ownWS.String()+`","channel":"web_push","events":["comment.created"],"is_enabled":true}`)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

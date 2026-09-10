@@ -72,18 +72,16 @@ func TestRequireBodyWorkspace_NonMemberIsRefused(t *testing.T) {
 // agent key and never looks at the target workspace, so an agent key was the one
 // credential that walked through every "protected by rbac" route in this class.
 func TestRequireBodyWorkspace_AgentKeyIsRefused(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	db, _, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
 	victimWS := uuid.New()
+	intruderOwnWS := uuid.New() // the workspace the intruder's OWN key authenticated into
 	intruderAgent := uuid.New()
 
-	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
-		WithArgs(intruderAgent, victimWS).
-		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
-
 	c, rec := bodyWSContext(`{"workspace_id":"`+victimWS.String()+`"}`, AuthTypeAgent, intruderAgent)
+	c.Set(ContextKeyAgentAuthWorkspaceID, intruderOwnWS) // no DB query needed — the mismatch is the proof
 
 	reached := false
 	guard := RequireBodyWorkspace(sqlx.NewDb(db, "postgres"))
@@ -91,7 +89,6 @@ func TestRequireBodyWorkspace_AgentKeyIsRefused(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.False(t, reached, "an agent key reached another tenant's workspace")
-	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestRequireBodyWorkspace_MemberPassesAndBodyIsIntact is the half that decides
@@ -260,17 +257,28 @@ func TestActorMayAccessWorkspace(t *testing.T) {
 	})
 
 	t.Run("agent in the workspace", func(t *testing.T) {
-		db, mock, err := sqlmock.New()
+		db, _, err := sqlmock.New()
 		require.NoError(t, err)
 		defer func() { _ = db.Close() }()
 
 		wsID, agentID := uuid.New(), uuid.New()
-		mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
-			WithArgs(agentID, wsID).
-			WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
 
 		c, _ := bodyWSContext(`{}`, AuthTypeAgent, agentID)
+		c.Set(ContextKeyAgentAuthWorkspaceID, wsID) // the presented key authenticated into wsID
 		assert.True(t, ActorMayAccessWorkspace(c, sqlx.NewDb(db, "postgres"), wsID))
+	})
+
+	t.Run("agent's key scoped to a different workspace than the one it holds a grant in", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		guestWS, homeWS, agentID := uuid.New(), uuid.New(), uuid.New()
+
+		c, _ := bodyWSContext(`{}`, AuthTypeAgent, agentID)
+		c.Set(ContextKeyAgentAuthWorkspaceID, homeWS) // request authenticated via the HOME key
+		assert.False(t, ActorMayAccessWorkspace(c, sqlx.NewDb(db, "postgres"), guestWS),
+			"a grant existing elsewhere must not be reachable through an unrelated key (#7661fc5d)")
 	})
 
 	t.Run("workspace owner without a membership row", func(t *testing.T) {
