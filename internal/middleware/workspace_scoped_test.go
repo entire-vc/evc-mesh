@@ -127,28 +127,23 @@ func TestRequireWorkspaceMemberScoped_OwnerWithoutMemberRow_Allowed(t *testing.T
 // takes a fast path with no workspace check at all, so an agent key from workspace A
 // would otherwise reach workspace B on any route guarded only by rbac().
 func TestRequireWorkspaceMemberScoped_AgentOfAnotherWorkspace_Forbidden(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	db, _, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	sqlxDB := sqlx.NewDb(db, "postgres")
 
 	e := echo.New()
 	targetWS := uuid.New()
+	ownWS := uuid.New() // the workspace the agent's presented key actually authenticated into
 	agentID := uuid.New()
 
 	c, rec := scopedCtx(e, targetWS.String(), targetWS, AuthTypeAgent)
 	c.Set(ContextKeyAgentID, agentID)
-
-	// Neither the agent's home workspace nor any agent_workspace_grants
-	// connection matches targetWS — the UNION returns no rows.
-	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
-		WithArgs(agentID, targetWS).
-		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
+	c.Set(ContextKeyAgentAuthWorkspaceID, ownWS) // no DB query — the mismatch alone refuses
 
 	mw := RequireWorkspaceMemberScoped(sqlxDB)
 	require.NoError(t, mw(nopHandler)(c))
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestRequireWorkspaceMemberScoped_MalformedWorkspaceID_Forbidden verifies a :ws_id that

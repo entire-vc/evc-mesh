@@ -579,7 +579,20 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 //
 // For users: reads workspace_role from Echo context (populated by WorkspaceRLS with no
 // extra DB query) — non-empty role means the user is a member.
-// For agents: verifies agents.workspace_id matches the requested workspace (one SELECT).
+//
+// For agents: requires the PRESENTED KEY to have authenticated into wsID —
+// GetAgentAuthWorkspaceID(c) (see ContextKeyAgentAuthWorkspaceID), not merely
+// "is this agent a member of wsID via SOME grant". Those are different
+// questions for a multi-workspace agent: membership in wsID is necessary but
+// not sufficient — the credential in THIS request also has to be the one
+// scoped to it, or a guest key issued for workspace A authenticates the
+// caller into A and then, on any route naming a DIFFERENT workspace B the
+// same agent happens to also hold a grant in, reads B's directory too
+// (#7661fc5d — measured live: a guest-workspace key returned the home
+// workspace's full agent roster with key prefixes). No DB query needed: the
+// equality check IS the proof — agentService.Authenticate already read
+// agent_workspace_grants (or the legacy home row) to produce that value, and
+// a revoked/expired grant never reaches it in the first place.
 //
 // Must run after DualAuth and WorkspaceRLS.
 func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
@@ -591,11 +604,8 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 			}
 
 			if IsAgent(c) {
-				agentID, err := GetAgentID(c)
-				if err != nil {
-					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
-				}
-				if !AgentIsInWorkspace(c.Request().Context(), db, wsID, agentID) {
+				authWsID, err := GetAgentAuthWorkspaceID(c)
+				if err != nil || authWsID != wsID {
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 				}
 				return next(c)

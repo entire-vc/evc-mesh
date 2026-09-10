@@ -108,10 +108,8 @@ func TestRequireWorkspaceMemberScoped_TaskID_Live_Returns200(t *testing.T) {
 	mock.ExpectQuery("set_config").
 		WithArgs(wsID.String()).
 		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow(wsID.String()))
-	// RequireWorkspaceMember's agent branch: agent belongs to the same workspace.
-	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
-		WithArgs(agentID, wsID).
-		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
+	// RequireWorkspaceMember's agent branch is now an in-memory equality check
+	// against ContextKeyAgentAuthWorkspaceID (set below) — no DB query.
 
 	e := echo.New()
 	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), httptest.NewRecorder())
@@ -120,6 +118,7 @@ func TestRequireWorkspaceMemberScoped_TaskID_Live_Returns200(t *testing.T) {
 	c.SetParamValues(taskID.String())
 	c.Set(ContextKeyAuthType, AuthTypeAgent)
 	c.Set(ContextKeyAgentID, agentID)
+	c.Set(ContextKeyAgentAuthWorkspaceID, wsID) // the presented key authenticated into the task's own workspace
 
 	rec := c.Response().Writer.(*httptest.ResponseRecorder)
 	require.NoError(t, runScoped(sqlx.NewDb(db, "postgres"), c))
@@ -150,11 +149,9 @@ func TestRequireWorkspaceMemberScoped_TaskID_ForeignWorkspace_Not200(t *testing.
 	mock.ExpectQuery("set_config").
 		WithArgs(foreignWS.String()).
 		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow(foreignWS.String()))
-	// The agent belongs to a DIFFERENT workspace than the task, and holds no
-	// grant into foreignWS either — the UNION returns no rows.
-	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
-		WithArgs(agentID, foreignWS).
-		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
+	// The agent's presented key authenticated into its OWN workspace, not
+	// foreignWS — the equality check refuses regardless of what other grants
+	// the agent might separately hold (#7661fc5d).
 
 	e := echo.New()
 	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), httptest.NewRecorder())
@@ -163,6 +160,7 @@ func TestRequireWorkspaceMemberScoped_TaskID_ForeignWorkspace_Not200(t *testing.
 	c.SetParamValues(taskID.String())
 	c.Set(ContextKeyAuthType, AuthTypeAgent)
 	c.Set(ContextKeyAgentID, agentID)
+	c.Set(ContextKeyAgentAuthWorkspaceID, uuid.New()) // authenticated elsewhere, not into foreignWS
 
 	rec := c.Response().Writer.(*httptest.ResponseRecorder)
 	require.NoError(t, runScoped(sqlx.NewDb(db, "postgres"), c))
