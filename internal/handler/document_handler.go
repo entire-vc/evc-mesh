@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,6 +57,27 @@ type updateDocumentRequest struct {
 	Body        *string    `json:"body"`
 	AppendBody  *string    `json:"append_body"`
 	BaseVersion *int       `json:"base_version"`
+}
+
+// guardRawDocumentBody reads the request body, rejects it if the "body" or
+// "append_body" field contains a binary-format signature, and puts the bytes
+// back so c.Bind can still read them normally afterward.
+//
+// This runs BEFORE c.Bind deliberately: c.Bind decodes JSON into a Go string,
+// and encoding/json's string unmarshal silently replaces invalid UTF-8 bytes
+// with U+FFFD instead of erroring — which is exactly what a raw PNG/JPEG body
+// is. service.RejectBinaryBodyRawFields explains the full mechanism; this is
+// just the plumbing that gets it the untouched bytes. Shared by Create and
+// Update — Create's payload never has an append_body key, so that lookup is
+// just a harmless no-op there, not a special case worth splitting the two
+// call sites over.
+func guardRawDocumentBody(c echo.Context) error {
+	raw, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return apierror.BadRequest("could not read request body")
+	}
+	c.Request().Body = io.NopCloser(bytes.NewReader(raw))
+	return service.RejectBinaryBodyRawFields(raw, "body", "append_body")
 }
 
 // List handles GET /projects/:proj_id/documents
@@ -122,6 +145,10 @@ func (h *DocumentHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
 	}
 
+	if guardErr := guardRawDocumentBody(c); guardErr != nil {
+		return handleError(c, guardErr)
+	}
+
 	var req createDocumentRequest
 	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
@@ -166,6 +193,10 @@ func (h *DocumentHandler) Update(c echo.Context) error {
 	docID, wsID, apiErr := documentScope(c)
 	if apiErr != nil {
 		return c.JSON(apiErr.StatusCode(), apiErr)
+	}
+
+	if guardErr := guardRawDocumentBody(c); guardErr != nil {
+		return handleError(c, guardErr)
 	}
 
 	var req updateDocumentRequest
