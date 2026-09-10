@@ -152,9 +152,17 @@ func TestRateLimitKeyByIP_TwoAccountsSameIP_ShareOneBucket_BEFORE(t *testing.T) 
 // windowSecs<=0 defensive fallback in both windowKey and RecordFailure's
 // Retry-After computation — a caller that (mis)configures a zero or
 // negative window must not divide by zero or produce a nonsensical bucket.
+//
+// The fallback bucket is 1 SECOND wide, and this test fires two calls that
+// must land in the same bucket to prove the count accumulates. Against the
+// real clock that is a coin flip straddling whatever moment CI happens to
+// run at (same class of flake as TestLoginLockout_CountIsLostAcrossAWindowBoundary
+// above, just with a 1s window instead of the production-sized one) — so,
+// like that test, pin the clock rather than read it live.
 func TestLoginLockout_ZeroWindow_FallsBackToOneSecondBucket(t *testing.T) {
 	rdb := newTestRedis(t)
-	l := NewLoginLockout(rdb, 1, 0) // window=0, deliberately misconfigured
+	fixed := time.Unix(1_700_000_000, 0)
+	l := NewLoginLockout(rdb, 1, 0, WithLoginLockoutClock(func() time.Time { return fixed })) // window=0, deliberately misconfigured
 	ctx := context.Background()
 
 	locked, _, err := l.RecordFailure(ctx, "user@example.com")
