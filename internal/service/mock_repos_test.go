@@ -1802,6 +1802,39 @@ func (m *MockAgentWorkspaceGrantRepository) GetByWorkspaceAndPrefix(_ context.Co
 	return nil, nil
 }
 
+// IsRevoked mirrors the real repository's PK lookup: found+revoked_at set →
+// true, found+active → false, not found at all → true (fail-closed, same
+// contract as the real repo — see the interface doc).
+func (m *MockAgentWorkspaceGrantRepository) IsRevoked(_ context.Context, id uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, g := range m.items {
+		if g.ID == id {
+			return g.IsRevoked(), nil
+		}
+	}
+	return true, nil
+}
+
+// Revoke flips revoked_at on the seeded grant with the given id, mimicking
+// the direct-SQL UPDATE that is the only revoke path as of task U2 (U3 adds
+// an API). Used by tests that need to revoke a connection AFTER it has
+// already been cached, to reproduce the AC4 scenario.
+func (m *MockAgentWorkspaceGrantRepository) Revoke(id uuid.UUID, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.items {
+		if g.ID == id {
+			revokedAt := at
+			g.RevokedAt = &revokedAt
+			return
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // MockAgentNotifyService — records NotifyAgent calls for assertion in tests.
 // ---------------------------------------------------------------------------

@@ -80,6 +80,15 @@ type Agent struct {
 	// (see agent_workspace_grant.go for why it is a separate concept from
 	// Role above).
 	WorkspaceRole string `json:"-" db:"-"`
+	// GrantID is the agent_workspace_grants row that resolved this login, set
+	// by agentService.authenticateViaGrant — nil for a legacy-path login (no
+	// connection row exists yet) or for any Agent not produced by
+	// Authenticate. Same transient, request-scoped nature as WorkspaceRole:
+	// not persisted, not populated by GetByID/List/etc. cachedAgentAuth reads
+	// this to know whether a cache hit needs a fresh revocation check (see
+	// agent_auth_cache.go's cachedGrantStillValid) — a grant can be revoked by
+	// a direct SQL UPDATE that no in-process cache invalidation ever sees.
+	GrantID *uuid.UUID `json:"-" db:"-"`
 }
 
 // IsKeyExpired returns true when the agent's API key has a set expiry that has passed.
