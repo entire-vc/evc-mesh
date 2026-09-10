@@ -66,6 +66,66 @@ func TestCommentMentionRepo_List_SQL(t *testing.T) {
 	assert.Contains(t, captured, "t.deleted_at IS NULL")
 }
 
+// TestCommentMentionRepo_List_FiltersByWorkspace is the regression test for the
+// dashboard defect: /me/mentions returned every workspace's rows because
+// nothing here joined as far as workspace_id. Without WorkspaceID set, the
+// join is present but the WHERE clause is not — see
+// TestCommentMentionRepo_List_OmitsTheWorkspaceClauseWhenUnset for the other
+// half of that contract.
+func TestCommentMentionRepo_List_FiltersByWorkspace(t *testing.T) {
+	var captured string
+	rawDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+			captured = actualSQL
+			return nil
+		})))
+	require.NoError(t, err)
+	defer func() { _ = rawDB.Close() }()
+
+	repo := NewCommentMentionRepo(sqlx.NewDb(rawDB, "postgres"))
+	mock.ExpectQuery(".*").WillReturnRows(sqlmock.NewRows([]string{
+		"comment_id", "mentioned_id", "mentioned_kind", "mentioned_slug", "extracted_at", "seen_at",
+		"task_id", "task_title", "project_id", "comment_body", "author_id", "author_name",
+	}))
+
+	workspaceID := uuid.New()
+	mentionedID := uuid.New()
+	_, err = repo.List(context.Background(), mentionedID, "user", repository.MentionFilter{WorkspaceID: &workspaceID})
+	require.NoError(t, err)
+
+	assert.Contains(t, captured, "JOIN projects p ON p.id = t.project_id")
+	assert.Contains(t, captured, "p.workspace_id = $3",
+		"workspace_id is the third arg on an otherwise-empty filter: mentionedID, mentionedKind, then this")
+}
+
+// TestCommentMentionRepo_List_OmitsTheWorkspaceClauseWhenUnset documents the
+// repo-level contract: WorkspaceID is an optional *uuid.UUID here, same as
+// ProjectID, and the required-ness lives one layer up in
+// parseMentionFilter. A caller that reaches the repo without setting it — as
+// every pre-existing test in this file does — gets the old unscoped query,
+// not a panic or a zero-UUID filter that matches nothing.
+func TestCommentMentionRepo_List_OmitsTheWorkspaceClauseWhenUnset(t *testing.T) {
+	var captured string
+	rawDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
+		sqlmock.QueryMatcherFunc(func(_, actualSQL string) error {
+			captured = actualSQL
+			return nil
+		})))
+	require.NoError(t, err)
+	defer func() { _ = rawDB.Close() }()
+
+	repo := NewCommentMentionRepo(sqlx.NewDb(rawDB, "postgres"))
+	mock.ExpectQuery(".*").WillReturnRows(sqlmock.NewRows([]string{
+		"comment_id", "mentioned_id", "mentioned_kind", "mentioned_slug", "extracted_at", "seen_at",
+		"task_id", "task_title", "project_id", "comment_body", "author_id", "author_name",
+	}))
+
+	_, err = repo.List(context.Background(), uuid.New(), "user", repository.MentionFilter{})
+	require.NoError(t, err)
+
+	assert.NotContains(t, captured, "p.workspace_id")
+}
+
 func TestCommentMentionRepo_CountUnseen_ExcludesMentionsOnADeletedTask(t *testing.T) {
 	repo, mock := newCommentMentionRepoMock(t)
 	mentionedID := uuid.New()

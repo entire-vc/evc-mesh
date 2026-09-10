@@ -123,11 +123,16 @@ export function sortMentionInbox(items: MentionInboxItem[]): MentionInboxItem[] 
  * Neither request can fail the other: a document-mentions endpoint that is
  * missing or erroring must not blank out task mentions that loaded fine, and
  * vice versa. What it does instead is name itself in `failed`.
+ *
+ * `workspaceId` is required, not optional, for the same reason the server
+ * rejects a request without it: an inbox that quietly worked without a
+ * workspace would go back to returning every workspace's mentions the moment
+ * a caller forgot to pass one.
  */
-export async function fetchMentionInbox(limit = 50): Promise<MentionInbox> {
+export async function fetchMentionInbox(workspaceId: string, limit = 50): Promise<MentionInbox> {
   const [tasks, documents] = await Promise.allSettled([
-    api<Mention[]>(TASK_MENTIONS_PATH, { params: { limit } }),
-    api<DocumentMention[]>(DOCUMENT_MENTIONS_PATH, { params: { limit } }),
+    api<Mention[]>(TASK_MENTIONS_PATH, { params: { workspace_id: workspaceId, limit } }),
+    api<DocumentMention[]>(DOCUMENT_MENTIONS_PATH, { params: { workspace_id: workspaceId, limit } }),
   ]);
 
   const items: MentionInboxItem[] = [];

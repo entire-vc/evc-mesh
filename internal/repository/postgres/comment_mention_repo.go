@@ -67,6 +67,10 @@ func (r *CommentMentionRepo) List(ctx context.Context, mentionedID uuid.UUID, me
 		args = append(args, *filter.ProjectID)
 		where += ` AND t.project_id = $` + fmt.Sprintf("%d", len(args))
 	}
+	if filter.WorkspaceID != nil {
+		args = append(args, *filter.WorkspaceID)
+		where += ` AND p.workspace_id = $` + fmt.Sprintf("%d", len(args))
+	}
 
 	args = append(args, limit)
 	q := `
@@ -86,6 +90,7 @@ func (r *CommentMentionRepo) List(ctx context.Context, mentionedID uuid.UUID, me
 		FROM comment_mentions cm
 		JOIN comments c ON c.id = cm.comment_id
 		JOIN tasks t    ON t.id = c.task_id
+		JOIN projects p ON p.id = t.project_id
 		LEFT JOIN users  u ON u.id = c.author_id AND c.author_type = 'user'
 		LEFT JOIN agents a ON a.id = c.author_id AND c.author_type = 'agent'
 		WHERE ` + where + `

@@ -183,6 +183,18 @@ var declaredQueryTenantParams = map[string]string{
 	// "cm.mentioned_id = $1") and holds for the same reason.
 	"document_mention_handler.go:parseMentionFilter.project_id": "narrows: AND d.project_id = $ — pinned by dcm.mentioned_id = $1",
 
+	// workspace_id on the same two routes, added when the dashboard's Mentions
+	// widget turned out to read every workspace's rows instead of the current
+	// one — parseMentionFilter now requires it, but "required" is a client-side
+	// promise and this test is about what an arbitrary value can do once it
+	// reaches the query. Same pin as project_id above, one join hop further
+	// (through projects): a caller-supplied workspace_id joined onto the
+	// mention's task/document can only remove rows from that caller's own
+	// mention set, never add a stranger's. The task-mention side joins the same
+	// way through comments -> tasks -> projects ("AND p.workspace_id = $",
+	// pinned by "cm.mentioned_id = $1") and holds for the same reason.
+	"document_mention_handler.go:parseMentionFilter.workspace_id": "narrows: AND p.workspace_id = $ — pinned by dcm.mentioned_id = $1",
+
 	// GET /projects/:proj_id/events — pinned by the path parameter, which projAccess
 	// and WorkspaceRLS have both already resolved.
 	"event_handler.go:listEventsQuery.agent_id": "narrows: e.agent_id = $%d — pinned by e.project_id = $1",

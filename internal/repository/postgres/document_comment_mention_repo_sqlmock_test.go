@@ -184,18 +184,51 @@ func TestDocumentCommentMentionRepo_List_HidesRowsWhoseTargetIsGone(t *testing.T
 func TestDocumentCommentMentionRepo_List_AppliesEveryFilter(t *testing.T) {
 	since := time.Now().UTC().Add(-time.Hour)
 	projectID := uuid.New()
+	workspaceID := uuid.New()
 	seen := true
 
 	sql := captureSQL(t, true, func(repo *DocumentCommentMentionRepo) {
 		_, _ = repo.List(context.Background(), uuid.New(), "agent", repository.MentionFilter{
-			Seen: &seen, Since: &since, ProjectID: &projectID, Limit: 7,
+			Seen: &seen, Since: &since, ProjectID: &projectID, WorkspaceID: &workspaceID, Limit: 7,
 		})
 	})
 
 	assert.Contains(t, sql, "dcm.seen_at IS NOT NULL")
 	assert.Contains(t, sql, "dcm.extracted_at > $3")
 	assert.Contains(t, sql, "d.project_id = $4")
-	assert.Contains(t, sql, "LIMIT $5", "the limit is always the last placeholder, whatever precedes it")
+	assert.Contains(t, sql, "p.workspace_id = $5")
+	assert.Contains(t, sql, "LIMIT $6", "the limit is always the last placeholder, whatever precedes it")
+}
+
+// TestDocumentCommentMentionRepo_List_FiltersByWorkspace is the regression
+// test for the dashboard defect: an empty workspace's Mentions widget showed
+// another workspace's rows because nothing here joined as far as
+// workspace_id. document_comment_mentions carries an RLS policy keyed on the
+// same chain (see the migration), but RLS depends on a session variable this
+// route never sets (no :ws_id/:proj_id/:doc_id in its path — see
+// middleware/workspace.go's WorkspaceRLS) and is not a substitute for scoping
+// the query itself.
+func TestDocumentCommentMentionRepo_List_FiltersByWorkspace(t *testing.T) {
+	workspaceID := uuid.New()
+
+	sql := captureSQL(t, true, func(repo *DocumentCommentMentionRepo) {
+		_, _ = repo.List(context.Background(), uuid.New(), "user", repository.MentionFilter{WorkspaceID: &workspaceID})
+	})
+
+	assert.Contains(t, sql, "JOIN projects p")
+	assert.Contains(t, sql, "p.workspace_id = $3",
+		"workspace_id is the third arg on an otherwise-empty filter: mentionedID, mentionedKind, then this")
+}
+
+// TestDocumentCommentMentionRepo_List_OmitsTheWorkspaceClauseWhenUnset is the
+// document-side twin of the same contract on CommentMentionRepo: WorkspaceID
+// is optional here, required one layer up in parseMentionFilter.
+func TestDocumentCommentMentionRepo_List_OmitsTheWorkspaceClauseWhenUnset(t *testing.T) {
+	sql := captureSQL(t, true, func(repo *DocumentCommentMentionRepo) {
+		_, _ = repo.List(context.Background(), uuid.New(), "user", repository.MentionFilter{})
+	})
+
+	assert.NotContains(t, sql, "p.workspace_id")
 }
 
 func TestDocumentCommentMentionRepo_List_UnseenFilterIsTheOtherDirection(t *testing.T) {

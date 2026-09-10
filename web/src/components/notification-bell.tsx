@@ -162,17 +162,19 @@ export function NotificationBell() {
     setOpen((prev) => {
       if (!prev) {
         void fetchNotifications();
-        fetchMentionInbox(20)
-          .then(({ items, failed }) => {
-            setMentions(items);
-            setMentionsFailed(failed.length > 0);
-            setMentionCount(items.filter((m) => !m.seen_at).length);
-          })
-          .catch(() => setMentionsFailed(true));
+        if (currentWorkspace) {
+          fetchMentionInbox(currentWorkspace.id, 20)
+            .then(({ items, failed }) => {
+              setMentions(items);
+              setMentionsFailed(failed.length > 0);
+              setMentionCount(items.filter((m) => !m.seen_at).length);
+            })
+            .catch(() => setMentionsFailed(true));
+        }
       }
       return !prev;
     });
-  }, [fetchNotifications]);
+  }, [fetchNotifications, currentWorkspace]);
 
   const handleNotificationClick = useCallback(
     (n: Notification) => {

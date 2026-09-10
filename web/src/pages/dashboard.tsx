@@ -80,6 +80,7 @@ function WidgetEmpty({
 
 function MentionsWidget() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
+  const { currentWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
   const [mentions, setMentions] = useState<MentionInboxItem[]>([]);
   const [failed, setFailed] = useState<MentionSource[]>([]);
@@ -87,8 +88,13 @@ function MentionsWidget() {
 
   // Both inboxes, same as the Activity tab — a widget that reads only task
   // mentions is the same wrong answer in a smaller box.
+  //
+  // Scoped to currentWorkspace: without workspace_id this returned every
+  // workspace's mentions, which is exactly how an empty workspace's
+  // dashboard ended up showing somebody else's alerts and billing threads.
   useEffect(() => {
-    fetchMentionInbox(10)
+    if (!currentWorkspace) return;
+    fetchMentionInbox(currentWorkspace.id, 10)
       .then(({ items, failed: failedSources }) => {
         setMentions(items.slice(0, 10));
         setFailed(failedSources);
@@ -98,7 +104,7 @@ function MentionsWidget() {
         setFailed(["task", "document"]);
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [currentWorkspace]);
 
   const activityTo = wsSlug ? `/w/${wsSlug}/activity` : "/";
 
