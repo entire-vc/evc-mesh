@@ -58,6 +58,8 @@ func (m *mockAgentRepo) TouchLastSeenBatch(context.Context, []uuid.UUID) error {
 func (m *mockAgentRepo) SearchByPrefix(context.Context, uuid.UUID, string, int) ([]domain.Agent, error) {
 	return nil, nil
 }
+func (m *mockAgentRepo) CreateWithHomeGrant(context.Context, *domain.Agent) error { return nil }
+func (m *mockAgentRepo) RotateHomeGrantKey(context.Context, *domain.Agent) error  { return nil }
 
 // seedCollisionFixture builds a service whose test user owns one workspace
 // (mockWorkspaceRepo.ListForUser == ListByOwner, so ownership is what makes a

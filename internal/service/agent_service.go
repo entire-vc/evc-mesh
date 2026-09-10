@@ -259,7 +259,11 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 		agent.AcceptsFrom = input.AcceptsFrom
 	}
 
-	if err := s.agentRepo.Create(ctx, agent); err != nil {
+	// CreateWithHomeGrant (not plain Create) — it also creates the agent's
+	// home agent_workspace_grants row, atomically, so a newly registered
+	// agent is visible through agent_workspace_grants immediately instead of
+	// living on the legacy agents-table path indefinitely (task #44f461a9).
+	if err := s.agentRepo.CreateWithHomeGrant(ctx, agent); err != nil {
 		return nil, err
 	}
 
@@ -597,7 +601,14 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 	agent.ExpiresAt = &expires
 	agent.UpdatedAt = now
 
-	if err := s.agentRepo.Update(ctx, agent); err != nil {
+	// RotateHomeGrantKey (not plain Update) — it also rewrites the key
+	// material on the agent's home agent_workspace_grants row, atomically.
+	// Without this the grant row keeps authenticating under the OLD key
+	// forever: Authenticate looks a presented key up by its OWN prefix
+	// through the grant table first, and a stale grant row still matches on
+	// the old prefix even after agents.api_key_prefix has moved on (task
+	// #44f461a9's rotation half).
+	if err := s.agentRepo.RotateHomeGrantKey(ctx, agent); err != nil {
 		return "", err
 	}
 
