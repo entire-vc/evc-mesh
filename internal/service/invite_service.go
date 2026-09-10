@@ -231,7 +231,7 @@ func (s *inviteService) AcceptInvite(ctx context.Context, input AcceptInviteInpu
 	}
 
 	if user == nil {
-		hash, hashErr := bcrypt.GenerateFromPassword([]byte(input.Password), 10)
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(input.Password), userPasswordBcryptCost)
 		if hashErr != nil {
 			return "", "", apierror.InternalError("failed to hash password")
 		}

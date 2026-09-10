@@ -19,6 +19,15 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
+// userPasswordBcryptCost is the bcrypt work factor for user (not agent API key —
+// see bcryptCost in agent_service.go) password hashes, shared with
+// invite_service.go's AcceptInvite. A var, not a literal, so tests can override
+// it — see main_test.go's TestMain. #6ae6f813: same real-cost-under-race problem
+// as bcryptCost, just a second, separate call site that wasn't wired to the
+// existing override (TestAcceptInvite_UsernameMatchesRegistration alone was
+// 5.43s under -race before this fix).
+var userPasswordBcryptCost = 10
+
 type workspaceMemberService struct {
 	memberRepo        repository.WorkspaceMemberRepository
 	userRepo          repository.UserRepository
@@ -182,7 +191,7 @@ func (s *workspaceMemberService) AddMemberWithCreate(ctx context.Context, worksp
 	}
 
 	if user == nil {
-		hash, hashErr := bcrypt.GenerateFromPassword([]byte(password), 10)
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(password), userPasswordBcryptCost)
 		if hashErr != nil {
 			return nil, apierror.InternalError("failed to hash password")
 		}
