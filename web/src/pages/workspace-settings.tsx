@@ -1492,8 +1492,8 @@ export function WorkspaceSettingsPage() {
       {activeTab === "members" && (
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-[200px] space-y-1.5">
               <CardTitle>Members</CardTitle>
               <CardDescription>
                 Manage who has access to this workspace
@@ -1548,7 +1548,7 @@ export function WorkspaceSettingsPage() {
                 return (
                   <div
                     key={member.id}
-                    className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
+                    className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0"
                   >
                     {/* Avatar */}
                     <Avatar
@@ -1559,8 +1559,11 @@ export function WorkspaceSettingsPage() {
 
                     {/* Info. Name first, address only when it disambiguates —
                         for an account that never got a name the two are the
-                        same string, and printing it twice reads as a bug. */}
-                    <div className="flex-1 min-w-0">
+                        same string, and printing it twice reads as a bug.
+                        min-w floor (not min-w-0) so the action controls wrap
+                        to their own line on narrow screens instead of
+                        crushing this column to an unreadable sliver. */}
+                    <div className="min-w-[140px] flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate text-sm font-medium">
                           {displayName(member.user)}
@@ -1580,66 +1583,75 @@ export function WorkspaceSettingsPage() {
                           {member.user.email}
                         </p>
                       )}
-                      <p className="text-xs text-muted-foreground">
+                      <p className="truncate text-xs text-muted-foreground">
                         Joined {formatDate(member.created_at)}
                       </p>
                     </div>
 
-                    {/* Edit name. Own name is edited on the Profile tab, which
-                        is also the only place it can be changed once its owner
-                        has chosen it. */}
-                    {canManageMembers && !isMe && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                        onClick={() => handleOpenRename(member)}
-                        title="Edit display name"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                    )}
+                    {/* Action controls as one group so they wrap together onto
+                        their own line on narrow screens, rather than each
+                        squeezing the info column independently. gap-3 (not
+                        gap-1) matches the original outer row's spacing between
+                        these same three controls — this wrapper must not
+                        change their relative spacing at 1440, only group them
+                        for wrapping. */}
+                    <div className="flex items-center gap-3">
+                      {/* Edit name. Own name is edited on the Profile tab, which
+                          is also the only place it can be changed once its owner
+                          has chosen it. */}
+                      {canManageMembers && !isMe && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          onClick={() => handleOpenRename(member)}
+                          title="Edit display name"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
 
-                    {/* Role badge or dropdown */}
-                    {canEditRole ? (
-                      <Select
-                        value={member.role}
-                        onChange={(e) =>
-                          void handleRoleChange(
-                            member,
-                            e.target.value as WorkspaceRole,
-                          )
-                        }
-                        className="w-28 text-sm"
-                      >
-                        {roleOptions.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </Select>
-                    ) : (
-                      <Badge
-                        variant={roleBadgeVariant(member.role)}
-                        className="capitalize"
-                      >
-                        {member.role}
-                      </Badge>
-                    )}
+                      {/* Role badge or dropdown */}
+                      {canEditRole ? (
+                        <Select
+                          value={member.role}
+                          onChange={(e) =>
+                            void handleRoleChange(
+                              member,
+                              e.target.value as WorkspaceRole,
+                            )
+                          }
+                          className="w-28 text-sm"
+                        >
+                          {roleOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <Badge
+                          variant={roleBadgeVariant(member.role)}
+                          className="capitalize"
+                        >
+                          {member.role}
+                        </Badge>
+                      )}
 
-                    {/* Remove button */}
-                    {canRemove && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        onClick={() => handleOpenRemove(member)}
-                        title="Remove member"
-                        disabled={isMe && isLastOwner}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
+                      {/* Remove button */}
+                      {canRemove && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => handleOpenRemove(member)}
+                          title="Remove member"
+                          disabled={isMe && isLastOwner}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
