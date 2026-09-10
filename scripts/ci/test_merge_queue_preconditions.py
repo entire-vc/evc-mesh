@@ -9,7 +9,7 @@ invisible in review:
   1. every workflow that produces a required context must list `merge_group:`.
      A workflow that does not simply produces nothing there — so the queue entry
      waits for a check that is never requested. With `enforce_admins: true` and
-     six required contexts that is not a slow merge, it is a repository that
+     five required contexts that is not a slow merge, it is a repository that
      cannot merge anything, with no override available to anyone including the
      owner. This is the whole reason the trigger landed as its own change,
      *before* the queue was turned on.
@@ -47,10 +47,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO / ".github" / "workflows"
 
-# The literal contexts `main`'s branch protection requires, with
-# enforce_admins: true. Verified live 2026-08-08:
-#   gh api repos/entire-vc/evc-mesh/branches/main/protection \
-#     --jq .required_status_checks.contexts
+# The literal contexts `main`'s branch protection requires. Verified live
+# 2026-09-10 (gh api repos/entire-vc/evc-mesh/rulesets/21250306):
+#   Lint, Test, Build, Go coverage ≥80% (affected-set), Memory recall gate,
+#   Hold gate, Tenancy & RBAC gate, Repo tests (integration),
+#   Showcase migrated gate — plus "Authed E2E" until #8daab9da removed it
+#   (dev canon moved to GitLab 2026-08-23; GitHub's copy had stale creds and
+#   produced only false-red on every mirror push, never a real merge gate).
+# This file only covers the subset that must ALSO fire on `merge_group` —
+# see `_producers()` below — not the ruleset's full required-checks list.
 # Hard-coded rather than fetched: this must pass offline, and a check that
 # silently skips when the network is down is the blind gate it is guarding
 # against. If protection changes, this list changes in the same PR.
@@ -58,7 +63,6 @@ REQUIRED_CONTEXTS = [
     "Lint",
     "Test",
     "Build",
-    "Authed E2E",
     "Go coverage ≥80% (affected-set)",
     "Memory recall gate",
 ]
@@ -136,7 +140,7 @@ def _producers() -> dict[str, tuple[str, str]]:
 
 
 class TestEveryRequiredContextIsProducedOnMergeGroup(unittest.TestCase):
-    def test_all_six_producers_are_discoverable(self):
+    def test_all_five_producers_are_discoverable(self):
         """Negative control for every other test in this file.
 
         Each test below iterates the producers this finds. If discovery breaks —
