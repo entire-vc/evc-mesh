@@ -327,6 +327,13 @@ type TeamDirectoryAgent struct {
 	// Computed presence fields (derived, not stored in DB)
 	ComputedStatus ComputedAgentStatus `json:"computed_status"`
 	LastSeenAt     *time.Time          `json:"last_seen_at,omitempty"`
+	// IsHome reports whether this workspace is the agent's HOME workspace
+	// (agents.workspace_id) rather than one it holds a guest connection into
+	// via agent_workspace_grants (task U3/#71627c5a). Without this the
+	// directory cannot say which is which, and the caller has no way to tell
+	// a native member from an invited guest short of cross-referencing
+	// GET /agents separately.
+	IsHome bool `json:"is_home"`
 }
 
 // TeamDirectoryHuman is the human member profile for team directory API.

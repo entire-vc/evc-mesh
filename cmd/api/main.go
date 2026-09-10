@@ -302,6 +302,10 @@ func main() {
 	rulesService := service.NewRulesServiceWithOptions(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo,
 		service.WithRulesRuleRepo(ruleRepo),
 		service.WithRulesStatusRepo(taskStatusRepo),
+		// Enables GET /workspaces/:ws_id/team to list guest agents (task
+		// U3/#71627c5a) alongside home ones, each tagged is_home. Without
+		// this, the endpoint reverts to home-only — see GetTeamDirectory.
+		service.WithRulesAgentGrantRepo(agentWorkspaceGrantRepo),
 	)
 
 	// Web Push service — graceful: no-op when VAPID keys are absent.
@@ -448,6 +452,12 @@ func main() {
 		// user assignment, so this wiring is load-bearing, not optional —
 		// TestTaskServiceWiresTheAssigneeTenancyGuard reads it back out of this file.
 		service.WithWorkspaceMembershipReader(postgres.NewWorkspaceMembershipReader(db)),
+		// Agent half of the same guard for the multi-workspace case (task
+		// U3/#71627c5a): without it, a guest agent (home workspace is
+		// elsewhere, reached here via an active agent_workspace_grants
+		// connection) can never pass assertAssigneeInProjectWorkspace's agent
+		// branch, and every guest-workspace assignment refuses.
+		service.WithTaskAgentGrantRepo(agentWorkspaceGrantRepo),
 		// Enables stale-cursor rejection on list_tasks (ADR-0004). Without
 		// this, List behaves exactly as it did before the option existed —
 		// see WithTaskListRevisionRepo's doc comment.

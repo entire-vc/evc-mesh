@@ -4057,3 +4057,119 @@ func (m *MockDocumentRepository) SearchInProject(
 	}
 	return hits, nil
 }
+
+// ---------------------------------------------------------------------------
+// MockWorkspaceMemberRepository — human half of GetTeamDirectory (task
+// #71627c5a). Only List/ListWithProjects have real callers today; the rest
+// are stubs so the mock satisfies repository.WorkspaceMemberRepository at
+// compile time without pulling in every path's test fixture up front.
+// ---------------------------------------------------------------------------
+
+var _ repository.WorkspaceMemberRepository = (*MockWorkspaceMemberRepository)(nil)
+
+type MockWorkspaceMemberRepository struct {
+	mu          sync.RWMutex
+	items       []domain.WorkspaceMemberWithUser
+	errToReturn error
+}
+
+func NewMockWorkspaceMemberRepository() *MockWorkspaceMemberRepository {
+	return &MockWorkspaceMemberRepository{}
+}
+
+// Seed adds a member row directly for a given workspace, bypassing Create.
+func (m *MockWorkspaceMemberRepository) Seed(workspaceID uuid.UUID, member domain.WorkspaceMemberWithUser) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	member.WorkspaceID = workspaceID
+	m.items = append(m.items, member)
+}
+
+func (m *MockWorkspaceMemberRepository) Create(_ context.Context, _ *domain.WorkspaceMember) error {
+	return m.errToReturn
+}
+
+func (m *MockWorkspaceMemberRepository) GetByWorkspaceAndUser(_ context.Context, workspaceID, userID uuid.UUID) (*domain.WorkspaceMember, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, it := range m.items {
+		if it.WorkspaceID == workspaceID && it.UserID == userID {
+			cp := it.WorkspaceMember
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockWorkspaceMemberRepository) GetRole(_ context.Context, workspaceID, userID uuid.UUID) (string, error) {
+	if m.errToReturn != nil {
+		return "", m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, it := range m.items {
+		if it.WorkspaceID == workspaceID && it.UserID == userID {
+			return it.Role, nil
+		}
+	}
+	return "", fmt.Errorf("membership not found")
+}
+
+// List returns every member of workspaceID — the query GetTeamDirectory calls.
+func (m *MockWorkspaceMemberRepository) List(_ context.Context, workspaceID uuid.UUID) ([]domain.WorkspaceMemberWithUser, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.WorkspaceMemberWithUser
+	for _, it := range m.items {
+		if it.WorkspaceID == workspaceID {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+func (m *MockWorkspaceMemberRepository) ListWithProjects(_ context.Context, _ uuid.UUID) ([]repository.HumanWithProjects, error) {
+	return nil, m.errToReturn
+}
+
+func (m *MockWorkspaceMemberRepository) UpdateRole(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return m.errToReturn
+}
+
+func (m *MockWorkspaceMemberRepository) Delete(_ context.Context, workspaceID, userID uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	filtered := m.items[:0]
+	for _, it := range m.items {
+		if it.WorkspaceID == workspaceID && it.UserID == userID {
+			continue
+		}
+		filtered = append(filtered, it)
+	}
+	m.items = filtered
+	return nil
+}
+
+func (m *MockWorkspaceMemberRepository) CountOwners(_ context.Context, workspaceID uuid.UUID) (int, error) {
+	if m.errToReturn != nil {
+		return 0, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, it := range m.items {
+		if it.WorkspaceID == workspaceID && it.Role == domain.RoleOwner {
+			n++
+		}
+	}
+	return n, nil
+}

@@ -25,18 +25,20 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 
 	// newSvc builds a service with the tenancy directories wired, so each case can
 	// knock out exactly one of them and nothing else.
-	newSvc := func() (*taskService, *MockProjectRepository, *MockAgentRepository, *MockWorkspaceMembershipReader) {
+	newSvc := func() (*taskService, *MockProjectRepository, *MockAgentRepository, *MockWorkspaceMembershipReader, *MockAgentWorkspaceGrantRepository) {
 		projRepo := NewMockProjectRepository()
 		agentRepo := NewMockAgentRepository()
 		wsReader := NewMembershipTableReader()
+		grantRepo := NewMockAgentWorkspaceGrantRepository()
 		svc := NewTaskService(
 			NewMockTaskRepository(), NewMockTaskStatusRepository(),
 			NewMockTaskDependencyRepository(), NewMockActivityLogRepository(),
 			WithProjectRepo(projRepo),
 			WithTaskAgentRepo(agentRepo),
 			WithWorkspaceMembershipReader(wsReader),
+			WithTaskAgentGrantRepo(grantRepo),
 		).(*taskService)
-		return svc, projRepo, agentRepo, wsReader
+		return svc, projRepo, agentRepo, wsReader, grantRepo
 	}
 
 	// seedProject registers a project belonging to wsID.
@@ -47,7 +49,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	}
 
 	t.Run("no project directory", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		svc.projectRepo = nil
 		id := uuid.New()
@@ -57,7 +59,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("project lookup errors", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		projRepo.errToReturn = assert.AnError
 		id := uuid.New()
@@ -67,7 +69,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("project does not exist", func(t *testing.T) {
-		svc, _, _, _ := newSvc()
+		svc, _, _, _, _ := newSvc()
 		id := uuid.New()
 
 		err := svc.assertAssigneeInProjectWorkspace(ctx, uuid.New(), &id, domain.AssigneeTypeAgent)
@@ -75,7 +77,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("no agent directory", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		svc.agentRepo = nil
 		id := uuid.New()
@@ -85,7 +87,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("agent lookup errors", func(t *testing.T) {
-		svc, projRepo, agentRepo, _ := newSvc()
+		svc, projRepo, agentRepo, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		agentRepo.errToReturn = assert.AnError
 		id := uuid.New()
@@ -95,7 +97,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("no such agent", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		id := uuid.New()
 
@@ -103,8 +105,8 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 		requireRefusal(t, err, "no such agent")
 	})
 
-	t.Run("agent from another workspace", func(t *testing.T) {
-		svc, projRepo, agentRepo, _ := newSvc()
+	t.Run("agent from another workspace, no grant at all", func(t *testing.T) {
+		svc, projRepo, agentRepo, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		id := uuid.New()
 		agentRepo.items[id] = &domain.Agent{ID: id, WorkspaceID: uuid.New(), Slug: "foreign"}
@@ -113,8 +115,66 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 		requireRefusal(t, err, "different workspace")
 	})
 
+	// The agent-half sibling of "no membership directory"/"membership lookup
+	// errors" below — same fail-closed contract, different directory
+	// (task U3/#71627c5a).
+	t.Run("no agent grant directory", func(t *testing.T) {
+		svc, projRepo, agentRepo, _, _ := newSvc()
+		projID := seedProject(projRepo)
+		svc.agentGrantRepo = nil
+		id := uuid.New()
+		agentRepo.items[id] = &domain.Agent{ID: id, WorkspaceID: uuid.New(), Slug: "foreign"}
+
+		err := svc.assertAssigneeInProjectWorkspace(ctx, projID, &id, domain.AssigneeTypeAgent)
+		requireRefusal(t, err, "agent workspace grant directory unavailable")
+	})
+
+	t.Run("agent grant lookup errors", func(t *testing.T) {
+		svc, projRepo, agentRepo, _, grantRepo := newSvc()
+		projID := seedProject(projRepo)
+		grantRepo.errToReturn = assert.AnError
+		id := uuid.New()
+		agentRepo.items[id] = &domain.Agent{ID: id, WorkspaceID: uuid.New(), Slug: "foreign"}
+
+		err := svc.assertAssigneeInProjectWorkspace(ctx, projID, &id, domain.AssigneeTypeAgent)
+		requireRefusal(t, err, "could not read agent workspace grants")
+	})
+
+	// AC4's red half: a revoked connection must refuse exactly like no
+	// connection at all — GetByAgentAndWorkspace returns the revoked row
+	// (never collapses it into absent), so this pins that the caller checks
+	// IsRevoked() rather than trusting "found".
+	t.Run("agent grant is revoked", func(t *testing.T) {
+		svc, projRepo, agentRepo, _, grantRepo := newSvc()
+		projID := seedProject(projRepo)
+		id := uuid.New()
+		homeWS := uuid.New()
+		agentRepo.items[id] = &domain.Agent{ID: id, WorkspaceID: homeWS, Slug: "guest"}
+		grant := &domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: id, WorkspaceID: wsID}
+		grantRepo.Seed(grant)
+		grantRepo.SeedRevoke(grant.ID, timeNow())
+
+		err := svc.assertAssigneeInProjectWorkspace(ctx, projID, &id, domain.AssigneeTypeAgent)
+		requireRefusal(t, err, "different workspace")
+	})
+
+	// AC1's core: a GUEST agent — home elsewhere, active connection into
+	// THIS workspace — must be admitted, not just a home agent. Without this
+	// case the whole file is satisfied by a function that only ever checks
+	// agents.workspace_id, which is the exact bug #71627c5a reports.
+	t.Run("agent with an active guest grant is allowed", func(t *testing.T) {
+		svc, projRepo, agentRepo, _, grantRepo := newSvc()
+		projID := seedProject(projRepo)
+		id := uuid.New()
+		homeWS := uuid.New()
+		agentRepo.items[id] = &domain.Agent{ID: id, WorkspaceID: homeWS, Slug: "guest"}
+		grantRepo.Seed(&domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: id, WorkspaceID: wsID})
+
+		require.NoError(t, svc.assertAssigneeInProjectWorkspace(ctx, projID, &id, domain.AssigneeTypeAgent))
+	})
+
 	t.Run("no membership directory", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		svc.wsMembership = nil
 		id := uuid.New()
@@ -124,7 +184,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("membership lookup errors", func(t *testing.T) {
-		svc, projRepo, _, wsReader := newSvc()
+		svc, projRepo, _, wsReader, _ := newSvc()
 		projID := seedProject(projRepo)
 		wsReader.FailWith(assert.AnError)
 		id := uuid.New()
@@ -134,7 +194,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("user is not a member", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		id := uuid.New()
 
@@ -145,7 +205,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	// The permitting branches. Without these the whole table above is satisfied by
 	// a function that returns an error unconditionally.
 	t.Run("agent of this workspace is allowed", func(t *testing.T) {
-		svc, projRepo, agentRepo, _ := newSvc()
+		svc, projRepo, agentRepo, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		id := uuid.New()
 		agentRepo.items[id] = &domain.Agent{ID: id, WorkspaceID: wsID, Slug: "native"}
@@ -154,7 +214,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("member of this workspace is allowed", func(t *testing.T) {
-		svc, projRepo, _, wsReader := newSvc()
+		svc, projRepo, _, wsReader, _ := newSvc()
 		projID := seedProject(projRepo)
 		id := uuid.New()
 		wsReader.Allow(wsID, id)
@@ -164,7 +224,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 
 	// Early returns: nothing is being granted, so there is nothing to refuse.
 	t.Run("no assignee at all", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		nilID := uuid.Nil
 
@@ -173,7 +233,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	})
 
 	t.Run("a type that grants nothing readable", func(t *testing.T) {
-		svc, projRepo, _, _ := newSvc()
+		svc, projRepo, _, _, _ := newSvc()
 		projID := seedProject(projRepo)
 		id := uuid.New()
 
