@@ -192,7 +192,7 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 		return nil, apierror.InternalError("failed to generate API key")
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(rawKey), bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword(bcryptInput(rawKey), bcryptCost)
 	if err != nil {
 		return nil, apierror.InternalError("failed to hash API key")
 	}
@@ -438,7 +438,7 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 // connection — WorkspaceID and WorkspaceRole reflect where the caller just
 // authenticated INTO, which is not necessarily the agent's home workspace.
 func (s *agentService) authenticateViaGrant(ctx context.Context, grant *domain.AgentWorkspaceGrant, apiKey string) (*domain.Agent, error) {
-	if err := bcrypt.CompareHashAndPassword([]byte(grant.APIKeyHash), []byte(apiKey)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(grant.APIKeyHash), bcryptInput(apiKey)); err != nil {
 		return nil, apierror.Unauthorized("invalid API key")
 	}
 
@@ -530,7 +530,7 @@ func (s *agentService) verifyAPIKey(ctx context.Context, agent *domain.Agent, ap
 		return nil
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(agent.APIKeyHash), []byte(apiKey)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(agent.APIKeyHash), bcryptInput(apiKey)); err != nil {
 		return apierror.Unauthorized("invalid API key")
 	}
 
@@ -595,7 +595,7 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 		return "", apierror.InternalError("failed to generate API key")
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(rawKey), bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword(bcryptInput(rawKey), bcryptCost)
 	if err != nil {
 		return "", apierror.InternalError("failed to hash API key")
 	}

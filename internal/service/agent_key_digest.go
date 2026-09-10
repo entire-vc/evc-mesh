@@ -63,3 +63,44 @@ func agentKeyDigestMatches(storedDigest, rawKey string) bool {
 	}
 	return subtle.ConstantTimeCompare([]byte(storedDigest), []byte(agentKeyDigest(rawKey))) == 1
 }
+
+// bcryptMaxInputBytes is bcrypt's own hard input cap — golang.org/x/crypto/
+// bcrypt.GenerateFromPassword returns a bare error (not a truncation) past
+// this length. Verified empirically against the vendored version: 72 bytes
+// succeeds, 73 fails with "password length exceeds 72 bytes".
+const bcryptMaxInputBytes = 72
+
+// bcryptInput returns the bytes bcrypt should hash or compare for an agent
+// API key, correcting for bcryptMaxInputBytes.
+//
+// An agent key's length is not fixed — it embeds the workspace slug
+// (agk_{slug}_{48 hex}) — so a long enough slug (empirically: >19 chars; the
+// fixed agk_/_/48-hex overhead is 53 bytes) pushes the whole key past the cap
+// and bcrypt.GenerateFromPassword returns a bare error instead of truncating
+// (#9317fcd0 — measured live: POST /workspaces/:ws/agents and
+// .../agent-grants both 500'd on a 27-char slug).
+//
+// Below the cap, rawKey passes through unchanged. That is the path every
+// already-issued key in the fleet uses today — workspace slugs have stayed
+// under the cap by convention, not by any enforced check — so this change
+// alters nothing about verifying an existing hash.
+//
+// At or above the cap, agentKeyDigest's fixed 64-byte hex output stands in
+// for the key instead. This loses no security: it is a keyed hash of the
+// SAME 192-bit random secret (see agentKeyDigest's own doc for why bcrypt's
+// cost factor buys nothing against a server-generated random key in the
+// first place), and which representation to use is a PURE function of
+// len(rawKey) — recomputed identically at generation and at every future
+// verification of that same key, with no flag to store and nothing to
+// migrate.
+//
+// MUST be called at every bcrypt.GenerateFromPassword/CompareHashAndPassword
+// site that touches an agent API key (agent_service.go,
+// agent_workspace_grant_service.go) — an inconsistent call site would be
+// unable to verify keys the others generate.
+func bcryptInput(rawKey string) []byte {
+	if len(rawKey) > bcryptMaxInputBytes {
+		return []byte(agentKeyDigest(rawKey))
+	}
+	return []byte(rawKey)
+}
