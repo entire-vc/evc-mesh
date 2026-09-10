@@ -28,9 +28,10 @@ import (
 type countingAgentService struct {
 	AgentService // nil: any method not overridden below panics if called
 
-	authCalls   atomic.Int64
-	rotateCalls atomic.Int64
-	deleteCalls atomic.Int64
+	authCalls        atomic.Int64
+	rotateCalls      atomic.Int64
+	deleteCalls      atomic.Int64
+	revokeCheckCalls atomic.Int64
 
 	// agent is returned by Authenticate when authErr is nil.
 	mu           sync.Mutex
@@ -40,6 +41,27 @@ type countingAgentService struct {
 	delErr       error
 	configed     bool
 	configedRepo repository.AgentActivityLogRepository
+
+	// revoked/revokeCheckErr drive IsGrantRevoked, below. A test that never
+	// authenticates a GrantID-bearing agent never reaches this method at all
+	// (cachedGrantStillValid short-circuits on a nil GrantID) — every
+	// pre-existing test in this file is exactly that case, unchanged.
+	revoked        bool
+	revokeCheckErr error
+}
+
+// IsGrantRevoked implements GrantRevocationChecker, so this fixture doubles
+// as both branches cachedGrantStillValid can take for a grant-derived agent:
+// checker present, revoked/valid per s.revoked, or erroring per
+// s.revokeCheckErr.
+func (s *countingAgentService) IsGrantRevoked(_ context.Context, _ uuid.UUID) (bool, error) {
+	s.revokeCheckCalls.Add(1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revokeCheckErr != nil {
+		return false, s.revokeCheckErr
+	}
+	return s.revoked, nil
 }
 
 func (s *countingAgentService) Authenticate(_ context.Context, _, _ string) (*domain.Agent, error) {
@@ -317,6 +339,150 @@ func TestCachedAgentAuth_InvalidateAgentDropsAllKeysForThatAgent(t *testing.T) {
 func TestCachedAgentAuth_InvalidateUnknownAgentIsNoop(t *testing.T) {
 	c, _, _ := newCacheFixture(t, time.Hour)
 	assert.NotPanics(t, func() { c.InvalidateAgent(uuid.New()) })
+}
+
+// ---------------------------------------------------------------------------
+// Grant revocation freshness (task U2 AC4, `#fbc12881`)
+//
+// A grant can be revoked by a direct SQL UPDATE — the only revoke path that
+// exists until U3 ships an API — which is a change this process never gets
+// told about via InvalidateAgent. These tests are the regression guard for
+// the gap independent review found before the fix: a cache HIT must not
+// answer from a stale success once the grant behind it has been revoked,
+// even though the revoke happened entirely outside this process.
+// ---------------------------------------------------------------------------
+
+// newGrantCacheFixture is newCacheFixture, but the inner agent carries a
+// GrantID — i.e. it looks like a login that went through
+// agentService.authenticateViaGrant, the only path that ever sets GrantID.
+func newGrantCacheFixture(t *testing.T, ttl time.Duration) (*cachedAgentAuth, *countingAgentService, *time.Time) {
+	t.Helper()
+	c, inner, clock := newCacheFixture(t, ttl)
+	grantID := uuid.New()
+	inner.agent.GrantID = &grantID
+	return c, inner, clock
+}
+
+// The exact scenario Garfield's independent review reproduced against the
+// deployed cachedAgentAuth+agentService pairing: a grant-derived key is
+// cached, the grant is revoked mid-TTL by something outside this process,
+// and the SAME key must be denied on the very next request — not up to
+// AgentAuthCacheTTL later.
+func TestCachedAgentAuth_GrantRevokedMidTTL_DeniesImmediately(t *testing.T) {
+	c, inner, _ := newGrantCacheFixture(t, time.Hour)
+	ctx := context.Background()
+
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), inner.authCalls.Load(), "first call must be a real verification")
+
+	// Simulate a direct SQL revoke: nothing in this process called
+	// InvalidateAgent, so the cache entry itself is untouched — only what the
+	// (now revoked) grant would report has changed.
+	inner.mu.Lock()
+	inner.revoked = true
+	inner.authErr = apierror.Unauthorized("invalid API key")
+	inner.mu.Unlock()
+
+	_, err = c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.Error(t, err, "a revoked grant must not be served from a still-warm cache entry")
+	assert.Equal(t, int64(1), inner.revokeCheckCalls.Load(),
+		"the freshness check must have run to notice the revoke")
+	assert.Equal(t, int64(2), inner.authCalls.Load(),
+		"denial must come from a real re-authenticate, not be synthesized by the cache")
+}
+
+// A grant-derived hit that is still valid pays one freshness check per
+// request — that's the cost this fix accepts — but never re-pays bcrypt.
+func TestCachedAgentAuth_GrantStillValid_RecheckedButNotReAuthenticated(t *testing.T) {
+	c, inner, _ := newGrantCacheFixture(t, time.Hour)
+	ctx := context.Background()
+
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, int64(1), inner.authCalls.Load(),
+		"a valid grant must still skip the bcrypt path on every hit")
+	assert.Equal(t, int64(10), inner.revokeCheckCalls.Load(),
+		"but the freshness check runs on every one of those hits")
+}
+
+// If the freshness check itself cannot answer (a transient DB error), the
+// entry must NOT be trusted on the strength of "we couldn't prove it's bad" —
+// that would quietly reopen exactly the hole this fix closes.
+func TestCachedAgentAuth_GrantRevocationCheckErrors_IsNotTrusted(t *testing.T) {
+	c, inner, _ := newGrantCacheFixture(t, time.Hour)
+	ctx := context.Background()
+
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+
+	inner.mu.Lock()
+	inner.revokeCheckErr = errors.New("db unavailable")
+	inner.mu.Unlock()
+
+	_, err = c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err, "the inner service is still healthy; only the freshness check errored")
+	assert.Equal(t, int64(2), inner.authCalls.Load(),
+		"an unreadable freshness check must fall through to a real re-authenticate, not trust the cache")
+}
+
+// TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately
+// wires the EXACT composition cmd/api/main.go uses in prod —
+// NewCachedAgentAuth(NewAgentService(...), ttl) over a real *agentService,
+// not the countingAgentService stand-in above — and reproduces the scenario
+// Garfield's independent review found manually against a live stand before
+// this fix: a grant cached warm, then revoked by a direct SQL-shaped UPDATE
+// (grantRepo.Revoke, mirroring the only revoke path that exists pre-U3),
+// must deny the same key on the very next request rather than up to
+// AgentAuthCacheTTL later. TestAgentService_Authenticate_RevokedGrant_Denies
+// AndDoesNotFallBack (above, in agent_service_grant_auth_test.go) proves the
+// bare *agentService gets this right; this proves the wrapped pairing prod
+// actually deploys does too — which is exactly the gap the bare-service test
+// alone could not catch.
+func TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately(t *testing.T) {
+	f, homeWS := setupGrantAuthFixture()
+	agent, _ := seedHomeAgent(t, f, homeWS, "Grant Agent")
+
+	guestWS := &domain.Workspace{ID: uuid.New(), Name: "Guest Co", Slug: "guest"}
+	f.svc.workspaceRepo.(*MockWorkspaceRepository).items[guestWS.ID] = guestWS
+	guestKey := seedGrant(t, f, agent.ID, guestWS, "admin", false)
+
+	cached := NewCachedAgentAuth(f.svc, time.Hour)
+	ctx := context.Background()
+
+	first, err := cached.Authenticate(ctx, guestWS.Slug, guestKey)
+	require.NoError(t, err)
+	require.NotNil(t, first.GrantID, "a grant-derived login must carry GrantID for the freshness check to find")
+
+	// Mid-TTL revoke, exactly as a direct SQL UPDATE would do it — no call
+	// anywhere in this test touches InvalidateAgent.
+	f.grantRepo.Revoke(*first.GrantID, frozenTime)
+
+	_, err = cached.Authenticate(ctx, guestWS.Slug, guestKey)
+	requireUnauthorized(t, err)
+}
+
+// A legacy-path entry (no connection row exists — GrantID is nil) has no
+// grant to re-check. It must keep behaving exactly as it did before this
+// fix: trusted for its full TTL, zero extra DB calls per hit.
+func TestCachedAgentAuth_LegacyEntry_SkipsRevocationCheck(t *testing.T) {
+	c, inner, _ := newCacheFixture(t, time.Hour) // GrantID nil — see newCacheFixture
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, int64(1), inner.authCalls.Load())
+	assert.Zero(t, inner.revokeCheckCalls.Load(),
+		"a legacy (non-grant) login has nothing for the freshness check to look at")
 }
 
 // ---------------------------------------------------------------------------

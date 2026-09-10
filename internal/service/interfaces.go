@@ -801,6 +801,23 @@ type AgentServiceConfigurable interface {
 	SetAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository)
 }
 
+// GrantRevocationChecker is an optional capability of AgentService: a fast,
+// PK-keyed check of a single agent_workspace_grants row's revoked_at, kept
+// separate from Authenticate so cachedAgentAuth (agent_auth_cache.go) can run
+// it on a cache HIT without paying Authenticate's full lookup+bcrypt cost.
+//
+// Why a cache hit needs this at all: a grant can be revoked by ANY process
+// against the same database — today that means a direct SQL UPDATE, since
+// task U2's scope is the auth read path only (U3 adds a revoke API) — and
+// nothing calls cachedAgentAuth.InvalidateAgent for that, unlike
+// RotateAPIKey/Delete which invalidate explicitly because they run inside
+// this same process. *agentService implements this by delegating to
+// grantRepo; a nil grantRepo (never wired) answers false so the check is a
+// no-op rather than a crash.
+type GrantRevocationChecker interface {
+	IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (bool, error)
+}
+
 // CheckoutHeartbeatExtender is the narrow slice of TaskService that
 // agentService.Heartbeat needs to push checkout_expires forward on a live
 // heartbeat. Kept separate from the wide TaskService interface deliberately:

@@ -117,6 +117,45 @@ func TestAgentWorkspaceGrantRepo_GetByWorkspaceAndPrefix_NoRowAtAll(t *testing.T
 	assert.Nil(t, got)
 }
 
+// IsRevoked backs cachedAgentAuth's per-hit freshness re-check
+// (internal/service/agent_auth_cache.go) — the fix for AC4's cache-vs-revoke
+// gap independent review found. These three cover the same states
+// GetByWorkspaceAndPrefix does above, but through the PK-keyed query that
+// re-check actually calls.
+func TestAgentWorkspaceGrantRepo_IsRevoked_ActiveRow(t *testing.T) {
+	db := agentDigestTestDB(t)
+	wsID := seedGrantWorkspace(t, db)
+	agent := seedGrantAgent(t, db, wsID)
+	grantID := insertGrant(t, db, agent.ID, wsID, "member", "isrevactive1", "$2a$12$active-hash", nil)
+
+	revoked, err := NewAgentWorkspaceGrantRepo(db).IsRevoked(context.Background(), grantID)
+	require.NoError(t, err)
+	assert.False(t, revoked)
+}
+
+func TestAgentWorkspaceGrantRepo_IsRevoked_RevokedRow(t *testing.T) {
+	db := agentDigestTestDB(t)
+	wsID := seedGrantWorkspace(t, db)
+	agent := seedGrantAgent(t, db, wsID)
+	revokedAt := time.Now().Add(-time.Minute)
+	grantID := insertGrant(t, db, agent.ID, wsID, "member", "isrevrevoked1", "$2a$12$revoked-hash", &revokedAt)
+
+	revoked, err := NewAgentWorkspaceGrantRepo(db).IsRevoked(context.Background(), grantID)
+	require.NoError(t, err)
+	assert.True(t, revoked)
+}
+
+// A grant ID that does not exist at all — deleted, or a caller error — reads
+// as revoked. Fail-closed: there is no valid state where a live cache entry
+// points at a row that has vanished.
+func TestAgentWorkspaceGrantRepo_IsRevoked_NoRowAtAll(t *testing.T) {
+	db := agentDigestTestDB(t)
+
+	revoked, err := NewAgentWorkspaceGrantRepo(db).IsRevoked(context.Background(), uuid.New())
+	require.NoError(t, err)
+	assert.True(t, revoked, "a vanished grant must read as revoked, not as valid")
+}
+
 // AC5 at the SQL level: the same prefix under a DIFFERENT workspace does not
 // resolve, even though it resolves under the right one.
 func TestAgentWorkspaceGrantRepo_GetByWorkspaceAndPrefix_ScopedByWorkspace(t *testing.T) {

@@ -63,6 +63,12 @@ type agentService struct {
 	grantRepo repository.AgentWorkspaceGrantRepository
 }
 
+// Compile-time proof that *agentService still satisfies GrantRevocationChecker
+// — cachedAgentAuth's freshness re-check (agent_auth_cache.go) silently no-ops
+// against any inner service that stops implementing this, which is exactly
+// the AC4 hole this method exists to close.
+var _ GrantRevocationChecker = (*agentService)(nil)
+
 // NewAgentService returns a new AgentService backed by the given repositories.
 // userRepo may be nil — Register's username-collision guard is then skipped,
 // which is fine for tests that don't touch it but means a caller wiring this
@@ -445,7 +451,22 @@ func (s *agentService) authenticateViaGrant(ctx context.Context, grant *domain.A
 	resolved := *agent
 	resolved.WorkspaceID = grant.WorkspaceID
 	resolved.WorkspaceRole = grant.Role
+	grantID := grant.ID
+	resolved.GrantID = &grantID
 	return &resolved, nil
+}
+
+// IsGrantRevoked implements GrantRevocationChecker: a fast PK-keyed
+// revocation check for cachedAgentAuth to run on a cache hit (see that
+// interface's doc for why this exists as a separate, cheaper path from
+// Authenticate). grantRepo unwired reports false — the same "behave as if
+// U2 never happened" default every other grantRepo-nil branch in this file
+// uses.
+func (s *agentService) IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (bool, error) {
+	if s.grantRepo == nil {
+		return false, nil
+	}
+	return s.grantRepo.IsRevoked(ctx, grantID)
 }
 
 // authenticateLegacy is the pre-U2 lookup: find the agent directly by

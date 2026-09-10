@@ -597,6 +597,17 @@ type AgentWorkspaceGrantRepository interface {
 	// collapsing both into the same nil would let a revoked key silently
 	// keep working through the fallback.
 	GetByWorkspaceAndPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.AgentWorkspaceGrant, error)
+	// IsRevoked reports whether the grant identified by id currently has
+	// revoked_at set. Used ONLY to re-check a cache hit's freshness
+	// (agent_auth_cache.go) — a plain read against the PRIMARY KEY, not the
+	// (workspace_id, prefix) lookup above, so it stays cheap enough to run on
+	// every cached authentication instead of only on a cache miss.
+	//
+	// A grant that no longer exists at all (id not found) reports revoked=true:
+	// there is no valid state in which the row a live cache entry points at
+	// has vanished, so treating "gone" the same as "revoked" is the fail-closed
+	// choice, not a guess.
+	IsRevoked(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
 // AgentActivityLogFilter defines filtering options for listing agent activity log entries.

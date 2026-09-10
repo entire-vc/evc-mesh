@@ -48,3 +48,21 @@ func (r *AgentWorkspaceGrantRepo) GetByWorkspaceAndPrefix(ctx context.Context, w
 	}
 	return &g, nil
 }
+
+// IsRevoked reads revoked_at for a single grant by primary key. A PK lookup,
+// unlike GetByWorkspaceAndPrefix, so it is safe to run on every cache hit
+// (see the interface doc) rather than only on a miss.
+//
+// A row that no longer exists reports revoked=true — see the interface doc
+// for why "gone" and "revoked" get the same answer here.
+func (r *AgentWorkspaceGrantRepo) IsRevoked(ctx context.Context, id uuid.UUID) (bool, error) {
+	const q = `SELECT revoked_at IS NOT NULL FROM agent_workspace_grants WHERE id = $1`
+	var revoked bool
+	if err := r.db.GetContext(ctx, &revoked, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return true, nil
+		}
+		return false, err
+	}
+	return revoked, nil
+}

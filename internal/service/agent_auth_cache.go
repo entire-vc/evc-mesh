@@ -17,11 +17,17 @@ import (
 
 // AgentAuthCacheTTL is how long a successful key verification is trusted.
 //
-// The number is a deliberate trade: a revoked or rotated key that this process
+// The number is a deliberate trade: a rotated or deleted key that this process
 // never sees an invalidation for stays usable for at most this long. Rotation
 // and deletion DO invalidate explicitly (see RotateAPIKey/Delete below), so the
 // window only applies to changes made by another process against the same
-// database — a second API replica, or a manual UPDATE.
+// database — a second API replica, or a manual UPDATE against agents.* directly.
+//
+// A REVOKED agent_workspace_grants connection is NOT part of that window:
+// cachedGrantStillValid re-checks a grant-derived hit's revocation status on
+// every request, specifically because the only way to revoke a connection as
+// of task U2 is a manual UPDATE, so leaving it inside the TTL window would
+// have made every revoke silently take up to a minute to take effect.
 const AgentAuthCacheTTL = 60 * time.Second
 
 // agentAuthCacheMaxEntries bounds the map so a caller that presents a large
@@ -140,13 +146,26 @@ func agentAuthCacheKey(workspaceSlug, apiKey string) [sha256.Size]byte {
 
 // Authenticate returns the cached agent for a key verified within the TTL, and
 // otherwise delegates to the wrapped service and caches a success.
+//
+// A grant-derived hit (agent.GrantID != nil) additionally gets a fresh
+// revocation re-check (cachedGrantStillValid) before being trusted — see that
+// method's doc for why a cache hit alone is not enough for AC4's "revoked
+// denies immediately".
 func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error) {
 	key := agentAuthCacheKey(workspaceSlug, apiKey)
 	now := c.now()
 
 	if agent, ok := c.lookup(key, now); ok {
-		metrics.RecordAgentAuth("hit")
-		return agent, nil
+		if c.cachedGrantStillValid(ctx, agent) {
+			metrics.RecordAgentAuth("hit")
+			return agent, nil
+		}
+		// The grant backing this entry reads as revoked (or the freshness
+		// check itself failed — see cachedGrantStillValid) — evict and fall
+		// through to a full, uncached Authenticate below, so the denial (or
+		// success) comes from the one place that already knows how to
+		// construct it, instead of being synthesized here a second time.
+		c.evict(key, agent.ID)
 	}
 
 	agent, err := c.AgentService.Authenticate(ctx, workspaceSlug, apiKey)
@@ -158,6 +177,50 @@ func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKe
 	c.store(key, agent, now)
 	metrics.RecordAgentAuth("miss")
 	return agent, nil
+}
+
+// cachedGrantStillValid re-checks a grant-derived cache hit's revocation
+// status directly against the database before trusting it.
+//
+// Why a cache hit alone is not enough (task U2 AC4, `#fbc12881`): a grant can
+// be revoked by ANY process against the same database — as of this task the
+// ONLY revoke path that exists is a direct SQL UPDATE (U3 adds an API) — and
+// nothing calls InvalidateAgent for that. RotateAPIKey/Delete above cover the
+// two cases THIS process can be told about explicitly; this covers
+// everything else, at the cost of one indexed-by-PK lookup per grant-derived
+// cache hit instead of zero. That lookup is cheap next to the ~163ms bcrypt
+// compare the cache exists to avoid in the first place, so caching's whole
+// reason to exist survives.
+//
+// A legacy-path entry (GrantID == nil) has no grant to re-check and is
+// trusted for the remainder of its TTL, same as before this method existed —
+// U2's revoke semantics only apply to grant-derived logins.
+//
+// On an error from the freshness check itself, the entry is NOT trusted:
+// "couldn't tell" is treated the same as "looks revoked", so a transient
+// failure here narrows to "fall through to the uncached path" rather than
+// "silently keep serving a key we could not actually verify is still good".
+func (c *cachedAgentAuth) cachedGrantStillValid(ctx context.Context, agent *domain.Agent) bool {
+	if agent.GrantID == nil {
+		return true
+	}
+	checker, ok := c.AgentService.(GrantRevocationChecker)
+	if !ok {
+		return true
+	}
+	revoked, err := checker.IsGrantRevoked(ctx, *agent.GrantID)
+	if err != nil {
+		return false
+	}
+	return !revoked
+}
+
+// evict drops a single cache entry, same locking as InvalidateAgent below but
+// scoped to one key instead of every key an agent has cached.
+func (c *cachedAgentAuth) evict(key [sha256.Size]byte, agentID uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deleteEntryLocked(key, agentID)
 }
 
 // lookup returns a copy of the cached agent when the entry is present, unexpired
