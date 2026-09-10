@@ -118,9 +118,10 @@ export function ActivityPage() {
   const hasDispatchedBadgeRef = useRef(false);
 
   const fetchMentions = useCallback(async () => {
+    if (!currentWorkspace) return;
     setLoading(true);
     try {
-      const { items, failed } = await fetchMentionInbox(50);
+      const { items, failed } = await fetchMentionInbox(currentWorkspace.id, 50);
       setMentions(items);
       setMentionsFailed(failed);
       if (failed.length > 0) toast.error("Some mentions could not be loaded");
@@ -133,7 +134,7 @@ export function ActivityPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentWorkspace]);
 
   const fetchMyComments = useCallback(async (cursor?: CommentCursor) => {
     if (cursor) setLoadingMore(true);

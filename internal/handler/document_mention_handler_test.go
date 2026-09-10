@@ -68,7 +68,7 @@ func TestDocumentMentionHandler_List_ScopesToTheCaller(t *testing.T) {
 	}}
 	h := NewDocumentMentionHandler(svc)
 	userID := uuid.New()
-	c, rec := callerIs(t, userID, domain.ActorTypeUser, "/me/document-mentions")
+	c, rec := callerIs(t, userID, domain.ActorTypeUser, "/me/document-mentions?workspace_id="+uuid.New().String())
 
 	require.NoError(t, h.List(c))
 
@@ -90,12 +90,40 @@ func TestDocumentMentionHandler_List_AnAgentReadsItsOwnInbox(t *testing.T) {
 	svc := &mockDocumentMentionService{}
 	h := NewDocumentMentionHandler(svc)
 	agentID := uuid.New()
-	c, _ := callerIs(t, agentID, domain.ActorTypeAgent, "/me/document-mentions")
+	c, _ := callerIs(t, agentID, domain.ActorTypeAgent, "/me/document-mentions?workspace_id="+uuid.New().String())
 
 	require.NoError(t, h.List(c))
 
 	assert.Equal(t, agentID, svc.gotID)
 	assert.Equal(t, "agent", svc.gotKind)
+}
+
+// TestDocumentMentionHandler_List_RequiresWorkspaceID is the regression test
+// for the bug this filter exists to fix: a caller that doesn't (or forgot to)
+// send workspace_id must be refused, not silently handed every workspace's
+// mentions the way the endpoint behaved before this field existed.
+func TestDocumentMentionHandler_List_RequiresWorkspaceID(t *testing.T) {
+	h := NewDocumentMentionHandler(&mockDocumentMentionService{})
+	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/me/document-mentions")
+
+	err := h.List(c)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation, "workspace_id")
+}
+
+func TestDocumentMentionHandler_List_RejectsAMalformedWorkspaceID(t *testing.T) {
+	h := NewDocumentMentionHandler(&mockDocumentMentionService{})
+	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/me/document-mentions?workspace_id=not-a-uuid")
+
+	err := h.List(c)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation, "workspace_id")
 }
 
 func TestDocumentMentionHandler_List_RequiresAuthentication(t *testing.T) {
@@ -113,14 +141,18 @@ func TestDocumentMentionHandler_List_RequiresAuthentication(t *testing.T) {
 func TestDocumentMentionHandler_List_ParsesEveryFilter(t *testing.T) {
 	svc := &mockDocumentMentionService{}
 	h := NewDocumentMentionHandler(svc)
+	workspaceID := uuid.New()
 	projectID := uuid.New()
 	since := time.Now().UTC().Truncate(time.Second)
-	target := "/me/document-mentions?seen=false&limit=7&project_id=" + projectID.String() +
+	target := "/me/document-mentions?workspace_id=" + workspaceID.String() +
+		"&seen=false&limit=7&project_id=" + projectID.String() +
 		"&since=" + since.Format(time.RFC3339)
 	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, target)
 
 	require.NoError(t, h.List(c))
 
+	require.NotNil(t, svc.gotFilter.WorkspaceID)
+	assert.Equal(t, workspaceID, *svc.gotFilter.WorkspaceID)
 	require.NotNil(t, svc.gotFilter.Seen)
 	assert.False(t, *svc.gotFilter.Seen)
 	assert.Equal(t, 7, svc.gotFilter.Limit)
@@ -132,18 +164,23 @@ func TestDocumentMentionHandler_List_ParsesEveryFilter(t *testing.T) {
 
 func TestDocumentMentionHandler_List_RejectsMalformedFilters(t *testing.T) {
 	cases := []struct{ name, query, field string }{
-		{"seen", "?seen=maybe", "seen"},
-		{"since", "?since=yesterday", "since"},
-		{"project_id", "?project_id=not-a-uuid", "project_id"},
-		{"limit below range", "?limit=0", "limit"},
-		{"limit above range", "?limit=101", "limit"},
-		{"limit not a number", "?limit=many", "limit"},
+		{"seen", "seen=maybe", "seen"},
+		{"since", "since=yesterday", "since"},
+		{"project_id", "project_id=not-a-uuid", "project_id"},
+		{"limit below range", "limit=0", "limit"},
+		{"limit above range", "limit=101", "limit"},
+		{"limit not a number", "limit=many", "limit"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewDocumentMentionHandler(&mockDocumentMentionService{})
-			c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/me/document-mentions"+tc.query)
+			// A valid workspace_id rides along on every case here — this
+			// table is about the OTHER filters, and workspace_id is checked
+			// first, so leaving it off would report "workspace_id" for every
+			// case regardless of what's actually under test.
+			target := "/me/document-mentions?workspace_id=" + uuid.New().String() + "&" + tc.query
+			c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, target)
 
 			err := h.List(c)
 
@@ -158,7 +195,7 @@ func TestDocumentMentionHandler_List_RejectsMalformedFilters(t *testing.T) {
 func TestDocumentMentionHandler_List_SurfacesAServiceFailure(t *testing.T) {
 	boom := errors.New("db down")
 	h := NewDocumentMentionHandler(&mockDocumentMentionService{err: boom})
-	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/me/document-mentions")
+	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/me/document-mentions?workspace_id="+uuid.New().String())
 
 	assert.ErrorIs(t, h.List(c), boom)
 }
@@ -274,7 +311,8 @@ func TestDocumentMentionedIsSubscribable(t *testing.T) {
 func TestMentionHandler_List_StillRejectsMalformedFilters(t *testing.T) {
 	h := NewMentionHandler(nil)
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/me/mentions?limit=999", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet,
+		"/me/mentions?workspace_id="+uuid.New().String()+"&limit=999", http.NoBody)
 	req = req.WithContext(actorctx.WithActor(req.Context(), uuid.New(), domain.ActorTypeUser))
 	c := e.NewContext(req, httptest.NewRecorder())
 
@@ -284,4 +322,23 @@ func TestMentionHandler_List_StillRejectsMalformedFilters(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
 	assert.Contains(t, apiErr.Validation, "limit")
+}
+
+// TestMentionHandler_List_RequiresWorkspaceID is the task-mention-side twin of
+// TestDocumentMentionHandler_List_RequiresWorkspaceID: parseMentionFilter is
+// shared, but each handler's route wires it up separately, so both call sites
+// need their own regression test.
+func TestMentionHandler_List_RequiresWorkspaceID(t *testing.T) {
+	h := NewMentionHandler(nil)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/me/mentions", http.NoBody)
+	req = req.WithContext(actorctx.WithActor(req.Context(), uuid.New(), domain.ActorTypeUser))
+	c := e.NewContext(req, httptest.NewRecorder())
+
+	err := h.List(c)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation, "workspace_id")
 }

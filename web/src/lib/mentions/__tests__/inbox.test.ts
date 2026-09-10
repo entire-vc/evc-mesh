@@ -71,7 +71,7 @@ describe("fetchMentionInbox", () => {
       }),
     );
 
-    const { items, failed } = await fetchMentionInbox();
+    const { items, failed } = await fetchMentionInbox("ws-1");
 
     expect(failed).toEqual([]);
     expect(items).toHaveLength(2);
@@ -87,7 +87,7 @@ describe("fetchMentionInbox", () => {
       }),
     );
 
-    const { items, failed } = await fetchMentionInbox();
+    const { items, failed } = await fetchMentionInbox("ws-1");
 
     // The task mentions that did load are still shown …
     expect(items).toHaveLength(1);
@@ -105,7 +105,7 @@ describe("fetchMentionInbox", () => {
       }),
     );
 
-    const { items } = await fetchMentionInbox();
+    const { items } = await fetchMentionInbox("ws-1");
     expect(items[0]).toMatchObject({ source: "task", task_id: "t-1" });
   });
 
@@ -117,9 +117,33 @@ describe("fetchMentionInbox", () => {
       }),
     );
 
-    const { items, failed } = await fetchMentionInbox();
+    const { items, failed } = await fetchMentionInbox("ws-1");
     expect(items).toEqual([]);
     expect(failed).toEqual(["task", "document"]);
+  });
+
+  // Regression test for the dashboard defect: an empty workspace's Mentions
+  // widget showed another workspace's rows because this call sent no
+  // workspace_id at all — the server had nothing to filter on. Asserting on
+  // the actual params, not just the response, is the point: the earlier bug
+  // shipped with green tests exactly like the ones above because none of
+  // them looked at what was sent, only at what was returned.
+  it("sends workspace_id to both endpoints", async () => {
+    apiMock.mockImplementation(
+      resolveByPath({
+        "/api/v1/me/mentions": [TASK_MENTION],
+        "/api/v1/me/document-mentions": [DOC_MENTION],
+      }),
+    );
+
+    await fetchMentionInbox("ws-42", 20);
+
+    expect(apiMock).toHaveBeenCalledWith("/api/v1/me/mentions", {
+      params: { workspace_id: "ws-42", limit: 20 },
+    });
+    expect(apiMock).toHaveBeenCalledWith("/api/v1/me/document-mentions", {
+      params: { workspace_id: "ws-42", limit: 20 },
+    });
   });
 
   it("tolerates a null body from either endpoint", async () => {
@@ -130,7 +154,7 @@ describe("fetchMentionInbox", () => {
       }),
     );
 
-    const { items, failed } = await fetchMentionInbox();
+    const { items, failed } = await fetchMentionInbox("ws-1");
     expect(items).toEqual([]);
     expect(failed).toEqual([]);
   });

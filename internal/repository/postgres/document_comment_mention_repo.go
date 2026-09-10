@@ -84,6 +84,10 @@ func (r *DocumentCommentMentionRepo) List(
 		args = append(args, *filter.ProjectID)
 		where += ` AND d.project_id = $` + strconv.Itoa(len(args))
 	}
+	if filter.WorkspaceID != nil {
+		args = append(args, *filter.WorkspaceID)
+		where += ` AND p.workspace_id = $` + strconv.Itoa(len(args))
+	}
 
 	args = append(args, limit)
 	q := `
@@ -104,6 +108,7 @@ func (r *DocumentCommentMentionRepo) List(
 		FROM document_comment_mentions dcm
 		JOIN document_comments dc ON dc.id = dcm.comment_id
 		JOIN documents d          ON d.id = dc.document_id
+		JOIN projects p           ON p.id = d.project_id
 		LEFT JOIN users  u ON u.id = dc.author_id AND dc.author_type = 'user'
 		LEFT JOIN agents a ON a.id = dc.author_id AND dc.author_type = 'agent'
 		WHERE ` + where + `

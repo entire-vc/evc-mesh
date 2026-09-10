@@ -31,7 +31,8 @@ func NewDocumentMentionHandler(ms service.DocumentMentionService) *DocumentMenti
 }
 
 // List returns the caller's document-comment mentions.
-// Query params: seen (bool), since (RFC3339), project_id (UUID), limit (1-100).
+// Query params: workspace_id (required UUID), seen (bool), since (RFC3339),
+// project_id (UUID), limit (1-100).
 func (h *DocumentMentionHandler) List(c echo.Context) error {
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
 	if actorID == uuid.Nil {
@@ -98,6 +99,18 @@ func (h *DocumentMentionHandler) UnseenCount(c echo.Context) error {
 // difference nobody chose.
 func parseMentionFilter(c echo.Context) (repository.MentionFilter, error) {
 	filter := repository.MentionFilter{Limit: 50}
+
+	// workspace_id is required, not optional like the filters below — the same
+	// choice GetCurrentUserTasks (task_handler.go) makes for /me/tasks. An
+	// optional workspace_id would let an unmigrated caller keep not sending it
+	// and get every workspace back unfiltered, same as before this field
+	// existed; requiring it means the caller cannot silently regress.
+	wsIDStr := c.QueryParam("workspace_id")
+	workspaceID, err := uuid.Parse(wsIDStr)
+	if err != nil {
+		return filter, apierror.ValidationError(map[string]string{"workspace_id": "required UUID"})
+	}
+	filter.WorkspaceID = &workspaceID
 
 	if v := c.QueryParam("seen"); v != "" {
 		b, err := strconv.ParseBool(v)

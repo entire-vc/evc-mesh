@@ -23,7 +23,8 @@ func NewMentionHandler(ms service.MentionService) *MentionHandler {
 }
 
 // List returns paginated @-mention records for the caller.
-// Query params: seen (bool), since (RFC3339), project_id (UUID), limit (int, max 100).
+// Query params: workspace_id (required UUID), seen (bool), since (RFC3339),
+// project_id (UUID), limit (int, max 100).
 func (h *MentionHandler) List(c echo.Context) error {
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
 	if actorID == uuid.Nil {

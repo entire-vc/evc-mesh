@@ -689,7 +689,14 @@ type MentionFilter struct {
 	Seen      *bool
 	Since     *time.Time
 	ProjectID *uuid.UUID
-	Limit     int
+	// WorkspaceID scopes the result to one workspace, joined in through the
+	// mention's task/document -> project -> workspace chain. A pointer, like
+	// the other optional fields, but the handler-level parseMentionFilter
+	// never leaves it nil: an optional workspace_id would let the caller keep
+	// not sending it, and the defect this exists to fix would survive the
+	// query-layer change unnoticed.
+	WorkspaceID *uuid.UUID
+	Limit       int
 }
 
 // CommentMentionRepository manages persistence for comment_mentions rows.
