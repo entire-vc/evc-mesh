@@ -2639,6 +2639,15 @@ func embedBudget(chunks int) time.Duration {
 // embedding.maxClientBatchSize; a mismatch only affects budget arithmetic, never correctness.
 const embedBatchSize = 32
 
+// embedRetryBackoff computes the wait before retry attempt N (N>=1) — 1s, then 2s,
+// for the two backoffs embedMaxAttempts=3 allows. A package-level var, not a pure
+// function, so tests can override it — see its doc in main_test.go's TestMain.
+// Production behavior (the real formula below) is the default; nothing in the
+// production build ever reassigns it.
+var embedRetryBackoff = func(attempt int) time.Duration {
+	return time.Duration(1<<(attempt-1)) * time.Second
+}
+
 // embedWithRetry calls EmbedBatch with bounded exponential backoff. It gives up
 // immediately when the caller's context is done — retrying against an expired deadline
 // burns the remaining budget for nothing.
@@ -2646,7 +2655,7 @@ func embedWithRetry(ctx context.Context, embedder embedding.Embedder, texts []st
 	var lastErr error
 	for attempt := 0; attempt < embedMaxAttempts; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(1<<(attempt-1)) * time.Second
+			backoff := embedRetryBackoff(attempt)
 			select {
 			case <-ctx.Done():
 				return nil, fmt.Errorf("embed retry aborted: %w", ctx.Err())

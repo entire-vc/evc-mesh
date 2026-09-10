@@ -26,9 +26,18 @@ import (
 // created for it with no role specified.
 const legacyGrantRole = "member"
 
+// bcryptCost is the bcrypt work factor for hashing API keys. A var, not a
+// const, so tests can override it — see its doc in main_test.go's TestMain.
+// #6ae6f813: at cost 12 under -race, a single GenerateFromPassword
+// or CompareHashAndPassword call measured ~2.2s (isolated: one Register +
+// one Authenticate = 4.4s for TestAuthenticate_LegacyRowRejectsAWrongKeyAnd-
+// BackfillsNothing, -race -count=3, ~4.4s every run). The package has ~91
+// Register/Authenticate call sites across its tests — that alone plausibly
+// accounts for most of the ~190s full-package -race runtime that was pushing
+// the CI stall-watchdog's 180s silence threshold.
+var bcryptCost = 12
+
 const (
-	// bcryptCost is the bcrypt work factor for hashing API keys.
-	bcryptCost = 12
 	// apiKeyRandomBytes is the number of random bytes for the API key suffix.
 	apiKeyRandomBytes = 24
 	// apiKeyPrefixLen is the length of the stored prefix (used for fast lookup).
