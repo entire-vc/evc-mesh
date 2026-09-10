@@ -263,6 +263,10 @@ func main() {
 		configurable.SetAgentActivityLogRepo(agentActLogRepo)
 		configurable.SetAgentWorkspaceGrantRepo(agentWorkspaceGrantRepo)
 	}
+	// Invite/revoke/list on top of the same table (task U3) — a separate
+	// service from AgentService/agentService above: that one only ever READS
+	// agent_workspace_grants (the auth path), this one owns the writes.
+	agentWorkspaceGrantService := service.NewAgentWorkspaceGrantService(agentWorkspaceGrantRepo, agentRepo, workspaceRepo, activityLogRepo)
 
 	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).
 	// Reuses the same Redis connection as the WebSocket hub (created below in step 8a).
@@ -770,6 +774,7 @@ func main() {
 	recurringHandler := handler.NewRecurringHandler(recurringService)
 	taskTemplateHandler := handler.NewTaskTemplateHandler(taskTemplateService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
+	agentWorkspaceGrantHandler := handler.NewAgentWorkspaceGrantHandler(agentWorkspaceGrantService)
 	inviteHandler := handler.NewInviteHandler(inviteService, authService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 	notificationHandler := handler.NewNotificationHandler(notificationService, workspaceMemberRepo)
@@ -1288,6 +1293,17 @@ func main() {
 	// directory at all.
 	api.GET("/workspaces/:ws_id/users/search", workspaceMemberHandler.SearchUsers, rbac(mw.PermManageMembers))
 
+	// Agent-workspace grant routes (task U3) — connecting an agent to a
+	// workspace other than its home one. Same rbac bar as human members:
+	// only PermManageMembers can invite/revoke. Listing is open to any
+	// workspace member, same as GET .../members above — agentPerms has no
+	// PermManageMembers entry (see internal/middleware/rbac.go), so an
+	// X-Agent-Key caller 403s on Invite/Revoke unconditionally; nothing extra
+	// needed here to keep "the workspace side always initiates" true.
+	api.GET("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.List)
+	api.POST("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.Invite, rbac(mw.PermManageMembers))
+	api.DELETE("/workspaces/:ws_id/agent-grants/:grant_id", agentWorkspaceGrantHandler.Revoke, rbac(mw.PermManageMembers))
+
 	// Workspace invite routes (email-link flow).
 	api.POST("/workspaces/:ws_id/invites", inviteHandler.Create, rbac(mw.PermManageMembers))
 	api.GET("/workspaces/:ws_id/invites", inviteHandler.List, rbac(mw.PermManageMembers))
@@ -1520,6 +1536,14 @@ func main() {
 	api.GET("/agents/:agent_id/activity", agentHandler.ListAgentActivity)
 	api.POST("/agents/:agent_id/activity", agentHandler.CreateAgentActivity)
 	api.GET("/workspaces/:ws_id/agents/status", agentHandler.GetAgentsStatus)
+	// GET /agents/:agent_id/workspaces (task U3) — where this agent is
+	// connected, home workspace not included (that's GET /agents/:agent_id).
+	// :agent_id resolves to the TARGET agent's home workspace
+	// (workspaceParamResolvers, agents.workspace_id) regardless of which
+	// workspace the caller is currently authenticated into — so
+	// RequireSelfOrPermission's fallback checks manage_members THERE, same
+	// self-or-manage-members bar as PUT /agents/:agent_id/profile above.
+	api.GET("/agents/:agent_id/workspaces", agentWorkspaceGrantHandler.ListAgentWorkspaces, mw.RequireSelfOrPermission("agent_id", mw.PermManageMembers, workspaceMemberRepo))
 
 	// Event bus routes.
 	api.GET("/projects/:proj_id/events", eventHandler.List, projAccess)

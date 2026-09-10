@@ -1210,6 +1210,51 @@ type WorkspaceMemberService interface {
 	SearchUsers(ctx context.Context, workspaceID, callerID uuid.UUID, query string) ([]domain.UserWithMemberStatus, error)
 }
 
+// InviteAgentResult is InviteAgent's return value — the grant plus the raw
+// API key, which exists nowhere else once this call returns (task U3, spec's
+// "Секрет" section: the value is returned only here, never re-derivable, and
+// callers must not persist or log it themselves).
+type InviteAgentResult struct {
+	Grant *domain.AgentWorkspaceGrant
+	// APIKey is the raw, unhashed key. Show it to the caller once; nothing
+	// else in this codebase should ever hold onto it past this response.
+	APIKey string
+	// Reactivated is true when this call revived a previously-revoked
+	// connection (AC6's "same row, new key") rather than inserting a new one
+	// — the handler uses this to pick 200 vs 201.
+	Reactivated bool
+}
+
+// AgentWorkspaceGrantService provides business logic for connecting an agent
+// to a workspace other than its home one (task U3): invite, revoke, and the
+// two listings. The workspace side always initiates (see the task
+// description's "Почему приглашает принимающая сторона") — nothing here lets
+// an agent request access to a workspace on its own behalf.
+type AgentWorkspaceGrantService interface {
+	// InviteAgent connects agentID to workspaceID with role, generating and
+	// returning a fresh API key formatted for workspaceID.
+	//
+	// Branches on whether a connection already exists (AC6):
+	//   - none at all           → INSERT, Reactivated=false (handler: 201)
+	//   - exists, active        → apierror.Conflict — refuses to silently
+	//     replace a working connection out from under whatever is using it
+	//   - exists, revoked       → REACTIVATE the same row with a fresh key,
+	//     Reactivated=true (handler: 200) — the one way back in after a
+	//     revoke, mirroring re-inviting a removed human member
+	InviteAgent(ctx context.Context, workspaceID, agentID uuid.UUID, role string, invitedBy uuid.UUID) (*InviteAgentResult, error)
+	// RevokeGrant sets revoked_at on grantID, scoped to workspaceID so a
+	// grant_id belonging to a DIFFERENT workspace 404s rather than revoking
+	// (or leaking the existence of) someone else's connection. Idempotent: an
+	// already-revoked grant still reports success.
+	RevokeGrant(ctx context.Context, workspaceID, grantID uuid.UUID) error
+	// ListWorkspaceAgents returns every agent currently connected to
+	// workspaceID (active grants only), with role and agent brief info.
+	ListWorkspaceAgents(ctx context.Context, workspaceID uuid.UUID) ([]domain.AgentWorkspaceGrantWithAgent, error)
+	// ListAgentWorkspaces returns every workspace agentID currently holds an
+	// active connection to.
+	ListAgentWorkspaces(ctx context.Context, agentID uuid.UUID) ([]domain.AgentWorkspaceGrantWithWorkspace, error)
+}
+
 // ProjectMemberService provides business logic for project member management.
 type ProjectMemberService interface {
 	ListMembers(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectMemberWithUser, error)

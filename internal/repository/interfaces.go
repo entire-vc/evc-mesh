@@ -608,6 +608,44 @@ type AgentWorkspaceGrantRepository interface {
 	// has vanished, so treating "gone" the same as "revoked" is the fail-closed
 	// choice, not a guess.
 	IsRevoked(ctx context.Context, id uuid.UUID) (bool, error)
+
+	// --- Below: task U3 (invite/revoke API). U1/U2 only needed reads. ---
+
+	// GetByAgentAndWorkspace returns the connection row for (agentID,
+	// workspaceID) — active OR revoked, mirroring GetByWorkspaceAndPrefix's
+	// "never collapse revoked into absent" contract. This is the (agent_id,
+	// workspace_id) unique-index lookup (uq_agent_ws_grant), used by
+	// InviteAgent to decide INSERT vs 409-active vs reactivate-revoked (AC6).
+	GetByAgentAndWorkspace(ctx context.Context, agentID, workspaceID uuid.UUID) (*domain.AgentWorkspaceGrant, error)
+	// Create inserts a brand-new connection row. Callers must have already
+	// confirmed no row exists for (g.AgentID, g.WorkspaceID) — the unique
+	// index will reject a duplicate, but that surfaces as a raw constraint
+	// error, not apierror.Conflict; GetByAgentAndWorkspace is the intended
+	// pre-check.
+	Create(ctx context.Context, g *domain.AgentWorkspaceGrant) error
+	// Reactivate overwrites a REVOKED row's role and key material in place
+	// (same id — AC6's "one way to not multiply rows") and clears revoked_at.
+	// Callers must have already confirmed the row is currently revoked; this
+	// does not check.
+	Reactivate(ctx context.Context, id uuid.UUID, role, apiKeyPrefix, apiKeyHash string, invitedBy *uuid.UUID) error
+	// Revoke sets revoked_at = NOW() on the grant identified by (id,
+	// workspaceID) if it is not already revoked, and reports whether a row
+	// matching (id, workspaceID) exists at all (regardless of whether this
+	// call changed it) — found=false is the caller's signal for 404: either
+	// the id doesn't exist, or it belongs to a DIFFERENT workspace, and this
+	// deliberately does not distinguish the two (same non-disclosure shape as
+	// other cross-tenant lookups in this codebase). found=true with no error
+	// covers both "just revoked" and "was already revoked" — DELETE is
+	// idempotent here, same as WorkspaceMemberRepository.Delete.
+	Revoke(ctx context.Context, id, workspaceID uuid.UUID) (found bool, err error)
+	// ListActiveByWorkspace returns every non-revoked connection into
+	// workspaceID, each joined with its agent's brief info, ordered by
+	// created_at — the GET /workspaces/:ws_id/agent-grants listing.
+	ListActiveByWorkspace(ctx context.Context, workspaceID uuid.UUID) ([]domain.AgentWorkspaceGrantWithAgent, error)
+	// ListActiveByAgent returns every non-revoked connection agentID holds,
+	// each joined with the granting workspace's brief info, ordered by
+	// created_at — the GET /agents/:agent_id/workspaces listing.
+	ListActiveByAgent(ctx context.Context, agentID uuid.UUID) ([]domain.AgentWorkspaceGrantWithWorkspace, error)
 }
 
 // AgentActivityLogFilter defines filtering options for listing agent activity log entries.

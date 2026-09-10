@@ -462,7 +462,7 @@ func TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately(
 
 	// Mid-TTL revoke, exactly as a direct SQL UPDATE would do it — no call
 	// anywhere in this test touches InvalidateAgent.
-	f.grantRepo.Revoke(*first.GrantID, frozenTime)
+	f.grantRepo.SeedRevoke(*first.GrantID, frozenTime)
 
 	_, err = cached.Authenticate(ctx, guestWS.Slug, guestKey)
 	requireUnauthorized(t, err)

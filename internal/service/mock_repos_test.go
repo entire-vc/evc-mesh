@@ -1819,11 +1819,12 @@ func (m *MockAgentWorkspaceGrantRepository) IsRevoked(_ context.Context, id uuid
 	return true, nil
 }
 
-// Revoke flips revoked_at on the seeded grant with the given id, mimicking
-// the direct-SQL UPDATE that is the only revoke path as of task U2 (U3 adds
-// an API). Used by tests that need to revoke a connection AFTER it has
-// already been cached, to reproduce the AC4 scenario.
-func (m *MockAgentWorkspaceGrantRepository) Revoke(id uuid.UUID, at time.Time) {
+// SeedRevoke flips revoked_at on the seeded grant with the given id directly,
+// bypassing Revoke's (task U3) workspace check and found-reporting — for
+// tests that need to revoke a connection AFTER it has already been cached, to
+// reproduce the AC4 scenario, without asserting anything about the U3 revoke
+// API itself.
+func (m *MockAgentWorkspaceGrantRepository) SeedRevoke(id uuid.UUID, at time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, g := range m.items {
@@ -1833,6 +1834,104 @@ func (m *MockAgentWorkspaceGrantRepository) Revoke(id uuid.UUID, at time.Time) {
 			return
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Below: task U3 (invite/revoke API) methods.
+// ---------------------------------------------------------------------------
+
+func (m *MockAgentWorkspaceGrantRepository) GetByAgentAndWorkspace(_ context.Context, agentID, workspaceID uuid.UUID) (*domain.AgentWorkspaceGrant, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, g := range m.items {
+		if g.AgentID == agentID && g.WorkspaceID == workspaceID {
+			cp := *g
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockAgentWorkspaceGrantRepository) Create(_ context.Context, g *domain.AgentWorkspaceGrant) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *g
+	m.items = append(m.items, &cp)
+	return nil
+}
+
+func (m *MockAgentWorkspaceGrantRepository) Reactivate(_ context.Context, id uuid.UUID, role, apiKeyPrefix, apiKeyHash string, invitedBy *uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.items {
+		if g.ID != id {
+			continue
+		}
+		g.Role = role
+		g.APIKeyPrefix = apiKeyPrefix
+		g.APIKeyHash = apiKeyHash
+		g.InvitedBy = invitedBy
+		g.RevokedAt = nil
+		return nil
+	}
+	return nil
+}
+
+func (m *MockAgentWorkspaceGrantRepository) Revoke(_ context.Context, id, workspaceID uuid.UUID) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.items {
+		if g.ID == id && g.WorkspaceID == workspaceID {
+			if g.RevokedAt == nil {
+				now := time.Now()
+				g.RevokedAt = &now
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *MockAgentWorkspaceGrantRepository) ListActiveByWorkspace(_ context.Context, workspaceID uuid.UUID) ([]domain.AgentWorkspaceGrantWithAgent, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.AgentWorkspaceGrantWithAgent
+	for _, g := range m.items {
+		if g.WorkspaceID == workspaceID && !g.IsRevoked() {
+			out = append(out, domain.AgentWorkspaceGrantWithAgent{AgentWorkspaceGrant: *g})
+		}
+	}
+	return out, nil
+}
+
+func (m *MockAgentWorkspaceGrantRepository) ListActiveByAgent(_ context.Context, agentID uuid.UUID) ([]domain.AgentWorkspaceGrantWithWorkspace, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.AgentWorkspaceGrantWithWorkspace
+	for _, g := range m.items {
+		if g.AgentID == agentID && !g.IsRevoked() {
+			out = append(out, domain.AgentWorkspaceGrantWithWorkspace{AgentWorkspaceGrant: *g})
+		}
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

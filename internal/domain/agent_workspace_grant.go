@@ -33,3 +33,34 @@ type AgentWorkspaceGrant struct {
 func (g *AgentWorkspaceGrant) IsRevoked() bool {
 	return g.RevokedAt != nil
 }
+
+// AgentBrief holds minimal public agent information for embedding in grant
+// list responses (task U3) — same purpose as UserBrief for workspace members.
+type AgentBrief struct {
+	ID   uuid.UUID `json:"id" db:"id"`
+	Name string    `json:"name" db:"name"`
+	Slug string    `json:"slug" db:"slug"`
+}
+
+// WorkspaceBrief holds minimal public workspace information for embedding in
+// grant list responses (task U3).
+type WorkspaceBrief struct {
+	ID   uuid.UUID `json:"id" db:"id"`
+	Name string    `json:"name" db:"name"`
+	Slug string    `json:"slug" db:"slug"`
+}
+
+// AgentWorkspaceGrantWithAgent embeds AgentWorkspaceGrant with the connected
+// agent's brief info — the shape GET /workspaces/:ws_id/agent-grants returns.
+type AgentWorkspaceGrantWithAgent struct {
+	AgentWorkspaceGrant
+	Agent AgentBrief `json:"agent"`
+}
+
+// AgentWorkspaceGrantWithWorkspace embeds AgentWorkspaceGrant with the
+// granting workspace's brief info — the shape GET /agents/:agent_id/workspaces
+// returns.
+type AgentWorkspaceGrantWithWorkspace struct {
+	AgentWorkspaceGrant
+	Workspace WorkspaceBrief `json:"workspace"`
+}

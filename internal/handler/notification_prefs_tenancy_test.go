@@ -159,9 +159,12 @@ func TestUpdatePreferences_ForeignWorkspaceIsRefusedForAgentKey(t *testing.T) {
 	victimWS := uuid.New()
 	intruder := uuid.New()
 
-	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
-		WithArgs(intruder).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(uuid.New()))
+	// AgentIsInWorkspace (task U3): a single UNION query checking both the
+	// agent's home workspace and any active agent_workspace_grants connection.
+	// Neither matches victimWS here — no rows.
+	mock.ExpectQuery(`SELECT 1 FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.workspace_id = \$2 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL\s+UNION ALL\s+SELECT 1 FROM agent_workspace_grants g\s+JOIN workspaces w ON w\.id = g\.workspace_id\s+WHERE g\.agent_id = \$1 AND g\.workspace_id = \$2 AND g\.revoked_at IS NULL AND w\.deleted_at IS NULL\s+LIMIT 1`).
+		WithArgs(intruder, victimWS).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
 
 	svc, rec := putPreferences(t, db, mw.AuthTypeAgent, intruder,
 		`{"workspace_id":"`+victimWS.String()+`"}`)

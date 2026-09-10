@@ -135,14 +135,15 @@ func TestRequireWorkspaceMemberScoped_AgentOfAnotherWorkspace_Forbidden(t *testi
 	e := echo.New()
 	targetWS := uuid.New()
 	agentID := uuid.New()
-	agentWS := uuid.New()
 
 	c, rec := scopedCtx(e, targetWS.String(), targetWS, AuthTypeAgent)
 	c.Set(ContextKeyAgentID, agentID)
 
-	mock.ExpectQuery(`SELECT a\.workspace_id FROM agents a\s+JOIN workspaces w ON w\.id = a\.workspace_id\s+WHERE a\.id = \$1 AND a\.deleted_at IS NULL AND w\.deleted_at IS NULL`).
-		WithArgs(agentID).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id"}).AddRow(agentWS))
+	// Neither the agent's home workspace nor any agent_workspace_grants
+	// connection matches targetWS — the UNION returns no rows.
+	mock.ExpectQuery(agentIsInWorkspaceQueryPattern).
+		WithArgs(agentID, targetWS).
+		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
 
 	mw := RequireWorkspaceMemberScoped(sqlxDB)
 	require.NoError(t, mw(nopHandler)(c))
