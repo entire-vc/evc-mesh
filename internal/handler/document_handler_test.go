@@ -159,6 +159,72 @@ func TestDocumentHandler_Create_MalformedBody(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// TestDocumentHandler_Create_RejectsRawBinaryBodyEvenThroughJSONMangling is
+// the handler-level regression guard for the red-control failure an
+// independent review found: a real HTTP POST with a PNG's magic bytes
+// embedded in the "body" JSON string field returned 201, not 400.
+// service.TestRejectBinaryBodyRaw_* proves the check itself is correct in
+// isolation; this proves it is actually wired into the route a real client
+// hits — the exact thing that check alone did NOT prove the first time,
+// because the original rejectBinaryBody call sat on the JSON-decoded string,
+// and by the time c.Bind hands that string to the service the PNG's
+// non-ASCII leading byte has already been replaced with U+FFFD (see
+// RejectBinaryBodyRawFields's doc for the full mechanism).
+//
+// The payload is built the way a real client sending raw file bytes through
+// a JSON string field actually has to: the control-character tail of PNG's
+// signature (CR LF SUB LF) written as its JSON escape sequences (required —
+// RFC 8259 forbids a literal control character in a JSON string), the
+// leading 0x89 byte left raw and unescaped (permitted — it isn't a control
+// character, a quote, or a backslash, so nothing requires escaping it, even
+// though the result isn't valid UTF-8).
+func TestDocumentHandler_Create_RejectsRawBinaryBodyEvenThroughJSONMangling(t *testing.T) {
+	mockSvc := &MockDocumentService{}
+	createCalled := false
+	mockSvc.CreateFunc = func(context.Context, service.CreateDocumentInput) (*domain.Document, error) {
+		createCalled = true
+		return &domain.Document{ID: uuid.New()}, nil
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	body := "{\"title\":\"evil\",\"body\":\"\x89PNG\\r\\n\\n" + strings.Repeat("x", 20) + "\"}"
+	c, rec := projectDocRequest(e, http.MethodPost, uuid.New().String(), "/", body)
+
+	require.NoError(t, h.Create(c))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"a raw PNG-bodied POST must be rejected — this is the exact live repro the independent review ran")
+	assert.False(t, createCalled, "the guard must short-circuit before the service is ever called")
+}
+
+// TestDocumentHandler_Create_DoesNotRejectATitleThatMentionsAFormatByName is
+// the handler-level regression guard for the false-positive a SECOND
+// independent review found in the first version of this fix: the raw guard
+// used to scan the ENTIRE request body, so a document whose title merely
+// mentioned "GIF8" or "%PDF" as ordinary text — with a perfectly clean
+// markdown body — was rejected outright, and the error even blamed "body"
+// for a match that was actually in title. Scoping the scan to just the body/
+// append_body field values (service.RejectBinaryBodyRawFields) fixes this;
+// this test is the live repro of the exact case the reviewer constructed.
+func TestDocumentHandler_Create_DoesNotRejectATitleThatMentionsAFormatByName(t *testing.T) {
+	mockSvc := &MockDocumentService{}
+	var gotInput service.CreateDocumentInput
+	mockSvc.CreateFunc = func(_ context.Context, input service.CreateDocumentInput) (*domain.Document, error) {
+		gotInput = input
+		return &domain.Document{ID: uuid.New(), Title: input.Title}, nil
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	body := `{"title":"Our %PDF export pipeline mentions GIF8 too","body":"# Just a heading\nNothing binary here."}`
+	c, rec := projectDocRequest(e, http.MethodPost, uuid.New().String(), "/", body)
+
+	require.NoError(t, h.Create(c))
+
+	assert.Equal(t, http.StatusCreated, rec.Code,
+		"a format name mentioned in title must not reject a document whose body is clean markdown")
+	assert.Equal(t, "Our %PDF export pipeline mentions GIF8 too", gotInput.Title)
+}
+
 // A missing title is the service's validation to make, and the handler has to
 // pass its verdict through as a 400 rather than swallowing it into a 500.
 func TestDocumentHandler_Create_MissingTitleIsRelayed(t *testing.T) {
@@ -461,6 +527,31 @@ func TestDocumentHandler_Update_MalformedBody(t *testing.T) {
 	require.NoError(t, h.Update(c))
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestDocumentHandler_Update_RejectsRawBinaryBodyEvenThroughJSONMangling is
+// Update's counterpart to the Create test of the same shape above —
+// update_doc's body/append_body fields go through the identical c.Bind
+// JSON-mangling path Create's body does, so the guard has to be wired into
+// this route too, not just Create's.
+func TestDocumentHandler_Update_RejectsRawBinaryBodyEvenThroughJSONMangling(t *testing.T) {
+	wsID := uuid.New()
+	mockSvc := &MockDocumentService{}
+	updateCalled := false
+	mockSvc.UpdateFunc = func(context.Context, uuid.UUID, uuid.UUID, service.UpdateDocumentInput) (*domain.Document, error) {
+		updateCalled = true
+		return &domain.Document{ID: uuid.New()}, nil
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	body := "{\"body\":\"\x89PNG\\r\\n\\n" + strings.Repeat("x", 20) + "\"}"
+	c, rec := docRequest(e, http.MethodPatch, uuid.New().String(), &wsID, body)
+
+	require.NoError(t, h.Update(c))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"a raw PNG-bodied PATCH must be rejected, same as Create")
+	assert.False(t, updateCalled, "the guard must short-circuit before the service is ever called")
 }
 
 func TestDocumentHandler_Update_NoWorkspaceInContext(t *testing.T) {

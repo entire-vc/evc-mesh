@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +60,89 @@ func rejectBinaryBody(body []byte) error {
 			return apierror.ValidationError(map[string]string{
 				"body": fmt.Sprintf("body looks like a binary %s file, not markdown — upload it as a task artifact instead", sig.name),
 			})
+		}
+	}
+	return nil
+}
+
+// binaryRawSignatures is binarySignaturePrefixes' counterpart for scanning the
+// RAW (still-JSON-encoded) request body — same four formats, but PNG's entry
+// is trimmed to its first 4 bytes instead of the full 8-byte signature.
+//
+// Why it has to be shorter here specifically: RFC 8259 requires a JSON string
+// to escape control characters (U+0000-U+001F). PNG's signature is
+// \x89PNG\r\n\x1a\n — the \r, \n, \x1a, \n tail are all control characters, so
+// ANY JSON encoder (a real one, or a hand-rolled one that is otherwise
+// careless about UTF-8 validity) is going to write that tail as \r\n\x1a\n,
+// never as four raw bytes. A bytes.Contains for the full 8-byte signature
+// against the raw payload would miss that, which is not a hypothetical —
+// verified live in the fix for AC1 of task 3e6f8029-88e2-41b4-8dfc-e60a19ca78dc:
+// a payload with the control-char tail escaped and only the leading \x89
+// left raw parses successfully, decodes to a body starting with U+FFFD, and
+// slipped past the very first version of this raw check because it searched
+// for the full signature. \x89PNG has no such problem — 0x89 is not a control
+// character, so nothing requires it to be escaped, and it is already
+// sufficient on its own to identify a PNG. GIF/JPEG/PDF need no trimming:
+// none of their signature bytes are control characters.
+var binaryRawSignatures = []struct {
+	name string
+	sig  []byte
+}{
+	{"PNG", []byte("\x89PNG")},
+	{"GIF", []byte("GIF8")},
+	{"JPEG", []byte{0xFF, 0xD8, 0xFF}},
+	{"PDF", []byte("%PDF")},
+}
+
+// RejectBinaryBodyRawFields is rejectBinaryBody's counterpart for the RAW
+// HTTP request body, checked BEFORE JSON decoding rather than after.
+//
+// Why a second check is needed at all: rejectBinaryBody runs on input.Body,
+// which for the human-facing create_doc/update_doc handlers is a Go string
+// produced by encoding/json unmarshaling the request. None of these four
+// signatures is valid UTF-8, and encoding/json's string unmarshal does not
+// error on that — it silently replaces the offending bytes with the Unicode
+// replacement character (U+FFFD) and returns success. By the time
+// rejectBinaryBody runs, the PNG/JPEG magic bytes it is looking for have
+// already been overwritten, so the check never fires for a real HTTP client —
+// only for the internal Go callers (SyncMount, RefreshIfStale) that hand
+// rejectBinaryBody real []byte directly, never through JSON. Verified live:
+// a raw PNG-bodied POST to /projects/:id/documents returned 201, not 400.
+//
+// The fix is to check the bytes the client actually sent, before anything
+// unmarshals them, against binaryRawSignatures (not binarySignaturePrefixes —
+// see that var's doc for why PNG's entry differs).
+//
+// It scans only the named fields' own JSON string VALUES, not the whole raw
+// envelope — an earlier version of this function did a bytes.Contains over
+// the entire request body, and independent review caught the consequence
+// live: GIF's and PDF's signatures are plain ASCII ("GIF8", "%PDF"), so a
+// document that merely MENTIONS one of those strings as ordinary text (a
+// runbook about file signatures, say) got rejected — and worse, the error
+// always blamed "body" even when the actual match was in title. Decoding via
+// json.RawMessage per named field, instead of scanning raw as one blob,
+// fixes both: only the field that is actually going to become the stored
+// body can trigger this, and the error names the field that matched. A
+// malformed raw payload (Unmarshal itself fails) is not this function's
+// concern — it returns nil and lets the handler's own c.Bind produce its
+// normal "invalid request body" 400 right after, unchanged from before this
+// function existed.
+func RejectBinaryBodyRawFields(raw []byte, fieldNames ...string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil
+	}
+	for _, field := range fieldNames {
+		val, ok := fields[field]
+		if !ok {
+			continue
+		}
+		for _, sig := range binaryRawSignatures {
+			if bytes.Contains(val, sig.sig) {
+				return apierror.ValidationError(map[string]string{
+					field: fmt.Sprintf("%s looks like a binary %s file, not markdown — upload it as a task artifact instead", field, sig.name),
+				})
+			}
 		}
 	}
 	return nil

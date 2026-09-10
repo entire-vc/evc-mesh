@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -415,6 +416,136 @@ func TestDocumentService_Update_RejectsBinaryBody(t *testing.T) {
 	reread, err := f.repo.GetByID(context.Background(), created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 1, reread.Version, "a refused write must not bump the version")
+}
+
+// TestRejectBinaryBodyRaw_CatchesWhatJSONUnmarshalWouldHaveMangled is the
+// regression guard for the original red-control failure an independent
+// review found: for PNG and JPEG specifically, rejectBinaryBody alone never
+// fires for a real HTTP client, because encoding/json's string unmarshal
+// replaces invalid UTF-8 — which is exactly what those two signatures'
+// leading bytes are — with U+FFFD before rejectBinaryBody ever sees it. (GIF
+// and PDF are pure-ASCII signatures, so they survive the JSON round-trip
+// intact and were never actually broken — verified live. They're included
+// here anyway as a same-shape control: RejectBinaryBodyRawFields has to keep
+// catching them too.)
+//
+// Each payload is built the way a REAL client sending a raw binary file
+// through a JSON string field actually has to: bytes that don't need
+// RFC 8259 escaping (anything that isn't a control character, quote, or
+// backslash) are embedded raw and unescaped, because that's what naive code
+// dropping file bytes into a JSON string does; a signature's bytes that ARE
+// control characters (PNG's CR LF SUB LF tail) are instead written as their
+// JSON escape sequences, because those MUST be escaped for the payload to be
+// valid JSON at all. Proven directly below: every payload decodes
+// successfully via the standard library's own json.Unmarshal (so it is a
+// realistic wire payload, not a strawman), and for PNG/JPEG the decoded body
+// is asserted to start with the U+FFFD replacement character rather than the
+// real signature — confirming rejectBinaryBody(decoded) would not have
+// matched, the same live 201 the independent review reproduced.
+//
+// If RejectBinaryBodyRawFields ever regressed to checking PNG's full,
+// unescaped 8-byte signature (as its first version did) instead of the
+// 4-byte escape-safe prefix, this test would fail on the PNG case
+// specifically, silently, while every other case kept passing — which is
+// exactly how the original bug shipped unnoticed through code review the
+// first time.
+func TestRejectBinaryBodyRaw_CatchesWhatJSONUnmarshalWouldHaveMangled(t *testing.T) {
+	cases := []struct {
+		name string
+		// rawBody is the exact bytes a document's "body" JSON string value
+		// would contain on the wire for this format — NOT run through any
+		// escaping helper, so the test controls precisely which bytes are raw
+		// and which are JSON escape sequences, the same way the exploit does.
+		rawBody []byte
+		// mangled is true when this signature's leading bytes are invalid
+		// standalone UTF-8, so encoding/json mangles them to U+FFFD on
+		// decode — the actual bug. false for the pure-ASCII formats, which
+		// decode losslessly and were never broken by this.
+		mangled bool
+	}{
+		{"PNG", append([]byte{
+			0x89, 'P', 'N', 'G',
+			'\\', 'r', // JSON escape for the real tail's \r
+			'\\', 'n', // JSON escape for the real tail's \n
+			'\\', 'u', '0', '0', '1', 'a', // JSON escape for the real tail's \x1a (SUB)
+			'\\', 'n', // JSON escape for the real tail's trailing \n
+		}, []byte("rest-of-file")...), true},
+		{"JPEG", append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, []byte("rest-of-file")...), true},
+		{"GIF", []byte("GIF89arest-of-file"), false},
+		{"PDF", []byte("%PDF-1.4-rest-of-file"), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := append([]byte(`{"title":"evil","body":"`), tc.rawBody...)
+			payload = append(payload, []byte(`"}`)...)
+
+			// Prove the payload is realistic: it parses as valid JSON (a real
+			// HTTP server would accept it, exactly as AC1's red control did),
+			// and the decoded body does NOT start with the real signature —
+			// confirming rejectBinaryBody alone would have missed it, same as
+			// the live 201 the independent review reproduced.
+			var decoded struct {
+				Body string `json:"body"`
+			}
+			require.NoError(t, json.Unmarshal(payload, &decoded), "payload must be valid JSON, like a real request")
+			if tc.mangled {
+				firstRune := []rune(decoded.Body)[0]
+				assert.Equal(t, '�', firstRune,
+					"decoded body must start with the replacement char, proving rejectBinaryBody(decoded) would not have matched")
+			}
+
+			err := RejectBinaryBodyRawFields(payload, "body", "append_body")
+			var apiErr *apierror.Error
+			require.ErrorAs(t, err, &apiErr, "the raw-body check must catch what the post-decode check misses")
+			assert.Equal(t, 400, apiErr.StatusCode())
+		})
+	}
+}
+
+// TestRejectBinaryBodyRaw_OrdinaryMarkdownPasses is the green control for the
+// test above — a JSON payload with no binary signature anywhere in it must
+// not be rejected, proving RejectBinaryBodyRawFields's scan does not just
+// reject everything.
+func TestRejectBinaryBodyRaw_OrdinaryMarkdownPasses(t *testing.T) {
+	payload := []byte(`{"title":"Runbook","body":"# Heading\n\nSome ordinary markdown text."}`)
+	assert.NoError(t, RejectBinaryBodyRawFields(payload, "body", "append_body"))
+}
+
+// TestRejectBinaryBodyRaw_IgnoresMatchesOutsideTheNamedFields is the
+// regression guard for the false-positive independent review found in the
+// first version of this function: it used to bytes.Contains over the WHOLE
+// raw request body, so a document merely mentioning "GIF8" or "%PDF" as
+// ordinary text anywhere in the payload — including in title, a field that
+// is never going to become the stored body — got rejected. Scoping the scan
+// to only the named fields' own JSON values (RejectBinaryBodyRawFields, via
+// json.RawMessage per field) fixes this: a hit in title must not reject a
+// document whose body is clean.
+func TestRejectBinaryBodyRaw_IgnoresMatchesOutsideTheNamedFields(t *testing.T) {
+	payload := []byte(`{"title":"Our %PDF export pipeline mentions GIF8 too","body":"# Just a heading\nNothing binary here."}`)
+	assert.NoError(t, RejectBinaryBodyRawFields(payload, "body", "append_body"),
+		"a signature-shaped string in title must not reject a document whose body field is clean")
+}
+
+// TestRejectBinaryBodyRaw_ErrorNamesTheFieldThatActuallyMatched is the other
+// half of the same regression guard: the first version's error always said
+// "body", even on the rare case where scanning the whole envelope DID
+// correctly reject something (a genuine binary body) — coincidentally right
+// answer, misleading reasoning, and it would have named the wrong field for
+// any hit that came from elsewhere in the envelope. This asserts the
+// validation error's field key matches whichever named field actually
+// contained the signature.
+func TestRejectBinaryBodyRaw_ErrorNamesTheFieldThatActuallyMatched(t *testing.T) {
+	payload := []byte(`{"body":"# clean","append_body":"GIF89a-mid-edit-paste"}`)
+
+	err := RejectBinaryBodyRawFields(payload, "body", "append_body")
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation, "append_body",
+		"the validation error must be keyed on append_body, the field that actually matched — not body")
+	assert.NotContains(t, apiErr.Validation, "body",
+		"body was clean and must not be named as the problem field")
 }
 
 // The delete is reversible by design, so the body has to survive it — a restored
