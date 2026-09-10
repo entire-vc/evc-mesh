@@ -181,11 +181,18 @@ export function mentionHref(
   return `${base}/docs/${item.document_id}?comment=${item.comment_id}`;
 }
 
-/** Combined unseen count across both inboxes, for the sidebar badge. */
-export async function fetchUnseenMentionCount(): Promise<number> {
+/**
+ * Combined unseen count across both inboxes, for the sidebar/bell badge.
+ *
+ * `workspaceId` is required for the same reason it is on `fetchMentionInbox`:
+ * the server rejects an unscoped request. The badge and the list it sits next
+ * to must count the same workspace, or a caller on an empty workspace sees an
+ * empty list next to a nonzero badge left over from wherever they were before.
+ */
+export async function fetchUnseenMentionCount(workspaceId: string): Promise<number> {
   const [tasks, documents] = await Promise.allSettled([
-    api<{ count: number }>(`${TASK_MENTIONS_PATH}/unseen_count`),
-    api<{ count: number }>(`${DOCUMENT_MENTIONS_PATH}/unseen_count`),
+    api<{ count: number }>(`${TASK_MENTIONS_PATH}/unseen_count`, { params: { workspace_id: workspaceId } }),
+    api<{ count: number }>(`${DOCUMENT_MENTIONS_PATH}/unseen_count`, { params: { workspace_id: workspaceId } }),
   ]);
   let total = 0;
   if (tasks.status === "fulfilled") total += tasks.value?.count ?? 0;

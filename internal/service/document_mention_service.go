@@ -36,6 +36,7 @@ func (s *documentMentionService) CountUnseen(
 	ctx context.Context,
 	mentionedID uuid.UUID,
 	mentionedKind string,
+	workspaceID uuid.UUID,
 ) (int64, error) {
-	return s.mentionRepo.CountUnseen(ctx, mentionedID, mentionedKind)
+	return s.mentionRepo.CountUnseen(ctx, mentionedID, mentionedKind, workspaceID)
 }

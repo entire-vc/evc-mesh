@@ -170,7 +170,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const [wsCreating, setWsCreating] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
   const [unseenCount, setUnseenCount] = useState(0);
-  const unseenFetchedRef = useRef(false);
+  const unseenFetchedRef = useRef<string | null>(null);
   const sparkEnabled = useCapabilitiesStore((s) => s.sparkEnabled);
   const fetchCapabilities = useCapabilitiesStore((s) => s.fetch);
 
@@ -212,20 +212,27 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const isSessionsRoute = location.pathname.endsWith("/sessions");
   const isActivityRoute = location.pathname.includes("/activity");
 
-  // Fetch unseen mention count once on mount, then refresh on cache invalidation.
-  // Both inboxes: a badge counting only task mentions is the same contradiction
-  // the Mentions tab had — the bell says two, the sidebar says none.
+  // Fetch unseen mention count for the current workspace, then refresh on
+  // cache invalidation. Both inboxes: a badge counting only task mentions is
+  // the same contradiction the Mentions tab had — the bell says two, the
+  // sidebar says none.
+  //
+  // Re-runs on workspace change (keyed by id, not just "once on mount"): the
+  // badge exists on this same sidebar next to a workspace-scoped mention
+  // list, and a stale cross-workspace count left over from wherever the user
+  // was before is exactly the bug this scoping fixes (#fe3ae257).
   useEffect(() => {
-    if (unseenFetchedRef.current) return;
-    unseenFetchedRef.current = true;
-    fetchUnseenMentionCount()
+    const workspaceId = currentWorkspace?.id;
+    if (!workspaceId || unseenFetchedRef.current === workspaceId) return;
+    unseenFetchedRef.current = workspaceId;
+    fetchUnseenMentionCount(workspaceId)
       .then((count) => {
         localStorage.setItem("mesh_unseen_ts", String(Date.now()));
         localStorage.setItem("mesh_unseen_count", String(count));
         setUnseenCount(count);
       })
       .catch(() => {});
-  }, []);
+  }, [currentWorkspace?.id]);
 
   // Subscribe to personal WS channel for mention.created events.
   useEffect(() => {

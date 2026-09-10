@@ -121,11 +121,11 @@ export function NotificationBell() {
   // Activity badge uses (fetchUnseenMentionCount), kept independent here so
   // the bell doesn't depend on the sidebar having mounted.
   useEffect(() => {
-    if (!isAuthenticated) return;
-    fetchUnseenMentionCount()
+    if (!isAuthenticated || !currentWorkspace) return;
+    fetchUnseenMentionCount(currentWorkspace.id)
       .then(setMentionCount)
       .catch(() => {});
-  }, [isAuthenticated]);
+  }, [isAuthenticated, currentWorkspace]);
 
   // Live badge: the server publishes mention.badge (comment_service.go,
   // document_comment_mentions.go) on the user's personal channel for both

@@ -45,9 +45,10 @@ func (m *mockDocumentMentionService) MarkSeen(_ context.Context, commentID, ment
 }
 
 func (m *mockDocumentMentionService) CountUnseen(
-	_ context.Context, mentionedID uuid.UUID, mentionedKind string,
+	_ context.Context, mentionedID uuid.UUID, mentionedKind string, workspaceID uuid.UUID,
 ) (int64, error) {
 	m.gotID, m.gotKind = mentionedID, mentionedKind
+	m.gotFilter.WorkspaceID = &workspaceID
 	return m.count, m.err
 }
 
@@ -257,7 +258,9 @@ func TestDocumentMentionHandler_UnseenCount(t *testing.T) {
 	svc := &mockDocumentMentionService{count: 4}
 	h := NewDocumentMentionHandler(svc)
 	agentID := uuid.New()
-	c, rec := callerIs(t, agentID, domain.ActorTypeAgent, "/me/document-mentions/unseen_count")
+	workspaceID := uuid.New()
+	c, rec := callerIs(t, agentID, domain.ActorTypeAgent,
+		"/me/document-mentions/unseen_count?workspace_id="+workspaceID.String())
 
 	require.NoError(t, h.UnseenCount(c))
 
@@ -265,6 +268,8 @@ func TestDocumentMentionHandler_UnseenCount(t *testing.T) {
 	assert.Equal(t, "max-age=10", rec.Header().Get("Cache-Control"))
 	assert.Equal(t, agentID, svc.gotID)
 	assert.Equal(t, "agent", svc.gotKind)
+	require.NotNil(t, svc.gotFilter.WorkspaceID)
+	assert.Equal(t, workspaceID, *svc.gotFilter.WorkspaceID)
 
 	var got map[string]int64
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
@@ -283,10 +288,28 @@ func TestDocumentMentionHandler_UnseenCount_RequiresAuthentication(t *testing.T)
 	assert.Equal(t, http.StatusUnauthorized, apiErr.StatusCode())
 }
 
+// TestDocumentMentionHandler_UnseenCount_RequiresWorkspaceID is the regression
+// test for the badge half of the workspace-isolation bug: the list view was
+// fixed to require workspace_id, but the sidebar/bell badge (this endpoint)
+// kept answering with a cross-workspace count — a caller on an empty
+// workspace saw an empty list next to a nonzero badge. Refusing an
+// unscoped request here closes that gap the same way List already does.
+func TestDocumentMentionHandler_UnseenCount_RequiresWorkspaceID(t *testing.T) {
+	h := NewDocumentMentionHandler(&mockDocumentMentionService{})
+	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/me/document-mentions/unseen_count")
+
+	err := h.UnseenCount(c)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation, "workspace_id")
+}
+
 func TestDocumentMentionHandler_UnseenCount_SurfacesAServiceFailure(t *testing.T) {
 	boom := errors.New("db down")
 	h := NewDocumentMentionHandler(&mockDocumentMentionService{err: boom})
-	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/")
+	c, _ := callerIs(t, uuid.New(), domain.ActorTypeUser, "/?workspace_id="+uuid.New().String())
 
 	assert.ErrorIs(t, h.UnseenCount(c), boom)
 }
@@ -336,6 +359,25 @@ func TestMentionHandler_List_RequiresWorkspaceID(t *testing.T) {
 	c := e.NewContext(req, httptest.NewRecorder())
 
 	err := h.List(c)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode())
+	assert.Contains(t, apiErr.Validation, "workspace_id")
+}
+
+// TestMentionHandler_UnseenCount_RequiresWorkspaceID is the task-mention-side
+// twin of TestDocumentMentionHandler_UnseenCount_RequiresWorkspaceID — the
+// badge shown by the bell/sidebar for task mentions must refuse an unscoped
+// request exactly like the document-mention badge does.
+func TestMentionHandler_UnseenCount_RequiresWorkspaceID(t *testing.T) {
+	h := NewMentionHandler(nil)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/me/mentions/unseen_count", http.NoBody)
+	req = req.WithContext(actorctx.WithActor(req.Context(), uuid.New(), domain.ActorTypeUser))
+	c := e.NewContext(req, httptest.NewRecorder())
+
+	err := h.UnseenCount(c)
 
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)

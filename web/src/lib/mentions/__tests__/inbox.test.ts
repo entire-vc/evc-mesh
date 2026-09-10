@@ -240,7 +240,7 @@ describe("fetchUnseenMentionCount", () => {
         "/api/v1/me/document-mentions/unseen_count": { count: 3 },
       }),
     );
-    await expect(fetchUnseenMentionCount()).resolves.toBe(5);
+    await expect(fetchUnseenMentionCount("ws-1")).resolves.toBe(5);
   });
 
   it("still counts what it could read when one endpoint fails", async () => {
@@ -250,6 +250,28 @@ describe("fetchUnseenMentionCount", () => {
         "/api/v1/me/document-mentions/unseen_count": new Error("500"),
       }),
     );
-    await expect(fetchUnseenMentionCount()).resolves.toBe(2);
+    await expect(fetchUnseenMentionCount("ws-1")).resolves.toBe(2);
+  });
+
+  // Regression test for the badge half of the workspace-isolation bug: the
+  // list view (fetchMentionInbox, above) was fixed to require workspace_id,
+  // but the sidebar/bell badge kept asking for a global count — a caller on
+  // an empty workspace saw an empty list next to a nonzero badge.
+  it("sends workspace_id to both unseen_count endpoints", async () => {
+    apiMock.mockImplementation(
+      resolveByPath({
+        "/api/v1/me/mentions/unseen_count": { count: 1 },
+        "/api/v1/me/document-mentions/unseen_count": { count: 1 },
+      }),
+    );
+
+    await fetchUnseenMentionCount("ws-42");
+
+    expect(apiMock).toHaveBeenCalledWith("/api/v1/me/mentions/unseen_count", {
+      params: { workspace_id: "ws-42" },
+    });
+    expect(apiMock).toHaveBeenCalledWith("/api/v1/me/document-mentions/unseen_count", {
+      params: { workspace_id: "ws-42" },
+    });
   });
 });
