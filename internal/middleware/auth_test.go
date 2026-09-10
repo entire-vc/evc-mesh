@@ -762,3 +762,72 @@ func TestOptionalAuth_WithAgentKey(t *testing.T) {
 	assert.True(t, handlerCalled)
 	assert.Equal(t, AuthTypeAgent, c.Get(ContextKeyAuthType))
 }
+
+// ---------------------------------------------------------------------------
+// Tests: workspace role propagation (task U2) — role comes from whatever
+// Authenticate resolved (a connection's grant, or the legacy default), never
+// implied by the middleware itself.
+// ---------------------------------------------------------------------------
+
+func TestAgentKeyAuth_SetsWorkspaceRoleFromAuthenticatedAgent(t *testing.T) {
+	agentSvc := &mockAgentService{
+		AuthenticateFunc: func(_ context.Context, _, _ string) (*domain.Agent, error) {
+			return &domain.Agent{ID: uuid.New(), WorkspaceID: uuid.New(), WorkspaceRole: "admin"}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", http.NoBody)
+	req.Header.Set("X-Agent-Key", "agk_my-workspace_abcdefghijklmnopqrstuvwxyz123456")
+	rec := httptest.NewRecorder()
+	c := newEchoContext(req, rec)
+
+	handler := AgentKeyAuth(agentSvc)(func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, "admin", c.Get(ContextKeyWorkspaceRole))
+}
+
+func TestDualAuth_SetsWorkspaceRoleFromAuthenticatedAgent(t *testing.T) {
+	svc := newTestAuthService()
+	agentSvc := &mockAgentService{
+		AuthenticateFunc: func(_ context.Context, _, _ string) (*domain.Agent, error) {
+			return &domain.Agent{ID: uuid.New(), WorkspaceID: uuid.New(), WorkspaceRole: "viewer"}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req.Header.Set("X-Agent-Key", "agk_test-ws_abcdefghijklmnopqrstuvwxyz123456")
+	rec := httptest.NewRecorder()
+	c := newEchoContext(req, rec)
+
+	handler := DualAuth(svc, agentSvc)(func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, AuthTypeAgent, c.Get(ContextKeyAuthType))
+	assert.Equal(t, "viewer", c.Get(ContextKeyWorkspaceRole))
+}
+
+func TestOptionalAuth_SetsWorkspaceRoleFromAuthenticatedAgent(t *testing.T) {
+	svc := newTestAuthService()
+	agentSvc := &mockAgentService{
+		AuthenticateFunc: func(_ context.Context, _, _ string) (*domain.Agent, error) {
+			return &domain.Agent{ID: uuid.New(), WorkspaceID: uuid.New(), WorkspaceRole: "member"}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req.Header.Set("X-Agent-Key", "agk_test-ws_abcdefghijklmnopqrstuvwxyz123456")
+	rec := httptest.NewRecorder()
+	c := newEchoContext(req, rec)
+
+	handler := OptionalAuth(svc, agentSvc)(func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, "member", c.Get(ContextKeyWorkspaceRole))
+}

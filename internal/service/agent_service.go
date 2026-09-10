@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -17,6 +18,13 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
+
+// legacyGrantRole is the workspace role assigned to a login that fell back to
+// the pre-U2 agents-table path (no agent_workspace_grants connection exists
+// yet for it). It matches the DEFAULT of agent_workspace_grants.role, so a
+// not-yet-backfilled agent reads exactly as it would once a connection is
+// created for it with no role specified.
+const legacyGrantRole = "member"
 
 const (
 	// bcryptCost is the bcrypt work factor for hashing API keys.
@@ -49,6 +57,10 @@ type agentService struct {
 	// which is the pre-existing behavior for anyone who never wires it (tests
 	// included).
 	checkoutExtender CheckoutHeartbeatExtender
+	// grantRepo is optional (nil until SetAgentWorkspaceGrantRepo is called);
+	// a nil value makes Authenticate skip the connection lookup entirely and
+	// always use the pre-U2 agents-table path (see SetAgentWorkspaceGrantRepo).
+	grantRepo repository.AgentWorkspaceGrantRepository
 }
 
 // NewAgentService returns a new AgentService backed by the given repositories.
@@ -77,6 +89,13 @@ func (s *agentService) SetAgentActivityLogRepo(repo repository.AgentActivityLogR
 // SetCheckoutHeartbeatExtender wires the optional checkout-lease extension hook.
 func (s *agentService) SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExtender) {
 	s.checkoutExtender = ext
+}
+
+// SetAgentWorkspaceGrantRepo wires the optional agent-workspace connection
+// repository (task U2, migration 20260909001). See the field doc on
+// agentService.grantRepo for what a nil value (never called) means.
+func (s *agentService) SetAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository) {
+	s.grantRepo = repo
 }
 
 // generateAPIKey creates a raw API key in the format: agk_{workspaceSlug}_{random_hex}.
@@ -352,9 +371,18 @@ func (s *agentService) ListActivityLog(ctx context.Context, agentID uuid.UUID, f
 	return s.agentActLogRepo.List(ctx, agentID, filter, pg)
 }
 
-// Authenticate verifies an API key against the stored hash.
-// It resolves the workspace by slug, extracts the prefix for fast lookup,
-// then does a bcrypt comparison.
+// Authenticate verifies an API key and resolves the caller's identity for the
+// requested workspace.
+//
+// The lookup goes through agent_workspace_grants first (task U2): agent_id,
+// workspace_id and workspace role all come from the CONNECTION that matched,
+// never assumed from the agent's home row. Only when no connection exists at
+// all for (workspace, prefix) — an agent that predates U1's backfill, or
+// grantRepo not wired — does this fall back to the pre-U2 path against
+// agents.* directly. A connection that DOES exist but is revoked is an
+// outright denial, not a fallback: the whole point of a revoke is that the
+// same underlying key must stop working immediately (see
+// authenticateViaGrant / the AC4 red control on task U2).
 func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey string) (*domain.Agent, error) {
 	ws, err := s.workspaceRepo.GetBySlug(ctx, workspaceSlug)
 	if err != nil {
@@ -365,7 +393,68 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 	}
 
 	prefix := extractPrefix(apiKey, workspaceSlug)
-	agent, err := s.agentRepo.GetByAPIKeyPrefix(ctx, ws.ID, prefix)
+
+	if s.grantRepo != nil {
+		grant, err := s.grantRepo.GetByWorkspaceAndPrefix(ctx, ws.ID, prefix)
+		if err != nil {
+			return nil, err
+		}
+		if grant != nil {
+			if grant.IsRevoked() {
+				return nil, apierror.Unauthorized("invalid API key")
+			}
+			return s.authenticateViaGrant(ctx, grant, apiKey)
+		}
+		// Transitional: no connection row for this (workspace, prefix) at
+		// all — fall back to the legacy path and log it, so the fallback can
+		// be retired once this line stops firing (see task U2 description).
+		log.Printf("agent auth fallback: workspace_id=%s prefix=%s — no agent_workspace_grants connection, using legacy agents-table lookup", ws.ID, prefix)
+	}
+
+	return s.authenticateLegacy(ctx, ws.ID, prefix, apiKey)
+}
+
+// authenticateViaGrant verifies apiKey against an active connection's own key
+// material and returns the agent with identity fields overridden from the
+// connection — WorkspaceID and WorkspaceRole reflect where the caller just
+// authenticated INTO, which is not necessarily the agent's home workspace.
+func (s *agentService) authenticateViaGrant(ctx context.Context, grant *domain.AgentWorkspaceGrant, apiKey string) (*domain.Agent, error) {
+	if err := bcrypt.CompareHashAndPassword([]byte(grant.APIKeyHash), []byte(apiKey)); err != nil {
+		return nil, apierror.Unauthorized("invalid API key")
+	}
+
+	agent, err := s.agentRepo.GetByID(ctx, grant.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	if agent == nil {
+		// The connection points at an agent row that no longer exists (or is
+		// soft-deleted). Same response as any other invalid key — don't leak
+		// which half of the check failed.
+		return nil, apierror.Unauthorized("invalid API key")
+	}
+
+	if agent.IsKeyExpiredAt(timeNow()) {
+		return nil, apierror.Unauthorized("API key expired")
+	}
+
+	// Copy before mutating: agent came back from a repository whose contract
+	// says nothing about whether the pointer is shared (the in-memory test
+	// double hands back the very pointer it stores), so writing through it
+	// would corrupt state the caller does not own.
+	resolved := *agent
+	resolved.WorkspaceID = grant.WorkspaceID
+	resolved.WorkspaceRole = grant.Role
+	return &resolved, nil
+}
+
+// authenticateLegacy is the pre-U2 lookup: find the agent directly by
+// (workspace, prefix) in agents.* and verify against its own key material.
+// WorkspaceRole is set to the same default a fresh connection would get
+// (legacyGrantRole), so a caller reading it never has to special-case "no
+// connection yet" as a third state.
+func (s *agentService) authenticateLegacy(ctx context.Context, workspaceID uuid.UUID, prefix, apiKey string) (*domain.Agent, error) {
+	agent, err := s.agentRepo.GetByAPIKeyPrefix(ctx, workspaceID, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +470,10 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 		return nil, apierror.Unauthorized("API key expired")
 	}
 
-	return agent, nil
+	// Same defensive copy as authenticateViaGrant — see its comment.
+	resolved := *agent
+	resolved.WorkspaceRole = legacyGrantRole
+	return &resolved, nil
 }
 
 // verifyAPIKey checks apiKey against the agent's stored credentials, preferring

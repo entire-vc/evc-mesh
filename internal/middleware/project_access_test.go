@@ -211,6 +211,41 @@ func TestRequireProjectMember_OwnerBypassesOnProjectRoute(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestRequireProjectMember_AgentOwnerRole_DoesNotBypass pins the fix for the
+// privilege-escalation path agent-conn-auth-u2 would otherwise have reactivated:
+// since that change, ContextKeyWorkspaceRole is populated for agents too (from their
+// agent_workspace_grants role), which would let an agent connected with an
+// owner/admin-role grant fall into the human bypass above and reach every project in
+// the workspace regardless of project_members. An agent connection is scoped to the
+// projects it's an explicit member of — it must always go through the project_members
+// check below, never the role bypass, no matter what role its grant carries.
+func TestRequireProjectMember_AgentOwnerRole_DoesNotBypass(t *testing.T) {
+	e := echo.New()
+	projID, agentID := uuid.New(), uuid.New()
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(projID, agentID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	hit := false
+	c, rec := setupProjectCtx(e, "/projects/:proj_id/statuses", map[string]string{
+		"proj_id": projID.String(),
+	})
+	c.Set(ContextKeyAuthType, AuthTypeAgent)
+	c.Set(ContextKeyAgentID, agentID)
+	c.Set(ContextKeyWorkspaceRole, domain.RoleOwner)
+
+	err = RequireProjectMember(sqlx.NewDb(db, "sqlmock"))(reachedHandler(&hit))(c)
+	require.NoError(t, err)
+	assert.False(t, hit, "an agent must never bypass project membership via its workspace role")
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	require.NoError(t, mock.ExpectationsWereMet(),
+		"the project_members query must actually run — a bypass would skip it entirely")
+}
+
 // TestRequireProjectMember_InvalidProjID keeps the existing 400 behaviour for a
 // malformed project id, which is a caller error and distinct from the two cases above.
 func TestRequireProjectMember_InvalidProjID(t *testing.T) {

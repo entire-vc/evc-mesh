@@ -583,6 +583,22 @@ type AgentRepository interface {
 	SearchByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Agent, error)
 }
 
+// AgentWorkspaceGrantRepository manages persistence for agent-workspace
+// connections (table agent_workspace_grants, migration 20260909001, task U1).
+// agentService.Authenticate (task U2) reads through this repository first;
+// AgentRepository.GetByAPIKeyPrefix remains only as the pre-cutover fallback
+// for an agent that has no connection row yet.
+type AgentWorkspaceGrantRepository interface {
+	// GetByWorkspaceAndPrefix returns the connection row for (workspaceID,
+	// prefix) — active OR revoked. Returns (nil, nil) when no such row exists
+	// at all. Callers rely on that distinction: "no row" means "this agent
+	// predates U2, fall back to the legacy agents-table lookup"; "row, but
+	// revoked" means "this connection was deliberately cut, deny outright" —
+	// collapsing both into the same nil would let a revoked key silently
+	// keep working through the fallback.
+	GetByWorkspaceAndPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.AgentWorkspaceGrant, error)
+}
+
 // AgentActivityLogFilter defines filtering options for listing agent activity log entries.
 type AgentActivityLogFilter struct {
 	EventType string

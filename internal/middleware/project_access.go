@@ -21,11 +21,13 @@ import (
 //
 // Resolution:
 //   - Extracts project_id from :proj_id route param; absent → 500 (misconfiguration).
-//   - Workspace owners and admins bypass (they have access to all projects).
+//   - Human workspace owners/admins bypass (they have access to all projects).
+//   - Agents never get that bypass, even with an owner/admin-role connection: always
+//     checks project_members. See the human-only guard in the implementation.
 //   - For members/viewers/agents: checks project_members table.
 //   - Returns 403 if the actor is not a project member.
 //
-// Must run after DualAuth and WorkspaceRLS (which sets ContextKeyWorkspaceRole).
+// Must run after DualAuth and WorkspaceRLS/AgentKeyAuth (which set ContextKeyWorkspaceRole).
 func RequireProjectMember(db *sqlx.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -63,9 +65,22 @@ func RequireProjectMember(db *sqlx.DB) echo.MiddlewareFunc {
 			}
 
 			// Workspace owners and admins bypass project membership check.
-			if role, ok := c.Get(ContextKeyWorkspaceRole).(string); ok {
-				if role == domain.RoleOwner || role == domain.RoleAdmin {
-					return next(c)
+			//
+			// Deliberately human-only: since agent-conn-auth-u2, ContextKeyWorkspaceRole
+			// is also populated for agents (from their agent_workspace_grants role), so
+			// an agent connected with an owner/admin-role grant would otherwise reach
+			// this branch too — and unlike a human owner, a workspace-scoped agent
+			// connection is not meant to imply access to every project in the
+			// workspace, only the ones it is an explicit member of. Every other
+			// consumer of this context value (rbac.go's RequirePermission,
+			// activity_handler.go, project_handler.go) already special-cases IsAgent(c)
+			// before trusting it; this was the one place that didn't, because the value
+			// was previously never set for agents at all.
+			if !IsAgent(c) {
+				if role, ok := c.Get(ContextKeyWorkspaceRole).(string); ok {
+					if role == domain.RoleOwner || role == domain.RoleAdmin {
+						return next(c)
+					}
 				}
 			}
 

@@ -1762,6 +1762,47 @@ func (m *MockAgentRepository) SearchByPrefix(_ context.Context, _ uuid.UUID, _ s
 }
 
 // ---------------------------------------------------------------------------
+// MockAgentWorkspaceGrantRepository — in-memory agent_workspace_grants (task U2).
+// ---------------------------------------------------------------------------
+
+// MockAgentWorkspaceGrantRepository mirrors the real repository's contract:
+// GetByWorkspaceAndPrefix must return a REVOKED row (not nil) so the caller
+// can tell "revoked" apart from "never connected" — see the interface doc.
+type MockAgentWorkspaceGrantRepository struct {
+	mu          sync.RWMutex
+	items       []*domain.AgentWorkspaceGrant
+	errToReturn error
+}
+
+func NewMockAgentWorkspaceGrantRepository() *MockAgentWorkspaceGrantRepository {
+	return &MockAgentWorkspaceGrantRepository{}
+}
+
+// Seed adds a connection row directly, bypassing any service-layer logic —
+// this mock has no create/revoke methods because the real repository (task
+// U2's scope) does not need them yet; U3 adds those.
+func (m *MockAgentWorkspaceGrantRepository) Seed(g *domain.AgentWorkspaceGrant) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items = append(m.items, g)
+}
+
+func (m *MockAgentWorkspaceGrantRepository) GetByWorkspaceAndPrefix(_ context.Context, workspaceID uuid.UUID, prefix string) (*domain.AgentWorkspaceGrant, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, g := range m.items {
+		if g.WorkspaceID == workspaceID && g.APIKeyPrefix == prefix {
+			cp := *g
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
 // MockAgentNotifyService — records NotifyAgent calls for assertion in tests.
 // ---------------------------------------------------------------------------
 
