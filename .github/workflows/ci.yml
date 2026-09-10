@@ -820,6 +820,20 @@ jobs:
     name: "Authed E2E"
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # DISABLED 2026-09-10 (#8daab9da). Dev canon moved to GitLab 2026-08-23
+    # (§0z); .gitlab-ci.yml:authed-e2e already gates real merges there with
+    # working creds (set via gl-admin set-ci-variable, 2026-09-07, #d5619f11).
+    # This GitHub copy's E2E_USER_EMAIL/E2E_USER_PASSWORD repo secrets were
+    # never updated to match, so every mirror push has failed login (HTTP 401)
+    # since 2026-09-07 ~19:40 — 20+ false-red runs, zero real signal (the
+    # GitLab pipeline on the same SHAs stayed green throughout). Not
+    # re-keyed instead of disabled: this repo is a read-only showcase mirror
+    # nobody merges into (§0z), and GitHub Actions never exposes repo secrets
+    # to fork PRs anyway, so this job could not meaningfully protect an
+    # external contribution either. Removed from the ruleset's
+    # required-status-checks in the same change — see
+    # scripts/ci/test_merge_queue_preconditions.py REQUIRED_CONTEXTS.
+    if: false
     container:
       # Pinned to the SAME version as playwright-core in web/pnpm-lock.yaml, on
       # purpose: matched, the browsers this job needs are already baked into the
