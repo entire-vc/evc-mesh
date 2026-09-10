@@ -212,7 +212,26 @@ func (s *taskService) assertAssigneeInProjectWorkspace(
 			return refuse("no such agent")
 		}
 		if agent.WorkspaceID != workspaceID {
-			return refuse("agent belongs to a different workspace")
+			// Not home — the agent may still be a legitimate assignee via an
+			// ACTIVE agent_workspace_grants connection into this workspace
+			// (task U3, #71627c5a). This mirrors the user branch's shape
+			// below (membership, not a single-tenant column) and
+			// middleware.AgentIsInWorkspace's grant half — same fail-closed
+			// contract: an unreadable grant directory, or an absent/revoked
+			// grant, both refuse. A grant existing but revoked must refuse
+			// exactly like no grant at all; GetByAgentAndWorkspace returns
+			// revoked rows too (see its own doc), so IsRevoked() is checked
+			// explicitly rather than trusting "found" alone.
+			if s.agentGrantRepo == nil {
+				return refuse("agent workspace grant directory unavailable")
+			}
+			grant, gerr := s.agentGrantRepo.GetByAgentAndWorkspace(ctx, *assigneeID, workspaceID)
+			if gerr != nil {
+				return refuse("could not read agent workspace grants")
+			}
+			if grant == nil || grant.IsRevoked() {
+				return refuse("agent belongs to a different workspace")
+			}
 		}
 
 	case domain.AssigneeTypeUser:

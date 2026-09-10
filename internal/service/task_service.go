@@ -63,6 +63,7 @@ type taskService struct {
 	notifySvc         NotificationService
 	ctxCacheInv       ContextCacheInvalidator
 	wsMembership      WorkspaceMembershipReader
+	agentGrantRepo    repository.AgentWorkspaceGrantRepository
 	listRevisionRepo  repository.TaskListRevisionRepository
 }
 
@@ -192,6 +193,26 @@ func WithTaskListRevisionRepo(r repository.TaskListRevisionRepository) TaskServi
 func WithTaskAgentRepo(ar repository.AgentRepository) TaskServiceOption {
 	return func(s *taskService) {
 		s.agentRepo = ar
+	}
+}
+
+// WithTaskAgentGrantRepo wires the agent half of the assignee tenancy guard
+// (see assertAssigneeInProjectWorkspace) for the multi-workspace case: an
+// agent whose HOME workspace (agents.workspace_id) differs from the task's
+// workspace is still a legitimate assignee if it holds an active
+// agent_workspace_grants connection into that workspace (task U3/#71627c5a).
+// Without it, the agent branch can only ever see the home row — the same
+// gap #7661fc5d closed for authentication, not yet closed here for
+// assignment — and every guest-workspace assignment refuses with
+// "agent belongs to a different workspace" even for a correctly invited,
+// actively-granted agent. Optional in the sense that a nil value keeps
+// today's home-only behavior (fail-closed still holds; it just never finds
+// a grant to check), never optional in the sense of correctness — this is
+// load-bearing for the multi-workspace feature exactly like
+// WithWorkspaceMembershipReader is for its human counterpart.
+func WithTaskAgentGrantRepo(r repository.AgentWorkspaceGrantRepository) TaskServiceOption {
+	return func(s *taskService) {
+		s.agentGrantRepo = r
 	}
 }
 

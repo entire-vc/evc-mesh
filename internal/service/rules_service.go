@@ -17,15 +17,16 @@ import (
 
 // rulesService implements RulesService.
 type rulesService struct {
-	wsRuleRepo    repository.WorkspaceRuleConfigRepository
-	projRuleRepo  repository.ProjectRuleConfigRepository
-	violationRepo repository.RuleViolationLogRepository
-	agentRepo     repository.AgentRepository
-	memberRepo    repository.WorkspaceMemberRepository
-	workspaceRepo repository.WorkspaceRepository
-	projectRepo   repository.ProjectRepository
-	ruleRepo      repository.RuleRepository       // optional; used for task count queries in team directory
-	statusRepo    repository.TaskStatusRepository // optional; used to expand my_permissions.can_transition for empty configs
+	wsRuleRepo     repository.WorkspaceRuleConfigRepository
+	projRuleRepo   repository.ProjectRuleConfigRepository
+	violationRepo  repository.RuleViolationLogRepository
+	agentRepo      repository.AgentRepository
+	memberRepo     repository.WorkspaceMemberRepository
+	workspaceRepo  repository.WorkspaceRepository
+	projectRepo    repository.ProjectRepository
+	ruleRepo       repository.RuleRepository                // optional; used for task count queries in team directory
+	statusRepo     repository.TaskStatusRepository          // optional; used to expand my_permissions.can_transition for empty configs
+	agentGrantRepo repository.AgentWorkspaceGrantRepository // optional; adds guest agents (task U3/#71627c5a) to GetTeamDirectory
 }
 
 // NewRulesService creates a new rulesService.
@@ -60,6 +61,16 @@ func WithRulesRuleRepo(rr repository.RuleRepository) func(*rulesService) {
 // no workflow rules config exists.
 func WithRulesStatusRepo(sr repository.TaskStatusRepository) func(*rulesService) {
 	return func(s *rulesService) { s.statusRepo = sr }
+}
+
+// WithRulesAgentGrantRepo sets the AgentWorkspaceGrantRepository on the
+// rulesService, enabling GetTeamDirectory to list GUEST agents — those whose
+// home workspace is elsewhere but hold an active agent_workspace_grants
+// connection into this one (task U3/#71627c5a). Without it, GetTeamDirectory
+// falls back to its pre-U3 behavior: home agents only, via agentRepo.List's
+// agents.workspace_id filter, which is exactly the gap this option closes.
+func WithRulesAgentGrantRepo(r repository.AgentWorkspaceGrantRepository) func(*rulesService) {
+	return func(s *rulesService) { s.agentGrantRepo = r }
 }
 
 // applyRulesOptions applies functional options to a rulesService.
@@ -107,7 +118,7 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 		return nil, fmt.Errorf("workspace not found")
 	}
 
-	// Get agents with current task counts (use max page size to get all agents).
+	// Get home agents with current task counts (use max page size to get all agents).
 	agentFilter := repository.AgentFilter{}
 	agentPg := pagination.Params{Page: 1, PageSize: pagination.MaxPageSize}
 	agentPage, err := s.agentRepo.List(ctx, workspaceID, agentFilter, agentPg)
@@ -121,41 +132,47 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 		string(domain.StatusCategoryInProgress),
 	}
 
+	seen := make(map[uuid.UUID]bool, len(agentPage.Items))
 	agents := make([]domain.TeamDirectoryAgent, 0, len(agentPage.Items))
-	for _, a := range agentPage.Items {
-		currentTasks := 0
-		if s.ruleRepo != nil {
-			var cnt int
-			cnt, err = s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories)
-			if err == nil {
-				currentTasks = cnt
-			}
+	for i := range agentPage.Items {
+		a := &agentPage.Items[i]
+		agents = append(agents, s.buildTeamDirectoryAgent(ctx, workspaceID, a, true, activeCategories))
+		seen[a.ID] = true
+	}
+
+	// GUEST agents: home workspace is elsewhere, but an active
+	// agent_workspace_grants connection reaches into THIS workspace (task
+	// U3/#71627c5a). agentRepo.List above filters on agents.workspace_id and
+	// can never see these — agent_workspace_grants is the only place that
+	// does, same asymmetry #7661fc5d found on the authentication side.
+	if s.agentGrantRepo != nil {
+		grants, gerr := s.agentGrantRepo.ListActiveByWorkspace(ctx, workspaceID)
+		if gerr != nil {
+			return nil, fmt.Errorf("list active agent workspace grants: %w", gerr)
 		}
-		agents = append(agents, domain.TeamDirectoryAgent{
-			ID:                 a.ID,
-			Name:               a.Name,
-			Slug:               a.Slug,
-			Status:             a.Status,
-			AgentType:          a.AgentType,
-			ParentAgentID:      a.ParentAgentID,
-			SupervisorUserID:   a.SupervisorUserID,
-			Role:               a.Role,
-			Capabilities:       a.Capabilities,
-			ResponsibilityZone: a.ResponsibilityZone,
-			EscalationTo:       derefRawMessage(a.EscalationTo),
-			AcceptsFrom:        a.AcceptsFrom,
-			MaxConcurrentTasks: a.MaxConcurrentTasks,
-			WorkingHours:       a.WorkingHours,
-			ProfileDescription: a.ProfileDescription,
-			CurrentTasks:       currentTasks,
-			Projects:           []string{},
-			LastHeartbeat:      a.LastHeartbeat,
-			HeartbeatStatus:    a.HeartbeatStatus,
-			HeartbeatMessage:   a.HeartbeatMessage,
-			IsStale:            a.IsHeartbeatStale(),
-			ComputedStatus:     a.ComputedStatus(presence.IsConnected(a.ID)),
-			LastSeenAt:         a.LastHeartbeat,
-		})
+		for _, g := range grants {
+			if seen[g.AgentID] {
+				// A home agent should never also carry a distinct grant row
+				// into its own home workspace under the current invite flow,
+				// but if the data ever disagrees, the home listing above is
+				// the fuller, authoritative record — do not add a second,
+				// guest-flavored duplicate of it.
+				continue
+			}
+			agent, aerr := s.agentRepo.GetByID(ctx, g.AgentID)
+			if aerr != nil {
+				return nil, fmt.Errorf("get guest agent %s: %w", g.AgentID, aerr)
+			}
+			if agent == nil {
+				// A grant outliving the agent it points at is not a known
+				// reachable state (no ON DELETE CASCADE gap here), but
+				// skipping one ghost row is cheaper than failing the whole
+				// directory over it.
+				continue
+			}
+			agents = append(agents, s.buildTeamDirectoryAgent(ctx, workspaceID, agent, false, activeCategories))
+			seen[g.AgentID] = true
+		}
 	}
 
 	// Get human members with their profile data.
@@ -187,6 +204,46 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 		Agents:    agents,
 		Humans:    humans,
 	}, nil
+}
+
+// buildTeamDirectoryAgent turns a domain.Agent into its team-directory
+// representation for workspaceID, tagging IsHome so a guest (task
+// U3/#71627c5a — home workspace is elsewhere, reached here via an active
+// agent_workspace_grants connection) reads as distinguishable from a native
+// member rather than silently identical to one, per that task's AC3.
+func (s *rulesService) buildTeamDirectoryAgent(ctx context.Context, workspaceID uuid.UUID, a *domain.Agent, isHome bool, activeCategories []string) domain.TeamDirectoryAgent {
+	currentTasks := 0
+	if s.ruleRepo != nil {
+		if cnt, err := s.ruleRepo.CountTasksByAssigneeAndCategory(ctx, workspaceID, a.ID, string(domain.AssigneeTypeAgent), activeCategories); err == nil {
+			currentTasks = cnt
+		}
+	}
+	return domain.TeamDirectoryAgent{
+		ID:                 a.ID,
+		Name:               a.Name,
+		Slug:               a.Slug,
+		Status:             a.Status,
+		AgentType:          a.AgentType,
+		ParentAgentID:      a.ParentAgentID,
+		SupervisorUserID:   a.SupervisorUserID,
+		Role:               a.Role,
+		Capabilities:       a.Capabilities,
+		ResponsibilityZone: a.ResponsibilityZone,
+		EscalationTo:       derefRawMessage(a.EscalationTo),
+		AcceptsFrom:        a.AcceptsFrom,
+		MaxConcurrentTasks: a.MaxConcurrentTasks,
+		WorkingHours:       a.WorkingHours,
+		ProfileDescription: a.ProfileDescription,
+		CurrentTasks:       currentTasks,
+		Projects:           []string{},
+		LastHeartbeat:      a.LastHeartbeat,
+		HeartbeatStatus:    a.HeartbeatStatus,
+		HeartbeatMessage:   a.HeartbeatMessage,
+		IsStale:            a.IsHeartbeatStale(),
+		ComputedStatus:     a.ComputedStatus(presence.IsConnected(a.ID)),
+		LastSeenAt:         a.LastHeartbeat,
+		IsHome:             isHome,
+	}
 }
 
 // GetTeamDirectoryTree returns the team directory in hierarchical format with project affiliations.
@@ -250,6 +307,13 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 			IsStale:            a.IsHeartbeatStale(),
 			ComputedStatus:     a.ComputedStatus(presence.IsConnected(a.ID)),
 			LastSeenAt:         a.LastHeartbeat,
+			// ListWithProjects, like GetTeamDirectory's pre-#71627c5a form,
+			// only ever sees home agents (agents.workspace_id) — no guest
+			// listing here yet, so every row genuinely IS home. Left true
+			// rather than defaulting to false so this endpoint does not
+			// silently start claiming every one of its agents is a guest the
+			// moment IsHome exists on the shared struct.
+			IsHome: true,
 		})
 	}
 
