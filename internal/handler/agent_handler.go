@@ -575,6 +575,33 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 	})
 }
 
+// meResponse embeds an agent row with WorkspaceID replaced by the workspace
+// the PRESENTED key actually authenticated into, and additionally carries
+// HomeWorkspaceID — the value at rest on the agents row (agent.WorkspaceID
+// before the swap). Shared by Me and UpdateMe (#606c215e).
+//
+// The swap is what makes "workspace_id" on this response match this
+// handler's own doc comment ("based on the API key used for auth") for a
+// guest key: authWorkspaceID is the grant's workspace
+// (agentService.authenticateViaGrant already resolves this correctly, see
+// ContextKeyAgentAuthWorkspaceID's doc comment in middleware/auth.go) — a
+// DIFFERENT tenant than agent.WorkspaceID (the home row) whenever the key is
+// a guest grant, not the agent's own home connection. For a home key the two
+// are equal, so this is a no-op for the entire existing fleet — only guest
+// keys, whose current value is wrong today, change.
+//
+// HomeWorkspaceID is additive: nothing that read workspace_id before loses
+// access to the home value, it just reads it under the new name.
+func meResponse(agent *domain.Agent, authWorkspaceID uuid.UUID) any {
+	home := agent.WorkspaceID
+	resp := *agent
+	resp.WorkspaceID = authWorkspaceID
+	return struct {
+		domain.Agent
+		HomeWorkspaceID uuid.UUID `json:"home_workspace_id"`
+	}{Agent: resp, HomeWorkspaceID: home}
+}
+
 // Me handles GET /agents/me
 // Returns the current agent's profile based on the API key used for auth.
 func (h *AgentHandler) Me(c echo.Context) error {
@@ -593,7 +620,18 @@ func (h *AgentHandler) Me(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	return c.JSON(http.StatusOK, agent)
+	// This route is only reachable via the agent branch of DualAuth (it 401s
+	// above otherwise), which always sets ContextKeyAgentAuthWorkspaceID
+	// alongside agent_id — an error here means that invariant broke, not a
+	// legitimate "unknown workspace" case. Fail closed rather than falling
+	// back to agent.WorkspaceID (the home row), which is exactly the bug
+	// this handler exists to fix.
+	authWsID, err := mw.GetAgentAuthWorkspaceID(c)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError("agent auth workspace not resolved"))
+	}
+
+	return c.JSON(http.StatusOK, meResponse(agent, authWsID))
 }
 
 // updateMeRequest represents the JSON body for self-service agent profile updates.
@@ -633,11 +671,21 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 		agent.CallbackURL = *req.CallbackURL
 	}
 
-	if err := h.agentService.Update(c.Request().Context(), agent); err != nil {
-		return handleError(c, err)
+	if updateErr := h.agentService.Update(c.Request().Context(), agent); updateErr != nil {
+		return handleError(c, updateErr)
 	}
 
-	return c.JSON(http.StatusOK, agent)
+	// Swap AFTER persisting, never before: agentRepo.Update's column list
+	// does not include workspace_id today, but the ordering here means this
+	// stays safe even if that ever changes — the row is written from the
+	// unmodified agent first, and only the in-memory copy returned below is
+	// touched. Same fix as Me, see meResponse's doc comment (#606c215e).
+	authWsID, err := mw.GetAgentAuthWorkspaceID(c)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError("agent auth workspace not resolved"))
+	}
+
+	return c.JSON(http.StatusOK, meResponse(agent, authWsID))
 }
 
 // reportSessionRequest is the JSON body for POST /agents/me/sessions/report.

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -516,4 +517,137 @@ func TestHandleError_GenericError(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &result)
 	require.NoError(t, err)
 	assert.Equal(t, "Internal server error", result.Message)
+}
+
+// --- TestAgentHandler_Me — #606c215e ---
+//
+// meRespView mirrors meResponse's anonymous struct shape for unmarshalling in
+// tests (domain.Agent's own fields flattened, plus home_workspace_id).
+type meRespView struct {
+	domain.Agent
+	HomeWorkspaceID uuid.UUID `json:"home_workspace_id"`
+}
+
+// meRequest builds a GET /agents/me (or PATCH with body) request carrying the
+// agent_id + agent-auth-workspace context a real DualAuth pass would set —
+// see notification_prefs_tenancy_test.go / workspace_member_test.go for the
+// same pattern used elsewhere. authWsID mirrors ContextKeyAgentAuthWorkspaceID
+// (agent.WorkspaceID as agentService.Authenticate resolved it); pass
+// uuid.Nil to simulate the invariant-violation case (never set).
+func meRequest(t *testing.T, h *AgentHandler, method string, agentID, authWsID uuid.UUID, body string, handle func(echo.Context) error) *httptest.ResponseRecorder {
+	t.Helper()
+	e := echo.New()
+	var req *http.Request
+	if body != "" {
+		req = httptest.NewRequest(method, "/", strings.NewReader(body))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	} else {
+		req = httptest.NewRequest(method, "/", http.NoBody)
+	}
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("agent_id", agentID)
+	if authWsID != uuid.Nil {
+		c.Set(mw.ContextKeyAgentAuthWorkspaceID, authWsID)
+	}
+
+	err := handle(c)
+	require.NoError(t, err)
+	return rec
+}
+
+func TestAgentHandler_Me_ReturnsAuthWorkspace_NotHome(t *testing.T) {
+	agentID := uuid.New()
+	homeWS := uuid.New()
+	grantWS := uuid.New() // the workspace the guest key actually authenticated into
+	require.NotEqual(t, homeWS, grantWS)
+
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			assert.Equal(t, agentID, id)
+			return &domain.Agent{ID: agentID, WorkspaceID: homeWS, Name: "guest-agent"}, nil
+		},
+	}
+	h, _ := setupAgentTest(mockSvc)
+
+	rec := meRequest(t, h, http.MethodGet, agentID, grantWS, "", h.Me)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var result meRespView
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	assert.Equal(t, grantWS, result.WorkspaceID, "workspace_id must be the workspace the presented key authenticated into, not the home row")
+	assert.Equal(t, homeWS, result.HomeWorkspaceID, "home_workspace_id must still carry the agent's home workspace (additive, not lost)")
+}
+
+func TestAgentHandler_Me_HomeKey_WorkspaceIDUnchanged(t *testing.T) {
+	agentID := uuid.New()
+	homeWS := uuid.New()
+
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: agentID, WorkspaceID: homeWS, Name: "home-agent"}, nil
+		},
+	}
+	h, _ := setupAgentTest(mockSvc)
+
+	// A home key's auth workspace equals its home workspace — the existing
+	// fleet's behavior must not change (#606c215e explicitly measures this).
+	rec := meRequest(t, h, http.MethodGet, agentID, homeWS, "", h.Me)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var result meRespView
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	assert.Equal(t, homeWS, result.WorkspaceID)
+	assert.Equal(t, homeWS, result.HomeWorkspaceID)
+}
+
+func TestAgentHandler_Me_NoAuthWorkspaceInContext_FailsClosed(t *testing.T) {
+	agentID := uuid.New()
+	homeWS := uuid.New()
+
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: agentID, WorkspaceID: homeWS}, nil
+		},
+	}
+	h, _ := setupAgentTest(mockSvc)
+
+	// ContextKeyAgentAuthWorkspaceID deliberately not set — this route is
+	// only reachable via DualAuth's agent branch, which always sets it
+	// alongside agent_id; if it's missing, that invariant broke and the
+	// handler must refuse rather than silently fall back to the home
+	// workspace (the exact bug being fixed).
+	rec := meRequest(t, h, http.MethodGet, agentID, uuid.Nil, "", h.Me)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestAgentHandler_UpdateMe_ReturnsAuthWorkspace_NotHome(t *testing.T) {
+	agentID := uuid.New()
+	homeWS := uuid.New()
+	grantWS := uuid.New()
+	require.NotEqual(t, homeWS, grantWS)
+
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: agentID, WorkspaceID: homeWS, ProfileDescription: "old"}, nil
+		},
+		UpdateFunc: func(ctx context.Context, agent *domain.Agent) error {
+			// The persisted row must carry the HOME workspace, never the
+			// auth workspace — the swap in the handler happens strictly
+			// after this call returns (see UpdateMe's own comment).
+			assert.Equal(t, homeWS, agent.WorkspaceID, "must not persist the auth workspace onto the agent row")
+			assert.Equal(t, "new", agent.ProfileDescription)
+			return nil
+		},
+	}
+	h, _ := setupAgentTest(mockSvc)
+
+	rec := meRequest(t, h, http.MethodPatch, agentID, grantWS, `{"profile_description":"new"}`, h.UpdateMe)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var result meRespView
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	assert.Equal(t, grantWS, result.WorkspaceID)
+	assert.Equal(t, homeWS, result.HomeWorkspaceID)
+	assert.Equal(t, "new", result.ProfileDescription)
 }
