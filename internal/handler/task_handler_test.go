@@ -1834,6 +1834,77 @@ func TestTaskHandler_MoveTask_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+// TestTaskHandler_MoveTask_HumanGateFrozen_DoneMessageDoesNotMentionBacklog is the
+// HTTP-layer counterpart of the service-level control in task_human_gate_test.go
+// (#854b7b8d): the wire message a caller actually sees for a refused done/cancelled
+// move must not claim backlog is human-only too, since the gate's own author IS
+// allowed to park there (#e1b4cffd) — the handler used to hardcode a single string
+// for every category and this pinned the stale one.
+func TestTaskHandler_MoveTask_HumanGateFrozen_DoneMessageDoesNotMentionBacklog(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	mockSvc := &MockTaskService{
+		MoveTaskFunc: func(ctx context.Context, tid uuid.UUID, input service.MoveTaskInput) error {
+			return &service.HumanGateFrozenError{TargetCategory: domain.StatusCategoryDone}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"status_id":"` + statusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/move")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.MoveTask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "human_gate_frozen", resp["code"])
+	assert.NotContains(t, resp["message"], "backlog",
+		"the gate author IS allowed to park in backlog — the done/cancelled refusal must not say otherwise")
+}
+
+// TestTaskHandler_MoveTask_HumanGateFrozen_BacklogMessageNamesAuthorship is the
+// mirror control: a refused backlog move must say the reason is authorship, not
+// "only a human" — a human is never the only door to backlog since #e1b4cffd.
+func TestTaskHandler_MoveTask_HumanGateFrozen_BacklogMessageNamesAuthorship(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	mockSvc := &MockTaskService{
+		MoveTaskFunc: func(ctx context.Context, tid uuid.UUID, input service.MoveTaskInput) error {
+			return &service.HumanGateFrozenError{TargetCategory: domain.StatusCategoryBacklog}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"status_id":"` + statusID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/move")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	err := h.MoveTask(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "human_gate_frozen", resp["code"])
+	assert.Contains(t, resp["message"], "author",
+		"backlog refusal for a non-author agent must name authorship, not just \"only a human\"")
+}
+
 // --- TestTaskHandler_ListSubtasks ---
 
 func TestTaskHandler_ListSubtasks_Success(t *testing.T) {

@@ -1665,9 +1665,13 @@ func handleError(c echo.Context, err error) error {
 
 	var humanGateErr *service.HumanGateFrozenError
 	if errors.As(err, &humanGateErr) {
+		message := "Task is awaiting human sign-off (human_gate=true). Only a user may move it to done/cancelled. To clear the gate, a human must either move the task manually or call PATCH /tasks/:id with human_gate=false."
+		if humanGateErr.TargetCategory == domain.StatusCategoryBacklog {
+			message = "Task is awaiting human sign-off (human_gate=true). Only the gate's own author may park it in backlog while the ask is still open, and you are not that author. To close the task (done/cancelled), a human must either move it manually or call PATCH /tasks/:id with human_gate=false."
+		}
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"code":    "human_gate_frozen",
-			"message": "Task is awaiting human sign-off (human_gate=true). Only a user may move it to backlog/done/cancelled. To clear the gate, a human must either move the task manually or call PATCH /tasks/:id with human_gate=false.",
+			"message": message,
 		})
 	}
 

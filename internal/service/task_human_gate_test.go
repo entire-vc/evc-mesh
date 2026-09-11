@@ -176,6 +176,55 @@ func TestMoveTask_HumanGate_NonAuthorAgentStillBlockedOnBacklog(t *testing.T) {
 	assert.ErrorAs(t, err, &gateErr, "only the gate's own author gets the backlog exception, not any agent")
 }
 
+// TestMoveTask_HumanGate_GateAuthorDoneMessageDoesNotMentionBacklog is the negative
+// control for #854b7b8d: the gate author's own-ask exception (#e1b4cffd) covers
+// backlog only, so the message on a refused done/cancelled move must not claim
+// backlog is human-only too — that claim is now false for exactly this actor.
+func TestMoveTask_HumanGate_GateAuthorDoneMessageDoesNotMentionBacklog(t *testing.T) {
+	ts, taskID, cats := buildHumanGateEnv(t)
+
+	authorID := uuid.New()
+	authorType := domain.ActorTypeAgent
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthor = &authorID
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthorType = &authorType
+
+	ctx := actorctx.WithActor(context.Background(), authorID, domain.ActorTypeAgent)
+
+	doneID := cats[domain.StatusCategoryDone]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &doneID})
+
+	require.Error(t, err)
+	var gateErr *HumanGateFrozenError
+	require.ErrorAs(t, err, &gateErr)
+	assert.NotContains(t, gateErr.Error(), "backlog",
+		"the gate author IS allowed to park in backlog — the done/cancelled refusal must not say otherwise")
+}
+
+// TestMoveTask_HumanGate_NonAuthorBacklogMessageNamesAuthorship is the mirror
+// control: a non-author agent refused on backlog must be told the reason is
+// authorship, not "only a human" — a human is never the only door to backlog
+// since #e1b4cffd, so that phrasing would be actively misleading here.
+func TestMoveTask_HumanGate_NonAuthorBacklogMessageNamesAuthorship(t *testing.T) {
+	ts, taskID, cats := buildHumanGateEnv(t)
+
+	authorID := uuid.New()
+	authorType := domain.ActorTypeAgent
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthor = &authorID
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthorType = &authorType
+
+	// A DIFFERENT agent than the one who raised the gate.
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+
+	backlogID := cats[domain.StatusCategoryBacklog]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &backlogID})
+
+	require.Error(t, err)
+	var gateErr *HumanGateFrozenError
+	require.ErrorAs(t, err, &gateErr)
+	assert.Contains(t, gateErr.Error(), "author",
+		"backlog refusal for a non-author agent must name authorship, not just \"only a human\"")
+}
+
 func TestMoveTask_HumanGate_AgentAllowedToReview(t *testing.T) {
 	ts, taskID, cats := buildHumanGateEnv(t)
 

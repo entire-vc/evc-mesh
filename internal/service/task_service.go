@@ -905,13 +905,13 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			if actorType != domain.ActorTypeUser {
 				switch status.Category {
 				case domain.StatusCategoryDone, domain.StatusCategoryCancelled:
-					return &HumanGateFrozenError{}
+					return &HumanGateFrozenError{TargetCategory: status.Category}
 				case domain.StatusCategoryBacklog:
 					isGateAuthor := actorType == domain.ActorTypeAgent &&
 						task.GateAuthor != nil && *task.GateAuthor == actorID &&
 						task.GateAuthorType != nil && *task.GateAuthorType == domain.ActorTypeAgent
 					if !isGateAuthor {
-						return &HumanGateFrozenError{}
+						return &HumanGateFrozenError{TargetCategory: status.Category}
 					}
 				}
 			}
@@ -2056,10 +2056,23 @@ func (e *AssignmentPinnedError) Error() string {
 
 // HumanGateFrozenError is returned when an agent or system actor attempts to move a
 // human-gated task to backlog/done/cancelled without a human sign-off (audit 2026-06-15 P0 #3).
-type HumanGateFrozenError struct{}
+//
+// TargetCategory names the destination status category that was actually refused, so
+// callers (the HTTP handler) can render an accurate message instead of always naming
+// the full backlog/done/cancelled trio. That matters because backlog has its own,
+// narrower rule since #e1b4cffd: the gate's own author MAY park it there — a refusal
+// hitting this branch always means "you are not that author", never "only a human",
+// and the old one-size-fits-all text told the gate author the one door they'd just
+// been given was still locked (#854b7b8d).
+type HumanGateFrozenError struct {
+	TargetCategory domain.StatusCategory
+}
 
 func (e *HumanGateFrozenError) Error() string {
-	return "task is human-gated: awaiting human sign-off; only a user may move it to backlog/done/cancelled"
+	if e.TargetCategory == domain.StatusCategoryBacklog {
+		return "task is human-gated: awaiting human sign-off; only the gate's own author may park it in backlog while the ask is still open — to close it (done/cancelled) only a user may do that"
+	}
+	return "task is human-gated: awaiting human sign-off; only a user may move it to done/cancelled"
 }
 
 // githubLiveCheckTimeout bounds a single done-evidence-gate GitHub round
