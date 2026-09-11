@@ -398,6 +398,25 @@ func (s *agentService) ListActivityLog(ctx context.Context, agentID uuid.UUID, f
 // Authenticate verifies an API key and resolves the caller's identity for the
 // requested workspace.
 //
+// workspaceSlug is trusted only to BOOTSTRAP which workspace ID to search —
+// it is a mutable string re-parsed from the presented key's own plaintext
+// (agk_{slug}_{random}, fixed at issue time, never updated if the workspace
+// is later renamed) and, since migration 20260911002 + WorkspaceRepo.Delete's
+// rename-on-delete (task #c164a5df), a slug a deleted workspace once held can
+// be reused by a completely unrelated new workspace. GetBySlug below always
+// resolves to whichever workspace is LIVE under that slug right now — which,
+// for a key issued before a deletion+reuse, is NOT the workspace the key was
+// issued for. That is fine ONLY because every lookup that follows
+// (GetByWorkspaceAndPrefix / GetByAPIKeyPrefix) re-scopes by that workspace's
+// immutable id, never by the slug string again — a row that actually belongs
+// to the original (now-deleted) workspace carries that workspace's own id
+// forever and can never match a query scoped to some other workspace's id,
+// no matter what slug either of them answers to. Do not "simplify" either
+// lookup to filter by slug instead of workspace_id — that would resurrect
+// exactly the hole task #2045c890 audited this function for. Regression
+// coverage against real Postgres (not mocks — the thing being proven is SQL
+// scoping): agent_key_workspace_reuse_db_test.go.
+//
 // The lookup goes through agent_workspace_grants first (task U2): agent_id,
 // workspace_id and workspace role all come from the CONNECTION that matched,
 // never assumed from the agent's home row. Only when no connection exists at
