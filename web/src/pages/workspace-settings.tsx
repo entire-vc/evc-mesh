@@ -641,6 +641,7 @@ export function WorkspaceSettingsPage() {
   const {
     workspaceMembers,
     myRole,
+    myRoleError,
     isLoadingWorkspaceMembers,
     fetchWorkspaceMembers,
     fetchMyRole,
@@ -1197,6 +1198,34 @@ export function WorkspaceSettingsPage() {
       </div>
 
       <div className="mx-auto max-w-2xl space-y-6">
+      {/* Role fetch failed (not "you have no role" — that's a real 404 and
+          stays silent, see fetchMyRole in stores/member.ts). Shown on every
+          tab: admin controls across Members/General/Workflow Templates/Config
+          all key off the same myRole, so a fetch failure hides all of them
+          at once — the reader needs to know why, not just see fewer buttons. */}
+      {myRoleError && (
+        <div className="flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/5 p-4">
+          <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0 space-y-1">
+            <p className="text-sm font-medium text-destructive">
+              Could not determine your role in this workspace
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {myRoleError} — admin controls are hidden until this is
+              resolved. This does not mean you lack permission, only that we
+              could not check.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => currentWorkspace && void fetchMyRole(currentWorkspace.id)}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
       {/* Section 0: Profile */}
       {activeTab === "profile" && (
       <Card>
