@@ -152,6 +152,13 @@ func (r *WorkspaceRepo) Update(ctx context.Context, workspace *domain.Workspace)
 	return nil
 }
 
+// workspaceDeletedSlugMaxLen is the longest the ORIGINAL slug portion may be
+// before the rename-on-delete suffix is appended, so the result still fits
+// the column's own rules: chk_workspaces_slug_format caps the whole slug at
+// 100 chars (migrations/20260224003_create_workspaces.sql), and the suffix
+// below ("-deleted-" + YYYYMMDD + "-" + 8 hex chars) is always exactly 26.
+const workspaceDeletedSlugMaxLen = 100 - 26
+
 // Delete performs a soft delete of the workspace and, in the same
 // transaction, cascades to every project and task inside it.
 //
@@ -164,6 +171,26 @@ func (r *WorkspaceRepo) Update(ctx context.Context, workspace *domain.Workspace)
 // closes that by construction: those queries already filter tasks.deleted_at/
 // projects.deleted_at (or now do, see the fixes alongside this one), so once
 // this cascade runs there is nothing left for them to find.
+//
+// The delete also RENAMES the row's own slug (task #c164a5df, parent
+// #93644be7) rather than leaving it in place. A soft-deleted row that keeps
+// its slug holds it forever — idx_workspaces_slug_unique_live (migration
+// 20260911002) only enforces uniqueness among LIVE rows, so a dead row with
+// its original slug would silently block recreating a workspace at that
+// same address, and the failure would look identical to "someone else has
+// this slug" with no way to tell the two apart.
+//
+// Chosen over bare release (freeing the slug with no trace): renaming keeps
+// the dead row reachable by its new, distinguishable slug and doesn't hand
+// old bookmarked links straight to whatever unrelated workspace claims the
+// slug next — see the parent task's decision comment.
+//
+// The 8 hex chars appended are the row's own id with dashes stripped
+// (deterministic, not random) — since id is the table's primary key, two
+// DIFFERENT rows deleting the same slug on the same day always get
+// different suffixes, so the same-slug-deleted-twice-in-one-day collision
+// the parent task calls out can't happen even without a query-then-write
+// race check.
 func (r *WorkspaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -171,8 +198,12 @@ func (r *WorkspaceRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 	defer func() { _ = tx.Rollback() }() // no-op once committed
 
-	res, err := tx.ExecContext(ctx,
-		`UPDATE workspaces SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
+	res, err := tx.ExecContext(ctx, `
+		UPDATE workspaces
+		SET deleted_at = NOW(),
+		    slug = left(slug, $2) || '-deleted-' || to_char(NOW(), 'YYYYMMDD') || '-' || left(replace(id::text, '-', ''), 8)
+		WHERE id = $1 AND deleted_at IS NULL`,
+		id, workspaceDeletedSlugMaxLen)
 	if err != nil {
 		return err
 	}

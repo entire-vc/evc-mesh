@@ -162,8 +162,8 @@ func TestWorkspaceRepo_Delete_CascadesToTasksAndProjects(t *testing.T) {
 	wsID := uuid.New()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)] WHERE id = [$]1 AND deleted_at IS NULL").
-		WithArgs(wsID).
+	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)], *slug = .* WHERE id = [$]1 AND deleted_at IS NULL").
+		WithArgs(wsID, workspaceDeletedSlugMaxLen).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE tasks SET deleted_at = NOW[(][)]").
 		WithArgs(wsID).
@@ -187,8 +187,8 @@ func TestWorkspaceRepo_Delete_NotFoundRollsBackWithoutTouchingChildren(t *testin
 	wsID := uuid.New()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)] WHERE id = [$]1 AND deleted_at IS NULL").
-		WithArgs(wsID).
+	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)], *slug = .* WHERE id = [$]1 AND deleted_at IS NULL").
+		WithArgs(wsID, workspaceDeletedSlugMaxLen).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
@@ -206,8 +206,8 @@ func TestWorkspaceRepo_Delete_TaskCascadeFailureRollsBackTheWorkspaceToo(t *test
 	wsID := uuid.New()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)] WHERE id = [$]1 AND deleted_at IS NULL").
-		WithArgs(wsID).
+	mock.ExpectExec("UPDATE workspaces SET deleted_at = NOW[(][)], *slug = .* WHERE id = [$]1 AND deleted_at IS NULL").
+		WithArgs(wsID, workspaceDeletedSlugMaxLen).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE tasks SET deleted_at = NOW[(][)]").
 		WithArgs(wsID).
@@ -244,7 +244,9 @@ func TestWorkspaceRepo_Delete_SQL(t *testing.T) {
 	require.Len(t, captured, 3)
 
 	normalize := func(s string) string { return regexp.MustCompile(`\s+`).ReplaceAllString(s, " ") }
-	assert.Contains(t, normalize(captured[0]), "UPDATE workspaces SET deleted_at = NOW()")
+	assert.Contains(t, normalize(captured[0]), "UPDATE workspaces SET deleted_at = NOW(),")
+	assert.Contains(t, normalize(captured[0]), "slug = left(slug, $2) || '-deleted-' || to_char(NOW(), 'YYYYMMDD') || '-' || left(replace(id::text, '-', ''), 8)",
+		"delete must rename the dead row's own slug — see workspaceDeletedSlugMaxLen doc comment")
 	assert.Contains(t, normalize(captured[1]), "UPDATE tasks SET deleted_at = NOW()")
 	assert.Contains(t, normalize(captured[1]), "project_id IN (SELECT id FROM projects WHERE workspace_id = $1)",
 		"tasks have no workspace_id column — must reach it through projects")
