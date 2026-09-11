@@ -517,6 +517,7 @@ func main() {
 	workspaceMemberService := service.NewWorkspaceMemberService(workspaceMemberRepo, userRepo, projectMemberRepo, activityLogRepo, agentRepo)
 	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo,
 		service.WithAgentRepo(agentRepo),
+		service.WithAgentWorkspaceGrantRepo(agentWorkspaceGrantRepo),
 	)
 
 	// Invite service (email-link flow).
@@ -1536,6 +1537,13 @@ func main() {
 	api.GET("/agents/me/events/stream", agentHandler.EventStream)
 	api.GET("/agents/me/tasks/poll", agentHandler.PollTasks)
 	api.POST("/agents/me/sessions/report", agentHandler.ReportSession)
+	// GET /agents/me/workspaces — the calling agent's OWN connections, self
+	// only, no permission check (mirrors the rest of /agents/me/*). Must
+	// stay registered ahead of /agents/:agent_id/workspaces below for the
+	// same "me" != UUID reason as every other /agents/me/* route (task
+	// #80dfb336 — this route was missing entirely; a guest agent's own key
+	// got a 403 asking where it's connected).
+	api.GET("/agents/me/workspaces", agentWorkspaceGrantHandler.ListMyWorkspaces)
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 	api.GET("/agents/:agent_id", agentHandler.GetByID)
 	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))

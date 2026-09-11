@@ -156,3 +156,40 @@ func (h *AgentWorkspaceGrantHandler) ListAgentWorkspaces(c echo.Context) error {
 		"count":      len(grants),
 	})
 }
+
+// ListMyWorkspaces handles GET /agents/me/workspaces — the calling agent's
+// own connections, taken from the authenticated caller's context (same
+// c.Get("agent_id") pattern as AgentHandler.Me/UpdateMe), never from a path
+// parameter. This is a SELF-only read: no permission check, mirroring the
+// rest of the /agents/me/* family.
+//
+// It exists as its own handler (not routed at ListAgentWorkspaces under a
+// "me" alias for :agent_id) because that route is guarded by
+// RequireSelfOrPermission — self-or-manage-members in the TARGET's home
+// workspace — which is the right bar for looking up someone ELSE's
+// connections, but wrong here: this is always "about me", the same
+// reasoning that put the other five /agents/me/* routes ahead of
+// /agents/:agent_id in the route table (task #80dfb336).
+func (h *AgentWorkspaceGrantHandler) ListMyWorkspaces(c echo.Context) error {
+	agentIDVal := c.Get("agent_id")
+	if agentIDVal == nil {
+		return c.JSON(http.StatusUnauthorized, apierror.Unauthorized("agent API key required"))
+	}
+	agentID, ok := agentIDVal.(uuid.UUID)
+	if !ok {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id in context"))
+	}
+
+	grants, err := h.svc.ListAgentWorkspaces(c.Request().Context(), agentID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if grants == nil {
+		grants = []domain.AgentWorkspaceGrantWithWorkspace{}
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"workspaces": grants,
+		"count":      len(grants),
+	})
+}

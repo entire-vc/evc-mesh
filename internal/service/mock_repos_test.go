@@ -2737,8 +2737,24 @@ func (m *MockProjectMemberRepository) GetByProjectAndAgent(_ context.Context, pr
 	return nil, nil
 }
 
-func (m *MockProjectMemberRepository) List(_ context.Context, _ uuid.UUID) ([]domain.ProjectMemberWithUser, error) {
-	return nil, nil
+// List returns the members Create()-ed for projectID, wrapped with no
+// User/Agent enrichment (no test currently asserts on those fields — they
+// stayed nil in the pre-existing always-nil stub too). Real, not a stub:
+// AddMember/AddAgentMember both look up their own just-created row through
+// this exact method to build their return value, so a stub here made every
+// successful add() silently fail with "could not retrieve created member"
+// regardless of what the service logic actually did.
+func (m *MockProjectMemberRepository) List(_ context.Context, projectID uuid.UUID) ([]domain.ProjectMemberWithUser, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.ProjectMemberWithUser
+	for _, pm := range m.members {
+		if pm.ProjectID != projectID {
+			continue
+		}
+		out = append(out, domain.ProjectMemberWithUser{ProjectMember: *pm})
+	}
+	return out, nil
 }
 
 func (m *MockProjectMemberRepository) UpdateRole(_ context.Context, _, _ uuid.UUID, _ string) error {

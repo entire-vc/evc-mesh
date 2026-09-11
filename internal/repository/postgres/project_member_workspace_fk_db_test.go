@@ -25,6 +25,18 @@ import (
 // already covers every write path in internal/service; this is the second,
 // independent layer against direct SQL, a future backfill, or a service that
 // writes this table outside internal/service.
+//
+// The AGENT half of that guard (fk_pm_agent_workspace) was replaced by
+// migration 20260911001 with a trigger (check_pm_agent_workspace) — a bare FK
+// only knows "agent_id's home workspace_id", and task U1/U3's guest grants
+// (agent_workspace_grants) added a second, legitimate way to belong that a FK
+// cannot express. TestProjectMemberCreate_ForeignAgent_RejectedBySchema below
+// now asserts on the trigger's own exception text instead of the dropped
+// constraint's name; TestProjectMemberCreate_GuestAgentWithActiveGrant_*
+// and its revoked-grant sibling are new, proving the trigger's OR-branch
+// both ways (task #80dfb336 — found live: the mock-backed AddAgentMember
+// unit tests passed with the FK still in place; only a real Postgres caught
+// that the service-layer fix alone was not sufficient).
 
 func pmFKTestDB(t *testing.T) *sqlx.DB {
 	t.Helper()
@@ -166,8 +178,58 @@ func TestProjectMemberCreate_ForeignAgent_RejectedBySchema(t *testing.T) {
 		ID: uuid.New(), ProjectID: fx.nativeProjectID, AgentID: &fx.foreignAgentID,
 		Role: "member", CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	})
-	require.Error(t, err, "fk_pm_agent_workspace must reject a foreign agent")
-	assert.Contains(t, err.Error(), "fk_pm_agent_workspace")
+	require.Error(t, err, "check_pm_agent_workspace must reject a foreign agent with no home match and no grant")
+	assert.Contains(t, err.Error(), "does not belong to workspace")
+}
+
+// The guest half of the SAME invariant: an agent whose HOME is elsewhere but
+// who holds an ACTIVE grant into the native workspace (task U1/U3,
+// agent_workspace_grants) must be let through by the trigger — this is the
+// exact case fk_pm_agent_workspace used to reject unconditionally, which is
+// why migration 20260911001 exists.
+func TestProjectMemberCreate_GuestAgentWithActiveGrant_Succeeds(t *testing.T) {
+	db := pmFKTestDB(t)
+	fx := newPMFKFixture(t, db)
+	ctx := context.Background()
+
+	grant := &domain.AgentWorkspaceGrant{
+		ID: uuid.New(), AgentID: fx.foreignAgentID, WorkspaceID: fx.nativeWorkspaceID,
+		Role: "member", APIKeyPrefix: "g-" + uuid.New().String()[:8], APIKeyHash: "$2a$12$grant",
+	}
+	require.NoError(t, NewAgentWorkspaceGrantRepo(db).Create(ctx, grant))
+
+	err := NewProjectMemberRepo(db).Create(ctx, &domain.ProjectMember{
+		ID: uuid.New(), ProjectID: fx.nativeProjectID, AgentID: &fx.foreignAgentID,
+		Role: "member", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err, "an agent with an ACTIVE grant into the project's workspace must be allowed, even though its home workspace is elsewhere")
+}
+
+// Same setup, but the grant is REVOKED — the trigger's revoked_at IS NULL
+// clause is exactly what a plain FK could never express, so this is the one
+// case that most needs its own regression test: a trigger that forgot that
+// clause would pass TestProjectMemberCreate_GuestAgentWithActiveGrant_Succeeds
+// too, silently.
+func TestProjectMemberCreate_GuestAgentWithRevokedGrant_RejectedBySchema(t *testing.T) {
+	db := pmFKTestDB(t)
+	fx := newPMFKFixture(t, db)
+	ctx := context.Background()
+
+	grant := &domain.AgentWorkspaceGrant{
+		ID: uuid.New(), AgentID: fx.foreignAgentID, WorkspaceID: fx.nativeWorkspaceID,
+		Role: "member", APIKeyPrefix: "r-" + uuid.New().String()[:8], APIKeyHash: "$2a$12$revoked",
+	}
+	require.NoError(t, NewAgentWorkspaceGrantRepo(db).Create(ctx, grant))
+	found, err := NewAgentWorkspaceGrantRepo(db).Revoke(ctx, grant.ID, fx.nativeWorkspaceID)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	err = NewProjectMemberRepo(db).Create(ctx, &domain.ProjectMember{
+		ID: uuid.New(), ProjectID: fx.nativeProjectID, AgentID: &fx.foreignAgentID,
+		Role: "member", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	require.Error(t, err, "a REVOKED grant must not satisfy the trigger — revoke has to actually mean something")
+	assert.Contains(t, err.Error(), "does not belong to workspace")
 }
 
 // Same defect, the user path — this is the shape of the one real violation the
