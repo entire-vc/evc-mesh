@@ -327,3 +327,53 @@ func TestAgentWorkspaceGrantHandler_ListAgentWorkspaces_RejectsBadAgentID(t *tes
 	require.NoError(t, h.ListAgentWorkspaces(c))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+// ---------------------------------------------------------------------------
+// ListMyWorkspaces (GET /agents/me/workspaces) — task #80dfb336
+// ---------------------------------------------------------------------------
+
+func TestAgentWorkspaceGrantHandler_ListMyWorkspaces_UsesContextAgentIDNotPathParam(t *testing.T) {
+	callerID := uuid.New()
+	var gotAgentID uuid.UUID
+	svc := &MockAgentWorkspaceGrantService{
+		ListAgentWorkspacesFunc: func(_ context.Context, agentID uuid.UUID) ([]domain.AgentWorkspaceGrantWithWorkspace, error) {
+			gotAgentID = agentID
+			return []domain.AgentWorkspaceGrantWithWorkspace{
+				{
+					AgentWorkspaceGrant: domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: callerID, WorkspaceID: uuid.New(), Role: "admin"},
+					Workspace:           domain.WorkspaceBrief{ID: uuid.New(), Name: "Subrose", Slug: "subrose"},
+				},
+			}, nil
+		},
+	}
+	h := NewAgentWorkspaceGrantHandler(svc)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	// No path param at all — the whole point of /agents/me/workspaces is
+	// reading identity from the authenticated caller's context, exactly
+	// like AgentHandler.Me/UpdateMe.
+	c.Set("agent_id", callerID)
+
+	require.NoError(t, h.ListMyWorkspaces(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, callerID, gotAgentID, "must look up the AUTHENTICATED caller's own connections, not a path parameter")
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+	assert.Equal(t, float64(1), out["count"])
+}
+
+func TestAgentWorkspaceGrantHandler_ListMyWorkspaces_NoAgentKey_401(t *testing.T) {
+	h := NewAgentWorkspaceGrantHandler(&MockAgentWorkspaceGrantService{})
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	// No "agent_id" set in context at all — a user-authenticated caller
+	// (no agent API key), not a guest agent with no connections.
+
+	require.NoError(t, h.ListMyWorkspaces(c))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}

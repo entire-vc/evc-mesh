@@ -13,10 +13,11 @@ import (
 )
 
 type projectMemberService struct {
-	memberRepo          repository.ProjectMemberRepository
-	workspaceMemberRepo repository.WorkspaceMemberRepository
-	projectRepo         repository.ProjectRepository
-	agentRepo           repository.AgentRepository
+	memberRepo              repository.ProjectMemberRepository
+	workspaceMemberRepo     repository.WorkspaceMemberRepository
+	projectRepo             repository.ProjectRepository
+	agentRepo               repository.AgentRepository
+	agentWorkspaceGrantRepo repository.AgentWorkspaceGrantRepository
 }
 
 // NewProjectMemberService returns a new ProjectMemberService.
@@ -43,6 +44,18 @@ type ProjectMemberServiceOption func(*projectMemberService)
 // WithAgentRepo injects the agent repository for agent membership validation.
 func WithAgentRepo(repo repository.AgentRepository) ProjectMemberServiceOption {
 	return func(s *projectMemberService) { s.agentRepo = repo }
+}
+
+// WithAgentWorkspaceGrantRepo injects the grant repository so AddAgentMember
+// can recognize a GUEST agent (invited into project.WorkspaceID via
+// agent_workspace_grants, task U1/U3) and not just a HOME one
+// (agent.WorkspaceID == project.WorkspaceID). Without this, a guest agent
+// that is genuinely a member of the target workspace is rejected with
+// "agent does not belong to this workspace" — the U1-U3 invite/grant epic
+// produced agents that can authenticate into a workspace but can never be
+// added to any of its projects (task #80dfb336).
+func WithAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository) ProjectMemberServiceOption {
+	return func(s *projectMemberService) { s.agentWorkspaceGrantRepo = repo }
 }
 
 var validProjectRoles = map[string]bool{
@@ -152,7 +165,21 @@ func (s *projectMemberService) AddAgentMember(ctx context.Context, projectID, ag
 			return nil, apierror.NotFound("Agent")
 		}
 		if agent.WorkspaceID != project.WorkspaceID {
-			return nil, apierror.BadRequest("agent does not belong to this workspace")
+			// Not a HOME member — check whether it's a GUEST one instead
+			// (invited into project.WorkspaceID via agent_workspace_grants,
+			// task U1/U3) before refusing. Same shape as AgentIsInWorkspace
+			// (internal/middleware/workspace.go): home OR active grant.
+			belongsAsGuest := false
+			if s.agentWorkspaceGrantRepo != nil {
+				grant, grantErr := s.agentWorkspaceGrantRepo.GetByAgentAndWorkspace(ctx, agentID, project.WorkspaceID)
+				if grantErr != nil {
+					return nil, fmt.Errorf("project_member_service.AddAgentMember: %w", grantErr)
+				}
+				belongsAsGuest = grant != nil && !grant.IsRevoked()
+			}
+			if !belongsAsGuest {
+				return nil, apierror.BadRequest("agent does not belong to this workspace")
+			}
 		}
 	}
 

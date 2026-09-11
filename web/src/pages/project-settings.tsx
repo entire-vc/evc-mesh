@@ -34,6 +34,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
 import { useRulesStore } from "@/stores/rules";
 import { useAgentStore } from "@/stores/agent";
+import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
 import {
   Card,
   CardContent,
@@ -1077,6 +1078,16 @@ export function ProjectSettingsPage() {
   } = useRulesStore();
 
   const { agents, fetchAgents } = useAgentStore();
+  // Home+guest candidates for the "Add Agent to Project" dropdown below —
+  // deliberately NOT `agents` (useAgentStore.fetchAgents), which lists only
+  // agents whose HOME workspace is this one (GET /workspaces/:ws_id/agents,
+  // internal/repository/postgres/agent_repo.go). A guest agent invited into
+  // this workspace via agent_workspace_grants (task U1/U3) never appears
+  // there — U4 built exactly this endpoint for the Members-tab "Agents (N)"
+  // list, and the project-level Add-Agent dropdown needs the same source
+  // (task #80dfb336).
+  const { workspaceAgentGrants, fetchWorkspaceAgentGrants } =
+    useAgentWorkspaceGrantStore();
 
   // --- General info form state ---
   const [name, setName] = useState("");
@@ -1243,6 +1254,15 @@ export function ProjectSettingsPage() {
       void fetchAgents(currentWorkspace.id);
     }
   }, [currentWorkspace?.id, fetchAgents]);
+
+  // Fetch home+guest agent-grants for the "Add Agent to Project" dropdown —
+  // separate from fetchAgents above, see the useAgentWorkspaceGrantStore
+  // destructure comment.
+  useEffect(() => {
+    if (currentWorkspace?.id) {
+      void fetchWorkspaceAgentGrants(currentWorkspace.id);
+    }
+  }, [currentWorkspace?.id, fetchWorkspaceAgentGrants]);
 
   // Fetch workspace members for the add-member dialog
   useEffect(() => {
@@ -2092,7 +2112,8 @@ export function ProjectSettingsPage() {
                 User Members
               </CardTitle>
               <CardDescription>
-                Users with access to this project. Workspace owners and admins always have access.
+                Users with access to this project. Workspace owners and admins
+                (human members) always have access.
               </CardDescription>
             </div>
             <Button size="sm" onClick={() => setAddMemberDialogOpen(true)}>
@@ -2195,7 +2216,9 @@ export function ProjectSettingsPage() {
                 Agent Members
               </CardTitle>
               <CardDescription>
-                AI agents with access to this project via API/MCP.
+                AI agents with access to this project via API/MCP. Workspace
+                role does not grant access — an agent must be added here
+                explicitly, regardless of its workspace role.
               </CardDescription>
             </div>
             <Button size="sm" onClick={() => setAddAgentMemberOpen(true)}>
@@ -2253,11 +2276,13 @@ export function ProjectSettingsPage() {
                 className="w-full text-sm"
               >
                 <option value="">Select agent...</option>
-                {agents
-                  .filter((a) => !agentMembers.some((m) => m.agent_id === a.id))
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
+                {workspaceAgentGrants
+                  .filter(
+                    (g) => !agentMembers.some((m) => m.agent_id === g.agent.id),
+                  )
+                  .map((g) => (
+                    <option key={g.agent.id} value={g.agent.id}>
+                      {g.agent.name}
                     </option>
                   ))}
               </Select>
