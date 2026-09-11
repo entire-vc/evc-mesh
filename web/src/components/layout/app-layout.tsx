@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiErrorMessage } from "@/lib/api-error";
+import { AlertTriangle } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -64,12 +65,38 @@ export function AppLayout() {
     }
   }, [isAuthenticated, workspaces.length, fetchWorkspaces]);
 
-  // Resolve workspace slug
+  // Resolve workspace slug. A slug that doesn't match any live workspace —
+  // deleted (soft-delete renames its slug away, task #c164a5df), never
+  // existed, or belongs to a workspace this account can't see — must not be
+  // allowed to silently keep whatever workspace was current before this
+  // navigation: without the reset below, clicking a stale bookmark/deep-link
+  // while already inside a DIFFERENT live workspace left `currentWorkspace`
+  // pointing at that unrelated workspace, and every page under this layout
+  // (there is no other place `:wsSlug` gets resolved — see workspaceNotFound
+  // below) would render that workspace's data under the dead slug's URL,
+  // which is worse than a blank page.
   useEffect(() => {
     if (wsSlug && workspaces.length > 0) {
-      setCurrentWorkspaceBySlug(wsSlug);
+      const found = setCurrentWorkspaceBySlug(wsSlug);
+      if (!found && currentWorkspace) {
+        useWorkspaceStore.setState({ currentWorkspace: null });
+      }
     }
+    // currentWorkspace deliberately excluded: it's read only to decide
+    // whether a clear is needed, and including it would re-run this effect
+    // every time it changes as a RESULT of this same effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wsSlug, workspaces, setCurrentWorkspaceBySlug]);
+
+  // Render-time (not effect-time) source of truth for "this URL names a
+  // workspace slug that isn't in the live list" — computed directly from
+  // wsSlug/workspaces rather than waiting on the effect above, so there is
+  // no one-frame window where a stale currentWorkspace's page renders under
+  // the new, mismatched URL before the effect catches up.
+  const workspaceNotFound =
+    !!wsSlug &&
+    workspaces.length > 0 &&
+    !workspaces.some((w) => w.slug === wsSlug);
 
   // Fetch projects when workspace changes
   useEffect(() => {
@@ -186,6 +213,13 @@ export function AppLayout() {
     return <NoWorkspacesScreen />;
   }
 
+  // URL names a workspace slug that isn't live (deleted, never existed, or
+  // not accessible to this account) — explicit dead-end, not a blank shell
+  // or a page silently rendering a different, still-current workspace.
+  if (workspaceNotFound) {
+    return <WorkspaceNotFoundScreen slug={wsSlug!} fallbackSlug={workspaces[0]!.slug} />;
+  }
+
   return (
     <div className="flex h-screen bg-background">
       {/* Mobile backdrop */}
@@ -227,6 +261,40 @@ export function AppLayout() {
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function WorkspaceNotFoundScreen({
+  slug,
+  fallbackSlug,
+}: {
+  slug: string;
+  fallbackSlug: string;
+}) {
+  const navigate = useNavigate();
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+            <AlertTriangle className="h-6 w-6" />
+          </div>
+          <CardTitle className="text-2xl">Workspace not found</CardTitle>
+          <CardDescription>
+            &quot;{slug}&quot; doesn&apos;t exist, was deleted, or you don&apos;t have
+            access to it.
+          </CardDescription>
+        </CardHeader>
+        <CardFooter>
+          <Button
+            className="w-full"
+            onClick={() => navigate(`/w/${fallbackSlug}/activity`, { replace: true })}
+          >
+            Go to your workspace
+          </Button>
+        </CardFooter>
+      </Card>
     </div>
   );
 }
