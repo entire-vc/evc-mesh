@@ -19,18 +19,27 @@ const (
 	PermManageMembers   Permission = "manage_members"
 	PermCreateProject   Permission = "create_project"
 	PermDeleteProject   Permission = "delete_project"
-	PermRegisterAgent   Permission = "register_agent"
-	PermDeleteAgent     Permission = "delete_agent"
-	PermCreateTask      Permission = "create_task"
-	PermUpdateTask      Permission = "update_task"
-	PermDeleteTask      Permission = "delete_task"
-	PermAddComment      Permission = "add_comment"
-	PermUploadArtifact  Permission = "upload_artifact"
-	PermPublishEvent    Permission = "publish_event"
-	PermManageCF        Permission = "manage_custom_fields"
-	PermExportAuditLog  Permission = "export_audit_log"
-	PermManageWebhooks  Permission = "manage_webhooks"
-	PermManageRules     Permission = "manage_rules"
+	// PermRegisterAgent gates POST /workspaces/:ws_id/agents. It is
+	// deliberately absent from agentPerms — checked six independent ways on
+	// 21.08 (#85fd1ef2), no agent self-registration path has ever existed on
+	// prod, and workspace role does not change that: RequirePermission's
+	// agent branch checks agentPerms by ACTOR TYPE (IsAgent(c)), never by the
+	// role a grant carries, so an admin-role grant is irrelevant to this
+	// check — same shape as PermManageSecrets below. Registering a new agent
+	// identity is a human-only action: an agent that could register agents
+	// could mint itself siblings holding whatever grants it chose.
+	PermRegisterAgent  Permission = "register_agent"
+	PermDeleteAgent    Permission = "delete_agent"
+	PermCreateTask     Permission = "create_task"
+	PermUpdateTask     Permission = "update_task"
+	PermDeleteTask     Permission = "delete_task"
+	PermAddComment     Permission = "add_comment"
+	PermUploadArtifact Permission = "upload_artifact"
+	PermPublishEvent   Permission = "publish_event"
+	PermManageCF       Permission = "manage_custom_fields"
+	PermExportAuditLog Permission = "export_audit_log"
+	PermManageWebhooks Permission = "manage_webhooks"
+	PermManageRules    Permission = "manage_rules"
 	// PermManageSecrets gates the write-only secret store (task #64e84eb1).
 	// It is deliberately absent from agentPerms: the whole point of the store
 	// is that a human hands over a credential and no agent identity can read
@@ -132,6 +141,15 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 			// --- Agents: fast-path, no DB lookup. ---
 			if IsAgent(c) {
 				if !agentPerms[perm] {
+					// PermRegisterAgent gets its own message: the generic
+					// text leaves whoever granted this agent an admin role
+					// wondering why admin didn't help. Naming the actual
+					// boundary (actor type, not role — see PermRegisterAgent's
+					// doc comment) answers that without them having to read
+					// the source.
+					if perm == PermRegisterAgent {
+						return c.JSON(http.StatusForbidden, apierror.Forbidden("agent registration requires a human credential — no workspace role lets an agent register another agent"))
+					}
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
 				}
 				return next(c)

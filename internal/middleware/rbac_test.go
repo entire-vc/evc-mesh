@@ -357,6 +357,45 @@ func TestRBAC_Agent_CannotManageCF(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
 
+// TestRBAC_Agent_CannotRegisterAgent_NamesTheBoundary — #606c215e Part 2.
+// An admin-role grant does not help an agent actor here (the agent branch
+// checks agentPerms by ACTOR TYPE, never by role), and the generic "agents
+// cannot perform this action" message left whoever granted admin unable to
+// tell why. The message for this specific permission must name the actual
+// boundary (human credential, not role) instead of the generic text.
+func TestRBAC_Agent_CannotRegisterAgent_NamesTheBoundary(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	agentID := uuid.New()
+
+	c, rec := newRBACAgentContext(agentID, wsID)
+
+	h := RequirePermission(PermRegisterAgent, repo)(okHandler)
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code, "the boundary itself must not move — still 403")
+	assert.Contains(t, rec.Body.String(), "human credential")
+	assert.NotContains(t, rec.Body.String(), "agents cannot perform this action", "must not fall back to the generic message for this specific permission")
+}
+
+// TestRBAC_Agent_OtherMissingPerms_KeepGenericMessage — the message
+// improvement above is scoped to PermRegisterAgent; every other permission
+// agents lack keeps the pre-existing generic text unchanged.
+func TestRBAC_Agent_OtherMissingPerms_KeepGenericMessage(t *testing.T) {
+	repo := newRBACMockMemberRepo()
+	wsID := uuid.New()
+	agentID := uuid.New()
+
+	for _, perm := range []Permission{PermCreateProject, PermDeleteWorkspace, PermManageCF, PermManageSecrets} {
+		c, rec := newRBACAgentContext(agentID, wsID)
+		h := RequirePermission(perm, repo)(okHandler)
+		err := h(c)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Contains(t, rec.Body.String(), "agents cannot perform this action", "perm=%s", perm)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests: unauthenticated / missing context returns 403
 // ---------------------------------------------------------------------------
