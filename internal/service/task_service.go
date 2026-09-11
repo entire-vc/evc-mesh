@@ -891,12 +891,28 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		// Human-gate freeze: when a task is awaiting human sign-off, only a user
 		// may move it to backlog/done/cancelled. Prevents SupersedeRecurringInstances,
 		// auto_transition, and other system actors from silently closing gated tasks.
+		//
+		// Narrow exception (#e1b4cffd): the AGENT who raised THIS gate may park it
+		// in backlog — never done/cancelled, and never any other agent — while the
+		// ask is still open and unanswered. Without it the gate author has no way
+		// to say "still waiting, nothing changed" short of lying (withdrawing a
+		// marker that is still valid); the feed re-fed the same unresolved ask on
+		// every cycle because the predicate is a pure function of history that is
+		// never consumed. The gate itself is untouched by this move — HumanGate
+		// stays true, so closing the task remains a human-only act.
 		if task.HumanGate {
-			_, actorType := actorctx.FromContext(ctx)
+			actorID, actorType := actorctx.FromContext(ctx)
 			if actorType != domain.ActorTypeUser {
 				switch status.Category {
-				case domain.StatusCategoryBacklog, domain.StatusCategoryDone, domain.StatusCategoryCancelled:
+				case domain.StatusCategoryDone, domain.StatusCategoryCancelled:
 					return &HumanGateFrozenError{}
+				case domain.StatusCategoryBacklog:
+					isGateAuthor := actorType == domain.ActorTypeAgent &&
+						task.GateAuthor != nil && *task.GateAuthor == actorID &&
+						task.GateAuthorType != nil && *task.GateAuthorType == domain.ActorTypeAgent
+					if !isGateAuthor {
+						return &HumanGateFrozenError{}
+					}
 				}
 			}
 		}

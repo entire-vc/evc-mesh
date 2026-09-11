@@ -101,6 +101,81 @@ func TestMoveTask_HumanGate_UserAllowedOnDone(t *testing.T) {
 	require.NoError(t, err, "user must be allowed to move human-gated task to done")
 }
 
+func TestMoveTask_HumanGate_GateAuthorAllowedOnBacklog(t *testing.T) {
+	ts, taskID, cats := buildHumanGateEnv(t)
+
+	authorID := uuid.New()
+	authorType := domain.ActorTypeAgent
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthor = &authorID
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthorType = &authorType
+
+	ctx := actorctx.WithActor(context.Background(), authorID, domain.ActorTypeAgent)
+
+	backlogID := cats[domain.StatusCategoryBacklog]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &backlogID})
+
+	require.NoError(t, err, "the gate's own author must be allowed to park the still-open ask in backlog")
+
+	parked, getErr := ts.taskRepo.GetByID(context.Background(), taskID)
+	require.NoError(t, getErr)
+	assert.True(t, parked.HumanGate, "parking must not clear the gate — a human still has to resolve it")
+}
+
+func TestMoveTask_HumanGate_GateAuthorStillBlockedOnDone(t *testing.T) {
+	ts, taskID, cats := buildHumanGateEnv(t)
+
+	authorID := uuid.New()
+	authorType := domain.ActorTypeAgent
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthor = &authorID
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthorType = &authorType
+
+	ctx := actorctx.WithActor(context.Background(), authorID, domain.ActorTypeAgent)
+
+	doneID := cats[domain.StatusCategoryDone]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &doneID})
+
+	require.Error(t, err)
+	var gateErr *HumanGateFrozenError
+	assert.ErrorAs(t, err, &gateErr, "the gate author's own-ask exception covers backlog only, never done")
+}
+
+func TestMoveTask_HumanGate_GateAuthorStillBlockedOnCancelled(t *testing.T) {
+	ts, taskID, cats := buildHumanGateEnv(t)
+
+	authorID := uuid.New()
+	authorType := domain.ActorTypeAgent
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthor = &authorID
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthorType = &authorType
+
+	ctx := actorctx.WithActor(context.Background(), authorID, domain.ActorTypeAgent)
+
+	cancelledID := cats[domain.StatusCategoryCancelled]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &cancelledID})
+
+	require.Error(t, err)
+	var gateErr *HumanGateFrozenError
+	assert.ErrorAs(t, err, &gateErr, "the gate author's own-ask exception covers backlog only, never cancelled")
+}
+
+func TestMoveTask_HumanGate_NonAuthorAgentStillBlockedOnBacklog(t *testing.T) {
+	ts, taskID, cats := buildHumanGateEnv(t)
+
+	authorID := uuid.New()
+	authorType := domain.ActorTypeAgent
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthor = &authorID
+	ts.taskRepo.(*MockTaskRepository).items[taskID].GateAuthorType = &authorType
+
+	// A DIFFERENT agent than the one who raised the gate.
+	ctx := actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent)
+
+	backlogID := cats[domain.StatusCategoryBacklog]
+	err := ts.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &backlogID})
+
+	require.Error(t, err)
+	var gateErr *HumanGateFrozenError
+	assert.ErrorAs(t, err, &gateErr, "only the gate's own author gets the backlog exception, not any agent")
+}
+
 func TestMoveTask_HumanGate_AgentAllowedToReview(t *testing.T) {
 	ts, taskID, cats := buildHumanGateEnv(t)
 
