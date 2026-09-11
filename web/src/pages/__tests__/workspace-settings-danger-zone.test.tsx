@@ -8,12 +8,16 @@ vi.mock("react-router", async () => {
   return { ...actual, useNavigate: () => mockedNavigate };
 });
 
-vi.mock("@/lib/api", () => ({
-  api: vi.fn(),
-  getAccessToken: vi.fn(() => null),
-}));
+vi.mock("@/lib/api", async () => {
+  // Keep the real ApiRequestError class — fetchMyRole (stores/member.ts)
+  // does `err instanceof ApiRequestError` to tell a real 404 ("not a
+  // member") apart from every other failure; a plain mock object here would
+  // make that check silently false and break the myRoleError tests below.
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual, api: vi.fn(), getAccessToken: vi.fn(() => null) };
+});
 
-import { api } from "@/lib/api";
+import { api, ApiRequestError } from "@/lib/api";
 import { WorkspaceSettingsPage } from "@/pages/workspace-settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useMemberStore } from "@/stores/member";
@@ -187,5 +191,86 @@ describe("WorkspaceSettingsPage — Delete Workspace flow", () => {
     expect(mockedNavigate).not.toHaveBeenCalled();
     // Dialog stayed open — the confirm button is still on screen.
     expect(screen.getByRole("button", { name: "Delete Workspace" })).toBeInTheDocument();
+  });
+});
+
+// Task #a935ce0f: a fetchMyRole failure (network/401/403/500) used to be
+// indistinguishable from a genuine non-admin — every control just vanished.
+// These are the synthetic AC3/AC4 controls Garfield's diagnosis calls for
+// (the real partner-instance episode never reproduced as a members/me HTTP
+// error, so the failure has to be injected explicitly).
+describe("WorkspaceSettingsPage — role fetch failure banner (AC3/AC4)", () => {
+  // AC3, negative control: members/me fails outright. The page must SAY SO —
+  // not just quietly render as if the answer were "you have no role".
+  it("shows an error banner (not a silent hide) when members/me fails", async () => {
+    useMemberStore.setState({ myRole: null, myRoleError: null });
+    mockedApi.mockImplementation((url: string) => {
+      if (url === "/api/v1/workspaces/ws1/members/me") {
+        return Promise.reject(
+          new ApiRequestError("Server error (500)", "SERVER_ERROR", 500),
+        );
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Could not determine your role in this workspace"),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Server error \(500\)/)).toBeInTheDocument();
+    // Fail closed: an unknown role must not show admin-only controls either.
+    expect(screen.queryByText("Danger Zone")).not.toBeInTheDocument();
+  });
+
+  // AC4, positive control: a REAL non-admin — the request succeeded and said
+  // so. Controls are hidden (as before), but with NO error banner — this is
+  // what must stay silent, and it's what distinguishes "denied" from "unknown".
+  it("shows no error banner for a real, successfully-fetched non-admin role", async () => {
+    useMemberStore.setState({ myRole: null, myRoleError: null });
+    mockApiByRoute("member");
+
+    renderPage();
+
+    await waitFor(() => expect(mockedApi).toHaveBeenCalled());
+    expect(
+      screen.queryByText("Could not determine your role in this workspace"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Danger Zone")).not.toBeInTheDocument();
+  });
+
+  it("Retry re-fetches and clears the banner on success", async () => {
+    useMemberStore.setState({ myRole: null, myRoleError: null });
+    let attempt = 0;
+    mockedApi.mockImplementation((url: string) => {
+      if (url === "/api/v1/workspaces/ws1/members/me") {
+        attempt += 1;
+        if (attempt === 1) {
+          return Promise.reject(
+            new ApiRequestError("Server error (500)", "SERVER_ERROR", 500),
+          );
+        }
+        return Promise.resolve({ role: "owner" });
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    await waitFor(() =>
+      expect(
+        screen.getByText("Could not determine your role in this workspace"),
+      ).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Could not determine your role in this workspace"),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(screen.getByText("Danger Zone")).toBeInTheDocument());
   });
 });

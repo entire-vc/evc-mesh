@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/api", () => ({
-  api: vi.fn(),
-}));
-import { api } from "@/lib/api";
+vi.mock("@/lib/api", async () => {
+  // ApiRequestError must stay the REAL class, not a mock stand-in — fetchMyRole
+  // (stores/member.ts) does `err instanceof ApiRequestError` to tell a real
+  // 404 ("not a member") apart from every other failure, and a plain object
+  // mock would make that check always false.
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual, api: vi.fn() };
+});
+import { api, ApiRequestError } from "@/lib/api";
 import { useMemberStore } from "@/stores/member";
 import type { WorkspaceMemberWithUser } from "@/types";
 
@@ -37,6 +42,8 @@ beforeEach(() => {
     workspaceMembers: [],
     userSearchResults: [],
     isSearching: false,
+    myRole: null,
+    myRoleError: null,
   });
   mockedApi.mockReset();
 });
@@ -183,5 +190,95 @@ describe("updateWorkspaceMemberName", () => {
     await expect(
       useMemberStore.getState().updateWorkspaceMemberName(WS, USER, "Something Else"),
     ).rejects.toThrow(/own display name/);
+  });
+});
+
+// Task #a935ce0f: workspace-settings.tsx hides EVERY admin control (invite,
+// delete workspace, manage rules/secrets) off myRole alone, and the old
+// fetchMyRole swallowed any failure — network, 401/403/500 — into the exact
+// same myRole: null a genuine non-admin gets. A denied/unknown role must be
+// distinguishable from "we checked and you have none".
+describe("fetchMyRole", () => {
+  it("sets myRole on success and clears any previous error", async () => {
+    useMemberStore.setState({ myRoleError: "stale error from a previous attempt" });
+    mockedApi.mockResolvedValueOnce({
+      workspace_id: WS,
+      user_id: USER,
+      role: "owner",
+    });
+
+    await useMemberStore.getState().fetchMyRole(WS);
+
+    expect(useMemberStore.getState().myRole).toBe("owner");
+    expect(useMemberStore.getState().myRoleError).toBeNull();
+  });
+
+  // Positive control (task AC4): a REAL non-admin — the server answered,
+  // definitively, "you have a role and it isn't owner/admin". No error banner:
+  // this is the same silent-hide as before the fix, and it must stay silent.
+  it("a real non-admin role is not treated as an error", async () => {
+    mockedApi.mockResolvedValueOnce({ workspace_id: WS, user_id: USER, role: "member" });
+
+    await useMemberStore.getState().fetchMyRole(WS);
+
+    expect(useMemberStore.getState().myRole).toBe("member");
+    expect(useMemberStore.getState().myRoleError).toBeNull();
+  });
+
+  // GetMyRole (workspace_member_service.go) maps "no membership row" to a
+  // 404 NotFound — a genuine, known answer (no role), not a failed lookup.
+  // Must NOT surface as myRoleError, or a real non-member would be
+  // permanently flagged as "we don't know" instead of "you have none".
+  it("treats 404 (not a member) as a real answer, not a fetch failure", async () => {
+    mockedApi.mockRejectedValueOnce(
+      new ApiRequestError("WorkspaceMember not found", "NOT_FOUND", 404),
+    );
+
+    await useMemberStore.getState().fetchMyRole(WS);
+
+    expect(useMemberStore.getState().myRole).toBeNull();
+    expect(useMemberStore.getState().myRoleError).toBeNull();
+  });
+
+  // Negative control (task AC3): the failure the bug report actually hit —
+  // some non-404 failure (modeled here as a 500; a bare network Error takes
+  // the same branch). myRole must stay null (fail closed on admin controls —
+  // this is not a green light to show them) but myRoleError must be SET, so
+  // the page can render "could not determine your role" instead of quietly
+  // rendering as if the answer were "no role".
+  it("surfaces a non-404 failure as myRoleError, distinct from a real no-role answer", async () => {
+    mockedApi.mockRejectedValueOnce(
+      new ApiRequestError("Server error (500)", "SERVER_ERROR", 500),
+    );
+
+    await useMemberStore.getState().fetchMyRole(WS);
+
+    expect(useMemberStore.getState().myRole).toBeNull();
+    expect(useMemberStore.getState().myRoleError).toBe("Server error (500)");
+  });
+
+  it("surfaces a plain network failure (not an ApiRequestError) the same way", async () => {
+    mockedApi.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await useMemberStore.getState().fetchMyRole(WS);
+
+    expect(useMemberStore.getState().myRole).toBeNull();
+    expect(useMemberStore.getState().myRoleError).toBe(
+      "Could not reach the server to check your role",
+    );
+  });
+
+  // A retry (the banner's own button) that then succeeds must clear the
+  // error — otherwise "Retry" would be cosmetic and the banner would be stuck.
+  it("a successful retry after a failure clears myRoleError", async () => {
+    mockedApi.mockRejectedValueOnce(new ApiRequestError("Server error (500)", "SERVER_ERROR", 500));
+    await useMemberStore.getState().fetchMyRole(WS);
+    expect(useMemberStore.getState().myRoleError).toBe("Server error (500)");
+
+    mockedApi.mockResolvedValueOnce({ workspace_id: WS, user_id: USER, role: "owner" });
+    await useMemberStore.getState().fetchMyRole(WS);
+
+    expect(useMemberStore.getState().myRole).toBe("owner");
+    expect(useMemberStore.getState().myRoleError).toBeNull();
   });
 });

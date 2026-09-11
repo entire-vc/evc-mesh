@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api } from "@/lib/api";
+import { api, ApiRequestError } from "@/lib/api";
 import type {
   CreateInviteResponse,
   InviteDelivery,
@@ -14,6 +14,13 @@ import type {
 interface MemberState {
   workspaceMembers: WorkspaceMemberWithUser[];
   myRole: WorkspaceRole | null;
+  // Set only when fetchMyRole could not determine the role at all (network
+  // failure, 401/403/500, ...) — distinct from myRole legitimately being
+  // null because the server said "not a member" (404). A denied/unknown
+  // role must never look identical to "we checked and you have none":
+  // task #a935ce0f, a silent catch here hid every admin control with no
+  // explanation on a genuine transient failure.
+  myRoleError: string | null;
   projectMembers: ProjectMemberWithUser[];
   userSearchResults: UserSearchResult[];
   isLoadingWorkspaceMembers: boolean;
@@ -82,6 +89,7 @@ interface MemberState {
 export const useMemberStore = create<MemberState>((set) => ({
   workspaceMembers: [],
   myRole: null,
+  myRoleError: null,
   projectMembers: [],
   userSearchResults: [],
   isLoadingWorkspaceMembers: false,
@@ -107,9 +115,30 @@ export const useMemberStore = create<MemberState>((set) => ({
       const me = await api<{ role: string }>(
         `/api/v1/workspaces/${workspaceId}/members/me`,
       );
-      set({ myRole: (me?.role as WorkspaceRole) ?? null });
-    } catch {
-      set({ myRole: null });
+      set({ myRole: (me?.role as WorkspaceRole) ?? null, myRoleError: null });
+    } catch (err) {
+      // 404 from this endpoint means "you have no membership row here" —
+      // GetMyRole (workspace_member_service.go) maps a missing row straight
+      // to NotFound. That is a genuine, known answer (no role), not a
+      // failure to find one, so it must NOT set myRoleError: doing so would
+      // permanently flag a real non-member as "we don't know", which is
+      // exactly the opposite bug from the one this fixes.
+      //
+      // Anything else — a network failure (not an ApiRequestError at all),
+      // 401/403/500, a malformed response — means the role is genuinely
+      // unknown. Collapsing that into myRole: null with no signal is the
+      // defect task #a935ce0f reports: every admin control (invite, delete
+      // workspace, manage rules/secrets) disappears with no explanation,
+      // indistinguishable from "you were never an admin".
+      if (err instanceof ApiRequestError && err.status === 404) {
+        set({ myRole: null, myRoleError: null });
+      } else {
+        const message =
+          err instanceof ApiRequestError
+            ? err.message
+            : "Could not reach the server to check your role";
+        set({ myRole: null, myRoleError: message });
+      }
     }
   },
 
