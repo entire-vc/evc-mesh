@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,7 +231,11 @@ func TestEnforceMentionHandoffGate_RecentSubtaskAccompaniesMention(t *testing.T)
 }
 
 // TestEnforceMentionHandoffGate_StaleSubtaskIsNotAccompanying: the window
-// applies to create_subtask the same way it applies to assign_task.
+// applies to create_subtask the same way it applies to assign_task. Body
+// carries "проверь" (an ask-pattern imperative) so the case still exercises
+// "no accompanying hand-off" rather than being exempted by the ask-pattern
+// narrowing instead (see TestEnforceMentionHandoffGate_NoAskPatternIsNotGated
+// for that orthogonal exemption).
 func TestEnforceMentionHandoffGate_StaleSubtaskIsNotAccompanying(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, parentID := newGatedTaskEnv()
@@ -246,7 +251,7 @@ func TestEnforceMentionHandoffGate_StaleSubtaskIsNotAccompanying(t *testing.T) {
 
 	comment := &domain.Comment{
 		TaskID: parentID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@bart там же было что-то",
+		Body: "@bart там же было что-то, проверь ещё раз",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
@@ -426,9 +431,14 @@ func TestEnforceMentionHandoffGate_ShadowIsTheDefault(t *testing.T) {
 }
 
 // TestEnforceMentionHandoffGate_EnforceFlagIsHonoured is the negative control for the
-// test above: the SAME input, differing only by the flag, must be refused and must NOT
-// persist. Without it, "shadow does not refuse" would pass equally on a gate that
-// decided nothing at all.
+// test above, PLUS the ask-pattern narrowing (#ffa6e607): a body that DOES read as an
+// ask ("нужен вердикт" — same shape as the headline case), with the flag flipped, must
+// be refused and must NOT persist. It is deliberately NOT the identical body as the
+// shadow test above — since #ffa6e607, "@wally принято, правку не делай." has no
+// ask-pattern and is exempt from this gate regardless of the flag (see
+// TestEnforceMentionHandoffGate_NegatedImperativeIsNotAnAskPattern), so it can no
+// longer serve as a same-input flag toggle. Without a real ask-pattern body, "shadow
+// does not refuse" would pass equally on a gate that decided nothing at all.
 func TestEnforceMentionHandoffGate_EnforceFlagIsHonoured(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
@@ -439,13 +449,113 @@ func TestEnforceMentionHandoffGate_EnforceFlagIsHonoured(t *testing.T) {
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
 		AuthorType: domain.ActorTypeUser,
-		Body:       "@wally принято, правку не делай.",
+		Body:       "@wally — нужен вердикт",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
-	require.Error(t, err, "with the flag set, the identical mention must be refused")
+	require.Error(t, err, "with the flag set, an ask-shaped mention must be refused")
 	var handoffErr *MentionHandoffRequiredError
 	require.True(t, errors.As(err, &handoffErr), "got %T: %v", err, err)
 	assert.Equal(t, []string{"wally"}, handoffErr.Slugs)
 	assert.Empty(t, env.commentRepo.items, "a refused comment must not be stored")
+}
+
+// --- Ask-pattern narrowing (#ffa6e607, based on the #bb39554c shadow-log read) ---
+
+// TestEnforceMentionHandoffGate_NoAskPatternIsNotGated: a bare @slug with no queue
+// path and no accompanying hand-off, but ALSO no imperative/question nearby, must not
+// be gated even under enforcement — this is the dominant class the shadow-log report
+// found (routine addressed commentary in an already-tracked thread), and the whole
+// point of the narrowing is to stop refusing it.
+func TestEnforceMentionHandoffGate_NoAskPatternIsNotGated(t *testing.T) {
+	enforceMentionHandoff(t)
+	env, taskID := newGatedTaskEnv()
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	env.agentSvc.AddAgent(env.wsID, agent)
+
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
+		Body: "@wally взгляд со стороны был полезен, спасибо",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+	assert.NotEmpty(t, env.commentRepo.items)
+}
+
+// TestEnforceMentionHandoffGate_NegatedImperativeIsNotAnAskPattern pins the exact
+// example the gate's own shadow-mode comment names as ordinary addressing —
+// "@garfield принято, правку не делай" — a NEGATED imperative. It must not be gated
+// even under enforcement: matching the bare stem "делай" would defeat the narrowing
+// on its own canonical counter-example.
+func TestEnforceMentionHandoffGate_NegatedImperativeIsNotAnAskPattern(t *testing.T) {
+	enforceMentionHandoff(t)
+	env, taskID := newGatedTaskEnv()
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "garfield"}
+	env.agentSvc.AddAgent(env.wsID, agent)
+
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
+		Body: "@garfield принято, правку не делай.",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment))
+	assert.NotEmpty(t, env.commentRepo.items)
+}
+
+// TestEnforceMentionHandoffGate_QuestionMarkIsAnAskPattern: a question mark next to
+// the mention counts as an ask on its own, no imperative verb required.
+func TestEnforceMentionHandoffGate_QuestionMarkIsAnAskPattern(t *testing.T) {
+	enforceMentionHandoff(t)
+	env, taskID := newGatedTaskEnv()
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	env.agentSvc.AddAgent(env.wsID, agent)
+
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
+		Body: "@wally это уже смёржено?",
+	}
+	err := env.svc.Create(context.Background(), comment)
+
+	var handoffErr *MentionHandoffRequiredError
+	require.True(t, errors.As(err, &handoffErr))
+}
+
+// TestEnforceMentionHandoffGate_AskPatternOutsideWindowDoesNotCount: an imperative
+// far enough away from the mention (beyond askContextWindowBytes) belongs to a
+// different clause and must not pull an unrelated addressed mention into the gate.
+func TestEnforceMentionHandoffGate_AskPatternOutsideWindowDoesNotCount(t *testing.T) {
+	enforceMentionHandoff(t)
+	env, taskID := newGatedTaskEnv()
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	env.agentSvc.AddAgent(env.wsID, agent)
+
+	padding := strings.Repeat("x", askContextWindowBytes+40)
+	comment := &domain.Comment{
+		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
+		Body: "нужен вердикт по соседней теме, " + padding + " @wally смотрели уже эту версию",
+	}
+	require.NoError(t, env.svc.Create(context.Background(), comment),
+		"the imperative is far outside the window around @wally — must not gate")
+	assert.NotEmpty(t, env.commentRepo.items)
+}
+
+// TestMentionHasAskPattern is direct unit coverage of the detector, independent of
+// the full gate/service plumbing.
+func TestMentionHasAskPattern(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		slug string
+		want bool
+	}{
+		{"imperative next to mention", "@wally нужен вердикт", "wally", true},
+		{"question mark next to mention", "@wally готово?", "wally", true},
+		{"negated imperative does not count", "@garfield принято, правку не делай.", "garfield", false},
+		{"plain addressing does not count", "@garfield принято, спасибо", "garfield", false},
+		{"one of several occurrences is enough", "@wally смотри, потом @wally нужен ответ", "wally", true},
+		{"far-away imperative outside window does not count", "нужен вердикт " + strings.Repeat("x", askContextWindowBytes+40) + " @wally смотрели уже эту версию", "wally", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, mentionHasAskPattern(tc.body, tc.slug))
+		})
+	}
 }
