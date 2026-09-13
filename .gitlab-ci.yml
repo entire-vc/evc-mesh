@@ -567,7 +567,13 @@ tenancy-rbac-gate:
     - name: nats:2-alpine
       alias: nats
       command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
-    - name: minio/minio
+    # Docker Hub's minio/minio repository started returning "pull access denied
+    # ... repository does not exist" (measured 2026-09-13, reproduced with a
+    # plain `docker pull minio/minio:latest` outside CI too — not a runner-side
+    # flake). quay.io/minio/minio is MinIO's own other published mirror of the
+    # same image; verified it serves an identical /minio/health/live 200 before
+    # this change went in.
+    - name: quay.io/minio/minio
       alias: minio
       command: ["server", "/data"]
   cache:
