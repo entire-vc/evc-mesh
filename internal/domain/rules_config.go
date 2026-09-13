@@ -286,9 +286,13 @@ type PolicyRule struct {
 // untouched on the agent rather than being zeroed out. A caller that wants to
 // clear a field must send it explicitly (e.g. "working_hours": "").
 type AgentProfileUpdate struct {
-	Role               *string         `json:"role,omitempty"`
-	Capabilities       json.RawMessage `json:"capabilities"`
-	ResponsibilityZone *string         `json:"responsibility_zone,omitempty"`
+	Role         *string         `json:"role,omitempty"`
+	Capabilities json.RawMessage `json:"capabilities"`
+	// MentionWakes is a dedicated agents column (see domain.Agent), kept out of
+	// Capabilities so this PATCH can flip it without colliding with the
+	// blind-replace on Capabilities above — see #33b7d4b7.
+	MentionWakes       *bool   `json:"mention_wakes,omitempty"`
+	ResponsibilityZone *string `json:"responsibility_zone,omitempty"`
 	// EscalationTo is a single name/handle (e.g. "Garfield"), not a list —
 	// matches the shape every other write path already assumes: the MCP
 	// tool (mcpsdk.ParseString), and TeamAgentConfig.EscalationTo (plain

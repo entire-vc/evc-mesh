@@ -413,6 +413,9 @@ func (s *rulesService) UpdateAgentProfile(ctx context.Context, agentID uuid.UUID
 	if profile.Capabilities != nil {
 		agent.Capabilities = profile.Capabilities
 	}
+	if profile.MentionWakes != nil {
+		agent.MentionWakes = *profile.MentionWakes
+	}
 	if profile.ResponsibilityZone != nil {
 		agent.ResponsibilityZone = *profile.ResponsibilityZone
 	}

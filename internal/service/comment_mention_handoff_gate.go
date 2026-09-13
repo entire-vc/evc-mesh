@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -151,45 +150,41 @@ func mentionHasAskPattern(body, slug string) bool {
 // tuning knob, a description of "the same breath".
 const mentionHandoffWindow = 60 * time.Second
 
-// mentionWakesCapabilityKey is a boolean an agent's Capabilities JSON
-// (internal/domain/agent.go) may carry to opt out of this gate entirely: true
-// means a plain @-mention already has a fleet-side path to wake THIS agent
-// without any Mesh-side queue state at all.
+// agentMentionAlreadyWakes reports whether agent's own MentionWakes column
+// (internal/domain/agent.go) claims a plain @-mention already has a
+// fleet-side path to wake THIS agent without any Mesh-side queue state at
+// all. Fails closed (false) on a nil agent: an agent must opt out
+// explicitly.
 //
-// As of 2026-09 exactly one agent (the dispatcher-driven "Riker" lane) is
-// actually woken by a bare @-mention (its SSE listener spawns a session on
-// task.mentioned); every other lane is fiddler-driven and is not. That
-// distinction lives entirely in fleet-ops config on the Mac Mini
-// (~/bin/mesh-agents.json vs ~/.config/fiddler/fiddler.json) — files the Mesh
-// API process has no access to and no business reading even if it did, since
-// the roster changes without a Mesh deploy. Hardcoding a slug here would
-// silently go stale the next time that roster changes (exactly the failure
-// mode `registry_stamp_is_documentation_not_a_gate` and
-// `registry_profile_is_a_routing_control` already catalogue for this fleet).
-// A capability flag on the agent's own row is a DATA change, not a CODE
+// MentionWakes is a dedicated column, not a Capabilities key, because
+// Capabilities is written by an incompatible second consumer
+// (UpdateAgentProfile's config export/import, which expects a plain string
+// array) that blind-replaces rather than merges — see #33b7d4b7. A single
+// jsonb value could not hold both shapes at once; whichever write landed
+// last silently destroyed the other, with no activity_log trail. That is
+// exactly how the flag set on the "Riker" lane by migration 20260906004
+// vanished by 2026-09-13 (#ba959606's red/green control caught it).
+//
+// As of 2026-09 no lane in the fleet is actually woken by a bare
+// @-mention — Riker moved from the dispatcher (whose SSE listener used to
+// spawn a session on task.mentioned) to fiddler, which is poll-only. This
+// column exists for if/when a fleet-side listener like that comes back for
+// some agent; that agent's row is the one that sets it true then. Which
+// lane, if any, has a live listener is fleet-ops config on the Mac Mini
+// (~/bin/mesh-agents.json vs ~/.config/fiddler/fiddler.json) — files the
+// Mesh API process has no access to and no business reading even if it did,
+// since the roster changes without a Mesh deploy. Hardcoding a slug here
+// would silently go stale the next time that roster changes (exactly the
+// failure mode `registry_stamp_is_documentation_not_a_gate` and
+// `registry_profile_is_a_routing_control` already catalogue for this
+// fleet). A flag on the agent's own row is a DATA change, not a CODE
 // change, and is the row's own claim about itself rather than this gate's
 // guess from a name.
-//
-// Nothing sets this flag today — until the dispatcher-driven lane's row
-// carries {"mention_wakes": true}, this gate treats it like every other
-// agent. See the task's closing report for the follow-up this implies.
-const mentionWakesCapabilityKey = "mention_wakes"
-
-// agentMentionAlreadyWakes reports whether agent's own Capabilities row
-// claims a plain @-mention already reaches it through a fleet-side channel
-// this gate cannot see. Fails closed (false) on absent/malformed
-// capabilities: an agent must opt out explicitly, an unreadable claim is not
-// one.
 func agentMentionAlreadyWakes(agent *domain.Agent) bool {
-	if agent == nil || len(agent.Capabilities) == 0 {
+	if agent == nil {
 		return false
 	}
-	var caps map[string]any
-	if err := json.Unmarshal(agent.Capabilities, &caps); err != nil {
-		return false
-	}
-	v, _ := caps[mentionWakesCapabilityKey].(bool)
-	return v
+	return agent.MentionWakes
 }
 
 // fyiExemptSlugs returns the lowercase slugs that appear in an explicit
