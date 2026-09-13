@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -321,6 +322,42 @@ func TestUpdateAgentProfile_AllFieldsSetAppliesEverything(t *testing.T) {
 	assert.Equal(t, 5, got.MaxConcurrentTasks)
 	assert.Equal(t, "10:00-18:00", got.WorkingHours)
 	assert.Equal(t, "Full replace", got.ProfileDescription)
+}
+
+// TestUpdateAgentProfile_MentionWakesSurvivesCapabilitiesArrayWrite is the
+// regression test for #33b7d4b7: agents.capabilities is written by two
+// incompatible consumers (an object for the mention-handoff gate, a plain
+// string array for UpdateAgentProfile/config import), and UpdateAgentProfile
+// blind-replaces Capabilities rather than merging it. Before this fix,
+// mention_wakes lived as a key inside that same jsonb column, so a
+// capabilities-array write (the shape importTeamConfig and the MCP
+// update_agent_profile tool always send) silently destroyed it. MentionWakes
+// is now a dedicated column untouched by the Capabilities write — this
+// proves the two can no longer collide.
+func TestUpdateAgentProfile_MentionWakesSurvivesCapabilitiesArrayWrite(t *testing.T) {
+	agentRepo := NewMockAgentRepository()
+	svc := NewRulesService(nil, nil, nil, agentRepo, nil, nil, nil)
+
+	agentID := uuid.New()
+	require.NoError(t, agentRepo.Create(context.Background(), &domain.Agent{
+		ID:           agentID,
+		Name:         "riker",
+		Slug:         "riker",
+		MentionWakes: true,
+	}))
+
+	// Simulate importTeamConfig / the MCP update_agent_profile tool, which
+	// always send Capabilities as a plain string array and never touch
+	// mention_wakes.
+	err := svc.UpdateAgentProfile(context.Background(), agentID, domain.AgentProfileUpdate{
+		Capabilities: json.RawMessage(`["some","tags"]`),
+	})
+	require.NoError(t, err)
+
+	got, err := agentRepo.GetByID(context.Background(), agentID)
+	require.NoError(t, err)
+	assert.True(t, got.MentionWakes, "an array-shaped Capabilities write must not silently clear MentionWakes")
+	assert.JSONEq(t, `["some","tags"]`, string(got.Capabilities))
 }
 
 // TestEscalationTo_SurvivesUpdateAndExportRoundTrip is the regression test

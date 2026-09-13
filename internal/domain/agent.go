@@ -44,9 +44,15 @@ type Agent struct {
 	// with bcrypt. Empty means the fast path has not been populated for this
 	// agent yet (no backfill is possible from a bcrypt hash), not that the key
 	// is invalid — see migration 20260817092.
-	APIKeySHA256        string          `json:"-" db:"api_key_sha256"`
-	APIKeyPrefix        string          `json:"api_key_prefix" db:"api_key_prefix"`
-	Capabilities        json.RawMessage `json:"capabilities" db:"capabilities"`
+	APIKeySHA256 string          `json:"-" db:"api_key_sha256"`
+	APIKeyPrefix string          `json:"api_key_prefix" db:"api_key_prefix"`
+	Capabilities json.RawMessage `json:"capabilities" db:"capabilities"`
+	// MentionWakes is a dedicated column, not a Capabilities key, because
+	// Capabilities already serves two incompatible shapes (an object for
+	// register_sub_agent/the mention gate, a plain string array for
+	// UpdateAgentProfile/workspace config import) — see #33b7d4b7. Only
+	// comment_mention_handoff_gate.go reads this.
+	MentionWakes        bool            `json:"mention_wakes" db:"mention_wakes"`
 	Status              AgentStatus     `json:"status" db:"status"`
 	LastHeartbeat       *time.Time      `json:"last_heartbeat" db:"last_heartbeat"`
 	HeartbeatStatus     string          `json:"heartbeat_status" db:"heartbeat_status"`

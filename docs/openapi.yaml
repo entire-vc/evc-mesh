@@ -509,6 +509,10 @@ components:
           type: string
         capabilities:
           type: object
+        mention_wakes:
+          type: boolean
+          description: >-
+            Dedicated column, not a Capabilities key — see #33b7d4b7.
         status:
           type: string
           enum: [online, offline, busy, error]
@@ -3961,6 +3965,12 @@ paths:
                   type: array
                   items:
                     type: string
+                mention_wakes:
+                  type: boolean
+                  description: >-
+                    Dedicated column, not a Capabilities key — flags that a
+                    plain @-mention already has a fleet-side path to wake
+                    this agent (see #33b7d4b7). Omit to leave unchanged.
                 zone:
                   type: string
                 max_tasks:

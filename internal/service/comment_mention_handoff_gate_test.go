@@ -310,15 +310,16 @@ func TestEnforceMentionHandoffGate_UnresolvedHandleNotGated(t *testing.T) {
 	assert.NotEmpty(t, env.commentRepo.items)
 }
 
-// TestEnforceMentionHandoffGate_CapabilityFlagExempt: an agent row that
-// claims `capabilities.mention_wakes: true` opts out of the gate entirely —
+// TestEnforceMentionHandoffGate_CapabilityFlagExempt: an agent row whose
+// dedicated MentionWakes column is true opts out of the gate entirely —
 // today that means the dispatcher-driven lane, expressed as data on its own
-// row rather than a hardcoded slug in this file.
+// row rather than a hardcoded slug in this file. Not a Capabilities key —
+// see #33b7d4b7.
 func TestEnforceMentionHandoffGate_CapabilityFlagExempt(t *testing.T) {
 	env, taskID := newGatedTaskEnv()
 	agent := &domain.Agent{
 		ID: uuid.New(), WorkspaceID: env.wsID, Slug: "riker",
-		Capabilities: []byte(`{"mention_wakes": true}`),
+		MentionWakes: true,
 	}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
@@ -331,14 +332,13 @@ func TestEnforceMentionHandoffGate_CapabilityFlagExempt(t *testing.T) {
 }
 
 // TestEnforceMentionHandoffGate_CapabilityFlagFalseStillGated: the flag must
-// be an explicit opt-in — false, malformed, or absent capabilities all gate
-// normally.
+// be an explicit opt-in — false or absent MentionWakes both gate normally.
 func TestEnforceMentionHandoffGate_CapabilityFlagFalseStillGated(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
 	agent := &domain.Agent{
 		ID: uuid.New(), WorkspaceID: env.wsID, Slug: "marcus",
-		Capabilities: []byte(`{"mention_wakes": false}`),
+		MentionWakes: false,
 	}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
@@ -361,12 +361,11 @@ func TestAgentMentionAlreadyWakes(t *testing.T) {
 		want bool
 	}{
 		{"nil agent", nil, false},
-		{"no capabilities", &domain.Agent{}, false},
-		{"malformed json", &domain.Agent{Capabilities: []byte(`not-json`)}, false},
-		{"flag true", &domain.Agent{Capabilities: []byte(`{"mention_wakes": true}`)}, true},
-		{"flag false", &domain.Agent{Capabilities: []byte(`{"mention_wakes": false}`)}, false},
-		{"flag wrong type", &domain.Agent{Capabilities: []byte(`{"mention_wakes": "yes"}`)}, false},
-		{"unrelated keys only", &domain.Agent{Capabilities: []byte(`{"no_lane": true}`)}, false},
+		{"no mention_wakes", &domain.Agent{}, false},
+		{"flag true", &domain.Agent{MentionWakes: true}, true},
+		{"flag false", &domain.Agent{MentionWakes: false}, false},
+		{"unrelated capabilities present, flag false", &domain.Agent{Capabilities: []byte(`{"no_lane": true}`)}, false},
+		{"unrelated capabilities present, flag true", &domain.Agent{Capabilities: []byte(`["fleet-coordination"]`), MentionWakes: true}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
