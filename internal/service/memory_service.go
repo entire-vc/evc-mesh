@@ -1442,15 +1442,22 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		merged = merged[:opts.Limit]
 	}
 
-	// ── Boost relevance as positive feedback (non-fatal) ─────────────────────
-	// Boost only what the caller actually receives — rows trimmed above were
-	// never seen and must not be treated as a hit.
+	// ── Boost relevance + touch last_accessed_at as positive feedback (non-fatal) ──
+	// Both only on what the caller actually receives — rows trimmed above were never
+	// seen and must not be treated as a hit. TouchAccessed used to run inside each
+	// arm's own repo method, over its own oversized pre-fusion candidate pool
+	// (poolSize = limit*candidateMultiplier); that counted "was a candidate before
+	// RRF/filters/trim" as "accessed", which is why runReviewTriage's 60-day stale
+	// branch (task #c5b5fb48) never fired in production — almost any review_needed
+	// row surfaces in SOME recall's candidate pool sooner or later. Moved here to
+	// match BoostRelevance's existing, correct scope.
 	if len(merged) > 0 {
 		ids := make([]uuid.UUID, len(merged))
 		for i, r := range merged {
 			ids[i] = r.ID
 		}
 		_ = s.memRepo.BoostRelevance(ctx, ids)
+		_ = s.memRepo.TouchAccessed(ctx, ids)
 	}
 
 	return merged, stats, nil

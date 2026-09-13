@@ -46,6 +46,25 @@ var (
 	BuildEnv     = "dev"
 )
 
+// reviewTriageInitialWait computes how long a freshly-started process should wait before its
+// FIRST review-triage run, given the persisted last-run watermark (nil if the job has never
+// run on this workspace) and the current time. This is the fix for task #c5b5fb48: a bare
+// time.NewTicker(interval) always waits a fresh full interval from process start, so a service
+// that restarts more often than the interval elapses almost never reaches a tick. Here, a
+// restart occurring after lastRun+interval has already passed waits ~0 (catches up on the
+// overdue run immediately); a restart occurring before that waits only the remaining time.
+func reviewTriageInitialWait(lastRun *time.Time, now time.Time, interval time.Duration) time.Duration {
+	if lastRun == nil {
+		// Never run before (fresh install / migration just applied) — run once on startup
+		// rather than waiting a full interval for the first-ever pass.
+		return 0
+	}
+	if elapsed := now.Sub(*lastRun); elapsed < interval {
+		return interval - elapsed
+	}
+	return 0
+}
+
 func main() {
 	// 1. Load configuration from environment.
 	cfg := config.Load()
@@ -127,6 +146,7 @@ func main() {
 	notificationRepo := postgres.NewNotificationRepo(db)
 	autoTransRuleRepo := postgres.NewAutoTransitionRuleRepo(db)
 	memoryRepo := postgres.NewMemoryRepo(db)
+	schedulerStateRepo := postgres.NewSchedulerStateRepo(db)
 	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
 	memoryChunkRepo := postgres.NewMemoryChunkRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
@@ -1904,27 +1924,56 @@ func main() {
 	// against similar history — once a memory is parked at review_needed, that
 	// phase never looks at it again). Deliberately its own ~24h ticker rather than
 	// folded into the 6h loop above — see RunReviewTriage's doc.
+	//
+	// Task #c5b5fb48: a bare time.NewTicker(24h) is keyed off THIS PROCESS'S OWN
+	// START, not wall-clock time since the job last actually ran. Measured on
+	// mesh-vm over 6 days: 70 process restarts, only 2 real triage runs — the
+	// service almost never stays up 24h straight, so the ticker almost never
+	// fires. Fixed by persisting last_run_at (schedulerStateRepo,
+	// scheduler_job_runs table) and computing the FIRST wait from it at startup:
+	// a restart 3h after the last real run now waits the remaining 21h, not a
+	// fresh 24h. Every tick re-persists last_run_at before rearming for the next
+	// interval, so the watermark keeps surviving future restarts too.
 	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
+		const reviewTriageInterval = 24 * time.Hour
+		const reviewTriageJobName = "memory-review-triage"
+
+		initialWait := reviewTriageInterval
+		lastRun, err := schedulerStateRepo.GetLastRun(context.Background(), reviewTriageJobName)
+		if err != nil {
+			log.Printf("[memory-review-triage] ERROR reading last_run_at, falling back to full %v wait: %v", reviewTriageInterval, err)
+		} else {
+			initialWait = reviewTriageInitialWait(lastRun, time.Now(), reviewTriageInterval)
+		}
+
+		timer := time.NewTimer(initialWait)
+		defer timer.Stop()
 		for {
 			select {
-			case <-ticker.C:
+			case <-timer.C:
+				runAt := time.Now()
 				recCtx, recCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				stats, err := memReconciler.RunReviewTriage(recCtx)
+				recCancel()
 				if err != nil {
 					log.Printf("[memory-review-triage] ERROR: %v", err)
 				} else {
 					log.Printf("[memory-review-triage] considered=%d superseded=%d stale=%d active=%d errored=%d",
 						stats.Considered, stats.Superseded, stats.Stale, stats.Active, stats.Errored)
 				}
-				recCancel()
+				// Persisted regardless of err: matches the old ticker's behavior of not
+				// retrying before the next full interval on failure, and prevents a
+				// persistently-failing run from turning into a tight restart-retry loop.
+				if setErr := schedulerStateRepo.SetLastRun(context.Background(), reviewTriageJobName, runAt); setErr != nil {
+					log.Printf("[memory-review-triage] ERROR persisting last_run_at: %v", setErr)
+				}
+				timer.Reset(reviewTriageInterval)
 			case <-schedulerShutdownCh:
 				return
 			}
 		}
 	}()
-	log.Println("Memory review-triage scheduler started (24h interval)")
+	log.Println("Memory review-triage scheduler started (24h interval, wall-clock persisted)")
 
 	// 10b. Agent events sweeper — delete expired rows from agent_events every 5 minutes.
 	go func() {

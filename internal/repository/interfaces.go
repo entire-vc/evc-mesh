@@ -1328,6 +1328,29 @@ type MemoryRepository interface {
 	// AppendTag adds tag to a memory's tags array if not already present (idempotent — a
 	// second call with the same tag is a no-op), and bumps updated_at.
 	AppendTag(ctx context.Context, id uuid.UUID, tag string) error
+	// TouchAccessed batch-updates last_accessed_at (1-hour idempotency window, same as the
+	// UpdatedAt convention elsewhere) for exactly the ids given — no-op on an empty slice.
+	//
+	// Callers MUST pass only rows that were actually delivered to whoever asked, not an
+	// arm's own oversized candidate pool: last_accessed_at is the "no обращений" signal
+	// runReviewTriage's stale branch keys off (task #c5b5fb48), and a row that was fetched
+	// as a candidate but never made it into a response was never "accessed" in any sense
+	// that should keep it out of stale — see memoryService.RecallWithStats, the sole caller,
+	// which calls this alongside BoostRelevance on the final trimmed `merged` set.
+	TouchAccessed(ctx context.Context, ids []uuid.UUID) error
+}
+
+// SchedulerStateRepository persists a durable last-run watermark for background jobs whose
+// cadence must survive process restarts. A bare time.Ticker resets its wait to the full
+// interval on every restart; on a service that restarts often, a long interval (nightly+)
+// then almost never elapses (task #c5b5fb48: 70 restarts / 6 days → 2 real runs against a
+// 24h target). Deliberately generic across job_name rather than one column per job — any
+// future long-interval job on this service has the identical failure shape.
+type SchedulerStateRepository interface {
+	// GetLastRun returns the last recorded run time for jobName, or nil if it has never run.
+	GetLastRun(ctx context.Context, jobName string) (*time.Time, error)
+	// SetLastRun upserts the last-run watermark for jobName to at.
+	SetLastRun(ctx context.Context, jobName string, at time.Time) error
 }
 
 // MemoryChunkRepository stores and retrieves per-chunk embeddings for long
