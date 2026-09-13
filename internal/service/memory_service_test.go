@@ -83,6 +83,7 @@ type mockMemoryRepo struct {
 	listByWorkspaceProjectFn           func(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, filter domain.MemoryListFilter) ([]domain.Memory, int64, error)
 	deleteFn                           func(ctx context.Context, id uuid.UUID) error
 	boostRelevanceFn                   func(ctx context.Context, ids []uuid.UUID) error
+	touchAccessedFn                    func(ctx context.Context, ids []uuid.UUID) error
 	findByShortIDFn                    func() (*domain.Memory, error)
 	setArchivedFn                      func() error
 	findByThreadIDFn                   func(ctx context.Context, wsID uuid.UUID, threadID string, excludeID uuid.UUID) ([]domain.Memory, error)
@@ -170,6 +171,13 @@ func (m *mockMemoryRepo) Delete(ctx context.Context, id uuid.UUID) error {
 func (m *mockMemoryRepo) BoostRelevance(ctx context.Context, ids []uuid.UUID) error {
 	if m.boostRelevanceFn != nil {
 		return m.boostRelevanceFn(ctx, ids)
+	}
+	return nil
+}
+
+func (m *mockMemoryRepo) TouchAccessed(ctx context.Context, ids []uuid.UUID) error {
+	if m.touchAccessedFn != nil {
+		return m.touchAccessedFn(ctx, ids)
 	}
 	return nil
 }
@@ -919,6 +927,65 @@ func TestRecall_BasicSearch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, scored, 2)
 	assert.True(t, boostCalled, "BoostRelevance should be called after a successful search")
+}
+
+// ---------------------------------------------------------------------------
+// TestRecall_TouchAccessed_OnlyFinalTrimmedSet
+//
+// Regression test for task #c5b5fb48: TouchAccessed (the last_accessed_at
+// signal runReviewTriage's 60-day stale branch keys off) used to run INSIDE
+// FullTextSearchRanked, over that arm's own oversized pre-fusion candidate
+// pool (poolSize = limit*candidateMultiplier). That counted "was a candidate"
+// as "accessed" even for rows the caller's requested Limit later trimmed away
+// — which is why the stale branch never fired in production. TouchAccessed
+// must now be called by RecallWithStats itself, on the SAME ids as
+// BoostRelevance: the final merged/filtered/trimmed set, never the raw arm
+// output.
+// ---------------------------------------------------------------------------
+
+func TestRecall_TouchAccessed_OnlyFinalTrimmedSet(t *testing.T) {
+	wsID := uuid.New()
+
+	// The arm returns MORE rows than the caller's requested limit — mirrors
+	// production, where each arm fetches limit*candidateMultiplier candidates.
+	candidatePool := []domain.ScoredMemory{
+		{Memory: domain.Memory{ID: uuid.New(), Key: "k1", Content: "c1", ImportanceScore: 0.8}, Score: 0.9},
+		{Memory: domain.Memory{ID: uuid.New(), Key: "k2", Content: "c2", ImportanceScore: 0.8}, Score: 0.8},
+		{Memory: domain.Memory{ID: uuid.New(), Key: "k3", Content: "c3", ImportanceScore: 0.8}, Score: 0.7},
+		{Memory: domain.Memory{ID: uuid.New(), Key: "k4", Content: "c4", ImportanceScore: 0.8}, Score: 0.6},
+	}
+	const requestedLimit = 2
+
+	var touchedIDs []uuid.UUID
+	repo := &mockMemoryRepo{
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
+			return candidatePool, nil
+		},
+		touchAccessedFn: func(_ context.Context, ids []uuid.UUID) error {
+			touchedIDs = ids
+			return nil
+		},
+	}
+
+	svc := newMemoryService(repo)
+	scored, _, err := svc.Recall(context.Background(), domain.RecallOpts{
+		Query:       "c",
+		WorkspaceID: wsID,
+		Limit:       requestedLimit,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, scored, requestedLimit, "Recall must honor the requested limit")
+	require.Len(t, touchedIDs, requestedLimit,
+		"TouchAccessed must be called with exactly the rows returned to the caller, not the arm's larger candidate pool")
+
+	returnedIDs := make(map[uuid.UUID]bool, len(scored))
+	for _, m := range scored {
+		returnedIDs[m.ID] = true
+	}
+	for _, id := range touchedIDs {
+		assert.True(t, returnedIDs[id], "TouchAccessed touched an id (%s) that was not in the response", id)
+	}
 }
 
 // ---------------------------------------------------------------------------

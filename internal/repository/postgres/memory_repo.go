@@ -1827,26 +1827,40 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 	}
 
 	result := make([]domain.ScoredMemory, len(rows))
-	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		result[i] = domain.ScoredMemory{
 			Memory: row.toDomain(),
 			Score:  row.Score,
 		}
-		ids[i] = row.ID
 	}
 
-	// Batch-touch last_accessed_at (1-hour idempotency window) over the FINAL merged set.
-	if len(ids) > 0 {
-		_, _ = r.db.ExecContext(ctx,
-			`UPDATE memories SET last_accessed_at = NOW()
-			 WHERE id = ANY($1)
-			   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
-			pq.Array(ids),
-		)
-	}
-
+	// NOTE: last_accessed_at is deliberately NOT touched here (task #c5b5fb48). `rows` at
+	// this point is this arm's own local AND/OR-fallback merge, still ahead of RecallWithStats'
+	// RRF fusion with the vector arm, its extended filters, and its trim to the caller's
+	// requested limit — most of these candidates never reach the caller. Touching here counted
+	// "was a candidate in an oversized pool" as "accessed", which is why runReviewTriage's
+	// 60-day stale branch (keyed off last_accessed_at) fired zero times in production despite
+	// review_needed rows well past that age: virtually every one had surfaced in SOME recall's
+	// candidate pool. The caller (memoryService.RecallWithStats) now calls TouchAccessed
+	// itself, on the final merged/filtered/trimmed set, alongside BoostRelevance.
 	return result, nil
+}
+
+// TouchAccessed batch-updates last_accessed_at (1-hour idempotency window, to avoid write
+// amplification from repeated recalls hitting the same popular rows) for exactly the ids
+// given. See the interface doc — callers must pass only ids actually delivered to whoever
+// asked, not an arm's own candidate pool.
+func (r *MemoryRepo) TouchAccessed(ctx context.Context, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE memories SET last_accessed_at = NOW()
+		 WHERE id = ANY($1)
+		   AND (last_accessed_at IS NULL OR last_accessed_at < NOW() - INTERVAL '1 hour')`,
+		pq.Array(ids),
+	)
+	return err
 }
 
 // ftsRankedORFallback is the FullTextSearchRanked sibling of ftsORFallback: it runs a
