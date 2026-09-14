@@ -17,6 +17,10 @@ const (
 	AgentTypeAider      AgentType = "aider"
 	AgentTypeCustom     AgentType = "custom"
 	AgentTypeHermes     AgentType = "hermes"
+	AgentTypeCodex      AgentType = "codex"
+	AgentTypeCursor     AgentType = "cursor"
+	AgentTypeCopilot    AgentType = "copilot"
+	AgentTypeGeminiCLI  AgentType = "gemini_cli"
 )
 
 // AgentStatus represents the current operational state of an agent.

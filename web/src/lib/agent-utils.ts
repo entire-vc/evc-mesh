@@ -11,6 +11,10 @@ export const agentTypeConfig: Record<
   aider: { label: "Aider", color: "bg-orange-100 text-orange-700" },
   custom: { label: "Custom", color: "bg-gray-100 text-gray-700" },
   hermes: { label: "Hermes", color: "bg-teal-100 text-teal-700" },
+  codex: { label: "Codex", color: "bg-slate-100 text-slate-700" },
+  cursor: { label: "Cursor", color: "bg-indigo-100 text-indigo-700" },
+  copilot: { label: "GitHub Copilot", color: "bg-zinc-100 text-zinc-700" },
+  gemini_cli: { label: "Gemini CLI", color: "bg-sky-100 text-sky-700" },
 };
 
 export const agentStatusConfig: Record<

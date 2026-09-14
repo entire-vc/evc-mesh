@@ -14,7 +14,7 @@ type Agent struct {
 	SupervisorUserID    *string         `json:"supervisor_user_id,omitempty"`
 	Name                string          `json:"name"`
 	Slug                string          `json:"slug"`
-	AgentType           string          `json:"agent_type"` // claude_code|openclaw|cline|aider|custom
+	AgentType           string          `json:"agent_type"` // claude_code|openclaw|cline|aider|custom|hermes|codex|cursor|copilot|gemini_cli
 	APIKeyPrefix        string          `json:"api_key_prefix"`
 	Status              string          `json:"status"` // online|offline|busy|error
 	LastHeartbeat       *string         `json:"last_heartbeat,omitempty"`
@@ -86,7 +86,7 @@ func (c *Client) GetAgent(ctx context.Context, agentID string) (*Agent, error) {
 // RegisterSubAgentInput is the request body for creating a sub-agent.
 type RegisterSubAgentInput struct {
 	Name          string         `json:"name"`
-	AgentType     string         `json:"agent_type,omitempty"` // claude_code|openclaw|cline|aider|custom
+	AgentType     string         `json:"agent_type,omitempty"` // claude_code|openclaw|cline|aider|custom|hermes|codex|cursor|copilot|gemini_cli
 	ParentAgentID string         `json:"parent_agent_id,omitempty"`
 	Capabilities  map[string]any `json:"capabilities,omitempty"`
 }
