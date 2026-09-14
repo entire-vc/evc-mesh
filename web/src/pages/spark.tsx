@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Download, ExternalLink, Search, Sparkles, Star, Tag, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
+import { agentTypeConfig, agentTypeDisplay } from "@/lib/agent-utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useSparkStore } from "@/stores/spark";
 import { useCapabilitiesStore } from "@/stores/capabilities";
@@ -42,27 +43,16 @@ const DOMAIN_TAGS = [
   "infra",
 ] as const;
 
-// Agent type options for the filter dropdown.
+// Agent type options for the filter dropdown — derived from the shared
+// agentTypeConfig (web/src/lib/agent-utils.ts) so a new harness only needs
+// to be added there, not copy-pasted into every page that lists agent types.
 const AGENT_TYPE_OPTIONS = [
   { value: "all", label: "All Types" },
-  { value: "claude_code", label: "Claude Code" },
-  { value: "openclaw", label: "OpenClaw" },
-  { value: "cline", label: "Cline" },
-  { value: "aider", label: "Aider" },
-  { value: "custom", label: "Custom" },
-] as const;
-
-// Maps agent_type string to display label and color.
-function agentTypeLabel(agentType: string): { label: string; color: string } {
-  const map: Record<string, { label: string; color: string }> = {
-    claude_code: { label: "Claude Code", color: "bg-purple-100 text-purple-700" },
-    openclaw: { label: "OpenClaw", color: "bg-blue-100 text-blue-700" },
-    cline: { label: "Cline", color: "bg-green-100 text-green-700" },
-    aider: { label: "Aider", color: "bg-orange-100 text-orange-700" },
-    custom: { label: "Custom", color: "bg-gray-100 text-gray-700" },
-  };
-  return map[agentType] ?? { label: agentType, color: "bg-gray-100 text-gray-700" };
-}
+  ...Object.entries(agentTypeConfig).map(([value, config]) => ({
+    value,
+    label: config.label,
+  })),
+];
 
 export function SparkPage() {
   const { currentWorkspace } = useWorkspaceStore();
@@ -401,7 +391,7 @@ function SparkAgentCard({
   onOpen: () => void;
   onInstall: () => void;
 }) {
-  const typeConfig = agentTypeLabel(agent.agent_type);
+  const typeConfig = agentTypeDisplay(agent.agent_type);
 
   return (
     <Card

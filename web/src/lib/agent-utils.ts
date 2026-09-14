@@ -17,6 +17,21 @@ export const agentTypeConfig: Record<
   gemini_cli: { label: "Gemini CLI", color: "bg-sky-100 text-sky-700" },
 };
 
+/**
+ * Same lookup as agentTypeConfig, but safe for a value that isn't known to be
+ * an AgentType at compile time (e.g. a Spark marketplace manifest's agent_type,
+ * typed AgentType | string because a listing can name an unrecognized harness).
+ * Falls back to the raw string as the label with a neutral color.
+ */
+export function agentTypeDisplay(agentType: string): { label: string; color: string } {
+  return (
+    (agentTypeConfig as Record<string, { label: string; color: string }>)[agentType] ?? {
+      label: agentType,
+      color: "bg-gray-100 text-gray-700",
+    }
+  );
+}
+
 export const agentStatusConfig: Record<
   AgentStatus,
   { label: string; dotColor: string }
