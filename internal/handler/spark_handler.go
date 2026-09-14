@@ -373,6 +373,10 @@ func resolveAgentType(sparkType string) string {
 		"cline":       "cline",
 		"aider":       "aider",
 		"custom":      "custom",
+		"codex":       "codex",
+		"cursor":      "cursor",
+		"copilot":     "copilot",
+		"gemini_cli":  "gemini_cli",
 	}
 	if t, ok := known[strings.ToLower(sparkType)]; ok {
 		return t

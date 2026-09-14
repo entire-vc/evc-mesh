@@ -18,7 +18,11 @@ export type AgentType =
   | "cline"
   | "aider"
   | "custom"
-  | "hermes";
+  | "hermes"
+  | "codex"
+  | "cursor"
+  | "copilot"
+  | "gemini_cli";
 export type AgentStatus = "online" | "offline" | "busy" | "error";
 export type DependencyType = "blocks" | "relates_to" | "is_child_of";
 export type ArtifactType =
