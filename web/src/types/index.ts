@@ -493,6 +493,10 @@ export interface ProjectDocument {
   // caller read is what it sends back as base_version on the next write —
   // see UpdateDocumentRequest.base_version.
   version: number;
+  // Canonical deep-link (https://.../d/<id>), computed by the handler from
+  // the request — same pattern as Task.url above. Resolved client-side by
+  // DocumentDeepLinkResolver into the full /w/:ws/p/:proj/docs/:id route.
+  url?: string;
 }
 
 export interface CreateDocumentRequest {

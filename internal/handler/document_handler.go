@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -17,6 +18,31 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
+
+// computeDocumentURL builds a canonical deep-link for the given document ID,
+// same construction as computeTaskURL in task_handler.go (respects
+// X-Forwarded-Proto/X-Forwarded-Host set by Caddy).
+//
+// It deliberately does NOT embed the workspace/project slug: a Document here
+// knows only its ProjectID, not the project's or workspace's slug, and
+// resolving those would mean a join the handler doesn't otherwise need. The
+// path /d/<id> mirrors /t/<id> for tasks (see web/src/pages/task-deep-link.tsx),
+// which is a client-side resolver that looks up the slugs and redirects to the
+// full /w/:wsSlug/p/:projectSlug/docs/:docId route. web/src/App.tsx registers
+// the matching /d/:docId route.
+func computeDocumentURL(r *http.Request, docID uuid.UUID) string {
+	scheme := "https"
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	} else if r.TLS == nil {
+		scheme = "http"
+	}
+	host := r.Host
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		host = h
+	}
+	return fmt.Sprintf("%s://%s/d/%s", scheme, host, docID.String())
+}
 
 // DocumentHandler handles HTTP requests for project documents.
 type DocumentHandler struct {
@@ -97,6 +123,9 @@ func (h *DocumentHandler) List(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	for i := range page.Items {
+		page.Items[i].URL = computeDocumentURL(c.Request(), page.Items[i].ID)
+	}
 
 	return c.JSON(http.StatusOK, page)
 }
@@ -169,6 +198,7 @@ func (h *DocumentHandler) Create(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	doc.URL = computeDocumentURL(c.Request(), doc.ID)
 
 	return c.JSON(http.StatusCreated, doc)
 }
@@ -184,6 +214,7 @@ func (h *DocumentHandler) GetByID(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	doc.URL = computeDocumentURL(c.Request(), doc.ID)
 
 	return c.JSON(http.StatusOK, doc)
 }
@@ -225,6 +256,7 @@ func (h *DocumentHandler) Update(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	doc.URL = computeDocumentURL(c.Request(), doc.ID)
 
 	return c.JSON(http.StatusOK, doc)
 }
@@ -293,6 +325,7 @@ func (h *DocumentHandler) GetByPath(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	doc.URL = computeDocumentURL(c.Request(), doc.ID)
 
 	return c.JSON(http.StatusOK, doc)
 }

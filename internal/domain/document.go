@@ -96,6 +96,16 @@ type Document struct {
 	// list of 200 documents is not 200 round-trips to S3. Same arrangement as
 	// Artifact.StorageURL — a domain field the storage layer fills in.
 	Body string `json:"body,omitempty" db:"-"`
+
+	// URL is the canonical deep-link, e.g. https://mesh.entire.host/d/<id>.
+	// Populated by HTTP handlers from request scheme+host, same pattern as
+	// Task.URL. Empty in non-HTTP contexts.
+	//
+	// Without this a caller has no way to hand a human a working link to a
+	// document it just wrote: create_doc/get_doc/list_docs returned id, slug
+	// and project_id, none of which resolve to a URL without also knowing the
+	// document's workspace and project slugs (task #14db79fd).
+	URL string `json:"url,omitempty" db:"-"`
 }
 
 // DocumentSearchHit is one result of a full-text search over document content.
