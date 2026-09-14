@@ -277,6 +277,7 @@ func (h *DocumentHandler) Outline(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	outline.URL = computeDocumentURL(c.Request(), docID)
 
 	return c.JSON(http.StatusOK, outline)
 }
@@ -305,6 +306,7 @@ func (h *DocumentHandler) Section(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	section.URL = computeDocumentURL(c.Request(), docID)
 
 	return c.JSON(http.StatusOK, section)
 }

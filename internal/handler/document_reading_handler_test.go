@@ -66,6 +66,26 @@ func TestDocumentHandler_Outline(t *testing.T) {
 	assert.Equal(t, "deploy", got.Outline[0].Anchor)
 }
 
+// Outline is the DEFAULT shape get_doc returns (no body/section/version_only
+// argument) — an agent takes this path far more often than a full-body read,
+// so the deep-link has to be set here too, not just on GetByID.
+func TestDocumentHandler_Outline_SetsURL(t *testing.T) {
+	docID := uuid.New()
+	mockSvc := &MockDocumentService{
+		OutlineFunc: func(_ context.Context, id, _ uuid.UUID) (*service.DocumentOutline, error) {
+			return &service.DocumentOutline{DocumentID: id, Title: "Runbook"}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docSubRequest(e, http.MethodGet, "/documents/:doc_id/outline", docID.String(), "/", "")
+	require.NoError(t, h.Outline(c))
+
+	var got service.DocumentOutline
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, "http://example.com/d/"+docID.String(), got.URL)
+}
+
 func TestDocumentHandler_Outline_InvalidDocID(t *testing.T) {
 	h, e := setupDocumentTest(&MockDocumentService{})
 
@@ -122,6 +142,24 @@ func TestDocumentHandler_Section(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "deploy", gotRef)
 	assert.Contains(t, rec.Body.String(), "Push the tag")
+}
+
+func TestDocumentHandler_Section_SetsURL(t *testing.T) {
+	docID := uuid.New()
+	mockSvc := &MockDocumentService{
+		SectionFunc: func(_ context.Context, id, _ uuid.UUID, _ string) (*service.DocumentSection, error) {
+			return &service.DocumentSection{DocumentID: id}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docSubRequest(e, http.MethodGet, "/documents/:doc_id/section", docID.String(),
+		"/?heading=deploy", "")
+	require.NoError(t, h.Section(c))
+
+	var got service.DocumentSection
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, "http://example.com/d/"+docID.String(), got.URL)
 }
 
 // A heading with spaces and punctuation is exactly why the reference is a query
