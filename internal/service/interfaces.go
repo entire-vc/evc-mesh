@@ -604,6 +604,13 @@ type DocumentOutline struct {
 	// without a second read.
 	Version int            `json:"version"`
 	Outline []mdoc.Heading `json:"outline"`
+	// URL is the canonical deep-link, same field and same computation as
+	// domain.Document.URL — populated by the HTTP handler, empty until then.
+	// This is the outline's own default response shape (get_doc with no body/
+	// section/version_only argument), which is the path an agent takes far
+	// more often than a full-body read, so the link has to live here too or
+	// it is effectively never returned.
+	URL string `json:"url,omitempty"`
 }
 
 // DocumentSection is one heading of a document and the markdown under it.
@@ -613,6 +620,10 @@ type DocumentSection struct {
 	Version int          `json:"version"`
 	Heading mdoc.Heading `json:"heading"`
 	Content string       `json:"content"`
+	// URL is the document's own deep-link (a section has no anchor of its own
+	// in the URL — the paragraph-anchor scheme lives client-side in the hash,
+	// see web/src/pages/docs.tsx), same computation as domain.Document.URL.
+	URL string `json:"url,omitempty"`
 }
 
 // ResolveAnchorInput is a quotation to locate in a document.
