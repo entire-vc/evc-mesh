@@ -1620,6 +1620,11 @@ type RememberResult struct {
 	// window", not as a signal to retry or wait. Always false when no embedder is
 	// configured (embedding.IsNoop) — there is nothing pending in that case. See #a2e00afd.
 	EmbeddingPending bool
+	// Warning is set when the write succeeded but something about it is worth
+	// flagging to the caller without failing the request — currently only a
+	// missing reason under MESH_MEMORY_REQUIRE_REASON=warn (see
+	// requireMemoryReasonMode). Empty when there is nothing to warn about.
+	Warning string
 }
 
 // MemoryService provides business logic for agent persistent memory.

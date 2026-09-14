@@ -524,6 +524,48 @@ func TestRequireMemoryReason_OnlyExplicitTruthEnables(t *testing.T) {
 	}
 }
 
+func TestRequireMemoryReasonMode_ThreeStates(t *testing.T) {
+	// The three-state reader must stay backward compatible with the boolean
+	// flag it replaced: "1"/"true" still resolve to enforce, so any deployment
+	// that already sets this env var for hard-reject is unaffected by this
+	// change. "warn"/"soft" opt into the new intermediate state. Everything
+	// else — unset, a typo, an old-style falsy value — is off, matching the
+	// old function's fail-safe direction.
+	for _, tc := range []struct {
+		value string
+		want  memoryReasonMode
+	}{
+		{"1", memoryReasonEnforce}, {"true", memoryReasonEnforce}, {"TRUE", memoryReasonEnforce},
+		{" true ", memoryReasonEnforce}, {"enforce", memoryReasonEnforce}, {"ENFORCE", memoryReasonEnforce},
+		{"warn", memoryReasonWarn}, {"WARN", memoryReasonWarn}, {" warn ", memoryReasonWarn},
+		{"soft", memoryReasonWarn}, {"soft-warn", memoryReasonWarn},
+		{"", memoryReasonOff}, {"0", memoryReasonOff}, {"false", memoryReasonOff},
+		{"yes", memoryReasonOff}, {"on", memoryReasonOff}, {"tru", memoryReasonOff}, {"warnn", memoryReasonOff},
+	} {
+		t.Setenv(requireMemoryReasonEnv, tc.value)
+		if got := requireMemoryReasonMode(); got != tc.want {
+			t.Errorf("%q: got %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestRequireMemoryReason_TrueOnlyForEnforceMode(t *testing.T) {
+	// requireMemoryReason (Forget's call site) has no warn state to offer — it
+	// must be true for enforce and false for both off and warn.
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"true", true}, {"enforce", true},
+		{"warn", false}, {"", false}, {"0", false},
+	} {
+		t.Setenv(requireMemoryReasonEnv, tc.value)
+		if got := requireMemoryReason(); got != tc.want {
+			t.Errorf("%q: got %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
 func TestTrimmedOrNil_BlankIsAbsent(t *testing.T) {
 	// Blank and absent are stored differently on purpose: the column rejects
 	// blank, and NULL means "written before a reason was required".
