@@ -262,15 +262,57 @@ func memorySanitizerDisabled() bool {
 
 // ── Reason requirement ──────────────────────────────────────────────────────
 
-// requireMemoryReasonEnv switches on rejection of memory writes that carry no
-// reason. It defaults to OFF; see the call site in Remember for why the flip is
-// staged behind the MCP tool shipping a reason parameter.
+// requireMemoryReasonEnv switches memory-write reason handling between three
+// states. It defaults to OFF; see the call site in Remember for why the flip
+// to enforce is staged behind fleet-wide compliance, not just the MCP tool
+// shipping a reason parameter.
 const requireMemoryReasonEnv = "MESH_MEMORY_REQUIRE_REASON"
 
-// requireMemoryReason reports whether a missing reason should be refused.
-// Anything other than "1"/"true" (case-insensitive) leaves enforcement off, so
-// a typo in the variable fails in the safe direction: writes keep working.
-func requireMemoryReason() bool {
+// memoryReasonMode is the resolved state of requireMemoryReasonEnv.
+type memoryReasonMode int
+
+const (
+	// memoryReasonOff accepts a missing reason silently — today's default.
+	memoryReasonOff memoryReasonMode = iota
+	// memoryReasonWarn accepts a missing reason but reports it: the write
+	// succeeds, the response carries a warning, and the event is logged for
+	// per-agent compliance tracking (see the reason-compliance view/query in
+	// docs, and memory_revisions.reason IS NULL for the underlying data).
+	// This is the intermediate step measured by #620bd93a/#40cc098e before
+	// enforce is considered again: two measurements three weeks apart showed
+	// the tool-schema hint alone never moved fleet compliance off a 38-64%
+	// plateau, so a written-and-warned record is the next lever, not a flip
+	// straight to reject.
+	memoryReasonWarn
+	// memoryReasonEnforce refuses a write with no reason. This is the only
+	// state that changes pre-existing behaviour — it is exactly what the old
+	// boolean flag did, under a new name.
+	memoryReasonEnforce
+)
+
+// requireMemoryReasonMode resolves requireMemoryReasonEnv to one of the three
+// states above. Backward compatible with the boolean flag this replaces:
+// "1"/"true" still mean enforce, so nothing that already sets this env var to
+// turn on hard rejection changes behaviour. "warn"/"soft" opt into the new
+// soft-warn mode. Anything else — unset, "0", "false", a typo — is off,
+// preserving the old function's fail-safe direction: a misconfigured flag
+// never silently starts rejecting writes.
+func requireMemoryReasonMode() memoryReasonMode {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(requireMemoryReasonEnv)))
-	return v == "1" || v == "true"
+	switch v {
+	case "1", "true", "enforce":
+		return memoryReasonEnforce
+	case "warn", "soft", "soft-warn":
+		return memoryReasonWarn
+	default:
+		return memoryReasonOff
+	}
+}
+
+// requireMemoryReason reports whether a missing reason should be refused.
+// Kept as a boolean predicate for Forget's call site: a forget has no
+// "warn and proceed" middle state to offer — it is either allowed or refused,
+// so only the enforce/not-enforce distinction is meaningful there.
+func requireMemoryReason() bool {
+	return requireMemoryReasonMode() == memoryReasonEnforce
 }

@@ -207,6 +207,23 @@ func TestRemember_ReasonRequiredOnlyWhenEnabled(t *testing.T) {
 		})
 		require.NoError(t, err, "the gate must not block writes that comply")
 	})
+
+	t.Run("warn mode: a write with no reason succeeds AND carries a warning", func(t *testing.T) {
+		t.Setenv(requireMemoryReasonEnv, "warn")
+		result, err := svc.Remember(ctx, newMem(), domain.MemoryWriteIntent{})
+		require.NoError(t, err, "warn must never reject a write — only enforce does")
+		assert.NotEmpty(t, result.Warning, "the caller must be told the reason was missing")
+		assert.Contains(t, result.Warning, "reason")
+	})
+
+	t.Run("warn mode: a write WITH a reason carries no warning", func(t *testing.T) {
+		t.Setenv(requireMemoryReasonEnv, "warn")
+		result, err := svc.Remember(ctx, newMem(), domain.MemoryWriteIntent{
+			Reason: "compliant caller, nothing to flag",
+		})
+		require.NoError(t, err)
+		assert.Empty(t, result.Warning, "a compliant write must not be warned about")
+	})
 }
 
 // TestRevisionHistory_KeepsWhatItSaidAndWhy is acceptance 3.

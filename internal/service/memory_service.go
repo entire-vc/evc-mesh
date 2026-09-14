@@ -499,19 +499,30 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	// most expensive thing to read later: the next agent gets an assertion with
 	// no way to judge why it was made or whether it still holds.
 	//
-	// Enforcement is behind a flag that currently defaults to OFF, and that is
-	// a deployment constraint rather than a soft opinion. The `remember` tool
-	// every agent calls has no reason parameter yet, and the binary carrying
-	// that tool is rebuilt and installed by hand (Mesh #3d448464). Turning this
-	// on before the tool ships would reject every memory write in the fleet,
-	// and the repair would itself need a manual rebuild. So: accept-and-record
-	// now, measure how many writes arrive with a reason, flip the flag once
-	// they do. The rejection path below is the finished behaviour, not a
-	// placeholder — it is switched on by one environment variable.
-	if requireMemoryReason() && strings.TrimSpace(intent.Reason) == "" {
+	// Two measurements three weeks apart (#620bd93a, 2026-08-21 and 2026-09-14)
+	// found fleet-wide compliance plateaued at 38-64% with no upward trend — the
+	// tool-schema hint alone ("optional today, about to become required") does
+	// not move agent behaviour. Flipping straight to enforce at that compliance
+	// would reject the majority of fleet remember() calls the moment the flag
+	// changed, so enforce stays reserved for a later, separately-decided task
+	// (#40cc098e). warn is the intermediate step: the write still succeeds, but
+	// the caller is told, and the omission is logged so per-agent compliance can
+	// be tracked (see requireMemoryReasonMode's doc and memory_revisions.reason).
+	reasonMode := requireMemoryReasonMode()
+	reasonMissing := strings.TrimSpace(intent.Reason) == ""
+	if reasonMode == memoryReasonEnforce && reasonMissing {
 		return RememberResult{}, apierror.ValidationError(map[string]string{
 			"reason": "reason is required: say what this memory is for, so a future thread can judge whether it still applies; memory was not written",
 		})
+	}
+	var reasonWarning string
+	if reasonMode == memoryReasonWarn && reasonMissing {
+		reasonWarning = "reason missing — this will be required soon (MESH_MEMORY_REQUIRE_REASON=enforce); write succeeded, but say what this memory is for next time"
+		// Grep-able signal for per-agent compliance tracking independent of the
+		// memory_revisions table (which already carries reason=NULL + actor_agent_id
+		// for the same event, but isn't something a log-based alert can watch).
+		log.Printf("memory reason warn: agent=%v workspace=%s key=%q — missing reason, write allowed (mode=warn)",
+			intent.ActorAgentID, mem.WorkspaceID, mem.Key)
 	}
 
 	// Write-path sanitizer. Memory written here is injected into other agents'
@@ -830,7 +841,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 		}
 	}
 
-	return RememberResult{Outcome: outcome, Version: mem.Version, EmbeddingPending: embeddingPending}, nil
+	return RememberResult{Outcome: outcome, Version: mem.Version, EmbeddingPending: embeddingPending, Warning: reasonWarning}, nil
 }
 
 // enforceReservedTags refuses a write carrying a tag in reservedMemoryTags
