@@ -162,7 +162,8 @@ export function AppLayout() {
 
   const isDeepLinkRoute =
     location.pathname.startsWith("/t/") ||
-    location.pathname.startsWith("/tasks/");
+    location.pathname.startsWith("/tasks/") ||
+    location.pathname.startsWith("/d/");
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
