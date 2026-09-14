@@ -33,6 +33,7 @@ import { SessionDashboardPage } from "@/pages/session-dashboard";
 import { ActivityPage } from "@/pages/activity-page";
 import { DashboardPage } from "@/pages/dashboard";
 import { TaskDeepLinkResolver } from "@/pages/task-deep-link";
+import { DocumentDeepLinkResolver } from "@/pages/document-deep-link";
 import { AcceptInvitePage } from "@/pages/accept-invite";
 
 class ErrorBoundary extends Component<
@@ -191,6 +192,7 @@ const router = createBrowserRouter(
         />
         <Route path="t/:taskId" element={<TaskDeepLinkResolver />} />
         <Route path="tasks/:taskId" element={<TaskDeepLinkResolver />} />
+        <Route path="d/:docId" element={<DocumentDeepLinkResolver />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </>,

@@ -85,6 +85,30 @@ func TestDocumentHandler_List(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "Runbook")
 }
 
+// A document written for a human has to come with a link that human can
+// actually open (task #14db79fd) — Title/Slug/ProjectID alone don't resolve
+// to one. List, Create, GetByID, GetByPath and Update all populate it, same
+// as decorateTaskList/computeTaskURL do for tasks.
+func TestDocumentHandler_List_SetsURL(t *testing.T) {
+	docID := uuid.New()
+	mockSvc := &MockDocumentService{
+		ListByProjectFunc: func(_ context.Context, id uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Document], error) {
+			return pagination.NewPage([]domain.Document{{ID: docID, Title: "Runbook"}}, 1, pg), nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := projectDocRequest(e, http.MethodGet, uuid.New().String(), "/", "")
+	require.NoError(t, h.List(c))
+
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, "http://example.com/d/"+docID.String(), page.Items[0]["url"])
+}
+
 func TestDocumentHandler_List_InvalidProjectID(t *testing.T) {
 	h, e := setupDocumentTest(&MockDocumentService{})
 
@@ -106,6 +130,30 @@ func TestDocumentHandler_List_ServiceError(t *testing.T) {
 	require.NoError(t, h.List(c))
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestDocumentHandler_GetByPath_SetsURL(t *testing.T) {
+	docID := uuid.New()
+	projID := uuid.New()
+	mockSvc := &MockDocumentService{
+		GetByPathFunc: func(_ context.Context, _ uuid.UUID, path string) (*domain.Document, error) {
+			return &domain.Document{ID: docID, Title: "ADR"}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/documents/by-path/*")
+	c.SetParamNames("proj_id", "*")
+	c.SetParamValues(projID.String(), "architecture/adr/adr-004")
+
+	require.NoError(t, h.GetByPath(c))
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, "http://example.com/d/"+docID.String(), doc["url"])
 }
 
 // --- Create ---
@@ -139,6 +187,22 @@ func TestDocumentHandler_Create(t *testing.T) {
 	assert.Equal(t, "# hi", got.Body)
 	assert.Equal(t, userID, got.CreatedBy)
 	assert.Equal(t, domain.ActorTypeUser, got.CreatedByType)
+}
+
+func TestDocumentHandler_Create_SetsURL(t *testing.T) {
+	docID := uuid.New()
+	mockSvc := &MockDocumentService{}
+	mockSvc.CreateFunc = func(_ context.Context, input service.CreateDocumentInput) (*domain.Document, error) {
+		return &domain.Document{ID: docID, ProjectID: input.ProjectID, Title: input.Title}, nil
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := projectDocRequest(e, http.MethodPost, uuid.New().String(), "/", `{"title":"Runbook"}`)
+	require.NoError(t, h.Create(c))
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, "http://example.com/d/"+docID.String(), doc["url"])
 }
 
 func TestDocumentHandler_Create_InvalidProjectID(t *testing.T) {
@@ -303,6 +367,24 @@ func TestDocumentHandler_GetByID(t *testing.T) {
 	assert.Equal(t, "# hi", doc["body"], "the markdown body comes back with the metadata")
 }
 
+func TestDocumentHandler_GetByID_SetsURL(t *testing.T) {
+	docID := uuid.New()
+	wsID := uuid.New()
+	mockSvc := &MockDocumentService{
+		GetByIDInWorkspaceFunc: func(_ context.Context, id, _ uuid.UUID) (*domain.Document, error) {
+			return &domain.Document{ID: id, Title: "Runbook"}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodGet, docID.String(), &wsID, "")
+	require.NoError(t, h.GetByID(c))
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, "http://example.com/d/"+docID.String(), doc["url"])
+}
+
 func TestDocumentHandler_GetByID_InvalidUUID(t *testing.T) {
 	wsID := uuid.New()
 	h, e := setupDocumentTest(&MockDocumentService{})
@@ -380,6 +462,24 @@ func TestDocumentHandler_Update(t *testing.T) {
 	require.NotNil(t, gotInput.Body)
 	assert.Equal(t, "new", *gotInput.Body)
 	assert.False(t, gotInput.ClearParent)
+}
+
+func TestDocumentHandler_Update_SetsURL(t *testing.T) {
+	docID := uuid.New()
+	wsID := uuid.New()
+	mockSvc := &MockDocumentService{
+		UpdateFunc: func(_ context.Context, id, _ uuid.UUID, _ service.UpdateDocumentInput) (*domain.Document, error) {
+			return &domain.Document{ID: id, Title: "Final"}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := docRequest(e, http.MethodPatch, docID.String(), &wsID, `{"title":"Final"}`)
+	require.NoError(t, h.Update(c))
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	assert.Equal(t, "http://example.com/d/"+docID.String(), doc["url"])
 }
 
 // The editor is read from the request context, never bound from the body — an
