@@ -1537,6 +1537,7 @@ export interface AnalyticsMetrics {
     total_tokens_in: number;
     total_tokens_out: number;
     session_count: number;
+    reported_session_count: number;
     by_agent: Array<{
       agent_id: string;
       agent_name: string;

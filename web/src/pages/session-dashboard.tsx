@@ -249,9 +249,9 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 						{/* KPI row */}
 						<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
 							<div className="rounded-lg border bg-card px-3 py-2.5">
-								<p className="text-[11px] text-muted-foreground">Total spend</p>
+								<p className="text-[11px] text-muted-foreground">Reported cost</p>
 								<p className="text-lg font-semibold tabular-nums">
-									{formatCost(cost.total_cost)}
+									{cost.reported_session_count > 0 ? formatCost(cost.total_cost) : "—"}
 								</p>
 							</div>
 							<div className="rounded-lg border bg-card px-3 py-2.5">
@@ -267,12 +267,21 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 								</p>
 							</div>
 							<div className="rounded-lg border bg-card px-3 py-2.5">
-								<p className="text-[11px] text-muted-foreground">Avg / session</p>
+								<p className="text-[11px] text-muted-foreground">Avg / reported session</p>
 								<p className="text-lg font-semibold tabular-nums">
-									{formatCost(cost.session_count > 0 ? cost.total_cost / cost.session_count : 0)}
+									{cost.reported_session_count > 0
+										? formatCost(cost.total_cost / cost.reported_session_count)
+										: "—"}
 								</p>
 							</div>
 						</div>
+						<p className="text-[11px] text-muted-foreground">
+							{`${cost.reported_session_count.toLocaleString("en-US")} of ${cost.session_count.toLocaleString(
+								"en-US",
+							)} sessions reported (${Math.round(
+								(cost.reported_session_count / cost.session_count) * 100,
+							)}%)`}
+						</p>
 
 						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 							{/* Spend by agent */}
