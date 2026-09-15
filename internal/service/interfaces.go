@@ -1453,6 +1453,17 @@ type AgentTaskRow struct {
 type EventMetrics struct {
 	TotalEvents int            `json:"total_events"`
 	ByType      map[string]int `json:"by_type"`
+	// RetainedSince is the created_at of the oldest row currently alive in the
+	// short-lived event_bus_messages queue for this scope (nil if the queue
+	// holds nothing for it right now). It is NOT the start of the requested
+	// period — it reflects what the TTL-bounded queue still physically has.
+	RetainedSince *time.Time `json:"retained_since"`
+	// PeriodFullyCovered is true only when the requested period's start is
+	// not before RetainedSince, i.e. the queue's current contents actually
+	// span the whole requested window. False (including when RetainedSince
+	// is nil) means TotalEvents/ByType cannot be trusted as a historical
+	// count for this period — the queue's TTL may have already dropped rows.
+	PeriodFullyCovered bool `json:"period_fully_covered"`
 }
 
 // DayMetric holds the daily task creation/completion counts.

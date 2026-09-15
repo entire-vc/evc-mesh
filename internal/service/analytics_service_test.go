@@ -271,3 +271,159 @@ func TestAnalyticsService_GetMetrics_CostMetrics_EmptyWorkspace(t *testing.T) {
 	assert.Empty(t, cost.ByProject)
 	assert.Empty(t, cost.TopTasks)
 }
+
+// seedEventFixture creates a bare workspace + project for event_bus_messages tests and
+// registers cleanup. Returns the fixture IDs.
+func seedEventFixture(t *testing.T, db *sqlx.DB) (workspaceID, projectID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+
+	workspaceID = uuid.New()
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO workspaces (id, name, slug, owner_id, settings, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		workspaceID, "Event Test WS", "event-ws-"+uuid.New().String()[:8], uuid.New(), json.RawMessage(`{}`), time.Now().UTC(), time.Now().UTC(),
+	)
+	require.NoError(t, err)
+
+	projectID = uuid.New()
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO projects (id, workspace_id, name, slug, default_assignee_type, settings, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		projectID, workspaceID, "Event Test Project", "event-proj-"+uuid.New().String()[:8], "none", json.RawMessage(`{}`), time.Now().UTC(), time.Now().UTC(),
+	)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM event_bus_messages WHERE workspace_id = $1", workspaceID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM projects WHERE id = $1", projectID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM workspaces WHERE id = $1", workspaceID)
+	})
+
+	return workspaceID, projectID
+}
+
+// insertEventBusMessage inserts one event_bus_messages row with an explicit created_at,
+// simulating a row minted at an arbitrary point within the queue's short TTL window.
+func insertEventBusMessage(t *testing.T, db *sqlx.DB, workspaceID, projectID uuid.UUID, eventType string, createdAt time.Time) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(),
+		`INSERT INTO event_bus_messages (id, workspace_id, project_id, event_type, subject, payload, created_at, expires_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		uuid.New(), workspaceID, projectID, eventType, "test.subject", json.RawMessage(`{}`), createdAt, createdAt.Add(24*time.Hour),
+	)
+	require.NoError(t, err)
+}
+
+// TestAnalyticsService_GetMetrics_EventMetrics_PeriodFilter is the regression test for the
+// audit finding (#9b803a9b): queryEventMetrics used to ignore filter.From/To entirely and
+// return the whole live queue for the scope regardless of the requested period. Rows outside
+// the requested window must not be counted.
+func TestAnalyticsService_GetMetrics_EventMetrics_PeriodFilter(t *testing.T) {
+	db := testDB(t)
+	workspaceID, projectID := seedEventFixture(t, db)
+	now := time.Now().UTC()
+
+	// Inside the requested period.
+	insertEventBusMessage(t, db, workspaceID, projectID, "custom", now.Add(-30*time.Minute))
+	insertEventBusMessage(t, db, workspaceID, projectID, "status_change", now.Add(-10*time.Minute))
+	// Outside the requested period (older than From) — must NOT be counted.
+	insertEventBusMessage(t, db, workspaceID, projectID, "custom", now.Add(-10*24*time.Hour))
+
+	svc := NewAnalyticsService(db)
+	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
+		WorkspaceID: workspaceID,
+		ProjectID:   &projectID,
+		From:        now.Add(-time.Hour),
+		To:          now.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, metrics)
+
+	ev := metrics.EventMetrics
+	assert.Equal(t, 2, ev.TotalEvents, "must count only rows inside [From,To], not the whole queue")
+	assert.Equal(t, 1, ev.ByType["custom"])
+	assert.Equal(t, 1, ev.ByType["status_change"])
+}
+
+// TestAnalyticsService_GetMetrics_EventMetrics_QueueVsClosedPeriod reproduces the literal
+// audit scenario: querying a closed historical period returns the CURRENT queue size instead
+// of a real historical count, because event_bus_messages is a 24h-TTL queue, not a log. After
+// the fix, a closed period the queue can no longer possibly hold must read TotalEvents=0 and
+// PeriodFullyCovered=false — never the live queue's current size.
+func TestAnalyticsService_GetMetrics_EventMetrics_QueueVsClosedPeriod(t *testing.T) {
+	db := testDB(t)
+	workspaceID, projectID := seedEventFixture(t, db)
+	now := time.Now().UTC()
+
+	// Simulate the current queue: rows minted "now", as a live TTL=24h queue would hold.
+	insertEventBusMessage(t, db, workspaceID, projectID, "context_update", now)
+	insertEventBusMessage(t, db, workspaceID, projectID, "custom", now)
+	insertEventBusMessage(t, db, workspaceID, projectID, "status_change", now)
+
+	svc := NewAnalyticsService(db)
+	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
+		WorkspaceID: workspaceID,
+		ProjectID:   &projectID,
+		// A closed period well over a month in the past — the queue's TTL could
+		// never have retained anything from here even if it existed.
+		From: now.AddDate(0, -2, 0),
+		To:   now.AddDate(0, -2, 1),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, metrics)
+
+	ev := metrics.EventMetrics
+	assert.Equal(t, 0, ev.TotalEvents, "must NOT report the live queue's current size as a historical count")
+	assert.False(t, ev.PeriodFullyCovered, "a closed period the queue cannot have retained must not claim coverage")
+}
+
+// TestAnalyticsService_GetMetrics_EventMetrics_FullyCovered checks the positive case: when
+// the queue's oldest retained row predates the requested period's start, the period is
+// genuinely covered by what the queue still holds and the counter can be trusted.
+func TestAnalyticsService_GetMetrics_EventMetrics_FullyCovered(t *testing.T) {
+	db := testDB(t)
+	workspaceID, projectID := seedEventFixture(t, db)
+	now := time.Now().UTC()
+
+	// Oldest row in the queue for this scope — sets retained_since.
+	insertEventBusMessage(t, db, workspaceID, projectID, "custom", now.Add(-3*time.Hour))
+	// A row inside the requested period.
+	insertEventBusMessage(t, db, workspaceID, projectID, "custom", now.Add(-30*time.Minute))
+
+	svc := NewAnalyticsService(db)
+	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
+		WorkspaceID: workspaceID,
+		ProjectID:   &projectID,
+		From:        now.Add(-time.Hour), // after retained_since (-3h) → within the covered window
+		To:          now,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, metrics)
+
+	ev := metrics.EventMetrics
+	require.NotNil(t, ev.RetainedSince)
+	assert.WithinDuration(t, now.Add(-3*time.Hour), *ev.RetainedSince, 5*time.Second)
+	assert.True(t, ev.PeriodFullyCovered)
+	assert.Equal(t, 1, ev.TotalEvents, "only the in-period row counts, not the older floor-setting row")
+}
+
+// TestAnalyticsService_GetMetrics_EventMetrics_EmptyWorkspace checks the vacuous case: a
+// workspace with no rows at all in event_bus_messages must not claim coverage just because
+// there's nothing to contradict it — absence of current rows proves nothing about the past.
+func TestAnalyticsService_GetMetrics_EventMetrics_EmptyWorkspace(t *testing.T) {
+	db := testDB(t)
+
+	svc := NewAnalyticsService(db)
+	metrics, err := svc.GetMetrics(context.Background(), AnalyticsFilter{
+		WorkspaceID: uuid.New(),
+		From:        time.Now().Add(-time.Hour),
+		To:          time.Now().Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, metrics)
+
+	ev := metrics.EventMetrics
+	assert.Equal(t, 0, ev.TotalEvents)
+	assert.Nil(t, ev.RetainedSince)
+	assert.False(t, ev.PeriodFullyCovered)
+	assert.Empty(t, ev.ByType)
+}

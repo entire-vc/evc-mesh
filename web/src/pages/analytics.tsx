@@ -408,7 +408,20 @@ export function AnalyticsPage() {
             <KPICard
               icon={<Zap className="h-5 w-5 text-amber-500" />}
               label="Total Events"
-              value={metrics.event_metrics.total_events}
+              value={
+                metrics.event_metrics.period_fully_covered
+                  ? metrics.event_metrics.total_events
+                  : "—"
+              }
+              caption={
+                metrics.event_metrics.period_fully_covered
+                  ? undefined
+                  : metrics.event_metrics.retained_since
+                    ? `Log only retains data since ${new Date(
+                        metrics.event_metrics.retained_since,
+                      ).toLocaleDateString()}`
+                    : "No event data retained for this period"
+              }
             />
           </div>
         ) : null}
@@ -531,7 +544,9 @@ export function AnalyticsPage() {
                 />
               ) : (
                 <p className="text-center text-xs text-muted-foreground py-4">
-                  No events yet.
+                  {metrics && !metrics.event_metrics.period_fully_covered
+                    ? "Event log doesn't retain data this far back — no breakdown available."
+                    : "No events yet."}
                 </p>
               )}
             </CardContent>
@@ -550,10 +565,12 @@ function KPICard({
   icon,
   label,
   value,
+  caption,
 }: {
   icon: React.ReactNode;
   label: string;
-  value: number;
+  value: number | string;
+  caption?: string;
 }) {
   return (
     <Card>
@@ -562,7 +579,10 @@ function KPICard({
           {icon}
           <span className="text-xs text-muted-foreground">{label}</span>
         </div>
-        <span className="text-3xl font-bold tracking-tight">{value.toLocaleString("en-US")}</span>
+        <span className="text-3xl font-bold tracking-tight">
+          {typeof value === "number" ? value.toLocaleString("en-US") : value}
+        </span>
+        {caption ? <p className="text-[11px] text-muted-foreground">{caption}</p> : null}
       </CardContent>
     </Card>
   );
