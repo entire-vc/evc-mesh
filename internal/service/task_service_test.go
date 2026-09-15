@@ -240,6 +240,28 @@ func TestTaskService_Create_ProjectDoesNotExist(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, apiErr.Code)
 }
 
+// TestTaskService_Create_BackgroundCtxActorTypeDefaultsToSystem is the
+// mock-level companion to the real-Postgres regression test in
+// recurring_empty_actor_type_db_test.go (#fd8a3e43). The recurring scheduler's
+// 60s ticker (cmd/api/main.go) calls Create through
+// recurringService.RunDue -> createInstance on a bare context.Background() —
+// actorctx.FromContext(ctx) then returns actorType == "", and
+// activity_log.actor_type is a NOT NULL enum with no DEFAULT, so the real
+// INSERT fails with SQLSTATE 22P02 and rolls back the whole transaction,
+// including the task row itself. This asserts the fallback directly against
+// what Create hands to taskRepo.Create, without needing a real database.
+func TestTaskService_Create_BackgroundCtxActorTypeDefaultsToSystem(t *testing.T) {
+	svc, taskRepo, _ := setupTaskService()
+
+	task := &domain.Task{ProjectID: uuid.New(), StatusID: uuid.New(), Title: "Recurring instance"}
+	err := svc.Create(context.Background(), task)
+	require.NoError(t, err)
+
+	require.NotNil(t, taskRepo.LastCreateActivity)
+	assert.Equal(t, domain.ActorTypeSystem, taskRepo.LastCreateActivity.ActorType,
+		"an empty ctx actor type must fall back to system, never reach Postgres empty")
+}
+
 // ---------------------------------------------------------------------------
 // TestTaskService_GetByID
 // ---------------------------------------------------------------------------
@@ -1229,6 +1251,37 @@ func TestTaskService_CreateSubtask_PublishesEvent(t *testing.T) {
 	title, ok := msg.Payload["title"].(map[string]interface{})
 	require.True(t, ok, "payload must carry the title change, same shape as Create's")
 	assert.Equal(t, child.Title, title["new"])
+}
+
+// TestTaskService_CreateSubtask_BackgroundCtxActorTypeFallsBackToCreatedByType
+// is the mock-level companion to the real-Postgres regression test in
+// recurring_empty_actor_type_db_test.go (#fd8a3e43). No ticker calls
+// CreateSubtask on a bare context.Background() today, but the bug shape was
+// identical and latent here too: the activity_log entry's ActorType came
+// straight from actorctx.FromContext(ctx) instead of the already-defaulted
+// child.CreatedByType, so it would have hit the exact same NOT NULL enum
+// violation the moment any future background caller used this path.
+func TestTaskService_CreateSubtask_BackgroundCtxActorTypeFallsBackToCreatedByType(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	svc := newTestTaskService(taskRepo, statusRepo, NewMockTaskDependencyRepository(), NewMockActivityLogRepository()).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+
+	f := newSubtaskFixture(taskRepo, statusRepo)
+
+	child, err := svc.CreateSubtask(context.Background(), f.parentID, CreateSubtaskInput{
+		Title:    "Child of a background caller",
+		Priority: domain.PriorityMedium,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	require.NotNil(t, taskRepo.LastCreateActivity)
+	assert.NotEmpty(t, taskRepo.LastCreateActivity.ActorType,
+		"activity_log.actor_type must never be empty — it is a NOT NULL enum with no DEFAULT")
+	assert.Equal(t, child.CreatedByType, taskRepo.LastCreateActivity.ActorType,
+		"the activity log's actor type must match the task's own created_by_type, "+
+			"which already carries the \"\" -> ActorTypeUser fallback")
 }
 
 // ---------------------------------------------------------------------------

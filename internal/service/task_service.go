@@ -512,6 +512,18 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	wsID := proj.WorkspaceID
 
 	// actorID/actorType were already resolved above (auto-enroll block).
+	//
+	// Defense in depth for #fd8a3e43: activity_log.actor_type is a NOT NULL enum
+	// with no DEFAULT, so an empty actorType (any caller on a bare
+	// context.Background() — the recurring ticker being the one that actually
+	// hit this, cmd/api/main.go now wraps that one explicitly too) makes this
+	// INSERT fail with SQLSTATE 22P02 and rolls back the whole transaction,
+	// including the task row itself. Falling back here means every current and
+	// future unauthenticated/background caller of Create is covered, not just
+	// the one ticker this incident happened to surface.
+	if actorType == "" {
+		actorType = domain.ActorTypeSystem
+	}
 	changes := map[string]interface{}{
 		"title":    map[string]interface{}{"old": nil, "new": task.Title},
 		"priority": map[string]interface{}{"old": nil, "new": string(task.Priority)},
@@ -1495,9 +1507,14 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		EntityID:    child.ID,
 		Action:      "task.created",
 		ActorID:     creatorID,
-		ActorType:   creatorType,
-		Changes:     changesJSON,
-		CreatedAt:   now,
+		// child.CreatedByType, not the raw creatorType: it already carries the
+		// "" -> ActorTypeUser fallback applied above, so this can never write
+		// activity_log's NOT NULL, no-DEFAULT enum column an empty value on a
+		// background/unauthenticated ctx — same class of bug as Create's own
+		// fallback (#fd8a3e43).
+		ActorType: child.CreatedByType,
+		Changes:   changesJSON,
+		CreatedAt: now,
 	}
 	if err := s.taskRepo.Create(ctx, child, activityEntry); err != nil {
 		return nil, err

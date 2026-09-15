@@ -12,12 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pressly/goose/v3"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
 	"github.com/entire-vc/evc-mesh/pkg/metrics"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/auth"
 	"github.com/entire-vc/evc-mesh/internal/bootstrap"
 	"github.com/entire-vc/evc-mesh/internal/config"
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/handler"
@@ -1852,7 +1855,19 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				// actorctx.WithActor is required here, not optional: RunDue ->
+				// createInstance -> taskSvc.Create writes the task.created
+				// activity_log row atomically with the task itself, reading the
+				// actor from this ctx. Without it, actor_type arrives empty at a
+				// NOT NULL enum column with no DEFAULT — Postgres rejects the
+				// INSERT (22P02), and the whole transaction rolls back, so EVERY
+				// recurring schedule fails on its next tick. TaskService.Create
+				// now also falls back to ActorTypeSystem on an empty actor type
+				// (defense in depth for any other background caller), but this
+				// ticker should still identify itself explicitly rather than
+				// rely on that fallback (#fd8a3e43).
+				ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+				ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 				count, err := recurringService.RunDue(ctx)
 				cancel()
 				if err != nil {
