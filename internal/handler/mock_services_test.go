@@ -1202,7 +1202,7 @@ func (m *MockAgentSessionRepository) Create(ctx context.Context, session *domain
 func (m *MockAgentSessionRepository) Update(ctx context.Context, session *domain.AgentSession) error {
 	return nil
 }
-func (m *MockAgentSessionRepository) GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
+func (m *MockAgentSessionRepository) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil
 }
 func (m *MockAgentSessionRepository) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {

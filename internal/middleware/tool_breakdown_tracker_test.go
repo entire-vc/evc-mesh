@@ -27,7 +27,7 @@ func (minimalAgentSessionRepoStub) Create(ctx context.Context, session *domain.A
 func (minimalAgentSessionRepoStub) Update(ctx context.Context, session *domain.AgentSession) error {
 	return nil
 }
-func (minimalAgentSessionRepoStub) GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
+func (minimalAgentSessionRepoStub) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	return nil, nil
 }
 func (minimalAgentSessionRepoStub) GetActiveForTask(ctx context.Context, agentID, taskID uuid.UUID) (*domain.AgentSession, error) {

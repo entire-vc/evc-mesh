@@ -50,7 +50,7 @@ func TestSessionRepo_IncrementToolBreakdown_RealPostgres(t *testing.T) {
 	require.NoError(t, repo.IncrementToolBreakdown(ctx, agentID, wsID, nil,
 		map[string]int64{"recall": 2, "get_task": 1}))
 
-	active, err := repo.GetActive(ctx, agentID)
+	active, err := repo.GetActiveAgentWide(ctx, agentID)
 	require.NoError(t, err)
 	require.NotNil(t, active, "the first tool call must create the session row, not wait for session_report")
 	assert.Equal(t, 3, active.ToolCalls)
@@ -65,7 +65,7 @@ func TestSessionRepo_IncrementToolBreakdown_RealPostgres(t *testing.T) {
 	require.NoError(t, repo.IncrementToolBreakdown(ctx, agentID, wsID, nil,
 		map[string]int64{"recall": 3, "remember": 1}))
 
-	active, err = repo.GetActive(ctx, agentID)
+	active, err = repo.GetActiveAgentWide(ctx, agentID)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(active.ToolBreakdown, &breakdown))
 	assert.Equal(t, int64(5), breakdown["recall"], "5 = 2 + 3, an atomic add across two flush cycles")
@@ -78,13 +78,13 @@ func TestSessionRepo_IncrementToolBreakdown_RealPostgres(t *testing.T) {
 	//    this increment must not revert it when it writes back afterward.
 	//    This is the exact race Update() used to be able to lose before
 	//    tool_breakdown/tool_calls were dropped from its SET list.
-	staleCopy := *active // simulates ReportSession's GetActive() fetch, taken before the next increment
+	staleCopy := *active // simulates ReportSession's GetActiveAgentWide() fetch, taken before the next increment
 	require.NoError(t, repo.IncrementToolBreakdown(ctx, agentID, wsID, nil, map[string]int64{"recall": 100}))
 
 	staleCopy.TokensIn = 999 // ReportSession would also bump tokens/cost on its copy
 	require.NoError(t, repo.Update(ctx, &staleCopy))
 
-	final, err := repo.GetActive(ctx, agentID)
+	final, err := repo.GetActiveAgentWide(ctx, agentID)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(final.ToolBreakdown, &breakdown))
 	assert.Equal(t, int64(105), breakdown["recall"],

@@ -1412,7 +1412,14 @@ type WorkspaceInviteRepository interface {
 type AgentSessionRepository interface {
 	Create(ctx context.Context, session *domain.AgentSession) error
 	Update(ctx context.Context, session *domain.AgentSession) error
-	GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error)
+	// GetActiveAgentWide returns the agent's active session that is NOT scoped
+	// to any task (task_id IS NULL), or nil if none exists. This is the
+	// counterpart to GetActiveForTask for untagged reports — it must NOT match
+	// a task-scoped active session, however recently that one started, or
+	// agent-wide activity (e.g. a periodic fiddler flush with no task_id)
+	// silently piles onto whichever task happens to be active instead of
+	// getting its own row (see task ea1b9fb6).
+	GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error)
 	// GetActiveForTask returns the agent's active session for a specific task, or nil.
 	// Scopes spend per-task so a busy agent completing multiple tasks within one
 	// EndStale window doesn't pile every task's cost onto the first task's session.
@@ -1428,8 +1435,12 @@ type AgentSessionRepository interface {
 	// tool_breakdown[tool] and the total onto tool_calls, for the agent's active
 	// session — task-scoped (task_id = *taskID) when taskID is non-nil, else
 	// agent-wide, mirroring the precedence a session_report with a task_id already
-	// resolves by (GetActiveForTask, falling back to GetActive). When no matching
-	// active session exists yet, one is created seeded with these counts and
+	// resolves by (GetActiveForTask, falling back to GetActiveAgentWide). Note:
+	// unlike GetActiveAgentWide, the agent-wide SQL this uses does NOT filter on
+	// task_id IS NULL (matches the agent's single latest active session,
+	// whatever task it belongs to) — a related but distinct gap, tracked
+	// separately, not fixed by GetActiveAgentWide's introduction here. When no
+	// matching active session exists yet, one is created seeded with these counts and
 	// workspaceID — this is deliberately allowed to be the FIRST thing that creates
 	// an agent_sessions row for a spawn, so a spawn that ends without ever calling
 	// session_report (crash, timeout) still leaves a populated tool_breakdown

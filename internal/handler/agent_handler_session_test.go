@@ -19,13 +19,18 @@ import (
 )
 
 // mockSessionRepo is an in-memory AgentSessionRepository for handler tests.
-// It keeps at most one active session per agent (byAgent) and one per
-// agent+task pair (byAgentTask) so both GetActive and GetActiveForTask can be
-// exercised. All methods are guarded by a mutex so the concurrency test stays
+// It keeps at most one agent-wide active session per agent (byAgentWide —
+// task_id IS NULL, mirroring GetActiveAgentWide's real WHERE clause) and one
+// per agent+task pair (byAgentTask) so GetActiveAgentWide and
+// GetActiveForTask can each be exercised as two genuinely separate rows, not
+// two views onto the same map — that distinction is the whole point of task
+// ea1b9fb6 (a task-scoped session must never be returned to an untagged
+// caller just because it happens to be the agent's most recently touched
+// one). All methods are guarded by a mutex so the concurrency test stays
 // race-free under `go test -race`.
 type mockSessionRepo struct {
 	mu          sync.Mutex
-	byAgent     map[uuid.UUID]*domain.AgentSession
+	byAgentWide map[uuid.UUID]*domain.AgentSession
 	byAgentTask map[string]*domain.AgentSession // key: agentID+":"+taskID
 	createN     int
 	updateN     int
@@ -34,7 +39,7 @@ type mockSessionRepo struct {
 
 func newMockSessionRepo() *mockSessionRepo {
 	return &mockSessionRepo{
-		byAgent:     make(map[uuid.UUID]*domain.AgentSession),
+		byAgentWide: make(map[uuid.UUID]*domain.AgentSession),
 		byAgentTask: make(map[string]*domain.AgentSession),
 	}
 }
@@ -47,9 +52,10 @@ func (m *mockSessionRepo) Create(ctx context.Context, s *domain.AgentSession) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *s
-	m.byAgent[s.AgentID] = &cp
 	if s.TaskID != nil {
 		m.byAgentTask[agentTaskKey(s.AgentID, *s.TaskID)] = &cp
+	} else {
+		m.byAgentWide[s.AgentID] = &cp
 	}
 	m.createN++
 	return nil
@@ -59,18 +65,19 @@ func (m *mockSessionRepo) Update(ctx context.Context, s *domain.AgentSession) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *s
-	m.byAgent[s.AgentID] = &cp
 	if s.TaskID != nil {
 		m.byAgentTask[agentTaskKey(s.AgentID, *s.TaskID)] = &cp
+	} else {
+		m.byAgentWide[s.AgentID] = &cp
 	}
 	m.updateN++
 	return nil
 }
 
-func (m *mockSessionRepo) GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
+func (m *mockSessionRepo) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s, ok := m.byAgent[agentID]
+	s, ok := m.byAgentWide[agentID]
 	if !ok {
 		return nil, nil
 	}
@@ -118,7 +125,7 @@ func (m *mockSessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, w
 	if taskID != nil {
 		target = m.byAgentTask[agentTaskKey(agentID, *taskID)]
 	} else {
-		target = m.byAgent[agentID]
+		target = m.byAgentWide[agentID]
 	}
 
 	merged := map[string]int64{}
@@ -155,9 +162,10 @@ func (m *mockSessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, w
 	target.ToolBreakdown = raw
 	target.ToolCalls += int(total)
 	cp := *target
-	m.byAgent[agentID] = &cp
 	if taskID != nil {
 		m.byAgentTask[agentTaskKey(agentID, *taskID)] = &cp
+	} else {
+		m.byAgentWide[agentID] = &cp
 	}
 	return nil
 }
@@ -203,7 +211,7 @@ func TestReportSession_CreatesNewSession(t *testing.T) {
 	assert.Equal(t, 1, repo.createN)
 	assert.Equal(t, 0, repo.updateN)
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	assert.Equal(t, wsID, stored.WorkspaceID)
 	assert.Equal(t, domain.AgentSessionStatusActive, stored.Status)
@@ -243,7 +251,7 @@ func TestReportSession_AdditiveUpdate(t *testing.T) {
 	assert.Equal(t, 1, repo.createN, "should reuse the active session, not create a second")
 	assert.Equal(t, 1, repo.updateN)
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	assert.Equal(t, int64(3000), stored.TokensIn)
 	assert.Equal(t, int64(2000), stored.TokensOut)
@@ -270,7 +278,7 @@ func TestReportSession_EmptyBodyCreatesSession(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 1, repo.createN)
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	assert.Equal(t, int64(0), stored.TokensIn)
 	assert.Equal(t, int64(0), stored.TokensOut)
@@ -284,12 +292,12 @@ func TestReportSession_ModelOverride(t *testing.T) {
 	h, e := setupSessionTest(repo, uuid.New())
 
 	postReport(t, h, e, &agentID, `{"tokens_in":100}`)
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	assert.Equal(t, "", stored.ModelUsed)
 
 	postReport(t, h, e, &agentID, `{"tokens_in":200,"model":"claude-opus-4-7"}`)
-	stored, _ = repo.GetActive(context.Background(), agentID)
+	stored, _ = repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	assert.Equal(t, "claude-opus-4-7", stored.ModelUsed)
 	assert.Equal(t, int64(300), stored.TokensIn)
@@ -304,7 +312,7 @@ func TestReportSession_ModelNotClobberedByEmpty(t *testing.T) {
 	postReport(t, h, e, &agentID, `{"tokens_in":100,"model":"claude-opus-4-7"}`)
 	postReport(t, h, e, &agentID, `{"tokens_in":200}`) // no model
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	assert.Equal(t, "claude-opus-4-7", stored.ModelUsed, "empty model must not overwrite")
 }
@@ -352,6 +360,58 @@ func TestReportSession_TwoTasksSeparateSessions(t *testing.T) {
 	assert.Equal(t, 2, repo.createN)
 }
 
+// Regression for task ea1b9fb6: an untagged (task_id=nil) report must get
+// its OWN agent-wide session — it must NOT accumulate onto whichever
+// task-scoped session happens to be active, however recently that one
+// started. Before the fix, ReportSession's agent-wide branch called plain
+// GetActive(agentID), which had no task_id IS NULL filter and simply
+// returned "the agent's latest active session, any task" — so a periodic
+// agent-wide flush (e.g. fiddler reporting idle-time activity between tasks)
+// silently misattributed its cost onto the currently-fed task instead of
+// getting a distinct task_id-NULL row.
+func TestReportSession_AgentWideReportDoesNotPileOntoTaskSession(t *testing.T) {
+	repo := newMockSessionRepo()
+	agentID := uuid.New()
+	taskA := uuid.New()
+	h, e := setupSessionTest(repo, uuid.New())
+
+	// Task-scoped session exists and is the most recently touched one.
+	postReport(t, h, e, &agentID, `{"task_id":"`+taskA.String()+`","tokens_in":500,"estimated_cost":0.05}`)
+
+	// An untagged report arrives (e.g. agent-wide idle-time cost) — must NOT
+	// land on taskA's session.
+	postReport(t, h, e, &agentID, `{"tokens_in":30,"estimated_cost":0.003}`)
+
+	sessA, err := repo.GetActiveForTask(context.Background(), agentID, taskA)
+	require.NoError(t, err)
+	require.NotNil(t, sessA)
+	assert.Equal(t, int64(500), sessA.TokensIn, "taskA's session must be untouched by the agent-wide report")
+
+	wide, err := repo.GetActiveAgentWide(context.Background(), agentID)
+	require.NoError(t, err)
+	require.NotNil(t, wide, "the untagged report must create its own agent-wide (task_id=nil) session")
+	assert.Nil(t, wide.TaskID)
+	assert.Equal(t, int64(30), wide.TokensIn)
+
+	// Two distinct sessions: one per task-scoped, one agent-wide.
+	assert.Equal(t, 2, repo.createN)
+
+	// A second untagged report must accumulate onto that SAME agent-wide
+	// session, not spawn a third one and not touch taskA's.
+	postReport(t, h, e, &agentID, `{"tokens_in":5}`)
+
+	wide, err = repo.GetActiveAgentWide(context.Background(), agentID)
+	require.NoError(t, err)
+	require.NotNil(t, wide)
+	assert.Equal(t, int64(35), wide.TokensIn, "second agent-wide report accumulates onto the same task_id=nil row")
+	assert.Equal(t, 2, repo.createN, "no third session created")
+
+	sessA, err = repo.GetActiveForTask(context.Background(), agentID, taskA)
+	require.NoError(t, err)
+	require.NotNil(t, sessA)
+	assert.Equal(t, int64(500), sessA.TokensIn, "taskA's session must still be untouched")
+}
+
 // Concurrent reports from the same agent must not race (run with -race).
 // Note: the in-memory mock serializes via mutex; this asserts the handler
 // itself holds no unsynchronized shared state across goroutines.
@@ -380,7 +440,7 @@ func TestReportSession_ConcurrentReports(t *testing.T) {
 	}
 	wg.Wait()
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	// No lost-update guarantee from the read-modify-write mock under concurrency,
 	// but the session must remain a single active row with a positive total.
@@ -402,7 +462,7 @@ func TestReportSession_MergesClientToolBreakdown(t *testing.T) {
 		`{"tokens_in":100,"tool_breakdown":{"recall":3,"remember":1}}`)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	var breakdown map[string]int64
 	require.NoError(t, json.Unmarshal(stored.ToolBreakdown, &breakdown))
@@ -426,7 +486,7 @@ func TestReportSession_ToolBreakdownAccumulatesAcrossReports(t *testing.T) {
 	postReport(t, h, e, &agentID, `{"tool_breakdown":{"recall":2}}`)
 	postReport(t, h, e, &agentID, `{"tool_breakdown":{"recall":2}}`) // e.g. a retried report
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	var breakdown map[string]int64
 	require.NoError(t, json.Unmarshal(stored.ToolBreakdown, &breakdown))
@@ -445,7 +505,7 @@ func TestReportSession_NoToolBreakdownFieldLeavesNothingToMerge(t *testing.T) {
 	rec := postReport(t, h, e, &agentID, `{"tokens_in":50}`)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	stored, _ := repo.GetActive(context.Background(), agentID)
+	stored, _ := repo.GetActiveAgentWide(context.Background(), agentID)
 	require.NotNil(t, stored)
 	assert.Equal(t, int64(50), stored.TokensIn)
 	assert.Equal(t, 0, stored.ToolCalls)
