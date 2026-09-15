@@ -1465,14 +1465,15 @@ type DayMetric struct {
 // CostMetrics holds aggregated agent-session cost/token data for a workspace/period,
 // sourced from agent_sessions (populated by the fiddler session_report MCP tool).
 type CostMetrics struct {
-	TotalCost      float64          `json:"total_cost"`
-	TotalTokensIn  int64            `json:"total_tokens_in"`
-	TotalTokensOut int64            `json:"total_tokens_out"`
-	SessionCount   int              `json:"session_count"`
-	ByAgent        []AgentCostRow   `json:"by_agent"`
-	ByProject      []ProjectCostRow `json:"by_project"`
-	ByDay          []DayCostMetric  `json:"by_day"`
-	TopTasks       []TaskCostRow    `json:"top_tasks"`
+	TotalCost            float64          `json:"total_cost"`
+	TotalTokensIn        int64            `json:"total_tokens_in"`
+	TotalTokensOut       int64            `json:"total_tokens_out"`
+	SessionCount         int              `json:"session_count"`
+	ReportedSessionCount int              `json:"reported_session_count"`
+	ByAgent              []AgentCostRow   `json:"by_agent"`
+	ByProject            []ProjectCostRow `json:"by_project"`
+	ByDay                []DayCostMetric  `json:"by_day"`
+	TopTasks             []TaskCostRow    `json:"top_tasks"`
 }
 
 // AgentCostRow holds per-agent spend/token stats for the period.

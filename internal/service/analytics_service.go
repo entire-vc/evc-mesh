@@ -341,10 +341,11 @@ func (s *analyticsService) queryTimeline(ctx context.Context, filter AnalyticsFi
 
 // costTotalsRow holds the workspace-wide cost/token totals for the period.
 type costTotalsRow struct {
-	Cost         float64 `db:"cost"`
-	TokensIn     int64   `db:"tokens_in"`
-	TokensOut    int64   `db:"tokens_out"`
-	SessionCount int     `db:"session_count"`
+	Cost                 float64 `db:"cost"`
+	TokensIn             int64   `db:"tokens_in"`
+	TokensOut            int64   `db:"tokens_out"`
+	SessionCount         int     `db:"session_count"`
+	ReportedSessionCount int     `db:"reported_session_count"`
 }
 
 // agentCostQueryRow holds one row from the per-agent cost aggregation.
@@ -403,7 +404,8 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 		SELECT COALESCE(SUM(ags.estimated_cost), 0) AS cost,
 		       COALESCE(SUM(ags.tokens_in), 0) AS tokens_in,
 		       COALESCE(SUM(ags.tokens_out), 0) AS tokens_out,
-		       COUNT(*) AS session_count
+		       COUNT(*) AS session_count,
+		       COUNT(*) FILTER (WHERE ags.model_used <> '' AND ags.model_used IS NOT NULL) AS reported_session_count
 		FROM agent_sessions ags
 		LEFT JOIN tasks t ON t.id = ags.task_id
 		WHERE ags.workspace_id = $1
@@ -515,13 +517,14 @@ func (s *analyticsService) queryCostMetrics(ctx context.Context, filter Analytic
 	}
 
 	return &CostMetrics{
-		TotalCost:      totals.Cost,
-		TotalTokensIn:  totals.TokensIn,
-		TotalTokensOut: totals.TokensOut,
-		SessionCount:   totals.SessionCount,
-		ByAgent:        byAgent,
-		ByProject:      byProject,
-		ByDay:          byDay,
-		TopTasks:       topTasks,
+		TotalCost:            totals.Cost,
+		TotalTokensIn:        totals.TokensIn,
+		TotalTokensOut:       totals.TokensOut,
+		SessionCount:         totals.SessionCount,
+		ReportedSessionCount: totals.ReportedSessionCount,
+		ByAgent:              byAgent,
+		ByProject:            byProject,
+		ByDay:                byDay,
+		TopTasks:             topTasks,
 	}, nil
 }

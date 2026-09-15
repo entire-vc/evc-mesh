@@ -11,6 +11,7 @@ const SAMPLE_COST: CostMetrics = {
   total_tokens_in: 150_000,
   total_tokens_out: 45_000,
   session_count: 8,
+  reported_session_count: 8,
   by_agent: [
     { agent_id: "a1", agent_name: "Linus", cost: 8, tokens_in: 100_000, tokens_out: 30_000 },
     { agent_id: "a2", agent_name: "Garfield", cost: 4.5, tokens_in: 50_000, tokens_out: 15_000 },
@@ -45,6 +46,9 @@ describe("CostTrackingSection", () => {
     expect(screen.getByText("$12.50")).toBeInTheDocument();
     expect(screen.getByText("150.0k / 45.0k")).toBeInTheDocument();
     expect(screen.getByText("8")).toBeInTheDocument();
+    // Avg / reported session: $12.50 / 8 reported = $1.56.
+    expect(screen.getByText("$1.56")).toBeInTheDocument();
+    expect(screen.getByText("8 of 8 sessions reported (100%)")).toBeInTheDocument();
 
     expect(screen.getByText("Linus")).toBeInTheDocument();
     expect(screen.getByText("Garfield")).toBeInTheDocument();
@@ -57,6 +61,23 @@ describe("CostTrackingSection", () => {
 
     const analyticsLink = screen.getByRole("link", { name: /View full analytics/ });
     expect(analyticsLink).toHaveAttribute("href", "/w/acme/analytics");
+  });
+
+  it("renders '—' instead of $0.00 when no session in the window has reported cost", () => {
+    renderWithRouter(
+      <CostTrackingSection
+        cost={{ ...SAMPLE_COST, reported_session_count: 0 }}
+        isLoading={false}
+        wsSlug="acme"
+      />,
+    );
+
+    // Sessions still shows the real (unreported) count — the section is not "empty".
+    expect(screen.getByText("8")).toBeInTheDocument();
+    expect(screen.getByText("0 of 8 sessions reported (0%)")).toBeInTheDocument();
+    // Both cost figures render "—", never $0.00 — unknown must not be presented as zero.
+    expect(screen.getAllByText("—")).toHaveLength(2);
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
   it("treats a zero-session response as empty even when cost object is present", () => {
