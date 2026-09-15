@@ -145,8 +145,8 @@ func (r *SessionRepo) Create(ctx context.Context, s *domain.AgentSession) error 
 // tool_breakdown. Those two columns are owned exclusively by
 // IncrementToolBreakdown's atomic read-and-add UPDATE (below): a caller here
 // always carries a plain copy of whatever ToolCalls/ToolBreakdown looked like
-// at the time it fetched the session (GetActive/GetActiveForTask never zero
-// them), and if this method wrote that copy back it would silently clobber
+// at the time it fetched the session (GetActiveAgentWide/GetActiveForTask
+// never zero them), and if this method wrote that copy back it would silently clobber
 // any increment IncrementToolBreakdown applied to the row in between the
 // fetch and this call — a classic read-modify-write lost update, and not a
 // hypothetical one: ReportSession does exactly that fetch-then-Update() round
@@ -332,13 +332,19 @@ func (r *SessionRepo) IncrementToolBreakdown(ctx context.Context, agentID, works
 	})
 }
 
-// GetActive returns the active session for an agent, or nil if none exists.
-func (r *SessionRepo) GetActive(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
+// GetActiveAgentWide returns the agent's active session that is NOT scoped to
+// any task (task_id IS NULL), or nil if none exists. Deliberately filters on
+// task_id IS NULL rather than just "the agent's latest active session,
+// whatever task it belongs to" — the latter is what this method used to do
+// (as plain GetActive), which meant an untagged session_report silently
+// accumulated cost onto whichever task's session happened to be most recently
+// active instead of getting its own agent-wide row (task ea1b9fb6).
+func (r *SessionRepo) GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error) {
 	var row sessionRow
 	err := r.db.GetContext(ctx, &row,
 		`SELECT `+sessionColumns+`
 		 FROM agent_sessions
-		 WHERE agent_id = $1 AND status = 'active'
+		 WHERE agent_id = $1 AND status = 'active' AND task_id IS NULL
 		 ORDER BY started_at DESC
 		 LIMIT 1`,
 		agentID,

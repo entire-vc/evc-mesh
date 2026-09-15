@@ -106,7 +106,7 @@ func TestSessionRepo_IncrementToolBreakdown_QueryTextIsAlwaysOneOfTheTwoConstant
 
 // Task-scoped call must filter by task_id too, matching the precedence
 // ReportSession already uses when it has a task_id to scope by
-// (GetActiveForTask before GetActive), and must run the OTHER fixed
+// (GetActiveForTask before GetActiveAgentWide), and must run the OTHER fixed
 // constant verbatim.
 func TestSessionRepo_IncrementToolBreakdown_TaskScopedFiltersByTaskID(t *testing.T) {
 	repo, mock, captured := captureSessionRepoSQL(t)

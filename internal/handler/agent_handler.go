@@ -756,7 +756,7 @@ func (h *AgentHandler) ReportSession(c echo.Context) error {
 	if reqTaskID != nil {
 		active, err = h.sessionRepo.GetActiveForTask(ctx, agentID, *reqTaskID)
 	} else {
-		active, err = h.sessionRepo.GetActive(ctx, agentID)
+		active, err = h.sessionRepo.GetActiveAgentWide(ctx, agentID)
 	}
 	if err != nil {
 		return handleError(c, err)
