@@ -54,7 +54,7 @@ func (e *shippedEnv) createTask(t *testing.T, shipped bool, statusID uuid.UUID) 
 		Title:     "test task",
 		IsShipped: shipped,
 	}
-	if err := e.taskRepo.Create(context.Background(), task); err != nil {
+	if err := e.taskRepo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 	return task

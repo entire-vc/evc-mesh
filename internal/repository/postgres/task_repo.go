@@ -401,7 +401,7 @@ func isTaskNumberConflict(err error) bool {
 	return errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "uq_tasks_project_number"
 }
 
-func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
+func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *domain.ActivityLog) error {
 	// Serialize task_number allocation per project using pg_advisory_xact_lock.
 	//
 	// IMPORTANT: the lock MUST be acquired in a separate statement (Statement 1) before
@@ -416,6 +416,13 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 	//   Stmt 2: INSERT ... (SELECT MAX(task_number)+1 ...)  → fresh snapshot, sees all prior commits
 	// the MAX read is guaranteed to see the most recent committed task_number.
 	const qLock = `SELECT pg_advisory_xact_lock(hashtext($1::text))`
+	// qActivityInsert mirrors ActivityLogRepo.Create's SQL exactly (kept as a literal
+	// copy, not a shared call, so this insert can run against `tx` instead of `r.db` —
+	// see the atomicity comment on TaskRepository.Create).
+	const qActivityInsert = `
+		INSERT INTO activity_log (id, workspace_id, entity_type, entity_id, action, actor_id, actor_type, changes, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`
 	const qInsert = `
 		INSERT INTO tasks (
 			id, project_id, status_id, title, description,
@@ -487,6 +494,25 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task) error {
 			)
 			if err != nil {
 				return err
+			}
+			// Statement 3: the creation audit entry, in the SAME transaction as the
+			// insert above. If this fails, the whole transaction rolls back — a task
+			// must never exist without the event that says it was created (#819e7b29:
+			// the prior fire-and-forget post-commit write silently dropped 8.47% of
+			// system-created tasks' task.created rows under concurrent recurring-tick
+			// load, with no retry and no error surfaced to the caller).
+			if activity != nil {
+				changes := activity.Changes
+				if changes == nil {
+					changes = json.RawMessage(`{}`)
+				}
+				_, err = tx.ExecContext(ctx, qActivityInsert,
+					activity.ID, activity.WorkspaceID, activity.EntityType, activity.EntityID,
+					activity.Action, activity.ActorID, activity.ActorType, changes, activity.CreatedAt,
+				)
+				if err != nil {
+					return err
+				}
 			}
 			return tx.Commit()
 		}()

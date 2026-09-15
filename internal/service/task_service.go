@@ -490,29 +490,63 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 		}
 	}
 
-	if err := s.taskRepo.Create(ctx, task); err != nil {
+	// Resolve workspace_id BEFORE creating the task, so the task.created audit
+	// entry can be written atomically with the task itself — same DB transaction,
+	// see TaskRepo.Create. A task must never exist without the event that records
+	// its creation: the previous fire-and-forget, post-commit, non-retried write
+	// here silently dropped 8.47% of system-created tasks' task.created rows under
+	// concurrent recurring-tick load, with no error surfaced anywhere (#819e7b29).
+	// project_id is NOT NULL REFERENCES projects(id), so a missing project was
+	// already fatal to task creation (a raw FK violation from taskRepo.Create) —
+	// this just surfaces that earlier, with a clean error.
+	if s.projectRepo == nil {
+		return fmt.Errorf("task_service.Create: no project repository configured, cannot log task.created")
+	}
+	proj, err := s.projectRepo.GetByID(ctx, task.ProjectID)
+	if err != nil {
+		return fmt.Errorf("task_service.Create: resolving workspace for project %s: %w", task.ProjectID, err)
+	}
+	if proj == nil {
+		return apierror.NotFound("Project")
+	}
+	wsID := proj.WorkspaceID
+
+	// actorID/actorType were already resolved above (auto-enroll block).
+	changes := map[string]interface{}{
+		"title":    map[string]interface{}{"old": nil, "new": task.Title},
+		"priority": map[string]interface{}{"old": nil, "new": string(task.Priority)},
+	}
+	changesJSON, _ := json.Marshal(changes)
+	activityEntry := &domain.ActivityLog{
+		ID:          uuid.New(),
+		WorkspaceID: wsID,
+		EntityType:  "task",
+		EntityID:    task.ID,
+		Action:      "task.created",
+		ActorID:     actorID,
+		ActorType:   actorType,
+		Changes:     changesJSON,
+		CreatedAt:   now,
+	}
+
+	if err := s.taskRepo.Create(ctx, task, activityEntry); err != nil {
 		return err
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
-	s.logActivity(ctx, task.ProjectID, task.ID, "task.created", map[string]interface{}{
-		"title":    map[string]interface{}{"old": nil, "new": task.Title},
-		"priority": map[string]interface{}{"old": nil, "new": string(task.Priority)},
-	})
+	s.publishTaskEvent(ctx, wsID, task.ProjectID, task.ID, actorID, actorType, "task.created", changes)
 
 	// Dispatch webhook for task.created (agent wakeup pipeline).
-	if s.webhookSvc != nil && s.projectRepo != nil {
-		if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
-			go s.webhookSvc.Dispatch(ctx, proj.WorkspaceID, "task.created", map[string]interface{}{
-				"task_id":     task.ID,
-				"project_id":  task.ProjectID,
-				"title":       task.Title,
-				"priority":    string(task.Priority),
-				"assignee_id": task.AssigneeID,
-				"status_id":   task.StatusID,
-			})
-		}
+	if s.webhookSvc != nil {
+		go s.webhookSvc.Dispatch(ctx, wsID, "task.created", map[string]interface{}{
+			"task_id":     task.ID,
+			"project_id":  task.ProjectID,
+			"title":       task.Title,
+			"priority":    string(task.Priority),
+			"assignee_id": task.AssigneeID,
+			"status_id":   task.StatusID,
+		})
 	}
 
 	// Notify assigned agent via push mechanisms (callback_url, SSE, long-poll).
@@ -1437,13 +1471,37 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		return nil, err
 	}
 
-	if err := s.taskRepo.Create(ctx, child); err != nil {
-		return nil, err
+	// Same atomicity contract as Create (see the comment there / #819e7b29): the
+	// task.created audit entry is written in the SAME transaction as the subtask
+	// insert, so a subtask can never exist without its creation event.
+	if s.projectRepo == nil {
+		return nil, fmt.Errorf("task_service.CreateSubtask: no project repository configured, cannot log task.created")
 	}
-	s.logActivity(ctx, child.ProjectID, child.ID, "task.created", map[string]interface{}{
+	proj, projErr := s.projectRepo.GetByID(ctx, child.ProjectID)
+	if projErr != nil {
+		return nil, fmt.Errorf("task_service.CreateSubtask: resolving workspace for project %s: %w", child.ProjectID, projErr)
+	}
+	if proj == nil {
+		return nil, apierror.NotFound("Project")
+	}
+	changesJSON, _ := json.Marshal(map[string]interface{}{
 		"title":          map[string]interface{}{"old": nil, "new": child.Title},
 		"parent_task_id": map[string]interface{}{"old": nil, "new": parentTaskID.String()},
 	})
+	activityEntry := &domain.ActivityLog{
+		ID:          uuid.New(),
+		WorkspaceID: proj.WorkspaceID,
+		EntityType:  "task",
+		EntityID:    child.ID,
+		Action:      "task.created",
+		ActorID:     creatorID,
+		ActorType:   creatorType,
+		Changes:     changesJSON,
+		CreatedAt:   now,
+	}
+	if err := s.taskRepo.Create(ctx, child, activityEntry); err != nil {
+		return nil, err
+	}
 
 	// Same two-channel contract as Create: push-wake an agent assignee,
 	// targeted in-app notify a user assignee. Both no-op on no assignee or

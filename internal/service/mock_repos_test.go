@@ -281,9 +281,14 @@ type MockTaskRepository struct {
 	// ListByAssignee call, so a caller can be checked for pushing its narrowing
 	// down to the repository instead of doing it in Go afterwards.
 	LastListByAssigneeFilter repository.AssigneeTaskFilter
-	mu                       sync.RWMutex
-	items                    map[uuid.UUID]*domain.Task
-	errToReturn              error
+	// LastCreateActivity records the activity entry passed to the most recent
+	// Create call, so a test can assert task_service built the right task.created
+	// payload without needing a real Postgres transaction (see TaskRepo.Create's
+	// atomicity contract, #819e7b29).
+	LastCreateActivity *domain.ActivityLog
+	mu                 sync.RWMutex
+	items              map[uuid.UUID]*domain.Task
+	errToReturn        error
 	// getByIDErr fails ONLY GetByID, leaving every other method working. Added
 	// 2026-09-09 (#f933dc05) because errToReturn fails them all, so a test that
 	// sets it and then asserts "the write was refused" passes whether the guard
@@ -317,13 +322,14 @@ func (m *MockTaskRepository) WithStatusCategoryLookup(statusRepo *MockTaskStatus
 	return m
 }
 
-func (m *MockTaskRepository) Create(_ context.Context, t *domain.Task) error {
+func (m *MockTaskRepository) Create(_ context.Context, t *domain.Task, activity *domain.ActivityLog) error {
 	if m.errToReturn != nil {
 		return m.errToReturn
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items[t.ID] = t
+	m.LastCreateActivity = activity
 	return nil
 }
 

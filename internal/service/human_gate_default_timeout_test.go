@@ -178,7 +178,7 @@ func (h *defaultTimeoutHarness) seedExpiredGate(t *testing.T, category domain.St
 		HumanGate: true, HumanGateClass: domain.HumanGateClassSoft, HumanGateArmedAt: &armedAt,
 		GateAuthor: &author, GateAuthorType: actorTypePtr(domain.ActorTypeAgent),
 		RecommendedDefault: &recDefault, GateDeadline: &deadline,
-	}))
+	}, nil))
 	h.mover.seed(&domain.Task{ID: taskID, ProjectID: projectID, StatusID: statusID, Title: "test task"})
 	return taskID
 }
@@ -223,7 +223,7 @@ func TestHumanGateDefaultTimeoutService_RecordsCorrectDecisionInput(t *testing.T
 		HumanGate: true, HumanGateClass: domain.HumanGateClassSoft, HumanGateArmedAt: &armedAt,
 		GateAuthor: &author, GateAuthorType: actorTypePtr(domain.ActorTypeAgent),
 		RecommendedDefault: &recDefault, GateDeadline: &deadline,
-	}))
+	}, nil))
 	h.mover.seed(&domain.Task{ID: taskID, ProjectID: projectID, StatusID: statusID, Title: "t"})
 
 	n, err := h.svc.SweepExpiredDefaultGates(context.Background())
@@ -345,7 +345,7 @@ func TestHumanGateDefaultTimeoutService_NilOptionalDeps_StillRecordsDecision(t *
 		ID: taskID, HumanGate: true, HumanGateClass: domain.HumanGateClassSoft,
 		HumanGateArmedAt: &armedAt, GateAuthor: &author, GateAuthorType: actorTypePtr(domain.ActorTypeAgent),
 		RecommendedDefault: &recDefault, GateDeadline: &deadline,
-	}))
+	}, nil))
 	mover.seed(&domain.Task{ID: taskID})
 
 	require.NotPanics(t, func() {

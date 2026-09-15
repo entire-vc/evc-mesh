@@ -71,7 +71,7 @@ func vcsLinkTestTask(t *testing.T, db *sqlx.DB) uuid.UUID {
 		Title: "vcs-link upsert regression task", AssigneeType: domain.AssigneeTypeUnassigned,
 		Priority: domain.PriorityMedium, CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser,
 	}
-	require.NoError(t, NewTaskRepo(db).Create(ctx, task))
+	require.NoError(t, NewTaskRepo(db).Create(ctx, task, nil))
 
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(ctx, "DELETE FROM tasks WHERE id = $1", task.ID)

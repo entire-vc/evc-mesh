@@ -40,7 +40,7 @@ func seedGateTask(t *testing.T, repo *MockTaskRepository, class domain.HumanGate
 		HumanGateClass:   class,
 		HumanGateArmedAt: armedAt,
 	}
-	if err := repo.Create(context.Background(), task); err != nil {
+	if err := repo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
 	return id

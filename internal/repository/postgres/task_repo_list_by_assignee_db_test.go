@@ -97,7 +97,7 @@ func newAssigneeFeedFixture(t *testing.T, db *sqlx.DB, perCategory int) assignee
 				AssigneeType: domain.AssigneeTypeAgent,
 				Priority:     domain.PriorityNone,
 				CreatedBy:    uuid.New(), CreatedByType: domain.ActorTypeUser,
-			}))
+			}, nil))
 		}
 	}
 	return fx

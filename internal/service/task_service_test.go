@@ -190,6 +190,57 @@ func TestTaskService_Create(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestTaskService_Create_WorkspaceResolutionFailures — #819e7b29: Create now
+// resolves workspace_id BEFORE calling taskRepo.Create, so the task.created
+// activity entry can be built and written atomically. These are the three ways
+// that resolution can fail, mirroring the same three branches CreateSubtask
+// gained in the sibling test below.
+// ---------------------------------------------------------------------------
+
+func TestTaskService_Create_NoProjectRepoConfigured(t *testing.T) {
+	svc, _, _ := setupTaskService()
+	svc.projectRepo = nil
+
+	err := svc.Create(context.Background(), &domain.Task{
+		ProjectID: uuid.New(), StatusID: uuid.New(), Title: "T",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no project repository")
+}
+
+func TestTaskService_Create_ProjectLookupErrors(t *testing.T) {
+	svc, _, _ := setupTaskService()
+	projRepo := svc.projectRepo.(*MockProjectRepository)
+	projRepo.errToReturn = assert.AnError
+
+	err := svc.Create(context.Background(), &domain.Task{
+		ProjectID: uuid.New(), StatusID: uuid.New(), Title: "T",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError, "the underlying lookup error must be wrapped, not swallowed")
+}
+
+func TestTaskService_Create_ProjectDoesNotExist(t *testing.T) {
+	// A projectRepo with no default workspace: an unseeded project id resolves
+	// to "no such project", same convention MockProjectRepository documents.
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	svc := NewTaskService(taskRepo, statusRepo, depRepo, activityRepo,
+		WithProjectRepo(NewMockProjectRepository()),
+	).(*taskService)
+
+	err := svc.Create(context.Background(), &domain.Task{
+		ProjectID: uuid.New(), StatusID: uuid.New(), Title: "T",
+	})
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Code)
+}
+
+// ---------------------------------------------------------------------------
 // TestTaskService_GetByID
 // ---------------------------------------------------------------------------
 
@@ -1136,6 +1187,52 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestTaskService_CreateSubtask_WorkspaceResolutionFailures — #819e7b29, the
+// CreateSubtask mirror of TestTaskService_Create_WorkspaceResolutionFailures
+// above: the same three ways workspace_id resolution can fail before the
+// atomic taskRepo.Create(ctx, child, activityEntry) call.
+// ---------------------------------------------------------------------------
+
+func TestTaskService_CreateSubtask_NoProjectRepoConfigured(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	f := newSubtaskFixture(taskRepo, statusRepo)
+	svc := newTestTaskService(taskRepo, statusRepo, NewMockTaskDependencyRepository(), NewMockActivityLogRepository()).(*taskService)
+	svc.projectRepo = nil
+
+	_, err := svc.CreateSubtask(context.Background(), f.parentID, CreateSubtaskInput{Title: "T"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no project repository")
+}
+
+func TestTaskService_CreateSubtask_ProjectLookupErrors(t *testing.T) {
+	svc, taskRepo, statusRepo := setupTaskService()
+	f := newSubtaskFixture(taskRepo, statusRepo)
+	svc.projectRepo.(*MockProjectRepository).errToReturn = assert.AnError
+
+	_, err := svc.CreateSubtask(context.Background(), f.parentID, CreateSubtaskInput{Title: "T"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+}
+
+func TestTaskService_CreateSubtask_ProjectDoesNotExist(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	f := newSubtaskFixture(taskRepo, statusRepo)
+	// No default workspace: the parent's real project_id was never seeded into
+	// this fresh repo, so it resolves to "no such project".
+	svc := NewTaskService(taskRepo, statusRepo, NewMockTaskDependencyRepository(), NewMockActivityLogRepository(),
+		WithProjectRepo(NewMockProjectRepository()),
+	).(*taskService)
+
+	_, err := svc.CreateSubtask(context.Background(), f.parentID, CreateSubtaskInput{Title: "T"})
+	require.Error(t, err)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Code)
 }
 
 // ---------------------------------------------------------------------------

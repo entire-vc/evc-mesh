@@ -379,7 +379,7 @@ func TestTaskRepo_CreateAndGetByID(t *testing.T) {
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
 
-	err := repo.Create(ctx, task)
+	err := repo.Create(ctx, task, nil)
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, task.ID)
@@ -421,7 +421,7 @@ func TestTaskRepo_Update_LabelsRoundTrip(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, task))
+	require.NoError(t, repo.Create(ctx, task, nil))
 
 	got, err := repo.GetByID(ctx, task.ID)
 	require.NoError(t, err)
@@ -477,7 +477,7 @@ func TestTaskRepo_StartAfter_RoundTrip(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, task))
+	require.NoError(t, repo.Create(ctx, task, nil))
 
 	got, err := repo.GetByID(ctx, task.ID)
 	require.NoError(t, err)
@@ -540,7 +540,7 @@ func TestTaskRepo_Create_ReviewerRoundTrip(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, task))
+	require.NoError(t, repo.Create(ctx, task, nil))
 
 	got, err := repo.GetByID(ctx, task.ID)
 	require.NoError(t, err)
@@ -565,7 +565,7 @@ func TestTaskRepo_Create_ReviewerRoundTrip(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, agentTask))
+	require.NoError(t, repo.Create(ctx, agentTask, nil))
 
 	gotAgent, err := repo.GetByID(ctx, agentTask.ID)
 	require.NoError(t, err)
@@ -598,7 +598,7 @@ func TestTaskRepo_Create_NoReviewerIsNull(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, task))
+	require.NoError(t, repo.Create(ctx, task, nil))
 
 	got, err := repo.GetByID(ctx, task.ID)
 	require.NoError(t, err)
@@ -626,7 +626,7 @@ func TestTaskRepo_Update_PreReviewAssigneeRoundTrip(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, task))
+	require.NoError(t, repo.Create(ctx, task, nil))
 
 	// Stash a pre-review assignee, mirroring applyReviewAssignee.
 	builderType := domain.AssigneeTypeAgent
@@ -679,7 +679,7 @@ func TestTaskRepo_ListWithFilters(t *testing.T) {
 			CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 			UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		}
-		require.NoError(t, repo.Create(ctx, task))
+		require.NoError(t, repo.Create(ctx, task, nil))
 	}
 
 	// List all
@@ -720,7 +720,7 @@ func TestTaskRepo_List_HumanGateFilter(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, gated))
+	require.NoError(t, repo.Create(ctx, gated, nil))
 	// human_gate is not settable via Create/Update by design (armed only through
 	// SetHumanGate/comment-marker service logic) — flip it directly for the fixture.
 	_, err := db.ExecContext(ctx, "UPDATE tasks SET human_gate = true WHERE id = $1", gated.ID)
@@ -740,7 +740,7 @@ func TestTaskRepo_List_HumanGateFilter(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, notGated))
+	require.NoError(t, repo.Create(ctx, notGated, nil))
 
 	pg := pagination.Params{Page: 1, PageSize: 10}
 
@@ -786,7 +786,7 @@ func TestTaskRepo_ListSubtasks(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, parentTask))
+	require.NoError(t, repo.Create(ctx, parentTask, nil))
 
 	// Create subtasks
 	for i := 0; i < 3; i++ {
@@ -806,7 +806,7 @@ func TestTaskRepo_ListSubtasks(t *testing.T) {
 			CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 			UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		}
-		require.NoError(t, repo.Create(ctx, child))
+		require.NoError(t, repo.Create(ctx, child, nil))
 	}
 
 	subtasks, err := repo.ListSubtasks(ctx, parentTask.ID)
@@ -846,7 +846,7 @@ func TestTaskRepo_List_DefaultSortUpdatedAtDesc(t *testing.T) {
 			CreatedAt:     base.Add(time.Duration(i) * time.Second),
 			UpdatedAt:     base.Add(time.Duration(i) * time.Second),
 		}
-		require.NoError(t, repo.Create(ctx, task))
+		require.NoError(t, repo.Create(ctx, task, nil))
 	}
 
 	// No sort params — should default to updated_at DESC, so taskIDs[2] comes first.
@@ -898,7 +898,7 @@ func TestTaskRepo_List_IdTiebreaker(t *testing.T) {
 			CreatedAt:     sameTime,
 			UpdatedAt:     sameTime,
 		}
-		require.NoError(t, repo.Create(ctx, task))
+		require.NoError(t, repo.Create(ctx, task, nil))
 	}
 
 	// All tasks have the same updated_at; id ASC tiebreaker must produce id1, id2, id3.
@@ -1025,7 +1025,7 @@ func TestTaskRepo_ConcurrentCreate_NoTaskNumberConflict(t *testing.T) {
 				CreatedAt:     time.Now().UTC(),
 				UpdatedAt:     time.Now().UTC(),
 			}
-			if err := repo.Create(ctx, task); err != nil {
+			if err := repo.Create(ctx, task, nil); err != nil {
 				errs <- fmt.Errorf("worker %d: %w", i, err)
 			}
 		}(i)

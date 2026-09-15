@@ -117,7 +117,7 @@ func (h *monitorHarness) addTask(t *testing.T, projectID, statusID uuid.UUID, la
 		Labels:    labels,
 		DueDate:   dueDate,
 	}
-	if err := h.taskRepo.Create(context.Background(), task); err != nil {
+	if err := h.taskRepo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("addTask: %v", err)
 	}
 	return task
@@ -591,7 +591,7 @@ func (h *monitorHarness) addTaskWithStartAfter(t *testing.T, projectID, statusID
 		DueDate:    dueDate,
 		StartAfter: startAfter,
 	}
-	if err := h.taskRepo.Create(context.Background(), task); err != nil {
+	if err := h.taskRepo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("addTaskWithStartAfter: %v", err)
 	}
 	return task

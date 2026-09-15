@@ -79,7 +79,7 @@ func newCursorTestFixture(t *testing.T, db *sqlx.DB) cursorTestFixture {
 		Title: "Cursor tie-break test task", AssigneeType: domain.AssigneeTypeUnassigned,
 		Priority: domain.PriorityMedium, CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser,
 	}
-	require.NoError(t, NewTaskRepo(db).Create(ctx, task))
+	require.NoError(t, NewTaskRepo(db).Create(ctx, task, nil))
 
 	return cursorTestFixture{workspaceID: ws.ID, taskID: task.ID}
 }

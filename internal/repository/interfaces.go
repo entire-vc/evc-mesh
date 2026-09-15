@@ -90,7 +90,18 @@ type AssigneeTaskFilter struct {
 
 // TaskRepository manages persistence for tasks.
 type TaskRepository interface {
-	Create(ctx context.Context, task *domain.Task) error
+	// Create inserts task and — atomically, in the same DB transaction — the
+	// task.created activity log entry describing it, when activity is non-nil.
+	// Real service call sites (task_service.go) always build and pass a real
+	// entry: a task created without its audit event silently understated every
+	// journal-coverage guarantee the product makes (measured: 314/3709 system-
+	// created tasks over 30 days lost their event to a post-commit, unguarded,
+	// non-retried write — #819e7b29). If the activity insert fails, the whole
+	// transaction rolls back — the task and its creation event commit together
+	// or not at all. activity == nil is only for callers (test fixtures) that
+	// have no workspace context to build a real entry from and don't care about
+	// the audit trail for their scenario.
+	Create(ctx context.Context, task *domain.Task, activity *domain.ActivityLog) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error)
 	// GetByShortID resolves the first task whose UUID starts with the given hex prefix.
 	// prefix must be 6–12 hex chars. Returns apierror.NotFound if no match, apierror.BadRequest if ambiguous.
