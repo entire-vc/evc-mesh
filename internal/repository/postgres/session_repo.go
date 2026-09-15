@@ -33,6 +33,7 @@ type sessionRow struct {
 	TaskID           *uuid.UUID                `db:"task_id"`
 	StartedAt        time.Time                 `db:"started_at"`
 	EndedAt          *time.Time                `db:"ended_at"`
+	LastActivityAt   time.Time                 `db:"last_activity_at"`
 	Status           domain.AgentSessionStatus `db:"status"`
 	ToolCalls        int                       `db:"tool_calls"`
 	ToolBreakdown    json.RawMessage           `db:"tool_breakdown"`
@@ -71,6 +72,7 @@ func (r *sessionRow) toDomain() domain.AgentSession {
 		TaskID:           r.TaskID,
 		StartedAt:        r.StartedAt,
 		EndedAt:          r.EndedAt,
+		LastActivityAt:   r.LastActivityAt,
 		Status:           r.Status,
 		ToolCalls:        r.ToolCalls,
 		ToolBreakdown:    toolBreakdown,
@@ -86,7 +88,7 @@ func (r *sessionRow) toDomain() domain.AgentSession {
 	}
 }
 
-const sessionColumns = `id, workspace_id, agent_id, task_id, started_at, ended_at, status,
+const sessionColumns = `id, workspace_id, agent_id, task_id, started_at, ended_at, last_activity_at, status,
 	tool_calls, tool_breakdown, tasks_touched, events_published, memories_created,
 	model_used, tokens_in, tokens_out, estimated_cost, compliance_score, compliance_detail`
 
@@ -97,6 +99,9 @@ func (r *SessionRepo) Create(ctx context.Context, s *domain.AgentSession) error 
 	}
 	if s.StartedAt.IsZero() {
 		s.StartedAt = time.Now()
+	}
+	if s.LastActivityAt.IsZero() {
+		s.LastActivityAt = s.StartedAt
 	}
 	if s.Status == "" {
 		s.Status = domain.AgentSessionStatusActive
@@ -118,17 +123,17 @@ func (r *SessionRepo) Create(ctx context.Context, s *domain.AgentSession) error 
 
 	const q = `
 		INSERT INTO agent_sessions (
-			id, workspace_id, agent_id, task_id, started_at, ended_at, status,
+			id, workspace_id, agent_id, task_id, started_at, ended_at, last_activity_at, status,
 			tool_calls, tool_breakdown, tasks_touched, events_published, memories_created,
 			model_used, tokens_in, tokens_out, estimated_cost, compliance_score, compliance_detail
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, $10, $11, $12, $13,
+			$14, $15, $16, $17, $18, $19
 		)
 	`
 	_, err := r.db.ExecContext(ctx, q,
-		s.ID, s.WorkspaceID, s.AgentID, s.TaskID, s.StartedAt, s.EndedAt, s.Status,
+		s.ID, s.WorkspaceID, s.AgentID, s.TaskID, s.StartedAt, s.EndedAt, s.LastActivityAt, s.Status,
 		s.ToolCalls, toolBreakdown, pq.Array(taskStrs), s.EventsPublished, s.MemoriesCreated,
 		s.ModelUsed, s.TokensIn, s.TokensOut, s.EstimatedCost, s.ComplianceScore, complianceDetail,
 	)
@@ -149,6 +154,11 @@ func (r *SessionRepo) Create(ctx context.Context, s *domain.AgentSession) error 
 // tool-breakdown flush loop (ToolBreakdownTracker) writing to the same row
 // every ~15s. Leaving these two columns out of the SET list is what makes
 // that concurrency safe.
+//
+// last_activity_at IS bumped here (via GREATEST, so a concurrent
+// IncrementToolBreakdown's own newer stamp is never rolled back) — a
+// session-report is exactly as much "activity" as a tool call, and a
+// long-running session must not be closed by EndStale between reports.
 func (r *SessionRepo) Update(ctx context.Context, s *domain.AgentSession) error {
 	complianceDetail := s.ComplianceDetail
 	if complianceDetail == nil {
@@ -173,7 +183,8 @@ func (r *SessionRepo) Update(ctx context.Context, s *domain.AgentSession) error 
 		    estimated_cost    = $9,
 		    compliance_score  = $10,
 		    compliance_detail = $11,
-		    task_id           = COALESCE(task_id, $12)
+		    task_id           = COALESCE(task_id, $12),
+		    last_activity_at  = GREATEST(last_activity_at, now())
 		WHERE id = $13
 	`
 	_, err := r.db.ExecContext(ctx, q,
@@ -225,7 +236,8 @@ const incrementToolBreakdownAgentWide = `
 			)
 			FROM jsonb_each_text($1::jsonb) AS d(key, value)
 		),
-	    tool_calls = tool_calls + $2
+	    tool_calls = tool_calls + $2,
+	    last_activity_at = now()
 	WHERE id = (
 		SELECT id FROM agent_sessions
 		WHERE agent_id = $3 AND status = 'active'
@@ -243,7 +255,8 @@ const incrementToolBreakdownTaskScoped = `
 			)
 			FROM jsonb_each_text($1::jsonb) AS d(key, value)
 		),
-	    tool_calls = tool_calls + $2
+	    tool_calls = tool_calls + $2,
+	    last_activity_at = now()
 	WHERE id = (
 		SELECT id FROM agent_sessions
 		WHERE agent_id = $3 AND status = 'active' AND task_id = $4
@@ -438,8 +451,18 @@ func (r *SessionRepo) GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) 
 	}, nil
 }
 
-// EndStale marks all active sessions that have been running longer than timeout as ended.
-// Returns the number of sessions that were terminated.
+// EndStale marks all active sessions that have had no activity for longer
+// than timeout as ended. Returns the number of sessions that were
+// terminated.
+//
+// Filters on last_activity_at, NOT started_at (fixed 2026-09-15, task
+// #872f82a2): a fiddler lane's session can legitimately stay active for many
+// hours across a single long task, and closing it purely for being OLD —
+// while tool calls keep landing on it — force-ends still-live work and
+// starts an uncosted successor session on the very next tool call (see
+// migration 20260915001's comment). Genuinely abandoned sessions (no tool
+// call, no session-report) still age out exactly the same as before, just
+// measured from their last real activity instead of their birth.
 func (r *SessionRepo) EndStale(ctx context.Context, timeout time.Duration) (int, error) {
 	cutoff := time.Now().Add(-timeout)
 	res, err := r.db.ExecContext(ctx,
@@ -447,7 +470,7 @@ func (r *SessionRepo) EndStale(ctx context.Context, timeout time.Duration) (int,
 		 SET status   = 'ended',
 		     ended_at = NOW()
 		 WHERE status = 'active'
-		   AND started_at < $1`,
+		   AND last_activity_at < $1`,
 		cutoff,
 	)
 	if err != nil {
