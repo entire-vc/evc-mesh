@@ -63,8 +63,11 @@ func TestSessionRepo_IncrementToolBreakdown_UpdatesExistingActiveSession(t *test
 		"must read the OLD tool_breakdown value in the same statement — a fetch-then-write "+
 			"in Go here would race with a concurrent flush/session_report touching the same row")
 	assert.Contains(t, sql, "tool_calls = tool_calls + $2", "tool_calls must be an atomic add via a bound placeholder, not an overwrite or an inlined literal")
-	assert.Regexp(t, regexp.MustCompile(`(?i)agent_id\s*=\s*\$3\s+AND\s+status\s*=\s*'active'`), sql)
-	assert.NotContains(t, sql, "task_id =", "agent-wide call (taskID=nil) must not filter by task_id at all")
+	assert.Regexp(t, regexp.MustCompile(`(?i)agent_id\s*=\s*\$3\s+AND\s+status\s*=\s*'active'\s+AND\s+task_id\s+IS\s+NULL`), sql,
+		"agent-wide call (taskID=nil) must filter on task_id IS NULL — matching any active "+
+			"session regardless of task_id misattributes tool_breakdown/tool_calls onto whatever "+
+			"task session is active (task 33af0928)")
+	assert.NotContains(t, sql, "task_id =", "agent-wide call (taskID=nil) must not filter by task_id EQUALITY (that's the task-scoped constant's job)")
 }
 
 // This is the specific regression a CI security gate (semgrep

@@ -151,3 +151,73 @@ func TestSessionRepo_IncrementToolBreakdown_RealPostgres_TaskScoped(t *testing.T
 	require.NoError(t, rows.Scan(&n))
 	assert.Equal(t, 2, n, "agent-wide and task-scoped calls must create/target two separate session rows, not merge into one")
 }
+
+// TestSessionRepo_IncrementToolBreakdown_RealPostgres_AgentWideDoesNotLandOnTaskSession
+// is the regression this fix (task 33af0928) exists for — and the specific
+// ordering the test above does NOT cover. The test above does agent-wide
+// FIRST, task-scoped second; since nothing is active yet when the agent-wide
+// call runs, it always creates its own row regardless of whether the SQL
+// filters on task_id IS NULL. The bug only manifests in the OTHER order: a
+// task-scoped session is already the most recently active row when an
+// untagged call arrives — that's exactly the shape of a fiddler lane with an
+// in-flight task whose tool calls (recall, remember, get_my_tasks — none of
+// them carrying a task_id in their route) land in between task-scoped ones.
+func TestSessionRepo_IncrementToolBreakdown_RealPostgres_AgentWideDoesNotLandOnTaskSession(t *testing.T) {
+	db := testDB(t)
+	repo := NewSessionRepo(db)
+	ctx := context.Background()
+
+	ws, proj, status := createTestProject(t, db)
+	agentID := uuid.New()
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO agents (id, workspace_id, name, slug, api_key_hash, api_key_prefix)
+		 VALUES ($1, $2, 'Tool Breakdown Ordering Agent', $3, 'not-a-real-hash', 'test')`,
+		agentID, ws.ID, "tbdo-agent-"+agentID.String()[:8])
+	require.NoError(t, err)
+	taskA := uuid.New()
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO tasks (id, project_id, status_id, title, task_number, created_by, position)
+		 VALUES ($1, $2, $3, 'tool breakdown agent-wide-after-task test', $4, $5, 1)`,
+		taskA, proj.ID, status.ID, int(time.Now().UnixNano()%1_000_000_000), uuid.New())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM agent_sessions WHERE agent_id = $1`, agentID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM tasks WHERE id = $1`, taskA)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM agents WHERE id = $1`, agentID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM workspaces WHERE id = $1`, ws.ID)
+	})
+
+	// Task-scoped session is created and is the agent's ONLY, most recently
+	// active session at this point — exactly the state that let the pre-fix
+	// agent-wide query's unfiltered "latest active session" match it.
+	require.NoError(t, repo.IncrementToolBreakdown(ctx, agentID, ws.ID, &taskA, map[string]int64{"add_comment": 5}))
+
+	// An untagged (agent-wide) call arrives — e.g. a recall/remember/get_my_tasks
+	// call with no task_id in its route.
+	require.NoError(t, repo.IncrementToolBreakdown(ctx, agentID, ws.ID, nil, map[string]int64{"recall": 3}))
+
+	taskSession, err := repo.GetActiveForTask(ctx, agentID, taskA)
+	require.NoError(t, err)
+	require.NotNil(t, taskSession)
+	var taskBreakdown map[string]int64
+	require.NoError(t, json.Unmarshal(taskSession.ToolBreakdown, &taskBreakdown))
+	assert.Equal(t, int64(5), taskBreakdown["add_comment"], "taskA's own count must be unchanged")
+	_, hasRecall := taskBreakdown["recall"]
+	assert.False(t, hasRecall, "the agent-wide recall count must NOT land on the task-scoped session — this is the exact misattribution task 33af0928 fixes")
+
+	wideSession, err := repo.GetActiveAgentWide(ctx, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, wideSession, "the untagged call must create/target its own task_id=NULL session")
+	assert.Nil(t, wideSession.TaskID)
+	var wideBreakdown map[string]int64
+	require.NoError(t, json.Unmarshal(wideSession.ToolBreakdown, &wideBreakdown))
+	assert.Equal(t, int64(3), wideBreakdown["recall"])
+
+	rows, err := db.QueryContext(ctx, `SELECT count(*) FROM agent_sessions WHERE agent_id = $1 AND status = 'active'`, agentID)
+	require.NoError(t, err)
+	defer rows.Close()
+	require.True(t, rows.Next())
+	var n int
+	require.NoError(t, rows.Scan(&n))
+	assert.Equal(t, 2, n, "must be two distinct active rows, not one shared between task and agent-wide")
+}

@@ -1433,13 +1433,12 @@ type AgentSessionRepository interface {
 	GetTaskCostSummary(ctx context.Context, taskID uuid.UUID) (*domain.TaskCostSummary, error)
 	// IncrementToolBreakdown atomically adds each count in counts onto
 	// tool_breakdown[tool] and the total onto tool_calls, for the agent's active
-	// session — task-scoped (task_id = *taskID) when taskID is non-nil, else
-	// agent-wide, mirroring the precedence a session_report with a task_id already
-	// resolves by (GetActiveForTask, falling back to GetActiveAgentWide). Note:
-	// unlike GetActiveAgentWide, the agent-wide SQL this uses does NOT filter on
-	// task_id IS NULL (matches the agent's single latest active session,
-	// whatever task it belongs to) — a related but distinct gap, tracked
-	// separately, not fixed by GetActiveAgentWide's introduction here. When no
+	// session — task-scoped (task_id = *taskID AND task_id IS NOT NULL, by
+	// construction) when taskID is non-nil, else agent-wide (task_id IS NULL),
+	// mirroring the precedence a session_report with a task_id already
+	// resolves by (GetActiveForTask, falling back to GetActiveAgentWide) — see
+	// task 33af0928 for the fix that brought this method's own agent-wide SQL
+	// in line with GetActiveAgentWide's task_id IS NULL filter. When no
 	// matching active session exists yet, one is created seeded with these counts and
 	// workspaceID — this is deliberately allowed to be the FIRST thing that creates
 	// an agent_sessions row for a spawn, so a spawn that ends without ever calling
