@@ -240,7 +240,7 @@ const incrementToolBreakdownAgentWide = `
 	    last_activity_at = now()
 	WHERE id = (
 		SELECT id FROM agent_sessions
-		WHERE agent_id = $3 AND status = 'active'
+		WHERE agent_id = $3 AND status = 'active' AND task_id IS NULL
 		ORDER BY started_at DESC
 		LIMIT 1
 	)
