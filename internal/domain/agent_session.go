@@ -68,12 +68,19 @@ func (c ComplianceDetail) ComputeScore() float32 {
 // Sessions accumulate metrics (tool calls, tokens, cost, compliance) for monitoring
 // and are used to detect stale/abandoned sessions via EndStale.
 type AgentSession struct {
-	ID               uuid.UUID          `json:"id" db:"id"`
-	WorkspaceID      uuid.UUID          `json:"workspace_id" db:"workspace_id"`
-	AgentID          uuid.UUID          `json:"agent_id" db:"agent_id"`
-	TaskID           *uuid.UUID         `json:"task_id,omitempty" db:"task_id"`
-	StartedAt        time.Time          `json:"started_at" db:"started_at"`
-	EndedAt          *time.Time         `json:"ended_at,omitempty" db:"ended_at"`
+	ID          uuid.UUID  `json:"id" db:"id"`
+	WorkspaceID uuid.UUID  `json:"workspace_id" db:"workspace_id"`
+	AgentID     uuid.UUID  `json:"agent_id" db:"agent_id"`
+	TaskID      *uuid.UUID `json:"task_id,omitempty" db:"task_id"`
+	StartedAt   time.Time  `json:"started_at" db:"started_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty" db:"ended_at"`
+	// LastActivityAt is bumped on every tool call (IncrementToolBreakdown) and
+	// every /agents/me/sessions/report call (ReportSession's Update). EndStale
+	// closes a session on inactivity measured from THIS field, not StartedAt —
+	// a long-lived fiddler session that keeps seeing tool calls must not be
+	// force-ended purely for having been open a long time (see migration
+	// 20260915001's comment for the incident this fixes).
+	LastActivityAt   time.Time          `json:"last_activity_at" db:"last_activity_at"`
 	Status           AgentSessionStatus `json:"status" db:"status"`
 	ToolCalls        int                `json:"tool_calls" db:"tool_calls"`
 	ToolBreakdown    json.RawMessage    `json:"tool_breakdown" db:"tool_breakdown"`
