@@ -1502,6 +1502,10 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 	if err := s.taskRepo.Create(ctx, child, activityEntry); err != nil {
 		return nil, err
 	}
+	s.publishTaskEvent(ctx, proj.WorkspaceID, child.ProjectID, child.ID, creatorID, creatorType, "task.created", map[string]interface{}{
+		"title":          map[string]interface{}{"old": nil, "new": child.Title},
+		"parent_task_id": map[string]interface{}{"old": nil, "new": parentTaskID.String()},
+	})
 
 	// Same two-channel contract as Create: push-wake an agent assignee,
 	// targeted in-app notify a user assignee. Both no-op on no assignee or

@@ -1189,6 +1189,48 @@ func TestTaskService_CreateSubtask(t *testing.T) {
 	}
 }
 
+// TestTaskService_CreateSubtask_PublishesEvent — #42d3daea. The #819e7b29
+// atomicity fix replaced CreateSubtask's call to the old logActivity (which
+// wrote activity_log AND published to the event bus, see the doc comment on
+// publishTaskEvent) with a direct atomic activity_log write, and dropped the
+// event-bus publish in the process — a subtask started landing an audit row
+// but silently vanishing from the live Events feed. No test in this package
+// wired an EventBusService at all, which is exactly why coverage-gate never
+// caught it; this is that missing wiring, mirroring Create's own
+// publishTaskEvent contract.
+func TestTaskService_CreateSubtask_PublishesEvent(t *testing.T) {
+	taskRepo := NewMockTaskRepository()
+	statusRepo := NewMockTaskStatusRepository()
+	depRepo := NewMockTaskDependencyRepository()
+	activityRepo := NewMockActivityLogRepository()
+	eventBus := NewMockEventBusService()
+	opts := append(wireTenancyDeps(NewMockProjectRepository(), NewMockAgentRepository()), WithEventBusService(eventBus))
+	svc := newTestTaskService(taskRepo, statusRepo, depRepo, activityRepo, opts...).(*taskService)
+	timeNow = func() time.Time { return frozenTime }
+
+	f := newSubtaskFixture(taskRepo, statusRepo)
+	ctx := context.Background()
+
+	child, err := svc.CreateSubtask(ctx, f.parentID, CreateSubtaskInput{
+		Title:    "Child task",
+		Priority: domain.PriorityMedium,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, child)
+
+	require.Len(t, eventBus.Messages, 1, "CreateSubtask must publish exactly one event bus message, same as Create")
+	msg := eventBus.Messages[0]
+	assert.Equal(t, testDefaultWorkspaceID, msg.WorkspaceID)
+	assert.Equal(t, f.projectID, msg.ProjectID)
+	require.NotNil(t, msg.TaskID)
+	assert.Equal(t, child.ID, *msg.TaskID)
+	assert.Equal(t, "task.created", msg.Subject)
+	assert.Equal(t, child.ID.String(), msg.Payload["task_id"])
+	title, ok := msg.Payload["title"].(map[string]interface{})
+	require.True(t, ok, "payload must carry the title change, same shape as Create's")
+	assert.Equal(t, child.Title, title["new"])
+}
+
 // ---------------------------------------------------------------------------
 // TestTaskService_CreateSubtask_WorkspaceResolutionFailures — #819e7b29, the
 // CreateSubtask mirror of TestTaskService_Create_WorkspaceResolutionFailures

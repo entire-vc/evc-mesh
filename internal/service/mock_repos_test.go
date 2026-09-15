@@ -4195,3 +4195,59 @@ func (m *MockWorkspaceMemberRepository) CountOwners(_ context.Context, workspace
 	}
 	return n, nil
 }
+
+// ---------------------------------------------------------------------------
+// MockEventBusService
+// ---------------------------------------------------------------------------
+
+// MockEventBusService records Publish calls so tests can assert a mutation
+// reached the Events feed (event_bus_messages), distinct from the audit-only
+// activity_log write. See #42d3daea: CreateSubtask stopped calling
+// publishTaskEvent after the #819e7b29 atomicity fix, and nothing caught it
+// because no test in this package ever wired an EventBusService at all.
+type MockEventBusService struct {
+	mu       sync.Mutex
+	Messages []PublishEventInput
+}
+
+func NewMockEventBusService() *MockEventBusService {
+	return &MockEventBusService{}
+}
+
+func (m *MockEventBusService) Publish(_ context.Context, input PublishEventInput) (*domain.EventBusMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Messages = append(m.Messages, input)
+	return &domain.EventBusMessage{ID: uuid.New(), ProjectID: input.ProjectID, EventType: input.EventType, Subject: input.Subject}, nil
+}
+
+func (m *MockEventBusService) GetByID(_ context.Context, _ uuid.UUID) (*domain.EventBusMessage, error) {
+	return nil, nil
+}
+
+func (m *MockEventBusService) List(_ context.Context, _ uuid.UUID, _ repository.EventBusMessageFilter, _ pagination.Params) (*pagination.Page[domain.EventBusMessage], error) {
+	return &pagination.Page[domain.EventBusMessage]{}, nil
+}
+
+func (m *MockEventBusService) ListEnriched(_ context.Context, _ uuid.UUID, _ repository.EventBusMessageFilter, _ pagination.Params) (*pagination.Page[domain.EnrichedEventBusMessage], error) {
+	return &pagination.Page[domain.EnrichedEventBusMessage]{}, nil
+}
+
+func (m *MockEventBusService) GetContext(_ context.Context, _ uuid.UUID, _ GetContextOptions) ([]domain.EventBusMessage, error) {
+	return nil, nil
+}
+
+func (m *MockEventBusService) CleanupExpired(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
+// Subjects returns the Subject field of every recorded Publish call, in order.
+func (m *MockEventBusService) Subjects() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.Messages))
+	for i, msg := range m.Messages {
+		out[i] = msg.Subject
+	}
+	return out
+}
