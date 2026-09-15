@@ -24,15 +24,32 @@
 # (adapted, not a literal port — see that job's own header and
 # `.gitlab/scripts/vendor_trailer_gate.py` for why GitLab's squash mechanics
 # change what it can actually check), the Go coverage ≥80% (affected-set)
-# gate, and now authed-e2e (present in the YAML and gating merges for real —
+# gate, authed-e2e (present in the YAML and gating merges for real —
 # the two GitLab CI/CD variables it needs, E2E_USER_EMAIL/E2E_USER_PASSWORD,
 # were set via `gl-admin set-ci-variable` on 2026-09-07, #d5619f11; do not
-# read an older comment saying otherwise as still current). CodeQL's job —
-# SAST — is now carried by `semgrep` (see that job's own header for why it is
-# a re-implementation rather than a port). Deliberately still absent, and
-# worth its own card: Memory recall gate. A stub that looks like full CI is
-# more dangerous than a gap you can see, so the gap is named here rather than
-# implied.
+# read an older comment saying otherwise as still current), and now (since
+# #06bc8932) the required "Memory recall gate" (`recall-gate-branch`). CodeQL's
+# job — SAST — is now carried by `semgrep` (see that job's own header for why
+# it is a re-implementation rather than a port). A stub that looks like full
+# CI is more dangerous than a gap you can see, so any remaining gap is named
+# here rather than implied.
+#
+# ## `recall-gate-branch` — corrected premise, read before touching it
+#
+# The card that ported it (#06bc8932) was filed on the belief that "Memory
+# recall gate" reaches PROD memory and needs careful secret handling. That
+# was true of the job under this name once (evc-mesh#394/#2a079432) but is
+# NOT true of what the name currently identifies: ADR-0003
+# (.github/workflows/memory-bench.yml, job `recall-gate-branch`) rebuilt
+# `cmd/api` from the PR head and measures THAT — an ephemeral server over an
+# ephemeral Postgres, minting its own throwaway agent key
+# (`ci_bootstrap.py`) rather than touching `secrets.MESH_BENCH_KEY`, which
+# is prod's. The job that DOES touch prod is a different, differently-named,
+# NON-required check: `recall-gate` / "Memory recall canary (prod)" — it
+# only runs on push/schedule/dispatch to `main`, never on `pull_request` or
+# `merge_group`, and is out of this card's scope (it is not what "Memory
+# recall gate" identifies). Ported below: zero prod secrets, zero GitLab
+# CI/CD variables, nothing masked — there is nothing to mask.
 #
 # ## The half that is not in this file
 #
@@ -58,7 +75,7 @@ workflow:
       when: never
     - if: $CI_COMMIT_BRANCH
 
-stages: [gate, sast, lint, test, build, deploy]
+stages: [gate, sast, lint, test, build, memory-gate, deploy]
 
 variables:
   # Services are reachable by their image alias on the docker executor, NOT on
@@ -80,6 +97,24 @@ variables:
   # the goose version in go.mod — the tool and the library must not drift.
   GOOSE_VERSION: "v3.27.3"   # keep in step with go.mod
   GOFLAGS: "-buildvcs=false"
+  # Every file whose behaviour `recall-gate-branch` is supposed to protect.
+  # Copied verbatim from `.github/workflows/memory-bench.yml`'s own `env:` —
+  # ONE list, not two: a file missing here is the worst failure a required
+  # check can have (it reports green having measured nothing, #347). Keep
+  # this in step with the GitHub copy by hand until one of the two files is
+  # retired; there is no mechanism that syncs them.
+  MEMORY_PATHS: |
+    internal/handler/memory_handler.go
+    internal/domain/memory.go
+    internal/service/memory_service.go
+    internal/service/memory_sanitizer.go
+    internal/repository/postgres/memory_repo.go
+    internal/repository/postgres/memory_edges_repo.go
+    internal/repository/postgres/memory_chunk_rank.go
+    internal/repository/postgres/memory_chunk_repo.go
+    internal/reconciler/
+    pkg/sdk/memories.go
+    scripts/memory-bench/
 
 default:
   tags: [docker]
@@ -1226,3 +1261,316 @@ trigger:prod-frontend:
     #   • сторож дрейфа (launchd, 15 мин) — для фронтенда это state-трекинг
     #     (у отданного бандла нет метки коммита): ждёт смены `index-<hash>.js`
     #     в пределах grace после нового коммита в web/** на канон-main.
+
+# ── memory-gate ─────────────────────────────────────────────────────────────
+# Ports `.github/workflows/memory-bench.yml`'s job `recall-gate-branch`
+# (check name "Memory recall gate") — see the file header above for why this
+# is safe without any GitLab CI/CD variable: the job builds `cmd/api` from
+# THIS branch and measures an ephemeral server over an ephemeral database, no
+# prod credential anywhere in it.
+#
+# Not ported, and why:
+#   - the `update_baseline` re-snap path (`workflow_dispatch` only — an
+#     operator action, not something a merge gate needs);
+#   - the blindness-alert/escalate/resolve trio, which files GitHub issues —
+#     dead code for this port even on GitHub, since all three are gated
+#     `github.event_name != 'pull_request'` and this job only ever runs on
+#     `merge_request_event`. A GitLab-issue equivalent is a real gap for the
+#     PUSH/SCHEDULE arm this port does not carry either (see below), not for
+#     this one.
+#   - the prod canary (`recall-gate` / "Memory recall canary (prod)") and the
+#     paid end-to-end arm (`memory-bench`) — both advisory, both need
+#     `secrets.MESH_BENCH_KEY`/an LLM judge key, neither is what this card's
+#     title names. Left for a future card if the fleet wants an equivalent of
+#     the post-deploy prod canary on GitLab.
+#
+# TRANSLATION DECISIONS FROM THE GITHUB VERSION:
+#   - image is `golang:1.25-bookworm` (glibc), not this file's usual
+#     `-alpine` tags. `fastembed` pulls in `onnxruntime`, which ships NO musl
+#     wheel at all (verified: `pip install fastembed` on `golang:1.25-alpine`
+#     fails ResolutionImpossible, "no matching distributions" for
+#     onnxruntime on ANY Python version) — this job cannot run on Alpine,
+#     full stop, independent of the loopback point below.
+#   - Postgres/Redis/NATS are NOT `services:` containers. `fixture_ages.py`
+#     (used to backdate memory rows for the recency controls) hard-refuses
+#     any DSN whose host is not `localhost`/`127.0.0.1`/`::1` — a deliberate
+#     guard so this arm's backdating can never reach a real database even by
+#     editing the YAML. A `services:` container is reachable by alias only on
+#     the docker executor (see this file's own header comment), never by
+#     loopback, so honouring that guard means self-hosting all three INSIDE
+#     the job — installed via `apt`/`go install`, listening on 127.0.0.1,
+#     gone when the job ends. Same reasoning `#e64a383f` names for the
+#     separately-tracked "Self-host env" context, applied here because the
+#     safety property forces it rather than because the context asked for it.
+#     Side effect: Debian bookworm's `postgresql` package is 15, not 16 like
+#     this file's other jobs — verified wire-compatible for this schema, but
+#     named here rather than left implicit.
+#   - `entire-vc/evc-mesh-mcp` (the recall CLIENT this arm measures against)
+#     is checked out from its **public GitHub showcase mirror**
+#     (`github.com/entire-vc/evc-mesh-mcp`, no auth), not from GitLab canon.
+#     Canon is private, and granting this project's `CI_JOB_TOKEN` access to
+#     it — or adding a deploy token as a masked CI/CD variable — needs
+#     Maintainer(40); every fleet agent account is Developer(30) (verified
+#     live: `GET /projects/23/job_token_scope` and
+#     `GET /projects/21/variables` both 403 under this account). The mirror
+#     lags canon by up to ~10 min (§0z point 9), so a client change merged
+#     seconds ago can be invisible to the very next pipeline — an accepted,
+#     named gap, not a silent one. Revisit if Maintainer rights are ever
+#     delegated for this.
+#   - Self-checks run through `bash <<'GATE_SCRIPT' … GATE_SCRIPT` rather than
+#     as plain `script:` lines: several downstream steps capture a piped
+#     command's exit code via `${PIPESTATUS[0]}`, which does not exist in
+#     POSIX `sh`. Explicitly invoking bash makes that portable regardless of
+#     the runner's default job shell.
+#   - `EVENT_NAME` is hardcoded `pull_request` for `scope_relevant.sh` and
+#     `prove_gate_can_go_red.py`'s rc=2 handling: the job's own `rules:`
+#     below already restrict it to `merge_request_event`, so there is no
+#     `merge_group` case here the way GitHub's `merge_group:` trigger has —
+#     GitLab's merge trains reuse the MR pipeline rather than firing a
+#     distinct event.
+#   - stage placed AFTER `build` and BEFORE `deploy` in the `stages:` list at
+#     the top of this file: this job has no `needs:` (it builds its own
+#     ephemeral `cmd/api`, not the `build:api` artifact), so it only needs to
+#     not race the deploy triggers — and it never runs on `push` anyway
+#     (`rules:` below is MR-only), so its presence in that slot costs nothing
+#     on a push-to-main pipeline.
+recall-gate-branch:
+  stage: memory-gate
+  image: golang:1.25-bookworm
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    # Full history: `scope_relevant.sh` diffs base..head, and a shallow clone
+    # may not contain the base commit.
+    GIT_DEPTH: "0"
+  # Deliberately NO `cache:` and no GOCACHE/GOMODCACHE override, unlike every
+  # other Go job in this file. Measured live on pipeline #3698: a shared
+  # go-mod cache restored INTO the repo tree (this file's usual
+  # `$CI_PROJECT_DIR/.gomodcache` convention) lands before `step_script` even
+  # starts — GitLab's own cache-restore stage runs ahead of it — so the gate's
+  # OWN self-check (`test_every_memory_source_file_is_gated`, shared verbatim
+  # with the GitHub arm) then walks a tree that already contains vendored Go
+  # source under `.gomodcache/` and correctly flags three "memory"-named files
+  # in it (zapcore/memory_encoder.go, two copies of windows/memory_windows.go)
+  # as uncovered by `MEMORY_PATHS`. That is the self-check doing its job on an
+  # input the GitHub arm never produces — `ubuntu-latest` runners don't
+  # pre-populate a module cache into the checkout before this job's steps run.
+  # Go's container defaults (`$HOME/go/pkg/mod`, `$HOME/.cache/go-build`) live
+  # outside `$CI_PROJECT_DIR`, so leaving these unset keeps the self-check's
+  # input identical to the GitHub arm's at the cost of a from-scratch module
+  # download every run — acceptable here since nothing else in this job reuses
+  # that cache across runs anyway (fresh container each time either way).
+  # Sized off the GitHub arm's own measured worst case (~57 min, see that
+  # job's `timeout-minutes` comment) plus headroom for `apt`/`go install`
+  # self-hosting installs this port adds that the GitHub arm does not pay
+  # for. Not yet independently re-measured on this runner — the first few
+  # real runs are what that measurement has to be; raise or lower from an
+  # actual number, not from this guess, the same rule the source file states
+  # about itself.
+  timeout: 90m
+  script:
+    - |
+      bash <<'GATE_SCRIPT'
+      set -euo pipefail
+
+      echo "## Gate self-checks (stdlib only, no network, no services needed yet)"
+      # `jq` added here, not just `python3`/`postgresql-client`: measured live
+      # on pipeline #3698, `test_gate_blindness.py`'s own setUpClass refuses
+      # to run 5 test classes without it ("'jq' is required to EXECUTE the
+      # storm guard ... skipping instead of failing would leave the guard
+      # unproven while reporting green"). `ubuntu-latest` (the GitHub arm's
+      # runner) ships `jq` preinstalled; `golang:1.25-bookworm` does not.
+      apt-get update -qq && apt-get install -y -qq python3 jq postgresql-client >/dev/null
+      cd scripts/memory-bench
+      for f in test_mcp_ref.py test_gate_blindness.py test_gate_modes.py test_gate_arm.py \
+               test_gate_dense_arm.py test_gate_scope.py test_check_captured_baseline.py \
+               test_gold_rank.py test_fixture_isolation.py test_serving_version.py \
+               test_classify_cancelled_arm.py test_resume_after_deploy.py test_bench_window.py \
+               test_fixture_ages.py test_search_settle.py test_embed_drain.py \
+               test_confirm_embedder_alive.py test_corpus_sanitize.py test_corpus_sanitize_wiring.py \
+               test_gate_recency_floor.py; do
+        python3 "$f" || { echo "SELF-CHECK FAILED: $f"; exit 1; }
+      done
+      python3 dense_arm_control.py --selftest || exit 1
+      python3 prod_window.py --selftest || exit 1
+      python3 fixture_ages.py --selftest || exit 1
+      python3 recency_control.py --selftest || exit 1
+      echo "all self-checks passed"
+
+      echo "## The gate must still be able to go RED (redproof)"
+      set +e
+      python3 prove_gate_can_go_red.py baseline_retrieval_branch.json branch 2>&1 | tee redproof.log
+      rc=${PIPESTATUS[0]}
+      set -e
+      case "$rc" in
+        0) echo "redproof PASS: identity OK, an over-tolerance drop names its category, an in-tolerance drop stays OK." ;;
+        1) echo "redproof FAILED — the gate can no longer produce the verdict it exists to produce. Blocking."; exit 1 ;;
+        2) echo "redproof INCONCLUSIVE (missing/mismatched baseline) — nothing here is the author's to fix, not blocking on an MR." ;;
+        *) echo "redproof exited $rc"; exit "$rc" ;;
+      esac
+      cd "$CI_PROJECT_DIR"
+
+      echo "## Does this change touch memory?"
+      # HEAD_SHA is $CI_COMMIT_SHA, not a "CI_MERGE_REQUEST_DIFF_HEAD_SHA" —
+      # measured live on pipeline #3708: that variable does not exist on
+      # GitLab (confirmed against the predefined-variables reference; the
+      # nearest real name, CI_MERGE_REQUEST_DIFF_BASE_SHA, is real and used
+      # below), and `set -u` turned the typo into an immediate hard failure
+      # rather than a silent empty string. This job's `rules:` restrict it to
+      # `merge_request_event` (a "merge request pipeline", not a "merged
+      # results pipeline"), so the checkout is the source branch's real head
+      # commit (confirmed: pipeline #3698/#3708 both checked out exactly the
+      # branch's pushed SHA, not a synthetic merge commit) — CI_COMMIT_SHA IS
+      # the head of the diff this step needs.
+      EVENT_NAME=pull_request \
+      BASE_SHA="$CI_MERGE_REQUEST_DIFF_BASE_SHA" \
+      HEAD_SHA="$CI_COMMIT_SHA" \
+        bash scripts/memory-bench/scope_relevant.sh > scope.log
+      cat scope.log
+      if ! grep -q '^memory-relevant: true$' scope.log; then
+        echo "No memory-path file in this diff — the recall gate is a no-op."
+        exit 0
+      fi
+
+      echo "## Self-hosting Postgres/Redis/NATS on loopback (see file header for why not services:)"
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y -qq postgresql redis-server gcc >/dev/null
+      service postgresql start
+      for i in $(seq 30); do pg_isready -h 127.0.0.1 -U "$(whoami)" >/dev/null 2>&1 && break; sleep 1; done
+      su postgres -c "psql -c \"CREATE USER mesh WITH PASSWORD 'mesh' SUPERUSER;\""
+      su postgres -c "psql -c \"CREATE DATABASE mesh OWNER mesh;\""
+      PGPASSWORD=mesh psql -h 127.0.0.1 -U mesh -d mesh -c 'select 1;' >/dev/null
+      redis-server --daemonize yes --bind 127.0.0.1
+      go install github.com/nats-io/nats-server/v2@v2.10.22
+      "$(go env GOPATH)/bin/nats-server" -p 4222 -a 127.0.0.1 > /tmp/nats.log 2>&1 &
+      echo "postgres, redis, nats up on 127.0.0.1"
+
+      echo "## Python venv + fastembed (glibc-only — see file header)"
+      python3 -m venv /tmp/venv
+      . /tmp/venv/bin/activate
+      pip install -q mcp httpx fastembed
+
+      echo "## Run migrations"
+      go install github.com/pressly/goose/v3/cmd/goose@latest
+      GOOSE_DRIVER=postgres GOOSE_DBSTRING="postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable" \
+        "$(go env GOPATH)/bin/goose" -dir migrations up
+
+      echo "## Start the local embedder"
+      cd scripts/memory-bench
+      nohup python3 ci_embedder.py --port 8099 --cache-dir .fastembed_cache > embedder.log 2>&1 &
+      echo $! > embedder.pid
+      for i in $(seq 180); do
+        curl -sf http://127.0.0.1:8099/healthz > /dev/null && { echo "embedder ready after ${i}s"; break; }
+        sleep 1
+      done
+      curl -sf http://127.0.0.1:8099/healthz > /dev/null || { echo "embedder never became ready"; cat embedder.log; exit 1; }
+      cd "$CI_PROJECT_DIR"
+
+      echo "## Build + start the API from THIS branch"
+      go build -o /tmp/mesh-api ./cmd/api
+      export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=mesh DB_PASSWORD=mesh DB_NAME=mesh DB_SSL_MODE=disable
+      export REDIS_HOST=127.0.0.1 REDIS_PORT=6379 NATS_URL="nats://127.0.0.1:4222"
+      export JWT_SECRET="ci-recall-gate-secret-32chars-min!" JWT_ISSUER=mesh-ci
+      export MESH_RATE_LIMIT_ENABLED=false MESH_ALLOW_REGISTRATION=true
+      export EMBEDDING_PROVIDER=openai EMBEDDING_ENDPOINT="http://127.0.0.1:8099"
+      export EMBEDDING_MODEL="BAAI/bge-small-en-v1.5" EMBEDDING_DIMENSIONS=384
+      export EMBEDDING_API_KEY=not-used-by-the-local-embedder APP_ENV=test
+      nohup /tmp/mesh-api > api.log 2>&1 &
+      echo $! > api.pid
+      export MESH_API_URL=http://127.0.0.1:8005
+
+      echo "## Bootstrap a bench workspace + agent key (never printed — see ci_bootstrap.py)"
+      python3 scripts/memory-bench/ci_bootstrap.py --api-url "$MESH_API_URL" --env-file /tmp/bench.env \
+        || { echo "bootstrap failed"; tail -50 api.log; exit 1; }
+      set -a; . /tmp/bench.env; set +a
+
+      echo "## Checkout evc-mesh-mcp from its public GitHub showcase mirror (see file header)"
+      git clone --depth 1 https://github.com/entire-vc/evc-mesh-mcp.git /tmp/evc-mesh-mcp
+      MCP_COMMIT="$(git -C /tmp/evc-mesh-mcp rev-parse HEAD)"
+      echo "mesh-mcp client: mirror commit=$MCP_COMMIT"
+
+      echo "## Cross-compile mesh-mcp"
+      ( cd /tmp/evc-mesh-mcp && GOOS=linux GOARCH=amd64 go build -o "$CI_PROJECT_DIR/mesh-mcp-bin" . )
+      chmod +x mesh-mcp-bin
+
+      echo "## Confirm the embedder is still alive before measuring"
+      bash scripts/memory-bench/confirm_embedder_alive.sh http://127.0.0.1:8099/healthz scripts/memory-bench/embedder.log
+
+      export MESH_MCP_BIN="$CI_PROJECT_DIR/mesh-mcp-bin"
+      export MESH_MCP_HTTP_TIMEOUT_SECS=120
+      export RECALL_GRAPH_ENABLED=true
+      export BENCH_BACKDATE_DSN="postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable"
+
+      echo "## Dense-arm control — the vector arm must be contributing"
+      cd scripts/memory-bench
+      set +e
+      BENCH_RUN_NONCE="${CI_PIPELINE_ID}-ctl" python3 dense_arm_control.py --expect alive 2>&1 | tee control_alive.log
+      rc=${PIPESTATUS[0]}
+      set -e
+      [ "$rc" = "1" ] && exit 1
+      true
+
+      echo "## Recency control — fixture age must be visible"
+      export BENCH_FIXTURE_AGE_MODE=question-anchored
+      set +e
+      BENCH_RUN_NONCE="${CI_PIPELINE_ID}-age" python3 recency_control.py --expect visible 2>&1 | tee control_recency_visible.log
+      rc=${PIPESTATUS[0]}
+      set -e
+      [ "$rc" = "1" ] && exit 1
+      true
+
+      echo "## Recency control — and what it sees is AGE, not the parameter"
+      unset BENCH_BACKDATE_DSN
+      set +e
+      BENCH_RUN_NONCE="${CI_PIPELINE_ID}-age-neg" python3 recency_control.py --expect blind 2>&1 | tee control_recency_blind.log
+      rc=${PIPESTATUS[0]}
+      set -e
+      [ "$rc" = "1" ] && exit 1
+      true
+      export BENCH_BACKDATE_DSN="postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable"
+
+      echo "## Run the recall gate against the branch build"
+      set +e
+      BENCH_RUN_NONCE="${CI_PIPELINE_ID}-gate" python3 run_ci.py --retrieval-only --arm branch --tolerance 0.25 2>&1 | tee gate.log
+      rc=${PIPESTATUS[0]}
+      set -e
+      reason="$(grep -m1 '^GATE_REASON:' gate.log | sed 's/^GATE_REASON: *//' || true)"
+      if [ "$rc" = "0" ] && grep -qi 'no baseline_retrieval' gate.log; then rc=2; reason="no-baseline"; fi
+      echo "GATE VERDICT rc=$rc reason=${reason:-unspecified}"
+      case "$rc" in
+        0) echo "PASS — recall on this branch, within tolerance of the branch baseline." ;;
+        1) echo "REGRESSION — recall dropped below the branch baseline. This blocks the merge."; exit 1 ;;
+        2) echo "INCONCLUSIVE ($reason) — nothing measured, not blocking an MR author for it." ;;
+        *) echo "gate exited $rc"; exit "$rc" ;;
+      esac
+
+      echo "## Power check — with the dense arm off, the control must MISS"
+      kill "$(cat embedder.pid)" 2>/dev/null || true
+      for i in $(seq 20); do curl -sf http://127.0.0.1:8099/healthz > /dev/null || break; sleep 1; done
+      set +e
+      BENCH_RUN_NONCE="${CI_PIPELINE_ID}-pwr" python3 dense_arm_control.py --expect dead 2>&1 | tee control_dead.log
+      rc=${PIPESTATUS[0]}
+      set -e
+      if [ "$rc" = "1" ]; then
+        echo "The control has NO POWER — gold was still found with the dense arm off. Every green it produced was uninformative."
+        exit 1
+      fi
+      echo "power check OK: the control goes red when the dense arm is removed, so its green means something."
+
+      echo "## Server logs"
+      tail -200 "$CI_PROJECT_DIR/api.log" 2>/dev/null || true
+      tail -50 embedder.log 2>/dev/null || true
+      GATE_SCRIPT
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - scripts/memory-bench/gate.log
+      - scripts/memory-bench/redproof.log
+      - scripts/memory-bench/control_alive.log
+      - scripts/memory-bench/control_dead.log
+      - scripts/memory-bench/control_recency_visible.log
+      - scripts/memory-bench/control_recency_blind.log
+      - scripts/memory-bench/embedder.log
+      - scripts/memory-bench/results/
+      - api.log
