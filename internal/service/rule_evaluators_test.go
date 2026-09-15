@@ -251,7 +251,7 @@ func TestEvalRequireSubtasksDone_CancelledSubtask_AllowedWhenConfigured(t *testi
 	require.NoError(t, statusRepo.Create(context.Background(), cancelledStatus))
 
 	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: cancelledStatus.ID}
-	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+	require.NoError(t, taskRepo.Create(context.Background(), subtask, nil))
 
 	rule := makeRequireSubtasksDoneRule(true, "done", "review")
 	status := makeDoneStatus()
@@ -277,7 +277,7 @@ func TestEvalRequireSubtasksDone_OpenSubtask_StillBlocks(t *testing.T) {
 	require.NoError(t, statusRepo.Create(context.Background(), todoStatus))
 
 	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: todoStatus.ID}
-	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+	require.NoError(t, taskRepo.Create(context.Background(), subtask, nil))
 
 	rule := makeRequireSubtasksDoneRule(true, "done", "review")
 	status := makeDoneStatus()
@@ -306,7 +306,7 @@ func TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenTaskStatusRepoNil(t
 	// this is the exact state prod was in: allow_cancelled:true, dependency missing.
 	cancelledStatusID := uuid.New()
 	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: cancelledStatusID}
-	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+	require.NoError(t, taskRepo.Create(context.Background(), subtask, nil))
 
 	rule := makeRequireSubtasksDoneRule(true, "done", "review")
 	status := makeDoneStatus()
@@ -331,7 +331,7 @@ func TestEvalRequireSubtasksDone_CancelledSubtask_BlockedWhenAllowCancelledFalse
 	require.NoError(t, statusRepo.Create(context.Background(), cancelledStatus))
 
 	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: cancelledStatus.ID}
-	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+	require.NoError(t, taskRepo.Create(context.Background(), subtask, nil))
 
 	rule := makeRequireSubtasksDoneRule(false, "done", "review") // allow_cancelled explicitly off
 	status := makeDoneStatus()
@@ -368,7 +368,7 @@ func TestEvalRequireSubtasksDone_SkipsWhenTargetCategoryNotMatched(t *testing.T)
 	todoStatus := makeTodoStatus()
 	require.NoError(t, statusRepo.Create(context.Background(), todoStatus))
 	subtask := &domain.Task{ID: uuid.New(), ParentTaskID: &parentID, StatusID: todoStatus.ID}
-	require.NoError(t, taskRepo.Create(context.Background(), subtask))
+	require.NoError(t, taskRepo.Create(context.Background(), subtask, nil))
 
 	rule := makeRequireSubtasksDoneRule(true, "done") // only "done" triggers the rule
 	reviewStatus := &domain.TaskStatus{ID: uuid.New(), Name: "In Review", Category: domain.StatusCategoryReview}

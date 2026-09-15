@@ -68,7 +68,7 @@ func (h *backlogHarness) addTask(t *testing.T, projectID, statusID uuid.UUID) *d
 		Title:        "backlog task",
 		AssigneeType: domain.AssigneeTypeAgent,
 	}
-	if err := h.taskRepo.Create(context.Background(), task); err != nil {
+	if err := h.taskRepo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("addTask: %v", err)
 	}
 	return task

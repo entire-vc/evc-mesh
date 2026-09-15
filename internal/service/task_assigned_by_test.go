@@ -67,7 +67,7 @@ func (e *assignedByEnv) createTask(t *testing.T, assignedBy domain.AssignmentSou
 		AssigneeType: domain.AssigneeTypeAgent,
 		AssignedBy:   assignedBy,
 	}
-	if err := e.taskRepo.Create(context.Background(), task); err != nil {
+	if err := e.taskRepo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 	return task

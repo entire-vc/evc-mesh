@@ -2517,7 +2517,9 @@ func (m *mockTaskRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task,
 	return nil, nil
 }
 
-func (m *mockTaskRepo) Create(_ context.Context, _ *domain.Task) error { return nil }
+func (m *mockTaskRepo) Create(_ context.Context, _ *domain.Task, _ *domain.ActivityLog) error {
+	return nil
+}
 func (m *mockTaskRepo) GetByShortID(_ context.Context, _ string) (*domain.Task, error) {
 	return nil, nil
 }

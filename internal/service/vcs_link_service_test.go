@@ -142,7 +142,9 @@ type fakeTaskRepo struct {
 	tasks map[uuid.UUID]*domain.Task
 }
 
-func (r *fakeTaskRepo) Create(context.Context, *domain.Task) error { return nil }
+func (r *fakeTaskRepo) Create(context.Context, *domain.Task, *domain.ActivityLog) error {
+	return nil
+}
 func (r *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
 	return r.tasks[id], nil
 }

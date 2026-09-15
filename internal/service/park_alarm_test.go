@@ -68,7 +68,7 @@ func (h *alarmGateHarness) seed(t *testing.T, statusID uuid.UUID, labels []strin
 		Labels:    labels,
 		DueDate:   due,
 	}
-	require.NoError(t, h.taskRepo.Create(context.Background(), task))
+	require.NoError(t, h.taskRepo.Create(context.Background(), task, nil))
 	return task
 }
 

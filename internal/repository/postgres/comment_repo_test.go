@@ -36,7 +36,7 @@ func createTestTaskForComments(t *testing.T, taskRepo *TaskRepo, projID, statusI
 		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:     time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 	return task.ID
 }
 

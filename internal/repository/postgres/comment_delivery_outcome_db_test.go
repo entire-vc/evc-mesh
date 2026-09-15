@@ -72,7 +72,7 @@ func newDeliveryOutcomeComment(t *testing.T, db *sqlx.DB) uuid.UUID {
 		Title: "delivery outcome fixture", AssigneeType: domain.AssigneeTypeUnassigned,
 		Priority: domain.PriorityMedium, CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser,
 	}
-	require.NoError(t, NewTaskRepo(db).Create(ctx, task))
+	require.NoError(t, NewTaskRepo(db).Create(ctx, task, nil))
 
 	c := &domain.Comment{
 		ID: uuid.New(), TaskID: task.ID, AuthorID: uuid.New(),

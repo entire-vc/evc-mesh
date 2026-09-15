@@ -112,7 +112,7 @@ func (h *reaperHarness) addExpiredTask(t *testing.T, projectID uuid.UUID, at dom
 		AssigneeType:    at,
 		CheckoutExpires: &past,
 	}
-	if err := h.taskRepo.Create(context.Background(), task); err != nil {
+	if err := h.taskRepo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("addExpiredTask: %v", err)
 	}
 	return task
@@ -303,7 +303,7 @@ func TestLeaseReaper_FutureCheckoutExpiry_NotSwept(t *testing.T) {
 		AssigneeType:    domain.AssigneeTypeAgent,
 		CheckoutExpires: &future,
 	}
-	if err := h.taskRepo.Create(context.Background(), active); err != nil {
+	if err := h.taskRepo.Create(context.Background(), active, nil); err != nil {
 		t.Fatalf("create active task: %v", err)
 	}
 
@@ -349,7 +349,7 @@ func (h *reaperHarness) addUnleasedTask(t *testing.T, projectID uuid.UUID, idleF
 		UpdatedAt:    time.Now().Add(-idleFor),
 		// CheckedOutBy / CheckoutExpires deliberately nil — this IS the state.
 	}
-	if err := h.taskRepo.Create(context.Background(), task); err != nil {
+	if err := h.taskRepo.Create(context.Background(), task, nil); err != nil {
 		t.Fatalf("addUnleasedTask: %v", err)
 	}
 	return task
@@ -395,7 +395,7 @@ func TestLeaseReaper_UnleasedInProgress_LiveCheckoutUntouched(t *testing.T) {
 		CheckoutExpires: &future,
 		UpdatedAt:       time.Now().Add(-9 * time.Hour), // idle, but LEASED
 	}
-	if err := h.taskRepo.Create(context.Background(), held); err != nil {
+	if err := h.taskRepo.Create(context.Background(), held, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 

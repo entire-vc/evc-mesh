@@ -80,7 +80,7 @@ func TestFindStaleUnleasedInProgress_Predicates(t *testing.T) {
 	// its first run.
 	mk := func(statusID uuid.UUID, title string, by *uuid.UUID, exp *time.Time, updated time.Time) uuid.UUID {
 		task := makeTestTask(proj.ID, statusID, title)
-		require.NoError(t, repo.Create(ctx, task))
+		require.NoError(t, repo.Create(ctx, task, nil))
 		_, err := db.ExecContext(ctx,
 			`UPDATE tasks SET updated_at=$1, checked_out_by=$2, checkout_expires=$3 WHERE id=$4`,
 			updated, by, exp, task.ID)
@@ -144,7 +144,7 @@ func TestFindStaleUnleasedInProgress_GraceIsApplied(t *testing.T) {
 	require.NoError(t, err)
 
 	task := makeTestTask(proj.ID, inProg.ID, "idle for three hours")
-	require.NoError(t, repo.Create(ctx, task))
+	require.NoError(t, repo.Create(ctx, task, nil))
 	_, err = db.ExecContext(ctx, `UPDATE tasks SET updated_at=$1 WHERE id=$2`, time.Now().Add(-3*time.Hour), task.ID)
 	require.NoError(t, err)
 
@@ -201,7 +201,7 @@ func TestFindStaleUnleasedInProgress_SkipsUnmovableTasks(t *testing.T) {
 	// the property under test cannot fail, and reads exactly like a passing one.
 	mk := func(title string, gated, shipped bool) uuid.UUID {
 		task := makeTestTask(proj.ID, inProg.ID, title)
-		require.NoError(t, repo.Create(ctx, task))
+		require.NoError(t, repo.Create(ctx, task, nil))
 		_, err := db.ExecContext(ctx,
 			`UPDATE tasks SET updated_at=$1, human_gate=$2, is_shipped=$3 WHERE id=$4`,
 			stale, gated, shipped, task.ID)

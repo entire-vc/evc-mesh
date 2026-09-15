@@ -180,6 +180,6 @@ func newCoverageTask(t *testing.T, db *sqlx.DB, fx coverageFixture, title string
 		CreatedBy:     fx.userID,
 		CreatedByType: domain.ActorTypeUser,
 	}
-	require.NoError(t, NewTaskRepo(db).Create(context.Background(), task))
+	require.NoError(t, NewTaskRepo(db).Create(context.Background(), task, nil))
 	return task.ID
 }

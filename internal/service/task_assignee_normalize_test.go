@@ -92,7 +92,7 @@ func TestAssignTask_HumanUUID_SavesTypeUser(t *testing.T) {
 		ID:           taskID,
 		ProjectID:    projID,
 		AssigneeType: domain.AssigneeTypeUnassigned,
-	}))
+	}, nil))
 
 	// Assign with wrong type (simulates Riker MCP defaulting to "agent").
 	err := svc.AssignTask(context.Background(), taskID, AssignTaskInput{
@@ -131,7 +131,7 @@ func TestAssignTask_AgentUUID_SavesTypeAgent(t *testing.T) {
 		ID:           taskID,
 		ProjectID:    projID,
 		AssigneeType: domain.AssigneeTypeUnassigned,
-	}))
+	}, nil))
 
 	// Assign with correct type (should stay 'agent').
 	err := svc.AssignTask(context.Background(), taskID, AssignTaskInput{
@@ -174,7 +174,7 @@ func TestAssignTask_UserAssignee_EnrolledInProjectMembers(t *testing.T) {
 		ID:           taskID,
 		ProjectID:    projID,
 		AssigneeType: domain.AssigneeTypeUnassigned,
-	}))
+	}, nil))
 
 	require.NoError(t, svc.AssignTask(context.Background(), taskID, AssignTaskInput{
 		AssigneeID:   &userID,
@@ -211,7 +211,7 @@ func TestAssignTask_AgentAssignee_NoUserMemberEnroll(t *testing.T) {
 		ID:           taskID,
 		ProjectID:    projID,
 		AssigneeType: domain.AssigneeTypeUnassigned,
-	}))
+	}, nil))
 
 	require.NoError(t, svc.AssignTask(context.Background(), taskID, AssignTaskInput{
 		AssigneeID:   &agentID,

@@ -82,8 +82,8 @@ func TestTaskListRevisionRepo_CrossProjectIsolation_NegativeControl(t *testing.T
 	assert.Equal(t, int64(0), controlBefore)
 
 	// Mutate ONLY the target project: create two tasks.
-	require.NoError(t, taskRepo.Create(ctx, makeTestTask(targetProj.ID, targetStatus.ID, "target task 1")))
-	require.NoError(t, taskRepo.Create(ctx, makeTestTask(targetProj.ID, targetStatus.ID, "target task 2")))
+	require.NoError(t, taskRepo.Create(ctx, makeTestTask(targetProj.ID, targetStatus.ID, "target task 1"), nil))
+	require.NoError(t, taskRepo.Create(ctx, makeTestTask(targetProj.ID, targetStatus.ID, "target task 2"), nil))
 
 	targetAfterMutation, err := revRepo.GetRevision(ctx, targetProj.ID)
 	require.NoError(t, err)
@@ -96,7 +96,7 @@ func TestTaskListRevisionRepo_CrossProjectIsolation_NegativeControl(t *testing.T
 
 	// Now mutate ONLY the control project, to prove the isolation holds in
 	// both directions, not just "control happens to start at 0 and stay 0".
-	require.NoError(t, taskRepo.Create(ctx, makeTestTask(controlProj.ID, controlStatus.ID, "control task 1")))
+	require.NoError(t, taskRepo.Create(ctx, makeTestTask(controlProj.ID, controlStatus.ID, "control task 1"), nil))
 
 	targetAfterControlMutation, err := revRepo.GetRevision(ctx, targetProj.ID)
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestTaskListRevisionRepo_Bump_OnTaskCreate(t *testing.T) {
 	before, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
 
-	require.NoError(t, taskRepo.Create(ctx, makeTestTask(proj.ID, status.ID, "created task")))
+	require.NoError(t, taskRepo.Create(ctx, makeTestTask(proj.ID, status.ID, "created task"), nil))
 
 	after, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
@@ -138,7 +138,7 @@ func TestTaskListRevisionRepo_Bump_OnTaskFieldUpdate(t *testing.T) {
 	_, proj, status := createTestProject(t, db)
 
 	task := makeTestTask(proj.ID, status.ID, "before update")
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 
 	before, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
@@ -172,7 +172,7 @@ func TestTaskListRevisionRepo_Bump_OnTaskMove(t *testing.T) {
 	require.NoError(t, err)
 
 	task := makeTestTask(proj.ID, openStatus.ID, "moving task")
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 
 	before, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestTaskListRevisionRepo_Bump_OnTaskDelete(t *testing.T) {
 	_, proj, status := createTestProject(t, db)
 
 	task := makeTestTask(proj.ID, status.ID, "to be deleted")
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 
 	before, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
@@ -226,7 +226,7 @@ func TestTaskListRevisionRepo_Bump_OnLabelAttachDetach(t *testing.T) {
 
 	task := makeTestTask(proj.ID, status.ID, "label test task")
 	task.Labels = pq.StringArray{}
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 
 	beforeAttach, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
@@ -261,7 +261,7 @@ func TestTaskListRevisionRepo_Bump_OnArtifactCreateAndDelete(t *testing.T) {
 	artifactRepo := NewArtifactRepo(db)
 
 	task := makeTestTask(proj.ID, status.ID, "artifact host task")
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 
 	beforeCreate, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestTaskListRevisionRepo_Bump_OnVCSLinkCreateAndDelete(t *testing.T) {
 	vcsRepo := NewVCSLinkRepo(db)
 
 	task := makeTestTask(proj.ID, status.ID, "vcs link host task")
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 
 	beforeCreate, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
@@ -338,7 +338,7 @@ func TestTaskListRevisionRepo_NoBump_OnCommentAddOrEdit(t *testing.T) {
 	commentRepo := NewCommentRepo(db)
 
 	task := makeTestTask(proj.ID, status.ID, "comment host task")
-	require.NoError(t, taskRepo.Create(ctx, task))
+	require.NoError(t, taskRepo.Create(ctx, task, nil))
 
 	beforeComment, err := revRepo.GetRevision(ctx, proj.ID)
 	require.NoError(t, err)
