@@ -180,6 +180,15 @@ func (h *AnalyticsHandler) ExportMetrics(c echo.Context) error {
 		_ = w.Write([]string{"Events by Type", et, fmt.Sprintf("%d", metrics.EventMetrics.ByType[et])})
 	}
 
+	// Event coverage — makes explicit whether Total Events/Events by Type
+	// above actually reflect the requested period, or just what the
+	// short-lived event queue still happens to hold.
+	_ = w.Write([]string{"Event Coverage", "total_events", fmt.Sprintf("%d", metrics.EventMetrics.TotalEvents)})
+	_ = w.Write([]string{"Event Coverage", "period_fully_covered", fmt.Sprintf("%t", metrics.EventMetrics.PeriodFullyCovered)})
+	if metrics.EventMetrics.RetainedSince != nil {
+		_ = w.Write([]string{"Event Coverage", "retained_since", metrics.EventMetrics.RetainedSince.Format(time.RFC3339)})
+	}
+
 	// Daily timeline.
 	for _, day := range metrics.Timeline {
 		_ = w.Write([]string{"Daily Timeline (Created)", day.Date, fmt.Sprintf("%d", day.Created)})

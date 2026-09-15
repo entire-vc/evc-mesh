@@ -1526,6 +1526,8 @@ export interface AnalyticsMetrics {
   event_metrics: {
     total_events: number;
     by_type: Record<string, number>;
+    retained_since: string | null;
+    period_fully_covered: boolean;
   };
   timeline: Array<{
     date: string;

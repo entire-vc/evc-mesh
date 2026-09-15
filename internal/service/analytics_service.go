@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -240,33 +241,59 @@ type eventTypeRow struct {
 }
 
 func (s *analyticsService) queryEventMetrics(ctx context.Context, filter AnalyticsFilter) (*EventMetrics, error) {
-	var args []interface{}
+	var scopeArgs []interface{}
 	var projectFilter string
 	if filter.ProjectID != nil {
-		args = []interface{}{filter.WorkspaceID, *filter.ProjectID}
+		scopeArgs = []interface{}{filter.WorkspaceID, *filter.ProjectID}
 		projectFilter = "AND em.project_id = $2"
 	} else {
-		args = []interface{}{filter.WorkspaceID}
+		scopeArgs = []interface{}{filter.WorkspaceID}
 	}
+
+	// floorQ finds the oldest row the TTL-bounded queue still physically
+	// holds for this scope RIGHT NOW — deliberately without a period filter.
+	// It tells us how far back the queue's current contents can be trusted,
+	// not what happened in the requested period.
+	floorQ := fmt.Sprintf(`
+		SELECT MIN(em.created_at) FROM event_bus_messages em
+		WHERE em.workspace_id = $1 %s
+	`, projectFilter)
+	var retainedSince sql.NullTime
+	if err := s.db.GetContext(ctx, &retainedSince, floorQ, scopeArgs...); err != nil {
+		return nil, err
+	}
+	var retainedSincePtr *time.Time
+	if retainedSince.Valid {
+		t := retainedSince.Time
+		retainedSincePtr = &t
+	}
+	// The queue's contents cover the requested period only if the oldest row
+	// it still has predates (or equals) the requested start. No rows at all
+	// for this scope proves nothing about the past — it stays uncovered.
+	fullyCovered := retainedSincePtr != nil && !filter.From.Before(*retainedSincePtr)
+
+	periodArgs := append(append([]interface{}{}, scopeArgs...), filter.From, filter.To)
+	fromIdx := len(scopeArgs) + 1
+	toIdx := len(scopeArgs) + 2
 
 	totalQ := fmt.Sprintf(`
 		SELECT COUNT(*) FROM event_bus_messages em
-		WHERE em.workspace_id = $1 %s
-	`, projectFilter)
+		WHERE em.workspace_id = $1 %s AND em.created_at >= $%d AND em.created_at <= $%d
+	`, projectFilter, fromIdx, toIdx)
 	var total int
-	if err := s.db.GetContext(ctx, &total, totalQ, args...); err != nil {
+	if err := s.db.GetContext(ctx, &total, totalQ, periodArgs...); err != nil {
 		return nil, err
 	}
 
 	byTypeQ := fmt.Sprintf(`
 		SELECT em.event_type, COUNT(*) AS cnt
 		FROM event_bus_messages em
-		WHERE em.workspace_id = $1 %s
+		WHERE em.workspace_id = $1 %s AND em.created_at >= $%d AND em.created_at <= $%d
 		GROUP BY em.event_type
 		ORDER BY cnt DESC
-	`, projectFilter)
+	`, projectFilter, fromIdx, toIdx)
 	var typeRows []eventTypeRow
-	if err := s.db.SelectContext(ctx, &typeRows, byTypeQ, args...); err != nil {
+	if err := s.db.SelectContext(ctx, &typeRows, byTypeQ, periodArgs...); err != nil {
 		return nil, err
 	}
 	byType := make(map[string]int, len(typeRows))
@@ -275,8 +302,10 @@ func (s *analyticsService) queryEventMetrics(ctx context.Context, filter Analyti
 	}
 
 	return &EventMetrics{
-		TotalEvents: total,
-		ByType:      byType,
+		TotalEvents:        total,
+		ByType:             byType,
+		RetainedSince:      retainedSincePtr,
+		PeriodFullyCovered: fullyCovered,
 	}, nil
 }
 
