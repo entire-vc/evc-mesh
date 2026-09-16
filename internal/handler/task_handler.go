@@ -190,6 +190,46 @@ type moveTaskRequest struct {
 	Source            string              `json:"source,omitempty"` // "mcp" | "api" | "ui"
 }
 
+// bindStrictJSON decodes the JSON request body into out, refusing any field
+// name out does not declare instead of the silent-drop encoding/json (and
+// therefore c.Bind()) does by default. Without this, a typo'd or invented
+// field name is a 200/201 that changed nothing it claimed to — the exact
+// shape #64b74e58 hand-patched for status_id/status_slug/status on this same
+// endpoint; this generalizes that fix to every field (#3e4c9f80) instead of
+// requiring a new named reject block per incident.
+//
+// Mirrors echo's own DefaultBinder.BindBody Content-Length==0 special case
+// (a body-less request leaves the destination zero-valued, not an error) so
+// this isn't a second behavior change riding on the one requested.
+func bindStrictJSON(c echo.Context, out any) *apierror.Error {
+	if c.Request().ContentLength == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(c.Request().Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		if field, ok := unknownJSONField(err); ok {
+			return apierror.BadRequestWithDetails("unknown field in request body", field)
+		}
+		return apierror.BadRequest("invalid request body")
+	}
+	return nil
+}
+
+// unknownJSONField extracts the offending field name from the error
+// DisallowUnknownFields produces. encoding/json exposes no typed error for
+// this — the message text (`json: unknown field "foo"`) is the only
+// machine-readable form there is.
+func unknownJSONField(err error) (string, bool) {
+	const marker = "unknown field "
+	msg := err.Error()
+	idx := strings.Index(msg, marker)
+	if idx == -1 {
+		return "", false
+	}
+	return strings.Trim(msg[idx+len(marker):], `"`), true
+}
+
 // Create handles POST /projects/:proj_id/tasks
 func (h *TaskHandler) Create(c echo.Context) error {
 	projectIDStr := c.Param("proj_id")
@@ -199,8 +239,8 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	}
 
 	var req createTaskRequest
-	if err = c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	if apiErr := bindStrictJSON(c, &req); apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
 
 	if req.Title == "" {
@@ -647,8 +687,8 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	}
 
 	var req updateTaskRequest
-	if err = c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	if apiErr := bindStrictJSON(c, &req); apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
 
 	// #64b74e58: status is not a PATCH field — reject before touching the
@@ -1115,8 +1155,8 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 	}
 
 	var req createSubtaskRequest
-	if err = c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	if apiErr := bindStrictJSON(c, &req); apiErr != nil {
+		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
 
 	if req.Title == "" {
