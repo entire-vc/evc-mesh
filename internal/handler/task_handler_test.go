@@ -2994,3 +2994,127 @@ func TestTaskHandler_ListSubtasks_HasDescriptionAndURLAreDecorated(t *testing.T)
 
 	assert.Equal(t, false, items[1]["has_description"])
 }
+
+// --- TestTaskHandler_UnknownField (#3e4c9f80) ---
+//
+// Generalizes the #64b74e58 fix (status_id/status_slug/status hand-rejected
+// on Update) to any field name none of the three handlers declare: a
+// caller's typo or invented field must be a 400 naming it, never a 200/201
+// that quietly changed nothing it claimed to.
+
+func TestTaskHandler_Create_UnknownFieldRejected(t *testing.T) {
+	mockSvc := &MockTaskService{}
+	h, e := setupTaskTest(mockSvc)
+	projectID := uuid.New()
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"title":"x","start_afterr":"2026-09-29T00:00:00Z"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id/tasks")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+
+	require.NoError(t, h.Create(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Contains(t, body["details"], "start_afterr", "the response must name the offending field, not just say \"bad request\"")
+}
+
+func TestTaskHandler_Update_UnknownFieldRejected(t *testing.T) {
+	existing := &domain.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Untouched", Priority: domain.PriorityLow}
+	updateCalled := false
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) { return existing, nil },
+		UpdateFunc:  func(ctx context.Context, task *domain.Task) error { updateCalled = true; return nil },
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"start_afterr":"2026-09-29T00:00:00Z"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(existing.ID.String())
+
+	require.NoError(t, h.Update(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"a made-up field name must be refused, not silently dropped behind a 200 that changed nothing (#3e4c9f80)")
+	assert.False(t, updateCalled, "an unknown field must never reach taskService.Update")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Contains(t, body["details"], "start_afterr")
+}
+
+func TestTaskHandler_CreateSubtask_UnknownFieldRejected(t *testing.T) {
+	mockSvc := &MockTaskService{}
+	h, e := setupTaskTest(mockSvc)
+	parentID := uuid.New()
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"title":"x","start_afterr":"2026-09-29T00:00:00Z"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/subtasks")
+	c.SetParamNames("task_id")
+	c.SetParamValues(parentID.String())
+
+	require.NoError(t, h.CreateSubtask(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Contains(t, body["details"], "start_afterr")
+}
+
+// TestTaskHandler_Update_KnownFieldTypoStillCaughtAsUnknown is the negative
+// control the task's own acceptance criteria demand: without it, "success"
+// on a garbage field is indistinguishable from "it actually applied". A
+// near-miss on a real field name (not just gibberish) must still be refused.
+func TestTaskHandler_Update_KnownFieldTypoStillCaughtAsUnknown(t *testing.T) {
+	existing := &domain.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Untouched"}
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) { return existing, nil },
+		UpdateFunc:  func(ctx context.Context, task *domain.Task) error { return nil },
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"tittle":"typo'd field name"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(existing.ID.String())
+
+	require.NoError(t, h.Update(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestTaskHandler_Update_KnownFieldsStillAcceptedTogether pins that the
+// strict decode is additive, not a regression on any legitimate combination
+// of the handler's real fields.
+func TestTaskHandler_Update_KnownFieldsStillAcceptedTogether(t *testing.T) {
+	existing := &domain.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Untouched"}
+	mockSvc := &MockTaskService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Task, error) { return existing, nil },
+		UpdateFunc:  func(ctx context.Context, task *domain.Task) error { return nil },
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(
+		`{"title":"New","priority":"high","due_date":"2026-10-01","start_after":"2026-09-20T00:00:00Z"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(existing.ID.String())
+
+	require.NoError(t, h.Update(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
