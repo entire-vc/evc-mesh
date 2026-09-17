@@ -18,9 +18,28 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 
 vi.mock("@/lib/api", () => ({
-  api: vi.fn(() => Promise.resolve({ enabled: false })),
+  // Shape-aware: VCSLinks and DependencyList unwrap specific keys, and a
+  // one-shape-fits-all stub makes them throw instead of rendering — which
+  // would silently keep their headings out of the comparison below, the exact
+  // blind spot this file exists to close.
+  api: vi.fn((path: string) => {
+    if (path.includes("/vcs-links")) return Promise.resolve({ vcs_links: [] });
+    if (path.includes("/dependencies")) {
+      return Promise.resolve({ blocked_by: [], blocks: [], parent: null, children: [] });
+    }
+    return Promise.resolve({ enabled: false });
+  }),
   getAccessToken: vi.fn(() => null),
-  getTaskCostSummary: vi.fn(() => Promise.resolve(null)),
+  getTaskCostSummary: vi.fn(() =>
+    Promise.resolve({
+      total_cost: 0.01,
+      tokens_in: 10,
+      tokens_out: 20,
+      session_count: 2,
+      rework_count: 0,
+      quality_flag: "multi-turn",
+    }),
+  ),
   uploadPendingImages: vi.fn((_id: string, _p: unknown, desc: string) =>
     Promise.resolve(desc),
   ),
@@ -44,7 +63,26 @@ const ONLY_AFTER_CREATE: Record<string, string> = {
   "Human gate": "a gate is armed by a comment on an existing task",
   Created: "there is no creation timestamp before creation",
   Updated: "there is no update timestamp before creation",
+  "VCS Links": "the endpoint is keyed on a task id",
+  Dependencies: "an edge cannot start at a node that does not exist yet",
+  "Cost & Quality": "computed from sessions that have not happened yet",
 };
+
+/**
+ * Rows the edit panel renders as whole blocks rather than label/value pairs.
+ * They are swept by heading below, because `querySelectorAll("label")` alone
+ * cannot see them — and a row the comparison cannot see is a hole exactly
+ * where the next regression would walk through.
+ *
+ * They surface because `propertyNamesOf` expands the panel ("Show empty"),
+ * not because the fixture carries VCS/dependency/cost data: `showVcsLinks`
+ * and `showDependencies` are `!hideEmpty || <has data>`. An earlier version of
+ * this file set `vcs_link_count: 1` on the fixture as if that were what made
+ * the row appear; a mutation test (count → 0) kept passing and showed the
+ * claim was false, so the field is gone rather than left there implying a
+ * dependency the code does not have.
+ */
+const DATA_GATED_EDIT_ROWS = ["VCS Links", "Dependencies", "Cost & Quality"];
 
 const PROJECT: Project = {
   id: "proj-1",
@@ -176,7 +214,11 @@ async function propertyNamesOf(mode: "create" | "edit"): Promise<string[]> {
     .filter(Boolean);
   // Section headings are not <label> elements in every block, so pick up the
   // two that are rendered as headings.
-  for (const heading of ["Definition of Done", "Custom Fields"]) {
+  for (const heading of [
+    "Definition of Done",
+    "Custom Fields",
+    ...DATA_GATED_EDIT_ROWS,
+  ]) {
     if (within(panel).queryByText(heading)) names.push(heading);
   }
 
@@ -203,6 +245,17 @@ describe("TaskPanel — the create form is the edit form", () => {
     // rotted into a comment.
     const editNames = await propertyNamesOf("edit");
     const createNames = await propertyNamesOf("create");
+
+    // Guard the guard: if any of these stopped rendering in edit — block
+    // deleted, heading renamed, panel no longer expanded — the loop below
+    // would pass vacuously on three fewer names. Proven to fail: deleting the
+    // VCS Links block from the edit branch trips this, not the diff above.
+    for (const name of DATA_GATED_EDIT_ROWS) {
+      expect(
+        editNames,
+        `fixture no longer surfaces ${name} — the comparison just got narrower`,
+      ).toContain(name);
+    }
 
     for (const name of Object.keys(ONLY_AFTER_CREATE)) {
       if (name === "Human gate") continue; // only rendered on a gated task
