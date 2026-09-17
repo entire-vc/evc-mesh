@@ -77,7 +77,7 @@ const blockerStillOpenWithdrawalBody = "Отзываю запрос: ответ 
 // what explicitNonWithdrawalMarkers exists to catch, independent of which
 // specific triageExitNegators word the negation happened to contain.
 const liveIncidentNotWithdrawingBody = "Gate-owner wake-up re-check (7th vantage-point re-verification, ~4h after " +
-	"the last at 03:49Z): `alyssa` (161.104.58.170) is still fully unreachable — `nc` to :22 → `Operation timed " +
+	"the last at 03:49Z): `alyssa` (192.0.2.170) is still fully unreachable — `nc` to :22 → `Operation timed " +
 	"out`, `curl --max-time 8` to :443 and to `https://teamrelay.ru/` → both `Connection timed out` " +
 	"(`http_code=000`). No change in ~8h since the 23:18Z outage start.\n\n" +
 	"Blocker is still live and unchanged from what's already on this thread — nothing for me to resolve without " +
