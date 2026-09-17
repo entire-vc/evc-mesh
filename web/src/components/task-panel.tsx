@@ -39,6 +39,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRecurringStore } from "@/stores/recurring";
 import { useRulesStore } from "@/stores/rules";
+import { useTemplateStore } from "@/stores/template";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -190,6 +191,7 @@ export function TaskPanel({
   const { currentWorkspace } = useWorkspaceStore();
   const { schedules, fetchSchedules } = useRecurringStore();
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
+  const { templates, fetchTemplates } = useTemplateStore();
 
   const [loading, setLoading] = useState(false);
   const [activeMobileTab, setActiveMobileTab] = useState<MobileTabId>("details");
@@ -204,7 +206,12 @@ export function TaskPanel({
   useEffect(() => {
     if (focusCommentId) setActiveMobileTab("comments");
   }, [focusCommentId]);
-  const [hideEmpty, setHideEmpty] = useState(true);
+  // Existing tasks open collapsed (most properties are empty on a typical card);
+  // a create draft opens expanded, because every row there is an input the author
+  // may want to fill and a hidden input is an input that does not exist. The
+  // control itself is present in BOTH modes — it is what keeps the two Properties
+  // panels the same panel rather than two look-alikes (#88087321).
+  const [hideEmpty, setHideEmpty] = useState(!isCreateMode);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
   const [clearingGate, setClearingGate] = useState(false);
@@ -257,6 +264,13 @@ export function TaskPanel({
   // "unassigned" | "user:{id}" | "agent:{id}"
   const [draftAssigneeValue, setDraftAssigneeValue] = useState("unassigned");
   const [draftReviewerValue, setDraftReviewerValue] = useState("unassigned");
+  // estimated_hours / custom_fields are accepted by POST /tasks (handler
+  // CreateTaskRequest), so there is no reason they can only be set on the second
+  // screen — they are kept as draft state exactly like the rest.
+  const [draftEstimatedHours, setDraftEstimatedHours] = useState("");
+  const [draftCustomFields, setDraftCustomFields] = useState<
+    Record<string, unknown>
+  >({});
   // Images pasted into the description before the task exists — uploaded
   // right after createTask() succeeds, same as create-task-dialog.tsx.
   const draftPendingImagesRef = useRef<PendingImage[]>([]);
@@ -282,7 +296,9 @@ export function TaskPanel({
       draftStatusId !== draftInitialRef.current.statusId ||
       draftDueDate !== draftInitialRef.current.dueDate ||
       draftAssigneeValue !== "unassigned" ||
-      draftReviewerValue !== "unassigned");
+      draftReviewerValue !== "unassigned" ||
+      draftEstimatedHours.trim() !== "" ||
+      Object.keys(draftCustomFields).length > 0);
 
   // Warn on tab close/reload with an unsaved draft. useBlocker (below)
   // cannot cover this case — it only intercepts in-app router navigation.
@@ -411,6 +427,12 @@ export function TaskPanel({
     if (statuses.length === 0 || statuses[0]?.project_id !== createProjectId) {
       void fetchStatuses(createProjectId);
     }
+    // Same fetch the task-load path does (custom-field definitions) plus the
+    // template list: without them the create form silently renders a SHORTER
+    // Properties panel than the edit form for the same project, which is the
+    // defect this card exists for.
+    fetchCustomFields(createProjectId).catch(() => {});
+    fetchTemplates(createProjectId).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCreateMode, createProjectId, fetchProjectMembers, fetchStatuses]);
 
@@ -847,6 +869,14 @@ export function TaskPanel({
         reviewer_type: reviewerType,
         due_date: draftDueDate ? `${draftDueDate}T00:00:00Z` : undefined,
         status_id: draftStatusId || undefined,
+        estimated_hours:
+          draftEstimatedHours.trim() === ""
+            ? undefined
+            : Number(draftEstimatedHours),
+        custom_fields:
+          Object.keys(draftCustomFields).length > 0
+            ? draftCustomFields
+            : undefined,
       };
 
       const createdTask = await createTask(createProjectId, req);
@@ -885,6 +915,8 @@ export function TaskPanel({
     draftReviewerValue,
     draftDueDate,
     draftStatusId,
+    draftEstimatedHours,
+    draftCustomFields,
     createTask,
     updateTask,
     onCreated,
@@ -901,11 +933,25 @@ export function TaskPanel({
     return false;
   }
 
-  // Create mode always shows Due Date / Labels rows (matching create-task-dialog.tsx) —
-  // the hideEmpty toggle only applies to an existing task's already-populated Properties.
-  const showDueDate = isCreateMode || !hideEmpty || !isEmpty(currentTask?.due_date);
-  const showLabels = isCreateMode || !hideEmpty || (currentTask?.labels ?? []).length > 0;
-  const showHours = !hideEmpty || currentTask?.estimated_hours != null;
+  // One rule for both modes: a row is shown when "show empty" is on, or when it
+  // already carries a value — reading the draft in create mode and the task in
+  // edit mode. Create defaults to hideEmpty=false (see the useState above), so a
+  // fresh draft still opens with every row visible; what changed is that the two
+  // panels are now driven by the same predicate instead of create hard-coding
+  // its own shorter list.
+  const showDueDate =
+    !hideEmpty ||
+    (isCreateMode ? !isEmpty(draftDueDate) : !isEmpty(currentTask?.due_date));
+  const showLabels =
+    !hideEmpty ||
+    (isCreateMode
+      ? draftLabels.length > 0
+      : (currentTask?.labels ?? []).length > 0);
+  const showHours =
+    !hideEmpty ||
+    (isCreateMode
+      ? draftEstimatedHours.trim() !== ""
+      : currentTask?.estimated_hours != null);
   const showVcsLinks = !hideEmpty || (currentTask?.vcs_link_count ?? 0) > 0;
   const showDependencies = !hideEmpty;
 
@@ -913,6 +959,27 @@ export function TaskPanel({
   const createProject = createProjectId
     ? projects.find((p) => p.id === createProjectId)
     : undefined;
+
+  // Definition-of-Done gates come from PROJECT settings, not from the task, so
+  // they are just as knowable while the task is still a draft — the create form
+  // renders them read-only ("what this project will require of the card you are
+  // about to open") rather than pretending they don't exist.
+  const panelProjectId = isCreateMode ? createProjectId : currentTask?.project_id;
+  const panelProject =
+    projects.find((p) => p.id === panelProjectId) ?? currentProject;
+  const dodGates: DodGateConfig[] =
+    (panelProject?.settings as { dod_gates?: DodGateConfig[] })?.dod_gates ?? [];
+
+  // Rendered identically in both modes so the Properties header is one header.
+  const hideEmptyToggle = (
+    <button
+      type="button"
+      className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+      onClick={() => setHideEmpty((v) => !v)}
+    >
+      {hideEmpty ? "Show empty" : "Hide empty"}
+    </button>
+  );
 
   // ---- Shared sub-components -----------------------------------------------
 
@@ -922,6 +989,7 @@ export function TaskPanel({
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Properties
         </span>
+        {hideEmptyToggle}
       </div>
 
       <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
@@ -1143,6 +1211,93 @@ export function TaskPanel({
             </div>
           </>
         )}
+
+        {/* Estimated hours */}
+        {showHours && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
+              <Hourglass className="h-3 w-3" />
+              Estimate
+            </label>
+            <Input
+              type="number"
+              value={draftEstimatedHours}
+              onChange={(e) => setDraftEstimatedHours(e.target.value)}
+              min={0}
+              step={0.5}
+              placeholder="e.g. 4"
+              className="h-7 w-24 text-xs"
+            />
+          </>
+        )}
+
+        {/* Custom fields */}
+        {customFieldDefs.length > 0 && (
+          <>
+            <div className="my-1 sm:col-span-2">
+              <Separator />
+            </div>
+            <label className="flex items-center gap-1 text-xs font-medium text-muted-foreground sm:col-span-2">
+              <SlidersHorizontal className="h-3 w-3" />
+              Custom Fields
+            </label>
+            {[...customFieldDefs]
+              .sort((a, b) => a.position - b.position)
+              .filter(
+                (field) => !hideEmpty || !isEmpty(draftCustomFields[field.slug]),
+              )
+              .map((field) => (
+                <Fragment key={field.id}>
+                  <label className="pt-1 text-xs text-muted-foreground">
+                    {field.name}
+                    {field.is_required && (
+                      <span className="ml-0.5 text-destructive">*</span>
+                    )}
+                  </label>
+                  <CustomFieldRenderer
+                    field={field}
+                    value={draftCustomFields[field.slug]}
+                    onChange={(val) =>
+                      setDraftCustomFields((prev) => ({
+                        ...prev,
+                        [field.slug]: val,
+                      }))
+                    }
+                  />
+                </Fragment>
+              ))}
+          </>
+        )}
+
+        {/* Definition-of-Done gates */}
+        {dodGates.length > 0 && (
+          <>
+            <div className="my-1 sm:col-span-2">
+              <Separator />
+            </div>
+            <div className="sm:col-span-2">
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Definition of Done
+              </p>
+              <div className="flex flex-col gap-1">
+                {dodGates.map((gate) => (
+                  <div key={gate.name} className="flex items-center gap-2 text-xs">
+                    <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="text-foreground">{gate.name}</span>
+                    {gate.required && (
+                      <Badge
+                        variant="outline"
+                        className="border-orange-300 px-1 py-0 text-[9px] text-orange-600"
+                      >
+                        required
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   ) : currentTask && (
@@ -1151,13 +1306,7 @@ export function TaskPanel({
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Properties
         </span>
-        <button
-          type="button"
-          className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-          onClick={() => setHideEmpty((v) => !v)}
-        >
-          {hideEmpty ? "Show empty" : "Hide empty"}
-        </button>
+        {hideEmptyToggle}
       </div>
 
       <div className="grid grid-cols-1 items-start gap-y-2.5 sm:grid-cols-[auto_1fr] sm:gap-x-4">
@@ -1537,10 +1686,10 @@ export function TaskPanel({
         {/* Custom fields */}
         {customFieldDefs.length > 0 && (
           <>
-            <div className="col-span-2 my-1">
+            <div className="sm:col-span-2 my-1">
               <Separator />
             </div>
-            <label className="col-span-2 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+            <label className="sm:col-span-2 flex items-center gap-1 text-xs font-medium text-muted-foreground">
               <SlidersHorizontal className="h-3 w-3" />
               Custom Fields
             </label>
@@ -1578,7 +1727,7 @@ export function TaskPanel({
         )}
 
         {/* Timestamps */}
-        <div className="col-span-2 flex items-center justify-between gap-2 pt-1">
+        <div className="sm:col-span-2 flex items-center justify-between gap-2 pt-1">
           <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
             <Clock className="h-3 w-3" />
             Created
@@ -1588,7 +1737,7 @@ export function TaskPanel({
           </span>
         </div>
 
-        <div className="col-span-2 flex items-center justify-between gap-2">
+        <div className="sm:col-span-2 flex items-center justify-between gap-2">
           <label className="shrink-0 text-xs text-muted-foreground">Updated</label>
           <span className="text-right text-xs text-muted-foreground">
             {formatRelative(currentTask.updated_at)}
@@ -1602,7 +1751,7 @@ export function TaskPanel({
           );
           return (
             <>
-              <div className="col-span-2 my-1">
+              <div className="sm:col-span-2 my-1">
                 <Separator />
               </div>
               <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
@@ -1634,10 +1783,10 @@ export function TaskPanel({
         {/* VCS Links */}
         {showVcsLinks && (
           <>
-            <div className="col-span-2 my-1">
+            <div className="sm:col-span-2 my-1">
               <Separator />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <VCSLinks taskId={currentTask.id} />
             </div>
           </>
@@ -1646,10 +1795,10 @@ export function TaskPanel({
         {/* Dependencies */}
         {showDependencies && (
           <>
-            <div className="col-span-2 my-1">
+            <div className="sm:col-span-2 my-1">
               <Separator />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <DependencyList
                 taskId={currentTask.id}
                 onOpenTask={pushTask}
@@ -1662,10 +1811,10 @@ export function TaskPanel({
         {/* Cost & Quality */}
         {costSummary && costSummary.session_count > 0 && (
           <>
-            <div className="col-span-2 my-1">
+            <div className="sm:col-span-2 my-1">
               <Separator />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <CostQualityBlock summary={costSummary} />
             </div>
           </>
@@ -1673,16 +1822,15 @@ export function TaskPanel({
 
         {/* Definition-of-Done gates */}
         {(() => {
-          const proj = (projects.find((p) => p.id === currentTask.project_id) ?? currentProject);
-          const dodGates: DodGateConfig[] = (proj?.settings as { dod_gates?: DodGateConfig[] })?.dod_gates ?? [];
+          // dodGates is resolved once for both modes (see derived state above).
           if (dodGates.length === 0) return null;
           const checks = currentTask.dod_checks ?? {};
           return (
             <>
-              <div className="col-span-2 my-1">
+              <div className="sm:col-span-2 my-1">
                 <Separator />
               </div>
-              <div className="col-span-2">
+              <div className="sm:col-span-2">
                 <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Definition of Done
                 </p>
@@ -1817,6 +1965,40 @@ export function TaskPanel({
         </div>
       )}
     </div>
+  );
+
+  // Task templates are a per-project feature that stayed editable in Project
+  // Settings the whole time but lost its only consumer when the create modal was
+  // replaced by this route: create-task-dialog.tsx had the picker, the /new page
+  // shipped without it, and the dialog was later deleted (3b6108fa). Restored
+  // here, and it now applies every field the template carries, not just four.
+  const templateSelector = templates.length > 0 && (
+    <Select
+      defaultValue=""
+      onChange={(e) => {
+        const tmpl = templates.find((t) => t.id === e.target.value);
+        if (!tmpl) return;
+        if (tmpl.title_template) setDraftTitle(tmpl.title_template);
+        if (tmpl.description_template)
+          setDraftDescription(tmpl.description_template);
+        if (tmpl.priority) setDraftPriority(tmpl.priority as Priority);
+        if (tmpl.labels && tmpl.labels.length > 0) setDraftLabels(tmpl.labels);
+        if (tmpl.status_id) setDraftStatusId(tmpl.status_id);
+        if (tmpl.estimated_hours != null)
+          setDraftEstimatedHours(String(tmpl.estimated_hours));
+        if (tmpl.custom_fields) setDraftCustomFields(tmpl.custom_fields);
+        if (tmpl.assignee_id && tmpl.assignee_type)
+          setDraftAssigneeValue(`${tmpl.assignee_type}:${tmpl.assignee_id}`);
+      }}
+      className="h-7 text-xs"
+    >
+      <option value="">From template...</option>
+      {templates.map((tmpl) => (
+        <option key={tmpl.id} value={tmpl.id}>
+          {tmpl.name}
+        </option>
+      ))}
+    </Select>
   );
 
   const titleBlock = isCreateMode ? (
@@ -1974,8 +2156,15 @@ export function TaskPanel({
       {/* comments/subtasks/artifacts/activity tabs to show.                  */}
       {/* ------------------------------------------------------------------ */}
       {!loading && isCreateMode && (
-        <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-2xl space-y-5 px-5 py-4">
+        <div className="flex min-h-0 flex-1 overflow-hidden lg:flex-row">
+          {/* LEFT PANEL — identical geometry to the edit layout's left panel:
+              same flex-1 scroll column, same px-5 py-4 / space-y-5 rhythm, same
+              lg:border-r. It used to be `mx-auto max-w-2xl`, which is why the
+              create screen read as a narrow card floating in empty gutters next
+              to a full-width edit screen (#88087321). */}
+          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto lg:border-r lg:border-border">
+          <div className="flex-1 space-y-5 px-5 py-4">
+            {templateSelector}
             {titleBlock}
             {propertiesGrid}
             {descriptionPanel}
@@ -2008,6 +2197,33 @@ export function TaskPanel({
               >
                 {draftSubmitting ? "Creating..." : "Create Task"}
               </Button>
+            </div>
+          </div>
+          </div>
+
+          {/* RIGHT PANEL — same 2/5 column and same tab bar as the edit layout,
+              shown inert. Comments, subtasks, artifacts and the activity log are
+              all keyed on a task id, so there is nothing to put in them before
+              the card exists; the panel says so in one line instead of vanishing
+              and leaving the create screen a different shape. */}
+          <div className="hidden w-2/5 shrink-0 flex-col overflow-hidden lg:flex">
+            <div className="flex shrink-0 overflow-x-auto border-b border-border">
+              {["Comments", "Subtasks", "Artifacts", "Activity"].map((label) => (
+                <span
+                  key={label}
+                  className="flex shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 py-2.5 text-xs font-medium text-muted-foreground/50"
+                >
+                  {label === "Subtasks" && <ListTree className="h-3.5 w-3.5" />}
+                  {label === "Artifacts" && <Package className="h-3.5 w-3.5" />}
+                  {label}
+                </span>
+              ))}
+            </div>
+            <div className="flex flex-1 items-center justify-center p-6">
+              <p className="max-w-[16rem] text-center text-xs text-muted-foreground">
+                Comments, subtasks, artifacts and activity open once the task is
+                created.
+              </p>
             </div>
           </div>
         </div>
