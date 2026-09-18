@@ -1456,7 +1456,7 @@ recall-gate-branch:
       pip install -q mcp httpx fastembed
 
       echo "## Run migrations"
-      go install github.com/pressly/goose/v3/cmd/goose@latest
+      go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
       GOOSE_DRIVER=postgres GOOSE_DBSTRING="postgres://mesh:mesh@127.0.0.1:5432/mesh?sslmode=disable" \
         "$(go env GOPATH)/bin/goose" -dir migrations up
 
