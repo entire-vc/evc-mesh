@@ -228,6 +228,20 @@ List tasks with filters.
 }
 ```
 
+**Description field contract:** each returned task's `description` is included by
+default, and `has_description` always reflects the task's real content — it is
+computed before any trimming below, so it never depends on which projection a
+caller asked for. However, on **any** page (plain listing or `search=`) whose
+descriptions together total more than 200KB, the server blanks `description`
+from the **tail** of that page (in item order) to keep the response size
+bounded, and sets `truncated: true` on the response (the field is omitted when
+false). This can silently drop descriptions from a large fraction of a page on
+a prose-heavy project. `search=<query>` usually returns few enough hits to stay
+under the budget, so it's the practical workaround for finding a specific known
+task by its description text — but the only fetch that is *guaranteed* to
+return a given task's full description, independent of any listing's size or
+order, is `get_task(task_id)`.
+
 ---
 
 #### 4. `get_task`
