@@ -389,7 +389,7 @@ func TestRateLimit_RefreshFleetFlood_NotThrottled(t *testing.T) {
 		Enabled:     true,
 		RPM:         refreshRPM,
 		RedisClient: nil,
-		KeyFunc:     func(c echo.Context) string { return "10.0.0.1" }, // shared fleet egress
+		KeyFunc:     func(c echo.Context) string { return "192.0.2.1" }, // shared egress address
 	})
 	handler := func(c echo.Context) error { return c.NoContent(http.StatusOK) }
 	wrapped := mw(handler)
@@ -433,7 +433,7 @@ func TestRateLimit_Redis_NameRequired(t *testing.T) {
 // /auth/login) a single request of its own, independent 5 RPM budget.
 func TestRateLimit_Redis_NamespacesDoNotShareCounter(t *testing.T) {
 	rdb := newTestRedis(t)
-	const sharedKey = "10.10.10.1" // e.g. both resolve to the same (broken) RealIP()
+	const sharedKey = "192.0.2.1" // e.g. both resolve to the same (broken) RealIP()
 	const loginRPM = 5
 	const refreshRPM = 60
 

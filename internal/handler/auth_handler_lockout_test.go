@@ -238,7 +238,7 @@ func TestAuthHandler_Login_BruteForceAcrossDifferentIPs_StillLocked(t *testing.T
 // fixing.
 func TestAuthHandler_Login_TwoAccountsSameIP_DoNotShareBudget(t *testing.T) {
 	const maxFailures = 2
-	const sharedIP = "10.10.10.1" // e.g. every external client, per #5d759aad
+	const sharedIP = "192.0.2.1" // a reverse proxy in front: every external client looks like this
 	userRepo := newAuthTestUserRepo()
 	h, e := newAuthHandlerTestWithLockout(t, userRepo, maxFailures)
 	registerUser(t, h, e, "alice@example.com", "AlicePass1")

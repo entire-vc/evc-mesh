@@ -1046,7 +1046,7 @@ func TestEnforceBlockingTriage_UnrelatedCompletionWordFarFromMarker_ArmsGate(t *
 		TaskID:     taskID,
 		AuthorID:   assigneeID,
 		AuthorType: domain.ActorTypeAgent,
-		Body: "Helsinki-миграция инфраструктурно завершена — все продукты за hel01 на " +
+		Body: "Миграция инфраструктурно завершена — все продукты за общим edge-хостом на " +
 			"приватном мосту. " + filler +
 			"\n\n❓ **Blocking @pavel**: какой из двух живых инстансов останавливать?",
 	}
