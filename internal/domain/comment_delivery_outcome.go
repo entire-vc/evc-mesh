@@ -106,4 +106,36 @@ type CommentDeliveryOutcome struct {
 	Channel           string     `json:"channel"            db:"channel"`
 	RecipientPresence string     `json:"recipient_presence" db:"recipient_presence"`
 	DecidedAt         time.Time  `json:"decided_at"         db:"decided_at"`
+
+	// Hint is computed at read time from Reason, never persisted — see
+	// ApplyHint. Empty for a reason with nothing actionable to say (delivered,
+	// self-mention, unknown handle): a hint only exists for the outcome the
+	// author of the comment can actually do something about.
+	Hint string `json:"hint,omitempty" db:"-"`
+}
+
+// hintsByReason names, for a Reason where the comment's author holds a fix,
+// what that fix is. Deliberately not exhaustive: a reason with no entry here
+// leaves Hint empty rather than restating the reason as prose, which would
+// just be Reason repeated in English.
+var hintsByReason = map[string]string{
+	// The common, expensive case (see ReasonNoQueuePath): the recipient is
+	// alive but this task isn't in their queue. The author is the one person
+	// who can put it there.
+	ReasonNoQueuePath: "recipient is alive but this task isn't assigned to them — assign it if you need them to see this",
+}
+
+// ApplyHint sets Hint from o.Reason, in place. Safe to call on a row that
+// already carries a hint (idempotent) or on one with no entry (leaves it
+// empty rather than erroring).
+func (o *CommentDeliveryOutcome) ApplyHint() {
+	o.Hint = hintsByReason[o.Reason]
+}
+
+// ApplyHints runs ApplyHint over a batch — the shape every call site actually
+// has, whether fresh out of notifyMentions or read back from the repository.
+func ApplyHints(rows []CommentDeliveryOutcome) {
+	for i := range rows {
+		rows[i].ApplyHint()
+	}
 }

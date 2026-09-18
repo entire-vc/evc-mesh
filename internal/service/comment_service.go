@@ -1106,6 +1106,20 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 		s.enforceTriageExit(ctx, comment, task, wsID)
 	}
 
+	// Surface what became of each @-addressed handle in the SAME response that
+	// created the comment. notifyMentions above already wrote these rows, but
+	// until now nothing read them back before returning — a missed handle
+	// (no_queue_path) was recorded in comment_delivery_outcomes and then never
+	// seen by the one person who could still fix it: the comment's own author,
+	// who had already moved on believing the mention was handed off. Re-read
+	// through the same helper ListByTask uses, so a freshly created comment and
+	// one read back later carry identically-shaped delivery + hint.
+	if s.deliveryRepo != nil {
+		withOutcomes := []domain.Comment{*comment}
+		s.attachDeliveryOutcomes(ctx, withOutcomes)
+		comment.Delivery = withOutcomes[0].Delivery
+	}
+
 	// Closed-card follow-up (audit 1.14, task #754173eb). The suppression a few
 	// lines above is correct and stays — a task.commented on a closed card used
 	// to reopen shipped work (#56a6d5b2). But suppressing the only channel left
@@ -1255,6 +1269,7 @@ func (s *commentService) attachDeliveryOutcomes(ctx context.Context, comments []
 	}
 	for i := range comments {
 		if rows, ok := byComment[comments[i].ID]; ok {
+			domain.ApplyHints(rows)
 			comments[i].Delivery = rows
 		}
 	}
