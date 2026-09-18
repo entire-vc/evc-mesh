@@ -199,7 +199,7 @@ CREATE INDEX IF NOT EXISTS idx_vcs_links_external_lookup
 
 3. **Add the webhook in GitHub** — repo (or org) **Settings → Webhooks → Add
    webhook**:
-   - **Payload URL**: `https://mesh.entire.host/webhooks/github`
+   - **Payload URL**: `https://<your-mesh-instance>/webhooks/github`
    - **Content type**: `application/json`
    - **Secret**: the same value as `MESH_GITHUB_WEBHOOK_SECRET`
    - **Events**: select *Pull requests* and *Pushes* (or "Send me everything").
@@ -218,7 +218,7 @@ CREATE INDEX IF NOT EXISTS idx_vcs_links_external_lookup
 - **Invalid signature** (secret configured):
 
   ```bash
-  curl -i -X POST https://mesh.entire.host/webhooks/github \
+  curl -i -X POST https://<your-mesh-instance>/webhooks/github \
     -H 'X-GitHub-Event: pull_request' \
     -H 'X-GitHub-Delivery: 00000000-0000-0000-0000-000000000001' \
     -H 'X-Hub-Signature-256: sha256=deadbeef' \

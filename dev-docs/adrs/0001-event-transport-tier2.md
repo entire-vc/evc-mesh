@@ -16,7 +16,7 @@ tags:
 # ADR-0001 — SSE → Durable Transport: Evaluation (NATS JetStream / Redis Streams)
 
 **Status:** Proposed · awaiting Pavel review  
-**Task:** [fc2acff3](https://mesh.entire.host/t/fc2acff3-6af1-462a-8fa4-97bc256daf20)  
+**Task:** `fc2acff3`  
 **Depends on:** [81f5cec1] SSE cursor+replay (deployed 2026-05-21, prod b862db3)  
 **Observation window:** 2026-05-21 → 2026-06-11 (21 days)
 
@@ -71,7 +71,7 @@ Key facts:
 | 410 Gone cursor-expiry events | **unknown** — no persistent counter | Server stdout, no log retention |
 | Lost-event incidents | **0** confirmed | Task history, no escalations |
 
-**Gap:** server stdout is not persisted beyond the running process lifetime; systemd journal retains only ~2 days on tw-mesh. A `410_gone_total` Prometheus counter would close this gap.
+**Gap:** server stdout is not persisted beyond the running process lifetime; the systemd journal retains only ~2 days on the prod host. A `410_gone_total` Prometheus counter would close this gap.
 
 ---
 

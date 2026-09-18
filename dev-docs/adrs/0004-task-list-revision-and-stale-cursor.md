@@ -16,7 +16,7 @@ tags:
 # ADR-0004 — `task_list_revision` counter and stale-cursor rejection for `list_tasks`
 
 **Status:** Proposed · awaiting review before subtasks #5 (migration+triggers) and #6 (cursor validation) start
-**Task:** [ebcf18e8](https://mesh.entire.host/t/ebcf18e8-f39c-49a6-b2b6-c47cfaa09f7a) — part 1/7 of [ad22bfda](https://mesh.entire.host/t/ad22bfda-beda-4408-97bf-161dab29ff7a)
+**Task:** `ebcf18e8` — part 1/7 of `ad22bfda`
 **Depends on:** nothing shipped. Consumed by #5 (schema) and #6 (validation).
 
 ---

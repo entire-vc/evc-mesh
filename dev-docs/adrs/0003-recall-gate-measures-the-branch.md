@@ -16,8 +16,8 @@ tags:
 # ADR-0003 — The recall gate must measure the branch it is gating, not production
 
 **Status:** Accepted · implemented in the same change
-**Task:** [2a079432](https://mesh.entire.host/t/2a079432-db11-403c-bf4d-4550ab516ece)
-**Found by:** verify pass on [84b0694d](https://mesh.entire.host/t/84b0694d), epic [b052cdda](https://mesh.entire.host/t/b052cdda) (memory chunking)
+**Task:** `2a079432`
+**Found by:** verify pass on `84b0694d`, epic `b052cdda` (memory chunking)
 **Supersedes nothing.** Extends the two-arm split decided 2026-07-13 (`canon-memory-quality-ci-gate-two-arm-split`, #8e8ad761), which split the gate by *cost*; this one splits it by *what is under test*.
 
 ---
@@ -26,8 +26,8 @@ tags:
 
 `.github/workflows/memory-bench.yml` runs `Memory recall gate` on every PR, and
 that check is required on `main`. It takes its target from
-`MESH_API_URL: ${{ secrets.MESH_API_URL }}` — `https://mesh.entire.host`, the
-deployed production server. No job in the file builds or boots `cmd/api`: the
+`MESH_API_URL: ${{ secrets.MESH_API_URL }}` — the deployed production server.
+No job in the file builds or boots `cmd/api`: the
 only `go build` steps compile `mesh-mcp`, the **client**, out of a different
 repository (`entire-vc/evc-mesh-mcp`). There are no `services:`, no compose file,
 no local override.

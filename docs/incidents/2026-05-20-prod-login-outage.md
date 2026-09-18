@@ -2,7 +2,7 @@
 
 **Severity**: P0 (perceived) → P2 (actual)
 **Duration**: 17:07–17:13 UTC (6 minutes until rollback)
-**Affected**: mesh.entire.host API (prod, tw-mesh)
+**Affected**: mesh API (prod)
 **Resolution**: Garfield rolled back to `pre-pr58` binary at 17:13 UTC
 
 ---

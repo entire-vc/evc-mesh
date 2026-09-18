@@ -495,7 +495,7 @@ inferred from a GitHub or GitLab URL.
   "name": "add_vcs_link",
   "arguments": {
     "task_id": "a1b2c3d4-...",
-    "url": "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/912",
+    "url": "https://gitlab.example.com/org/repo/-/merge_requests/912",
     "title": "fix: reject a colon in a memory key",
     "status": "merged"
   }

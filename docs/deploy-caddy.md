@@ -24,7 +24,7 @@ truth. The live file on the host must always match it byte-for-byte.
    - **only if validation passes**: backs up the current live file
      (`Caddyfile.bak.<timestamp>-pre-ci-deploy-<sha>`), moves the candidate
      into place, validates again in-place, then `systemctl reload caddy`,
-   - smoke-tests `https://mesh.entire.host/api/v1/healthz/version` for a 200,
+   - smoke-tests `${{ vars.APP_BASE_URL }}/api/v1/healthz/version` for a 200,
    - re-runs the drift check to confirm the live file now matches the repo.
 3. A validation failure at either step means the live config is **never
    touched** and `reload` never runs — fail-closed by construction, not by
