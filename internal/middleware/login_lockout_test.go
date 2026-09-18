@@ -116,7 +116,7 @@ func TestLoginLockout_MaxFailuresNonPositive_Disabled(t *testing.T) {
 // unrelated, login request then needs.
 func TestRateLimitKeyByIP_TwoAccountsSameIP_ShareOneBucket_BEFORE(t *testing.T) {
 	e := echo.New()
-	const sharedIP = "10.10.10.1" // every external client, per #5d759aad
+	const sharedIP = "192.0.2.1" // a reverse proxy in front: every external client looks like this
 	const rpm = 3
 
 	limiter := RateLimit(RateLimitConfig{

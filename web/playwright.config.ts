@@ -10,11 +10,12 @@ import { defineConfig, devices } from "@playwright/test";
  * context trips theft detection and revokes every session for the user.
  *
  * Required env:
- *   APP_BASE_URL       — e.g. https://mesh.entire.host
+ *   APP_BASE_URL       — base URL of the deployment to test,
+ *                        e.g. https://mesh.your-host.example.com
  *   E2E_USER_EMAIL     — dedicated CI user: `member` of the scratch workspace
  *                        `e2e-ci-sandbox` and of NO real workspace, so the
  *                        suite can exercise write paths without the credential
- *                        in GitHub secrets reaching anything that matters.
+ *                        in CI secrets reaching anything that matters.
  *                        See the "Run Playwright E2E" step in ci.yml.
  *   E2E_USER_PASSWORD  — its password
  *
@@ -33,7 +34,10 @@ export default defineConfig({
   reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
 
   use: {
-    baseURL: process.env.APP_BASE_URL || "https://mesh.entire.host",
+    // No remote default: an unset APP_BASE_URL must never silently aim a
+    // write-exercising suite at somebody's deployment. Falls back to a local
+    // dev server (scripts/local-stack.sh up, whose web port defaults to 3007).
+    baseURL: process.env.APP_BASE_URL || "http://localhost:3007",
     // Traces and screenshots are OFF deliberately, and this is a security
     // decision rather than a preference. A trace records request and response
     // headers, and every API call in this suite carries
