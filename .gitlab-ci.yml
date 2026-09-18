@@ -1380,7 +1380,12 @@ recall-gate-branch:
       # storm guard ... skipping instead of failing would leave the guard
       # unproven while reporting green"). `ubuntu-latest` (the GitHub arm's
       # runner) ships `jq` preinstalled; `golang:1.25-bookworm` does not.
-      apt-get update -qq && apt-get install -y -qq python3 jq postgresql-client >/dev/null
+      # `python3-venv` added here too: measured live on pipeline #3900,
+      # any memory-relevant MR failed deterministically at the `python3 -m
+      # venv /tmp/venv` step below ("ensurepip is not available") because
+      # Debian's `python3` package ships without it. Not flaky — every
+      # memory-relevant MR hit this every time until fixed.
+      apt-get update -qq && apt-get install -y -qq python3 python3-venv jq postgresql-client >/dev/null
       cd scripts/memory-bench
       for f in test_mcp_ref.py test_gate_blindness.py test_gate_modes.py test_gate_arm.py \
                test_gate_dense_arm.py test_gate_scope.py test_check_captured_baseline.py \
