@@ -95,6 +95,14 @@ variables:
   # three jobs that run migrations (test, repo-integration, tenancy-rbac-gate)
   # all failed at `go install`, before a single test ran. Keep in step with
   # the goose version in go.mod — the tool and the library must not drift.
+  #
+  # `recall-gate-branch` (defined separately below, self-hosted memory-bench
+  # harness) had its OWN unpinned `goose@latest` in its inline migration step
+  # — missed in the 2026-09-02 fix because it doesn't share a job template
+  # with the four jobs above. Same class of break, hit again 2026-09-18
+  # (#1bc9c311) the moment upstream cut goose v3.28.0. Fixed to use this same
+  # variable; a fifth job pinned is not a guarantee a sixth won't be missed —
+  # grep this file for `goose/v3/cmd/goose@` before trusting "all jobs pinned".
   GOOSE_VERSION: "v3.27.3"   # keep in step with go.mod
   GOFLAGS: "-buildvcs=false"
   # Every file whose behaviour `recall-gate-branch` is supposed to protect.

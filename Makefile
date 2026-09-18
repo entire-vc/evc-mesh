@@ -78,7 +78,9 @@ help:
 # Prerequisite: colima running (`colima start`). Services are auto-started.
 #
 # Pinned tool versions — must match ci.yml
+# GOOSE_VERSION: keep in step with go.mod and .gitlab-ci.yml's GOOSE_VERSION.
 GOLANGCI_LINT_VERSION := v2.11.3
+GOOSE_VERSION := v3.27.3
 GOLANGCI_LINT         := $(shell go env GOPATH)/bin/golangci-lint
 GOOSE                 := $(shell go env GOPATH)/bin/goose
 
@@ -139,8 +141,8 @@ ci-install-tools:
 		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
 	fi
 	@if ! command -v $(GOOSE) >/dev/null 2>&1; then \
-		echo "Installing goose..."; \
-		go install github.com/pressly/goose/v3/cmd/goose@latest; \
+		echo "Installing goose $(GOOSE_VERSION)..."; \
+		go install github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION); \
 	fi
 
 ## ci-lint: Run golangci-lint (pinned v2.11.3, matches ci.yml).
