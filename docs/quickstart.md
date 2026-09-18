@@ -204,6 +204,13 @@ With evc-mesh connected, Claude Code can:
 | See own task queue | `get_my_tasks` | "What tasks are assigned to me?" |
 | Report errors | `report_error` | "Report that the API endpoint is failing" |
 
+> `add_comment`'s response includes a `delivery` array whenever the comment
+> `@`-mentions someone — it reports whether the mention actually reached a
+> path the recipient consumes (their task queue, a notification), not just
+> that the comment was posted. Full field reference:
+> [`docs/mcp-reference.md`](mcp-reference.md#12-add_comment); outcome/reason
+> vocabulary: [`docs/integrations/comment-triage.md`](integrations/comment-triage.md).
+
 ---
 
 ## Next Steps
