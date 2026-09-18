@@ -92,7 +92,7 @@ var cookieInsecureOptOut = os.Getenv("MESH_COOKIE_INSECURE") == "true"
 //
 // It deliberately does NOT trust X-Forwarded-Proto. That header is set by
 // whatever spoke to us last, and in our own production topology it is
-// provably wrong: the hel01 edge terminates TLS and forwards to mesh-vm's
+// provably wrong: the edge hop terminates TLS and forwards to the backend's
 // Caddy over plain :80, and Caddy (v2.11.4, no `trusted_proxies` configured)
 // OVERWRITES the inbound X-Forwarded-Proto with the scheme of the hop it
 // received rather than preserving it. Measured on the host, echo server
