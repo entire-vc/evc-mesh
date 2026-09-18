@@ -548,6 +548,57 @@ Add a comment to a task.
 }
 ```
 
+The response carries a `delivery` array — one entry per `@`-addressed handle in
+`body` — reporting what actually happened to that mention, not just that the
+comment was published. A comment that names nobody has no `delivery` key at
+all (`omitempty`); this is the one field whose whole value is that it only
+appears when there is something to say. See
+[`docs/integrations/comment-triage.md`](integrations/comment-triage.md) for
+the full outcome/reason vocabulary.
+
+**Example response — mention landed in the recipient's queue (delivered, no hint):**
+```json
+{
+  "id": "c9d8e7f6-...",
+  "task_id": "a1b2c3d4-...",
+  "body": "please take a look @bob",
+  "delivery": [
+    {
+      "recipient_slug": "bob",
+      "recipient_kind": "agent",
+      "outcome": "delivered",
+      "reason": "task_queue",
+      "channel": "task_queue",
+      "recipient_presence": "online"
+    }
+  ]
+}
+```
+
+**Example response — mention published, but the task isn't in the recipient's queue (the common miss):**
+```json
+{
+  "id": "c9d8e7f6-...",
+  "task_id": "a1b2c3d4-...",
+  "body": "please take a look @bob",
+  "delivery": [
+    {
+      "recipient_slug": "bob",
+      "recipient_kind": "agent",
+      "outcome": "skipped",
+      "reason": "no_queue_path",
+      "channel": "none",
+      "recipient_presence": "online",
+      "hint": "recipient is alive but this task isn't assigned to them — assign it if you need them to see this"
+    }
+  ]
+}
+```
+
+`hint` is computed at read time and only present for outcomes the comment's
+own author can act on (today: `no_queue_path`). Its absence in the delivered
+case is a missing key, not an empty string.
+
 ---
 
 #### 13. `list_comments`

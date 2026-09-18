@@ -131,3 +131,59 @@ rejected; add it here when the Telegram channel is wired to `NotificationService
 default `events` array for both `web_push` and `browser_push` preference rows.
 Migration `20260601057` backfills all existing preference rows so current users
 receive alerts without needing to opt in manually.
+
+## Delivery outcome — what happened to the mention itself
+
+The auto-triage move above only fires for a `❓ **Blocking @<user>**` marker
+naming a *human*. It says nothing about whether an `@`-mentioned *agent*
+actually saw the comment — and "the mention was recorded" has never meant
+"the recipient will act on it": an agent-slug mention delivers only when the
+task is already in that agent's polled queue (assigned + todo-category
+status). A comment addressing an agent who has no claim on the task is
+published, the name is highlighted, and — before this — nothing told the
+author it went nowhere.
+
+`commentService.Create()` now returns this directly: the `add_comment`
+response carries a `delivery` array, one entry per `@`-addressed handle in
+the body, reporting the outcome for *that specific handle* — independent of,
+and in addition to, the triage-marker mechanism above. A comment can both
+auto-move to triage (marker matched a human) **and** report a `no_queue_path`
+miss for an agent named in the same body.
+
+```json
+{
+  "delivery": [
+    {
+      "recipient_slug": "bob",
+      "recipient_kind": "agent",
+      "outcome": "skipped",
+      "reason": "no_queue_path",
+      "channel": "none",
+      "recipient_presence": "online",
+      "hint": "recipient is alive but this task isn't assigned to them — assign it if you need them to see this"
+    }
+  ]
+}
+```
+
+| `outcome` | Meaning |
+|-----------|---------|
+| `delivered` | Reached a path the recipient demonstrably consumes (`reason: task_queue` — assigned + todo-category status — or `reason: notification` — a subscribed channel). |
+| `skipped` | No delivery was attempted, or none could reach — always paired with a `reason`. |
+| `failed` | A write delivery depended on returned an error (`reason: event_persist_failed`). |
+
+Common `reason` values for `skipped`: `no_queue_path` (recipient is alive but
+the task isn't in their queue — the case this section exists for),
+`recipient_offline`, `recipient_unknown`, `no_subscription`,
+`self_mention` (author mentioned themselves).
+
+`hint` is a computed, read-only field present only for a reason the comment's
+own author can act on — today, only `no_queue_path` (fix: assign the task to
+them). It is absent (not empty-string) on every other outcome, including
+`delivered`.
+
+Full field reference: [`docs/mcp-reference.md`](../mcp-reference.md#12-add_comment).
+See also the `mention-and-wake` skill, which documents that a mention alone
+does not wake a fiddler-fed agent lane — `delivery` is what now lets the
+comment's author *see* that in the response, instead of assuming the handoff
+happened.
