@@ -8,7 +8,7 @@ A deploy triggers whenever a push to `main` touches backend paths (`cmd/**`, `in
 
 1. Runs `golangci-lint` + full test suite (with PostgreSQL, Redis, NATS) — both must pass.
 2. Cross-compiles the API binary for `linux/amd64` with embedded build metadata.
-3. Uploads the binary to `tw-mesh` and performs an atomic swap + `systemctl restart`.
+3. Uploads the binary to the mesh VM and performs an atomic swap + `systemctl restart`.
 4. Verifies the deployed commit SHA via `/api/v1/healthz/version`.
 
 **No manual SSH builds.** The prod binary only changes through this workflow.
@@ -18,7 +18,7 @@ A deploy triggers whenever a push to `main` touches backend paths (`cmd/**`, `in
 ## Verifying a deploy
 
 ```bash
-curl https://mesh.entire.host/api/v1/healthz/version
+curl https://<your-prod-domain>/api/v1/healthz/version
 # → {"commit":"<sha>","build_time":"2026-05-20T17:00:00Z","version":"v1.2.3","environment":"prod","service":"evc-mesh-api"}
 ```
 
@@ -59,10 +59,12 @@ For local cross-compilation use `make build-prod`.
 
 ## Emergency rollback
 
-If a bad deploy slips through (smoke test passes but runtime breaks):
+If a bad deploy slips through (smoke test passes but runtime breaks), reach prod
+through the restricted jump host — see `DEPLOY_HEL01.md` for the SSH config pattern,
+never a direct `ssh root@<ip>` (the old direct-IP path is retired):
 
 ```bash
-ssh root@216.57.106.222
+ssh mesh-vm
 cp /opt/evc-mesh/mesh-api.prev /opt/evc-mesh/mesh-api   # if backup exists
 systemctl restart mesh-api
 ```
@@ -76,7 +78,7 @@ The deploy script does **not** automatically keep a `.prev` backup — add one t
 Add this before the atomic swap in `deploy-backend.yml`:
 
 ```bash
-ssh root@... 'cp /opt/evc-mesh/mesh-api /opt/evc-mesh/mesh-api.prev || true'
+ssh mesh-vm 'cp /opt/evc-mesh/mesh-api /opt/evc-mesh/mesh-api.prev || true'
 ```
 
 ---
