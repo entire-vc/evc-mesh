@@ -619,6 +619,132 @@ func TestCommentService_Create_FiresMention(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestCommentService_Create_SurfacesDeliveryOutcome (#2489f750)
+// ---------------------------------------------------------------------------
+
+// TestCommentService_Create_SurfacesDeliveryOutcome proves Create's OWN
+// return value — not just a later ListByTask call — carries comment.Delivery.
+// Before this fix, attachDeliveryOutcomes ran only from ListByTask
+// (comment_service.go:1231); notifyMentions built and persisted the exact
+// same outcome rows during Create, but Create returned without ever reading
+// them back, so a no_queue_path miss was recorded in comment_delivery_outcomes
+// and never seen by the one person who could still fix it — the comment's own
+// author, reading the response to their own POST.
+//
+// Table-driven over the two acceptance cases: a miss (no_queue_path, WITH an
+// actionable hint) and the delivered control (task_queue, WITHOUT a hint —
+// nothing to fix when it already worked).
+func TestCommentService_Create_SurfacesDeliveryOutcome(t *testing.T) {
+	tests := []struct {
+		name         string
+		assignToSelf bool // whether the mentioned agent's task IS their own queued task
+		wantOutcome  string
+		wantReason   string
+		wantHint     string
+	}{
+		{
+			name:         "mentioned agent has no queue path — skipped, with hint",
+			assignToSelf: false,
+			wantOutcome:  domain.DeliverySkipped,
+			wantReason:   domain.ReasonNoQueuePath,
+			wantHint:     "recipient is alive but this task isn't assigned to them — assign it if you need them to see this",
+		},
+		{
+			name:         "mentioned agent owns the queued task — delivered, no hint",
+			assignToSelf: true,
+			wantOutcome:  domain.DeliveryDelivered,
+			wantReason:   domain.ReasonTaskQueue,
+			wantHint:     "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			commentRepo := NewMockCommentRepository()
+			taskRepo := NewMockTaskRepository()
+			activityRepo := NewMockActivityLogRepository()
+			statusRepo := NewMockTaskStatusRepository()
+			projectRepo := NewMockProjectRepository()
+			notifySvc := NewMockAgentNotifyService()
+			agentSvc := NewMockAgentService()
+			deliveryRepo := NewMockCommentDeliveryOutcomeRepository()
+
+			wsID := uuid.New()
+			projID := uuid.New()
+			projectRepo.items[projID] = &domain.Project{ID: projID, WorkspaceID: wsID}
+
+			statusID := uuid.New()
+			statusRepo.items[statusID] = &domain.TaskStatus{
+				ID: statusID, ProjectID: projID, Category: domain.StatusCategoryTodo, Name: "Todo",
+			}
+
+			// Alive without an open stream: recent heartbeat is enough for
+			// ComputedStatus to report online, so a miss in this test is
+			// unambiguously no_queue_path, never the OTHER skip reason
+			// (recipient_offline) — the two need different fixes and the test
+			// must not conflate them.
+			heartbeat := time.Now()
+			agent := &domain.Agent{ID: uuid.New(), WorkspaceID: wsID, Slug: "bob", LastHeartbeat: &heartbeat}
+			agentSvc.AddAgent(wsID, agent)
+
+			taskID := uuid.New()
+			task := &domain.Task{ID: taskID, ProjectID: projID, Title: "T", StatusID: statusID}
+			if tc.assignToSelf {
+				task.AssigneeType = domain.AssigneeTypeAgent
+				task.AssigneeID = &agent.ID
+			} else {
+				other := uuid.New()
+				task.AssigneeType = domain.AssigneeTypeAgent
+				task.AssigneeID = &other
+			}
+			taskRepo.items[taskID] = task
+
+			timeNow = func() time.Time { return frozenTime }
+
+			svc := NewCommentService(commentRepo, taskRepo, activityRepo,
+				WithCommentAgentNotify(notifySvc),
+				WithCommentAgentService(agentSvc),
+				WithCommentStatusRepo(statusRepo),
+				WithCommentProjectRepo(projectRepo),
+				WithCommentDeliveryOutcomeRepo(deliveryRepo),
+			).(*commentService)
+
+			comment := &domain.Comment{
+				TaskID:     taskID,
+				AuthorID:   uuid.New(),
+				AuthorType: domain.ActorTypeUser,
+				Body:       "please take a look @bob",
+			}
+			require.NoError(t, svc.Create(context.Background(), comment))
+
+			require.Len(t, comment.Delivery, 1, "Create's own return value must carry the delivery outcome, not just a later ListByTask")
+			row := comment.Delivery[0]
+			assert.Equal(t, "bob", row.RecipientSlug)
+			assert.Equal(t, tc.wantOutcome, row.Outcome)
+			assert.Equal(t, tc.wantReason, row.Reason)
+			assert.Equal(t, tc.wantHint, row.Hint)
+
+			// Round-trip through JSON the way the HTTP response actually
+			// leaves the process — proves the hint is a real field on the
+			// wire, not just a Go-side struct value nobody serializes.
+			body, err := json.Marshal(comment)
+			require.NoError(t, err)
+			var decoded struct {
+				Delivery []struct {
+					Outcome string `json:"outcome"`
+					Reason  string `json:"reason"`
+					Hint    string `json:"hint"`
+				} `json:"delivery"`
+			}
+			require.NoError(t, json.Unmarshal(body, &decoded))
+			require.Len(t, decoded.Delivery, 1)
+			assert.Equal(t, tc.wantOutcome, decoded.Delivery[0].Outcome)
+			assert.Equal(t, tc.wantHint, decoded.Delivery[0].Hint)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestCommentService_Create_NoNotifyOnTerminalTask (incident #56a6d5b2)
 // ---------------------------------------------------------------------------
 

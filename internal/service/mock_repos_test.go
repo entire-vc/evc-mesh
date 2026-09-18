@@ -4251,3 +4251,67 @@ func (m *MockEventBusService) Subjects() []string {
 	}
 	return out
 }
+
+// MockCommentDeliveryOutcomeRepository is an in-memory stand-in for
+// repository.CommentDeliveryOutcomeRepository. Rows are keyed by
+// (comment_id, recipient_slug, recipient_kind), mirroring the real repo's
+// upsert conflict target, so a re-run of notifyMentions on the same comment
+// (e.g. Update's edit path) replaces a row rather than duplicating it.
+type MockCommentDeliveryOutcomeRepository struct {
+	mu   sync.RWMutex
+	rows map[uuid.UUID]map[string]domain.CommentDeliveryOutcome
+}
+
+func NewMockCommentDeliveryOutcomeRepository() *MockCommentDeliveryOutcomeRepository {
+	return &MockCommentDeliveryOutcomeRepository{
+		rows: make(map[uuid.UUID]map[string]domain.CommentDeliveryOutcome),
+	}
+}
+
+func (m *MockCommentDeliveryOutcomeRepository) InsertBatch(_ context.Context, rows []domain.CommentDeliveryOutcome) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, row := range rows {
+		byKey, ok := m.rows[row.CommentID]
+		if !ok {
+			byKey = make(map[string]domain.CommentDeliveryOutcome)
+			m.rows[row.CommentID] = byKey
+		}
+		byKey[row.RecipientSlug+"/"+row.RecipientKind] = row
+	}
+	return nil
+}
+
+func (m *MockCommentDeliveryOutcomeRepository) MarkFailed(_ context.Context, commentID uuid.UUID, slug, kind, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byKey, ok := m.rows[commentID]
+	if !ok {
+		return nil
+	}
+	key := slug + "/" + kind
+	row, ok := byKey[key]
+	if !ok || row.Outcome == domain.DeliveryFailed {
+		return nil
+	}
+	row.Outcome = domain.DeliveryFailed
+	row.Reason = reason
+	byKey[key] = row
+	return nil
+}
+
+func (m *MockCommentDeliveryOutcomeRepository) ListByCommentIDs(_ context.Context, commentIDs []uuid.UUID) (map[uuid.UUID][]domain.CommentDeliveryOutcome, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[uuid.UUID][]domain.CommentDeliveryOutcome)
+	for _, id := range commentIDs {
+		byKey, ok := m.rows[id]
+		if !ok {
+			continue
+		}
+		for _, row := range byKey {
+			out[id] = append(out[id], row)
+		}
+	}
+	return out, nil
+}
