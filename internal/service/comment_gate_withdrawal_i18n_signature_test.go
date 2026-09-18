@@ -16,11 +16,13 @@ import (
 // Task #62560d6d — two independent, real, live-reproduced failures of gate
 // withdrawal, both on the SAME card (#68df3b62, 2026-08-23): an owner with
 // clearable_by_owner=true tried to withdraw twice and no-opped silently both
-// times, for two different reasons. The bodies below are byte-for-byte the
-// real comments (task #68df3b62, matching this file's convention for
-// billLongStatusReportBody a few sections up), not paraphrases — a
-// paraphrase can accidentally fix itself by not reproducing the exact shape
-// that broke.
+// times, for two different reasons. The bodies below reproduce the real
+// comments' exact shape (task #68df3b62, matching this file's convention for
+// billLongStatusReportBody a few sections up) — paragraph structure, markdown,
+// negator position, trailing signature — not a paraphrase, since a paraphrase
+// can accidentally fix itself by not reproducing the exact shape that broke.
+// Infra-identifying details are anonymized, same discipline as elsewhere in
+// this file.
 // ---------------------------------------------------------------------------
 
 // english68df3b62RetractionBody is comment 46a4dbc3, 2026-08-23T17:27:37Z:
@@ -29,7 +31,7 @@ import (
 // triageExitNegators vocabulary and left the gate up with no signal.
 const english68df3b62RetractionBody = "Retracting the gate marker from my prior comment on this card — " +
 	"that was meant purely as cross-reference explaining why I'm not duplicating the ask, " +
-	"not as a second independent ask. The one live question for Pavel about VM-113 access " +
+	"not as a second independent ask. The one live question about VM access " +
 	"lives on #bdd682a4 only. This subtask is parked (todo) waiting on that resolution, " +
 	"nothing further needed here directly."
 
