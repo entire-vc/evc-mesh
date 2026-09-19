@@ -81,6 +81,7 @@ import { DelegationLevelSelect } from "@/components/delegation-level-select";
 import {
   getTaskCostSummary,
   recordHumanGateDecision,
+  clearHumanGate,
   type TaskCostSummary,
 } from "@/lib/api";
 import { CostQualityBlock } from "@/components/cost-quality-block";
@@ -595,8 +596,11 @@ export function TaskPanel({
   // session cannot call this path even if it reached the button.
   const handleClearHumanGate = async () => {
     if (!currentTask || !user) return;
+    // A marker-armed gate is answered by a decision that references the
+    // marker comment. A gate armed via the API has no marker comment and so no
+    // question_ref: the server names its release door "clear_endpoint" and
+    // users may always take it (DELETE /tasks/:id/human-gate).
     const questionRef = currentTask.human_gate_info?.marker_comment_id;
-    if (!questionRef) return; // no live marker to answer — nothing to reference
     if (
       !window.confirm(
         "Clear the human gate on this task? This records that the question was answered and unfreezes the task.",
@@ -606,12 +610,16 @@ export function TaskPanel({
     }
     setClearingGate(true);
     try {
-      await recordHumanGateDecision(currentTask.id, {
-        question_ref: questionRef,
-        decided_by: user.id,
-        provenance: "direct",
-        channel: "mesh",
-      });
+      if (questionRef) {
+        await recordHumanGateDecision(currentTask.id, {
+          question_ref: questionRef,
+          decided_by: user.id,
+          provenance: "direct",
+          channel: "mesh",
+        });
+      } else {
+        await clearHumanGate(currentTask.id);
+      }
       if (taskId) await fetchTask(taskId);
       onTaskUpdated?.();
       toast.success("Gate cleared");
@@ -1385,7 +1393,7 @@ export function TaskPanel({
                   SPA), and the backend independently 403s provenance=direct
                   for anyone who isn't the decided_by user — this check is
                   belt, the handler is suspenders. */}
-              {user && currentTask.human_gate_info?.marker_comment_id && (
+              {user && (
                 <Button
                   size="sm"
                   variant="outline"
