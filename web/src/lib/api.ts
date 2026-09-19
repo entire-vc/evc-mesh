@@ -397,3 +397,16 @@ export async function recordHumanGateDecision(
     body,
   });
 }
+
+/**
+ * DELETE /api/v1/tasks/:task_id/human-gate — the release door for a gate that
+ * carries no marker comment (armed via POST /human-gate, so there is no
+ * question_ref for recordHumanGateDecision to point at). The server reports
+ * this door as human_gate_info.clear_path === "clear_endpoint". Users may
+ * always clear; the handler (ClearHumanGate) is what enforces who else may.
+ */
+export async function clearHumanGate(taskId: string): Promise<unknown> {
+  return api<unknown>(`/api/v1/tasks/${taskId}/human-gate`, {
+    method: "DELETE",
+  });
+}
