@@ -87,10 +87,16 @@ func splitDocument(title, body string) []docPiece {
 	return out
 }
 
+func stripNUL(s string) string { return strings.ReplaceAll(s, "\x00", "") }
+
 // Index (re)builds the chunk set of doc from body. Embedding failure is not
 // fatal: chunks are stored without vectors and stay reachable by BM25.
 func (x *DocumentIndexer) Index(ctx context.Context, doc *domain.Document, body string) error {
-	pieces := splitDocument(doc.Title, body)
+	// Postgres text cannot hold a NUL byte (SQLSTATE 22021). Four live documents carry
+	// one (found by the first prod backfill), and the insert failed on every retry, so
+	// a document with a stray \x00 could never be indexed. Strip it before chunking —
+	// the byte is never searchable text anyway.
+	pieces := splitDocument(stripNUL(doc.Title), stripNUL(body))
 	chunks := make([]domain.DocumentChunk, len(pieces))
 	for i, p := range pieces {
 		chunks[i] = domain.DocumentChunk{ChunkIdx: i, Heading: p.heading, Content: p.text}

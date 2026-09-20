@@ -253,3 +253,16 @@ func TestIndexer_Backfill(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, st.LiveDocs)
 }
+
+func TestIndexer_NULByteInBodyDoesNotBreakIndexing(t *testing.T) {
+	repo := &recordingDocRepo{}
+	x := NewDocumentIndexer(repo, nil, nil, true)
+	doc := &domain.Document{ID: uuid.New(), Title: "T\x00itle", Version: 1}
+	require.NoError(t, x.Index(context.Background(), doc, "## A\nbefore\x00after\n"))
+	require.NotEmpty(t, repo.replaced)
+	for _, c := range repo.replaced {
+		assert.NotContains(t, c.Content, "\x00", "a NUL byte reaches Postgres as SQLSTATE 22021 and the document can never be indexed")
+		assert.NotContains(t, c.Heading, "\x00")
+	}
+	assert.Contains(t, repo.replaced[0].Content, "beforeafter")
+}
