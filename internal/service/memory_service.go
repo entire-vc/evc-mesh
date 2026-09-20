@@ -1271,12 +1271,12 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	var wg sync.WaitGroup
 
 	var docKw, docVec []domain.ScoredMemory
-	if s.docRecall {
+	if s.docRecall && !opts.DocViewer.IsZero() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			var err error
-			if docKw, err = s.docRepo.FullTextSearch(ftsCtx, opts.WorkspaceID, projID, opts.Query, poolSize); err != nil {
+			if docKw, err = s.docRepo.FullTextSearch(ftsCtx, opts.WorkspaceID, projID, opts.Query, opts.DocViewer, poolSize); err != nil {
 				log.Printf("memory recall: doc fts failed (docs skipped): %v", err)
 				docKw = nil
 			}
@@ -1326,12 +1326,12 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 				return
 			}
 			var docWG sync.WaitGroup
-			if s.docRecall {
+			if s.docRecall && !opts.DocViewer.IsZero() {
 				docWG.Add(1)
 				go func() {
 					defer docWG.Done()
 					var err error
-					if docVec, err = s.docRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, poolSize); err != nil {
+					if docVec, err = s.docRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, opts.DocViewer, poolSize); err != nil {
 						log.Printf("memory recall: doc vector search failed (docs skipped): %v", err)
 						docVec = nil
 					}

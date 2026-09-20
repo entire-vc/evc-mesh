@@ -96,6 +96,15 @@ func (x *DocumentIndexer) Index(ctx context.Context, doc *domain.Document, body 
 	// one (found by the first prod backfill), and the insert failed on every retry, so
 	// a document with a stray \x00 could never be indexed. Strip it before chunking —
 	// the byte is never searchable text anyway.
+	// Projects kept out of recall (scratch/probe) never get chunks — and lose any they
+	// had from before the exclusion, so flipping the setting also cleans up.
+	indexable, err := x.repo.ProjectIndexable(ctx, doc.ProjectID)
+	if err != nil {
+		return err
+	}
+	if !indexable {
+		return x.repo.DeleteByDocument(ctx, doc.ID)
+	}
 	pieces := splitDocument(stripNUL(doc.Title), stripNUL(body))
 	chunks := make([]domain.DocumentChunk, len(pieces))
 	for i, p := range pieces {

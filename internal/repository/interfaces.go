@@ -1576,8 +1576,15 @@ type DocumentChunkRepository interface {
 	DeleteByDocument(ctx context.Context, documentID uuid.UUID) error
 	// PurgeDeleted removes chunks of soft-deleted documents; returns rows removed.
 	PurgeDeleted(ctx context.Context) (int64, error)
-	FullTextSearch(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error)
-	VectorSearch(ctx context.Context, queryVec []float32, wsID uuid.UUID, projID *uuid.UUID, limit int) ([]domain.ScoredMemory, error)
+	// FullTextSearch and VectorSearch return only chunks the viewer may see (member of
+	// the document's project, or AllProjects) and never chunks of a project excluded
+	// from the index. Both are predicates in SQL, not a post-filter, so the arm's
+	// truncation budget is spent on eligible rows.
+	FullTextSearch(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, viewer domain.DocViewer, limit int) ([]domain.ScoredMemory, error)
+	VectorSearch(ctx context.Context, queryVec []float32, wsID uuid.UUID, projID *uuid.UUID, viewer domain.DocViewer, limit int) ([]domain.ScoredMemory, error)
+	// ProjectIndexable reports whether the project's documents belong in the recall
+	// index at all (false for scratch/probe projects).
+	ProjectIndexable(ctx context.Context, projectID uuid.UUID) (bool, error)
 	// ListStale returns live documents of the workspace (optionally one project)
 	// with no chunk set at their current version.
 	ListStale(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, limit int) ([]domain.Document, error)

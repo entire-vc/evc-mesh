@@ -43,7 +43,7 @@ func TestDocumentChunkRepoDB_SearchReturnsDocSourceAndHidesDeleted(t *testing.T)
 			{ChunkIdx: 0, Heading: "3.5 Predicate", Content: "fleet audit gate predicate reads its own output"},
 		}))
 	}
-	got, err := repo.FullTextSearch(ctx, ws, &proj, "fleet audit gate predicate", 10)
+	got, err := repo.FullTextSearch(ctx, ws, &proj, "fleet audit gate predicate", domain.DocViewer{AllProjects: true}, 10)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, domain.SourceDoc, got[0].SourceType)
@@ -51,7 +51,7 @@ func TestDocumentChunkRepoDB_SearchReturnsDocSourceAndHidesDeleted(t *testing.T)
 
 	_, err = repo.db.ExecContext(ctx, `UPDATE documents SET deleted_at = now() WHERE id=$1`, dead)
 	require.NoError(t, err)
-	got, err = repo.FullTextSearch(ctx, ws, &proj, "fleet audit gate predicate", 10)
+	got, err = repo.FullTextSearch(ctx, ws, &proj, "fleet audit gate predicate", domain.DocViewer{AllProjects: true}, 10)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "a soft-deleted document must not be returned even before its chunks are purged")
 	assert.Equal(t, live, *got[0].SourceDocID)
@@ -61,7 +61,7 @@ func TestDocumentChunkRepoDB_SearchReturnsDocSourceAndHidesDeleted(t *testing.T)
 	assert.GreaterOrEqual(t, n, int64(1))
 
 	other := uuid.New()
-	got, err = repo.FullTextSearch(ctx, other, nil, "fleet audit gate predicate", 10)
+	got, err = repo.FullTextSearch(ctx, other, nil, "fleet audit gate predicate", domain.DocViewer{AllProjects: true}, 10)
 	require.NoError(t, err)
 	assert.Empty(t, got, "another workspace must see nothing")
 }
@@ -109,4 +109,73 @@ func TestDocumentChunkRepoDB_BackfillSelectionIsIdempotentAndVersionGuarded(t *t
 	stale, _ = repo.ListStale(ctx, ws, &proj, 10)
 	require.Len(t, stale, 1)
 	assert.Equal(t, b, stale[0].ID)
+}
+
+func TestDocumentChunkRepoDB_ViewerSeesOnlyProjectsTheyBelongTo(t *testing.T) {
+	repo, ws, proj, mkDoc := docIdxFixture(t)
+	ctx := context.Background()
+	db := repo.db
+	open := mkDoc("open-doc")
+
+	// A second, closed project the agent is NOT a member of.
+	closedProj := uuid.New()
+	_, err := db.ExecContext(ctx, `INSERT INTO projects (id,workspace_id,name,slug) VALUES ($1,$2,'closed',$3)`, closedProj, ws, "c-"+closedProj.String()[:8])
+	require.NoError(t, err)
+	closedDoc := uuid.New()
+	_, err = db.ExecContext(ctx, `INSERT INTO documents (id,project_id,slug,title,storage_key,created_by,created_by_type)
+		VALUES ($1,$2,'secret','secret','k',$3,'agent')`, closedDoc, closedProj, uuid.New())
+	require.NoError(t, err)
+	for _, x := range []struct{ d, p uuid.UUID }{{open, proj}, {closedDoc, closedProj}} {
+		require.NoError(t, repo.ReplaceChunks(ctx, x.d, x.p, 1, []domain.DocumentChunk{{ChunkIdx: 0, Content: "confidential fleet budget numbers"}}))
+	}
+
+	agent := uuid.New()
+	_, err = db.ExecContext(ctx, `INSERT INTO agents (id, workspace_id, name, slug, api_key_hash, api_key_prefix) VALUES ($1,$2,'a',$3,'h','p')`, agent, ws, "a-"+agent.String()[:8])
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO project_members (id, project_id, workspace_id, agent_id) VALUES ($1,$2,$3,$4)`, uuid.New(), proj, ws, agent)
+	require.NoError(t, err)
+
+	got, err := repo.FullTextSearch(ctx, ws, nil, "confidential fleet budget", domain.DocViewer{AgentID: &agent}, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "a member sees their own project's chunk and NOT the closed project's")
+	assert.Equal(t, open, *got[0].SourceDocID)
+
+	stranger := uuid.New()
+	got, err = repo.FullTextSearch(ctx, ws, nil, "confidential fleet budget", domain.DocViewer{AgentID: &stranger}, 10)
+	require.NoError(t, err)
+	assert.Empty(t, got, "an agent that belongs to no project sees no doc chunk")
+
+	got, err = repo.FullTextSearch(ctx, ws, nil, "confidential fleet budget", domain.DocViewer{}, 10)
+	require.NoError(t, err)
+	assert.Empty(t, got, "the zero viewer sees nothing")
+
+	got, err = repo.FullTextSearch(ctx, ws, nil, "confidential fleet budget", domain.DocViewer{AllProjects: true}, 10)
+	require.NoError(t, err)
+	assert.Len(t, got, 2, "a workspace owner/admin sees every project")
+}
+
+func TestDocumentChunkRepoDB_ScratchProjectsAreExcludedEverywhere(t *testing.T) {
+	repo, ws, _, _ := docIdxFixture(t)
+	ctx := context.Background()
+	scratch := uuid.New()
+	_, err := repo.db.ExecContext(ctx, `INSERT INTO projects (id,workspace_id,name,slug) VALUES ($1,$2,'R5 probe (scratch)',$3)`, scratch, ws, "s-"+scratch.String()[:8])
+	require.NoError(t, err)
+	off := uuid.New()
+	_, err = repo.db.ExecContext(ctx, `INSERT INTO projects (id,workspace_id,name,slug,settings) VALUES ($1,$2,'quiet',$3,'{"docs_recall":"off"}')`, off, ws, "q-"+off.String()[:8])
+	require.NoError(t, err)
+	for _, pid := range []uuid.UUID{scratch, off} {
+		_, err = repo.db.ExecContext(ctx, `INSERT INTO documents (id,project_id,slug,title,storage_key,created_by,created_by_type)
+			VALUES ($1,$2,'d','d','k',$3,'agent')`, uuid.New(), pid, uuid.New())
+		require.NoError(t, err)
+		ok, idxErr := repo.ProjectIndexable(ctx, pid)
+		require.NoError(t, idxErr)
+		assert.False(t, ok)
+	}
+
+	stale, err := repo.ListStale(ctx, ws, nil, 50)
+	require.NoError(t, err)
+	assert.Empty(t, stale, "excluded projects are never offered to the backfill")
+	st, err := repo.Status(ctx, ws, nil)
+	require.NoError(t, err)
+	assert.Equal(t, domain.DocIndexStatus{LiveDocs: 0, IndexedDocs: 0, ExcludedDocs: 2}, st, "the subtraction is reported, not silent")
 }

@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -115,12 +117,58 @@ func (h docChunkHit) toScored(wsID uuid.UUID) domain.ScoredMemory {
 	}
 }
 
+// docProjectIndexable is the ONE definition of "this project's documents belong in the
+// recall index". A project is kept out when it says so explicitly (settings
+// {"docs_recall":"off"}) or is a scratch/probe project by name — the convention the
+// R5 AC4 probe project already follows. Used by search, the stale listing and the
+// status counts so the four can never disagree. Expects the projects table as p.
+const docProjectIndexable = `NOT (coalesce(p.settings->>'docs_recall', '') = 'off' OR p.name ILIKE '%(scratch)%')`
+
+// docProjectIndexableFmt is the same predicate escaped for use inside a fmt.Sprintf format string.
+var docProjectIndexableFmt = strings.ReplaceAll(docProjectIndexable, "%", "%%")
+
+// docViewerCond builds the visibility predicate for chunk alias c. The membership
+// test is the same table the project-access middleware reads (project_members);
+// AllProjects (a human workspace owner/admin) skips it. No identity → FALSE.
+func docViewerCond(v domain.DocViewer, args []interface{}) (cond string, outArgs []interface{}) {
+	if v.AllProjects {
+		return "", args
+	}
+	var ids []string
+	if v.AgentID != nil {
+		args = append(args, *v.AgentID)
+		ids = append(ids, fmt.Sprintf("pm.agent_id = $%d", len(args)))
+	}
+	if v.UserID != nil {
+		args = append(args, *v.UserID)
+		ids = append(ids, fmt.Sprintf("pm.user_id = $%d", len(args)))
+	}
+	if len(ids) == 0 {
+		return "FALSE", args
+	}
+	return "EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = c.project_id AND (" + strings.Join(ids, " OR ") + "))", args
+}
+
 const docChunkSelect = `c.id, c.document_id, c.project_id, d.slug, d.title, c.heading, c.content, c.doc_version, d.updated_at`
 const docChunkFrom = `FROM document_chunks c
 	JOIN documents d ON d.id = c.document_id AND d.deleted_at IS NULL
-	JOIN projects p ON p.id = d.project_id AND p.workspace_id = $1`
+	JOIN projects p ON p.id = d.project_id AND p.workspace_id = $1 AND ` + docProjectIndexable
 
-func (r *DocumentChunkRepo) FullTextSearch(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error) {
+// ProjectIndexable reports whether the project's documents belong in the index.
+// An unknown project is reported as not indexable (nothing to index into).
+func (r *DocumentChunkRepo) ProjectIndexable(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	var ok bool
+	err := r.db.GetContext(ctx, &ok, `SELECT `+docProjectIndexable+` FROM projects p WHERE p.id = $1`, projectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("project indexable: %w", err)
+	}
+	return ok, nil
+}
+
+func (r *DocumentChunkRepo) FullTextSearch(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, viewer domain.DocViewer, limit int) ([]domain.ScoredMemory, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -130,6 +178,11 @@ func (r *DocumentChunkRepo) FullTextSearch(ctx context.Context, wsID uuid.UUID, 
 		if projID != nil {
 			args = append(args, *projID)
 			where += fmt.Sprintf(" AND c.project_id = $%d", len(args))
+		}
+		var vc string
+		vc, args = docViewerCond(viewer, args)
+		if vc != "" {
+			where += " AND " + vc
 		}
 		args = append(args, limit)
 		q := fmt.Sprintf(`SELECT %s, ts_rank_cd(c.search_vector, %s) AS score %s WHERE %s ORDER BY score DESC LIMIT $%d`,
@@ -155,7 +208,7 @@ func (r *DocumentChunkRepo) FullTextSearch(ctx context.Context, wsID uuid.UUID, 
 	return out, nil
 }
 
-func (r *DocumentChunkRepo) VectorSearch(ctx context.Context, queryVec []float32, wsID uuid.UUID, projID *uuid.UUID, limit int) ([]domain.ScoredMemory, error) {
+func (r *DocumentChunkRepo) VectorSearch(ctx context.Context, queryVec []float32, wsID uuid.UUID, projID *uuid.UUID, viewer domain.DocViewer, limit int) ([]domain.ScoredMemory, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -164,6 +217,11 @@ func (r *DocumentChunkRepo) VectorSearch(ctx context.Context, queryVec []float32
 	if projID != nil {
 		args = append(args, *projID)
 		where += fmt.Sprintf(" AND c.project_id = $%d", len(args))
+	}
+	var vc string
+	vc, args = docViewerCond(viewer, args)
+	if vc != "" {
+		where += " AND " + vc
 	}
 	var emb []struct {
 		ID        uuid.UUID `db:"id"`
@@ -239,7 +297,7 @@ func (r *DocumentChunkRepo) ListStale(ctx context.Context, wsID uuid.UUID, projI
 	}
 	args = append(args, limit)
 	q := fmt.Sprintf(`SELECT d.id, d.project_id, d.slug, d.title, d.storage_key, d.version
-		FROM documents d JOIN projects p ON p.id = d.project_id AND p.workspace_id = $1
+		FROM documents d JOIN projects p ON p.id = d.project_id AND p.workspace_id = $1 AND `+docProjectIndexableFmt+`
 		WHERE %s AND NOT EXISTS (SELECT 1 FROM document_chunks c WHERE c.document_id = d.id AND c.doc_version = d.version)
 		ORDER BY d.updated_at DESC LIMIT $%d`, strings.Join(cond, " AND "), len(args))
 	var docs []domain.Document
@@ -257,9 +315,13 @@ func (r *DocumentChunkRepo) Status(ctx context.Context, wsID uuid.UUID, projID *
 		cond += " AND d.project_id = $2"
 	}
 	var st domain.DocIndexStatus
-	q := fmt.Sprintf(`SELECT count(*) AS live_docs,
-		count(*) FILTER (WHERE EXISTS (SELECT 1 FROM document_chunks c WHERE c.document_id = d.id AND c.doc_version = d.version)) AS indexed_docs
+	// live/indexed count only indexable projects; the rest are reported separately so
+	// a subtraction from "live == indexed" is always visible, never silent.
+	q := fmt.Sprintf(`SELECT
+		count(*) FILTER (WHERE `+docProjectIndexableFmt+`) AS live_docs,
+		count(*) FILTER (WHERE `+docProjectIndexableFmt+` AND EXISTS (SELECT 1 FROM document_chunks c WHERE c.document_id = d.id AND c.doc_version = d.version)) AS indexed_docs,
+		count(*) FILTER (WHERE NOT (`+docProjectIndexableFmt+`)) AS excluded_docs
 		FROM documents d JOIN projects p ON p.id = d.project_id AND p.workspace_id = $1 WHERE %s`, cond)
-	err := r.db.QueryRowxContext(ctx, q, args...).Scan(&st.LiveDocs, &st.IndexedDocs)
+	err := r.db.QueryRowxContext(ctx, q, args...).Scan(&st.LiveDocs, &st.IndexedDocs, &st.ExcludedDocs)
 	return st, err
 }

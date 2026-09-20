@@ -53,12 +53,16 @@ func TestSplitDocument_LongSectionSplitAndCapped(t *testing.T) {
 
 type fakeDocChunkRepo struct {
 	repository.DocumentChunkRepository
-	ftsCalls int
-	hits     []domain.ScoredMemory
+	ftsCalls   int
+	lastViewer domain.DocViewer
+	hits       []domain.ScoredMemory
 }
 
-func (f *fakeDocChunkRepo) FullTextSearch(context.Context, uuid.UUID, *uuid.UUID, string, int) ([]domain.ScoredMemory, error) {
+func allDocs() domain.DocViewer { return domain.DocViewer{AllProjects: true} }
+
+func (f *fakeDocChunkRepo) FullTextSearch(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, v domain.DocViewer, _ int) ([]domain.ScoredMemory, error) {
 	f.ftsCalls++
+	f.lastViewer = v
 	return f.hits, nil
 }
 
@@ -72,13 +76,18 @@ func docHit(slug string, score float64) domain.ScoredMemory {
 
 func recallWithDocs(t *testing.T, recall bool, docs *fakeDocChunkRepo, mems []domain.ScoredMemory, limit int) []domain.ScoredMemory {
 	t.Helper()
+	return recallWithViewer(t, recall, docs, mems, limit, allDocs())
+}
+
+func recallWithViewer(t *testing.T, recall bool, docs *fakeDocChunkRepo, mems []domain.ScoredMemory, limit int, viewer domain.DocViewer) []domain.ScoredMemory {
+	t.Helper()
 	repo := &mockMemoryRepo{
 		fullTextSearchRankedFn: func(context.Context, uuid.UUID, *uuid.UUID, string, domain.MemorySearchFilter, int) ([]domain.ScoredMemory, error) {
 			return mems, nil
 		},
 	}
 	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, nil, MemoryWithDocIndex(docs, recall))
-	got, _, err := svc.Recall(context.Background(), domain.RecallOpts{Query: "audit", WorkspaceID: uuid.New(), Limit: limit})
+	got, _, err := svc.Recall(context.Background(), domain.RecallOpts{Query: "audit", WorkspaceID: uuid.New(), Limit: limit, DocViewer: viewer})
 	require.NoError(t, err)
 	return got
 }
@@ -90,6 +99,24 @@ func TestRecall_DocArm_OffByDefault_NeverTouchesDocRepo(t *testing.T) {
 	assert.Zero(t, docs.ftsCalls, "flag off → the doc arm must not run at all")
 	require.Len(t, got, 1)
 	assert.NotEqual(t, domain.SourceDoc, got[0].SourceType)
+}
+
+func TestRecall_DocArm_NoViewerMeansNoDocs(t *testing.T) {
+	// A recall path that does not say who is asking (internal seeds, graph expansion)
+	// must get no docs, not every doc in the workspace.
+	docs := &fakeDocChunkRepo{hits: []domain.ScoredMemory{docHit("audit", 1)}}
+	got := recallWithViewer(t, true, docs, nil, 10, domain.DocViewer{})
+	assert.Zero(t, docs.ftsCalls, "the doc arm must not even run for the zero viewer")
+	assert.Empty(t, got)
+}
+
+func TestRecall_DocArm_PassesTheViewerToTheRepository(t *testing.T) {
+	agent := uuid.New()
+	docs := &fakeDocChunkRepo{hits: []domain.ScoredMemory{docHit("audit", 1)}}
+	recallWithViewer(t, true, docs, nil, 10, domain.DocViewer{AgentID: &agent})
+	require.NotNil(t, docs.lastViewer.AgentID)
+	assert.Equal(t, agent, *docs.lastViewer.AgentID)
+	assert.False(t, docs.lastViewer.AllProjects)
 }
 
 func TestRecall_DocArm_OnReturnsDocsWithSourceMarker(t *testing.T) {
@@ -113,13 +140,15 @@ func TestRecall_DocArm_ShareIsCapped(t *testing.T) {
 
 type recordingDocRepo struct {
 	repository.DocumentChunkRepository
-	mu         sync.Mutex
-	replaced   []domain.DocumentChunk
-	replacedID uuid.UUID
-	deleted    []uuid.UUID
-	stale      []domain.Document
-	replaceErr error
-	listErr    error
+	mu           sync.Mutex
+	replaced     []domain.DocumentChunk
+	replacedID   uuid.UUID
+	deleted      []uuid.UUID
+	stale        []domain.Document
+	replaceErr   error
+	listErr      error
+	excluded     bool
+	indexableErr error
 }
 
 func (r *recordingDocRepo) ReplaceChunks(_ context.Context, id, _ uuid.UUID, _ int, c []domain.DocumentChunk) error {
@@ -133,6 +162,9 @@ func (r *recordingDocRepo) DeleteByDocument(_ context.Context, id uuid.UUID) err
 	defer r.mu.Unlock()
 	r.deleted = append(r.deleted, id)
 	return nil
+}
+func (r *recordingDocRepo) ProjectIndexable(context.Context, uuid.UUID) (bool, error) {
+	return !r.excluded, r.indexableErr
 }
 func (r *recordingDocRepo) PurgeDeleted(context.Context) (int64, error) { return 2, nil }
 func (r *recordingDocRepo) ListStale(context.Context, uuid.UUID, *uuid.UUID, int) ([]domain.Document, error) {
@@ -265,4 +297,21 @@ func TestIndexer_NULByteInBodyDoesNotBreakIndexing(t *testing.T) {
 		assert.NotContains(t, c.Heading, "\x00")
 	}
 	assert.Contains(t, repo.replaced[0].Content, "beforeafter")
+}
+
+func TestIndexer_ExcludedProjectGetsNoChunksAndLosesOldOnes(t *testing.T) {
+	repo := &recordingDocRepo{excluded: true}
+	x := NewDocumentIndexer(repo, nil, nil, true)
+	doc := &domain.Document{ID: uuid.New(), ProjectID: uuid.New(), Title: "T", Version: 1}
+	require.NoError(t, x.Index(context.Background(), doc, "## A\nprobe copy of a real doc"))
+	assert.Empty(t, repo.replaced, "a scratch/probe project must never be chunked into recall")
+	assert.Equal(t, []uuid.UUID{doc.ID}, repo.deleted, "chunks that predate the exclusion are removed")
+}
+
+func TestIndexer_ProjectLookupErrorFailsTheIndexRun(t *testing.T) {
+	repo := &recordingDocRepo{indexableErr: errors.New("db")}
+	x := NewDocumentIndexer(repo, nil, nil, true)
+	err := x.Index(context.Background(), &domain.Document{ID: uuid.New()}, "x")
+	require.Error(t, err)
+	assert.Empty(t, repo.replaced)
 }
