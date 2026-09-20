@@ -377,13 +377,20 @@ func MemoryWithDocIndex(repo repository.DocumentChunkRepository, recall bool) Me
 }
 
 // docRRFFactor damps doc chunks' RRF contribution relative to memories, and
-// docMaxShare caps how much of the page they may fill. Docs are long, plentiful
+// docMaxShare caps how much of the page they may fill (0.4 -> 0.2 after the first
+// production measurement: at limit 5 two slots displaced 11 of 50 memories in the
+// top-5, and about half of the docs that did so were noise). Docs are long, plentiful
 // and uncurated; memories are short and deliberately written, so a doc must be
 // clearly the better match to displace one. Applies only to doc hits.
 const (
 	docRRFFactor = 0.8
-	docMaxShare  = 0.4
+	docMaxShare  = 0.2
 )
+
+// docMaxSlots is how many doc chunks may sit in a page of `limit` results. The epsilon
+// keeps float noise from adding a slot: 15 * 0.2 is 3.0000000000000004, and a bare Ceil
+// would answer 4.
+func docMaxSlots(limit int) int { return int(math.Ceil(float64(limit)*docMaxShare - 1e-9)) }
 
 // MemoryWithChunkRepo switches the embed write path (embedAndStore, BatchEmbed) from
 // the legacy single-vector memories.embedding column to per-chunk storage in
@@ -1276,7 +1283,7 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		go func() {
 			defer wg.Done()
 			var err error
-			if docKw, err = s.docRepo.FullTextSearch(ftsCtx, opts.WorkspaceID, projID, opts.Query, opts.DocViewer, poolSize); err != nil {
+			if docKw, err = s.docRepo.FullTextSearch(ftsCtx, opts.WorkspaceID, projID, opts.Query, opts.DocViewer, max(poolSize, docArmPool)); err != nil {
 				log.Printf("memory recall: doc fts failed (docs skipped): %v", err)
 				docKw = nil
 			}
@@ -1331,7 +1338,7 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 				go func() {
 					defer docWG.Done()
 					var err error
-					if docVec, err = s.docRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, opts.DocViewer, poolSize); err != nil {
+					if docVec, err = s.docRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, opts.DocViewer, max(poolSize, docArmPool)); err != nil {
 						log.Printf("memory recall: doc vector search failed (docs skipped): %v", err)
 						docVec = nil
 					}
@@ -1412,7 +1419,12 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	if len(docKw)+len(docVec) > 0 {
 		docMerged := reciprocalRankFusion(docKw, docVec, s.rrfTextWeight*docRRFFactor, s.rrfVectorWeight*docRRFFactor)
 		docMerged = applyExtendedFilters(docMerged, opts)
-		if maxDocs := int(math.Ceil(float64(opts.Limit) * docMaxShare)); len(docMerged) > maxDocs {
+		// A heading that repeats the query's words is lifted; memories are untouched.
+		for i := range docMerged {
+			docMerged[i].Score += docHeadingBonus * headingMatchFraction(opts.Query, docMerged[i].DocHeading)
+		}
+		slices.SortFunc(docMerged, func(a, b domain.ScoredMemory) int { return cmp.Compare(b.Score, a.Score) })
+		if maxDocs := docMaxSlots(opts.Limit); len(docMerged) > maxDocs {
 			docMerged = docMerged[:maxDocs]
 		}
 		merged = append(merged, docMerged...)

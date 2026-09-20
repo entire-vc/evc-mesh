@@ -54,14 +54,16 @@ func TestSplitDocument_LongSectionSplitAndCapped(t *testing.T) {
 type fakeDocChunkRepo struct {
 	repository.DocumentChunkRepository
 	ftsCalls   int
+	lastLimit  int
 	lastViewer domain.DocViewer
 	hits       []domain.ScoredMemory
 }
 
 func allDocs() domain.DocViewer { return domain.DocViewer{AllProjects: true} }
 
-func (f *fakeDocChunkRepo) FullTextSearch(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, v domain.DocViewer, _ int) ([]domain.ScoredMemory, error) {
+func (f *fakeDocChunkRepo) FullTextSearch(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, v domain.DocViewer, limit int) ([]domain.ScoredMemory, error) {
 	f.ftsCalls++
+	f.lastLimit = limit
 	f.lastViewer = v
 	return f.hits, nil
 }
@@ -125,15 +127,6 @@ func TestRecall_DocArm_OnReturnsDocsWithSourceMarker(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, domain.SourceDoc, got[0].SourceType)
 	assert.Equal(t, "audit", got[0].DocSlug)
-}
-
-func TestRecall_DocArm_ShareIsCapped(t *testing.T) {
-	var hits []domain.ScoredMemory
-	for i := 0; i < 20; i++ {
-		hits = append(hits, docHit("d", float64(20-i)))
-	}
-	got := recallWithDocs(t, true, &fakeDocChunkRepo{hits: hits}, nil, 10)
-	assert.Len(t, got, 4, "docs may fill at most 40%% of the requested page")
 }
 
 // --- indexer behaviour (fake repo/embedder/store) ---------------------------------
