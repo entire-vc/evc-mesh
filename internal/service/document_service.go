@@ -197,6 +197,10 @@ type documentService struct {
 	// the local text, i.e. by losing the edit some time after the user was told
 	// it was saved.
 	trWriter TeamRelayWriter
+
+	// indexer feeds the recall index over documents (#154450b1). Nil, or a
+	// DOC_INDEX_WRITE-off indexer, makes every hook a no-op.
+	indexer *DocumentIndexer
 }
 
 // DocumentServiceOption configures optional collaborators.
@@ -207,6 +211,11 @@ type DocumentServiceOption func(*documentService)
 // change-notice, and a delete tells the watchers before their rows go with it.
 func WithDocumentWatch(w DocumentWatchService) DocumentServiceOption {
 	return func(s *documentService) { s.watch = w }
+}
+
+// WithDocumentIndexer wires the recall index into the document write paths.
+func WithDocumentIndexer(x *DocumentIndexer) DocumentServiceOption {
+	return func(s *documentService) { s.indexer = x }
 }
 
 // WithTeamRelayRefresher wires the R3 freshness check into GetByIDInWorkspace —
@@ -371,6 +380,7 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 	}
 
 	s.indexBody(ctx, doc.ID, input.Body)
+	s.indexer.IndexAsync(ctx, doc, input.Body)
 
 	// You should not learn about your own page last. Auto-subscribing the author
 	// is what makes the feature useful without anybody having to discover a
@@ -769,6 +779,7 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// document it produced is a different document to search.
 	if newBody != nil {
 		s.indexBody(ctx, doc.ID, *newBody)
+		s.indexer.IndexAsync(ctx, doc, *newBody)
 		// The markdown the comments are anchored into has just been replaced, so
 		// every stored offset now describes a document that no longer exists.
 		// Same condition as the reindex, and for the same reason: the body is
@@ -953,6 +964,7 @@ func (s *documentService) Delete(ctx context.Context, id, workspaceID, deletedBy
 	if delErr := s.documentRepo.SoftDelete(ctx, id, timeNow(), deletedBy, deletedByType); delErr != nil {
 		return delErr
 	}
+	s.indexer.Remove(ctx, id)
 
 	// Announced after the delete succeeded, never before: a notification saying
 	// a page is gone, sent for a delete that then failed, is worse than no

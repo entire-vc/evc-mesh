@@ -1564,3 +1564,22 @@ type GatePredicateLogRepository interface {
 	Record(ctx context.Context, entry *domain.GatePredicateLogEntry) error
 	CountByOutcome(ctx context.Context, since time.Time) (map[domain.GatePredicateOutcome]int, error)
 }
+
+// DocumentChunkRepository is the recall index over Mesh Docs (table
+// document_chunks, #154450b1). Search methods return doc chunks shaped as
+// ScoredMemory with SourceType=doc so they can join the recall pipeline.
+type DocumentChunkRepository interface {
+	// ReplaceChunks swaps a document's chunk set in one transaction. A write
+	// carrying a version older than the stored one is a no-op (an out-of-order
+	// async index must not overwrite a newer one).
+	ReplaceChunks(ctx context.Context, documentID, projectID uuid.UUID, version int, chunks []domain.DocumentChunk) error
+	DeleteByDocument(ctx context.Context, documentID uuid.UUID) error
+	// PurgeDeleted removes chunks of soft-deleted documents; returns rows removed.
+	PurgeDeleted(ctx context.Context) (int64, error)
+	FullTextSearch(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, limit int) ([]domain.ScoredMemory, error)
+	VectorSearch(ctx context.Context, queryVec []float32, wsID uuid.UUID, projID *uuid.UUID, limit int) ([]domain.ScoredMemory, error)
+	// ListStale returns live documents of the workspace (optionally one project)
+	// with no chunk set at their current version.
+	ListStale(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, limit int) ([]domain.Document, error)
+	Status(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) (domain.DocIndexStatus, error)
+}

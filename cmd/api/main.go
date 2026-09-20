@@ -152,6 +152,7 @@ func main() {
 	schedulerStateRepo := postgres.NewSchedulerStateRepo(db)
 	memoryEdgesRepo := postgres.NewMemoryEdgesRepo(db)
 	memoryChunkRepo := postgres.NewMemoryChunkRepo(db)
+	documentChunkRepo := postgres.NewDocumentChunkRepo(db)
 	commentMentionRepo := postgres.NewCommentMentionRepo(db)
 	commentDeliveryRepo := postgres.NewCommentDeliveryOutcomeRepo(db)
 	documentCommentMentionRepo := postgres.NewDocumentCommentMentionRepo(db)
@@ -244,6 +245,10 @@ func main() {
 		service.MemoryWithDepRepo(taskDependencyRepo),
 		service.MemoryWithEmbedConcurrency(cfg.Embedding.Concurrency),
 		service.MemoryWithChunkRepo(memoryChunkRepo),
+		// Recall over Mesh Docs (#154450b1): both flags default OFF. WRITE builds the
+		// index; RECALL exposes it to recall. Separate so an index can be built and
+		// checked before any recall sees it.
+		service.MemoryWithDocIndex(documentChunkRepo, os.Getenv("DOC_INDEX_RECALL") == "true"),
 	)
 
 	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
@@ -671,7 +676,9 @@ func main() {
 	// anchored into that body: PATCH re-resolves every anchor against the markdown
 	// it just stored, and nulls the ones whose text is gone. It is a required
 	// argument, not an option — see the field's note in documentService.
+	documentIndexer := service.NewDocumentIndexer(documentChunkRepo, embedder, documentStore, os.Getenv("DOC_INDEX_WRITE") == "true")
 	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo, documentCommentRepo,
+		service.WithDocumentIndexer(documentIndexer),
 		service.WithDocumentWatch(documentWatchService),
 		service.WithTeamRelayRefresher(teamRelayMountService),
 		// Same collaborator on both sides of the copy's lifecycle: it refreshes a
@@ -815,6 +822,7 @@ func main() {
 	pushSubscriptionHandler := handler.NewPushSubscriptionHandler(pushService)
 	autoTransHandler := handler.NewAutoTransitionHandler(autoTransitionSvc)
 	memoryHandler := handler.NewMemoryHandler(memoryService, workspaceMemberRepo)
+	memoryHandler.SetDocumentIndexer(documentIndexer)
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	documentMentionHandler := handler.NewDocumentMentionHandler(documentMentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
@@ -1826,6 +1834,8 @@ func main() {
 	api.POST("/memories/reindex", memoryHandler.Reindex)
 	api.POST("/memories/backfill-chunks", memoryHandler.BackfillChunks)
 	api.POST("/memories/rechunk-stale", memoryHandler.RechunkStale)
+	api.POST("/memories/backfill-doc-index", memoryHandler.BackfillDocIndex)
+	api.GET("/memories/doc-index-status", memoryHandler.DocIndexStatus)
 	api.GET("/memories/:id", memoryHandler.GetByID)
 	api.GET("/memories/:id/related", memoryHandler.FindRelated)
 	api.GET("/memories/:id/revisions", memoryHandler.Revisions)

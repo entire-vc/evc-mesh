@@ -314,6 +314,8 @@ type memoryService struct {
 	workspaceRepo repository.WorkspaceRepository
 	taskRepo      repository.TaskRepository           // optional; nil → Amendments 2 & 3 skipped
 	depRepo       repository.TaskDependencyRepository // optional; nil → depends_on bridge skipped
+	docRepo       repository.DocumentChunkRepository  // optional; nil or docRecall=false → recall ignores Mesh Docs
+	docRecall     bool                                // DOC_INDEX_RECALL
 	chunkRepo     repository.MemoryChunkRepository    // optional; nil → legacy single-vector embed path (memories.embedding)
 	halfLifeDays  float64                             // half-life for exp decay; default defaultHalfLifeDays
 	embedSem      chan struct{}                       // optional bound on concurrent embed goroutines; nil = unbounded (default)
@@ -363,6 +365,25 @@ func MemoryWithDepRepo(dr repository.TaskDependencyRepository) MemoryServiceOpti
 		s.depRepo = dr
 	}
 }
+
+// MemoryWithDocIndex lets Recall also search chunks of Mesh Docs (#154450b1).
+// recall=false (the default, DOC_INDEX_RECALL unset) leaves Recall byte-for-byte
+// as it was: the doc arms never run.
+func MemoryWithDocIndex(repo repository.DocumentChunkRepository, recall bool) MemoryServiceOption {
+	return func(s *memoryService) {
+		s.docRepo = repo
+		s.docRecall = recall && repo != nil
+	}
+}
+
+// docRRFFactor damps doc chunks' RRF contribution relative to memories, and
+// docMaxShare caps how much of the page they may fill. Docs are long, plentiful
+// and uncurated; memories are short and deliberately written, so a doc must be
+// clearly the better match to displace one. Applies only to doc hits.
+const (
+	docRRFFactor = 0.8
+	docMaxShare  = 0.4
+)
 
 // MemoryWithChunkRepo switches the embed write path (embedAndStore, BatchEmbed) from
 // the legacy single-vector memories.embedding column to per-chunk storage in
@@ -1249,6 +1270,19 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 
 	var wg sync.WaitGroup
 
+	var docKw, docVec []domain.ScoredMemory
+	if s.docRecall {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var err error
+			if docKw, err = s.docRepo.FullTextSearch(ftsCtx, opts.WorkspaceID, projID, opts.Query, poolSize); err != nil {
+				log.Printf("memory recall: doc fts failed (docs skipped): %v", err)
+				docKw = nil
+			}
+		}()
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -1291,6 +1325,19 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 			if len(queryVec) == 0 {
 				return
 			}
+			var docWG sync.WaitGroup
+			if s.docRecall {
+				docWG.Add(1)
+				go func() {
+					defer docWG.Done()
+					var err error
+					if docVec, err = s.docRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, poolSize); err != nil {
+						log.Printf("memory recall: doc vector search failed (docs skipped): %v", err)
+						docVec = nil
+					}
+				}()
+			}
+			defer docWG.Wait()
 			var vecErr error
 			vecResults, vecErr = s.memRepo.VectorSearch(ctx, queryVec, opts.WorkspaceID, projID, searchFilter, poolSize)
 			if vecErr != nil {
@@ -1358,6 +1405,18 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	}
 	// Always apply extended filters (handles importance, status, tags, etc.).
 	merged = applyExtendedFilters(merged, opts)
+
+	// Mesh Docs join AFTER memories are filtered and ranked, fused on their own
+	// with a damped weight and a hard cap on their share of the page, so nothing
+	// in the memories path above changes when the doc arms are off or empty.
+	if len(docKw)+len(docVec) > 0 {
+		docMerged := reciprocalRankFusion(docKw, docVec, s.rrfTextWeight*docRRFFactor, s.rrfVectorWeight*docRRFFactor)
+		docMerged = applyExtendedFilters(docMerged, opts)
+		if maxDocs := int(math.Ceil(float64(opts.Limit) * docMaxShare)); len(docMerged) > maxDocs {
+			docMerged = docMerged[:maxDocs]
+		}
+		merged = append(merged, docMerged...)
+	}
 
 	// ── Step 5: Freshness and universal temporal decay ────────────────────────
 	// Decay is applied uniformly to ALL memory scopes when requested

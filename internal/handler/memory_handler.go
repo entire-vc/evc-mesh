@@ -20,6 +20,7 @@ import (
 // MemoryHandler handles HTTP requests for agent persistent memory management.
 type MemoryHandler struct {
 	memoryService service.MemoryService
+	docIndexer    *service.DocumentIndexer // optional; nil → doc-index endpoints answer 503
 	members       repository.WorkspaceMemberRepository
 }
 
@@ -1144,4 +1145,64 @@ func (h *MemoryHandler) requireWorkspaceID(c echo.Context, raw string) (uuid.UUI
 		return uuid.Nil, apierror.Forbidden("workspace access denied")
 	}
 	return requested, nil
+}
+
+// SetDocumentIndexer wires the Mesh Docs recall index (#154450b1).
+func (h *MemoryHandler) SetDocumentIndexer(x *service.DocumentIndexer) { h.docIndexer = x }
+
+func (h *MemoryHandler) docIndexScope(c echo.Context, rawWS, rawProj string) (wsID uuid.UUID, projID *uuid.UUID, err error) {
+	wsID, err = h.requireWorkspaceID(c, rawWS)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+	if rawProj != "" {
+		id, perr := uuid.Parse(rawProj)
+		if perr != nil {
+			return uuid.Nil, nil, apierror.BadRequest("invalid project_id")
+		}
+		projID = &id
+	}
+	return wsID, projID, nil
+}
+
+// BackfillDocIndex handles POST /api/v1/memories/backfill-doc-index
+// Indexes up to `limit` (default 50) live documents that have no chunk set at
+// their current version; optional project_id narrows it to one project. Call
+// repeatedly until status.indexed_docs == status.live_docs. Idempotent.
+// Refused while DOC_INDEX_WRITE is off.
+func (h *MemoryHandler) BackfillDocIndex(c echo.Context) error {
+	if h.docIndexer == nil {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "document index not configured"})
+	}
+	wsID, projID, err := h.docIndexScope(c, c.QueryParam("workspace_id"), c.QueryParam("project_id"))
+	if err != nil {
+		return handleError(c, err)
+	}
+	limit := 0
+	if l := c.QueryParam("limit"); l != "" {
+		if n, convErr := strconv.Atoi(l); convErr == nil {
+			limit = n
+		}
+	}
+	res, err := h.docIndexer.Backfill(c.Request().Context(), wsID, projID, limit)
+	if err != nil {
+		return c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, res)
+}
+
+// DocIndexStatus handles GET /api/v1/memories/doc-index-status.
+func (h *MemoryHandler) DocIndexStatus(c echo.Context) error {
+	if h.docIndexer == nil {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "document index not configured"})
+	}
+	wsID, projID, err := h.docIndexScope(c, c.QueryParam("workspace_id"), c.QueryParam("project_id"))
+	if err != nil {
+		return handleError(c, err)
+	}
+	st, err := h.docIndexer.Status(c.Request().Context(), wsID, projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, st)
 }

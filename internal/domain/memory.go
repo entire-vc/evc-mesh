@@ -78,6 +78,9 @@ const (
 	SourceHuman MemorySourceType = "human"
 	// SourceSystem indicates the memory was created automatically by the system.
 	SourceSystem MemorySourceType = "system"
+	// SourceDoc marks a recall hit that is a chunk of a Mesh Doc, not a stored
+	// memory. Never written to memories; IsValid deliberately excludes it.
+	SourceDoc MemorySourceType = "doc"
 )
 
 // IsValid reports whether the source type is one of the recognised values.
@@ -113,6 +116,12 @@ type Memory struct {
 	ExpiresAt       *time.Time       `json:"expires_at,omitempty" db:"expires_at"`
 	LastAccessedAt  *time.Time       `json:"last_accessed_at,omitempty" db:"last_accessed_at"`
 	Archived        bool             `json:"archived" db:"archived"`
+
+	// SourceDocID/DocSlug/DocHeading are set only on recall hits with
+	// SourceType=doc (chunks of a Mesh Doc). Not columns of memories.
+	SourceDocID *uuid.UUID `json:"source_doc_id,omitempty" db:"-"`
+	DocSlug     string     `json:"doc_slug,omitempty" db:"-"`
+	DocHeading  string     `json:"doc_heading,omitempty" db:"-"`
 
 	// ThreadID is propagated from the source task's thread_id at write time.
 	// Enables same-thread edge creation without a JOIN to the tasks table.
