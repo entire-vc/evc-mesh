@@ -376,14 +376,16 @@ func MemoryWithDocIndex(repo repository.DocumentChunkRepository, recall bool) Me
 	}
 }
 
-// docRRFFactor damps doc chunks' RRF contribution relative to memories, and
+// docRRFFactor damps doc chunks' RRF contribution relative to memories (0.8 -> 0.7 on the
+// paired measurement of 20.09: at 0.8 a doc beat the 5th memory in 7 of 10 queries even
+// without the heading bonus, at 0.7 in 4), and
 // docMaxShare caps how much of the page they may fill (0.4 -> 0.2 after the first
 // production measurement: at limit 5 two slots displaced 11 of 50 memories in the
 // top-5, and about half of the docs that did so were noise). Docs are long, plentiful
 // and uncurated; memories are short and deliberately written, so a doc must be
 // clearly the better match to displace one. Applies only to doc hits.
 const (
-	docRRFFactor = 0.8
+	docRRFFactor = 0.7
 	docMaxShare  = 0.2
 )
 
@@ -1419,11 +1421,17 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	if len(docKw)+len(docVec) > 0 {
 		docMerged := reciprocalRankFusion(docKw, docVec, s.rrfTextWeight*docRRFFactor, s.rrfVectorWeight*docRRFFactor)
 		docMerged = applyExtendedFilters(docMerged, opts)
-		// A heading that repeats the query's words is lifted; memories are untouched.
-		for i := range docMerged {
-			docMerged[i].Score += docHeadingBonus * headingMatchFraction(opts.Query, docMerged[i].DocHeading)
-		}
-		slices.SortFunc(docMerged, func(a, b domain.ScoredMemory) int { return cmp.Compare(b.Score, a.Score) })
+		// A heading that repeats the query's words decides WHICH docs take the few
+		// doc slots (a stable sort on score+bonus); it is not added to the score a doc
+		// carries into the merge. Measured 20.09: with the bonus in the score, docs
+		// outranked the 5th memory in 9 of 10 queries (41/50 memories kept, 45 required),
+		// because 0.02 is larger than a memory's whole RRF score (~0.010-0.016). Whether a
+		// doc beats a memory is decided by the damped arm score alone.
+		slices.SortStableFunc(docMerged, func(a, b domain.ScoredMemory) int {
+			as := a.Score + docHeadingBonus*headingMatchFraction(opts.Query, a.DocHeading)
+			bs := b.Score + docHeadingBonus*headingMatchFraction(opts.Query, b.DocHeading)
+			return cmp.Compare(bs, as)
+		})
 		if maxDocs := docMaxSlots(opts.Limit); len(docMerged) > maxDocs {
 			docMerged = docMerged[:maxDocs]
 		}

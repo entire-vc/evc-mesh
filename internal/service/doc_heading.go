@@ -5,9 +5,10 @@ import (
 	"unicode"
 )
 
-// docHeadingBonus is the score a chunk gains when its heading repeats ALL of the
-// query's words (a partial match earns the matching fraction of it). It is sized to
-// about 1.5x a chunk that ranks first in both doc arms (0.8 * (0.3+0.7) / 61 ~ 0.013):
+// docHeadingBonus is the ORDERING credit a chunk gets when its heading repeats ALL of the
+// query's words (a partial match earns the matching fraction of it). It picks which docs
+// take the doc slots and is never added to the score a doc competes with memories on. It
+// is sized to about 1.5x a chunk that ranks first in both doc arms (~0.013):
 // a section heading that echoes the query is the strongest relevance signal a doc chunk
 // can carry, and BM25 over 'english'-stemmed Cyrillic text cannot see it (no Russian
 // stemming, and an AND query with one absent word matches nothing).

@@ -51,18 +51,38 @@ func TestRecall_DocArm_ShareIsCappedAtTwentyPercent(t *testing.T) {
 	assert.Len(t, recallWithDocs(t, true, &fakeDocChunkRepo{hits: hits}, nil, 10), 2, "limit 10 -> two doc slots")
 }
 
-func TestRecall_DocArm_HeadingEchoingTheQueryOutranksABetterArmRank(t *testing.T) {
-	// The chunk whose heading repeats the query's words sits BELOW an unrelated chunk
-	// in the arm ranking; the heading bonus must lift it above.
+func TestRecall_DocArm_HeadingEchoingTheQueryTakesTheSlot(t *testing.T) {
+	// One doc slot (limit 5). The chunk whose heading repeats the query sits BELOW an
+	// unrelated chunk in the arm ranking; the heading bonus must give it the slot.
 	unrelated := headedDocHit("unrelated", "Something else entirely", 9)
 	echo := headedDocHit("echo", "Audit recommendations", 1)
 	docs := &fakeDocChunkRepo{hits: []domain.ScoredMemory{unrelated, echo}}
-	repo := &mockMemoryRepo{}
+	svc := NewMemoryService(&mockMemoryRepo{}, &mockMemoryEdgeRepo{}, nil, MemoryWithDocIndex(docs, true))
+	got, _, err := svc.Recall(context.Background(), domain.RecallOpts{Query: "audit recommendations", WorkspaceID: uuid.New(), Limit: 5, DocViewer: allDocs()})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "echo", got[0].DocSlug, "the heading that echoes the query gets the doc slot")
+}
+
+func TestRecall_DocArm_HeadingBonusNeverLiftsADocOverAMemory(t *testing.T) {
+	// A doc with a perfect heading match and a weak arm rank must NOT outrank a memory
+	// that outscores it on arm rank alone: the bonus picks among docs, it does not decide
+	// doc-vs-memory (0.02 exceeds a whole memory RRF score, so leaking it would put a
+	// heading-matching doc above nearly every memory).
+	mem := domain.ScoredMemory{Memory: domain.Memory{ID: uuid.New(), Key: "the-memory", Content: "c", ImportanceScore: 0.8}, Score: 0.9}
+	echo := headedDocHit("echo", "Audit recommendations", 0.1)
+	docs := &fakeDocChunkRepo{hits: []domain.ScoredMemory{echo}}
+	repo := &mockMemoryRepo{
+		fullTextSearchRankedFn: func(context.Context, uuid.UUID, *uuid.UUID, string, domain.MemorySearchFilter, int) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{mem}, nil
+		},
+	}
 	svc := NewMemoryService(repo, &mockMemoryEdgeRepo{}, nil, MemoryWithDocIndex(docs, true))
 	got, _, err := svc.Recall(context.Background(), domain.RecallOpts{Query: "audit recommendations", WorkspaceID: uuid.New(), Limit: 10, DocViewer: allDocs()})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	assert.Equal(t, "echo", got[0].DocSlug, "the heading that echoes the query goes first")
+	assert.Equal(t, "the-memory", got[0].Key, "the memory stays first")
+	assert.Less(t, got[1].Score, got[0].Score, "the doc carries its damped arm score, not the bonus")
 }
 
 func TestRecall_DocArm_AsksForAWiderPoolThanMemories(t *testing.T) {
