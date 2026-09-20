@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -72,19 +73,21 @@ type BacklogPromotionDecision struct {
 //     backlog_promotion_advisory_test.go, which exists specifically to catch that
 //     mistake before it ships.
 //
-// Known gaps vs. the Python sweep — deliberately out of scope for this first unit; the
-// #f928e5af parallel run is what is expected to surface these as named divergences to
-// fix, not something to guess at and pre-emptively port:
-//   - wake:<type>/due_date override of a passive-wait label (due_wake_overrides_park);
-//   - Agent-Eval golden-fixture child skip (parent_is_eval_fixture);
+// Parity with the sweep (#c15c503a): human-gate (cheap path), parent-gate, eval-fixture
+// parent, ABSOLUTE_NO_PROMOTE labels and the due_date / wake:<type> overrides live in
+// backlog_promotion_gates.go, ported function-for-function. Still NOT covered:
+//
+// server holds where the sweep promotes (safe direction, costs a delay):
+//   - the comment-aware release tiers of is_human_gated (Pavel answered → un-freeze);
+//   - the QUEUE-BEHIND lift of a passive-wait label; wake-condition comment types.
+//
+// server would PROMOTE where the sweep holds (UNSAFE — enforcing must not flip until
+// each is ported or measured at 0 in the divergence journal):
 //   - visible-work-needs-a-`source:`-line gate (needs_source);
-//   - parent-awaits-human skip (parent_awaits_human) and the epic-candidate-assigned-
-//     to-a-user skip (is_epic_candidate);
-//   - Pavel backlog-freeze-via-comment-phrase detection (has_user_backlog_freeze) —
-//     this rule relies on the label route only, which is also how the #bbf3db92
-//     incident itself was actually remediated (labels added to the card), not a
-//     comment-phrase fix;
-//   - the per-assignee promotion cap within one sweep tick (assignee_count/cap).
+//   - epic-candidate-assigned-to-a-user skip (is_epic_candidate);
+//   - Pavel backlog-freeze-via-comment-phrase (has_user_backlog_freeze) — this rule
+//     reads no comments;
+//   - the per-assignee promotion cap within one sweep tick.
 type BacklogPromotionAdvisoryService interface {
 	SweepAdvisory(ctx context.Context) ([]BacklogPromotionDecision, error)
 }
@@ -94,6 +97,7 @@ type backlogPromotionAdvisoryService struct {
 	statusRepo   repository.TaskStatusRepository
 	depRepo      repository.TaskDependencyRepository
 	activityRepo repository.ActivityLogRepository
+	now          func() time.Time
 }
 
 // NewBacklogPromotionAdvisoryService constructs a BacklogPromotionAdvisoryService.
@@ -108,6 +112,7 @@ func NewBacklogPromotionAdvisoryService(
 		statusRepo:   statusRepo,
 		depRepo:      depRepo,
 		activityRepo: activityRepo,
+		now:          time.Now,
 	}
 }
 
@@ -122,11 +127,14 @@ func (s *backlogPromotionAdvisoryService) SweepAdvisory(ctx context.Context) ([]
 	// projectID -> lowercased-trimmed status name -> category. Built lazily, once per
 	// project touched this tick — mirrors mesh-intake-sweep.py's name_categories cache.
 	nameCatCache := make(map[uuid.UUID]map[string]domain.StatusCategory)
+	// parent_id -> parent verdict, one fetch per parent per tick (mirrors the sweep's
+	// parent_human_cache / parent_eval_cache).
+	parentCache := make(map[uuid.UUID]parentVerdict)
 
 	decisions := make([]BacklogPromotionDecision, 0, len(tasks))
 	for i := range tasks {
 		task := &tasks[i]
-		promote, reason, err := s.evaluate(ctx, task, nameCatCache)
+		promote, reason, err := s.evaluate(ctx, task, nameCatCache, parentCache)
 		if err != nil {
 			reason = fmt.Sprintf("guard lookup failed, fail-closed no-promote: %v", err)
 			promote = false
@@ -145,20 +153,31 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	ctx context.Context,
 	task *domain.Task,
 	nameCatCache map[uuid.UUID]map[string]domain.StatusCategory,
+	parentCache map[uuid.UUID]parentVerdict,
 ) (promote bool, reason string, err error) {
-	// 1. Label-based park — cheapest guard (no extra query), checked first, mirroring
-	// mesh-intake-sweep.py's own ordering (is_passive_wait() runs before any lookup).
-	if label, ok := hasBacklogParkLabel(task.Labels); ok {
-		return false, fmt.Sprintf("passive-wait label %q", label), nil
+	// 1. Park labels and the wake overrides — cheapest guard (no extra query), checked
+	// first, mirroring mesh-intake-sweep.py's own ordering (is_passive_wait() runs
+	// before any lookup). See evaluateWake for the wake:<type> / due_date rules.
+	if hold, why := s.evaluateWake(task); hold {
+		return false, why, nil
 	}
 
-	// 2. Human-gate — read directly off the task. Unlike the Python sweep (an external
-	// client that also re-scans comment bodies for a marker because it cannot fully
-	// trust flag-propagation lag — see is_human_gated's "FULL path" comment in
-	// mesh-intake-sweep.py), this rule computed the flag itself: the field is
-	// authoritative here, no comment re-scan needed.
-	if task.HumanGate {
-		return false, "human_gate armed", nil
+	// 2. Human-gate (is_human_gated's cheap path — see humanGateReason) and the
+	// Agent-Eval fixture / parent-gate skips (parent_is_eval_fixture, parent_awaits_human).
+	if why := humanGateReason(task); why != "" {
+		return false, why, nil
+	}
+	if task.ParentTaskID != nil {
+		pv, perr := s.parentOf(ctx, *task.ParentTaskID, parentCache)
+		if perr != nil {
+			return false, "", fmt.Errorf("parent lookup: %w", perr)
+		}
+		if pv.evalFixture {
+			return false, "parent is an eval-harness fixture", nil
+		}
+		if pv.gatesChildren {
+			return false, "parent awaits human sign-off", nil
+		}
 	}
 
 	// 3. Dependencies — ALL outgoing edges regardless of dependency_type, matching
