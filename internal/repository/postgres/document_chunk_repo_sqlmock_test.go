@@ -125,7 +125,7 @@ func TestDocChunkRepo_FullTextSearch_ShapesHitsAndFallsBackToOR(t *testing.T) {
 	mock.ExpectQuery("regexp_replace").WillReturnRows(sqlmock.NewRows(hitCols).
 		AddRow(cid, did, proj, "audit", "Audit", "3.5 Gate", "text", 1, now, 0.4).
 		AddRow(uuid.New(), did, proj, "audit", "Audit", "", "more", 1, now, 0.2))
-	got, err := repo.FullTextSearch(context.Background(), ws, &proj, "fleet gate", 0)
+	got, err := repo.FullTextSearch(context.Background(), ws, &proj, "fleet gate", domain.DocViewer{AllProjects: true}, 0)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, domain.SourceDoc, got[0].SourceType)
@@ -139,7 +139,7 @@ func TestDocChunkRepo_FullTextSearch_ShapesHitsAndFallsBackToOR(t *testing.T) {
 func TestDocChunkRepo_FullTextSearch_Error(t *testing.T) {
 	repo, mock := newDocChunkMock(t)
 	mock.ExpectQuery("plainto_tsquery").WillReturnError(errors.New("boom"))
-	_, err := repo.FullTextSearch(context.Background(), uuid.New(), nil, "q", 5)
+	_, err := repo.FullTextSearch(context.Background(), uuid.New(), nil, "q", domain.DocViewer{AllProjects: true}, 5)
 	require.Error(t, err)
 }
 
@@ -157,7 +157,7 @@ func TestDocChunkRepo_VectorSearch_RanksByCosineAndCapsToLimit(t *testing.T) {
 	mock.ExpectQuery("FROM document_chunks c").WillReturnRows(sqlmock.NewRows(hitCols).
 		AddRow(near, doc, proj, "s", "T", "H", "c1", 1, now, 0).
 		AddRow(far, doc, proj, "s", "T", "H2", "c2", 1, now, 0))
-	got, err := repo.VectorSearch(context.Background(), []float32{1, 0}, ws, &proj, 2)
+	got, err := repo.VectorSearch(context.Background(), []float32{1, 0}, ws, &proj, domain.DocViewer{AllProjects: true}, 2)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, near, got[0].ID, "the parallel vector must rank first")
@@ -167,18 +167,18 @@ func TestDocChunkRepo_VectorSearch_RanksByCosineAndCapsToLimit(t *testing.T) {
 func TestDocChunkRepo_VectorSearch_EmptyAndErrors(t *testing.T) {
 	repo, mock := newDocChunkMock(t)
 	mock.ExpectQuery("SELECT c.id, c.embedding").WillReturnRows(sqlmock.NewRows([]string{"id", "embedding"}))
-	got, err := repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, 0)
+	got, err := repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, domain.DocViewer{AllProjects: true}, 0)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 
 	mock.ExpectQuery("SELECT c.id, c.embedding").WillReturnError(errors.New("x"))
-	_, err = repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, 3)
+	_, err = repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, domain.DocViewer{AllProjects: true}, 3)
 	require.Error(t, err)
 
 	mock.ExpectQuery("SELECT c.id, c.embedding").WillReturnRows(sqlmock.NewRows([]string{"id", "embedding"}).
 		AddRow(uuid.New(), domain.EncodeEmbedding([]float32{1})))
 	mock.ExpectQuery("FROM document_chunks c").WillReturnError(errors.New("hydrate"))
-	_, err = repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, 3)
+	_, err = repo.VectorSearch(context.Background(), []float32{1}, uuid.New(), nil, domain.DocViewer{AllProjects: true}, 3)
 	require.Error(t, err)
 }
 
@@ -195,8 +195,60 @@ func TestDocChunkRepo_ListStaleAndStatus(t *testing.T) {
 	_, err = repo.ListStale(context.Background(), ws, nil, 5)
 	require.Error(t, err)
 
-	mock.ExpectQuery("count\\(\\*\\) AS live_docs").WillReturnRows(sqlmock.NewRows([]string{"a", "b"}).AddRow(599, 599))
+	mock.ExpectQuery("AS excluded_docs").WillReturnRows(sqlmock.NewRows([]string{"a", "b", "c"}).AddRow(201, 197, 259))
 	st, err := repo.Status(context.Background(), ws, &proj)
 	require.NoError(t, err)
-	assert.Equal(t, domain.DocIndexStatus{LiveDocs: 599, IndexedDocs: 599}, st)
+	assert.Equal(t, domain.DocIndexStatus{LiveDocs: 201, IndexedDocs: 197, ExcludedDocs: 259}, st)
+}
+
+func TestDocChunkRepo_ViewerCondition(t *testing.T) {
+	agent, user := uuid.New(), uuid.New()
+
+	sql, args := docViewerCond(domain.DocViewer{AllProjects: true}, nil)
+	assert.Empty(t, sql, "an owner/admin is not filtered by membership")
+	assert.Empty(t, args)
+
+	sql, args = docViewerCond(domain.DocViewer{}, nil)
+	assert.Equal(t, "FALSE", sql, "no identity sees nothing")
+	assert.Empty(t, args)
+
+	sql, args = docViewerCond(domain.DocViewer{AgentID: &agent}, []interface{}{"ws"})
+	assert.Contains(t, sql, "pm.agent_id = $2")
+	assert.Contains(t, sql, "project_members")
+	assert.Equal(t, []interface{}{"ws", agent}, args)
+
+	sql, args = docViewerCond(domain.DocViewer{UserID: &user, AgentID: &agent}, nil)
+	assert.Contains(t, sql, "pm.agent_id = $1 OR pm.user_id = $2")
+	assert.Len(t, args, 2)
+}
+
+func TestDocChunkRepo_ProjectIndexable(t *testing.T) {
+	repo, mock := newDocChunkMock(t)
+	id := uuid.New()
+	mock.ExpectQuery("FROM projects p WHERE p.id").WithArgs(id).WillReturnRows(sqlmock.NewRows([]string{"ok"}).AddRow(true))
+	ok, err := repo.ProjectIndexable(context.Background(), id)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	mock.ExpectQuery("FROM projects p WHERE p.id").WillReturnRows(sqlmock.NewRows([]string{"ok"}))
+	ok, err = repo.ProjectIndexable(context.Background(), id)
+	require.NoError(t, err)
+	assert.False(t, ok, "an unknown project has nothing to index into")
+
+	mock.ExpectQuery("FROM projects p WHERE p.id").WillReturnError(errors.New("x"))
+	_, err = repo.ProjectIndexable(context.Background(), id)
+	require.Error(t, err)
+}
+
+func TestDocChunkRepo_SearchAppliesViewerPredicateInSQL(t *testing.T) {
+	repo, mock := newDocChunkMock(t)
+	agent := uuid.New()
+	// The membership test must be part of the arm's own query, not a filter applied
+	// after truncation.
+	mock.ExpectQuery("EXISTS \\(SELECT 1 FROM project_members pm").WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), agent, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(hitCols))
+	mock.ExpectQuery("EXISTS \\(SELECT 1 FROM project_members pm").WillReturnRows(sqlmock.NewRows(hitCols))
+	_, err := repo.FullTextSearch(context.Background(), uuid.New(), nil, "q", domain.DocViewer{AgentID: &agent}, 5)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

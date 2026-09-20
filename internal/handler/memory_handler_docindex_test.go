@@ -23,12 +23,13 @@ type fakeDocChunks struct {
 	stale []domain.Document
 }
 
-func (f *fakeDocChunks) PurgeDeleted(context.Context) (int64, error) { return 0, nil }
+func (f *fakeDocChunks) ProjectIndexable(context.Context, uuid.UUID) (bool, error) { return true, nil }
+func (f *fakeDocChunks) PurgeDeleted(context.Context) (int64, error)               { return 0, nil }
 func (f *fakeDocChunks) ListStale(context.Context, uuid.UUID, *uuid.UUID, int) ([]domain.Document, error) {
 	return f.stale, nil
 }
 func (f *fakeDocChunks) Status(context.Context, uuid.UUID, *uuid.UUID) (domain.DocIndexStatus, error) {
-	return domain.DocIndexStatus{LiveDocs: 3, IndexedDocs: 2}, nil
+	return domain.DocIndexStatus{LiveDocs: 3, IndexedDocs: 2, ExcludedDocs: 259}, nil
 }
 func (f *fakeDocChunks) ReplaceChunks(context.Context, uuid.UUID, uuid.UUID, int, []domain.DocumentChunk) error {
 	return nil
@@ -77,7 +78,7 @@ func TestDocIndex_StatusReturnsCounts(t *testing.T) {
 	h.SetDocumentIndexer(service.NewDocumentIndexer(&fakeDocChunks{}, nil, fakeDocStore{}, false))
 	rec := docIndexCall(t, h, h.DocIndexStatus, http.MethodGet, "?project_id="+uuid.New().String(), uuid.New())
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"live_docs":3,"indexed_docs":2}`, rec.Body.String())
+	assert.JSONEq(t, `{"live_docs":3,"indexed_docs":2,"excluded_docs":259}`, rec.Body.String())
 }
 
 func TestDocIndex_BackfillRefusedWhileWriteFlagOff(t *testing.T) {

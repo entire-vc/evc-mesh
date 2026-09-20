@@ -404,6 +404,7 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		Query:             q.Q,
 		WorkspaceID:       wsID,
 		ProjectID:         projID,
+		DocViewer:         docViewerFromContext(c),
 		Scope:             domain.MemoryScope(q.Scope),
 		Tags:              tags,
 		TagsAny:           tagsAny,
@@ -1205,4 +1206,28 @@ func (h *MemoryHandler) DocIndexStatus(c echo.Context) error {
 		return handleError(c, err)
 	}
 	return c.JSON(http.StatusOK, st)
+}
+
+// docViewerFromContext says who a recall is for, so the Mesh Docs arm can show only
+// what the caller could open in the project UI/API. Mirrors the project-access
+// middleware: an agent sees the projects it is an explicit member of and nothing else
+// (its workspace grant role deliberately does not widen this); a human sees projects
+// they are a member of, or every project if they are a workspace owner/admin. No
+// identity on the context yields the zero viewer, i.e. no docs.
+func docViewerFromContext(c echo.Context) domain.DocViewer {
+	if mw.IsAgent(c) {
+		if id, err := mw.GetAgentID(c); err == nil {
+			return domain.DocViewer{AgentID: &id}
+		}
+		return domain.DocViewer{}
+	}
+	id, err := mw.GetUserID(c)
+	if err != nil {
+		return domain.DocViewer{}
+	}
+	v := domain.DocViewer{UserID: &id}
+	if role, ok := c.Get(mw.ContextKeyWorkspaceRole).(string); ok && (role == domain.RoleOwner || role == domain.RoleAdmin) {
+		v.AllProjects = true
+	}
+	return v
 }

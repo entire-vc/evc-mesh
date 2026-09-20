@@ -317,6 +317,10 @@ type RecallOpts struct {
 	// IncludeStale includes stale memories in results (default true).
 	// When false, only active/review_needed/conflicted memories are returned.
 	IncludeStale bool
+
+	// DocViewer says who the recall is for, gating the Mesh Docs arm (never memories).
+	// The zero value means "no docs" — see DocViewer.
+	DocViewer DocViewer
 }
 
 // MemoryListFilter is the structured filter passed to the repository List method.
