@@ -111,6 +111,35 @@ func humanGateReason(t *domain.Task) string {
 	return ""
 }
 
+// --- needs_source (1.15: visible work must name its source of truth) ---------------
+
+// backlogVisualLabels mirrors VISUAL_LABELS.
+var backlogVisualLabels = map[string]struct{}{
+	"ui": {}, "site": {}, "landing": {}, "has-mockup": {},
+	"kind:visual": {}, "design-fidelity": {},
+}
+
+// backlogSourceLineRE mirrors SOURCE_LINE. Anchored at line start on purpose: the word
+// "source" in prose is not a source of truth. The value must sit on the SAME line —
+// `[^\S\n]*` rather than `\s*`, otherwise a bare `source:` borrows the first word of
+// the next line.
+var backlogSourceLineRE = regexp.MustCompile(
+	`(?im)^[^\S\n]*(?:[-*+][^\S\n]*)?(?:\*\*)?source(?:\*\*)?[^\S\n]*:[^\S\n]*\S`)
+
+// needsSourceReason mirrors needs_source: a card carrying a visual label whose
+// description has no `source:` line is held. `source: n/a — <reason>` counts. The
+// sweep re-fetches the description when its paginated listing blanks it; the server
+// reads the full row, so there is no such mismatch to guard.
+func needsSourceReason(t *domain.Task) string {
+	if !hasAnyLabel(t.Labels, backlogVisualLabels) {
+		return ""
+	}
+	if backlogSourceLineRE.MatchString(t.Description) {
+		return ""
+	}
+	return "visible work without a `source:` line"
+}
+
 // --- parent gate (parent_gates_children / parent_is_eval_fixture) ----------------
 
 type parentVerdict struct {

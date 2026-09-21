@@ -254,3 +254,47 @@ func TestParity_DemotionParkStillHoldsWithoutDueWake(t *testing.T) {
 	e.addMove(t, b, "In Progress", "Backlog", time.Now().Add(-72*time.Hour))
 	e.wantHold(t, b)
 }
+
+// --- needs_source (1.15: visible work must name its source of truth) --------------
+
+func TestParity_NeedsSource_VisualCardWithoutSourceLineHolds(t *testing.T) {
+	e := newParityEnv(t)
+	for _, l := range []string{"ui", "site", "landing", "has-mockup", "kind:visual", "design-fidelity"} {
+		task := e.task(t, func(x *domain.Task) {
+			x.Labels = []string{l}
+			x.Description = "Поправить шапку, без ссылки на макет."
+		})
+		e.wantHold(t, task)
+	}
+}
+
+func TestParity_NeedsSource_SourceLineReleases(t *testing.T) {
+	e := newParityEnv(t)
+	for _, desc := range []string{
+		"source: https://example.test/mock.dc.html",
+		"- **source:** design/hero.dc.html",
+		"Текст.\n**Source**: n/a — метка обозначает область",
+		"  * SOURCE:\tfigma.test/x",
+	} {
+		d := desc
+		e.wantPromote(t, e.task(t, func(x *domain.Task) { x.Labels = []string{"ui"}; x.Description = d }))
+	}
+}
+
+func TestParity_NeedsSource_ProseAndEmptyValueDoNotCount(t *testing.T) {
+	e := newParityEnv(t)
+	for _, desc := range []string{
+		"the source: is somewhere in prose", // not at line start
+		"source:\nnext line word",           // empty value must not borrow the next line
+		"open source: yes",                  // 'source' not the line's first word
+	} {
+		d := desc
+		e.wantHold(t, e.task(t, func(x *domain.Task) { x.Labels = []string{"landing"}; x.Description = d }))
+	}
+}
+
+func TestParity_NeedsSource_NonVisualCardIsUntouched(t *testing.T) {
+	e := newParityEnv(t)
+	e.wantPromote(t, e.task(t, func(x *domain.Task) { x.Labels = []string{"backend"}; x.Description = "no source line, not visual" }))
+	e.wantPromote(t, e.task(t, func(x *domain.Task) { x.Description = "" }))
+}
