@@ -83,7 +83,6 @@ type BacklogPromotionDecision struct {
 //
 // server would PROMOTE where the sweep holds (UNSAFE — enforcing must not flip until
 // each is ported or measured at 0 in the divergence journal):
-//   - visible-work-needs-a-`source:`-line gate (needs_source);
 //   - epic-candidate-assigned-to-a-user skip (is_epic_candidate);
 //   - Pavel backlog-freeze-via-comment-phrase (has_user_backlog_freeze) — this rule
 //     reads no comments;
@@ -166,6 +165,9 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	// 2. Human-gate (is_human_gated's cheap path — see humanGateReason) and the
 	// Agent-Eval fixture / parent-gate skips (parent_is_eval_fixture, parent_awaits_human).
 	if why := humanGateReason(task); why != "" {
+		return false, why, nil
+	}
+	if why := needsSourceReason(task); why != "" {
 		return false, why, nil
 	}
 	if task.ParentTaskID != nil {
