@@ -218,3 +218,39 @@ func TestParity_CardsOutsideSweepScopeGetTheSameGuards(t *testing.T) {
 		t.Fatal("an ungated card outside the sweep's scope is evaluated normally, not dropped")
 	}
 }
+
+// --- due_wake also overrides the deliberate-park (demotion) guard ----------------
+//
+// mesh-intake-sweep: `if parked and not due_wake: skip`. The two cards that showed
+// up as sweep_only on 2026-09-21 (#6fb0cf1c, #d30ef935) were demoted into backlog
+// with no deps AND carried a passive-wait label whose due_date had arrived: the
+// sweep promoted them, the rule held them as "parked via demotion".
+
+func (e *parityEnv) demoted(t *testing.T, task *domain.Task) {
+	t.Helper()
+	inProgress := e.addStatus(t, e.projectID, "In Progress", domain.StatusCategoryInProgress)
+	_ = inProgress
+	e.addMove(t, task, "In Progress", "Backlog", time.Now().Add(-72*time.Hour))
+}
+
+func TestParity_DueWakeOverridesDemotionPark(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	e := newParityEnv(t)
+	task := e.task(t, func(x *domain.Task) { x.Labels = []string{"kind:monitor"}; x.DueDate = &past })
+	e.demoted(t, task)
+	e.wantPromote(t, task)
+}
+
+func TestParity_DemotionParkStillHoldsWithoutDueWake(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(48 * time.Hour)
+	e := newParityEnv(t)
+	// passive label, due date NOT arrived → held by the label anyway
+	a := e.task(t, func(x *domain.Task) { x.Labels = []string{"kind:monitor"}; x.DueDate = &future })
+	e.demoted(t, a)
+	e.wantHold(t, a)
+	// no passive label: a passed due_date is a deadline, not a wake — demotion park stays
+	b := e.task(t, func(x *domain.Task) { x.DueDate = &past })
+	e.addMove(t, b, "In Progress", "Backlog", time.Now().Add(-72*time.Hour))
+	e.wantHold(t, b)
+}

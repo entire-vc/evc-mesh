@@ -181,32 +181,36 @@ func (s *backlogPromotionAdvisoryService) dueDateArrived(t *domain.Task) bool {
 // the override past an absolute label; the condition-comment wake types are held
 // (their audit comment is not read server-side, fail closed).
 //
+// woke reports that a park label was actively overridden (due_wake in the sweep):
+// the sweep's `if parked and not due_wake` then lets the same wake also lift the
+// deliberate-park (demotion) guard, so the caller must not apply that guard.
+//
 // Not ported: the QUEUE-BEHIND override (a passive-wait label is lifted when open
 // work depends on the card). It needs the dependents' statuses; the journal shows it
 // as `sweep_only` on 4 cards, all on 2026-09-10 — the safe direction.
-func (s *backlogPromotionAdvisoryService) evaluateWake(t *domain.Task) (hold bool, reason string) {
+func (s *backlogPromotionAdvisoryService) evaluateWake(t *domain.Task) (hold, woke bool, reason string) {
 	wt := wakeType(t.Labels)
 	arrived := s.dueDateArrived(t)
 	if arrived && (wt == "delete_after" || wt == "manual") {
-		return true, fmt.Sprintf("wake:%s never promotes", wt)
+		return true, false, fmt.Sprintf("wake:%s never promotes", wt)
 	}
 
 	passive, isPassive := hasBacklogParkLabel(t.Labels)
 	if !isPassive {
-		return false, ""
+		return false, false, ""
 	}
 	absolute := hasAnyLabel(t.Labels, backlogAbsoluteNoPromoteLabels)
 
 	if !absolute && arrived {
-		return false, "" // park expired by its own due_date
+		return false, true, "" // park expired by its own due_date
 	}
 	if absolute && wt != "" && arrived {
 		switch wt {
 		case "date", "dependency_edges":
-			return false, "" // explicit wake licence; dependency guard below still applies
+			return false, true, "" // explicit wake licence; dependency guard below still applies
 		default:
-			return true, fmt.Sprintf("wake:%s condition not evaluated server-side (fail closed), label %q", wt, passive)
+			return true, false, fmt.Sprintf("wake:%s condition not evaluated server-side (fail closed), label %q", wt, passive)
 		}
 	}
-	return true, fmt.Sprintf("passive-wait label %q", passive)
+	return true, false, fmt.Sprintf("passive-wait label %q", passive)
 }
