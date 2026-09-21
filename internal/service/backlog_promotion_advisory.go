@@ -158,7 +158,8 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	// 1. Park labels and the wake overrides — cheapest guard (no extra query), checked
 	// first, mirroring mesh-intake-sweep.py's own ordering (is_passive_wait() runs
 	// before any lookup). See evaluateWake for the wake:<type> / due_date rules.
-	if hold, why := s.evaluateWake(task); hold {
+	hold, woke, why := s.evaluateWake(task)
+	if hold {
 		return false, why, nil
 	}
 
@@ -201,7 +202,9 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	// "last transition = demotion ⇒ parked" check WITHOUT this gate would wrongly
 	// protect a demoted, dependency-bearing card that the live sweep actually
 	// promotes once its deps clear.
-	if len(depIDs) == 0 {
+	// A wake that lifted a park label lifts this guard too (sweep: `parked and not
+	// due_wake`), otherwise a demoted monitor card never wakes on its due_date.
+	if len(depIDs) == 0 && !woke {
 		parked, parkErr := s.wasDeliberatelyParked(ctx, task, nameCatCache)
 		if parkErr != nil {
 			return false, "", fmt.Errorf("activity lookup: %w", parkErr)
