@@ -88,21 +88,21 @@ services:
       timeout: 5s
       retries: 5
 
-# Named volumes, not host bind-mounts (#976884dd, 2026-09-22): this compose
-# file is the DEV/CI stack (`make docker-up` / `ci-services-up`), and every
-# checkout that starts it -- git worktree, session-worktree, or a scratchpad
-# clone -- can live under /tmp, which colima's guest VM does NOT share with
-# the host (only `~` is virtiofs-mounted). A relative bind-mount source like
+# Named volumes, not host bind-mounts: this compose file is the DEV/CI
+# stack (`make docker-up` / `ci-services-up`), and every checkout that
+# starts it -- git worktree or a scratchpad clone -- can live under /tmp,
+# which colima's guest VM does NOT share with the host (only `~` is
+# virtiofs-mounted). A relative bind-mount source like
 # `./volumes/postgres/data` still resolves against the checkout's own
 # directory, but since that path isn't visible inside the guest, the
 # in-guest docker daemon just materializes it as a real directory on the
 # guest's OWN filesystem to satisfy the mount -- and that directory outlives
 # the checkout forever once it's deleted on the host, invisible to both
 # `du` on the host and `docker system df` (it's neither an image nor a
-# tracked volume). Measured 2026-09-22: 88 such orphaned trees, 5.33GB,
-# >55% of the guest root disk's used space -- same failure class the config
-# comment above already worked around for `nats-server.conf`, just for data
-# instead of config.
+# tracked volume). Measured: dozens of such orphaned trees, several GB,
+# a large share of the guest root disk's used space -- same failure class
+# the config comment above already worked around for `nats-server.conf`,
+# just for data instead of config.
 #
 # Named volumes are the fix because the cleanup path ALREADY EXISTS and
 # already runs reliably: `make ci-test`'s EXIT/INT/TERM/HUP trap calls
