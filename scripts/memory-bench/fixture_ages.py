@@ -441,7 +441,7 @@ def _selftest() -> int:
         failures.append(f"the loopback DSN was refused: {exc}")
     for remote in (
         "postgres://u:p@mesh.entire.host:5432/mesh",
-        "postgres://u:p@10.10.10.10/mesh",
+        "postgres://u:p@192.0.2.10/mesh",
         "postgresql://u:p@db.internal/mesh",
     ):
         try:
