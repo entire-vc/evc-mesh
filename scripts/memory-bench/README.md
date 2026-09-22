@@ -996,7 +996,7 @@ but weaker than the name promises.
 ## Local run
 
 ```bash
-export MESH_API_URL=https://mesh.entire.host
+export MESH_API_URL=https://your-mesh-instance.example.com
 export MESH_AGENT_KEY=<bench agent key>
 export MESH_MCP_BIN=~/bin/mesh-mcp
 python run_ci.py --retrieval-only            # free
