@@ -9,7 +9,7 @@ services:
     ports:
       - "${DB_PORT:-5437}:5432"
     volumes:
-      - ./volumes/postgres/data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mesh"]
       interval: 5s
@@ -22,7 +22,7 @@ services:
     ports:
       - "${REDIS_PORT:-6383}:6379"
     volumes:
-      - ./volumes/redis/data:/data
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -63,7 +63,7 @@ services:
       - "${NATS_PORT:-4223}:4222"
       - "${NATS_MONITOR_PORT:-8223}:8222"
     volumes:
-      - ./volumes/nats/data:/data
+      - nats-data:/data
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 5s
@@ -81,9 +81,48 @@ services:
       - "${MINIO_API_PORT:-9002}:9000"
       - "${MINIO_CONSOLE_PORT:-9003}:9001"
     volumes:
-      - ./volumes/minio/data:/data
+      - minio-data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+# Named volumes, not host bind-mounts (#976884dd, 2026-09-22): this compose
+# file is the DEV/CI stack (`make docker-up` / `ci-services-up`), and every
+# checkout that starts it -- git worktree, session-worktree, or a scratchpad
+# clone -- can live under /tmp, which colima's guest VM does NOT share with
+# the host (only `~` is virtiofs-mounted). A relative bind-mount source like
+# `./volumes/postgres/data` still resolves against the checkout's own
+# directory, but since that path isn't visible inside the guest, the
+# in-guest docker daemon just materializes it as a real directory on the
+# guest's OWN filesystem to satisfy the mount -- and that directory outlives
+# the checkout forever once it's deleted on the host, invisible to both
+# `du` on the host and `docker system df` (it's neither an image nor a
+# tracked volume). Measured 2026-09-22: 88 such orphaned trees, 5.33GB,
+# >55% of the guest root disk's used space -- same failure class the config
+# comment above already worked around for `nats-server.conf`, just for data
+# instead of config.
+#
+# Named volumes are the fix because the cleanup path ALREADY EXISTS and
+# already runs reliably: `make ci-test`'s EXIT/INT/TERM/HUP trap calls
+# `ci-services-down` (`docker compose down -v`), and
+# `scripts/ci/reap_stale_ci_containers.py` (the SIGKILL backstop, invoked
+# from every `ci-services-up`) calls the same `down -v --remove-orphans`.
+# `-v` removes compose-managed named volumes; it has never removed a host
+# bind-mount directory, which is exactly why the leak accumulated even
+# though teardown was "working" the whole time. No new script/cron needed.
+#
+# `COMPOSE_PROJECT_NAME` (set per-checkout, see Makefile's "Per-checkout
+# isolation" block) namespaces these same as it already namespaces
+# containers/networks, so concurrent checkouts still don't collide.
+#
+# `deploy/docker/mesh/volumes/` (gitignored) and its bind-mounts stay as-is
+# in docker-compose.prod.yml -- that stack is long-lived on a real host path
+# per docs/self-hosting.md (backup tooling reads those paths directly), not
+# an ephemeral per-checkout CI stack, so it was never part of this leak.
+volumes:
+  postgres-data:
+  redis-data:
+  nats-data:
+  minio-data:
