@@ -1095,6 +1095,10 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 
 	// Notify @-mentioned agents.
 	if wsID != uuid.Nil {
+		// A person naming the assignee on their own parked card lifts it into
+		// the lane's feed first, so the verdict recorded below reads the card
+		// where it now is (#ed60c795).
+		s.liftParkedCardOnAssigneeMention(ctx, comment, task, wsID)
 		s.notifyMentions(ctx, comment, task, "", wsID)
 		// Server-side enforcement: "❓ Blocking @user" → auto-move task to triage + arm gate.
 		s.enforceBlockingTriage(ctx, comment, task, wsID)
@@ -1375,7 +1379,10 @@ func (s *commentService) notifyMentions(
 	// The task's status category, resolved once: it decides whether the card is
 	// in the feed a mentioned agent actually polls, which is the difference
 	// between a comment they will be handed and one they will never see.
-	taskInTodo := s.taskIsInTodoCategory(ctx, task)
+	statusCategory := s.taskStatusCategory(ctx, task)
+	taskInTodo := statusCategory == string(domain.StatusCategoryTodo)
+	taskGated := task.HumanGate
+	taskScheduled := task.StartAfter != nil && task.StartAfter.After(now)
 
 	seenID := make(map[uuid.UUID]bool)
 	var dbRows []domain.CommentMention
@@ -1428,10 +1435,12 @@ func (s *commentService) notifyMentions(
 					Agent:           agent,
 					SelfMention:     isSelf,
 					StreamConnected: presence.IsConnected(agent.ID),
-					InTaskQueue: taskInTodo &&
-						task.AssigneeType == domain.AssigneeTypeAgent &&
-						task.AssigneeID != nil && *task.AssigneeID == agent.ID,
-					Presence: agent.ComputedStatus(presence.IsConnected(agent.ID)),
+					InTaskQueue:     taskInTodo && taskAssignedToAgent(task, agent.ID),
+					IsAssignee:      taskAssignedToAgent(task, agent.ID),
+					StatusCategory:  statusCategory,
+					Gated:           taskGated,
+					Scheduled:       taskScheduled,
+					Presence:        agent.ComputedStatus(presence.IsConnected(agent.ID)),
 				}, now))
 				dbRows = append(dbRows, domain.CommentMention{
 					CommentID:     comment.ID,
@@ -1599,14 +1608,26 @@ func (s *commentService) markDeliveryFailed(commentID uuid.UUID, slug, kind stri
 // confident "delivered", which is the shape of error this record exists to
 // eliminate — an unknown must never be reported as a reassurance.
 func (s *commentService) taskIsInTodoCategory(ctx context.Context, task *domain.Task) bool {
+	return s.taskStatusCategory(ctx, task) == string(domain.StatusCategoryTodo)
+}
+
+// taskStatusCategory returns the task's status category, or "" when it cannot
+// be read — which every caller treats as "not todo" (fail closed, as above).
+func (s *commentService) taskStatusCategory(ctx context.Context, task *domain.Task) string {
 	if s.statusRepo == nil || task == nil {
-		return false
+		return ""
 	}
 	status, err := s.statusRepo.GetByID(ctx, task.StatusID)
 	if err != nil || status == nil {
-		return false
+		return ""
 	}
-	return status.Category == domain.StatusCategoryTodo
+	return string(status.Category)
+}
+
+// taskAssignedToAgent reports whether the task's assignee is this agent.
+func taskAssignedToAgent(task *domain.Task, agentID uuid.UUID) bool {
+	return task.AssigneeType == domain.AssigneeTypeAgent &&
+		task.AssigneeID != nil && *task.AssigneeID == agentID
 }
 
 // userHasMentionSubscription reports whether the mentioned person has any

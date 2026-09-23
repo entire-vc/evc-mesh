@@ -42,7 +42,7 @@ func TestDecideDelivery_AsleepAndNotInQueueAreDifferentReasons(t *testing.T) {
 	assert.Equal(t, domain.DeliverySkipped, outCard)
 
 	assert.Equal(t, domain.ReasonRecipientOffline, reasonAsleep)
-	assert.Equal(t, domain.ReasonNoQueuePath, reasonCard)
+	assert.Equal(t, domain.ReasonNotAssignee, reasonCard)
 
 	// The property the card actually asks for, asserted as a property rather
 	// than as two literals: whatever the reasons are called, they must differ.
@@ -71,7 +71,7 @@ func TestDecideDelivery_BothSkipReasonsAreReachable(t *testing.T) {
 		seen[reason] = true
 	}
 	assert.True(t, seen[domain.ReasonRecipientOffline], "recipient_offline must be reachable")
-	assert.True(t, seen[domain.ReasonNoQueuePath], "no_queue_path must be reachable")
+	assert.True(t, seen[domain.ReasonNotAssignee], "not_assignee must be reachable")
 }
 
 // The load-bearing honesty case. An agent can be soundly asleep and still be
@@ -117,7 +117,7 @@ func TestDecideDelivery_OpenStreamIsPresenceNotDelivery(t *testing.T) {
 	})
 	assert.Equal(t, domain.DeliverySkipped, out,
 		"an open stream must not be reported as reach on its own")
-	assert.Equal(t, domain.ReasonNoQueuePath, reason)
+	assert.Equal(t, domain.ReasonNotAssignee, reason)
 	assert.Equal(t, domain.ChannelNone, channel)
 	assert.Equal(t, string(domain.ComputedStatusOnline), presence,
 		"the connection is still recorded — as presence, which is what it is")

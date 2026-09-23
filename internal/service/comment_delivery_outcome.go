@@ -50,6 +50,23 @@ type deliveryFacts struct {
 	// stream open, which makes it the path that matters most of the time.
 	InTaskQueue bool
 
+	// IsAssignee is true when the task is assigned to the recipient agent,
+	// whatever its status. Separates "not theirs" from "theirs but parked" —
+	// two misses with different fixes (#ed60c795). InTaskQueue implies it.
+	IsAssignee bool
+
+	// StatusCategory is the task's status category ("" when unreadable).
+	// Recorded on the row so the status_not_fed hint can say where the card is.
+	StatusCategory string
+
+	// Gated is true when an armed human_gate holds the task. The feeder skips
+	// gated cards in every status, so a todo card that is gated is NOT reached.
+	Gated bool
+
+	// Scheduled is true when the task's start_after lies in the future. The
+	// feeder skips such cards until then, whatever their status.
+	Scheduled bool
+
 	// Presence is the recipient agent's computed presence.
 	Presence domain.ComputedAgentStatus
 
@@ -109,13 +126,33 @@ func decideDelivery(f deliveryFacts) (outcome, reason, channel, presence string)
 
 	p := presenceOf(f)
 
-	if f.InTaskQueue {
+	// A todo card that a gate or a future start_after holds is in the feed the
+	// API returns, but the feeder drops it before the lane ever sees it — so it
+	// is not a reaching path, and reporting it as one would be the confident
+	// false "delivered" this record exists to eliminate.
+	if f.InTaskQueue && !f.Gated && !f.Scheduled {
 		return domain.DeliveryDelivered, domain.ReasonTaskQueue, domain.ChannelTaskQueue, p
 	}
 	if f.Presence == domain.ComputedStatusOffline {
 		return domain.DeliverySkipped, domain.ReasonRecipientOffline, domain.ChannelNone, p
 	}
-	return domain.DeliverySkipped, domain.ReasonNoQueuePath, domain.ChannelNone, p
+
+	// Alive and not reached. Which of four situations it is decides which
+	// single action would change the outcome, so each gets its own reason
+	// (#ed60c795: one merged no_queue_path with an "assign it" hint was shown
+	// on a card that was already the recipient's own, parked in backlog).
+	// Ordered by what the author must fix FIRST: ownership, then a freeze no
+	// status move can lift, then the status itself.
+	switch {
+	case !f.IsAssignee && !f.InTaskQueue:
+		return domain.DeliverySkipped, domain.ReasonNotAssignee, domain.ChannelNone, p
+	case f.Gated:
+		return domain.DeliverySkipped, domain.ReasonTaskGated, domain.ChannelNone, p
+	case f.Scheduled:
+		return domain.DeliverySkipped, domain.ReasonTaskScheduled, domain.ChannelNone, p
+	default:
+		return domain.DeliverySkipped, domain.ReasonStatusNotFed, domain.ChannelNone, p
+	}
 }
 
 func presenceOf(f deliveryFacts) string {
@@ -151,6 +188,10 @@ func newOutcomeRow(
 		id := f.Agent.ID
 		row.RecipientID = &id
 		row.RecipientKind = domain.RecipientKindAgent
+		if f.StatusCategory != "" {
+			cat := f.StatusCategory
+			row.TaskStatusCategory = &cat
+		}
 	case f.User != nil:
 		id := f.User.ID
 		row.RecipientID = &id

@@ -17,6 +17,7 @@ import { type MentionEntry } from "@/components/markdown-view";
 import { MarkdownWithRelay } from "@/components/MarkdownWithRelay";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { useRulesStore } from "@/stores/rules";
+import { useTaskStore } from "@/stores/task";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type {
   ActorType,
@@ -24,6 +25,7 @@ import type {
   CommentDeliveryOutcome,
   CreateCommentRequest,
   PaginatedResponse,
+  TaskStatus,
 } from "@/types";
 
 interface CommentListProps {
@@ -62,41 +64,153 @@ function ActorLabel({ type, name }: { type: ActorType; name?: string }) {
  * The delivery record for one comment: which handles it addressed, and what
  * became of each.
  *
- * Renders the API's own identifiers verbatim — `skipped`, `no_queue_path`,
- * `recipient_offline` — rather than prose. That is deliberate on two counts.
- * The values are a stable machine vocabulary shared with the REST payload and
- * the database, so a reader who sees one here can grep for it. And visible
- * product copy is gated on an explicit approval that this change does not
- * carry, so inventing friendlier sentences here would ship unapproved voice.
+ * Renders the API's own identifiers verbatim — `skipped`, `status_not_fed`,
+ * `recipient_offline` — rather than prose. The values are a stable machine
+ * vocabulary shared with the REST payload and the database, so a reader who
+ * sees one here can grep for it.
+ *
+ * Below the badges, a missed handle the author can still fix gets a plate
+ * with the server's hint and, where one action would change the outcome, a
+ * button for it (#ed60c795). The badge alone was a yellow machine word: Pavel
+ * wrote "@howard" on Howard's own parked card, saw nothing he recognised as a
+ * miss, and had to ask whether the agent got it.
  *
  * Nothing renders when a comment addressed nobody, which is most comments.
  */
-function DeliveryRecord({ rows }: { rows?: CommentDeliveryOutcome[] }) {
+function DeliveryRecord({
+  rows,
+  taskId,
+  projId,
+}: {
+  rows?: CommentDeliveryOutcome[];
+  taskId?: string;
+  projId?: string;
+}) {
   if (!rows || rows.length === 0) return null;
 
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1">
-      {rows.map((row) => (
-        <Badge
-          key={row.recipient_slug}
+    <>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        {rows.map((row) => (
+          <Badge
+            key={`${row.recipient_slug}:${row.recipient_kind}`}
+            variant="outline"
+            className={cn(
+              "gap-1 font-mono text-[10px] font-normal",
+              row.outcome === "delivered" && "text-muted-foreground",
+              // Not-delivered is the state worth seeing across a room, since the
+              // whole defect being fixed is that it currently looks like success.
+              row.outcome === "skipped" && "text-yellow-600",
+              row.outcome === "failed" && "text-destructive",
+            )}
+            title={`@${row.recipient_slug} · ${row.outcome} · ${row.reason} · channel=${row.channel} · presence=${row.recipient_presence}`}
+          >
+            <span>@{row.recipient_slug}</span>
+            <span aria-hidden="true">·</span>
+            <span>{row.outcome}</span>
+            <span aria-hidden="true">·</span>
+            <span>{row.reason}</span>
+          </Badge>
+        ))}
+      </div>
+      {rows
+        .filter((row) => row.outcome === "skipped" && row.hint)
+        .map((row) => (
+          <DeliveryMissPlate
+            key={`plate:${row.recipient_slug}:${row.recipient_kind}`}
+            row={row}
+            taskId={taskId}
+            projId={projId}
+          />
+        ))}
+    </>
+  );
+}
+
+type MissAction = "move_to_todo" | "assign";
+
+/**
+ * Which single action would change a missed verdict. Gated/scheduled cards
+ * get none: neither a move nor an assignment lifts a human gate or a
+ * start_after date, and a button that changes nothing is the wrong-hint
+ * defect this plate replaces.
+ */
+export function missActionFor(row: CommentDeliveryOutcome): MissAction | null {
+  if (row.recipient_kind !== "agent" || !row.recipient_id) return null;
+  if (row.reason === "status_not_fed") return "move_to_todo";
+  if (row.reason === "not_assignee") return "assign";
+  return null;
+}
+
+function DeliveryMissPlate({
+  row,
+  taskId,
+  projId,
+}: {
+  row: CommentDeliveryOutcome;
+  taskId?: string;
+  projId?: string;
+}) {
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
+  const task = useTaskStore((s) => (taskId ? s.tasksById[taskId] : undefined));
+  const action = taskId && projId ? missActionFor(row) : null;
+
+  // The verdict is about the moment the comment was written; if somebody has
+  // since assigned the card, don't offer to assign it again.
+  const alreadyAssigned =
+    action === "assign" && task?.assignee_id != null && task.assignee_id === row.recipient_id;
+
+  const run = async () => {
+    if (!taskId || !projId || !action) return;
+    setState("busy");
+    try {
+      const store = useTaskStore.getState();
+      if (action === "move_to_todo") {
+        const statuses = await api<TaskStatus[]>(`/api/v1/projects/${projId}/statuses`);
+        const todo = (statuses ?? [])
+          .filter((st) => st.category === "todo")
+          .sort((a, b) => a.position - b.position)[0];
+        if (!todo) throw new Error("project has no todo status");
+        await store.moveTask(taskId, { status_id: todo.id });
+      } else {
+        await store.updateTask(taskId, {
+          assignee_id: row.recipient_id,
+          assignee_type: "agent",
+        });
+      }
+      setState("done");
+      // Refresh the panel's copy so the status/assignee pickers show the change.
+      void store.fetchTask(taskId).catch(() => undefined);
+    } catch {
+      setState("error");
+    }
+  };
+
+  return (
+    <div
+      data-testid="delivery-miss-plate"
+      className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-50/60 px-2 py-1 text-xs text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-200"
+    >
+      <span>
+        @{row.recipient_slug} won&apos;t see this: {row.hint}
+      </span>
+      {action && !alreadyAssigned && state !== "done" && (
+        <Button
           variant="outline"
-          className={cn(
-            "gap-1 font-mono text-[10px] font-normal",
-            row.outcome === "delivered" && "text-muted-foreground",
-            // Not-delivered is the state worth seeing across a room, since the
-            // whole defect being fixed is that it currently looks like success.
-            row.outcome === "skipped" && "text-yellow-600",
-            row.outcome === "failed" && "text-destructive",
-          )}
-          title={`@${row.recipient_slug} · ${row.outcome} · ${row.reason} · channel=${row.channel} · presence=${row.recipient_presence}`}
+          size="sm"
+          className="h-6 px-2 text-xs"
+          disabled={state === "busy"}
+          onClick={() => void run()}
         >
-          <span>@{row.recipient_slug}</span>
-          <span aria-hidden="true">·</span>
-          <span>{row.outcome}</span>
-          <span aria-hidden="true">·</span>
-          <span>{row.reason}</span>
-        </Badge>
-      ))}
+          {action === "move_to_todo" ? "Move to todo" : `Assign to @${row.recipient_slug}`}
+        </Button>
+      )}
+      {state === "done" && (
+        <span className="text-muted-foreground">
+          {action === "move_to_todo" ? "Moved to todo." : `Assigned to @${row.recipient_slug}.`}
+        </span>
+      )}
+      {state === "error" && <span className="text-destructive">Couldn&apos;t apply — try from the task fields.</span>}
     </div>
   );
 }
@@ -262,7 +376,7 @@ function CommentItem({
           />
         )}
 
-        <DeliveryRecord rows={comment.delivery} />
+        <DeliveryRecord rows={comment.delivery} taskId={comment.task_id} projId={projId} />
       </div>
 
       {replies.length > 0 && (

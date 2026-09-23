@@ -41,20 +41,23 @@ func (r *CommentDeliveryOutcomeRepo) InsertBatch(ctx context.Context, rows []dom
 	const q = `
 		INSERT INTO comment_delivery_outcomes
 			(comment_id, recipient_slug, recipient_id, recipient_kind,
-			 outcome, reason, channel, recipient_presence, decided_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 outcome, reason, channel, recipient_presence, decided_at,
+			 task_status_category)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (comment_id, recipient_slug, recipient_kind) DO UPDATE SET
 			recipient_id       = EXCLUDED.recipient_id,
 			outcome            = EXCLUDED.outcome,
 			reason             = EXCLUDED.reason,
 			channel            = EXCLUDED.channel,
 			recipient_presence = EXCLUDED.recipient_presence,
-			decided_at         = EXCLUDED.decided_at
+			decided_at         = EXCLUDED.decided_at,
+			task_status_category = EXCLUDED.task_status_category
 	`
 	for _, o := range rows {
 		if _, err := r.db.ExecContext(ctx, q,
 			o.CommentID, o.RecipientSlug, o.RecipientID, o.RecipientKind,
 			o.Outcome, o.Reason, o.Channel, o.RecipientPresence, o.DecidedAt,
+			o.TaskStatusCategory,
 		); err != nil {
 			return err
 		}
@@ -100,7 +103,8 @@ func (r *CommentDeliveryOutcomeRepo) ListByCommentIDs(
 
 	const q = `
 		SELECT comment_id, recipient_slug, recipient_id, recipient_kind,
-		       outcome, reason, channel, recipient_presence, decided_at
+		       outcome, reason, channel, recipient_presence, decided_at,
+		       task_status_category
 		  FROM comment_delivery_outcomes
 		 WHERE comment_id = ANY($1)
 		 ORDER BY recipient_slug

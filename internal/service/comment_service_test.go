@@ -643,11 +643,11 @@ func TestCommentService_Create_SurfacesDeliveryOutcome(t *testing.T) {
 		wantHint     string
 	}{
 		{
-			name:         "mentioned agent has no queue path — skipped, with hint",
+			name:         "mentioned agent is not the assignee — skipped, with assign hint",
 			assignToSelf: false,
 			wantOutcome:  domain.DeliverySkipped,
-			wantReason:   domain.ReasonNoQueuePath,
-			wantHint:     "recipient is alive but this task isn't assigned to them — assign it if you need them to see this",
+			wantReason:   domain.ReasonNotAssignee,
+			wantHint:     "recipient is alive but this task is assigned to someone else — assign it to them if they should act on it",
 		},
 		{
 			name:         "mentioned agent owns the queued task — delivered, no hint",
@@ -680,7 +680,7 @@ func TestCommentService_Create_SurfacesDeliveryOutcome(t *testing.T) {
 
 			// Alive without an open stream: recent heartbeat is enough for
 			// ComputedStatus to report online, so a miss in this test is
-			// unambiguously no_queue_path, never the OTHER skip reason
+			// unambiguously not_assignee, never the OTHER skip reason
 			// (recipient_offline) — the two need different fixes and the test
 			// must not conflate them.
 			heartbeat := time.Now()

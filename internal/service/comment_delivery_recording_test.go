@@ -138,7 +138,7 @@ func TestNotifyMentions_TwoRecipientsGetTwoDifferentReasons(t *testing.T) {
 
 	assert.Equal(t, domain.DeliverySkipped, awake.Outcome)
 	assert.Equal(t, domain.DeliverySkipped, asleep.Outcome)
-	assert.Equal(t, domain.ReasonNoQueuePath, awake.Reason)
+	assert.Equal(t, domain.ReasonNotAssignee, awake.Reason)
 	assert.Equal(t, domain.ReasonRecipientOffline, asleep.Reason)
 	assert.NotEqual(t, awake.Reason, asleep.Reason,
 		"the two scenarios must not collapse into one reason")

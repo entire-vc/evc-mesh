@@ -322,6 +322,11 @@ func (s *commentService) enforceMentionHandoffGate(
 	now := timeNow()
 	taskInTodo := s.taskIsInTodoCategory(ctx, task)
 
+	// A person naming the assignee on their own parked card is about to lift it
+	// into todo (liftParkedCardOnAssigneeMention, right after persistence) —
+	// that IS the handoff, so it must not be refused here as a dead letter.
+	_, liftApplies := s.assigneeMentionLiftTarget(ctx, comment, task, wsID)
+
 	var blocked []string
 	for _, slug := range slugs {
 		if exempt[slug] {
@@ -340,6 +345,9 @@ func (s *commentService) enforceMentionHandoffGate(
 			continue
 		}
 		if s.mentionHasHandoff(ctx, task, agent, taskInTodo, now) {
+			continue
+		}
+		if liftApplies && taskAssignedToAgent(task, agent.ID) {
 			continue
 		}
 		if !mentionHasAskPattern(comment.Body, slug) {
