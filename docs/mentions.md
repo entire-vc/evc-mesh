@@ -2,8 +2,6 @@
 
 Full specification for the `@`-mention system: regex extraction → slug resolution → `comment_mentions` persistence → `task.mentioned` SSE (agents) → `mention.badge` WS (users) → REST query API.
 
-Implemented in PR #68. Frontend Activity tab (B2) in PR #72.
-
 ---
 
 ## 1. Slug extraction
@@ -86,7 +84,7 @@ Insert uses `ON CONFLICT (comment_id, mentioned_id) DO NOTHING` — idempotent o
 
 ## 6. Agent SSE — `task.mentioned`
 
-Published to Redis pub/sub channel `agent-notify:<agent-uuid>` after each agent mention row is persisted. Mesh-dispatcher and SSE consumers subscribe per agent.
+Published to Redis pub/sub channel `agent-notify:<agent-uuid>` after each agent mention row is persisted. Agent runtimes subscribe to their own channel and consume via SSE.
 
 **Event shape:**
 
@@ -98,7 +96,7 @@ Published to Redis pub/sub channel `agent-notify:<agent-uuid>` after each agent 
   "agent_id": "<uuid of mentioned agent>",
   "actor_id": "<uuid of commenter>",
   "actor_type": "agent | user",
-  "actor_name": "Garfield",
+  "actor_name": "alice",
   "task": {
     "id": "<uuid>",
     "project_id": "<uuid>",
@@ -118,7 +116,7 @@ Published to Redis pub/sub channel `agent-notify:<agent-uuid>` after each agent 
   "task_id": "<uuid>",
   "project_id": "<uuid>",
   "payload": {
-    "mentioned_slug": "garfield"
+    "mentioned_slug": "alice"
   }
 }
 ```
@@ -169,7 +167,7 @@ Returns paginated mention records for the caller.
     "comment_id": "<uuid>",
     "mentioned_id": "<uuid>",
     "mentioned_kind": "agent | user",
-    "mentioned_slug": "garfield",
+    "mentioned_slug": "alice",
     "extracted_at": "2026-05-21T00:00:00Z",
     "seen_at": null,
     "task_id": "<uuid>",
@@ -177,7 +175,7 @@ Returns paginated mention records for the caller.
     "project_id": "<uuid>",
     "comment_body": "…",
     "author_id": "<uuid>",
-    "author_name": "Pavel"
+    "author_name": "bob"
   }
 ]
 ```
@@ -218,8 +216,8 @@ Returns the count of unseen mentions. Cached for 10 s (`Cache-Control: max-age=1
 
 ## 10. Out of scope
 
-- ❌ Markdown render `@username` as hyperlink (Phase 3)
-- ❌ `@<typing>` autocomplete in comment editor (Phase 3)
-- ❌ Web push / Telegram alerts (Phase 2)
-- ❌ Profile UI to rename `username` (separate task `06f9f2dc`)
-- ❌ Dispatcher-side spawn logic (Riker — activates automatically from `task.mentioned` event)
+- ❌ Markdown render `@username` as hyperlink
+- ❌ `@<typing>` autocomplete in comment editor
+- ❌ Web push / external chat alerts
+- ❌ Profile UI to rename `username`
+- ❌ Any agent-runtime reaction to `task.mentioned` — that's the consumer's responsibility, out of this service's scope
