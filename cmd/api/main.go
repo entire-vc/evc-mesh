@@ -2063,7 +2063,7 @@ func main() {
 	// enforcing and retire the sweep (#56ec28e8). Same 60s cadence as the monitor
 	// sweeper above so a day of logs lines up 1:1 with a day of sweep runs.
 	backlogPromotionAdvisorySvc := service.NewBacklogPromotionAdvisoryService(
-		taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo,
+		taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo, projectRepo,
 	)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)

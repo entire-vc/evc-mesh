@@ -35,6 +35,7 @@ type backlogHarness struct {
 	statusRepo   *MockTaskStatusRepository
 	depRepo      *MockTaskDependencyRepository
 	activityRepo *MockActivityLogRepository
+	projectRepo  *MockProjectRepository
 	svc          BacklogPromotionAdvisoryService
 }
 
@@ -44,9 +45,17 @@ func newBacklogHarness() *backlogHarness {
 		statusRepo:   NewMockTaskStatusRepository(),
 		depRepo:      NewMockTaskDependencyRepository(),
 		activityRepo: NewMockActivityLogRepository(),
+		projectRepo:  NewMockProjectRepository(),
 	}
 	h.taskRepo.WithStatusCategoryLookup(h.statusRepo)
-	h.svc = NewBacklogPromotionAdvisoryService(h.taskRepo, h.statusRepo, h.depRepo, h.activityRepo)
+	// Every existing test in this file predates the workspace-scope guard and never
+	// seeds a project row — defaulting unseeded projects to the in-scope EVC workspace
+	// keeps them all exercising what they actually test (parity with the sweep on an
+	// in-scope task) instead of tripping the new guard. A test that needs an
+	// OUT-of-scope project seeds one explicitly with WithDefaultWorkspace's sibling,
+	// projectRepo.Create — see TestWorkspaceScope_* below.
+	h.projectRepo.WithDefaultWorkspace(backlogInScopeWorkspaceID)
+	h.svc = NewBacklogPromotionAdvisoryService(h.taskRepo, h.statusRepo, h.depRepo, h.activityRepo, h.projectRepo)
 	return h
 }
 
@@ -306,5 +315,86 @@ func TestBacklogPromotionAdvisory_CancelledBlocker_ClearsDep(t *testing.T) {
 	got := decisionFor(t, decisions, task.ID)
 	if !got.Promote {
 		t.Fatalf("expected promote=true (cancelled blocker clears the dependency), got false, reason=%q", got.Reason)
+	}
+}
+
+// --- Workspace scope (#a24616da, prerequisite of #f42fe0a8): mesh-intake-sweep.py
+// only ever polls ONE workspace (WORKSPACE_ID in bob/scripts/mesh-intake-sweep.py,
+// same UUID as backlogInScopeWorkspaceID here). A backlog task whose project sits in
+// any OTHER workspace (KidCash — Pavel's personal workspace under Codex; Editorial)
+// is invisible to the sweep and must be HELD, not promoted — promoting it would be new
+// behaviour, not parity, per Riker's #f42fe0a8 decision (2026-09-21T16:16Z).
+
+// Negative control: a project in a foreign workspace — otherwise a "born in backlog,
+// no dependencies" card that the positive control above shows IS promotable when the
+// workspace matches. Isolates the guard: everything else about the task is identical.
+func TestBacklogPromotionAdvisory_ForeignWorkspace_NotPromotable(t *testing.T) {
+	h := newBacklogHarness()
+	projectID := uuid.New()
+	foreignWS := uuid.New()
+	if err := h.projectRepo.Create(context.Background(), &domain.Project{ID: projectID, WorkspaceID: foreignWS}); err != nil {
+		t.Fatalf("seed foreign-workspace project: %v", err)
+	}
+	backlog := h.addStatus(t, projectID, "Backlog", domain.StatusCategoryBacklog)
+
+	task := h.addTask(t, projectID, backlog.ID)
+	// No activity-log entries, no deps, no labels — identical shape to the "born in
+	// backlog" positive control, so a promote=true here could ONLY come from skipping
+	// the workspace check, not from some other guard coincidentally also holding it.
+
+	decisions, err := h.svc.SweepAdvisory(context.Background())
+	if err != nil {
+		t.Fatalf("SweepAdvisory: %v", err)
+	}
+	got := decisionFor(t, decisions, task.ID)
+	if got.Promote {
+		t.Fatalf("expected promote=false (project in foreign workspace %s), got true, reason=%q", foreignWS, got.Reason)
+	}
+	if got.Reason != "workspace outside EVC scope (not covered by mesh-intake-sweep.py)" {
+		t.Fatalf("unexpected reason: %q", got.Reason)
+	}
+}
+
+// Positive control: same shape, but the project is explicitly seeded in the in-scope
+// EVC workspace (not relying on newBacklogHarness's default-workspace fallback) — the
+// guard must not hold a genuinely in-scope task.
+func TestBacklogPromotionAdvisory_EVCWorkspace_StillPromotable(t *testing.T) {
+	h := newBacklogHarness()
+	projectID := uuid.New()
+	if err := h.projectRepo.Create(context.Background(), &domain.Project{ID: projectID, WorkspaceID: backlogInScopeWorkspaceID}); err != nil {
+		t.Fatalf("seed EVC-workspace project: %v", err)
+	}
+	backlog := h.addStatus(t, projectID, "Backlog", domain.StatusCategoryBacklog)
+
+	task := h.addTask(t, projectID, backlog.ID)
+
+	decisions, err := h.svc.SweepAdvisory(context.Background())
+	if err != nil {
+		t.Fatalf("SweepAdvisory: %v", err)
+	}
+	got := decisionFor(t, decisions, task.ID)
+	if !got.Promote {
+		t.Fatalf("expected promote=true (project explicitly in EVC workspace), got false, reason=%q", got.Reason)
+	}
+}
+
+// Fail-closed control: the task's project cannot be resolved at all (deleted /
+// unknown project id, no default-workspace fallback) — must hold, matching the
+// fail-closed convention every other guard lookup in evaluate() follows.
+func TestBacklogPromotionAdvisory_UnresolvableProject_FailsClosedNotPromotable(t *testing.T) {
+	h := newBacklogHarness()
+	h.projectRepo.WithDefaultWorkspace(uuid.Nil) // undo newBacklogHarness's fallback
+	projectID := uuid.New()                      // never seeded in projectRepo
+	backlog := h.addStatus(t, projectID, "Backlog", domain.StatusCategoryBacklog)
+
+	task := h.addTask(t, projectID, backlog.ID)
+
+	decisions, err := h.svc.SweepAdvisory(context.Background())
+	if err != nil {
+		t.Fatalf("SweepAdvisory: %v", err)
+	}
+	got := decisionFor(t, decisions, task.ID)
+	if got.Promote {
+		t.Fatalf("expected promote=false (project lookup unresolvable, fail-closed), got true, reason=%q", got.Reason)
 	}
 }
