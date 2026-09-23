@@ -1402,7 +1402,7 @@ recall-gate-branch:
                test_classify_cancelled_arm.py test_resume_after_deploy.py test_bench_window.py \
                test_fixture_ages.py test_search_settle.py test_embed_drain.py \
                test_confirm_embedder_alive.py test_corpus_sanitize.py test_corpus_sanitize_wiring.py \
-               test_gate_recency_floor.py; do
+               test_gate_recency_floor.py test_ci_bootstrap_workspace_slug.py; do
         python3 "$f" || { echo "SELF-CHECK FAILED: $f"; exit 1; }
       done
       python3 dense_arm_control.py --selftest || exit 1
