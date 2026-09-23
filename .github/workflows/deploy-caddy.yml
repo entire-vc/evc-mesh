@@ -36,15 +36,15 @@ jobs:
       - name: Configure hel01 jump
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
             echo "Host mesh-vm"
-            echo "  HostName 10.10.10.10"
+            echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
             echo "  ProxyJump hel01-jump"
             echo "  StrictHostKeyChecking accept-new"
             echo "Host hel01-jump"
-            echo "  HostName 66.151.34.194"
+            echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
             echo "  User ghdeploy"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
@@ -80,9 +80,11 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
 
       - name: Smoke test
+        env:
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
         run: |
           for i in $(seq 1 10); do
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' https://mesh.entire.host/api/v1/healthz/version) || CODE=000
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "${APP_BASE_URL}/api/v1/healthz/version") || CODE=000
             if [ "$CODE" = "200" ]; then
               echo "Smoke OK: healthz/version → 200"
               exit 0

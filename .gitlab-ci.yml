@@ -1,4 +1,4 @@
-# CI for the GitLab canon (git.entire.host/entire-vc/evc-mesh).
+# CI for the GitLab canon (self-hosted GitLab, entire-vc/evc-mesh).
 #
 # ## Why this file exists
 #
@@ -916,7 +916,8 @@ test:web:
 # Ported from .github/workflows/ci.yml:playwright-e2e ("Authed E2E"). Despite
 # its name and the task description's assumption, this job stands up NO
 # infrastructure at all — no API/frontend/DB/NATS/MinIO. web/playwright.config.ts
-# points baseURL at the LIVE prod app (https://mesh.entire.host by default) and
+# points baseURL at the LIVE prod app (configured via the $MESH_PROD_APP_BASE_URL
+# project CI/CD variable below) and
 # web/e2e/auth-helper.ts logs in once through the real, deployed
 # /api/v1/auth/login as a dedicated CI-only account (member of exactly one
 # scratch workspace, e2e-ci-sandbox, and of no real workspace). There is no
@@ -938,7 +939,7 @@ test:web:
 # as `only_allow_merge_if_pipeline_succeeds`, §1q — cleared via the
 # `gl-admin`/`gitlab-rails` root channel on VM 113, not by hand-editing this
 # repo's settings). The job is wired live and green in prod (pipeline 2184,
-# job `authed-e2e`, 8/8 passed against https://mesh.entire.host) — no `hold`,
+# job `authed-e2e`, 8/8 passed against the live prod app) — no `hold`,
 # no open Pavel ask. global-setup.ts still fails loudly, not silently-skips,
 # if the variables ever go missing again (the #40ea4053 incident this job
 # exists to prevent was exactly a green check over a silently skipped suite).
@@ -948,7 +949,7 @@ authed-e2e:
   timeout: 20m
   needs: [lint]
   variables:
-    APP_BASE_URL: "https://mesh.entire.host"
+    APP_BASE_URL: "$MESH_PROD_APP_BASE_URL"
     # Same download black-hole as the GitHub job — see header above.
     PLAYWRIGHT_DOWNLOAD_HOST: "http://127.0.0.1:9"
   before_script:

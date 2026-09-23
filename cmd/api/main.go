@@ -563,7 +563,7 @@ func main() {
 		log.Printf("[config] Invite links will be built from MESH_BASE_URL=%s", cfg.Email.BaseURL)
 	}
 	// SMTP_HOST set but SMTP_FROM not: previously this silently sent as
-	// noreply@mesh.entire.host — our domain, on someone else's mail server.
+	// noreply@mesh.example.com — our domain, on someone else's mail server.
 	// Now it's an empty From header, which most SMTP servers reject outright
 	// at send time. Either way the operator needs to know before their first
 	// invite fails; say so once, at boot, the same as the base-URL check above.
