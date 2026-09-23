@@ -162,10 +162,42 @@ func (r *ProjectRepo) ListForUserInWorkspace(ctx context.Context, workspaceID, u
 	return result, nil
 }
 
-// Delete performs a soft delete by setting deleted_at.
+// projectDeletedSlugMaxLen is how much of the original slug survives the
+// rename on delete: '-deleted-' (9) + YYYYMMDD (8) + '-' (1) + 8 hex = 26
+// characters are appended, and chk_projects_slug_format caps the whole slug
+// at 100.
+const projectDeletedSlugMaxLen = 100 - 26
+
+// Delete performs a soft delete of the project and, in the same transaction,
+// cascades to the project's tasks and documents.
+//
+// Same shape as WorkspaceRepo.Delete, for the same reason: cross-cutting reads
+// (a member's active-task list, /me/comments, the docs index behind recall)
+// only check the deleted_at of the row they select, so a deleted project whose
+// tasks and documents stayed live would keep surfacing them. Cascading makes
+// those queries correct without teaching each of them about projects.
+//
+// The slug is renamed rather than kept: uq_projects_workspace_slug covers dead
+// rows too, so a soft-deleted project holding its slug would make the same
+// slug impossible to reuse in that workspace, with an error indistinguishable
+// from "a live project already has it". The suffix is the row's own id, so two
+// projects deleted from the same slug on the same day cannot collide.
+//
+// Task #ddd219f4: before this, DELETE /projects/:id was wired to Archive and
+// this method was never called.
 func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
-	const q = `UPDATE projects SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
-	res, err := r.db.ExecContext(ctx, q, id)
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE projects
+		SET deleted_at = NOW(), updated_at = NOW(),
+		    slug = left(slug, $2) || '-deleted-' || to_char(NOW(), 'YYYYMMDD') || '-' || left(replace(id::text, '-', ''), 8)
+		WHERE id = $1 AND deleted_at IS NULL`,
+		id, projectDeletedSlugMaxLen)
 	if err != nil {
 		return err
 	}
@@ -173,7 +205,20 @@ func (r *ProjectRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	if n == 0 {
 		return apierror.NotFound("Project")
 	}
-	return nil
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET deleted_at = NOW() WHERE project_id = $1 AND deleted_at IS NULL`, id,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE documents SET deleted_at = NOW(), updated_at = NOW() WHERE project_id = $1 AND deleted_at IS NULL`, id,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (r *ProjectRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repository.ProjectFilter, pg pagination.Params) (*pagination.Page[domain.Project], error) {

@@ -242,6 +242,13 @@ func (s *projectService) Unarchive(ctx context.Context, id uuid.UUID) error {
 	return s.projectRepo.Update(ctx, project)
 }
 
+// Delete soft-deletes the project together with its tasks and documents.
+// Unlike Archive it is not reversible from the API: the row is gone from every
+// read, and its slug is freed for reuse.
+func (s *projectService) Delete(ctx context.Context, id uuid.UUID) error {
+	return s.projectRepo.Delete(ctx, id)
+}
+
 // List returns a paginated list of projects for the given workspace.
 func (s *projectService) List(ctx context.Context, workspaceID uuid.UUID, filter repository.ProjectFilter, pg pagination.Params) (*pagination.Page[domain.Project], error) {
 	pg.Normalize()

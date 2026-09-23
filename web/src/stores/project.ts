@@ -13,6 +13,18 @@ function getErrorMessage(error: unknown): string {
   return apiErrorMessage(error, "Request failed");
 }
 
+function replaceProject(
+  state: { projects: Project[]; currentProject: Project | null },
+  id: string,
+  updated: Project,
+) {
+  return {
+    projects: state.projects.map((p) => (p.id === id ? updated : p)),
+    currentProject:
+      state.currentProject?.id === id ? updated : state.currentProject,
+  };
+}
+
 interface ProjectState {
   projects: Project[];
   currentProject: Project | null;
@@ -32,6 +44,8 @@ interface ProjectState {
     req: Partial<CreateProjectRequest>,
   ) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
+  archiveProject: (id: string) => Promise<void>;
+  unarchiveProject: (id: string) => Promise<void>;
 
   fetchStatuses: (projectId: string) => Promise<void>;
   createStatus: (
@@ -118,6 +132,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentProject:
         state.currentProject?.id === id ? null : state.currentProject,
     }));
+  },
+
+  // Archive state has its own routes — PATCH refuses is_archived (#ddd219f4).
+  // The project stays in `projects` (lookups by id must still resolve its
+  // name); the sidebar is what splits live from archived.
+  archiveProject: async (id: string) => {
+    const updated = await api<Project>(`/api/v1/projects/${id}/archive`, {
+      method: "POST",
+    });
+    set((state) => replaceProject(state, id, updated));
+  },
+
+  unarchiveProject: async (id: string) => {
+    const updated = await api<Project>(`/api/v1/projects/${id}/unarchive`, {
+      method: "POST",
+    });
+    set((state) => replaceProject(state, id, updated));
   },
 
   fetchStatuses: async (projectId: string) => {

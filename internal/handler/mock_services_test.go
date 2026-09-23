@@ -80,6 +80,7 @@ type MockProjectService struct {
 	UpdateFunc    func(ctx context.Context, project *domain.Project) error
 	ArchiveFunc   func(ctx context.Context, id uuid.UUID) error
 	UnarchiveFunc func(ctx context.Context, id uuid.UUID) error
+	DeleteFunc    func(ctx context.Context, id uuid.UUID) error
 	ListFunc      func(ctx context.Context, workspaceID uuid.UUID, filter repository.ProjectFilter, pg pagination.Params) (*pagination.Page[domain.Project], error)
 }
 
@@ -114,6 +115,13 @@ func (m *MockProjectService) Archive(ctx context.Context, id uuid.UUID) error {
 func (m *MockProjectService) Unarchive(ctx context.Context, id uuid.UUID) error {
 	if m.UnarchiveFunc != nil {
 		return m.UnarchiveFunc(ctx, id)
+	}
+	return nil
+}
+
+func (m *MockProjectService) Delete(ctx context.Context, id uuid.UUID) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id)
 	}
 	return nil
 }

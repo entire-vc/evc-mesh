@@ -1517,8 +1517,6 @@ paths:
                   type: string
                 icon:
                   type: string
-                is_archived:
-                  type: boolean
       responses:
         "200":
           description: Updated project
@@ -1526,12 +1524,65 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
+        "400":
+          description: >-
+            Invalid body. `is_archived` is refused here — use
+            POST /projects/{proj_id}/archive or /unarchive.
     delete:
       tags: [Projects]
       summary: Delete project
+      description: >-
+        Soft-deletes the project together with its tasks and documents and frees
+        its slug. Not reversible through the API. Requires delete_project
+        (workspace owner/admin).
       responses:
         "204":
           description: Deleted
+        "404":
+          description: Project not found or already deleted
+
+  /api/v1/projects/{proj_id}/archive:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Projects]
+      summary: Archive project
+      description: >-
+        Sets is_archived=true. Archived projects are excluded from
+        GET /workspaces/{ws_id}/projects?is_archived=false. Requires
+        delete_project (workspace owner/admin).
+      responses:
+        "200":
+          description: Archived project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /api/v1/projects/{proj_id}/unarchive:
+    parameters:
+      - name: proj_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Projects]
+      summary: Unarchive project
+      description: Sets is_archived=false. Requires delete_project (workspace owner/admin).
+      responses:
+        "200":
+          description: Unarchived project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
 
   # ------------------------------------------------------------------
   # Task Statuses

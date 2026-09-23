@@ -296,3 +296,24 @@ func TestProjectService_GetByID(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestProjectService_Delete (#ddd219f4)
+// ---------------------------------------------------------------------------
+
+func TestProjectService_Delete(t *testing.T) {
+	svc, projectRepo, _ := setupProjectService()
+	ctx := context.Background()
+	id := uuid.New()
+	projectRepo.items[id] = &domain.Project{ID: id, Name: "Doomed"}
+
+	require.NoError(t, svc.Delete(ctx, id))
+	_, stillThere := projectRepo.items[id]
+	assert.False(t, stillThere, "Delete must reach the repository delete, not archive")
+
+	projectRepo.errToReturn = apierror.NotFound("Project")
+	err := svc.Delete(ctx, uuid.New())
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Code)
+}
