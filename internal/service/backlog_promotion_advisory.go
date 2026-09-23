@@ -96,6 +96,7 @@ type backlogPromotionAdvisoryService struct {
 	statusRepo   repository.TaskStatusRepository
 	depRepo      repository.TaskDependencyRepository
 	activityRepo repository.ActivityLogRepository
+	projectRepo  repository.ProjectRepository
 	now          func() time.Time
 }
 
@@ -105,12 +106,14 @@ func NewBacklogPromotionAdvisoryService(
 	statusRepo repository.TaskStatusRepository,
 	depRepo repository.TaskDependencyRepository,
 	activityRepo repository.ActivityLogRepository,
+	projectRepo repository.ProjectRepository,
 ) BacklogPromotionAdvisoryService {
 	return &backlogPromotionAdvisoryService{
 		taskRepo:     taskRepo,
 		statusRepo:   statusRepo,
 		depRepo:      depRepo,
 		activityRepo: activityRepo,
+		projectRepo:  projectRepo,
 		now:          time.Now,
 	}
 }
@@ -129,11 +132,13 @@ func (s *backlogPromotionAdvisoryService) SweepAdvisory(ctx context.Context) ([]
 	// parent_id -> parent verdict, one fetch per parent per tick (mirrors the sweep's
 	// parent_human_cache / parent_eval_cache).
 	parentCache := make(map[uuid.UUID]parentVerdict)
+	// project_id -> workspace_id, one fetch per project per tick (§workspace scope guard).
+	projectWSCache := make(map[uuid.UUID]uuid.UUID)
 
 	decisions := make([]BacklogPromotionDecision, 0, len(tasks))
 	for i := range tasks {
 		task := &tasks[i]
-		promote, reason, err := s.evaluate(ctx, task, nameCatCache, parentCache)
+		promote, reason, err := s.evaluate(ctx, task, nameCatCache, parentCache, projectWSCache)
 		if err != nil {
 			reason = fmt.Sprintf("guard lookup failed, fail-closed no-promote: %v", err)
 			promote = false
@@ -153,7 +158,24 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	task *domain.Task,
 	nameCatCache map[uuid.UUID]map[string]domain.StatusCategory,
 	parentCache map[uuid.UUID]parentVerdict,
+	projectWSCache map[uuid.UUID]uuid.UUID,
 ) (promote bool, reason string, err error) {
+	// 0. Workspace scope. mesh-intake-sweep.py only ever polls ONE workspace
+	// (WORKSPACE_ID in bob/scripts/mesh-intake-sweep.py) — a task whose project belongs
+	// to any OTHER workspace (KidCash, Pavel's personal workspace under Codex;
+	// Editorial) is invisible to the sweep, which never promotes it because it never
+	// sees it. Promoting such a card server-side would be NEW behaviour, not parity
+	// (Riker, #f42fe0a8, 2026-09-21T16:16Z: "enforcing только на workspace EVC ...
+	// паритет, а не новое поведение"). Checked first: it decides which rule set even
+	// applies, and a task outside scope should never accrue an in-scope reason string.
+	ws, wsErr := s.projectWorkspaceOf(ctx, task.ProjectID, projectWSCache)
+	if wsErr != nil {
+		return false, "", fmt.Errorf("resolve project workspace: %w", wsErr)
+	}
+	if ws != backlogInScopeWorkspaceID {
+		return false, "workspace outside EVC scope (not covered by mesh-intake-sweep.py)", nil
+	}
+
 	// 1. Park labels and the wake overrides — cheapest guard (no extra query), checked
 	// first, mirroring mesh-intake-sweep.py's own ordering (is_passive_wait() runs
 	// before any lookup). See evaluateWake for the wake:<type> / due_date rules.
@@ -265,6 +287,27 @@ func (s *backlogPromotionAdvisoryService) allDepsCleared(ctx context.Context, de
 		}
 	}
 	return true, nil
+}
+
+// projectWorkspaceOf resolves a project's workspace once per tick, cached the same
+// way as nameCatCache/parentCache above. A project that cannot be read (error or
+// gone) is an error, which the caller turns into fail-closed no-promote — we cannot
+// prove the task is in scope, so it is treated as out of scope's safe side (hold).
+func (s *backlogPromotionAdvisoryService) projectWorkspaceOf(
+	ctx context.Context, projectID uuid.UUID, cache map[uuid.UUID]uuid.UUID,
+) (uuid.UUID, error) {
+	if ws, ok := cache[projectID]; ok {
+		return ws, nil
+	}
+	p, err := s.projectRepo.GetByID(ctx, projectID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if p == nil {
+		return uuid.Nil, fmt.Errorf("project %s not found", projectID)
+	}
+	cache[projectID] = p.WorkspaceID
+	return p.WorkspaceID, nil
 }
 
 // wasDeliberatelyParked mirrors mesh-intake-sweep.py's was_deliberately_parked(),

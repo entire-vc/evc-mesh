@@ -19,6 +19,12 @@ import (
 // promotes shows up as `sweep_only` in the divergence journal and costs a delay,
 // while the opposite direction would move a card that is waiting on a person.
 
+// backlogInScopeWorkspaceID mirrors WORKSPACE_ID in bob/scripts/mesh-intake-sweep.py —
+// the single workspace the sweep polls. A task whose project belongs to any other
+// workspace is invisible to the sweep and must be held, not promoted (see the
+// workspace-scope guard in backlog_promotion_advisory.go's evaluate()).
+var backlogInScopeWorkspaceID = uuid.MustParse("df814cd2-ca4b-47d6-9522-820e4eb47dc3")
+
 // backlogAbsoluteNoPromoteLabels mirrors ABSOLUTE_NO_PROMOTE_LABELS: an explicit
 // human freeze or an Agent-Eval fixture. A passed due_date never overrides these;
 // only an explicit wake:<type> label does.
