@@ -1041,6 +1041,8 @@ export function ProjectSettingsPage() {
     fetchStatuses,
     updateProject,
     deleteProject,
+    archiveProject,
+    unarchiveProject,
     reorderStatuses,
     deleteStatus,
   } = useProjectStore();
@@ -1650,9 +1652,15 @@ export function ProjectSettingsPage() {
 
     setIsArchiving(true);
     try {
-      await updateProject(currentProject.id, { is_archived: true } as Parameters<typeof updateProject>[1]);
-      setArchiveDialogOpen(false);
-      navigate(`/w/${wsSlug}`);
+      if (currentProject.is_archived) {
+        await unarchiveProject(currentProject.id);
+        setArchiveDialogOpen(false);
+        setIsArchiving(false);
+      } else {
+        await archiveProject(currentProject.id);
+        setArchiveDialogOpen(false);
+        navigate(`/w/${wsSlug}`);
+      }
     } catch {
       // Error is handled by keeping the dialog open
       setIsArchiving(false);
@@ -3081,10 +3089,13 @@ export function ProjectSettingsPage() {
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between rounded-lg border border-border p-4">
             <div>
-              <p className="text-sm font-medium">Archive Project</p>
+              <p className="text-sm font-medium">
+                {currentProject.is_archived ? "Unarchive Project" : "Archive Project"}
+              </p>
               <p className="text-sm text-muted-foreground">
-                Archive this project. It will be hidden from the sidebar and
-                board.
+                {currentProject.is_archived
+                  ? "This project is archived. Unarchive it to bring it back to the sidebar."
+                  : "Archive this project. It moves to the Archived section of the sidebar and can be restored later."}
               </p>
             </div>
             <Button
@@ -3092,7 +3103,7 @@ export function ProjectSettingsPage() {
               className="border-destructive/50 text-destructive hover:bg-destructive/10"
               onClick={() => setArchiveDialogOpen(true)}
             >
-              Archive
+              {currentProject.is_archived ? "Unarchive" : "Archive"}
             </Button>
           </div>
 
@@ -3197,9 +3208,13 @@ export function ProjectSettingsPage() {
         open={archiveDialogOpen}
         onClose={() => setArchiveDialogOpen(false)}
         onConfirm={handleArchiveProject}
-        title="Archive Project"
-        description={`Are you sure you want to archive "${currentProject.name}"? The project will be hidden but can be restored later.`}
-        confirmText="Archive Project"
+        title={currentProject.is_archived ? "Unarchive Project" : "Archive Project"}
+        description={
+          currentProject.is_archived
+            ? `Unarchive "${currentProject.name}"? It will return to the Projects list in the sidebar.`
+            : `Are you sure you want to archive "${currentProject.name}"? The project will move to the Archived section and can be restored later.`
+        }
+        confirmText={currentProject.is_archived ? "Unarchive Project" : "Archive Project"}
         variant="destructive"
         isLoading={isArchiving}
       />

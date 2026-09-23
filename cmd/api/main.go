@@ -1368,6 +1368,10 @@ func main() {
 	api.GET("/projects/:proj_id", projectHandler.GetByID, projAccess)
 	api.PATCH("/projects/:proj_id", projectHandler.Update, projAccess)
 	api.DELETE("/projects/:proj_id", projectHandler.Delete, projAccess, rbac(mw.PermDeleteProject))
+	// Archive/unarchive carry the same permission DELETE did while it was
+	// (wrongly) an archive — owners/admins, never plain members (#ddd219f4).
+	api.POST("/projects/:proj_id/archive", projectHandler.Archive, projAccess, rbac(mw.PermDeleteProject))
+	api.POST("/projects/:proj_id/unarchive", projectHandler.Unarchive, projAccess, rbac(mw.PermDeleteProject))
 
 	// Project member routes.
 	api.GET("/projects/:proj_id/members", projectMemberHandler.List, projAccess)

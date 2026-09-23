@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
+  ArchiveRestore,
   BarChart2,
   Bell,
   Bot,
   Brain,
   ChevronDown,
+  ChevronRight,
   FolderKanban,
   Inbox,
   LayoutDashboard,
@@ -158,7 +160,15 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { workspaces, currentWorkspace, createWorkspace } = useWorkspaceStore();
-  const { projects } = useProjectStore();
+  const { projects: allProjects, unarchiveProject } = useProjectStore();
+  // The store keeps archived projects so ids still resolve to names elsewhere;
+  // the sidebar lists only live ones and tucks the rest under "Archived"
+  // (#ddd219f4 — an archived project used to stay in the list as if nothing
+  // had happened).
+  const projects = allProjects.filter((p) => !p.is_archived);
+  const archivedProjects = allProjects.filter((p) => p.is_archived);
+  const [showArchived, setShowArchived] = useState(false);
+  const [unarchiveError, setUnarchiveError] = useState<string | null>(null);
   const { user } = useAuthStore();
   const lastEvent = useWebSocketStore((s) => s.lastEvent);
   const wsSubscribe = useWebSocketStore((s) => s.subscribe);
@@ -523,6 +533,69 @@ export function Sidebar({ collapsed }: SidebarProps) {
               </p>
             )}
           </div>
+          {archivedProjects.length > 0 && (
+            <div className="mt-1" data-testid="archived-projects">
+              <button
+                type="button"
+                onClick={() => setShowArchived((v) => !v)}
+                aria-expanded={showArchived}
+                className="flex w-full items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent"
+              >
+                {showArchived ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+                Archived ({archivedProjects.length})
+              </button>
+              {showArchived && (
+                <div className="mt-0.5 space-y-0.5">
+                  {archivedProjects.map((project) => (
+                    <div
+                      key={project.id}
+                      className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-sidebar-accent"
+                    >
+                      <Link
+                        to={`/w/${wsSlug}/p/${project.slug}`}
+                        className={cn(
+                          "flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground",
+                          project.slug === projectSlug &&
+                            "font-medium text-sidebar-primary",
+                        )}
+                      >
+                        <FolderKanban className="h-4 w-4 shrink-0" />
+                        <span className="flex-1 truncate">{project.name}</span>
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0"
+                        title="Unarchive"
+                        aria-label={`Unarchive ${project.name}`}
+                        onClick={async () => {
+                          setUnarchiveError(null);
+                          try {
+                            await unarchiveProject(project.id);
+                          } catch (err) {
+                            setUnarchiveError(
+                              apiErrorMessage(err, "Failed to unarchive project"),
+                            );
+                          }
+                        }}
+                      >
+                        <ArchiveRestore className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                  {unarchiveError && (
+                    <p className="px-2 py-1 text-xs text-destructive">
+                      {unarchiveError}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="my-2 border-t border-sidebar-border" />

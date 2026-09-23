@@ -42,6 +42,13 @@ type updateProjectRequest struct {
 	Description *string          `json:"description"`
 	Icon        *string          `json:"icon"`
 	Settings    *json.RawMessage `json:"settings"`
+
+	// IsArchived is decoded only so it can be refused. The archive flag is not
+	// a PATCH field: archiving has its own routes gated by PermDeleteProject,
+	// and PATCH is open to every project member. Before #ddd219f4 the field
+	// simply wasn't declared, so the web client's {is_archived:true} was
+	// silently dropped and answered 200 with nothing changed.
+	IsArchived *bool `json:"is_archived"`
 }
 
 // listProjectsQuery represents query parameters for listing projects.
@@ -169,6 +176,10 @@ func (h *ProjectHandler) Update(c echo.Context) error {
 	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
+	if req.IsArchived != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			"is_archived cannot be changed with PATCH; use POST /projects/:proj_id/archive or /unarchive"))
+	}
 
 	// Fetch existing project first.
 	project, err := h.projectService.GetByID(c.Request().Context(), projID)
@@ -200,17 +211,51 @@ func (h *ProjectHandler) Update(c echo.Context) error {
 	return c.JSON(http.StatusOK, project)
 }
 
-// Delete handles DELETE /projects/:proj_id (archive)
+// Delete handles DELETE /projects/:proj_id — a real (soft) delete of the
+// project with its tasks and documents. It used to call Archive, so "Delete"
+// in the UI left the project in place and answered 204 (#ddd219f4).
 func (h *ProjectHandler) Delete(c echo.Context) error {
-	projIDStr := c.Param("proj_id")
-	projID, err := uuid.Parse(projIDStr)
+	projID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 	}
 
-	if err := h.projectService.Archive(c.Request().Context(), projID); err != nil {
+	if err := h.projectService.Delete(c.Request().Context(), projID); err != nil {
 		return handleError(c, err)
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// Archive handles POST /projects/:proj_id/archive and returns the updated project.
+func (h *ProjectHandler) Archive(c echo.Context) error {
+	return h.setArchived(c, true)
+}
+
+// Unarchive handles POST /projects/:proj_id/unarchive and returns the updated project.
+func (h *ProjectHandler) Unarchive(c echo.Context) error {
+	return h.setArchived(c, false)
+}
+
+func (h *ProjectHandler) setArchived(c echo.Context, archived bool) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+
+	ctx := c.Request().Context()
+	if archived {
+		err = h.projectService.Archive(ctx, projID)
+	} else {
+		err = h.projectService.Unarchive(ctx, projID)
+	}
+	if err != nil {
+		return handleError(c, err)
+	}
+
+	project, err := h.projectService.GetByID(ctx, projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, project)
 }

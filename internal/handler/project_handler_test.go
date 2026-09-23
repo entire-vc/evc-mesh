@@ -232,11 +232,19 @@ func TestProjectHandler_List_WithFilters(t *testing.T) {
 
 // --- TestProjectHandler_Delete ---
 
-func TestProjectHandler_Delete_Success(t *testing.T) {
+// #ddd219f4: DELETE used to call Archive and answer 204, so "Delete" in the UI
+// left the project alive. It must reach the real delete and never the archive.
+func TestProjectHandler_Delete_DeletesNotArchives(t *testing.T) {
 	projID := uuid.New()
+	var deleted bool
 	mockSvc := &MockProjectService{
-		ArchiveFunc: func(ctx context.Context, id uuid.UUID) error {
+		DeleteFunc: func(ctx context.Context, id uuid.UUID) error {
 			assert.Equal(t, projID, id)
+			deleted = true
+			return nil
+		},
+		ArchiveFunc: func(ctx context.Context, id uuid.UUID) error {
+			t.Fatal("DELETE must not archive the project")
 			return nil
 		},
 	}
@@ -253,4 +261,140 @@ func TestProjectHandler_Delete_Success(t *testing.T) {
 	err := h.Delete(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.True(t, deleted, "DELETE must call ProjectService.Delete")
+}
+
+func TestProjectHandler_Delete_NotFound(t *testing.T) {
+	mockSvc := &MockProjectService{
+		DeleteFunc: func(ctx context.Context, id uuid.UUID) error {
+			return apierror.NotFound("Project")
+		},
+	}
+	h, e := setupProjectTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodDelete, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(uuid.New().String())
+
+	_ = h.Delete(c)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// --- archive / unarchive ---
+
+func TestProjectHandler_ArchiveAndUnarchive(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		archived bool
+	}{{"archive", true}, {"unarchive", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			projID := uuid.New()
+			state := !tc.archived
+			mockSvc := &MockProjectService{
+				ArchiveFunc: func(ctx context.Context, id uuid.UUID) error {
+					assert.Equal(t, projID, id)
+					state = true
+					return nil
+				},
+				UnarchiveFunc: func(ctx context.Context, id uuid.UUID) error {
+					assert.Equal(t, projID, id)
+					state = false
+					return nil
+				},
+				GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Project, error) {
+					return &domain.Project{ID: id, IsArchived: state}, nil
+				},
+			}
+			h, e := setupProjectTest(mockSvc)
+
+			req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/projects/:proj_id/" + tc.name)
+			c.SetParamNames("proj_id")
+			c.SetParamValues(projID.String())
+
+			var err error
+			if tc.archived {
+				err = h.Archive(c)
+			} else {
+				err = h.Unarchive(c)
+			}
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			var got domain.Project
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+			assert.Equal(t, tc.archived, got.IsArchived, "response must carry the flag as stored")
+		})
+	}
+}
+
+// #ddd219f4: PATCH {is_archived:true} was answered 200 with nothing changed,
+// because the field wasn't in the request contract. It must be refused loudly.
+func TestProjectHandler_Update_IsArchivedRefused(t *testing.T) {
+	mockSvc := &MockProjectService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Project, error) {
+			return &domain.Project{ID: id, Name: "p"}, nil
+		},
+		UpdateFunc: func(ctx context.Context, project *domain.Project) error {
+			t.Fatal("PATCH with is_archived must not persist anything")
+			return nil
+		},
+	}
+	h, e := setupProjectTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"is_archived":true}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(uuid.New().String())
+
+	require.NoError(t, h.Update(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "/archive")
+}
+
+func TestProjectHandler_ArchiveErrors(t *testing.T) {
+	newCtx := func(e *echo.Echo, id string) (echo.Context, *httptest.ResponseRecorder) {
+		req := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetPath("/projects/:proj_id/archive")
+		c.SetParamNames("proj_id")
+		c.SetParamValues(id)
+		return c, rec
+	}
+
+	t.Run("invalid id", func(t *testing.T) {
+		h, e := setupProjectTest(&MockProjectService{})
+		c, rec := newCtx(e, "not-a-uuid")
+		require.NoError(t, h.Archive(c))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("service error is surfaced, not answered 200", func(t *testing.T) {
+		h, e := setupProjectTest(&MockProjectService{
+			UnarchiveFunc: func(ctx context.Context, id uuid.UUID) error { return apierror.NotFound("Project") },
+		})
+		c, rec := newCtx(e, uuid.New().String())
+		_ = h.Unarchive(c)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+
+	t.Run("re-read error is surfaced", func(t *testing.T) {
+		h, e := setupProjectTest(&MockProjectService{
+			GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Project, error) {
+				return nil, apierror.NotFound("Project")
+			},
+		})
+		c, rec := newCtx(e, uuid.New().String())
+		_ = h.Archive(c)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
 }
