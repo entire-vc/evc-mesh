@@ -369,10 +369,11 @@ func TestResolveCurrentValues_DecryptsLiveAndFlagsExpiredWithoutDecrypting(t *te
 	require.NoError(t, err)
 	past := time.Now().Add(-time.Hour)
 
-	rows := sqlmock.NewRows([]string{"name", "encrypted_value", "expires_at"}).
-		AddRow("LIVE", live, nil).
-		AddRow("EXPIRED", expiredCipher, past)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT name, encrypted_value, expires_at")).
+	liveID, expiredID := uuid.New(), uuid.New()
+	rows := sqlmock.NewRows([]string{"id", "name", "encrypted_value", "value_sha256_prefix", "expires_at"}).
+		AddRow(liveID, "LIVE", live, "1a2b3c4d", nil).
+		AddRow(expiredID, "EXPIRED", expiredCipher, "5e6f7a8b", past)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, encrypted_value, value_sha256_prefix, expires_at")).
 		WithArgs(wsID, nil, nil).
 		WillReturnRows(rows)
 
@@ -388,6 +389,12 @@ func TestResolveCurrentValues_DecryptsLiveAndFlagsExpiredWithoutDecrypting(t *te
 	assert.Equal(t, "live-plaintext", byName["LIVE"].Value)
 	assert.True(t, byName["EXPIRED"].Expired)
 	assert.Empty(t, byName["EXPIRED"].Value)
+	// The version identity rides along for the issuance audit (#1c9f527d),
+	// for expired rows too — "who was handed a dead key" is also a question.
+	assert.Equal(t, liveID, byName["LIVE"].ID)
+	assert.Equal(t, "1a2b3c4d", byName["LIVE"].ValueSHA256Prefix)
+	assert.Equal(t, expiredID, byName["EXPIRED"].ID)
+	assert.Equal(t, "5e6f7a8b", byName["EXPIRED"].ValueSHA256Prefix)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -396,9 +403,9 @@ func TestResolveCurrentValues_UndecryptableValueReturnsNamedError(t *testing.T) 
 	repo, mock := newSecretRepoMock(t)
 	wsID := uuid.New()
 
-	rows := sqlmock.NewRows([]string{"name", "encrypted_value", "expires_at"}).
-		AddRow("BROKEN", "enc:v1:not-valid-base64-or-wrong-key", nil)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT name, encrypted_value, expires_at")).
+	rows := sqlmock.NewRows([]string{"id", "name", "encrypted_value", "value_sha256_prefix", "expires_at"}).
+		AddRow(uuid.New(), "BROKEN", "enc:v1:not-valid-base64-or-wrong-key", "00000000", nil)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, encrypted_value, value_sha256_prefix, expires_at")).
 		WillReturnRows(rows)
 
 	_, err := repo.ResolveCurrentValues(context.Background(), wsID, nil, nil)
@@ -410,7 +417,7 @@ func TestResolveCurrentValues_UndecryptableValueReturnsNamedError(t *testing.T) 
 func TestResolveCurrentValues_QueryErrorPropagates(t *testing.T) {
 	repo, mock := newSecretRepoMock(t)
 	wsID := uuid.New()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT name, encrypted_value, expires_at")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, encrypted_value, value_sha256_prefix, expires_at")).
 		WillReturnError(errors.New("connection lost"))
 
 	_, err := repo.ResolveCurrentValues(context.Background(), wsID, nil, nil)

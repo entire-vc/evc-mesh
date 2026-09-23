@@ -62,8 +62,16 @@ type CreateSecretInput struct {
 // construct or hold one. Expired carries the expiry state explicitly so the
 // materializer can name the secret in a loud spawn error instead of writing
 // a silently empty variable.
+//
+// ID and ValueSHA256Prefix identify WHICH version was handed out, for the
+// issuance audit entry (task #1c9f527d): every rotation writes a new row, so
+// the row id is the version, and the fingerprint is the same sha256[:8] the
+// masked list and the mutation audit already show. Neither says anything
+// about the value itself.
 type MaterializedSecret struct {
-	Name    string
-	Value   string
-	Expired bool
+	ID                uuid.UUID
+	Name              string
+	Value             string
+	ValueSHA256Prefix string
+	Expired           bool
 }
