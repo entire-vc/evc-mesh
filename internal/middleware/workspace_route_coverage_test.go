@@ -278,9 +278,12 @@ var declaredBodyTenantFields = map[string]string{
 	// IS the trusted spawner, already holding the same level of trust as
 	// MESH_INTEGRATION_ENCRYPTION_KEY itself — so the ids are the scope
 	// resolution input, not something a workspace guard could narrow.
-	"secret_materialize_handler.go:materializeRequest.workspace_id": "checked: possession of the SpawnAuth shared secret (X-Spawn-Token) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnAuth doc comment",
-	"secret_materialize_handler.go:materializeRequest.project_id":   "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
-	"secret_materialize_handler.go:materializeRequest.agent_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
+	"secret_materialize_handler.go:materializeRequest.workspace_id":   "checked: possession of the SpawnAuth shared secret (X-Spawn-Token) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnAuth doc comment",
+	"secret_materialize_handler.go:materializeRequest.project_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
+	"secret_materialize_handler.go:materializeRequest.agent_id":       "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
+	"secret_materialize_handler.go:materializationAudit.workspace_id": "checked: never decoded from a request — the activity_log payload the handler WRITES for each issuance (#1c9f527d); its value is materializeRequest.workspace_id, already authorized by SpawnAuth above",
+	"secret_materialize_handler.go:materializationAudit.project_id":   "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
+	"secret_materialize_handler.go:materializationAudit.agent_id":     "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
 }
 
 // bodyTenantFieldNames are the json field names that identify a tenant, or an

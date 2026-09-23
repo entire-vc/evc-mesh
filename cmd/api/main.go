@@ -267,7 +267,6 @@ func main() {
 	secretRepo := postgres.NewSecretRepo(db)
 	secretService := service.NewSecretService(secretRepo)
 	secretMaterializationService := service.NewSecretMaterializationService(secretRepo)
-	secretMaterializeHandler := handler.NewSecretMaterializeHandler(secretMaterializationService)
 	mw.CheckSpawnTokenConfigured()
 
 	agentActLogRepo := postgres.NewAgentActivityLogRepo(db)
@@ -540,6 +539,9 @@ func main() {
 	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
+	// Built here, not beside secretMaterializationService above: every
+	// issuance is journaled (#1c9f527d), so it needs the activity service.
+	secretMaterializeHandler := handler.NewSecretMaterializeHandler(secretMaterializationService, activityLogService)
 
 	// Member services.
 	workspaceMemberService := service.NewWorkspaceMemberService(workspaceMemberRepo, userRepo, projectMemberRepo, activityLogRepo, agentRepo)
@@ -1645,9 +1647,11 @@ func main() {
 	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
 	// there accepts a user JWT or ANY agent's API key; this route must accept
 	// neither, since either would let something wielding an ordinary agent
-	// identity decrypt secrets. Gated by mw.SpawnAuth() alone — see its doc
-	// comment for the trust model.
-	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.SpawnAuth())
+	// identity decrypt secrets. Gated by mw.SpawnAuth() — see its doc
+	// comment for the trust model — behind mw.DirectOnly(), which 404s
+	// anything that came through a reverse proxy, so the route's closure no
+	// longer rests on the edge Caddyfile alone (#1c9f527d).
+	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.DirectOnly(), mw.SpawnAuth())
 
 	// Write-only secrets CRUD (task #64e84eb1, S3). Every route is gated by
 	// PermManageSecrets, which no agent key holds — see its declaration in

@@ -368,16 +368,18 @@ func (r *SecretRepo) AssertScopeRefInWorkspace(ctx context.Context, workspaceID 
 // the variable.
 func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error) {
 	const q = `
-		SELECT name, encrypted_value, expires_at FROM secrets
+		SELECT id, name, encrypted_value, value_sha256_prefix, expires_at FROM secrets
 		WHERE rotated_at IS NULL AND (
 			(scope = 'workspace' AND workspace_id = $1) OR
 			(scope = 'project' AND workspace_id = $1 AND project_id = $2) OR
 			(scope = 'agent' AND workspace_id = $1 AND agent_id = $3)
 		)`
 	type row struct {
-		Name           string     `db:"name"`
-		EncryptedValue string     `db:"encrypted_value"`
-		ExpiresAt      *time.Time `db:"expires_at"`
+		ID                uuid.UUID  `db:"id"`
+		Name              string     `db:"name"`
+		EncryptedValue    string     `db:"encrypted_value"`
+		ValueSHA256Prefix string     `db:"value_sha256_prefix"`
+		ExpiresAt         *time.Time `db:"expires_at"`
 	}
 	var rows []row
 	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, projectID, agentID); err != nil {
@@ -386,7 +388,7 @@ func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.
 	out := make([]domain.MaterializedSecret, 0, len(rows))
 	for _, rr := range rows {
 		expired := rr.ExpiresAt != nil && rr.ExpiresAt.Before(time.Now())
-		m := domain.MaterializedSecret{Name: rr.Name, Expired: expired}
+		m := domain.MaterializedSecret{ID: rr.ID, Name: rr.Name, ValueSHA256Prefix: rr.ValueSHA256Prefix, Expired: expired}
 		if !expired {
 			plain, err := encryption.Decrypt(rr.EncryptedValue)
 			if err != nil {
