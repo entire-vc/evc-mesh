@@ -1122,6 +1122,7 @@ rail-visual-gates:
       fi
     - node scripts/assert-rail-icon-contrast.mjs --selftest
     - node scripts/assert-rail-icon-size.mjs --selftest
+    - node scripts/assert-rail-header-geometry.mjs --selftest
 
 # ── deploy ──────────────────────────────────────────────────────────────────
 # Выкатка прод-бэкенда по мёржу в канон. До 28.08.2026 её запускал человек

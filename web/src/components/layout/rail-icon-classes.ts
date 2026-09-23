@@ -166,3 +166,40 @@ export function projectRailIconParts(
 
 /** The letter/emoji inside a project tile. */
 export const PROJECT_RAIL_ICON_LABEL = "text-xs font-medium";
+
+/**
+ * The collapsed rail's three shell boxes — the column, the header strip that
+ * holds the workspace mark, and the navigation list under it (`#382ff590`).
+ *
+ * They live here, not inline in `sidebar.tsx`, for the same reason as every
+ * recipe above: `scripts/assert-rail-header-geometry.mjs` renders THESE
+ * strings in a real browser, and a restated copy would keep passing after the
+ * component changed.
+ *
+ * The defect they exist to prevent: the column is `flex-col h-full`, and the
+ * nav under the header used to be a plain, non-scrolling flex child. Once the
+ * project list was taller than the window (14 projects at 900px was enough),
+ * flexbox took the missing height from the only box that could give — the
+ * header, `flex-shrink: 1` by default — and squeezed it from 56px down to its
+ * min-content: the 32px mark plus its 1px border. The mark then sat at y=0,
+ * glued to the top edge, and the nav overflowed the viewport underneath.
+ *
+ * It read as "the logo with an image broke" only because the workspace with an
+ * uploaded logo was also the one with many projects. The mark's own tile was
+ * identical in both branches the whole time; a workspace WITHOUT a logo and
+ * with 14 projects breaks exactly the same way.
+ *
+ * Two rules, both required:
+ *  - the header never shrinks (`shrink-0`), so its height is its own, not the
+ *    leftover after the list;
+ *  - the nav takes the remaining height and scrolls inside it
+ *    (`min-h-0 flex-1 overflow-y-auto`), the same arrangement the expanded
+ *    sidebar's nav has always had. The scrollbar is hidden: a 48px column has
+ *    no room for one without pushing the tiles off the column's centre line.
+ */
+export const RAIL_COLLAPSED_ASIDE =
+  "flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar";
+export const RAIL_COLLAPSED_HEADER =
+  "flex h-14 w-full shrink-0 items-center justify-center border-b border-sidebar-border";
+export const RAIL_COLLAPSED_NAV =
+  "scrollbar-hide flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto py-3";
