@@ -49,7 +49,19 @@ MESH_MCP_COMMAND = os.environ.get("MESH_MCP_BIN") or os.path.expanduser("~/bin/m
 MESH_MCP_ARGS = ["--transport", "stdio"]
 
 STORE_SCOPE = "workspace"
-SHARED_TAG = "lme-bench"
+# Overridable for the same reason BENCH_WORKSPACE_SLUG is (#1974ef80): "lme-bench"
+# is a server-side RESERVED tag (memory_service.go's reservedMemoryTags) — a write
+# carrying it is only accepted into the one workspace flagged is_bench=true in the
+# database (migration 20260906001, backfilled for exactly one prod workspace ID).
+# There is deliberately no API to grant that flag (domain.Workspace.IsBench's own
+# comment), so the branch/ephemeral arm's throwaway workspace can never earn it —
+# tagging its fixtures "lme-bench" gets every `remember` rejected with "tag
+# `lme-bench` is reserved for the benchmark workspace", independently of and in
+# addition to the assert_bench_workspace() guard below. ci_bootstrap.py sets this
+# to the ephemeral workspace's own (never-reserved, per-run-unique) slug; the
+# prod-key arms never set it and keep writing into the one workspace where
+# "lme-bench" is actually privileged.
+SHARED_TAG = os.environ.get("BENCH_SHARED_TAG", "lme-bench")
 INIT_TIMEOUT = 60.0
 # Sequential stores: the mesh-mcp stdio server closes under high concurrency.
 STORE_CONCURRENCY = 1

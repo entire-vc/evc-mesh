@@ -10,8 +10,20 @@ So the arm mints its own: register the first user (which the API allows only
 while `COUNT(users) == 0`, and which auto-creates that user's workspace), then
 create one agent in it and keep the raw `api_key` the create call returns once.
 
-Writes `MESH_AGENT_KEY=<key>` and `MESH_WORKSPACE_ID=<id>` into the file named by
-`--env-file` (default `$GITHUB_ENV`):
+Writes `MESH_AGENT_KEY=<key>`, `MESH_WORKSPACE_ID=<id>`, `BENCH_WORKSPACE_SLUG=<slug>`
+and `BENCH_SHARED_TAG=<slug>` into the file named by `--env-file` (default
+`$GITHUB_ENV`). Two independent guards gate a write into this arm's workspace,
+and both compare against a value that is only ever right if read from what THIS
+run actually minted, never hardcoded (#1974ef80):
+  - assert_bench_workspace() (client-side) refuses unless MESH_AGENT_KEY
+    resolves to BENCH_WORKSPACE_SLUG — this arm's workspace is minted fresh
+    every run and is never the `lme-bench` slug that guard defaults to.
+  - enforceReservedTags (server-side, memory_service.go) refuses the fixture
+    tag "lme-bench" (mesh_client_stdio.SHARED_TAG's default) from any
+    workspace not flagged is_bench=true in the database — a flag nothing
+    can grant this arm's throwaway workspace via any API, by design. Its
+    fixtures are tagged BENCH_SHARED_TAG instead, set here to the same
+    already-unique, already-non-reserved slug:
 
     python ci_bootstrap.py --api-url http://127.0.0.1:8005
 
@@ -148,6 +160,13 @@ def main() -> int:
             raise SystemExit(f"ci_bootstrap: workspace create failed ({status}): {ws}")
         workspaces = [ws]
     ws_id = workspaces[0]["id"]
+    ws_slug = workspaces[0].get("slug")
+    if not ws_slug:
+        raise SystemExit(
+            f"ci_bootstrap: workspace {ws_id} carries no 'slug' in the API "
+            f"response: {list(workspaces[0])}. assert_bench_workspace() cannot be "
+            f"told what to expect without it."
+        )
 
     status, agent = _req(
         "POST", f"{api}/api/v1/workspaces/{ws_id}/agents",
@@ -203,17 +222,39 @@ def main() -> int:
     # a database that ceases to exist when the job ends. It grants nothing
     # anywhere else, and `$GITHUB_ENV` is runner-local. Were this pointed at
     # prod, the alert would be correct and this comment would be an excuse.
+    # BENCH_WORKSPACE_SLUG tells mesh_client_stdio.py's assert_bench_workspace()
+    # what workspace THIS run's key is supposed to resolve to. This arm's
+    # workspace is not the fixed "lme-bench" the guard defaults to — it is
+    # whatever the API handed back just now (a fresh `ws-<uuid8>` when
+    # registration auto-created it, our own literal "recall-gate-bench" slug
+    # otherwise) — a different, unpredictable value on every run by
+    # construction, since it is minted against a throwaway per-job database.
+    # Hardcoding either shape here would just move the guard's false negative
+    # from "wrong workspace" to "wrong assumption about which workspace a
+    # fresh database produces". Writing the slug we actually observed is the
+    # only form of this check that cannot drift from what was really minted.
+    #
+    # BENCH_SHARED_TAG is the SECOND, independent guard this arm hits and the
+    # client-side slug fix above does nothing for: "lme-bench" (the default
+    # fixture tag every `remember` carries, mesh_client_stdio.SHARED_TAG) is
+    # reserved server-side to the one workspace flagged is_bench=true in the
+    # database, and this arm's workspace can never earn that flag (no API
+    # sets it, by design). Overriding the tag to this run's own workspace
+    # slug — already proven non-reserved and unique to this job — sidesteps
+    # a check this arm was never going to satisfy any other way.
     with Path(args.env_file).open("a", encoding="utf-8") as fh:
         fh.write(f"MESH_AGENT_KEY={key}\n")
         fh.write(f"MESH_WORKSPACE_ID={ws_id}\n")
+        fh.write(f"BENCH_WORKSPACE_SLUG={ws_slug}\n")
+        fh.write(f"BENCH_SHARED_TAG={ws_slug}\n")
 
-    # Everything that reaches a log is non-secret by construction: two ids and a
-    # length. The length earns its place — a truncated or empty key surfaces ten
-    # minutes later as 24 auth errors, and this line is what separates that from
-    # "the bench never got a key at all".
+    # Everything that reaches a log is non-secret by construction: two ids, a
+    # slug and a length. The length earns its place — a truncated or empty key
+    # surfaces ten minutes later as 24 auth errors, and this line is what
+    # separates that from "the bench never got a key at all".
     print(
-        f"# bootstrapped agent {agent['agent']['id']} in workspace {ws_id}; "
-        f"wrote a {len(key)}-char key to {args.env_file}",
+        f"# bootstrapped agent {agent['agent']['id']} in workspace {ws_id} "
+        f"(slug={ws_slug}); wrote a {len(key)}-char key to {args.env_file}",
         file=sys.stderr,
     )
     return 0
