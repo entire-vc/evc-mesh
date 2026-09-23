@@ -715,7 +715,7 @@ because four of us measured at once".
    than the one it closes. Ranking stays `REGRESSION > INCONCLUSIVE > OK`.
 
 6. **Measuring production instead of the branch under review** (#2a079432, fixed
-   by [ADR-0003](../../dev-docs/adrs/0003-recall-gate-measures-the-branch.md)).
+   by ADR-0003, `dev-docs/adrs/0003-recall-gate-measures-the-branch.md` — internal, not shipped in this tree).
    The required check took its target from `secrets.MESH_API_URL` — the deployed
    server — and nothing in the workflow ever built `cmd/api` from the branch (the
    two `go build` steps compile `mesh-mcp`, the *client*, from another repo). So
