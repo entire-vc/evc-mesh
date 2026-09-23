@@ -23,6 +23,9 @@ import { cn } from "@/lib/cn";
 import {
   PROJECT_RAIL_ICON_LABEL,
   WORKSPACE_LOGO_ICON_FILL,
+  RAIL_COLLAPSED_ASIDE,
+  RAIL_COLLAPSED_HEADER,
+  RAIL_COLLAPSED_NAV,
   projectRailIconParts,
   workspaceLogoContainerParts,
 } from "./rail-icon-classes";
@@ -276,15 +279,15 @@ export function Sidebar({ collapsed }: SidebarProps) {
 
   if (collapsed) {
     return (
-      <aside className="flex h-full w-12 flex-col items-center border-r border-sidebar-border bg-sidebar">
-        <div className="flex h-14 w-full items-center justify-center border-b border-sidebar-border">
+      <aside className={RAIL_COLLAPSED_ASIDE}>
+        <div className={RAIL_COLLAPSED_HEADER}>
           <WorkspaceLogo
             iconUrl={currentWorkspace?.icon_url}
             name={currentWorkspace?.name}
             variant="collapsed"
           />
         </div>
-        <nav className="flex flex-col items-center gap-2 py-3">
+        <nav className={RAIL_COLLAPSED_NAV}>
           {/* Dashboard */}
           <Link
             to={wsSlug ? `/w/${wsSlug}/dashboard` : "/"}
