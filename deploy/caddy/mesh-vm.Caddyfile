@@ -54,7 +54,7 @@
 	# binary object storage with range requests — none of them want an encoder.
 	@compressible {
 		not path /api/v1/agents/me/events/stream
-		not path /mcp/*
+		not path /mcp /mcp/*
 		not path /ws
 		not path /s3/*
 	}
@@ -93,6 +93,15 @@
 	}
 	handle /health {
 		reverse_proxy 127.0.0.1:8005
+	}
+	# Exact /mcp is the full-profile Streamable HTTP endpoint of mesh-mcp,
+	# forwarded WITHOUT stripping (mesh-mcp serves it at /mcp). /mcp/* below
+	# keeps serving SSE and the core profile (/mcp/core). Without this block
+	# a bare /mcp falls through to the SPA and answers index.html with 200.
+	handle /mcp {
+		reverse_proxy 127.0.0.1:8081 {
+			header_up Host localhost
+		}
 	}
 	handle_path /mcp/* {
 		# Host is rewritten to a loopback value on purpose. mcp-go >= v0.57.0
