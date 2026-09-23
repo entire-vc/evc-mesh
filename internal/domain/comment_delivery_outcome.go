@@ -56,13 +56,32 @@ const (
 	// The lane is down AND the card would not reach it anyway.
 	ReasonRecipientOffline = "recipient_offline"
 
-	// ReasonNoQueuePath — the recipient is an agent that is alive, but this
-	// task is not in the feed they poll: it is assigned to somebody else, or
-	// its status is not in the todo category. Being named in a comment does
-	// not put a task in anyone's queue, so a live agent still never sees it.
-	// This is the common case and the expensive one, because the sender has
-	// every reason to believe the handoff happened.
+	// ReasonNoQueuePath — LEGACY, no longer written (#ed60c795). It merged
+	// three situations with three different fixes into one verdict, and its
+	// hint named only one of them ("assign it"), so on a card that WAS the
+	// recipient's own — parked in backlog — it sent the author to an action
+	// that changes nothing. Kept so rows recorded before the split still read
+	// back with a hint that is at least not wrong. New rows carry one of the
+	// three reasons below instead.
 	ReasonNoQueuePath = "no_queue_path"
+
+	// ReasonNotAssignee — the recipient agent is alive, but the task is
+	// assigned to somebody else. Fix: assign it to them.
+	ReasonNotAssignee = "not_assignee"
+
+	// ReasonStatusNotFed — the task IS the recipient's, but sits in a status
+	// the lane's queue does not poll (backlog, triage, in_progress, review,
+	// done…). Which one is in TaskStatusCategory. Fix: move it to todo.
+	ReasonStatusNotFed = "status_not_fed"
+
+	// ReasonTaskGated — the task is the recipient's, but an armed human_gate
+	// holds it: the feeder skips gated cards whatever their status. Moving or
+	// assigning changes nothing until the gate is answered.
+	ReasonTaskGated = "task_gated"
+
+	// ReasonTaskScheduled — the task is the recipient's, but its start_after
+	// lies in the future: the feeder will not hand it over before then.
+	ReasonTaskScheduled = "task_scheduled"
 
 	// ReasonNoSubscription — the mentioned person has no notification
 	// preference row, so no channel is configured to carry this to them.
@@ -107,6 +126,13 @@ type CommentDeliveryOutcome struct {
 	RecipientPresence string     `json:"recipient_presence" db:"recipient_presence"`
 	DecidedAt         time.Time  `json:"decided_at"         db:"decided_at"`
 
+	// TaskStatusCategory is the task's status category at decision time
+	// (backlog, todo, …). Recorded because the hint for status_not_fed has to
+	// name WHERE the card is parked, and the task may have moved since — the
+	// verdict is about the moment the comment was written. Nil on rows
+	// recorded before the column existed and when the status was unreadable.
+	TaskStatusCategory *string `json:"task_status_category,omitempty" db:"task_status_category"`
+
 	// Hint is computed at read time from Reason, never persisted — see
 	// ApplyHint. Empty for a reason with nothing actionable to say (delivered,
 	// self-mention, unknown handle): a hint only exists for the outcome the
@@ -118,17 +144,30 @@ type CommentDeliveryOutcome struct {
 // what that fix is. Deliberately not exhaustive: a reason with no entry here
 // leaves Hint empty rather than restating the reason as prose, which would
 // just be Reason repeated in English.
+//
+// Each hint names the ONE action that would change the outcome. A hint that
+// points at the wrong action is worse than none: it is followed, nothing
+// changes, and the author concludes the system is broken (#ed60c795 — "assign
+// it" shown on a card that was already the recipient's own).
 var hintsByReason = map[string]string{
-	// The common, expensive case (see ReasonNoQueuePath): the recipient is
-	// alive but this task isn't in their queue. The author is the one person
-	// who can put it there.
-	ReasonNoQueuePath: "recipient is alive but this task isn't assigned to them — assign it if you need them to see this",
+	ReasonNoQueuePath:   "recipient is alive but this task isn't in their queue — it is assigned to someone else or not in todo",
+	ReasonNotAssignee:   "recipient is alive but this task is assigned to someone else — assign it to them if they should act on it",
+	ReasonTaskGated:     "this task is frozen by an armed human gate — they won't pick it up until the gate is answered",
+	ReasonTaskScheduled: "this task is scheduled for later (start_after) — they won't pick it up before that date",
 }
 
 // ApplyHint sets Hint from o.Reason, in place. Safe to call on a row that
 // already carries a hint (idempotent) or on one with no entry (leaves it
 // empty rather than erroring).
 func (o *CommentDeliveryOutcome) ApplyHint() {
+	if o.Reason == ReasonStatusNotFed {
+		where := "a status their queue doesn't poll"
+		if o.TaskStatusCategory != nil && *o.TaskStatusCategory != "" {
+			where = *o.TaskStatusCategory + ", which their queue doesn't poll"
+		}
+		o.Hint = "this task is theirs but sits in " + where + " — move it to todo if they should act on it"
+		return
+	}
 	o.Hint = hintsByReason[o.Reason]
 }
 

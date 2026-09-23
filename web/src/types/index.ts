@@ -386,6 +386,10 @@ export interface CommentDeliveryOutcome {
   channel: string;
   recipient_presence: string;
   decided_at: string;
+  /** Task's status category when the verdict was decided (status_not_fed). */
+  task_status_category?: string;
+  /** Read-time, actionable explanation for a miss the author can fix. */
+  hint?: string;
 }
 
 export interface CommentView {
