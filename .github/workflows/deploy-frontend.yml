@@ -58,15 +58,15 @@ jobs:
       - name: Configure hel01 jump
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
             echo "Host mesh-vm"
-            echo "  HostName 10.10.10.10"
+            echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
             echo "  ProxyJump hel01-jump"
             echo "  StrictHostKeyChecking accept-new"
             echo "Host hel01-jump"
-            echo "  HostName 66.151.34.194"
+            echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
             echo "  User ghdeploy"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config

@@ -36,8 +36,8 @@ type Config struct {
 //
 // Why it exists (task #4c642bd7, Pavel 2026-09-06): the fleet runs two
 // instances off this one binary. `mesh.prototypes.ventures` has the channel
-// configured and in use; `mesh.entire.host` does not use it, and the decision
-// there was verbatim "не выпиливать, а просто выключить" — turn it off, keep
+// configured and in use; our other production instance does not use it, and
+// the decision there was verbatim "не выпиливать, а просто выключить" — turn it off, keep
 // the code. Deleting the channel to satisfy one instance would have broken the
 // other, and leaving it wired means entire.vc keeps a bot-connect UI that can
 // be filled in and then delivers nothing.
@@ -78,7 +78,7 @@ type HumanGateConfig struct {
 // project_integrations and is untouched by this config.
 type TeamRelayConfig struct {
 	// RelayURL is the Team Relay instance's base URL (e.g.
-	// "https://cp.tr.entire.vc") used when no workspace has configured its
+	// "https://relay.example.com") used when no workspace has configured its
 	// own team_relay connection — see the type doc comment.
 	RelayURL string
 }
@@ -308,7 +308,7 @@ type WebhookConfig struct {
 	// usable "read-only anonymous" mode for a private org.
 	GitHubToken string
 	// GitLabURL is the base URL of the self-hosted GitLab instance (e.g.
-	// "https://git.entire.host") used when no workspace has its own GitLab
+	// "https://gitlab.example.com") used when no workspace has its own GitLab
 	// connection configured — see the type doc comment. Unlike GitHub,
 	// GitLab is self-hosted here, so there is no fixed default; both this
 	// and GitLabToken are required together for the env fallback to apply.

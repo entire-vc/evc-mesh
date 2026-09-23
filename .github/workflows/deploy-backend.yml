@@ -151,22 +151,23 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      # CI runners reach the mesh VM (private 10.10.10.10) only through the hel01
-      # forwarding-only jump user `ghdeploy` (single public IP). The deploy key is
+      # CI runners reach the mesh VM (private address, secrets.MESH_VM_HOST) only
+      # through the hel01 forwarding-only jump user `ghdeploy` (single public IP,
+      # secrets.HEL01_JUMP_HOST). The deploy key is
       # authorized on BOTH ghdeploy@hel01 and root@mesh-vm; ssh-agent offers it to
       # both hops. See docs/DEPLOY_HEL01.md.
       - name: Configure hel01 jump
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
             echo "Host mesh-vm"
-            echo "  HostName 10.10.10.10"
+            echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
             echo "  ProxyJump hel01-jump"
             echo "  StrictHostKeyChecking accept-new"
             echo "Host hel01-jump"
-            echo "  HostName 66.151.34.194"
+            echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
             echo "  User ghdeploy"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
@@ -261,15 +262,15 @@ jobs:
       - name: Configure hel01 jump
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -H 66.151.34.194 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
             echo "Host mesh-vm"
-            echo "  HostName 10.10.10.10"
+            echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
             echo "  ProxyJump hel01-jump"
             echo "  StrictHostKeyChecking accept-new"
             echo "Host hel01-jump"
-            echo "  HostName 66.151.34.194"
+            echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
             echo "  User ghdeploy"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
