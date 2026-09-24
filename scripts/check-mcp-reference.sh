@@ -34,20 +34,62 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # ── the server's tool list ───────────────────────────────────────────────────
+# Files declaring tool-name CONSTANTS used as NewTool(<ident>, ...), fetched next to
+# server.go. The literal-only grep could not see a tool registered through a constant:
+# the rename pavel_decision -> record_owner_decision (evc-mesh-mcp,
+# decision_tool_names.go) made that tool drop out of the count, and this gate went red on
+# every MR with "server registers 62" while the server still registered 63.
+CONST_FILES=(decision_tool_names.go)
+
+# Registered only when the operator opts in (MESH_MCP_LEGACY_TOOL_ALIASES=1). The
+# published binary's tools/list never shows them, so the public catalogue must not either.
+LEGACY_ALIASES=(pavel_decision)
+
 if [[ -n "${MCP_SERVER_GO:-}" ]]; then
     [[ -f "$MCP_SERVER_GO" ]] || { echo "ERROR: MCP_SERVER_GO='$MCP_SERVER_GO' not found." >&2; exit 1; }
     cp "$MCP_SERVER_GO" "$tmp/server.go"
-elif ! curl -fsSL --max-time 30 "$SERVER_URL" -o "$tmp/server.go"; then
-    # Not reachable is not "nothing to check" — refuse rather than pass silently.
-    echo "ERROR: could not fetch the MCP server source from $SERVER_URL." >&2
-    echo "       Set MCP_SERVER_GO=/path/to/evc-mesh-mcp/internal/mcp/server.go to run offline." >&2
-    exit 1
+    for f in "${CONST_FILES[@]}"; do
+        src="$(dirname "$MCP_SERVER_GO")/$f"
+        [[ -f "$src" ]] || { echo "ERROR: $src not found (expected next to MCP_SERVER_GO)." >&2; exit 1; }
+        cp "$src" "$tmp/$f"
+    done
+else
+    if ! curl -fsSL --max-time 30 "$SERVER_URL" -o "$tmp/server.go"; then
+        # Not reachable is not "nothing to check" — refuse rather than pass silently.
+        echo "ERROR: could not fetch the MCP server source from $SERVER_URL." >&2
+        echo "       Set MCP_SERVER_GO=/path/to/evc-mesh-mcp/internal/mcp/server.go to run offline." >&2
+        exit 1
+    fi
+    for f in "${CONST_FILES[@]}"; do
+        if ! curl -fsSL --max-time 30 "${SERVER_URL%/*}/$f" -o "$tmp/$f"; then
+            echo "ERROR: could not fetch ${SERVER_URL%/*}/$f (tool-name constants)." >&2
+            exit 1
+        fi
+    done
 fi
 
 # `|| true`: no match makes grep exit 1, which under `pipefail` would kill the script
 # before it could say why. The count check below is what turns "no tools found" into a
 # named refusal rather than a bare exit code.
-grep -oE 'NewTool\("[a-z_]+"' "$tmp/server.go" | sed 's/.*"\(.*\)"/\1/' | sort -u > "$tmp/registered" || true
+grep -oE 'NewTool\("[a-z_]+"' "$tmp/server.go" | sed 's/.*"\(.*\)"/\1/' > "$tmp/registered_raw" || true
+
+# NewTool(<ident>, ...): resolve each identifier to its string constant. An identifier
+# that resolves to nothing is a hard error, never a skip — a skip is exactly how a
+# registered tool silently fell out of the count.
+idents=$(grep -oE 'NewTool\([A-Za-z_][A-Za-z0-9_]*[,)]' "$tmp/server.go" | sed -E 's/NewTool\(([A-Za-z0-9_]+).*/\1/' | sort -u || true)
+for ident in $idents; do
+    name=$(cat "$tmp"/*.go | grep -oE "(^|[^A-Za-z0-9_])${ident}[[:space:]]*=[[:space:]]*\"[a-z_]+\"" | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
+    if [[ -z "$name" ]]; then
+        echo "ERROR: server.go registers NewTool($ident, ...), but no '$ident = \"...\"' was found in" >&2
+        echo "       server.go or ${CONST_FILES[*]}. Add the file that declares it to CONST_FILES." >&2
+        exit 1
+    fi
+    echo "$name" >> "$tmp/registered_raw"
+done
+
+sort -u "$tmp/registered_raw" > "$tmp/registered_all"
+printf '%s\n' "${LEGACY_ALIASES[@]}" | sort -u > "$tmp/legacy"
+comm -23 "$tmp/registered_all" "$tmp/legacy" > "$tmp/registered"
 n_registered=$(wc -l < "$tmp/registered" | tr -d ' ')
 
 # A source we fetched but could not parse is the same failure as one we could not fetch.
