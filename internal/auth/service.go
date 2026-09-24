@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -19,7 +20,13 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/metrics"
 )
+
+// defaultRefreshReuseGraceWindow is how long after an ordinary rotation a
+// replay of the just-retired refresh token is given the benefit of the
+// doubt. See WithRefreshReuseGraceWindow and handleTokenReuse.
+const defaultRefreshReuseGraceWindow = 10 * time.Second
 
 const (
 	// bcryptCost is the bcrypt work factor for hashing user passwords.
@@ -124,6 +131,8 @@ type Service struct {
 	accessTokenTTL    time.Duration
 	refreshTokenTTL   time.Duration
 	allowRegistration bool
+	// refreshReuseGraceWindow — see WithRefreshReuseGraceWindow.
+	refreshReuseGraceWindow time.Duration
 }
 
 // Option configures optional Service behavior.
@@ -146,6 +155,18 @@ func WithAgentRepo(agentRepo repository.AgentRepository) Option {
 	return func(s *Service) { s.agentRepo = agentRepo }
 }
 
+// WithRefreshReuseGraceWindow sets how long, after an ordinary refresh-token
+// rotation, a replay of the token that rotation just retired is treated as a
+// benign retry instead of theft — see handleTokenReuse's doc comment for the
+// exact rule and which of the two reuse branches it applies to. Defaults to
+// 10s (#cfb14ad6's spec). Pass 0 to disable the grace window entirely: every
+// replay of an already-revoked token is theft, matching behavior before this
+// option existed — the fastest rollback lever if the window ever needs to
+// come out without a deploy (MESH_AUTH_REFRESH_REUSE_GRACE_WINDOW=0).
+func WithRefreshReuseGraceWindow(d time.Duration) Option {
+	return func(s *Service) { s.refreshReuseGraceWindow = d }
+}
+
 // NewService creates a new auth Service with the given dependencies.
 func NewService(
 	userRepo repository.UserRepository,
@@ -156,14 +177,15 @@ func NewService(
 	opts ...Option,
 ) *Service {
 	s := &Service{
-		userRepo:            userRepo,
-		refreshTokenRepo:    refreshTokenRepo,
-		workspaceRepo:       workspaceRepo,
-		workspaceMemberRepo: workspaceMemberRepo,
-		jwtSecret:           []byte(jwtSecret),
-		accessTokenTTL:      15 * time.Minute,
-		refreshTokenTTL:     7 * 24 * time.Hour,
-		allowRegistration:   true,
+		userRepo:                userRepo,
+		refreshTokenRepo:        refreshTokenRepo,
+		workspaceRepo:           workspaceRepo,
+		workspaceMemberRepo:     workspaceMemberRepo,
+		jwtSecret:               []byte(jwtSecret),
+		accessTokenTTL:          15 * time.Minute,
+		refreshTokenTTL:         7 * 24 * time.Hour,
+		allowRegistration:       true,
+		refreshReuseGraceWindow: defaultRefreshReuseGraceWindow,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -410,7 +432,9 @@ func (s *Service) Login(ctx context.Context, email, password string) (*domain.Us
 
 // RefreshTokens validates a refresh token and returns a new token pair.
 // Implements refresh token rotation: the old token is revoked and a new one is issued.
-// If a revoked token is reused, all tokens for the user are revoked (theft detection).
+// If a revoked token is reused, all tokens for the user are revoked (theft detection) —
+// unless handleTokenReuse decides the replay is a benign post-rotation retry inside the
+// grace window (see its doc comment and WithRefreshReuseGraceWindow).
 func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	tokenHash := hashRefreshToken(refreshToken)
 
@@ -422,10 +446,12 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 		return nil, ErrInvalidRefreshToken
 	}
 
-	// Token theft detection: if token was already revoked, revoke all user tokens.
+	// Token theft detection, sequential case: this token was ALREADY revoked
+	// before this request even started reading it — nothing is racing this
+	// call. handleTokenReuse decides whether it is a benign post-rotation
+	// retry (grace window) or theft.
 	if stored.RevokedAt != nil {
-		_ = s.refreshTokenRepo.RevokeByUserID(ctx, stored.UserID)
-		return nil, ErrTokenReused
+		return s.handleTokenReuse(ctx, stored, "already_revoked")
 	}
 
 	if stored.ExpiresAt.Before(timeNow()) {
@@ -435,14 +461,20 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 	// Revoke the old refresh token. The conditional revoke — not the RevokedAt read
 	// above — is what actually decides the winner: the read is only an early-out, and
 	// between it and this line another request can consume the same one-shot token.
-	// Losing here is indistinguishable from presenting an already-revoked token, so it
-	// takes the same theft-detection path.
+	// Losing here is TRUE CONCURRENCY (both requests observed the token as live) —
+	// the ambiguous case theft-detection exists to catch — and is NEVER grace-eligible,
+	// regardless of how quickly the loser arrives: unlike the branch above, there is no
+	// safe way to tell a genuinely concurrent replay from a racing thief without
+	// reopening the exact TOCTOU window TestRefreshTokens_ConcurrentRequests_OnlySucceeds
+	// pins shut.
 	revoked, err := s.refreshTokenRepo.RevokeByHash(ctx, tokenHash)
 	if err != nil {
 		return nil, apierror.Wrap(err)
 	}
 	if !revoked {
 		_ = s.refreshTokenRepo.RevokeByUserID(ctx, stored.UserID)
+		log.Printf("[refresh-reuse] user=%s reason=lost_conditional_revoke grace=false", stored.UserID)
+		metrics.RecordRefreshTokenReuse("lost_conditional_revoke", false)
 		return nil, ErrTokenReused
 	}
 
@@ -455,7 +487,66 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 		return nil, ErrUserInactive
 	}
 
-	return s.generateTokenPair(user)
+	pair, err := s.generateTokenPair(user)
+	if err != nil {
+		return nil, err
+	}
+
+	// Link the rotation so a later replay of tokenHash can be told apart from a
+	// real reuse. Non-fatal: see LinkSuccessor's doc comment — losing this call
+	// only means that specific replay won't get the grace window, never a
+	// security regression.
+	newHash := hashRefreshToken(pair.RefreshToken)
+	if linkErr := s.refreshTokenRepo.LinkSuccessor(ctx, tokenHash, newHash); linkErr != nil {
+		log.Printf("[refresh-reuse] failed to link rotation successor for user %s: %v", stored.UserID, linkErr)
+	}
+
+	return pair, nil
+}
+
+// handleTokenReuse decides what happens when a refresh token is presented
+// that was ALREADY revoked at the moment RefreshTokens read it — i.e. nothing
+// is racing this request; it is a purely sequential replay. (The
+// true-concurrency loss inside RefreshTokens' RevokeByHash call never reaches
+// this function — see that call site's comment for why it stays a hard
+// failure unconditionally.)
+//
+// stored.ReplacedByHash tells us WHY the token was revoked:
+//
+//   - set: an earlier request rotated it successfully (LinkSuccessor ran). A
+//     replay within the grace window is most likely the client that made
+//     THAT request never seeing its response — a dropped mobile connection,
+//     a closed tab, a proxy timeout — retrying with the only token it has.
+//     Mint a fresh pair; do not touch the account's other sessions. A replay
+//     past the window gets no benefit of the doubt and falls through to the
+//     same full revoke as the case below.
+//   - nil: the token died some other way — an explicit logout, an earlier
+//     theft detection on this account, or (rarely) a rotation whose
+//     LinkSuccessor call was lost (safe by construction, see its doc
+//     comment). Nothing vouches for the replay: always theft.
+//
+// reason labels the metric/log for observability.
+func (s *Service) handleTokenReuse(ctx context.Context, stored *repository.RefreshToken, reason string) (*TokenPair, error) {
+	age := timeNow().Sub(*stored.RevokedAt)
+	graceEligible := stored.ReplacedByHash != nil && age >= 0 && age <= s.refreshReuseGraceWindow
+
+	log.Printf("[refresh-reuse] user=%s reason=%s age_s=%.3f grace=%t", stored.UserID, reason, age.Seconds(), graceEligible)
+	metrics.RecordRefreshTokenReuse(reason, graceEligible)
+
+	if !graceEligible {
+		_ = s.refreshTokenRepo.RevokeByUserID(ctx, stored.UserID)
+		return nil, ErrTokenReused
+	}
+
+	user, err := s.userRepo.GetByID(ctx, stored.UserID)
+	if err != nil {
+		return nil, apierror.Wrap(err)
+	}
+	if user == nil || !user.IsActive {
+		return nil, ErrUserInactive
+	}
+	pair, err := s.generateTokenPair(user)
+	return pair, err
 }
 
 // ValidateAccessToken parses and validates a JWT access token string.
@@ -483,7 +574,11 @@ func (s *Service) ValidateAccessToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-// generateTokenPair creates a new JWT access token and an opaque refresh token.
+// generateTokenPair creates a new JWT access token and an opaque refresh
+// token. Unchanged by #cfb14ad6 — callers that need the new refresh token's
+// hash (RefreshTokens' rotation path, to call LinkSuccessor) derive it with
+// hashRefreshToken(pair.RefreshToken) instead of this function returning it,
+// so this function's existing error branches stay out of that change's diff.
 func (s *Service) generateTokenPair(user *domain.User) (*TokenPair, error) {
 	now := timeNow()
 
