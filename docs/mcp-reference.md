@@ -1182,7 +1182,11 @@ records targeted at you or at all agents.
 
 ---
 
-#### 32. `pavel_decision`
+#### 32. `record_owner_decision`
+
+Formerly `pavel_decision`. The old name is still served only when the operator sets
+`MESH_MCP_LEGACY_TOOL_ALIASES=1`, so existing callers keep working; it is not listed by the
+published server.
 
 Record a human owner's directive as a canonical decision in project knowledge, and broadcast
 it to the agents named in `propagate_to`. `privacy:private` records are stored but excluded
@@ -1204,7 +1208,7 @@ failure there is reported in the result but does not undo the canonical write.
 **Example request:**
 ```json
 {
-  "name": "pavel_decision",
+  "name": "record_owner_decision",
   "arguments": {
     "summary": "Docs live in Mesh Docs, not in files",
     "text": "Specs, ADRs and runbooks go into the project's Docs tree...",
