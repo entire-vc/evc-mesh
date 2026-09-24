@@ -71,7 +71,9 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # Same image and pin as docker-compose.prod.yml — minio/minio is gone from
+    # Docker Hub. MINIO_IMAGE overrides it.
+    image: ${MINIO_IMAGE:-ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9}
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
