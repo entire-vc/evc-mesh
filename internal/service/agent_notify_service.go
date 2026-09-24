@@ -95,9 +95,7 @@ func NewAgentNotifyService(agentSvc AgentService, rdb *redis.Client, agentEvents
 		agentSvc:        agentSvc,
 		rdb:             rdb,
 		agentEventsRepo: agentEventsRepo,
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		client:          newAgentCallbackHTTPClient(isPubliclyRoutable),
 	}
 }
 
@@ -174,6 +172,13 @@ func (s *agentNotifyService) dispatch(agentID uuid.UUID, event AgentNotification
 		return
 	}
 
+	// Values stored before write-time validation existed are not trusted either:
+	// re-check here, so an old internal address is skipped instead of dialled.
+	if vErr := ValidateAgentCallbackURL(agent.CallbackURL); vErr != nil {
+		log.Printf("[agent-notify] callback_url for agent %s rejected, not delivering: %v", agentID, vErr)
+		return
+	}
+
 	deliveryID := uuid.New().String()
 	s.deliverWithRetry(agent.CallbackURL, agentID, event.EventType, deliveryID, payloadBytes)
 }
@@ -198,6 +203,10 @@ func (s *agentNotifyService) deliverWithRetry(callbackURL string, agentID uuid.U
 		req.Header.Set("User-Agent", "evc-mesh-agent-notify/1.0")
 
 		resp, err := s.client.Do(req)
+		if err != nil && isPermanentCallbackError(err) {
+			log.Printf("[agent-notify] callback POST for agent %s refused permanently (SSRF guard or unknown host), not retrying (url: %s): %v", agentID, callbackURL, err)
+			return
+		}
 		if err != nil {
 			log.Printf("[agent-notify] callback POST failed for agent %s (attempt %d, url: %s): %v", agentID, attempt+1, callbackURL, err)
 			continue // timeout or network error — retry

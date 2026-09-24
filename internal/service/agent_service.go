@@ -309,6 +309,15 @@ func (s *agentService) Update(ctx context.Context, agent *domain.Agent) error {
 	if existing == nil {
 		return apierror.NotFound("Agent")
 	}
+	// Checked here rather than in the handlers so every path that writes an
+	// agent is covered. Only on change: an unrelated edit to an agent that
+	// still carries a pre-validation value must not start failing — delivery
+	// re-checks that value and skips it anyway.
+	if agent.CallbackURL != existing.CallbackURL {
+		if err := ValidateAgentCallbackURL(agent.CallbackURL); err != nil {
+			return err
+		}
+	}
 	agent.UpdatedAt = timeNow()
 	return s.agentRepo.Update(ctx, agent)
 }

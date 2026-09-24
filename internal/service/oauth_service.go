@@ -437,24 +437,40 @@ func newCIMDHTTPClient() *http.Client {
 // that gap because it sees the exact address the connection is about to be
 // made to.
 func ssrfSafeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	d := &net.Dialer{
-		Timeout: oauthCIMDDialTimeout,
-		Control: func(_, address string, c syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return err
-			}
-			ip := net.ParseIP(host)
-			if ip == nil {
-				return fmt.Errorf("refusing to dial non-IP address %q", host)
-			}
-			if !isPubliclyRoutable(ip) {
-				return fmt.Errorf("refusing to dial non-public address %s", ip)
-			}
-			return nil
-		},
+	return guardedDialContext(oauthCIMDDialTimeout, isPubliclyRoutable)(ctx, network, address)
+}
+
+// errDialAddressRefused marks a dial refused by guardedDialContext's address
+// check. It survives the net.OpError / url.Error wrapping (both Unwrap), so a
+// caller can tell "we refused to connect" — permanent, not worth a retry —
+// apart from an ordinary network failure.
+var errDialAddressRefused = errors.New("refusing to dial")
+
+// guardedDialContext returns a DialContext that connects only when allow
+// accepts the resolved IP. The check runs in net.Dialer.Control, i.e. on the
+// exact address the socket is about to connect to, after DNS resolution —
+// see ssrfSafeDialContext for why that and not a pre-resolve.
+func guardedDialContext(timeout time.Duration, allow func(net.IP) bool) func(ctx context.Context, network, address string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		d := &net.Dialer{
+			Timeout: timeout,
+			Control: func(_, address string, _ syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				ip := net.ParseIP(host)
+				if ip == nil {
+					return fmt.Errorf("%w non-IP address %q", errDialAddressRefused, host)
+				}
+				if !allow(ip) {
+					return fmt.Errorf("%w non-public address %s", errDialAddressRefused, ip)
+				}
+				return nil
+			},
+		}
+		return d.DialContext(ctx, network, address)
 	}
-	return d.DialContext(ctx, network, address)
 }
 
 // isPubliclyRoutable blocks the standard SSRF target list: loopback
