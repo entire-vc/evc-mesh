@@ -936,6 +936,9 @@ perf-bundle:
     - cd web && pnpm install --frozen-lockfile
   script:
     - pnpm build
+    # The freshness refusal itself (a dist/ from another commit, a missing
+    # .build-sha) — proven every pipeline, not just once when it was written.
+    - node perf/check-bundle-budget.mjs --selftest
     - node perf/check-bundle-budget.mjs
     # The React Profiler behind VITE_PERF_PROFILER (src/lib/perf-profiler.tsx)
     # must never reach a shipped bundle. It is dead code without the flag; this
