@@ -39,13 +39,18 @@ Prints the measured values and writes `web/perf-bundle-report.json`
 (git-ignored, same file the CI job publishes as an artifact). Exit code is 1
 if anything is over budget.
 
-## Why `login.initial_js_kb_gz` currently equals `total_js_kb_gz`
+## `login.initial_js_kb_gz` vs `total_js_kb_gz` after route splitting
 
-There is no route splitting yet (that's `[perf·Б1]`) — every page is a static
-import from `App.tsx`, so the whole app ships on `/login`. Once Б1 lands and
-routes become `React.lazy`, `login.initial_js_kb_gz` should drop while
-`total_js_kb_gz` stays roughly flat (same code, split differently) — at that
-point lower `login.initial_js_kb_gz`'s ceiling to match, per the rule above.
+Routes are `React.lazy` since !1006, so the two numbers diverged: on
+`9514eba3` `login.initial_js_kb_gz` is 148.96 (was 432.07) and
+`total_js_kb_gz` is 488.75 (was 432.07). Ceilings are 150 and 490.
+
+`total_js_kb_gz` went **up** by ~56 KB: 95 chunks are gzipped one by one, and
+small chunks compress worse than one big one (gzip -9 over the same files:
+~7% more as separate files than as one stream); the rest is code that landed on
+`main` since the 432 baseline. It is not what a user downloads on `/login`, so
+it is a guard against unbounded growth, not a target. Raising it needed a
+reason and lead sign-off (rule above) — see the MR.
 
 ## Proving the gate actually gates (do this again after touching the script)
 
@@ -114,6 +119,27 @@ Spread over 12 local runs of the minimum: `dom_mutations` and
 `board_card_commits` exact (apart from the race), `react_commits` ±2,
 `layout_count` ±1, `recalc_style_count` wide (9–24) — its ceilings carry
 ~25% headroom, everything else sits at the highest observed minimum.
+
+### `board.open.dom_mutations` 43 → 74 after route splitting
+
+Since !1006 the board is a lazy chunk. The first `import()` of it makes Vite
+insert one `<link rel="modulepreload">` (or stylesheet) into `<head>` per
+dependency the entry chunk does not already carry — 30 JS + 2 CSS for the
+board — and the observer watches the whole `document`, `<head>` included.
+74 − 43 = 31 ≈ those 32 insertions. It happens once per session, adds no
+layout (`layout_count` unchanged at 3) and no React work. Measured on
+pipeline 5163 (runs 74 / 76 / 76, minimum gated). Lead sign-off: Garfield.
+Bringing it back to 43 (warm the board chunk on idle from `AppLayout`, or
+scope the observer to `#root`) lowers the ceiling again, per the rule above.
+
+`task.open.dom_mutations` 52 → 56 (+4) is the same change, found by running the
+whole spec: with `board.open` red, Playwright reports the other three paths as
+"did not run", so this one was invisible in CI. Measured locally on `558c1170`
+(52) vs `9514eba3` + fix (56, three runs 56 / 56 / 56). The +4 is the same
+mechanism as `board.open`: the first `import()` of `task-detail` inserts 4
+`<link rel="modulepreload">` into `<head>` (`task-detail`, `_task-panel`,
+`_template`, `_circle`; the rest of its closure is already loaded by the
+board). Lead sign-off: Garfield.
 
 ### Running it locally
 
