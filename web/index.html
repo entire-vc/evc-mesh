@@ -13,6 +13,19 @@
     <meta name="robots" content="noindex, nofollow" />
     <meta name="description" content="EVC Mesh web app — login required." />
     <title>EVC Mesh</title>
+    <!--
+      Theme before the first frame: same localStorage key and fallback as
+      main.tsx / header.tsx, so the static shell below paints in the right
+      theme instead of flashing light first.
+    -->
+    <script>
+      try {
+        var t = localStorage.getItem("theme");
+        if (t === "dark" || (!t && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (e) {}
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -21,7 +34,84 @@
     />
   </head>
   <body class="min-h-screen bg-background text-foreground antialiased">
+    <!--
+      Static shell (perf·Б2, #2417383b). Until the bundle has loaded and React
+      has mounted, #root holds a copy of the markup React renders on its FIRST
+      frame for this route, so the screen is visible at TTFB + CSS instead of
+      after all of the JS. createRoot() then replaces it (not hydration).
+
+      Each template MUST match its React counterpart class-for-class, as the
+      classes come out of cn()/tailwind-merge (CardTitle, for one, loses
+      leading-none once text-2xl is merged in):
+        shell-login → pages/login.tsx (LoginPage, registrationEnabled=true —
+                      the hook's initial value)
+        shell-app   → components/layout/app-layout.tsx (authLoading branch)
+      scripts/assert-static-shell-match.mjs diffs the two pixel-by-pixel (CI).
+
+      Kill switch: ?static-shell=off (remembered in localStorage
+      "mesh-static-shell"), ?static-shell=on clears it.
+    -->
+    <template id="shell-login">
+      <div class="flex min-h-screen items-center justify-center bg-background px-4">
+        <div class="rounded-xl border border-border bg-card text-card-foreground shadow-sm w-full max-w-md">
+          <div class="flex flex-col space-y-1.5 p-6 text-center">
+            <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">M</div>
+            <h3 class="font-semibold tracking-tight text-2xl">Welcome back</h3>
+            <p class="text-sm text-muted-foreground">Sign in to your EVC Mesh account</p>
+          </div>
+          <!-- Not submittable: typed values are carried into the React form by lib/static-shell.ts. -->
+          <form onsubmit="return false">
+            <div class="p-6 pt-0 space-y-4">
+              <div class="space-y-2">
+                <label for="email" class="text-sm font-medium">Email</label>
+                <input id="email" type="email" placeholder="you@example.com" required autocomplete="email" class="flex h-9 w-full rounded-lg border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" />
+              </div>
+              <div class="space-y-2">
+                <label for="password" class="text-sm font-medium">Password</label>
+                <input id="password" type="password" placeholder="Your password" required autocomplete="current-password" class="flex h-9 w-full rounded-lg border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" />
+              </div>
+            </div>
+            <div class="flex items-center p-6 pt-0 flex-col gap-4">
+              <button type="submit" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4 py-2 w-full">Sign in</button>
+              <p class="text-center text-sm text-muted-foreground">Don&apos;t have an account? <a href="/register" class="text-primary hover:underline">Register</a></p>
+            </div>
+          </form>
+        </div>
+      </div>
+    </template>
+    <template id="shell-app">
+      <div class="flex h-screen items-center justify-center bg-background">
+        <div class="space-y-4 text-center">
+          <div class="animate-pulse bg-muted mx-auto h-8 w-8 rounded-full"></div>
+          <div class="animate-pulse rounded-md bg-muted h-4 w-32"></div>
+        </div>
+      </div>
+    </template>
     <div id="root"></div>
+    <script>
+      (function () {
+        try {
+          var KEY = "mesh-static-shell";
+          var q = /[?&]static-shell=(on|off)\b/.exec(location.search);
+          if (q) {
+            if (q[1] === "off") localStorage.setItem(KEY, "off");
+            else localStorage.removeItem(KEY);
+          }
+          if (localStorage.getItem(KEY) === "off") return;
+        } catch (e) {}
+        var p = location.pathname;
+        // /register and /accept-invite render their own forms — no shell there
+        // rather than a wrong one.
+        var id = p === "/login" || p === "/login/" ? "shell-login"
+          : /^\/(register|accept-invite)(\/|$)/.test(p) ? null
+          : "shell-app";
+        var tpl = id && document.getElementById(id);
+        if (!tpl) return;
+        var root = document.getElementById("root");
+        root.appendChild(tpl.content.cloneNode(true));
+        root.setAttribute("data-static-shell", id);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

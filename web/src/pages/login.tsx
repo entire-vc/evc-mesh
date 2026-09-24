@@ -1,8 +1,12 @@
-import { type FormEvent, useCallback, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { useAuthStore } from "@/stores/auth";
 import { useAuthConfig } from "@/hooks/use-auth-config";
 import { ApiRequestError } from "@/lib/api";
+import {
+  clearStaticShellDraft,
+  peekStaticShellDraft,
+} from "@/lib/static-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -19,10 +23,31 @@ export function LoginPage() {
   const [searchParams] = useSearchParams();
   const { isAuthenticated, login } = useAuthStore();
   const { registrationEnabled } = useAuthConfig();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  // Seeded from the static shell in index.html, so input typed before the
+  // bundle loaded survives the hand-off to React.
+  const [email, setEmail] = useState(() => peekStaticShellDraft()?.email ?? "");
+  const [password, setPassword] = useState(
+    () => peekStaticShellDraft()?.password ?? "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const focusedId = peekStaticShellDraft()?.focusedId;
+    clearStaticShellDraft();
+    if (!focusedId) return;
+    const el = document.getElementById(focusedId);
+    if (el instanceof HTMLInputElement) {
+      el.focus();
+      // type=email doesn't support selection APIs; the caret lands at the end
+      // on focus there anyway.
+      try {
+        el.setSelectionRange(el.value.length, el.value.length);
+      } catch {
+        /* not a text-selectable input type */
+      }
+    }
+  }, []);
 
   const handleSubmit = useCallback(
     async (e: FormEvent) => {
