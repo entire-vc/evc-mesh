@@ -6,8 +6,23 @@
 // metric over its ceiling. See web/perf/README.md for the ratchet rule.
 //
 // Run after `pnpm build`, from web/: `node perf/check-bundle-budget.mjs`.
+//
+// It also refuses a dist/ that was not built from the current commit
+// (dist/.build-sha, written by the build-sha plugin in vite.config.ts): when
+// `pnpm build` fails before vite runs, the previous dist/ stays on disk, and
+// reading it passed the budget on code that no longer built. A missing
+// .build-sha is a refusal too, never a skipped check.
+// `node perf/check-bundle-budget.mjs --selftest` proves that refusal logic.
 
-import { readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { gzipSync } from "node:zlib";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,9 +40,91 @@ function fail(message) {
   process.exit(1);
 }
 
+/** The commit the checkout is at: CI's SHA first, local git second — the same
+ * order vite.config.ts uses to stamp the build. null = cannot tell. */
+function currentCommit() {
+  if (process.env.CI_COMMIT_SHA) return process.env.CI_COMMIT_SHA.trim();
+  try {
+    return execSync("git rev-parse HEAD", { cwd: webRoot, stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Was `distDir` built from `expectedSha`? Anything short of a positive match
+ * — no expected commit, no stamp, empty stamp, different commit — is a "no". */
+function distFreshness(distDir, expectedSha) {
+  if (!expectedSha) {
+    return {
+      ok: false,
+      reason:
+        "cannot determine the current commit (no CI_COMMIT_SHA, `git rev-parse HEAD` failed) " +
+        "— refusing to check a dist/ whose freshness cannot be verified.",
+    };
+  }
+  const stampPath = join(distDir, ".build-sha");
+  if (!existsSync(stampPath)) {
+    return {
+      ok: false,
+      reason:
+        `${stampPath} not found — dist/ was not stamped by the current build ` +
+        "(built before this check existed, or the build-sha plugin in vite.config.ts is gone). Run `pnpm build`.",
+    };
+  }
+  const stamped = readFileSync(stampPath, "utf8").trim();
+  if (!stamped) {
+    return { ok: false, reason: `${stampPath} is empty — dist/ has no build commit. Run \`pnpm build\`.` };
+  }
+  if (stamped !== expectedSha) {
+    return {
+      ok: false,
+      reason:
+        `dist/ is not from HEAD: dist/.build-sha = ${stamped}, current commit = ${expectedSha}. ` +
+        "It is left over from an older build (or the build failed before vite ran) — run `pnpm build`.",
+    };
+  }
+  return { ok: true, reason: null };
+}
+
+if (process.argv.includes("--selftest")) {
+  // The refusal is the point of this check, so prove each way it can refuse
+  // (and that the one good case still passes) without touching the real dist/.
+  const tmp = mkdtempSync(join(tmpdir(), "bundle-fresh-"));
+  const SHA = "a".repeat(40);
+  const OTHER = "b".repeat(40);
+  const dir = (name, stamp) => {
+    const d = join(tmp, name);
+    mkdirSync(d);
+    if (stamp !== undefined) writeFileSync(join(d, ".build-sha"), stamp);
+    return d;
+  };
+  const cases = [
+    ["stamp matches HEAD", distFreshness(dir("ok", `${SHA}\n`), SHA), true],
+    ["stamp from another commit", distFreshness(dir("stale", `${OTHER}\n`), SHA), false],
+    ["stamp file missing", distFreshness(dir("missing", undefined), SHA), false],
+    ["stamp file empty", distFreshness(dir("empty", "\n"), SHA), false],
+    ["current commit unknown", distFreshness(dir("nohead", `${SHA}\n`), null), false],
+  ];
+  rmSync(tmp, { recursive: true, force: true });
+  let bad = 0;
+  for (const [name, got, wantOk] of cases) {
+    const pass = got.ok === wantOk;
+    if (!pass) bad++;
+    console.log(`${pass ? "ok  " : "FAIL"} ${name}: ${got.ok ? "accepted" : "refused"}${got.reason ? ` — ${got.reason.slice(0, 90)}` : ""}`);
+  }
+  if (bad) fail(`selftest: ${bad} case(s) behaved wrongly`);
+  console.log("[check-bundle-budget] selftest OK");
+  process.exit(0);
+}
+
 if (!existsSync(distDir)) {
   fail(`dist/ not found at ${distDir} — run \`pnpm build\` first.`);
 }
+const freshness = distFreshness(distDir, currentCommit());
+if (!freshness.ok) fail(freshness.reason);
+
 if (!existsSync(manifestPath)) {
   fail(
     `${manifestPath} not found. vite.config.ts must set build.manifest: true ` +
@@ -141,19 +238,8 @@ for (const [metric, ceiling] of Object.entries(budget)) {
 // unbounded with nobody noticing. Surfaced in the report, not gated.
 const uncovered = Object.keys(actual).filter((k) => !(k in budget));
 
-function gitSha() {
-  if (process.env.CI_COMMIT_SHA) return process.env.CI_COMMIT_SHA;
-  try {
-    return execSync("git rev-parse HEAD", { cwd: webRoot, stdio: ["ignore", "pipe", "ignore"] })
-      .toString()
-      .trim();
-  } catch {
-    return null;
-  }
-}
-
 const report = {
-  commit: gitSha(),
+  commit: currentCommit(),
   measured_at: new Date().toISOString(),
   entry_files: entryFiles,
   all_js_files: allJsFiles,

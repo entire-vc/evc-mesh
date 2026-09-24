@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -43,12 +43,51 @@ function swCacheVersion(): Plugin {
   };
 }
 
+/** The commit this build is made from: CI's own SHA first, local git second.
+ * web/perf/check-bundle-budget.mjs resolves the "current" commit in the same
+ * order, so the two agree on what HEAD means. null = unknown, and then no
+ * .build-sha is written — which the check treats as a failure, not a pass. */
+function currentCommit(): string | null {
+  if (process.env.CI_COMMIT_SHA) return process.env.CI_COMMIT_SHA.trim();
+  try {
+    return execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return null;
+  }
+}
+
+// Stamps the built output with the commit it came from (dist/.build-sha), so
+// web/perf/check-bundle-budget.mjs can refuse a dist left over from an older
+// build: `tsc -b` failing before vite runs leaves the previous dist/ in place,
+// and a budget check that reads it passes on code that no longer builds.
+function buildSha(): Plugin {
+  let outDir = resolve(__dirname, "dist");
+  return {
+    name: "build-sha",
+    apply: "build",
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      const sha = currentCommit();
+      if (!sha) {
+        console.warn("[build-sha] cannot determine the current commit; dist/.build-sha not written");
+        return;
+      }
+      writeFileSync(join(outDir, ".build-sha"), `${sha}\n`);
+      console.log(`[build-sha] ${sha}`);
+    },
+  };
+}
+
 // The perf-counter build (web/perf/README.md, part 2). Separate outDir so it
 // can never be mistaken for, or overwrite, the dist/ that ships.
 const PERF_PROFILER = process.env.VITE_PERF_PROFILER === "1";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), swCacheVersion()],
+  plugins: [react(), tailwindcss(), swCacheVersion(), buildSha()],
   resolve: {
     alias: [
       { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },

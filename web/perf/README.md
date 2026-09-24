@@ -39,6 +39,27 @@ Prints the measured values and writes `web/perf-bundle-report.json`
 (git-ignored, same file the CI job publishes as an artifact). Exit code is 1
 if anything is over budget.
 
+## A dist/ from another commit is refused
+
+`pnpm build` is `tsc -b && vite build`. When `tsc` fails, vite never runs and
+the previous `dist/` stays on disk — and the check used to read it and pass
+(seen on `9514eba3`: the build failed with TS1117, the check went green on a
+`dist/` from 05:30). A check that can pass without checking the code under
+test is a false green.
+
+Now `vite build` stamps `dist/.build-sha` with the commit it was made from
+(`CI_COMMIT_SHA`, else `git rev-parse HEAD`), and `check-bundle-budget.mjs`
+compares it with the current commit (same order) before it reads anything.
+It exits 1 — with `dist/ is not from HEAD` and both SHAs — when they differ,
+and equally when the stamp is missing, empty, or the current commit cannot be
+determined. There is no "skip" path.
+
+Limits, stated: it compares commits, not file contents, so uncommitted edits
+made after a successful build are not noticed locally (CI always builds a
+committed tree). `node perf/check-bundle-budget.mjs --selftest` proves the five
+refusal/accept cases without a build; `perf-bundle` runs it before the real
+check.
+
 ## `login.initial_js_kb_gz` vs `total_js_kb_gz` after route splitting
 
 Routes are `React.lazy` since !1006, so the two numbers diverged: on
