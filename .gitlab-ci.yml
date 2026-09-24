@@ -610,13 +610,21 @@ tenancy-rbac-gate:
     - name: nats:2-alpine
       alias: nats
       command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
-    # Docker Hub's minio/minio repository started returning "pull access denied
-    # ... repository does not exist" (measured 2026-09-13, reproduced with a
-    # plain `docker pull minio/minio:latest` outside CI too — not a runner-side
-    # flake). quay.io/minio/minio is MinIO's own other published mirror of the
-    # same image; verified it serves an identical /minio/health/live 200 before
-    # this change went in.
-    - name: quay.io/minio/minio
+    # MinIO no longer publishes a public image we can pull: Docker Hub
+    # minio/minio went "pull access denied" (2026-09-13) and quay.io/minio/minio
+    # then started answering 401 to anonymous manifest requests (2026-09-24),
+    # which failed this job before it started and took every MR's pipeline red.
+    # Both were `latest` from a registry we do not control; that is the second
+    # time, so the image now lives in this project's own registry, pinned by
+    # digest. It is a copy of the amd64 image this gate had been running on
+    # (quay.io/minio/minio:latest = index 14cea493, image built 2025-09-07); the
+    # digest below is that image's amd64 manifest, verified identical after the
+    # push. The runner authenticates to $CI_REGISTRY with the job token, so no
+    # credentials are needed here.
+    #
+    # To move to a newer MinIO: pull it somewhere that still can, push it to
+    # git.entire.host:5050/entire-vc/evc-mesh/minio, and change the digest.
+    - name: git.entire.host:5050/entire-vc/evc-mesh/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
       alias: minio
       command: ["server", "/data"]
   cache:
