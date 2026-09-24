@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -50,6 +51,23 @@ const (
 	// character class is a fingerprint, and confirming a guess against it is
 	// cheaper than not having it.
 	PermManageSecrets Permission = "manage_secrets"
+
+	// The next three exist for RequireConnectorPermission only: they are the
+	// role bar for routes that carry no rbac() (and must not gain one, because
+	// that would narrow what humans and trusted X-Agent-Key agents can do
+	// there). They are deliberately not in agentPerms — nothing reads them for
+	// an agk_ agent.
+	//
+	// PermManageProject: rename/re-describe a project and change its status
+	// set. Owner/admin only — a member creates projects but does not
+	// restructure them through a connector.
+	PermManageProject Permission = "manage_project"
+	// PermWriteMemory: write or delete workspace/project memory and project
+	// knowledge. Owner/admin/member; a viewer is read-only.
+	PermWriteMemory Permission = "write_memory"
+	// PermMemoryIndex: rebuild the memory search index (re-embed, backfill
+	// chunks). Each call spends embedding quota, so owner/admin only.
+	PermMemoryIndex Permission = "memory_index"
 )
 
 // permissionMatrix maps a role name to the set of permissions it holds.
@@ -77,6 +95,9 @@ var permissionMatrix = map[string]map[Permission]bool{
 		PermManageWebhooks:  true,
 		PermManageRules:     true,
 		PermManageSecrets:   true,
+		PermManageProject:   true,
+		PermWriteMemory:     true,
+		PermMemoryIndex:     true,
 	},
 	domain.RoleAdmin: {
 		// Admin has the same permissions as owner.
@@ -97,6 +118,9 @@ var permissionMatrix = map[string]map[Permission]bool{
 		PermManageWebhooks:  true,
 		PermManageRules:     true,
 		PermManageSecrets:   true,
+		PermManageProject:   true,
+		PermWriteMemory:     true,
+		PermMemoryIndex:     true,
 	},
 	domain.RoleMember: {
 		PermCreateProject:  true,
@@ -107,6 +131,7 @@ var permissionMatrix = map[string]map[Permission]bool{
 		PermUploadArtifact: true,
 		PermPublishEvent:   true,
 		PermManageCF:       true,
+		PermWriteMemory:    true,
 	},
 	domain.RoleViewer: {
 		// Viewer: read-only, no write actions.
@@ -148,14 +173,18 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 			// identity (agentPerms, meant for trusted lead agents) that
 			// outlives their own actual access, including PermManageRules.
 			//
-			// Scope of that guarantee: the clamp lives HERE, so it holds only
-			// on routes registered behind rbac(...). A route with no rbac()
-			// (e.g. POST /projects/:id/statuses, PATCH /projects/:id, POST
-			// /tasks/:id/checkout, POST /memories) is open to any connector
-			// exactly as it is to an agk_ agent today — "a connector never
-			// holds more than its user" is true of the permission matrix, not
-			// of those routes. Not a regression of this change; closing it
-			// means adding rbac() to them, tracked separately.
+			// Scope of that guarantee: this clamp only runs on routes registered
+			// behind rbac(...). A route without it is not covered by THIS function,
+			// so the same guarantee is delivered there by
+			// RequireConnectorPermission / RequireConnectorSelfOrPermission (same
+			// lookup, same 403, but a no-op for humans and X-Agent-Key agents, whose
+			// access on those routes is deliberately unchanged). A route with none of
+			// the three must be in the reviewed allow-list of
+			// cmd/api/rbac_routes_audit_test.go, which fails the build otherwise — that
+			// test, not this comment, is what keeps "a connector never holds more
+			// than its user" true as routes are added. Read routes are outside that
+			// promise by design: a viewer's connector reads what the viewer reads,
+			// and the tenant boundary on them is group-wide (WorkspaceRLS).
 			if IsAgent(c) {
 				if !agentPerms[perm] {
 					// PermRegisterAgent gets its own message: the generic
@@ -170,15 +199,11 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
 				}
 
-				if connectorUserID, ok := GetOAuthConnectorUserID(c); ok {
-					wsID, err := GetAgentAuthWorkspaceID(c)
-					if err != nil {
-						return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace context required"))
-					}
-					role, err := memberRepo.GetRole(c.Request().Context(), wsID, connectorUserID)
-					if err != nil || !hasPermission(role, perm) {
-						return c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions — the connected user's workspace role no longer grants this"))
-					}
+				// nil owner check: rbac() routes keep the membership-row-only
+				// lookup they always had; the owner fallback is for the routes
+				// this change newly guards (see WorkspaceOwnerCheck).
+				if denied, err := clampConnector(c, perm, memberRepo, nil); denied {
+					return err
 				}
 
 				return next(c)
@@ -229,6 +254,98 @@ func RequireSelfOrPermission(agentIDParam string, perm Permission, memberRepo re
 		guarded := fallback(next)
 		return func(c echo.Context) error {
 			if IsAgent(c) {
+				if callerID, err := GetAgentID(c); err == nil {
+					if targetID, perr := uuid.Parse(c.Param(agentIDParam)); perr == nil && targetID == callerID {
+						return next(c)
+					}
+				}
+			}
+			return guarded(c)
+		}
+	}
+}
+
+// WorkspaceOwnerCheck reports whether userID owns workspace wsID. It is the
+// owner fallback for a workspace whose owner has no workspace_members row (a
+// documented possibility: see oauthService.resolveMemberRole). nil disables the
+// fallback. In production it is UserOwnsWorkspace bound to the database.
+type WorkspaceOwnerCheck func(ctx context.Context, wsID, userID uuid.UUID) bool
+
+// clampConnector applies the OAuth-connector role clamp. denied is false when
+// the caller is not a connector (nothing to clamp) or its consenting user's
+// CURRENT workspace role holds perm; when true the 403 has already been written
+// and the caller must return err WITHOUT calling next. One SELECT, and only for
+// connectors.
+//
+// The two-value shape is deliberate: c.JSON returns nil on a successful write,
+// so returning only its error would make "denied" indistinguishable from
+// "allowed" and let the handler run after the 403 was sent — the response would
+// look right and the write would still happen. (The first version of this
+// helper did exactly that; only a real request against a real handler showed it.)
+//
+// Fail-closed: a missing workspace, a role lookup error and a role that is no
+// longer a member all deny. Shared by RequirePermission and the connector-only
+// middlewares below so the two cannot drift.
+func clampConnector(c echo.Context, perm Permission, memberRepo repository.WorkspaceMemberRepository, ownsWorkspace WorkspaceOwnerCheck) (denied bool, err error) {
+	connectorUserID, ok := GetOAuthConnectorUserID(c)
+	if !ok {
+		return false, nil
+	}
+	wsID, wsErr := GetAgentAuthWorkspaceID(c)
+	if wsErr != nil {
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("workspace context required"))
+	}
+	role, roleErr := memberRepo.GetRole(c.Request().Context(), wsID, connectorUserID)
+	if roleErr != nil && ownsWorkspace != nil && ownsWorkspace(c.Request().Context(), wsID, connectorUserID) {
+		// The owner of a workspace whose own membership row was never written.
+		// The OAuth service admits such an owner at consent (resolveMemberRole)
+		// and the workspace guard admits them on every other route, so the clamp
+		// must not turn a connector they legitimately authorised into a 403 on
+		// the routes it now guards.
+		role, roleErr = domain.RoleOwner, nil
+	}
+	if roleErr != nil || !hasPermission(role, perm) {
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions — the connected user's workspace role no longer grants this"))
+	}
+	return false, nil
+}
+
+// RequireConnectorPermission is the role bar for a route that has no rbac():
+// it clamps an OAuth connector (mot_) to what its consenting user's current
+// workspace role holds, and does nothing for anyone else.
+//
+// Why not just rbac() on those routes: rbac() also applies to humans and to
+// trusted X-Agent-Key agents. Adding it would silently narrow what a member can
+// do in the web app on the same route, and agentPerms is shorter than the
+// matrix, so agents such as the lead lanes would start getting 403 on routes
+// they use today. The connector is new and has no such history; a role bar is
+// safe to introduce there, and only there.
+//
+// Runs after DualAuth and WorkspaceRLS (needs the workspace the token is bound
+// to). Unlike RequirePermission it does NOT consult agentPerms.
+func RequireConnectorPermission(perm Permission, memberRepo repository.WorkspaceMemberRepository, ownsWorkspace WorkspaceOwnerCheck) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if IsAgent(c) {
+				if denied, err := clampConnector(c, perm, memberRepo, ownsWorkspace); denied {
+					return err
+				}
+			}
+			return next(c)
+		}
+	}
+}
+
+// RequireConnectorSelfOrPermission is RequireConnectorPermission for a route
+// whose :agentIDParam names an agent: a connector may always act on its own
+// identity, and on another agent's only if its user's role holds perm.
+// A malformed id falls through to the permission check (never to "self").
+func RequireConnectorSelfOrPermission(agentIDParam string, perm Permission, memberRepo repository.WorkspaceMemberRepository, ownsWorkspace WorkspaceOwnerCheck) echo.MiddlewareFunc {
+	bar := RequireConnectorPermission(perm, memberRepo, ownsWorkspace)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		guarded := bar(next)
+		return func(c echo.Context) error {
+			if _, isConnector := GetOAuthConnectorUserID(c); isConnector {
 				if callerID, err := GetAgentID(c); err == nil {
 					if targetID, perr := uuid.Parse(c.Param(agentIDParam)); perr == nil && targetID == callerID {
 						return next(c)

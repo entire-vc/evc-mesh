@@ -659,6 +659,18 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
+	// A callback URL makes the server POST event payloads to an address the
+	// caller chose, through a plain HTTP client with no SSRF guard. A trusted
+	// X-Agent-Key agent is one we issued a key to; an OAuth connector is
+	// whichever third-party client a member consented to, so it does not get to
+	// name a URL the server will call. Clearing one ("") stays allowed, and so
+	// does everything else on this route.
+	if req.CallbackURL != nil && *req.CallbackURL != "" {
+		if _, isConnector := mw.GetOAuthConnectorUserID(c); isConnector {
+			return c.JSON(http.StatusForbidden, apierror.Forbidden("an OAuth connector cannot register a callback URL — read events through the event stream or by polling"))
+		}
+	}
+
 	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
 	if err != nil {
 		return handleError(c, err)
