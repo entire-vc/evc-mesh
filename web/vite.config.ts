@@ -43,12 +43,39 @@ function swCacheVersion(): Plugin {
   };
 }
 
+// The perf-counter build (web/perf/README.md, part 2). Separate outDir so it
+// can never be mistaken for, or overwrite, the dist/ that ships.
+const PERF_PROFILER = process.env.VITE_PERF_PROFILER === "1";
+
 export default defineConfig({
   plugins: [react(), tailwindcss(), swCacheVersion()],
   resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
+    alias: [
+      { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
+      // React's production build never calls <Profiler onRender>; the
+      // profiling build does. Perf build only — see src/lib/perf-profiler.tsx.
+      ...(PERF_PROFILER
+        ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }]
+        : []),
+    ],
+  },
+  build: {
+    // Read by web/perf/check-bundle-budget.mjs to find the entry chunk and
+    // its static imports without guessing filenames from hashed output.
+    manifest: true,
+    outDir: PERF_PROFILER ? "dist-perf" : "dist",
+  },
+  preview: {
+    // The perf spec serves dist-perf with `vite preview` and talks to the
+    // ephemeral CI API through this proxy, same-origin, exactly as the dev
+    // server does. Unset → preview inherits server.proxy (unchanged).
+    ...(process.env.PERF_API_URL
+      ? {
+          proxy: {
+            "/api": { target: process.env.PERF_API_URL, changeOrigin: true },
+          },
+        }
+      : {}),
   },
   server: {
     port: 3000,
