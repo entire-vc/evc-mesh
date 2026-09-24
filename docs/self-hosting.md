@@ -404,6 +404,41 @@ Point `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`,
 credentials are not allowed to create buckets, create `S3_BUCKET` yourself
 first — the startup log will tell you if this is the case.
 
+### Which MinIO image
+
+`minio/minio` is no longer available from Docker Hub (`pull access denied`) and
+`quay.io/minio/minio` no longer serves anonymous pulls, so a fresh `up -d` on
+the old default failed before any service started. The compose files now run
+
+```
+ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+```
+
+This is a third-party build of MinIO `RELEASE.2025-10-15T17-29-55Z` (multi-arch:
+amd64 and arm64), compiled from MinIO's source by its publisher (coollabsio), not
+MinIO's own release binary and not something MinIO signs or vouches for. That is
+why `minio --version` reports `commit-id=DEVELOPMENT.GOGET`, and why the image's
+`vendor`/`maintainer` labels (copied from MinIO) should not be read as a
+statement by MinIO. It contains both `minio` and `mc`, which the service's
+healthcheck (`mc ready local`) needs. If you have a provenance requirement,
+review how it is built or build MinIO yourself, push the result to a registry you
+control and set `MINIO_IMAGE` (below).
+
+The reference is pinned by the digest of its image index, so a re-pointed tag
+cannot change what your instance runs. A pin does **not** keep the image
+available — a package can be deleted, which is how `minio/minio` failed — and it
+freezes MinIO and the base image at that release, so it receives no security
+updates. For anything you cannot afford to lose, mirror the image into your own
+registry and plan a move to an S3 service you control (see *Using an external S3
+bucket* above).
+
+`MINIO_IMAGE` in `.env` swaps the image. It has to be a drop-in MinIO: the
+compose file starts it with `server /data --console-address ":9001"`, passes
+`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`, listens on 9000, and its healthcheck
+runs `mc ready local`. A different S3 server needs its own `command` and
+`healthcheck`, which this variable cannot change — use an external bucket
+instead and drop the `minio` service.
+
 ### How files are served back
 
 | | Served by | Needs `S3_PUBLIC_URL`? |
@@ -688,7 +723,7 @@ Services included in `docker-compose.prod.yml`:
 | `postgres` | *(internal)* | PostgreSQL 16 — required env: `POSTGRES_PASSWORD` |
 | `redis` | *(internal)* | Redis 7 with password — required env: `REDIS_PASSWORD` |
 | `nats` | *(internal)* | NATS 2.10 with JetStream enabled |
-| `minio` | *(internal)* | MinIO object storage — required env: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` |
+| `minio` | *(internal)* | MinIO object storage — required env: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`; optional `MINIO_IMAGE` ([which image](#which-minio-image)) |
 | `api` | `${API_PORT:-8005}` | Mesh API server (Go binary, runs DB migrations on startup) |
 | `mcp` | `${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents |
 | `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api`, `/ws` and `/mcp` (SSE, see [Agent onboarding](agent-onboarding.md)) |
@@ -1353,6 +1388,12 @@ pnpm dev
    docker compose -f docker-compose.prod.yml --env-file .env up -d --build
    ```
    Migrations are applied automatically at API startup.
+
+   Releases from this one on run the bundled `minio` service from a different
+   image ([which image](#which-minio-image)). `up -d` pulls it and recreates the
+   container, so the host needs outbound access to `ghcr.io` (or set
+   `MINIO_IMAGE` to a registry it can reach). Data in `volumes/minio/data` and
+   the bucket are unaffected.
 
 4. Verify health and version:
    ```bash

@@ -88,7 +88,14 @@ services:
       retries: 3
 
   minio:
-    image: minio/minio:latest
+    # minio/minio left Docker Hub ("pull access denied") and quay.io/minio/minio
+    # stopped serving anonymous pulls, so a fresh install failed on `up -d`
+    # before any service started. The default is a community rebuild of MinIO
+    # (RELEASE.2025-10-15T17-29-55Z) on ghcr.io, pinned by index digest so a
+    # moved tag cannot change what runs; it carries both `minio` and the `mc`
+    # the healthcheck below uses. MINIO_IMAGE overrides it, e.g. with your own
+    # mirror. See docs/self-hosting.md#which-minio-image.
+    image: ${MINIO_IMAGE:-ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9}
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:

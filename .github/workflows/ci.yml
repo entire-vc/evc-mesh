@@ -261,7 +261,7 @@ jobs:
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data
+            ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9 server /data
           for _ in $(seq 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
               echo "MinIO ready"; exit 0
@@ -465,7 +465,7 @@ jobs:
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data
+            ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9 server /data
           for _ in $(seq 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1; then
               echo "MinIO ready"; exit 0
