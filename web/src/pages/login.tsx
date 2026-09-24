@@ -7,6 +7,7 @@ import {
   clearStaticShellDraft,
   peekStaticShellDraft,
 } from "@/lib/static-shell";
+import { prefetchNextRouteAfterLogin } from "@/lib/prefetch-next-route";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -57,6 +58,7 @@ export function LoginPage() {
 
       try {
         await login({ email, password });
+        prefetchNextRouteAfterLogin();
         const redirect = searchParams.get("redirect");
         navigate(redirect && redirect.startsWith("/") ? redirect : "/");
       } catch (err) {

@@ -50,6 +50,12 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  build: {
+    // Lets a one-off script (or the perf-bundle CI gate, once merged) find
+    // the /login entry chunk and its static imports without guessing
+    // filenames from hashed output.
+    manifest: true,
+  },
   server: {
     port: 3000,
     proxy: {
