@@ -54,6 +54,18 @@ func TestSetEventBusEnabled(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(EventBusEnabled))
 }
 
+// mesh_refresh_token_reuse_total is the only per-reason signal for #cfb14ad6's
+// grace window — the two outcome labels ("revoked_all" vs "grace_window") are
+// what a follow-up investigation would query first, so a wrong label here is
+// as invisible as the other counters above until someone goes looking.
+func TestRecordRefreshTokenReuse(t *testing.T) {
+	RecordRefreshTokenReuse("already_revoked", false)
+	assert.Equal(t, float64(1), testutil.ToFloat64(RefreshTokenReuseTotal.WithLabelValues("already_revoked", "revoked_all")))
+
+	RecordRefreshTokenReuse("already_revoked", true)
+	assert.Equal(t, float64(1), testutil.ToFloat64(RefreshTokenReuseTotal.WithLabelValues("already_revoked", "grace_window")))
+}
+
 // mesh_memory_embed_inflight must count the BACKLOG (start-to-finish), not
 // embedSem slot occupancy — a caller (the memory-bench harness, #ebd9dc1c)
 // polls it to know whether it is safe to issue a recall without queueing

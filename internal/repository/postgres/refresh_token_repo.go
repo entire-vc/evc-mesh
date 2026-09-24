@@ -32,7 +32,7 @@ func (r *RefreshTokenRepo) Create(ctx context.Context, userID uuid.UUID, tokenHa
 }
 
 func (r *RefreshTokenRepo) GetByHash(ctx context.Context, tokenHash string) (*repository.RefreshToken, error) {
-	const q = `SELECT id, user_id, token_hash, expires_at, created_at, revoked_at FROM refresh_tokens WHERE token_hash = $1`
+	const q = `SELECT id, user_id, token_hash, expires_at, created_at, revoked_at, replaced_by_hash FROM refresh_tokens WHERE token_hash = $1`
 	var rt repository.RefreshToken
 	if err := r.db.GetContext(ctx, &rt, q, tokenHash); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -66,6 +66,15 @@ func (r *RefreshTokenRepo) RevokeByHash(ctx context.Context, tokenHash string) (
 		return false, err
 	}
 	return true, nil
+}
+
+// LinkSuccessor records which token replaced oldHash. See the interface doc
+// comment (repository.RefreshTokenRepository) for why this is a plain,
+// non-atomic UPDATE rather than folded into RevokeByHash's conditional one.
+func (r *RefreshTokenRepo) LinkSuccessor(ctx context.Context, oldHash, newHash string) error {
+	const q = `UPDATE refresh_tokens SET replaced_by_hash = $1 WHERE token_hash = $2`
+	_, err := r.db.ExecContext(ctx, q, newHash, oldHash)
+	return err
 }
 
 func (r *RefreshTokenRepo) DeleteExpired(ctx context.Context) error {

@@ -147,6 +147,16 @@ func (r *mockRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string)
 	return true, nil
 }
 
+func (r *mockRefreshTokenRepo) LinkSuccessor(_ context.Context, oldHash, newHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t, ok := r.tokens[oldHash]; ok {
+		h := newHash
+		t.ReplacedByHash = &h
+	}
+	return nil
+}
+
 func (r *mockRefreshTokenRepo) DeleteExpired(_ context.Context) error { return nil }
 
 type mockWorkspaceRepo struct {

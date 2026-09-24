@@ -166,6 +166,7 @@ func main() {
 		cfg.Auth.JWTSecret,
 		auth.WithAllowRegistration(cfg.Auth.AllowRegistration),
 		auth.WithAgentRepo(agentRepo),
+		auth.WithRefreshReuseGraceWindow(cfg.Auth.RefreshReuseGraceWindow),
 	)
 
 	// Create the first admin on a fresh install — and always say what happened.

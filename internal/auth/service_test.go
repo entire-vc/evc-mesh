@@ -24,6 +24,12 @@ import (
 type mockUserRepo struct {
 	mu    sync.RWMutex
 	users map[uuid.UUID]*domain.User
+
+	// getByIDErr, when non-nil, makes the next GetByID call fail instead of
+	// looking the user up — exercises callers' repo-failure branches (a real
+	// DB blip) separately from the "no such user" case, which returns
+	// (nil, nil) and is reachable without this field.
+	getByIDErr error
 }
 
 func newMockUserRepo() *mockUserRepo {
@@ -44,6 +50,9 @@ func (r *mockUserRepo) UsernameExists(_ context.Context, _ string) (bool, error)
 func (r *mockUserRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if r.getByIDErr != nil {
+		return nil, r.getByIDErr
+	}
 	u, ok := r.users[id]
 	if !ok {
 		return nil, nil
@@ -133,6 +142,15 @@ type mockRefreshTokenRepo struct {
 	// snapshot saying "not revoked", so nothing but the atomicity of the revoke
 	// itself can decide who is allowed to mint.
 	readBarrier *raceBarrier
+
+	// createErr, when non-nil, makes the next Create call fail — exercises
+	// generateTokenPair's own repo-failure branch (a real DB blip while minting
+	// the rotated pair), distinct from every other error path in this file.
+	createErr error
+	// linkSuccessorErr, when non-nil, makes the next LinkSuccessor call fail —
+	// exercises RefreshTokens' documented non-fatal handling of that failure
+	// (logged, rotation still succeeds; see LinkSuccessor's doc comment).
+	linkSuccessorErr error
 }
 
 func newMockRefreshTokenRepo() *mockRefreshTokenRepo {
@@ -142,6 +160,9 @@ func newMockRefreshTokenRepo() *mockRefreshTokenRepo {
 func (r *mockRefreshTokenRepo) Create(_ context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.createErr != nil {
+		return r.createErr
+	}
 	r.tokens[tokenHash] = &repository.RefreshToken{
 		ID:        uuid.New(),
 		UserID:    userID,
@@ -199,6 +220,20 @@ func (r *mockRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string)
 	now := time.Now()
 	t.RevokedAt = &now
 	return true, nil
+}
+
+// LinkSuccessor mirrors the real repo's plain, non-atomic UPDATE.
+func (r *mockRefreshTokenRepo) LinkSuccessor(_ context.Context, oldHash, newHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.linkSuccessorErr != nil {
+		return r.linkSuccessorErr
+	}
+	if t, ok := r.tokens[oldHash]; ok {
+		h := newHash
+		t.ReplacedByHash = &h
+	}
+	return nil
 }
 
 func (r *mockRefreshTokenRepo) DeleteExpired(_ context.Context) error {
@@ -808,20 +843,216 @@ func TestRefreshTokens_ExpiredToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "expired")
 }
 
-func TestRefreshTokens_RevokedToken_TheftDetection(t *testing.T) {
-	svc, _, _, _, _ := newTestService()
+// TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair pins
+// #cfb14ad6's grace window: a replay of a token that died in an ordinary,
+// successful rotation — the shape a client produces when it rotates
+// successfully but never sees the response (dropped mobile connection,
+// closed tab, proxy timeout) and retries with the only token it has — gets a
+// fresh pair instead of a full-account revoke, as long as the replay lands
+// inside the window (default 10s).
+//
+// Verified by mutation: this test fails against the pre-#cfb14ad6 service
+// (unconditional revoke-all on any replay of a revoked token) — it is not a
+// restatement of the implementation.
+func TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
 
-	_, tokens, err := svc.Register(context.Background(), "theft@example.com", "StrongP4ss", "User")
+	user, tokens, err := svc.Register(context.Background(), "grace@example.com", "StrongP4ss", "User")
 	require.NoError(t, err)
 
-	// First refresh: should succeed and revoke the old token.
+	// A second live session for the same user (another device) — what an
+	// unconditional revoke-all would touch, and what the grace window must
+	// NOT touch. This is the assertion that actually distinguishes
+	// "grace window granted" from "happened to also return no error".
+	otherHash := "other-device-token-hash"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	// First refresh: succeeds, rotates, and links the successor.
 	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
 	require.NoError(t, err)
 
-	// Second refresh with the same (now revoked) token: theft detection.
+	// Replay the now-revoked original token immediately — well inside the
+	// default 10s window.
+	newPair, err := svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err, "a replay inside the grace window must succeed, not be treated as theft")
+	require.NotNil(t, newPair)
+	assert.NotEmpty(t, newPair.RefreshToken)
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.Nil(t, otherToken.RevokedAt, "grace-window replay must not revoke the account's other sessions")
+}
+
+// TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection is the
+// other half of the AC in #cfb14ad6: a replay older than the window gets no
+// benefit of the doubt — full revoke, same as before the window existed.
+func TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	user, tokens, err := svc.Register(context.Background(), "stale-replay@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	otherHash := "other-device-token-hash-2"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err)
+
+	// Jump the clock past the default 10s window before replaying.
+	origTimeNow := timeNow
+	future := time.Now().Add(11 * time.Second)
+	timeNow = func() time.Time { return future }
+	defer func() { timeNow = origTimeNow }()
+
 	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "reuse detected")
+	assert.ErrorIs(t, err, ErrTokenReused)
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.NotNil(t, otherToken.RevokedAt, "a replay outside the grace window must still revoke all sessions")
+}
+
+// TestRefreshTokens_RevokedToken_GraceWindowDisabled_AlwaysTheftDetection
+// pins the rollback lever (WithRefreshReuseGraceWindow(0) /
+// MESH_AUTH_REFRESH_REUSE_GRACE_WINDOW=0): with the window off, behavior
+// matches the service before #cfb14ad6 exactly — no exceptions.
+func TestRefreshTokens_RevokedToken_GraceWindowDisabled_AlwaysTheftDetection(t *testing.T) {
+	userRepo := newMockUserRepo()
+	refreshRepo := newMockRefreshTokenRepo()
+	wsRepo := newMockWorkspaceRepo()
+	wsMemberRepo := newMockWorkspaceMemberRepo()
+	svc := NewService(userRepo, refreshRepo, wsRepo, wsMemberRepo, testJWTSecret, WithRefreshReuseGraceWindow(0))
+
+	_, tokens, err := svc.Register(context.Background(), "no-grace@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err)
+
+	// Immediate replay — would be grace-eligible under the default window,
+	// but the kill switch must still treat it as theft.
+	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrTokenReused)
+}
+
+// TestRefreshTokens_Rotation_GenerateTokenPairError covers the ordinary
+// rotation path's own repo-failure branch: RevokeByHash already won (the old
+// token is gone) when minting the replacement fails. The caller must see the
+// error, not a partial/nil success — a lost old token with no new one handed
+// back would strand the client with neither.
+func TestRefreshTokens_Rotation_GenerateTokenPairError(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	_, tokens, err := svc.Register(context.Background(), "rotate-fail@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	refreshRepo.mu.Lock()
+	refreshRepo.createErr = errors.New("db blip")
+	refreshRepo.mu.Unlock()
+
+	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrTokenReused, "a repo blip while minting the replacement is not theft")
+}
+
+// TestRefreshTokens_Rotation_LinkSuccessorError_StillReturnsFreshPair pins the
+// documented non-fatal handling: losing LinkSuccessor costs THIS ONE token's
+// future grace-window eligibility, never the current rotation's success and
+// never anyone else's sessions.
+func TestRefreshTokens_Rotation_LinkSuccessorError_StillReturnsFreshPair(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	user, tokens, err := svc.Register(context.Background(), "link-fail@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	otherHash := "other-device-token-hash-link-fail"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	refreshRepo.mu.Lock()
+	refreshRepo.linkSuccessorErr = errors.New("db blip")
+	refreshRepo.mu.Unlock()
+
+	newPair, err := svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err, "a failed LinkSuccessor must not fail the rotation itself")
+	assert.NotEmpty(t, newPair.RefreshToken)
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.Nil(t, otherToken.RevokedAt, "a lost LinkSuccessor call must not fall back to revoking other sessions")
+}
+
+// TestRefreshTokens_WithinGraceWindow_UserLookupError covers handleTokenReuse's
+// own repo-failure branch: a replay lands inside the grace window (would
+// otherwise mint a fresh pair), but looking up the user fails. The caller
+// must see an error, not a fresh pair minted for an unverified account —
+// and, just as importantly, the account's other live sessions must NOT be
+// swept by this branch: a DB blip that could resolve on retry is not the
+// same event as a confirmed theft, so it must not pay theft's cost.
+func TestRefreshTokens_WithinGraceWindow_UserLookupError(t *testing.T) {
+	svc, userRepo, refreshRepo, _, _ := newTestService()
+
+	user, tokens, err := svc.Register(context.Background(), "lookup-fail@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	otherHash := "other-device-token-hash-lookup-fail"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err)
+
+	userRepo.mu.Lock()
+	userRepo.getByIDErr = errors.New("db blip")
+	userRepo.mu.Unlock()
+
+	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrTokenReused, "a repo blip while re-verifying the user is not theft")
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.Nil(t, otherToken.RevokedAt, "a user-lookup blip during a grace-eligible replay must not revoke other sessions either")
+}
+
+// TestRefreshTokens_WithinGraceWindow_UserNoLongerExists covers the other half
+// of handleTokenReuse's user check: the lookup succeeds but finds nothing (or
+// an inactive account) — must fail closed with ErrUserInactive, not mint a
+// pair for an account that no longer has one to mint for.
+func TestRefreshTokens_WithinGraceWindow_UserNoLongerExists(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	orphanUserID := uuid.New()
+	oldHash := "orphan-old-hash"
+	require.NoError(t, refreshRepo.Create(context.Background(), orphanUserID, oldHash, time.Now().Add(time.Hour)))
+	revoked, err := refreshRepo.RevokeByHash(context.Background(), oldHash)
+	require.NoError(t, err)
+	require.True(t, revoked)
+	newHash := "orphan-new-hash"
+	require.NoError(t, refreshRepo.LinkSuccessor(context.Background(), oldHash, newHash))
+
+	// No user row for orphanUserID at all — the account was deleted after the
+	// token was issued, or never existed. Exercise handleTokenReuse directly
+	// (same package) with a stored record whose RevokedAt/ReplacedByHash are
+	// already set the way LinkSuccessor left them above — the exact shape
+	// RefreshTokens hands it when reached through the real sequential-replay
+	// path, without needing to also re-derive the token's plaintext/hash here.
+	stored, err := refreshRepo.GetByHash(context.Background(), oldHash)
+	require.NoError(t, err)
+	require.NotNil(t, stored.RevokedAt)
+	require.NotNil(t, stored.ReplacedByHash)
+
+	_, err = svc.handleTokenReuse(context.Background(), stored, "already_revoked")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUserInactive)
 }
 
 // TestRefreshTokens_ConcurrentRequests_OnlyOneSucceeds pins the one-shot guarantee under

@@ -211,6 +211,30 @@ var (
 			Help: "1 if the event bus (NATS/Redis) connected successfully at startup, 0 if mesh-api is running without it",
 		},
 	)
+
+	// RefreshTokenReuseTotal counts refresh-token-reuse detections (RefreshTokens
+	// returning ErrTokenReused) by cause and by whether the grace window let the
+	// replay through instead of revoking the account's other sessions.
+	//
+	//   reason: "already_revoked" (the token was revoked before this request even
+	//     started reading it — a purely sequential replay, the only branch the
+	//     grace window can ever apply to) or "lost_conditional_revoke" (this
+	//     request raced a concurrent rotation and lost — true concurrency, never
+	//     grace-eligible; see internal/auth/service.go RefreshTokens).
+	//   outcome: "revoked_all" (full-account revoke, ErrTokenReused returned) or
+	//     "grace_window" (a fresh pair was minted instead).
+	//
+	// Added for #cfb14ad6: before this, mesh-api never recorded WHY a reuse was
+	// detected, so "does this actually hit real users" could only be guessed from
+	// the revoke pattern in the refresh_tokens table. Alert on any sustained
+	// outcome="revoked_all" for a non-service account.
+	RefreshTokenReuseTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mesh_refresh_token_reuse_total",
+			Help: "Refresh token reuse detections by cause (already_revoked|lost_conditional_revoke) and outcome (revoked_all|grace_window)",
+		},
+		[]string{"reason", "outcome"},
+	)
 )
 
 // RecordMCPToolCall records a single MCP tool call with its outcome status.
@@ -295,6 +319,17 @@ func SetClientIPTrusted(trusted bool) {
 		return
 	}
 	ClientIPTrusted.Set(0)
+}
+
+// RecordRefreshTokenReuse records one refresh-token-reuse detection, labelled
+// by cause and by whether the grace window granted a fresh pair instead of a
+// full-account revoke.
+func RecordRefreshTokenReuse(reason string, grantedGrace bool) {
+	outcome := "revoked_all"
+	if grantedGrace {
+		outcome = "grace_window"
+	}
+	RefreshTokenReuseTotal.WithLabelValues(reason, outcome).Inc()
 }
 
 // SetEventBusEnabled publishes whether mesh-api is running with a working

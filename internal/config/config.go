@@ -284,6 +284,13 @@ type AuthConfig struct {
 	// unchanged. The first user on a fresh install can always register
 	// regardless of this setting (see auth.Service.RegistrationOpen).
 	AllowRegistration bool
+	// RefreshReuseGraceWindow is how long after an ordinary refresh-token
+	// rotation a replay of the token that rotation just retired is treated
+	// as a client that never saw the rotation response (dropped mobile
+	// connection, closed tab, proxy timeout) rather than theft — see
+	// auth.Service.WithRefreshReuseGraceWindow. Default 10s; 0 disables the
+	// grace window (every such replay is theft, the pre-#cfb14ad6 behavior).
+	RefreshReuseGraceWindow time.Duration
 }
 
 // WebhookConfig holds the INSTANCE-WIDE fallback for GitHub/GitLab —
@@ -376,11 +383,12 @@ func Load() *Config {
 			PublicURL:       getEnv("S3_PUBLIC_URL", ""),
 		},
 		Auth: AuthConfig{
-			JWTSecret:         getEnv("JWT_SECRET", "change-me-in-production"),
-			CasdoorEndpoint:   getEnv("CASDOOR_ENDPOINT", ""),
-			CasdoorClientID:   getEnv("CASDOOR_CLIENT_ID", ""),
-			AgentKeyPrefix:    getEnv("AGENT_KEY_PREFIX", "agk"),
-			AllowRegistration: getEnvBool("MESH_ALLOW_REGISTRATION", true),
+			JWTSecret:               getEnv("JWT_SECRET", "change-me-in-production"),
+			CasdoorEndpoint:         getEnv("CASDOOR_ENDPOINT", ""),
+			CasdoorClientID:         getEnv("CASDOOR_CLIENT_ID", ""),
+			AgentKeyPrefix:          getEnv("AGENT_KEY_PREFIX", "agk"),
+			AllowRegistration:       getEnvBool("MESH_ALLOW_REGISTRATION", true),
+			RefreshReuseGraceWindow: getEnvDuration("MESH_AUTH_REFRESH_REUSE_GRACE_WINDOW", 10*time.Second),
 		},
 		CORS: CORSConfig{
 			AllowOrigins: getEnvStringSlice("MESH_CORS_ORIGINS", []string{"*"}),

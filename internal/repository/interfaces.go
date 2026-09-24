@@ -885,6 +885,19 @@ type RefreshToken struct {
 	ExpiresAt time.Time  `db:"expires_at"`
 	CreatedAt time.Time  `db:"created_at"`
 	RevokedAt *time.Time `db:"revoked_at"`
+	// ReplacedByHash is the hash of the token that succeeded this one in an
+	// ORDINARY rotation, set by LinkSuccessor right after a winning
+	// RevokeByHash. Nil means either this token is still live, or it died
+	// some other way — an explicit RevokeByUserID call (logout, theft
+	// detection) never touches this column, and a rotation whose
+	// LinkSuccessor call was lost leaves it nil too (safe by construction,
+	// see LinkSuccessor's doc comment).
+	//
+	// This is what lets auth.Service tell "this token died in a rotation
+	// whose response the client may never have seen" from "this token died
+	// because someone declared the session compromised or logged out" —
+	// see auth.Service.RefreshTokens / handleTokenReuse.
+	ReplacedByHash *string `db:"replaced_by_hash"`
 }
 
 // RefreshTokenRepository manages persistence for refresh tokens.
@@ -899,6 +912,18 @@ type RefreshTokenRepository interface {
 	// the token was already consumed (by a racing request or an earlier one) — the
 	// caller must treat it as reuse, never as success.
 	RevokeByHash(ctx context.Context, tokenHash string) (bool, error)
+	// LinkSuccessor records that oldHash was rotated to newHash, for later reuse
+	// classification (see RefreshToken.ReplacedByHash). Call it once, right after a
+	// winning RevokeByHash(oldHash), from the same request that won.
+	//
+	// It intentionally does NOT re-check revoked_at or attempt to be atomic with the
+	// revoke: at most one request can ever reach this call for a given oldHash,
+	// because RevokeByHash's own atomicity already picked that single winner before
+	// this is ever called. Losing this write (e.g. a crash between the two calls) is
+	// safe — a later replay of oldHash simply won't find a successor and falls back
+	// to the pre-existing full-account-revoke behavior; it never causes a security
+	// regression, only a missed optimization.
+	LinkSuccessor(ctx context.Context, oldHash, newHash string) error
 	DeleteExpired(ctx context.Context) error
 }
 

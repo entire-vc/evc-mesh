@@ -135,6 +135,15 @@ func (r *authTestRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash str
 	t.RevokedAt = &now
 	return true, nil
 }
+func (r *authTestRefreshTokenRepo) LinkSuccessor(_ context.Context, oldHash, newHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t, ok := r.tokens[oldHash]; ok {
+		h := newHash
+		t.ReplacedByHash = &h
+	}
+	return nil
+}
 func (r *authTestRefreshTokenRepo) DeleteExpired(_ context.Context) error { return nil }
 
 // authTestWorkspaceRepo is a pure no-op stub: every method returns a zero
@@ -385,8 +394,15 @@ func TestAuthHandler_Refresh_RotatesCookie(t *testing.T) {
 	assert.NotEqual(t, firstCookie.Value, rotated.Value, "refresh must rotate the token, not reissue the same one")
 }
 
+// TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401 pins AC7 (from
+// #562, the httpOnly-cookie + Web Locks migration): a replay of an
+// already-rotated refresh token must still be able to trip full reuse
+// detection and clear the client cookie — the grace window added by
+// #cfb14ad6 is a narrow, time-boxed exception (see the test below), not a
+// removal of this guarantee. Grace window explicitly disabled here so this
+// test keeps meaning exactly what it meant before #cfb14ad6 existed.
 func TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401(t *testing.T) {
-	h, e := newAuthHandlerTest(newAuthTestUserRepo())
+	h, e := newAuthHandlerTest(newAuthTestUserRepo(), auth.WithRefreshReuseGraceWindow(0))
 
 	regBody := `{"email":"cookie-reuse@example.com","password":"StrongP4ss","name":"Reuse Test"}`
 	regReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(regBody))
@@ -413,6 +429,42 @@ func TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401(t *testing.T)
 
 	cleared := findRefreshCookie(t, rec2)
 	assert.LessOrEqual(t, cleared.MaxAge, 0, "a reuse-detected refresh must clear the client cookie, not leave the dead token in place")
+}
+
+// TestAuthHandler_Refresh_ReusedToken_WithinGraceWindow_RotatesInstead is the
+// new behavior #cfb14ad6 adds on top of AC7 above: a replay of the just-
+// rotated token, inside the default grace window, is the shape a mobile
+// client produces when it never saw the rotation response (dropped
+// connection, closed tab, proxy timeout) — it gets a fresh cookie instead of
+// a 401. Uses the handler's DEFAULT service construction (grace window on),
+// unlike the test above.
+func TestAuthHandler_Refresh_ReusedToken_WithinGraceWindow_RotatesInstead(t *testing.T) {
+	h, e := newAuthHandlerTest(newAuthTestUserRepo())
+
+	regBody := `{"email":"cookie-grace@example.com","password":"StrongP4ss","name":"Grace Test"}`
+	regReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(regBody))
+	regReq.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	regRec := httptest.NewRecorder()
+	require.NoError(t, h.Register(e.NewContext(regReq, regRec)))
+	firstCookie := findRefreshCookie(t, regRec)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
+	req1.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- AddCookie on an http.Request only serializes Name=Value into the Cookie request header; Secure/HttpOnly are response-cookie attributes and meaningless here
+	rec1 := httptest.NewRecorder()
+	require.NoError(t, h.Refresh(e.NewContext(req1, rec1)))
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	// Simulate the client never seeing rec1's Set-Cookie (the response was
+	// lost) by replaying the pre-rotation cookie value again, immediately.
+	req2 := httptest.NewRequest(http.MethodPost, "/", http.NoBody)
+	req2.AddCookie(&http.Cookie{Name: refreshCookieName, Value: firstCookie.Value}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- AddCookie on an http.Request only serializes Name=Value into the Cookie request header; Secure/HttpOnly are response-cookie attributes and meaningless here
+	rec2 := httptest.NewRecorder()
+	require.NoError(t, h.Refresh(e.NewContext(req2, rec2)))
+	require.Equal(t, http.StatusOK, rec2.Code, "a replay inside the grace window must succeed, not 401")
+
+	freshCookie := findRefreshCookie(t, rec2)
+	assert.Greater(t, freshCookie.MaxAge, 0, "the grace-window response must set a live cookie, not clear it")
+	assert.NotEqual(t, firstCookie.Value, freshCookie.Value)
 }
 
 func TestAuthHandler_Logout_ClearsCookie(t *testing.T) {
