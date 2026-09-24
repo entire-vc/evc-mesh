@@ -207,13 +207,14 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 	expires := now.Add(agentKeyDefaultTTL)
 
 	agent := &domain.Agent{
-		ID:            uuid.New(),
-		WorkspaceID:   input.WorkspaceID,
-		ParentAgentID: input.ParentAgentID,
-		Name:          input.Name,
-		Slug:          slug,
-		AgentType:     input.AgentType,
-		APIKeyHash:    string(hash),
+		ID:               uuid.New(),
+		WorkspaceID:      input.WorkspaceID,
+		ParentAgentID:    input.ParentAgentID,
+		SupervisorUserID: input.SupervisorUserID,
+		Name:             input.Name,
+		Slug:             slug,
+		AgentType:        input.AgentType,
+		APIKeyHash:       string(hash),
 		// Written at issue time, the one moment the plaintext exists, so a
 		// freshly registered agent never pays bcrypt at all.
 		APIKeySHA256: agentKeyDigest(rawKey),

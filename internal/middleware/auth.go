@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -38,6 +39,13 @@ const (
 // both questions onto one context key made every :ws_id route ask the wrong one
 // — see RequireWorkspaceMember, which is the actual consumer of this value.
 const ContextKeyAgentAuthWorkspaceID = "agent_auth_workspace_id"
+
+// ContextKeyOAuthConnectorUserID stores domain.Agent.OAuthConnectorUserID
+// when the current request authenticated via a mot_ OAuth token (MCP-OAuth
+// 1/5) — unset for a trusted X-Agent-Key agent. RequirePermission
+// (rbac.go) checks this to clamp an OAuth connector's permissions to the
+// consenting user's live workspace role instead of the full agentPerms set.
+const ContextKeyOAuthConnectorUserID = "oauth_connector_user_id"
 
 // Auth types set in the Echo context.
 const (
@@ -79,12 +87,75 @@ func JWTAuth(authService *auth.Service) echo.MiddlewareFunc {
 	}
 }
 
-// AgentKeyAuth returns middleware that requires a valid agent API key
-// in the X-Agent-Key header. On success it sets agent_id, workspace_id,
-// and auth_type in the Echo context.
-func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
+// OAuthTokenAuthenticator is the narrow slice of service.OAuthService the
+// auth middleware needs: verify a raw mot_ bearer token (MCP-OAuth 1/5) and
+// resolve it to the connector agent it authenticates as, with WorkspaceID/
+// WorkspaceRole already set — the same shape agentService.Authenticate
+// returns for an agk_ key. Kept separate from the full service.OAuthService
+// interface, same reasoning as service.CheckoutHeartbeatExtender: this
+// package should not need to know that interface's other dozen methods to
+// use this one. A nil value (never wired) makes every function below skip
+// the mot_ branch entirely and behave exactly as it did before MCP-OAuth
+// 1/5 — the same "unwired optional dependency is a no-op" contract
+// AgentWorkspaceGrantRepository's nil case uses in agentService.
+type OAuthTokenAuthenticator interface {
+	AuthenticateAccessToken(ctx context.Context, rawToken string) (*domain.Agent, error)
+}
+
+// oauthBearerToken extracts a Bearer token from Authorization specifically
+// when it carries the OAuth access-token prefix (service.OAuthAccessToken-
+// Prefix) — distinct from extractBearerToken (used for the JWT path), which
+// takes any Bearer value regardless of prefix.
+func oauthBearerToken(c echo.Context) (string, bool) {
+	header := c.Request().Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimPrefix(header, "Bearer ")
+	if !strings.HasPrefix(token, service.OAuthAccessTokenPrefix) {
+		return "", false
+	}
+	return token, true
+}
+
+// setAgentAuthContext is the context-setting + actor-propagation block every
+// agent-authenticated path (X-Agent-Key, and now a mot_ Bearer token) needs
+// to run identically, factored out so AgentKeyAuth/DualAuth/OptionalAuth
+// cannot drift between their agk_ and mot_ branches the way three inlined
+// copies eventually would.
+func setAgentAuthContext(c echo.Context, agent *domain.Agent) {
+	c.Set(ContextKeyAuthType, AuthTypeAgent)
+	c.Set(ContextKeyAgentID, agent.ID)
+	c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
+	c.Set(ContextKeyAgentAuthWorkspaceID, agent.WorkspaceID)
+	c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
+	if agent.OAuthConnectorUserID != nil {
+		c.Set(ContextKeyOAuthConnectorUserID, *agent.OAuthConnectorUserID)
+	}
+
+	goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
+	goCtx = actorctx.WithActorName(goCtx, agent.Name)
+	c.SetRequest(c.Request().WithContext(goCtx))
+}
+
+// AgentKeyAuth returns middleware that requires either a valid agent API key
+// in the X-Agent-Key header, or (when oauthAuth is wired) a valid mot_
+// Bearer access token. On success it sets agent_id, workspace_id, and
+// auth_type in the Echo context.
+func AgentKeyAuth(agentService service.AgentService, oauthAuth OAuthTokenAuthenticator) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			if oauthAuth != nil {
+				if token, ok := oauthBearerToken(c); ok {
+					agent, err := oauthAuth.AuthenticateAccessToken(c.Request().Context(), token)
+					if err != nil {
+						return unauthorizedJSON(c, "Invalid access token")
+					}
+					setAgentAuthContext(c, agent)
+					return next(c)
+				}
+			}
+
 			apiKey := c.Request().Header.Get("X-Agent-Key")
 			if apiKey == "" {
 				return unauthorizedJSON(c, "Agent API key required")
@@ -101,33 +172,37 @@ func AgentKeyAuth(agentService service.AgentService) echo.MiddlewareFunc {
 				return unauthorizedJSON(c, "Invalid agent API key")
 			}
 
-			c.Set(ContextKeyAuthType, AuthTypeAgent)
-			c.Set(ContextKeyAgentID, agent.ID)
-			c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
-			c.Set(ContextKeyAgentAuthWorkspaceID, agent.WorkspaceID)
-			// Role comes from whatever connection resolved this login
-			// (Authenticate sets it, grant-backed or legacy-default — see
-			// agentService.authenticateViaGrant/authenticateLegacy), never
-			// implied here. WorkspaceRLS's own role resolution skips agents
-			// entirely (!IsAgent(c)), so this is the only place it is set.
-			c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
-
-			// Propagate actor into Go context for service layer.
-			goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
-			goCtx = actorctx.WithActorName(goCtx, agent.Name)
-			c.SetRequest(c.Request().WithContext(goCtx))
-
+			setAgentAuthContext(c, agent)
 			return next(c)
 		}
 	}
 }
 
-// DualAuth requires either a valid JWT Bearer token or a valid agent API key.
-// Returns 401 if neither is present or valid.
-func DualAuth(authService *auth.Service, agentService service.AgentService) echo.MiddlewareFunc {
+// DualAuth requires a valid JWT Bearer token, a valid agent API key, or
+// (when oauthAuth is wired) a valid mot_ Bearer access token. Returns 401 if
+// none is present or valid. This is the middleware gating the whole
+// /api/v1 group (cmd/api/main.go), so it is what MCP-OAuth 1/5's "existing
+// endpoints work under mot_ unmodified" acceptance criterion actually runs
+// through.
+func DualAuth(authService *auth.Service, agentService service.AgentService, oauthAuth OAuthTokenAuthenticator) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Try JWT Bearer token first.
+			// Try a mot_ OAuth access token first — it lives in the same
+			// Authorization: Bearer header a JWT would, but ValidateAccessToken
+			// will simply fail to parse it as a JWT and fall through, so trying
+			// this first (cheap prefix check) avoids paying that failed parse
+			// on every OAuth-authenticated request.
+			if oauthAuth != nil {
+				if token, ok := oauthBearerToken(c); ok {
+					if agent, err := oauthAuth.AuthenticateAccessToken(c.Request().Context(), token); err == nil {
+						setAgentAuthContext(c, agent)
+						return next(c)
+					}
+					return unauthorizedJSON(c, "Invalid access token")
+				}
+			}
+
+			// Try JWT Bearer token.
 			if tokenString, err := extractBearerToken(c); err == nil {
 				if claims, err := authService.ValidateAccessToken(tokenString); err == nil {
 					if userID, err := uuid.Parse(claims.Subject); err == nil {
@@ -147,15 +222,7 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 			if apiKey := c.Request().Header.Get("X-Agent-Key"); apiKey != "" {
 				if slug, err := parseWorkspaceSlugFromKey(apiKey); err == nil {
 					if agent, err := agentService.Authenticate(c.Request().Context(), slug, apiKey); err == nil {
-						c.Set(ContextKeyAuthType, AuthTypeAgent)
-						c.Set(ContextKeyAgentID, agent.ID)
-						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
-						c.Set(ContextKeyAgentAuthWorkspaceID, agent.WorkspaceID)
-						c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
-						// Propagate actor into Go context for service layer.
-						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
-						goCtx = actorctx.WithActorName(goCtx, agent.Name)
-						c.SetRequest(c.Request().WithContext(goCtx))
+						setAgentAuthContext(c, agent)
 						return next(c)
 					}
 				}
@@ -167,12 +234,22 @@ func DualAuth(authService *auth.Service, agentService service.AgentService) echo
 	}
 }
 
-// OptionalAuth tries JWT first, then agent key. If neither is present,
-// the request passes through without authentication context.
-func OptionalAuth(authService *auth.Service, agentService service.AgentService) echo.MiddlewareFunc {
+// OptionalAuth tries a mot_ OAuth token (if oauthAuth is wired), then JWT,
+// then agent key. If none is present, the request passes through without
+// authentication context.
+func OptionalAuth(authService *auth.Service, agentService service.AgentService, oauthAuth OAuthTokenAuthenticator) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Try JWT Bearer token first.
+			if oauthAuth != nil {
+				if token, ok := oauthBearerToken(c); ok {
+					if agent, err := oauthAuth.AuthenticateAccessToken(c.Request().Context(), token); err == nil {
+						setAgentAuthContext(c, agent)
+						return next(c)
+					}
+				}
+			}
+
+			// Try JWT Bearer token.
 			if tokenString, err := extractBearerToken(c); err == nil {
 				if claims, err := authService.ValidateAccessToken(tokenString); err == nil {
 					if userID, err := uuid.Parse(claims.Subject); err == nil {
@@ -192,21 +269,32 @@ func OptionalAuth(authService *auth.Service, agentService service.AgentService) 
 			if apiKey := c.Request().Header.Get("X-Agent-Key"); apiKey != "" {
 				if slug, err := parseWorkspaceSlugFromKey(apiKey); err == nil {
 					if agent, err := agentService.Authenticate(c.Request().Context(), slug, apiKey); err == nil {
-						c.Set(ContextKeyAuthType, AuthTypeAgent)
-						c.Set(ContextKeyAgentID, agent.ID)
-						c.Set(ContextKeyWorkspaceID, agent.WorkspaceID)
-						c.Set(ContextKeyAgentAuthWorkspaceID, agent.WorkspaceID)
-						c.Set(ContextKeyWorkspaceRole, agent.WorkspaceRole)
-						// Propagate actor into Go context for service layer.
-						goCtx := actorctx.WithActor(c.Request().Context(), agent.ID, domain.ActorTypeAgent)
-						goCtx = actorctx.WithActorName(goCtx, agent.Name)
-						c.SetRequest(c.Request().WithContext(goCtx))
+						setAgentAuthContext(c, agent)
 						return next(c)
 					}
 				}
 			}
 
-			// Neither present: pass through unauthenticated.
+			// Nothing present: pass through unauthenticated.
+			return next(c)
+		}
+	}
+}
+
+// RequireUserAuth rejects any request not authenticated as a real user
+// (JWT) — for routes only a human acting for THEMSELVES should reach, never
+// an agent key or a mot_ OAuth token acting on a workspace's behalf. Used on
+// the OAuth consent/grants API (MCP-OAuth 1/5): consenting to, or revoking,
+// a connector agent's access is a decision only the resource owner makes,
+// not something that should be reachable via the very token the flow is
+// about to mint. Must run after DualAuth (or JWTAuth), which is what sets
+// ContextKeyAuthType in the first place.
+func RequireUserAuth() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if v, _ := c.Get(ContextKeyAuthType).(string); v != AuthTypeUser {
+				return unauthorizedJSON(c, "User authentication required")
+			}
 			return next(c)
 		}
 	}
@@ -266,6 +354,20 @@ func GetAgentID(c echo.Context) (uuid.UUID, error) {
 		return uuid.Nil, errors.New("agent_id has invalid type in context")
 	}
 	return id, nil
+}
+
+// GetOAuthConnectorUserID returns the consenting user's ID and true when the
+// current request authenticated via a mot_ OAuth token — see
+// ContextKeyOAuthConnectorUserID. False (zero value, no error) for a
+// trusted X-Agent-Key agent or any non-agent auth, which is the common case
+// callers should fall through on rather than treat as failure.
+func GetOAuthConnectorUserID(c echo.Context) (uuid.UUID, bool) {
+	v := c.Get(ContextKeyOAuthConnectorUserID)
+	if v == nil {
+		return uuid.Nil, false
+	}
+	id, ok := v.(uuid.UUID)
+	return id, ok
 }
 
 // IsAgent returns true if the current request was authenticated with an agent API key.

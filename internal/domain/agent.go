@@ -99,6 +99,15 @@ type Agent struct {
 	// agent_auth_cache.go's cachedGrantStillValid) — a grant can be revoked by
 	// a direct SQL UPDATE that no in-process cache invalidation ever sees.
 	GrantID *uuid.UUID `json:"-" db:"-"`
+	// OAuthConnectorUserID is set only by oauthService.AuthenticateAccessToken
+	// (MCP-OAuth 1/5), to the user who consented to this connector's grant.
+	// Its presence marks this Agent as authenticated via a mot_ OAuth token
+	// rather than a trusted X-Agent-Key — the auth middleware threads it into
+	// the Echo context so RequirePermission can clamp the connector's
+	// effective permissions to that user's LIVE workspace role instead of
+	// handing it the full agentPerms set a trusted lead agent gets. Same
+	// transient, request-scoped nature as WorkspaceRole/GrantID above.
+	OAuthConnectorUserID *uuid.UUID `json:"-" db:"-"`
 }
 
 // IsKeyExpired returns true when the agent's API key has a set expiry that has passed.

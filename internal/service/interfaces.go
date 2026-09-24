@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/mdoc"
+	"github.com/entire-vc/evc-mesh/pkg/oautherror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -774,17 +776,22 @@ type DocumentCommentService interface {
 // set to the zero value" (e.g. MaxConcurrentTasks: 0 on purpose, to pause a
 // lane without deleting it).
 type RegisterAgentInput struct {
-	WorkspaceID        uuid.UUID        `json:"workspace_id"`
-	Name               string           `json:"name"`
-	AgentType          domain.AgentType `json:"agent_type"`
-	Capabilities       map[string]any   `json:"capabilities"`
-	ParentAgentID      *uuid.UUID       `json:"parent_agent_id,omitempty"`
-	Role               *string          `json:"role,omitempty"`
-	ResponsibilityZone *string          `json:"responsibility_zone,omitempty"`
-	EscalationTo       *string          `json:"escalation_to,omitempty"`
-	AcceptsFrom        json.RawMessage  `json:"accepts_from,omitempty"`
-	MaxConcurrentTasks *int             `json:"max_concurrent_tasks,omitempty"`
-	WorkingHours       *string          `json:"working_hours,omitempty"`
+	WorkspaceID   uuid.UUID        `json:"workspace_id"`
+	Name          string           `json:"name"`
+	AgentType     domain.AgentType `json:"agent_type"`
+	Capabilities  map[string]any   `json:"capabilities"`
+	ParentAgentID *uuid.UUID       `json:"parent_agent_id,omitempty"`
+	// SupervisorUserID is optional: nil means "no supervising user" (the
+	// pre-existing behavior for every caller before MCP-OAuth 1/5). Set by
+	// oauthService when it creates a connector agent for a consenting user
+	// (domain.Agent.SupervisorUserID) — see that field's doc comment.
+	SupervisorUserID   *uuid.UUID      `json:"supervisor_user_id,omitempty"`
+	Role               *string         `json:"role,omitempty"`
+	ResponsibilityZone *string         `json:"responsibility_zone,omitempty"`
+	EscalationTo       *string         `json:"escalation_to,omitempty"`
+	AcceptsFrom        json.RawMessage `json:"accepts_from,omitempty"`
+	MaxConcurrentTasks *int            `json:"max_concurrent_tasks,omitempty"`
+	WorkingHours       *string         `json:"working_hours,omitempty"`
 }
 
 // RegisterAgentOutput holds the result of agent registration, including the raw API key.
@@ -1771,4 +1778,140 @@ type SecretMaterializationService interface {
 	// empty Value rather than omitted, so the caller can name it in a loud
 	// spawn error instead of writing a silently empty variable.
 	ResolveForSpawn(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error)
+}
+
+// --- OAuth 2.0 Authorization Server (task MCP-OAuth 1/5) ---
+
+// DCRRegisterInput is the RFC 7591 Dynamic Client Registration request body
+// (POST /oauth/register). TokenEndpointAuthMethod, if given at all, must be
+// "none" — this AS never issues a client_secret.
+type DCRRegisterInput struct {
+	RedirectURIs            []string `json:"redirect_uris"`
+	ClientName              string   `json:"client_name"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	GrantTypes              []string `json:"grant_types"`
+}
+
+// AuthorizeParams is the RFC 6749 §4.1.1 authorization request, shared by
+// GET /oauth/authorize, the consent-info API, and the consent-decision API —
+// all three validate the exact same fields.
+type AuthorizeParams struct {
+	ClientID            string
+	RedirectURI         string
+	ResponseType        string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	Scope               string
+	State               string
+}
+
+// AuthorizeValidation is ValidateAuthorize's result. The split between
+// ClientErr and RequestErr is the RFC 6749 §4.1.2.1 security rule that a
+// handler MUST follow: an invalid/unregistered redirect_uri (or unknown
+// client) can NEVER be redirected to — render an error directly — while
+// every other validation failure, once redirect_uri is trusted, DOES get
+// redirected back to it with ?error=...&state=....
+type AuthorizeValidation struct {
+	Client      *domain.OAuthClient
+	RedirectURI string
+	ClientErr   *oautherror.Error
+	RequestErr  *oautherror.Error
+}
+
+// ConsentInfo is what the frontend consent screen (task MCP-OAuth 2/5) needs
+// to render — GET /api/v1/oauth/consent's response.
+type ConsentInfo struct {
+	ClientName      string             `json:"client_name"`
+	RedirectURI     string             `json:"redirect_uri"`
+	RedirectHost    string             `json:"redirect_host"`
+	LoopbackWarning bool               `json:"loopback_warning"`
+	Scope           string             `json:"scope"`
+	Workspaces      []domain.Workspace `json:"workspaces"`
+}
+
+// ConsentDecisionInput is POST /api/v1/oauth/consent's body: the same
+// authorize params round-tripped by the frontend, plus the user's choice.
+type ConsentDecisionInput struct {
+	AuthorizeParams
+	UserID      uuid.UUID
+	WorkspaceID uuid.UUID
+	Allow       bool
+}
+
+// TokenResponse is the RFC 6749 §5.1 access token response — the body of
+// POST /oauth/token on success.
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope"`
+}
+
+// OAuthService implements the OAuth 2.0 Authorization Server behavior Mesh
+// exposes for MCP clients (task MCP-OAuth 1/5): CIMD/DCR client
+// registration, the authorize+consent flow, and the token endpoint —
+// including the mot_ access-token verification AgentKeyAuth/DualAuth use so
+// existing API routes accept a Mesh-issued OAuth token exactly like an
+// agk_ agent key.
+type OAuthService interface {
+	// RegisterClientDCR handles POST /oauth/register (RFC 7591).
+	RegisterClientDCR(ctx context.Context, in DCRRegisterInput) (*domain.OAuthClient, *oautherror.Error)
+	// ResolveClient looks up a previously registered client by client_id —
+	// for a DCR client, a plain lookup; for a CIMD client (client_id is an
+	// https:// URL), fetches (with SSRF protection) and caches the document
+	// on first sight, and refetches it once cached data goes stale.
+	ResolveClient(ctx context.Context, clientID string) (*domain.OAuthClient, *oautherror.Error)
+	// ValidateAuthorize runs every GET /oauth/authorize check (client,
+	// redirect_uri, response_type, PKCE) without any side effect — shared by
+	// the authorize handler itself and ConsentInfo/Decide, which must
+	// re-validate rather than trust a round-tripped client.
+	ValidateAuthorize(ctx context.Context, p AuthorizeParams) *AuthorizeValidation
+	// ConsentInfo is GET /api/v1/oauth/consent: re-validates p and returns
+	// what the consent screen needs to render, scoped to userID's own
+	// workspaces.
+	ConsentInfo(ctx context.Context, userID uuid.UUID, p AuthorizeParams) (*ConsentInfo, *oautherror.Error)
+	// Decide is POST /api/v1/oauth/consent: re-validates in.AuthorizeParams,
+	// and on Allow, creates-or-reuses the connector agent + oauth_grants row
+	// and issues a fresh authorization code. Returns the URL the frontend
+	// must navigate the browser to next — either
+	// "<redirect_uri>?code=...&state=..." or
+	// "<redirect_uri>?error=...&state=...". The returned error, when set, is
+	// this codebase's own apierror (a malformed/unauthorized REQUEST to
+	// THIS API, e.g. "not a member of that workspace") — never an
+	// oautherror, because unlike ValidateAuthorize's RequestErr case this
+	// failure has nowhere RFC-compliant to redirect to.
+	Decide(ctx context.Context, in ConsentDecisionInput) (redirectURL string, err error)
+	// ExchangeCode is POST /oauth/token grant_type=authorization_code.
+	ExchangeCode(ctx context.Context, clientID, redirectURI, code, codeVerifier string) (*TokenResponse, *oautherror.Error)
+	// RefreshTokenGrant is POST /oauth/token grant_type=refresh_token —
+	// rotates the presented refresh token, revoking it in the same call.
+	RefreshTokenGrant(ctx context.Context, clientID, refreshToken string) (*TokenResponse, *oautherror.Error)
+	// RevokeToken is POST /oauth/revoke (RFC 7009-shaped: unknown/already-
+	// revoked token is not an error, matching the RFC's "always 200" posture).
+	RevokeToken(ctx context.Context, token string) error
+	// AuthenticateAccessToken verifies a raw mot_ bearer token and returns
+	// the agent it authenticates as, with WorkspaceID/WorkspaceRole resolved
+	// exactly the way agentService.Authenticate resolves an agk_ key — used
+	// by internal/middleware/auth.go so every existing route keeps working
+	// under a token unmodified.
+	AuthenticateAccessToken(ctx context.Context, rawToken string) (*domain.Agent, error)
+	// ListMyGrants is GET /api/v1/oauth/grants — every grant (active or
+	// revoked) userID holds, across all clients/workspaces.
+	ListMyGrants(ctx context.Context, userID uuid.UUID) ([]domain.OAuthGrantWithDetails, error)
+	// RevokeMyGrant is DELETE /api/v1/oauth/grants/:id — revokes the grant
+	// (404 if it does not belong to userID) and every live token under it,
+	// so access dies immediately rather than only at next refresh.
+	RevokeMyGrant(ctx context.Context, userID, grantID uuid.UUID) error
+}
+
+// OAuthServiceConfigurable is the optional, test-only capability to replace
+// the outbound CIMD-fetch HTTP client. Production code never calls this —
+// ssrfSafeDialContext (the real client's transport) correctly refuses to
+// dial a loopback address, which is exactly where an httptest.Server lives,
+// so an end-to-end test that wants to stand in a fake CIMD host needs a way
+// around that check without weakening it for real traffic. Mirrors the
+// *Configurable pattern AgentServiceConfigurable already uses in this file.
+type OAuthServiceConfigurable interface {
+	SetHTTPClientForTesting(client *http.Client)
 }

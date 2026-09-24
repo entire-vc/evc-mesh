@@ -485,7 +485,7 @@ func TestAgentKeyAuth_ValidKey(t *testing.T) {
 	c := newEchoContext(req, rec)
 
 	var handlerCalled bool
-	handler := AgentKeyAuth(agentSvc)(func(c echo.Context) error {
+	handler := AgentKeyAuth(agentSvc, nil)(func(c echo.Context) error {
 		handlerCalled = true
 		return c.NoContent(http.StatusOK)
 	})
@@ -519,7 +519,7 @@ func TestAgentKeyAuth_InvalidKey(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
-	handler := AgentKeyAuth(agentSvc)(func(c echo.Context) error {
+	handler := AgentKeyAuth(agentSvc, nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 
@@ -535,7 +535,7 @@ func TestAgentKeyAuth_MissingHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
-	handler := AgentKeyAuth(agentSvc)(func(c echo.Context) error {
+	handler := AgentKeyAuth(agentSvc, nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 
@@ -552,7 +552,7 @@ func TestAgentKeyAuth_BadKeyFormat(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
-	handler := AgentKeyAuth(agentSvc)(func(c echo.Context) error {
+	handler := AgentKeyAuth(agentSvc, nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 
@@ -710,7 +710,7 @@ func TestOptionalAuth_NoAuth(t *testing.T) {
 	c := newEchoContext(req, rec)
 
 	var handlerCalled bool
-	handler := OptionalAuth(svc, agentSvc)(func(c echo.Context) error {
+	handler := OptionalAuth(svc, agentSvc, nil)(func(c echo.Context) error {
 		handlerCalled = true
 		return c.NoContent(http.StatusOK)
 	})
@@ -735,7 +735,7 @@ func TestOptionalAuth_WithJWT(t *testing.T) {
 	c := newEchoContext(req, rec)
 
 	var handlerCalled bool
-	handler := OptionalAuth(svc, agentSvc)(func(c echo.Context) error {
+	handler := OptionalAuth(svc, agentSvc, nil)(func(c echo.Context) error {
 		handlerCalled = true
 		return c.NoContent(http.StatusOK)
 	})
@@ -762,7 +762,7 @@ func TestOptionalAuth_WithAgentKey(t *testing.T) {
 	c := newEchoContext(req, rec)
 
 	var handlerCalled bool
-	handler := OptionalAuth(svc, agentSvc)(func(c echo.Context) error {
+	handler := OptionalAuth(svc, agentSvc, nil)(func(c echo.Context) error {
 		handlerCalled = true
 		return c.NoContent(http.StatusOK)
 	})
@@ -791,7 +791,7 @@ func TestAgentKeyAuth_SetsWorkspaceRoleFromAuthenticatedAgent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
-	handler := AgentKeyAuth(agentSvc)(func(c echo.Context) error {
+	handler := AgentKeyAuth(agentSvc, nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 
@@ -812,7 +812,7 @@ func TestDualAuth_SetsWorkspaceRoleFromAuthenticatedAgent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
-	handler := DualAuth(svc, agentSvc)(func(c echo.Context) error {
+	handler := DualAuth(svc, agentSvc, nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 
@@ -834,7 +834,7 @@ func TestOptionalAuth_SetsWorkspaceRoleFromAuthenticatedAgent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := newEchoContext(req, rec)
 
-	handler := OptionalAuth(svc, agentSvc)(func(c echo.Context) error {
+	handler := OptionalAuth(svc, agentSvc, nil)(func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
 
