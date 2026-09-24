@@ -1327,6 +1327,23 @@ func main() {
 		return mw.RequirePermission(perm, workspaceMemberRepo)
 	}
 
+	// connectorRBAC is the role bar for a route that has no rbac(): it clamps an
+	// OAuth connector (mot_) to its consenting user's current workspace role and
+	// is a no-op for humans and X-Agent-Key agents, whose access on those routes
+	// is deliberately unchanged. See mw.RequireConnectorPermission for why this
+	// is a separate middleware rather than rbac(). A mutating route needs one of
+	// rbac(), connectorRBAC(), connectorSelfOrRBAC(), mw.RequireUserAuth(), or an
+	// entry in the allow-list of cmd/api/rbac_routes_audit_test.go.
+	ownsWorkspace := func(ctx context.Context, wsID, userID uuid.UUID) bool {
+		return mw.UserOwnsWorkspace(ctx, db, wsID, userID)
+	}
+	connectorRBAC := func(perm mw.Permission) echo.MiddlewareFunc {
+		return mw.RequireConnectorPermission(perm, workspaceMemberRepo, ownsWorkspace)
+	}
+	connectorSelfOrRBAC := func(agentIDParam string, perm mw.Permission) echo.MiddlewareFunc {
+		return mw.RequireConnectorSelfOrPermission(agentIDParam, perm, workspaceMemberRepo, ownsWorkspace)
+	}
+
 	// Workspace routes.
 	api.GET("/workspaces", workspaceHandler.List)
 	api.POST("/workspaces", workspaceHandler.Create)
@@ -1396,7 +1413,7 @@ func main() {
 	// rather than the path, where RequireWorkspaceMemberScoped has nothing to see.
 	bodyWS := mw.RequireBodyWorkspace(db)
 	api.GET("/projects/:proj_id", projectHandler.GetByID, projAccess)
-	api.PATCH("/projects/:proj_id", projectHandler.Update, projAccess)
+	api.PATCH("/projects/:proj_id", projectHandler.Update, projAccess, connectorRBAC(mw.PermManageProject))
 	api.DELETE("/projects/:proj_id", projectHandler.Delete, projAccess, rbac(mw.PermDeleteProject))
 	// Archive/unarchive carry the same permission DELETE did while it was
 	// (wrongly) an archive — owners/admins, never plain members (#ddd219f4).
@@ -1413,9 +1430,9 @@ func main() {
 
 	// Task status routes.
 	api.GET("/projects/:proj_id/statuses", statusHandler.List, projAccess)
-	api.POST("/projects/:proj_id/statuses", statusHandler.Create, projAccess)
-	api.PATCH("/projects/:proj_id/statuses/:status_id", statusHandler.Update, projAccess)
-	api.PUT("/projects/:proj_id/statuses/reorder", statusHandler.Reorder, projAccess)
+	api.POST("/projects/:proj_id/statuses", statusHandler.Create, projAccess, connectorRBAC(mw.PermManageProject))
+	api.PATCH("/projects/:proj_id/statuses/:status_id", statusHandler.Update, projAccess, connectorRBAC(mw.PermManageProject))
+	api.PUT("/projects/:proj_id/statuses/reorder", statusHandler.Reorder, projAccess, connectorRBAC(mw.PermManageProject))
 
 	// Custom field routes.
 	api.GET("/projects/:proj_id/custom-fields", customFieldHandler.List, projAccess)
@@ -1443,9 +1460,9 @@ func main() {
 	api.GET("/tasks/:task_id/subtasks", taskHandler.ListSubtasks, wsAccess)
 	api.POST("/tasks/:task_id/subtasks", taskHandler.CreateSubtask, wsAccess, rbac(mw.PermCreateTask))
 	api.POST("/tasks/:task_id/assign", taskHandler.AssignTask, wsAccess, rbac(mw.PermUpdateTask))
-	api.POST("/tasks/:task_id/checkout", taskHandler.Checkout, wsAccess)
-	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout, wsAccess)
-	api.PATCH("/tasks/:task_id/checkout", taskHandler.ExtendCheckout, wsAccess)
+	api.POST("/tasks/:task_id/checkout", taskHandler.Checkout, wsAccess, connectorRBAC(mw.PermUpdateTask))
+	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout, wsAccess, connectorRBAC(mw.PermUpdateTask))
+	api.PATCH("/tasks/:task_id/checkout", taskHandler.ExtendCheckout, wsAccess, connectorRBAC(mw.PermUpdateTask))
 	api.PATCH("/tasks/:task_id/ship", taskHandler.ShipTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext, wsAccess)
 	api.GET("/tasks/:task_id/cost-summary", taskHandler.GetCostSummary, wsAccess)
@@ -1617,7 +1634,7 @@ func main() {
 	api.GET("/agents/:agent_id/sub-agents", agentHandler.ListSubAgents)
 	api.GET("/agents/:agent_id/heartbeat", agentHandler.GetAgentHeartbeat)
 	api.GET("/agents/:agent_id/activity", agentHandler.ListAgentActivity)
-	api.POST("/agents/:agent_id/activity", agentHandler.CreateAgentActivity)
+	api.POST("/agents/:agent_id/activity", agentHandler.CreateAgentActivity, connectorSelfOrRBAC("agent_id", mw.PermDeleteAgent))
 	api.GET("/workspaces/:ws_id/agents/status", agentHandler.GetAgentsStatus)
 	// GET /agents/:agent_id/workspaces (task U3) — where this agent is
 	// connected, home workspace not included (that's GET /agents/:agent_id).
@@ -1746,7 +1763,7 @@ func main() {
 	api.GET("/workspaces/:ws_id/analytics/export", analyticsHandler.ExportMetrics)
 
 	// Project update routes.
-	api.POST("/projects/:proj_id/updates", projectUpdateHandler.Create, projAccess)
+	api.POST("/projects/:proj_id/updates", projectUpdateHandler.Create, projAccess, connectorRBAC(mw.PermAddComment))
 	api.GET("/projects/:proj_id/updates", projectUpdateHandler.List, projAccess)
 	api.GET("/projects/:proj_id/updates/latest", projectUpdateHandler.GetLatest, projAccess)
 
@@ -1885,23 +1902,23 @@ func main() {
 	// NOTE: fixed-path routes (/memories/search, /memories/export, /memories/import,
 	// /memories/reindex, /memories/recall_graph) MUST be registered before /memories/:id
 	// to avoid the literal path segments being parsed as UUID parameters.
-	api.POST("/memories", memoryHandler.Remember)
+	api.POST("/memories", memoryHandler.Remember, connectorRBAC(mw.PermWriteMemory))
 	api.GET("/memories", memoryHandler.List)
 	api.GET("/memories/search", memoryHandler.Search)
 	api.GET("/memories/recall_graph", memoryHandler.RecallGraph)
 	api.GET("/memories/export", memoryHandler.ExportMemories)
-	api.POST("/memories/import", memoryHandler.ImportMemories)
-	api.POST("/memories/reindex", memoryHandler.Reindex)
-	api.POST("/memories/backfill-chunks", memoryHandler.BackfillChunks)
-	api.POST("/memories/rechunk-stale", memoryHandler.RechunkStale)
-	api.POST("/memories/backfill-doc-index", memoryHandler.BackfillDocIndex)
+	api.POST("/memories/import", memoryHandler.ImportMemories, connectorRBAC(mw.PermWriteMemory))
+	api.POST("/memories/reindex", memoryHandler.Reindex, connectorRBAC(mw.PermMemoryIndex))
+	api.POST("/memories/backfill-chunks", memoryHandler.BackfillChunks, connectorRBAC(mw.PermMemoryIndex))
+	api.POST("/memories/rechunk-stale", memoryHandler.RechunkStale, connectorRBAC(mw.PermMemoryIndex))
+	api.POST("/memories/backfill-doc-index", memoryHandler.BackfillDocIndex, connectorRBAC(mw.PermMemoryIndex))
 	api.GET("/memories/doc-index-status", memoryHandler.DocIndexStatus)
 	api.GET("/memories/:id", memoryHandler.GetByID)
 	api.GET("/memories/:id/related", memoryHandler.FindRelated)
 	api.GET("/memories/:id/revisions", memoryHandler.Revisions)
-	api.DELETE("/memories/:id", memoryHandler.Delete)
+	api.DELETE("/memories/:id", memoryHandler.Delete, connectorRBAC(mw.PermWriteMemory))
 	api.GET("/projects/:proj_id/knowledge", memoryHandler.GetProjectKnowledge, projAccess)
-	api.POST("/projects/:proj_id/knowledge", memoryHandler.SetProjectKnowledge, projAccess)
+	api.POST("/projects/:proj_id/knowledge", memoryHandler.SetProjectKnowledge, projAccess, connectorRBAC(mw.PermWriteMemory))
 
 	// C1 canonical updates feed — returns privacy:public canonical-decision memories since a cursor.
 	api.GET("/canonical_updates", canonicalUpdatesHandler.GetCanonicalUpdates)

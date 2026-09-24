@@ -651,3 +651,60 @@ func TestAgentHandler_UpdateMe_ReturnsAuthWorkspace_NotHome(t *testing.T) {
 	assert.Equal(t, homeWS, result.HomeWorkspaceID)
 	assert.Equal(t, "new", result.ProfileDescription)
 }
+
+// An OAuth connector is a third-party client a member consented to; it must not
+// be able to point the server's callback delivery at an address of its choosing.
+// Everything else PATCH /agents/me does stays available to it, and an
+// X-Agent-Key agent is unchanged.
+func TestAgentHandler_UpdateMe_CallbackURL_ConnectorRefused(t *testing.T) {
+	agentID, wsID, userID := uuid.New(), uuid.New(), uuid.New()
+
+	run := func(t *testing.T, connector bool, body string) (code int, updated bool, stored string) {
+		t.Helper()
+		mockSvc := &MockAgentService{
+			GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+				return &domain.Agent{ID: agentID, WorkspaceID: wsID, CallbackURL: "https://old.example/cb"}, nil
+			},
+			UpdateFunc: func(ctx context.Context, agent *domain.Agent) error {
+				updated, stored = true, agent.CallbackURL
+				return nil
+			},
+		}
+		h, _ := setupAgentTest(mockSvc)
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.Set("agent_id", agentID)
+		c.Set(mw.ContextKeyAgentAuthWorkspaceID, wsID)
+		if connector {
+			c.Set(mw.ContextKeyOAuthConnectorUserID, userID)
+		}
+		require.NoError(t, h.UpdateMe(c))
+		return rec.Code, updated, stored
+	}
+
+	t.Run("connector setting a callback URL is refused and nothing is written", func(t *testing.T) {
+		code, updated, _ := run(t, true, `{"callback_url":"http://169.254.169.254/latest/meta-data"}`)
+		assert.Equal(t, http.StatusForbidden, code)
+		assert.False(t, updated, "a refused request must not reach the service")
+	})
+	t.Run("connector may still update its description", func(t *testing.T) {
+		code, updated, _ := run(t, true, `{"profile_description":"a description"}`)
+		assert.Equal(t, http.StatusOK, code)
+		assert.True(t, updated)
+	})
+	t.Run("connector may clear a callback URL", func(t *testing.T) {
+		code, updated, stored := run(t, true, `{"callback_url":""}`)
+		assert.Equal(t, http.StatusOK, code)
+		assert.True(t, updated)
+		assert.Equal(t, "", stored)
+	})
+	t.Run("X-Agent-Key agent may set a callback URL, unchanged", func(t *testing.T) {
+		code, updated, stored := run(t, false, `{"callback_url":"https://hooks.example/cb"}`)
+		assert.Equal(t, http.StatusOK, code)
+		assert.True(t, updated)
+		assert.Equal(t, "https://hooks.example/cb", stored)
+	})
+}
