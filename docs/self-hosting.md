@@ -725,10 +725,43 @@ Services included in `docker-compose.prod.yml`:
 | `nats` | *(internal)* | NATS 2.10 with JetStream enabled |
 | `minio` | *(internal)* | MinIO object storage — required env: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`; optional `MINIO_IMAGE` ([which image](#which-minio-image)) |
 | `api` | `${API_PORT:-8005}` | Mesh API server (Go binary, runs DB migrations on startup) |
-| `mcp` | `${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents |
+| `mcp` | `${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents; loopback-only by default, reached through nginx at `/mcp/` ([port binding](#mcp-port-binding)) |
 | `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api`, `/ws` and `/mcp` (SSE, see [Agent onboarding](agent-onboarding.md)) |
 | `prometheus` | `${PROMETHEUS_PORT:-9090}` | Prometheus scraping `/metrics` from the API |
 | `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — password set by `GRAFANA_PASSWORD` (required, no default) |
+
+### MCP port binding
+
+The `mcp` service publishes its port on **loopback** by default
+(`127.0.0.1:${MCP_PORT:-8081}`). Remote agents do not need it: the bundled
+nginx serves MCP on the same origin as the web UI (`https://<your-host>/mcp/sse`,
+`/mcp` for the streamable transport, plus the OAuth metadata route), and that
+is the address the Integrations page shows.
+
+Why not `0.0.0.0`: mesh-mcp keys its per-IP limiter for failed authentication
+on the leftmost `X-Forwarded-For` entry. A client that connects to the
+published port directly skips nginx entirely, so nothing sits between it and
+mesh-mcp to control that header: it can put any address there and spend someone
+else's budget, or dodge its own. Keeping the port off the network closes that
+path; nothing else about the stack changes, because nginx reaches `mcp` over
+the compose network, not through the published port. (How nginx itself
+determines the client address it forwards is a separate setting and is not
+changed here.)
+
+What still works with the default: anything on the same host
+(`http://localhost:8081/...`, a host-side reverse proxy or `curl` health probe,
+`/metrics` with its token), and every agent going through `/mcp/`.
+
+If you *do* need `host:8081` reachable from other machines — agents pointed at
+that address directly, a Prometheus scraping `/metrics` from elsewhere — set it
+in `.env`:
+
+```bash
+MCP_BIND=0.0.0.0
+```
+
+That accepts the limiter bypass above: put your own proxy in front of the port
+that overwrites `X-Forwarded-For`, or firewall it to the hosts that need it.
 
 Required environment variables for production:
 
@@ -968,35 +1001,27 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    `curl -H "Authorization: Bearer $(cat deploy/docker/mesh/volumes/secrets/metrics_token)" http://localhost:8005/metrics`
    (API) or the same against `http://localhost:${MCP_PORT:-8081}/metrics`
    (MCP — note the bundled Prometheus does not scrape this one; nothing in
-   the stack consumes it, the gate exists so exposing the port doesn't leak
-   route names, traffic volumes and workspace/task counts to anyone who can
+   the stack consumes it; if you opt in with `MCP_BIND=0.0.0.0`, the gate exists
+   so exposing the port doesn't leak route names, traffic volumes and workspace/task counts to anyone who can
    reach it). Outside Compose both binaries read `MESH_METRICS_TOKEN`
    directly, and leaving it unset keeps the endpoint open for deployments
    that gate it at the network layer instead (e.g. the internal prod
-   install, fronted by Caddy). If you'd rather not expose the MCP metrics
-   port at all, bind it to loopback instead:
+   install, fronted by Caddy). The MCP port is published on loopback by
+   default (`MCP_BIND`, see [MCP port binding](#mcp-port-binding)), so from
+   another machine `/metrics` is reachable only if you opt in.
 
-   ```yaml
-   # deploy/docker/mesh/docker-compose.prod.yml, mcp service
-   ports:
-     - "127.0.0.1:${MCP_PORT:-8081}:8081"
-   ```
-
-   Don't do this as the shipped default, though — the mcp service exists so
-   remote agents can reach `/sse` and `/message` on this same port; binding
-   it to loopback closes those along with `/metrics`.
-
-   The same publish-by-default caveat applies to the `prometheus` (`9090`) and `grafana` (`3001`)
-   services: `docker-compose.prod.yml` publishes both on all interfaces.
+   Unlike `mcp`, the `prometheus` (`9090`) and `grafana` (`3001`)
+   services are still published on all interfaces by `docker-compose.prod.yml`.
    Grafana requires `GRAFANA_PASSWORD` to be set (Compose refuses to start
    otherwise) — but the port is still open to the network, so bind it to
-   `127.0.0.1` as above, or drop the two services entirely if you are not
-   using them.
+   `127.0.0.1` (change the mapping to `"127.0.0.1:${GRAFANA_PORT:-3001}:3000"`),
+   or drop the two services entirely if you are not using them.
 
 10. **Do not publish the API port when a proxy fronts it** -- Compose publishes
     `${API_PORT:-8005}` on every interface. With nginx or Caddy terminating TLS
     in front, that port is a plaintext bypass around it, rate limits and all.
-    Bind it to `127.0.0.1` as above, or remove the mapping.
+    Bind it to `127.0.0.1` (`"127.0.0.1:${API_PORT:-8005}:8005"`), or remove the
+    mapping.
 
     Note that Docker's published ports are inserted into iptables ahead of most
     host firewall rules, so a `ufw`/`firewalld` "deny" you added afterwards
@@ -1394,6 +1419,12 @@ pnpm dev
    container, so the host needs outbound access to `ghcr.io` (or set
    `MINIO_IMAGE` to a registry it can reach). Data in `volumes/minio/data` and
    the bucket are unaffected.
+
+   If agents connect to `http://<host>:8081` **directly** (not through
+   `/mcp/`), note that this release publishes that port on loopback only —
+   they will get *connection refused* after the `mcp` container is recreated.
+   Move them to `https://<your-host>/mcp/sse`, or set `MCP_BIND=0.0.0.0`
+   ([MCP port binding](#mcp-port-binding)).
 
 4. Verify health and version:
    ```bash
