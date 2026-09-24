@@ -44,13 +44,18 @@ function swCacheVersion(): Plugin {
 }
 
 /** The commit this build is made from: CI's own SHA first, local git second.
- * web/perf/check-bundle-budget.mjs resolves the "current" commit in the same
- * order, so the two agree on what HEAD means. null = unknown, and then no
+ * CI_COMMIT_SHA is trusted only in this repo's own pipeline. The deploy
+ * pipeline (entire-vc/deploy) builds evc-mesh from a checkout of its own, so
+ * there CI_COMMIT_SHA is the deploy repo's commit — the stamp must come from
+ * the checkout being built. web/perf/check-bundle-budget.mjs applies the same
+ * rule, so the two agree on what HEAD means. null = unknown, and then no
  * .build-sha is written — which the check treats as a failure, not a pass. */
 function currentCommit(): string | null {
-  if (process.env.CI_COMMIT_SHA) return process.env.CI_COMMIT_SHA.trim();
+  if (process.env.CI_COMMIT_SHA && process.env.CI_PROJECT_PATH === "entire-vc/evc-mesh") {
+    return process.env.CI_COMMIT_SHA.trim();
+  }
   try {
-    return execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+    return execSync("git rev-parse HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] })
       .toString()
       .trim();
   } catch {
