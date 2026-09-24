@@ -158,6 +158,12 @@ type RateLimitConfig struct {
 	RefreshRPM int
 	// APIRPM is the maximum requests per minute for API endpoints (per actor).
 	APIRPM int
+	// OAuthTokenRPM is the per-IP budget for POST /oauth/token and
+	// POST /oauth/revoke. A hosted MCP client exchanges and refreshes for all
+	// of its users from a handful of egress IPs, so this is tuned on its own
+	// rather than riding on APIRPM. Unset → follows APIRPM (the value both
+	// endpoints used before this setting existed).
+	OAuthTokenRPM int
 	// TrustedProxies is a list of CIDR ranges, in addition to the
 	// loopback/link-local/private-net ranges Echo trusts by default, whose
 	// X-Forwarded-For entries are trusted when resolving the client's real
@@ -398,6 +404,7 @@ func Load() *Config {
 			AuthRPM:           getEnvInt("MESH_RATE_LIMIT_AUTH_RPM", 5),
 			RefreshRPM:        getEnvInt("MESH_RATE_LIMIT_REFRESH_RPM", 60),
 			APIRPM:            getEnvInt("MESH_RATE_LIMIT_API_RPM", 600),
+			OAuthTokenRPM:     getEnvInt("MESH_RATE_LIMIT_OAUTH_TOKEN_RPM", getEnvInt("MESH_RATE_LIMIT_API_RPM", 600)),
 			TrustedProxies:    getEnvStringSlice("MESH_TRUSTED_PROXIES", nil),
 			AuthMaxFailures:   getEnvInt("MESH_RATE_LIMIT_AUTH_MAX_FAILURES", 10),
 			AuthLockoutWindow: getEnvDuration("MESH_RATE_LIMIT_AUTH_LOCKOUT_WINDOW", 15*time.Minute),

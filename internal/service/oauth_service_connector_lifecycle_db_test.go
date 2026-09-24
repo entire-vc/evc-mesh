@@ -118,6 +118,10 @@ func TestOAuthSvc_AgentConnectionRevokeDisconnectsConnector(t *testing.T) {
 		require.NoError(t, err, "control: works before the revoke")
 
 		env.revokeAgentConnection(t, env.grantAgentID(t, f.client.ClientID), f.ws)
+		// The admin's revoke happens outside the OAuth service, so the
+		// positive-auth cache cannot be told: the guarantee is "not later than
+		// the cache TTL", and the control call above populated the cache.
+		env.advance(oauthAuthCacheTTL + time.Second)
 
 		a, err := env.svc.AuthenticateAccessToken(ctx, f.tokens.AccessToken)
 		assert.Nil(t, a)

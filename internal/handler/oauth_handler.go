@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -70,9 +71,32 @@ func writeOAuthError(c echo.Context, e *oautherror.Error) error {
 
 // --- RFC 7591 dynamic client registration ---
 
+// oauthRegisterMaxBodyBytes caps the DCR request body. The endpoint is
+// unauthenticated and the decoded document is only size-checked field by field
+// AFTER it has been read in full, so without a cap one request can make the
+// server buffer an arbitrarily large JSON. The largest legitimate document is
+// ten redirect_uris of 2048 bytes plus a 200-character name, ~21 KiB; 32 KiB
+// leaves room for JSON overhead and extra RFC 7591 fields.
+const oauthRegisterMaxBodyBytes = 32 * 1024
+
 func (h *OAuthHandler) Register(c echo.Context) error {
+	tooLarge := func() error {
+		return c.JSON(http.StatusRequestEntityTooLarge,
+			oautherror.InvalidClientMetadata("request body is larger than the allowed 32 KiB").Body())
+	}
+	// Declared length first: refuses without reading a byte. The reader cap
+	// below is what holds when Content-Length is absent (chunked) or a lie.
+	if c.Request().ContentLength > oauthRegisterMaxBodyBytes {
+		return tooLarge()
+	}
+	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, oauthRegisterMaxBodyBytes)
+
 	var in service.DCRRegisterInput
 	if err := c.Bind(&in); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			return tooLarge()
+		}
 		return c.JSON(http.StatusBadRequest, oautherror.InvalidClientMetadata("request body is not valid JSON").Body())
 	}
 	client, oerr := h.oauthService.RegisterClientDCR(c.Request().Context(), in)

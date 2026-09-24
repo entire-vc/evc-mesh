@@ -111,6 +111,15 @@ func (r *OAuthRepo) DeleteExpiredCodes(ctx context.Context, before time.Time) (i
 	return res.RowsAffected()
 }
 
+func (r *OAuthRepo) DeleteExpiredTokens(ctx context.Context, before time.Time) (int64, error) {
+	const q = `DELETE FROM oauth_tokens WHERE expires_at < $1`
+	res, err := r.db.ExecContext(ctx, q, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // --- Grants ---
 
 const oauthGrantCols = `id, user_id, client_id, workspace_id, agent_id, scope, created_at, revoked_at`

@@ -71,6 +71,22 @@ const (
 	// request".
 	oauthClientCacheTTL = 1 * time.Hour
 
+	// Retention before the periodic purge (PurgeExpired) deletes a row. Both
+	// are measured from expires_at, not from the moment of use or revocation:
+	// a used-but-unexpired code and a revoked-but-unexpired refresh token must
+	// survive so a replay is still recognised (and its family revoked) instead
+	// of reading as "never existed". The grace after expiry keeps the row a
+	// little longer for post-mortems of a stolen-token report.
+	oauthCodeRetention  = 24 * time.Hour
+	oauthTokenRetention = 7 * 24 * time.Hour
+
+	// oauthInvalidCodeDescription is the one client-facing text for every
+	// "this code cannot be redeemed" outcome that is decided before the caller
+	// has proven anything: no such code, expired, already used, verifier
+	// malformed or not matching. One text means the response cannot be used to
+	// probe which of those it was — in particular whether a guessed code exists.
+	oauthInvalidCodeDescription = "invalid or expired authorization code"
+
 	oauthCIMDMaxBodyBytes = 64 * 1024
 	oauthCIMDFetchTimeout = 10 * time.Second
 	oauthCIMDDialTimeout  = 5 * time.Second
@@ -135,6 +151,7 @@ type oauthService struct {
 	workspaceMemberRepo repository.WorkspaceMemberRepository
 	agentGrantRepo      repository.AgentWorkspaceGrantRepository
 	httpClient          *http.Client
+	authCache           *oauthAuthCache
 }
 
 // NewOAuthService constructs the OAuth 2.0 Authorization Server service.
@@ -154,6 +171,7 @@ func NewOAuthService(
 		workspaceMemberRepo: workspaceMemberRepo,
 		agentGrantRepo:      agentGrantRepo,
 		httpClient:          newCIMDHTTPClient(),
+		authCache:           newOAuthAuthCache(oauthAuthCacheTTL),
 	}
 }
 
@@ -161,6 +179,22 @@ func NewOAuthService(
 // comment in interfaces.go for why this exists and why it is test-only.
 func (s *oauthService) SetHTTPClientForTesting(client *http.Client) {
 	s.httpClient = client
+}
+
+// SetAuthCacheTTLForTesting implements OAuthServiceConfigurable. A zero TTL
+// disables the cache.
+func (s *oauthService) SetAuthCacheTTLForTesting(ttl time.Duration) {
+	s.authCache = newOAuthAuthCache(ttl)
+}
+
+// PurgeExpired deletes authorization codes and tokens that expired more than
+// their retention ago. Idempotent; safe to run concurrently with live traffic —
+// nothing it removes can still be redeemed or presented.
+func (s *oauthService) PurgeExpired(ctx context.Context) (codes, tokens int64, err error) {
+	now := timeNow()
+	codes, cerr := s.repo.DeleteExpiredCodes(ctx, now.Add(-oauthCodeRetention))
+	tokens, terr := s.repo.DeleteExpiredTokens(ctx, now.Add(-oauthTokenRetention))
+	return codes, tokens, errors.Join(cerr, terr)
 }
 
 // --- Client registration (DCR + CIMD) ---
@@ -645,7 +679,9 @@ func (s *oauthService) getOrCreateGrant(ctx context.Context, userID uuid.UUID, c
 		if rerr := s.repo.RevokeTokensByGrant(ctx, existing.ID, now); rerr != nil {
 			return nil, oautherror.ServerError(rerr.Error())
 		}
-		if terr := s.repo.RetargetGrant(ctx, existing.ID, reg.Agent.ID); terr != nil {
+		terr := s.repo.RetargetGrant(ctx, existing.ID, reg.Agent.ID)
+		s.authCache.evictGrant(existing.ID)
+		if terr != nil {
 			return nil, oautherror.ServerError(terr.Error())
 		}
 		existing.AgentID = reg.Agent.ID
@@ -835,7 +871,7 @@ func (s *oauthService) ExchangeCode(ctx context.Context, clientID, redirectURI, 
 		return nil, oautherror.InvalidRequest("client_id, code, and code_verifier are required")
 	}
 	if !validPKCEVerifier(codeVerifier) {
-		return nil, oautherror.InvalidGrant("code_verifier does not match code_challenge")
+		return nil, oautherror.InvalidGrant(oauthInvalidCodeDescription)
 	}
 
 	row, err := s.repo.GetCodeByHash(ctx, sha256Hex(code))
@@ -843,7 +879,7 @@ func (s *oauthService) ExchangeCode(ctx context.Context, clientID, redirectURI, 
 		return nil, oautherror.ServerError(err.Error())
 	}
 	if row == nil {
-		return nil, oautherror.InvalidGrant("unknown authorization code")
+		return nil, oautherror.InvalidGrant(oauthInvalidCodeDescription)
 	}
 
 	now := timeNow()
@@ -854,16 +890,21 @@ func (s *oauthService) ExchangeCode(ctx context.Context, clientID, redirectURI, 
 		if row.UsedAt != nil && row.IssuedFamilyID != nil {
 			s.revokeFamilyLogged(ctx, *row.IssuedFamilyID, now)
 		}
-		return nil, oautherror.InvalidGrant("authorization code is expired or already used")
+		return nil, oautherror.InvalidGrant(oauthInvalidCodeDescription)
 	}
 	if row.ClientID != clientID {
-		return nil, oautherror.InvalidGrant("authorization code was not issued to this client")
+		// Same text as "no such code": a distinct one would confirm to whoever
+		// holds a client_id that this exact code exists and is still live.
+		return nil, oautherror.InvalidGrant(oauthInvalidCodeDescription)
+	}
+	if oerr := s.requireClientGrantType(ctx, clientID, oauthGrantTypeAuthorizationCode); oerr != nil {
+		return nil, oerr
 	}
 	if row.RedirectURI != redirectURI {
 		return nil, oautherror.InvalidGrant("redirect_uri does not match the one used to obtain this code")
 	}
 	if row.CodeChallengeMethod != "S256" || !verifyPKCE(codeVerifier, row.CodeChallenge) {
-		return nil, oautherror.InvalidGrant("code_verifier does not match code_challenge")
+		return nil, oautherror.InvalidGrant(oauthInvalidCodeDescription)
 	}
 
 	grant, err := s.repo.GetGrantByID(ctx, row.GrantID)
@@ -903,11 +944,9 @@ func (s *oauthService) ExchangeCode(ctx context.Context, clientID, redirectURI, 
 		// family is the one to kill: a second redemption attempt is evidence
 		// the code leaked.
 		if fresh, gerr := s.repo.GetCodeByHash(ctx, sha256Hex(code)); gerr == nil && fresh != nil && fresh.IssuedFamilyID != nil {
-			if rerr := s.repo.RevokeFamily(ctx, *fresh.IssuedFamilyID, now); rerr != nil {
-				log.Printf("oauth: revoking family %s after code replay failed: %v", *fresh.IssuedFamilyID, rerr)
-			}
+			s.revokeFamilyLogged(ctx, *fresh.IssuedFamilyID, now)
 		}
-		return nil, oautherror.InvalidGrant("authorization code is expired or already used")
+		return nil, oautherror.InvalidGrant(oauthInvalidCodeDescription)
 	}
 	return resp, nil
 }
@@ -949,6 +988,9 @@ func (s *oauthService) RefreshTokenGrant(ctx context.Context, clientID, refreshT
 	}
 	if grant.ClientID != clientID {
 		return nil, oautherror.InvalidGrant("refresh token was not issued to this client")
+	}
+	if oerr := s.requireClientGrantType(ctx, clientID, oauthGrantTypeRefreshToken); oerr != nil {
+		return nil, oerr
 	}
 	// The user who consented to this grant must still belong to the
 	// workspace right now — not just at consent time — otherwise a token
@@ -1009,9 +1051,39 @@ func (s *oauthService) RefreshTokenGrant(ctx context.Context, clientID, refreshT
 // way, so a failure here cannot change the response — but it must not vanish:
 // a family that survives its own revocation is a live stolen token.
 func (s *oauthService) revokeFamilyLogged(ctx context.Context, familyID uuid.UUID, now time.Time) {
-	if err := s.repo.RevokeFamily(ctx, familyID, now); err != nil {
+	err := s.repo.RevokeFamily(ctx, familyID, now)
+	// Evicted even when the revoke failed: at worst the next request re-reads
+	// the database, whereas a stale entry would keep serving a family that was
+	// just found compromised.
+	s.authCache.evictFamily(familyID)
+	if err != nil {
 		log.Printf("oauth: revoking token family %s failed: %v", familyID, err)
 	}
+}
+
+const (
+	oauthGrantTypeAuthorizationCode = "authorization_code"
+	oauthGrantTypeRefreshToken      = "refresh_token"
+)
+
+// requireClientGrantType enforces that the /oauth/token grant_type is one the
+// client registered for (RFC 7591 grant_types; RFC 6749 §5.2 unauthorized_client).
+// Read from the stored client row — no CIMD refetch on the token path. A client
+// that registered only "authorization_code" therefore cannot refresh.
+func (s *oauthService) requireClientGrantType(ctx context.Context, clientID, grantType string) *oautherror.Error {
+	client, err := s.repo.GetClientByClientID(ctx, clientID)
+	if err != nil {
+		return oautherror.ServerError(err.Error())
+	}
+	if client == nil {
+		return oautherror.InvalidClient("unknown client")
+	}
+	for _, gt := range client.GrantTypes {
+		if gt == grantType {
+			return nil
+		}
+	}
+	return oautherror.UnauthorizedClient("this client is not registered for the " + grantType + " grant type")
 }
 
 func (s *oauthService) RevokeToken(ctx context.Context, token string) error {
@@ -1031,9 +1103,12 @@ func (s *oauthService) RevokeToken(ctx context.Context, token string) error {
 	// (the paired access token, and anything a later rotation produced).
 	// Revoking a bare access token stays scoped to itself.
 	if row.TokenType == domain.OAuthTokenTypeRefresh {
-		return s.repo.RevokeFamily(ctx, row.FamilyID, timeNow())
+		revokeErr := s.repo.RevokeFamily(ctx, row.FamilyID, timeNow())
+		s.authCache.evictFamily(row.FamilyID)
+		return revokeErr
 	}
 	_, err = s.repo.RevokeToken(ctx, row.ID, timeNow())
+	s.authCache.evictToken(sha256Hex(token))
 	return err
 }
 
@@ -1043,7 +1118,23 @@ func (s *oauthService) AuthenticateAccessToken(ctx context.Context, rawToken str
 	if !strings.HasPrefix(rawToken, OAuthAccessTokenPrefix) {
 		return nil, apierror.Unauthorized("invalid access token")
 	}
-	row, err := s.repo.GetTokenByHash(ctx, sha256Hex(rawToken))
+	tokenHash := sha256Hex(rawToken)
+	// Snapshot BEFORE any read below: put refuses to store the answer if a
+	// revocation evicted anything while this request was in flight.
+	gen := s.authCache.generation()
+	if cached, grantID, ok := s.authCache.get(tokenHash, timeNow()); ok {
+		// One primary-key lookup instead of the full path: revoking the grant is
+		// honoured on the next request, by every replica, however it was revoked.
+		// A lookup error falls through to the full path, which reports it.
+		if g, gerr := s.repo.GetGrantByID(ctx, grantID); gerr == nil {
+			if g == nil || g.IsRevoked() {
+				s.authCache.evictToken(tokenHash)
+				return nil, apierror.Unauthorized("access for this token has been revoked")
+			}
+			return cached, nil
+		}
+	}
+	row, err := s.repo.GetTokenByHash(ctx, tokenHash)
 	if err != nil {
 		return nil, err
 	}
@@ -1059,9 +1150,10 @@ func (s *oauthService) AuthenticateAccessToken(ctx context.Context, rawToken str
 		return nil, apierror.Unauthorized("access for this token has been revoked")
 	}
 	// The consenting user must still belong to the workspace RIGHT NOW —
-	// checked on every authentication, not just at consent time, so removal
-	// from the workspace takes effect immediately instead of only once the
-	// access token itself expires (up to oauthAccessTokenTTL later).
+	// checked on every uncached authentication, not just at consent time, so
+	// removal from the workspace takes effect within oauthAuthCacheTTL instead
+	// of only once the access token itself expires (up to oauthAccessTokenTTL
+	// later).
 	if _, isMember, merr := s.resolveMemberRole(ctx, grant.WorkspaceID, grant.UserID); merr != nil || !isMember {
 		return nil, apierror.Unauthorized("access for this token has been revoked")
 	}
@@ -1088,6 +1180,7 @@ func (s *oauthService) AuthenticateAccessToken(ctx context.Context, rawToken str
 	resolved.WorkspaceRole = oauthConnectorWorkspaceRole
 	connectorUserID := grant.UserID
 	resolved.OAuthConnectorUserID = &connectorUserID
+	s.authCache.put(tokenHash, &resolved, grant.ID, row.FamilyID, row.ExpiresAt, timeNow(), gen)
 	return &resolved, nil
 }
 
@@ -1106,6 +1199,11 @@ func (s *oauthService) RevokeMyGrant(ctx context.Context, userID, grantID uuid.U
 		return apierror.NotFound("Grant")
 	}
 	now := timeNow()
+	// Evict before AND after; the generation counter (see oauthAuthCache.gen)
+	// is what makes a request that read the still-valid rows before the revoke
+	// unable to re-insert its answer after the eviction.
+	s.authCache.evictGrant(grantID)
+	defer s.authCache.evictGrant(grantID)
 	if err := s.repo.RevokeGrant(ctx, grantID, now); err != nil {
 		return err
 	}
