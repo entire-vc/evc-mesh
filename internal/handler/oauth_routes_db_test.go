@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,6 +40,11 @@ func newLimitedRoutes(t *testing.T, limits OAuthRateLimits) *limitedRoutes {
 }
 
 func (r *limitedRoutes) do(method, target, ip string, form url.Values) *httptest.ResponseRecorder {
+	return r.doXFF(method, target, ip, "", form)
+}
+
+// doXFF is do with a client-supplied X-Forwarded-For.
+func (r *limitedRoutes) doXFF(method, target, ip, xff string, form url.Values) *httptest.ResponseRecorder {
 	var body *strings.Reader
 	if form != nil {
 		body = strings.NewReader(form.Encode())
@@ -46,6 +53,9 @@ func (r *limitedRoutes) do(method, target, ip string, form url.Values) *httptest
 	}
 	req := httptest.NewRequest(method, target, body)
 	req.RemoteAddr = ip + ":40000"
+	if xff != "" {
+		req.Header.Set(echo.HeaderXForwardedFor, xff)
+	}
 	if form != nil {
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationForm)
 	}
@@ -55,7 +65,7 @@ func (r *limitedRoutes) do(method, target, ip string, form url.Values) *httptest
 }
 
 func TestOAuthRoutes_TokenAndRevokeAreRateLimitedPerIP(t *testing.T) {
-	r := newLimitedRoutes(t, OAuthRateLimits{Register: 1000, Authorize: 1000, AuthorizeNewClient: 1000, Token: 3})
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: true, Register: 1000, Authorize: 1000, AuthorizeNewClient: 1000, Token: 3})
 
 	for _, path := range []string{"/oauth/token", "/oauth/revoke"} {
 		ip := "203.0.113." + map[string]string{"/oauth/token": "10", "/oauth/revoke": "11"}[path]
@@ -73,7 +83,7 @@ func TestOAuthRoutes_TokenAndRevokeAreRateLimitedPerIP(t *testing.T) {
 }
 
 func TestOAuthRoutes_AuthorizeGeneralBudget(t *testing.T) {
-	r := newLimitedRoutes(t, OAuthRateLimits{Register: 1000, Authorize: 2, AuthorizeNewClient: 1000, Token: 1000})
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: true, Register: 1000, Authorize: 2, AuthorizeNewClient: 1000, Token: 1000})
 	target := "/oauth/authorize?client_id=mcpc_nope&response_type=code"
 	assert.NotEqual(t, http.StatusTooManyRequests, r.do(http.MethodGet, target, "203.0.113.20", nil).Code)
 	assert.NotEqual(t, http.StatusTooManyRequests, r.do(http.MethodGet, target, "203.0.113.20", nil).Code)
@@ -85,7 +95,7 @@ func TestOAuthRoutes_AuthorizeGeneralBudget(t *testing.T) {
 // a URL of the attacker's choosing and write an oauth_clients row per
 // request. Only NEW https client_ids may be throttled that hard.
 func TestOAuthRoutes_AuthorizeNewCIMDClientBudget(t *testing.T) {
-	r := newLimitedRoutes(t, OAuthRateLimits{Register: 1000, Authorize: 1000, AuthorizeNewClient: 2, Token: 1000})
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: true, Register: 1000, Authorize: 1000, AuthorizeNewClient: 2, Token: 1000})
 
 	fresh := func() string {
 		// 127.0.0.1:1 is refused by the SSRF guard before any connect — fast
@@ -132,7 +142,7 @@ func TestOAuthRoutes_ClientLookupFailureCountsAsNewClient(t *testing.T) {
 	e := echo.New()
 	e.HTTPErrorHandler = NewHTTPErrorHandler(e.DefaultHTTPErrorHandler)
 	RegisterOAuthPublicRoutes(e, env.oauthHandler, postgres.NewOAuthRepo(dead), OAuthRateLimits{
-		Enabled: true, Register: 1000, Authorize: 1000, AuthorizeNewClient: 2, Token: 1000,
+		Enabled: true, IPTrusted: true, Register: 1000, Authorize: 1000, AuthorizeNewClient: 2, Token: 1000,
 	})
 	r := &limitedRoutes{env: env, e: e}
 
@@ -156,4 +166,101 @@ func closedOAuthDB(t *testing.T) *sqlx.DB {
 	require.NoError(t, err)
 	require.NoError(t, dead.Close())
 	return dead
+}
+
+// freshCIMDTarget is an authorize URL for a first-seen https client_id.
+// 127.0.0.1:1 is refused by the SSRF guard before any connect — fast and
+// offline — but it is still a first-seen https client_id.
+func freshCIMDTarget() string {
+	return "/oauth/authorize?response_type=code&client_id=" + url.QueryEscape("https://127.0.0.1:1/c-"+uuid.New().String())
+}
+
+// TestOAuthRoutes_UntrustedIP_SpoofedXFFCannotResetFirstSeenCIMDBudget is the
+// #83cc58ef defect: with MESH_TRUSTED_PROXIES unset e.IPExtractor is nil, so
+// c.RealIP() returns the leftmost client-supplied X-Forwarded-For — a fresh
+// random value per request reset the per-IP "5/min for a new CIMD client_id"
+// budget every time, leaving the outbound fetch + oauth_clients row per
+// request unbounded. Untrusted, the budget must not be keyed on the header.
+func TestOAuthRoutes_UntrustedIP_SpoofedXFFCannotResetFirstSeenCIMDBudget(t *testing.T) {
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: false, Register: 1000, Authorize: 1000, AuthorizeNewClient: 2, Token: 1000})
+
+	for i := 1; i <= 2; i++ {
+		rec := r.doXFF(http.MethodGet, freshCIMDTarget(), "203.0.113.60", "198.51.100."+strconv.Itoa(i), nil)
+		assert.NotEqual(t, http.StatusTooManyRequests, rec.Code, "request %d is inside the budget", i)
+	}
+	// Different spoofed XFF each time, and even a different peer: still one bucket.
+	rec := r.doXFF(http.MethodGet, freshCIMDTarget(), "203.0.113.61", "198.51.100.99", nil)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "request 3 must be refused however X-Forwarded-For varies")
+}
+
+// TestOAuthRoutes_UntrustedIP_DoesNotThrottleUnrelatedTraffic pins the other
+// half of the trade-off: the shared bucket must be confined to the two
+// resource-cost endpoints. Behind a proxy that overwrites XFF every client
+// looks like one address, so a per-IP limiter on token/revoke/authorize
+// would let anyone lock every user out.
+func TestOAuthRoutes_UntrustedIP_DoesNotThrottleUnrelatedTraffic(t *testing.T) {
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: false, Register: 1, Authorize: 1, AuthorizeNewClient: 1, Token: 1})
+
+	for i := 1; i <= 10; i++ {
+		for _, path := range []string{"/oauth/token", "/oauth/revoke"} {
+			rec := r.do(http.MethodPost, path, "203.0.113.70", url.Values{"grant_type": {"refresh_token"}})
+			require.NotEqual(t, http.StatusTooManyRequests, rec.Code, "%s request %d", path, i)
+		}
+		rec := r.do(http.MethodGet, "/oauth/authorize?response_type=code&client_id=mcpc_"+uuid.New().String()[:8], "203.0.113.70", nil)
+		require.NotEqual(t, http.StatusTooManyRequests, rec.Code, "authorize (non-https client_id) request %d", i)
+	}
+}
+
+// TestOAuthRoutes_UntrustedIP_DCRIsBounded: /oauth/register writes a row per
+// call; untrusted, it is bounded by the same shared bucket, not left open.
+func TestOAuthRoutes_UntrustedIP_DCRIsBounded(t *testing.T) {
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: false, Register: 2, Authorize: 1000, AuthorizeNewClient: 1000, Token: 1000})
+	post := func(xff string) int {
+		return r.doXFF(http.MethodPost, "/oauth/register", "203.0.113.80", xff, url.Values{}).Code
+	}
+	assert.NotEqual(t, http.StatusTooManyRequests, post("198.51.100.1"))
+	assert.NotEqual(t, http.StatusTooManyRequests, post("198.51.100.2"))
+	assert.Equal(t, http.StatusTooManyRequests, post("198.51.100.3"))
+}
+
+// TestOAuthRoutes_TrustedProxy_UsesRealClientIPFromXFF: with
+// MESH_TRUSTED_PROXIES set (e.IPExtractor built from it, as cmd/api does), the
+// client IP a trusted hop relays in X-Forwarded-For is what is counted — one
+// bucket per real client, not one shared bucket for everything behind the hop.
+func TestOAuthRoutes_TrustedProxy_UsesRealClientIPFromXFF(t *testing.T) {
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: true, Register: 1000, Authorize: 1000, AuthorizeNewClient: 2, Token: 1000})
+	_, hop, err := net.ParseCIDR("203.0.113.0/24")
+	require.NoError(t, err)
+	r.e.IPExtractor = echo.ExtractIPFromXFFHeader(echo.TrustIPRange(hop))
+
+	const proxy = "203.0.113.5" // the trusted hop's own address (RemoteAddr)
+	clientA, clientB := "198.51.100.10", "198.51.100.11"
+
+	assert.NotEqual(t, http.StatusTooManyRequests, r.doXFF(http.MethodGet, freshCIMDTarget(), proxy, clientA, nil).Code)
+	assert.NotEqual(t, http.StatusTooManyRequests, r.doXFF(http.MethodGet, freshCIMDTarget(), proxy, clientA, nil).Code)
+	assert.Equal(t, http.StatusTooManyRequests, r.doXFF(http.MethodGet, freshCIMDTarget(), proxy, clientA, nil).Code,
+		"client A's third first-seen request is refused")
+	assert.NotEqual(t, http.StatusTooManyRequests, r.doXFF(http.MethodGet, freshCIMDTarget(), proxy, clientB, nil).Code,
+		"client B, behind the same trusted hop, has its own budget")
+}
+
+// TestOAuthRoutes_TrustedProxy_UntrustedPeerCannotSpoofXFF is the half of the
+// trusted-proxy contract the test above cannot see: without an IPExtractor
+// Echo's RealIP() takes the leftmost X-Forwarded-For from ANY peer, so that
+// test passes with or without the extractor. Here the peer is OUTSIDE the
+// trusted CIDR, so its forged X-Forwarded-For must be ignored and the budget
+// keyed on its own address — it goes red if the extractor is not wired.
+func TestOAuthRoutes_TrustedProxy_UntrustedPeerCannotSpoofXFF(t *testing.T) {
+	r := newLimitedRoutes(t, OAuthRateLimits{IPTrusted: true, Register: 1000, Authorize: 1000, AuthorizeNewClient: 2, Token: 1000})
+	_, hop, err := net.ParseCIDR("203.0.113.0/24")
+	require.NoError(t, err)
+	r.e.IPExtractor = echo.ExtractIPFromXFFHeader(echo.TrustIPRange(hop))
+
+	const outsider = "198.51.100.200" // not the trusted hop
+	for i := 1; i <= 2; i++ {
+		rec := r.doXFF(http.MethodGet, freshCIMDTarget(), outsider, "192.0.2."+strconv.Itoa(i), nil)
+		assert.NotEqual(t, http.StatusTooManyRequests, rec.Code, "request %d is inside the budget", i)
+	}
+	rec := r.doXFF(http.MethodGet, freshCIMDTarget(), outsider, "192.0.2.99", nil)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "an untrusted peer's forged X-Forwarded-For must not buy a fresh budget")
 }

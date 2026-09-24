@@ -901,7 +901,9 @@ func main() {
 		// field below, and the mesh_client_ip_trusted gauge on /metrics.
 		log.Printf("[config] MESH_TRUSTED_PROXIES is unset — client IP cannot be verified " +
 			"through the reverse-proxy chain, so /auth/login has NO per-IP rate-limit " +
-			"granularity (it is disabled, not silently shared across every client). " +
+			"granularity (it is disabled, not silently shared across every client); the " +
+			"public OAuth endpoints likewise lose per-IP limits, and DCR / first-seen client " +
+			"metadata fetches fall back to one global bucket each. " +
 			"Brute-force protection for /auth/login now relies solely on the per-account " +
 			"failed-login lockout (MESH_RATE_LIMIT_AUTH_MAX_FAILURES, default 10/15min). " +
 			"Set MESH_TRUSTED_PROXIES to the CIDR(s) of your trusted reverse-proxy hop(s) " +
@@ -1650,9 +1652,12 @@ func main() {
 	// at the bare `e` level (not `api`) for the same reason the webhook
 	// routes below are.
 	// Each endpoint sits behind its own per-IP limiter — see OAuthRateLimits
-	// for the sizing of each budget and why they differ.
+	// for the sizing of each budget and why they differ. Same trust gate as
+	// /auth/login: without MESH_TRUSTED_PROXIES the per-IP limiters are off
+	// and DCR / first-seen CIMD fall back to one global bucket.
 	handler.RegisterOAuthPublicRoutes(e, oauthHandler, oauthRepo, handler.OAuthRateLimits{
 		Enabled:            cfg.RateLimit.Enabled,
+		IPTrusted:          ipTrusted,
 		Redis:              sharedRedis,
 		Register:           cfg.RateLimit.AuthRPM,
 		Authorize:          cfg.RateLimit.RefreshRPM,
