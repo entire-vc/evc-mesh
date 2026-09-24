@@ -1574,3 +1574,31 @@ export interface AnalyticsMetrics {
     }>;
   };
 }
+
+// OAuth consent (MCP-OAuth 2/5) — shapes of GET/POST /api/v1/oauth/consent and
+// GET /api/v1/oauth/grants.
+
+/** GET /oauth/consent: what the consent screen shows. `workspaces` are only the
+ *  ones the signed-in user belongs to. */
+export interface OAuthConsentInfo {
+  client_name: string;
+  redirect_uri: string;
+  redirect_host: string;
+  /** true when EVERY redirect URI the client registered is loopback. */
+  loopback_warning: boolean;
+  scope: string;
+  workspaces: Pick<Workspace, "id" | "name" | "slug">[];
+}
+
+export interface OAuthGrant {
+  id: string;
+  client_id: string;
+  workspace_id: string;
+  agent_id: string;
+  scope: string;
+  created_at: string;
+  revoked_at?: string | null;
+  client_name: string;
+  agent_name: string;
+  workspace: WorkspaceBrief;
+}
