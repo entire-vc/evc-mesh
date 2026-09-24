@@ -41,9 +41,11 @@ function fail(message) {
 }
 
 /** The commit the checkout is at: CI's SHA first, local git second — the same
- * order vite.config.ts uses to stamp the build. null = cannot tell. */
-function currentCommit() {
-  if (process.env.CI_COMMIT_SHA) return process.env.CI_COMMIT_SHA.trim();
+ * order vite.config.ts uses to stamp the build. CI_COMMIT_SHA counts only in
+ * this repo's own pipeline: in entire-vc/deploy it is the deploy repo's commit,
+ * not the evc-mesh checkout being built. null = cannot tell. */
+function currentCommit(env = process.env) {
+  if (env.CI_COMMIT_SHA && env.CI_PROJECT_PATH === "entire-vc/evc-mesh") return env.CI_COMMIT_SHA.trim();
   try {
     return execSync("git rev-parse HEAD", { cwd: webRoot, stdio: ["ignore", "pipe", "ignore"] })
       .toString()
@@ -113,6 +115,18 @@ if (process.argv.includes("--selftest")) {
     const pass = got.ok === wantOk;
     if (!pass) bad++;
     console.log(`${pass ? "ok  " : "FAIL"} ${name}: ${got.ok ? "accepted" : "refused"}${got.reason ? ` — ${got.reason.slice(0, 90)}` : ""}`);
+  }
+  // Which SHA counts as "current": CI's only in this repo's own pipeline.
+  const gitHead = currentCommit({});
+  const shaCases = [
+    ["own pipeline: CI_COMMIT_SHA wins", currentCommit({ CI_COMMIT_SHA: "deadbeef", CI_PROJECT_PATH: "entire-vc/evc-mesh" }), "deadbeef"],
+    ["deploy pipeline: CI_COMMIT_SHA ignored", currentCommit({ CI_COMMIT_SHA: "deadbeef", CI_PROJECT_PATH: "entire-vc/deploy" }), gitHead],
+    ["no project path: CI_COMMIT_SHA ignored", currentCommit({ CI_COMMIT_SHA: "deadbeef" }), gitHead],
+  ];
+  for (const [name, got, want] of shaCases) {
+    const pass = got === want && (name.startsWith("own") || got !== "deadbeef");
+    if (!pass) bad++;
+    console.log(`${pass ? "ok  " : "FAIL"} ${name}: ${got}`);
   }
   if (bad) fail(`selftest: ${bad} case(s) behaved wrongly`);
   console.log("[check-bundle-budget] selftest OK");
