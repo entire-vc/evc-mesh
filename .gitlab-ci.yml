@@ -1124,6 +1124,42 @@ rail-visual-gates:
     - node scripts/assert-rail-icon-size.mjs --selftest
     - node scripts/assert-rail-header-geometry.mjs --selftest
 
+# ── static-shell-gate ───────────────────────────────────────────────────────
+# web/index.html рисует статическую копию первого кадра React (форма входа,
+# скелетон загрузки) до загрузки бандла — perf·Б2, `#2417383b`. Копия — это
+# дублированная разметка: поменял класс в login.tsx или в app-layout.tsx, не
+# поменял в index.html — и каждая загрузка начинается с прыжка от устаревшей
+# копии к настоящему экрану. Гейт сравнивает попиксельно каркас и смонтированный
+# React (/login и маршрут приложения × 1440/393 × светлая/тёмная), проверяет,
+# что набранный до загрузки JS пароль доезжает в React-форму, CLS подмены и
+# kill switch.
+#
+# Собирает сам, а не берёт `build:web`: тому артефакту нужен только CSS, а
+# здесь нужен весь `dist` с JS. `vite build` без `tsc` — типы проверяет
+# `build:web`, здесь это лишние полминуты.
+#
+# `--selftest` обязателен по той же причине, что у рейла: портит каркас на 4px
+# и требует КРАСНОГО. Первая версия контроля портила margin, который
+# схлопывался с соседним `space-y` и не сдвигал ничего, — и «проходила».
+static-shell-gate:
+  stage: build
+  image: mcr.microsoft.com/playwright:v1.62.1-jammy
+  timeout: 15m
+  variables:
+    PLAYWRIGHT_DOWNLOAD_HOST: http://127.0.0.1:9
+  before_script:
+    - corepack enable
+    - cd web && pnpm install --frozen-lockfile && cd ..
+  script:
+    - |
+      if ! (cd web && npx playwright install chromium); then
+        echo "Playwright полез скачивать браузер: образ и web/pnpm-lock.yaml разъехались."
+        echo "Чинить пином образа на mcr.microsoft.com/playwright:v<версия>-jammy."
+        exit 1
+      fi
+    - (cd web && pnpm exec vite build)
+    - node scripts/assert-static-shell-match.mjs --selftest
+
 # ── deploy ──────────────────────────────────────────────────────────────────
 # Выкатка прод-бэкенда по мёржу в канон. До 28.08.2026 её запускал человек
 # кнопкой `build:mesh-backend` в entire-vc/deploy, и это было главной причиной

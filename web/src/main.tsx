@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { Toaster, toast } from "@/components/ui/toast";
 import { useAuthStore } from "@/stores/auth";
+import { captureStaticShell } from "@/lib/static-shell";
 import "./index.css";
 
 // Initialize auth state
@@ -66,7 +67,12 @@ if (
   document.documentElement.classList.add("dark");
 }
 
-createRoot(document.getElementById("root")!).render(
+// index.html may have painted a static shell into #root; keep what was typed
+// into it before React replaces it (see lib/static-shell.ts).
+const rootEl = document.getElementById("root")!;
+captureStaticShell(rootEl);
+
+createRoot(rootEl).render(
   <StrictMode>
     <App />
     <Toaster />
