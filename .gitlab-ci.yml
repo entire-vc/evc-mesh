@@ -911,6 +911,137 @@ test:web:
   script:
     - pnpm test
 
+# ── perf-bundle ─────────────────────────────────────────────────────────────
+# The bundle half of the perf храповик (fleet-epic #3e9f036e, [perf·A]
+# #e0f9cb61). Builds web/ on its own (does not reuse build:web's artifact —
+# that job only publishes the compiled CSS, not dist/.vite/manifest.json or
+# the JS chunks this gate reads) and fails the pipeline when
+# web/perf/check-bundle-budget.mjs finds a metric over its ceiling in
+# web/perf/budget.json. See web/perf/README.md for the ratchet rule
+# (improve → lower the ceiling in the same MR; raise → reason + lead
+# sign-off) and for how this gate was proven to actually go red.
+#
+# `allow_failure: false` EXPLICITLY, not left at the job-default: this file's
+# own header (§0z/`code-canon-trackers`) records manual jobs silently
+# defaulting to `allow_failure: true` on GitLab as a repeat incident class —
+# this is not a manual job, but the explicit flag costs nothing and removes
+# any doubt the next time someone reads this job without reading that one.
+perf-bundle:
+  stage: test
+  image: node:22-alpine
+  timeout: 15m
+  allow_failure: false
+  before_script:
+    - corepack enable
+    - cd web && pnpm install --frozen-lockfile
+  script:
+    - pnpm build
+    - node perf/check-bundle-budget.mjs
+    # The React Profiler behind VITE_PERF_PROFILER (src/lib/perf-profiler.tsx)
+    # must never reach a shipped bundle. It is dead code without the flag; this
+    # is the proof, on every pipeline, that it stayed dead.
+    - |
+      if grep -l onRender dist/assets/*.js; then
+        echo "perf-bundle: the production bundle contains onRender — the perf Profiler leaked into dist/ (see src/lib/perf-profiler.tsx)"
+        exit 1
+      fi
+      echo "perf-bundle: onRender absent from the production bundle"
+  artifacts:
+    when: always
+    paths: [web/perf-bundle-report.json]
+    expire_in: 30 days
+
+# ── perf-counters ───────────────────────────────────────────────────────────
+# Per-action counters on four authed paths (board.open, task.open,
+# view.switch, comment.send): React commits, LayoutCount, RecalcStyleCount,
+# DOM mutations — gated against web/perf/budget.json, same ratchet rule as
+# perf-bundle (web/perf/README.md).
+#
+# Runs against an EPHEMERAL API, not prod, on purpose: the counters are only
+# comparable if the data is fixed and nobody else writes during the run, and
+# the prod E2E account is not allowed to seed 200 tasks anyway. perf-api-bin
+# builds cmd/api from THIS commit (static, so it runs on the Playwright
+# image's glibc), this job boots it over throwaway Postgres/Redis (migrations
+# apply on boot), seeds web/perf/seed-fixture.mjs — idempotent, `--selftest`
+# fails the job if a second pass would create anything — and measures a
+# VITE_PERF_PROFILER=1 build served by `vite preview`.
+perf-api-bin:
+  stage: test
+  image: golang:1.25-alpine
+  timeout: 15m
+  needs: [lint]
+  cache:
+    key: go-mod-$CI_COMMIT_REF_SLUG
+    paths: [.gocache/, .gomodcache/]
+    policy: pull
+  variables:
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+    GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+    CGO_ENABLED: "0"
+  before_script:
+    - apk add --no-cache git
+  script:
+    - go build -o perf-api ./cmd/api
+  artifacts:
+    paths: [perf-api]
+    expire_in: 1 day
+
+perf-counters:
+  stage: test
+  image: mcr.microsoft.com/playwright:v1.62.1-jammy
+  timeout: 20m
+  allow_failure: false
+  needs: [perf-api-bin]
+  services:
+    - name: postgres:16
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  variables:
+    PERF_API_URL: "http://localhost:8095"
+    # Same download black-hole as authed-e2e — see that job's header.
+    PLAYWRIGHT_DOWNLOAD_HOST: "http://127.0.0.1:9"
+  before_script:
+    - corepack enable
+    - cd web && pnpm install --frozen-lockfile && cd ..
+  script:
+    - |
+      SERVER_PORT=8095 \
+      DB_HOST=postgres DB_PORT=5432 DB_USER=mesh DB_PASSWORD=mesh DB_NAME=mesh DB_SSL_MODE=disable \
+      REDIS_HOST=redis REDIS_PORT=6379 \
+      JWT_SECRET=perf-ci-ephemeral-not-a-secret \
+      MESH_ALLOW_REGISTRATION=true \
+      MESH_RATE_LIMIT_ENABLED=false \
+      nohup ./perf-api > perf-api.log 2>&1 &
+    # node, not curl: the Playwright image is not promised to ship curl.
+    - |
+      node -e '
+        const url = process.env.PERF_API_URL + "/health";
+        (async () => {
+          for (let i = 0; i < 90; i++) {
+            try { if ((await fetch(url)).ok) return console.log("ephemeral API up after " + i + "s"); } catch {}
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+          process.exit(1);
+        })();
+      ' || { echo "ephemeral API did not come up"; tail -50 perf-api.log; exit 1; }
+    - cd web
+    - VITE_PERF_PROFILER=1 pnpm build
+    # The opposite of perf-bundle's check: without the profiling build every
+    # commit counter reads 0 and every ceiling passes.
+    - grep -q onRender dist-perf/assets/*.js || { echo "dist-perf has no Profiler — counters would all be 0"; exit 1; }
+    - node perf/seed-fixture.mjs --selftest
+    - |
+      if ! npx playwright install chromium; then
+        echo "Playwright tried to download a browser: pin this job's image to web/pnpm-lock.yaml's playwright-core (see authed-e2e)."
+        exit 1
+      fi
+    - npx playwright test -c perf/playwright.perf.config.ts
+  artifacts:
+    when: always
+    paths: [web/perf-counters-report.json, perf-api.log]
+    expire_in: 30 days
+
 # ── build ───────────────────────────────────────────────────────────────────
 # ── authed-e2e ──────────────────────────────────────────────────────────────
 # Ported from .github/workflows/ci.yml:playwright-e2e ("Authed E2E"). Despite

@@ -4,6 +4,7 @@ import { App } from "./App";
 import { Toaster, toast } from "@/components/ui/toast";
 import { useAuthStore } from "@/stores/auth";
 import { captureStaticShell } from "@/lib/static-shell";
+import { PerfProfiler } from "@/lib/perf-profiler";
 import "./index.css";
 
 // Initialize auth state
@@ -74,7 +75,9 @@ captureStaticShell(rootEl);
 
 createRoot(rootEl).render(
   <StrictMode>
-    <App />
+    <PerfProfiler id="app">
+      <App />
+    </PerfProfiler>
     <Toaster />
   </StrictMode>,
 );

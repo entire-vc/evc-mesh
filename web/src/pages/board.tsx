@@ -41,6 +41,7 @@ import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
+import { PerfProfiler } from "@/lib/perf-profiler";
 import {
   BOARD_FILTER_DEFAULTS,
   GROUP_BY_VALUES,
@@ -123,14 +124,16 @@ function SortableTaskCard({ task, columnId, statusCategory, onClick, onEditClick
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <TaskCard
-        task={task}
-        isDragging={isDragging}
-        statusCategory={statusCategory}
-        onClick={onClick}
-        onEditClick={() => onEditClick()}
-        checkedOutByName={checkedOutByName}
-      />
+      <PerfProfiler id="board-card">
+        <TaskCard
+          task={task}
+          isDragging={isDragging}
+          statusCategory={statusCategory}
+          onClick={onClick}
+          onEditClick={() => onEditClick()}
+          checkedOutByName={checkedOutByName}
+        />
+      </PerfProfiler>
     </div>
   );
 }
