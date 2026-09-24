@@ -120,7 +120,7 @@ func newOAuthE2EEnv(t *testing.T) *oauthE2EEnv {
 	// budgets no test in this file comes near, so it stays a functional
 	// test; the limiting behaviour itself is oauth_routes_db_test.go.
 	RegisterOAuthPublicRoutes(e, oauthHandler, oauthRepo, OAuthRateLimits{
-		Enabled: true, Register: 10000, Authorize: 10000, AuthorizeNewClient: 10000, Token: 10000,
+		Enabled: true, IPTrusted: true, Register: 10000, Authorize: 10000, AuthorizeNewClient: 10000, Token: 10000,
 	})
 
 	api := e.Group("/api/v1")

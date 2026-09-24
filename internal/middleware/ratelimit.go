@@ -232,6 +232,8 @@ func keyTypeFromKey(key string) string {
 		return "user"
 	case strings.HasPrefix(key, "agent:"):
 		return "agent"
+	case strings.HasPrefix(key, "global:"):
+		return "global"
 	default:
 		return "ip"
 	}

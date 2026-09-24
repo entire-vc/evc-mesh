@@ -553,3 +553,10 @@ func TestRateLimitWhen_OnlyCountsRequestsThePredicateSelects(t *testing.T) {
 		t.Fatalf("an unselected request after the budget is spent: got %d, want 204", code)
 	}
 }
+
+func TestKeyTypeFromKey_GlobalPrefixIsDistinctFromIP(t *testing.T) {
+	assert.Equal(t, "global", keyTypeFromKey("global:oauth"))
+	assert.Equal(t, "ip", keyTypeFromKey("203.0.113.7"))
+	assert.Equal(t, "user", keyTypeFromKey("user:abc"))
+	assert.Equal(t, "agent", keyTypeFromKey("agent:abc"))
+}
