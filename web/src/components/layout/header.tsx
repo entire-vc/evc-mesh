@@ -17,6 +17,7 @@ import {
   MonitorDot,
   Moon,
   Network,
+  Plug,
   Search,
   Settings,
   Sparkles,
@@ -499,6 +500,7 @@ const WORKSPACE_PAGES: Array<{
   { pattern: /\/w\/[^/]+\/integrations\/?$/, title: "Integrations", icon: Settings },
   { pattern: /\/w\/[^/]+\/initiatives\/?$/, title: "Initiatives", icon: Target },
   { pattern: /\/w\/[^/]+\/triage\/?$/, title: "Triage Inbox", icon: Inbox },
+  { pattern: /\/w\/[^/]+\/connected-apps\/?$/, title: "Connected apps", icon: Plug },
 ];
 
 function useWorkspacePage(): WorkspacePage | null {
@@ -557,6 +559,7 @@ function TeamViewTabs({ currentView, wsSlug }: { currentView: "tree" | "grid"; w
 
 export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps) {
   const { wsSlug, projectSlug } = useParams();
+  const navigate = useNavigate();
   const { user, logout } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { currentProject } = useProjectStore();
@@ -690,6 +693,16 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
               {isDark ? "Dark" : "Light"}
             </span>
           </DropdownMenuItem>
+          {(wsSlug ?? currentWorkspace?.slug) && (
+            <DropdownMenuItem
+              onClick={() =>
+                navigate(`/w/${wsSlug ?? currentWorkspace?.slug}/connected-apps`)
+              }
+            >
+              <Plug className="mr-2 h-4 w-4" />
+              Connected apps
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout}>
             <LogOut className="mr-2 h-4 w-4" />

@@ -106,10 +106,10 @@
           if (localStorage.getItem(KEY) === "off") return;
         } catch (e) {}
         var p = location.pathname;
-        // /register and /accept-invite render their own forms — no shell there
-        // rather than a wrong one.
+        // /register, /accept-invite and /connect (OAuth consent) render their
+        // own standalone pages — no shell there rather than a wrong one.
         var id = p === "/login" || p === "/login/" ? "shell-login"
-          : /^\/(register|accept-invite)(\/|$)/.test(p) ? null
+          : /^\/(register|accept-invite|connect)(\/|$)/.test(p) ? null
           : "shell-app";
         var tpl = id && document.getElementById(id);
         if (!tpl) return;

@@ -19,6 +19,12 @@ import { PageSkeleton } from "@/components/page-skeleton";
 const AcceptInvitePage = lazy(() =>
   import("@/pages/accept-invite").then((m) => ({ default: m.AcceptInvitePage })),
 );
+const OAuthConsentPage = lazy(() =>
+  import("@/pages/oauth-consent").then((m) => ({ default: m.OAuthConsentPage })),
+);
+const ConnectedAppsPage = lazy(() =>
+  import("@/pages/connected-apps").then((m) => ({ default: m.ConnectedAppsPage })),
+);
 const DashboardPage = lazy(() =>
   import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage })),
 );
@@ -175,6 +181,18 @@ const router = createBrowserRouter(
         element={
           <LazyPage>
             <AcceptInvitePage />
+          </LazyPage>
+        }
+      />
+      {/* OAuth consent for external MCP clients. Outside AppLayout on purpose: it
+          is a standalone decision page (no sidebar, no workspace context) and
+          guards its own sign-in. NOT under /oauth/* — that prefix is routed to
+          the API, past this SPA. */}
+      <Route
+        path="/connect/consent"
+        element={
+          <LazyPage>
+            <OAuthConsentPage />
           </LazyPage>
         }
       />
@@ -374,6 +392,14 @@ const router = createBrowserRouter(
           element={
             <LazyPage>
               <NotificationSettingsPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/connected-apps"
+          element={
+            <LazyPage>
+              <ConnectedAppsPage />
             </LazyPage>
           }
         />
