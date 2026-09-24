@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -23,10 +25,7 @@ import (
 // failing when no DB is reachable, so a plain local `go test ./...` still runs.
 func userRepoTestDB(t *testing.T) *sqlx.DB {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
-	}
+	dsn := userRepoTestDSN()
 	db, err := sqlx.Connect("postgres", dsn)
 	if err != nil {
 		t.Skipf("no reachable Postgres at %s, skipping: %v", dsn, err)
@@ -39,30 +38,115 @@ func userRepoTestDB(t *testing.T) *sqlx.DB {
 	return db
 }
 
-func TestUserRepo_Count(t *testing.T) {
-	db := userRepoTestDB(t)
-	repo := NewUserRepo(db)
+func userRepoTestDSN() string {
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		return dsn
+	}
+	return "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+}
+
+// dsnWithSearchPath returns dsn with the connection's search_path pinned to
+// schema alone. public is left out on purpose: an unqualified `users` then
+// either resolves to the private table or fails, and can never fall through
+// to the shared one.
+func dsnWithSearchPath(t *testing.T, dsn, schema string) string {
+	t.Helper()
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		return dsn + " search_path=" + schema // key=value form
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		// url.Error carries the whole DSN, password included; report only the cause.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		t.Fatalf("parse DATABASE_URL: %v", err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// usersIsolatedDB returns a handle on which the unqualified name `users` is a
+// private, initially empty copy of the table, so a test can assert exact row
+// counts instead of a delta over a table other tests are also writing to.
+//
+// Why a private table and not just a tighter assertion: `go test ./...` runs
+// packages in parallel against one DATABASE_URL, and internal/handler,
+// internal/service and this package all insert into and delete from the shared
+// `users`. Any before/after read of the global count can be split by another
+// package's write, in either direction (measured: `before+1` off by +1 and -1).
+// Serialising tests inside this package would not help — the writers are in
+// other processes.
+func usersIsolatedDB(t *testing.T) *sqlx.DB {
+	t.Helper()
+	admin := userRepoTestDB(t)
 	ctx := context.Background()
 
-	before, err := repo.Count(ctx)
-	require.NoError(t, err)
+	schema := "usercount_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	_, err := admin.ExecContext(ctx, "CREATE SCHEMA "+schema)
+	require.NoError(t, err, "create private schema")
+	t.Cleanup(func() {
+		if _, dropErr := admin.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); dropErr != nil {
+			t.Logf("could not drop private schema %s (it is left behind, harmless): %v", schema, dropErr)
+		}
+	})
+	_, err = admin.ExecContext(ctx,
+		"CREATE TABLE "+schema+".users (LIKE users INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)")
+	require.NoError(t, err, "create private users table")
 
-	u := &domain.User{
+	db, err := sqlx.Connect("postgres", dsnWithSearchPath(t, userRepoTestDSN(), schema))
+	require.NoError(t, err, "connect with private search_path")
+	t.Cleanup(func() { db.Close() })
+
+	// Prove the isolation is real rather than assume it: if the search_path
+	// were ignored, every assertion below would silently measure the shared
+	// table again.
+	var current string
+	require.NoError(t, db.GetContext(ctx, &current, "SELECT current_schema()"))
+	require.Equal(t, schema, current, "connection must resolve `users` in the private schema")
+	return db
+}
+
+func newCountTestUser() *domain.User {
+	suffix := uuid.New().String()[:8]
+	return &domain.User{
 		ID:           uuid.New(),
-		Email:        "count-test-" + uuid.New().String()[:8] + "@example.com",
+		Email:        "count-test-" + suffix + "@example.com",
 		PasswordHash: "irrelevant-hash",
 		Name:         "Count Test User",
-		Username:     "count-test-" + uuid.New().String()[:8],
+		Username:     "count-test-" + suffix,
 		IsActive:     true,
 		CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 		UpdatedAt:    time.Now().UTC().Truncate(time.Microsecond),
 	}
-	require.NoError(t, repo.Create(ctx, u))
-	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID) })
+}
 
-	after, err := repo.Count(ctx)
+func TestUserRepo_Count(t *testing.T) {
+	db := usersIsolatedDB(t)
+	repo := NewUserRepo(db)
+	ctx := context.Background()
+
+	count := func() int {
+		t.Helper()
+		n, err := repo.Count(ctx)
+		require.NoError(t, err)
+		return n
+	}
+
+	require.Equal(t, 0, count(), "no users yet: Count must be 0, not some leftover row count")
+
+	u1, u2 := newCountTestUser(), newCountTestUser()
+	require.NoError(t, repo.Create(ctx, u1))
+	require.Equal(t, 1, count(), "Count must reflect the newly created user")
+	require.NoError(t, repo.Create(ctx, u2))
+	require.Equal(t, 2, count(), "Count must reflect every created user")
+
+	_, err := db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u1.ID)
 	require.NoError(t, err)
-	require.Equal(t, before+1, after, "Count must reflect the newly created user")
+	require.Equal(t, 1, count(), "Count must reflect a removed user")
 }
 
 // TestUserRepo_GetByEmail_IsCaseAndWhitespaceInsensitive pins the lookup to the
