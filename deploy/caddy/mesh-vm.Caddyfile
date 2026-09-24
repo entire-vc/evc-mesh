@@ -88,6 +88,35 @@
 	handle /api/* {
 		reverse_proxy 127.0.0.1:8005
 	}
+
+	# --- OAuth for remote MCP clients (MCP-OAuth 4/5, Mesh #0d40b67f) -------
+	# Without these blocks all three fall through to the SPA and answer
+	# index.html with 200 -- an OAuth client then fails on "not JSON" with no
+	# hint that routing, not the server, is the problem.
+	#
+	# Authorization server (mesh-api): RFC 8414 metadata plus /oauth/register,
+	# /authorize, /token, /revoke. The consent SCREEN is not under /oauth/ --
+	# /oauth/authorize redirects to the SPA route /connect/consent, which the
+	# catch-all below keeps serving. The API serves only the exact metadata
+	# path; the trailing * sends everything else under that prefix (e.g. the
+	# RFC 8414 path-suffixed form a client may probe) to the API too, so the
+	# client gets a 404 instead of an HTML page.
+	handle /.well-known/oauth-authorization-server* {
+		reverse_proxy 127.0.0.1:8005
+	}
+	handle /oauth/* {
+		reverse_proxy 127.0.0.1:8005
+	}
+	# Protected resource metadata (mesh-mcp): the 401 from /mcp points clients
+	# at /.well-known/oauth-protected-resource/mcp (and .../mcp/core), at the
+	# ROOT of the origin, not under /mcp -- so /mcp/* below does not cover it.
+	# Host is rewritten for the same DNS-rebinding reason as /mcp/*; the
+	# `resource` field comes from MESH_MCP_PUBLIC_URL, not from Host.
+	handle /.well-known/oauth-protected-resource* {
+		reverse_proxy 127.0.0.1:8081 {
+			header_up Host localhost
+		}
+	}
 	handle /ws {
 		reverse_proxy 127.0.0.1:8005
 	}
