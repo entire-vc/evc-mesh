@@ -73,6 +73,32 @@ workflow:
     # load on the one shared runner this fleet has.
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
       when: never
+    # A push to main must NOT be cancelled by the next push to main .
+    #
+    # `default: interruptible: true` (below) plus GitLab's default auto-cancel
+    # means: a newer pipeline on the same ref cancels any older one whose
+    # jobs are all still interruptible. The only job that is not is
+    # trigger:prod-backend, the LAST one — so an older main pipeline is only
+    # safe once it has reached the end. On the single shared runner it never
+    # does: measured 2026-09-24, the first job of each main pipeline waited
+    # 3170 s (5598) and 1531 s (5634) for a runner while merges landed every
+    # 10-30 min, so every push cancelled its predecessor before it started
+    # and NONE reached the deploy: five main pipelines in a row canceled,
+    # prod backend stuck ~100 min behind main, mesh-deploy-drift red. That is a
+    # livelock, not a delay — it lasts as long as merges keep coming faster
+    # than the queue drains.
+    #
+    # Safe to let every main pipeline run because the deploy does not ship
+    # this pipeline's commit: build:mesh-backend in entire-vc/deploy clones
+    # `main` HEAD, and deploy:mesh-backend sits in a resource_group behind a
+    # too-frequent-deploy guard. Whichever pipeline finishes first therefore
+    # ships the newest code; the rest are redundant runs, not stale deploys.
+    # Cost: redundant main pipelines use runner time instead of being
+    # cancelled — the price of a deploy that can actually happen.
+    # MR pipelines are unchanged (still cancelled by a newer push).
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+      auto_cancel:
+        on_new_commit: none
     - if: $CI_COMMIT_BRANCH
 
 stages: [gate, sast, lint, test, build, memory-gate, deploy]
