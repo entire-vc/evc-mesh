@@ -201,3 +201,31 @@ func TestLoad_TelegramEnabledOverride(t *testing.T) {
 		})
 	}
 }
+
+// The OAuth token/revoke endpoints have their own per-IP budget. Unset, it
+// must follow APIRPM — the value both endpoints used before the setting
+// existed — so upgrading changes nothing until an operator sets it.
+func TestLoad_OAuthTokenRPM(t *testing.T) {
+	t.Run("unset follows APIRPM default", func(t *testing.T) {
+		cfg := Load()
+		assert.Equal(t, 600, cfg.RateLimit.OAuthTokenRPM)
+		assert.Equal(t, cfg.RateLimit.APIRPM, cfg.RateLimit.OAuthTokenRPM)
+	})
+	t.Run("unset follows a customised APIRPM", func(t *testing.T) {
+		t.Setenv("MESH_RATE_LIMIT_API_RPM", "1200")
+		cfg := Load()
+		assert.Equal(t, 1200, cfg.RateLimit.OAuthTokenRPM)
+	})
+	t.Run("empty value (the compose default) follows APIRPM", func(t *testing.T) {
+		t.Setenv("MESH_RATE_LIMIT_OAUTH_TOKEN_RPM", "")
+		cfg := Load()
+		assert.Equal(t, cfg.RateLimit.APIRPM, cfg.RateLimit.OAuthTokenRPM)
+	})
+	t.Run("own setting wins and leaves APIRPM alone", func(t *testing.T) {
+		t.Setenv("MESH_RATE_LIMIT_API_RPM", "600")
+		t.Setenv("MESH_RATE_LIMIT_OAUTH_TOKEN_RPM", "2400")
+		cfg := Load()
+		assert.Equal(t, 2400, cfg.RateLimit.OAuthTokenRPM)
+		assert.Equal(t, 600, cfg.RateLimit.APIRPM)
+	})
+}

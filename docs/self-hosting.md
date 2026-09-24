@@ -178,6 +178,7 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 | `MESH_RATE_LIMIT_AUTH_RPM` | `5` | Maximum requests per minute for auth endpoints (per IP). Deliberately tight — raise it if a whole office shares one NAT'd egress IP. |
 | `MESH_RATE_LIMIT_REFRESH_RPM` | `60` | Maximum requests per minute for token refresh (per IP) |
 | `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
+| `MESH_RATE_LIMIT_OAUTH_TOKEN_RPM` | same as `MESH_RATE_LIMIT_API_RPM` | Maximum requests per minute (per IP) for `POST /oauth/token` and `POST /oauth/revoke`, each counted separately. A hosted MCP client refreshes for all its users from a few egress IPs, so size this for that traffic rather than for one person. |
 
 ### Spark Catalog
 

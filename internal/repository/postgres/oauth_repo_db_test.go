@@ -242,9 +242,11 @@ func TestOAuthRepo_Code_DeleteExpiredOnlyRemovesExpired(t *testing.T) {
 	old := mk(time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC))
 	fresh := mk(time.Now().Add(time.Hour))
 
-	n, err := f.repo.DeleteExpiredCodes(ctx, time.Date(2001, 1, 2, 0, 0, 0, 0, time.UTC))
+	// No count assertion: another package's OAuthService.PurgeExpired test runs
+	// against this same database and may sweep the 2001 row first. The two
+	// row-level checks below are what proves the behaviour.
+	_, err := f.repo.DeleteExpiredCodes(ctx, time.Date(2001, 1, 2, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, n, int64(1))
 
 	gone, err := f.repo.GetCodeByHash(ctx, old.CodeHash)
 	require.NoError(t, err)
@@ -458,6 +460,8 @@ func TestOAuthRepo_ClosedDBPropagatesErrors(t *testing.T) {
 	_, err = repo.MarkCodeUsed(ctx, id, now, id)
 	assert.Error(t, err)
 	_, err = repo.DeleteExpiredCodes(ctx, now)
+	assert.Error(t, err)
+	_, err = repo.DeleteExpiredTokens(ctx, now)
 	assert.Error(t, err)
 	_, err = repo.GetGrantByID(ctx, id)
 	assert.Error(t, err)

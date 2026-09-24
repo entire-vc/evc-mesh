@@ -1903,6 +1903,10 @@ type OAuthService interface {
 	// (404 if it does not belong to userID) and every live token under it,
 	// so access dies immediately rather than only at next refresh.
 	RevokeMyGrant(ctx context.Context, userID, grantID uuid.UUID) error
+	// PurgeExpired deletes authorization codes and tokens that expired more
+	// than their retention ago, returning how many of each. Periodic
+	// housekeeping — nothing it removes could still be redeemed or presented.
+	PurgeExpired(ctx context.Context) (codes, tokens int64, err error)
 }
 
 // OAuthServiceConfigurable is the optional, test-only capability to replace
@@ -1914,4 +1918,7 @@ type OAuthService interface {
 // *Configurable pattern AgentServiceConfigurable already uses in this file.
 type OAuthServiceConfigurable interface {
 	SetHTTPClientForTesting(client *http.Client)
+	// SetAuthCacheTTLForTesting replaces the mot_ authentication cache TTL
+	// (zero disables the cache).
+	SetAuthCacheTTLForTesting(ttl time.Duration)
 }

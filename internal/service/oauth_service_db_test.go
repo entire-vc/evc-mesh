@@ -1199,7 +1199,7 @@ func TestOAuthSvc_AuthenticateAccessToken(t *testing.T) {
 		requireAPIStatus(t, err, http.StatusUnauthorized)
 	})
 
-	t.Run("member removed from workspace loses access immediately", func(t *testing.T) {
+	t.Run("member removed from workspace loses access within the cache TTL", func(t *testing.T) {
 		env := newOAuthSvcEnv(t)
 		owner, _ := env.createUser(t, "own")
 		ws := env.createWorkspace(t, owner)
@@ -1215,6 +1215,9 @@ func TestOAuthSvc_AuthenticateAccessToken(t *testing.T) {
 
 		_, err = env.db.Exec(`DELETE FROM workspace_members WHERE workspace_id=$1 AND user_id=$2`, ws, member)
 		require.NoError(t, err)
+		// Membership changes live outside the OAuth service and cannot evict
+		// the positive-auth cache; the bound is the TTL (see oauthAuthCacheTTL).
+		env.advance(oauthAuthCacheTTL + time.Second)
 		_, err = env.svc.AuthenticateAccessToken(ctx, tok.AccessToken)
 		requireAPIStatus(t, err, http.StatusUnauthorized)
 	})

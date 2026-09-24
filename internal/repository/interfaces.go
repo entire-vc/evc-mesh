@@ -1665,6 +1665,14 @@ type OAuthRepository interface {
 	// load-bearing for correctness (an expired code is already rejected by
 	// IsUsable regardless of whether the row still exists).
 	DeleteExpiredCodes(ctx context.Context, before time.Time) (int64, error)
+	// DeleteExpiredTokens removes tokens (access and refresh, revoked or not)
+	// whose expires_at is before the given time and returns how many rows were
+	// removed. Keyed on expires_at, never on revoked_at: a revoked-but-unexpired
+	// refresh token has to stay so that presenting it again is still recognised
+	// as reuse (RefreshTokenGrant revokes the whole family on it) rather than
+	// reading as an unknown token. Best-effort housekeeping like
+	// DeleteExpiredCodes — an expired token is already rejected by IsUsable.
+	DeleteExpiredTokens(ctx context.Context, before time.Time) (int64, error)
 
 	// --- Grants (table oauth_grants) ---
 

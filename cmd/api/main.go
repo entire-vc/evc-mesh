@@ -68,6 +68,21 @@ func reviewTriageInitialWait(lastRun *time.Time, now time.Time, interval time.Du
 	return 0
 }
 
+// oauthRateLimits derives the public OAuth endpoints' per-IP budgets from
+// config. A function of its own so a test can pin which setting feeds which
+// endpoint — in particular that token/revoke read OAuthTokenRPM, not APIRPM.
+func oauthRateLimits(cfg *config.Config, ipTrusted bool, redisClient *redis.Client) handler.OAuthRateLimits {
+	return handler.OAuthRateLimits{
+		Enabled:            cfg.RateLimit.Enabled,
+		IPTrusted:          ipTrusted,
+		Redis:              redisClient,
+		Register:           cfg.RateLimit.AuthRPM,
+		Authorize:          cfg.RateLimit.RefreshRPM,
+		AuthorizeNewClient: cfg.RateLimit.AuthRPM,
+		Token:              cfg.RateLimit.OAuthTokenRPM,
+	}
+}
+
 func main() {
 	// 1. Load configuration from environment.
 	cfg := config.Load()
@@ -1655,15 +1670,7 @@ func main() {
 	// for the sizing of each budget and why they differ. Same trust gate as
 	// /auth/login: without MESH_TRUSTED_PROXIES the per-IP limiters are off
 	// and DCR / first-seen CIMD fall back to one global bucket.
-	handler.RegisterOAuthPublicRoutes(e, oauthHandler, oauthRepo, handler.OAuthRateLimits{
-		Enabled:            cfg.RateLimit.Enabled,
-		IPTrusted:          ipTrusted,
-		Redis:              sharedRedis,
-		Register:           cfg.RateLimit.AuthRPM,
-		Authorize:          cfg.RateLimit.RefreshRPM,
-		AuthorizeNewClient: cfg.RateLimit.AuthRPM,
-		Token:              cfg.RateLimit.APIRPM,
-	})
+	handler.RegisterOAuthPublicRoutes(e, oauthHandler, oauthRepo, oauthRateLimits(cfg, ipTrusted, sharedRedis))
 
 	// Consent + "your connected apps" API — the frontend SPA's own bridge
 	// into the flow above (task MCP-OAuth 2/5). User-JWT-only: consenting to
@@ -1995,6 +2002,41 @@ func main() {
 		}
 	}()
 	log.Println("Memory decay scheduler started (6h interval)")
+
+	// 10a-ter. OAuth housekeeping (#23579e6b): expired authorization codes and
+	// tokens are dead weight — the auth path already rejects them — but nothing
+	// deleted them, so oauth_tokens grew by two rows per connector refresh
+	// forever. Hourly, with the first pass a minute after start so a service
+	// that restarts more often than the interval (every deploy) still purges.
+	// PurgeExpired is idempotent and only removes rows past their retention.
+	go func() {
+		purge := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			codes, tokens, err := oauthService.PurgeExpired(ctx)
+			if err != nil {
+				log.Printf("[oauth-purge] ERROR: %v", err)
+			}
+			if codes > 0 || tokens > 0 {
+				log.Printf("[oauth-purge] Removed %d expired authorization codes, %d expired tokens", codes, tokens)
+			}
+		}
+		first := time.NewTimer(time.Minute)
+		defer first.Stop()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-first.C:
+				purge()
+			case <-ticker.C:
+				purge()
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("OAuth expired-token purge started (1h interval)")
 
 	// 10a-bis. Memory review-triage nightly job (audit #1b010be6, plan:1.11):
 	// disposes of the review_needed backlog that the 6h reconciler's linker phase
