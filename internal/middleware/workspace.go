@@ -417,11 +417,20 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // spelled :id, which unrelated routes would also match if it were resolved
 // centrally — and the handler-side check is covered by a test that goes red
 // when the check is removed.
+//
+// /oauth/grants/:oauth_grant_id (task MCP-OAuth 1/5) is the same shape as
+// /notifications/preferences/:pref_id above: an oauth_grants row belongs to
+// a USER (it can span any workspace they've consented a client into), not to
+// a single workspace this guard could resolve from the path. oauthService.
+// RevokeMyGrant fetches the grant and 404s unless g.UserID == the caller,
+// before anything is revoked — a stricter check than workspace membership,
+// same reasoning as the preferences route.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/memories/:id":                       true,
 	"/api/v1/memories/:id/related":               true,
 	"/api/v1/memories/:id/revisions":             true,
 	"/api/v1/notifications/preferences/:pref_id": true,
+	"/api/v1/oauth/grants/:oauth_grant_id":       true,
 }
 
 // workspaceScopeExemptRoutes lists routes that carry one of WorkspaceScopedParams

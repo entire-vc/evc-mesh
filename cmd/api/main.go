@@ -296,6 +296,15 @@ func main() {
 	// agent_workspace_grants (the auth path), this one owns the writes.
 	agentWorkspaceGrantService := service.NewAgentWorkspaceGrantService(agentWorkspaceGrantRepo, agentRepo, workspaceRepo, activityLogRepo)
 
+	// OAuth 2.0 Authorization Server (task MCP-OAuth 1/5, migration
+	// 20260924004): lets an MCP client obtain a mot_ access token through
+	// user consent instead of a shared agk_ agent key. Depends on
+	// agentService (already wrapped in the auth cache above) to create/read
+	// the per-consent connector agent — same instance every other consumer
+	// of AgentService gets.
+	oauthRepo := postgres.NewOAuthRepo(db)
+	oauthService := service.NewOAuthService(oauthRepo, agentService, userRepo, workspaceRepo, workspaceMemberRepo, agentWorkspaceGrantRepo)
+
 	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).
 	// Reuses the same Redis connection as the WebSocket hub (created below in step 8a).
 	// We create a dedicated client here so the notify service can be injected into taskService
@@ -819,6 +828,7 @@ func main() {
 	taskTemplateHandler := handler.NewTaskTemplateHandler(taskTemplateService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	agentWorkspaceGrantHandler := handler.NewAgentWorkspaceGrantHandler(agentWorkspaceGrantService)
+	oauthHandler := handler.NewOAuthHandler(oauthService, cfg.Email.BaseURL)
 	inviteHandler := handler.NewInviteHandler(inviteService, authService)
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService)
 	notificationHandler := handler.NewNotificationHandler(notificationService, workspaceMemberRepo)
@@ -1266,7 +1276,7 @@ func main() {
 
 	// --- Protected routes (JWT or Agent Key) ---
 	api := v1.Group("")
-	api.Use(mw.DualAuth(authService, agentService))
+	api.Use(mw.DualAuth(authService, agentService, oauthService))
 	api.Use(activityTracker.Middleware())
 	api.Use(toolBreakdownTracker.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
@@ -1631,6 +1641,35 @@ func main() {
 	api.GET("/tasks/:task_id/vcs-links", vcsLinkHandler.List)
 	api.POST("/tasks/:task_id/vcs-links", vcsLinkHandler.Create, rbac(mw.PermUpdateTask))
 	api.DELETE("/vcs-links/:link_id", vcsLinkHandler.Delete, rbac(mw.PermUpdateTask))
+
+	// OAuth 2.0 Authorization Server (task MCP-OAuth 1/5). Public — no auth:
+	// these are the spec-mandated RFC 8414/7591/6749 endpoints an anonymous
+	// MCP client (or its browser) hits before it has any credential at all.
+	// Task MCP-OAuth 4/5 routes /.well-known/oauth-* and /oauth/* straight to
+	// this backend, past the SPA, on the production host — registered here
+	// at the bare `e` level (not `api`) for the same reason the webhook
+	// routes below are.
+	// Each endpoint sits behind its own per-IP limiter — see OAuthRateLimits
+	// for the sizing of each budget and why they differ.
+	handler.RegisterOAuthPublicRoutes(e, oauthHandler, oauthRepo, handler.OAuthRateLimits{
+		Enabled:            cfg.RateLimit.Enabled,
+		Redis:              sharedRedis,
+		Register:           cfg.RateLimit.AuthRPM,
+		Authorize:          cfg.RateLimit.RefreshRPM,
+		AuthorizeNewClient: cfg.RateLimit.AuthRPM,
+		Token:              cfg.RateLimit.APIRPM,
+	})
+
+	// Consent + "your connected apps" API — the frontend SPA's own bridge
+	// into the flow above (task MCP-OAuth 2/5). User-JWT-only: consenting to
+	// or revoking a connector agent's access is a decision only the resource
+	// owner makes for themselves, never reachable via an agk_ agent key or a
+	// mot_ token this very flow is about to mint (see mw.RequireUserAuth's
+	// doc comment).
+	api.GET("/oauth/consent", oauthHandler.ConsentInfo, mw.RequireUserAuth())
+	api.POST("/oauth/consent", oauthHandler.Decide, mw.RequireUserAuth())
+	api.GET("/oauth/grants", oauthHandler.ListGrants, mw.RequireUserAuth())
+	api.DELETE("/oauth/grants/:oauth_grant_id", oauthHandler.RevokeGrant, mw.RequireUserAuth())
 
 	// GitHub webhook receiver (public — no auth, HMAC validated when configured).
 	// Two equivalent routes: the legacy /webhooks/github path that existing repos

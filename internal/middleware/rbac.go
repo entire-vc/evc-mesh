@@ -138,7 +138,24 @@ var agentPerms = map[Permission]bool{
 func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRepository) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// --- Agents: fast-path, no DB lookup. ---
+			// --- Agents: fast-path, no DB lookup — EXCEPT an OAuth connector
+			// (mot_ token, MCP-OAuth 1/5), which costs one extra SELECT to
+			// clamp its permissions to the consenting user's CURRENT
+			// workspace role. A connector must never hold more than the
+			// human who authorized it holds right now — not at consent
+			// time, on every request — otherwise a viewer/member who
+			// consents once ends up granting a fixed-permission agent
+			// identity (agentPerms, meant for trusted lead agents) that
+			// outlives their own actual access, including PermManageRules.
+			//
+			// Scope of that guarantee: the clamp lives HERE, so it holds only
+			// on routes registered behind rbac(...). A route with no rbac()
+			// (e.g. POST /projects/:id/statuses, PATCH /projects/:id, POST
+			// /tasks/:id/checkout, POST /memories) is open to any connector
+			// exactly as it is to an agk_ agent today — "a connector never
+			// holds more than its user" is true of the permission matrix, not
+			// of those routes. Not a regression of this change; closing it
+			// means adding rbac() to them, tracked separately.
 			if IsAgent(c) {
 				if !agentPerms[perm] {
 					// PermRegisterAgent gets its own message: the generic
@@ -152,6 +169,18 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 					}
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
 				}
+
+				if connectorUserID, ok := GetOAuthConnectorUserID(c); ok {
+					wsID, err := GetAgentAuthWorkspaceID(c)
+					if err != nil {
+						return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace context required"))
+					}
+					role, err := memberRepo.GetRole(c.Request().Context(), wsID, connectorUserID)
+					if err != nil || !hasPermission(role, perm) {
+						return c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions — the connected user's workspace role no longer grants this"))
+					}
+				}
+
 				return next(c)
 			}
 

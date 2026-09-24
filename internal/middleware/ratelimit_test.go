@@ -512,3 +512,44 @@ func TestRateLimit_AgentPollStorm_NotThrottled(t *testing.T) {
 		}
 	}
 }
+
+// TestRateLimitWhen_OnlyCountsRequestsThePredicateSelects: a request the
+// predicate skips neither consumes budget nor is ever refused; the selected
+// ones are limited per key.
+func TestRateLimitWhen_OnlyCountsRequestsThePredicateSelects(t *testing.T) {
+	e := echo.New()
+	mwf := RateLimitWhen(
+		func(c echo.Context) bool { return c.QueryParam("limited") == "1" },
+		RateLimitConfig{Enabled: true, RPM: 2, KeyFunc: RateLimitKeyByIP},
+	)
+	h := mwf(func(c echo.Context) error { return c.NoContent(http.StatusNoContent) })
+
+	do := func(target string) int {
+		req := httptest.NewRequest(http.MethodGet, target, http.NoBody)
+		req.RemoteAddr = "198.51.100.7:1234"
+		rec := httptest.NewRecorder()
+		if err := h(e.NewContext(req, rec)); err != nil {
+			t.Fatalf("handler: %v", err)
+		}
+		return rec.Code
+	}
+
+	for i := 0; i < 20; i++ {
+		if code := do("/x"); code != http.StatusNoContent {
+			t.Fatalf("unselected request %d: got %d, want 204 — it must never be limited", i+1, code)
+		}
+	}
+	// 20 unselected requests must not have eaten the selected budget of 2.
+	if code := do("/x?limited=1"); code != http.StatusNoContent {
+		t.Fatalf("selected 1: %d", code)
+	}
+	if code := do("/x?limited=1"); code != http.StatusNoContent {
+		t.Fatalf("selected 2: %d", code)
+	}
+	if code := do("/x?limited=1"); code != http.StatusTooManyRequests {
+		t.Fatalf("selected 3: got %d, want 429", code)
+	}
+	if code := do("/x"); code != http.StatusNoContent {
+		t.Fatalf("an unselected request after the budget is spent: got %d, want 204", code)
+	}
+}

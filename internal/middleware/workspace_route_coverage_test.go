@@ -242,6 +242,7 @@ var declaredBodyTenantFields = map[string]string{
 	"project_member_handler.go:addAgentMemberRequest.agent_id":         "checked: projectMemberService.AddAgentMember requires the project's own workspace",
 	"secret_handler.go:createSecretRequest.project_id":                 "checked: secretService.Create -> repo.AssertScopeRefInWorkspace, the FK does not carry a workspace predicate",
 	"secret_handler.go:createSecretRequest.agent_id":                   "checked: same call — an agent id from another tenant is refused with the same message as a nonexistent one",
+	"oauth_handler.go:consentDecisionBody.workspace_id":                "checked: oauthService.Decide -> isWorkspaceMember (owner OR workspace_members row) before any write; the route has no :ws_id because the caller is choosing which workspace to consent into, not acting inside one it already proved membership of",
 
 	// Scoped by something other than the id in the body: the row these end up on is
 	// already pinned to a tenant the guard checked, and the id is stored as an

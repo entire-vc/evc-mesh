@@ -182,6 +182,27 @@ func RateLimit(cfg RateLimitConfig) echo.MiddlewareFunc {
 	}
 }
 
+// RateLimitWhen applies the limiter described by cfg only to requests for
+// which applies(c) is true; every other request passes through untouched and
+// does not consume the limiter's budget.
+//
+// It exists for endpoints where the expensive/abusable case is a subset of
+// the traffic and the rest must stay cheap for legitimate use — e.g. the
+// OAuth authorize endpoint, where only a first-seen https client_id triggers
+// an outbound fetch and a DB write.
+func RateLimitWhen(applies func(c echo.Context) bool, cfg RateLimitConfig) echo.MiddlewareFunc {
+	limiter := RateLimit(cfg)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		limited := limiter(next)
+		return func(c echo.Context) error {
+			if applies(c) {
+				return limited(c)
+			}
+			return next(c)
+		}
+	}
+}
+
 // RateLimitKeyByIP extracts the client IP address as the rate-limit key.
 // Suitable for auth endpoints where brute-force protection is per-IP.
 func RateLimitKeyByIP(c echo.Context) string {

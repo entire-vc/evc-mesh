@@ -1615,3 +1615,122 @@ type DocumentChunkRepository interface {
 	ListStale(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, limit int) ([]domain.Document, error)
 	Status(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID) (domain.DocIndexStatus, error)
 }
+
+// OAuthRepository persists OAuth 2.0 Authorization Server state (task
+// MCP-OAuth 1/5, migration 20260924004): registered clients, one-time
+// authorization codes, standing user grants, and opaque access/refresh
+// tokens. Bundled into one interface, unlike most other tables in this file,
+// because internal/service/oauth_service.go is the only caller and every one
+// of its operations touches more than one of these four tables at once.
+type OAuthRepository interface {
+	// --- Clients (table oauth_clients) ---
+
+	// CreateClient inserts a newly registered (DCR) or first-seen (CIMD)
+	// client. Callers must have already confirmed no row exists for
+	// c.ClientID — the unique index rejects a duplicate as a raw constraint
+	// error.
+	CreateClient(ctx context.Context, c *domain.OAuthClient) error
+	// GetClientByClientID returns (nil, nil) when no such client_id is
+	// registered.
+	GetClientByClientID(ctx context.Context, clientID string) (*domain.OAuthClient, error)
+	// UpdateClientMetadata refreshes a CIMD client's cached document fields
+	// (redirect_uris, client_name, grant_types, metadata,
+	// metadata_fetched_at) in place, by ID. Never called for a DCR client —
+	// there is no document to refetch.
+	UpdateClientMetadata(ctx context.Context, c *domain.OAuthClient) error
+
+	// --- Authorization codes (table oauth_authorization_codes) ---
+
+	CreateCode(ctx context.Context, code *domain.OAuthAuthorizationCode) error
+	// GetCodeByHash returns (nil, nil) when no such code exists at all —
+	// distinct from a code that exists but IsUsable(now) reports false.
+	GetCodeByHash(ctx context.Context, codeHash string) (*domain.OAuthAuthorizationCode, error)
+	// MarkCodeUsed atomically sets used_at=now and issued_family_id=familyID,
+	// guarded by `used_at IS NULL` — returns ok=false (not an error) when the
+	// code was already used, so the caller can tell "lost a redemption race /
+	// genuine replay" (deny with invalid_grant, and see §oauth.go's replay
+	// handling for why it then re-reads the row) apart from a real DB
+	// failure.
+	MarkCodeUsed(ctx context.Context, id uuid.UUID, now time.Time, familyID uuid.UUID) (ok bool, err error)
+	// RedeemCode consumes an authorization code and inserts the token rows it
+	// produces in ONE transaction: the used_at/issued_family_id guard (same
+	// contract as MarkCodeUsed — ok=false, no error, when the code was
+	// already used) and every tokens[i] INSERT commit together or not at all.
+	// Without this a failed insert after MarkCodeUsed burns the code and hands
+	// the client nothing, and a crash between the two leaves a used code whose
+	// family holds no tokens.
+	RedeemCode(ctx context.Context, codeID uuid.UUID, now time.Time, familyID uuid.UUID, tokens []*domain.OAuthToken) (ok bool, err error)
+	// DeleteExpiredCodes removes codes with expires_at before the given time
+	// and returns how many rows were removed. Best-effort housekeeping, not
+	// load-bearing for correctness (an expired code is already rejected by
+	// IsUsable regardless of whether the row still exists).
+	DeleteExpiredCodes(ctx context.Context, before time.Time) (int64, error)
+
+	// --- Grants (table oauth_grants) ---
+
+	CreateGrant(ctx context.Context, g *domain.OAuthGrant) error
+	GetGrantByID(ctx context.Context, id uuid.UUID) (*domain.OAuthGrant, error)
+	// GetGrantByUserClientWorkspace returns (nil, nil) when the user has no
+	// standing grant for this (client, workspace) pair yet — the "create a
+	// new connector agent" branch of consent. A REVOKED grant is still
+	// returned (not nil) so consent can re-activate it under the same
+	// connector agent instead of creating a duplicate one.
+	GetGrantByUserClientWorkspace(ctx context.Context, userID uuid.UUID, clientID string, workspaceID uuid.UUID) (*domain.OAuthGrant, error)
+	// RetargetGrant points an existing grant at a different connector agent
+	// and clears revoked_at, in place (same row, so uq_oauth_grant is not
+	// violated). Used by re-consent when the agent a grant used to point at
+	// was deleted or lost its workspace connection: the grant is the user's
+	// standing decision, the agent is only its executor, and a grant that
+	// keeps pointing at a dead executor can never authenticate again.
+	RetargetGrant(ctx context.Context, id, agentID uuid.UUID) error
+	// ReactivateGrant clears revoked_at on an existing grant row in place —
+	// the re-consent path for a previously revoked (client, workspace) pair,
+	// so it does not collide with the uq_oauth_grant unique index the way a
+	// second CreateGrant would.
+	ReactivateGrant(ctx context.Context, id uuid.UUID) error
+	// ListGrantsByUser returns every grant (active or revoked) the user
+	// holds, joined with client/agent/workspace brief info — the GET
+	// /api/v1/oauth/grants listing ("your connected apps").
+	ListGrantsByUser(ctx context.Context, userID uuid.UUID) ([]domain.OAuthGrantWithDetails, error)
+	// RevokeGrant sets revoked_at=now if not already set. Idempotent: revoking
+	// an already-revoked grant is not an error.
+	RevokeGrant(ctx context.Context, id uuid.UUID, now time.Time) error
+
+	// --- Tokens (table oauth_tokens) ---
+
+	CreateToken(ctx context.Context, t *domain.OAuthToken) error
+	// GetTokenByHash returns (nil, nil) when no such token exists at all —
+	// distinct from a token that exists but IsUsable(now) reports false
+	// (expired or already revoked). Callers need that distinction: a
+	// REVOKED refresh token being presented again is reuse (revoke the
+	// family), a token that never existed is just invalid_grant.
+	GetTokenByHash(ctx context.Context, tokenHash string) (*domain.OAuthToken, error)
+	// RevokeToken marks a single token revoked — used for the single-use
+	// refresh-token consumption step of a normal (non-reuse) rotation.
+	// Guarded by `revoked_at IS NULL`, same shape as MarkCodeUsed: returns
+	// ok=false (not an error) when a concurrent request already revoked this
+	// exact row first — the caller MUST treat that as lost-the-race and
+	// refuse to also issue a new token pair, or two concurrent refreshes of
+	// the same token both succeed and fork the family without either being
+	// detected as reuse.
+	RevokeToken(ctx context.Context, id uuid.UUID, now time.Time) (ok bool, err error)
+	// RotateRefreshToken performs one refresh rotation atomically: revokes the
+	// presented refresh token (guarded by `revoked_at IS NULL`, ok=false and
+	// nothing written when a concurrent request already claimed it) and
+	// inserts the replacement pair, in ONE transaction. A failed insert rolls
+	// the revocation back, so the client's presented token is still good for
+	// a retry — the alternative (revoke, then insert, no transaction) turns a
+	// transient DB error into a permanently dead token that the client's
+	// retry then reads as reuse and answers by killing the whole family.
+	RotateRefreshToken(ctx context.Context, oldTokenID uuid.UUID, now time.Time, tokens []*domain.OAuthToken) (ok bool, err error)
+	// RevokeFamily marks every token sharing familyID revoked — both the
+	// reuse-detected response (kill the whole refresh chain a stolen token
+	// was rotated through) and a replayed authorization code's response (kill
+	// the family that code already produced).
+	RevokeFamily(ctx context.Context, familyID uuid.UUID, now time.Time) error
+	// RevokeTokensByGrant marks every still-active token under grantID
+	// revoked. Used when a grant itself is revoked (POST
+	// /api/v1/oauth/grants/:id/revoke) so live tokens die immediately rather
+	// than merely failing their next refresh.
+	RevokeTokensByGrant(ctx context.Context, grantID uuid.UUID, now time.Time) error
+}
