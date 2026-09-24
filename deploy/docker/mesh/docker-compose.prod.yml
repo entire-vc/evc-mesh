@@ -275,8 +275,17 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_healthy
+    # Published on loopback by default. Every MCP route the stack needs from
+    # outside (/mcp, /mcp/, the OAuth metadata) goes through nginx above. A
+    # client that reaches this port directly skips nginx altogether, and
+    # mesh-mcp keys its per-IP auth-failure limiter on the leftmost
+    # X-Forwarded-For, which that client can set to anything — so an open port
+    # lets one client spend another's budget. (How nginx itself derives the
+    # address it forwards is a separate matter; this only removes the direct
+    # path.) Set MCP_BIND=0.0.0.0 to serve this port to the network anyway
+    # (see docs/self-hosting.md#mcp-port-binding).
     ports:
-      - "${MCP_PORT:-8081}:8081"
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8081}:8081"
     volumes:
       - ./volumes/secrets:/run/mesh-secrets:ro
     environment:

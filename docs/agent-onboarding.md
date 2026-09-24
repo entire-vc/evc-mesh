@@ -171,7 +171,8 @@ carries a `tools/list` result with 61 tools (25 on `MESH_MCP_PROFILE=core`).
 
 One `mesh-mcp` process serves many agents; each connection authenticates on its
 own. This is the `mcp` service in `docker-compose.prod.yml`, listening on
-`${MCP_PORT:-8081}`.
+`${MCP_PORT:-8081}`, published on loopback by default (`MCP_BIND`) — remote
+agents connect through the bundled nginx at `/mcp/` (below), not to that port.
 
 | Endpoint | Profile | Tools |
 |----------|---------|-------|
@@ -306,7 +307,10 @@ the bundled setup does for you automatically; do them yourself:
    `https://mesh.example.com/mcp/message`, which the proxy strips back to
    `/message` upstream.
 
-Serving MCP on its own hostname or port instead? Leave `MESH_MCP_PUBLIC_URL`
+Serving MCP on its own hostname or port instead? Set `MCP_BIND=0.0.0.0` so the
+port is reachable from outside the host (it is loopback-only by default; see
+[MCP port binding](self-hosting.md#mcp-port-binding) for the trade-off), and
+leave `MESH_MCP_PUBLIC_URL`
 empty (or unset it — the bundled compose file's default only fires when the
 variable is entirely absent). Relative endpoints resolve correctly on their
 own; the variable exists for path prefixes and for clients that refuse
