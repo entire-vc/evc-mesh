@@ -1686,16 +1686,29 @@ type OAuthRepository interface {
 	GetGrantByUserClientWorkspace(ctx context.Context, userID uuid.UUID, clientID string, workspaceID uuid.UUID) (*domain.OAuthGrant, error)
 	// RetargetGrant points an existing grant at a different connector agent
 	// and clears revoked_at, in place (same row, so uq_oauth_grant is not
-	// violated). Used by re-consent when the agent a grant used to point at
-	// was deleted or lost its workspace connection: the grant is the user's
-	// standing decision, the agent is only its executor, and a grant that
-	// keeps pointing at a dead executor can never authenticate again.
-	RetargetGrant(ctx context.Context, id, agentID uuid.UUID) error
+	// violated). Used by re-consent when the connector agent a grant pointed
+	// at was deleted: the grant is the user's standing decision, the agent is
+	// only its executor, and a grant that keeps pointing at a dead executor
+	// can never authenticate again.
+	//
+	// It is a compare-and-swap on oldAgentID, and in the same transaction
+	// revokes every token and deletes every unredeemed code of the grant.
+	// swapped=false (no error) means another consent retargeted the grant
+	// first — the caller must discard the agent it registered and use the
+	// grant as it now stands.
+	RetargetGrant(ctx context.Context, id, oldAgentID, newAgentID uuid.UUID, now time.Time) (swapped bool, err error)
 	// ReactivateGrant clears revoked_at on an existing grant row in place —
 	// the re-consent path for a previously revoked (client, workspace) pair,
 	// so it does not collide with the uq_oauth_grant unique index the way a
-	// second CreateGrant would.
-	ReactivateGrant(ctx context.Context, id uuid.UUID) error
+	// second CreateGrant would. In the same transaction it revokes the
+	// grant's tokens and deletes its unredeemed codes, so anything minted
+	// while the grant was revoked cannot come back to life.
+	ReactivateGrant(ctx context.Context, id uuid.UUID, now time.Time) error
+	// HasAdminRevokedConnector reports whether the workspace holds a live
+	// connector agent supervised by userID, named baseName (or "baseName
+	// (xxxx)"), whose workspace connection an admin revoked. Consent uses it to
+	// keep an admin's revoke binding across a re-registered client_id.
+	HasAdminRevokedConnector(ctx context.Context, workspaceID, userID uuid.UUID, baseName string) (bool, error)
 	// ListGrantsByUser returns every grant (active or revoked) the user
 	// holds, joined with client/agent/workspace brief info — the GET
 	// /api/v1/oauth/grants listing ("your connected apps").
@@ -1703,6 +1716,9 @@ type OAuthRepository interface {
 	// RevokeGrant sets revoked_at=now if not already set. Idempotent: revoking
 	// an already-revoked grant is not an error.
 	RevokeGrant(ctx context.Context, id uuid.UUID, now time.Time) error
+	// RevokeGrantWithCredentials is RevokeGrant plus revocation of every token
+	// and deletion of every unredeemed code of the grant, in one transaction.
+	RevokeGrantWithCredentials(ctx context.Context, id uuid.UUID, now time.Time) error
 
 	// --- Tokens (table oauth_tokens) ---
 

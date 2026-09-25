@@ -281,7 +281,7 @@ func TestOAuthRepo_Grant_GetRevokeReactivate(t *testing.T) {
 	require.True(t, g.IsRevoked())
 	assert.WithinDuration(t, first, *g.RevokedAt, time.Millisecond, "re-revoke must not overwrite the original revoked_at")
 
-	require.NoError(t, f.repo.ReactivateGrant(ctx, f.grantID))
+	require.NoError(t, f.repo.ReactivateGrant(ctx, f.grantID, time.Now().UTC()))
 	g, err = f.repo.GetGrantByID(ctx, f.grantID)
 	require.NoError(t, err)
 	assert.False(t, g.IsRevoked())
@@ -444,6 +444,91 @@ func TestOAuthRepo_RevokeTokensByGrant_OnlyThatGrant(t *testing.T) {
 	assert.Nil(t, got.RevokedAt, "another grant's tokens must be untouched")
 }
 
+// TestOAuthRepo_HasAdminRevokedConnector proves the query this test file
+// otherwise never drives at all: the connector-name footprint an admin's
+// revoke leaves behind, read straight off the real schema (the JOIN, the
+// LIKE-with-ESCAPE disambiguation match, and the exact-name match), not
+// asserted against a mock's idea of the SQL.
+func TestOAuthRepo_HasAdminRevokedConnector(t *testing.T) {
+	ctx := context.Background()
+	db := agentDigestTestDB(t)
+	repo := NewOAuthRepo(db)
+	wsID := seedGrantWorkspace(t, db)
+	supervisor := seedGrantUser(t, db)
+	revokedAt := time.Now().UTC()
+
+	newNamedAgent := func(t *testing.T, supervisorID uuid.UUID, name string) *domain.Agent {
+		t.Helper()
+		suffix := uuid.New().String()[:8]
+		agent := &domain.Agent{
+			ID: uuid.New(), WorkspaceID: wsID, SupervisorUserID: &supervisorID, Name: name, Slug: "hac-" + suffix,
+			AgentType: domain.AgentTypeCustom, APIKeyHash: "$2a$12$hash-" + suffix,
+			APIKeyPrefix: "hac-" + suffix, Status: domain.AgentStatusOffline, Role: "developer",
+		}
+		require.NoError(t, NewAgentRepo(db).Create(ctx, agent))
+		return agent
+	}
+
+	t.Run("no connector by this name: false", func(t *testing.T) {
+		got, err := repo.HasAdminRevokedConnector(ctx, wsID, supervisor, "Nonexistent Tool "+uuid.New().String()[:6])
+		require.NoError(t, err)
+		assert.False(t, got)
+	})
+
+	t.Run("exact name match, revoked: true", func(t *testing.T) {
+		agent := newNamedAgent(t, supervisor, "Exact Tool "+uuid.New().String()[:6])
+		insertGrant(t, db, agent.ID, wsID, "member", "hacpfx-"+agent.ID.String()[:8], "$2a$12$h", &revokedAt)
+		got, err := repo.HasAdminRevokedConnector(ctx, wsID, supervisor, agent.Name)
+		require.NoError(t, err)
+		assert.True(t, got)
+	})
+
+	t.Run("disambiguated name match, revoked: true", func(t *testing.T) {
+		base := "Disambig Tool " + uuid.New().String()[:6]
+		agent := newNamedAgent(t, supervisor, base+" (ab12)")
+		insertGrant(t, db, agent.ID, wsID, "member", "hacpfx-"+agent.ID.String()[:8], "$2a$12$h", &revokedAt)
+		got, err := repo.HasAdminRevokedConnector(ctx, wsID, supervisor, base)
+		require.NoError(t, err)
+		assert.True(t, got)
+	})
+
+	t.Run("live (not revoked) connector of the same name: false", func(t *testing.T) {
+		agent := newNamedAgent(t, supervisor, "Live Tool "+uuid.New().String()[:6])
+		insertGrant(t, db, agent.ID, wsID, "member", "hacpfx-"+agent.ID.String()[:8], "$2a$12$h", nil)
+		got, err := repo.HasAdminRevokedConnector(ctx, wsID, supervisor, agent.Name)
+		require.NoError(t, err)
+		assert.False(t, got)
+	})
+
+	t.Run("a different supervisor's revoked connector of the same name: false", func(t *testing.T) {
+		other := seedGrantUser(t, db)
+		agent := newNamedAgent(t, other, "Someone Else's Tool "+uuid.New().String()[:6])
+		insertGrant(t, db, agent.ID, wsID, "member", "hacpfx-"+agent.ID.String()[:8], "$2a$12$h", &revokedAt)
+		got, err := repo.HasAdminRevokedConnector(ctx, wsID, supervisor, agent.Name)
+		require.NoError(t, err)
+		assert.False(t, got)
+	})
+
+	t.Run("a LIKE metacharacter in the queried name is treated literally, not as a wildcard", func(t *testing.T) {
+		// The pattern is built from the queried baseName (escaped) and matched
+		// against revoked connectors' disambiguated names. Unescaped, "Tool_A"
+		// would wildcard-match "ToolXA (ab12)" since '_' matches any one char.
+		agent := newNamedAgent(t, supervisor, "ToolXA (ab12)")
+		insertGrant(t, db, agent.ID, wsID, "member", "hacpfx-"+agent.ID.String()[:8], "$2a$12$h", &revokedAt)
+		got, err := repo.HasAdminRevokedConnector(ctx, wsID, supervisor, "Tool_A")
+		require.NoError(t, err)
+		assert.False(t, got, "an unescaped '_' in the queried name would wildcard-match 'ToolXA (ab12)'")
+
+		t.Run("positive control: the literal underscore name does match its own disambiguated form", func(t *testing.T) {
+			agent2 := newNamedAgent(t, supervisor, "Tool_A (cd34)")
+			insertGrant(t, db, agent2.ID, wsID, "member", "hacpfx-"+agent2.ID.String()[:8], "$2a$12$h", &revokedAt)
+			got, err := repo.HasAdminRevokedConnector(ctx, wsID, supervisor, "Tool_A")
+			require.NoError(t, err)
+			assert.True(t, got, "control: without the escaping bug, this exact-underscore name must still match")
+		})
+	})
+}
+
 // Every method must surface a driver error rather than collapse it into a
 // "not found" nil — a dead pool reported as "unknown token" would turn an
 // outage into a wave of invalid_grant answers.
@@ -473,7 +558,7 @@ func TestOAuthRepo_ClosedDBPropagatesErrors(t *testing.T) {
 	assert.Error(t, err)
 	_, err = repo.RevokeToken(ctx, id, now)
 	assert.Error(t, err)
-	assert.Error(t, repo.ReactivateGrant(ctx, id))
+	assert.Error(t, repo.ReactivateGrant(ctx, id, now))
 	assert.Error(t, repo.RevokeGrant(ctx, id, now))
 	assert.Error(t, repo.RevokeFamily(ctx, id, now))
 	assert.Error(t, repo.RevokeTokensByGrant(ctx, id, now))
@@ -482,4 +567,11 @@ func TestOAuthRepo_ClosedDBPropagatesErrors(t *testing.T) {
 	assert.Error(t, repo.CreateCode(ctx, &domain.OAuthAuthorizationCode{}))
 	assert.Error(t, repo.CreateGrant(ctx, &domain.OAuthGrant{}))
 	assert.Error(t, repo.CreateToken(ctx, &domain.OAuthToken{}))
+	// BeginTxx itself is what fails on a closed pool for these three — none
+	// of the other closed-DB calls above exercise that particular error path.
+	_, err = repo.RetargetGrant(ctx, id, id, id, now)
+	assert.Error(t, err)
+	assert.Error(t, repo.RevokeGrantWithCredentials(ctx, id, now))
+	_, err = repo.HasAdminRevokedConnector(ctx, id, id, "x")
+	assert.Error(t, err)
 }

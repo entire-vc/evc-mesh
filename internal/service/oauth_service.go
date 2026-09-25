@@ -654,11 +654,22 @@ func (s *oauthService) resolveMemberRole(ctx context.Context, workspaceID, userI
 // to the consenting user) the first time this pair is ever consented to.
 //
 // An existing grant is only reusable while the connector agent behind it is
-// still usable (alive AND holding an active workspace connection). If an
-// admin deleted the agent or revoked its connection, reusing the grant would
-// make every consent "succeed" and every resulting mot_ token 401 — with no
-// way out from the API, since the grant row itself is the thing that is
-// stuck. In that case the grant is retargeted at a freshly registered agent.
+// still usable (alive AND holding an active workspace connection). Two ways
+// it stops being usable, handled differently on purpose:
+//
+//   - A workspace admin REVOKED the agent's connection (the agent still
+//     exists). That is an explicit "this application may not act here", so
+//     consent is REFUSED — retargeting the grant at a fresh agent would turn
+//     the revoke into a mere reset that any member undoes with one click on
+//     Allow. The block lifts the way the admin lifts any agent's access: by
+//     re-inviting the connector agent, which makes the grant usable again.
+//   - The connector agent was deleted. A deleted identity cannot be
+//     re-invited, so refusing forever would strand the user with no way out
+//     via the API; the grant is retargeted at a freshly registered agent.
+//
+// Every step that changes what a grant points at is compare-and-swap /
+// transactional, and every agent this call registers but ends up not using
+// is discarded — see retargetGrantAtomically and createGrantOrJoinWinner.
 func (s *oauthService) getOrCreateGrant(ctx context.Context, userID uuid.UUID, client *domain.OAuthClient, workspaceID uuid.UUID) (*domain.OAuthGrant, error) {
 	existing, err := s.repo.GetGrantByUserClientWorkspace(ctx, userID, client.ClientID, workspaceID)
 	if err != nil {
@@ -672,12 +683,20 @@ func (s *oauthService) getOrCreateGrant(ctx context.Context, userID uuid.UUID, c
 		}
 		if usable {
 			if existing.IsRevoked() {
-				if reactivateErr := s.repo.ReactivateGrant(ctx, existing.ID); reactivateErr != nil {
+				if reactivateErr := s.repo.ReactivateGrant(ctx, existing.ID, timeNow()); reactivateErr != nil {
 					return nil, oautherror.ServerError(reactivateErr.Error())
 				}
 				existing.RevokedAt = nil
 			}
 			return existing, nil
+		}
+		blocked, berr := s.connectorRevokedByAdmin(ctx, existing)
+		if berr != nil {
+			log.Printf("oauth: admin-revoke lookup for grant %s failed: %v", existing.ID, berr)
+			return nil, oautherror.ServerError("could not verify the connector's standing")
+		}
+		if blocked {
+			return nil, errAdminDisconnected
 		}
 	}
 
@@ -685,26 +704,24 @@ func (s *oauthService) getOrCreateGrant(ctx context.Context, userID uuid.UUID, c
 	if nerr != nil {
 		return nil, nerr
 	}
+	// The block must survive a re-registered client_id (a DCR client is free
+	// and gets a fresh one): an admin-revoked connector of the same name,
+	// supervised by this user, in this workspace still means "not this app".
+	revoked, rerr := s.repo.HasAdminRevokedConnector(ctx, workspaceID, userID, agentName)
+	if rerr != nil {
+		log.Printf("oauth: admin-revoked connector lookup for user %s workspace %s failed: %v", userID, workspaceID, rerr)
+		return nil, oautherror.ServerError("could not verify the connector's standing")
+	}
+	if revoked {
+		return nil, errAdminDisconnected
+	}
 	reg, regErr := s.registerConnectorAgent(ctx, workspaceID, agentName, userID)
 	if regErr != nil {
 		return nil, regErr
 	}
 
 	if existing != nil {
-		// Tokens minted under the dead agent must not silently start
-		// authenticating as the new one once the grant points at it.
-		now := timeNow()
-		if rerr := s.repo.RevokeTokensByGrant(ctx, existing.ID, now); rerr != nil {
-			return nil, oautherror.ServerError(rerr.Error())
-		}
-		terr := s.repo.RetargetGrant(ctx, existing.ID, reg.Agent.ID)
-		s.authCache.evictGrant(existing.ID)
-		if terr != nil {
-			return nil, oautherror.ServerError(terr.Error())
-		}
-		existing.AgentID = reg.Agent.ID
-		existing.RevokedAt = nil
-		return existing, nil
+		return s.retargetGrantAtomically(ctx, existing, reg.Agent)
 	}
 
 	g := &domain.OAuthGrant{
@@ -716,10 +733,140 @@ func (s *oauthService) getOrCreateGrant(ctx context.Context, userID uuid.UUID, c
 		Scope:       oauthDefaultScope,
 		CreatedAt:   timeNow(),
 	}
-	if err := s.repo.CreateGrant(ctx, g); err != nil {
+	return s.createGrantOrJoinWinner(ctx, g, reg.Agent)
+}
+
+// errAdminDisconnected is what consent answers when a workspace admin cut this
+// application off. One value, so both ways of detecting it (the grant's own
+// agent, or a same-named connector under another client_id) read identically.
+var errAdminDisconnected = apierror.Forbidden("a workspace admin disconnected this application from the workspace — ask an admin to re-invite it before connecting again")
+
+// retargetGrantAtomically points existing at newAgent. The swap, the
+// revocation of the old agent's tokens and the deletion of its unredeemed
+// codes are ONE transaction (a code issued before the retarget must not
+// redeem into tokens for the new agent, and a failure part-way must leave the
+// grant exactly as it was). On any failure, or on losing a race to another
+// consent that retargeted first, newAgent is discarded so no orphan
+// connector agent is left behind.
+func (s *oauthService) retargetGrantAtomically(ctx context.Context, existing *domain.OAuthGrant, newAgent *domain.Agent) (*domain.OAuthGrant, error) {
+	// The swap kills the old agent's tokens; drop any cached resolution of
+	// them (before and after, like RevokeMyGrant) so a cached mot_ answer
+	// cannot outlive the retarget.
+	s.authCache.evictGrant(existing.ID)
+	defer s.authCache.evictGrant(existing.ID)
+	swapped, err := s.repo.RetargetGrant(ctx, existing.ID, existing.AgentID, newAgent.ID, timeNow())
+	if err != nil {
+		s.discardConnectorAgent(ctx, newAgent)
 		return nil, oautherror.ServerError(err.Error())
 	}
+	if !swapped {
+		s.discardConnectorAgent(ctx, newAgent)
+		return s.currentGrant(ctx, existing.ID)
+	}
+	existing.AgentID = newAgent.ID
+	existing.RevokedAt = nil
+	return existing, nil
+}
+
+// createGrantOrJoinWinner inserts g. If a concurrent consent for the same
+// (user, client, workspace) inserted first (uq_oauth_grant) — a double click
+// on "Allow" — the agent registered for g is discarded and the winner's grant
+// is returned, so both requests succeed against one agent instead of one of
+// them failing with a 500 and leaving an orphan connector behind.
+func (s *oauthService) createGrantOrJoinWinner(ctx context.Context, g *domain.OAuthGrant, newAgent *domain.Agent) (*domain.OAuthGrant, error) {
+	err := s.repo.CreateGrant(ctx, g)
+	if err == nil {
+		return g, nil
+	}
+	s.discardConnectorAgent(ctx, newAgent)
+	if !isGrantConflict(err) {
+		return nil, oautherror.ServerError(err.Error())
+	}
+	winner, gerr := s.repo.GetGrantByUserClientWorkspace(ctx, g.UserID, g.ClientID, g.WorkspaceID)
+	if gerr != nil {
+		return nil, oautherror.ServerError(gerr.Error())
+	}
+	if winner == nil {
+		return nil, oautherror.ServerError("concurrent consent left no grant behind")
+	}
+	return winner, nil
+}
+
+// currentGrant re-reads a grant after losing a compare-and-swap.
+func (s *oauthService) currentGrant(ctx context.Context, id uuid.UUID) (*domain.OAuthGrant, error) {
+	g, err := s.repo.GetGrantByID(ctx, id)
+	if err != nil {
+		return nil, oautherror.ServerError(err.Error())
+	}
+	if g == nil {
+		return nil, oautherror.ServerError("grant disappeared during concurrent consent")
+	}
 	return g, nil
+}
+
+// discardConnectorAgent undoes registerConnectorAgent for an agent that ended
+// up unused: soft-deletes it and cuts its workspace connection (a soft-deleted
+// agent with a live connection row still shows up in the workspace's agent
+// list). Best-effort by necessity — the caller is already on a failure path —
+// so failures are logged, not returned.
+func (s *oauthService) discardConnectorAgent(ctx context.Context, agent *domain.Agent) {
+	if agent == nil {
+		return
+	}
+	// Runs on a failure path, where ctx may be exactly what failed (client
+	// gone, deadline hit): compensate on a detached, bounded context, or the
+	// orphan this exists to remove would stay.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+
+	// Delete first, then cut the connection: were the delete to fail after the
+	// connection was revoked, a live agent with a revoked connection is
+	// exactly the footprint HasAdminRevokedConnector reads as an admin's
+	// revoke, and would block the user from this application for good.
+	if err := s.agentService.Delete(ctx, agent.ID); err != nil {
+		log.Printf("oauth: discarding connector agent %s failed: %v", agent.ID, err)
+		return
+	}
+	if s.agentGrantRepo != nil {
+		home, err := s.agentGrantRepo.GetByAgentAndWorkspace(ctx, agent.ID, agent.WorkspaceID)
+		if err != nil {
+			log.Printf("oauth: discarding connector agent %s: loading its workspace connection failed: %v", agent.ID, err)
+		} else if home != nil && !home.IsRevoked() {
+			if _, rerr := s.agentGrantRepo.Revoke(ctx, home.ID, agent.WorkspaceID); rerr != nil {
+				log.Printf("oauth: discarding connector agent %s: revoking its workspace connection failed: %v", agent.ID, rerr)
+			}
+		}
+	}
+}
+
+// connectorRevokedByAdmin reports whether the grant's connector agent still
+// exists but its workspace connection was explicitly revoked — the shape an
+// admin's DELETE /workspaces/:ws/agent-grants/:id leaves behind. A lookup
+// failure is an error, never "not revoked": refusing on an outage is safe,
+// silently retargeting on one is not.
+func (s *oauthService) connectorRevokedByAdmin(ctx context.Context, grant *domain.OAuthGrant) (bool, error) {
+	if s.agentGrantRepo == nil {
+		return false, nil
+	}
+	if _, err := s.agentService.GetByID(ctx, grant.AgentID); err != nil {
+		var apiErr *apierror.Error
+		if errors.As(err, &apiErr) && apiErr.Code == http.StatusNotFound {
+			return false, nil // the agent itself is gone, not merely disconnected
+		}
+		return false, err
+	}
+	home, err := s.agentGrantRepo.GetByAgentAndWorkspace(ctx, grant.AgentID, grant.WorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	return home != nil && home.IsRevoked(), nil
+}
+
+// isGrantConflict reports whether err is the oauth_grants.uq_oauth_grant
+// unique-constraint violation.
+func isGrantConflict(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "uq_oauth_grant"
 }
 
 // connectorAgentName builds the "<client_name> — <username>" display name.
@@ -1216,16 +1363,12 @@ func (s *oauthService) RevokeMyGrant(ctx context.Context, userID, grantID uuid.U
 	if g == nil || g.UserID != userID {
 		return apierror.NotFound("Grant")
 	}
-	now := timeNow()
 	// Evict before AND after; the generation counter (see oauthAuthCache.gen)
 	// is what makes a request that read the still-valid rows before the revoke
 	// unable to re-insert its answer after the eviction.
 	s.authCache.evictGrant(grantID)
 	defer s.authCache.evictGrant(grantID)
-	if err := s.repo.RevokeGrant(ctx, grantID, now); err != nil {
-		return err
-	}
-	return s.repo.RevokeTokensByGrant(ctx, grantID, now)
+	return s.repo.RevokeGrantWithCredentials(ctx, grantID, timeNow())
 }
 
 // --- Small stateless helpers ---

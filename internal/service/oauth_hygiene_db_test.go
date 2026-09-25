@@ -298,7 +298,10 @@ func TestOAuthSvc_AuthCache(t *testing.T) {
 		_, err := env.svc.AuthenticateAccessToken(ctx, f.tokens.AccessToken)
 		require.NoError(t, err)
 
-		env.revokeAgentConnection(t, env.grantAgentID(t, f.client.ClientID), f.ws)
+		// A revoked connection is now a hard block (consent is refused); the
+		// retarget path is what remains for a DELETED connector agent.
+		_, err = env.db.Exec(`UPDATE agents SET deleted_at=NOW() WHERE id=$1`, env.grantAgentID(t, f.client.ClientID))
+		require.NoError(t, err)
 		_, challenge := svcPKCE()
 		_ = env.consent(t, f.client.ClientID, f.redirect, challenge, f.user, f.ws) // registers a new agent, retargets the grant
 

@@ -161,7 +161,7 @@ func TestOAuthSvc_AgentConnectionRevokeDisconnectsConnector(t *testing.T) {
 	})
 }
 
-// --- blocker 3: a deleted / cut-off connector can be re-consented ----------
+// --- blocker 3: a deleted connector can be re-consented -------------------
 
 func TestOAuthSvc_ReconsentRecoversDeadConnector(t *testing.T) {
 	ctx := context.Background()
@@ -196,18 +196,8 @@ func TestOAuthSvc_ReconsentRecoversDeadConnector(t *testing.T) {
 		requireAPIStatus(t, err, http.StatusUnauthorized) // tokens minted for the dead agent must not silently become the new agent's
 	})
 
-	t.Run("agent connection revoked by an admin", func(t *testing.T) {
-		env := newOAuthSvcEnv(t)
-		f := env.fullFlow(t)
-		oldAgent := env.grantAgentID(t, f.client.ClientID)
-		env.revokeAgentConnection(t, oldAgent, f.ws)
-
-		tok := reconsent(t, env, f)
-
-		a, err := env.svc.AuthenticateAccessToken(ctx, tok.AccessToken)
-		require.NoError(t, err)
-		assert.NotEqual(t, oldAgent, a.ID)
-	})
+	// An admin revoking the connection is a hard block, not a reset: see
+	// TestOAuthSvc_AdminRevokeIsAHardBlock in oauth_service_grant_integrity_db_test.go.
 
 	t.Run("a healthy connector is reused, not replaced", func(t *testing.T) {
 		env := newOAuthSvcEnv(t)
