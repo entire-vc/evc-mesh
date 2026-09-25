@@ -340,6 +340,65 @@ self-host-env:
         docker compose -f "$f" --env-file /tmp/first-release.env config >/dev/null
       done
 
+# ── nginx-real-ip-syntax ────────────────────────────────────────────────────
+# The bundled nginx (deploy/docker/mesh/nginx.conf) is the client-IP trust
+# boundary for mesh-api and mesh-mcp (#358a35dc): it includes a file rendered by
+# 25-mesh-trusted-proxies.sh and forwards $remote_addr as X-Forwarded-For. A
+# typo there does not fail a build — the nginx image only dies at container
+# start, on the operator's machine. This job renders the include exactly as the
+# entrypoint would and runs `nginx -t` against the shipped config, so a broken
+# directive or a missing include fails the MR instead.
+#
+# Deliberately NOT the behavioural test (test-nginx-real-ip.sh): that needs a
+# Docker daemon and this fleet's shared runner does not give jobs one (see
+# self-host-env above). Run that one locally when touching the trust logic.
+# The two checks below only need the nginx binary the image already carries.
+nginx-real-ip-syntax:
+  stage: lint
+  image:
+    name: nginx:1.27-alpine
+    entrypoint: [""]
+  timeout: 5m
+  script:
+    # nginx.conf names its upstreams literally and nginx resolves those at
+    # config load; outside the compose network they do not exist.
+    - echo "127.0.0.1 api minio" >> /etc/hosts
+    - cp deploy/docker/mesh/nginx.conf /etc/nginx/conf.d/default.conf
+    - sh deploy/docker/mesh/25-mesh-trusted-proxies.sh
+    - nginx -t
+    # `nginx -t` alone would pass if someone put the appending header back, so
+    # pin the wiring: no proxy location may append to a client-supplied
+    # X-Forwarded-For, and the five that carry client identity (/api/, /ws,
+    # /mcp/, exact /mcp, the OAuth resource metadata) must forward the
+    # realip-resolved address. Adding a sixth proxy location means raising this.
+    - |
+      if grep -nE '^[[:space:]]*proxy_set_header[[:space:]]+X-Forwarded-For[[:space:]]+\$proxy_add_x_forwarded_for' deploy/docker/mesh/nginx.conf; then
+        echo "nginx.conf appends to the client's X-Forwarded-For again (#358a35dc)" >&2
+        exit 1
+      fi
+      n=$(grep -c 'proxy_set_header X-Forwarded-For \$remote_addr;' deploy/docker/mesh/nginx.conf)
+      [ "$n" -ge 5 ] || { echo "expected X-Forwarded-For \$remote_addr in 5 proxy locations, found $n" >&2; exit 1; }
+      grep -q '^ *real_ip_header X-Forwarded-For;' deploy/docker/mesh/nginx.conf
+      grep -q '^ *real_ip_recursive on;' deploy/docker/mesh/nginx.conf
+    # An extra edge is rendered into the include and the config still parses.
+    - MESH_TRUSTED_PROXIES="203.0.113.0/24, 2001:db8::/32" sh deploy/docker/mesh/25-mesh-trusted-proxies.sh
+    - grep -q '^set_real_ip_from 203.0.113.0/24;$' /etc/nginx/mesh-trusted-proxies.conf
+    - nginx -t
+    # Red controls for the fail-closed half: each bad value MUST be refused, and
+    # by the render script's own refusal — a crash for another reason (an
+    # unwritable path) must not read as a pass.
+    - |
+      for bad in '1.2.3.0/24; allow all' '203.0.113.7' '0.0.0.0/0' '0.0.0.0/00' '1.2.3.4/000' 'abc.def/24' '::/0' '::/00'; do
+        if err=$(MESH_TRUSTED_PROXIES="$bad" sh deploy/docker/mesh/25-mesh-trusted-proxies.sh 2>&1); then
+          echo "render script accepted MESH_TRUSTED_PROXIES='$bad'" >&2
+          exit 1
+        fi
+        case $err in
+          *"refusing MESH_TRUSTED_PROXIES entry"*) ;;
+          *) echo "'$bad' failed, but not with the refusal message: $err" >&2; exit 1 ;;
+        esac
+      done
+
 # ── mcp-reference-gate ──────────────────────────────────────────
 # docs/mcp-reference.md is the public catalogue of the MCP tools, but the tools
 # themselves live in a DIFFERENT repository (evc-mesh-mcp). Nothing in this
