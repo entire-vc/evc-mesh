@@ -180,6 +180,93 @@ See [Seeding the first admin](#seeding-the-first-admin) below.
 | `MESH_RATE_LIMIT_API_RPM` | `600` | Maximum requests per minute for API endpoints (per authenticated actor) |
 | `MESH_RATE_LIMIT_OAUTH_TOKEN_RPM` | same as `MESH_RATE_LIMIT_API_RPM` | Maximum requests per minute (per IP) for `POST /oauth/token` and `POST /oauth/revoke`, each counted separately. A hosted MCP client refreshes for all its users from a few egress IPs, so size this for that traffic rather than for one person. |
 
+### Client IP (`MESH_TRUSTED_PROXIES`)
+
+Per-IP limits — the login limiter in `mesh-api` and the authentication-failure
+budget in `mesh-mcp` (`MESH_MCP_AUTH_FAIL_RPM`) — are only as good as the
+address they key on. That address comes from `X-Forwarded-For`, a header any
+client can write. The bundled nginx therefore decides who is believed:
+
+| Where the request comes from | What nginx does with `X-Forwarded-For` |
+|---|---|
+| A **trusted hop**: loopback, link-local, private ranges (RFC 1918, ULA) — always — plus every CIDR in `MESH_TRUSTED_PROXIES` | Believed. Trusted entries are skipped from the right; the first untrusted one is the client. |
+| Anyone else (a client reaching nginx directly) | Ignored. The client is the address the connection came from. |
+
+Either way, on every proxied client-facing location (`/api/`, `/ws`, `/mcp/`,
+`/mcp` and the OAuth resource metadata) the backends receive a single
+`X-Forwarded-For` value that nginx resolved, never one the client chose. Without
+this, a client on a directly reachable instance could send a random `X-Forwarded-For` on every request to get
+a fresh limiter bucket each time (the limiter limits nothing), or send someone
+else's address to burn that address's budget.
+
+**What to set:**
+
+- **TLS edge reaches nginx from a private address** (Caddy or a proxy on the same
+  host or Docker network, a load balancer in your VPC): nothing. This is the
+  default and it works.
+- **TLS edge has a public address** (a cloud load balancer, Cloudflare, another
+  host across the internet): set `MESH_TRUSTED_PROXIES` in `.env` to its CIDR(s),
+  comma-separated. With it unset every client resolves to the edge's own address
+  and shares one bucket — one attacker can then exhaust the limit for everybody.
+- **No edge, nginx exposed directly:** nothing. `X-Forwarded-For` from clients is
+  ignored, which is what you want here — provided nginx sees the client's real
+  address. Setups where Docker presents every client as a private bridge address
+  (rootless Docker, Docker Desktop, some userland-proxy paths) make clients look
+  like a trusted hop, and their `X-Forwarded-For` is believed again. Check what
+  address nginx logs for an outside request before relying on this.
+
+Entries must be CIDRs with a prefix length (`203.0.113.7/32` for a single host,
+`/128` for IPv6) — `mesh-api` drops a bare address, so it is refused here too,
+as is a `/0` in any spelling (`/00` included), which would trust every client
+and turn the protection off.
+
+The same variable is passed to `mesh-api`, so both services share one boundary.
+Leaving it unset keeps `mesh-api`'s per-IP **login** limiter switched off (the
+API logs a warning at startup); brute-force protection there then rests on the
+per-account lockout. The public OAuth endpoints lose their per-IP limits the
+same way. The other per-IP limits stay on and key on the address nginx resolved:
+registration, token refresh, invite acceptance and workspace-icon requests.
+
+> **Upgrading behind a public-address edge.** Before this resolution existed,
+> such a stack keyed those limits on whatever `X-Forwarded-For` the edge sent,
+> so each user had a bucket of their own (and a forged header could pick any
+> bucket). Now an edge nginx does not trust is just the peer: without
+> `MESH_TRUSTED_PROXIES` every user resolves to the edge's address and
+> **shares one bucket** for refresh (60/min for the whole instance) and for
+> registration and invite acceptance (5/min). Set the variable to the edge's
+> CIDR(s) when you upgrade. Nothing logs an error if you do not.
+
+The trusted hop must itself overwrite or append `X-Forwarded-For`. A private-
+address proxy that passes the client's header through untouched puts that
+client's value back in the chain and restores the forgery.
+
+A malformed entry stops the nginx container at start with a message naming the
+entry, rather than being silently dropped.
+
+> **The MCP port bypasses this.** `docker-compose.prod.yml` also publishes
+> `mesh-mcp` directly (`${MCP_PORT:-8081}`), and a client connecting there
+> reaches `mesh-mcp` without passing through nginx, so its `X-Forwarded-For` is
+> read as written. If your clients use the `/mcp/` route through nginx (the
+> default `MESH_MCP_PUBLIC_URL`), bind that port to loopback so the limiter
+> cannot be bypassed by going around nginx:
+>
+> ```yaml
+> # docker-compose.prod.yml, mcp service
+> ports:
+>   - "127.0.0.1:${MCP_PORT:-8081}:8081"
+> ```
+>
+> Leave it published only if you deliberately serve MCP on that port to remote
+> agents, and put your own edge in front of it that overwrites
+> `X-Forwarded-For` (Caddy's `trusted_proxies` does this).
+
+The same applies to the API port (`${API_PORT:-8005}`), which is also published
+directly: see hardening item 10 below.
+
+Verify the behaviour on your own build with
+`deploy/docker/mesh/test-nginx-real-ip.sh` (needs Docker; it runs the real nginx
+config against an echo backend).
+
 ### Spark Catalog
 
 | Variable | Default | Description |

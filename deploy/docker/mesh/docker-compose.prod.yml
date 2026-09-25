@@ -202,6 +202,11 @@ services:
       MESH_RATE_LIMIT_REFRESH_RPM: ${MESH_RATE_LIMIT_REFRESH_RPM:-60}
       MESH_RATE_LIMIT_API_RPM: ${MESH_RATE_LIMIT_API_RPM:-600}
       MESH_RATE_LIMIT_OAUTH_TOKEN_RPM: ${MESH_RATE_LIMIT_OAUTH_TOKEN_RPM:-}
+      # Client-IP trust boundary, shared with the nginx service below (same
+      # variable, same meaning: extra CIDRs, beyond loopback/private, whose
+      # X-Forwarded-For is believed). Empty keeps the per-IP limiters off
+      # rather than keyed on an address nobody verified.
+      MESH_TRUSTED_PROXIES: ${MESH_TRUSTED_PROXIES:-}
       MESH_SPARK_ENABLED: ${MESH_SPARK_ENABLED:-false}
       MESH_SPARK_URL: ${MESH_SPARK_URL:-}
       # Web Push. An empty public or private key disables browser push —
@@ -261,6 +266,12 @@ services:
       # and it keeps the UI's availability decoupled from MinIO's health.
       minio:
         condition: service_started
+    environment:
+      # Read by /docker-entrypoint.d/25-mesh-trusted-proxies.sh: extra CIDRs
+      # (comma-separated) whose X-Forwarded-For nginx believes, on top of the
+      # private ranges. Set it to your TLS edge's address if that edge has a
+      # public IP; leave empty when it reaches nginx from a private one.
+      MESH_TRUSTED_PROXIES: ${MESH_TRUSTED_PROXIES:-}
     ports:
       - "${HTTP_PORT:-80}:80"
 
