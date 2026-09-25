@@ -30,6 +30,8 @@ func TestValidateAgentCallbackURL(t *testing.T) {
 		"https://123.hooks.example.com/cb",
 		"https://hooks.example.com./cb",
 		"https://0xdeadbeef.example.com/cb",
+		// '%' is refused in the host only, not anywhere in the URL.
+		"https://hooks.example.com/a%20b?x=%41",
 	}
 	for _, u := range accepted {
 		assert.NoError(t, ValidateAgentCallbackURL(u), "should accept %q", u)
@@ -54,6 +56,13 @@ func TestValidateAgentCallbackURL(t *testing.T) {
 		"http://127.1/x",
 		"http://10.1/x",
 		"http://hooks.example.0x1/",
+		// IPv6 zone-id: net.ParseIP does not parse "%zone", so without an
+		// explicit check these fell into the DNS-name branch.
+		"http://[fe80::1%25eth0]/",
+		"http://[fe80::1%25en0]:8080/cb",
+		"http://[2606:2800:220:1:248:1893:25c8:1946%25eth0]/cb",
+		"http://[::1%25lo]/",
+		"http://[FE80::1%25ETH0]/",
 		"http://localhost:6379/",
 		"http://LOCALHOST./",
 		"http://redis.localhost/",

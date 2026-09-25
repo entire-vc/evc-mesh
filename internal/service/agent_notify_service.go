@@ -193,7 +193,7 @@ func (s *agentNotifyService) deliverWithRetry(callbackURL string, agentID uuid.U
 
 		req, err := http.NewRequest(http.MethodPost, callbackURL, bytes.NewReader(body))
 		if err != nil {
-			log.Printf("[agent-notify] failed to build callback request for agent %s: %v", agentID, err)
+			log.Printf("[agent-notify] failed to build callback request for agent %s (%s): %s", agentID, redactCallbackURL(callbackURL), redactCallbackError(err))
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -204,18 +204,18 @@ func (s *agentNotifyService) deliverWithRetry(callbackURL string, agentID uuid.U
 
 		resp, err := s.client.Do(req)
 		if err != nil && isPermanentCallbackError(err) {
-			log.Printf("[agent-notify] callback POST for agent %s refused permanently (SSRF guard or unknown host), not retrying (url: %s): %v", agentID, callbackURL, err)
+			log.Printf("[agent-notify] callback POST for agent %s refused permanently (SSRF guard or unknown host), not retrying (host: %s): %s", agentID, redactCallbackURL(callbackURL), redactCallbackError(err))
 			return
 		}
 		if err != nil {
-			log.Printf("[agent-notify] callback POST failed for agent %s (attempt %d, url: %s): %v", agentID, attempt+1, callbackURL, err)
+			log.Printf("[agent-notify] callback POST failed for agent %s (attempt %d, host: %s): %s", agentID, attempt+1, redactCallbackURL(callbackURL), redactCallbackError(err))
 			continue // timeout or network error — retry
 		}
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck // drain body to enable connection reuse
 		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			log.Printf("[agent-notify] callback delivered for agent %s (attempt %d, url: %s)", agentID, attempt+1, callbackURL)
+			log.Printf("[agent-notify] callback delivered for agent %s (attempt %d, host: %s)", agentID, attempt+1, redactCallbackURL(callbackURL))
 			return // success
 		}
 

@@ -68,6 +68,13 @@ func ValidateAgentCallbackURL(raw string) error {
 	if host == "" {
 		return fail("callback_url must have a host")
 	}
+	// An IPv6 zone-id ("fe80::1%25eth0" in the URL, "fe80::1%eth0" here) is
+	// not understood by net.ParseIP, so the literal would fall through to the
+	// DNS-name branch below and be stored. No public callback needs a zone; a
+	// zone means a link-local or otherwise on-host address. Refuse any '%'.
+	if strings.Contains(host, "%") {
+		return fail("callback_url host must not contain an IPv6 zone identifier")
+	}
 	lh := strings.ToLower(strings.TrimSuffix(host, "."))
 	if ip := net.ParseIP(lh); ip != nil {
 		if !isPubliclyRoutable(ip) {
@@ -144,4 +151,30 @@ func isPermanentCallbackError(err error) bool {
 	}
 	var dnsErr *net.DNSError
 	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
+}
+
+// redactCallbackURL renders a callback address for logs: scheme and host
+// only. Webhook addresses routinely carry their secret in the query
+// (?token=...) or in the path (Slack-style /T000/B000/xxxx), and delivery
+// logs on every attempt, so neither may reach the log. Credentials and
+// fragments are dropped too. An address that does not parse is not echoed.
+func redactCallbackURL(raw string) string {
+	const unparseable = "<unparseable callback url>"
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return unparseable
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// redactCallbackError renders an error from the delivery client for logs.
+// http.Client.Do wraps its failures in *url.Error, whose text embeds the full
+// request URL — query included — so logging the error verbatim leaks exactly
+// what redactCallbackURL hides. Only the underlying cause is kept.
+func redactCallbackError(err error) string {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err.Error()
+	}
+	return err.Error()
 }
