@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -16,8 +18,20 @@ import (
 )
 
 const (
-	slackHTTPTimeout = 5 * time.Second
+	// slackDialTimeout bounds the TCP connect to a Slack Incoming Webhook
+	// receiver (or whatever a workspace admin pointed webhook_url at).
+	slackDialTimeout = 5 * time.Second
+	// slackRequestTimeout bounds one whole delivery attempt.
+	slackRequestTimeout = 10 * time.Second
 )
+
+// errSlackRedirectRefused is returned by the delivery client's CheckRedirect.
+// SendMessage has no retry logic (NotifyTaskEvent fires once and logs on
+// error), so unlike webhook_service's ErrUseLastResponse there is no delivery
+// log entry that benefits from seeing the 30x status — refusing outright is
+// simpler and gives the same guarantee: a redirect to an internal address is
+// never followed.
+var errSlackRedirectRefused = errors.New("slack webhook redirects are not followed")
 
 // slackConfig is the Slack Incoming Webhook configuration stored as JSONB
 // in integration_configs.config.
@@ -76,10 +90,42 @@ type slackService struct {
 func NewSlackService(integrationRepo repository.IntegrationRepository, baseURL string) SlackService {
 	return &slackService{
 		integrationRepo: integrationRepo,
-		client: &http.Client{
-			Timeout: slackHTTPTimeout,
+		client:          newSlackHTTPClient(isPubliclyRoutable),
+		baseURL:         baseURL,
+	}
+}
+
+// newSlackHTTPClient builds the client used to deliver a Slack Incoming
+// Webhook notification. webhook_url is workspace-admin-controlled and stored
+// exactly like a workspace webhook's URL — same blind-SSRF exposure, same
+// fix: dial only addresses allow accepts, checked on the resolved IP right
+// before connect (closes the gap between write-time validation, which can
+// only see what a name resolves to today, and a later delivery), and never
+// follow a redirect (a 30x to an internal address would otherwise walk
+// straight past the dial check's intent). See newWebhookHTTPClient in
+// webhook_service.go and newAgentCallbackHTTPClient in agent_callback_url.go
+// — same shape, same guardedDialContext/isPubliclyRoutable from
+// oauth_service.go, applied to a third outbound path.
+//
+// allow is isPubliclyRoutable in production; tests pass a predicate that
+// admits their loopback httptest server.
+//
+// Proxy is deliberately left nil: an HTTP(S)_PROXY from the environment
+// would make the dial check see the proxy's address, not the webhook's.
+func newSlackHTTPClient(allow func(net.IP) bool) *http.Client {
+	return &http.Client{
+		Timeout: slackRequestTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errSlackRedirectRefused
 		},
-		baseURL: baseURL,
+		Transport: &http.Transport{
+			DialContext:         guardedDialContext(slackDialTimeout, allow),
+			TLSHandshakeTimeout: slackDialTimeout,
+			// Receivers are sporadic (task-event notifications, not a
+			// steady stream) — pooling idle connections per host would
+			// only leak descriptors, same reasoning as webhook delivery.
+			DisableKeepAlives: true,
+		},
 	}
 }
 

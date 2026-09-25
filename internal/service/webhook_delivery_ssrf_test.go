@@ -109,6 +109,15 @@ func TestValidateWebhookURL_SharedPredicate(t *testing.T) {
 	}
 }
 
+// TestValidateWebhookURL_ExportedWrapperDelegates covers the exported
+// ValidateWebhookURL wrapper in THIS package's own coverage profile —
+// integration_handler_test.go exercises it too, but cross-package calls
+// don't count toward internal/service's coverage-gate profile.
+func TestValidateWebhookURL_ExportedWrapperDelegates(t *testing.T) {
+	assert.NoError(t, ValidateWebhookURL("https://93.184.216.34/hook"))
+	assert.Error(t, ValidateWebhookURL("http://127.0.0.1/hook"))
+}
+
 // The write-time check cannot be the boundary: a hostname is only resolved
 // once there. This is the delivery side of the same claim.
 func TestWebhookDelivery_RefusesNonPublicAddress(t *testing.T) {
