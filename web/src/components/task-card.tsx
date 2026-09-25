@@ -1,4 +1,4 @@
-import { forwardRef, memo, type HTMLAttributes } from "react";
+import { forwardRef, type HTMLAttributes } from "react";
 import { AlignLeft, CircleCheck, ExternalLink, GitBranch, Hand, Lock, Paperclip, Pencil, RefreshCw, Snowflake } from "lucide-react";
 import { parseISO } from "date-fns";
 import { cn } from "@/lib/cn";
@@ -41,9 +41,8 @@ interface TaskCardProps extends HTMLAttributes<HTMLDivElement> {
   checkedOutByName?: string;
 }
 
-export const TaskCard = memo(
-  forwardRef<HTMLDivElement, TaskCardProps>(
-    ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, className, ...props }, ref) => {
+export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
+  ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, className, ...props }, ref) => {
     const borderColor =
       priorityBorderColors[task.priority] ?? "border-l-transparent";
 
@@ -261,6 +260,5 @@ export const TaskCard = memo(
       </div>
     );
   },
-  ),
 );
 TaskCard.displayName = "TaskCard";
