@@ -250,6 +250,20 @@ test("board.open — open the project board from the sidebar", async () => {
     async () => {
       await page.goto(`/w/${fixture.ws_slug}/dashboard`);
       await expect(page.getByRole("link", { name: /perf fixture/i }).first()).toBeVisible();
+      // The signed-in shell warms the board chunk on idle (AppLayout →
+      // prefetch-next-route.ts). Wait for it instead of hoping the idle
+      // callback fires inside the 500 ms quiet window: if it landed during
+      // the click, its 32 <head> links would be counted as the click's own.
+      // And if the warm-up stops working, this fails by name rather than
+      // as a mystery +31 on dom_mutations.
+      await page.waitForFunction(
+        () =>
+          performance
+            .getEntriesByType("resource")
+            .some((e) => /\/assets\/board-[\w-]+\.js/.test(e.name)),
+        undefined,
+        { timeout: 15_000 }
+      );
     },
     async () => {
       await page.getByRole("link", { name: /perf fixture/i }).first().click();

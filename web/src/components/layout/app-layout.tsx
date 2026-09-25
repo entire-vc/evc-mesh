@@ -7,6 +7,7 @@ import { useProjectStore } from "@/stores/project";
 import { useWebSocketStore } from "@/stores/websocket";
 import { useInstallPrompt } from "@/hooks/use-install-prompt";
 import { useDynamicFavicon } from "@/hooks/use-dynamic-favicon";
+import { prefetchNextRouteOnIdle } from "@/lib/prefetch-next-route";
 import { InstallPromptBanner } from "@/components/install-prompt";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
@@ -64,6 +65,13 @@ export function AppLayout() {
       setInitialized(true);
     }
   }, [isAuthenticated, workspaces.length, fetchWorkspaces]);
+
+  // Warm the dashboard/board chunks once the shell is on screen. The login
+  // submit does this too, but a reload with a live session never goes through
+  // it — see prefetch-next-route.ts. Idempotent, kill-switchable.
+  useEffect(() => {
+    if (isAuthenticated && initialized) prefetchNextRouteOnIdle();
+  }, [isAuthenticated, initialized]);
 
   // Resolve workspace slug. A slug that doesn't match any live workspace —
   // deleted (soft-delete renames its slug away, task #c164a5df), never
