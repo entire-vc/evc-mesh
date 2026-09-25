@@ -141,7 +141,7 @@ Spread over 12 local runs of the minimum: `dom_mutations` and
 `layout_count` ±1, `recalc_style_count` wide (9–24) — its ceilings carry
 ~25% headroom, everything else sits at the highest observed minimum.
 
-### `board.open.dom_mutations` 43 → 74 after route splitting
+### `board.open.dom_mutations` 43 → 74 → 43
 
 Since !1006 the board is a lazy chunk. The first `import()` of it makes Vite
 insert one `<link rel="modulepreload">` (or stylesheet) into `<head>` per
@@ -149,9 +149,48 @@ dependency the entry chunk does not already carry — 30 JS + 2 CSS for the
 board — and the observer watches the whole `document`, `<head>` included.
 74 − 43 = 31 ≈ those 32 insertions. It happens once per session, adds no
 layout (`layout_count` unchanged at 3) and no React work. Measured on
-pipeline 5163 (runs 74 / 76 / 76, minimum gated). Lead sign-off: Garfield.
-Bringing it back to 43 (warm the board chunk on idle from `AppLayout`, or
-scope the observer to `#root`) lowers the ceiling again, per the rule above.
+pipeline 5163 (runs 74 / 76 / 76, minimum gated); the ceiling was raised to 74
+with Garfield's sign-off.
+
+It is back at **43** because the chunk is now warmed *before* the click:
+`AppLayout` calls `prefetchNextRouteOnIdle()` once the signed-in shell is on
+screen, which `import()`s the dashboard and board chunks on idle
+(`src/lib/prefetch-next-route.ts`). The 32 links are still inserted — but
+during the idle warm-up, which the counter does not see (it is reset when the
+action starts), not during the click. Until now only the login *submit* did
+this, and the counters path (and every reload, bookmark or second tab with a
+live session) never goes through it — that is why the number rose in the
+first place.
+
+Why not narrow the observer to `#root`: that would have kept the number at 43
+by making the metric blind to `<head>`, and the user would still have paid for
+the chunk on the click. Warming fixes the thing the number was pointing at.
+
+Measured locally on this change (`5bb8f632`), 4x CPU, same fixture:
+
+| | `board.open.dom_mutations` (3 runs) | gated (min) |
+|---|---|---|
+| without the `AppLayout` warm-up (= `main`) | 74 / 76 / 76 | 74 |
+| with it | 43 / 45 / 45 | **43** |
+
+The 43 / 45 / 45 shape repeated in 5 of 5 recordings (first run 43, later two
+45) — the minimum is stable, so the ceiling is exactly 43. `layout_count` 3
+and `react_commits` 12–13 are unchanged. Wall time is in the report but not a
+proof here: on loopback the chunk download costs nothing, so the local `ms`
+(1303 / 720 / 1485 → 1052 / 703 / 629) mostly shows the noise. What the user
+should gain is the ~33 file requests no longer made on the first click on a
+real connection — not measured here, only reasoned.
+
+`board.open`'s setup waits until the board chunk has actually been fetched
+(resource timing) before the action starts, so the result does not depend on
+whether the idle callback happened to fire inside the 500 ms quiet window. It
+also means that if the warm-up ever stops working, `board.open` fails in that
+wait, by name, instead of as an unexplained +31 (both proven red on this MR:
+ceiling 42 → `43 > ceiling 42`; warm-up removed → `waitForFunction` timeout).
+
+The warm-up is off when `prefetchNextRoute` is `false` (`/config.json` or
+`window.__MESH_FLAGS__` — unit test `prefetch-next-route.test.ts`) and on a
+data-saver connection (`navigator.connection.saveData`).
 
 `task.open.dom_mutations` 52 → 56 (+4) is the same change, found by running the
 whole spec: with `board.open` red, Playwright reports the other three paths as
