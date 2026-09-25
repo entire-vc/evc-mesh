@@ -231,7 +231,7 @@ const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
 // Keys under these paths belong to the per-action counters and are checked by
 // perf/counters.spec.ts (perf-counters job), which also fails on a missing
 // one. Anything else this script does not compute is still an error.
-const COUNTER_PATHS = ["board.open.", "task.open.", "view.switch.", "comment.send."];
+const COUNTER_PATHS = ["board.open.", "task.open.", "view.switch.", "comment.send.", "board.drag."];
 
 const failures = [];
 for (const [metric, ceiling] of Object.entries(budget)) {

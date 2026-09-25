@@ -42,6 +42,8 @@ export const taskTitle = (n) => `Perf fixture task ${String(n).padStart(3, "0")}
 export const OPEN_TASK_TITLE = taskTitle(1);
 /** Receives comment.send; its comments are wiped before each measurement. */
 export const COMMENT_TASK_TITLE = taskTitle(2);
+/** Dragged by board.drag; moved back to its seeded status before each repeat. */
+export const DRAG_TASK_TITLE = taskTitle(3);
 
 function apiBase() {
   const base = process.env.PERF_API_URL;
@@ -171,6 +173,7 @@ export async function seed({ quiet = false } = {}) {
     project_id: project.id,
     open_task_id: byTitle.get(OPEN_TASK_TITLE).id,
     comment_task_id: byTitle.get(COMMENT_TASK_TITLE).id,
+    drag_task_id: byTitle.get(DRAG_TASK_TITLE).id,
     task_count: FIXTURE.taskCount,
     email: FIXTURE.email,
     password: FIXTURE.password,
