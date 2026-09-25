@@ -99,6 +99,17 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 	}
 
 	provider := domain.IntegrationProvider(req.Provider)
+
+	// Slack's webhook_url gets the same write-time SSRF guard as a workspace
+	// webhook's url (§ prepareSlackConfig's own doc comment) — checked here,
+	// before the switch below, so the switch's Slack/Spark case stays the
+	// single shared marshal path it always was.
+	if provider == domain.IntegrationProviderSlack {
+		if apiErr := prepareSlackConfig(req.Config); apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
+	}
+
 	var configJSON json.RawMessage
 	switch provider {
 	case domain.IntegrationProviderMCP:
@@ -184,6 +195,15 @@ func (h *IntegrationHandler) Update(c echo.Context) error {
 	existing, err := h.integrationService.GetByID(c.Request().Context(), intID)
 	if err != nil {
 		return handleError(c, err)
+	}
+
+	// Same write-time Slack guard as Configure, checked once here so the
+	// switch's catch-all marshal path below stays the single shared one it
+	// always was for every provider without its own merge logic.
+	if existing.Provider == domain.IntegrationProviderSlack && req.Config != nil {
+		if apiErr := prepareSlackConfig(req.Config); apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
 	}
 
 	var configJSON []byte
@@ -407,6 +427,42 @@ func (h *IntegrationHandler) findExisting(ctx context.Context, workspaceID uuid.
 		}
 	}
 	return nil, nil
+}
+
+// prepareSlackConfig validates the webhook_url field present in config (a
+// map[string]any from the request body) before it is stored. A workspace's
+// Slack webhook_url is exactly the class of address SendMessage
+// (slack_service.go) POSTs to fresh on every task-event notification — the
+// same blind-SSRF exposure as a workspace webhook's url, so it gets the same
+// write-time guard: service.ValidateWebhookURL (shared with the workspace
+// webhook write path, itself backed by isPubliclyRoutable).
+//
+//   - No webhook_url field at all (e.g. an Update that only toggles
+//     is_active, or only changes channel/notify_events): left untouched —
+//     mirrors prepareTelegramConfig's "no field, no-op" rule.
+//   - An empty string: left untouched too — slackService.SendMessage already
+//     treats "" as "no webhook configured yet" and skips sending, so there is
+//     nothing here for the guard to protect.
+//   - A non-empty string that fails the guard: rejected before Configure/
+//     Update ever reaches the repository.
+//
+// This is the write-time courtesy check, not the security boundary — a name
+// can resolve differently by the time NotifyTaskEvent actually delivers.
+// The boundary is newSlackHTTPClient's dial-time guard in slack_service.go.
+func prepareSlackConfig(config interface{}) *apierror.Error {
+	raw, _ := config.(map[string]interface{})
+	v, ok := raw["webhook_url"]
+	if !ok {
+		return nil
+	}
+	s, _ := v.(string)
+	if s == "" {
+		return nil
+	}
+	if err := service.ValidateWebhookURL(s); err != nil {
+		return apierror.BadRequestWithDetails("invalid webhook_url", err.Error())
+	}
+	return nil
 }
 
 // prepareGitHubConfig validates and encrypts token/webhook_secret fields

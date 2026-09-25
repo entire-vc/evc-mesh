@@ -450,6 +450,8 @@ var errDialAddressRefused = errors.New("refusing to dial")
 // accepts the resolved IP. The check runs in net.Dialer.Control, i.e. on the
 // exact address the socket is about to connect to, after DNS resolution —
 // see ssrfSafeDialContext for why that and not a pre-resolve.
+//
+//nolint:unparam // every current caller (CIMD, webhook, agent-callback, slack) happens to dial with the same 5s bound today; timeout stays a parameter so a future caller (a different delivery class with its own latency budget) isn't forced to fork this function to get one.
 func guardedDialContext(timeout time.Duration, allow func(net.IP) bool) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		d := &net.Dialer{

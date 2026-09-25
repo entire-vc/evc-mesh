@@ -440,6 +440,15 @@ func stringFromMap(m map[string]interface{}, key string) (string, bool) {
 	return s, ok
 }
 
+// ValidateWebhookURL is validateWebhookURL, exported so the
+// integration_handler package (a different write path for the same class of
+// address — a workspace's Slack webhook_url) can reuse the same guard
+// instead of re-deriving it. See validateWebhookURL's own doc comment for
+// what it checks.
+func ValidateWebhookURL(rawURL string) error {
+	return validateWebhookURL(rawURL)
+}
+
 // validateWebhookURL refuses a webhook URL that is visibly wrong at write
 // time: wrong scheme, a literal non-public IP, localhost, a numeric host that a
 // libc resolver would read as an IP, or a name that resolves to a non-public
@@ -448,7 +457,9 @@ func stringFromMap(m map[string]interface{}, key string) (string, bool) {
 //
 // This is a courtesy to the person configuring the webhook (fast, readable
 // error), not the security boundary: the answer for a name can change after
-// this check. The boundary is newWebhookHTTPClient.
+// this check. The boundary is newWebhookHTTPClient (and, for Slack Incoming
+// Webhooks, newSlackHTTPClient in slack_service.go — the same predicate,
+// applied to a second write path that stores an outbound URL).
 func validateWebhookURL(rawURL string) error {
 	fail := func(msg string) error {
 		return apierror.ValidationError(map[string]string{"url": msg})

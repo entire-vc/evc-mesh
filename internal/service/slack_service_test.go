@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -235,8 +236,12 @@ func TestResolveTaskEventBaseURL(t *testing.T) {
 
 // TestNotifyTaskEvent_FallsBackToConfiguredBaseURL verifies the end-to-end path:
 // a TaskEvent with no BaseURL of its own still produces a deep-link built from
-// the service's configured MESH_BASE_URL (via NewSlackService), never a
-// hardcoded vendor domain.
+// the service's configured MESH_BASE_URL, never a hardcoded vendor domain.
+//
+// This exercises deep-link business logic, not the delivery SSRF guard, so it
+// builds the service with an open dial predicate (admits the loopback
+// httptest receiver) instead of NewSlackService's production
+// isPubliclyRoutable — see slack_webhook_ssrf_test.go for the guard itself.
 func TestNotifyTaskEvent_FallsBackToConfiguredBaseURL(t *testing.T) {
 	received := make(chan SlackMessage, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -248,7 +253,11 @@ func TestNotifyTaskEvent_FallsBackToConfiguredBaseURL(t *testing.T) {
 	defer srv.Close()
 
 	repo := &fakeIntegrationRepo{cfg: activeSlackConfig(srv.URL)}
-	svc := NewSlackService(repo, "https://configured.example.com")
+	svc := &slackService{
+		integrationRepo: repo,
+		client:          newSlackHTTPClient(func(net.IP) bool { return true }),
+		baseURL:         "https://configured.example.com",
+	}
 
 	taskID := uuid.New()
 	svc.NotifyTaskEvent(context.Background(), uuid.New(), TaskEvent{
