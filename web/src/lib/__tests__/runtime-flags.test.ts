@@ -62,4 +62,22 @@ describe("runtime-flags — the perf·Б1 prefetch kill switch", () => {
     await loadRuntimeFlags();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("defaults boardCardMemo to true when /config.json 404s", async () => {
+    vi.spyOn(window, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+    const { loadRuntimeFlags } = await freshModule();
+    const flags = await loadRuntimeFlags();
+    expect(flags.boardCardMemo).toBe(true);
+  });
+
+  it("honors /config.json disabling boardCardMemo", async () => {
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ boardCardMemo: false }), { status: 200 }),
+    );
+    const { loadRuntimeFlags } = await freshModule();
+    const flags = await loadRuntimeFlags();
+    expect(flags.boardCardMemo).toBe(false);
+    // The two flags are independent — disabling one must not touch the other.
+    expect(flags.prefetchNextRoute).toBe(true);
+  });
 });
