@@ -98,6 +98,21 @@ func (h *AgentWorkspaceGrantHandler) Invite(c echo.Context) error {
 }
 
 // Revoke handles DELETE /workspaces/:ws_id/agent-grants/:grant_id
+//
+// When the agent is an OAuth connector (an external application a workspace
+// member connected through the OAuth consent flow), this is a HARD block for
+// that application: its access tokens stop working at once, and the member who
+// connected it cannot re-connect it to this workspace by consenting again —
+// consent is refused (403), and that holds when the application registers a
+// fresh client_id, because the block is matched on the connector's name and
+// supervising member, not on the client_id. An admin lifts it by re-inviting
+// the connector agent. It does not stop a member who deliberately connects an
+// application under a different name; to stop a member connecting external
+// applications at all, change their role (a viewer cannot) or remove them.
+//
+// Deleting the connector agent instead of revoking its connection does not
+// block re-consent: a deleted agent cannot be re-invited, so the member is
+// issued a fresh connector.
 func (h *AgentWorkspaceGrantHandler) Revoke(c echo.Context) error {
 	wsID, err := uuid.Parse(c.Param("ws_id"))
 	if err != nil {

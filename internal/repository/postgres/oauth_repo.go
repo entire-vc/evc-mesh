@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -157,16 +158,116 @@ func (r *OAuthRepo) GetGrantByUserClientWorkspace(ctx context.Context, userID uu
 	return &g, nil
 }
 
-func (r *OAuthRepo) RetargetGrant(ctx context.Context, id, agentID uuid.UUID) error {
-	const q = `UPDATE oauth_grants SET agent_id = $2, revoked_at = NULL WHERE id = $1`
-	_, err := r.db.ExecContext(ctx, q, id, agentID)
+// killGrantCredentialsTx revokes every token of a grant and deletes its
+// not-yet-redeemed authorization codes, on tx. Used wherever a grant's
+// standing changes under it (retarget, reactivate, revoke): a token or a code
+// minted before the change must not survive it and start authenticating
+// under the grant's new state. Used codes are left alone — their row is what
+// makes a replay detectable (issued_family_id).
+func killGrantCredentialsTx(ctx context.Context, tx *sqlx.Tx, grantID uuid.UUID, now time.Time) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE oauth_tokens SET revoked_at = $2 WHERE grant_id = $1 AND revoked_at IS NULL`, grantID, now); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`DELETE FROM oauth_authorization_codes WHERE grant_id = $1 AND used_at IS NULL`, grantID)
 	return err
 }
 
-func (r *OAuthRepo) ReactivateGrant(ctx context.Context, id uuid.UUID) error {
-	const q = `UPDATE oauth_grants SET revoked_at = NULL WHERE id = $1`
-	_, err := r.db.ExecContext(ctx, q, id)
-	return err
+// RetargetGrant swaps the grant's connector agent from oldAgentID to
+// newAgentID as one compare-and-swap transaction: the agent switch, the
+// token revocation and the deletion of unredeemed codes commit together or
+// not at all, and only if the grant still points at oldAgentID. A second
+// concurrent re-consent that lost the race gets (false, nil) and must
+// discard the agent it registered — it never overwrites the winner.
+func (r *OAuthRepo) RetargetGrant(ctx context.Context, id, oldAgentID, newAgentID uuid.UUID, now time.Time) (bool, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE oauth_grants SET agent_id = $3, revoked_at = NULL WHERE id = $1 AND agent_id = $2`,
+		id, oldAgentID, newAgentID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil
+	}
+	if err := killGrantCredentialsTx(ctx, tx, id, now); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ReactivateGrant clears revoked_at in place AND, in the same transaction,
+// revokes every token and deletes every unredeemed code the grant holds. A
+// token minted in the window between RevokeGrant and RevokeTokensByGrant (an
+// exchange that passed its revoked check just before the revoke) is otherwise
+// unrevoked and would come back to life the moment revoked_at is cleared.
+//
+// It acts only on a grant that is still revoked: the flip is a guarded UPDATE
+// that also takes the row lock, so two consents that both read the grant as
+// revoked (a double click) serialize, and the second finds it already live and
+// touches nothing — it must not revoke the tokens and codes the first one just
+// handed out.
+func (r *OAuthRepo) ReactivateGrant(ctx context.Context, id uuid.UUID, now time.Time) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `UPDATE oauth_grants SET revoked_at = NULL WHERE id = $1 AND revoked_at IS NOT NULL`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		if err := killGrantCredentialsTx(ctx, tx, id, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// HasAdminRevokedConnector reports whether workspaceID holds a live connector
+// agent supervised by userID whose workspace connection was revoked and whose
+// name is baseName or a disambiguated "baseName (xxxx)" — the footprint an
+// admin's revoke leaves behind for THAT application, independent of which
+// client_id it registered under. A DCR client costs nothing to re-register and
+// gets a fresh client_id, so the per-(user, client_id) grant alone cannot
+// carry the block.
+func (r *OAuthRepo) HasAdminRevokedConnector(ctx context.Context, workspaceID, userID uuid.UUID, baseName string) (bool, error) {
+	const q = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agents a
+			JOIN agent_workspace_grants g ON g.agent_id = a.id AND g.workspace_id = a.workspace_id
+			WHERE a.workspace_id = $1
+			  AND a.supervisor_user_id = $2
+			  AND a.deleted_at IS NULL
+			  AND g.revoked_at IS NOT NULL
+			  AND (a.name = $3 OR a.name LIKE $4 ESCAPE '\')
+		)`
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(baseName)
+	var exists bool
+	if err := r.db.GetContext(ctx, &exists, q, workspaceID, userID, baseName, escaped+` (%)`); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // oauthGrantListRow is the flat scan target for ListGrantsByUser's JOIN —
@@ -225,6 +326,27 @@ func (r *OAuthRepo) RevokeGrant(ctx context.Context, id uuid.UUID, now time.Time
 	const q = `UPDATE oauth_grants SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL`
 	_, err := r.db.ExecContext(ctx, q, id, now)
 	return err
+}
+
+// RevokeGrantWithCredentials revokes the grant, all its tokens and its
+// unredeemed codes in one transaction — the user-facing "revoke access". Done
+// as separate statements, a crash between them left a revoked grant with live
+// tokens that a later reactivation resurrected.
+func (r *OAuthRepo) RevokeGrantWithCredentials(ctx context.Context, id uuid.UUID, now time.Time) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE oauth_grants SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL`, id, now); err != nil {
+		return err
+	}
+	if err := killGrantCredentialsTx(ctx, tx, id, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // --- Tokens ---
