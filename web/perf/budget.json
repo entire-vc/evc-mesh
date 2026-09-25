@@ -20,5 +20,10 @@
   "comment.send.board_card_commits": 0,
   "comment.send.layout_count": 3,
   "comment.send.recalc_style_count": 13,
-  "comment.send.dom_mutations": 25
+  "comment.send.dom_mutations": 25,
+  "board.drag.react_commits": 36,
+  "board.drag.board_card_commits": 1410,
+  "board.drag.layout_count": 18,
+  "board.drag.recalc_style_count": 99,
+  "board.drag.dom_mutations": 837
 }

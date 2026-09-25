@@ -71,6 +71,7 @@ const fixture = JSON.parse(readFileSync(resolve(here, ".fixture.json"), "utf8"))
   project_id: string;
   open_task_id: string;
   comment_task_id: string;
+  drag_task_id: string;
   email: string;
   password: string;
 };
@@ -348,6 +349,123 @@ test("view.switch — board → list", async () => {
     }
   );
   assertWithinBudget("view.switch", sample);
+});
+
+/** Column id (BoardColumn's data-column-id) of the dragged fixture card, or
+ * "" if it is not on the board right now (e.g. mid-navigation). */
+async function dragCardColumnId(): Promise<string> {
+  return page.evaluate((taskId) => {
+    const card = document.querySelector(`[data-testid="task-card"][data-task-id="${taskId}"]`);
+    return card?.closest("[data-testid='board-column']")?.getAttribute("data-column-id") ?? "";
+  }, fixture.drag_task_id);
+}
+
+test("board.drag — drag a card to a different column", async () => {
+  const dragCard = () =>
+    page.locator(`[data-testid="task-card"][data-task-id="${fixture.drag_task_id}"]`);
+
+  // The task's seeded status is a pure function of its task number modulo the
+  // project's status count (seed-fixture.mjs) — it can land anywhere,
+  // including a category the board hides by default (showClosed=false hides
+  // done/cancelled). Rather than assume it seeded into a visible column, pick
+  // one explicitly: the lowest-position non-closed status, read from the API
+  // the same way seed-fixture.mjs does, and move the card there before ever
+  // measuring. Every REPEAT resets back to this same, always-visible column.
+  const statusesRes = await page.request.get(
+    `/api/v1/projects/${fixture.project_id}/statuses`,
+    { headers: authHeaders }
+  );
+  expect(statusesRes.ok(), "reading project statuses for board.drag must succeed").toBe(true);
+  const statusesBody = (await statusesRes.json()) as
+    | { id: string; position: number; category: string }[]
+    | { items: { id: string; position: number; category: string }[] };
+  const allStatuses = Array.isArray(statusesBody) ? statusesBody : statusesBody.items;
+  const visibleStatuses = allStatuses
+    .filter((s) => s.category !== "done" && s.category !== "cancelled")
+    .sort((a, b) => a.position - b.position);
+  if (visibleStatuses.length < 2) {
+    throw new Error("board.drag needs at least two non-closed statuses on the fixture project");
+  }
+  const originalStatusId = visibleStatuses[0]!.id;
+
+  const sample = await measureRepeated(
+    "board.drag",
+    async () => {
+      // Unmeasured setup: put the card back on originalStatusId if it is not
+      // there already (REPEAT > 1 means every run after the first is undoing
+      // the previous run's own drag). A direct API call, not a second UI
+      // drag — a UI drag here would pollute this repeat's baseline with the
+      // previous repeat's cleanup.
+      const current = await page.request.get(`/api/v1/tasks/${fixture.drag_task_id}`, {
+        headers: authHeaders,
+      });
+      expect(current.ok(), "reading the drag fixture task must succeed").toBe(true);
+      const currentStatusId = ((await current.json()) as { status_id: string }).status_id;
+      if (currentStatusId !== originalStatusId) {
+        const reset = await page.request.post(`/api/v1/tasks/${fixture.drag_task_id}/move`, {
+          headers: authHeaders,
+          data: { status_id: originalStatusId },
+        });
+        expect(reset.ok(), "resetting the board.drag fixture between repeats must succeed").toBe(
+          true
+        );
+      }
+      await page.goto(boardUrl());
+      await expect(dragCard()).toBeVisible();
+    },
+    async () => {
+      const cardBox = await dragCard().boundingBox();
+      if (!cardBox) throw new Error("drag card has no bounding box");
+      const sourceColumnId = await dragCardColumnId();
+
+      const targetColumnBox = await page.evaluate((sourceColumnId) => {
+        const target = Array.from(
+          document.querySelectorAll("[data-testid='board-column']")
+        ).find((el) => el.getAttribute("data-column-id") !== sourceColumnId);
+        if (!target) return null;
+        const r = target.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      }, sourceColumnId);
+      if (!targetColumnBox) throw new Error("board.drag needs at least two visible columns");
+
+      const startX = cardBox.x + cardBox.width / 2;
+      const startY = cardBox.y + cardBox.height / 2;
+      const endX = targetColumnBox.x + targetColumnBox.width / 2;
+      const endY = targetColumnBox.y + 30;
+
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      // @dnd-kit's PointerSensor (board.tsx) needs movement past its own
+      // activationConstraint.distance (5px) before it starts tracking, then
+      // several intermediate steps so closestCorners collision detection
+      // sees the pointer pass over the target column rather than jumping
+      // straight from the source card to the final point.
+      await page.mouse.move(startX + 10, startY, { steps: 2 });
+      await page.mouse.move(endX, startY, { steps: 10 });
+      await page.mouse.move(endX, endY, { steps: 10 });
+      await page.mouse.up();
+
+      // Client-side proof the drop landed: the card is no longer under its
+      // old column. The server-side proof (§1n — a repaint is not a move)
+      // follows once the whole path is measured, below.
+      await expect(
+        page.locator(
+          `[data-testid="board-column"][data-column-id="${sourceColumnId}"] [data-task-id="${fixture.drag_task_id}"]`
+        )
+      ).toHaveCount(0);
+    }
+  );
+  assertWithinBudget("board.drag", sample);
+
+  const persisted = await page.request.get(`/api/v1/tasks/${fixture.drag_task_id}`, {
+    headers: authHeaders,
+  });
+  expect(persisted.ok(), "reading the dragged task back must succeed").toBe(true);
+  const task = (await persisted.json()) as { status_id: string };
+  expect(
+    task.status_id,
+    "the drag must persist server-side, not just repaint the column"
+  ).not.toBe(originalStatusId);
 });
 
 test("comment.send — post a comment on a task", async () => {
