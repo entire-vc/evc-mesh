@@ -1,6 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router";
-import { useShallow } from "zustand/react/shallow";
 import {
   DndContext,
   DragOverlay,
@@ -43,7 +42,6 @@ import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
 import { PerfProfiler } from "@/lib/perf-profiler";
-import { loadRuntimeFlags } from "@/lib/runtime-flags";
 import {
   BOARD_FILTER_DEFAULTS,
   GROUP_BY_VALUES,
@@ -92,21 +90,6 @@ interface BoardCol {
 }
 
 // ---------------------------------------------------------------------------
-// Board memoization kill switch (perf·Б3)
-// ---------------------------------------------------------------------------
-
-// Fires once at module load. By the time a real drag or click can happen the
-// fetch has long since resolved into window.__MESH_FLAGS__, which the
-// (necessarily synchronous) memo comparators below read directly. Before it
-// resolves — and if it never does — both default to enabled, the same
-// "absent means on" contract every flag in runtime-flags.ts uses.
-void loadRuntimeFlags();
-
-export function boardCardMemoEnabled(): boolean {
-  return window.__MESH_FLAGS__?.boardCardMemo ?? true;
-}
-
-// ---------------------------------------------------------------------------
 // Sortable task card wrapper
 // ---------------------------------------------------------------------------
 
@@ -114,43 +97,13 @@ interface SortableTaskCardProps {
   task: Task;
   columnId: string;
   statusCategory?: StatusCategory;
-  /** Stable across renders (a useCallback in BoardPage) — the id is bound at
-   * the call site, not by wrapping this in a new per-task closure in
-   * BoardColumn, which would defeat the memo below on every column render. */
-  onClick: (task: Task) => void;
-  onEditClick: (task: Task) => void;
+  onClick: () => void;
+  onEditClick: () => void;
   /** Display name of the card's checkout holder, when it is resolvable. */
   checkedOutByName?: string;
 }
 
-export function sortableTaskCardPropsEqual(
-  prev: SortableTaskCardProps,
-  next: SortableTaskCardProps,
-): boolean {
-  if (!boardCardMemoEnabled()) return false;
-  // task/onClick/onEditClick are reference-compared on purpose: the task
-  // store's moveTask + groupByStatus (stores/task.ts) preserve the object
-  // identity of every task they don't touch, and onClick/onEditClick are
-  // BoardPage useCallbacks with stable deps — so an unrelated card's props
-  // are the SAME references across a drag, not just equal-looking ones.
-  return (
-    prev.task === next.task &&
-    prev.columnId === next.columnId &&
-    prev.statusCategory === next.statusCategory &&
-    prev.onClick === next.onClick &&
-    prev.onEditClick === next.onEditClick &&
-    prev.checkedOutByName === next.checkedOutByName
-  );
-}
-
-const SortableTaskCard = memo(function SortableTaskCard({
-  task,
-  columnId,
-  statusCategory,
-  onClick,
-  onEditClick,
-  checkedOutByName,
-}: SortableTaskCardProps) {
+function SortableTaskCard({ task, columnId, statusCategory, onClick, onEditClick, checkedOutByName }: SortableTaskCardProps) {
   const {
     attributes,
     listeners,
@@ -169,37 +122,21 @@ const SortableTaskCard = memo(function SortableTaskCard({
     opacity: isDragging ? 0.4 : 1,
   };
 
-  // TaskCard is itself memoized (task-card.tsx) — these need to be stable
-  // too, or a fresh arrow function on every one of THIS component's own
-  // re-renders (most of which, during a drag, come from @dnd-kit's shared
-  // context and touch neither `task` nor `onClick`/`onEditClick`) would
-  // defeat that memo just as surely as the per-task closures in BoardColumn
-  // used to defeat this component's own memo.
-  const handleClick = useCallback(() => onClick(task), [onClick, task]);
-  const handleEditClick = useCallback(() => onEditClick(task), [onEditClick, task]);
-
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      data-testid="task-card"
-      data-task-id={task.id}
-      {...attributes}
-      {...listeners}
-    >
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
       <PerfProfiler id="board-card">
         <TaskCard
           task={task}
           isDragging={isDragging}
           statusCategory={statusCategory}
-          onClick={handleClick}
-          onEditClick={handleEditClick}
+          onClick={onClick}
+          onEditClick={() => onEditClick()}
           checkedOutByName={checkedOutByName}
         />
       </PerfProfiler>
     </div>
   );
-}, sortableTaskCardPropsEqual);
+}
 
 // ---------------------------------------------------------------------------
 // Droppable column
@@ -216,47 +153,7 @@ interface BoardColumnProps {
   holderNameById: Map<string, string>;
 }
 
-/** True when both arrays hold the SAME task objects, in the same order —
- * cheaper than deep-comparing task content, and enough: moveTask +
- * groupByStatus (stores/task.ts) always give an unrelated task back its old
- * object reference, so this is exact, not an approximation. */
-export function tasksArrayEqual(a: Task[], b: Task[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-/** True when both maps hold the same key → value pairs. holderNameById is
- * rebuilt (new Map, same content) on every board.tsx re-render whose deps
- * include `tasks` — including a drag that changes no one's checkout holder —
- * so a reference comparison here would defeat the column memo on every
- * drag. Member/holder counts are small (tens, not thousands): this is cheap. */
-export function holderMapsEqual(a: Map<string, string>, b: Map<string, string>): boolean {
-  if (a === b) return true;
-  if (a.size !== b.size) return false;
-  for (const [k, v] of a) {
-    if (b.get(k) !== v) return false;
-  }
-  return true;
-}
-
-export function boardColumnPropsEqual(prev: BoardColumnProps, next: BoardColumnProps): boolean {
-  if (!boardCardMemoEnabled()) return false;
-  return (
-    prev.col === next.col &&
-    tasksArrayEqual(prev.tasks, next.tasks) &&
-    prev.dndEnabled === next.dndEnabled &&
-    prev.onAddTask === next.onAddTask &&
-    prev.onTaskClick === next.onTaskClick &&
-    prev.onTaskEdit === next.onTaskEdit &&
-    holderMapsEqual(prev.holderNameById, next.holderNameById)
-  );
-}
-
-const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById }: BoardColumnProps) {
+function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById }: BoardColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
 
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
@@ -300,9 +197,6 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
 
       <div
         ref={setNodeRef}
-        data-testid="board-column"
-        data-column-id={col.id}
-        data-status-id={col.status?.id ?? ""}
         className={
           "min-h-[60px] space-y-2 rounded-xl bg-muted/50 p-2 transition-colors" +
           (isOver ? " ring-2 ring-primary/30 bg-muted/70" : "") +
@@ -319,8 +213,8 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
               task={task}
               columnId={col.id}
               statusCategory={col.status?.category}
-              onClick={onTaskClick}
-              onEditClick={onTaskEdit}
+              onClick={() => onTaskClick(task)}
+              onEditClick={() => onTaskEdit(task)}
               checkedOutByName={
                 task.checked_out_by ? holderNameById.get(task.checked_out_by) : undefined
               }
@@ -336,7 +230,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
       </div>
     </div>
   );
-}, boardColumnPropsEqual);
+}
 
 // ---------------------------------------------------------------------------
 // Tiny priority icon for column headers
@@ -404,37 +298,11 @@ function calculatePosition(tasks: Task[], targetIndex: number): number {
 export function BoardPage() {
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
-  // useShallow, not a bare store call: each store here carries fields this
-  // page never reads (error/total/page/… on the task store, for instance),
-  // and a bare `useStore()` re-renders on ANY of them changing, not just the
-  // ones destructured below. A drag's own moveTask touches several of those
-  // unrelated fields in the same `set()` — without this, every column and
-  // card would re-render on state a drag doesn't even use.
-  const { currentProject, statuses, fetchStatuses } = useProjectStore(
-    useShallow((s) => ({
-      currentProject: s.currentProject,
-      statuses: s.statuses,
-      fetchStatuses: s.fetchStatuses,
-    })),
-  );
-  const { tasks, tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore(
-    useShallow((s) => ({
-      tasks: s.tasks,
-      tasksByStatus: s.tasksByStatus,
-      isLoading: s.isLoading,
-      fetchTasks: s.fetchTasks,
-      moveTask: s.moveTask,
-    })),
-  );
-  const { fields: customFieldDefs, fetchFields: fetchCustomFields } = useCustomFieldStore(
-    useShallow((s) => ({ fields: s.fields, fetchFields: s.fetchFields })),
-  );
-  const { projectMembers, fetchProjectMembers } = useMemberStore(
-    useShallow((s) => ({
-      projectMembers: s.projectMembers,
-      fetchProjectMembers: s.fetchProjectMembers,
-    })),
-  );
+  const { currentProject, statuses, fetchStatuses } = useProjectStore();
+  const { tasks, tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore();
+  const { fields: customFieldDefs, fetchFields: fetchCustomFields } =
+    useCustomFieldStore();
+  const { projectMembers, fetchProjectMembers } = useMemberStore();
 
   // Slide-over state
   const [slideOverTaskId, setSlideOverTaskId] = useState<string | null>(null);
@@ -688,7 +556,7 @@ export function BoardPage() {
   // Build columns + task groups based on groupBy
   // ---------------------------------------------------------------------------
 
-  const { columns: rawColumns, tasksByColumn } = useMemo((): {
+  const { columns, tasksByColumn } = useMemo((): {
     columns: BoardCol[];
     tasksByColumn: Record<string, Task[]>;
   } => {
@@ -812,37 +680,6 @@ export function BoardPage() {
     tasksByStatus,
     filteredTasks,
   ]);
-
-  // BoardCol objects above are rebuilt from scratch on every recompute —
-  // including one triggered by a single task's drag, which changes
-  // tasksByStatus/filteredTasks but not a single status's id/title/color.
-  // BoardColumn is memoized (below) and compares `col` by reference, so a
-  // fresh-but-identical object would defeat that memo for EVERY column on
-  // EVERY drag. Reconcile by id + shallow content against the previous
-  // render's objects and reuse them when nothing actually changed, so
-  // unrelated columns keep the same `col` reference across a drag.
-  const boardColCacheRef = useRef<Map<string, BoardCol>>(new Map());
-  const columns = useMemo(() => {
-    const cache = boardColCacheRef.current;
-    const next = new Map<string, BoardCol>();
-    const stabilized = rawColumns.map((col) => {
-      const cached = cache.get(col.id);
-      const unchanged =
-        cached !== undefined &&
-        cached.title === col.title &&
-        cached.color === col.color &&
-        cached.status === col.status &&
-        cached.priority === col.priority &&
-        cached.assigneeId === col.assigneeId &&
-        cached.assigneeName === col.assigneeName &&
-        cached.assigneeType === col.assigneeType;
-      const stable = unchanged ? cached : col;
-      next.set(col.id, stable);
-      return stable;
-    });
-    boardColCacheRef.current = next;
-    return stabilized;
-  }, [rawColumns]);
 
   // DnD is only fully active when groupBy === 'status'
   // (we disable cross-column drag for other groupings to keep status intact)
