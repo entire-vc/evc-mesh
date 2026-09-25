@@ -21,6 +21,50 @@ import { fileURLToPath } from "node:url";
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * `AppLayout` warms the dashboard and board chunks on idle
+ * (`src/lib/prefetch-next-route.ts`) — the first `import()` of a lazy chunk
+ * inserts its `<link rel="modulepreload">`s into `<head>`, and a test whose
+ * setup navigates straight to a route (skipping whichever of the two chunks
+ * that route doesn't itself load) can have the warm-up's idle callback land
+ * *during* the timed action, miscounting its `<head>` insertions as the
+ * action's own `dom_mutations`. The fix is to wait for the warmed chunk's
+ * resource-timing entry before the action starts (below).
+ *
+ * The wait needs the *exact* built filename, not a hand-written prefix
+ * pattern like `/assets/board-[\w-]+\.js` — that string is a bet that no
+ * other current or future chunk's name also starts with "board-" right after
+ * "/assets/", and nothing enforces the bet. Reading it from the same
+ * manifest `check-bundle-budget.mjs` uses (keyed by source path, so a rename
+ * of the chunk is still found) removes the bet entirely: wrong or missing
+ * entry fails loudly here instead of quietly matching nothing.
+ */
+const manifestPath = resolve(here, "..", "dist-perf", ".vite", "manifest.json");
+function manifestChunkFile(srcPath: string): string {
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
+    string,
+    { file?: string }
+  >;
+  const file = manifest[srcPath]?.file;
+  if (!file) {
+    throw new Error(
+      `${manifestPath} has no chunk file for "${srcPath}" (renamed or moved?). Keys: ${Object.keys(manifest).join(", ") || "(none)"}`,
+    );
+  }
+  return file;
+}
+const BOARD_CHUNK = manifestChunkFile("src/pages/board.tsx");
+const DASHBOARD_CHUNK = manifestChunkFile("src/pages/dashboard.tsx");
+
+async function waitForChunkFetched(target: Page, chunkFile: string): Promise<void> {
+  await target.waitForFunction(
+    (file) => performance.getEntriesByType("resource").some((e) => e.name.endsWith(file)),
+    chunkFile,
+    { timeout: 15_000 },
+  );
+}
+
 const fixture = JSON.parse(readFileSync(resolve(here, ".fixture.json"), "utf8")) as {
   ws_slug: string;
   project_slug: string;
@@ -256,14 +300,7 @@ test("board.open — open the project board from the sidebar", async () => {
       // the click, its 32 <head> links would be counted as the click's own.
       // And if the warm-up stops working, this fails by name rather than
       // as a mystery +31 on dom_mutations.
-      await page.waitForFunction(
-        () =>
-          performance
-            .getEntriesByType("resource")
-            .some((e) => /\/assets\/board-[\w-]+\.js/.test(e.name)),
-        undefined,
-        { timeout: 15_000 }
-      );
+      await waitForChunkFetched(page, BOARD_CHUNK);
     },
     async () => {
       await page.getByRole("link", { name: /perf fixture/i }).first().click();
@@ -280,6 +317,11 @@ test("task.open — open a card from the board", async () => {
     async () => {
       await page.goto(boardUrl());
       await expect(firstCard()).toBeVisible();
+      // Same race as board.open's setup, mirrored: this setup lands directly
+      // on the board (board chunk already loaded as part of the navigation
+      // itself), but AppLayout's warm-up still has to fetch the dashboard
+      // chunk it hasn't seen yet — wait for that before starting the click.
+      await waitForChunkFetched(page, DASHBOARD_CHUNK);
     },
     async () => {
       await firstCard().click();
@@ -296,6 +338,8 @@ test("view.switch — board → list", async () => {
     async () => {
       await page.goto(boardUrl());
       await expect(firstCard()).toBeVisible();
+      // Same race as task.open's setup — see the comment there.
+      await waitForChunkFetched(page, DASHBOARD_CHUNK);
     },
     async () => {
       await page.getByRole("button", { name: "List", exact: true }).click();
@@ -322,6 +366,12 @@ test("comment.send — post a comment on a task", async () => {
       await page.goto(`${boardUrl()}/t/${fixture.comment_task_id}`);
       const box = form().getByRole("textbox");
       await expect(box).toBeVisible();
+      // Unlike task.open/view.switch, this setup never navigates through the
+      // board — it goes straight to the task-detail URL — so AppLayout's
+      // warm-up still has to fetch BOTH the dashboard and the board chunk it
+      // hasn't seen yet. Wait for both before starting the action.
+      await waitForChunkFetched(page, DASHBOARD_CHUNK);
+      await waitForChunkFetched(page, BOARD_CHUNK);
       await box.click();
       await page.keyboard.type(text);
       await expect(form().getByRole("button", { name: "Comment", exact: true })).toBeEnabled();
