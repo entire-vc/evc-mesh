@@ -18,10 +18,17 @@
 export interface RuntimeFlags {
   /** Prefetch the next likely route's JS chunk once idle. */
   prefetchNextRoute: boolean;
+  /** Memoize board columns and cards (perf·Б3) so a drag/drop or a store
+   * update outside a column only re-renders the cards that actually changed,
+   * instead of every card on the board. Off falls back to the pre-memo
+   * behavior — every card and column re-renders on every board state change,
+   * same as before this flag existed. */
+  boardCardMemo: boolean;
 }
 
 const DEFAULT_FLAGS: RuntimeFlags = {
   prefetchNextRoute: true,
+  boardCardMemo: true,
 };
 
 declare global {
