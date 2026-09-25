@@ -32,6 +32,40 @@ declare global {
 
 let loaded: Promise<RuntimeFlags> | null = null;
 
+const FALSY_FLAG_STRINGS = new Set(["false", "0", "off"]);
+const TRUTHY_FLAG_STRINGS = new Set(["true", "1", "on"]);
+
+/** A flag read from JSON (`/config.json` or `window.__MESH_FLAGS__`) can be
+ * anything a human typed by hand. `{...DEFAULT_FLAGS, ...fromConfig}` used to
+ * trust it verbatim, so `"prefetchNextRoute": "false"` (a string, truthy in
+ * JS) merged in as-is and the `if (!flags.prefetchNextRoute) return;` kill
+ * switch never fired — fail-open on exactly the kind of typo someone makes
+ * editing the file by hand during an incident. Only a real boolean or one of
+ * the common textual spellings changes the flag; anything else is logged and
+ * ignored so a typo shows up in the console instead of silently no-op'ing. */
+function normalizeFlagValue(name: string, value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (FALSY_FLAG_STRINGS.has(normalized)) return false;
+    if (TRUTHY_FLAG_STRINGS.has(normalized)) return true;
+  }
+  console.warn(
+    `[runtime-flags] ${name} = ${JSON.stringify(value)} is not a recognized boolean value — falling back to ${fallback}.`,
+  );
+  return fallback;
+}
+
+function normalizeFlags(raw: Partial<RuntimeFlags> | undefined): Partial<RuntimeFlags> {
+  if (!raw || typeof raw !== "object") return {};
+  const result: Partial<RuntimeFlags> = {};
+  for (const key of Object.keys(DEFAULT_FLAGS) as (keyof RuntimeFlags)[]) {
+    if (!(key in raw)) continue;
+    result[key] = normalizeFlagValue(key, raw[key], DEFAULT_FLAGS[key]);
+  }
+  return result;
+}
+
 async function fetchConfigFlags(): Promise<Partial<RuntimeFlags>> {
   try {
     const res = await fetch("/config.json", { cache: "no-store" });
@@ -52,8 +86,8 @@ export function loadRuntimeFlags(): Promise<RuntimeFlags> {
     loaded = fetchConfigFlags().then((fromConfig) => {
       const merged: RuntimeFlags = {
         ...DEFAULT_FLAGS,
-        ...fromConfig,
-        ...window.__MESH_FLAGS__,
+        ...normalizeFlags(fromConfig),
+        ...normalizeFlags(window.__MESH_FLAGS__),
       };
       window.__MESH_FLAGS__ = merged;
       return merged;

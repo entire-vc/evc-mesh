@@ -73,6 +73,13 @@ small chunks compress worse than one big one (gzip -9 over the same files:
 it is a guard against unbounded growth, not a target. Raising it needed a
 reason and lead sign-off (rule above) — see the MR.
 
+`login.initial_js_kb_gz` also moved for a second, unrelated reason: the
+`AppLayout` warm-up (`5bb8f632`, see `board.open.dom_mutations` below) added
+`prefetch-next-route.ts` and its runtime-flags check to the code the signed-in
+shell loads eagerly — 148.96 → 149.13 KB gz (**+0.17 KB gz**). Not a route-split
+chunk, so it counts against the initial-load ceiling like any other
+always-loaded code; stated here so the number isn't mistaken for drift.
+
 ## Proving the gate actually gates (do this again after touching the script)
 
 A budget check that can't go red isn't a check (see the fleet's `§0x`). Two
@@ -180,6 +187,13 @@ proof here: on loopback the chunk download costs nothing, so the local `ms`
 (1303 / 720 / 1485 → 1052 / 703 / 629) mostly shows the noise. What the user
 should gain is the ~33 file requests no longer made on the first click on a
 real connection — not measured here, only reasoned.
+
+**Zero headroom, by construction, not by accident:** the ceiling is 43
+because the gated minimum of 43 / 45 / 45 *is* 43 — there is no slack between
+"what we measured" and "what fails the build". Any regression that adds even
+one DOM mutation to the warm first render lands the minimum at 44 and the job
+goes red. That is the intended behavior of a ratchet at its own floor, not a
+bug to pad out with margin.
 
 `board.open`'s setup waits until the board chunk has actually been fetched
 (resource timing) before the action starts, so the result does not depend on
