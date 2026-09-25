@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -32,6 +33,10 @@ const (
 	webhookMaxAttempts = 3
 	// webhookDefaultDeliveryLimit is the default number of deliveries returned in ListDeliveries.
 	webhookDefaultDeliveryLimit = 50
+	// webhookDialTimeout bounds the TCP connect to a webhook receiver.
+	webhookDialTimeout = 5 * time.Second
+	// webhookRequestTimeout bounds one whole delivery attempt.
+	webhookRequestTimeout = 10 * time.Second
 )
 
 // webhookService implements WebhookService.
@@ -55,15 +60,58 @@ func WithSlackService(ss SlackService) WebhookServiceOption {
 // NewWebhookService returns a new WebhookService backed by the given repository.
 func NewWebhookService(repo repository.WebhookRepository, opts ...WebhookServiceOption) WebhookService {
 	s := &webhookService{
-		repo: repo,
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		repo:   repo,
+		client: newWebhookHTTPClient(isPubliclyRoutable),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// newWebhookHTTPClient builds the client used for outbound webhook delivery.
+// The URL check at write time (validateWebhookURL) can only see what the name
+// resolves to today, so it is not what keeps the server out of its own
+// network: this client is. It dials only addresses allow accepts, checked on
+// the exact IP right before connect (closes DNS rebinding between the write and
+// any later delivery or retry), and never follows a redirect (a 30x is
+// returned as-is and recorded as a failed delivery, not retried).
+//
+// allow is isPubliclyRoutable in production; tests pass a predicate that
+// admits their loopback httptest server.
+//
+// Proxy is deliberately left nil: an HTTP(S)_PROXY from the environment would
+// make the dial check see the proxy's address, not the receiver's.
+func newWebhookHTTPClient(allow func(net.IP) bool) *http.Client {
+	return &http.Client{
+		Timeout: webhookRequestTimeout,
+		// Hand the 30x back as the response instead of following it: the
+		// Location is chosen by whoever runs the receiver, and the delivery log
+		// then shows the status the receiver actually answered.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: &http.Transport{
+			DialContext:         guardedDialContext(webhookDialTimeout, allow),
+			TLSHandshakeTimeout: webhookDialTimeout,
+			// Receivers are chosen by tenants and deliveries are sporadic:
+			// pooling idle connections per host would only leak descriptors.
+			DisableKeepAlives: true,
+		},
+	}
+}
+
+// isPermanentWebhookError reports whether a delivery error is our own guard
+// refusing the address, or a name that does not exist.
+// Retrying cannot change the outcome, and the retry schedule sleeps 1s+5s+25s
+// per event. Temporary resolver failures and ordinary network errors still
+// retry.
+func isPermanentWebhookError(err error) bool {
+	if errors.Is(err, errDialAddressRefused) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
 // Create generates a random secret and persists the webhook configuration.
@@ -232,8 +280,16 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 				success = true
 				break
 			}
+			if status >= 300 && status < 400 {
+				// Not followed, and a retry will not change the answer.
+				log.Printf("[webhook] webhook %s event %s: receiver answered %d, redirects are not followed", wh.ID, eventType, status)
+				break
+			}
 		} else {
 			log.Printf("[webhook] attempt %d/%d for webhook %s event %s: %v", attempt, webhookMaxAttempts, wh.ID, eventType, err)
+			if isPermanentWebhookError(err) {
+				break
+			}
 		}
 	}
 
@@ -384,71 +440,58 @@ func stringFromMap(m map[string]interface{}, key string) (string, bool) {
 	return s, ok
 }
 
-// privateRanges lists CIDR blocks that must not be targeted by webhooks (SSRF prevention).
-var privateRanges = func() []*net.IPNet {
-	cidrs := []string{
-		"127.0.0.0/8",    // loopback
-		"10.0.0.0/8",     // private
-		"172.16.0.0/12",  // private
-		"192.168.0.0/16", // private
-		"169.254.0.0/16", // link-local / cloud metadata (AWS 169.254.169.254, etc.)
-		"::1/128",        // IPv6 loopback
-		"fc00::/7",       // IPv6 unique local
-		"fe80::/10",      // IPv6 link-local
-	}
-	nets := make([]*net.IPNet, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err == nil {
-			nets = append(nets, ipNet)
-		}
-	}
-	return nets
-}()
-
-// isPrivateIP returns true if ip falls within any of the reserved/private ranges.
-func isPrivateIP(ip net.IP) bool {
-	for _, block := range privateRanges {
-		if block.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// validateWebhookURL checks that the URL is a valid http/https URL and does not
-// point to a private/internal IP address (SSRF prevention).
+// validateWebhookURL refuses a webhook URL that is visibly wrong at write
+// time: wrong scheme, a literal non-public IP, localhost, a numeric host that a
+// libc resolver would read as an IP, or a name that resolves to a non-public
+// address. It uses the same predicate as the delivery dial guard
+// (isPubliclyRoutable).
+//
+// This is a courtesy to the person configuring the webhook (fast, readable
+// error), not the security boundary: the answer for a name can change after
+// this check. The boundary is newWebhookHTTPClient.
 func validateWebhookURL(rawURL string) error {
+	fail := func(msg string) error {
+		return apierror.ValidationError(map[string]string{"url": msg})
+	}
 	if strings.TrimSpace(rawURL) == "" {
-		return apierror.ValidationError(map[string]string{
-			"url": "url is required",
-		})
+		return fail("url is required")
 	}
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil {
-		return apierror.ValidationError(map[string]string{
-			"url": "url is not a valid URL",
-		})
+		return fail("url is not a valid URL")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return apierror.ValidationError(map[string]string{
-			"url": "url must use http or https scheme",
-		})
+		return fail("url must use http or https scheme")
 	}
 
-	hostname := parsed.Hostname()
+	hostname := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if hostname == "" {
+		return fail("url must have a host")
+	}
+	const privateMsg = "url must not point to a private or internal address"
+	if ip := net.ParseIP(hostname); ip != nil {
+		if !isPubliclyRoutable(ip) {
+			return fail(privateMsg)
+		}
+		return nil
+	}
+	// 2130706433, 0x7f000001, 127.1: not canonical IPs, so ParseIP says no, yet
+	// a libc resolver reads each as 127.0.0.1. No real DNS name ends in a
+	// numeric label, so refuse the whole shape.
+	if isNumericHostLabel(hostname[strings.LastIndex(hostname, ".")+1:]) {
+		return fail("url host must be a DNS name or a canonical IP address")
+	}
+	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return fail(privateMsg)
+	}
+
 	addrs, err := net.LookupHost(hostname)
 	if err != nil {
-		return apierror.ValidationError(map[string]string{
-			"url": "url hostname could not be resolved",
-		})
+		return fail("url hostname could not be resolved")
 	}
 	for _, addr := range addrs {
-		ip := net.ParseIP(addr)
-		if ip != nil && isPrivateIP(ip) {
-			return apierror.ValidationError(map[string]string{
-				"url": "url must not point to a private or internal address",
-			})
+		if ip := net.ParseIP(addr); ip != nil && !isPubliclyRoutable(ip) {
+			return fail(privateMsg)
 		}
 	}
 	return nil
