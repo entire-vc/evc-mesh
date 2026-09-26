@@ -96,10 +96,15 @@ func TestRequireConnectorPermission_RoleMatrix(t *testing.T) {
 func TestRequireConnectorPermission_DoesNotTouchAgentKeyAgentsOrHumans(t *testing.T) {
 	repo := newRBACMockMemberRepo()
 	wsID, agentID, userID := uuid.New(), uuid.New(), uuid.New()
-	// A human viewer: holds no PermManageProject / PermWriteMemory / PermMemoryIndex.
+	// A human viewer: holds no PermManageProject / PermWriteMemory.
 	repo.addMember(wsID, userID, domain.RoleViewer)
 
-	for _, perm := range []Permission{PermManageProject, PermWriteMemory, PermMemoryIndex} {
+	// PermMemoryIndex is deliberately excluded from this loop (task 440358b6):
+	// it moved into agentPerms once its routes moved to rbac(), so the
+	// "precondition: not in agentPerms" assertion below no longer holds for
+	// it — see TestRBAC_MemoryMaintenance_TrustedAgentCanRebuildIndex for its
+	// own coverage of the X-Agent-Key path.
+	for _, perm := range []Permission{PermManageProject, PermWriteMemory} {
 		t.Run("agk_ agent / "+string(perm), func(t *testing.T) {
 			require.False(t, agentPerms[perm], "precondition: the new permissions are not in agentPerms — that is the point")
 			c, rec := newRBACAgentContext(agentID, wsID) // no connector user id set
@@ -213,12 +218,20 @@ func TestRequireConnectorSelfOrPermission(t *testing.T) {
 	})
 }
 
-// The new permissions must live in the role matrix and nowhere else: not in
-// agentPerms (nothing reads them for an agk_ agent, and adding one would make
-// RequirePermission start admitting agk_ agents to it).
+// The new permissions must live in the role matrix, and (with one deliberate
+// exception) nowhere else: not in agentPerms (nothing reads them for an agk_
+// agent, and adding one would make RequirePermission start admitting agk_
+// agents to it). PermMemoryIndex is that exception (task 440358b6): its
+// routes moved to rbac(), and mesh-embed-backfill.sh / rechunk-prod-corpus.sh
+// reach them via a plain X-Agent-Key, not a workspace role — so it must be
+// in agentPerms, unlike its two siblings.
 func TestNewConnectorPermissions_MatrixShape(t *testing.T) {
-	for _, p := range []Permission{PermManageProject, PermWriteMemory, PermMemoryIndex} {
+	for _, p := range []Permission{PermManageProject, PermWriteMemory} {
 		assert.False(t, agentPerms[p], "%s must not be in agentPerms", p)
+	}
+	assert.True(t, agentPerms[PermMemoryIndex], "PermMemoryIndex must be in agentPerms: the reindex/backfill routes are called by X-Agent-Key fleet jobs, not just human roles")
+
+	for _, p := range []Permission{PermManageProject, PermWriteMemory, PermMemoryIndex} {
 		assert.False(t, hasPermission(domain.RoleViewer, p), "viewer must hold no write permission: %s", p)
 		assert.True(t, hasPermission(domain.RoleOwner, p), "owner holds %s", p)
 		assert.True(t, hasPermission(domain.RoleAdmin, p), "admin holds %s", p)

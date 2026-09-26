@@ -614,7 +614,10 @@ func TestHasPermission_OwnerHasAll(t *testing.T) {
 }
 
 func TestHasPermission_AgentLimitedPerms(t *testing.T) {
-	allowed := []Permission{PermCreateTask, PermUpdateTask, PermDeleteTask, PermAddComment, PermUploadArtifact, PermPublishEvent, PermManageRules}
+	// PermMemoryIndex (task 440358b6): the fleet's mesh-embed-backfill.sh and
+	// rechunk-prod-corpus.sh scripts call these routes under X-Agent-Key,
+	// so it must be allowed here once the routes move off connectorRBAC.
+	allowed := []Permission{PermCreateTask, PermUpdateTask, PermDeleteTask, PermAddComment, PermUploadArtifact, PermPublishEvent, PermManageRules, PermMemoryIndex}
 	denied := []Permission{PermDeleteWorkspace, PermManageMembers, PermCreateProject, PermDeleteProject, PermRegisterAgent, PermDeleteAgent, PermManageCF, PermExportAuditLog, PermManageWebhooks}
 
 	for _, p := range allowed {
