@@ -318,7 +318,7 @@ func main() {
 	// the per-consent connector agent — same instance every other consumer
 	// of AgentService gets.
 	oauthRepo := postgres.NewOAuthRepo(db)
-	oauthService := service.NewOAuthService(oauthRepo, agentService, userRepo, workspaceRepo, workspaceMemberRepo, agentWorkspaceGrantRepo)
+	oauthService := service.NewOAuthService(oauthRepo, agentService, userRepo, workspaceRepo, workspaceMemberRepo, agentWorkspaceGrantRepo, projectMemberRepo)
 
 	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).
 	// Reuses the same Redis connection as the WebSocket hub (created below in step 8a).

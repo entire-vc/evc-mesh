@@ -969,6 +969,11 @@ type ProjectMemberRepository interface {
 	DeleteByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) error
 	// ExistsMember returns true if the given user or agent is a member of the project.
 	ExistsMember(ctx context.Context, projectID uuid.UUID, userID, agentID *uuid.UUID) (bool, error)
+	// ListByWorkspaceAndUser returns every project membership row userID holds
+	// across projects in workspaceID. Used to mirror a human's own project
+	// access onto a newly registered identity acting on their behalf (task
+	// ec0bc566: a fresh OAuth connector agent).
+	ListByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.ProjectMember, error)
 }
 
 // SavedViewRepository manages persistence for saved views.
