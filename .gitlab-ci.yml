@@ -1039,6 +1039,9 @@ perf-bundle:
     # .build-sha) — proven every pipeline, not just once when it was written.
     - node perf/check-bundle-budget.mjs --selftest
     - node perf/check-bundle-budget.mjs
+    # The arithmetic behind every counters ceiling (false red vs miss rate of
+    # the min-of-N gate, perf/README.md "Choosing a ceiling").
+    - node perf/gate-power.mjs --selftest
     # The React Profiler behind VITE_PERF_PROFILER (src/lib/perf-profiler.tsx)
     # must never reach a shipped bundle. It is dead code without the flag; this
     # is the proof, on every pipeline, that it stayed dead.
