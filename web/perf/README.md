@@ -149,6 +149,70 @@ Spread over 12 local runs of the minimum: `dom_mutations` and
 `layout_count` ±1, `recalc_style_count` wide (9–24) — its ceilings carry
 ~25% headroom, everything else sits at the highest observed minimum.
 
+### Choosing a ceiling: two error rates, one script
+
+A min-of-N gate on a metric that jitters has two ways to be wrong, and they
+pull the ceiling in opposite directions. With `S(c)` the share of single
+runs above `c`:
+
+| | probability |
+|---|---|
+| **false red** — unchanged code fails | `P(min of N > C) = S(C)^N` |
+| **miss** — a real `+d` regression passes | `1 − S(C − d)^N` |
+
+A ceiling at the per-run **median** makes the first one large (the 18.5% on
+`board.drag`, round 3 below). A ceiling at the per-run **maximum** drives it
+to zero — and on any metric whose spread is wider than `d`, drives the catch
+rate to zero with it: a `+1` regression passes whenever even one of the N
+runs lands below the maximum. On `main` today `board.drag.board_card_commits`
+(ceiling 1410, 49 CI runs spread 1332–1410) has a modelled catch rate of 0
+for a `+1` — no first run in 11 reports landed above 1409 — and needs a
+regression of `+79` before it is caught 95% of the time. Neither end is safe by construction;
+the ceiling has to be computed.
+
+`perf/gate-power.mjs` does that from real runs. Give it
+`perf-counters-report.json` artifacts **of the same code** (a
+`PERF_REPEAT=25 PERF_RECORD=1` calibration record plus the reports of recent
+ordinary jobs is the best input — the ordinary jobs are what supply
+first-run samples, see below):
+
+```bash
+cd web
+node perf/gate-power.mjs [--repeat 3] [--shift 1] [--alpha 0.01] report.json…
+```
+
+Per metric it prints the false-red rate of the ceiling in `budget.json`, its
+rule-of-three upper bound (when no sample is above the ceiling the real tail
+is unknown, not zero), the catch rate for a `+shift` regression, the
+smallest regression caught 95% of the time, the **tightest ceiling the data
+defends at this `PERF_REPEAT`** (lowest observed value whose false-red bound
+is ≤ `--alpha`), and the smallest `PERF_REPEAT` at which some ceiling both
+keeps false red ≤ `--alpha` and catches `+shift` ≥ 95%. `none up to N=25`
+means no repeat count rescues that metric: its spread has to shrink first
+(`board.drag` on `main`, fixed by #8ecdfc89).
+
+**The first run is pooled separately.** On some paths it is systematically
+different from the later ones — `board.open`'s first run is 43 DOM
+mutations in every recorded job, the later runs 45; `view.switch`'s first
+run never hits the 173 the later ones sometimes do. Treating all runs as one
+pool would report a 30% false red on `board.open.dom_mutations` that no job
+has ever shown. A single calibration record carries one first run, which is
+why the bound needs ordinary jobs' reports next to it.
+
+**Rule for a new or changed ceiling:** use the `tightest@N` value, never the
+raw maximum, and quote the script's row in the MR. A ceiling above that is
+headroom the gate cannot use; below it, the false red is no longer bounded.
+`node perf/gate-power.mjs --selftest` (run by `perf-bundle`) proves the
+arithmetic, including the median and maximum mistakes above.
+
+First application (#dc8427af, 56 CI reports from 24–26.09): `view.switch`
+`react_commits` 8 → 7 and `board_card_commits` 150 → 0. Both were constant
+over all 183 recorded runs (the local 0 ↔ 150 race above never showed on
+CI); both went from catching a `+1` never to always, with a false-red bound
+under 0.01%. The other loose-looking ceilings (`recalc_style_count` on every
+path) buy almost nothing by tightening at `PERF_REPEAT=3` — their `tightest`
+row still catches `+1` under 3% — and were left alone.
+
 ### `board.open.dom_mutations` 43 → 74 → 43
 
 Since !1006 the board is a lazy chunk. The first `import()` of it makes Vite
@@ -314,6 +378,12 @@ sample) — consistent with the "no deterministic floor" diagnosis above, not
 a second regression. `budget.json` gates on the **max** of each column:
 `react_commits: 36`, `board_card_commits: 1410`, `layout_count: 18`,
 `recalc_style_count: 99`, `dom_mutations: 837`.
+
+**Superseded in part by "Choosing a ceiling" above (#dc8427af):** the
+maximum is safe against false red but, measured with `perf/gate-power.mjs`,
+it leaves this path blind to any regression smaller than its spread. Keep
+the warning against the median; replace "use the max" with the script's
+`tightest@N`.
 
 **Do not shrink these toward the median or the min again.** The gate stays
 min-of-`PERF_REPEAT` — that part is unchanged and correct, and matches every
