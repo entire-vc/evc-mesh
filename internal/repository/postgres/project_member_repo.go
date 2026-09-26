@@ -218,6 +218,30 @@ func (r *ProjectMemberRepo) ListByWorkspaceAndUser(ctx context.Context, workspac
 	return members, nil
 }
 
+// ListByWorkspaceAndAgent returns every project membership row agentID holds
+// across projects in workspaceID, joined through projects so a membership
+// in another workspace's project of the same agent is never returned.
+func (r *ProjectMemberRepo) ListByWorkspaceAndAgent(ctx context.Context, workspaceID, agentID uuid.UUID) ([]domain.ProjectMember, error) {
+	const q = `
+		SELECT pm.id, pm.project_id, pm.user_id, pm.agent_id, pm.role, pm.created_at, pm.updated_at
+		FROM project_members pm
+		JOIN projects p ON p.id = pm.project_id
+		WHERE p.workspace_id = $1 AND pm.agent_id = $2
+	`
+	var members []domain.ProjectMember
+	if err := r.db.SelectContext(ctx, &members, q, workspaceID, agentID); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+// UpdateRoleAgent changes the role for a given project + agent.
+func (r *ProjectMemberRepo) UpdateRoleAgent(ctx context.Context, projectID, agentID uuid.UUID, role string) error {
+	const q = `UPDATE project_members SET role = $3, updated_at = $4 WHERE project_id = $1 AND agent_id = $2`
+	_, err := r.db.ExecContext(ctx, q, projectID, agentID, role, time.Now())
+	return err
+}
+
 func derefStr(s *string) string {
 	if s == nil {
 		return ""

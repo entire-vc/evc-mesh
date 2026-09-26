@@ -2055,6 +2055,44 @@ func main() {
 	}()
 	log.Println("OAuth expired-token purge started (1h interval)")
 
+	// 10a-quater. Connector-membership resync (task cf226500): mirrorProjectMemberships
+	// (MR!1044, #ec0bc566) only ever runs once, at connector-agent registration — an
+	// existing grant's reuse path never re-mirrors. A human later removed from a
+	// project (or demoted) keeps their connector agent holding the stale access
+	// until something re-syncs it; the OAuth re-consent path can't be relied on for
+	// this given the 30-day refresh-token TTL. Same hourly cadence and 1-minute
+	// first-run offset as the purge job above, deliberately: this is the same class
+	// of best-effort, no-request-in-flight background job.
+	go func() {
+		resync := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			result, err := oauthService.ResyncConnectorMemberships(ctx)
+			if err != nil {
+				log.Printf("[oauth-membership-resync] ERROR: %v", err)
+			}
+			if result.Added > 0 || result.Removed > 0 || result.Updated > 0 {
+				log.Printf("[oauth-membership-resync] %d connector agents checked: %d memberships added, %d removed, %d roles corrected",
+					result.Agents, result.Added, result.Removed, result.Updated)
+			}
+		}
+		first := time.NewTimer(time.Minute)
+		defer first.Stop()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-first.C:
+				resync()
+			case <-ticker.C:
+				resync()
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Println("OAuth connector-membership resync started (1h interval)")
+
 	// 10a-bis. Memory review-triage nightly job (audit #1b010be6, plan:1.11):
 	// disposes of the review_needed backlog that the 6h reconciler's linker phase
 	// above never revisits (it only ever compares memories created in the last 24h

@@ -974,6 +974,14 @@ type ProjectMemberRepository interface {
 	// access onto a newly registered identity acting on their behalf (task
 	// ec0bc566: a fresh OAuth connector agent).
 	ListByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.ProjectMember, error)
+	// ListByWorkspaceAndAgent is ListByWorkspaceAndUser's connector-agent
+	// counterpart: every project membership row agentID holds across projects
+	// in workspaceID. Used to diff a connector agent's mirrored access
+	// against its supervisor's CURRENT access (task cf226500).
+	ListByWorkspaceAndAgent(ctx context.Context, workspaceID, agentID uuid.UUID) ([]domain.ProjectMember, error)
+	// UpdateRoleAgent is UpdateRole's connector-agent counterpart: changes the
+	// role for a given project + agent.
+	UpdateRoleAgent(ctx context.Context, projectID, agentID uuid.UUID, role string) error
 }
 
 // SavedViewRepository manages persistence for saved views.
@@ -1718,6 +1726,12 @@ type OAuthRepository interface {
 	// holds, joined with client/agent/workspace brief info — the GET
 	// /api/v1/oauth/grants listing ("your connected apps").
 	ListGrantsByUser(ctx context.Context, userID uuid.UUID) ([]domain.OAuthGrantWithDetails, error)
+	// ListActiveGrants returns every non-revoked grant system-wide. Used by
+	// the periodic connector-membership resync job (task cf226500) to find
+	// every connector agent whose mirrored project access might have drifted
+	// from its supervisor's current one — housekeeping-scale (one sweep),
+	// never per-request.
+	ListActiveGrants(ctx context.Context) ([]domain.OAuthGrant, error)
 	// RevokeGrant sets revoked_at=now if not already set. Idempotent: revoking
 	// an already-revoked grant is not an error.
 	RevokeGrant(ctx context.Context, id uuid.UUID, now time.Time) error

@@ -296,6 +296,35 @@ func TestOAuthRepo_Grant_UniquePerUserClientWorkspace(t *testing.T) {
 	require.Error(t, f.repo.CreateGrant(context.Background(), dup))
 }
 
+// TestOAuthRepo_ListActiveGrants_ExcludesRevoked exercises the query
+// ResyncConnectorMemberships (oauth_service.go, task cf226500) relies on for
+// its system-wide working set: an active grant must be included, a revoked
+// one must not. Unscoped by design (the periodic sweep walks every workspace
+// in one pass), so this asserts by Contains/NotContains rather than an exact
+// count — the shared test database can hold other tests' own active grants.
+func TestOAuthRepo_ListActiveGrants_ExcludesRevoked(t *testing.T) {
+	f := newOAuthFixture(t)
+	ctx := context.Background()
+
+	c2 := newOAuthTestClient(t, f.repo, "Resync Revoked Client")
+	revoked := &domain.OAuthGrant{
+		ID: uuid.New(), UserID: f.userID, ClientID: c2.ClientID, WorkspaceID: f.wsID,
+		AgentID: f.agent.ID, Scope: "mesh", CreatedAt: time.Now().UTC().Add(time.Second),
+	}
+	require.NoError(t, f.repo.CreateGrant(ctx, revoked))
+	require.NoError(t, f.repo.RevokeGrant(ctx, revoked.ID, time.Now().UTC()))
+
+	active, err := f.repo.ListActiveGrants(ctx)
+	require.NoError(t, err)
+
+	byID := make(map[uuid.UUID]domain.OAuthGrant, len(active))
+	for _, g := range active {
+		byID[g.ID] = g
+	}
+	assert.Contains(t, byID, f.grantID, "the fixture's own never-revoked grant must be in the active set")
+	assert.NotContains(t, byID, revoked.ID, "a revoked grant must never appear in ListActiveGrants")
+}
+
 func TestOAuthRepo_Grant_NotFound(t *testing.T) {
 	f := newOAuthFixture(t)
 	ctx := context.Background()
@@ -553,6 +582,8 @@ func TestOAuthRepo_ClosedDBPropagatesErrors(t *testing.T) {
 	_, err = repo.GetGrantByUserClientWorkspace(ctx, id, "x", id)
 	assert.Error(t, err)
 	_, err = repo.ListGrantsByUser(ctx, id)
+	assert.Error(t, err)
+	_, err = repo.ListActiveGrants(ctx)
 	assert.Error(t, err)
 	_, err = repo.GetTokenByHash(ctx, "x")
 	assert.Error(t, err)

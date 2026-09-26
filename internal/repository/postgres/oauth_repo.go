@@ -322,6 +322,18 @@ func (r *OAuthRepo) ListGrantsByUser(ctx context.Context, userID uuid.UUID) ([]d
 	return result, nil
 }
 
+// ListActiveGrants returns every grant with revoked_at IS NULL, system-wide —
+// the working set for the periodic connector-membership resync job (task
+// cf226500). Housekeeping-scale: called once per sweep, never per request.
+func (r *OAuthRepo) ListActiveGrants(ctx context.Context) ([]domain.OAuthGrant, error) {
+	q := `SELECT ` + oauthGrantCols + ` FROM oauth_grants WHERE revoked_at IS NULL`
+	var grants []domain.OAuthGrant
+	if err := r.db.SelectContext(ctx, &grants, q); err != nil {
+		return nil, err
+	}
+	return grants, nil
+}
+
 func (r *OAuthRepo) RevokeGrant(ctx context.Context, id uuid.UUID, now time.Time) error {
 	const q = `UPDATE oauth_grants SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL`
 	_, err := r.db.ExecContext(ctx, q, id, now)

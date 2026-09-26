@@ -1009,6 +1009,136 @@ func (s *oauthService) mirrorProjectMemberships(ctx context.Context, workspaceID
 	}
 }
 
+// ResyncConnectorMembershipsResult reports what one ResyncConnectorMemberships
+// sweep changed.
+type ResyncConnectorMembershipsResult struct {
+	Agents  int // connector agents inspected (usable ones, with a live grant)
+	Added   int // project memberships added because the supervisor gained them
+	Removed int // project memberships removed because the supervisor lost them
+	Updated int // project membership roles corrected to match the supervisor's
+}
+
+// ResyncConnectorMemberships re-mirrors every active connector agent's
+// project memberships onto its supervisor's CURRENT ones.
+//
+// mirrorProjectMemberships only ever runs once, at connector-agent
+// registration (registerConnectorAgent) — getOrCreateGrant's "existing grant
+// is still usable" branch returns the grant as-is without touching
+// membership. Two kinds of drift follow: added-after (the human joined a
+// project after their agent already existed — stale but not a privilege
+// escalation, the agent simply can't see something new) and removed-after
+// (the human was removed from a project, or demoted, after their agent
+// mirrored the old access — the agent then holds access the human no longer
+// has, which IS an escalation relative to the human's current standing).
+// This closes both directions.
+//
+// Deliberately periodic (task cf226500's option "б"), not wired into
+// getOrCreateGrant's reuse path (option "а"): that path is only exercised
+// when the human goes through /oauth/authorize again, which — given the
+// 30-day refresh-token TTL — can be weeks after their access actually
+// changed. A removal has to reach the connector agent on its own schedule,
+// independent of whether the human happens to re-consent. Wired alongside
+// PurgeExpired in cmd/api/main.go's existing hourly OAuth housekeeping
+// goroutine, since both are the same class of best-effort, no-request-in-
+// flight background job.
+func (s *oauthService) ResyncConnectorMemberships(ctx context.Context) (ResyncConnectorMembershipsResult, error) {
+	var result ResyncConnectorMembershipsResult
+	if s.projectMemberRepo == nil {
+		return result, nil
+	}
+	grants, err := s.repo.ListActiveGrants(ctx)
+	if err != nil {
+		return result, fmt.Errorf("oauth: resync: listing active grants: %w", err)
+	}
+	var errs error
+	for _, grant := range grants {
+		usable, uerr := s.connectorAgentUsable(ctx, &grant)
+		if uerr != nil {
+			errs = errors.Join(errs, fmt.Errorf("oauth: resync: grant %s: checking connector agent: %w", grant.ID, uerr))
+			continue
+		}
+		if !usable {
+			// No live connector agent to resync onto — an admin-revoked or
+			// deleted agent's memberships are that path's own business, not
+			// this job's.
+			continue
+		}
+		human, herr := s.projectMemberRepo.ListByWorkspaceAndUser(ctx, grant.WorkspaceID, grant.UserID)
+		if herr != nil {
+			errs = errors.Join(errs, fmt.Errorf("oauth: resync: grant %s: listing supervisor memberships: %w", grant.ID, herr))
+			continue
+		}
+		agentMemberships, aerr := s.projectMemberRepo.ListByWorkspaceAndAgent(ctx, grant.WorkspaceID, grant.AgentID)
+		if aerr != nil {
+			errs = errors.Join(errs, fmt.Errorf("oauth: resync: grant %s: listing agent memberships: %w", grant.ID, aerr))
+			continue
+		}
+		result.Agents++
+		added, removed, updated := s.reconcileProjectMemberships(ctx, grant.AgentID, human, agentMemberships)
+		result.Added += added
+		result.Removed += removed
+		result.Updated += updated
+	}
+	return result, errs
+}
+
+// reconcileProjectMemberships makes agentID's own project memberships (within
+// the one workspace human and agentMemberships were both listed from) match
+// human exactly: adds a project human holds that the agent doesn't, removes
+// one the agent holds that human no longer does, and corrects a role that
+// drifted. Best-effort per row, same posture as mirrorProjectMemberships — one
+// failing write is logged and does not stop the rest of the sweep.
+func (s *oauthService) reconcileProjectMemberships(ctx context.Context, agentID uuid.UUID, human, agentMemberships []domain.ProjectMember) (added, removed, updated int) {
+	byProject := make(map[uuid.UUID]domain.ProjectMember, len(human))
+	for _, m := range human {
+		byProject[m.ProjectID] = m
+	}
+	agentByProject := make(map[uuid.UUID]domain.ProjectMember, len(agentMemberships))
+	for _, m := range agentMemberships {
+		agentByProject[m.ProjectID] = m
+	}
+
+	now := timeNow()
+	for projectID, hm := range byProject {
+		if am, ok := agentByProject[projectID]; ok {
+			if am.Role == hm.Role {
+				continue
+			}
+			if err := s.projectMemberRepo.UpdateRoleAgent(ctx, projectID, agentID, hm.Role); err != nil {
+				log.Printf("oauth: resync role update onto connector agent %s for project %s failed: %v", agentID, projectID, err)
+				continue
+			}
+			updated++
+			continue
+		}
+		newAgentID := agentID
+		member := &domain.ProjectMember{
+			ID:        uuid.New(),
+			ProjectID: projectID,
+			AgentID:   &newAgentID,
+			Role:      hm.Role,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := s.projectMemberRepo.Create(ctx, member); err != nil {
+			log.Printf("oauth: resync add membership onto connector agent %s for project %s failed: %v", agentID, projectID, err)
+			continue
+		}
+		added++
+	}
+	for projectID := range agentByProject {
+		if _, stillMember := byProject[projectID]; stillMember {
+			continue
+		}
+		if err := s.projectMemberRepo.DeleteAgent(ctx, projectID, agentID); err != nil {
+			log.Printf("oauth: resync remove membership from connector agent %s for project %s failed: %v", agentID, projectID, err)
+			continue
+		}
+		removed++
+	}
+	return added, removed, updated
+}
+
 // isSlugConflict reports whether err is the agents.uq_agents_workspace_slug
 // unique-constraint violation.
 func isSlugConflict(err error) bool {
