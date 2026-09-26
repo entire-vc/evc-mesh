@@ -27,6 +27,13 @@ import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import type { Task, WSMessage } from "@/types";
 
+// A module-level constant, not an inline object at the useSensor call site:
+// an inline object is a new reference on every CalendarPage render, which
+// makes useSensors return a new `sensors` array and forces a new value on
+// DndContext's InternalContext, re-rendering every draggable chip even when
+// nothing about the sensor changed (same mechanism as board.tsx).
+const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 5 } };
+
 // ---------------------------------------------------------------------------
 // Drag data shape
 // ---------------------------------------------------------------------------
@@ -545,11 +552,7 @@ export function CalendarPage() {
   // DnD sensors — require 5px movement before drag starts (preserves clicks)
   // ---------------------------------------------------------------------------
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS));
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const data = event.active.data.current as DragData | undefined;

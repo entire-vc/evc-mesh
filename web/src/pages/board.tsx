@@ -106,6 +106,22 @@ export function boardCardMemoEnabled(): boolean {
   return window.__MESH_FLAGS__?.boardCardMemo ?? true;
 }
 
+// A module-level constant, not an inline object at the useSensor call site:
+// an inline object is a new reference on every BoardPage render, which makes
+// useSensors return a new `sensors` array, which @dnd-kit's DndContext turns
+// into a new `activators` value on its InternalContext — re-rendering every
+// card on the board even when nothing about the sensor actually changed.
+const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 5 } };
+
+// Disables @dnd-kit/sortable's post-drop layout-FLIP animation. That
+// animation depends on an internal `wasDragging` flag cleared via
+// setTimeout(50) — if the post-drop re-render lands inside that window
+// (timing-dependent, not deterministic), every shifted card re-renders an
+// extra time and re-applies its transform style, which is what made
+// dom_mutations vary run to run. Cards still snap to their new position
+// instantly; only the animated slide is removed.
+const DISABLE_LAYOUT_ANIMATION = () => false;
+
 // ---------------------------------------------------------------------------
 // Sortable task card wrapper
 // ---------------------------------------------------------------------------
@@ -161,6 +177,7 @@ const SortableTaskCard = memo(function SortableTaskCard({
   } = useSortable({
     id: task.id,
     data: { task, columnId },
+    animateLayoutChanges: DISABLE_LAYOUT_ANIMATION,
   });
 
   const style: React.CSSProperties = {
@@ -466,11 +483,7 @@ export function BoardPage() {
   // during the brief window while switching projects.
   const [filtersHydrated, setFiltersHydrated] = useState(false);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS));
 
   // Debounce ref to avoid re-fetching too rapidly on burst events.
   const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

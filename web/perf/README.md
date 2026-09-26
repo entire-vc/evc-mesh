@@ -428,6 +428,91 @@ column via a direct API call before every repeat (`perf/seed-fixture.mjs`'s
 that repeat's baseline with the previous repeat's own cleanup, the same
 reasoning `comment.send` uses for `wipeComments()`.
 
+### `board_card_commits` and `dom_mutations` DO have a floor after all (#8ecdfc89)
+
+The round-3 write-up above concluded `board_card_commits`/`dom_mutations` had
+no deterministic floor because every `useSortable`/`useDraggable`/
+`useDroppable` consumer reads `DndContext`'s `InternalContext`, which
+recomputes on essentially every pointer-move tick during a drag. That's true
+of the context recompute itself, but two *additional*, independent sources
+of variance were stacked on top of it and, it turns out, dominated these two
+specific counters:
+
+1. **`sensors` was a new array reference on every `BoardPage` render.**
+   `useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))`
+   built its options object inline at the call site, so any unrelated
+   `BoardPage` re-render (a store update, a filter change, anything) handed
+   `DndContext` a brand-new `sensors` array, which flows into the same
+   `InternalContext` `useMemo` as `activators` — one more full board
+   re-render stacked on top of the drag-tick churn the round-3 diagnosis
+   already knew about, and whether an unrelated re-render happened to land
+   during a given run's drag window is exactly the kind of timing accident
+   that shows up as run-to-run variance rather than a fixed count. Fixed by
+   hoisting the options object to a module-level `POINTER_SENSOR_OPTIONS`
+   constant (same pattern applied in `calendar.tsx`, which had the identical
+   inline-object pattern on its own `sensors`).
+2. **The post-drop layout-FLIP animation fired on a timing-dependent
+   window.** `@dnd-kit/sortable`'s default `useSortable` behaviour animates
+   shifted siblings into their new position after a drop, gated by an
+   internal `wasDragging` flag the library clears on a bare
+   `setTimeout(50)`. Whether the post-drop re-render this test's assertions
+   observe lands inside or outside that 50 ms window is not deterministic
+   (it depends on the test runner's own scheduling, not on anything the app
+   controls), and when it lands inside the window every shifted card
+   re-renders once more and re-applies its transform style — directly
+   inflating `dom_mutations`. Fixed by passing
+   `animateLayoutChanges={() => false}` to `SortableTaskCard`'s
+   `useSortable()` call. Cards still snap to their new slot instantly on
+   drop; only the animated slide-into-place is removed (checked visually at
+   1440 and 393 — no jump or flash, just an instant reflow instead of an
+   animated one).
+
+Neither fix touches the underlying `InternalContext` recompute-on-every-tick
+behaviour round 3 documented — `layout_count` and `recalc_style_count` still
+vary run to run (12–16 and 56–98 over 15 CI runs) for that reason, and still
+need the max-of-N ceiling methodology below. But `board_card_commits` and
+`dom_mutations` were not actually hostage to that mechanism the way round 3
+assumed: measured over 15 repeats in CI (pipeline
+[6073](https://git.entire.host/entire-vc/evc-mesh/-/pipelines/6073) on a
+throwaway `verne/board-drag-stable-sensor-calibration` push, same reasoning
+as round 3's calibration branch — a dedicated, uncontended runner),
+`board_card_commits` is **exactly 1282 on all 15/15 CI runs** (was
+1332–1410) and `dom_mutations` is **447 on 13/15 runs, 448 on 2/15** (was
+447–837) — a spread of 0 and 1 respectively, against this card's acceptance
+bar of 0 and ≤5.
+
+CI is this repo's authoritative measurement environment for ratchets (see
+round 3's methodology above), but it's worth being precise about what local
+measurement shows on the shared fleet dev host: repeated local 15-run
+samples land `board_card_commits` at 1282 on the large majority of runs,
+with an occasional single run at 1281 when the host is under heavy
+concurrent load from unrelated processes (observed at `load average
+7.5–10.8` on 10 cores, ~28 concurrent Docker containers from other tenants
+of the same machine) — never above 1282. That's consistent with a genuinely
+fixed floor that a contended host can occasionally undershoot inside the
+harness's measurement window, not a reopened source of unbounded variance:
+a value landing *below* the ceiling never fails `assertWithinBudget`
+(`gated > ceiling`), and the red-control check below still catches a real
++1 regression reliably. Don't re-read an isolated local 1281 as evidence the
+fix regressed — check CI first.
+
+`budget.json`'s `board.drag.*` ceilings are updated to the max of that same
+15-run CI sample: `react_commits: 36`, `board_card_commits: 1282`,
+`layout_count: 16`, `recalc_style_count: 98` — except `dom_mutations`, which
+is set to **447**, not the sample max of 448. Fault-injection on pipeline
+[6130](https://git.entire.host/entire-vc/evc-mesh/-/pipelines/6130) (16
+parallel runs: 8 clean, 8 with one extra DOM mutation injected) showed a
+ceiling of 448 catches that injected +1 regression 0/8 times (the injected
+run also lands on 448 or 449, indistinguishable from clean noise), while 447
+catches it 8/8 times. Taking the calibration max here would ship a gate that
+cannot see the regression it exists to catch, so the ceiling is the tightest
+value the same calibration data supports (447), not the loosest one that
+happens to pass. The `board_card_commits`/`dom_mutations` ceilings are no
+longer loose statistical margin over a noisy floor — they're a tight bound
+over two counters that are now (near-)constant, so a future regression on
+either one will redden on the very next PR rather than needing another
+25-run calibration pass to notice.
+
 ### Running it locally
 
 ```bash
@@ -440,6 +525,27 @@ PERF_API_URL=http://localhost:8095 npx playwright test -c perf/playwright.perf.c
 
 `PERF_RECORD=1` measures and writes `web/perf-counters-report.json` without
 gating — use it to take new ceilings. The CI job never sets it.
+
+### Proving this fix's own ceiling gates (#8ecdfc89)
+
+Reproducible on demand — not just prose in a Mesh comment. With the stack up
+and the fixture seeded per "Running it locally" above:
+
+```bash
+# board.drag.board_card_commits ceiling temporarily 1282 → 1281 in budget.json
+PERF_API_URL=http://localhost:8095 npx playwright test -c perf/playwright.perf.config.ts -g "board.drag"
+```
+
+```
+  ✘  1 [perf-counters] › perf/counters.spec.ts:363:1 › board.drag — drag a card to a different column (9.9s)
+    Error: perf budget exceeded on board.drag:
+      board.drag.board_card_commits: 1282 > ceiling 1281
+```
+
+Ceiling restored to 1282 immediately after (never committed at 1281); with
+it back, the same command passes. This is the +1 regression the tightened
+ceiling exists to catch — the "measured 1282, ceiling 1282" claim above is
+not just a calibration number, the gate actually reds one commit above it.
 
 ### Proving it gates
 
