@@ -3,7 +3,9 @@
 ## Overview
 
 evc-mesh exposes **63 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
-Supported transports: **stdio** (default), **SSE** (HTTP Server-Sent Events on port 8081).
+Supported transports: **stdio** (default), and over HTTP on port 8081 **SSE** and
+**Streamable HTTP** — the latter also accepting OAuth access tokens, so an MCP
+client can sign in by itself instead of being handed an agent key.
 
 New to this? [Agent Onboarding](agent-onboarding.md) walks through issuing a key
 and connecting a client end to end. This page is the tool catalogue.
@@ -126,6 +128,41 @@ Agents authenticate per-connection using one of these methods:
 - `X-Agent-Key: agk_...` header
 - `?agent_key=agk_...` query parameter
 
+### Streamable HTTP and OAuth
+
+The same `--transport sse` process also serves MCP Streamable HTTP (stateless:
+every request carries its own credential):
+
+| Endpoint on the binary | Public URL behind the bundled nginx | Profile | Tools |
+|------------------------|-------------------------------------|---------|-------|
+| `http://localhost:8081/mcp` | `https://<host>/mcp` | full | 63 |
+| `http://localhost:8081/core` | `https://<host>/mcp/core` | core | 25 |
+
+Credentials, headers only (a `?agent_key=` here is rejected with `400`):
+
+- `Authorization: Bearer agk_...` or `X-Agent-Key: agk_...` — an agent key
+- `Authorization: Bearer mot_...` — an OAuth access token issued by the Mesh API
+
+No credential, or a rejected `mot_` token → `401` with
+`WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp", scope="mesh"`
+(`…/mcp/core` for the core profile). A rejected agent key stays `403`.
+
+OAuth endpoints a client walks through, all at the instance origin:
+
+| Path | Served by | Purpose |
+|------|-----------|---------|
+| `/.well-known/oauth-protected-resource/mcp`, `…/mcp/core` | `mcp` | RFC 9728 resource metadata; `authorization_servers` names the instance |
+| `/.well-known/oauth-authorization-server` | `api` | RFC 8414 metadata; `issuer` is `MESH_BASE_URL` |
+| `POST /oauth/register` | `api` | Dynamic client registration (RFC 7591); an `https://` `client_id` (Client ID Metadata Document) needs no registration |
+| `GET /oauth/authorize` | `api` | Authorization code + PKCE (`S256`); redirects to the web UI consent screen `/connect/consent` |
+| `POST /oauth/token` | `api` | Code / refresh-token exchange; access tokens start with `mot_` |
+| `POST /oauth/revoke` | `api` | RFC 7009 revocation |
+
+A reverse proxy in front of Mesh must route every path above, unchanged, to
+the service named — see
+[Agent Onboarding §4](agent-onboarding.md#4-behind-a-reverse-proxy) for nginx
+and Caddy examples and a `curl` check.
+
 ---
 
 ## Environment Variables
@@ -139,6 +176,8 @@ Agents authenticate per-connection using one of these methods:
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
 | `MESH_MCP_PUBLIC_URL` | *(empty)* | No | Public base URL of the SSE server. Empty advertises the message endpoint relative to the URL the client connected to, which is correct unless a proxy serves MCP under a path prefix |
 | `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (63) or `core` (25). In SSE mode the profile follows the endpoint |
+| `MESH_MCP_OAUTH_ISSUER` | *(empty)* | No | Authorization server named in the OAuth resource metadata. Empty = the origin of the resource URL, correct whenever MCP is served on the Mesh instance's own origin |
+| `MESH_MCP_OAUTH_CACHE_TTL_SEC` | `60` | No | How long an accepted OAuth access token is trusted before it is re-checked with the API — the bound on how long a revoked token keeps working here |
 
 ---
 

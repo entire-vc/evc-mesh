@@ -1,7 +1,8 @@
 # Agent Onboarding
 
 How to point an AI agent at a self-hosted Mesh instance: issue an agent key,
-connect over stdio or SSE, and confirm the connection actually works.
+connect over stdio or SSE (or let an MCP client sign in with OAuth over
+Streamable HTTP), and confirm the connection actually works.
 
 This is the operator-facing path. For the tool catalogue see
 [mcp-reference.md](mcp-reference.md); for API-level auth details see
@@ -115,9 +116,10 @@ cannot add itself.
 
 ## 2. Connect
 
-Two transports. Pick **stdio** when the agent runs on a machine that can reach
-the Mesh API directly; pick **SSE** when it cannot, or when several agents share
-one MCP server.
+Pick **stdio** when the agent runs on a machine that can reach the Mesh API
+directly; pick **SSE** when it cannot, or when several agents share one MCP
+server. MCP clients that expect to be given only a URL and to sign in by
+themselves use **Streamable HTTP with OAuth** — no agent key to copy at all.
 
 ### stdio — one agent, local process
 
@@ -165,7 +167,7 @@ printf '%s\n' \
 ```
 
 On success stderr shows `Authenticated as agent: my-agent (…)` and stdout
-carries a `tools/list` result with 61 tools (25 on `MESH_MCP_PROFILE=core`).
+carries a `tools/list` result with 63 tools (25 on `MESH_MCP_PROFILE=core`).
 
 ### SSE — remote agents, several at once
 
@@ -176,8 +178,8 @@ agents connect through the bundled nginx at `/mcp/` (below), not to that port.
 
 | Endpoint | Profile | Tools |
 |----------|---------|-------|
-| `/sse` | full | 49 |
-| `/core/sse` | core | 21 |
+| `/sse` | full | 63 |
+| `/core/sse` | core | 25 |
 
 Three accepted ways to present the key, first match wins:
 
@@ -203,6 +205,45 @@ Client config:
 ```
 
 Missing key → `401`. Key present but invalid → `403`.
+
+### Streamable HTTP with OAuth — clients that sign in on their own
+
+The same `mcp` service also serves the MCP Streamable HTTP transport, and it
+accepts an OAuth access token (`mot_…`) in place of an agent key. You give the
+client one URL; it discovers the rest, opens a browser for the user to approve
+the connection, and gets a token of its own.
+
+| Public URL (bundled nginx) | Profile |
+|----------------------------|---------|
+| `https://<your-host>/mcp` | full |
+| `https://<your-host>/mcp/core` | core |
+
+What the client does with that URL, and what has to be reachable for it to work:
+
+1. `POST /mcp` without a credential → `401` with
+   `WWW-Authenticate: Bearer resource_metadata="https://<your-host>/.well-known/oauth-protected-resource/mcp", scope="mesh"`.
+2. `GET /.well-known/oauth-protected-resource/mcp` (served by `mcp`) → JSON
+   whose `authorization_servers` is the instance origin.
+3. `GET /.well-known/oauth-authorization-server` (served by `api`) → RFC 8414
+   metadata; `issuer` is `MESH_BASE_URL`.
+4. `POST /oauth/register` (dynamic client registration) — or the client uses
+   an `https://` URL as its `client_id` (Client ID Metadata Document) and skips
+   this step.
+5. `GET /oauth/authorize` → `302` to the web UI's consent screen
+   `/connect/consent`, where the signed-in user picks a workspace and approves.
+6. `POST /oauth/token` → `mot_…` access token plus a refresh token.
+7. `POST /mcp` with `Authorization: Bearer mot_…` → normal MCP traffic.
+
+An agent key still works on the same endpoints (`Authorization: Bearer agk_…`
+or `X-Agent-Key`, headers only — never the query string here). A rejected
+agent key is `403`; a missing credential or a rejected OAuth token is `401`
+with the `resource_metadata` challenge above, which is what tells an OAuth
+client to start (or restart) the flow.
+
+Every URL in steps 1–7 is on the instance origin, and none of them is under
+`/mcp/` or `/api/`. The bundled nginx routes all of them; on your own proxy
+you have to add them yourself (§4) — otherwise the client gets the web UI's
+`index.html` with `200` and reports "not JSON" or "no OAuth support".
 
 ---
 
@@ -253,9 +294,10 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ## 4. Behind a reverse proxy
 
-The bundled nginx (`deploy/docker/mesh/nginx.conf`) proxies `/mcp/` under the
-same origin as the web UI, alongside `/api/`, `/ws` and `/health` — no extra
-configuration needed on a stock `docker compose` install. `MESH_MCP_PUBLIC_URL`
+The bundled nginx (`deploy/docker/mesh/nginx.conf`) proxies `/mcp/`, exact
+`/mcp` and the OAuth routes (§2, Streamable HTTP) under the same origin as the
+web UI, alongside `/api/`, `/ws` and `/health` — no extra configuration needed
+on a stock `docker compose` install. `MESH_MCP_PUBLIC_URL`
 defaults to `${MESH_BASE_URL}/mcp` in `docker-compose.prod.yml`, so setting
 `MESH_BASE_URL` (which you already do for invite links) is enough to make
 `https://<your-host>/mcp/sse` — the address the Integrations page in the web UI
@@ -307,6 +349,99 @@ the bundled setup does for you automatically; do them yourself:
    `https://mesh.example.com/mcp/message`, which the proxy strips back to
    `/message` upstream.
 
+3. The Streamable HTTP endpoint and the OAuth routes, if remote clients should
+   be able to sign in (§2). None of these may strip a prefix: `mcp` and `api`
+   match on the full path.
+
+   | Path | Match | Upstream |
+   |------|-------|----------|
+   | `/mcp` | exact | `mcp` (full-profile Streamable HTTP; `/mcp/core` is already covered by the `/mcp/` route above) |
+   | `/.well-known/oauth-protected-resource` | prefix | `mcp` |
+   | `/.well-known/oauth-authorization-server` | prefix | `api` |
+   | `/oauth/` | prefix | `api` (`register`, `authorize`, `token`, `revoke`) |
+
+   The consent screen `/connect/consent` is a web UI route — leave it on the
+   SPA. The prefix match on the authorization-server metadata also catches the
+   RFC 8414 path-suffixed form some clients probe, so they get the API's JSON
+   `404` rather than an HTML page.
+
+   ```nginx
+   # X-Forwarded-For is overwritten with the connecting address, never appended
+   # to: an appended header keeps whatever the client sent, and the services key
+   # their rate limits on it (see docs/self-hosting.md, client IP).
+   # Same buffering rules as /mcp/ — Streamable HTTP can answer with an SSE stream.
+   location = /mcp {
+       proxy_pass http://mcp:8081;    # no URI part: the path is passed unchanged
+       proxy_http_version 1.1;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $remote_addr;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_set_header Connection "";
+       proxy_buffering off;
+       proxy_read_timeout 3600s;
+   }
+   location ^~ /.well-known/oauth-protected-resource {
+       proxy_pass http://mcp:8081;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $remote_addr;
+       proxy_set_header X-Forwarded-Proto $scheme;
+   }
+   location ^~ /.well-known/oauth-authorization-server {
+       proxy_pass http://api:8005;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $remote_addr;
+       proxy_set_header X-Forwarded-Proto $scheme;
+   }
+   location ^~ /oauth/ {
+       proxy_pass http://api:8005;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $remote_addr;
+       proxy_set_header X-Forwarded-Proto $scheme;
+   }
+   ```
+
+   ```
+   # Caddy — before the SPA catch-all
+   handle /mcp {
+       reverse_proxy mcp:8081 {
+           header_up Host localhost
+       }
+   }
+   handle /.well-known/oauth-protected-resource* {
+       reverse_proxy mcp:8081 {
+           header_up Host localhost
+       }
+   }
+   handle /.well-known/oauth-authorization-server* {
+       reverse_proxy api:8005
+   }
+   handle /oauth/* {
+       reverse_proxy api:8005
+   }
+   ```
+
+   The URLs the client is sent to come from configuration, not from the proxy:
+   the resource and its metadata from `MESH_MCP_PUBLIC_URL`, the authorization
+   server (`issuer`, every `/oauth/*` endpoint, the consent redirect) from
+   `MESH_BASE_URL`. Both must be the public origin the client actually uses.
+   If MCP is served from a different origin than the Mesh web UI, set
+   `MESH_MCP_OAUTH_ISSUER` on `mcp` to `MESH_BASE_URL` — by default `mcp`
+   names its own origin as the authorization server.
+
+   Check it end to end — each line must print JSON, not HTML:
+
+   ```bash
+   H=https://mesh.example.com
+   curl -si -X POST $H/mcp | grep -i '^www-authenticate'       # resource_metadata="…"
+   curl -s $H/.well-known/oauth-protected-resource/mcp          # "authorization_servers"
+   curl -s $H/.well-known/oauth-authorization-server            # "issuer"
+   curl -s -X POST $H/oauth/token -d grant_type=x               # JSON error, not index.html
+   ```
+
 Serving MCP on its own hostname or port instead? Set `MCP_BIND=0.0.0.0` so the
 port is reachable from outside the host (it is loopback-only by default; see
 [MCP port binding](self-hosting.md#mcp-port-binding) for the trade-off), and
@@ -356,6 +491,13 @@ Two caveats:
   idle time**. A rotated or deleted key keeps working on an established SSE
   connection until its cache entry ages out. Restart the `mcp` service if you
   need a revocation to take effect immediately.
+- OAuth connections (§2) are revoked by the user from the web UI or with
+  `POST /oauth/revoke`. The API instance that handled the revoke stops
+  accepting the token at once (other API replicas within 15 seconds); `mcp`
+  re-checks an accepted OAuth token every `MESH_MCP_OAUTH_CACHE_TTL_SEC`
+  (default **60 seconds**), so a revoked token can keep working there for up
+  to that long. The two caches stack: on a multi-replica API the worst case is
+  about 75 seconds (15 + 60); on a single-replica install it is the 60.
 
 ---
 
@@ -370,6 +512,8 @@ Two caveats:
 | SSE connects, then nothing happens | Proxy buffering the stream | `proxy_buffering off` |
 | Client posts to `0.0.0.0` or to a 404 | Advertised endpoint does not match the client's route | Upgrade; set `MESH_MCP_PUBLIC_URL` if MCP sits under a path prefix |
 | `https://<host>/mcp/sse` returns HTML | Running a custom reverse proxy without the `/mcp/` route, or `MESH_BASE_URL`/`MESH_MCP_PUBLIC_URL` pointing somewhere the proxy doesn't route from | On the bundled nginx, set `MESH_BASE_URL`; on your own proxy, add the route (§4) |
+| OAuth client says the server returned HTML / "not JSON", or that it has no OAuth support | `/.well-known/oauth-*`, `/oauth/*` or exact `/mcp` fall through to the web UI on your proxy | Add the routes in §4 item 3, then re-run the `curl` check there |
+| OAuth sign-in goes to the wrong host, or `http://` behind TLS | `MESH_BASE_URL` (authorization server) or `MESH_MCP_PUBLIC_URL` (resource) is not the public origin | Set both to the URL clients actually use (§4 item 3) |
 | `403 Forbidden: invalid Host header` on `/mcp/sse` | DNS-rebinding guard — proxy reaches `mesh-mcp` over loopback with a non-`localhost` Host | Set `Host: localhost` on that route (§4) |
 | `list_projects` returns `[]` and `create_task` says `agent is not a member of this project` | The key works; the agent is in the workspace but not on the project | Add it to each project it must work in (§1.1) |
 | Fewer tools than expected | Connected to the core profile | Use `/sse`, or unset `MESH_MCP_PROFILE` for stdio |
