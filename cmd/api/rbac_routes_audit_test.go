@@ -94,11 +94,10 @@ var auditConnectorGuards = map[string]string{
 	"POST /memories":                               "connectorRBAC(mw.PermWriteMemory)",
 	"POST /memories/import":                        "connectorRBAC(mw.PermWriteMemory)",
 	"DELETE /memories/:id":                         "connectorRBAC(mw.PermWriteMemory)",
-	"POST /memories/reindex":                       "connectorRBAC(mw.PermMemoryIndex)",
-	"POST /memories/backfill-chunks":               "connectorRBAC(mw.PermMemoryIndex)",
-	"POST /memories/rechunk-stale":                 "connectorRBAC(mw.PermMemoryIndex)",
-	"POST /memories/backfill-doc-index":            "connectorRBAC(mw.PermMemoryIndex)",
-	"POST /agents/:agent_id/activity":              "connectorSelfOrRBAC(\"agent_id\", mw.PermDeleteAgent)",
+	// /memories/reindex, /backfill-chunks, /rechunk-stale, /backfill-doc-index
+	// moved to rbac(mw.PermMemoryIndex) (task 440358b6): connectorRBAC left a
+	// plain human JWT, including a viewer, untouched on these routes.
+	"POST /agents/:agent_id/activity": "connectorSelfOrRBAC(\"agent_id\", mw.PermDeleteAgent)",
 }
 
 // auditPublicWrites are the state-changing routes registered OUTSIDE the

@@ -142,6 +142,19 @@ var permissionMatrix = map[string]map[Permission]bool{
 // Agents can perform task/comment/artifact/event operations and manage workspace rules.
 // PermManageRules is included so that designated lead agents (e.g. Garfield) can apply
 // gate rules (capacity_limit, transition_gate) without requiring a human JWT.
+//
+// PermMemoryIndex is included deliberately (task 440358b6): the fleet's
+// mesh-embed-backfill.sh and rechunk-prod-corpus.sh scripts call the
+// memory-maintenance routes (reindex, backfill-chunks, rechunk-stale,
+// backfill-doc-index) under X-Agent-Key, and those routes moved from
+// connectorRBAC to rbac() so a human viewer can no longer reach them.
+// (The hourly vc.entire.memory-reindex launchd job is unrelated: it runs
+// reindex-memory-index.py, which rewrites local MEMORY.md hot/cold shards
+// and never calls these HTTP routes.) Adding this here is not a privilege
+// escalation for any workspace member: an agent identity is only ever
+// minted by a human admin (PermRegisterAgent), so granting an agent this
+// permission does not hand it to anyone who couldn't already register an
+// agent to get it.
 var agentPerms = map[Permission]bool{
 	PermCreateTask:     true,
 	PermUpdateTask:     true,
@@ -150,6 +163,7 @@ var agentPerms = map[Permission]bool{
 	PermUploadArtifact: true,
 	PermPublishEvent:   true,
 	PermManageRules:    true,
+	PermMemoryIndex:    true,
 }
 
 // RequirePermission returns Echo middleware that enforces a specific permission.
