@@ -1907,6 +1907,12 @@ type OAuthService interface {
 	// than their retention ago, returning how many of each. Periodic
 	// housekeeping — nothing it removes could still be redeemed or presented.
 	PurgeExpired(ctx context.Context) (codes, tokens int64, err error)
+	// ResyncConnectorMemberships re-mirrors every active connector agent's
+	// project memberships onto its supervisor's CURRENT ones, correcting both
+	// added-after and removed-after drift (task cf226500: the one-shot mirror
+	// at registration time never re-syncs on its own). Periodic housekeeping,
+	// like PurgeExpired — not on the request or grant-reuse path.
+	ResyncConnectorMemberships(ctx context.Context) (ResyncConnectorMembershipsResult, error)
 }
 
 // OAuthServiceConfigurable is the optional, test-only capability to replace

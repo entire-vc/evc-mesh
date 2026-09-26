@@ -2193,6 +2193,10 @@ type MockAgentService struct {
 
 	registerOutput *RegisterAgentOutput
 	registerErr    error
+
+	getByIDOutput *domain.Agent
+	getByIDErr    error
+	getByIDSet    bool
 }
 
 func NewMockAgentService() *MockAgentService {
@@ -2232,8 +2236,22 @@ func (m *MockAgentService) Register(_ context.Context, _ RegisterAgentInput) (*R
 	}
 	return out, err
 }
+
+// SetGetByIDResult configures GetByID's return value; without it, GetByID
+// still panics — most callers of this mock never exercise it.
+func (m *MockAgentService) SetGetByIDResult(a *domain.Agent, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getByIDOutput, m.getByIDErr, m.getByIDSet = a, err, true
+}
+
 func (m *MockAgentService) GetByID(_ context.Context, _ uuid.UUID) (*domain.Agent, error) {
-	panic("MockAgentService.GetByID not implemented")
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if !m.getByIDSet {
+		panic("MockAgentService.GetByID not implemented")
+	}
+	return m.getByIDOutput, m.getByIDErr
 }
 func (m *MockAgentService) Update(_ context.Context, _ *domain.Agent) error {
 	panic("MockAgentService.Update not implemented")
@@ -2706,10 +2724,13 @@ func (m *MockUserRepository) Count(_ context.Context) (int, error) {
 // ---------------------------------------------------------------------------
 
 type MockProjectMemberRepository struct {
-	mu              sync.RWMutex
-	members         []*domain.ProjectMember
-	listByWSUserErr error
-	createErr       error
+	mu                 sync.RWMutex
+	members            []*domain.ProjectMember
+	listByWSUserErr    error
+	listByWSAgentErr   error
+	createErr          error
+	updateRoleAgentErr error
+	deleteAgentErr     error
 }
 
 // SetListByWorkspaceAndUserErr makes ListByWorkspaceAndUser fail — used to
@@ -2720,12 +2741,36 @@ func (m *MockProjectMemberRepository) SetListByWorkspaceAndUserErr(err error) {
 	m.listByWSUserErr = err
 }
 
+// SetListByWorkspaceAndAgentErr makes ListByWorkspaceAndAgent fail — used to
+// exercise a caller's error path without a real broken database.
+func (m *MockProjectMemberRepository) SetListByWorkspaceAndAgentErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listByWSAgentErr = err
+}
+
 // SetCreateErr makes every subsequent Create fail — used to exercise a
 // caller's error path without a real broken database.
 func (m *MockProjectMemberRepository) SetCreateErr(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.createErr = err
+}
+
+// SetUpdateRoleAgentErr makes every subsequent UpdateRoleAgent fail — used to
+// exercise a caller's error path without a real broken database.
+func (m *MockProjectMemberRepository) SetUpdateRoleAgentErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updateRoleAgentErr = err
+}
+
+// SetDeleteAgentErr makes every subsequent DeleteAgent fail — used to
+// exercise a caller's error path without a real broken database.
+func (m *MockProjectMemberRepository) SetDeleteAgentErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteAgentErr = err
 }
 
 func NewMockProjectMemberRepository() *MockProjectMemberRepository {
@@ -2810,7 +2855,9 @@ func (m *MockProjectMemberRepository) Delete(_ context.Context, _, _ uuid.UUID) 
 }
 
 func (m *MockProjectMemberRepository) DeleteAgent(_ context.Context, _, _ uuid.UUID) error {
-	return nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.deleteAgentErr
 }
 
 func (m *MockProjectMemberRepository) DeleteByWorkspaceAndUser(_ context.Context, _, _ uuid.UUID) error {
@@ -2833,6 +2880,40 @@ func (m *MockProjectMemberRepository) ListByWorkspaceAndUser(_ context.Context, 
 		}
 	}
 	return out, nil
+}
+
+// ListByWorkspaceAndAgent is ListByWorkspaceAndUser's connector-agent
+// counterpart, same no-workspace-join caveat.
+func (m *MockProjectMemberRepository) ListByWorkspaceAndAgent(_ context.Context, _, agentID uuid.UUID) ([]domain.ProjectMember, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.listByWSAgentErr != nil {
+		return nil, m.listByWSAgentErr
+	}
+	var out []domain.ProjectMember
+	for _, pm := range m.members {
+		if pm.AgentID != nil && *pm.AgentID == agentID {
+			out = append(out, *pm)
+		}
+	}
+	return out, nil
+}
+
+// UpdateRoleAgent mutates the in-memory row in place so a resync test can
+// observe the corrected role through a follow-up List/ListByWorkspaceAndAgent
+// call.
+func (m *MockProjectMemberRepository) UpdateRoleAgent(_ context.Context, projectID, agentID uuid.UUID, role string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.updateRoleAgentErr != nil {
+		return m.updateRoleAgentErr
+	}
+	for _, pm := range m.members {
+		if pm.ProjectID == projectID && pm.AgentID != nil && *pm.AgentID == agentID {
+			pm.Role = role
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
