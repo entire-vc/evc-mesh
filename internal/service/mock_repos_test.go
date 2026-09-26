@@ -2190,6 +2190,9 @@ type MockAgentService struct {
 	// about, the second is not — and telling them apart needs a mock that can
 	// produce both.
 	errToReturn error
+
+	registerOutput *RegisterAgentOutput
+	registerErr    error
 }
 
 func NewMockAgentService() *MockAgentService {
@@ -2212,8 +2215,22 @@ func (m *MockAgentService) GetBySlug(_ context.Context, workspaceID uuid.UUID, s
 	return a, nil
 }
 
+// SetRegisterResult configures Register's return value; without it, Register
+// still panics — most callers of this mock never exercise it.
+func (m *MockAgentService) SetRegisterResult(out *RegisterAgentOutput, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.registerOutput, m.registerErr = out, err
+}
+
 func (m *MockAgentService) Register(_ context.Context, _ RegisterAgentInput) (*RegisterAgentOutput, error) {
-	panic("MockAgentService.Register not implemented")
+	m.mu.RLock()
+	out, err := m.registerOutput, m.registerErr
+	m.mu.RUnlock()
+	if out == nil && err == nil {
+		panic("MockAgentService.Register not implemented")
+	}
+	return out, err
 }
 func (m *MockAgentService) GetByID(_ context.Context, _ uuid.UUID) (*domain.Agent, error) {
 	panic("MockAgentService.GetByID not implemented")
@@ -2689,8 +2706,26 @@ func (m *MockUserRepository) Count(_ context.Context) (int, error) {
 // ---------------------------------------------------------------------------
 
 type MockProjectMemberRepository struct {
-	mu      sync.RWMutex
-	members []*domain.ProjectMember
+	mu              sync.RWMutex
+	members         []*domain.ProjectMember
+	listByWSUserErr error
+	createErr       error
+}
+
+// SetListByWorkspaceAndUserErr makes ListByWorkspaceAndUser fail — used to
+// exercise a caller's error path without a real broken database.
+func (m *MockProjectMemberRepository) SetListByWorkspaceAndUserErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listByWSUserErr = err
+}
+
+// SetCreateErr makes every subsequent Create fail — used to exercise a
+// caller's error path without a real broken database.
+func (m *MockProjectMemberRepository) SetCreateErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createErr = err
 }
 
 func NewMockProjectMemberRepository() *MockProjectMemberRepository {
@@ -2700,6 +2735,9 @@ func NewMockProjectMemberRepository() *MockProjectMemberRepository {
 func (m *MockProjectMemberRepository) Create(_ context.Context, pm *domain.ProjectMember) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.createErr != nil {
+		return m.createErr
+	}
 	m.members = append(m.members, pm)
 	return nil
 }
@@ -2777,6 +2815,24 @@ func (m *MockProjectMemberRepository) DeleteAgent(_ context.Context, _, _ uuid.U
 
 func (m *MockProjectMemberRepository) DeleteByWorkspaceAndUser(_ context.Context, _, _ uuid.UUID) error {
 	return nil
+}
+
+// ListByWorkspaceAndUser filters by userID only — this in-memory stand-in
+// has no project/workspace join available, and no current caller of it
+// spans more than one workspace's projects in the same test.
+func (m *MockProjectMemberRepository) ListByWorkspaceAndUser(_ context.Context, _, userID uuid.UUID) ([]domain.ProjectMember, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.listByWSUserErr != nil {
+		return nil, m.listByWSUserErr
+	}
+	var out []domain.ProjectMember
+	for _, pm := range m.members {
+		if pm.UserID != nil && *pm.UserID == userID {
+			out = append(out, *pm)
+		}
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

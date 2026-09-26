@@ -95,7 +95,8 @@ func newOAuthE2EEnv(t *testing.T) *oauthE2EEnv {
 		configurable.SetAgentWorkspaceGrantRepo(agentWorkspaceGrantRepo)
 	}
 
-	oauthSvc := service.NewOAuthService(oauthRepo, agentSvc, userRepo, workspaceRepo, workspaceMemberRepo, agentWorkspaceGrantRepo)
+	projectMemberRepo := postgres.NewProjectMemberRepo(db)
+	oauthSvc := service.NewOAuthService(oauthRepo, agentSvc, userRepo, workspaceRepo, workspaceMemberRepo, agentWorkspaceGrantRepo, projectMemberRepo)
 
 	authSvc := auth.NewService(userRepo, refreshTokenRepo, workspaceRepo, workspaceMemberRepo, "oauth-e2e-test-jwt-secret-do-not-use-in-prod")
 
@@ -288,18 +289,30 @@ func (env *oauthE2EEnv) exchangeCode(t *testing.T, clientID, redirectURI, code, 
 
 func (env *oauthE2EEnv) meAgentName(t *testing.T, accessToken string) (status int, agentName string) {
 	t.Helper()
+	status, _, agentName = env.meAgent(t, accessToken)
+	return status, agentName
+}
+
+// meAgent is meAgentName plus the connector agent's own id, needed by callers
+// that check what the agent can reach (e.g. its project memberships) rather
+// than just who it authenticated as.
+func (env *oauthE2EEnv) meAgent(t *testing.T, accessToken string) (status int, agentID uuid.UUID, agentName string) {
+	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, env.server.URL+"/api/v1/agents/me", http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := env.client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, ""
+		return resp.StatusCode, uuid.Nil, ""
 	}
 	var out map[string]interface{}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	name, _ := out["name"].(string)
-	return resp.StatusCode, name
+	idStr, _ := out["id"].(string)
+	id, err := uuid.Parse(idStr)
+	require.NoError(t, err, "agents/me must return a parseable id")
+	return resp.StatusCode, id, name
 }
 
 // --- The end-to-end scenario, DCR client ---
@@ -356,6 +369,73 @@ func TestOAuthEndToEnd_DCRClient(t *testing.T) {
 
 	statusAfterReuse, _ := env.meAgentName(t, newAccess)
 	assert.Equal(t, http.StatusUnauthorized, statusAfterReuse, "refresh-token reuse must revoke the ENTIRE family, including tokens minted after the reused one")
+}
+
+// TestOAuthEndToEnd_ConnectorAgentInheritsProjectAccess is task ec0bc566: a
+// brand-new connector agent used to start as a member of zero projects, so
+// list_projects/list_tasks/get_my_tasks all came back empty for a genuinely
+// first-time OAuth connection until a workspace admin manually granted that
+// (not yet existing) agent identity access — exactly the reviewer's first
+// connection this blocked.
+func TestOAuthEndToEnd_ConnectorAgentInheritsProjectAccess(t *testing.T) {
+	env := newOAuthE2EEnv(t)
+	accessJWT, userID, workspaceID, _ := env.registerTestUser(t, "proj-access-user")
+	ctx := context.Background()
+	projectRepo := postgres.NewProjectRepo(env.db)
+	projectMemberRepo := postgres.NewProjectMemberRepo(env.db)
+
+	// A project the user IS a member of — the agent must inherit this one.
+	memberProject := &domain.Project{
+		ID:                  uuid.New(),
+		WorkspaceID:         workspaceID,
+		Name:                "Member Project",
+		Slug:                "member-project-" + uuid.New().String()[:8],
+		DefaultAssigneeType: domain.DefaultAssigneeNone,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+	require.NoError(t, projectRepo.Create(ctx, memberProject))
+	require.NoError(t, projectMemberRepo.Create(ctx, &domain.ProjectMember{
+		ID:        uuid.New(),
+		ProjectID: memberProject.ID,
+		UserID:    &userID,
+		Role:      domain.ProjectRoleAdmin,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	// A project in the SAME workspace the user is NOT a member of — the
+	// agent must NOT inherit this one (mirroring, not a workspace-wide grant).
+	otherProject := &domain.Project{
+		ID:                  uuid.New(),
+		WorkspaceID:         workspaceID,
+		Name:                "Other Project",
+		Slug:                "other-project-" + uuid.New().String()[:8],
+		DefaultAssigneeType: domain.DefaultAssigneeNone,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+	require.NoError(t, projectRepo.Create(ctx, otherProject))
+
+	redirectURI := "http://localhost/callback"
+	clientID := env.registerDCRClient(t, redirectURI)
+	verifier, challenge := pkcePair()
+	code := env.authorizeAndConsent(t, accessJWT, clientID, redirectURI, challenge, "state-proj-access-1", workspaceID)
+	tokens := env.exchangeCode(t, clientID, redirectURI, code, verifier)
+	accessTok, _ := tokens["access_token"].(string)
+	require.NotEmpty(t, accessTok)
+
+	status, agentID, _ := env.meAgent(t, accessTok)
+	require.Equal(t, http.StatusOK, status)
+
+	member, err := projectMemberRepo.GetByProjectAndAgent(ctx, memberProject.ID, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, member, "the new connector agent must be a member of every project its consenting human already belongs to")
+	assert.Equal(t, domain.ProjectRoleAdmin, member.Role, "the mirrored membership must carry the human's own role, not an escalated or downgraded one")
+
+	notMember, err := projectMemberRepo.GetByProjectAndAgent(ctx, otherProject.ID, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, notMember, "mirroring must not grant access to a project the consenting human is not themselves a member of")
 }
 
 // --- The end-to-end scenario, CIMD client ---

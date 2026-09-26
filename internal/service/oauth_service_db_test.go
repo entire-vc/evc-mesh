@@ -80,7 +80,7 @@ func newOAuthSvcEnv(t *testing.T) *oauthSvcEnv {
 	if c, ok := agentSvc.(AgentServiceConfigurable); ok {
 		c.SetAgentWorkspaceGrantRepo(postgres.NewAgentWorkspaceGrantRepo(db))
 	}
-	svc := NewOAuthService(postgres.NewOAuthRepo(db), agentSvc, userRepo, workspaceRepo, postgres.NewWorkspaceMemberRepo(db), postgres.NewAgentWorkspaceGrantRepo(db))
+	svc := NewOAuthService(postgres.NewOAuthRepo(db), agentSvc, userRepo, workspaceRepo, postgres.NewWorkspaceMemberRepo(db), postgres.NewAgentWorkspaceGrantRepo(db), postgres.NewProjectMemberRepo(db))
 
 	env := &oauthSvcEnv{db: db, svc: svc.(*oauthService)}
 	prev := timeNow
@@ -134,6 +134,27 @@ func (env *oauthSvcEnv) addMember(t *testing.T, ws, user uuid.UUID, role string)
 	_, err := env.db.Exec(
 		`INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1, $2, $3, $4)`,
 		uuid.New(), ws, user, role,
+	)
+	require.NoError(t, err)
+}
+
+func (env *oauthSvcEnv) createProject(t *testing.T, ws uuid.UUID, name string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	_, err := env.db.Exec(
+		`INSERT INTO projects (id, workspace_id, name, slug, default_assignee_type) VALUES ($1, $2, $3, $4, 'none')`,
+		id, ws, name, "oauth-svc-proj-"+id.String()[:8],
+	)
+	require.NoError(t, err)
+	return id
+}
+
+func (env *oauthSvcEnv) addProjectMember(t *testing.T, project, user uuid.UUID, role string) {
+	t.Helper()
+	_, err := env.db.Exec(
+		`INSERT INTO project_members (id, project_id, user_id, role, workspace_id)
+		 VALUES ($1, $2, $3, $4, (SELECT workspace_id FROM projects WHERE id = $2))`,
+		uuid.New(), project, user, role,
 	)
 	require.NoError(t, err)
 }
@@ -734,6 +755,42 @@ func TestOAuthSvc_Decide(t *testing.T) {
 	})
 }
 
+// TestOAuthSvc_Decide_MirrorsProjectMembershipsOntoConnectorAgent: the fix for
+// task ec0bc566 — a brand-new connector agent must inherit the consenting
+// user's own project memberships in that workspace (same role, not a
+// workspace-wide grant), so a first-time OAuth connection can immediately see
+// the projects/tasks its human already has. It must not be added to a project
+// the user doesn't belong to.
+func TestOAuthSvc_Decide_MirrorsProjectMembershipsOntoConnectorAgent(t *testing.T) {
+	env := newOAuthSvcEnv(t)
+	owner, _ := env.createUser(t, "pmowner")
+	ws := env.createWorkspace(t, owner)
+	env.addMember(t, ws, owner, domain.RoleAdmin)
+
+	memberProject := env.createProject(t, ws, "Mirrored Project")
+	env.addProjectMember(t, memberProject, owner, "admin")
+	outsiderProject := env.createProject(t, ws, "Not Mirrored Project")
+
+	redirect := "https://mirror.example.com/cb"
+	c := env.registerDCR(t, "Mirror App "+uuid.New().String()[:6], redirect)
+	_, challenge := svcPKCE()
+	env.consent(t, c.ClientID, redirect, challenge, owner, ws)
+
+	var agentID uuid.UUID
+	require.NoError(t, env.db.Get(&agentID, `SELECT agent_id FROM oauth_grants WHERE client_id=$1`, c.ClientID))
+
+	var memberships []domain.ProjectMember
+	require.NoError(t, env.db.Select(&memberships,
+		`SELECT id, project_id, agent_id, role, created_at, updated_at FROM project_members WHERE agent_id=$1`, agentID))
+	require.Len(t, memberships, 1, "the new agent must inherit exactly the owner's own project memberships, not a workspace-wide grant")
+	assert.Equal(t, memberProject, memberships[0].ProjectID)
+	assert.Equal(t, "admin", memberships[0].Role, "the mirrored role must match the human's own role, not a hardcoded one")
+
+	var n int
+	require.NoError(t, env.db.Get(&n, `SELECT count(*) FROM project_members WHERE agent_id=$1 AND project_id=$2`, agentID, outsiderProject))
+	assert.Zero(t, n, "must not be added to a project the consenting user doesn't belong to")
+}
+
 // TestOAuthSvc_Decide_SameClientNameDisambiguatesAgentSlug: two separate DCR
 // registrations of "the same app" (same client_name, different client_id)
 // consented by the same user into the same workspace must produce two working
@@ -1307,7 +1364,7 @@ func TestOAuthSvc_DatabaseDownFailsClosed(t *testing.T) {
 	userRepo := postgres.NewUserRepo(dead)
 	wsRepo := postgres.NewWorkspaceRepo(dead)
 	agentSvc := NewAgentService(postgres.NewAgentRepo(dead), postgres.NewActivityLogRepo(dead), wsRepo, userRepo)
-	svc := NewOAuthService(postgres.NewOAuthRepo(dead), agentSvc, userRepo, wsRepo, postgres.NewWorkspaceMemberRepo(dead), postgres.NewAgentWorkspaceGrantRepo(dead))
+	svc := NewOAuthService(postgres.NewOAuthRepo(dead), agentSvc, userRepo, wsRepo, postgres.NewWorkspaceMemberRepo(dead), postgres.NewAgentWorkspaceGrantRepo(dead), postgres.NewProjectMemberRepo(dead))
 	ctx := context.Background()
 	v, _ := svcPKCE()
 

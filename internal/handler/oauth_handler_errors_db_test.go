@@ -483,7 +483,7 @@ func newOAuthDeadDBServer(t *testing.T, live *oauthE2EEnv) *deadDBServer {
 	require.NoError(t, dead.Close())
 
 	agentSvc := service.NewAgentService(postgres.NewAgentRepo(dead), postgres.NewActivityLogRepo(dead), postgres.NewWorkspaceRepo(dead), postgres.NewUserRepo(dead))
-	oauthSvc := service.NewOAuthService(postgres.NewOAuthRepo(dead), agentSvc, postgres.NewUserRepo(dead), postgres.NewWorkspaceRepo(dead), postgres.NewWorkspaceMemberRepo(dead), postgres.NewAgentWorkspaceGrantRepo(dead))
+	oauthSvc := service.NewOAuthService(postgres.NewOAuthRepo(dead), agentSvc, postgres.NewUserRepo(dead), postgres.NewWorkspaceRepo(dead), postgres.NewWorkspaceMemberRepo(dead), postgres.NewAgentWorkspaceGrantRepo(dead), postgres.NewProjectMemberRepo(dead))
 	h := NewOAuthHandler(oauthSvc, "https://mesh.example.test")
 
 	logs := &syncBuffer{}

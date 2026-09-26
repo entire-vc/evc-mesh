@@ -201,6 +201,23 @@ func (r *ProjectMemberRepo) ExistsMember(ctx context.Context, projectID uuid.UUI
 	return false, nil
 }
 
+// ListByWorkspaceAndUser returns every project membership row userID holds
+// across projects in workspaceID, joined through projects so a membership
+// in another workspace's project of the same user is never returned.
+func (r *ProjectMemberRepo) ListByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.ProjectMember, error) {
+	const q = `
+		SELECT pm.id, pm.project_id, pm.user_id, pm.agent_id, pm.role, pm.created_at, pm.updated_at
+		FROM project_members pm
+		JOIN projects p ON p.id = pm.project_id
+		WHERE p.workspace_id = $1 AND pm.user_id = $2
+	`
+	var members []domain.ProjectMember
+	if err := r.db.SelectContext(ctx, &members, q, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
 func derefStr(s *string) string {
 	if s == nil {
 		return ""

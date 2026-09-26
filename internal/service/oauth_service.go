@@ -150,6 +150,7 @@ type oauthService struct {
 	workspaceRepo       repository.WorkspaceRepository
 	workspaceMemberRepo repository.WorkspaceMemberRepository
 	agentGrantRepo      repository.AgentWorkspaceGrantRepository
+	projectMemberRepo   repository.ProjectMemberRepository
 	httpClient          *http.Client
 	authCache           *oauthAuthCache
 }
@@ -162,6 +163,7 @@ func NewOAuthService(
 	workspaceRepo repository.WorkspaceRepository,
 	workspaceMemberRepo repository.WorkspaceMemberRepository,
 	agentGrantRepo repository.AgentWorkspaceGrantRepository,
+	projectMemberRepo repository.ProjectMemberRepository,
 ) OAuthService {
 	return &oauthService{
 		repo:                repo,
@@ -170,6 +172,7 @@ func NewOAuthService(
 		workspaceRepo:       workspaceRepo,
 		workspaceMemberRepo: workspaceMemberRepo,
 		agentGrantRepo:      agentGrantRepo,
+		projectMemberRepo:   projectMemberRepo,
 		httpClient:          newCIMDHTTPClient(),
 		authCache:           newOAuthAuthCache(oauthAuthCacheTTL),
 	}
@@ -948,6 +951,7 @@ func (s *oauthService) registerConnectorAgent(ctx context.Context, workspaceID u
 			SupervisorUserID: &uid,
 		})
 		if err == nil {
+			s.mirrorProjectMemberships(ctx, workspaceID, supervisorUserID, reg.Agent.ID)
 			return reg, nil
 		}
 		if !isNameConflict(err) {
@@ -960,6 +964,49 @@ func (s *oauthService) registerConnectorAgent(ctx context.Context, workspaceID u
 		name = fmt.Sprintf("%s (%s)", baseName, suffix)
 	}
 	return nil, oautherror.ServerError("could not register connector agent: name collision persisted after retries")
+}
+
+// mirrorProjectMemberships gives newAgentID the same project memberships
+// supervisorUserID already holds in workspaceID.
+//
+// Without this, a freshly registered connector agent starts as a member of
+// zero projects: RequireProjectMember (internal/middleware/project_access.go)
+// deliberately never bypasses on an agent's workspace role the way it does
+// for a human owner/admin, so list_projects/list_tasks/get_my_tasks all come
+// back empty until a workspace admin manually calls
+// POST /projects/:id/members/agents for an agent identity that, at the time
+// of first connecting, didn't exist yet to grant it to. That breaks every
+// first-time OAuth connection, since the whole point of consenting is to act
+// on the consenting human's own behalf.
+//
+// Best-effort: called right after Register succeeds, so a failure here must
+// not fail the registration that already committed — the agent still
+// authenticates, just with no project access until an admin grants it by
+// hand, exactly the pre-existing behavior this exists to avoid needing.
+func (s *oauthService) mirrorProjectMemberships(ctx context.Context, workspaceID, supervisorUserID, newAgentID uuid.UUID) {
+	if s.projectMemberRepo == nil {
+		return
+	}
+	memberships, err := s.projectMemberRepo.ListByWorkspaceAndUser(ctx, workspaceID, supervisorUserID)
+	if err != nil {
+		log.Printf("oauth: mirroring project memberships onto connector agent %s (user %s, workspace %s) failed: %v", newAgentID, supervisorUserID, workspaceID, err)
+		return
+	}
+	now := timeNow()
+	for _, m := range memberships {
+		agentID := newAgentID
+		member := &domain.ProjectMember{
+			ID:        uuid.New(),
+			ProjectID: m.ProjectID,
+			AgentID:   &agentID,
+			Role:      m.Role,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := s.projectMemberRepo.Create(ctx, member); err != nil {
+			log.Printf("oauth: mirroring project membership onto connector agent %s for project %s failed: %v", newAgentID, m.ProjectID, err)
+		}
+	}
 }
 
 // isSlugConflict reports whether err is the agents.uq_agents_workspace_slug
