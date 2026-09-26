@@ -368,16 +368,17 @@ nginx-real-ip-syntax:
     - nginx -t
     # `nginx -t` alone would pass if someone put the appending header back, so
     # pin the wiring: no proxy location may append to a client-supplied
-    # X-Forwarded-For, and the five that carry client identity (/api/, /ws,
-    # /mcp/, exact /mcp, the OAuth resource metadata) must forward the
-    # realip-resolved address. Adding a sixth proxy location means raising this.
+    # X-Forwarded-For, and the seven that carry client identity (/api/, /ws,
+    # /mcp/, exact /mcp, the OAuth resource metadata, the OAuth authorization
+    # server metadata, /oauth/) must forward the realip-resolved address.
+    # Adding an eighth proxy location means raising this.
     - |
       if grep -nE '^[[:space:]]*proxy_set_header[[:space:]]+X-Forwarded-For[[:space:]]+\$proxy_add_x_forwarded_for' deploy/docker/mesh/nginx.conf; then
         echo "nginx.conf appends to the client's X-Forwarded-For again (#358a35dc)" >&2
         exit 1
       fi
       n=$(grep -c 'proxy_set_header X-Forwarded-For \$remote_addr;' deploy/docker/mesh/nginx.conf)
-      [ "$n" -ge 5 ] || { echo "expected X-Forwarded-For \$remote_addr in 5 proxy locations, found $n" >&2; exit 1; }
+      [ "$n" -ge 7 ] || { echo "expected X-Forwarded-For \$remote_addr in 7 proxy locations, found $n" >&2; exit 1; }
       grep -q '^ *real_ip_header X-Forwarded-For;' deploy/docker/mesh/nginx.conf
       grep -q '^ *real_ip_recursive on;' deploy/docker/mesh/nginx.conf
     # An extra edge is rendered into the include and the config still parses.

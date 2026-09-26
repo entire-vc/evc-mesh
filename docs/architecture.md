@@ -76,7 +76,7 @@ clients. It is **not part of this repository** — it lives in
 
 - Supports **stdio** transport (for local clients) and **HTTP SSE** transport (for remote ones)
 - Calls the REST API via HTTP — does not access the database directly
-- 61 tools (`MESH_MCP_PROFILE=full`), 25 on the `core` profile
+- 63 tools (`MESH_MCP_PROFILE=full`), 25 on the `core` profile
 - Authenticates using agent API keys
 
 The MCP server is intentionally separate from the API server. This ensures a

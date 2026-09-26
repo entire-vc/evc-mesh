@@ -367,7 +367,13 @@ from a `cmd/mcp` package in this repository. In SSE mode
 `docker-compose.prod.yml` sets the transport, host and port for you, and also
 proxies it under `/mcp/` on the same origin as the web UI (`nginx.conf`) —
 `https://<your-host>/mcp/sse` works out of the box once `MESH_BASE_URL` is set,
-with no separate port to open.
+with no separate port to open. The same service serves MCP Streamable HTTP at
+`https://<your-host>/mcp` (core: `/mcp/core`), where clients may sign in with
+OAuth instead of an agent key: nginx also routes
+`/.well-known/oauth-protected-resource*` to `mcp`, and the authorization server
+(`/.well-known/oauth-authorization-server`, `/oauth/*`) to `api`. Behind your
+own reverse proxy you need those routes too — see
+[Agent onboarding §4](agent-onboarding.md#4-behind-a-reverse-proxy).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -377,7 +383,9 @@ with no separate port to open.
 | `MESH_MCP_HOST` | `0.0.0.0` | SSE listen host |
 | `MESH_MCP_PORT` | `8081` | SSE listen port |
 | `MESH_MCP_PUBLIC_URL` | *(empty — the binary's own default; see note)* | Public base URL of the SSE server (e.g. `https://mesh.example.com/mcp`). Empty means the message endpoint is advertised as a path relative to whatever URL the client connected to — correct for localhost and a directly-published container port, but **not** for a reverse proxy that strips a path prefix (like the bundled nginx's `/mcp/` route), which needs the prefix included explicitly. |
-| `MESH_MCP_PROFILE` | `full` | `full` (61 tools) or `core` (25 tools). Applies to stdio mode; in SSE mode the profile is chosen by which endpoint the client connects to (`/sse` vs `/core/sse`). |
+| `MESH_MCP_PROFILE` | `full` | `full` (63 tools) or `core` (25 tools). Applies to stdio mode; in SSE mode the profile is chosen by which endpoint the client connects to (`/sse` vs `/core/sse`). |
+| `MESH_MCP_OAUTH_ISSUER` | *(empty — origin of `MESH_MCP_PUBLIC_URL`)* | Authorization server the OAuth resource metadata names. Leave empty when MCP is served on the Mesh instance's own origin (every stock install); set it to `MESH_BASE_URL` if MCP has its own hostname. |
+| `MESH_MCP_OAUTH_CACHE_TTL_SEC` | `60` | How long `mcp` trusts an accepted OAuth access token before re-checking it with the API — the upper bound on how long a revoked token keeps working on `mcp`. |
 
 See [Agent onboarding](agent-onboarding.md) for issuing keys and connecting a
 client.
@@ -813,7 +821,7 @@ Services included in `docker-compose.prod.yml`:
 | `minio` | *(internal)* | MinIO object storage — required env: `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`; optional `MINIO_IMAGE` ([which image](#which-minio-image)) |
 | `api` | `${API_PORT:-8005}` | Mesh API server (Go binary, runs DB migrations on startup) |
 | `mcp` | `${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8081}` | MCP server in SSE mode for remote agents; loopback-only by default, reached through nginx at `/mcp/` ([port binding](#mcp-port-binding)) |
-| `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api`, `/ws` and `/mcp` (SSE, see [Agent onboarding](agent-onboarding.md)) |
+| `nginx` | `${HTTP_PORT:-80}` | Nginx serving the React SPA, proxying `/api`, `/ws`, `/mcp` (SSE and Streamable HTTP) and the OAuth routes `/.well-known/oauth-*`, `/oauth/*` (see [Agent onboarding](agent-onboarding.md)) |
 | `prometheus` | `${PROMETHEUS_PORT:-9090}` | Prometheus scraping `/metrics` from the API |
 | `grafana` | `${GRAFANA_PORT:-3001}` | Grafana dashboards — password set by `GRAFANA_PASSWORD` (required, no default) |
 
