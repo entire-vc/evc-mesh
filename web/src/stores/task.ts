@@ -40,6 +40,12 @@ interface TaskState {
   groupByStatus: () => void;
 }
 
+// Monotonic id of the newest fetchTasks call. A response that is no longer the
+// newest belongs to a project/filter the user already left (Lab board -> Keep
+// board) and must not overwrite the list — it used to, when the Lab request
+// was the slower one.
+let latestFetchTasks = 0;
+
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
   tasksById: {},
@@ -55,6 +61,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     projectId: string,
     params?: Record<string, string | number | undefined>,
   ) => {
+    const requestId = ++latestFetchTasks;
     set({ isLoading: true, error: null });
     try {
       const data = await api<PaginatedResponse<Task>>(
@@ -66,6 +73,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         // frontend deploy that lands before the backend one is merely slow.
         { params: { page_size: "200", include_description: "false", ...params } },
       );
+      if (requestId !== latestFetchTasks) return;
       const items = data.items ?? [];
       const prevById = get().tasksById;
       set({
@@ -97,6 +105,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       });
       get().groupByStatus();
     } catch (error) {
+      if (requestId !== latestFetchTasks) return;
       set({
         tasks: [],
         tasksByStatus: {},
