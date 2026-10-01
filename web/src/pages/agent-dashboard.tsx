@@ -206,6 +206,13 @@ function AgentCard({
           ) : null;
         })()}
 
+        {/* Model */}
+        {agent.model && (
+          <div className="truncate text-xs text-muted-foreground" title={agent.model}>
+            Model: <span className="font-mono">{agent.model}</span>
+          </div>
+        )}
+
         {/* Role */}
         {agent.role && (
           <div className="text-xs text-muted-foreground">

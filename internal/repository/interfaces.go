@@ -561,6 +561,9 @@ type UpdateHeartbeatParams struct {
 	Status   string
 	Message  string
 	Metadata json.RawMessage
+	// AgentType (harness) and Model are optional self-reports; "" / nil = leave as is.
+	AgentType domain.AgentType
+	Model     *string
 }
 
 // AgentRepository manages persistence for agents.

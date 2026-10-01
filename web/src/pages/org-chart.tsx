@@ -178,6 +178,12 @@ function AgentCard({
           <p className="text-xs text-muted-foreground truncate">{agent.role}</p>
         )}
 
+        {agent.model && (
+          <p className="font-mono text-[11px] text-muted-foreground truncate" title={`${agent.agent_type} · ${agent.model}`}>
+            {agent.model}
+          </p>
+        )}
+
         <div className="flex items-center gap-1.5">
           <span className={cn("h-2 w-2 rounded-full shrink-0", statusCfg.dotColor)} />
           <span className="text-xs text-muted-foreground">

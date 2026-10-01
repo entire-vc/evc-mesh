@@ -708,3 +708,121 @@ func TestAgentHandler_UpdateMe_CallbackURL_ConnectorRefused(t *testing.T) {
 		assert.Equal(t, "https://hooks.example/cb", stored)
 	})
 }
+
+// --- harness (agent_type) + model self-report (#5548367d) ---
+
+func TestAgentHandler_UpdateMe_HarnessAndModel(t *testing.T) {
+	agentID, wsID := uuid.New(), uuid.New()
+	var saved *domain.Agent
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: agentID, WorkspaceID: wsID, AgentType: domain.AgentTypeClaudeCode}, nil
+		},
+		UpdateFunc: func(ctx context.Context, a *domain.Agent) error { saved = a; return nil },
+	}
+	h, _ := setupAgentTest(mockSvc)
+
+	rec := meRequest(t, h, http.MethodPatch, agentID, wsID, `{"agent_type":"codex","model":"  gpt-6.1-sol "}`, h.UpdateMe)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, saved)
+	assert.Equal(t, domain.AgentTypeCodex, saved.AgentType)
+	require.NotNil(t, saved.Model)
+	assert.Equal(t, "gpt-6.1-sol", *saved.Model, "model is trimmed")
+
+	var result meRespView
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	assert.Equal(t, domain.AgentTypeCodex, result.AgentType)
+	require.NotNil(t, result.Model)
+	assert.Equal(t, "gpt-6.1-sol", *result.Model)
+}
+
+func TestAgentHandler_UpdateMe_EmptyModelClears(t *testing.T) {
+	agentID, wsID := uuid.New(), uuid.New()
+	old := "old-model"
+	var saved *domain.Agent
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: agentID, WorkspaceID: wsID, Model: &old}, nil
+		},
+		UpdateFunc: func(ctx context.Context, a *domain.Agent) error { saved = a; return nil },
+	}
+	h, _ := setupAgentTest(mockSvc)
+	rec := meRequest(t, h, http.MethodPatch, agentID, wsID, `{"model":"   "}`, h.UpdateMe)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Nil(t, saved.Model, "blank model clears to NULL")
+}
+
+func TestAgentHandler_UpdateMe_RejectsBadHarnessAndLongModel(t *testing.T) {
+	agentID, wsID := uuid.New(), uuid.New()
+	updates := 0
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: agentID, WorkspaceID: wsID}, nil
+		},
+		UpdateFunc: func(ctx context.Context, a *domain.Agent) error { updates++; return nil },
+	}
+	h, _ := setupAgentTest(mockSvc)
+
+	rec := meRequest(t, h, http.MethodPatch, agentID, wsID, `{"agent_type":"skynet"}`, h.UpdateMe)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	rec = meRequest(t, h, http.MethodPatch, agentID, wsID, `{"model":"`+strings.Repeat("m", 129)+`"}`, h.UpdateMe)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, 0, updates, "nothing persisted on a rejected request")
+}
+
+func TestAgentHandler_Heartbeat_HarnessModelAndStatusLen(t *testing.T) {
+	agentID := uuid.New()
+	var got *service.HeartbeatInput
+	mockSvc := &MockAgentService{
+		HeartbeatFunc: func(ctx context.Context, id uuid.UUID, in *service.HeartbeatInput) error { got = in; return nil },
+	}
+	h, _ := setupAgentTest(mockSvc)
+
+	post := func(body string) int {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.Set("agent_id", agentID)
+		rec := httptest.NewRecorder()
+		c = e.NewContext(req, rec)
+		c.Set("agent_id", agentID)
+		require.NoError(t, h.Heartbeat(c))
+		return rec.Code
+	}
+
+	require.Equal(t, http.StatusOK, post(`{"agent_type":"codex","model":"gpt-6.1-sol"}`))
+	require.NotNil(t, got)
+	assert.Equal(t, domain.AgentTypeCodex, got.AgentType)
+	require.NotNil(t, got.Model)
+	assert.Equal(t, "gpt-6.1-sol", *got.Model)
+
+	got = nil
+	assert.Equal(t, http.StatusBadRequest, post(`{"agent_type":"skynet"}`))
+	assert.Equal(t, http.StatusBadRequest, post(`{"status":"`+strings.Repeat("s", 21)+`"}`))
+	assert.Nil(t, got, "rejected heartbeat must not reach the service")
+}
+
+func TestAgentHandler_Update_AdminSetsModel(t *testing.T) {
+	agentID := uuid.New()
+	var saved *domain.Agent
+	mockSvc := &MockAgentService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Agent, error) {
+			return &domain.Agent{ID: agentID, AgentType: domain.AgentTypeClaudeCode}, nil
+		},
+		UpdateFunc: func(ctx context.Context, a *domain.Agent) error { saved = a; return nil },
+	}
+	h, _ := setupAgentTest(mockSvc)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"model":"gpt-6.1-sol"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("agent_id")
+	c.SetParamValues(agentID.String())
+	require.NoError(t, h.Update(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, saved.Model)
+	assert.Equal(t, "gpt-6.1-sol", *saved.Model)
+	assert.Equal(t, domain.AgentTypeClaudeCode, saved.AgentType, "agent_type behaviour unchanged")
+}

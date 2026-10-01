@@ -137,6 +137,13 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
         <Badge variant="secondary" className="text-xs capitalize shrink-0">
           {agent.role}
         </Badge>
+        <span
+          className="hidden max-w-[14rem] truncate font-mono text-xs text-muted-foreground sm:inline"
+          title="Harness · model"
+        >
+          {agent.agent_type}
+          {agent.model ? ` · ${agent.model}` : ""}
+        </span>
         <span className="text-xs text-muted-foreground shrink-0">
           {agent.current_tasks}/{agent.max_concurrent_tasks} tasks
         </span>
@@ -153,6 +160,12 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
       </button>
       {expanded && (
         <div className="border-t border-border px-4 py-3 space-y-2 text-sm bg-muted/30">
+          <div className="flex gap-2">
+            <span className="text-muted-foreground w-36 shrink-0">Harness / model</span>
+            <span className="font-mono">
+              {agent.agent_type} / {agent.model || "not reported"}
+            </span>
+          </div>
           {agent.responsibility_zone && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-36 shrink-0">Responsibility zone</span>

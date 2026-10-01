@@ -316,3 +316,51 @@ describe("AgentDetailDialog — Workspaces section (task U4)", () => {
     expect(screen.getAllByText("Home")).toHaveLength(1);
   });
 });
+
+describe("AgentDetailDialog — harness and model (task #5548367d)", () => {
+  beforeEach(() => {
+    vi.mocked(api).mockReset();
+  });
+
+  it("shows 'Not reported' when the agent has no model, and the model when it has one", () => {
+    const { unmount } = render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+    expect(screen.getByText("Not reported")).toBeTruthy();
+    unmount();
+    render(
+      <AgentDetailDialog open onOpenChange={vi.fn()} agent={{ ...baseAgent, model: "gpt-6.1-sol" }} />,
+    );
+    expect(screen.getByText("gpt-6.1-sol")).toBeTruthy();
+  });
+
+  it("saves the model through PATCH /agents/:id with the trimmed value", async () => {
+    vi.mocked(api).mockImplementation((path: string, opts?: { method?: string }) => {
+      if (path === "/api/v1/agents/agent-1" && opts?.method === "PATCH") {
+        return Promise.resolve({ ...baseAgent, model: "gpt-6.1-sol" });
+      }
+      return Promise.reject(new Error(`unexpected call: ${path} ${opts?.method}`));
+    });
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+
+    fireEvent.click(screen.getByTitle("Edit model"));
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "  gpt-6.1-sol " } });
+    fireEvent.click(screen.getByTitle("Save model"));
+
+    await waitFor(() => {
+      const call = vi.mocked(api).mock.calls.find(
+        ([p, o]) => p === "/api/v1/agents/agent-1" && (o as { method?: string })?.method === "PATCH",
+      );
+      expect(call).toBeTruthy();
+      expect((call![1] as { body: unknown }).body).toEqual({ model: "gpt-6.1-sol" });
+    });
+  });
+
+  it("changes the harness through the select", async () => {
+    vi.mocked(api).mockResolvedValue({ ...baseAgent, agent_type: "codex" });
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "codex" } });
+    await waitFor(() => {
+      const call = vi.mocked(api).mock.calls.find(([, o]) => (o as { method?: string })?.method === "PATCH");
+      expect((call![1] as { body: unknown }).body).toEqual({ agent_type: "codex" });
+    });
+  });
+});

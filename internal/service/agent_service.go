@@ -345,9 +345,11 @@ func (s *agentService) Heartbeat(ctx context.Context, agentID uuid.UUID, input *
 	var params *repository.UpdateHeartbeatParams
 	if input != nil {
 		params = &repository.UpdateHeartbeatParams{
-			Status:   input.Status,
-			Message:  input.Message,
-			Metadata: input.Metadata,
+			Status:    input.Status,
+			Message:   input.Message,
+			Metadata:  input.Metadata,
+			AgentType: input.AgentType,
+			Model:     input.Model,
 		}
 	}
 	if err := s.agentRepo.UpdateHeartbeat(ctx, agentID, params); err != nil {

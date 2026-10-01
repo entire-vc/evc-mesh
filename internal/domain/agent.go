@@ -43,7 +43,10 @@ type Agent struct {
 	Name             string     `json:"name" db:"name"`
 	Slug             string     `json:"slug" db:"slug"`
 	AgentType        AgentType  `json:"agent_type" db:"agent_type"`
-	APIKeyHash       string     `json:"-" db:"api_key_hash"`
+	// Model is the LLM the agent runs on (AgentType is the harness). nil = not
+	// reported; never defaulted. Self-reported via PATCH /agents/me or heartbeat.
+	Model      *string `json:"model" db:"model"`
+	APIKeyHash string  `json:"-" db:"api_key_hash"`
 	// APIKeySHA256 is the keyed digest of the same key that APIKeyHash covers
 	// with bcrypt. Empty means the fast path has not been populated for this
 	// agent yet (no backfill is possible from a bcrypt hash), not that the key
@@ -188,3 +191,18 @@ type AgentActivityLog struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty" db:"metadata"`
 	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
 }
+
+// IsValidAgentType reports whether t is one of the known harness values
+// (mirrors the agent_type DB enum).
+func IsValidAgentType(t AgentType) bool {
+	switch t {
+	case AgentTypeClaudeCode, AgentTypeOpenClaw, AgentTypeCline, AgentTypeAider,
+		AgentTypeCustom, AgentTypeHermes, AgentTypeCodex, AgentTypeCursor,
+		AgentTypeCopilot, AgentTypeGeminiCLI:
+		return true
+	}
+	return false
+}
+
+// AgentModelMaxLen bounds the self-reported model string.
+const AgentModelMaxLen = 128
