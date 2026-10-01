@@ -1,9 +1,10 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
+import { useTaskStore } from "@/stores/task";
 import { useWebSocketStore } from "@/stores/websocket";
 import { useInstallPrompt } from "@/hooks/use-install-prompt";
 import { useDynamicFavicon } from "@/hooks/use-dynamic-favicon";
@@ -116,12 +117,51 @@ export function AppLayout() {
   // Resolve project slug (re-runs when projects finish loading)
   useEffect(() => {
     if (projectSlug && projects.length > 0) {
-      setCurrentProjectBySlug(projectSlug);
+      const found = setCurrentProjectBySlug(projectSlug);
+      // An unknown slug must not keep the previous project current: the
+      // project pages read currentProject, not the URL, and would draw that
+      // other project's tasks under this URL.
+      if (!found && currentProject) {
+        useProjectStore.setState({ currentProject: null });
+      }
     } else if (!projectSlug && currentProject) {
       // Clear current project when navigating away from a project route
       useProjectStore.setState({ currentProject: null });
     }
   }, [projectSlug, projects, setCurrentProjectBySlug, currentProject]);
+
+  // The task list and statuses in their stores belong to the project that was
+  // current. Once the project guard releases for the new one, the page's first
+  // render would still show them until its own fetch starts — drop them when the
+  // current project changes.
+  const currentProjectId = currentProject?.id;
+  const shownProjectId = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (currentProjectId && shownProjectId.current && shownProjectId.current !== currentProjectId) {
+      useTaskStore.setState({ tasks: [], tasksByStatus: {}, total: 0, hasMore: false });
+      useProjectStore.setState({ statuses: [] });
+    }
+    if (currentProjectId) shownProjectId.current = currentProjectId;
+  }, [currentProjectId]);
+
+  // Render-time guard, same idea as workspaceNotFound: the project pages (board,
+  // list, calendar, timeline) read `currentProject` from the store, not the URL.
+  // After a navigation Lab -> Keep the store still holds Lab until the effect
+  // above runs, so for that window (or for good, if the effect loses a race with
+  // fetchProjects) the Keep URL rendered Lab's tasks. While the store disagrees
+  // with the URL, show a loader instead of the page. For an unknown slug the
+  // effect above clears currentProject, which ends the loader and lets the
+  // pages say "not found" — never with the previous project's data.
+  const urlWorkspace = workspaces.find((w) => w.slug === wsSlug);
+  const projectPending =
+    !!projectSlug &&
+    !!currentProject &&
+    (currentProject.slug !== projectSlug ||
+      // slugs are unique per workspace only: same slug, other workspace
+      // (resolved from the URL, not currentWorkspace, which lags by an effect)
+      (!!urlWorkspace &&
+        !!currentProject.workspace_id &&
+        currentProject.workspace_id !== urlWorkspace.id));
 
   // Initialize WebSocket connection when workspace is available.
   useEffect(() => {
@@ -261,7 +301,14 @@ export function AppLayout() {
           onInstall={installPrompt.promptInstall}
         />
         <main className="flex-1 overflow-y-auto p-3 md:p-6">
-          <Outlet />
+          {projectPending ? (
+            <div data-testid="project-switching" className="space-y-3" aria-busy="true">
+              <Skeleton className="h-8 w-48" />
+              <Skeleton className="h-64 w-full" />
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </main>
         {installPrompt.showBanner && (
           <InstallPromptBanner

@@ -61,6 +61,9 @@ interface ProjectState {
   reorderStatuses: (projectId: string, statusIds: string[]) => Promise<void>;
 }
 
+// A late status response must not replace the columns of a newer project.
+let latestFetchStatuses = 0;
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -152,13 +155,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   fetchStatuses: async (projectId: string) => {
+    const requestId = ++latestFetchStatuses;
     set({ error: null });
     try {
       const statuses = await api<TaskStatus[]>(
         `/api/v1/projects/${projectId}/statuses`,
       );
+      if (requestId !== latestFetchStatuses) return;
       set({ statuses: statuses ?? [], error: null });
     } catch (error) {
+      if (requestId !== latestFetchStatuses) return;
       set({ statuses: [], error: getErrorMessage(error) });
     }
   },
