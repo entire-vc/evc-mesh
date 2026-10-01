@@ -57,6 +57,8 @@ import {
 import { toast } from "@/components/ui/toast";
 import "@/components/doc-editor.css";
 import { apiErrorMessage } from "@/lib/api-error";
+import { joinFrontmatter, splitFrontmatter } from "@/lib/docs/frontmatter";
+import { DocProperties } from "@/components/doc-properties";
 
 /**
  * Tell the user an upload failed, by name.
@@ -108,6 +110,11 @@ export interface DocEditorProps {
    * to fill is the page's business, not this component's.
    */
   className?: string;
+}
+
+interface MilkdownDocProps extends DocEditorProps {
+  /** The frontmatter block, drawn above the prose and outside ProseMirror. */
+  properties?: React.ReactNode;
 }
 
 // The prose classes are shared by the editor and the viewer on purpose: they are
@@ -274,7 +281,8 @@ function MilkdownDoc({
   onAnchorResolved,
   onCopyAnchor,
   className,
-}: DocEditorProps) {
+  properties,
+}: MilkdownDocProps) {
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -756,6 +764,8 @@ function MilkdownDoc({
         </div>
       )}
 
+      {properties && <div className={cn(!readOnly && "px-3 pt-2")}>{properties}</div>}
+
       {/* `mesh-doc-editor-body` carries the fill down to the contenteditable
           across the two wrapper elements Milkdown renders for itself, which
           take no className from us — see doc-editor.css. No `min-h-0`: this box
@@ -813,8 +823,30 @@ export function DocEditor({
   onCopyAnchor,
   className,
 }: DocEditorProps) {
+  // The frontmatter never reaches Milkdown: it would render as one bold
+  // setext heading. The engine sees the body only, and every change is
+  // re-joined with the frontmatter exactly as it was written.
+  const split = useMemo(() => splitFrontmatter(value), [value]);
+  const rawRef = useRef(split.raw);
+  rawRef.current = split.raw;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const handleBodyChange = useCallback(
+    (body: string) => onChangeRef.current(joinFrontmatter(rawRef.current, body)),
+    [],
+  );
+
   if (readOnly && !value.trim()) {
     return <p className="text-sm text-muted-foreground">This page is empty.</p>;
+  }
+
+  const properties = split.raw ? (
+    <DocProperties entries={split.entries} inner={split.inner} />
+  ) : null;
+
+  // A document that is nothing but frontmatter has no body to render.
+  if (readOnly && !split.body.trim()) {
+    return <div className={cn("flex flex-col", className)}>{properties}</div>;
   }
 
   return (
@@ -824,14 +856,15 @@ export function DocEditor({
     // half-updated one.
     <MilkdownProvider key={readOnly ? "view" : "edit"}>
       <MilkdownDoc
-        value={value}
-        onChange={onChange}
+        value={split.body}
+        onChange={handleBodyChange}
         readOnly={readOnly}
         documentId={documentId}
         className={className}
         anchor={anchor}
         onAnchorResolved={onAnchorResolved}
         onCopyAnchor={onCopyAnchor}
+        properties={properties}
       />
     </MilkdownProvider>
   );

@@ -59,7 +59,15 @@ export function flattenText(container: Node): FlatText {
   const pieces: TextPiece[] = [];
   let text = "";
 
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  // Chrome drawn inside the document area that is not the document — the
+  // frontmatter properties block — opts out with `data-doc-text-skip`, so a
+  // quote can neither land in it nor shift when it opens or closes.
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentElement?.closest("[data-doc-text-skip]")
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
   let previousBlock: Element | null = null;
   let first = true;
 
