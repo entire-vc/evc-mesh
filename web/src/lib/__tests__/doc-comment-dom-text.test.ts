@@ -24,6 +24,17 @@ beforeEach(() => {
 });
 
 describe("flattenText", () => {
+  it("leaves out chrome marked data-doc-text-skip, such as the properties block", () => {
+    // The frontmatter properties block sits inside the measured document area.
+    // Its text is not prose: a quote must not land in it, and opening it must
+    // not shift the offsets of everything below.
+    const host = mount(
+      '<div data-doc-text-skip=""><button>Properties 8</button><span>contenthub</span></div>' +
+        "<h1>Title</h1><p>Body text.</p>",
+    );
+    expect(flattenText(host).text).toBe("Title\nBody text.");
+  });
+
   it("concatenates the text of a single paragraph", () => {
     const host = mount("<p>Hello world</p>");
     expect(flattenText(host).text).toBe("Hello world");

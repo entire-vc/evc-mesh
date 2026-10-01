@@ -693,3 +693,85 @@ describe("toolbar hover contrast", () => {
     expect(contrast(dark, "--secondary", "--muted-foreground")).toBeCloseTo(4.03, 1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Frontmatter
+// ---------------------------------------------------------------------------
+
+const WITH_FRONTMATTER = `---
+created: 2026-10-01T17:50+03:00
+updated: 2026-10-01
+author: Garfield-Mesh
+status: review
+tags:
+  - contenthub
+  - spec
+---
+
+# PRD title
+
+Body paragraph.
+`;
+
+describe("DocEditor frontmatter", () => {
+  it("shows the frontmatter as a collapsed properties block, not as a heading", async () => {
+    const { container } = renderInRouter(
+      <DocEditor value={WITH_FRONTMATTER} onChange={vi.fn()} readOnly />,
+    );
+    const pm = await surface(container);
+
+    // The defect: the closing fence made the block one bold setext H2.
+    expect(pm.textContent).not.toContain("created:");
+    expect(pm.textContent).not.toContain("Garfield-Mesh");
+    expect(pm.querySelector("h1")?.textContent).toBe("PRD title");
+    expect(pm.querySelector("h2")).toBeNull();
+
+    const block = screen.getByTestId("doc-properties");
+    const toggle = within(block).getByRole("button");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(block).queryByTestId("doc-properties-table")).toBeNull();
+    // Collapsed: tags as chips, nothing else.
+    expect(within(block).getAllByTestId("doc-property-chip").map((c) => c.textContent))
+      .toEqual(["contenthub", "spec"]);
+    expect(block.textContent).not.toContain("Garfield-Mesh");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const table = within(block).getByTestId("doc-properties-table");
+    expect(within(table).getByText("author")).toBeInTheDocument();
+    expect(within(table).getByText("Garfield-Mesh")).toBeInTheDocument();
+    // Dates as dates, with the source value kept on the element.
+    expect(table.querySelector('time[datetime="2026-10-01"]')?.textContent).toBe("Oct 1, 2026");
+    expect(table.querySelector('time[datetime="2026-10-01T17:50+03:00"]')).not.toBeNull();
+    expect(within(table).getAllByTestId("doc-property-chip")).toHaveLength(2);
+  });
+
+  it("draws no properties block for a document without frontmatter", async () => {
+    const { container } = renderInRouter(
+      <DocEditor value={"Intro\n\n---\n\nAfter the rule\n"} onChange={vi.fn()} readOnly />,
+    );
+    const pm = await surface(container);
+    expect(screen.queryByTestId("doc-properties")).toBeNull();
+    // A rule in the middle is still a rule.
+    expect(pm.querySelector("hr")).not.toBeNull();
+  });
+
+  it("keeps the frontmatter byte for byte when the body is edited", async () => {
+    const onChange = vi.fn();
+    const { container } = renderInRouter(
+      <DocEditor value={WITH_FRONTMATTER} onChange={onChange} documentId="doc-1" />,
+    );
+    const pm = await surface(container);
+    expect(pm.textContent).not.toContain("created:");
+    expect(screen.getByTestId("doc-properties")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle("Table"));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+
+    const saved = onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] as string;
+    const fm = WITH_FRONTMATTER.slice(0, WITH_FRONTMATTER.indexOf("# PRD"));
+    expect(saved.startsWith(fm)).toBe(true);
+    expect(saved).not.toContain("## created");
+    expect(saved).toContain("# PRD title");
+  });
+});
