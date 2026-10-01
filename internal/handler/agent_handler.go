@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -197,6 +198,21 @@ type updateAgentRequest struct {
 	ParentAgentID      *string           `json:"parent_agent_id"`    // UUID string or "" to clear
 	SupervisorUserID   *string           `json:"supervisor_user_id"` // UUID string or "" to clear
 	Role               *string           `json:"role"`
+	Model              *string           `json:"model"` // "" clears (NULL)
+}
+
+// normalizeAgentModel trims a self-reported model string. ok=false means it is
+// longer than domain.AgentModelMaxLen. The returned pointer is nil for "" so the
+// column goes back to NULL ("not reported").
+func normalizeAgentModel(raw string) (model *string, ok bool) {
+	m := strings.TrimSpace(raw)
+	if len(m) > domain.AgentModelMaxLen {
+		return nil, false
+	}
+	if m == "" {
+		return nil, true
+	}
+	return &m, true
 }
 
 // Update handles PATCH /agents/:agent_id
@@ -223,6 +239,13 @@ func (h *AgentHandler) Update(c echo.Context) error {
 	}
 	if req.AgentType != nil {
 		agent.AgentType = *req.AgentType
+	}
+	if req.Model != nil {
+		m, ok := normalizeAgentModel(*req.Model)
+		if !ok {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(fmt.Sprintf("model must be <=%d chars", domain.AgentModelMaxLen)))
+		}
+		agent.Model = m
 	}
 	if req.Capabilities != nil {
 		var capBytes []byte
@@ -324,6 +347,9 @@ type heartbeatRequest struct {
 	Message       string         `json:"message"`
 	Metadata      map[string]any `json:"metadata"`
 	CurrentTaskID *string        `json:"current_task_id"`
+	// Optional self-report of harness / model (same rules as PATCH /agents/me).
+	AgentType *domain.AgentType `json:"agent_type"`
+	Model     *string           `json:"model"`
 }
 
 // heartbeatStatusMaxLen mirrors the DB column width for agents.heartbeat_status
@@ -355,16 +381,41 @@ func (h *AgentHandler) Heartbeat(c echo.Context) error {
 		)))
 	}
 
+	var hbAgentType domain.AgentType
+	if req.AgentType != nil && *req.AgentType != "" {
+		if !domain.IsValidAgentType(*req.AgentType) {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_type"))
+		}
+		hbAgentType = *req.AgentType
+	}
+	var hbModel *string
+	hasModel := false
+	if req.Model != nil {
+		m, ok := normalizeAgentModel(*req.Model)
+		if !ok {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(fmt.Sprintf("model must be <=%d chars", domain.AgentModelMaxLen)))
+		}
+		hasModel = true
+		if m == nil {
+			empty := ""
+			hbModel = &empty // "" tells the repo to clear
+		} else {
+			hbModel = m
+		}
+	}
+
 	// Auto-set status to "busy" when processing a task (unless explicitly set otherwise).
 	if req.CurrentTaskID != nil && *req.CurrentTaskID != "" && req.Status == "" {
 		req.Status = "busy"
 	}
 
 	var input *service.HeartbeatInput
-	if req.Status != "" || req.Message != "" || req.Metadata != nil || req.CurrentTaskID != nil {
+	if req.Status != "" || req.Message != "" || req.Metadata != nil || req.CurrentTaskID != nil || hbAgentType != "" || hasModel {
 		input = &service.HeartbeatInput{
-			Status:  req.Status,
-			Message: req.Message,
+			Status:    req.Status,
+			Message:   req.Message,
+			AgentType: hbAgentType,
+			Model:     hbModel,
 		}
 		if req.Metadata != nil {
 			b, _ := json.Marshal(req.Metadata)
@@ -635,10 +686,13 @@ func (h *AgentHandler) Me(c echo.Context) error {
 }
 
 // updateMeRequest represents the JSON body for self-service agent profile updates.
-// Only safe fields — no name/type/capabilities changes (those require admin).
+// Only safe fields — no name/capabilities changes (those require admin).
+// agent_type (harness) and model are self-reported: the agent knows what it runs on.
 type updateMeRequest struct {
-	ProfileDescription *string `json:"profile_description"`
-	CallbackURL        *string `json:"callback_url"`
+	ProfileDescription *string           `json:"profile_description"`
+	CallbackURL        *string           `json:"callback_url"`
+	AgentType          *domain.AgentType `json:"agent_type"`
+	Model              *string           `json:"model"` // "" clears (NULL)
 }
 
 // UpdateMe handles PATCH /agents/me
@@ -671,6 +725,19 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 		}
 	}
 
+	// Validate before the read so a bad value is a 400, not a silent 200.
+	if req.AgentType != nil && !domain.IsValidAgentType(*req.AgentType) {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_type"))
+	}
+	var newModel *string
+	if req.Model != nil {
+		m, ok := normalizeAgentModel(*req.Model)
+		if !ok {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(fmt.Sprintf("model must be <=%d chars", domain.AgentModelMaxLen)))
+		}
+		newModel = m
+	}
+
 	agent, err := h.agentService.GetByID(c.Request().Context(), agentID)
 	if err != nil {
 		return handleError(c, err)
@@ -681,6 +748,12 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 	}
 	if req.CallbackURL != nil {
 		agent.CallbackURL = *req.CallbackURL
+	}
+	if req.AgentType != nil {
+		agent.AgentType = *req.AgentType
+	}
+	if req.Model != nil {
+		agent.Model = newModel
 	}
 
 	if updateErr := h.agentService.Update(c.Request().Context(), agent); updateErr != nil {

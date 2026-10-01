@@ -311,6 +311,7 @@ type TeamDirectoryAgent struct {
 	Slug               string          `json:"slug"`
 	Status             AgentStatus     `json:"status"`
 	AgentType          AgentType       `json:"agent_type"`
+	Model              *string         `json:"model"`
 	ParentAgentID      *uuid.UUID      `json:"parent_agent_id,omitempty"`
 	SupervisorUserID   *uuid.UUID      `json:"supervisor_user_id,omitempty"`
 	Role               string          `json:"role"`

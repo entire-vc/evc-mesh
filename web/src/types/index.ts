@@ -438,7 +438,9 @@ export interface Agent {
   parent_agent_id?: string | null;
   supervisor_user_id?: string | null;
   name: string;
-  agent_type: AgentType;
+  agent_type: AgentType; // harness (claude_code, codex, ...)
+  // LLM the agent runs on, self-reported; null = not reported.
+  model?: string | null;
   status: AgentStatus;
   role?: string;
   // API returns an object ({}) rather than string[] — same shape as
@@ -998,6 +1000,7 @@ export interface TeamDirectoryAgent {
   slug: string;
   status: string;
   agent_type: string;
+  model?: string | null;
   parent_agent_id?: string | null;
   supervisor_user_id?: string | null;
   role: string;

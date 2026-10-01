@@ -875,6 +875,9 @@ type HeartbeatInput struct {
 	Message       string          `json:"message"`
 	Metadata      json.RawMessage `json:"metadata"`
 	CurrentTaskID *uuid.UUID      `json:"current_task_id,omitempty"`
+	// Optional self-report of harness / model; "" / nil = leave unchanged.
+	AgentType domain.AgentType `json:"agent_type,omitempty"`
+	Model     *string          `json:"model,omitempty"`
 }
 
 // AgentService provides business logic for agent management.

@@ -71,6 +71,8 @@ export function AgentDetailDialog({
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [editingRole, setEditingRole] = useState(false);
   const [roleDraft, setRoleDraft] = useState("");
+  const [editingModel, setEditingModel] = useState(false);
+  const [modelDraft, setModelDraft] = useState("");
   const [editingCallbackUrl, setEditingCallbackUrl] = useState(false);
   const [callbackUrlDraft, setCallbackUrlDraft] = useState("");
   // Five fields new to this form (task #85714565), all routed through
@@ -93,6 +95,8 @@ export function AgentDetailDialog({
     setDescriptionDraft("");
     setEditingRole(false);
     setRoleDraft("");
+    setEditingModel(false);
+    setModelDraft("");
     setEditingCallbackUrl(false);
     setCallbackUrlDraft("");
     setEditingProfileField(null);
@@ -166,6 +170,27 @@ export function AgentDetailDialog({
       setIsLoading(false);
     }
   }, [agent, roleDraft, updateAgent]);
+
+  const handleStartEditModel = useCallback(() => {
+    if (!agent) return;
+    setModelDraft(agent.model ?? "");
+    setEditingModel(true);
+  }, [agent]);
+
+  const handleSaveModel = useCallback(async () => {
+    if (!agent) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      // "" clears the model back to "not reported" (NULL on the server).
+      await updateAgent(agent.id, { model: modelDraft.trim() });
+      setEditingModel(false);
+    } catch (err) {
+      setError(apiErrorMessage(err, "Failed to update model"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [agent, modelDraft, updateAgent]);
 
   const handleStartEditCallbackUrl = useCallback(() => {
     if (!agent) return;
@@ -427,6 +452,8 @@ export function AgentDetailDialog({
                 void updateAgent(agent.id, { agent_type: e.target.value as AgentType });
               }}
               className="h-6 w-auto min-w-[120px] text-xs"
+              aria-label="Harness"
+              title="Harness"
             >
               {Object.entries(agentTypeConfig).map(([key, cfg]) => (
                 <option key={key} value={key}>{cfg.label}</option>
@@ -597,6 +624,58 @@ export function AgentDetailDialog({
                   className="h-6 w-6 shrink-0"
                   onClick={handleStartEditRole}
                   title="Edit role"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
+          </DetailRow>
+
+          {/* Model (the LLM; the select next to the name is the harness) */}
+          <DetailRow label="Model">
+            {editingModel ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={modelDraft}
+                  onChange={(e) => setModelDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSaveModel();
+                    if (e.key === "Escape") setEditingModel(false);
+                  }}
+                  placeholder="e.g. gpt-6.1-sol"
+                  maxLength={128}
+                  aria-label="Model"
+                  className="h-7 w-48 text-sm"
+                  autoFocus
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0"
+                  onClick={() => void handleSaveModel()}
+                  disabled={isLoading}
+                  title="Save model"
+                >
+                  <Check className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0"
+                  onClick={() => setEditingModel(false)}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm">{agent.model || "Not reported"}</span>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0"
+                  onClick={handleStartEditModel}
+                  title="Edit model"
                 >
                   <Pencil className="h-3 w-3" />
                 </Button>
