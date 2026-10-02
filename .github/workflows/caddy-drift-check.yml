@@ -27,6 +27,8 @@ jobs:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
       - name: Configure SSH jump host
+        env:
+          DEPLOY_JUMP_USER: ${{ vars.DEPLOY_JUMP_USER }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
@@ -38,7 +40,7 @@ jobs:
             echo "  StrictHostKeyChecking accept-new"
             echo "Host deploy-jump"
             echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
-            echo "  User ${{ vars.DEPLOY_JUMP_USER }}"
+            echo "  User ${DEPLOY_JUMP_USER}"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
           chmod 600 ~/.ssh/config
