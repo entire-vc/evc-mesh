@@ -457,6 +457,21 @@ function OrgChartSkeleton() {
 
 type ViewMode = "tree" | "grid";
 
+function overlayAgentEdits(tree: OrgChartAgentNode[], agents: Agent[]): OrgChartAgentNode[] {
+  if (agents.length === 0) return tree;
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const walk = (nodes: OrgChartAgentNode[]): OrgChartAgentNode[] =>
+    nodes.map((n) => {
+      const a = byId.get(n.id);
+      return {
+        ...n,
+        ...(a && { name: a.name, role: a.role, agent_type: a.agent_type, model: a.model ?? null }),
+        children: walk(n.children),
+      };
+    });
+  return walk(tree);
+}
+
 export function OrgChartPage() {
   const { currentWorkspace } = useWorkspaceStore();
   const { orgChart, isOrgChartLoading, fetchOrgChart } = useRulesStore();
@@ -478,7 +493,13 @@ export function OrgChartPage() {
     }
   }, [currentWorkspace, fetchOrgChart, fetchAgents]);
 
-  const agentTree = orgChart?.agent_tree ?? [];
+  // The org-chart payload is fetched separately from the agents list that the
+  // detail dialog edits, so overlay the edited fields from the agents store —
+  // otherwise cards stay stale until the next org-chart refetch.
+  const agentTree = useMemo(
+    () => overlayAgentEdits(orgChart?.agent_tree ?? [], agents),
+    [orgChart, agents],
+  );
   const humans = orgChart?.humans ?? [];
   const workspaceName = orgChart?.workspace ?? currentWorkspace?.name ?? "";
 
