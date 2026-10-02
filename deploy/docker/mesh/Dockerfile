@@ -13,9 +13,9 @@ RUN go mod download
 # class of requirement. Placed before `COPY . .` so this layer caches on the pin alone and
 # is unaffected by evc-mesh source changes. `go install` names the binary after the
 # module (`evc-mesh-mcp`); renamed below to `mesh-mcp` to match the `command:` in
-# docker-compose.prod.yml and the systemd unit on mesh-vm. The -X target below is the
+# docker-compose.prod.yml and the systemd unit on prod-host. The -X target below is the
 # exact symbol evc-mesh-mcp's own deploy workflow sets
-# (.github/workflows/deploy-mesh-vm.yml, internal/mcp.BuildSHA) — not a guess — so
+# (.github/workflows/deploy-prod-host.yml, internal/mcp.BuildSHA) — not a guess — so
 # `mesh-mcp --version` reports the pinned commit instead of falling back to "dev".
 #
 # Bumping MESH_MCP_REF is a routine dependency bump (like any go.mod version bump), not a

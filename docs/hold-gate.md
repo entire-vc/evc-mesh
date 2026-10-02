@@ -78,7 +78,7 @@ rather than misconfigured.
 
 ## Keeping the list in one piece
 
-`.github/hold-labels.txt` and `HOLD_LABELS` in `bob/scripts/fleet_gate_labels.py`
+`.github/hold-labels.txt` and `HOLD_LABELS` in `fleet-ops/scripts/fleet_gate_labels.py`
 must hold the same names. They are two copies of one rule, in two repositories,
 and they drifted the day the first one was written — three names were honoured by
 the wrappers and unknown to this gate. `mesh-merge-train --test` now compares

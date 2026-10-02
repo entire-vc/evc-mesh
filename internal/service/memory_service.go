@@ -2168,7 +2168,7 @@ func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUI
 		// INTO the actual bench workspace (is_bench=true) passes through
 		// unchanged — only landing such a tag in a NON-bench workspace is
 		// rejected, which is the leak this guard exists to close. (The one
-		// concrete restore artifact on file, bob/docs/audit-2026-09/lme-bench-
+		// concrete restore artifact on file, fleet-ops/docs/audit-2026-09/lme-bench-
 		// purged.jsonl, is a raw per-row DB dump — id/workspace_id/.../version —
 		// not this function's `memories:` YAML shape, so it was never actually
 		// going to go through ImportMemories; this comment is about what THIS

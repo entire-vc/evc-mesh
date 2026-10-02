@@ -1,4 +1,4 @@
-name: Deploy frontend to mesh VM (via hel01)
+name: Deploy frontend to mesh VM (via gateway)
 
 on:
   push:
@@ -53,25 +53,25 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      # CI reaches the private mesh VM only via the hel01 forwarding-only jump user.
-      # See docs/DEPLOY_HEL01.md.
-      - name: Configure hel01 jump
+      # CI reaches the private mesh VM only via the gateway forwarding-only jump user.
+      # See docs/deploy-via-jump-host.md.
+      - name: Configure SSH jump host
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
-            echo "Host mesh-vm"
+            echo "Host prod-host"
             echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
-            echo "  ProxyJump hel01-jump"
+            echo "  ProxyJump deploy-jump"
             echo "  StrictHostKeyChecking accept-new"
-            echo "Host hel01-jump"
+            echo "Host deploy-jump"
             echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
-            echo "  User ghdeploy"
+            echo "  User ${{ vars.DEPLOY_JUMP_USER }}"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
           chmod 600 ~/.ssh/config
 
       - name: Deploy to mesh VM
         run: |
-          rsync -avz --delete web/dist/ mesh-vm:/opt/evc-mesh/web/dist/
+          rsync -avz --delete web/dist/ prod-host:/opt/evc-mesh/web/dist/

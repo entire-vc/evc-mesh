@@ -14,7 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 // Backlog promotion advisory rule tests (task #9f3f4064, parent #00327dc6).
 //
-// Contract under test — mirroring bob/scripts/mesh-intake-sweep.py:
+// Contract under test — mirroring fleet-ops/scripts/mesh-intake-sweep.py:
 //   - A task DEMOTED into backlog from a working status, with NO dependencies, is a
 //     deliberate park and must NOT be advised as promotable (#b832d451: vacuously-true
 //     empty-dep-set undid a park in 26 minutes).
@@ -319,7 +319,7 @@ func TestBacklogPromotionAdvisory_CancelledBlocker_ClearsDep(t *testing.T) {
 }
 
 // --- Workspace scope (#a24616da, prerequisite of #f42fe0a8): mesh-intake-sweep.py
-// only ever polls ONE workspace (WORKSPACE_ID in bob/scripts/mesh-intake-sweep.py,
+// only ever polls ONE workspace (WORKSPACE_ID in fleet-ops/scripts/mesh-intake-sweep.py,
 // same UUID as backlogInScopeWorkspaceID here). A backlog task whose project sits in
 // any OTHER workspace (KidCash — Pavel's personal workspace under Codex; Editorial)
 // is invisible to the sweep and must be HELD, not promoted — promoting it would be new

@@ -6,7 +6,7 @@ runners cannot reach the private addresses directly, so every deploy hops throug
 
 ## Mechanism
 
-- **Jump user** (`ghdeploy` in our setup) on the gateway: `nologin` shell, `authorized_keys`
+- **Jump user** (`<jump-user>`, supplied as the repository variable `vars.DEPLOY_JUMP_USER`) on the gateway: `nologin` shell, `authorized_keys`
   lines are `restrict,port-forwarding,permitopen="<vm_ip>:22" <product-deploy-pubkey>`.
   No shell/pty/exec — only `ssh -J` (`-W`) tunnels, and only to the one VM each key owns.
   A leaked repo secret cannot reach any other product's VM.
@@ -21,28 +21,28 @@ runners cannot reach the private addresses directly, so every deploy hops throug
 
 After `webfactory/ssh-agent`, add a step that writes `~/.ssh/config`. The gateway's public
 IP and this VM's private IP come from CI secrets, never hardcoded in the workflow file
-(`secrets.HEL01_JUMP_HOST`, `secrets.MESH_VM_HOST` in this repo — see `.github/workflows/deploy-backend.yml`):
+(`secrets.HEL01_JUMP_HOST`, `secrets.MESH_VM_HOST` in this repo — legacy secret names, kept so existing secrets keep working — see `.github/workflows/deploy-backend.yml`):
 
 ```yaml
-- name: Configure hel01 jump
+- name: Configure SSH jump host
   run: |
     mkdir -p ~/.ssh && chmod 700 ~/.ssh
     ssh-keyscan -H "${{ secrets.HEL01_JUMP_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
     {
-      echo "Host <product>-vm"
+      echo "Host <product>-host"
       echo "  HostName ${{ secrets.MESH_VM_HOST }}"
-      echo "  User root"
-      echo "  ProxyJump hel01-jump"
+      echo "  User <deploy-user>"
+      echo "  ProxyJump deploy-jump"
       echo "  StrictHostKeyChecking accept-new"
-      echo "Host hel01-jump"
+      echo "Host deploy-jump"
       echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
-      echo "  User ghdeploy"
+      echo "  User ${{ vars.DEPLOY_JUMP_USER }}"
       echo "  StrictHostKeyChecking accept-new"
     } >> ~/.ssh/config
     chmod 600 ~/.ssh/config
 ```
 
-Then target `<product>-vm` in every `ssh`/`rsync` (rsync reads `~/.ssh/config`, so ProxyJump
+Then target `<product>-host` in every `ssh`/`rsync` (rsync reads `~/.ssh/config`, so ProxyJump
 applies automatically). Never target an old public IP directly once a product has moved
 behind the jump host — direct access is retired along with the migration.
 

@@ -110,7 +110,7 @@ func TestHumanGateSoftTimeoutService_NoCandidates_NoOp(t *testing.T) {
 // card to STAY in the digest, and both of those modules decide that from comment text,
 // not from the human_gate flag alone (a still-present `❓ Blocking @pavel` marker plus
 // no later user reply keeps a card surfaced regardless of the flag — see
-// bob/scripts/human_gate.py:is_human_gated). A comment that accidentally matched one of
+// fleet-ops/scripts/human_gate.py:is_human_gated). A comment that accidentally matched one of
 // these phrases would silently drop the card from Pavel's queue despite no answer ever
 // having arrived — the exact regression this test exists to catch.
 func TestHumanGateSoftTimeoutService_ReleaseComment_AvoidsDigestNegatorPhrases(t *testing.T) {
@@ -122,7 +122,7 @@ func TestHumanGateSoftTimeoutService_ReleaseComment_AvoidsDigestNegatorPhrases(t
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Mirrors bob/scripts/pavel-digest.py's WITHDRAWAL_SYSTEM_MARK and _RESOLVED tuple
+	// Mirrors fleet-ops/scripts/pavel-digest.py's WITHDRAWAL_SYSTEM_MARK and _RESOLVED tuple
 	// verbatim — see that file if this list needs to be re-synced.
 	forbidden := []string{
 		"автор запроса отозвал его сам", // WITHDRAWAL_SYSTEM_MARK

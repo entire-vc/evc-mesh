@@ -60,11 +60,11 @@ For local cross-compilation use `make build-prod`.
 ## Emergency rollback
 
 If a bad deploy slips through (smoke test passes but runtime breaks), reach prod
-through the restricted jump host — see `DEPLOY_HEL01.md` for the SSH config pattern,
+through the restricted jump host — see `deploy-via-jump-host.md` for the SSH config pattern,
 never a direct `ssh root@<ip>` (the old direct-IP path is retired):
 
 ```bash
-ssh mesh-vm
+ssh prod-host
 cp /opt/evc-mesh/mesh-api.prev /opt/evc-mesh/mesh-api   # if backup exists
 systemctl restart mesh-api
 ```
@@ -78,7 +78,7 @@ The deploy script does **not** automatically keep a `.prev` backup — add one t
 Add this before the atomic swap in `deploy-backend.yml`:
 
 ```bash
-ssh mesh-vm 'cp /opt/evc-mesh/mesh-api /opt/evc-mesh/mesh-api.prev || true'
+ssh prod-host 'cp /opt/evc-mesh/mesh-api /opt/evc-mesh/mesh-api.prev || true'
 ```
 
 ---

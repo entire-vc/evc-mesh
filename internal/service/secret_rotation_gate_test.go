@@ -8,7 +8,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// These mirror bob/scripts/test_secret_rotation_gate_e8388213.py's TestClassify
+// These mirror fleet-ops/scripts/test_secret_rotation_gate_e8388213.py's TestClassify
 // case-for-case (task #bb1aaa09, tail of #e8388213) — the Go port must classify the
 // SAME population the same way, not merely "a reasonable subset". The two named traps
 // (an alert about the leak-COUNTER itself, and a `logrotate` alert) are the ones that

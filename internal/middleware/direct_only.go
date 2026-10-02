@@ -31,7 +31,7 @@ var forwardingHeaders = []string{
 //
 // Legitimate callers never carry these headers: the two spawners and the
 // health check reach 127.0.0.1:8005 over ssh with plain curl (see
-// bob/scripts/spawn_secrets.py, `ssh+http://`). A proxy configured to STRIP
+// fleet-ops/scripts/spawn_secrets.py, `ssh+http://`). A proxy configured to STRIP
 // the forwarding headers defeats this — that has to be written on purpose,
 // which is the difference from the failure this guards against.
 func DirectOnly() echo.MiddlewareFunc {

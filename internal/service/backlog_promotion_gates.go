@@ -13,13 +13,13 @@ import (
 
 // Parity guards for BacklogPromotionAdvisoryService (#c15c503a, prerequisite of the
 // enforcing cutover #f42fe0a8). Each function below is ported one-to-one from
-// bob/scripts/mesh-intake-sweep.py and bob/scripts/human_gate.py; the Python name is
+// fleet-ops/scripts/mesh-intake-sweep.py and fleet-ops/scripts/human_gate.py; the Python name is
 // in each doc comment. Where the server CANNOT reproduce a sweep behaviour (it has no
 // comment repository here), it errs toward HOLD: a server that holds where the sweep
 // promotes shows up as `sweep_only` in the divergence journal and costs a delay,
 // while the opposite direction would move a card that is waiting on a person.
 
-// backlogInScopeWorkspaceID mirrors WORKSPACE_ID in bob/scripts/mesh-intake-sweep.py —
+// backlogInScopeWorkspaceID mirrors WORKSPACE_ID in fleet-ops/scripts/mesh-intake-sweep.py —
 // the single workspace the sweep polls. A task whose project belongs to any other
 // workspace is invisible to the sweep and must be held, not promoted (see the
 // workspace-scope guard in backlog_promotion_advisory.go's evaluate()).

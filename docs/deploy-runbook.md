@@ -146,7 +146,7 @@ ssh root@prod-host
 
 **The MCP server is not built from this repository.** It lives in
 `entire-vc/evc-mesh-mcp` and ships from that repository's own workflow
-(`.github/workflows/deploy-mesh-vm.yml`, dispatched by hand: `dry-run` prints
+(`.github/workflows/deploy-prod-host.yml`, dispatched by hand: `dry-run` prints
 the plan and changes nothing, `deploy` swaps, `rollback` reverts). That
 workflow takes a rollback anchor before the swap and reverts automatically if
 its smoke test fails — prefer it over the manual steps below.
@@ -168,10 +168,10 @@ workflow itself is unavailable.
 GOOS=linux GOARCH=amd64 go build -o mesh-mcp .
 
 # 2. Copy binary to prod
-scp mesh-mcp root@mesh-vm:/opt/evc-mesh/bin/mesh-mcp.new
+scp mesh-mcp root@prod-host:/opt/evc-mesh/bin/mesh-mcp.new
 
 # 3. On the prod host: run migrations FIRST, then swap binary
-ssh root@mesh-vm
+ssh root@prod-host
 
   # STEP 1 — Run evc-mesh DB migrations (fail-closed).
   # goose CLI is installed at /opt/evc-mesh/bin/goose by the CI migrate job.

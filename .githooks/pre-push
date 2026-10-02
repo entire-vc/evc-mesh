@@ -1,0 +1,3 @@
+#!/bin/sh
+# Same gate CI runs (topology-gate job); catches a leak before it is pushed.
+exec python3 scripts/topology_gate.py

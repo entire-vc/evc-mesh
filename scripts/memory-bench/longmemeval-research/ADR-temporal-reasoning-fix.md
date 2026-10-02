@@ -399,7 +399,7 @@ the 101-q run, and well inside the ~15% temp=0 noise floor established earlier o
 81.95% full-500-with-bug number.
 
 **Full-500 confirmation launched 2026-08-21 06:38 MSK** (`results/full500-minefix-20260821.jsonl`,
-PID 97581, watcher `~/ClaudeCowork/bob/full500-minefix-wake.sh`) — the task AC requires a
+PID 97581, watcher `~/ClaudeCowork/fleet-ops/full500-minefix-wake.sh`) — the task AC requires a
 full-500 number for Metronix-baseline comparability; the 133-q subset above is strong
 evidence but not the number the AC asks for. ETA ~5-6h based on prior full-500 timing.
 **COMPLETED — the number is below, in "Full-500 confirmation (2026-08-23)".**

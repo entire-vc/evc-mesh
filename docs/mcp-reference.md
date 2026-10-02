@@ -1160,7 +1160,7 @@ records `get_project_knowledge` returns.
     "project_id": "550e8400-...",
     "key": "canonical-deploy-target",
     "category": "deploy",
-    "value": "mesh-api runs under systemd on mesh-vm, not docker. `systemctl restart mesh-api`.",
+    "value": "mesh-api runs under systemd on prod-host, not docker. `systemctl restart mesh-api`.",
     "tags": ["kind:canonical"]
   }
 }

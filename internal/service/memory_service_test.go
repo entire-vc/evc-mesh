@@ -1473,7 +1473,7 @@ func TestComputeImportanceScore_BaseByKind(t *testing.T) {
 		{"kind:fact", 0.60},
 		{"kind:session-checkpoint", 0.30},
 		// Not a recognised kind: it falls through to the 0.50 default. Pinned
-		// because bob/CLAUDE-memory.md documented it at 0.80 for months and
+		// because fleet-ops/CLAUDE-memory.md documented it at 0.80 for months and
 		// nothing contradicted the claim (#17840d1b).
 		{"kind:canonical-decision", 0.50},
 	}

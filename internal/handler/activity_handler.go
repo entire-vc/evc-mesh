@@ -171,7 +171,7 @@ func callerHasExportAuditLogPerm(c echo.Context) bool {
 // Found while fixing task a43785cc: review-verify-driver reads exactly
 // Changes.status.{old,new} off task.moved to compute how long a task has sat
 // in its current status (status_entered_at() in
-// bob/scripts/review-verify-driver.py) — every agent caller is exempt from
+// fleet-ops/scripts/review-verify-driver.py) — every agent caller is exempt from
 // PermExportAuditLog, so the blanket redaction made that field permanently
 // null for the one consumer that depended on it, and the driver silently
 // fell back to task.updated_at, which its own comments reset.

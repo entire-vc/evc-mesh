@@ -18,7 +18,7 @@ import (
 // need the identical activity-log read + interpretation, and a guard correct in one
 // copy and stale in the other is exactly the kind of drift this package already warns
 // about elsewhere (see monitor_promotion.go's absoluteNoPromoteLabels doc comment on
-// the two label-set copies that diverged in bob/).
+// the two label-set copies that diverged in fleet-ops/).
 
 // activityStatusChange is the shape of the "status" key inside a task.moved activity
 // log entry's Changes JSON — written by task_service.go's MoveTask as

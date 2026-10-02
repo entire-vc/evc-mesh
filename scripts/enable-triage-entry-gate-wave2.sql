@@ -15,7 +15,7 @@
 -- authored by a human directly, or is hard-classed.
 --
 -- UNLIKE WAVE 1 — no existing `mid_pipeline` merge hazard here. Confirmed via a
--- live snapshot before writing (bob/rollback/project-rules-workflow-triage-
+-- live snapshot before writing (fleet-ops/rollback/project-rules-workflow-triage-
 -- entry-wave2-*.json): none of these 5 projects has ANY row in `project_rules`
 -- for rule_type='workflow' at all (config is NULL, not an empty object) — so
 -- the ON CONFLICT branch's nested jsonb_set is defense-in-depth against a race,
@@ -26,7 +26,7 @@
 --
 -- PRE-FLIGHT — snapshot already taken (see path above), BEFORE this write.
 --
--- Run: ssh mesh-vm "docker exec -i evc-mesh-postgres-1 psql -U mesh -d mesh" < scripts/enable-triage-entry-gate-wave2.sql
+-- Run: ssh prod-host "docker exec -i evc-mesh-postgres-1 psql -U mesh -d mesh" < scripts/enable-triage-entry-gate-wave2.sql
 --
 -- ROLLBACK (removes just the two new keys from mid_pipeline; reads back off,
 -- which is the pre-change behaviour — safe even though today mid_pipeline
