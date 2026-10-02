@@ -317,6 +317,9 @@ describe("AgentDetailDialog — Workspaces section (task U4)", () => {
   });
 });
 
+// Shape of the real ApiError (code + status), so apiErrorMessage uses the fallback text.
+const apiError502 = () => Object.assign(new Error("Server error (502)"), { code: "server_error", status: 502 });
+
 describe("AgentDetailDialog — harness and model (task #5548367d)", () => {
   beforeEach(() => {
     vi.mocked(api).mockReset();
@@ -362,5 +365,54 @@ describe("AgentDetailDialog — harness and model (task #5548367d)", () => {
       const call = vi.mocked(api).mock.calls.find(([, o]) => (o as { method?: string })?.method === "PATCH");
       expect((call![1] as { body: unknown }).body).toEqual({ agent_type: "codex" });
     });
+  });
+  it("shows an error and reverts the select when the harness change is rejected, then clears it on the next successful edit", async () => {
+    vi.mocked(api).mockImplementation((path: string, opts?: { method?: string; body?: unknown }) => {
+      const body = opts?.body as { model?: string } | undefined;
+      if (path === "/api/v1/agents/agent-1" && opts?.method === "PATCH") {
+        if (body?.model !== undefined) return Promise.resolve({ ...baseAgent, model: body.model });
+        return Promise.reject(apiError502());
+      }
+      return Promise.reject(new Error(`unexpected call: ${path} ${opts?.method}`));
+    });
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "codex" } });
+    await waitFor(() => {
+      expect(screen.getByText("Failed to update harness")).toBeTruthy();
+    });
+    expect((screen.getByLabelText("Harness") as HTMLSelectElement).value).toBe("claude_code");
+
+    fireEvent.click(screen.getByTitle("Edit model"));
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "gpt-6.1-sol" } });
+    fireEvent.click(screen.getByTitle("Save model"));
+    await waitFor(() => {
+      expect(screen.queryByText("Failed to update harness")).toBeNull();
+    });
+  });
+
+  it("clears a stale model error when the next harness change starts", async () => {
+    let harnessCall = false;
+    vi.mocked(api).mockImplementation((path: string, opts?: { method?: string; body?: unknown }) => {
+      const body = opts?.body as { agent_type?: string } | undefined;
+      if (path === "/api/v1/agents/agent-1" && opts?.method === "PATCH") {
+        if (body?.agent_type) {
+          harnessCall = true;
+          return Promise.resolve({ ...baseAgent, agent_type: "codex" });
+        }
+        return Promise.reject(apiError502());
+      }
+      return Promise.reject(new Error(`unexpected call: ${path} ${opts?.method}`));
+    });
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+
+    fireEvent.click(screen.getByTitle("Edit model"));
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "x" } });
+    fireEvent.click(screen.getByTitle("Save model"));
+    await waitFor(() => expect(screen.getByText("Failed to update model")).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "codex" } });
+    await waitFor(() => expect(harnessCall).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Failed to update model")).toBeNull());
   });
 });

@@ -192,6 +192,21 @@ export function AgentDetailDialog({
     }
   }, [agent, modelDraft, updateAgent]);
 
+  const handleChangeHarness = useCallback(
+    async (agentType: AgentType) => {
+      if (!agent) return;
+      setError(null);
+      try {
+        await updateAgent(agent.id, { agent_type: agentType });
+      } catch (err) {
+        // The select is controlled by agent.agent_type, which the store did not
+        // change, so it snaps back to the previous harness on its own.
+        setError(apiErrorMessage(err, "Failed to update harness"));
+      }
+    },
+    [agent, updateAgent],
+  );
+
   const handleStartEditCallbackUrl = useCallback(() => {
     if (!agent) return;
     setCallbackUrlDraft(agent.callback_url ?? "");
@@ -448,9 +463,7 @@ export function AgentDetailDialog({
             )}
             <Select
               value={agent.agent_type}
-              onChange={(e) => {
-                void updateAgent(agent.id, { agent_type: e.target.value as AgentType });
-              }}
+              onChange={(e) => void handleChangeHarness(e.target.value as AgentType)}
               className="h-6 w-auto min-w-[120px] text-xs"
               aria-label="Harness"
               title="Harness"
