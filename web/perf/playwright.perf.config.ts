@@ -21,6 +21,10 @@ export default defineConfig({
   testMatch: "*.spec.ts",
   outputDir: "./test-results",
   timeout: 180_000,
+  // Rendering fixture content can outlast the default 5s on the shared
+  // runner with CPU throttling. Keep assertions finite and aligned with
+  // action readiness; the perf budgets still gate every measured action.
+  expect: { timeout: 15_000 },
   // A retry would hide exactly the non-determinism this suite has to surface.
   retries: 0,
   workers: 1,
