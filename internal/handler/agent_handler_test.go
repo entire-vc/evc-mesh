@@ -16,6 +16,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -825,4 +826,83 @@ func TestAgentHandler_Update_AdminSetsModel(t *testing.T) {
 	require.NotNil(t, saved.Model)
 	assert.Equal(t, "gpt-6.1-sol", *saved.Model)
 	assert.Equal(t, domain.AgentTypeClaudeCode, saved.AgentType, "agent_type behaviour unchanged")
+}
+
+// --- has_description on the agent task feed (#fc032545) ---
+//
+// The feed's task DTOs serialize has_description (the field has no omitempty),
+// so leaving it at the Go zero value made every feed item claim
+// has_description:false even when the description was right there in the same
+// JSON object. The flag must mean TrimSpace(description) != "" here too.
+func TestGetMyTasks_HasDescriptionConsistentWithBody(t *testing.T) {
+	agentID, wsID := uuid.New(), uuid.New()
+	taskSvc := &MockTaskService{
+		GetMyTasksFunc: func(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType, _ repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
+			return []domain.Task{
+				{ID: uuid.New(), Title: "With body", Description: "has one"},
+				{ID: uuid.New(), Title: "Whitespace", Description: " \t "},
+				{ID: uuid.New(), Title: "Empty", Description: ""},
+			}, 3, nil
+		},
+	}
+	h := NewAgentHandlerWithTaskService(nil, taskSvc)
+
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)
+	c.Set(mw.ContextKeyAgentID, agentID)
+	c.Set(mw.ContextKeyWorkspaceID, wsID)
+
+	require.NoError(t, h.GetMyTasks(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Tasks []domain.Task `json:"tasks"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Tasks, 3)
+	assert.True(t, resp.Tasks[0].HasDescription)
+	assert.False(t, resp.Tasks[1].HasDescription)
+	assert.False(t, resp.Tasks[2].HasDescription)
+	// The feed has no include_description contract — text stays untouched.
+	assert.Equal(t, "has one", resp.Tasks[0].Description)
+}
+
+// The long-poll twin answers the same feed after its wait; its task DTOs carry
+// the same computed flag (caught uncovered by independent review, MR !1061).
+func TestAgentHandler_PollTasks_HasDescriptionConsistentWithBody(t *testing.T) {
+	agentID, wsID := uuid.New(), uuid.New()
+	taskSvc := &MockTaskService{
+		GetMyTasksFunc: func(_ context.Context, _, _ uuid.UUID, _ domain.AssigneeType, _ repository.AssigneeTaskFilter) ([]domain.Task, int, error) {
+			return []domain.Task{
+				{ID: uuid.New(), Title: "With body", Description: "has one"},
+				{ID: uuid.New(), Title: "Whitespace", Description: " \t "},
+				{ID: uuid.New(), Title: "Empty", Description: ""},
+			}, 3, nil
+		},
+	}
+	_, rdb := newSSEMiniredis(t)
+	h := NewAgentHandlerFull(nil, taskSvc, nil, rdb)
+
+	e := echo.New()
+	// timeout=1 keeps the park short: no pub/sub message arrives on the fresh
+	// miniredis, so the timer branch fires and the response is the plain feed.
+	req := httptest.NewRequest(http.MethodGet, "/?timeout=1", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(mw.ContextKeyAgentID, agentID)
+	c.Set(mw.ContextKeyWorkspaceID, wsID)
+
+	require.NoError(t, h.PollTasks(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Tasks []domain.Task `json:"tasks"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Tasks, 3)
+	assert.True(t, resp.Tasks[0].HasDescription)
+	assert.False(t, resp.Tasks[1].HasDescription)
+	assert.False(t, resp.Tasks[2].HasDescription)
+	assert.Equal(t, "has one", resp.Tasks[0].Description)
 }

@@ -343,7 +343,7 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	// Re-fetch from DB to get enriched fields (assignee_name, subtask_count, etc.)
 	// that are populated via SQL JOINs but not available on the in-memory object.
 	if enriched, err := h.taskService.GetByID(c.Request().Context(), task.ID); err == nil && enriched != nil {
-		enriched.URL = computeTaskURL(c.Request(), enriched.ID)
+		decorateTask(c, enriched)
 		// PossibleDuplicate is db:"-" (never persisted) — Create computed it on
 		// the in-memory task above, but this fresh GetByID knows nothing about
 		// it, so it must be carried over explicitly or the response silently
@@ -352,7 +352,7 @@ func (h *TaskHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusCreated, enriched)
 	}
 
-	task.URL = computeTaskURL(c.Request(), task.ID)
+	decorateTask(c, task)
 	return c.JSON(http.StatusCreated, task)
 }
 
@@ -533,7 +533,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 				return handleError(c, err2)
 			}
 			h.attachHumanGateInfo(c.Request().Context(), task)
-			task.URL = computeTaskURL(c.Request(), task.ID)
+			decorateTask(c, task)
 			return c.JSON(http.StatusOK, task)
 		}
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
@@ -545,7 +545,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 	}
 
 	h.attachHumanGateInfo(c.Request().Context(), task)
-	task.URL = computeTaskURL(c.Request(), task.ID)
+	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
 
@@ -562,7 +562,7 @@ func (h *TaskHandler) GetByShortID(c echo.Context) error {
 	}
 
 	h.attachHumanGateInfo(c.Request().Context(), task)
-	task.URL = computeTaskURL(c.Request(), task.ID)
+	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
 
@@ -602,6 +602,20 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 	return c.JSON(http.StatusOK, page)
 }
 
+// decorateTask fills in the computed per-response fields of ONE task: the URL
+// and the has_description flag. It is the single-object counterpart of
+// decorateTaskList and never touches the description text itself.
+//
+// has_description must mean TrimSpace(description) != "" on every path that
+// returns a task DTO. The flag used to be computed only by the list decorator,
+// so the one-object endpoints (get_task by UUID and by short ID, create,
+// update, the my-tasks feeds) serialized it at its Go zero value and reported
+// has_description:false for tasks that visibly had a description (#fc032545).
+func decorateTask(c echo.Context, task *domain.Task) {
+	task.URL = computeTaskURL(c.Request(), task.ID)
+	task.HasDescription = strings.TrimSpace(task.Description) != ""
+}
+
 // decorateTaskList fills in the per-response fields of a list of tasks: the
 // computed URL, the has_description flag, and — if the caller asked for it — the
 // removal of the description bodies themselves.
@@ -613,10 +627,9 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 func decorateTaskList(c echo.Context, items []domain.Task) {
 	includeDesc := includeDescriptionRequested(c)
 	for i := range items {
-		items[i].URL = computeTaskURL(c.Request(), items[i].ID)
 		// Computed BEFORE any blanking below, so has_description describes the
 		// task and not the projection the caller happened to ask for.
-		items[i].HasDescription = strings.TrimSpace(items[i].Description) != ""
+		decorateTask(c, &items[i])
 		if !includeDesc {
 			items[i].Description = ""
 		}
@@ -837,7 +850,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		})
 	}
 
-	task.URL = computeTaskURL(c.Request(), task.ID)
+	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
 
@@ -1129,6 +1142,7 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
 
@@ -1207,9 +1221,11 @@ func (h *TaskHandler) CreateSubtask(c echo.Context) error {
 
 	// Re-fetch from DB to get enriched fields (assignee_name, etc.)
 	if enriched, err := h.taskService.GetByID(c.Request().Context(), subtask.ID); err == nil && enriched != nil {
+		decorateTask(c, enriched)
 		return c.JSON(http.StatusCreated, enriched)
 	}
 
+	decorateTask(c, subtask)
 	return c.JSON(http.StatusCreated, subtask)
 }
 
@@ -1452,6 +1468,7 @@ func (h *TaskHandler) MoveToProject(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
 
@@ -1483,6 +1500,13 @@ func (h *TaskHandler) GetCurrentUserTasks(c echo.Context) error {
 	page, err := h.taskService.GetUserActiveTasks(c.Request().Context(), workspaceID, actorID, pg)
 	if err != nil {
 		return handleError(c, err)
+	}
+	// /me/tasks has no include_description contract, so only the computed
+	// fields are added here — the description text always travels in full.
+	if page != nil {
+		for i := range page.Items {
+			decorateTask(c, &page.Items[i])
+		}
 	}
 	return c.JSON(http.StatusOK, page)
 }

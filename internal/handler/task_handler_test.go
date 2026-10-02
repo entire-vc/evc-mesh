@@ -554,6 +554,284 @@ func TestTaskHandler_GetByID_InternalError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+// --- has_description on every task DTO (#fc032545) ---
+//
+// decorateTaskList computes has_description for the list-shaped endpoints; the
+// one-object endpoints used to serialize the field at its Go zero value, so
+// get_task reported has_description:false for a task whose description was
+// visibly there while list_tasks(search=...) said true about the same task.
+// The flag must mean TrimSpace(description) != "" on every path that returns a
+// task DTO, and the description text itself must never change.
+
+// decodeTaskResponse unmarshals a handler's JSON body as a single task.
+func decodeTaskResponse(t *testing.T, rec *httptest.ResponseRecorder) domain.Task {
+	t.Helper()
+	var task domain.Task
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &task))
+	return task
+}
+
+var hasDescriptionCases = []struct {
+	name string
+	desc string
+	want bool
+}{
+	{"non-empty description", "AC: go test output pasted in closing comment", true},
+	{"empty description", "", false},
+	{"whitespace-only description", " \n\t ", false},
+}
+
+func TestTaskHandler_GetByID_HasDescriptionConsistentWithBody(t *testing.T) {
+	for _, tc := range hasDescriptionCases {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			stored := &domain.Task{
+				ID:          taskID,
+				ProjectID:   uuid.New(),
+				Title:       "Consistency probe",
+				Description: tc.desc,
+			}
+			mockSvc := &MockTaskService{
+				GetByIDFunc:      func(context.Context, uuid.UUID) (*domain.Task, error) { return stored, nil },
+				GetByShortIDFunc: func(_ context.Context, prefix string) (*domain.Task, error) { return stored, nil },
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			// All three one-object read routes must agree with each other and
+			// with the listing decorator: full UUID, 6–12 hex prefix on the
+			// same route, and the dedicated by-short-id endpoint.
+			routes := []struct {
+				name   string
+				path   string
+				param  string
+				value  string
+				invoke func(echo.Context) error
+			}{
+				{"full UUID", "/tasks/:task_id", "task_id", taskID.String(), h.GetByID},
+				{"short-ID prefix", "/tasks/:task_id", "task_id", taskID.String()[:8], h.GetByID},
+				{"by-short-id endpoint", "/tasks/by-short-id/:short", "short", taskID.String()[:8], h.GetByShortID},
+			}
+			for _, r := range routes {
+				t.Run(r.name, func(t *testing.T) {
+					req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+					rec := httptest.NewRecorder()
+					c := e.NewContext(req, rec)
+					c.SetPath(r.path)
+					c.SetParamNames(r.param)
+					c.SetParamValues(r.value)
+
+					require.NoError(t, r.invoke(c))
+					require.Equal(t, http.StatusOK, rec.Code)
+
+					result := decodeTaskResponse(t, rec)
+					assert.Equal(t, tc.want, result.HasDescription,
+						`has_description must reflect TrimSpace(description) != ""`)
+					assert.Equal(t, tc.desc, result.Description,
+						"the one-object read must not rewrite the description text")
+					assert.NotEmpty(t, result.URL, "computed URL must stay set")
+				})
+			}
+		})
+	}
+}
+
+func TestTaskHandler_Update_HasDescriptionConsistentWithBody(t *testing.T) {
+	for _, tc := range hasDescriptionCases {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			existing := &domain.Task{
+				ID:          taskID,
+				ProjectID:   uuid.New(),
+				Title:       "Old Title",
+				Description: tc.desc,
+			}
+			mockSvc := &MockTaskService{
+				GetByIDFunc: func(context.Context, uuid.UUID) (*domain.Task, error) { return existing, nil },
+				UpdateFunc:  func(context.Context, *domain.Task) error { return nil },
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			body := `{"title":"New Title"}`
+			req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/tasks/:task_id")
+			c.SetParamNames("task_id")
+			c.SetParamValues(taskID.String())
+
+			require.NoError(t, h.Update(c))
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			result := decodeTaskResponse(t, rec)
+			assert.Equal(t, tc.want, result.HasDescription,
+				`PATCH must report has_description from the post-update body`)
+			assert.Equal(t, tc.desc, result.Description)
+		})
+	}
+}
+
+func TestTaskHandler_Create_HasDescriptionConsistentWithBody(t *testing.T) {
+	for _, tc := range hasDescriptionCases {
+		// The enriched re-fetch path: CreateFunc persists, GetByIDFunc returns
+		// the stored shape, the response is that enriched object.
+		t.Run(tc.name+"/enriched-refetch", func(t *testing.T) {
+			projectID := uuid.New()
+			var stored uuid.UUID
+			mockSvc := &MockTaskService{
+				CreateFunc: func(_ context.Context, task *domain.Task) error {
+					stored = task.ID
+					return nil
+				},
+				GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+					return &domain.Task{ID: id, ProjectID: projectID, Title: "T", Description: tc.desc}, nil
+				},
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			body := fmt.Sprintf(`{"title":"T","description":%q}`, tc.desc)
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/projects/:proj_id/tasks")
+			c.SetParamNames("proj_id")
+			c.SetParamValues(projectID.String())
+
+			require.NoError(t, h.Create(c))
+			require.Equal(t, http.StatusCreated, rec.Code)
+
+			result := decodeTaskResponse(t, rec)
+			assert.Equal(t, tc.want, result.HasDescription)
+			assert.Equal(t, tc.desc, result.Description)
+			assert.NotEmpty(t, result.URL)
+			_ = stored
+		})
+
+		// The fallback path: the post-create GetByID fails, so the in-memory
+		// task object is returned directly.
+		t.Run(tc.name+"/fallback", func(t *testing.T) {
+			projectID := uuid.New()
+			mockSvc := &MockTaskService{
+				CreateFunc: func(context.Context, *domain.Task) error { return nil },
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			body := fmt.Sprintf(`{"title":"T","description":%q}`, tc.desc)
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/projects/:proj_id/tasks")
+			c.SetParamNames("proj_id")
+			c.SetParamValues(projectID.String())
+
+			require.NoError(t, h.Create(c))
+			require.Equal(t, http.StatusCreated, rec.Code)
+
+			result := decodeTaskResponse(t, rec)
+			assert.Equal(t, tc.want, result.HasDescription)
+			assert.Equal(t, tc.desc, result.Description)
+		})
+	}
+}
+
+func TestTaskHandler_CreateSubtask_HasDescriptionConsistentWithBody(t *testing.T) {
+	for _, tc := range hasDescriptionCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parentID, childID := uuid.New(), uuid.New()
+			mockSvc := &MockTaskService{
+				CreateSubtaskFunc: func(_ context.Context, _ uuid.UUID, _ service.CreateSubtaskInput) (*domain.Task, error) {
+					return &domain.Task{ID: childID, ParentTaskID: &parentID, Title: "Child", Description: tc.desc}, nil
+				},
+				GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+					return &domain.Task{ID: id, ParentTaskID: &parentID, Title: "Child", Description: tc.desc}, nil
+				},
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			body := `{"title":"Child"}`
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/tasks/:task_id/subtasks")
+			c.SetParamNames("task_id")
+			c.SetParamValues(parentID.String())
+
+			require.NoError(t, h.CreateSubtask(c))
+			require.Equal(t, http.StatusCreated, rec.Code)
+
+			result := decodeTaskResponse(t, rec)
+			assert.Equal(t, tc.want, result.HasDescription)
+			assert.Equal(t, tc.desc, result.Description)
+		})
+	}
+}
+
+func TestTaskHandler_MoveToProject_HasDescriptionConsistentWithBody(t *testing.T) {
+	for _, tc := range hasDescriptionCases {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			mockSvc := &MockTaskService{
+				MoveToProjectFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {
+					return &domain.Task{ID: taskID, ProjectID: uuid.New(), Title: "Moved", Description: tc.desc}, nil
+				},
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			body := fmt.Sprintf(`{"project_id":%q}`, uuid.New().String())
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath("/tasks/:task_id/move-to-project")
+			c.SetParamNames("task_id")
+			c.SetParamValues(taskID.String())
+
+			require.NoError(t, h.MoveToProject(c))
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			result := decodeTaskResponse(t, rec)
+			assert.Equal(t, tc.want, result.HasDescription)
+			assert.NotEmpty(t, result.URL)
+		})
+	}
+}
+
+func TestTaskHandler_GetCurrentUserTasks_HasDescriptionConsistentWithBody(t *testing.T) {
+	userID, wsID := uuid.New(), uuid.New()
+	mockSvc := &MockTaskService{
+		GetUserActiveTasksFunc: func(context.Context, uuid.UUID, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
+			return &pagination.Page[domain.Task]{
+				Items: []domain.Task{
+					{ID: uuid.New(), Title: "With body", Description: "has one"},
+					{ID: uuid.New(), Title: "Whitespace", Description: " \t "},
+					{ID: uuid.New(), Title: "Empty", Description: ""},
+				},
+			}, nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me/tasks?workspace_id="+wsID.String(), http.NoBody)
+	req = req.WithContext(actorctx.WithActor(req.Context(), userID, domain.ActorTypeUser))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h.GetCurrentUserTasks(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var page pagination.Page[domain.Task]
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Len(t, page.Items, 3)
+	assert.True(t, page.Items[0].HasDescription)
+	assert.False(t, page.Items[1].HasDescription)
+	assert.False(t, page.Items[2].HasDescription)
+	// /me/tasks has no include_description contract — the text stays.
+	assert.Equal(t, "has one", page.Items[0].Description)
+}
+
 // --- TestTaskHandler_Update ---
 
 func TestTaskHandler_Update_Success(t *testing.T) {
@@ -2266,6 +2544,50 @@ func TestTaskHandler_AssignTask_ShortID(t *testing.T) {
 	require.NoError(t, h.AssignTask(c))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.True(t, assigned)
+}
+
+// AssignTask re-reads and returns the task after a successful assignment —
+// the one single-object path the first sweep of #fc032545 missed (caught by
+// independent review, MR !1061): it serialized has_description at the zero
+// value exactly like the paths fixed before it.
+func TestTaskHandler_AssignTask_HasDescriptionConsistentWithBody(t *testing.T) {
+	for _, tc := range hasDescriptionCases {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			mockSvc := &MockTaskService{
+				AssignTaskFunc: func(_ context.Context, id uuid.UUID, _ service.AssignTaskInput) error {
+					assert.Equal(t, taskID, id)
+					return nil
+				},
+				GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+					return &domain.Task{
+						ID:          taskID,
+						ProjectID:   uuid.New(),
+						Title:       "Consistency probe",
+						Description: tc.desc,
+					}, nil
+				},
+			}
+			h, e := setupTaskTest(mockSvc)
+			body := `{"assignee_id":"` + uuid.New().String() + `","assignee_type":"agent"}`
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("task_id")
+			c.SetParamValues(taskID.String())
+
+			require.NoError(t, h.AssignTask(c))
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			result := decodeTaskResponse(t, rec)
+			assert.Equal(t, tc.want, result.HasDescription,
+				`has_description must reflect TrimSpace(description) != ""`)
+			assert.Equal(t, tc.desc, result.Description,
+				"assignment must not rewrite the description text")
+			assert.NotEmpty(t, result.URL, "computed URL must stay set")
+		})
+	}
 }
 
 func TestTaskHandler_MoveTask_FullUUID_StillWorks(t *testing.T) {
