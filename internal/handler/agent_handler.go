@@ -1091,6 +1091,13 @@ func (h *AgentHandler) GetMyTasks(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// The feed has no include_description contract, so only the computed
+	// fields are added — the description text always travels in full (the
+	// dispatcher's dependency-park gate scans it).
+	for i := range tasks {
+		decorateTask(c, &tasks[i])
+	}
+
 	return c.JSON(http.StatusOK, map[string]any{
 		"tasks":       tasks,
 		"count":       len(tasks),
@@ -1330,6 +1337,12 @@ func (h *AgentHandler) PollTasks(c echo.Context) error {
 	tasks, total, err := h.taskService.GetMyTasks(ctx, workspaceID, agentID, domain.AssigneeTypeAgent, filter)
 	if err != nil {
 		return handleError(c, err)
+	}
+
+	// Same computed fields as the non-polling twin — the poll response must
+	// not disagree with a plain get_my_tasks about the same tasks.
+	for i := range tasks {
+		decorateTask(c, &tasks[i])
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
