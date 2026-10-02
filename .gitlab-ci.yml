@@ -1143,18 +1143,14 @@ perf-counters:
       MESH_ALLOW_REGISTRATION=true \
       MESH_RATE_LIMIT_ENABLED=false \
       nohup ./perf-api > perf-api.log 2>&1 &
-    # node, not curl: the Playwright image is not promised to ship curl.
-    - |
-      node -e '
-        const url = process.env.PERF_API_URL + "/health";
-        (async () => {
-          for (let i = 0; i < 90; i++) {
-            try { if ((await fetch(url)).ok) return console.log("ephemeral API up after " + i + "s"); } catch {}
-            await new Promise((r) => setTimeout(r, 1000));
-          }
-          process.exit(1);
-        })();
-      ' || { echo "ephemeral API did not come up"; tail -50 perf-api.log; exit 1; }
+      echo $! > perf-api.pid
+    # Fail-closed wait: one overall deadline sized for cold migrations under a
+    # loaded runner (job 106538: 88s of migrations alone), per-request timeout,
+    # early exit if the API process died, semantic /health check. Its --selftest
+    # (late-booting / never-up / foreign body / hung / dead-process servers) is
+    # the ratchet. node, not curl: the Playwright image may not ship curl.
+    - node web/perf/wait-for-api.mjs --selftest
+    - node web/perf/wait-for-api.mjs --url "$PERF_API_URL/health" --pid "$(cat perf-api.pid)" --deadline 300 --request-timeout 3 --log perf-api.log
     - cd web
     - VITE_PERF_PROFILER=1 pnpm build
     # The opposite of perf-bundle's check: without the profiling build every
