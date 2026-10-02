@@ -998,7 +998,7 @@ export function AgentDetailDialog({
               marked separately (agent.workspace_id === grant.workspace_id,
               no cross-referencing needed here unlike the Members-tab list).
               Hidden entirely on 403, not shown as an error: this dialog
-              opens from agent-dashboard/org-chart/team-member too, where a
+              opens from org-chart/team-member too, where a
               rank-and-file viewer without manage_members in the agent's
               HOME workspace hitting 403 here is the expected case, not a
               failure to report. */}
