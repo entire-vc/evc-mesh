@@ -70,6 +70,13 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not on PATH"
 }
 
+port_listener_pids() {
+  # Prints the PID(s) listening on a port, deduped (lsof lists a dual-stack
+  # listener twice), or nothing if free. Companion to port_owner for checks
+  # that compare bare PIDs against a pidfile.
+  lsof -nP -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | sort -u || true
+}
+
 port_owner() {
   # Prints the PID(s)/container listening on a port, or nothing if free.
   # lsof exits 1 when nothing matches — the common case — which under `set -e`
@@ -161,7 +168,14 @@ cmd_up() {
 
   log "starting API on ${API_URL} (migrations apply automatically on boot)"
   (
-    cd "$ROOT_DIR" && \
+    # cd on its own line, NOT `cd X && nohup Y &`: the trailing & backgrounds
+    # the whole AND-list, so $! names the throwaway bash wrapper running the
+    # list, not the server — api.pid then points at a process whose death
+    # leaves the real server orphaned on the port, and `kill $(cat api.pid)`
+    # is a silent no-op (#4b1131f7, measured live: pidfile 48210 = wrapper,
+    # listener 48212 = mesh-api). With cd as a separate statement, $! is the
+    # nohup'ed mesh-api process itself.
+    cd "$ROOT_DIR"
     SERVER_PORT="$API_PORT" \
     DB_HOST=localhost DB_PORT="$PG_PORT" DB_USER=mesh DB_PASSWORD=mesh DB_NAME=mesh DB_SSL_MODE=disable \
     REDIS_HOST=localhost REDIS_PORT="$REDIS_PORT" \
@@ -176,6 +190,16 @@ cmd_up() {
   )
   wait_for_http "$API_URL/health" "API" 45
 
+  # api.pid must name the process actually listening on API_PORT — fail fast
+  # rather than hand out a pidfile that lies about who owns the port.
+  local api_pid listener_pids
+  api_pid="$(cat "$STATE_DIR/api.pid")"
+  listener_pids="$(port_listener_pids "$API_PORT" | paste -sd ' ' -)"
+  if [ "$api_pid" != "$listener_pids" ]; then
+    die "api.pid (${api_pid}) is not the process listening on ${API_PORT} (listener: ${listener_pids:-<none>})"
+  fi
+  log "api.pid ${api_pid} is the process listening on ${API_PORT}"
+
   seed_data
 
   log "installing web dependencies from lockfile"
@@ -183,7 +207,11 @@ cmd_up() {
 
   log "starting vite dev server on ${WEB_URL} (same-origin proxy → API on ${API_PORT}, avoids the CORS+credentials trap)"
   (
-    cd "$WEB_DIR" && \
+    # Same pidfile rule as the API block above: $! must name the launched
+    # process, so cd lives on its own line. vite.pid is the `pnpm exec vite`
+    # process; the port is bound deeper in the node/esbuild tree, which $!
+    # can never name — teardown's port-kill fallback covers that child.
+    cd "$WEB_DIR"
     VITE_API_URL= VITE_DEV_API_PORT="$API_PORT" \
     nohup pnpm exec vite --port "$WEB_PORT" --strictPort > "$STATE_DIR/vite.log" 2>&1 &
     echo $! > "$STATE_DIR/vite.pid"
@@ -317,7 +345,8 @@ MD
     --arg email "$SEED_EMAIL" --arg password "$SEED_PASSWORD" \
     --arg login_url "${WEB_URL}/login" --arg doc_url "$doc_url" \
     --arg ws_slug "$ws_slug" --arg proj_slug "$proj_slug" --arg doc_id "$doc_id" \
-    '{email:$email, password:$password, login_url:$login_url, doc_url:$doc_url, ws_slug:$ws_slug, proj_slug:$proj_slug, doc_id:$doc_id}' \
+    --arg proj_id "$proj_id" \
+    '{email:$email, password:$password, login_url:$login_url, doc_url:$doc_url, ws_slug:$ws_slug, proj_slug:$proj_slug, doc_id:$doc_id, proj_id:$proj_id}' \
     > "$STATE_DIR/seed.json"
   log "seeded: $doc_url"
 }
