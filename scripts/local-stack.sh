@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command local Mesh stand: throwaway Postgres + Redis → API (cmd/api) →
+# One-command local Mesh stand: throwaway Postgres + Redis + MinIO → API (cmd/api) →
 # seed data → vite dev → a URL you can log into with a browser, without a
 # single prod credential.
 #
@@ -33,6 +33,7 @@ PG_PORT="${LOCAL_STACK_PG_PORT:-55432}"
 REDIS_PORT="${LOCAL_STACK_REDIS_PORT:-56379}"
 API_PORT="${LOCAL_STACK_API_PORT:-8095}"
 WEB_PORT="${LOCAL_STACK_WEB_PORT:-3007}"
+S3_PORT="${LOCAL_STACK_S3_PORT:-59002}"
 
 # Container names used to be fixed constants regardless of port — so a second
 # agent picking a free PG_PORT/REDIS_PORT (exactly what check_port_free's own
@@ -49,6 +50,11 @@ STACK_LABEL="mesh-local-stack"
 
 PG_CONTAINER="mesh-local-stack-pg-${STACK_ID}"
 REDIS_CONTAINER="mesh-local-stack-redis-${STACK_ID}"
+S3_CONTAINER="mesh-local-stack-s3-${STACK_ID}"
+# Same pinned S3 implementation as the self-hosted compose stack.
+S3_IMAGE="${LOCAL_STACK_S3_IMAGE:-ghcr.io/coollabsio/minio@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9}"
+S3_ENDPOINT="127.0.0.1:${S3_PORT}"
+S3_URL="http://${S3_ENDPOINT}"
 
 SEED_EMAIL="local-stack@example.test"
 SEED_PASSWORD="LocalStack1"
@@ -76,7 +82,7 @@ check_port_free() {
   local owner
   owner="$(port_owner "$port")"
   if [ -n "$owner" ]; then
-    die "port ${port} (for ${what}) is already in use by: ${owner}. Set LOCAL_STACK_${what^^}_PORT to a free one — container names are now scoped to the port (or LOCAL_STACK_NAME), so 'up' only ever touches its own containers, never another agent's."
+    die "port ${port} (for ${what}) is already in use by: ${owner}. Set LOCAL_STACK_$(printf '%s' "$what" | tr '[:lower:]' '[:upper:]')_PORT to a free one — container names are now scoped to the port (or LOCAL_STACK_NAME), so 'up' only ever touches its own containers, never another agent's."
   fi
 }
 
@@ -124,15 +130,22 @@ cmd_up() {
   check_port_free "$REDIS_PORT" redis
   check_port_free "$API_PORT" api
   check_port_free "$WEB_PORT" web
+  check_port_free "$S3_PORT" s3
 
   log "starting throwaway postgres (port ${PG_PORT}) and redis (port ${REDIS_PORT}), stack id ${STACK_ID}"
   safe_rm_container "$PG_CONTAINER"
   safe_rm_container "$REDIS_CONTAINER"
+  safe_rm_container "$S3_CONTAINER"
   docker run -d --name "$PG_CONTAINER" --label "${STACK_LABEL}=${STACK_ID}" \
     -e POSTGRES_USER=mesh -e POSTGRES_PASSWORD=mesh -e POSTGRES_DB=mesh \
     -p "${PG_PORT}:5432" postgres:16-alpine >/dev/null
   docker run -d --name "$REDIS_CONTAINER" --label "${STACK_LABEL}=${STACK_ID}" \
     -p "${REDIS_PORT}:6379" redis:7-alpine >/dev/null
+  log "starting throwaway MinIO (port ${S3_PORT})"
+  docker run -d --name "$S3_CONTAINER" --label "${STACK_LABEL}=${STACK_ID}" \
+    -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+    -p "${S3_PORT}:9000" "$S3_IMAGE" server /data >/dev/null
+  wait_for_http "$S3_URL/minio/health/ready" "MinIO" 45
 
   log "waiting for postgres to accept connections"
   local waited=0
@@ -152,6 +165,8 @@ cmd_up() {
     SERVER_PORT="$API_PORT" \
     DB_HOST=localhost DB_PORT="$PG_PORT" DB_USER=mesh DB_PASSWORD=mesh DB_NAME=mesh DB_SSL_MODE=disable \
     REDIS_HOST=localhost REDIS_PORT="$REDIS_PORT" \
+    S3_ENDPOINT="$S3_ENDPOINT" S3_ACCESS_KEY_ID=minioadmin S3_SECRET_ACCESS_KEY=minioadmin \
+    S3_BUCKET=mesh-artifacts S3_REGION=us-east-1 S3_USE_SSL=false S3_PUBLIC_URL= \
     JWT_SECRET=local-dev-secret-not-for-prod \
     MESH_ALLOW_REGISTRATION=true \
     MESH_CORS_ORIGINS="$WEB_URL" \
@@ -162,6 +177,9 @@ cmd_up() {
   wait_for_http "$API_URL/health" "API" 45
 
   seed_data
+
+  log "installing web dependencies from lockfile"
+  (cd "$WEB_DIR" && pnpm install --frozen-lockfile)
 
   log "starting vite dev server on ${WEB_URL} (same-origin proxy → API on ${API_PORT}, avoids the CORS+credentials trap)"
   (
@@ -259,6 +277,15 @@ MD
   doc_id="$(echo "$doc" | jq -r '.id')"
   [ -n "$doc_id" ] && [ "$doc_id" != "null" ] || die "create document did not return an id: $doc"
 
+  # A successful POST alone cannot prove that the object is readable. Keep a
+  # round-trip check here so missing storage breaks up before it prints a URL.
+  local stored_doc
+  stored_doc="$(auth "$API_URL/api/v1/documents/$doc_id")" || die "read seeded document failed"
+  echo "$stored_doc" | jq -e --arg body "$body" --arg id "$doc_id" \
+    '.id == $id and .body == $body and .title == "Welcome to the local stand"' >/dev/null \
+    || die "seeded document body did not round-trip through storage"
+  log "verified seeded document body round-trip"
+
   docauth() { curl -fsS -H "Authorization: Bearer $token" -H 'Content-Type: application/json' "$@"; }
 
   # Thread 1: anchored comment + a nested reply.
@@ -346,6 +373,13 @@ cmd_status() {
     bad "container missing or not responding"
   fi
 
+  echo "MinIO (${S3_CONTAINER}, ${S3_URL}):"
+  if curl -fsS -o /dev/null "$S3_URL/minio/health/ready" 2>/dev/null; then
+    ok "up, accepting S3 requests"
+  else
+    bad "container missing or not accepting S3 requests"
+  fi
+
   echo "API (${API_URL}):"
   if curl -fsS -o /dev/null "$API_URL/health" 2>/dev/null; then
     ok "up, /health OK"
@@ -381,19 +415,20 @@ cmd_teardown() {
     [ -n "$pids" ] && kill -9 $pids >/dev/null 2>&1 || true
   done
 
-  log "removing postgres and redis containers (stack id ${STACK_ID})"
+  log "removing postgres, redis and MinIO containers (stack id ${STACK_ID})"
   safe_rm_container "$PG_CONTAINER"
   safe_rm_container "$REDIS_CONTAINER"
+  safe_rm_container "$S3_CONTAINER"
 
   sleep 1
   local remaining=""
-  for port in "$PG_PORT" "$REDIS_PORT" "$API_PORT" "$WEB_PORT"; do
+  for port in "$PG_PORT" "$REDIS_PORT" "$API_PORT" "$WEB_PORT" "$S3_PORT"; do
     [ -n "$(port_owner "$port")" ] && remaining="$remaining $port"
   done
   if [ -n "$remaining" ]; then
     die "teardown incomplete — still occupied:$remaining"
   fi
-  log "teardown complete, all four ports (${PG_PORT} ${REDIS_PORT} ${API_PORT} ${WEB_PORT}) confirmed free"
+  log "teardown complete, all five ports (${PG_PORT} ${REDIS_PORT} ${API_PORT} ${WEB_PORT} ${S3_PORT}) confirmed free"
 }
 
 case "${1:-}" in
