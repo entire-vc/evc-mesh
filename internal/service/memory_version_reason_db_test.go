@@ -241,7 +241,7 @@ func TestRevisionHistory_KeepsWhatItSaidAndWhy(t *testing.T) {
 		}, domain.MemoryWriteIntent{Reason: reason})
 		require.NoError(t, err)
 	}
-	write("prod runs on tw-billing", "initial note after the cutover meeting")
+	write("prod runs on host-a", "initial note after the cutover meeting")
 	write("prod runs in Helsinki", "corrected: the host moved on 2026-07-09")
 
 	id := mustMemoryID(t, db, ws.ID, key)
@@ -258,7 +258,7 @@ func TestRevisionHistory_KeepsWhatItSaidAndWhy(t *testing.T) {
 	assert.Equal(t, domain.MemoryActionCreated, revs[1].Action)
 	// The point of the whole table: what the memory USED to assert is still
 	// readable after it has been corrected.
-	assert.Equal(t, "prod runs on tw-billing", revs[1].Content,
+	assert.Equal(t, "prod runs on host-a", revs[1].Content,
 		"the superseded claim must survive, or 'when did this stop being true' "+
 			"stays unanswerable")
 	require.NotNil(t, revs[1].Reason)

@@ -1,6 +1,6 @@
-name: Deploy Caddyfile to mesh VM (via hel01)
+name: Deploy Caddyfile to mesh VM (via gateway)
 
-# Ships deploy/caddy/mesh-vm.Caddyfile to /etc/caddy/Caddyfile on mesh-vm.
+# Ships deploy/caddy/mesh.Caddyfile to /etc/caddy/Caddyfile on prod-host.
 # Fail-closed: `caddy validate` runs against the CANDIDATE file (uploaded to a
 # throwaway path, never the live path) before anything touches the live
 # config. A validate failure stops the job — nothing is copied over the
@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'deploy/caddy/mesh-vm.Caddyfile'
+      - 'deploy/caddy/mesh.Caddyfile'
   workflow_dispatch:
 
 concurrency:
@@ -31,21 +31,21 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      # CI reaches the private mesh VM only via the hel01 forwarding-only jump user.
-      # See docs/DEPLOY_HEL01.md.
-      - name: Configure hel01 jump
+      # CI reaches the private mesh VM only via the gateway forwarding-only jump user.
+      # See docs/deploy-via-jump-host.md.
+      - name: Configure SSH jump host
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
-            echo "Host mesh-vm"
+            echo "Host prod-host"
             echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
-            echo "  ProxyJump hel01-jump"
+            echo "  ProxyJump deploy-jump"
             echo "  StrictHostKeyChecking accept-new"
-            echo "Host hel01-jump"
+            echo "Host deploy-jump"
             echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
-            echo "  User ghdeploy"
+            echo "  User ${{ vars.DEPLOY_JUMP_USER }}"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
           chmod 600 ~/.ssh/config
@@ -55,22 +55,22 @@ jobs:
       # never gets near the live file or a reload.
       - name: Upload candidate + validate (fail-closed)
         run: |
-          rsync -avz deploy/caddy/mesh-vm.Caddyfile mesh-vm:/tmp/Caddyfile.candidate
-          ssh mesh-vm 'caddy validate --config /tmp/Caddyfile.candidate --adapter caddyfile'
+          rsync -avz deploy/caddy/mesh.Caddyfile prod-host:/tmp/Caddyfile.candidate
+          ssh prod-host 'caddy validate --config /tmp/Caddyfile.candidate --adapter caddyfile'
 
       # Only reached if validate above exited 0.
       - name: Backup, swap, reload (fail-closed)
         run: |
           # ${GITHUB_SHA:0:8} used to sit inside the single-quoted remote
-          # script below, so it expanded on mesh-vm's shell (where GITHUB_SHA
+          # script below, so it expanded on prod-host's shell (where GITHUB_SHA
           # doesn't exist) instead of the runner's — silently empty backup
           # suffix. Expand it here, on the runner, then splice the resulting
           # value into the still-single-quoted remote script as a literal
           # double-quoted fragment. $STAMP / $(date ...) stay untouched
           # inside single quotes on both sides of the splice, so they still
-          # evaluate on mesh-vm (its clock, not the runner's).
+          # evaluate on prod-host (its clock, not the runner's).
           SHORT_SHA="${GITHUB_SHA:0:8}"
-          ssh mesh-vm 'set -e
+          ssh prod-host 'set -e
             STAMP=$(date -u +%Y%m%d-%H%M%S)
             cp -p /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.${STAMP}-pre-ci-deploy-'"$SHORT_SHA"'"
             mv /tmp/Caddyfile.candidate /etc/caddy/Caddyfile
@@ -100,4 +100,4 @@ jobs:
       # a bad deploy fail loud in the SAME run instead of waiting for the next
       # scheduled tick.
       - name: Confirm no drift post-deploy
-        run: ./scripts/caddy-drift-check.sh deploy/caddy/mesh-vm.Caddyfile
+        run: ./scripts/caddy-drift-check.sh deploy/caddy/mesh.Caddyfile

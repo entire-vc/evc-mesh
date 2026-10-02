@@ -35,14 +35,14 @@
 -- (see the read-back query at the bottom).
 --
 -- PRE-FLIGHT — take the snapshot BEFORE writing, not after:
---   ssh mesh-vm "docker exec evc-mesh-postgres-1 psql -U mesh -d mesh -tAc \
+--   ssh prod-host "docker exec evc-mesh-postgres-1 psql -U mesh -d mesh -tAc \
 --     \"SET app.current_workspace_id = 'df814cd2-ca4b-47d6-9522-820e4eb47dc3'; \
 --      SELECT project_id, config FROM project_rules WHERE rule_type='workflow' \
 --      AND project_id IN ('e93b8e1a-ee44-4399-8e8a-0bdda460b4a0', \
 --                         'c6e35032-36d5-4045-b30d-6cf9e35c3dee');\"" \
 --     > rollback/project-rules-workflow-triage-entry-$(date +%Y%m%d-%H%M%S).json
 --
--- Run: ssh mesh-vm "docker exec -i evc-mesh-postgres-1 psql -U mesh -d mesh" < scripts/enable-triage-entry-gate.sql
+-- Run: ssh prod-host "docker exec -i evc-mesh-postgres-1 psql -U mesh -d mesh" < scripts/enable-triage-entry-gate.sql
 --
 -- ROLLBACK (removes just the two new keys from mid_pipeline; every other
 -- mid_pipeline key and every other top-level key is untouched; the flags

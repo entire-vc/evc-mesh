@@ -882,7 +882,7 @@ func main() {
 	// its purpose, and a built-in DoS (#5d759aad).
 	//
 	// Configuring this does NOT fix a misconfigured upstream proxy — our own
-	// Caddy config on mesh-vm is deploy/caddy/mesh-vm.Caddyfile, tracked
+	// Caddy config on prod-host is deploy/caddy/mesh.Caddyfile, tracked
 	// separately (PR #677). It only tells mesh-api which additional network
 	// ranges, beyond the loopback/link-local/private-net Echo trusts by
 	// default, are allowed to relay a client IP via X-Forwarded-For.
@@ -2102,7 +2102,7 @@ func main() {
 	//
 	// Task #c5b5fb48: a bare time.NewTicker(24h) is keyed off THIS PROCESS'S OWN
 	// START, not wall-clock time since the job last actually ran. Measured on
-	// mesh-vm over 6 days: 70 process restarts, only 2 real triage runs — the
+	// prod-host over 6 days: 70 process restarts, only 2 real triage runs — the
 	// service almost never stays up 24h straight, so the ticker almost never
 	// fires. Fixed by persisting last_run_at (schedulerStateRepo,
 	// scheduler_job_runs table) and computing the FIRST wait from it at startup:
@@ -2206,7 +2206,7 @@ func main() {
 	log.Println("Backlog due-date promotion sweeper started (60s interval)")
 
 	// 10b-quater. Backlog promotion ADVISORY sweeper (task #9f3f4064, parent #00327dc6,
-	// unit 1 of 4). Mirrors bob/scripts/mesh-intake-sweep.py's backlog→todo decision
+	// unit 1 of 4). Mirrors fleet-ops/scripts/mesh-intake-sweep.py's backlog→todo decision
 	// server-side, log-only — it NEVER calls MoveTask. Runs alongside the live Python
 	// sweep for a 7-day parallel comparison (#f928e5af); only after that comparison
 	// shows zero unexplained divergence (#e96abbff) does a LATER task flip this to

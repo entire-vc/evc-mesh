@@ -80,7 +80,7 @@ var sanitizerCases = []struct {
 		name:    "private-key",
 		label:   "private-key",
 		blocked: "backup key:\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEA\n-----END OPENSSH PRIVATE KEY-----",
-		passes:  "The Ed25519 key lives in ~/.ssh/id_ed25519 on tw-relay; rotate via the relay runbook.",
+		passes:  "The Ed25519 key lives in ~/.ssh/id_ed25519 on relay-host; rotate via the relay runbook.",
 	},
 	{
 		name:    "api-token-sk",
@@ -173,7 +173,7 @@ func TestScanMemoryContent_EveryRuleIsCovered(t *testing.T) {
 func TestScanMemoryContent_AllowsOrdinaryMemoryProse(t *testing.T) {
 	const body = "Task: [Mesh·memory] санитайзер (#f78232c4)\n" +
 		"Did: добавил scanMemoryContent в write-путь Remember; SetProjectKnowledge покрыт транзитивно.\n" +
-		"Проверка: `ssh mesh-vm \"docker exec evc-mesh-postgres-1 psql -U mesh_read -d mesh -tAc 'SELECT count(*) FROM memories LIMIT 100;'\"`\n" +
+		"Проверка: `ssh prod-host \"docker exec evc-mesh-postgres-1 psql -U mesh_read -d mesh -tAc 'SELECT count(*) FROM memories LIMIT 100;'\"`\n" +
 		"| правило | строк | \n|---|---|\n| role-tag | 1 |\n" +
 		"Ключи лежат в ~/.config/agents/*.env (mode 600) — в память кладём путь, не значение. ✅\n" +
 		"self_rated:\n  outcome: complete\n  confidence_correct: 0.9\n"

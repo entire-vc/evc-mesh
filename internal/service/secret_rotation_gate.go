@@ -8,7 +8,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// secretRotationClassify ports bob/scripts/fleet_secret_rotation.py's classify() to Go
+// secretRotationClassify ports fleet-ops/scripts/fleet_secret_rotation.py's classify() to Go
 // tier-for-tier (task #bb1aaa09, tail of #e8388213). Pavel's 2026-09-07 decision — "все
 // таски про ротацию ключей надо отменять... иначе это ветряная мельница" — is enforced
 // on the AGENT lanes by a PreToolUse hook (secret-rotation-gate-guard.py), which cannot

@@ -128,7 +128,7 @@ type TaskRepository interface {
 	// status, across ALL workspaces — global by design, mirroring FindDueBacklogTasks
 	// rather than the workspace-scoped ListByStatusCategory. Used by
 	// BacklogPromotionAdvisoryService (task #9f3f4064), which must see every backlog card
-	// the way bob/scripts/mesh-intake-sweep.py does (full visibility under its own agent
+	// the way fleet-ops/scripts/mesh-intake-sweep.py does (full visibility under its own agent
 	// key), not one caller's workspace.
 	ListAllBacklogTasks(ctx context.Context) ([]domain.Task, error)
 	// AtomicCheckout acquires an exclusive application-level lock on the task for the

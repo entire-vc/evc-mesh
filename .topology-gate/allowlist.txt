@@ -1,0 +1,15 @@
+# Topology-gate exceptions. Every line needs a reason after '#'. No inline markers, no skip flag.
+# Syntax: path <glob> <rule|*> | value <ipv4> | tokenhash <sha256 of lowercased token>
+tokenhash 98666b88e92e8847307ca2bc694a856c04ab32913926f9d617817d70772cfee2  # legacy GitHub secret name; renaming means re-creating the secret and secret rotation is on hold
+path .gitlab-ci.yml ip-public  # red-control inputs for the trusted-proxies render script: valid-looking values that MUST be refused
+path deploy/caddy/mesh.Caddyfile ip-private  # trusted_proxies line is functional config, deliberately kept, scoped to one host
+path deploy/docker/mesh/25-mesh-trusted-proxies.sh *  # default trusted-proxy ranges: RFC 1918 / link-local constants
+path deploy/docker/mesh/test-nginx-real-ip.sh *  # synthetic client and bridge addresses for the nginx real-ip test
+path internal/handler/oauth_handler*.go ip-public  # RFC 6749 section numbers in comments that merely look like an address
+path internal/service/interfaces.go ip-public  # RFC 6749 section numbers in comments that merely look like an address
+path internal/service/oauth_service.go *  # SSRF blocklist constants (CGNAT, benchmark, reserved ranges) and RFC section numbers
+path internal/service/oauth_service_validation_test.go *  # SSRF blocklist test vectors
+path internal/service/agent_callback_url_test.go *  # SSRF test vectors
+path internal/service/webhook_delivery_ssrf_test.go *  # SSRF test vectors
+path pkg/oautherror/* *  # leak-redaction test vector and RFC section numbers
+path scripts/memory-bench/data/* *  # third-party benchmark dataset (LongMemEval), verbatim text

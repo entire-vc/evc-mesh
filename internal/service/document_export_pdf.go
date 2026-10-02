@@ -1,6 +1,6 @@
 // PDF rendering has one hard constraint, set by the parent card (#2a467980):
-// pure Go, zero external binaries. There is no headless Chrome on the mesh-vm
-// prod host (verified: `ssh mesh-vm 'which chromium chromium-browser
+// pure Go, zero external binaries. There is no headless Chrome on the prod-host
+// prod host (verified: `ssh prod-host 'which chromium chromium-browser
 // google-chrome'` — empty) and mesh-api ships as a bare Go binary under
 // systemd, not a container, so any external renderer would be a brand new
 // permanent package on a production VM outside the deploy pipeline, with its

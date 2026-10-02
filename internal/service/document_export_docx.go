@@ -1,6 +1,6 @@
 // DOCX rendering has the same hard constraint as PDF (see
 // document_export_pdf.go's own header): pure Go, zero external binaries.
-// There is no pandoc on the mesh-vm prod host (verified alongside headless
+// There is no pandoc on the prod-host prod host (verified alongside headless
 // Chrome for the PDF card — `which pandoc` is empty) and mesh-api ships as a
 // bare Go binary under systemd, not a container, so pandoc would be a brand
 // new permanent package on a production VM outside the deploy pipeline.

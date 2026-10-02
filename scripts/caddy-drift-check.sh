@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Compares the tracked prod Caddyfile (deploy/caddy/mesh-vm.Caddyfile) against the
-# live file on mesh-vm. Read-only — never writes anything to the remote host.
+# Compares the tracked prod Caddyfile (deploy/caddy/mesh.Caddyfile) against the
+# live file on prod-host. Read-only — never writes anything to the remote host.
 #
 # Exit 0 = repo and live host match (no drift).
 # Exit 1 = drift detected, OR the host could not be reached/read — fail-closed.
@@ -9,8 +9,8 @@
 #   makes a future divergence loud instead of silent (Mesh e8c44540).
 set -euo pipefail
 
-REPO_FILE="${1:-deploy/caddy/mesh-vm.Caddyfile}"
-HOST="${CADDY_DRIFT_HOST:-mesh-vm}"
+REPO_FILE="${1:-deploy/caddy/mesh.Caddyfile}"
+HOST="${CADDY_DRIFT_HOST:-prod-host}"
 REMOTE_PATH="${CADDY_DRIFT_REMOTE_PATH:-/etc/caddy/Caddyfile}"
 
 if [ ! -f "$REPO_FILE" ]; then

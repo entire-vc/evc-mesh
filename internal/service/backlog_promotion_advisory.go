@@ -12,7 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
-// backlogPassiveWaitLabels mirrors PASSIVE_WAIT_LABELS in bob/scripts/mesh-intake-sweep.py
+// backlogPassiveWaitLabels mirrors PASSIVE_WAIT_LABELS in fleet-ops/scripts/mesh-intake-sweep.py
 // (task #00327dc6, this subtask #9f3f4064) — the label vocabulary that means "this
 // backlog card is deliberately parked, do not auto-promote it". Kept as ONE flat set,
 // unlike the Python script's ABSOLUTE_NO_PROMOTE_LABELS ⊂ PASSIVE_WAIT_LABELS split:
@@ -47,7 +47,7 @@ type BacklogPromotionDecision struct {
 }
 
 // BacklogPromotionAdvisoryService is the server-side, advisory-only mirror of
-// bob/scripts/mesh-intake-sweep.py's backlog→todo promotion decision (task #00327dc6,
+// fleet-ops/scripts/mesh-intake-sweep.py's backlog→todo promotion decision (task #00327dc6,
 // subtask #9f3f4064 — unit 1 of 4: ship advisory here, THEN a 7-day parallel-run diff
 // against the live Python sweep (#f928e5af), THEN a go/no-go on that log (#e96abbff),
 // THEN cutover + sweep retirement (#56ec28e8)).
@@ -161,7 +161,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	projectWSCache map[uuid.UUID]uuid.UUID,
 ) (promote bool, reason string, err error) {
 	// 0. Workspace scope. mesh-intake-sweep.py only ever polls ONE workspace
-	// (WORKSPACE_ID in bob/scripts/mesh-intake-sweep.py) — a task whose project belongs
+	// (WORKSPACE_ID in fleet-ops/scripts/mesh-intake-sweep.py) — a task whose project belongs
 	// to any OTHER workspace (KidCash, Pavel's personal workspace under Codex;
 	// Editorial) is invisible to the sweep, which never promotes it because it never
 	// sees it. Promoting such a card server-side would be NEW behaviour, not parity

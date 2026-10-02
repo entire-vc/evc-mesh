@@ -22,7 +22,7 @@ import (
 // label still selects anything.
 
 // absoluteNoPromoteLabels mirrors ABSOLUTE_NO_PROMOTE_LABELS in
-// bob/scripts/mesh-intake-sweep.py — the labels whose park a passed due_date may NOT
+// fleet-ops/scripts/mesh-intake-sweep.py — the labels whose park a passed due_date may NOT
 // override. Two groups, for two different reasons:
 //
 //   - freeze / no-intake-promote / no-promote — an explicit human "stay in backlog"

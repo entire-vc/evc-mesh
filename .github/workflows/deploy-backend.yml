@@ -1,4 +1,4 @@
-name: Deploy backend to mesh VM (via hel01)
+name: Deploy backend to mesh VM (via gateway)
 
 on:
   push:
@@ -152,30 +152,30 @@ jobs:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
       # CI runners reach the mesh VM (private address, secrets.MESH_VM_HOST) only
-      # through the hel01 forwarding-only jump user `ghdeploy` (single public IP,
+      # through the gateway forwarding-only jump user `<jump-user>` (single public IP,
       # secrets.HEL01_JUMP_HOST). The deploy key is
-      # authorized on BOTH ghdeploy@hel01 and root@mesh-vm; ssh-agent offers it to
-      # both hops. See docs/DEPLOY_HEL01.md.
-      - name: Configure hel01 jump
+      # authorized on BOTH <jump-user>@gateway and root@prod-host; ssh-agent offers it to
+      # both hops. See docs/deploy-via-jump-host.md.
+      - name: Configure SSH jump host
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
-            echo "Host mesh-vm"
+            echo "Host prod-host"
             echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
-            echo "  ProxyJump hel01-jump"
+            echo "  ProxyJump deploy-jump"
             echo "  StrictHostKeyChecking accept-new"
-            echo "Host hel01-jump"
+            echo "Host deploy-jump"
             echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
-            echo "  User ghdeploy"
+            echo "  User ${{ vars.DEPLOY_JUMP_USER }}"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
           chmod 600 ~/.ssh/config
 
       - name: Sync migration files to prod
         run: |
-          rsync -avz --checksum migrations/ mesh-vm:/opt/evc-mesh/migrations/
+          rsync -avz --checksum migrations/ prod-host:/opt/evc-mesh/migrations/
 
       # Build goose for linux/amd64 on the CI runner and upload to prod so migrations
       # run directly on the host without requiring docker or a pre-installed goose CLI.
@@ -188,12 +188,12 @@ jobs:
       - name: Build and upload goose to prod
         run: |
           GOBIN=$(pwd) GOOS=linux GOARCH=amd64 go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
-          rsync -avz goose mesh-vm:/opt/evc-mesh/bin/goose
-          ssh mesh-vm 'chmod +x /opt/evc-mesh/bin/goose'
+          rsync -avz goose prod-host:/opt/evc-mesh/bin/goose
+          ssh prod-host 'chmod +x /opt/evc-mesh/bin/goose'
 
       - name: Run migrations on prod (fail-closed)
         run: |
-          ssh mesh-vm bash << 'REMOTE'
+          ssh prod-host bash << 'REMOTE'
           set -uo pipefail
           # Source component DB_* vars from .env.prod (prod uses DB_HOST/PORT/USER/PASSWORD/NAME, not DATABASE_URL)
           set -a
@@ -242,12 +242,12 @@ jobs:
               -X main.BuildEnv=prod" \
             -o mesh-api ./cmd/api
           # This job used to build and deploy mesh-mcp from ./cmd/mcp too
-          # (#814c39b7). It no longer does: mesh-vm's mesh-mcp.service is
-          # deployed by evc-mesh-mcp's own deploy-mesh-vm.yml, from the single
+          # (#814c39b7). It no longer does: prod-host's mesh-mcp.service is
+          # deployed by evc-mesh-mcp's own deploy-prod-host.yml, from the single
           # implementation that also ships to the fleet. Two pipelines writing
           # /opt/evc-mesh/bin/mesh-mcp meant whichever ran last won, and this
           # one ran on every backend merge — so it silently reverted the other
-          # (measured: 8 mesh-mcp.rollback-*-ci-auto anchors on mesh-vm over
+          # (measured: 8 mesh-mcp.rollback-*-ci-auto anchors on prod-host over
           # 2026-08-21..22, each one this job overwriting the live binary).
           # ./cmd/mcp is now gone from this repository entirely (#e85e4e05):
           # the self-hosted compose stack installs the MCP server from
@@ -259,19 +259,19 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Configure hel01 jump
+      - name: Configure SSH jump host
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keyscan -H ${{ secrets.HEL01_JUMP_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           {
-            echo "Host mesh-vm"
+            echo "Host prod-host"
             echo "  HostName ${{ secrets.MESH_VM_HOST }}"
             echo "  User root"
-            echo "  ProxyJump hel01-jump"
+            echo "  ProxyJump deploy-jump"
             echo "  StrictHostKeyChecking accept-new"
-            echo "Host hel01-jump"
+            echo "Host deploy-jump"
             echo "  HostName ${{ secrets.HEL01_JUMP_HOST }}"
-            echo "  User ghdeploy"
+            echo "  User ${{ vars.DEPLOY_JUMP_USER }}"
             echo "  StrictHostKeyChecking accept-new"
           } >> ~/.ssh/config
           chmod 600 ~/.ssh/config
@@ -286,7 +286,7 @@ jobs:
             FORCE=true
           fi
 
-          LAST=$(ssh mesh-vm 'cat /opt/evc-mesh/.last-backend-deploy 2>/dev/null || echo 0')
+          LAST=$(ssh prod-host 'cat /opt/evc-mesh/.last-backend-deploy 2>/dev/null || echo 0')
           NOW=$(date +%s)
           DIFF=$((NOW - LAST))
 
@@ -298,12 +298,12 @@ jobs:
       - name: Upload binaries
         run: |
           sha256sum mesh-api | cut -d' ' -f1 > mesh-api.sha256
-          rsync -avz --checksum mesh-api mesh-vm:/opt/evc-mesh/bin/mesh-api.new
-          rsync -avz mesh-api.sha256 mesh-vm:/opt/evc-mesh/bin/mesh-api.new.sha256
+          rsync -avz --checksum mesh-api prod-host:/opt/evc-mesh/bin/mesh-api.new
+          rsync -avz mesh-api.sha256 prod-host:/opt/evc-mesh/bin/mesh-api.new.sha256
 
       - name: Atomic swap and restart (mesh-api)
         run: |
-          ssh mesh-vm 'set -e
+          ssh prod-host 'set -e
             EXPECTED=$(cat /opt/evc-mesh/bin/mesh-api.new.sha256)
             mv /opt/evc-mesh/bin/mesh-api.new /opt/evc-mesh/bin/mesh-api
             rm -f /opt/evc-mesh/bin/mesh-api.new.sha256
@@ -320,7 +320,7 @@ jobs:
         run: |
           DEPLOYED=""
           for i in $(seq 1 15); do
-            DEPLOYED=$(ssh mesh-vm 'curl -sf http://127.0.0.1:8005/api/v1/healthz/version' 2>/dev/null \
+            DEPLOYED=$(ssh prod-host 'curl -sf http://127.0.0.1:8005/api/v1/healthz/version' 2>/dev/null \
               | python3 -c "import sys,json; print(json.load(sys.stdin)['commit'])" 2>/dev/null) || true
             if [ -n "$DEPLOYED" ]; then
               break
@@ -339,4 +339,4 @@ jobs:
       # the next deploy is too soon; it must reflect a fully verified deploy,
       # not merely a completed upload.
       - name: Record deploy timestamp
-        run: ssh mesh-vm 'date +%s > /opt/evc-mesh/.last-backend-deploy'
+        run: ssh prod-host 'date +%s > /opt/evc-mesh/.last-backend-deploy'

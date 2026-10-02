@@ -35,7 +35,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# mesh-mcp stdio launch (matches ~/ClaudeCowork/bob/.mcp.json evc-mesh entry,
+# mesh-mcp stdio launch (matches ~/ClaudeCowork/fleet-ops/.mcp.json evc-mesh entry,
 # minus the mcp-wrap stderr-logging shim which we don't need here).
 MESH_MCP_COMMAND = os.path.expanduser("~/bin/mesh-mcp")
 MESH_MCP_ARGS = ["--transport", "stdio"]
