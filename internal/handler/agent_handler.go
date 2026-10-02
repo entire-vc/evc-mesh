@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -199,6 +200,12 @@ type updateAgentRequest struct {
 	SupervisorUserID   *string           `json:"supervisor_user_id"` // UUID string or "" to clear
 	Role               *string           `json:"role"`
 	Model              *string           `json:"model"` // "" clears (NULL)
+	// ShortTag binds as RawMessage, not *string, because encoding/json
+	// treats a JSON null as a no-op on a pointer — exactly like an absent
+	// field — while the contract (Mesh aa1b4845) distinguishes them: absent
+	// preserves the stored value, null clears it. RawMessage keeps the two
+	// apart: nil = absent, "null" = explicit clear.
+	ShortTag json.RawMessage `json:"short_tag"`
 }
 
 // normalizeAgentModel trims a self-reported model string. ok=false means it is
@@ -213,6 +220,23 @@ func normalizeAgentModel(raw string) (model *string, ok bool) {
 		return nil, true
 	}
 	return &m, true
+}
+
+// normalizeAgentShortTag trims a human-authored role label (Mesh aa1b4845).
+// ok=false means it is longer than domain.AgentShortTagMaxLen CHARACTERS —
+// runes, not bytes: the label is human-authored UI text («разработчик» is 12
+// chars but 24 bytes), so a byte budget would reject legal values. The
+// returned pointer is nil for a value that trims to empty, so the column goes
+// back to NULL ("no label") — same convention as normalizeAgentModel.
+func normalizeAgentShortTag(raw string) (tag *string, ok bool) {
+	s := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(s) > domain.AgentShortTagMaxLen {
+		return nil, false
+	}
+	if s == "" {
+		return nil, true
+	}
+	return &s, true
 }
 
 // Update handles PATCH /agents/:agent_id
@@ -246,6 +270,23 @@ func (h *AgentHandler) Update(c echo.Context) error {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest(fmt.Sprintf("model must be <=%d chars", domain.AgentModelMaxLen)))
 		}
 		agent.Model = m
+	}
+	if req.ShortTag != nil {
+		// Field present: JSON null clears, a string is normalized (trim,
+		// <=24, "" clears). Anything else is a type error.
+		if strings.TrimSpace(string(req.ShortTag)) == "null" {
+			agent.ShortTag = nil
+		} else {
+			var raw string
+			if unmarshalErr := json.Unmarshal(req.ShortTag, &raw); unmarshalErr != nil {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("short_tag must be a string or null"))
+			}
+			tag, ok := normalizeAgentShortTag(raw)
+			if !ok {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest(fmt.Sprintf("short_tag must be <=%d chars", domain.AgentShortTagMaxLen)))
+			}
+			agent.ShortTag = tag
+		}
 	}
 	if req.Capabilities != nil {
 		var capBytes []byte
