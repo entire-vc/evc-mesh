@@ -31,6 +31,7 @@ type agentRow struct {
 	Slug                string             `db:"slug"`
 	AgentType           domain.AgentType   `db:"agent_type"`
 	Model               *string            `db:"model"`
+	ShortTag            *string            `db:"short_tag"`
 	APIKeyHash          string             `db:"api_key_hash"`
 	APIKeySHA256        *string            `db:"api_key_sha256"`
 	APIKeyPrefix        string             `db:"api_key_prefix"`
@@ -80,7 +81,7 @@ const agentSelectCols = `
 	role, responsibility_zone, escalation_to, accepts_from,
 	max_concurrent_tasks, working_hours, profile_description,
 	callback_url, expires_at, last_rotated_at,
-	model,
+	model, short_tag,
 	created_at, updated_at, deleted_at`
 
 // nullIfEmpty is derefString's inverse on the write side: the domain spells
@@ -114,6 +115,7 @@ func (r *agentRow) toDomain() domain.Agent {
 		Slug:                r.Slug,
 		AgentType:           r.AgentType,
 		Model:               r.Model,
+		ShortTag:            r.ShortTag,
 		APIKeyHash:          r.APIKeyHash,
 		APIKeySHA256:        derefString(r.APIKeySHA256),
 		APIKeyPrefix:        r.APIKeyPrefix,
@@ -174,7 +176,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			callback_url,
 			expires_at, last_rotated_at,
 			created_at, updated_at,
-			api_key_sha256, mention_wakes, model
+			api_key_sha256, mention_wakes, model, short_tag
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
@@ -185,7 +187,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 			$24,
 			$25, $26,
 			$27, $28,
-			$29, $30, $31
+			$29, $30, $31, $32
 		)
 	`
 	capabilities := agent.Capabilities
@@ -212,7 +214,7 @@ func (r *AgentRepo) Create(ctx context.Context, agent *domain.Agent) error {
 		agent.CreatedAt, agent.UpdatedAt,
 		// NULL rather than "" so the partial unique index treats un-populated
 		// rows as distinct instead of colliding on the empty string.
-		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model,
+		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model, agent.ShortTag,
 	)
 	return err
 }
@@ -233,7 +235,7 @@ func createAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 			callback_url,
 			expires_at, last_rotated_at,
 			created_at, updated_at,
-			api_key_sha256, mention_wakes, model
+			api_key_sha256, mention_wakes, model, short_tag
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
@@ -244,7 +246,7 @@ func createAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 			$24,
 			$25, $26,
 			$27, $28,
-			$29, $30, $31
+			$29, $30, $31, $32
 		)
 	`
 	capabilities := agent.Capabilities
@@ -269,7 +271,7 @@ func createAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 		agent.CallbackURL,
 		agent.ExpiresAt, agent.LastRotatedAt,
 		agent.CreatedAt, agent.UpdatedAt,
-		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model,
+		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model, agent.ShortTag,
 	)
 	return err
 }
@@ -290,7 +292,8 @@ func updateAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 		    updated_at = $26,
 		    api_key_sha256 = $27,
 		    mention_wakes = $28,
-		    model = $29
+		    model = $29,
+		    short_tag = $30
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	capabilities := agent.Capabilities
@@ -317,7 +320,7 @@ func updateAgentTx(ctx context.Context, tx *sqlx.Tx, agent *domain.Agent) error 
 		agent.CallbackURL,
 		agent.ExpiresAt, agent.LastRotatedAt,
 		agent.UpdatedAt,
-		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model,
+		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model, agent.ShortTag,
 	)
 	if err != nil {
 		return err
@@ -445,7 +448,8 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		    updated_at = $26,
 		    api_key_sha256 = $27,
 		    mention_wakes = $28,
-		    model = $29
+		    model = $29,
+		    short_tag = $30
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	capabilities := agent.Capabilities
@@ -472,7 +476,7 @@ func (r *AgentRepo) Update(ctx context.Context, agent *domain.Agent) error {
 		agent.CallbackURL,
 		agent.ExpiresAt, agent.LastRotatedAt,
 		agent.UpdatedAt,
-		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model,
+		nullIfEmpty(agent.APIKeySHA256), agent.MentionWakes, agent.Model, agent.ShortTag,
 	)
 	if err != nil {
 		return err
@@ -574,7 +578,7 @@ func (r *AgentRepo) GetSubAgentTree(ctx context.Context, parentID uuid.UUID) ([]
 		       total_tasks_completed, total_errors, external_agent_id,
 		       role, responsibility_zone, escalation_to, accepts_from,
 		       max_concurrent_tasks, working_hours, profile_description,
-		       callback_url, model, created_at, updated_at, deleted_at
+		       callback_url, model, short_tag, created_at, updated_at, deleted_at
 		FROM agent_tree
 		ORDER BY depth, created_at
 	`
@@ -687,7 +691,7 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 		       a.total_tasks_completed, a.total_errors, a.external_agent_id,
 		       a.role, a.responsibility_zone, a.escalation_to, a.accepts_from,
 		       a.max_concurrent_tasks, a.working_hours, a.profile_description,
-		       a.callback_url, a.model, a.created_at, a.updated_at, a.deleted_at,
+		       a.callback_url, a.model, a.short_tag, a.created_at, a.updated_at, a.deleted_at,
 		       COALESCE(
 		           json_agg(DISTINCT p.name) FILTER (WHERE p.id IS NOT NULL),
 		           '[]'::json

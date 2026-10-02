@@ -137,17 +137,18 @@ func (r *AgentWorkspaceGrantRepo) Revoke(ctx context.Context, id, workspaceID uu
 // agentWorkspaceGrantAgentRow is a flat DB scan struct for
 // ListActiveByWorkspace's JOIN — same convention as workspaceMemberRow.
 type agentWorkspaceGrantAgentRow struct {
-	ID           uuid.UUID  `db:"id"`
-	AgentID      uuid.UUID  `db:"agent_id"`
-	WorkspaceID  uuid.UUID  `db:"workspace_id"`
-	Role         string     `db:"role"`
-	APIKeyPrefix string     `db:"api_key_prefix"`
-	APIKeyHash   string     `db:"api_key_hash"`
-	InvitedBy    *uuid.UUID `db:"invited_by"`
-	CreatedAt    time.Time  `db:"created_at"`
-	RevokedAt    *time.Time `db:"revoked_at"`
-	AgentName    string     `db:"a_name"`
-	AgentSlug    string     `db:"a_slug"`
+	ID            uuid.UUID  `db:"id"`
+	AgentID       uuid.UUID  `db:"agent_id"`
+	WorkspaceID   uuid.UUID  `db:"workspace_id"`
+	Role          string     `db:"role"`
+	APIKeyPrefix  string     `db:"api_key_prefix"`
+	APIKeyHash    string     `db:"api_key_hash"`
+	InvitedBy     *uuid.UUID `db:"invited_by"`
+	CreatedAt     time.Time  `db:"created_at"`
+	RevokedAt     *time.Time `db:"revoked_at"`
+	AgentName     string     `db:"a_name"`
+	AgentSlug     string     `db:"a_slug"`
+	AgentShortTag *string    `db:"a_short_tag"`
 }
 
 // ListActiveByWorkspace returns every non-revoked connection into
@@ -156,7 +157,7 @@ func (r *AgentWorkspaceGrantRepo) ListActiveByWorkspace(ctx context.Context, wor
 	const q = `
 		SELECT
 			g.id, g.agent_id, g.workspace_id, g.role, g.api_key_prefix, g.api_key_hash, g.invited_by, g.created_at, g.revoked_at,
-			a.name AS a_name, a.slug AS a_slug
+			a.name AS a_name, a.slug AS a_slug, a.short_tag AS a_short_tag
 		FROM agent_workspace_grants g
 		JOIN agents a ON a.id = g.agent_id
 		WHERE g.workspace_id = $1 AND g.revoked_at IS NULL
@@ -182,9 +183,10 @@ func (r *AgentWorkspaceGrantRepo) ListActiveByWorkspace(ctx context.Context, wor
 				RevokedAt:    row.RevokedAt,
 			},
 			Agent: domain.AgentBrief{
-				ID:   row.AgentID,
-				Name: row.AgentName,
-				Slug: row.AgentSlug,
+				ID:       row.AgentID,
+				Name:     row.AgentName,
+				Slug:     row.AgentSlug,
+				ShortTag: row.AgentShortTag,
 			},
 		}
 	}

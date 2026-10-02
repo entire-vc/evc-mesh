@@ -306,12 +306,15 @@ type AgentProfileUpdate struct {
 
 // TeamDirectoryAgent is the full agent info for team directory API.
 type TeamDirectoryAgent struct {
-	ID                 uuid.UUID       `json:"id"`
-	Name               string          `json:"name"`
-	Slug               string          `json:"slug"`
-	Status             AgentStatus     `json:"status"`
-	AgentType          AgentType       `json:"agent_type"`
-	Model              *string         `json:"model"`
+	ID        uuid.UUID   `json:"id"`
+	Name      string      `json:"name"`
+	Slug      string      `json:"slug"`
+	Status    AgentStatus `json:"status"`
+	AgentType AgentType   `json:"agent_type"`
+	Model     *string     `json:"model"`
+	// ShortTag is the agent's role label (Mesh aa1b4845) — see
+	// domain.Agent.ShortTag.
+	ShortTag           *string         `json:"short_tag"`
 	ParentAgentID      *uuid.UUID      `json:"parent_agent_id,omitempty"`
 	SupervisorUserID   *uuid.UUID      `json:"supervisor_user_id,omitempty"`
 	Role               string          `json:"role"`

@@ -41,6 +41,7 @@ func (s *mentionablesService) Search(ctx context.Context, workspaceID uuid.UUID,
 			Kind:        "agent",
 			Slug:        a.Slug,
 			DisplayName: a.Name,
+			ShortTag:    a.ShortTag,
 		})
 	}
 	for _, u := range users {

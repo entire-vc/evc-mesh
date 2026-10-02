@@ -45,7 +45,13 @@ type Agent struct {
 	AgentType        AgentType  `json:"agent_type" db:"agent_type"`
 	// Model is the LLM the agent runs on (AgentType is the harness). nil = not
 	// reported; never defaulted. Self-reported via PATCH /agents/me or heartbeat.
-	Model      *string `json:"model" db:"model"`
+	Model *string `json:"model" db:"model"`
+	// ShortTag is a human-authored role label (Mesh aa1b4845) — the short
+	// badge next to a name ("dev", "lead"), as opposed to Role, the long-form
+	// job description. nil = no label; never derived from Role or name/slug.
+	// Written only via PATCH /agents/:id (an editor permission), read by the
+	// UI lists (agent GET, workspace agents, mentionables, team directory).
+	ShortTag   *string `json:"short_tag" db:"short_tag"`
 	APIKeyHash string  `json:"-" db:"api_key_hash"`
 	// APIKeySHA256 is the keyed digest of the same key that APIKeyHash covers
 	// with bcrypt. Empty means the fast path has not been populated for this
@@ -206,3 +212,7 @@ func IsValidAgentType(t AgentType) bool {
 
 // AgentModelMaxLen bounds the self-reported model string.
 const AgentModelMaxLen = 128
+
+// AgentShortTagMaxLen bounds the human-authored role label. 24 keeps the
+// badge a badge — anything longer belongs in Role.
+const AgentShortTagMaxLen = 24

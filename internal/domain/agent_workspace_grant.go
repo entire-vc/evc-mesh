@@ -40,6 +40,9 @@ type AgentBrief struct {
 	ID   uuid.UUID `json:"id" db:"id"`
 	Name string    `json:"name" db:"name"`
 	Slug string    `json:"slug" db:"slug"`
+	// ShortTag is the agent's role label (Mesh aa1b4845) — nullable like on
+	// the agent itself; see domain.Agent.ShortTag.
+	ShortTag *string `json:"short_tag" db:"short_tag"`
 }
 
 // WorkspaceBrief holds minimal public workspace information for embedding in
