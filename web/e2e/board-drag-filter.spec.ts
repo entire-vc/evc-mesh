@@ -231,12 +231,26 @@ test("dragging a card to another column moves it server-side, not just in the DO
 });
 
 test("the toolbar search filter narrows to the matching card and back", async () => {
-  const cardCountBefore = await page.locator('[data-testid="task-card"]').count();
-  expect(
-    cardCountBefore,
-    "the board must show more than one card before filtering, or a search that returns everything could pass by accident"
-  ).toBeGreaterThan(1);
+  // Exercise a cold board with a slow task response, rather than inheriting
+  // the drag test's loaded DOM. The precondition must wait for real cards.
+  const tasksUrl = `**/api/v1/projects/${projectId}/tasks*`;
+  await page.route(tasksUrl, async (route) => {
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await route.fulfill({ response });
+  });
+  await page.goto(boardUrl(), { waitUntil: "domcontentloaded" });
+  const cards = page.locator('[data-testid="task-card"]');
+  await expect
+    .poll(() => cards.count(), {
+      message:
+        "the board must show more than one card before filtering, or a search that returns everything could pass by accident",
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(1);
   await expect(taskCard(dragTaskId)).toBeVisible();
+  const cardCountBefore = await cards.count();
+  await page.unroute(tasksUrl);
 
   // The board toolbar's search box shares its placeholder with the global
   // header search (web/src/components/layout/header.tsx) — a cmdk-style

@@ -1209,6 +1209,14 @@ authed-e2e:
   image: mcr.microsoft.com/playwright:v1.62.1-jammy
   timeout: 20m
   needs: [lint]
+  rules:
+    # Exercise changes to the flaky board spec repeatedly, using the same
+    # dedicated sandbox credentials as the normal suite.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH)'
+      changes: [web/e2e/board-drag-filter.spec.ts]
+      variables:
+        BOARD_DRAG_FILTER_STRESS: "1"
+    - when: on_success
   variables:
     APP_BASE_URL: "$MESH_PROD_APP_BASE_URL"
     # Same download black-hole as the GitHub job — see header above.
@@ -1225,7 +1233,11 @@ authed-e2e:
         echo "step to make it green — it is what keeps cdn.playwright.dev out of the merge path."
         exit 1
       fi
-    - npx playwright test
+    - |
+      npx playwright test
+      if [ "${BOARD_DRAG_FILTER_STRESS:-0}" = "1" ]; then
+        timeout 600 npx playwright test e2e/board-drag-filter.spec.ts --repeat-each=20 --project=authed-e2e
+      fi
   artifacts:
     when: always
     paths: [web/playwright-report/]
