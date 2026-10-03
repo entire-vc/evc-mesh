@@ -208,10 +208,12 @@ export function AppLayout() {
     }
   }, [isDocsRoute, sidebarCollapsed]);
 
+  const isProjectDeepLinkRoute = location.pathname.startsWith("/p/");
   const isDeepLinkRoute =
     location.pathname.startsWith("/t/") ||
     location.pathname.startsWith("/tasks/") ||
-    location.pathname.startsWith("/d/");
+    location.pathname.startsWith("/d/") ||
+    isProjectDeepLinkRoute;
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -257,8 +259,9 @@ export function AppLayout() {
     return <Navigate to={`/w/${workspaces[0]!.slug}/activity`} replace />;
   }
 
-  // No workspaces — show create workspace screen
-  if (workspaces.length === 0) {
+  // The project resolver must show its access/not-found state even when this
+  // account cannot see any workspaces.
+  if (workspaces.length === 0 && !isProjectDeepLinkRoute) {
     return <NoWorkspacesScreen />;
   }
 

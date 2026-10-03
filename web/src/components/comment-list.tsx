@@ -254,7 +254,37 @@ function CommentItem({
   // an active thread — a rail that opens to its default scroll position
   // (top) does not, on its own, prove the right comment was ever reached.
   useEffect(() => {
-    if (focused) focusRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const target = focusRef.current;
+    if (!focused || !target) return;
+    target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const pane = target.closest("[data-comment-scroll]");
+    if (!pane) return;
+
+    // Markdown and attachment images render asynchronously. Keep the arrival
+    // anchor while their heights settle, then give control to the reader as
+    // soon as they interact with the thread.
+    let frame = 0;
+    let stopped = false;
+    const restore = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!stopped) target.scrollIntoView({ block: "nearest", behavior: "auto" });
+      });
+    };
+    const mutations = new MutationObserver(restore);
+    mutations.observe(pane, { childList: true, subtree: true });
+    const sizes = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(restore);
+    if (pane.firstElementChild) sizes?.observe(pane.firstElementChild);
+    const events = ["wheel", "touchstart", "pointerdown", "keydown"];
+    const stop = () => {
+      stopped = true;
+      cancelAnimationFrame(frame);
+      mutations.disconnect();
+      sizes?.disconnect();
+      events.forEach(event => pane.removeEventListener(event, stop));
+    };
+    events.forEach(event => pane.addEventListener(event, stop, { passive: true }));
+    return stop;
   }, [focused]);
 
   const handleEditClick = () => {
@@ -622,7 +652,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Scrollable comments list */}
-      <div className="flex-1 overflow-x-hidden overflow-y-auto p-4">
+      <div data-comment-scroll className="flex-1 overflow-x-hidden overflow-y-auto p-4">
         {topLevel.length === 0 && (
           <p className="py-4 text-center text-sm text-muted-foreground">
             No comments yet. Be the first to comment.

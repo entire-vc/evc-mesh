@@ -106,13 +106,18 @@ const ProjectSettingsPage = lazy(() =>
   })),
 );
 const TaskDeepLinkResolver = lazy(() =>
-  import("@/pages/task-deep-link").then((m) => ({
+  import("@/pages/entity-deep-links").then((m) => ({
     default: m.TaskDeepLinkResolver,
   })),
 );
 const DocumentDeepLinkResolver = lazy(() =>
-  import("@/pages/document-deep-link").then((m) => ({
+  import("@/pages/entity-deep-links").then((m) => ({
     default: m.DocumentDeepLinkResolver,
+  })),
+);
+const ProjectDeepLinkResolver = lazy(() =>
+  import("@/pages/entity-deep-links").then((m) => ({
+    default: m.ProjectDeepLinkResolver,
   })),
 );
 
@@ -424,6 +429,14 @@ const router = createBrowserRouter(
           element={
             <LazyPage>
               <TaskDeepLinkResolver />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="p/:projectId"
+          element={
+            <LazyPage>
+              <ProjectDeepLinkResolver />
             </LazyPage>
           }
         />

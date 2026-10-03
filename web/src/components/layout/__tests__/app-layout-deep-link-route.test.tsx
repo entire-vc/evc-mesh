@@ -26,10 +26,12 @@ import { AppLayout } from "@/components/layout/app-layout";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
+import { ProjectDeepLinkResolver } from "@/pages/project-deep-link";
+import { api } from "@/lib/api";
 
 const WORKSPACE_A = { id: "ws-a", name: "Acme", slug: "acme" } as never;
 
-function renderDeepLink(initialPath: string) {
+function renderDeepLink(initialPath: string, resolveProject = false) {
   const router = createMemoryRouter(
     [
       { path: "/login", element: <div data-testid="login-page">Login</div> },
@@ -39,6 +41,7 @@ function renderDeepLink(initialPath: string) {
           { path: "w/:wsSlug/activity", element: <div data-testid="activity-page">Activity</div> },
           { path: "t/:taskId", element: <div data-testid="task-deep-link">TaskDeepLink</div> },
           { path: "d/:docId", element: <div data-testid="doc-deep-link">DocDeepLink</div> },
+          { path: "p/:projectId", element: resolveProject ? <ProjectDeepLinkResolver /> : <div data-testid="project-deep-link">ProjectDeepLink</div> },
         ],
       },
     ],
@@ -49,6 +52,7 @@ function renderDeepLink(initialPath: string) {
 }
 
 beforeEach(() => {
+  vi.mocked(api).mockReset().mockResolvedValue({});
   // jsdom has no matchMedia; app-layout.tsx's unconditional hooks need it
   // regardless of which render branch is ultimately taken.
   window.matchMedia = vi.fn().mockReturnValue({
@@ -75,6 +79,32 @@ beforeEach(() => {
 });
 
 describe("AppLayout — deep-link routes are not redirected to activity", () => {
+  it("keeps workspace onboarding for ordinary routes with no workspaces", async () => {
+    useWorkspaceStore.setState({ workspaces: [] });
+    renderDeepLink("/w/acme/activity");
+    await screen.findByText("Create your first workspace to get started.");
+    expect(screen.queryByTestId("activity-page")).not.toBeInTheDocument();
+  });
+
+  it("shows project not found when the authenticated user has no workspaces", async () => {
+    useWorkspaceStore.setState({ workspaces: [] });
+    vi.mocked(api).mockRejectedValue(new Error("Not found"));
+    const path = "/p/00000000-0000-4000-8000-000000000000";
+    const router = renderDeepLink(path, true);
+
+    await screen.findByText("Project not found or you don't have access.");
+    expect(screen.getByRole("heading", { name: "Project not found" })).toBeVisible();
+    expect(router.state.location.pathname).toBe(path);
+  });
+
+  it("lets /p/:projectId render the project resolver", async () => {
+    const router = renderDeepLink("/p/00000000-0000-4000-8000-000000000000");
+
+    await screen.findByTestId("project-deep-link");
+    expect(screen.queryByTestId("activity-page")).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/p/00000000-0000-4000-8000-000000000000");
+  });
+
   it("lets /d/:docId render its own resolver instead of bouncing to /w/<slug>/activity (the bug)", async () => {
     const router = renderDeepLink("/d/some-doc-id");
 
