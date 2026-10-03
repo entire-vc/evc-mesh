@@ -77,7 +77,7 @@ export const TaskCard = memo(
       <div
         ref={ref}
         className={cn(
-          "group cursor-pointer rounded-lg border border-border border-l-[3px] bg-card p-3 shadow-sm transition-shadow hover:shadow-md",
+          "group relative cursor-pointer rounded-lg border border-border border-l-[3px] bg-card p-3 shadow-sm transition-shadow hover:shadow-md",
           borderColor,
           isDragging && "shadow-lg opacity-90 ring-2 ring-primary/20",
           className,

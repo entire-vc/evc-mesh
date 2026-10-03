@@ -996,7 +996,7 @@ export function DocsPage() {
   // shell scrolls its own padding box for every other page, and Docs is the one
   // page that owns two independently scrolling columns.
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
+    <div className="mesh-mobile-docs flex h-full min-h-0 overflow-hidden">
       {/* Document tree.
 
           Below `md` the two columns do not fit side by side, so the route
@@ -1222,13 +1222,12 @@ export function DocsPage() {
                   message (the 409 conflict notice) from overflowing on desktop
                   too. */}
               <div className="mt-2 flex flex-wrap items-center gap-y-2 gap-x-3">
-                {/* `truncate` needs the `min-w-0`, or the flex item refuses to
-                    shrink below its text and shoves the actions off the row.
-                    The full title stays reachable on hover and to a screen
-                    reader, so nothing is actually lost to the ellipsis. */}
+                {/* Mobile titles wrap so touch users can read the full name.
+                    Desktop truncation needs min-w-0 to leave room for actions;
+                    the title attribute preserves the full name on hover. */}
                 <h1
                   title={openDoc.title}
-                  className="w-full min-w-0 truncate text-2xl font-semibold tracking-tight md:flex-1 md:text-3xl"
+                  className="w-full min-w-0 break-words text-2xl font-semibold tracking-tight md:flex-1 md:truncate md:text-3xl"
                 >
                   {openDoc.title}
                 </h1>

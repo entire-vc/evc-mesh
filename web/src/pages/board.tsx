@@ -306,7 +306,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-11 w-11 md:h-6 md:w-6"
             onClick={() => onAddTask(col.status!.id)}
             title="Add task"
           >
@@ -1049,7 +1049,7 @@ export function BoardPage() {
   return (
     <div className="flex flex-col gap-3">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="mesh-mobile-board-toolbar flex flex-wrap items-center gap-2">
         <BoardToolbar
           groupBy={groupBy}
           onGroupByChange={setGroupBy}

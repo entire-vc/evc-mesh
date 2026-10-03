@@ -71,3 +71,64 @@ pre {
     display: none;
   }
 }
+
+/* These mobile hit areas belong to the audited surfaces only. Shared UI
+   primitives stay unchanged because task create/edit forms are frozen. */
+@media (max-width: 767px) {
+  .mesh-mobile-header {
+    height: auto;
+    min-height: 56px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding-block: 6px;
+  }
+
+  .mesh-mobile-header > nav {
+    flex: 1;
+  }
+
+  .mesh-mobile-header > .flex-1 {
+    display: none;
+  }
+
+  .mesh-mobile-header .mesh-project-tabs {
+    order: 1;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .mesh-mobile-header button,
+  .mesh-mobile-header a,
+  .mesh-mobile-sessions a,
+  .mesh-mobile-board-toolbar button,
+  .mesh-mobile-board-toolbar input,
+  .mesh-mobile-board-toolbar select,
+  .mesh-mobile-analytics-toolbar button,
+  .mesh-mobile-analytics-toolbar select,
+  .mesh-mobile-docs button,
+  .mesh-mobile-docs a,
+  .mesh-mobile-docs input,
+  .mesh-mobile-settings button,
+  .mesh-mobile-settings input:not([type="checkbox"]):not([type="radio"]),
+  .mesh-mobile-settings select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .mesh-mobile-header a {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .mesh-mobile-sessions a {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .mesh-mobile-docs [role="treeitem"] {
+    min-width: 0;
+  }
+}
