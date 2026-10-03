@@ -5,7 +5,7 @@
   "board.open.board_card_commits": 300,
   "board.open.layout_count": 3,
   "board.open.recalc_style_count": 14,
-  "board.open.dom_mutations": 43,
+  "board.open.dom_mutations": 45,
   "task.open.react_commits": 15,
   "task.open.board_card_commits": 0,
   "task.open.layout_count": 5,
@@ -25,5 +25,5 @@
   "board.drag.board_card_commits": 1282,
   "board.drag.layout_count": 16,
   "board.drag.recalc_style_count": 98,
-  "board.drag.dom_mutations": 447
+  "board.drag.dom_mutations": 448
 }
