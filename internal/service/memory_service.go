@@ -1644,6 +1644,10 @@ func reciprocalRankFusion(kw, vec []domain.ScoredMemory, textWeight, vectorWeigh
 	type entry struct {
 		mem   domain.Memory
 		score float64
+		// dense is the vector arm's raw cosine for this item, nil when the arm
+		// did not score it. Carried through the merge untouched (see
+		// ScoredMemory.DenseScore): the fused score below is rank-only.
+		dense *float64
 	}
 	scores := make(map[uuid.UUID]*entry)
 
@@ -1663,13 +1667,19 @@ func reciprocalRankFusion(kw, vec []domain.ScoredMemory, textWeight, vectorWeigh
 			scores[id] = &entry{mem: mc}
 		}
 		scores[id].score += vectorWeight * (1.0 / (float64(rrfK) + float64(rank+1)))
+		// In the vector arm Score IS the cosine; snapshot it now because the
+		// fused score overwrites it below. Fresh take per iteration so each
+		// entry points at its own value.
+		cos := m.Score
+		scores[id].dense = &cos
 	}
 
 	result := make([]domain.ScoredMemory, 0, len(scores))
 	for _, e := range scores {
 		result = append(result, domain.ScoredMemory{
-			Memory: e.mem,
-			Score:  e.score,
+			Memory:     e.mem,
+			Score:      e.score,
+			DenseScore: e.dense,
 		})
 	}
 	slices.SortFunc(result, func(a, b domain.ScoredMemory) int {
