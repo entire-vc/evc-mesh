@@ -215,6 +215,30 @@ row still catches `+1` under 3% — and were left alone.
 
 ### `board.open.dom_mutations` 43 → 74 → 43
 
+**CI recalibration, 2026-10-03:** the current DOM ceilings are **45** for
+`board.open` and **448** for `board.drag`. These supersede the historical
+43/447 floor claims below; the gate still uses min-of-3, without retries.
+Across the latest 50 pipelines (main and MR/push branches), 34 reports contain
+102 `board.open`, 96 `board.drag`, and 84 `comment.send` raw samples. Their
+nearest-rank p95 DOM counts are 45, 448, and 25 respectively (ranges 43–50,
+447–448, and 25–25). `comment.send` stays at 25; all other ceilings stay fixed.
+
+Five job attempts exceeded the old DOM ceilings. Three of these share the
+same SHA, `9b8a9b567d`: two fail on drag at 448, one on open at 45. Six reports
+have the identical current `web/` tree, including those three failures and
+three successful jobs. This window has no successful perf job on that exact
+failing SHA, so it does not establish an exact-SHA false-red rate. The old
+claim that the first open sample is *always* 43 is contradicted by job
+113879 (48/45/45) and main job 111030.
+
+The measured p95 removes the 1–2 mutation jitter without granting a
+percentage margin to every metric. It deliberately gives up detection of
+`+1` drag / `+2` open DOM mutations at their old floors. A `+20%` DOM increase
+still exceeds these ceilings even from the observed floors:
+`ceil(43 × 1.2) = 52 > 45`, `ceil(447 × 1.2) = 537 > 448`, and
+`ceil(25 × 1.2) = 30 > 25`. Recalibrate again if the scenario or UI changes;
+neither this empirical p95 nor ten green jobs guarantees a zero future tail.
+
 Since !1006 the board is a lazy chunk. The first `import()` of it makes Vite
 insert one `<link rel="modulepreload">` (or stylesheet) into `<head>` per
 dependency the entry chunk does not already carry — 30 JS + 2 CSS for the
