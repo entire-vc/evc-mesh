@@ -1,3 +1,4 @@
+import { useAgentShortTag } from "@/hooks/use-agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { cn } from "@/lib/cn";
 
@@ -34,6 +35,7 @@ const sizeClasses = {
 } as const;
 
 export interface AssigneeAvatarProps {
+  id?: string | null;
   name?: string | null;
   shortTag?: string | null;
   type?: "user" | "agent" | "unassigned";
@@ -42,12 +44,15 @@ export interface AssigneeAvatarProps {
 }
 
 export function AssigneeAvatar({
+  id,
   name,
   shortTag,
   type = "unassigned",
   size = "md",
   className,
 }: AssigneeAvatarProps) {
+  const savedTag = useAgentShortTag(id, type);
+  const tag = shortTag === undefined ? savedTag : shortTag;
   const baseClasses = cn(
     "inline-flex shrink-0 items-center justify-center rounded-full font-medium select-none",
     sizeClasses[size],
@@ -55,7 +60,7 @@ export function AssigneeAvatar({
 
   // Named assignee — show first two characters with a deterministic color
   if (name) {
-    const label = agentLabel(name, type === "agent" ? shortTag : null);
+    const label = agentLabel(name, type === "agent" ? tag : null);
     const initials = name.slice(0, 2).toUpperCase();
     const colorClass = AVATAR_COLORS[colorIndexForName(name)];
     return (

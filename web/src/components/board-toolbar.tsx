@@ -1,3 +1,4 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
 /**
  * BoardToolbar — ClickUp-style controls for the Board page.
  *
@@ -260,8 +261,8 @@ function AssigneeFilterDropdown({
                   onChange={() => toggleId(c.id)}
                   className="h-3.5 w-3.5 rounded border-input"
                 />
-                <AssigneeAvatar name={c.name} type={c.type} size="sm" />
-                <span className="truncate">{c.name}</span>
+                <AssigneeAvatar id={c.id} name={c.name} type={c.type} size="sm" />
+                <span className="truncate">{c.name}<AgentShortTag id={c.id} type={c.type} /></span>
               </label>
             ))}
           </div>

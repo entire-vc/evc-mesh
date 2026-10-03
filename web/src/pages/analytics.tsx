@@ -1,3 +1,5 @@
+import { useMentionDirectory } from "@/hooks/use-mention-directory";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { CalendarDays, Download, Printer, TrendingUp, Users, Zap } from "lucide-react";
@@ -242,6 +244,7 @@ async function downloadCSV(url: string, filename: string): Promise<void> {
 }
 
 export function AnalyticsPage() {
+  useMentionDirectory();
   useParams();
   const { currentWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
@@ -495,7 +498,7 @@ export function AnalyticsPage() {
                       <span className="w-5 shrink-0 text-xs text-muted-foreground">
                         {idx + 1}.
                       </span>
-                      {row.agent_name}
+                      {row.agent_name}<AgentShortTag id={row.agent_id} />
                     </span>
                     <span className="text-right font-medium">{row.completed}</span>
                   </div>

@@ -1,3 +1,4 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   Bot,
@@ -36,7 +37,7 @@ import "@/components/doc-comments.css";
 // Small pieces
 // ---------------------------------------------------------------------------
 
-function ActorLabel({ type, name }: { type: ActorType; name?: string | null }) {
+function ActorLabel({ id, type, name }: { id?: string; type: ActorType; name?: string | null }) {
   const Icon = type === "agent" ? Bot : User;
   const fallback = type === "agent" ? "Agent" : type === "system" ? "System" : "User";
   return (
@@ -47,7 +48,7 @@ function ActorLabel({ type, name }: { type: ActorType; name?: string | null }) {
           type === "agent" ? "text-violet-500" : "text-sky-500",
         )}
       />
-      <span className="truncate">{name?.trim() || fallback}</span>
+      <span className="truncate">{name?.trim() || fallback}<AgentShortTag id={id} type={type} /></span>
     </span>
   );
 }
@@ -241,7 +242,7 @@ function CommentBody({
   return (
     <div className={cn(isReply && "mt-2 border-l-2 border-border pl-2.5")}>
       <div className="flex items-baseline justify-between gap-2">
-        <ActorLabel type={comment.author_type} name={comment.author_name} />
+        <ActorLabel id={comment.author_id} type={comment.author_type} name={comment.author_name} />
         <span className="shrink-0 text-[11px] text-muted-foreground">
           {formatRelative(comment.created_at)}
           {edited && " · edited"}

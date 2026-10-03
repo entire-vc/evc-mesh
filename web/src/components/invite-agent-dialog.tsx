@@ -1,3 +1,4 @@
+import { agentLabel } from "@/lib/agent-label";
 import { type FormEvent, useEffect, useState } from "react";
 import { UserPlus } from "lucide-react";
 import {
@@ -190,7 +191,7 @@ export function InviteAgentDialog({
                             value={a.id}
                             disabled={connectedAgentIds.has(a.id)}
                           >
-                            {a.name}
+                            {agentLabel(a.name, a.short_tag)}
                             {connectedAgentIds.has(a.id)
                               ? " (already connected)"
                               : ""}

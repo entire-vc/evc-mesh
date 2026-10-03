@@ -1,3 +1,6 @@
+import { useAgentShortTag } from "@/hooks/use-agent-short-tag";
+import { agentLabel } from "@/lib/agent-label";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "@/components/ui/toast";
 import { useNavigate, useParams } from "react-router";
@@ -419,7 +422,7 @@ function WorkflowRulesSection({
                                     className="gap-1 pr-1"
                                   >
                                     <Bot className="h-3 w-3" />
-                                    {agent?.name ?? agentId.slice(0, 8)}
+                                    <span>{agent?.name ?? agentId.slice(0, 8)}<AgentShortTag id={agentId} /></span>
                                     <button
                                       type="button"
                                       className="ml-0.5 rounded-sm hover:bg-muted-foreground/20"
@@ -544,7 +547,7 @@ function WorkflowRulesSection({
                                       key={a.id}
                                       value={`agent:${a.id}`}
                                     >
-                                      {a.name}
+                                      {agentLabel(a.name, a.short_tag)}
                                     </option>
                                   ))}
                               </optgroup>
@@ -665,7 +668,7 @@ function AssigneeSelect({
         <optgroup label="Agents">
           {agents.map((a) => (
             <option key={a.id} value={`agent:${a.id}`}>
-              {a.name}
+              {agentLabel(a.name, a.short_tag)}
             </option>
           ))}
         </optgroup>
@@ -1127,6 +1130,7 @@ export function ProjectSettingsPage() {
   const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false);
   const [memberToRemove, setMemberToRemove] =
     useState<ProjectMemberWithUser | null>(null);
+  const removeMemberTag = useAgentShortTag(memberToRemove?.agent_id, "agent");
   const [isRemovingMember, setIsRemovingMember] = useState(false);
   const [memberError, setMemberError] = useState<string | null>(null);
 
@@ -2255,7 +2259,7 @@ export function ProjectSettingsPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="truncate text-sm font-medium">
-                      {member.agent_name || member.agent_id?.slice(0, 8)}
+                      {member.agent_name || member.agent_id?.slice(0, 8)}<AgentShortTag id={member.agent_id} />
                     </span>
                     <p className="text-xs text-muted-foreground">Agent</p>
                   </div>
@@ -2290,7 +2294,7 @@ export function ProjectSettingsPage() {
                   )
                   .map((g) => (
                     <option key={g.agent.id} value={g.agent.id}>
-                      {g.agent.name}
+                      {agentLabel(g.agent.name, g.agent.short_tag)}
                     </option>
                   ))}
               </Select>
@@ -3149,7 +3153,7 @@ export function ProjectSettingsPage() {
         title="Remove Member"
         description={
           memberToRemove
-            ? `Are you sure you want to remove ${memberToRemove.agent_id ? (memberToRemove.agent_name || "this agent") : (memberToRemove.user?.name || "this member")} from this project?`
+            ? `Are you sure you want to remove ${memberToRemove.agent_id ? agentLabel(memberToRemove.agent_name || "this agent", removeMemberTag) : (memberToRemove.user?.name || "this member")} from this project?`
             : ""
         }
         confirmText="Remove Member"
