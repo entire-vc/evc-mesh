@@ -303,6 +303,28 @@ vendor-trailer-gate:
   script:
     - python3 .gitlab/scripts/vendor_trailer_gate.py
 
+# ── commit-author-gate ───────────────────────────────────────────────────────
+# A lane's ambient GIT_AUTHOR_*/GIT_COMMITTER_* overrides its worktree `user.*`
+# config, so a commit can land under a foreign identity (Robert Johansson, the
+# `unconfigured` placeholder) with nothing noticing until someone reads the log.
+# Refuses any commit in `origin/<target>..HEAD` whose author or committer
+# e-mail is not in `.gitlab/commit-author-allowlist.txt`; exceptions are
+# explicit lines there. MR pipelines only by design: a push pipeline has no
+# target branch to diff against. See `.gitlab/scripts/commit_author_gate.py`.
+commit-author-gate:
+  stage: gate
+  image: python:3.12-alpine
+  allow_failure: false
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache git
+    - git fetch origin "+refs/heads/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+  script:
+    - python3 .gitlab/scripts/commit_author_gate.py
+
 # ── topology-gate ───────────────────────────────────────────────────────────
 # Public repositories must not describe private infrastructure: a deploy runbook
 # once shipped here with the production gateway address, its subnet and a map of
