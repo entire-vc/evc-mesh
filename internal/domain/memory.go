@@ -171,6 +171,16 @@ type ScoredMemory struct {
 	// RecencyScore is the exponential decay factor applied to this item during recall.
 	// Value in [0, 1]: 1.0 = brand-new or decay not applied; approaches 0 for very old items.
 	RecencyScore float64 `json:"recency_score,omitempty"`
+	// DenseScore is the RAW cosine similarity the vector arm computed for this
+	// item's embedding against the query embedding — before RRF fusion and before
+	// every freshness/decay multiplier (those touch Score only). Nil means the
+	// dense arm did not score the item: a BM25-only row, a bm25-only recall, or a
+	// server that does not populate the field. The nil/low distinction is the
+	// point: the mesh-mcp noise gate needs "semantically close, just phrased
+	// without any shared word" to be distinguishable from noise, and the fused
+	// RRF score — rank-only, tightly clustered in [0.010, 0.016] — cannot carry
+	// that (#116875c2). Additive response field; existing clients ignore it.
+	DenseScore *float64 `json:"dense_score,omitempty"`
 }
 
 // SearchMode reports which retrieval arms actually served a Recall.

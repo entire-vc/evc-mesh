@@ -30,6 +30,11 @@ type Memory struct {
 type ScoredMemory struct {
 	Memory
 	Score float64 `json:"score"`
+	// DenseScore is the raw vector-arm cosine the server computed for this item,
+	// before RRF fusion and decay multipliers. Pointer-nil when the dense arm did
+	// not score the item (BM25-only row or recall) — the client-side equivalent
+	// of domain.ScoredMemory.DenseScore.
+	DenseScore *float64 `json:"dense_score,omitempty"`
 }
 
 // RememberInput is the request body for creating/updating a memory.
