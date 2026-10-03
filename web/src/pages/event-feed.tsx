@@ -1,3 +1,5 @@
+import { useMentionDirectory } from "@/hooks/use-mention-directory";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
@@ -143,7 +145,7 @@ function EventRow({ event }: EventRowProps) {
       <div className="min-w-0 flex-1">
         {/* Main line */}
         <div className="flex flex-wrap items-center gap-1.5 text-sm">
-          <span className="font-medium text-foreground">{actorName}</span>
+          <span className="font-medium text-foreground">{actorName}<AgentShortTag id={event.agent_id} /></span>
           {isAgent && <Bot className="h-3 w-3 text-muted-foreground" />}
           <span className="text-muted-foreground">{verb}</span>
           {event.task_id ? (
@@ -233,7 +235,7 @@ function RealtimeEventRow({ event }: RealtimeEventRowProps) {
         {/* Main line */}
         <div className="flex flex-wrap items-center gap-1.5 text-sm">
           <Radio className="h-3 w-3 shrink-0 animate-pulse text-primary" />
-          <span className="font-medium text-foreground">{agentName}</span>
+          <span className="font-medium text-foreground">{agentName}<AgentShortTag id={data.agent_id as string | undefined} /></span>
           {isAgent && <Bot className="h-3 w-3 text-muted-foreground" />}
           {taskId ? (
             <Link
@@ -320,6 +322,7 @@ function isDefaultFilters(f: FilterState): boolean {
 // ---------------------------------------------------------------------------
 
 export function EventFeedPage() {
+  useMentionDirectory();
   const { wsSlug } = useParams();
   const { projects } = useProjectStore();
   const eventLog = useWebSocketStore((s) => s.eventLog);

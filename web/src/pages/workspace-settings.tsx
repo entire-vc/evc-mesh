@@ -1,3 +1,4 @@
+import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
@@ -290,7 +291,7 @@ function WsAssigneeSelect({
         <optgroup label="Agents">
           {agents.map((a) => (
             <option key={a.id} value={`agent:${a.id}`}>
-              {a.name}
+              {agentLabel(a.name, a.short_tag)}
             </option>
           ))}
         </optgroup>
@@ -2427,7 +2428,7 @@ export function WorkspaceSettingsPage() {
         title="Revoke Agent Connection"
         description={
           grantToRevoke
-            ? `${grantToRevoke.agent.name}'s API key for this workspace will stop working immediately. This does not affect its access to any other workspace.`
+            ? `${agentLabel(grantToRevoke.agent.name, grantToRevoke.agent.short_tag)}'s API key for this workspace will stop working immediately. This does not affect its access to any other workspace.`
             : ""
         }
         confirmText="Revoke Connection"

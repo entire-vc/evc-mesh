@@ -1,3 +1,4 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
@@ -439,7 +440,7 @@ function SessionsWidget() {
                     <span
                       className={cn("h-2 w-2 shrink-0 rounded-full", dotColor)}
                     />
-                    <span className="font-medium">{agent.name}</span>
+                    <span className="font-medium">{agent.name}<AgentShortTag tag={agent.short_tag} /></span>
                     <span className="text-[10px] capitalize text-muted-foreground">
                       {status}
                     </span>

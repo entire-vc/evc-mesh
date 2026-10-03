@@ -1,3 +1,4 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { useShallow } from "zustand/react/shallow";
@@ -287,6 +288,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
             <PriorityIcon priority={col.priority} />
           ) : col.assigneeId ? (
             <AssigneeAvatar
+              id={col.assigneeId}
               name={col.assigneeName}
               type={col.assigneeType}
               size="sm"
@@ -297,7 +299,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
               style={{ backgroundColor: col.color }}
             />
           )}
-          <span className="text-sm font-semibold">{col.title}</span>
+          <span className="text-sm font-semibold">{col.title}<AgentShortTag id={col.assigneeId} type={col.assigneeType} /></span>
           <Badge variant="secondary" className="text-xs">
             {tasks.length}
           </Badge>

@@ -1,3 +1,5 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
+import { useRulesStore } from "@/stores/rules";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { AtSign, Bell, Check, CheckCheck, Loader2, Settings } from "lucide-react";
@@ -163,6 +165,9 @@ export function NotificationBell() {
       if (!prev) {
         void fetchNotifications();
         if (currentWorkspace) {
+          if (!useRulesStore.getState().teamDirectory) {
+            void useRulesStore.getState().fetchTeamDirectory(currentWorkspace.id);
+          }
           fetchMentionInbox(currentWorkspace.id, 20)
             .then(({ items, failed }) => {
               setMentions(items);
@@ -477,7 +482,7 @@ function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium leading-tight">{row.title}</p>
+        <p className="truncate font-medium leading-tight">{row.mention ? <>{row.mention.author_name}<AgentShortTag id={row.mention.author_id} /> mentioned you on: {row.mention.title}</> : row.title}</p>
         {row.body && (
           <p className={`mt-0.5 line-clamp-2 text-xs ${secondaryText}`}>
             {toPreviewText(row.body)}

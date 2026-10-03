@@ -1,3 +1,6 @@
+import { useRulesStore } from "@/stores/rules";
+import { agentLabel } from "@/lib/agent-label";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -122,6 +125,7 @@ function formatActionDescription(entry: ActivityLogEntry, nameMap?: Map<string, 
 
 export function ActivityLog({ taskId }: ActivityLogProps) {
   const { agents } = useAgentStore();
+  const directoryAgents = useRulesStore((s) => s.teamDirectory?.agents);
   const { workspaceMembers } = useMemberStore();
   const [entries, setEntries] = useState<ActivityLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -132,14 +136,17 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
   // Build UUID → name map from agents and members
   const nameMap = useMemo(() => {
     const map = new Map<string, string>();
+    for (const a of directoryAgents ?? []) {
+      map.set(a.id, agentLabel(a.name, a.short_tag));
+    }
     for (const a of agents) {
-      map.set(a.id, a.name);
+      map.set(a.id, agentLabel(a.name, a.short_tag));
     }
     for (const m of workspaceMembers) {
       map.set(m.user_id, m.user?.name || m.user?.email || m.user_id);
     }
     return map;
-  }, [agents, workspaceMembers]);
+  }, [agents, directoryAgents, workspaceMembers]);
 
   const fetchActivity = useCallback(
     async (pageNum: number, append: boolean) => {
@@ -224,7 +231,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
             <div className="min-w-0 flex-1">
               <p className="text-sm">
                 <span className="font-medium">
-                  {entry.actor_name || entry.actor_type}
+                  {entry.actor_name || entry.actor_type}<AgentShortTag id={entry.actor_id} type={entry.actor_type} />
                 </span>
                 {" "}
                 {formatActionDescription(entry, nameMap)}

@@ -1,3 +1,5 @@
+import { useMentionDirectory } from "@/hooks/use-mention-directory";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
@@ -109,7 +111,7 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 						<Bot className="h-4 w-4" />
 					</div>
 					<div className="min-w-0">
-						<p className="truncate text-sm font-semibold">{agent.name}</p>
+						<p className="truncate text-sm font-semibold">{agent.name}<AgentShortTag id={agent.id} /></p>
 						<Badge variant="secondary" className={cn("mt-0.5 text-xs", typeCfg.color)}>
 							{typeCfg.label}
 						</Badge>
@@ -298,7 +300,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 												key={row.agent_id}
 												className="flex items-center justify-between gap-2 text-sm"
 											>
-												<span className="truncate text-foreground">{row.agent_name}</span>
+												<span className="truncate text-foreground">{row.agent_name}<AgentShortTag id={row.agent_id} /></span>
 												<span className="shrink-0 tabular-nums text-muted-foreground">
 													{formatCost(row.cost)}
 												</span>
@@ -356,6 +358,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 // ---------------------------------------------------------------------------
 
 export function SessionDashboardPage() {
+  useMentionDirectory();
 	const { wsSlug } = useParams<{ wsSlug: string }>();
 	const { currentWorkspace } = useWorkspaceStore();
 

@@ -1,3 +1,4 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { cn } from "@/lib/cn";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import type { ProjectDocument } from "@/types";
@@ -58,14 +59,14 @@ export function DocMeta({ doc, className }: DocMetaProps) {
       )}
     >
       <span>
-        Created by <span className="text-foreground/80">{creator}</span>
+        Created by <span className="text-foreground/80">{creator}<AgentShortTag id={doc.created_by} type={doc.created_by_type} /></span>
       </span>
 
       {editor && (
         <>
           <Dot />
           <span>
-            Last updated by <span className="text-foreground/80">{editor}</span>
+            Last updated by <span className="text-foreground/80">{editor}<AgentShortTag id={doc.updated_by} /></span>
           </span>
         </>
       )}

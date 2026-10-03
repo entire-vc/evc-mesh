@@ -1,3 +1,5 @@
+import { useMentionDirectory } from "@/hooks/use-mention-directory";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { AtSign, FileText, ListTodo, MessageSquare } from "lucide-react";
@@ -92,6 +94,7 @@ function getMentionDisplayState(
 }
 
 export function ActivityPage() {
+  useMentionDirectory();
   const { wsSlug } = useParams();
   const navigate = useNavigate();
   const { projects } = useProjectStore();
@@ -510,7 +513,7 @@ function CommentCard({
           </span>
         </div>
         <p className="mb-1 text-xs text-muted-foreground">
-          {showAuthor ? comment.author_name : comment.project_name}
+          {showAuthor ? <>{comment.author_name}<AgentShortTag id={comment.author_id} type={comment.author_kind} /></> : comment.project_name}
         </p>
         <div className="line-clamp-2 text-xs text-muted-foreground">
           <MarkdownView content={preview} className="text-xs" />
@@ -611,7 +614,7 @@ function MentionCard({
               {formatRelative(mention.extracted_at)}
             </span>
           </div>
-          <p className="mb-1 text-xs text-muted-foreground">{mention.author_name}</p>
+          <p className="mb-1 text-xs text-muted-foreground">{mention.author_name}<AgentShortTag id={mention.author_id} /></p>
           <div className="line-clamp-2 text-xs text-muted-foreground">
             <MarkdownView content={preview} className="text-xs" />
           </div>

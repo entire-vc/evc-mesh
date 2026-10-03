@@ -1,3 +1,4 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
 import {
   type FormEvent,
   useCallback,
@@ -49,13 +50,13 @@ function ActorIcon({ type }: { type: ActorType }) {
   return <User className="h-4 w-4 text-sky-500" />;
 }
 
-function ActorLabel({ type, name }: { type: ActorType; name?: string }) {
+function ActorLabel({ id, type, name }: { id?: string; type: ActorType; name?: string }) {
   const fallback = type === "agent" ? "Agent" : type === "system" ? "System" : "User";
   const displayName = name?.trim() || fallback;
   return (
     <span className="flex items-center gap-1.5 text-sm font-medium">
       <ActorIcon type={type} />
-      {displayName}
+      <span>{displayName}<AgentShortTag id={id} type={type} /></span>
     </span>
   );
 }
@@ -292,7 +293,7 @@ function CommentItem({
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2">
-            <ActorLabel type={comment.author_type} name={comment.author_name} />
+            <ActorLabel id={comment.author_id} type={comment.author_type} name={comment.author_name} />
             <span className="text-xs text-muted-foreground">
               {formatRelative(comment.created_at)}
             </span>
@@ -666,7 +667,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Reply className="h-3 w-3" />
               Replying to{" "}
-              {replyToComment.author_name?.trim() || (replyToComment.author_type === "agent" ? "Agent" : replyToComment.author_type === "system" ? "System" : "User")}
+              <span>{replyToComment.author_name?.trim() || (replyToComment.author_type === "agent" ? "Agent" : replyToComment.author_type === "system" ? "System" : "User")}<AgentShortTag id={replyToComment.author_id} type={replyToComment.author_type} /></span>
               <button
                 type="button"
                 className="ml-1 text-primary hover:underline"

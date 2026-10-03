@@ -1,3 +1,5 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
+import { agentLabel } from "@/lib/agent-label";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpCircle, Check, Clock, Layers, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -379,7 +381,7 @@ export function AgentDetailDialog({
           <DialogHeader>
             <DialogTitle>Delete Agent</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete <strong>{agent.name}</strong>? This action cannot be undone.
+              Are you sure you want to delete <strong>{agent.name}<AgentShortTag tag={agent.short_tag} /></strong>? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           {error && (
@@ -406,7 +408,7 @@ export function AgentDetailDialog({
           <DialogHeader>
             <DialogTitle>Regenerate API Key</DialogTitle>
             <DialogDescription>
-              This will invalidate the current API key for <strong>{agent.name}</strong>. Any integrations using the old key will stop working immediately.
+              This will invalidate the current API key for <strong>{agent.name}<AgentShortTag tag={agent.short_tag} /></strong>. Any integrations using the old key will stop working immediately.
             </DialogDescription>
           </DialogHeader>
           {error && (
@@ -633,7 +635,7 @@ export function AgentDetailDialog({
                 <optgroup label="Agents">
                   {parentCandidates.map((a) => (
                     <option key={`agent:${a.id}`} value={`agent:${a.id}`}>
-                      {a.name}
+                      {agentLabel(a.name, a.short_tag)}
                     </option>
                   ))}
                 </optgroup>

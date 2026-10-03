@@ -1,3 +1,4 @@
+import { agentLabel } from "@/lib/agent-label";
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, RotateCw, Trash2 } from "lucide-react";
 
@@ -348,7 +349,7 @@ export function WorkspaceSecrets({ workspaceId, canManage }: WorkspaceSecretsPro
                 <option value="">Choose an agent…</option>
                 {agents.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name}
+                    {agentLabel(a.name, a.short_tag)}
                   </option>
                 ))}
               </Select>

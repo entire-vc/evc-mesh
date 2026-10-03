@@ -1051,6 +1051,7 @@ export function ListViewPage() {
                               {visibleColumns.has("assignee") && (
                                 <td className="px-3 py-2">
                                   <AssigneeAvatar
+                                    id={task.assignee_id}
                                     name={task.assignee_name ?? undefined}
                                     type={task.assignee_type as "user" | "agent" | "unassigned"}
                                     size="sm"
@@ -1223,6 +1224,7 @@ export function ListViewPage() {
                                     {visibleColumns.has("assignee") && (
                                       <td className="px-3 py-1.5">
                                         <AssigneeAvatar
+                                          id={subtask.assignee_id}
                                           name={subtask.assignee_name ?? undefined}
                                           type={subtask.assignee_type as "user" | "agent" | "unassigned"}
                                           size="sm"

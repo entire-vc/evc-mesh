@@ -1,3 +1,4 @@
+import { agentLabel } from "@/lib/agent-label";
 import { useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -235,7 +236,7 @@ export function MemoryFiltersPanel({
             <option value="">Any agent</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.name}
+                {agentLabel(a.name, a.short_tag)}
               </option>
             ))}
           </Select>

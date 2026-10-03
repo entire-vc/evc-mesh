@@ -1,3 +1,5 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
+import { agentLabel } from "@/lib/agent-label";
 import { forwardRef, memo, type HTMLAttributes } from "react";
 import { AlignLeft, CircleCheck, ExternalLink, GitBranch, Hand, Lock, Paperclip, Pencil, RefreshCw, Snowflake } from "lucide-react";
 import { parseISO } from "date-fns";
@@ -46,6 +48,7 @@ export const TaskCard = memo(
   forwardRef<HTMLDivElement, TaskCardProps>(
     ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, className, ...props }, ref) => {
     const shortTag = useAgentShortTag(task.assignee_id, task.assignee_type);
+    const holderTag = useAgentShortTag(task.checked_out_by, "agent");
     const borderColor =
       priorityBorderColors[task.priority] ?? "border-l-transparent";
 
@@ -194,6 +197,7 @@ export const TaskCard = memo(
 
           {task.reviewer_id && (
             <AssigneeAvatar
+              id={task.reviewer_id}
               name={task.reviewer_name ?? undefined}
               type={task.reviewer_type ?? "unassigned"}
               size="sm"
@@ -217,7 +221,7 @@ export const TaskCard = memo(
               title={
                 checkoutLapsed
                   ? `Work lock lapsed ${formatRelative(task.checkout_expires!)} — the holder's session is gone, nobody is on this`
-                  : `In ${holderIsSomeoneElse ? checkedOutByName : "hand"}${holderIsSomeoneElse ? "'s hands" : "s"} until ${formatRelative(task.checkout_expires!)}`
+                  : `In ${holderIsSomeoneElse ? agentLabel(checkedOutByName!, holderTag) : "hand"}${holderIsSomeoneElse ? "'s hands" : "s"} until ${formatRelative(task.checkout_expires!)}`
               }
               data-testid="checkout-indicator"
               data-checkout-state={checkoutLapsed ? "lapsed" : "live"}
@@ -226,7 +230,7 @@ export const TaskCard = memo(
               <span className="sr-only">
                 {checkoutLapsed ? "Work lock lapsed" : "Checked out"}
               </span>
-              {holderIsSomeoneElse && <span>{checkedOutByName}</span>}
+              {holderIsSomeoneElse && <span>{checkedOutByName}<AgentShortTag id={task.checked_out_by} /></span>}
               <span>{formatRelative(task.checkout_expires!)}</span>
             </span>
           )}
