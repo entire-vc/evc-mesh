@@ -6,8 +6,8 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
-    // perf/*.spec.ts are Playwright specs (perf-counters job), not vitest.
-    exclude: ["e2e/**", "perf/**", "node_modules/**"],
+    // Browser and perf specs run through Playwright, outside the unit suite.
+    exclude: ["e2e/**", "e2e-local/**", "perf/**", "node_modules/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],

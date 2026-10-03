@@ -77,4 +77,15 @@ describe("OrgChartPage — cards follow edits made in the detail dialog", () => 
     });
     expect(screen.queryByText("gpt-6.1-sol")).toBeNull();
   });
+  it.each(["/org-chart", "/org-chart/grid"])("adds and clears a saved tag at %s without using the role", (path) => {
+    render(<MemoryRouter initialEntries={[path]}><OrgChartPage /></MemoryRouter>);
+    expect(screen.getByTitle("Verity")).toHaveTextContent("Verity");
+    act(() => { useAgentStore.setState({ agents: [{ ...agent, short_tag: "mesh-dev" }] }); });
+    const label = screen.getByTitle("Verity · mesh-dev");
+    expect(label).toHaveTextContent("Verity · mesh-dev");
+    expect(label.querySelector(".text-muted-foreground.font-normal")).toBeTruthy();
+    act(() => { useAgentStore.setState({ agents: [{ ...agent, short_tag: null }] }); });
+    expect(screen.getByTitle("Verity").textContent).toBe("Verity");
+  });
+
 });

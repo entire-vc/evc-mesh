@@ -1,3 +1,4 @@
+import { agentOptionLabel } from "@/lib/agent-label";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   Dialog,
@@ -405,7 +406,7 @@ export function CreateRecurringDialog({
               )}
               {agents.map((agent) => (
                 <option key={agent.id} value={`agent:${agent.id}`}>
-                  {agent.name} (agent)
+                  {agentOptionLabel(agent.name, agent.short_tag, "")}
                 </option>
               ))}
             </Select>

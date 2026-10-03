@@ -465,6 +465,7 @@ export interface Agent {
   callback_url?: string;
   created_at: string;
   updated_at: string;
+  short_tag?: string | null;
 }
 
 // A markdown page inside a project. Named ProjectDocument rather than Document
@@ -689,6 +690,7 @@ export interface Mentionable {
   slug: string;
   display_name: string;
   avatar_url: string | null;
+  short_tag?: string | null;
 }
 
 // API request types
@@ -810,6 +812,7 @@ export interface AgentBrief {
   id: string;
   name: string;
   slug: string;
+  short_tag?: string | null;
 }
 
 export interface WorkspaceBrief {
@@ -1017,6 +1020,7 @@ export interface TeamDirectoryAgent {
   heartbeat_status?: string;
   heartbeat_message?: string;
   is_stale?: boolean;
+  short_tag?: string | null;
 }
 
 export interface TeamDirectoryHuman {

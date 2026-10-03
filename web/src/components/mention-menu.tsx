@@ -1,4 +1,5 @@
 import { Bot, User } from "lucide-react";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { cn } from "@/lib/cn";
 import type { Mentionable } from "@/types";
 import type { UseMentionPicker } from "@/hooks/use-mention-picker";
@@ -73,7 +74,7 @@ export function MentionMenu({
             <User className="h-3.5 w-3.5 shrink-0 text-sky-500" />
           )}
           <span className="font-mono text-xs text-muted-foreground">@{m.slug}</span>
-          <span className="truncate">{m.display_name}</span>
+          <span className="truncate">{m.display_name}<AgentShortTag tag={m.kind === "agent" ? m.short_tag : null} /></span>
           <span className="ml-auto text-[10px] capitalize text-muted-foreground">{m.kind}</span>
         </button>
       ))}

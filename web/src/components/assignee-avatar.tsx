@@ -1,3 +1,4 @@
+import { agentLabel } from "@/lib/agent-label";
 import { cn } from "@/lib/cn";
 
 // 10 deterministic background colors for named assignees
@@ -34,6 +35,7 @@ const sizeClasses = {
 
 export interface AssigneeAvatarProps {
   name?: string | null;
+  shortTag?: string | null;
   type?: "user" | "agent" | "unassigned";
   size?: "sm" | "md" | "lg";
   className?: string;
@@ -41,6 +43,7 @@ export interface AssigneeAvatarProps {
 
 export function AssigneeAvatar({
   name,
+  shortTag,
   type = "unassigned",
   size = "md",
   className,
@@ -52,13 +55,14 @@ export function AssigneeAvatar({
 
   // Named assignee — show first two characters with a deterministic color
   if (name) {
+    const label = agentLabel(name, type === "agent" ? shortTag : null);
     const initials = name.slice(0, 2).toUpperCase();
     const colorClass = AVATAR_COLORS[colorIndexForName(name)];
     return (
       <span
         className={cn(baseClasses, colorClass, className)}
-        title={name}
-        aria-label={name}
+        title={label}
+        aria-label={label}
       >
         {initials}
       </span>
