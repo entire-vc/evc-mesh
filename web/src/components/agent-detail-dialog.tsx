@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpCircle, Check, Clock, Layers, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, agentTypeConfig, asCapabilityList, getEffectiveStatus, isAgentStale, splitList } from "@/lib/agent-utils";
@@ -63,6 +63,43 @@ export function AgentDetailDialog({
     // update (heartbeat, status), which would otherwise refetch on every poll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, agent?.id, fetchAgentWorkspaces]);
+
+  const [shortTagDraft, setShortTagDraft] = useState(agent?.short_tag ?? "");
+  const [isSavingShortTag, setIsSavingShortTag] = useState(false);
+  const shortTagPending = useRef(false);
+  const shortTagSaved = useRef(agent?.short_tag ?? "");
+  const editedAgentId = useRef(agent?.id);
+  editedAgentId.current = agent?.id;
+
+  useEffect(() => {
+    shortTagSaved.current = agent?.short_tag ?? "";
+    setShortTagDraft(shortTagSaved.current);
+  }, [open, agent?.id, agent?.short_tag]);
+
+  const handleSaveShortTag = useCallback(async () => {
+    if (!agent || shortTagPending.current) return;
+    const value = shortTagDraft.trim();
+    if (value === shortTagSaved.current) {
+      setShortTagDraft(value);
+      return;
+    }
+    const id = agent.id;
+    shortTagPending.current = true;
+    setIsSavingShortTag(true);
+    setError(null);
+    try {
+      const saved = await updateAgent(id, { short_tag: value || null });
+      if (editedAgentId.current === id) {
+        shortTagSaved.current = saved.short_tag ?? "";
+        setShortTagDraft(shortTagSaved.current);
+      }
+    } catch (err) {
+      if (editedAgentId.current === id) setError(apiErrorMessage(err, "Failed to update short tag"));
+    } finally {
+      shortTagPending.current = false;
+      setIsSavingShortTag(false);
+    }
+  }, [agent, shortTagDraft, updateAgent]);
 
   const [mode, setMode] = useState<DialogMode>("detail");
   const [editingName, setEditingName] = useState(false);
@@ -416,7 +453,7 @@ export function AgentDetailDialog({
         className="max-h-[85vh] overflow-y-auto"
       >
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-3">
+          <DialogTitle className="flex flex-wrap items-center gap-3 pr-6">
             {editingName ? (
               <div className="flex flex-1 items-center gap-2">
                 <Input
@@ -449,7 +486,7 @@ export function AgentDetailDialog({
               </div>
             ) : (
               <>
-                <span className="flex-1">{agent.name}</span>
+                <span className="min-w-0 flex-1 truncate" title={agent.name}>{agent.name}</span>
                 <Button
                   size="icon"
                   variant="ghost"
@@ -461,6 +498,7 @@ export function AgentDetailDialog({
                 </Button>
               </>
             )}
+            <div className="flex max-w-full flex-wrap items-center gap-3">
             <Select
               value={agent.agent_type}
               onChange={(e) => void handleChangeHarness(e.target.value as AgentType)}
@@ -472,6 +510,23 @@ export function AgentDetailDialog({
                 <option key={key} value={key}>{cfg.label}</option>
               ))}
             </Select>
+            <Input
+              aria-label="Short tag"
+              placeholder="short tag"
+              maxLength={24}
+              value={shortTagDraft}
+              disabled={isSavingShortTag}
+              onChange={(e) => setShortTagDraft(e.target.value)}
+              onBlur={() => void handleSaveShortTag()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void handleSaveShortTag();
+                }
+              }}
+              className="h-6 w-36 text-xs font-normal"
+            />
+            </div>
           </DialogTitle>
         </DialogHeader>
 

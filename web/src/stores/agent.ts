@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
+import { useRulesStore } from "@/stores/rules";
 import type {
   Agent,
   AgentProfileUpdateRequest,
@@ -26,7 +27,7 @@ interface AgentState {
   fetchAgent: (agentId: string) => Promise<Agent>;
   updateAgent: (
     agentId: string,
-    req: { name?: string; agent_type?: AgentType; model?: string; profile_description?: string; callback_url?: string; parent_agent_id?: string; supervisor_user_id?: string; role?: string },
+    req: { name?: string; agent_type?: AgentType; model?: string; profile_description?: string; callback_url?: string; parent_agent_id?: string; supervisor_user_id?: string; role?: string; short_tag?: string | null },
   ) => Promise<Agent>;
   // Separate endpoint (PUT /agents/:id/profile) — the fields it accepts
   // (responsibility_zone, escalation_to, accepts_from, max_concurrent_tasks,
@@ -79,7 +80,7 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   updateAgent: async (
     agentId: string,
-    req: { name?: string; agent_type?: AgentType; model?: string; profile_description?: string; callback_url?: string; parent_agent_id?: string; supervisor_user_id?: string; role?: string },
+    req: { name?: string; agent_type?: AgentType; model?: string; profile_description?: string; callback_url?: string; parent_agent_id?: string; supervisor_user_id?: string; role?: string; short_tag?: string | null },
   ): Promise<Agent> => {
     const agent = await api<Agent>(`/api/v1/agents/${agentId}`, {
       method: "PATCH",
@@ -88,6 +89,14 @@ export const useAgentStore = create<AgentState>((set) => ({
     set((state) => ({
       agents: state.agents.map((a) => (a.id === agentId ? agent : a)),
     }));
+    if (Object.prototype.hasOwnProperty.call(req, "short_tag")) {
+      useRulesStore.setState((state) => ({
+        teamDirectory: state.teamDirectory ? {
+          ...state.teamDirectory,
+          agents: state.teamDirectory.agents.map((a) => a.id === agentId ? { ...a, short_tag: agent.short_tag } : a),
+        } : null,
+      }));
+    }
     return agent;
   },
 

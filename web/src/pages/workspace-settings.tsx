@@ -1,3 +1,4 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { asCapabilityList } from "@/lib/agent-utils";
@@ -133,7 +134,7 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
           )}
           title={agent.status}
         />
-        <span className="flex-1 text-sm font-medium truncate">{agent.name}</span>
+        <span className="flex-1 text-sm font-medium truncate">{agent.name}<AgentShortTag tag={agent.short_tag} /></span>
         <Badge variant="secondary" className="text-xs capitalize shrink-0">
           {agent.role}
         </Badge>
@@ -1735,7 +1736,7 @@ export function WorkspaceSettingsPage() {
                       <Avatar name={grant.agent.name} size="md" />
                       <div className="flex-1 min-w-0">
                         <span className="truncate text-sm font-medium">
-                          {grant.agent.name}
+                          {grant.agent.name}<AgentShortTag tag={grant.agent.short_tag} />
                         </span>
                       </div>
 

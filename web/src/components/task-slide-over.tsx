@@ -1,3 +1,4 @@
+import { agentLabel, agentOptionLabel } from "@/lib/agent-label";
 import {
   Fragment,
   type KeyboardEvent,
@@ -781,7 +782,7 @@ export function TaskSlideOver({
                           const desc = [m.agent_role, m.agent_description].filter(Boolean).join(" · ");
                           return (
                             <option key={m.id} value={`agent:${m.agent_id}`}>
-                              {m.agent_name} (agent){desc ? ` — ${desc}` : ""}
+                              {agentOptionLabel(m.agent_name ?? "", teamDirectory?.agents.find((a) => a.id === m.agent_id)?.short_tag, desc)}
                             </option>
                           );
                         }
@@ -800,7 +801,7 @@ export function TaskSlideOver({
                         if (!resolved) return null;
                         return (
                           <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
-                            {resolved} (not a project member)
+                            {agentLabel(resolved, currentTask.assignee_type === "agent" ? teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.short_tag : null)} (not a project member)
                           </option>
                         );
                       })()}

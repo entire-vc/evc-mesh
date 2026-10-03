@@ -1,6 +1,7 @@
 import { forwardRef, memo, type HTMLAttributes } from "react";
 import { AlignLeft, CircleCheck, ExternalLink, GitBranch, Hand, Lock, Paperclip, Pencil, RefreshCw, Snowflake } from "lucide-react";
 import { parseISO } from "date-fns";
+import { useAgentShortTag } from "@/hooks/use-agent-short-tag";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
 import { formatRelative } from "@/lib/utils";
@@ -44,6 +45,7 @@ interface TaskCardProps extends HTMLAttributes<HTMLDivElement> {
 export const TaskCard = memo(
   forwardRef<HTMLDivElement, TaskCardProps>(
     ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, className, ...props }, ref) => {
+    const shortTag = useAgentShortTag(task.assignee_id, task.assignee_type);
     const borderColor =
       priorityBorderColors[task.priority] ?? "border-l-transparent";
 
@@ -145,6 +147,7 @@ export const TaskCard = memo(
         <div className="mt-1.5 flex items-center gap-2">
           <AssigneeAvatar
             name={task.assignee_name ?? undefined}
+            shortTag={shortTag}
             type={task.assignee_type}
             size="sm"
           />

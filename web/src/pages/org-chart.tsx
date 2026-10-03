@@ -1,3 +1,5 @@
+import { AgentShortTag } from "@/components/agent-short-tag";
+import { agentLabel } from "@/lib/agent-label";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { Bot, Plus, User, UserPlus } from "lucide-react";
@@ -169,8 +171,8 @@ function AgentCard({
       <CardContent className="p-3 space-y-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="font-medium text-sm truncate" title={agent.name}>
-            {agent.name}
+          <span className="font-medium text-sm truncate" title={agentLabel(agent.name, agent.short_tag)}>
+            {agent.name}<AgentShortTag tag={agent.short_tag} />
           </span>
         </div>
 
@@ -465,7 +467,7 @@ function overlayAgentEdits(tree: OrgChartAgentNode[], agents: Agent[]): OrgChart
       const a = byId.get(n.id);
       return {
         ...n,
-        ...(a && { name: a.name, role: a.role, agent_type: a.agent_type, model: a.model ?? null }),
+        ...(a && { name: a.name, short_tag: a.short_tag, role: a.role, agent_type: a.agent_type, model: a.model ?? null }),
         children: walk(n.children),
       };
     });
