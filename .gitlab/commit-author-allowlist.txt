@@ -1,0 +1,22 @@
+# Identities allowed as author AND committer of a commit on an MR branch.
+# One entry per line: an exact e-mail (matched case-insensitively), or
+# `sha:<full 40-hex>` to waive one already-published commit. Everything after
+# `#` is a comment; every exception needs a reason on the line above it.
+#
+# Source of the list: lane e-mails seen on origin/main plus the lane registry
+# (`<lane>@entire.vc`). Deliberately NOT listed: the GitHub showcase personas
+# (`*@users.noreply.github.com`) and the `unconfigured@entire.vc` placeholder —
+# those reach a commit only when a lane's ambient GIT_AUTHOR_*/GIT_COMMITTER_*
+# overrides its worktree config.
+bill@entire.vc
+daedalus@entire.vc
+garfield@entire.vc
+garfield.stoun@entire.vc
+howard@entire.vc
+hugh@entire.vc
+khan@entire.vc
+linus@entire.vc
+proto@entire.vc
+riker@entire.vc
+robert@entire.vc
+verne@entire.vc
