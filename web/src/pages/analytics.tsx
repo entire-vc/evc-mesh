@@ -333,7 +333,7 @@ export function AnalyticsPage() {
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
-      <div className="flex items-center justify-end gap-3 pb-4">
+      <div className="mesh-mobile-analytics-toolbar flex flex-wrap items-center justify-start gap-3 pb-4 md:justify-end">
         <Select
           value={projectFilter}
           onChange={(e) => setProjectFilter(e.target.value)}

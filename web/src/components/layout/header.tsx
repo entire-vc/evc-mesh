@@ -579,7 +579,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
   }, [isDark]);
 
   return (
-    <header className="flex h-14 items-center gap-2 sm:gap-4 border-b border-border bg-background px-2 sm:px-4">
+    <header className="mesh-mobile-header flex h-14 items-center gap-2 sm:gap-4 border-b border-border bg-background px-2 sm:px-4">
       <Button
         variant="ghost"
         size="icon"
@@ -630,7 +630,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
           wsSlug={wsSlug}
           projectSlug={projectSlug}
           projectId={currentProject?.id}
-          className="ml-1 shrink-0 sm:ml-4"
+          className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
         />
       )}
 

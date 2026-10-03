@@ -1,0 +1,305 @@
+{
+  "date": "2026-10-03",
+  "scope": "candidate, not deployed",
+  "reference": {
+    "states": 28,
+    "violations": [
+      "board 393 light: unexpected page/main overflow",
+      "board 393 light: 16 targets below 44px",
+      "task 393 light: 6 targets below 44px",
+      "docs 393 light: 44 targets below 44px",
+      "document 393 light: 14 targets below 44px",
+      "analytics 393 light: 6 targets below 44px",
+      "sessions 393 light: 4 targets below 44px",
+      "sessions cost top 393 light: overflow/small targets",
+      "sessions cost bottom 393 light: overflow/small targets",
+      "settings 393 light: unexpected page/main overflow",
+      "settings 393 light: 13 targets below 44px",
+      "board 393 dark: unexpected page/main overflow",
+      "board 393 dark: 16 targets below 44px",
+      "task 393 dark: 6 targets below 44px",
+      "docs 393 dark: 44 targets below 44px",
+      "document 393 dark: 14 targets below 44px",
+      "analytics 393 dark: 6 targets below 44px",
+      "sessions 393 dark: 4 targets below 44px",
+      "sessions cost top 393 dark: overflow/small targets",
+      "sessions cost bottom 393 dark: overflow/small targets",
+      "settings 393 dark: unexpected page/main overflow",
+      "settings 393 dark: 13 targets below 44px"
+    ]
+  },
+  "candidate": {
+    "states": 28,
+    "violations": []
+  },
+  "mobileEmulation": {
+    "innerWidth": 393,
+    "scrollWidth": 393,
+    "mainWidth": 393,
+    "mainScrollWidth": 393,
+    "overflow": false
+  },
+  "measurements": [
+    {
+      "screen": "board",
+      "width": 393,
+      "theme": "light",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "task",
+      "width": 393,
+      "theme": "light",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "docs",
+      "width": 393,
+      "theme": "light",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "document",
+      "width": 393,
+      "theme": "light",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "analytics",
+      "width": 393,
+      "theme": "light",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "sessions",
+      "width": 393,
+      "theme": "light",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "settings",
+      "width": 393,
+      "theme": "light",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "board",
+      "width": 393,
+      "theme": "dark",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "task",
+      "width": 393,
+      "theme": "dark",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "docs",
+      "width": 393,
+      "theme": "dark",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "document",
+      "width": 393,
+      "theme": "dark",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "analytics",
+      "width": 393,
+      "theme": "dark",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "sessions",
+      "width": 393,
+      "theme": "dark",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "settings",
+      "width": 393,
+      "theme": "dark",
+      "scrollWidth": 393,
+      "innerWidth": 393,
+      "mainWidth": 393,
+      "mainScrollWidth": 393
+    },
+    {
+      "screen": "board",
+      "width": 1440,
+      "theme": "light",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "task",
+      "width": 1440,
+      "theme": "light",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "docs",
+      "width": 1440,
+      "theme": "light",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "document",
+      "width": 1440,
+      "theme": "light",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "analytics",
+      "width": 1440,
+      "theme": "light",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "sessions",
+      "width": 1440,
+      "theme": "light",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "settings",
+      "width": 1440,
+      "theme": "light",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "board",
+      "width": 1440,
+      "theme": "dark",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "task",
+      "width": 1440,
+      "theme": "dark",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "docs",
+      "width": 1440,
+      "theme": "dark",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "document",
+      "width": 1440,
+      "theme": "dark",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "analytics",
+      "width": 1440,
+      "theme": "dark",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "sessions",
+      "width": 1440,
+      "theme": "dark",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    },
+    {
+      "screen": "settings",
+      "width": 1440,
+      "theme": "dark",
+      "scrollWidth": 1440,
+      "innerWidth": 1440,
+      "mainWidth": 1392,
+      "mainScrollWidth": 1392
+    }
+  ],
+  "checks": {
+    "build": "exit 0",
+    "vitest": {
+      "files": 7,
+      "passed": 114
+    },
+    "taskFormMainExemption": "16 targets below 44px; frozen, tracked in #478a37bd",
+    "sessionsTruncation": "tracked in #6b322896"
+  }
+}

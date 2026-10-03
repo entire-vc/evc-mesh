@@ -163,7 +163,7 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 							Working on{" "}
 							<Link
 								to={`/t/${agent.current_task_id}`}
-								className="text-primary underline-offset-2 hover:underline truncate"
+								className="break-words whitespace-normal text-primary underline-offset-2 hover:underline md:truncate"
 							>
 								{agent.current_task_title
 									? agent.current_task_title.slice(0, 60) +
@@ -324,7 +324,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 											>
 												<Link
 													to={`/t/${row.task_id}`}
-													className="truncate text-primary underline-offset-2 hover:underline"
+													className="min-w-0 break-words whitespace-normal text-primary underline-offset-2 hover:underline md:truncate"
 												>
 													{row.task_title || row.task_id.slice(0, 8) + "…"}
 												</Link>
@@ -429,7 +429,7 @@ export function SessionDashboardPage() {
 	).length;
 
 	return (
-		<div className="space-y-6">
+		<div className="mesh-mobile-sessions space-y-6">
 			{/* Summary chips */}
 			<div className="flex flex-wrap gap-3">
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">

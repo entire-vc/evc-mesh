@@ -1191,9 +1191,9 @@ export function WorkspaceSettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="mesh-mobile-settings space-y-6">
       {/* Tab navigation */}
-      <div className="flex gap-1 border-b border-border">
+      <div className="flex flex-wrap gap-1 border-b border-border md:flex-nowrap">
         {WS_TABS.map((tab) => (
           <button
             key={tab.id}

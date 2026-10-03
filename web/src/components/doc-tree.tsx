@@ -287,12 +287,12 @@ function DocTreeItem({
           className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
         >
           <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate">{doc.title}</span>
+          <span className="break-words md:truncate">{doc.title}</span>
         </button>
 
-        {/* Hover actions. focus-within keeps them reachable from the keyboard,
-            where there is no hover to trigger. */}
-        <div className="flex shrink-0 items-center opacity-0 focus-within:opacity-100 group-hover:opacity-100">
+        {/* Touch actions stay visible on mobile. Desktop reveals them on
+            hover or keyboard focus. */}
+        <div className="flex shrink-0 items-center opacity-100 md:opacity-0 focus-within:opacity-100 group-hover:opacity-100">
           <button
             type="button"
             title="New page inside"
