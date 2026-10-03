@@ -69,6 +69,29 @@ function highlightedIds(): string[] {
 // that is merely *visible* (true on desktop by default, per task-panel.tsx)
 // proves nothing about this; only checking the specific target's state does.
 describe("CommentList — focusCommentId scroll/highlight", () => {
+  it("keeps the target in view while earlier Markdown renders, until the reader scrolls", async () => {
+    mockedApi.mockResolvedValue({
+      items: [makeComment("newer", "task-x", "Newest"), makeComment("target", "task-x", "Target")],
+      has_more: false, page: 1,
+    });
+    render(<MemoryRouter><CommentList taskId="task-x" projId={PROJECT.id} focusCommentId="target" /></MemoryRouter>);
+    await screen.findByText("Target");
+    const target = document.querySelector('[data-comment-id="target"]')!;
+    const earlier = document.querySelector('[data-comment-id="newer"]')!;
+    const scroll = vi.mocked(Element.prototype.scrollIntoView);
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+    const initialCalls = scroll.mock.calls.length;
+    earlier.append(document.createElement("p"));
+    await waitFor(() => expect(scroll.mock.calls.length).toBeGreaterThan(initialCalls));
+    expect(scroll.mock.instances[scroll.mock.instances.length - 1]).toBe(target);
+
+    target.closest('.overflow-y-auto')!.dispatchEvent(new Event("wheel", { bubbles: true }));
+    const afterUserScroll = scroll.mock.calls.length;
+    earlier.append(document.createElement("p"));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(scroll).toHaveBeenCalledTimes(afterUserScroll);
+  });
+
   it("highlights and scrolls to the target comment already on the loaded page", async () => {
     mockedApi.mockResolvedValue({
       items: [
