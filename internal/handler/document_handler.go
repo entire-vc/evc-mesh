@@ -31,16 +31,7 @@ import (
 // full /w/:wsSlug/p/:projectSlug/docs/:docId route. web/src/App.tsx registers
 // the matching /d/:docId route.
 func computeDocumentURL(r *http.Request, docID uuid.UUID) string {
-	scheme := "https"
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-		scheme = p
-	} else if r.TLS == nil {
-		scheme = "http"
-	}
-	host := r.Host
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-		host = h
-	}
+	scheme, host := requestOrigin(r)
 	return fmt.Sprintf("%s://%s/d/%s", scheme, host, docID.String())
 }
 

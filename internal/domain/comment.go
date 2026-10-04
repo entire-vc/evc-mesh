@@ -45,4 +45,12 @@ type Comment struct {
 	// would be noise on the one field whose whole value is that it only
 	// appears when there is something to say.
 	Delivery []CommentDeliveryOutcome `json:"delivery,omitempty" db:"-"`
+
+	// URL is the canonical deep-link straight to this comment: the task's
+	// /t/<taskID> URL plus the ?comment=<id> focus parameter the web client
+	// already understands (task-panel.tsx opens the comments tab on it,
+	// comment-list.tsx scrolls to the [data-comment-id] element and
+	// highlights it). Computed per-response by the handler, never stored,
+	// hence db:"-" and omitempty.
+	URL string `json:"url,omitempty" db:"-"`
 }

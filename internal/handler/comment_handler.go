@@ -49,6 +49,15 @@ type updateCommentRequest struct {
 	Body *string `json:"body"`
 }
 
+// computeCommentURL builds the canonical deep-link straight to one comment:
+// the task's /t/<taskID> URL plus the ?comment=<id> focus parameter the web
+// client already understands — task-panel.tsx opens the comments tab on it,
+// comment-list.tsx scrolls to the [data-comment-id] element and highlights
+// it. Computed per-response, never stored.
+func computeCommentURL(r *http.Request, taskID, commentID uuid.UUID) string {
+	return computeTaskURL(r, taskID) + "?comment=" + commentID.String()
+}
+
 // List handles GET /tasks/:task_id/comments
 func (h *CommentHandler) List(c echo.Context) error {
 	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskSvc)
@@ -82,6 +91,10 @@ func (h *CommentHandler) List(c echo.Context) error {
 	page, err := h.commentService.ListByTask(c.Request().Context(), taskID, filter, pg)
 	if err != nil {
 		return handleError(c, err)
+	}
+
+	for i := range page.Items {
+		page.Items[i].URL = computeCommentURL(c.Request(), taskID, page.Items[i].ID)
 	}
 
 	return c.JSON(http.StatusOK, page)
@@ -136,6 +149,7 @@ func (h *CommentHandler) Create(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	comment.URL = computeCommentURL(c.Request(), taskID, comment.ID)
 	return c.JSON(http.StatusCreated, comment)
 }
 
@@ -164,6 +178,10 @@ func (h *CommentHandler) Update(c echo.Context) error {
 	if err := h.commentService.Update(c.Request().Context(), comment); err != nil {
 		return handleError(c, err)
 	}
+
+	// comment now carries the enriched record, TaskID included, so the
+	// deep-link can name the owning task.
+	comment.URL = computeCommentURL(c.Request(), comment.TaskID, comment.ID)
 
 	return c.JSON(http.StatusOK, comment)
 }
@@ -233,6 +251,12 @@ func (h *CommentHandler) GetMyComments(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Feed items span tasks, so each link is built from the item's own
+	// task_id — computed here, never stored (db:"-").
+	for i := range page.Items {
+		page.Items[i].URL = computeCommentURL(c.Request(), page.Items[i].TaskID, page.Items[i].CommentID)
+	}
+
 	c.Response().Header().Set("Cache-Control", "private, max-age=30")
 	return c.JSON(http.StatusOK, page)
 }
@@ -277,6 +301,11 @@ func (h *CommentHandler) GetRecentByWorkspace(c echo.Context) error {
 	page, err := h.commentService.ListRecentByWorkspace(c.Request().Context(), wsID, filter)
 	if err != nil {
 		return handleError(c, err)
+	}
+
+	// Same as GetMyComments: every row names its own task.
+	for i := range page.Items {
+		page.Items[i].URL = computeCommentURL(c.Request(), page.Items[i].TaskID, page.Items[i].CommentID)
 	}
 
 	c.Response().Header().Set("Cache-Control", "private, max-age=30")
