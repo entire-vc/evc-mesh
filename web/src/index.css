@@ -101,6 +101,7 @@ pre {
   .mesh-mobile-header button,
   .mesh-mobile-header a,
   .mesh-mobile-sessions a,
+  .mesh-mobile-sessions button,
   .mesh-mobile-board-toolbar button,
   .mesh-mobile-board-toolbar input,
   .mesh-mobile-board-toolbar select,
@@ -126,6 +127,20 @@ pre {
     align-items: center;
     max-width: 100%;
     overflow-wrap: anywhere;
+  }
+
+  /* Tap-to-expand text rows (#6b322896): read like the text they replace —
+     no button chrome, long words wrap. NB: no `display` here and no clamp
+     on the button itself — the button box is at least 44px (touch-area
+     audit above), and Blink paints the top sliver of a third line into any
+     clamp box taller than two lines (the clip edge is the padding box, so
+     padding cannot fix it). The line-clamp-2 class therefore lives on an
+     auto-height <span> inside the button, which cuts at exactly two lines.
+     Pixel-verified at 393; invisible to jsdom. */
+  .mesh-mobile-sessions button {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    text-align: left;
   }
 
   .mesh-mobile-docs [role="treeitem"] {
