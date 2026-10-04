@@ -375,6 +375,54 @@ func TestOAuthRepo_ListGrantsByUser_ScopedAndJoined(t *testing.T) {
 	assert.Empty(t, empty)
 }
 
+func TestOAuthRepo_ListGrantsByUser_AgentShortTag(t *testing.T) {
+	f := newOAuthFixture(t)
+	ctx := context.Background()
+
+	// The fixture agent has a label; a second grant of the SAME user points at an
+	// agent in ANOTHER workspace with a different label, and a third at an
+	// agent that never had one.
+	tagged := f.agent
+	tagged.ShortTag = strp("mesh-dev")
+	require.NoError(t, NewAgentRepo(f.db).Update(ctx, tagged))
+
+	suffix := uuid.New().String()[:8]
+	ws2 := &domain.Workspace{ID: uuid.New(), Name: "oauth-ws2-" + suffix, Slug: "oauth-ws2-" + suffix, OwnerID: f.userID}
+	require.NoError(t, NewWorkspaceRepo(f.db).Create(ctx, ws2))
+	other := seedGrantAgent(t, f.db, ws2.ID)
+	other.ShortTag = strp("keep-dev")
+	require.NoError(t, NewAgentRepo(f.db).Update(ctx, other))
+	bare := seedGrantAgent(t, f.db, ws2.ID)
+
+	mk := func(agentID uuid.UUID, ws uuid.UUID, off time.Duration) uuid.UUID {
+		c := newOAuthTestClient(t, f.repo, "Client "+uuid.New().String()[:6])
+		g := &domain.OAuthGrant{
+			ID: uuid.New(), UserID: f.userID, ClientID: c.ClientID, WorkspaceID: ws,
+			AgentID: agentID, Scope: "mesh", CreatedAt: time.Now().UTC().Add(off),
+		}
+		require.NoError(t, f.repo.CreateGrant(ctx, g))
+		return g.ID
+	}
+	otherGrant := mk(other.ID, ws2.ID, time.Second)
+	bareGrant := mk(bare.ID, ws2.ID, 2*time.Second)
+
+	list, err := f.repo.ListGrantsByUser(ctx, f.userID)
+	require.NoError(t, err)
+	byID := map[uuid.UUID]domain.OAuthGrantWithDetails{}
+	for _, g := range list {
+		byID[g.ID] = g
+	}
+	require.NotNil(t, byID[f.grantID].AgentShortTag)
+	assert.Equal(t, "mesh-dev", *byID[f.grantID].AgentShortTag)
+	require.NotNil(t, byID[otherGrant].AgentShortTag)
+	assert.Equal(t, "keep-dev", *byID[otherGrant].AgentShortTag, "each grant carries its own agent's label, whatever workspace it is in")
+	assert.Nil(t, byID[bareGrant].AgentShortTag, "an agent without a label is null, not an empty string")
+
+	raw, err := json.Marshal(byID[bareGrant])
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"agent_short_tag":null`)
+}
+
 func TestOAuthRepo_Token_CreateGetRevokeSemantics(t *testing.T) {
 	f := newOAuthFixture(t)
 	ctx := context.Background()

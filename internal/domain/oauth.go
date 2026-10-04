@@ -119,7 +119,11 @@ func (t *OAuthToken) IsUsable(now time.Time) bool {
 // shape GET /api/v1/oauth/grants returns.
 type OAuthGrantWithDetails struct {
 	OAuthGrant
-	ClientName string         `json:"client_name" db:"client_name"`
-	AgentName  string         `json:"agent_name" db:"agent_name"`
-	Workspace  WorkspaceBrief `json:"workspace"`
+	ClientName string `json:"client_name" db:"client_name"`
+	AgentName  string `json:"agent_name" db:"agent_name"`
+	// AgentShortTag is the grant agent's own short_tag (specs/agent-short-tag),
+	// resolved by agent_id regardless of the viewer's current workspace. nil
+	// when the agent has none — serialised as null, never "".
+	AgentShortTag *string        `json:"agent_short_tag"`
+	Workspace     WorkspaceBrief `json:"workspace"`
 }

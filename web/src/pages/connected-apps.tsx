@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AgentShortTag } from "@/components/agent-short-tag";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "@/components/ui/toast";
 import { api } from "@/lib/api";
@@ -131,7 +132,7 @@ function GrantRow({ grant, onRevoke }: { grant: OAuthGrant; onRevoke?: () => voi
             {isRevoked && <Badge variant="outline">Revoked</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">
-            Workspace {grant.workspace.name} · acts as {grant.agent_name}
+            Workspace {grant.workspace.name} · acts as {grant.agent_name}<AgentShortTag tag={grant.agent_short_tag} />
           </p>
           <p className="text-xs text-muted-foreground">
             {isRevoked
