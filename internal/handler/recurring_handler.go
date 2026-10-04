@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -17,11 +19,51 @@ import (
 // RecurringHandler handles HTTP requests for recurring task schedule management.
 type RecurringHandler struct {
 	recurringSvc service.RecurringService
+	projectSvc   service.ProjectService
+	workspaceSvc service.WorkspaceService
 }
 
 // NewRecurringHandler creates a new RecurringHandler.
-func NewRecurringHandler(svc service.RecurringService) *RecurringHandler {
-	return &RecurringHandler{recurringSvc: svc}
+func NewRecurringHandler(svc service.RecurringService, projectSvc service.ProjectService, workspaceSvc service.WorkspaceService) *RecurringHandler {
+	return &RecurringHandler{recurringSvc: svc, projectSvc: projectSvc, workspaceSvc: workspaceSvc}
+}
+
+// decorateScheduleURLs sets the canonical deep-link on each schedule in place:
+// the project settings Recurring tab anchored on the schedule, the exact
+// target scheduleHref builds in web/src/lib/entity-deep-links.ts and the only
+// address that opens the tab (#5f065856) — the /p/<id> resolver forwards the
+// query but lands on the project board, not the settings tab, so both slugs
+// are embedded here, resolved via the project and workspace services.
+//
+// Every schedule in one response shares a project (List is project-scoped by
+// route; Get/Create/Update are single schedules), so the slugs are resolved
+// once from the first schedule and reused. Lookup failure leaves URL empty
+// (omitempty drops it) rather than failing a response whose data is otherwise
+// valid — same never-stored trade-off Project.URL makes.
+func (h *RecurringHandler) decorateScheduleURLs(ctx context.Context, r *http.Request, schedules ...*domain.RecurringSchedule) {
+	if h.projectSvc == nil || h.workspaceSvc == nil {
+		return
+	}
+	scheme, host := requestOrigin(r)
+	var wsSlug, projSlug string
+	for _, s := range schedules {
+		if s == nil {
+			continue
+		}
+		if wsSlug == "" || projSlug == "" {
+			project, err := h.projectSvc.GetByID(ctx, s.ProjectID)
+			if err != nil || project == nil {
+				continue
+			}
+			workspace, err := h.workspaceSvc.GetByID(ctx, s.WorkspaceID)
+			if err != nil || workspace == nil {
+				continue
+			}
+			wsSlug, projSlug = workspace.Slug, project.Slug
+		}
+		s.URL = fmt.Sprintf("%s://%s/w/%s/p/%s/settings?tab=recurring&schedule=%s",
+			scheme, host, wsSlug, projSlug, s.ID)
+	}
 }
 
 // createRecurringRequest is the JSON body for creating a recurring schedule.
@@ -151,6 +193,8 @@ func (h *RecurringHandler) Create(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	h.decorateScheduleURLs(c.Request().Context(), c.Request(), schedule)
+
 	return c.JSON(http.StatusCreated, schedule)
 }
 
@@ -172,6 +216,16 @@ func (h *RecurringHandler) List(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Every item of a list response carries its own deep-link — a field the
+	// handler computes on some paths only reads as absent on the others (the
+	// #fc032545 lesson on tasks). One call for the whole page: the helper
+	// resolves the shared project's slugs once instead of per item.
+	items := make([]*domain.RecurringSchedule, len(page.Items))
+	for i := range page.Items {
+		items[i] = &page.Items[i]
+	}
+	h.decorateScheduleURLs(c.Request().Context(), c.Request(), items...)
+
 	return c.JSON(http.StatusOK, page)
 }
 
@@ -187,6 +241,8 @@ func (h *RecurringHandler) GetByID(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+
+	h.decorateScheduleURLs(c.Request().Context(), c.Request(), schedule)
 
 	return c.JSON(http.StatusOK, schedule)
 }
@@ -224,6 +280,8 @@ func (h *RecurringHandler) Update(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+
+	h.decorateScheduleURLs(c.Request().Context(), c.Request(), schedule)
 
 	return c.JSON(http.StatusOK, schedule)
 }

@@ -93,7 +93,7 @@ func TestRecurringHandler_ReadsRecurringIDParam(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &recurringSvcStub{}
-			h := NewRecurringHandler(stub)
+			h := NewRecurringHandler(stub, nil, nil)
 			scheduleID := uuid.New()
 
 			e := echo.New()
@@ -124,7 +124,7 @@ func TestRecurringHandler_ReadsRecurringIDParam(t *testing.T) {
 
 // TestRecurringHandler_RejectsMalformedID: the id still has to be a uuid.
 func TestRecurringHandler_RejectsMalformedID(t *testing.T) {
-	h := NewRecurringHandler(&recurringSvcStub{})
+	h := NewRecurringHandler(&recurringSvcStub{}, nil, nil)
 	e := echo.New()
 	rec := httptest.NewRecorder()
 	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)

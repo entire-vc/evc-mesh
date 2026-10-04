@@ -839,7 +839,7 @@ func main() {
 	triageHandler := handler.NewTriageHandler(triageService)
 	ruleHandler := handler.NewRuleHandler(ruleService)
 	rulesHandler := handler.NewRulesHandler(rulesService)
-	recurringHandler := handler.NewRecurringHandler(recurringService)
+	recurringHandler := handler.NewRecurringHandler(recurringService, projectService, workspaceService)
 	taskTemplateHandler := handler.NewTaskTemplateHandler(taskTemplateService)
 	workspaceMemberHandler := handler.NewWorkspaceMemberHandler(workspaceMemberService)
 	agentWorkspaceGrantHandler := handler.NewAgentWorkspaceGrantHandler(agentWorkspaceGrantService)
