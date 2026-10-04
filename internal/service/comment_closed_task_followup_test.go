@@ -130,6 +130,7 @@ type followUpEnv struct {
 	depRepo      *MockTaskDependencyRepository
 	activityRepo *MockActivityLogRepository
 	rootsRepo    *MockClosedFollowUpRootRepository
+	pendingRepo  *MockClosedFollowUpPendingRepository
 	taskSvc      *followUpTaskCreator
 	projID       uuid.UUID
 	wsID         uuid.UUID
@@ -151,6 +152,7 @@ func setupFollowUpEnv(t *testing.T, opts ...func(*followUpEnv)) followUpEnv {
 	projectRepo := NewMockProjectRepository()
 	depRepo := NewMockTaskDependencyRepository()
 	rootsRepo := NewMockClosedFollowUpRootRepository()
+	pendingRepo := NewMockClosedFollowUpPendingRepository()
 	taskSvc := &followUpTaskCreator{taskRepo: taskRepo, statusRepo: statusRepo}
 
 	wsID := uuid.New()
@@ -184,12 +186,14 @@ func setupFollowUpEnv(t *testing.T, opts ...func(*followUpEnv)) followUpEnv {
 		WithCommentTaskService(taskSvc),
 		WithCommentDependencyRepo(depRepo),
 		WithClosedFollowUpRootRepo(rootsRepo),
+		WithClosedFollowUpPendingRepo(pendingRepo),
 	).(*commentService)
 
 	env := followUpEnv{
 		svc: svc, commentRepo: commentRepo, taskRepo: taskRepo, statusRepo: statusRepo,
-		depRepo: depRepo, activityRepo: activityRepo, rootsRepo: rootsRepo, taskSvc: taskSvc,
-		projID: projID, wsID: wsID, doneID: doneID, todoID: todoID,
+		depRepo: depRepo, activityRepo: activityRepo, rootsRepo: rootsRepo, pendingRepo: pendingRepo,
+		taskSvc: taskSvc,
+		projID:  projID, wsID: wsID, doneID: doneID, todoID: todoID,
 		assignee: assignee, sourceID: sourceID,
 	}
 	for _, o := range opts {

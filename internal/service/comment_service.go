@@ -792,6 +792,11 @@ type commentService struct {
 	hgdRepo        repository.HumanGateDecisionRepository
 	depRepo        repository.TaskDependencyRepository
 	followUpRoots  repository.ClosedFollowUpRootRepository
+	// followUpPending parks a finding whose delivery failed on a read/write
+	// error (#db1c6c7a) instead of letting it vanish: the reconcile job
+	// re-delivers from this queue. nil in non-server builds — delivery then
+	// keeps P1's logged-return behavior rather than queueing.
+	followUpPending repository.ClosedFollowUpPendingRepository
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
@@ -890,6 +895,16 @@ func WithCommentDependencyRepo(repo repository.TaskDependencyRepository) Comment
 // DIFFERENT findings into one open root, which the approved contract forbids).
 func WithClosedFollowUpRootRepo(repo repository.ClosedFollowUpRootRepository) CommentServiceOption {
 	return func(s *commentService) { s.followUpRoots = repo }
+}
+
+// WithClosedFollowUpPendingRepo injects the pending-delivery queue of the
+// closed-card follow-up mechanism (#db1c6c7a): a finding whose root search
+// hit a read error is parked there for the 5-minute reconcile job — visible
+// pending row, visible system comment, no silent fail-open. Optional for the
+// same compile-compat reason as the roots repo; unset, a failed delivery is
+// logged and dropped exactly as before this queue existed.
+func WithClosedFollowUpPendingRepo(repo repository.ClosedFollowUpPendingRepository) CommentServiceOption {
+	return func(s *commentService) { s.followUpPending = repo }
 }
 
 // NewCommentService returns a new CommentService backed by the given repositories.

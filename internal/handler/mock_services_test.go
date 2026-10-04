@@ -269,6 +269,10 @@ func (m *MockCommentService) ListHumanGateDecisions(ctx context.Context, taskID 
 	return nil, nil
 }
 
+func (m *MockCommentService) ReconcileClosedFollowUpPending(ctx context.Context) (delivered, retried, escalated int, err error) {
+	return 0, 0, 0, nil
+}
+
 // MockTaskDependencyService implements service.TaskDependencyService for testing.
 type MockTaskDependencyService struct {
 	CreateFunc                   func(ctx context.Context, dep *domain.TaskDependency) error

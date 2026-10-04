@@ -331,6 +331,46 @@ type ClosedFollowUpRootRepository interface {
 	Delete(ctx context.Context, sourceTaskID uuid.UUID, findingKey string) error
 }
 
+// ClosedFollowUpPendingRepository is the visible-failure half of the
+// closed-card follow-up mechanism (#db1c6c7a, P2 of #9b712414): when a
+// finding's delivery cannot complete — the identity store or the root card
+// could not be read, the claim written, the card created — the finding is
+// parked here for the reconcile job instead of being dropped. The contract's
+// rule: a read error is never "dedup clean".
+type ClosedFollowUpPendingRepository interface {
+	// Enqueue records that comment's finding delivery failed inline.
+	// Idempotent on the comment PK; an existing row keeps its attempts — a
+	// re-enqueue must never buy the finding a fresh reconcile budget.
+	Enqueue(ctx context.Context, p *domain.ClosedFollowUpPending) error
+	// ListDue returns pending rows with attempts < maxAttempts, oldest
+	// first, at most limit rows: the reconcile job's every-5-minutes batch.
+	// A row at or past the budget is listed too while EITHER notice stamp
+	// is still NULL (escalated_at / noticed_at) — the notices, not the
+	// delivery, are what those rows are retried for, and the row retires
+	// only when both have landed.
+	ListDue(ctx context.Context, maxAttempts, limit int) ([]domain.ClosedFollowUpPending, error)
+	// MarkAttempt records one more failed reconcile attempt and returns the
+	// row's new attempts value (the caller escalates to a human when it
+	// reaches the max). Atomic increment, not a read-modify-write: two
+	// reconciling instances must not lose counts.
+	MarkAttempt(ctx context.Context, commentID uuid.UUID, lastErr string) (int, error)
+	// MarkEscalated records that the escalation notice has LANDED where a
+	// human reads it; only after this does the row leave the due set. A
+	// notice that failed to write must stay listed so a later pass retries
+	// it — the counter alone must never freeze an untold human out of the
+	// queue (codex-review P1, round 3).
+	MarkEscalated(ctx context.Context, commentID uuid.UUID, at time.Time) error
+	// MarkNoticed records that the park's «не подтверждена» notice has
+	// landed on the source card. While it is unset, every reconcile pass
+	// that works the row retries the notice — a queued finding its
+	// commenter cannot see is a queue, not a delivery (codex-review P1,
+	// round 4).
+	MarkNoticed(ctx context.Context, commentID uuid.UUID, at time.Time) error
+	// Delete removes the row once delivery succeeded (or its comment/source
+	// vanished and there is nothing left to deliver).
+	Delete(ctx context.Context, commentID uuid.UUID) error
+}
+
 // CustomFieldDefinitionRepository manages persistence for custom field definitions.
 type CustomFieldDefinitionRepository interface {
 	Create(ctx context.Context, field *domain.CustomFieldDefinition) error

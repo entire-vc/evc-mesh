@@ -425,6 +425,9 @@ func (c *fakeCommentService) RevokeHumanGateDecision(context.Context, domain.Rev
 func (c *fakeCommentService) ListHumanGateDecisions(context.Context, uuid.UUID) ([]domain.HumanGateDecision, error) {
 	return nil, nil
 }
+func (c *fakeCommentService) ReconcileClosedFollowUpPending(context.Context) (delivered, retried, escalated int, err error) {
+	return 0, 0, 0, nil
+}
 
 // ---------------------------------------------------------------------------
 // Test fixtures.
