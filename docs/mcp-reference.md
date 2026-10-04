@@ -1284,29 +1284,6 @@ failure there is reported in the result but does not undo the canonical write.
 
 ---
 
-#### 64. `get_memory`
-
-Fetch the **full text of one memory entry** by its exact `key`. Use it after a compact `recall` when an item's `content_truncated` is `true`. There is no get-by-key endpoint on the backend, so the tool searches on the key (up to 4 pages of 50) and returns the entry whose key matches exactly; superseded entries are included and the importance floor is not applied.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `key` | string | **Yes** | -- | Exact memory key |
-| `project_id` | string | No | -- | Restrict the search to a project |
-| `scope` | string | No | -- | `workspace`, `project`, `agent`, or `all` |
-| `include_archived` | boolean | No | `false` | Include archived memories |
-
-**Example request:**
-```json
-{
-  "name": "get_memory",
-  "arguments": {
-    "key": "doc-agent-docs-convention"
-  }
-}
-```
-
----
-
 ### Event Bus (5 tools)
 
 #### 33. `publish_event`
