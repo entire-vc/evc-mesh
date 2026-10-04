@@ -1055,30 +1055,6 @@ knowledge at session start, use `get_project_knowledge` instead.
 
 ---
 
-#### 64. `get_memory`
-
-**Full text of ONE memory** by exact key -- the `key` field `recall` returns. Use after
-`recall` when an item's `content_truncated` is true and you need the rest; the compact
-`recall` view cuts content at ~300 chars, this returns the entry whole. Errors if no entry
-has exactly that key.
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `key` | string | **Yes** | -- | Exact memory key, as returned by `recall` |
-| `project_id` | string | No | -- | Project of a project-scoped entry, if the key exists in several |
-| `scope` | string | No | `all` | `workspace`, `project`, `agent`, or `all` |
-| `include_archived` | boolean | No | `false` | Also look among archived memories |
-
-**Example request:**
-```json
-{
-  "name": "get_memory",
-  "arguments": { "key": "api-convention" }
-}
-```
-
----
-
 #### 26. `recall_with_graph`
 
 Search memory with knowledge-graph expansion. Seeds from hybrid `recall`, then BFS-traverses
