@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	"github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -514,7 +516,473 @@ func (s *commentService) createClosedTaskFollowUp(
 	if s.followUpRoots == nil {
 		return
 	}
-	s.claimAndCreateRoot(ctx, task, comment, true)
+	// P2 (#db1c6c7a): the delivery runs on the inline retry ladder, and a
+	// finding that survives the whole ladder undelivered is parked in the
+	// pending queue with a visible notice — a read error is never "dedup
+	// clean", and it is never silence either.
+	if err := s.deliverClosedFollowUpWithRetry(ctx, task, comment); err != nil {
+		s.enqueueClosedFollowUpPending(ctx, task, comment, err)
+	}
+}
+
+// followUpRetryError marks a delivery failure that is TRANSIENT in the
+// mechanism's eyes: the identity store could not be read or written, the
+// root card not fetched, the reopen not moved — today's outage, not a
+// permanent property of the remark. Exactly these climb the inline ladder
+// and, when it is exhausted, land in the pending queue. Permanent outcomes
+// (a project with no todo column, a storm-limited repeat, a wedged winner)
+// return nil and never queue.
+//
+// op names the failing operation for the closed_followup_error metric — a
+// bounded label set ("claim", "get_root", "status_read", ...), never the raw
+// error string, whose cardinality is unbounded. The cause itself rides in
+// the log line beside the counter.
+type followUpRetryError struct {
+	op  string
+	err error
+}
+
+func (e *followUpRetryError) Error() string { return e.op + ": " + e.err.Error() }
+func (e *followUpRetryError) Unwrap() error { return e.err }
+
+// followUpOp extracts the metric label from a delivery error; anything that
+// is not a followUpRetryError (a plain error from a path not yet wrapped)
+// still counts, as "unknown".
+func followUpOp(err error) string {
+	var re *followUpRetryError
+	if errors.As(err, &re) {
+		return re.op
+	}
+	return "unknown"
+}
+
+// followUpDeliveryRetryBackoff paces the inline retry ladder (#db1c6c7a):
+// one initial attempt plus up to three retries, 100/300/900 ms apart — the
+// contract's exact ladder. The whole ladder lives inside the SAME comment
+// request, so its ceiling bounds what a failing database can add to a
+// comment's latency. Package vars so tests collapse the sleeps.
+var followUpDeliveryRetryBackoff = []time.Duration{
+	100 * time.Millisecond, 300 * time.Millisecond, 900 * time.Millisecond,
+}
+
+// followUpDeliveryRetrySleep is time.Sleep in production; tests swap it out
+// so the ladder runs instantly and deterministically.
+var followUpDeliveryRetrySleep = time.Sleep
+
+// deliverClosedFollowUpWithRetry runs one delivery attempt and retries the
+// transient ones on the ladder. Every exit leaves the already-persisted
+// comment standing: a failure here routes, it never rejects.
+func (s *commentService) deliverClosedFollowUpWithRetry(
+	ctx context.Context,
+	task *domain.Task,
+	comment *domain.Comment,
+) error {
+	attempts := 1 + len(followUpDeliveryRetryBackoff)
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			// The request's context is the one thing a retry cannot outlast:
+			// once the caller is gone the remaining rungs have no reader, and
+			// the pending queue is the honest place for the finding.
+			if ctx.Err() != nil {
+				return lastErr
+			}
+			followUpDeliveryRetrySleep(followUpDeliveryRetryBackoff[attempt-2])
+		}
+		lastErr = s.claimAndCreateRoot(ctx, task, comment, true)
+		if lastErr == nil {
+			return nil
+		}
+		log.Printf("[closed-followup] delivery attempt %d/%d for task=%s comment=%s failed: %v",
+			attempt, attempts, task.ID, comment.ID, lastErr)
+	}
+	return lastErr
+}
+
+// enqueueClosedFollowUpPending parks a finding that survived the whole inline
+// ladder undelivered (#db1c6c7a): the closed_followup_error signal fires, a
+// pending row goes to the reconcile queue, and the commenter is told on the
+// source card — delivery unconfirmed, retry automatic. When even the pending
+// row cannot be written, the database is wholly down: that is the ONE
+// residual case (named in the MR), logged at ERROR with its own metric label;
+// the remark then rides on the source comment alone until a human or a later
+// repeat of the finding re-enters delivery.
+func (s *commentService) enqueueClosedFollowUpPending(
+	ctx context.Context,
+	task *domain.Task,
+	comment *domain.Comment,
+	deliveryErr error,
+) {
+	// The requester may be GONE — a cancelled request context is one of the
+	// ways the ladder ends — but the comment is already saved, so the park
+	// must complete without them: the queue write runs detached from the
+	// request's cancellation while keeping its values (codex-review P2).
+	// Without this, a healthy pending store would reject the row on the dead
+	// context and the finding would ride on the source comment alone.
+	ctx = context.WithoutCancel(ctx)
+	op := followUpOp(deliveryErr)
+	metrics.RecordClosedFollowUpError("inline", op)
+	log.Printf("[closed-followup] closed_followup_error op=%s task=%s comment=%s: delivery unconfirmed after %d inline attempts, parking for reconcile: %v",
+		op, task.ID, comment.ID, 1+len(followUpDeliveryRetryBackoff), deliveryErr)
+	if s.followUpPending == nil {
+		// Non-server build (no queue wired): P1's logged-return behavior is
+		// the floor; the signal above has already fired.
+		return
+	}
+	row := &domain.ClosedFollowUpPending{
+		CommentID:    comment.ID,
+		SourceTaskID: task.ID,
+		FindingKey:   closedFindingKey(comment),
+		Attempts:     0,
+		LastError:    deliveryErr.Error(),
+		CreatedAt:    timeNow(),
+	}
+	if err := s.followUpPending.Enqueue(ctx, row); err != nil {
+		metrics.RecordClosedFollowUpError("enqueue", "enqueue_pending")
+		log.Printf("[closed-followup] closed_followup_error ERROR op=enqueue_pending task=%s comment=%s: pending row not written either (residual case, database wholly down): %v",
+			task.ID, comment.ID, err)
+		return
+	}
+	metrics.RecordClosedFollowUpPending("enqueued")
+	s.ensurePendingNotice(ctx, "enqueue", task.ID, comment.ID)
+}
+
+// ensurePendingNotice makes the park VISIBLE: the «не подтверждена» notice
+// lands on the source card, and only then is noticed_at written. A failed
+// notice write is not swallowed into a log line — the row keeps noticed_at
+// NULL and every reconcile pass that works it retries the notice, the same
+// durability the escalation notice got in round 3. A queued finding its own
+// commenter cannot see is a queue, not a delivery (codex-review P1, round 4).
+//
+// Reports whether the notice is UP — posted by this call, or already on the
+// card with only the stamp write lagging. The caller needs the answer because
+// its row copy predates the stamp: a pass that lands the notice mid-loop must
+// not go on reading the copy's NULL (codex-review P1, round 6).
+func (s *commentService) ensurePendingNotice(ctx context.Context, stage string, sourceTaskID, commentID uuid.UUID) bool {
+	if err := s.postPendingNotice(ctx, sourceTaskID, commentID); err != nil {
+		metrics.RecordClosedFollowUpError(stage, "pending_notice")
+		log.Printf("[closed-followup] WARNING: pending notice task=%s comment=%s not posted (a reconcile pass retries it): %v",
+			sourceTaskID, commentID, err)
+		return false
+	}
+	if err := s.followUpPending.MarkNoticed(ctx, commentID, timeNow()); err != nil {
+		// The notice is up but the stamp is not: one duplicate notice may
+		// follow on a later pass — noise, never silence. First stamp wins.
+		log.Printf("[closed-followup] WARNING: pending notice task=%s comment=%s landed but noticed_at not written (one duplicate may follow): %v",
+			sourceTaskID, commentID, err)
+	}
+	return true
+}
+
+// postPendingNotice is the visible half of parking a finding: a system
+// comment on the source card telling the commenter their remark has not
+// reached a follow-up card yet and will be retried automatically. Straight
+// through commentRepo (system author), the same re-entry discipline as
+// postFollowUpNotice — and its "🤖 Auto:" opening is a driver prefix, so even
+// a future reader of this very comment cannot re-trigger the mechanism.
+// The error is returned, not logged here: the caller owns the retry policy
+// (ensurePendingNotice stamps noticed_at only after the write lands).
+func (s *commentService) postPendingNotice(ctx context.Context, sourceTaskID, commentID uuid.UUID) error {
+	now := timeNow()
+	sys := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     sourceTaskID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🤖 Auto: доставка замечания (комментарий `%s`) не подтверждена — сбой чтения при поиске карточки. "+
+				"Замечание не потеряно: повторю автоматически (до %d попыток), о доставке сообщу здесь.",
+			commentID, ClosedFollowUpReconcileMaxAttempts,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sys); err != nil {
+		return err
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, sourceTaskID)
+	}
+	return nil
+}
+
+// The reconcile half of P2 (#db1c6c7a): the pending queue is drained by a
+// periodic pass over closed_followup_pending. Interval is the scheduler's
+// cadence; MaxAttempts is where automation stops and a human is asked —
+// reached long after the inline ladder (4 attempts in one request), so a
+// finding has had 1 + 3 + 10 = 14 chances before the escalation notice.
+// Batch bounds one pass's work against a queue that grew during an outage.
+const (
+	ClosedFollowUpReconcileInterval    = 5 * time.Minute
+	ClosedFollowUpReconcileMaxAttempts = 10
+	closedFollowUpReconcileBatch       = 50
+)
+
+// ReconcileClosedFollowUpPending drains the pending queue: every row still
+// under the attempt budget gets its delivery re-run — the SAME function the
+// inline path used, so a finding cannot reconcile into a different shape
+// than it would have delivered live. Rows at or past the budget whose
+// escalation notice has not landed are worked for the NOTICE alone. Rows
+// whose comment or source card no longer exists are dropped (nothing left to
+// deliver), not counted as failures: a deleted remark is not an outage. The
+// pass never re-filters the finding through createClosedTaskFollowUp's gates
+// — the row exists precisely because it passed them once, and re-judging it
+// against a card whose state has since changed would let a close-and-reopened
+// source silently eat the parked remark.
+//
+// The caller (cmd/api scheduler) runs this on a system actor context;
+// claimAndCreateRoot may create cards through taskSvc.Create, which writes
+// the actor into activity_log.
+//
+// Concurrency invariant (codex-review round 7): passes are SINGLE-FLIGHT —
+// the scheduler runs the pass inline in its ticker loop, so one process never
+// works two passes at once, and the deployment (deploy/docker/mesh) runs one
+// api container. ListDue therefore needs no lease: a row it returns is worked
+// by exactly one pass. If the api is ever scaled past one replica, add a
+// per-row claim (a claimed_until lease column) BEFORE the replica ships —
+// until then the worst an overlapping inline delivery of the same comment
+// can do is a duplicate system comment and one extra reopen slot, because
+// Claim and TryReopen stay atomic and the notices are once-ever by stamp.
+func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (delivered, retried, escalated int, err error) {
+	if closedFollowUpDisabled() {
+		return 0, 0, 0, nil
+	}
+	if s.followUpPending == nil || s.followUpRoots == nil || s.taskSvc == nil || s.statusRepo == nil {
+		// Queue not wired (non-server build): nothing to reconcile.
+		return 0, 0, 0, nil
+	}
+	due, err := s.followUpPending.ListDue(ctx, ClosedFollowUpReconcileMaxAttempts, closedFollowUpReconcileBatch)
+	if err != nil {
+		metrics.RecordClosedFollowUpError("reconcile", "list_pending")
+		log.Printf("[closed-followup-reconcile] ERROR listing pending: %v", err)
+		return 0, 0, 0, err
+	}
+	for i := range due {
+		if ctx.Err() != nil {
+			break
+		}
+		row := &due[i]
+
+		// A row at or past the budget is listed for its NOTICES alone. The
+		// finding's delivery is not retried — the budget bought the human,
+		// not a resurrection — but visibility is TWO stamps, and the row
+		// leaves the due set only when both have landed: retiring it on the
+		// escalation alone would strand a park notice that never landed
+		// (codex-review P1, round 5 — round 3 made the escalation durable,
+		// round 4 the park notice; this is their intersection).
+		if row.Attempts >= ClosedFollowUpReconcileMaxAttempts {
+			if row.NoticedAt == nil {
+				s.ensurePendingNotice(ctx, "reconcile", row.SourceTaskID, row.CommentID)
+			}
+			if row.EscalatedAt != nil {
+				// The escalation already landed; this pass works the row
+				// only for its park notice, and it stays listed until that
+				// one lands too.
+				retried++
+				continue
+			}
+			if s.deliverEscalationNotice(ctx, row, fmt.Errorf("%s", row.LastError)) {
+				escalated++
+			} else {
+				retried++
+			}
+			continue
+		}
+
+		comment, err := s.commentRepo.GetByID(ctx, row.CommentID)
+		if err != nil {
+			if s.markPendingAttempt(ctx, row, "comment_read", err) {
+				escalated++
+			}
+			retried++
+			continue
+		}
+		if comment == nil {
+			// The remark itself is gone — deleted by an admin, wiped with the
+			// card. Nothing left to deliver; holding the row would just burn
+			// its attempts against a future that cannot happen.
+			_ = s.followUpPending.Delete(ctx, row.CommentID)
+			continue
+		}
+		task, err := s.taskRepo.GetByID(ctx, row.SourceTaskID)
+		if err != nil {
+			if s.markPendingAttempt(ctx, row, "task_read", err) {
+				escalated++
+			}
+			retried++
+			continue
+		}
+		if task == nil {
+			_ = s.followUpPending.Delete(ctx, row.CommentID)
+			continue
+		}
+
+		// The park must be visible to its commenter before more delivery
+		// work: a notice that failed to write at enqueue time is retried
+		// here, on every pass that works the row, until it lands — a queued
+		// finding nobody can see is a queue, not a delivery (codex-review
+		// P1, round 4). noticed_at makes it once-ever per row. The answer is
+		// carried in a local, not re-read from row: the copy predates the
+		// stamp this call may write (round 6).
+		noticed := row.NoticedAt != nil
+		if !noticed {
+			noticed = s.ensurePendingNotice(ctx, "reconcile", row.SourceTaskID, row.CommentID)
+		}
+
+		if err := s.claimAndCreateRoot(ctx, task, comment, true); err != nil {
+			if s.markPendingAttempt(ctx, row, followUpOp(err), err) {
+				escalated++
+			}
+			retried++
+			continue
+		}
+		// Delivered: the finding has its root (or its permanent terminal
+		// outcome — wedged winner, no todo column — which is equally done).
+		// But the delete must not discard an unlanded park notice
+		// (codex-review P1, round 6): postFollowUpNotice inside the
+		// delivery is best-effort, so a row whose «не подтверждена» write
+		// failed at enqueue AND this pass keeps its retry path — it stays
+		// due, the next pass re-posts the notice and re-delivers
+		// idempotently, and only a landed notice lets the row go. `noticed`
+		// is the pass-local truth: the stamp this same pass may have
+		// written lives in the store, not in the stale row copy.
+		if !noticed {
+			log.Printf("[closed-followup-reconcile] WARNING: delivered comment=%s but its park notice has not landed — row kept, notice retried next pass",
+				row.CommentID)
+			metrics.RecordClosedFollowUpPending("delivered")
+			delivered++
+			continue
+		}
+		if derr := s.followUpPending.Delete(ctx, row.CommentID); derr != nil {
+			log.Printf("[closed-followup-reconcile] WARNING: delivered comment=%s but pending row not deleted (it will re-deliver idempotently next pass): %v",
+				row.CommentID, derr)
+		}
+		metrics.RecordClosedFollowUpPending("delivered")
+		delivered++
+		log.Printf("[closed-followup-reconcile] delivered comment=%s key=%q after %d attempt(s)",
+			row.CommentID, row.FindingKey, row.Attempts+1)
+	}
+	return delivered, retried, escalated, nil
+}
+
+// markPendingAttempt records one failed reconcile pass on a pending row: the
+// closed_followup_error signal, the attempt counter, and — exactly once, at
+// the transition to the budget's edge — the escalation notice asking for a
+// human. Reports whether THIS call escalated. ListDue stops listing rows at
+// the budget, so the escalation posts once, on the pass that reaches it,
+// never again after.
+func (s *commentService) markPendingAttempt(
+	ctx context.Context,
+	row *domain.ClosedFollowUpPending,
+	op string,
+	cause error,
+) bool {
+	metrics.RecordClosedFollowUpError("reconcile", op)
+	attempts, err := s.followUpPending.MarkAttempt(ctx, row.CommentID, cause.Error())
+	if err != nil {
+		// The counter itself is unwritable: log and move on — a row whose
+		// count we cannot advance is re-listed next pass with its old count,
+		// and the delivery retries anyway. The budget's only job is deciding
+		// WHEN to escalate, not WHETHER to retry.
+		log.Printf("[closed-followup-reconcile] WARNING: mark attempt comment=%s failed (counter unwritten): %v",
+			row.CommentID, err)
+		return false
+	}
+	if attempts < ClosedFollowUpReconcileMaxAttempts {
+		log.Printf("[closed-followup-reconcile] attempt %d/%d comment=%s op=%s: %v",
+			attempts, ClosedFollowUpReconcileMaxAttempts, row.CommentID, op, cause)
+		return false
+	}
+	if attempts > ClosedFollowUpReconcileMaxAttempts {
+		// Two passes raced on one row: both listed it at 9, and MarkAttempt
+		// — atomic — handed each a unique post-increment value, 10 and 11.
+		// Only the pass that drew exactly the limit is the transition to
+		// "needs a human"; the one going past it must not post a second
+		// «нужен человек» notice (codex-review P2). The row is not re-listed
+		// past the limit either way, so nothing is lost by the refusal.
+		log.Printf("[closed-followup-reconcile] comment=%s already past the budget (attempts=%d) — escalation already posted, not repeating",
+			row.CommentID, attempts)
+		return false
+	}
+	log.Printf("[closed-followup-reconcile] escalated comment=%s after %d attempts (op=%s): %v",
+		row.CommentID, attempts, op, cause)
+	// The transition counted; the notice's own landing is
+	// deliverEscalationNotice's job — and a failed write leaves escalated_at
+	// unset, which is exactly what keeps the row listed for the retry above.
+	s.deliverEscalationNotice(ctx, row, cause)
+	return true
+}
+
+// deliverEscalationNotice posts the «нужен человек» notice and, when it
+// LANDS, persists completion (escalated_at) so the row leaves the due set.
+// Called from the budget's transition and again by every later pass while
+// the notice has not landed — the escalation's delivery is as durable as the
+// finding's was, because a decision a human never reads is the silent loss
+// this whole mechanism exists to remove (codex-review P1, round 3).
+func (s *commentService) deliverEscalationNotice(
+	ctx context.Context,
+	row *domain.ClosedFollowUpPending,
+	cause error,
+) bool {
+	if err := s.postEscalationNotice(ctx, row, cause); err != nil {
+		metrics.RecordClosedFollowUpError("reconcile", "escalation_notice")
+		log.Printf("[closed-followup-reconcile] WARNING: escalation notice comment=%s not posted (a later pass retries it): %v",
+			row.CommentID, err)
+		return false
+	}
+	if err := s.followUpPending.MarkEscalated(ctx, row.CommentID, timeNow()); err != nil {
+		// The notice is up but the completion stamp is not: the row stays in
+		// the due set and one later pass posts a single duplicate before the
+		// stamp lands. Accepted noise — retiring the row here instead would
+		// be the silent loss again, on the write that exists to end them.
+		log.Printf("[closed-followup-reconcile] WARNING: escalation notice landed comment=%s but escalated_at not written (one duplicate may follow): %v",
+			row.CommentID, err)
+	}
+	return true
+}
+
+// followUpCauseExcerpt caps an error's text for a human-facing comment: the
+// cause travels whole in logs and in the row's last_error, the comment only
+// needs enough to recognize the failure.
+func followUpCauseExcerpt(cause string) string {
+	runes := []rune(cause)
+	if len(runes) <= 200 {
+		return cause
+	}
+	return strings.TrimSpace(string(runes[:200])) + "…"
+}
+
+// postEscalationNotice writes the «нужен человек» comment on the source card
+// — the end of the automatic road: the finding could not be delivered after
+// the whole budget of retries, and pretending otherwise would be the silent
+// loss this whole mechanism exists to remove. The row STAYS in the table (a
+// human finding it there sees the full last_error); what retires it from the
+// due set is the escalated_at stamp, written by the caller only once THIS
+// write has landed. The remark itself still stands as the original comment.
+// Returns the write's error: the pending-outcome counter fires on landing,
+// because a decision whose comment never landed reaches nobody.
+func (s *commentService) postEscalationNotice(ctx context.Context, row *domain.ClosedFollowUpPending, cause error) error {
+	now := timeNow()
+	sys := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     row.SourceTaskID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🤖 Auto: доставка замечания (комментарий `%s`) не удалась после %d автоматических повторов — нужен человек. Причина последней ошибки: %s",
+			row.CommentID, ClosedFollowUpReconcileMaxAttempts, followUpCauseExcerpt(cause.Error()),
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sys); err != nil {
+		return err
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, row.SourceTaskID)
+	}
+	metrics.RecordClosedFollowUpPending("escalated")
+	return nil
 }
 
 // claimAndCreateRoot is the identity half of createClosedTaskFollowUp: claim
@@ -524,12 +992,18 @@ func (s *commentService) createClosedTaskFollowUp(
 // claim re-enters here once, and that second level must not attempt a third —
 // a pathological release loop would otherwise recurse for as long as
 // contention kept reproducing it.
+//
+// The error contract (#db1c6c7a): nil means delivered OR permanently skipped
+// (no todo column, storm-limited, wedged winner — outcomes the retry ladder
+// cannot improve and the pending queue must not re-offer); a non-nil
+// followUpRetryError means TRANSIENT — today the caller retries it inline,
+// tonight the reconcile job does.
 func (s *commentService) claimAndCreateRoot(
 	ctx context.Context,
 	task *domain.Task,
 	comment *domain.Comment,
 	allowTakeover bool,
-) {
+) error {
 	findingKey := closedFindingKey(comment)
 
 	candidateID := uuid.New()
@@ -538,28 +1012,36 @@ func (s *commentService) claimAndCreateRoot(
 		// Fail to NO CARD, not to an orphan: a card created outside the
 		// identity store would be invisible to every later repeat of the
 		// same finding — the duplicate-card defect back again, just delayed.
-		// Visible retry for this branch is P2 (#db1c6c7a).
-		log.Printf("[closed-followup] WARNING: claim failed for task=%s key=%q: %v",
-			task.ID, findingKey, err)
-		return
+		// Since P2 the failure is not silent either: it climbs the inline
+		// ladder and, failing that, the pending queue.
+		return &followUpRetryError{op: "claim", err: err}
 	}
 	if !claimed {
-		s.deliverRepeatFinding(ctx, task, comment, findingKey, allowTakeover)
-		return
+		return s.deliverRepeatFinding(ctx, task, comment, findingKey, allowTakeover)
 	}
 
 	todoID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryTodo)
-	if err != nil || todoID == uuid.Nil {
-		// No todo column means the project has no status the agent feed polls,
-		// so there is no card we could create that would wake anyone. Say so
-		// rather than parking a card in whatever column happens to be first.
-		// The claim is released too: a held claim would point at a card that
-		// never exists and send every later repeat of this finding into the
-		// repeat branch with no root behind it.
-		log.Printf("[closed-followup] skip task=%s — project %s has no todo-category status (err=%v)",
-			task.ID, task.ProjectID, err)
+	if err != nil {
+		// The statuses could not be READ — transient, retryable. The claim is
+		// released first: a retry re-claims cleanly, and a held claim would
+		// point at a card that may never exist.
+		log.Printf("[closed-followup] skip task=%s — todo status read failed (err=%v)",
+			task.ID, err)
 		s.releaseClaim(ctx, task.ID, findingKey)
-		return
+		return &followUpRetryError{op: "todo_status_read", err: err}
+	}
+	if todoID == uuid.Nil {
+		// No todo column is a PERMANENT property of the project: it has no
+		// status the agent feed polls, so there is no card we could create
+		// that would wake anyone. Say so rather than parking a card in
+		// whatever column happens to be first. The claim is released too: a
+		// held claim would point at a card that never exists and send every
+		// later repeat of this finding into the repeat branch with no root
+		// behind it. Not retryable — retrying cannot add a todo column.
+		log.Printf("[closed-followup] skip task=%s — project %s has no todo-category status",
+			task.ID, task.ProjectID)
+		s.releaseClaim(ctx, task.ID, findingKey)
+		return nil
 	}
 
 	assignee := *task.AssigneeID
@@ -591,9 +1073,11 @@ func (s *commentService) claimAndCreateRoot(
 			task.ID, comment.ID, err)
 		// Compensation: the claim already points at candidateID, which now will
 		// never be a card. Release it so the next repeat of this finding claims
-		// cleanly instead of being routed to a root that does not exist.
+		// cleanly instead of being routed to a root that does not exist —
+		// and the release itself is what makes a retry honest: it re-claims
+		// with a fresh candidate instead of colliding with its own ghost.
 		s.releaseClaim(ctx, task.ID, findingKey)
-		return
+		return &followUpRetryError{op: "create_root", err: err}
 	}
 
 	// relates_to, deliberately NOT blocks. A blocks edge onto a still-open
@@ -618,6 +1102,7 @@ func (s *commentService) claimAndCreateRoot(
 
 	log.Printf("[closed-followup] task=%s comment=%s author=%s/%s → follow-up=%s assignee=%s",
 		task.ID, comment.ID, comment.AuthorType, comment.AuthorID, followUp.ID, assignee)
+	return nil
 }
 
 // followUpBody is the follow-up card's description: why it exists, the remark
@@ -722,46 +1207,69 @@ func (s *commentService) postFollowUpNotice(
 // — a wedged winner — and the repeat is deferred visibly rather than
 // swallowed.
 //
-// Every branch is best-effort and logged: the comment itself was already
-// persisted by Create, and this mechanism routes remarks — it never rejects
-// one. Visible retry for the remaining failure branches is P2 (#db1c6c7a).
+// Error contract as in claimAndCreateRoot (#db1c6c7a): transient failures
+// (the store unreadable, the reopen unwritable) return a followUpRetryError
+// for the ladder and the pending queue; delivered and permanent outcomes
+// return nil. On a retryable exit nothing has been posted yet — the retry
+// delivers whole, and a later attempt must not find half the remarks already
+// on the root.
 func (s *commentService) deliverRepeatFinding(
 	ctx context.Context,
 	task *domain.Task,
 	comment *domain.Comment,
 	findingKey string,
 	allowTakeover bool,
-) {
+) error {
 	row, err := s.followUpRoots.Get(ctx, task.ID, findingKey)
-	if err != nil || row == nil {
-		// err set: the identity store could not be read. row nil: the claim
-		// lost to a row that vanished — a release that raced us, or a manual
-		// cleanup. Either way there is no root to deliver to and no honest
-		// way to make one here; the next repeat of this finding re-enters
-		// this path.
-		log.Printf("[closed-followup] WARNING: repeat finding for task=%s key=%q has no readable root (err=%v)",
-			task.ID, findingKey, err)
-		return
+	if err != nil {
+		// The identity store could not be read: transient, retryable — a
+		// working read may still find the root and deliver the repeat.
+		return &followUpRetryError{op: "get_root", err: err}
 	}
-	root := s.waitForRootCard(ctx, row.RootTaskID)
+	if row == nil {
+		// The claim lost to a row that vanished — a release that raced us,
+		// or a manual cleanup. There is no root to deliver to and no honest
+		// way to make one from INSIDE the repeat branch — but a retry of the
+		// whole delivery re-enters through Claim, which mints the root this
+		// finding is now missing.
+		return &followUpRetryError{op: "get_root", err: fmt.Errorf("root row vanished for key %q", findingKey)}
+	}
+	root, err := s.waitForRootCard(ctx, row.RootTaskID)
+	if err != nil {
+		// The root card could not be READ (or the caller went away): reads
+		// never succeeded, so this is not the wedged-winner branch below —
+		// it is a transient outage, and the honest route is the ladder and,
+		// failing that, the pending queue (codex-review P1 on this MR).
+		return &followUpRetryError{op: "root_card_read", err: err}
+	}
 	if root == nil {
 		rowNow, errNow := s.followUpRoots.Get(ctx, task.ID, findingKey)
 		if errNow == nil && rowNow == nil && allowTakeover {
 			log.Printf("[closed-followup] task=%s key=%q: claim vanished while waiting for root=%s — taking over creation",
 				task.ID, findingKey, row.RootTaskID)
-			s.claimAndCreateRoot(ctx, task, comment, false)
-			return
+			return s.claimAndCreateRoot(ctx, task, comment, false)
 		}
+		// Wedged winner: the claim persists with no card behind it. Reads
+		// SUCCEEDED — this is not an outage the ladder can wait out, so it
+		// stays P1's terminal deferral (visible notice, next repeat retries)
+		// rather than ten reconciles of the same unfixable wedge.
 		log.Printf("[closed-followup] WARNING: root %s for task=%s key=%q not visible after %d attempts (claim present=%v) — repeat deferred",
 			row.RootTaskID, task.ID, findingKey, len(followUpRootRetryBackoff), rowNow != nil)
 		s.postDeferredRepeatNotice(ctx, task, comment)
-		return
+		return nil
 	}
 	st, err := s.statusRepo.GetByID(ctx, root.StatusID)
-	if err != nil || st == nil {
-		log.Printf("[closed-followup] WARNING: status %s of root %s unreadable (err=%v)",
-			root.StatusID, root.ID, err)
-		return
+	if err != nil {
+		return &followUpRetryError{op: "status_read", err: err}
+	}
+	if st == nil {
+		// The root points at a status row that does not resolve — broken
+		// referential state, not an outage. Permanent for this attempt:
+		// deliver as storm-limited-style comment so the remark is not lost.
+		log.Printf("[closed-followup] WARNING: status %s of root %s resolves to nothing",
+			root.StatusID, root.ID)
+		s.postRepeatOnRoot(ctx, task, root, comment, false)
+		return nil
 	}
 
 	if st.Category != domain.StatusCategoryDone && st.Category != domain.StatusCategoryCancelled {
@@ -769,7 +1277,7 @@ func (s *commentService) deliverRepeatFinding(
 		// second card for the SAME finding is the duplicate this table exists
 		// to prevent. The commenter still learns where the remark went.
 		s.postFollowUpNotice(ctx, task, root, comment, followUpAlreadyOpen)
-		return
+		return nil
 	}
 
 	// Closed root — same finding again, same card again. The storm limit
@@ -785,9 +1293,7 @@ func (s *commentService) deliverRepeatFinding(
 	reopenAt := timeNow()
 	reopened, claim, err := s.followUpRoots.TryReopen(ctx, task.ID, findingKey, reopenAt)
 	if err != nil {
-		log.Printf("[closed-followup] WARNING: try-reopen task=%s key=%q failed: %v",
-			task.ID, findingKey, err)
-		return
+		return &followUpRetryError{op: "try_reopen", err: err}
 	}
 	if !reopened {
 		// The window is exhausted: the close/reopen cycle is spinning, and
@@ -796,16 +1302,23 @@ func (s *commentService) deliverRepeatFinding(
 		// swallowed, nobody woken.
 		s.postRepeatOnRoot(ctx, task, root, comment, false)
 		s.postFollowUpNotice(ctx, task, root, comment, followUpStormLimited)
-		return
+		return nil
 	}
 
 	todoID, err := findStatusIDByCategory(ctx, s.statusRepo, root.ProjectID, domain.StatusCategoryTodo)
-	if err != nil || todoID == uuid.Nil {
+	if err != nil {
+		// Transient read failure: the slot goes back (the reopen did not
+		// deliver), nothing is posted, and the retry takes a fresh slot.
+		s.compensateFailedReopen(ctx, task, findingKey, root.ID, claim)
+		return &followUpRetryError{op: "todo_status_read", err: err}
+	}
+	if todoID == uuid.Nil {
+		// Permanent: the project has no todo column to move the root to.
 		s.compensateFailedReopen(ctx, task, findingKey, root.ID, claim)
 		s.postRepeatOnRoot(ctx, task, root, comment, false)
-		log.Printf("[closed-followup] WARNING: cannot reopen root=%s — project %s has no todo-category status (err=%v)",
-			root.ID, root.ProjectID, err)
-		return
+		log.Printf("[closed-followup] WARNING: cannot reopen root=%s — project %s has no todo-category status",
+			root.ID, root.ProjectID)
+		return nil
 	}
 	// A shipped root cannot MoveTask to todo — TaskShippedError is the guard,
 	// and its only documented escape hatch is clearing the flag first. The
@@ -816,10 +1329,7 @@ func (s *commentService) deliverRepeatFinding(
 	if wasShipped {
 		if err := s.taskSvc.ShipTask(ctx, root.ID, false); err != nil {
 			s.compensateFailedReopen(ctx, task, findingKey, root.ID, claim)
-			s.postRepeatOnRoot(ctx, task, root, comment, false)
-			log.Printf("[closed-followup] WARNING: clear shipped on root=%s failed, not reopened: %v",
-				root.ID, err)
-			return
+			return &followUpRetryError{op: "ship_flag", err: err}
 		}
 	}
 	if err := s.taskSvc.MoveTask(ctx, root.ID, MoveTaskInput{StatusID: &todoID}); err != nil {
@@ -832,14 +1342,13 @@ func (s *commentService) deliverRepeatFinding(
 			}
 		}
 		s.compensateFailedReopen(ctx, task, findingKey, root.ID, claim)
-		s.postRepeatOnRoot(ctx, task, root, comment, false)
-		log.Printf("[closed-followup] WARNING: reopen move root=%s failed: %v", root.ID, err)
-		return
+		return &followUpRetryError{op: "reopen_move", err: err}
 	}
 	s.postRepeatOnRoot(ctx, task, root, comment, true)
 	s.postFollowUpNotice(ctx, task, root, comment, followUpReopened)
 	log.Printf("[closed-followup] task=%s comment=%s key=%q → reopened root=%s",
 		task.ID, comment.ID, findingKey, root.ID)
+	return nil
 }
 
 // compensateFailedReopen returns a storm-limit slot taken by a reopen that
@@ -876,24 +1385,40 @@ var followUpRootRetryBackoff = []time.Duration{
 var followUpRootRetrySleep = time.Sleep
 
 // waitForRootCard reads the root card, retrying while the winner's claim is
-// ahead of its card. Returns the card, or nil once the budget is spent — the
-// caller decides between takeover and deferral; this function does not guess.
-func (s *commentService) waitForRootCard(ctx context.Context, rootTaskID uuid.UUID) *domain.Task {
+// ahead of its card. Three exits, three meanings (#db1c6c7a, codex-review
+// P1): the card → (card, nil); the budget spent where the LAST read
+// succeeded and found nothing → (nil, nil), the honest absent/wedged case
+// the caller resolves by takeover or deferral; and anything else →
+// (nil, err), a transient state the caller must route to the retry ladder
+// and the pending queue. The LAST attempt decides, not any earlier one: a
+// read that succeeded mid-budget does not settle absence for good — the
+// winner may still be inserting its card — so if the budget ENDS on a
+// failed read the card's state is unknown and the honest answer is
+// retryable, never a wedged verdict on evidence that predates the failure.
+func (s *commentService) waitForRootCard(ctx context.Context, rootTaskID uuid.UUID) (*domain.Task, error) {
+	var lastErr error
 	for i, pause := range followUpRootRetryBackoff {
 		root, err := s.taskRepo.GetByID(ctx, rootTaskID)
 		if err == nil && root != nil {
-			return root
+			return root, nil
 		}
+		lastErr = err // nil on a successful read that found nothing
 		if err != nil {
 			log.Printf("[closed-followup] WARNING: root lookup %s attempt %d/%d: %v",
 				rootTaskID, i+1, len(followUpRootRetryBackoff), err)
 		}
 		if ctx.Err() != nil {
-			return nil
+			return nil, ctx.Err()
 		}
 		followUpRootRetrySleep(pause)
 	}
-	return nil
+	if lastErr != nil {
+		// The budget ended on a failed read (or every read failed): the
+		// card's state is unknown — transient by the taxonomy of every
+		// other read here.
+		return nil, lastErr
+	}
+	return nil, nil // the last read succeeded and found nothing: absence
 }
 
 // postDeferredRepeatNotice is the wedged-winner fallback: the repeat could

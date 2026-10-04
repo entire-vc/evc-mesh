@@ -349,6 +349,12 @@ type CommentService interface {
 	// ListHumanGateDecisions returns every decision/revocation row recorded
 	// on a task, newest first.
 	ListHumanGateDecisions(ctx context.Context, taskID uuid.UUID) ([]domain.HumanGateDecision, error)
+	// ReconcileClosedFollowUpPending drains the closed-card follow-up pending
+	// queue (task #db1c6c7a): one pass re-runs the delivery for every row
+	// still under the attempt budget. Called by the cmd/api scheduler with a
+	// system actor context; see comment_closed_task_followup.go for the
+	// error/outcome contract.
+	ReconcileClosedFollowUpPending(ctx context.Context) (delivered, retried, escalated int, err error)
 }
 
 // UploadArtifactInput holds parameters for uploading an artifact.

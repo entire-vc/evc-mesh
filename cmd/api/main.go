@@ -137,6 +137,7 @@ func main() {
 	taskDependencyRepo := postgres.NewTaskDependencyRepo(db)
 	commentRepo := postgres.NewCommentRepo(db)
 	closedFollowUpRootRepo := postgres.NewClosedFollowUpRootRepo(db)
+	closedFollowUpPendingRepo := postgres.NewClosedFollowUpPendingRepo(db)
 	humanGateDecisionRepo := postgres.NewHumanGateDecisionRepo(db)
 	artifactRepo := postgres.NewArtifactRepo(db)
 	documentRepo := postgres.NewDocumentRepo(db)
@@ -563,6 +564,7 @@ func main() {
 		service.WithHumanGateDecisionRepo(humanGateDecisionRepo),
 		service.WithCommentDependencyRepo(taskDependencyRepo),
 		service.WithClosedFollowUpRootRepo(closedFollowUpRootRepo),
+		service.WithClosedFollowUpPendingRepo(closedFollowUpPendingRepo),
 	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
@@ -2337,6 +2339,38 @@ func main() {
 		}
 	}()
 	log.Println("Stale session sweeper started (1h interval)")
+
+	// 10z. Closed-card follow-up pending reconciler (task #db1c6c7a): drains
+	// closed_followup_pending — findings whose delivery survived the inline
+	// ladder undelivered. Same delivery function as the live path, idempotent
+	// on the finding's P1 identity. The pass line logs on EVERY tick, empty
+	// queue included: a silent job cannot be told from a dead one.
+	go func() {
+		ticker := time.NewTicker(service.ClosedFollowUpReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				// actorctx.WithActor for the same reason as the recurring
+				// scheduler above: claimAndCreateRoot may reach taskSvc.Create,
+				// whose task.created activity row reads the actor from this
+				// ctx. Reconcile acts as the system, never as a past commenter.
+				ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+				ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+				delivered, retried, escalated, rerr := commentService.ReconcileClosedFollowUpPending(ctx)
+				cancel()
+				if rerr != nil {
+					log.Printf("[closed-followup-reconcile] ERROR: %v", rerr)
+				} else {
+					log.Printf("[closed-followup-reconcile] pass: delivered=%d retried=%d escalated=%d",
+						delivered, retried, escalated)
+				}
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+	log.Printf("Closed-card follow-up reconciler started (%s interval)", service.ClosedFollowUpReconcileInterval)
 
 	// 11. Start server with graceful shutdown.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

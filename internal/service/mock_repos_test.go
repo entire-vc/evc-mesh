@@ -296,11 +296,24 @@ type MockTaskRepository struct {
 	// the guard does not exist at all. Same shape as MockCommentRepository's
 	// listByTaskErr, and for the same reason.
 	getByIDErr error
+	// getByIDErrFor fails GetByID for SPECIFIC ids only — every other lookup,
+	// including other tasks in the same call chain, still serves from the
+	// map. A follow-up delivery reads the source card AND the root card
+	// through the same method; an outage of one row is the shape that tells
+	// those two reads apart (blanket getByIDErr cannot).
+	getByIDErrFor map[uuid.UUID]error
 	// getByIDMisses makes GetByID answer (nil, nil) for the first N calls on
 	// a given ID, then serve the stored task — the "winner's claim row is
 	// visible but its card is not yet" window of #5194afd4. Set via
 	// DeferGetByID; a test that never calls it gets the plain map read.
 	getByIDMisses map[uuid.UUID]int
+	// onGetByID, when set, is consulted on EVERY GetByID with its 1-based
+	// call number and may fail that one call — a scripted MIXED sequence
+	// (empty success, then failure) rather than an all-or-nothing outage.
+	// waitForRootCard's last-attempt rule is exactly about that shape: an
+	// error map keyed by id cannot say "call 1 fine, call 3 broken".
+	onGetByID    func(call int, id uuid.UUID) error
+	getByIDCalls int
 	// statusCategoryOf, if set, resolves a status ID to its category — used by
 	// FindDueBacklogTasks to emulate the real query's join against
 	// task_statuses without this mock needing a direct dependency on
@@ -339,8 +352,21 @@ func (m *MockTaskRepository) Create(_ context.Context, t *domain.Task, activity 
 }
 
 func (m *MockTaskRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+	m.mu.Lock()
+	m.getByIDCalls++
+	call := m.getByIDCalls
+	hook := m.onGetByID
+	m.mu.Unlock()
+	if hook != nil {
+		if err := hook(call, id); err != nil {
+			return nil, err
+		}
+	}
 	if m.getByIDErr != nil {
 		return nil, m.getByIDErr
+	}
+	if e, ok := m.getByIDErrFor[id]; ok {
+		return nil, e
 	}
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
@@ -4523,6 +4549,15 @@ type MockClosedFollowUpRootRepository struct {
 	// while a loser is inside its wait budget.
 	onGet    func(call int, m *MockClosedFollowUpRootRepository)
 	getCalls int
+	// failClaimFirstN models a TRANSIENT outage for the retry ladder
+	// (#db1c6c7a): exactly the first N Claim calls fail, then the store
+	// recovers. The sticky errToReturn is the database down for the whole
+	// test; the ladder needs the in-between shape: fail once, land on retry.
+	failClaimFirstN int
+	claimCalls      int
+	// getErr fails Get ALONE: the read side of the store flapping while Claim
+	// still succeeds — the shape deliverRepeatFinding's get_root branch wraps.
+	getErr error
 }
 
 func NewMockClosedFollowUpRootRepository() *MockClosedFollowUpRootRepository {
@@ -4535,6 +4570,14 @@ func NewMockClosedFollowUpRootRepository() *MockClosedFollowUpRootRepository {
 func (m *MockClosedFollowUpRootRepository) Claim(_ context.Context, sourceTaskID uuid.UUID, findingKey string, rootTaskID uuid.UUID, now time.Time) (bool, error) {
 	if m.errToReturn != nil {
 		return false, m.errToReturn
+	}
+	m.mu.Lock()
+	m.claimCalls++
+	call := m.claimCalls
+	n := m.failClaimFirstN
+	m.mu.Unlock()
+	if call <= n {
+		return false, fmt.Errorf("transient claim failure, call %d", call)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -4554,6 +4597,12 @@ func (m *MockClosedFollowUpRootRepository) Claim(_ context.Context, sourceTaskID
 func (m *MockClosedFollowUpRootRepository) Get(_ context.Context, sourceTaskID uuid.UUID, findingKey string) (*domain.ClosedFollowUpRoot, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	getErr := m.getErr
+	m.mu.Unlock()
+	if getErr != nil {
+		return nil, getErr
 	}
 	m.mu.Lock()
 	m.getCalls++
@@ -4654,5 +4703,169 @@ func (m *MockClosedFollowUpRootRepository) Delete(_ context.Context, sourceTaskI
 			delete(m.claims, id)
 		}
 	}
+	return nil
+}
+
+// MockClosedFollowUpPendingRepository (#db1c6c7a) mirrors
+// closed_followup_pending: a map keyed by the comment PK, an atomic attempts
+// counter, and the two error shapes the delivery path needs to rehearse —
+// sticky (errToReturn: the enqueue itself fails, the wholly-down database)
+// and scripted (failEnqueueFirstN: the queue flaps while the finding is being
+// parked, the retry ladder sees it).
+type MockClosedFollowUpPendingRepository struct {
+	mu    sync.Mutex
+	items map[uuid.UUID]*domain.ClosedFollowUpPending
+	// errToReturn, when set, fails EVERY method — the residual case where
+	// even the pending row cannot be written.
+	errToReturn error
+	// failEnqueueFirstN fails exactly the first N Enqueue calls, then
+	// recovers: the transient shape between "delivery failed" and "queue
+	// down too".
+	failEnqueueFirstN int
+	enqueueCalls      int
+	listCalls         int
+	// deleteErr fails Delete ALONE: the crash window's write side — the
+	// finding delivered but its row cannot leave the queue, so the next pass
+	// must re-deliver idempotently.
+	deleteErr error
+	// markErr fails MarkAttempt ALONE: the attempt counter is unwritable
+	// while the queue itself still works — markPendingAttempt's WARNING
+	// branch.
+	markErr error
+}
+
+func NewMockClosedFollowUpPendingRepository() *MockClosedFollowUpPendingRepository {
+	return &MockClosedFollowUpPendingRepository{items: make(map[uuid.UUID]*domain.ClosedFollowUpPending)}
+}
+
+func (m *MockClosedFollowUpPendingRepository) Enqueue(ctx context.Context, p *domain.ClosedFollowUpPending) error {
+	// A real store refuses a dead request context before it ever touches the
+	// row — the mock must too, or a test cannot see the difference between
+	// "the queue wrote it" and "the queue never even looked at it" when the
+	// park rides a cancelled context.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.enqueueCalls++
+	call := m.enqueueCalls
+	sticky := m.errToReturn
+	n := m.failEnqueueFirstN
+	m.mu.Unlock()
+	if sticky != nil {
+		return sticky
+	}
+	if call <= n {
+		return fmt.Errorf("transient enqueue failure, call %d", call)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.items[p.CommentID]; ok {
+		existing.LastError = p.LastError // ON CONFLICT DO UPDATE: attempts survive
+		return nil
+	}
+	copyRow := *p
+	m.items[p.CommentID] = &copyRow
+	return nil
+}
+
+func (m *MockClosedFollowUpPendingRepository) ListDue(_ context.Context, maxAttempts, limit int) ([]domain.ClosedFollowUpPending, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	m.listCalls++
+	m.mu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var rows []domain.ClosedFollowUpPending
+	for _, p := range m.items {
+		// Mirrors the SQL: below the budget, or past it with EITHER notice
+		// still undelivered — those rows are retried for their NOTICES, and
+		// retire only when both stamps are set.
+		if p.Attempts < maxAttempts || p.EscalatedAt == nil || p.NoticedAt == nil {
+			rows = append(rows, *p)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { // ORDER BY created_at, comment_id
+		if !rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
+			return rows[i].CreatedAt.Before(rows[j].CreatedAt)
+		}
+		return rows[i].CommentID.String() < rows[j].CommentID.String()
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
+}
+
+func (m *MockClosedFollowUpPendingRepository) MarkAttempt(_ context.Context, commentID uuid.UUID, lastErr string) (int, error) {
+	if m.errToReturn != nil {
+		return 0, m.errToReturn
+	}
+	if m.markErr != nil {
+		return 0, m.markErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.items[commentID]
+	if !ok {
+		return 0, nil // row deleted by a concurrent pass: nothing to count
+	}
+	p.Attempts++
+	p.LastError = lastErr
+	return p.Attempts, nil
+}
+
+// MarkEscalated mirrors the SQL stamp: first write wins, second is a no-op —
+// the landing time of the notice is the fact, and a retried pass arriving
+// late must not move it.
+func (m *MockClosedFollowUpPendingRepository) MarkEscalated(_ context.Context, commentID uuid.UUID, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.items[commentID]
+	if !ok {
+		return nil // row gone: nothing to stamp
+	}
+	if p.EscalatedAt == nil {
+		t := at
+		p.EscalatedAt = &t
+	}
+	return nil
+}
+
+// MarkNoticed mirrors MarkEscalated's SQL stamp for the park's own «не
+// подтверждена» notice: first write wins, a retried pass arriving late must
+// not move the landing time.
+func (m *MockClosedFollowUpPendingRepository) MarkNoticed(_ context.Context, commentID uuid.UUID, at time.Time) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.items[commentID]
+	if !ok {
+		return nil // row gone: nothing to stamp
+	}
+	if p.NoticedAt == nil {
+		t := at
+		p.NoticedAt = &t
+	}
+	return nil
+}
+
+func (m *MockClosedFollowUpPendingRepository) Delete(_ context.Context, commentID uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.items, commentID)
 	return nil
 }
