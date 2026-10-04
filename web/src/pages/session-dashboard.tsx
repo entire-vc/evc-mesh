@@ -3,6 +3,7 @@ import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
+	ArrowUpRight,
 	Bot,
 	Clock,
 	DollarSign,
@@ -83,11 +84,28 @@ function getEphemeralPresenceLabel(agent: AgentStatusEntry): string {
 // AgentSessionCard
 // ---------------------------------------------------------------------------
 
+// #6b322896: the JSX used to slice heartbeat_message at 80 and
+// current_task_title at 60 chars, so the tail of server-provided text never
+// reached the DOM and no CSS or interaction could recover it. Rendering now
+// caps only at an absurd length; visible truncation is CSS line-clamp, and a
+// long row becomes a tap-to-expand button (aria-expanded toggles the clamp).
+const TEXT_CAP = 500;
+const STATUS_EXPAND_THRESHOLD = 80; // where the old "…" used to appear
+const TASK_EXPAND_THRESHOLD = 60;
+
+function capped(s: string): string {
+	return s.length > TEXT_CAP ? s.slice(0, TEXT_CAP) + "…" : s;
+}
+
 interface AgentSessionCardProps {
 	agent: AgentStatusEntry;
 }
 
-function AgentSessionCard({ agent }: AgentSessionCardProps) {
+// Exported for component tests: the page-level data flow is mocked elsewhere,
+// the card itself is what #6b322896 exercises.
+export function AgentSessionCard({ agent }: AgentSessionCardProps) {
+	const [statusExpanded, setStatusExpanded] = useState(false);
+	const [taskExpanded, setTaskExpanded] = useState(false);
 	const statusCfg = agent.is_stale
 		? statusConfig.offline
 		: statusConfig[agent.status] ?? statusConfig.offline;
@@ -151,10 +169,32 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 				{agent.heartbeat_message && (
 					<div className="flex items-start gap-1.5">
 						<Info className="h-3 w-3 mt-0.5 shrink-0" />
-						<span className="line-clamp-2">
-							{agent.heartbeat_message.slice(0, 80)}
-							{agent.heartbeat_message.length > 80 ? "…" : ""}
-						</span>
+						{agent.heartbeat_message.length > STATUS_EXPAND_THRESHOLD ? (
+							<button
+								type="button"
+								aria-expanded={statusExpanded}
+								onClick={() => setStatusExpanded((v) => !v)}
+								className="flex min-w-0 flex-1 cursor-pointer items-center text-left"
+							>
+								{/* The clamp lives on this auto-height span, never on the
+								    button: the 44px touch-area audit makes the button box
+								    taller than two lines, and Blink then paints the top
+								    sliver of a third line under the clamp — the clip edge
+								    is the padding box, so padding cannot fix it either. An
+								    auto-height clamp box is cut at exactly two lines
+								    (verified pixel-level at 393; invisible to jsdom). */}
+								<span
+									className={cn(
+										"min-w-0 break-words",
+										!statusExpanded && "line-clamp-2",
+									)}
+								>
+									{capped(agent.heartbeat_message)}
+								</span>
+							</button>
+						) : (
+							<span className="line-clamp-2">{agent.heartbeat_message}</span>
+						)}
 					</div>
 				)}
 
@@ -163,15 +203,64 @@ function AgentSessionCard({ agent }: AgentSessionCardProps) {
 						<Clock className="h-3 w-3 mt-0.5 shrink-0" />
 						<span className="min-w-0">
 							Working on{" "}
-							<Link
-								to={`/t/${agent.current_task_id}`}
-								className="break-words whitespace-normal text-primary underline-offset-2 hover:underline md:truncate"
-							>
-								{agent.current_task_title
-									? agent.current_task_title.slice(0, 60) +
-									  (agent.current_task_title.length > 60 ? "…" : "")
-									: agent.current_task_id.slice(0, 8) + "…"}
-							</Link>
+							{agent.current_task_title &&
+							agent.current_task_title.length > TASK_EXPAND_THRESHOLD ? (
+								<>
+									{/* Mobile (<768): tap the clamped text to read it in place;
+									    navigation moves to a separate arrow link so the two
+									    affordances never nest. */}
+									<button
+										type="button"
+										aria-expanded={taskExpanded}
+										onClick={() => setTaskExpanded((v) => !v)}
+										className="flex min-w-0 cursor-pointer items-center text-left md:hidden"
+									>
+										{/* Same invariant as the status row above: the clamp
+										    sits on the auto-height span so the 44px touch
+										    area cannot expose a third-line sliver. */}
+										<span
+											className={cn(
+												"min-w-0 break-words",
+												!taskExpanded && "line-clamp-2",
+											)}
+										>
+											{capped(agent.current_task_title)}
+										</span>
+									</button>
+									<Link
+										to={`/t/${agent.current_task_id}`}
+										aria-label="Open task"
+										className="text-primary underline-offset-2 hover:underline md:hidden"
+									>
+										<ArrowUpRight className="inline h-3 w-3" aria-hidden="true" />
+									</Link>
+									{/* Desktop (≥768): the original single-line link, minus the
+									    slice. Both display classes are !important: a plain
+									    `hidden` loses to the mobile-scope rule
+									    `.mesh-mobile-sessions a { display: inline-flex }`
+									    (higher specificity), and a plain `md:inline-block`
+									    then loses to our own `hidden!` — the bangs pair up so
+									    the link is none below md and inline-block from md up.
+									    inline-block, not inline: CSS truncate only clips
+									    block-level boxes, which is what keeps the "…" at the
+									    card edge on wide viewports. */}
+									<Link
+										to={`/t/${agent.current_task_id}`}
+										className="hidden! md:inline-block! md:max-w-full md:truncate text-primary underline-offset-2 hover:underline"
+									>
+										{capped(agent.current_task_title)}
+									</Link>
+								</>
+							) : (
+								<Link
+									to={`/t/${agent.current_task_id}`}
+									className="break-words whitespace-normal text-primary underline-offset-2 hover:underline md:truncate"
+								>
+									{agent.current_task_title
+										? capped(agent.current_task_title)
+										: agent.current_task_id.slice(0, 8) + "…"}
+								</Link>
+							)}
 						</span>
 					</div>
 				)}
