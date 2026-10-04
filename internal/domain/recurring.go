@@ -58,6 +58,18 @@ type RecurringSchedule struct {
 	ConsecutiveMissedOutcomes int        `json:"consecutive_missed_outcomes" db:"consecutive_missed_outcomes"`
 	LastMissedAt              *time.Time `json:"last_missed_at,omitempty" db:"last_missed_at"`
 
+	// URL is the canonical deep-link opening the project settings Recurring
+	// tab anchored on this schedule, e.g.
+	// https://mesh.entire.host/w/<wsSlug>/p/<projSlug>/settings?tab=recurring&schedule=<id>.
+	// Unlike Task.URL/Project.URL (short /t/<id>, /p/<id> resolver links), a
+	// schedule's target lives on the canonical /w/<wsSlug>/p/<slug>/settings
+	// path — the /p/<id> resolver forwards the query but lands on the project
+	// board, not the settings tab — so this link carries both slugs, with
+	// scheduleHref in web/src/lib/entity-deep-links.ts as the reference
+	// construction. Computed per-response by the handler, never stored, hence
+	// db:"-" and omitempty (the zero value never serializes).
+	URL string `json:"url,omitempty" db:"-"`
+
 	CreatedBy     uuid.UUID  `json:"created_by" db:"created_by"`
 	CreatedByType ActorType  `json:"created_by_type" db:"created_by_type"`
 	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
