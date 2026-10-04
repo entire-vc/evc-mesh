@@ -83,8 +83,17 @@
 	# actually been observed. This one is visible in `curl -sI`.
 	header X-Content-Type-Options "nosniff"
 
+	# --- Ride out a backend restart (Mesh #bbeb6772) --------------------------
+	# Every reverse_proxy to 127.0.0.1:8005 / :8081 retries a refused dial for up
+	# to 30s every 250ms, so a mesh-api / mesh-mcp restart shows up as a short
+	# delay instead of a 502. A backend that stays down still fails (502 after
+	# 30s), so /health cannot report 200 for a dead backend.
+
 	handle /api/* {
-		reverse_proxy 127.0.0.1:8005
+		reverse_proxy 127.0.0.1:8005 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
+		}
 	}
 
 	# --- OAuth for remote MCP clients (MCP-OAuth 4/5, Mesh #0d40b67f) -------
@@ -100,10 +109,16 @@
 	# RFC 8414 path-suffixed form a client may probe) to the API too, so the
 	# client gets a 404 instead of an HTML page.
 	handle /.well-known/oauth-authorization-server* {
-		reverse_proxy 127.0.0.1:8005
+		reverse_proxy 127.0.0.1:8005 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
+		}
 	}
 	handle /oauth/* {
-		reverse_proxy 127.0.0.1:8005
+		reverse_proxy 127.0.0.1:8005 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
+		}
 	}
 	# Protected resource metadata (mesh-mcp): the 401 from /mcp points clients
 	# at /.well-known/oauth-protected-resource/mcp (and .../mcp/core), at the
@@ -112,14 +127,22 @@
 	# `resource` field comes from MESH_MCP_PUBLIC_URL, not from Host.
 	handle /.well-known/oauth-protected-resource* {
 		reverse_proxy 127.0.0.1:8081 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
 			header_up Host localhost
 		}
 	}
 	handle /ws {
-		reverse_proxy 127.0.0.1:8005
+		reverse_proxy 127.0.0.1:8005 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
+		}
 	}
 	handle /health {
-		reverse_proxy 127.0.0.1:8005
+		reverse_proxy 127.0.0.1:8005 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
+		}
 	}
 	# Exact /mcp is the full-profile Streamable HTTP endpoint of mesh-mcp,
 	# forwarded WITHOUT stripping (mesh-mcp serves it at /mcp). /mcp/* below
@@ -127,6 +150,8 @@
 	# a bare /mcp falls through to the SPA and answers index.html with 200.
 	handle /mcp {
 		reverse_proxy 127.0.0.1:8081 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
 			header_up Host localhost
 		}
 	}
@@ -141,6 +166,8 @@
 		# The server does not use Host for anything: message endpoints are
 		# advertised from MESH_MCP_PUBLIC_URL (.env.prod), not derived from Host.
 		reverse_proxy 127.0.0.1:8081 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
 			header_up Host localhost
 		}
 	}
@@ -150,7 +177,10 @@
 		}
 	}
 	handle /webhooks/* {
-		reverse_proxy 127.0.0.1:8005
+		reverse_proxy 127.0.0.1:8005 {
+			lb_try_duration 30s
+			lb_try_interval 250ms
+		}
 	}
 
 	# Vite writes a content hash into every filename under /assets/, so a given
