@@ -2,7 +2,7 @@
 
 ## Overview
 
-evc-mesh exposes **63 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **64 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), and over HTTP on port 8081 **SSE** and
 **Streamable HTTP** — the latter also accepting OAuth access tokens, so an MCP
 client can sign in by itself instead of being handed an agent key.
@@ -24,7 +24,7 @@ Tools are organized into 13 categories:
 | Project & Task Management | 11 | CRUD for projects, tasks, subtasks, dependencies, assignments, PR links |
 | Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
 | Documents | 7 | Project document tree: create, read, edit, search, and comment on pages |
-| Memory & Knowledge | 9 | Persistent memory, project knowledge, and the canonical decision layer |
+| Memory & Knowledge | 10 | Persistent memory, project knowledge, and the canonical decision layer |
 | Event Bus | 5 | Publish/subscribe events, context aggregation |
 | Agent Hierarchy | 2 | Register and list sub-agents |
 | Utility | 4 | Heartbeat, error reporting, self-assigned task listing, session metrics |
@@ -116,7 +116,7 @@ Two endpoints are served:
 
 | Endpoint | Profile | Tools |
 |----------|---------|-------|
-| `http://localhost:8081/sse` | full | 63 |
+| `http://localhost:8081/sse` | full | 64 |
 | `http://localhost:8081/core/sse` | core | 25 |
 
 Behind a reverse proxy, see
@@ -135,7 +135,7 @@ every request carries its own credential):
 
 | Endpoint on the binary | Public URL behind the bundled nginx | Profile | Tools |
 |------------------------|-------------------------------------|---------|-------|
-| `http://localhost:8081/mcp` | `https://<host>/mcp` | full | 63 |
+| `http://localhost:8081/mcp` | `https://<host>/mcp` | full | 64 |
 | `http://localhost:8081/core` | `https://<host>/mcp/core` | core | 25 |
 
 Credentials, headers only (a `?agent_key=` here is rejected with `400`):
@@ -175,7 +175,7 @@ and Caddy examples and a `curl` check.
 | `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
 | `MESH_MCP_PUBLIC_URL` | *(empty)* | No | Public base URL of the SSE server. Empty advertises the message endpoint relative to the URL the client connected to, which is correct unless a proxy serves MCP under a path prefix |
-| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (63) or `core` (25). In SSE mode the profile follows the endpoint |
+| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (64) or `core` (25). In SSE mode the profile follows the endpoint |
 | `MESH_MCP_OAUTH_ISSUER` | *(empty)* | No | Authorization server named in the OAuth resource metadata. Empty = the origin of the resource URL, correct whenever MCP is served on the Mesh instance's own origin |
 | `MESH_MCP_OAUTH_CACHE_TTL_SEC` | `60` | No | How long an accepted OAuth access token is trusted before it is re-checked with the API — the bound on how long a revoked token keeps working here |
 
@@ -957,7 +957,7 @@ anchor: it is still shown, and it is not pointing anywhere.
 
 ---
 
-### Memory & Knowledge (9 tools)
+### Memory & Knowledge (10 tools)
 
 #### 24. `remember`
 
@@ -1010,7 +1010,7 @@ Save knowledge to persistent memory. Use for decisions, conventions, and prefere
 #### 25. `recall`
 
 **Search** memory by keywords. Use to find a *specific* piece of knowledge, e.g. "API
-convention" or "license decision". Returns ranked results with scores. To load *all* project
+convention" or "license decision". Returns ranked results with scores. By default each item is compact: `content` is cut to about 300 characters with `content_truncated` / `content_chars` set, and service fields are omitted; pass `full=true` for the full items, or fetch one entry whole with `get_memory`. To load *all* project
 knowledge at session start, use `get_project_knowledge` instead.
 
 | Parameter | Type | Required | Default | Description |
@@ -1031,6 +1031,7 @@ knowledge at session start, use `get_project_knowledge` instead.
 | `include_archived` | boolean | No | `false` | Include archived memories |
 | `limit` | number | No | `10` | Max results (max 50). **Hard bound** -- see the note below |
 | `offset` | number | No | `0` | Pagination offset |
+| `full` | boolean | No | `false` | Return full items (complete `content` and all fields) instead of the compact view |
 
 > `limit` is a hard bound: the response never contains more than `limit` items. When
 > knowledge-graph boost is enabled, a share of the page (`limit/4`, at least 1 when
@@ -1253,6 +1254,29 @@ failure there is reported in the result but does not undo the canonical write.
     "text": "Specs, ADRs and runbooks go into the project's Docs tree...",
     "propagate_to": ["all"],
     "task_id": "a1b2c3d4-..."
+  }
+}
+```
+
+---
+
+#### 64. `get_memory`
+
+Fetch the **full text of one memory entry** by its exact `key`. Use it after a compact `recall` when an item's `content_truncated` is `true`. There is no get-by-key endpoint on the backend, so the tool searches on the key (up to 4 pages of 50) and returns the entry whose key matches exactly; superseded entries are included and the importance floor is not applied.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `key` | string | **Yes** | -- | Exact memory key |
+| `project_id` | string | No | -- | Restrict the search to a project |
+| `scope` | string | No | -- | `workspace`, `project`, `agent`, or `all` |
+| `include_archived` | boolean | No | `false` | Include archived memories |
+
+**Example request:**
+```json
+{
+  "name": "get_memory",
+  "arguments": {
+    "key": "doc-agent-docs-convention"
   }
 }
 ```
