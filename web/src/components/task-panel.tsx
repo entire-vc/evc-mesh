@@ -164,6 +164,10 @@ export function TaskPanel({
     () => new URLSearchParams(location.search).get("comment"),
     [location.search],
   );
+  const focusArtifactId = useMemo(
+    () => new URLSearchParams(location.search).get("artifact"),
+    [location.search],
+  );
 
   // Task navigation stack — must be declared before selectors that depend on it
   const [taskIdStack, setTaskIdStack] = useState<string[]>([]);
@@ -206,8 +210,13 @@ export function TaskPanel({
   // exactly why a passing "the rail is visible" check proves nothing here:
   // it would pass on desktop even with no focus/scroll logic implemented.
   useEffect(() => {
+    if (!isCreateMode && focusArtifactId) {
+      setActiveMobileTab("artifacts");
+      setActiveDesktopTab("artifacts");
+      return;
+    }
     if (focusCommentId) setActiveMobileTab("comments");
-  }, [focusCommentId]);
+  }, [focusCommentId, focusArtifactId, isCreateMode]);
   // Existing tasks open collapsed (most properties are empty on a typical card);
   // a create draft opens expanded, because every row there is an input the author
   // may want to fill and a hidden input is an input that does not exist. The
@@ -2329,6 +2338,7 @@ export function TaskPanel({
                   <div className="p-3">
                     <ArtifactList
                       taskId={currentTask.id}
+                      focusArtifactId={focusArtifactId}
                       projId={currentTask.project_id}
                       projectSettings={
                         (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
@@ -2455,6 +2465,7 @@ export function TaskPanel({
                 <div className="flex-1 overflow-y-auto p-3">
                   <ArtifactList
                     taskId={currentTask.id}
+                    focusArtifactId={focusArtifactId}
                     projId={currentTask.project_id}
                     projectSettings={
                       (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings

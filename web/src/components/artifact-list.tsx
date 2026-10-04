@@ -27,11 +27,14 @@ import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { ArtifactPreviewDialog } from "@/components/artifact-preview-dialog";
 import { previewKindFor } from "@/lib/artifact-preview";
-import type { Artifact, ArtifactType, PaginatedResponse } from "@/types";
+import type { Artifact, ArtifactType } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
+import { artifactHref, fetchLinkedEntities } from "@/lib/entity-deep-links";
+import { EntityAnchor } from "@/components/entity-anchor";
 
 interface ArtifactListProps {
   taskId: string;
+  focusArtifactId?: string | null;
   /** Increment this counter from parent to trigger a re-fetch */
   refreshKey?: number;
   projId?: string;
@@ -72,9 +75,11 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
 // browser, or offer only Download. See that module for why text is no longer in
 // the "hand it to the browser" bucket.
 
-export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: ArtifactListProps) {
+export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArtifactId }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const requestId = useRef(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -109,20 +114,25 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
   );
 
   const fetchArtifacts = useCallback(async () => {
+    const request = ++requestId.current;
+    setLoading(true);
+    setLoadError(false);
     try {
-      const data = await api<PaginatedResponse<Artifact>>(
+      const items = await fetchLinkedEntities<Artifact>(
         `/api/v1/tasks/${taskId}/artifacts`,
+        focusArtifactId,
       );
-      setArtifacts(data.items ?? []);
+      if (request === requestId.current) setArtifacts(items);
     } catch {
-      // silently fail - will show empty list
+      if (request === requestId.current) setLoadError(true);
     } finally {
-      setLoading(false);
+      if (request === requestId.current) setLoading(false);
     }
-  }, [taskId]);
+  }, [taskId, focusArtifactId]);
 
   useEffect(() => {
     void fetchArtifacts();
+    return () => { requestId.current++; };
   }, [fetchArtifacts, refreshKey]);
 
   // Upload files via drag-and-drop or file picker
@@ -303,9 +313,20 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
     </div>
   );
 
+  if (loadError) {
+    return <div role="alert" className="space-y-2 text-sm">
+      <p>Could not load artifacts.</p>
+      <Button variant="outline" onClick={() => void fetchArtifacts()}>Retry</Button>
+    </div>;
+  }
+
+  const notFound = focusArtifactId && !artifacts.some(artifact => artifact.id === focusArtifactId)
+    ? <p role="alert" className="py-3 text-sm text-muted-foreground">Artifact not found or you don&apos;t have access.</p> : null;
+
   if (artifacts.length === 0) {
     return (
       <div className="space-y-3">
+        {notFound}
         <div className="flex flex-col items-center py-4 text-muted-foreground">
           <Package className="mb-2 h-8 w-8" />
           <p className="text-sm">No artifacts uploaded yet.</p>
@@ -317,6 +338,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
 
   return (
     <div className="space-y-2">
+      {notFound}
       {artifacts.map((artifact) => {
         const Icon = artifactTypeIcons[artifact.artifact_type] ?? File;
         const badgeVariant = artifactTypeBadgeVariant[artifact.artifact_type] ?? "secondary";
@@ -327,8 +349,11 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
             : undefined;
 
         return (
-          <div
+          <EntityAnchor
             key={artifact.id}
+            id={artifact.id}
+            kind="artifact"
+            focused={artifact.id === focusArtifactId}
             className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-muted/50"
           >
             <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -349,6 +374,10 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
             </div>
 
             <div className="ml-3 flex shrink-0 items-center gap-1">
+              <a href={artifactHref(taskId, artifact.id)} title="Link to artifact" aria-label="Link to artifact"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted">
+                <Link className="h-4 w-4" />
+              </a>
               {/* A Team Relay artifact keeps opening in Team Relay: the bytes
                   are not ours to render and the share decides who may read
                   them. Checked before the kind, so it wins. */}
@@ -404,7 +433,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert }: Artifa
                 <Trash2 className="h-4 w-4" />
               </Button>
             </div>
-          </div>
+          </EntityAnchor>
         );
       })}
       {uploadZone}

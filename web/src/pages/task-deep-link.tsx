@@ -53,12 +53,12 @@ export function TaskDeepLinkResolver() {
     return () => {
       cancelled = true;
     };
-  }, [taskId, isAuthenticated, fetchWorkspaces, workspaces.length]);
+  }, [taskId, isAuthenticated, fetchWorkspaces, workspaces.length, location.search]);
 
   if (!isAuthenticated) {
     return (
       <Navigate
-        to={`/login?redirect=${encodeURIComponent(location.pathname)}`}
+        to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`}
         replace
       />
     );
