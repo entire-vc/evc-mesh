@@ -43,7 +43,14 @@ type AgentHandler struct {
 	rdb             *redis.Client                     // optional, used for SSE and long-poll
 	agentEventsRepo repository.AgentEventsRepository  // optional, enables Last-Event-ID SSE replay
 	sessionRepo     repository.AgentSessionRepository // optional, enables POST /agents/me/sessions/report
+	shutdown        <-chan struct{}                   // optional, closed on server shutdown to end SSE streams and long-polls
 }
+
+// SetShutdownSignal registers a channel that is closed when the server starts
+// shutting down. Long-lived handlers (SSE stream, task long-poll) return as
+// soon as it is closed; otherwise http.Server.Shutdown waits for them until
+// its deadline. A nil channel (the default) never fires.
+func (h *AgentHandler) SetShutdownSignal(ch <-chan struct{}) { h.shutdown = ch }
 
 // NewAgentHandler creates a new AgentHandler with the given service.
 func NewAgentHandler(as service.AgentService) *AgentHandler {
@@ -1215,6 +1222,9 @@ func (h *AgentHandler) EventStream(c echo.Context) error {
 		case <-reqCtx.Done():
 			return nil
 
+		case <-h.shutdown:
+			return nil
+
 		case msg, ok := <-subCh:
 			if !ok {
 				return nil
@@ -1328,6 +1338,9 @@ func (h *AgentHandler) PollTasks(c echo.Context) error {
 
 	case <-timer.C:
 		// Timeout reached — return current tasks with changed=false.
+
+	case <-h.shutdown:
+		// Server is shutting down — answer now with changed=false; the client re-polls.
 	}
 
 	// Fetch current tasks for this agent. The same filters as the non-polling
