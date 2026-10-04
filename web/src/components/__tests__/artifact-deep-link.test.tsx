@@ -23,7 +23,7 @@ describe("artifact address", () => {
     await screen.findByText("proof.png");
     const row = container.querySelector('[data-artifact-id="artifact-2"]');
     expect(row).toHaveAttribute("data-focused", "true");
-    expect(scroll).toHaveBeenCalled();
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
     expect(screen.getByRole("link", { name: "Link to artifact" }))
       .toHaveAttribute("href", "/t/task-1?artifact=artifact-2");
   });
