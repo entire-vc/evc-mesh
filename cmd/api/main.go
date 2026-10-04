@@ -823,6 +823,10 @@ func main() {
 	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
 	depHandler := handler.NewDependencyHandler(depService, taskService)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
+	// Closed first thing on SIGTERM so SSE streams and long-polls end before
+	// e.Shutdown, which would otherwise wait on them until its deadline.
+	httpShutdownCh := make(chan struct{})
+	agentHandler.SetShutdownSignal(httpShutdownCh)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	secretHandler := handler.NewSecretHandler(secretService, activityLogService)
@@ -1028,7 +1032,11 @@ func main() {
 	wsRedis := sharedRedis
 	hub := wsHub.NewHub(wsRedis)
 	hubCtx, hubCancel := context.WithCancel(context.Background())
-	go hub.Run(hubCtx)
+	hubDone := make(chan struct{})
+	go func() {
+		defer close(hubDone)
+		hub.Run(hubCtx)
+	}()
 	log.Println("WebSocket hub started")
 
 	// Activity tracker: batches last_heartbeat updates for API-calling agents.
@@ -2350,7 +2358,18 @@ func main() {
 	// Stop the scheduler.
 	close(schedulerShutdownCh)
 
-	// Graceful shutdown with timeout.
+	// End long-lived connections first: SSE/long-poll handlers return, WS
+	// clients are closed by the hub. e.Shutdown does not track hijacked WS
+	// connections and blocks on in-flight SSE handlers until its deadline.
+	close(httpShutdownCh)
+	hubCancel()
+	select {
+	case <-hubDone:
+	case <-time.After(time.Second):
+		log.Println("[ws-hub] did not stop within 1s, continuing shutdown")
+	}
+
+	// Graceful shutdown with timeout (safety net, normally finishes in ms).
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 
@@ -2372,8 +2391,7 @@ func main() {
 	toolBreakdownCancel()
 	toolBreakdownTracker.Flush(shutdownCtx)
 
-	// Close WebSocket hub and shared Redis (also used by the rate limiter).
-	hubCancel()
+	// Shared Redis (also used by the rate limiter) — the WS hub was stopped before e.Shutdown.
 	if err := sharedRedis.Close(); err != nil {
 		log.Printf("Error closing shared Redis: %v", err)
 	}
