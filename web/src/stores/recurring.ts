@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
+import { fetchLinkedEntities } from "@/lib/entity-deep-links";
 import type {
   CreateRecurringRequest,
   PaginatedResponse,
@@ -20,8 +21,11 @@ interface RecurringState {
   schedules: RecurringSchedule[];
   history: RecurringInstanceSummary[];
   isLoading: boolean;
+  schedulesLoading: boolean;
+  schedulesError: boolean;
+  schedulesProjectId: string | null;
 
-  fetchSchedules: (projectId: string) => Promise<void>;
+  fetchSchedules: (projectId: string, focusId?: string | null) => Promise<void>;
   createSchedule: (
     projectId: string,
     req: CreateRecurringRequest,
@@ -38,20 +42,28 @@ interface RecurringState {
   ) => Promise<void>;
 }
 
+let schedulesRequest = 0;
 export const useRecurringStore = create<RecurringState>((set, get) => ({
   schedules: [],
   history: [],
   isLoading: false,
+  schedulesLoading: false,
+  schedulesError: false,
+  schedulesProjectId: null,
 
-  fetchSchedules: async (projectId: string) => {
-    set({ isLoading: true });
+  fetchSchedules: async (projectId: string, focusId?: string | null) => {
+    const request = ++schedulesRequest;
+    set({ isLoading: true, schedulesLoading: true, schedulesError: false, schedulesProjectId: null, schedules: [] });
     try {
-      const data = await api<PaginatedResponse<RecurringSchedule>>(
+      const schedules = await fetchLinkedEntities<RecurringSchedule>(
         `/api/v1/projects/${projectId}/recurring`,
+        focusId,
       );
-      set({ schedules: data.items ?? [], isLoading: false });
+      if (request !== schedulesRequest) return;
+      set({ schedules, isLoading: false, schedulesLoading: false, schedulesProjectId: projectId });
     } catch {
-      set({ isLoading: false });
+      if (request !== schedulesRequest) return;
+      set({ isLoading: false, schedulesLoading: false, schedulesError: true, schedulesProjectId: projectId });
     }
   },
 

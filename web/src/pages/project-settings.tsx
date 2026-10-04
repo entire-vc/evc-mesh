@@ -3,7 +3,7 @@ import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "@/components/ui/toast";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import {
   AlertTriangle,
   ArrowDown,
@@ -16,6 +16,7 @@ import {
   GitBranch,
   GripVertical,
   History,
+  Link as LinkIcon,
   Pause,
   Pencil,
   Play,
@@ -65,6 +66,8 @@ import { formatDate, formatRelative, statusCategoryConfig } from "@/lib/utils";
 import { cn } from "@/lib/cn";
 import { api } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-error";
+import { projectSettingsTab, scheduleHref } from "@/lib/entity-deep-links";
+import { EntityAnchor } from "@/components/entity-anchor";
 import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
 import type {
   Agent,
@@ -1174,7 +1177,17 @@ export function ProjectSettingsPage() {
   const [trLastSyncError, setTrLastSyncError] = useState<string | null>(null);
 
   // --- Tab state ---
-  const [activeTab, setActiveTab] = useState("general");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = projectSettingsTab(searchParams);
+  const focusScheduleId = searchParams.get("schedule");
+  const setActiveTab = (tab: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set("tab", tab);
+      if (tab !== "recurring") next.delete("schedule");
+      return next;
+    });
+  };
 
   const PROJECT_TABS = [
     { id: "general", label: "General" },
@@ -1195,6 +1208,9 @@ export function ProjectSettingsPage() {
     updateSchedule: updateRecurringSchedule,
     deleteSchedule: deleteRecurringSchedule,
     triggerNow: triggerRecurringNow,
+    schedulesLoading,
+    schedulesError,
+    schedulesProjectId,
   } = useRecurringStore();
   const [recurringDialogOpen, setRecurringDialogOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<RecurringSchedule | null>(null);
@@ -1240,7 +1256,6 @@ export function ProjectSettingsPage() {
       fetchProjectMembers(currentProject.id);
       void fetchWorkflowRules(currentProject.id);
       void fetchEffectiveAssignmentRules(currentProject.id);
-      void fetchRecurringSchedules(currentProject.id);
       void fetchTemplates(currentProject.id);
     }
   }, [
@@ -1250,9 +1265,12 @@ export function ProjectSettingsPage() {
     fetchProjectMembers,
     fetchWorkflowRules,
     fetchEffectiveAssignmentRules,
-    fetchRecurringSchedules,
     fetchTemplates,
   ]);
+
+  useEffect(() => {
+    if (currentProject?.id) void fetchRecurringSchedules(currentProject.id, focusScheduleId);
+  }, [currentProject?.id, focusScheduleId, fetchRecurringSchedules]);
 
   // Fetch workspace members and agents for assignment selects
   useEffect(() => {
@@ -2352,6 +2370,17 @@ export function ProjectSettingsPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {schedulesLoading || schedulesProjectId !== currentProject.id ? (
+            <div role="status" className="py-8 text-sm text-muted-foreground">Loading recurring schedules…</div>
+          ) : schedulesError ? (
+            <div role="alert" className="py-4 text-sm">
+              Could not load recurring schedules.
+              <Button variant="ghost" onClick={() => void fetchRecurringSchedules(currentProject.id, focusScheduleId)}>Retry</Button>
+            </div>
+          ) : <>
+          {focusScheduleId && !recurringSchedules.some(schedule => schedule.id === focusScheduleId) && (
+            <p role="alert" className="mb-4 text-sm text-muted-foreground">Schedule not found or you don&apos;t have access.</p>
+          )}
           {recurringSchedules.length === 0 ? (
             <div className="py-10 text-center">
               <RefreshCw className="mx-auto mb-3 h-8 w-8 text-muted-foreground opacity-50" />
@@ -2374,7 +2403,8 @@ export function ProjectSettingsPage() {
           ) : (
             <div className="divide-y divide-border">
               {recurringSchedules.map((schedule) => (
-                <div key={schedule.id} className="py-4 first:pt-0 last:pb-0">
+                <EntityAnchor key={schedule.id} id={schedule.id} kind="schedule"
+                  focused={focusScheduleId === schedule.id} className="py-4 first:pt-0 last:pb-0">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-2 min-w-0">
                       <RefreshCw
@@ -2429,6 +2459,11 @@ export function ProjectSettingsPage() {
                     </div>
 
                     <div className="flex shrink-0 items-center gap-1">
+                      <a href={scheduleHref(wsSlug ?? "", projectSlug ?? "", schedule.id)}
+                        title="Link to schedule" aria-label="Link to schedule"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted">
+                        <LinkIcon className="h-4 w-4" />
+                      </a>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -2510,10 +2545,11 @@ export function ProjectSettingsPage() {
                       </Button>
                     </div>
                   </div>
-                </div>
+                </EntityAnchor>
               ))}
             </div>
           )}
+          </>}
         </CardContent>
       </Card>
       )}
