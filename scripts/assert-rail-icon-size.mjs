@@ -146,9 +146,11 @@ function railGlyphClassFromSidebar() {
     collapsedEnd === -1 ? src.length : collapsedEnd,
   );
   const classes = [
-    ...region.matchAll(/<[A-Z][A-Za-z0-9]*\s+className="(h-\d[^"]*w-\d[^"]*)"/g),
+    ...region.matchAll(/<([A-Z][A-Za-z0-9]*)\s+className="(h-\d[^"]*w-\d[^"]*)"/g),
   ]
-    .map((m) => m[1])
+    // Loading placeholders fill a whole tile; they do not draw an SVG glyph.
+    .filter((m) => m[1] !== "Skeleton")
+    .map((m) => m[2])
     // The unread-count badge is a positioned dot, not a rail glyph.
     .filter((c) => !c.includes("absolute"));
   if (classes.length === 0) fail("sidebar.tsx: no rail icon classes found in the collapsed branch");
