@@ -20,6 +20,12 @@ type CommentView struct {
 	IsInternal  bool      `json:"is_internal"  db:"is_internal"`
 	CreatedAt   time.Time `json:"created_at"   db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"   db:"updated_at"`
+
+	// URL is the canonical deep-link straight to this comment — the owning
+	// task's /t/<taskID> URL plus the ?comment=<id> focus parameter — same
+	// field as domain.Comment.URL, on the feed shape. Computed per-response
+	// by the handler, never stored, hence db:"-" and omitempty.
+	URL string `json:"url,omitempty" db:"-"`
 }
 
 // CommentCursor identifies a page boundary as a (created_at, id) tuple rather

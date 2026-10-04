@@ -32,6 +32,7 @@ func setupCommentTest(mockSvc *MockCommentService) (*CommentHandler, *echo.Echo)
 func TestCommentHandler_Create_Success(t *testing.T) {
 	taskID := uuid.New()
 	userID := uuid.New()
+	commentID := uuid.New()
 
 	mockSvc := &MockCommentService{
 		CreateFunc: func(ctx context.Context, comment *domain.Comment) error {
@@ -40,6 +41,8 @@ func TestCommentHandler_Create_Success(t *testing.T) {
 			assert.Equal(t, userID, comment.AuthorID)
 			assert.Equal(t, domain.ActorTypeUser, comment.AuthorType)
 			assert.False(t, comment.IsInternal)
+			// The real service assigns the ID before returning.
+			comment.ID = commentID
 			return nil
 		},
 	}
@@ -64,6 +67,9 @@ func TestCommentHandler_Create_Success(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &result)
 	require.NoError(t, err)
 	assert.Equal(t, "This is a comment", result.Body)
+	// The deep-link names the owning task plus the ?comment= focus
+	// parameter. httptest's default host is example.com over plain http.
+	assert.Equal(t, "http://example.com/t/"+taskID.String()+"?comment="+commentID.String(), result.URL)
 }
 
 func TestCommentHandler_Create_Internal(t *testing.T) {
@@ -196,6 +202,12 @@ func TestCommentHandler_List_Success(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &page)
 	require.NoError(t, err)
 	assert.Len(t, page.Items, 2)
+	// Each comment carries its own deep-link: the task URL plus the
+	// ?comment=<id> focus parameter the web client scrolls to and
+	// highlights. httptest's default host is example.com over plain http.
+	for i, cm := range page.Items {
+		assert.Equal(t, "http://example.com/t/"+taskID.String()+"?comment="+cm.ID.String(), page.Items[i].URL)
+	}
 }
 
 func TestCommentHandler_List_WithIncludeInternal(t *testing.T) {
@@ -406,6 +418,47 @@ func TestCommentHandler_List_IncludesReplies(t *testing.T) {
 
 // --- TestCommentHandler_Delete ---
 
+// --- TestCommentHandler_Update ---
+
+func TestCommentHandler_Update_Success(t *testing.T) {
+	commentID := uuid.New()
+	taskID := uuid.New()
+
+	mockSvc := &MockCommentService{
+		UpdateFunc: func(ctx context.Context, comment *domain.Comment) error {
+			assert.Equal(t, commentID, comment.ID)
+			assert.Equal(t, "edited body", comment.Body)
+			// The real service re-fetches and replaces the struct with the
+			// enriched record — TaskID included.
+			comment.TaskID = taskID
+			return nil
+		},
+	}
+
+	h, e := setupCommentTest(mockSvc)
+
+	body := `{"body":"edited body"}`
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/comments/:comment_id")
+	c.SetParamNames("comment_id")
+	c.SetParamValues(commentID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result domain.Comment
+	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	require.NoError(t, err)
+	assert.Equal(t, "edited body", result.Body)
+	// The URL is computed after Update enriched the record, so it can name
+	// the owning task. httptest's default host is example.com over plain http.
+	assert.Equal(t, "http://example.com/t/"+taskID.String()+"?comment="+commentID.String(), result.URL)
+}
+
 func TestCommentHandler_Delete_Success(t *testing.T) {
 	commentID := uuid.New()
 	mockSvc := &MockCommentService{
@@ -472,9 +525,11 @@ func TestCommentHandler_Delete_NotFound(t *testing.T) {
 func TestCommentHandler_GetMyComments_Success(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
+	taskID := uuid.New()
+	commentID := uuid.New()
 	page := &domain.CommentViewPage{
 		Items: []domain.CommentView{
-			{CommentID: uuid.New(), TaskTitle: "Task A", CommentBody: "hello", CreatedAt: now},
+			{CommentID: commentID, TaskID: taskID, TaskTitle: "Task A", CommentBody: "hello", CreatedAt: now},
 		},
 		NextCursor: nil,
 	}
@@ -502,6 +557,9 @@ func TestCommentHandler_GetMyComments_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	assert.Len(t, got.Items, 1)
 	assert.Equal(t, "Task A", got.Items[0].TaskTitle)
+	// Feed rows span tasks, so each link is built from the row's own task_id.
+	// httptest's default host is example.com over plain http.
+	assert.Equal(t, "http://example.com/t/"+taskID.String()+"?comment="+commentID.String(), got.Items[0].URL)
 }
 
 func TestCommentHandler_GetMyComments_Unauthenticated(t *testing.T) {
@@ -597,9 +655,11 @@ func TestCommentHandler_GetRecentByWorkspace_Success(t *testing.T) {
 	wsID := uuid.New()
 	now := time.Now().UTC()
 	nextCursor := now.Add(-time.Minute)
+	taskID := uuid.New()
+	commentID := uuid.New()
 	page := &domain.CommentViewPage{
 		Items: []domain.CommentView{
-			{CommentID: uuid.New(), TaskTitle: "Task B", AuthorName: "Garfield", CreatedAt: now},
+			{CommentID: commentID, TaskID: taskID, TaskTitle: "Task B", AuthorName: "Garfield", CreatedAt: now},
 		},
 		NextCursor: &nextCursor,
 	}
@@ -627,6 +687,47 @@ func TestCommentHandler_GetRecentByWorkspace_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	assert.Len(t, got.Items, 1)
 	assert.NotNil(t, got.NextCursor)
+	// Same per-row deep-link as GetMyComments. httptest's default host is
+	// example.com over plain http.
+	assert.Equal(t, "http://example.com/t/"+taskID.String()+"?comment="+commentID.String(), got.Items[0].URL)
+}
+
+// TestCommentHandler_GetRecentByWorkspace_URLRespectsForwardedHeaders pins
+// the #fe507dc9 rule for comments too: behind Caddy the deep-link must carry
+// the public scheme/host from X-Forwarded-Proto/X-Forwarded-Host, never the
+// internal hop the request actually arrived on.
+func TestCommentHandler_GetRecentByWorkspace_URLRespectsForwardedHeaders(t *testing.T) {
+	wsID := uuid.New()
+	taskID := uuid.New()
+	commentID := uuid.New()
+	page := &domain.CommentViewPage{
+		Items: []domain.CommentView{
+			{CommentID: commentID, TaskID: taskID, CreatedAt: time.Now().UTC()},
+		},
+	}
+
+	mockSvc := &MockCommentService{
+		ListRecentByWorkspaceFunc: func(_ context.Context, id uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error) {
+			return page, nil
+		},
+	}
+	h, e := setupCommentTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "mesh.entire.host")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("ws_id")
+	c.SetParamValues(wsID.String())
+
+	err := h.GetRecentByWorkspace(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var got domain.CommentViewPage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, "https://mesh.entire.host/t/"+taskID.String()+"?comment="+commentID.String(), got.Items[0].URL)
 }
 
 func TestCommentHandler_GetRecentByWorkspace_BadWorkspaceID(t *testing.T) {

@@ -30,16 +30,7 @@ import (
 // computeTaskURL builds a canonical short URL for the given task ID.
 // It respects X-Forwarded-Proto and X-Forwarded-Host headers set by reverse proxies (Caddy).
 func computeTaskURL(r *http.Request, taskID uuid.UUID) string {
-	scheme := "https"
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-		scheme = p
-	} else if r.TLS == nil {
-		scheme = "http"
-	}
-	host := r.Host
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-		host = h
-	}
+	scheme, host := requestOrigin(r)
 	return fmt.Sprintf("%s://%s/t/%s", scheme, host, taskID.String())
 }
 

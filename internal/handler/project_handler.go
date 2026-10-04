@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -24,6 +25,22 @@ type ProjectHandler struct {
 // NewProjectHandler creates a new ProjectHandler with the given service.
 func NewProjectHandler(ps service.ProjectService) *ProjectHandler {
 	return &ProjectHandler{projectService: ps}
+}
+
+// computeProjectURL builds a canonical deep-link for the given project ID,
+// same construction as computeTaskURL in task_handler.go and
+// computeDocumentURL in document_handler.go (respects
+// X-Forwarded-Proto/X-Forwarded-Host set by Caddy).
+//
+// It deliberately does NOT embed the workspace slug: the full
+// /w/<wsSlug>/p/<slug> path would need the workspace's slug, which the
+// project row doesn't know, and resolving it would mean a join the handler
+// doesn't otherwise need. The /p/<id> path is resolved client-side by
+// web/src/pages/project-deep-link.tsx, registered in web/src/App.tsx as
+// p/:projectId — same trade-off as /t/<id> and /d/<id>.
+func computeProjectURL(r *http.Request, projID uuid.UUID) string {
+	scheme, host := requestOrigin(r)
+	return fmt.Sprintf("%s://%s/p/%s", scheme, host, projID.String())
 }
 
 // createProjectRequest represents the JSON body for creating a project.
@@ -108,6 +125,10 @@ func (h *ProjectHandler) List(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	for i := range page.Items {
+		page.Items[i].URL = computeProjectURL(c.Request(), page.Items[i].ID)
+	}
+
 	return c.JSON(http.StatusOK, page)
 }
 
@@ -145,6 +166,7 @@ func (h *ProjectHandler) Create(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	project.URL = computeProjectURL(c.Request(), project.ID)
 	return c.JSON(http.StatusCreated, project)
 }
 
@@ -161,6 +183,7 @@ func (h *ProjectHandler) GetByID(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	project.URL = computeProjectURL(c.Request(), project.ID)
 	return c.JSON(http.StatusOK, project)
 }
 
@@ -208,6 +231,7 @@ func (h *ProjectHandler) Update(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	project.URL = computeProjectURL(c.Request(), project.ID)
 	return c.JSON(http.StatusOK, project)
 }
 
@@ -257,5 +281,6 @@ func (h *ProjectHandler) setArchived(c echo.Context, archived bool) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	project.URL = computeProjectURL(c.Request(), project.ID)
 	return c.JSON(http.StatusOK, project)
 }

@@ -60,6 +60,8 @@ func TestProjectHandler_Create_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "My Project", result.Name)
 	assert.Equal(t, wsID, result.WorkspaceID)
+	// httptest's default host is example.com over plain http.
+	assert.Equal(t, "http://example.com/p/"+result.ID.String(), result.URL)
 }
 
 func TestProjectHandler_Create_MissingName(t *testing.T) {
@@ -143,6 +145,41 @@ func TestProjectHandler_GetByID_Found(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, projID, result.ID)
 	assert.Equal(t, "Found Project", result.Name)
+	// httptest's default host is example.com over plain http.
+	assert.Equal(t, "http://example.com/p/"+projID.String(), result.URL)
+}
+
+// TestProjectHandler_GetByID_URLRespectsForwardedHeaders pins the same rule
+// computeTaskURL established (#fe507dc9): behind Caddy the URL must carry the
+// public scheme/host from X-Forwarded-Proto/X-Forwarded-Host, never the
+// internal one the request actually arrived on.
+func TestProjectHandler_GetByID_URLRespectsForwardedHeaders(t *testing.T) {
+	projID := uuid.New()
+	mockSvc := &MockProjectService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Project, error) {
+			return &domain.Project{ID: projID, Name: "Proxied", Slug: "proxied"}, nil
+		},
+	}
+
+	h, e := setupProjectTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "mesh.entire.host")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projID.String())
+
+	err := h.GetByID(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result domain.Project
+	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	require.NoError(t, err)
+	assert.Equal(t, "https://mesh.entire.host/p/"+projID.String(), result.URL)
 }
 
 func TestProjectHandler_GetByID_NotFound(t *testing.T) {
@@ -202,6 +239,12 @@ func TestProjectHandler_List_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, page.TotalCount)
 	assert.Len(t, page.Items, 2)
+	// Every item of a list response carries its own deep-link — a field the
+	// handler computes on some paths only reads as absent on the others
+	// (the #fc032545 lesson on tasks).
+	for _, p := range page.Items {
+		assert.Equal(t, "http://example.com/p/"+p.ID.String(), p.URL)
+	}
 }
 
 func TestProjectHandler_List_WithFilters(t *testing.T) {
@@ -329,8 +372,59 @@ func TestProjectHandler_ArchiveAndUnarchive(t *testing.T) {
 			var got domain.Project
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 			assert.Equal(t, tc.archived, got.IsArchived, "response must carry the flag as stored")
+			// archive/unarchive are response paths like any other — the
+			// deep-link must be there too. httptest's default host is
+			// example.com over plain http.
+			assert.Equal(t, "http://example.com/p/"+projID.String(), got.URL)
 		})
 	}
+}
+
+func TestProjectHandler_Update_Success(t *testing.T) {
+	projID := uuid.New()
+	now := time.Now()
+	existing := &domain.Project{
+		ID:          projID,
+		WorkspaceID: uuid.New(),
+		Name:        "Old Name",
+		Slug:        "old-slug",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	mockSvc := &MockProjectService{
+		GetByIDFunc: func(ctx context.Context, id uuid.UUID) (*domain.Project, error) {
+			assert.Equal(t, projID, id)
+			return existing, nil
+		},
+		UpdateFunc: func(ctx context.Context, project *domain.Project) error {
+			assert.Equal(t, "New Name", project.Name)
+			return nil
+		},
+	}
+
+	h, e := setupProjectTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"name":"New Name"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/projects/:proj_id")
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projID.String())
+
+	err := h.Update(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result domain.Project
+	err = json.Unmarshal(rec.Body.Bytes(), &result)
+	require.NoError(t, err)
+	assert.Equal(t, "New Name", result.Name)
+	// Update answers with the deep-link too, not just Get/List/Create — a
+	// field some paths compute and others skip reads as absent (#fc032545).
+	// httptest's default host is example.com over plain http.
+	assert.Equal(t, "http://example.com/p/"+projID.String(), result.URL)
 }
 
 // #ddd219f4: PATCH {is_archived:true} was answered 200 with nothing changed,

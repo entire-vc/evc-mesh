@@ -79,6 +79,14 @@ type Project struct {
 	IsArchived          bool                `json:"is_archived" db:"is_archived"`
 	CreatedAt           time.Time           `json:"created_at" db:"created_at"`
 	UpdatedAt           time.Time           `json:"updated_at" db:"updated_at"`
+
+	// URL is the canonical deep-link, e.g. https://mesh.entire.host/p/<id>.
+	// The full /w/<wsSlug>/p/<slug> path needs the workspace slug, which the
+	// project row doesn't know — /p/<id> is resolved client-side by
+	// web/src/pages/project-deep-link.tsx, the same trade-off Task.URL and
+	// Document.URL already make. Computed per-response by the handler, never
+	// stored, hence db:"-" and omitempty (the zero value never serializes).
+	URL string `json:"url,omitempty" db:"-"`
 }
 
 // GetSettings parses the Project.Settings JSONB into a typed ProjectSettings struct.
