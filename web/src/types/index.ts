@@ -1607,5 +1607,6 @@ export interface OAuthGrant {
   revoked_at?: string | null;
   client_name: string;
   agent_name: string;
+  agent_short_tag?: string | null;
   workspace: WorkspaceBrief;
 }

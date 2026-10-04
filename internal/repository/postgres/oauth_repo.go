@@ -284,6 +284,7 @@ type oauthGrantListRow struct {
 	RevokedAt     *time.Time `db:"revoked_at"`
 	ClientName    string     `db:"client_name"`
 	AgentName     string     `db:"agent_name"`
+	AgentShortTag *string    `db:"agent_short_tag"`
 	WorkspaceName string     `db:"workspace_name"`
 	WorkspaceSlug string     `db:"workspace_slug"`
 }
@@ -292,7 +293,7 @@ func (r *OAuthRepo) ListGrantsByUser(ctx context.Context, userID uuid.UUID) ([]d
 	const q = `
 		SELECT
 			g.id, g.user_id, g.client_id, g.workspace_id, g.agent_id, g.scope, g.created_at, g.revoked_at,
-			c.client_name AS client_name, a.name AS agent_name,
+			c.client_name AS client_name, a.name AS agent_name, NULLIF(a.short_tag, '') AS agent_short_tag,
 			w.name AS workspace_name, w.slug AS workspace_slug
 		FROM oauth_grants g
 		JOIN oauth_clients c ON c.client_id = g.client_id
@@ -312,8 +313,9 @@ func (r *OAuthRepo) ListGrantsByUser(ctx context.Context, userID uuid.UUID) ([]d
 				ID: row.ID, UserID: row.UserID, ClientID: row.ClientID, WorkspaceID: row.WorkspaceID,
 				AgentID: row.AgentID, Scope: row.Scope, CreatedAt: row.CreatedAt, RevokedAt: row.RevokedAt,
 			},
-			ClientName: row.ClientName,
-			AgentName:  row.AgentName,
+			ClientName:    row.ClientName,
+			AgentName:     row.AgentName,
+			AgentShortTag: row.AgentShortTag,
 			Workspace: domain.WorkspaceBrief{
 				ID: row.WorkspaceID, Name: row.WorkspaceName, Slug: row.WorkspaceSlug,
 			},
