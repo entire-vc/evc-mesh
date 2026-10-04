@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
+  AlertTriangle,
   ArchiveRestore,
   BarChart2,
   Bell,
@@ -38,6 +39,7 @@ import { useProjectStore } from "@/stores/project";
 import { useAuthStore } from "@/stores/auth";
 import { useWebSocketStore } from "@/stores/websocket";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -162,8 +164,11 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const { wsSlug, projectSlug } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { workspaces, currentWorkspace, createWorkspace } = useWorkspaceStore();
-  const { projects: allProjects, unarchiveProject } = useProjectStore();
+  const { workspaces, currentWorkspace, createWorkspace, isLoading: workspacesLoading } = useWorkspaceStore();
+  const { projects: allProjects, unarchiveProject, isLoading: projectsLoading, error: projectsError } = useProjectStore();
+  // Flat /t/ and /d/ links have no workspace until the resolver redirects.
+  // Only actual requests are pending; a dead-end resolver may never select one.
+  const navigationPending = workspacesLoading || projectsLoading;
   // The store keeps archived projects so ids still resolve to names elsewhere;
   // the sidebar lists only live ones and tucks the rest under "Archived"
   // (#ddd219f4 — an archived project used to stay in the list as if nothing
@@ -299,7 +304,16 @@ export function Sidebar({ collapsed }: SidebarProps) {
             <LayoutDashboard className="h-4 w-4" />
           </Link>
           {/* Projects */}
-          {projects.map((project) => (
+          {navigationPending ? (
+            <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label="Loading projects" className="space-y-2">
+              <Skeleton className="h-8 w-8 rounded-lg bg-sidebar-border" />
+              <Skeleton className="h-8 w-8 rounded-lg bg-sidebar-border" />
+            </div>
+          ) : !currentWorkspace ? null : projectsError ? (
+            <div role="alert" aria-label={projectsError} title={projectsError} className="flex h-8 w-8 items-center justify-center rounded-lg text-destructive">
+              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            </div>
+          ) : projects.map((project) => (
             <Link
               key={project.id}
               to={`/w/${wsSlug}/p/${project.slug}`}
@@ -510,7 +524,16 @@ export function Sidebar({ collapsed }: SidebarProps) {
             </Button>
           </div>
           <div className="mt-1 space-y-0.5">
-            {projects.map((project) => (
+            {navigationPending ? (
+              <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label="Loading projects" className="space-y-2 px-2 py-2">
+                <Skeleton className="h-6 w-full bg-sidebar-border" />
+                <Skeleton className="h-6 w-2/3 bg-sidebar-border" />
+              </div>
+            ) : !currentWorkspace ? null : projectsError ? (
+              <p role="alert" className="px-2 py-4 text-center text-xs text-destructive">
+                {projectsError}
+              </p>
+            ) : projects.map((project) => (
               <Link
                 key={project.id}
                 to={`/w/${wsSlug}/p/${project.slug}`}
@@ -530,13 +553,13 @@ export function Sidebar({ collapsed }: SidebarProps) {
                 <span className="flex-1 truncate">{project.name}</span>
               </Link>
             ))}
-            {projects.length === 0 && (
+            {!navigationPending && currentWorkspace && !projectsError && projects.length === 0 && (
               <p className="px-2 py-4 text-center text-xs text-muted-foreground">
                 No projects yet
               </p>
             )}
           </div>
-          {archivedProjects.length > 0 && (
+          {currentWorkspace && archivedProjects.length > 0 && (
             <div className="mt-1" data-testid="archived-projects">
               <button
                 type="button"

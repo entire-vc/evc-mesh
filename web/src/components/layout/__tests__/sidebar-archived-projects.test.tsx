@@ -16,6 +16,7 @@ vi.mock("@/lib/mentions/inbox", () => ({
 import { api } from "@/lib/api";
 import { Sidebar } from "@/components/layout/sidebar";
 import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import type { Project } from "@/types";
 
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
@@ -48,12 +49,18 @@ describe("Sidebar — archived projects", () => {
   beforeEach(() => {
     mockedApi.mockReset();
     mockedApi.mockResolvedValue({});
+    useWorkspaceStore.setState({
+      currentWorkspace: { id: "ws-1", slug: "acme", name: "Acme" } as never,
+      isLoading: false,
+    });
     useProjectStore.setState({
       projects: [
         project("p-live", "Live Project", false),
         project("p-arch", "r5-ac4-live-probe", true),
       ],
       currentProject: null,
+      isLoading: false,
+      error: null,
     });
   });
   afterEach(() => vi.clearAllMocks());
