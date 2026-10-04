@@ -136,6 +136,7 @@ func main() {
 	taskStatusRepo := postgres.NewTaskStatusRepo(db)
 	taskDependencyRepo := postgres.NewTaskDependencyRepo(db)
 	commentRepo := postgres.NewCommentRepo(db)
+	closedFollowUpRootRepo := postgres.NewClosedFollowUpRootRepo(db)
 	humanGateDecisionRepo := postgres.NewHumanGateDecisionRepo(db)
 	artifactRepo := postgres.NewArtifactRepo(db)
 	documentRepo := postgres.NewDocumentRepo(db)
@@ -561,6 +562,7 @@ func main() {
 		service.WithCommentTaskService(taskService),
 		service.WithHumanGateDecisionRepo(humanGateDecisionRepo),
 		service.WithCommentDependencyRepo(taskDependencyRepo),
+		service.WithClosedFollowUpRootRepo(closedFollowUpRootRepo),
 	)
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)

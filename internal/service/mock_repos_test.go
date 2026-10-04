@@ -296,6 +296,11 @@ type MockTaskRepository struct {
 	// the guard does not exist at all. Same shape as MockCommentRepository's
 	// listByTaskErr, and for the same reason.
 	getByIDErr error
+	// getByIDMisses makes GetByID answer (nil, nil) for the first N calls on
+	// a given ID, then serve the stored task — the "winner's claim row is
+	// visible but its card is not yet" window of #5194afd4. Set via
+	// DeferGetByID; a test that never calls it gets the plain map read.
+	getByIDMisses map[uuid.UUID]int
 	// statusCategoryOf, if set, resolves a status ID to its category — used by
 	// FindDueBacklogTasks to emulate the real query's join against
 	// task_statuses without this mock needing a direct dependency on
@@ -340,6 +345,13 @@ func (m *MockTaskRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.T
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
 	}
+	m.mu.Lock()
+	if m.getByIDMisses[id] > 0 {
+		m.getByIDMisses[id]--
+		m.mu.Unlock()
+		return nil, nil
+	}
+	m.mu.Unlock()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t, ok := m.items[id]
@@ -347,6 +359,17 @@ func (m *MockTaskRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.T
 		return nil, nil
 	}
 	return t, nil
+}
+
+// DeferGetByID scripts the not-yet-visible window: the next misses lookups of
+// id return (nil, nil) even though the task is (or will be) in items.
+func (m *MockTaskRepository) DeferGetByID(id uuid.UUID, misses int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.getByIDMisses == nil {
+		m.getByIDMisses = make(map[uuid.UUID]int)
+	}
+	m.getByIDMisses[id] = misses
 }
 
 func (m *MockTaskRepository) Update(_ context.Context, t *domain.Task) error {
@@ -4451,4 +4474,185 @@ func (m *MockCommentDeliveryOutcomeRepository) ListByCommentIDs(_ context.Contex
 		}
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// MockClosedFollowUpRootRepository (#5194afd4)
+//
+// Mirrors the Postgres repo's semantics exactly where they are load-bearing:
+// Claim is INSERT ... ON CONFLICT DO NOTHING (only the first claim for a key
+// wins, the loser gets false, never an error), and TryReopen carries the same
+// window reset and limit refusal as the SQL CASE+WHERE — a reopen whose
+// predecessor is older than the 24h window starts a fresh window at 1 rather
+// than growing a lifetime total, and the limit+1-th increment inside a window
+// is refused. CompensateReopen mirrors the ledger: it deletes the claim's OWN
+// row and recomputes count and anchor from the claims that survive inside the
+// window — count and anchor both (a count-only decrement is the exact round-5
+// defect the db tests pin), every claim independently compensable (a
+// displaced claim's slot comes back too, round 10 — the superseded-token
+// no-op was the single-pin-column variant), and never a free of a slot that
+// was not ours (round 9). Two copies of "when does the window expire" that
+// disagreed would make the service's storm branch lie about what TryReopen
+// actually stored.
+
+// closedFollowUpRootKey is the composite map key: one row per (source, finding).
+func closedFollowUpRootKey(sourceTaskID uuid.UUID, findingKey string) string {
+	return sourceTaskID.String() + "\x00" + findingKey
+}
+
+// mockReopenClaim is one row of the reopen-claim ledger the SQL side keeps in
+// closed_followup_reopen_claims.
+type mockReopenClaim struct {
+	sourceTaskID uuid.UUID
+	findingKey   string
+	claimedAt    time.Time
+}
+
+type MockClosedFollowUpRootRepository struct {
+	mu          sync.Mutex
+	items       map[string]*domain.ClosedFollowUpRoot
+	errToReturn error
+	// claims mirrors closed_followup_reopen_claims: one entry per TAKEN slot,
+	// keyed by the claim's unique id. Independent rows are what make a
+	// displaced claim still compensable (round 10) while never freeing a
+	// slot that was not ours (round 9).
+	claims map[uuid.UUID]mockReopenClaim
+	// onGet, when set, runs before the map read of every Get call (calls
+	// counted from 1), OUTSIDE the mutex — tests use it to script mid-flight
+	// state changes such as the winner's compensation deleting this very row
+	// while a loser is inside its wait budget.
+	onGet    func(call int, m *MockClosedFollowUpRootRepository)
+	getCalls int
+}
+
+func NewMockClosedFollowUpRootRepository() *MockClosedFollowUpRootRepository {
+	return &MockClosedFollowUpRootRepository{
+		items:  make(map[string]*domain.ClosedFollowUpRoot),
+		claims: make(map[uuid.UUID]mockReopenClaim),
+	}
+}
+
+func (m *MockClosedFollowUpRootRepository) Claim(_ context.Context, sourceTaskID uuid.UUID, findingKey string, rootTaskID uuid.UUID, now time.Time) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := closedFollowUpRootKey(sourceTaskID, findingKey)
+	if _, exists := m.items[k]; exists {
+		return false, nil
+	}
+	m.items[k] = &domain.ClosedFollowUpRoot{
+		SourceTaskID: sourceTaskID,
+		FindingKey:   findingKey,
+		RootTaskID:   rootTaskID,
+		CreatedAt:    now,
+	}
+	return true, nil
+}
+
+func (m *MockClosedFollowUpRootRepository) Get(_ context.Context, sourceTaskID uuid.UUID, findingKey string) (*domain.ClosedFollowUpRoot, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	m.getCalls++
+	call := m.getCalls
+	hook := m.onGet
+	m.mu.Unlock()
+	if hook != nil {
+		hook(call, m)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.items[closedFollowUpRootKey(sourceTaskID, findingKey)]
+	if !ok {
+		return nil, nil
+	}
+	copyRow := *row
+	return &copyRow, nil
+}
+
+func (m *MockClosedFollowUpRootRepository) TryReopen(_ context.Context, sourceTaskID uuid.UUID, findingKey string, now time.Time) (bool, repository.ReopenClaim, error) {
+	if m.errToReturn != nil {
+		return false, repository.ReopenClaim{}, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.items[closedFollowUpRootKey(sourceTaskID, findingKey)]
+	if !ok {
+		return false, repository.ReopenClaim{}, nil // UPDATE on a missing row: 0 rows affected, not an error
+	}
+	next := 1
+	if row.LastReopenedAt != nil && now.Sub(*row.LastReopenedAt) <= followUpReopenWindow {
+		next = row.ReopenCount + 1
+	}
+	if next > followUpReopenWindowLimit {
+		return false, repository.ReopenClaim{}, nil // the WHERE clause: the limit+1-th increment refused
+	}
+	claim := repository.ReopenClaim{ID: uuid.New()}
+	row.ReopenCount = next
+	t := now
+	row.LastReopenedAt = &t
+	m.claims[claim.ID] = mockReopenClaim{ // the ledger INSERT half of the SQL
+		sourceTaskID: sourceTaskID,
+		findingKey:   findingKey,
+		claimedAt:    now,
+	}
+	return true, claim, nil
+}
+
+func (m *MockClosedFollowUpRootRepository) CompensateReopen(_ context.Context, sourceTaskID uuid.UUID, findingKey string, claim repository.ReopenClaim) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.claims[claim.ID]; !ok || c.sourceTaskID != sourceTaskID || c.findingKey != findingKey {
+		return nil // DELETE matched nothing: double compensation / Delete took it / another finding's claim
+	}
+	delete(m.claims, claim.ID) // del: OUR row dies, nobody else's
+	row, ok := m.items[closedFollowUpRootKey(sourceTaskID, findingKey)]
+	if !ok {
+		return nil // the root row is gone: nothing to recompute
+	}
+	// agg + upd: the window recomputed from the claims that survive. The SQL
+	// side anchors the window at the database clock (now() - 24h); the mock
+	// uses the package's scripted timeNow — the same instant the service
+	// compensates at, and the divergence only exists where there is a script.
+	windowStart := timeNow().Add(-followUpReopenWindow)
+	count := 0
+	var anchor *time.Time
+	for _, c := range m.claims {
+		if c.sourceTaskID != sourceTaskID || c.findingKey != findingKey {
+			continue
+		}
+		if c.claimedAt.Before(windowStart) {
+			continue
+		}
+		count++
+		if anchor == nil || c.claimedAt.After(*anchor) {
+			a := c.claimedAt
+			anchor = &a
+		}
+	}
+	row.ReopenCount = count
+	row.LastReopenedAt = anchor
+	return nil
+}
+
+func (m *MockClosedFollowUpRootRepository) Delete(_ context.Context, sourceTaskID uuid.UUID, findingKey string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := closedFollowUpRootKey(sourceTaskID, findingKey)
+	delete(m.items, k)
+	for id, c := range m.claims { // the root's ledger rows die with it
+		if c.sourceTaskID == sourceTaskID && c.findingKey == findingKey {
+			delete(m.claims, id)
+		}
+	}
+	return nil
 }

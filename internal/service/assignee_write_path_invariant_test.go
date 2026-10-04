@@ -86,9 +86,9 @@ var assigneeWriteVerdict = map[string]string{
 	// because arguments about inputs are exactly what stopped holding. The
 	// check is real regardless: taskService.Create runs
 	// ensureAssigneeProjectMember before taskRepo.Create, and
-	// createClosedTaskFollowUp does not swallow its error — a refused assignee
+	// claimAndCreateRoot does not swallow its error — a refused assignee
 	// creates no follow-up card at all.
-	"commentService.createClosedTaskFollowUp": "delegated: taskService.Create performs the write and the funnel",
+	"commentService.claimAndCreateRoot": "delegated: taskService.Create performs the write and the funnel",
 }
 
 // assigneeFields are the struct fields whose write hands a task to a principal.
