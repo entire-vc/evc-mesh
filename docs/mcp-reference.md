@@ -2,7 +2,7 @@
 
 ## Overview
 
-evc-mesh exposes **63 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **64 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), and over HTTP on port 8081 **SSE** and
 **Streamable HTTP** — the latter also accepting OAuth access tokens, so an MCP
 client can sign in by itself instead of being handed an agent key.
@@ -24,7 +24,7 @@ Tools are organized into 13 categories:
 | Project & Task Management | 11 | CRUD for projects, tasks, subtasks, dependencies, assignments, PR links |
 | Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
 | Documents | 7 | Project document tree: create, read, edit, search, and comment on pages |
-| Memory & Knowledge | 9 | Persistent memory, project knowledge, and the canonical decision layer |
+| Memory & Knowledge | 10 | Persistent memory, project knowledge, and the canonical decision layer |
 | Event Bus | 5 | Publish/subscribe events, context aggregation |
 | Agent Hierarchy | 2 | Register and list sub-agents |
 | Utility | 4 | Heartbeat, error reporting, self-assigned task listing, session metrics |
@@ -957,7 +957,7 @@ anchor: it is still shown, and it is not pointing anywhere.
 
 ---
 
-### Memory & Knowledge (9 tools)
+### Memory & Knowledge (10 tools)
 
 #### 24. `remember`
 
@@ -1049,6 +1049,30 @@ knowledge at session start, use `get_project_knowledge` instead.
     "order_by": "decayed_relevance:desc",
     "limit": 5
   }
+}
+```
+
+---
+
+#### 64. `get_memory`
+
+**Full text of ONE memory** by exact key -- the `key` field `recall` returns. Use after
+`recall` when an item's `content_truncated` is true and you need the rest; the compact
+`recall` view cuts content at ~300 chars, this returns the entry whole. Errors if no entry
+has exactly that key.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `key` | string | **Yes** | -- | Exact memory key, as returned by `recall` |
+| `project_id` | string | No | -- | Project of a project-scoped entry, if the key exists in several |
+| `scope` | string | No | `all` | `workspace`, `project`, `agent`, or `all` |
+| `include_archived` | boolean | No | `false` | Also look among archived memories |
+
+**Example request:**
+```json
+{
+  "name": "get_memory",
+  "arguments": { "key": "api-convention" }
 }
 ```
 
