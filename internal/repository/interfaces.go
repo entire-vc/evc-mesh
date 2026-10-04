@@ -254,6 +254,83 @@ type TaskDependencyRepository interface {
 	Exists(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
 }
 
+// ClosedFollowUpReopenWindow is the storm-limit window the whole mechanism
+// must agree on: the service's read-side check (skip the reopen after ≥3
+// reopens inside this window) and TryReopen's SQL CASE (reset the counter
+// when the last reopen is older than the window) are two ends of one
+// mechanism. It lives here because both sides already depend on this package,
+// and two independent constants would be free to drift apart silently — the
+// failure shape being a counter that never resets while the reader thinks it
+// expired, or vice versa.
+const ClosedFollowUpReopenWindow = 24 * time.Hour
+
+// ClosedFollowUpReopenLimit is the other half of the storm guard: at most
+// this many reopens of one root inside ClosedFollowUpReopenWindow. It lives
+// beside the window for the same anti-drift reason: the SQL side enforces it
+// (TryReopen refuses the limit+1-th increment in the very UPDATE that records
+// one) and the service side narrates it to commenters — two copies would be
+// free to disagree silently.
+const ClosedFollowUpReopenLimit = 3
+
+// ReopenClaim is the record of one storm-limit slot TryReopen took: the id of
+// the claim's row in the reopen-claim ledger. Compensation deletes THAT row
+// and recomputes the window from the survivors — the count and the anchor
+// both (a count-only giveback leaves the window anchored at the failed
+// attempt's instant and stretches it over reopens that never delivered, and a
+// healthy repeat a day later inherits a half-burned budget, codex-review P2,
+// MR !1078, round 5).
+//
+// The id is a fresh uuid per claim, never a timestamp: two claims inside one
+// timestamptz microsecond are still two claims, and a compensation must never
+// free a slot that was not ours (round 9). And because every claim has its
+// own row, a claim displaced by a later one is still compensable — the
+// single-pin-column variant silently leaked its slot into the window (round
+// 10).
+type ReopenClaim struct {
+	ID uuid.UUID
+}
+
+// ClosedFollowUpRootRepository persists the identity of a finding the
+// closed-card follow-up mechanism routes (#5194afd4). The PK on
+// (source_task_id, finding_key) is the whole concurrency story: Claim is an
+// INSERT ... ON CONFLICT DO NOTHING, so exactly one of N racing claims wins
+// and the losers read the winner's root task via Get.
+type ClosedFollowUpRootRepository interface {
+	// Claim atomically records rootTaskID as THE root for
+	// (sourceTaskID, findingKey). Returns claimed=true when this caller won
+	// the race and must create the card; claimed=false when a root already
+	// exists and the caller must take the repeat branch.
+	Claim(ctx context.Context, sourceTaskID uuid.UUID, findingKey string, rootTaskID uuid.UUID, now time.Time) (bool, error)
+	// Get returns the root row, or (nil, nil) when this finding has no root yet.
+	Get(ctx context.Context, sourceTaskID uuid.UUID, findingKey string) (*domain.ClosedFollowUpRoot, error)
+	// TryReopen atomically consumes one of the ClosedFollowUpReopenLimit
+	// reopen slots inside the window anchored at last_reopened_at: the same
+	// CASE that resets an expired window to 1 also computes the next count,
+	// and the limit+1-th increment is refused in the same statement. Under N
+	// racing repeats of one finding at most limit slots exist, so the stored
+	// count can never exceed the repeats actually delivered — a
+	// read-check-record split let every racer pass the check and inflate the
+	// counter (codex-review P1, MR !1078). Taking a slot also records the
+	// claim's row in the reopen-claim ledger. Returns true with the slot held
+	// and its claim id; false with a zero claim when the window is exhausted
+	// (or the row is gone).
+	TryReopen(ctx context.Context, sourceTaskID uuid.UUID, findingKey string, now time.Time) (bool, ReopenClaim, error)
+	// CompensateReopen gives back a reopen slot taken by TryReopen when the
+	// reopen it was taken FOR never delivered (the todo lookup, the
+	// shipped-flag clear or the move failed afterwards). Deletes the claim's
+	// OWN ledger row and recomputes the count and the window anchor from the
+	// claims that survive inside the window: every claim is independently
+	// compensable (a displaced claim's slot comes back too, round 10), and a
+	// compensation can never free a slot that was not ours (round 9). A claim
+	// id that no longer exists (double compensation, or Delete took the root)
+	// is a clean no-op.
+	CompensateReopen(ctx context.Context, sourceTaskID uuid.UUID, findingKey string, claim ReopenClaim) error
+	// Delete removes the claim. Compensation for the one failure that must
+	// not leave a phantom: the claim won but the card creation failed, so the
+	// row would otherwise point at a card that does not exist.
+	Delete(ctx context.Context, sourceTaskID uuid.UUID, findingKey string) error
+}
+
 // CustomFieldDefinitionRepository manages persistence for custom field definitions.
 type CustomFieldDefinitionRepository interface {
 	Create(ctx context.Context, field *domain.CustomFieldDefinition) error

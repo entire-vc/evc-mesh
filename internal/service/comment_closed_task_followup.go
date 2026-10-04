@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -50,9 +53,10 @@ import (
 // deserved a card is the assignee's judgement to make with the card in front
 // of them, not this code's to make from the prose.
 
-// followUpLabel marks a card this mechanism opened. It is also how the dedup
-// below recognises its own earlier output, so renaming it silently disables
-// the dedup — change both or neither.
+// followUpLabel marks a card this mechanism opened. Since #5194afd4 the dedup
+// keys on the persistent (source card, finding) identity in
+// closed_followup_roots, not on a label scan — but the label stays: it is what
+// makes these cards recognisable in a queue to the human reading it.
 const followUpLabel = "follow-up"
 
 // followUpTitleExcerptRunes is how much of the comment goes into the follow-up
@@ -227,6 +231,92 @@ func followUpTitleExcerpt(body string) string {
 	}
 	return strings.TrimRight(string(runes[:followUpTitleExcerptRunes]), " ") + "…"
 }
+
+// findingIdentityMaxRunes caps metadata.finding_id — the contract says a
+// finding id is a string of at most 128 characters. A longer or empty value is
+// not an error; the comment simply falls back to the text key, which still
+// dedups an identical repeat and still delivers a reworded one.
+const findingIdentityMaxRunes = 128
+
+// findingIdentityFromMetadata extracts the cooperative finding identity a
+// detector may stamp on its own comment: metadata.finding_id plus optional
+// metadata.finding_ns. Self-declared, exactly like metadata.source — honoured
+// to GROUP the detector's own repeats, never to suppress anyone else's remark:
+// a key collision only ever merges comments carrying the SAME id.
+func findingIdentityFromMetadata(raw json.RawMessage) (ns, id string, ok bool) {
+	if len(raw) == 0 {
+		return "", "", false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return "", "", false
+	}
+	id, ok = m["finding_id"].(string)
+	if !ok {
+		return "", "", false
+	}
+	// Whitespace-only carries no identity (fall back to the text key), but a
+	// surrounding-space value is NOT normalized away: the contract defines the
+	// identity by the metadata values as written, and " x" vs "x" are
+	// different findings (codex-review P1, MR !1078, round 9) — trimming here
+	// would merge them exactly the way the raw-':' join merged (ns, id) pairs
+	// in round 7.
+	if strings.TrimSpace(id) == "" || len([]rune(id)) > findingIdentityMaxRunes {
+		return "", "", false
+	}
+	ns, _ = m["finding_ns"].(string)
+	return ns, id, true
+}
+
+// normalizeFindingText is the legacy key's normalization: trim, collapse all
+// whitespace runs to one space, lowercase. Deliberately EXACTLY this and
+// nothing fuzzy — the contract forbids similarity matching: a reworded remark
+// is a different finding and must be delivered, not silently merged by a
+// heuristic that guesses it "means the same".
+func normalizeFindingText(body string) string {
+	return strings.ToLower(strings.Join(strings.Fields(body), " "))
+}
+
+// escapeFindingKeyComponent keeps the "id:<ns>:<id>" join injective: ':' is
+// the join's delimiter, so a raw colon inside a component would let two
+// DIFFERENT (ns, id) pairs serialize to one key and merge distinct findings
+// (codex-review P1, MR !1078, round 7) — the exact "only ever merges comments
+// carrying the SAME id" promise findingIdentityFromMetadata's doc makes.
+// Backslash escapes itself first, so the mapping stays one-to-one;
+// components without ':' or '\' serialize byte-identically to the plain
+// contract format.
+func escapeFindingKeyComponent(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, ":", `\:`)
+}
+
+// closedFindingKey is the identity of a remark on a closed card: the pair
+// (source card, key) is one finding for this mechanism's whole memory. An
+// explicit metadata identity wins when present ("id:<ns>:<id>", components
+// escaped so the join is injective); anything else falls back to the
+// normalized text ("txt:" + sha256 hex).
+func closedFindingKey(comment *domain.Comment) string {
+	if ns, id, ok := findingIdentityFromMetadata(comment.Metadata); ok {
+		return "id:" + escapeFindingKeyComponent(ns) + ":" + escapeFindingKeyComponent(id)
+	}
+	sum := sha256.Sum256([]byte(normalizeFindingText(comment.Body)))
+	return "txt:" + hex.EncodeToString(sum[:])
+}
+
+// followUpReopenWindow and followUpReopenWindowLimit are the storm guard: at
+// most 3 reopens of the same root inside any 24h window; the 4th repeat (and
+// every further one until the window goes quiet for 24h) still lands as a
+// comment on the root and a notice on the source, but wakes nobody. A
+// permanent lock would trade a storm of cards for a silently dead finding —
+// the exact defect this file exists to fix — so the limit expires instead.
+const (
+	// One canonical window constant and one canonical limit, shared with the
+	// SQL side through the repository package — see
+	// repository.ClosedFollowUpReopenWindow for why two independent constants
+	// here would be a silent-drift bug.
+	followUpReopenWindow      = repository.ClosedFollowUpReopenWindow
+	followUpReopenWindowLimit = repository.ClosedFollowUpReopenLimit
+)
 
 // closingReportWindow is how recently the card's own close must have happened
 // for a comment by the SAME actor to read as that close's report rather than as
@@ -406,18 +496,55 @@ func (s *commentService) createClosedTaskFollowUp(
 		return
 	}
 
-	// Dedup. One remark → one card, but a burst of remarks on the same closed
-	// card in the same sitting (the measured precedent was two the same
-	// morning) must not become a card each: the assignee opens the live
-	// follow-up and the whole thread is on the closed card it points at.
+	// Identity and dedup (#5194afd4, contract approved on #9b712414). A
+	// finding is the pair (source card, finding_key): an explicit
+	// metadata.finding_id when a detector stamps one, else the normalized
+	// text. One pair → one root for the pair's WHOLE life: an open root
+	// absorbs repeats, a closed root is reopened, and a different finding
+	// (different id, or different normalized text) is never absorbed by any
+	// root of another finding.
 	//
-	// Recognised by this mechanism's OWN output — a still-open card carrying
-	// followUpLabel with a relates_to edge onto this exact source card — not by
-	// text similarity. Fails OPEN: if the edges cannot be read we create the
-	// card, because a duplicate card is recoverable and a swallowed remark is
-	// the thing we are fixing.
-	if existing := s.liveFollowUpFor(ctx, task.ID); existing != nil {
-		s.postFollowUpNotice(ctx, task, existing, comment, true)
+	// The claim is INSERT ... ON CONFLICT DO NOTHING BEFORE the card is
+	// created: two concurrent remarks with the same key cannot both become
+	// cards — the loser reads the winner's root and takes the repeat branch.
+	//
+	// Without the roots store there is no honest dedup left at all (the old
+	// label-scan absorbed DIFFERENT findings into one open root, which the
+	// contract forbids), so the mechanism is off rather than half-on.
+	if s.followUpRoots == nil {
+		return
+	}
+	s.claimAndCreateRoot(ctx, task, comment, true)
+}
+
+// claimAndCreateRoot is the identity half of createClosedTaskFollowUp: claim
+// the (source, finding key) pair, then — for the claim's winner — create the
+// root card under exactly the claimed ID. allowTakeover=false is passed only
+// one level down a takeover chain (see deliverRepeatFinding): a released
+// claim re-enters here once, and that second level must not attempt a third —
+// a pathological release loop would otherwise recurse for as long as
+// contention kept reproducing it.
+func (s *commentService) claimAndCreateRoot(
+	ctx context.Context,
+	task *domain.Task,
+	comment *domain.Comment,
+	allowTakeover bool,
+) {
+	findingKey := closedFindingKey(comment)
+
+	candidateID := uuid.New()
+	claimed, err := s.followUpRoots.Claim(ctx, task.ID, findingKey, candidateID, timeNow())
+	if err != nil {
+		// Fail to NO CARD, not to an orphan: a card created outside the
+		// identity store would be invisible to every later repeat of the
+		// same finding — the duplicate-card defect back again, just delayed.
+		// Visible retry for this branch is P2 (#db1c6c7a).
+		log.Printf("[closed-followup] WARNING: claim failed for task=%s key=%q: %v",
+			task.ID, findingKey, err)
+		return
+	}
+	if !claimed {
+		s.deliverRepeatFinding(ctx, task, comment, findingKey, allowTakeover)
 		return
 	}
 
@@ -426,13 +553,21 @@ func (s *commentService) createClosedTaskFollowUp(
 		// No todo column means the project has no status the agent feed polls,
 		// so there is no card we could create that would wake anyone. Say so
 		// rather than parking a card in whatever column happens to be first.
+		// The claim is released too: a held claim would point at a card that
+		// never exists and send every later repeat of this finding into the
+		// repeat branch with no root behind it.
 		log.Printf("[closed-followup] skip task=%s — project %s has no todo-category status (err=%v)",
 			task.ID, task.ProjectID, err)
+		s.releaseClaim(ctx, task.ID, findingKey)
 		return
 	}
 
 	assignee := *task.AssigneeID
 	followUp := &domain.Task{
+		// The claimed identity: this ID is already the root_task_id row the
+		// repeat branch will read, so the created card must be exactly this
+		// one — the claim and the card cannot disagree.
+		ID:           candidateID,
 		ProjectID:    task.ProjectID,
 		StatusID:     todoID,
 		Title:        fmt.Sprintf("Замечание к #%s — %s", shortTaskID(task.ID), followUpTitleExcerpt(comment.Body)),
@@ -454,6 +589,10 @@ func (s *commentService) createClosedTaskFollowUp(
 	if err := s.taskSvc.Create(ctx, followUp); err != nil {
 		log.Printf("[closed-followup] WARNING: create follow-up for task=%s comment=%s failed: %v",
 			task.ID, comment.ID, err)
+		// Compensation: the claim already points at candidateID, which now will
+		// never be a card. Release it so the next repeat of this finding claims
+		// cleanly instead of being routed to a root that does not exist.
+		s.releaseClaim(ctx, task.ID, findingKey)
 		return
 	}
 
@@ -475,7 +614,7 @@ func (s *commentService) createClosedTaskFollowUp(
 		}
 	}
 
-	s.postFollowUpNotice(ctx, task, followUp, comment, false)
+	s.postFollowUpNotice(ctx, task, followUp, comment, followUpCreated)
 
 	log.Printf("[closed-followup] task=%s comment=%s author=%s/%s → follow-up=%s assignee=%s",
 		task.ID, comment.ID, comment.AuthorType, comment.AuthorID, followUp.ID, assignee)
@@ -499,6 +638,26 @@ func followUpBody(comment *domain.Comment, task *domain.Task) string {
 	return b.String()
 }
 
+// followUpNoticeOutcome is what the notice on the SOURCE card tells the
+// commenter happened to their remark. Four outcomes, one root per finding —
+// see the identity note in createClosedTaskFollowUp.
+type followUpNoticeOutcome int
+
+const (
+	// followUpCreated: the finding was new, a root card was opened in todo.
+	followUpCreated followUpNoticeOutcome = iota
+	// followUpAlreadyOpen: the finding's root exists and is still open — the
+	// assignee's feed already carries it, no second card for the same finding.
+	followUpAlreadyOpen
+	// followUpReopened: the root existed and had been closed; it is back in
+	// todo with the assignee unchanged and the repeat appended as a comment.
+	followUpReopened
+	// followUpStormLimited: the root was closed but the 24h reopen limit is
+	// exhausted — no reopen, the repeat is a comment on the root and a notice
+	// here; nobody is woken for the 4th time in a day.
+	followUpStormLimited
+)
+
 // postFollowUpNotice writes the system comment that tells the commenter what
 // happened to their remark. Written straight through commentRepo rather than
 // s.Create, so it cannot re-enter any of the comment gates — and its author is
@@ -508,11 +667,24 @@ func (s *commentService) postFollowUpNotice(
 	task *domain.Task,
 	followUp *domain.Task,
 	comment *domain.Comment,
-	reused bool,
+	outcome followUpNoticeOutcome,
 ) {
 	verb := "заведена"
-	if reused {
+	switch outcome {
+	case followUpAlreadyOpen:
 		verb = "уже открыта"
+	case followUpReopened:
+		verb = "переоткрыта (снова `todo`, исполнитель прежний)"
+	case followUpStormLimited:
+		verb = "не переоткрыта — исчерпан лимит 3 переоткрытий за 24 ч; повтор приложен комментарием к карточке"
+	}
+	body := fmt.Sprintf(
+		"🤖 Auto: закрытая карточка никого не будит — комментарий в `done` фиддлер не подаёт, "+
+			"а @-меншен не хендофф. Замечание вынесено в карточку: %s #%s.",
+		verb, shortTaskID(followUp.ID),
+	)
+	if outcome == followUpReopened || outcome == followUpStormLimited {
+		body += fmt.Sprintf(" Источник: #%s, комментарий `%s`.", shortTaskID(task.ID), comment.ID)
 	}
 	now := timeNow()
 	sys := &domain.Comment{
@@ -520,13 +692,9 @@ func (s *commentService) postFollowUpNotice(
 		TaskID:     task.ID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
-		Body: fmt.Sprintf(
-			"🤖 Auto: закрытая карточка никого не будит — комментарий в `done` фиддлер не подаёт, "+
-				"а @-меншен не хендофф. Замечание вынесено в карточку: %s #%s (`todo`, исполнитель прежний).",
-			verb, shortTaskID(followUp.ID),
-		),
-		CreatedAt: now,
-		UpdatedAt: now,
+		Body:       body,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	if err := s.commentRepo.Create(ctx, sys); err != nil {
 		log.Printf("[closed-followup] WARNING: notice comment on task=%s (follow-up=%s) failed: %v",
@@ -536,50 +704,281 @@ func (s *commentService) postFollowUpNotice(
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
-	_ = comment
 }
 
-// liveFollowUpFor returns this mechanism's own still-open follow-up card for
-// sourceID, or nil when there is none.
+// deliverRepeatFinding routes a finding whose root already exists: an OPEN
+// root absorbs the repeat as a notice; a CLOSED root is REOPENED — same card
+// back in todo, assignee untouched, the repeat appended as a comment carrying
+// the source-comment link, counted against the 24h storm limit. A different
+// finding never reaches here: it claims a different key above and gets its own
+// root.
 //
-// Fails OPEN (nil) on any read error — see the dedup note at the call site.
-func (s *commentService) liveFollowUpFor(ctx context.Context, sourceID uuid.UUID) *domain.Task {
-	if s.depRepo == nil {
-		return nil
+// The root card may not exist YET: the winner's claim row is visible before
+// its card is, so the lookup waits out that race (waitForRootCard) instead of
+// dropping the repeat on it. When the card never appears, two honest cases:
+// the claim VANISHED while waiting — the winner released it (no todo column,
+// failed create), the finding has no root and no owner, and this call takes
+// over the creation, once (allowTakeover); or the claim persists with no card
+// — a wedged winner — and the repeat is deferred visibly rather than
+// swallowed.
+//
+// Every branch is best-effort and logged: the comment itself was already
+// persisted by Create, and this mechanism routes remarks — it never rejects
+// one. Visible retry for the remaining failure branches is P2 (#db1c6c7a).
+func (s *commentService) deliverRepeatFinding(
+	ctx context.Context,
+	task *domain.Task,
+	comment *domain.Comment,
+	findingKey string,
+	allowTakeover bool,
+) {
+	row, err := s.followUpRoots.Get(ctx, task.ID, findingKey)
+	if err != nil || row == nil {
+		// err set: the identity store could not be read. row nil: the claim
+		// lost to a row that vanished — a release that raced us, or a manual
+		// cleanup. Either way there is no root to deliver to and no honest
+		// way to make one here; the next repeat of this finding re-enters
+		// this path.
+		log.Printf("[closed-followup] WARNING: repeat finding for task=%s key=%q has no readable root (err=%v)",
+			task.ID, findingKey, err)
+		return
 	}
-	deps, err := s.depRepo.ListDependents(ctx, sourceID)
+	root := s.waitForRootCard(ctx, row.RootTaskID)
+	if root == nil {
+		rowNow, errNow := s.followUpRoots.Get(ctx, task.ID, findingKey)
+		if errNow == nil && rowNow == nil && allowTakeover {
+			log.Printf("[closed-followup] task=%s key=%q: claim vanished while waiting for root=%s — taking over creation",
+				task.ID, findingKey, row.RootTaskID)
+			s.claimAndCreateRoot(ctx, task, comment, false)
+			return
+		}
+		log.Printf("[closed-followup] WARNING: root %s for task=%s key=%q not visible after %d attempts (claim present=%v) — repeat deferred",
+			row.RootTaskID, task.ID, findingKey, len(followUpRootRetryBackoff), rowNow != nil)
+		s.postDeferredRepeatNotice(ctx, task, comment)
+		return
+	}
+	st, err := s.statusRepo.GetByID(ctx, root.StatusID)
+	if err != nil || st == nil {
+		log.Printf("[closed-followup] WARNING: status %s of root %s unreadable (err=%v)",
+			root.StatusID, root.ID, err)
+		return
+	}
+
+	if st.Category != domain.StatusCategoryDone && st.Category != domain.StatusCategoryCancelled {
+		// Root still open: its assignee's feed already carries this finding; a
+		// second card for the SAME finding is the duplicate this table exists
+		// to prevent. The commenter still learns where the remark went.
+		s.postFollowUpNotice(ctx, task, root, comment, followUpAlreadyOpen)
+		return
+	}
+
+	// Closed root — same finding again, same card again. The storm limit
+	// first, and ATOMICALLY with the count it reads: a read-check-record
+	// split let N concurrent repeats of this finding all pass the check and
+	// all record a reopen — a count above the number of repeats actually
+	// delivered, suppressing a later one prematurely (codex-review P1, MR
+	// !1078). TryReopen refuses the limit+1-th increment in the same UPDATE
+	// that records the reopen, so the count can never exceed the limit
+	// inside a window. The slot is held BEFORE the steps below that can
+	// fail; every failure exit returns it (compensateFailedReopen) — the
+	// budget counts delivered reopens, never attempts (codex-review P2).
+	reopenAt := timeNow()
+	reopened, claim, err := s.followUpRoots.TryReopen(ctx, task.ID, findingKey, reopenAt)
 	if err != nil {
-		return nil
+		log.Printf("[closed-followup] WARNING: try-reopen task=%s key=%q failed: %v",
+			task.ID, findingKey, err)
+		return
 	}
-	for _, d := range deps {
-		if d.DependencyType != domain.DependencyTypeRelatesTo {
-			continue
+	if !reopened {
+		// The window is exhausted: the close/reopen cycle is spinning, and
+		// waking it again is the storm, not the delivery. The repeat still
+		// lands on the root and the commenter is still told — nothing
+		// swallowed, nobody woken.
+		s.postRepeatOnRoot(ctx, task, root, comment, false)
+		s.postFollowUpNotice(ctx, task, root, comment, followUpStormLimited)
+		return
+	}
+
+	todoID, err := findStatusIDByCategory(ctx, s.statusRepo, root.ProjectID, domain.StatusCategoryTodo)
+	if err != nil || todoID == uuid.Nil {
+		s.compensateFailedReopen(ctx, task, findingKey, root.ID, claim)
+		s.postRepeatOnRoot(ctx, task, root, comment, false)
+		log.Printf("[closed-followup] WARNING: cannot reopen root=%s — project %s has no todo-category status (err=%v)",
+			root.ID, root.ProjectID, err)
+		return
+	}
+	// A shipped root cannot MoveTask to todo — TaskShippedError is the guard,
+	// and its only documented escape hatch is clearing the flag first. The
+	// flag means "fix deployed and verified live"; a repeat of the same
+	// finding is precisely the disproof of that, so the reopen honestly costs
+	// the flag rather than bypassing the guard.
+	wasShipped := root.IsShipped
+	if wasShipped {
+		if err := s.taskSvc.ShipTask(ctx, root.ID, false); err != nil {
+			s.compensateFailedReopen(ctx, task, findingKey, root.ID, claim)
+			s.postRepeatOnRoot(ctx, task, root, comment, false)
+			log.Printf("[closed-followup] WARNING: clear shipped on root=%s failed, not reopened: %v",
+				root.ID, err)
+			return
 		}
-		cand, err := s.taskRepo.GetByID(ctx, d.TaskID)
-		if err != nil || cand == nil {
-			continue
+	}
+	if err := s.taskSvc.MoveTask(ctx, root.ID, MoveTaskInput{StatusID: &todoID}); err != nil {
+		// The flag was cleared above and the root stays closed: a reopen that
+		// did not happen must not cost it. Best-effort, like the slot return.
+		if wasShipped {
+			if rerr := s.taskSvc.ShipTask(ctx, root.ID, true); rerr != nil {
+				log.Printf("[closed-followup] WARNING: restore shipped on root=%s after failed move failed: %v",
+					root.ID, rerr)
+			}
 		}
-		if !hasLabel(cand.Labels, followUpLabel) {
-			continue
+		s.compensateFailedReopen(ctx, task, findingKey, root.ID, claim)
+		s.postRepeatOnRoot(ctx, task, root, comment, false)
+		log.Printf("[closed-followup] WARNING: reopen move root=%s failed: %v", root.ID, err)
+		return
+	}
+	s.postRepeatOnRoot(ctx, task, root, comment, true)
+	s.postFollowUpNotice(ctx, task, root, comment, followUpReopened)
+	log.Printf("[closed-followup] task=%s comment=%s key=%q → reopened root=%s",
+		task.ID, comment.ID, findingKey, root.ID)
+}
+
+// compensateFailedReopen returns a storm-limit slot taken by a reopen that
+// never delivered: TryReopen holds it atomically, but the todo lookup, the
+// shipped-flag clear and the move can still fail after the slot is taken,
+// and slots burned by failures would let the window exhaust on attempts
+// rather than reopens (codex-review P2, MR !1078). The restore puts back the
+// claim's whole pre-claim state — count and window anchor both: a count-only
+// return leaves the window stretched over a reopen that never happened and
+// storm-limits the next healthy one (round 5). The repeat body still lands
+// on the closed root — a refused move is not a licence to swallow the
+// finding. Best-effort by design: a failed compensation leaks one slot into
+// the window (it decays with it) and never propagates its failure into the
+// comment path this mechanism serves.
+func (s *commentService) compensateFailedReopen(ctx context.Context, task *domain.Task, findingKey string, rootID uuid.UUID, claim repository.ReopenClaim) {
+	if err := s.followUpRoots.CompensateReopen(ctx, task.ID, findingKey, claim); err != nil {
+		log.Printf("[closed-followup] WARNING: reopen compensation task=%s key=%q root=%s failed: %v",
+			task.ID, findingKey, rootID, err)
+	}
+}
+
+// followUpRootRetryBackoff paces waitForRootCard's lookups. The winner's
+// remaining work after its claim is one SELECT (the todo column) plus one
+// INSERT (the card) — milliseconds — so ~3 s of backoff covers a busy
+// database many times over while never holding the comment request for long.
+// A package var so tests can collapse the sleeps.
+var followUpRootRetryBackoff = []time.Duration{
+	50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond,
+	400 * time.Millisecond, 800 * time.Millisecond, 1600 * time.Millisecond,
+}
+
+// followUpRootRetrySleep is time.Sleep in production; tests swap it out so
+// the wait logic runs instantly and deterministically.
+var followUpRootRetrySleep = time.Sleep
+
+// waitForRootCard reads the root card, retrying while the winner's claim is
+// ahead of its card. Returns the card, or nil once the budget is spent — the
+// caller decides between takeover and deferral; this function does not guess.
+func (s *commentService) waitForRootCard(ctx context.Context, rootTaskID uuid.UUID) *domain.Task {
+	for i, pause := range followUpRootRetryBackoff {
+		root, err := s.taskRepo.GetByID(ctx, rootTaskID)
+		if err == nil && root != nil {
+			return root
 		}
-		st, err := s.statusRepo.GetByID(ctx, cand.StatusID)
-		if err != nil || st == nil {
-			continue
+		if err != nil {
+			log.Printf("[closed-followup] WARNING: root lookup %s attempt %d/%d: %v",
+				rootTaskID, i+1, len(followUpRootRetryBackoff), err)
 		}
-		if st.Category == domain.StatusCategoryDone || st.Category == domain.StatusCategoryCancelled {
-			continue
+		if ctx.Err() != nil {
+			return nil
 		}
-		return cand
+		followUpRootRetrySleep(pause)
 	}
 	return nil
 }
 
-// hasLabel reports whether labels contains name, case-insensitively.
-func hasLabel(labels []string, name string) bool {
-	for _, l := range labels {
-		if strings.EqualFold(strings.TrimSpace(l), name) {
-			return true
-		}
+// postDeferredRepeatNotice is the wedged-winner fallback: the repeat could
+// not be routed to a root within the wait budget, and is NOT lost — the
+// remark itself is the comment this notice sits under, and the next repeat of
+// the finding re-enters delivery with a fresh budget. Written straight
+// through commentRepo (system author), same re-entry discipline as
+// postFollowUpNotice.
+func (s *commentService) postDeferredRepeatNotice(ctx context.Context, task *domain.Task, comment *domain.Comment) {
+	now := timeNow()
+	sys := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🤖 Auto: повтор замечания (комментарий `%s`) пока не доставлен в карточку — root ещё не виден (внутренняя гонка). "+
+				"Замечание не потеряно; следующий повтор попробует снова.",
+			comment.ID,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
-	return false
+	if err := s.commentRepo.Create(ctx, sys); err != nil {
+		log.Printf("[closed-followup] WARNING: deferred-repeat notice on task=%s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
 }
+
+// postRepeatOnRoot writes the repeat itself onto the root as a system comment
+// — the body plus the exact source-comment link — so the reopened card opens
+// with the new remark on it, and the storm-limited case still delivers the
+// remark somewhere a human reads it. Straight through commentRepo (system
+// author), same discipline as postFollowUpNotice: it cannot re-enter the
+// comment gates, and createClosedTaskFollowUp returns on system authors
+// before ever reaching the identity store, so it cannot re-enter this
+// mechanism either.
+func (s *commentService) postRepeatOnRoot(
+	ctx context.Context,
+	task *domain.Task,
+	root *domain.Task,
+	comment *domain.Comment,
+	reopened bool,
+) {
+	verb := "карточка переоткрыта (повтор того же замечания)"
+	if !reopened {
+		verb = "карточка НЕ переоткрыта — исчерпан лимит переоткрытий (3 за 24 ч), повтор приложён"
+	}
+	now := timeNow()
+	sys := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     root.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: fmt.Sprintf(
+			"🤖 Auto: повтор того же замечания на закрытой карточке #%s — %s.\n\n---\n\n%s\n\n---\n\nИсточник: #%s, комментарий `%s`.",
+			shortTaskID(task.ID), verb, comment.Body, shortTaskID(task.ID), comment.ID,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sys); err != nil {
+		log.Printf("[closed-followup] WARNING: repeat comment on root=%s failed: %v", root.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, root.ID)
+	}
+}
+
+// releaseClaim drops a claim whose card never came to exist (no todo column,
+// card create failed). Best-effort by design: a leak means a later repeat
+// reads a root_task_id that resolves to no card and is logged as a warning
+// there — recoverable by hand, unlike a phantom claim silently eating every
+// future repeat of the finding.
+func (s *commentService) releaseClaim(ctx context.Context, sourceID uuid.UUID, findingKey string) {
+	if err := s.followUpRoots.Delete(ctx, sourceID, findingKey); err != nil {
+		log.Printf("[closed-followup] WARNING: claim release failed for task=%s key=%q: %v",
+			sourceID, findingKey, err)
+	}
+}
+
+// hasLabel moved to task_service.go as hasDupCandidateLabel (#5194afd4): its
+// last generic caller here died with the label-scan dedup, and every remaining
+// call site passes dupCandidateLabel.

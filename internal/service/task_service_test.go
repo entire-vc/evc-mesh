@@ -4689,11 +4689,11 @@ func TestTaskService_Create_SimilarOpenTitle_FlagsPossibleDuplicateAndLabel(t *t
 
 	require.NotNil(t, newTask.PossibleDuplicate, "expected PossibleDuplicate to be set")
 	assert.Equal(t, existingID, *newTask.PossibleDuplicate)
-	assert.True(t, hasLabel(newTask.Labels, dupCandidateLabel), "expected labels %v to contain %q", newTask.Labels, dupCandidateLabel)
+	assert.True(t, hasDupCandidateLabel(newTask.Labels), "expected labels %v to contain %q", newTask.Labels, dupCandidateLabel)
 
 	stored, err := taskRepo.GetByID(context.Background(), newTask.ID)
 	require.NoError(t, err)
-	assert.True(t, hasLabel(stored.Labels, dupCandidateLabel), "dup-candidate label must be persisted, not just set on the in-memory task")
+	assert.True(t, hasDupCandidateLabel(stored.Labels), "dup-candidate label must be persisted, not just set on the in-memory task")
 }
 
 func TestTaskService_Create_DissimilarOpenTitle_NoFlag(t *testing.T) {
@@ -4708,7 +4708,7 @@ func TestTaskService_Create_DissimilarOpenTitle_NoFlag(t *testing.T) {
 	require.NoError(t, svc.Create(context.Background(), newTask))
 
 	assert.Nil(t, newTask.PossibleDuplicate)
-	assert.False(t, hasLabel(newTask.Labels, dupCandidateLabel))
+	assert.False(t, hasDupCandidateLabel(newTask.Labels))
 }
 
 func TestTaskService_Create_SimilarTitleButClosed_NoFlag(t *testing.T) {

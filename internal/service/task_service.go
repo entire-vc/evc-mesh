@@ -294,6 +294,19 @@ func (s *taskService) SetAutoTransitionService(svc AutoTransitionService) {
 // similar (titleSimilarity) against an already-open task in the same project.
 const dupCandidateLabel = "dup-candidate"
 
+// hasDupCandidateLabel reports whether labels already carries the dup hint,
+// case-insensitively. Was the generic hasLabel in
+// comment_closed_task_followup.go; renamed when the follow-up's label-scan
+// dedup died (#5194afd4) and this became its only caller shape.
+func hasDupCandidateLabel(labels []string) bool {
+	for _, l := range labels {
+		if strings.EqualFold(strings.TrimSpace(l), dupCandidateLabel) {
+			return true
+		}
+	}
+	return false
+}
+
 // dupTitleSimilarityThreshold is deliberately high (not a fuzzy "sounds
 // related" bar): it exists to catch near-verbatim retitles — the recurring-
 // check duplicate class this ships alongside, and a human accidentally
@@ -485,7 +498,7 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	// instead of a human noticing three near-duplicate cards later.
 	if dup := s.findPossibleDuplicateTitle(ctx, task.ProjectID, task.Title, task.ID); dup != nil {
 		task.PossibleDuplicate = dup
-		if !hasLabel(task.Labels, dupCandidateLabel) {
+		if !hasDupCandidateLabel(task.Labels) {
 			task.Labels = append(task.Labels, dupCandidateLabel)
 		}
 	}

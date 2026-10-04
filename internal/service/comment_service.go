@@ -791,6 +791,7 @@ type commentService struct {
 	taskSvc        TaskService
 	hgdRepo        repository.HumanGateDecisionRepository
 	depRepo        repository.TaskDependencyRepository
+	followUpRoots  repository.ClosedFollowUpRootRepository
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
@@ -874,11 +875,21 @@ func WithHumanGateDecisionRepo(repo repository.HumanGateDecisionRepository) Comm
 
 // WithCommentDependencyRepo injects the task-dependency repository, used by the
 // closed-card follow-up mechanism (comment_closed_task_followup.go) to link the
-// follow-up card back to the closed one with a relates_to edge, and to
-// recognise its own earlier output when deduping. Optional: unset, follow-up
-// cards are still created, just unlinked and undeduped.
+// follow-up card back to the closed one with a relates_to edge. Optional:
+// unset, follow-up cards are still created, just unlinked.
 func WithCommentDependencyRepo(repo repository.TaskDependencyRepository) CommentServiceOption {
 	return func(s *commentService) { s.depRepo = repo }
+}
+
+// WithClosedFollowUpRootRepo injects the persistent finding-identity store the
+// closed-card follow-up mechanism keys its dedup on (#5194afd4): one
+// (source card, finding) pair → one root for the pair's whole life, closed
+// repeats reopen that root instead of opening a second card. Optional only so
+// non-server builds compile: unset, the whole mechanism is off — without the
+// identity store there is no honest dedup left (the old label-scan absorbed
+// DIFFERENT findings into one open root, which the approved contract forbids).
+func WithClosedFollowUpRootRepo(repo repository.ClosedFollowUpRootRepository) CommentServiceOption {
+	return func(s *commentService) { s.followUpRoots = repo }
 }
 
 // NewCommentService returns a new CommentService backed by the given repositories.
