@@ -108,6 +108,27 @@ export default defineConfig({
     // its static imports without guessing filenames from hashed output.
     manifest: true,
     outDir: PERF_PROFILER ? "dist-perf" : "dist",
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          // Pack the tiny icon chunks to share gzip dictionaries, while
+          // keeping route-only icons out of the initial login download.
+          groups: [
+            {
+              name: "icons-initial",
+              test: /node_modules[\\/]lucide-react[\\/]/,
+              tags: ["$initial"],
+              includeDependenciesRecursively: false,
+            },
+            {
+              name: "icons-lazy",
+              test: /node_modules[\\/]lucide-react[\\/]/,
+              includeDependenciesRecursively: false,
+            },
+          ],
+        },
+      },
+    },
   },
   preview: {
     // The perf spec serves dist-perf with `vite preview` and talks to the
