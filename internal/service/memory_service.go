@@ -301,6 +301,12 @@ const defaultHalfLifeDays = 30.0
 // FullTextSearch and VectorSearch each fetch limit * candidateMultiplier results.
 const candidateMultiplier = 3
 
+// pinnedSentinelScore is the synthetic score injected pinned rows carry (see
+// RecallWithStats Step 6): strictly above any fused retrieval score (theoretical
+// max 1/61 after freshness), so pinned rows always sort to the front. It doubles
+// as the discriminator mesh_memory_recall_top_score uses to skip them.
+const pinnedSentinelScore = 2.0
+
 type memoryService struct {
 	memRepo     repository.MemoryRepository
 	edgeRepo    repository.MemoryEdgeRepository
@@ -1520,7 +1526,7 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 			if !searchFilter.Allows(p) {
 				continue // pinned still has to be eligible for THIS query
 			}
-			pinnedScored = append(pinnedScored, domain.ScoredMemory{Memory: p, Score: 2.0}) // score > any retrieval score
+			pinnedScored = append(pinnedScored, domain.ScoredMemory{Memory: p, Score: pinnedSentinelScore})
 		}
 		merged = append(pinnedScored, merged...)
 	}
@@ -1530,6 +1536,27 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	// contract with the caller, not a hint applied midway through the pipeline.
 	if len(merged) > opts.Limit {
 		merged = merged[:opts.Limit]
+	}
+
+	// Top-1 of the FINAL page, for mesh_memory_recall_top_score — captured after
+	// the trim, from the rows the caller actually receives. Pinned rows are
+	// skipped via their sentinel score: a synthetic 2.0 no retrieval score can
+	// reach, and counting one would let a page saved entirely by pinning report
+	// a perfect top score. Displacement counts too: when eligible pinned rows
+	// fill the limit and the trim discards every retrieval row, the served page
+	// is pinned-only and the pre-injection retrieval score must NOT be observed
+	// (review P1, #2c44a087) — that would be the same non-empty-but-useless
+	// blindness the metric exists to remove. merged is sorted descending and
+	// pinned rows sort first, so the first non-sentinel row IS the top retrieval
+	// score; 0.0 when the page holds none, which is what an empty or pinned-only
+	// page observes into the lowest bucket.
+	topScore := 0.0
+	for _, m := range merged {
+		if m.Score >= pinnedSentinelScore {
+			continue
+		}
+		topScore = m.Score
+		break
 	}
 
 	// ── Boost relevance + touch last_accessed_at as positive feedback (non-fatal) ──
@@ -1553,6 +1580,11 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	if len(merged) == 0 {
 		pkgmetrics.RecordMemoryRecallEmpty(string(searchMode))
 	}
+	// Unconditional — including empty and pinned-only pages (topScore 0.0), and
+	// excluding only the validation-error early returns that never ran the arms.
+	// That keeps _count equal to mesh_memory_recall_total, so a bucket's share
+	// of _count reads directly as "share of all recalls this useless".
+	pkgmetrics.ObserveMemoryRecallTopScore(string(searchMode), topScore)
 
 	return merged, stats, nil
 }

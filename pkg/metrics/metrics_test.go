@@ -3,8 +3,11 @@ package metrics
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mesh_integration_encryption_active is the only signal that says whether
@@ -103,4 +106,57 @@ func TestRecordMemoryRecallEmpty(t *testing.T) {
 
 	assert.Equal(t, emptyBefore+1, testutil.ToFloat64(empty))
 	assert.Equal(t, totalBefore, testutil.ToFloat64(total), "empty must not move the total")
+}
+
+// asHistogram narrows a HistogramVec child (handed out as a bare Observer) to
+// the full prometheus.Histogram, the only thing whose Write exposes buckets.
+func asHistogram(t *testing.T, o prometheus.Observer) prometheus.Histogram {
+	t.Helper()
+	h, ok := o.(prometheus.Histogram)
+	require.True(t, ok, "a HistogramVec child must implement prometheus.Histogram")
+	return h
+}
+
+func histCount(t *testing.T, h prometheus.Observer) uint64 {
+	t.Helper()
+	m := &dto.Metric{}
+	require.NoError(t, asHistogram(t, h).Write(m))
+	return m.GetHistogram().GetSampleCount()
+}
+
+func histBelow(t *testing.T, h prometheus.Observer, le float64) uint64 {
+	t.Helper()
+	m := &dto.Metric{}
+	require.NoError(t, asHistogram(t, h).Write(m))
+	for _, b := range m.GetHistogram().GetBucket() {
+		if b.GetUpperBound() == le {
+			return b.GetCumulativeCount()
+		}
+	}
+	t.Fatalf("no bucket le=%v", le)
+	return 0
+}
+
+// The top-score histogram accumulates per mode and its edges carry the
+// prod-measured decision boundary (#2c44a087): 0.7/61 ≈ 0.0115 — a hybrid page
+// whose winner only the dense arm found — must land INSIDE le=0.012, while
+// 1/61 ≈ 0.0164, a winner both arms ranked first, must land OUTSIDE it. The
+// empty counter must not move.
+func TestObserveMemoryRecallTopScore(t *testing.T) {
+	hist, err := MemoryRecallTopScore.GetMetricWithLabelValues("hybrid")
+	require.NoError(t, err)
+	empty := MemoryRecallEmptyTotal.WithLabelValues("hybrid")
+	countBefore, denseBefore, bothBefore := histCount(t, hist), histBelow(t, hist, 0.012), histBelow(t, hist, 0.017)
+	emptyBefore := testutil.ToFloat64(empty)
+
+	ObserveMemoryRecallTopScore("hybrid", 0.7/61) // dense-arm-only winner
+	ObserveMemoryRecallTopScore("hybrid", 1.0/61) // both-arms winner
+
+	assert.Equal(t, countBefore+2, histCount(t, hist))
+	assert.Equal(t, denseBefore+1, histBelow(t, hist, 0.012),
+		"exactly one of the two observations is ≤0.012: the dense-only 0.7/61, not the both-arms 1/61")
+	assert.Equal(t, denseBefore+1, histBelow(t, hist, 0.016),
+		"1/61 ≈ 0.016393 is NOT ≤0.016 — it lands in the (0.016, 0.017] band")
+	assert.Equal(t, bothBefore+2, histBelow(t, hist, 0.017), "both observations are ≤0.017")
+	assert.Equal(t, emptyBefore, testutil.ToFloat64(empty), "top score must not move the empty counter")
 }
