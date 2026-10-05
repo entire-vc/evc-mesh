@@ -44,6 +44,33 @@ type AgentHandler struct {
 	agentEventsRepo repository.AgentEventsRepository  // optional, enables Last-Event-ID SSE replay
 	sessionRepo     repository.AgentSessionRepository // optional, enables POST /agents/me/sessions/report
 	shutdown        <-chan struct{}                   // optional, closed on server shutdown to end SSE streams and long-polls
+	workspaceSvc    service.WorkspaceService          // optional, resolves the workspace slug for Agent.URL
+}
+
+// SetWorkspaceService enables Agent.URL on agent responses. Without it the
+// field is simply absent (omitempty).
+func (h *AgentHandler) SetWorkspaceService(ws service.WorkspaceService) { h.workspaceSvc = ws }
+
+// decorateAgentURLs sets the canonical deep-link on each agent in place. The
+// workspace slug is resolved once per call; every agent in one response is
+// linked under the same workspace (workspaceID), which for /agents/me is the
+// workspace the key authenticated into, not the agent's home row. A failed
+// lookup leaves URL empty rather than failing a response whose data is valid.
+func (h *AgentHandler) decorateAgentURLs(ctx context.Context, r *http.Request, workspaceID uuid.UUID, agents ...*domain.Agent) {
+	if h.workspaceSvc == nil {
+		return
+	}
+	ws, err := h.workspaceSvc.GetByID(ctx, workspaceID)
+	if err != nil || ws == nil {
+		return
+	}
+	scheme, host := requestOrigin(r)
+	for _, a := range agents {
+		if a == nil || a.Slug == "" {
+			continue
+		}
+		a.URL = fmt.Sprintf("%s://%s/w/%s/team/agent/%s", scheme, host, ws.Slug, a.Slug)
+	}
 }
 
 // SetShutdownSignal registers a channel that is closed when the server starts
@@ -134,6 +161,11 @@ func (h *AgentHandler) List(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	agents := make([]*domain.Agent, len(page.Items))
+	for i := range page.Items {
+		agents[i] = &page.Items[i]
+	}
+	h.decorateAgentURLs(c.Request().Context(), c.Request(), wsID, agents...)
 
 	return c.JSON(http.StatusOK, page)
 }
@@ -191,6 +223,7 @@ func (h *AgentHandler) GetByID(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	h.decorateAgentURLs(c.Request().Context(), c.Request(), agent.WorkspaceID, agent)
 
 	return c.JSON(http.StatusOK, agent)
 }
@@ -729,6 +762,8 @@ func (h *AgentHandler) Me(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("agent auth workspace not resolved"))
 	}
+
+	h.decorateAgentURLs(c.Request().Context(), c.Request(), authWsID, agent)
 
 	return c.JSON(http.StatusOK, meResponse(agent, authWsID))
 }
