@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -100,10 +101,13 @@ func TestArtifactService_Upload(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // stubRelayPublisher returns a fixed public URL / agent key and records that it was called.
+// err simulates a transport-level publish failure (error/timeout); the service must
+// not persist any TR metadata in that case.
 type stubRelayPublisher struct {
 	mu        sync.Mutex
 	publicURL string
 	agentKey  string
+	err       error
 	called    bool
 }
 
@@ -111,7 +115,7 @@ func (s *stubRelayPublisher) Publish(_ context.Context, _ uuid.UUID, _ string, _
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.called = true
-	return s.publicURL, s.agentKey, nil
+	return s.publicURL, s.agentKey, s.err
 }
 
 func (s *stubRelayPublisher) wasCalled() bool {
@@ -152,6 +156,83 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 			}
 			return m["tr_public_url"] == "https://relay.example.com/mesh/foo.md"
 		}, 2*time.Second, 10*time.Millisecond, "tr_public_url should be persisted to metadata")
+	})
+
+	// Card #3bbd0312: a confirmed publish must also stamp tr_published=true so the
+	// frontend can gate the "Open in Team Relay" button on publication being real,
+	// not on a URL the relay optimistically constructed. RED control: on the code
+	// before this change tr_public_url was written without any tr_published flag.
+	t.Run("confirmed publish persists tr_published=true alongside tr_public_url", func(t *testing.T) {
+		svc, artifactRepo, _ := setupArtifactService()
+		pub := &stubRelayPublisher{publicURL: "https://relay.example.com/mesh/foo.md"}
+		svc.SetRelayPublisher(pub)
+		ctx := context.Background()
+
+		artifact, err := svc.Upload(ctx, UploadArtifactInput{
+			TaskID:         uuid.New(),
+			Name:           "doc.md",
+			ArtifactType:   domain.ArtifactTypeReport,
+			MimeType:       "text/markdown",
+			UploadedBy:     uuid.New(),
+			UploadedByType: domain.UploaderTypeUser,
+			Reader:         strings.NewReader("# hello"),
+			Size:           7,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, artifact)
+
+		assert.Eventually(t, func() bool {
+			md := artifactRepo.MetadataOf(artifact.ID)
+			if len(md) == 0 {
+				return false
+			}
+			var m map[string]any
+			if jErr := json.Unmarshal(md, &m); jErr != nil {
+				return false
+			}
+			return m["tr_public_url"] == "https://relay.example.com/mesh/foo.md" &&
+				m["tr_published"] == true
+		}, 2*time.Second, 10*time.Millisecond, "confirmed publish must persist tr_public_url and tr_published=true")
+	})
+
+	// Card #3bbd0312: publish error/timeout means the publication is NOT confirmed —
+	// no TR metadata may be written, not even the URL the publisher reported before
+	// failing. RED control: the pre-fix code ignored the Publish error and persisted
+	// a non-empty publicURL anyway.
+	t.Run("publish error leaves metadata without TR keys", func(t *testing.T) {
+		svc, artifactRepo, _ := setupArtifactService()
+		pub := &stubRelayPublisher{
+			publicURL: "https://relay.example.com/mesh/foo.md",
+			err:       errors.New("relay sync-upload timeout"),
+		}
+		svc.SetRelayPublisher(pub)
+		ctx := context.Background()
+
+		artifact, err := svc.Upload(ctx, UploadArtifactInput{
+			TaskID:         uuid.New(),
+			Name:           "doc.md",
+			ArtifactType:   domain.ArtifactTypeReport,
+			MimeType:       "text/markdown",
+			UploadedBy:     uuid.New(),
+			UploadedByType: domain.UploaderTypeUser,
+			Reader:         strings.NewReader("# hello"),
+			Size:           7,
+		})
+		require.NoError(t, err)
+
+		// Wait for the publish attempt itself, then give the (forbidden) metadata
+		// write 500ms to appear — absence asserted with Never so the test cannot
+		// pass by checking before a wrong write lands.
+		assert.Eventually(t, pub.wasCalled, 2*time.Second, 10*time.Millisecond)
+		assert.Never(t, func() bool {
+			var m map[string]any
+			if jErr := json.Unmarshal(artifactRepo.MetadataOf(artifact.ID), &m); jErr != nil {
+				return false
+			}
+			_, hasURL := m["tr_public_url"]
+			_, hasFlag := m["tr_published"]
+			return hasURL || hasFlag
+		}, 500*time.Millisecond, 25*time.Millisecond, "no TR metadata may be written when Publish returns an error")
 	})
 
 	// Flipped from "agent key is merged into metadata alongside public url", which
@@ -263,6 +344,8 @@ func TestArtifactService_Upload_RelayPublishWritesPublicURL(t *testing.T) {
 			require.NoError(t, json.Unmarshal(md, &m))
 			_, has := m["tr_public_url"]
 			assert.False(t, has, "tr_public_url should not be set when relay returns empty URL")
+			_, hasFlag := m["tr_published"]
+			assert.False(t, hasFlag, "tr_published should not be set for a private/unpublished share")
 		}
 	})
 }

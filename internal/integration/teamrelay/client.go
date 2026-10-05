@@ -22,6 +22,18 @@ import (
 // 30 s timeout; relay is local/private so this is generous.
 var relayHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+// probeHTTPClient is the confirm-probe client. Unlike relayHTTPClient it never
+// follows redirects: an auth wall that bounces anonymous requests 302 →
+// login-page-200 must fail the 2xx check instead of passing it by landing on
+// the login page. The transport client keeps the default redirect policy — sync
+// calls may legitimately rely on it (trailing-slash/https redirects on the base URL).
+var probeHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 // syncUploadResponse is the success body returned by POST /v1/web/shares/{id}/sync-upload.
 type syncUploadResponse struct {
 	SyncURL string `json:"sync_url"`
@@ -30,9 +42,11 @@ type syncUploadResponse struct {
 }
 
 // Publisher is the interface consumed by the artifact upload hook.
-// Publish returns the relay-reported public URL (or "" if none), the agent key used
-// for the upload (so callers can persist it for authenticated open URLs), and a
-// best-effort error.
+// Publish returns the artifact's public URL only when publication is confirmed —
+// the relay accepted the upload and the URL serves to an anonymous browser; ""
+// otherwise (share not web-published, private visibility, unreachable, or the
+// confirm probe failing). The agent key used for the upload is returned alongside
+// (empty for public shares); err carries transport-level failures.
 type Publisher interface {
 	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (publicURL, agentKey string, err error)
 }
@@ -53,10 +67,11 @@ func transportEnabled() bool {
 }
 
 // Publish pushes an artifact to the Team Relay share for the project the task belongs to.
-// It is best-effort: all errors are logged but never returned to the caller.
-// On a successful upload it returns the relay-reported public URL (or "" if the relay
-// omits one) and the agent key used — the caller persists both into artifact metadata so
-// the UI can construct an authenticated open URL without a server round-trip.
+// It is best-effort: integration lookup failures are logged and yield ("", "", nil),
+// while transport-level upload failures are returned as err. A non-empty publicURL is
+// returned only when publication is confirmed: the relay accepted the upload AND the
+// returned web URL serves to an anonymous browser (see confirmPublishedWebURL). The
+// agent key is returned for callers that need authenticated access to the share.
 func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (publicURL, agentKey string, err error) {
 	// Resolve task → project.
 	task, tErr := c.taskRepo.GetByID(ctx, taskID)
@@ -105,7 +120,86 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 	}
 
 	webURL, tErr := transport(ctx, shareIdentifier, filePath, content, contentType, pi.AgentKey)
-	return webURL, pi.AgentKey, tErr
+	if tErr != nil {
+		return "", "", tErr
+	}
+	if webURL == "" {
+		// No web URL: the share is not web-published (or the relay rejected the
+		// key). Nothing the caller may advertise as publicly openable.
+		return "", pi.AgentKey, nil
+	}
+	// The control plane builds a web URL for any web_published share, including
+	// ones with private visibility that answer 401 to anonymous browsers — so the
+	// URL alone is a claim, not a confirmation. Only a URL that serves anonymously
+	// counts as published.
+	if !confirmPublishedWebURL(ctx, webURL) {
+		return "", pi.AgentKey, nil
+	}
+	return webURL, pi.AgentKey, nil
+}
+
+// confirmProbeAttempts bounds how many times the confirm probe is tried before
+// a web URL is declared unpublished. The probe fires immediately after the relay
+// accepted the upload (2xx), and web-side propagation can lag that acceptance —
+// a momentary 404 right after a successful upload is usually the file not being
+// visible yet, not a private share. Two quick retries cut those false negatives;
+// anything still not 2xx after the last attempt stays unconfirmed.
+const confirmProbeAttempts = 3
+
+// confirmProbeBackoff is the wait before probe retry N (N × backoff). A var so
+// tests can shorten it instead of sleeping real time.
+var confirmProbeBackoff = 250 * time.Millisecond
+
+// confirmPublishedWebURL reports whether webURL actually serves to an anonymous
+// browser. A plain credential-less GET is the same probe a user's browser makes
+// when clicking the link: private shares answer 401 (or a redirect to a login
+// page), not-yet-synced files 404, and anything but a final 2xx means the
+// publication is not confirmed and the caller must not persist the URL as
+// publicly openable.
+func confirmPublishedWebURL(ctx context.Context, webURL string) bool {
+	for attempt := 1; ; attempt++ {
+		final := attempt == confirmProbeAttempts
+		if confirmProbeOnce(ctx, webURL, final) {
+			return true
+		}
+		if final {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			log.Printf("teamrelay: confirm probe cancelled for %s: %v", webURL, ctx.Err())
+			return false
+		case <-time.After(confirmProbeBackoff * time.Duration(attempt)):
+		}
+	}
+}
+
+// confirmProbeOnce performs one anonymous, credential-less GET against webURL.
+// Only the final attempt logs its failure — retries are expected while the web
+// side catches up with the just-accepted upload.
+func confirmProbeOnce(ctx context.Context, webURL string, finalAttempt bool) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, webURL, http.NoBody)
+	if err != nil {
+		log.Printf("teamrelay: cannot build confirm request for %s: %v", webURL, err)
+		return false
+	}
+	resp, err := probeHTTPClient.Do(req)
+	if err != nil {
+		if finalAttempt {
+			log.Printf("teamrelay: confirm fetch failed for %s: %v — treating as unpublished", webURL, err)
+		}
+		return false
+	}
+	defer resp.Body.Close()
+	// Drain a little so the connection can be reused instead of torn down mid-stream.
+	_, _ = io.CopyN(io.Discard, resp.Body, 4096)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if finalAttempt {
+			log.Printf("teamrelay: %s answered %d to an anonymous request — publication not confirmed, tr_public_url will not be written", webURL, resp.StatusCode)
+		}
+		return false
+	}
+	return true
 }
 
 // webShareResponse is the body returned by GET /v1/web/shares/{slug}.
