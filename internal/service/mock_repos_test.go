@@ -4549,6 +4549,13 @@ type MockClosedFollowUpRootRepository struct {
 	// while a loser is inside its wait budget.
 	onGet    func(call int, m *MockClosedFollowUpRootRepository)
 	getCalls int
+	// onRootsClaim, when set, runs after the call counter of every Claim
+	// call (counted from 1), OUTSIDE the mutex — the overlap point for the
+	// lease test (#a2368528): pass B runs re-entrantly from inside pass A's
+	// first Claim, which is exactly the window two concurrent passes would
+	// race in. Runs for B's own Claim too (call 2), so the hook guards on
+	// the call number.
+	onRootsClaim func(call int)
 	// failClaimFirstN models a TRANSIENT outage for the retry ladder
 	// (#db1c6c7a): exactly the first N Claim calls fail, then the store
 	// recovers. The sticky errToReturn is the database down for the whole
@@ -4575,7 +4582,11 @@ func (m *MockClosedFollowUpRootRepository) Claim(_ context.Context, sourceTaskID
 	m.claimCalls++
 	call := m.claimCalls
 	n := m.failClaimFirstN
+	hook := m.onRootsClaim
 	m.mu.Unlock()
+	if hook != nil {
+		hook(call)
+	}
 	if call <= n {
 		return false, fmt.Errorf("transient claim failure, call %d", call)
 	}
@@ -4732,10 +4743,52 @@ type MockClosedFollowUpPendingRepository struct {
 	// while the queue itself still works — markPendingAttempt's WARNING
 	// branch.
 	markErr error
+	// claimErr fails ClaimForReconcile ALONE: the lease store is down while
+	// the queue reads fine — the loop's claim-error branch (#a2368528).
+	claimErr error
 }
 
 func NewMockClosedFollowUpPendingRepository() *MockClosedFollowUpPendingRepository {
 	return &MockClosedFollowUpPendingRepository{items: make(map[uuid.UUID]*domain.ClosedFollowUpPending)}
+}
+
+// ClaimForReconcile mirrors the SQL lease (#a2368528): a row is claimable
+// only while its lease is NULL or past — timeNow(), not a captured clock, so
+// the TTL arithmetic is the same one production pays. A missing row claims
+// false without an error, exactly like the UPDATE that affects nothing.
+func (m *MockClosedFollowUpPendingRepository) ClaimForReconcile(_ context.Context, commentID uuid.UUID, leaseUntil time.Time) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	if m.claimErr != nil {
+		return false, m.claimErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.items[commentID]
+	if !ok {
+		return false, nil // raced the row's deletion: nothing to claim
+	}
+	if row.ClaimedUntil != nil && row.ClaimedUntil.After(timeNow()) {
+		return false, nil // someone else holds the lease
+	}
+	t := leaseUntil
+	row.ClaimedUntil = &t
+	return true, nil
+}
+
+// ReleaseClaim mirrors the keep-path lease release: NULL the lease, no error
+// for a missing row.
+func (m *MockClosedFollowUpPendingRepository) ReleaseClaim(_ context.Context, commentID uuid.UUID) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if row, ok := m.items[commentID]; ok {
+		row.ClaimedUntil = nil
+	}
+	return nil
 }
 
 func (m *MockClosedFollowUpPendingRepository) Enqueue(ctx context.Context, p *domain.ClosedFollowUpPending) error {
@@ -4814,6 +4867,9 @@ func (m *MockClosedFollowUpPendingRepository) MarkAttempt(_ context.Context, com
 	}
 	p.Attempts++
 	p.LastError = lastErr
+	// The lease survives the progress write: it covers the whole row unit,
+	// and only the unit's end (ReleaseClaim / Delete / TTL) gives the row
+	// back (#a2368528, codex-review round 2 on !1085).
 	return p.Attempts, nil
 }
 

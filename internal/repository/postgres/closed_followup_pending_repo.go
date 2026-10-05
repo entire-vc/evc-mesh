@@ -23,7 +23,7 @@ func NewClosedFollowUpPendingRepo(db *sqlx.DB) *ClosedFollowUpPendingRepo {
 	return &ClosedFollowUpPendingRepo{db: db}
 }
 
-const closedFollowUpPendingSelectCols = `comment_id, source_task_id, finding_key, attempts, last_error, created_at, escalated_at, noticed_at`
+const closedFollowUpPendingSelectCols = `comment_id, source_task_id, finding_key, attempts, last_error, created_at, escalated_at, noticed_at, claimed_until`
 
 // Enqueue upserts the pending row on the comment PK. A row that already
 // exists keeps its attempts and only refreshes last_error: the counter is the
@@ -62,10 +62,52 @@ func (r *ClosedFollowUpPendingRepo) ListDue(ctx context.Context, maxAttempts, li
 	return rows, nil
 }
 
+// ClaimForReconcile atomically leases a row to one reconcile pass
+// (#a2368528): the single UPDATE either takes the lease (row unleased, or
+// the holder's TTL expired) or refuses it (someone else holds it), and
+// RowsAffected is the answer — there is no read-then-write window for two
+// replicas to both win. Rows are probed by PK, so no index is needed.
+// Returning (false, nil) for a missing row: a pass that raced the row's
+// deletion has nothing to claim, which is not an error.
+func (r *ClosedFollowUpPendingRepo) ClaimForReconcile(ctx context.Context, commentID uuid.UUID, leaseUntil time.Time) (bool, error) {
+	const q = `
+		UPDATE closed_followup_pending
+		SET claimed_until = $2
+		WHERE comment_id = $1 AND (claimed_until IS NULL OR claimed_until <= now())
+	`
+	res, err := r.db.ExecContext(ctx, q, commentID, leaseUntil)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// ReleaseClaim drops the lease when the pass is done with a row it is
+// KEEPING (delivered with an unlanded park notice, or any finished unit):
+// the row must be claimable by the very next pass, or its retry cadence
+// halves to the TTL. This is the ONLY write besides the row's delete that
+// gives a leased row back — the progress writes deliberately do not, so a
+// lease always covers a whole row unit (codex-review round 2 on !1085:
+// MarkNoticed releasing mid-row reopened the overlap window one write
+// before delivery). Idempotent — releasing an unleased or missing row is a
+// no-op.
+func (r *ClosedFollowUpPendingRepo) ReleaseClaim(ctx context.Context, commentID uuid.UUID) error {
+	const q = `UPDATE closed_followup_pending SET claimed_until = NULL WHERE comment_id = $1`
+	_, err := r.db.ExecContext(ctx, q, commentID)
+	return err
+}
+
 // MarkEscalated stamps the row's escalation as DELIVERED: the «нужен человек»
 // notice exists on the source card. Written only after the notice comment,
 // never before — the flag, not the counter, is what retires the row from the
 // due set. Idempotent: a second stamp never moves the first landing time.
+// Does NOT touch the lease: a stamp is progress INSIDE the row's unit, and
+// the unit — not the write — is what the lease covers; the loop's end-of-row
+// release hands the row back (#a2368528).
 func (r *ClosedFollowUpPendingRepo) MarkEscalated(ctx context.Context, commentID uuid.UUID, at time.Time) error {
 	const q = `
 		UPDATE closed_followup_pending
@@ -80,7 +122,11 @@ func (r *ClosedFollowUpPendingRepo) MarkEscalated(ctx context.Context, commentID
 // landed on the source card. Written only after the notice comment, never
 // before — while it is NULL every reconcile pass that works the row retries
 // the notice (codex-review P1, round 4). Idempotent, first write wins, same
-// shape as MarkEscalated.
+// shape as MarkEscalated. Does NOT touch the lease, deliberately: this stamp
+// lands BEFORE the delivery attempt on the normal path, and a lease released
+// here is the overlap window reopening mid-row — a second pass claims the
+// row while the first is still delivering (codex-review round 2 on !1085).
+// The row comes back at its unit's end, via the loop's release (#a2368528).
 func (r *ClosedFollowUpPendingRepo) MarkNoticed(ctx context.Context, commentID uuid.UUID, at time.Time) error {
 	const q = `
 		UPDATE closed_followup_pending
@@ -94,7 +140,10 @@ func (r *ClosedFollowUpPendingRepo) MarkNoticed(ctx context.Context, commentID u
 // MarkAttempt increments attempts atomically and returns the new value — the
 // increment lives in the UPDATE itself, not in a Go-side read-modify-write,
 // so two concurrently running reconcile passes can only ever count more
-// attempts, never lose one or clobber the counter.
+// attempts, never lose one or clobber the counter. Does NOT touch the lease:
+// the failed pass still owns the row until its unit ends — the loop's
+// release hands it back right after, so the next tick's cadence is unchanged
+// without a mid-row window (#a2368528).
 func (r *ClosedFollowUpPendingRepo) MarkAttempt(ctx context.Context, commentID uuid.UUID, lastErr string) (int, error) {
 	const q = `
 		UPDATE closed_followup_pending

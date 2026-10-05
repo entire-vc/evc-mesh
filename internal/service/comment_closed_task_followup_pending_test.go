@@ -270,6 +270,22 @@ func (env followUpEnv) repark(t *testing.T, c *domain.Comment, attempts int) {
 	}
 }
 
+// reparkUnnoticed re-seeds the pending row the way an enqueue-time notice
+// failure leaves it: due, with its park notice NOT landed (noticed_at nil).
+// The normal reconcile path then posts the notice BEFORE attempting the
+// delivery — the mid-row progress write whose lease handling is the whole
+// question of the unlanded-notice overlap.
+func (env followUpEnv) reparkUnnoticed(t *testing.T, c *domain.Comment, attempts int) {
+	t.Helper()
+	env.pendingRepo.mu.Lock()
+	defer env.pendingRepo.mu.Unlock()
+	env.pendingRepo.items[c.ID] = &domain.ClosedFollowUpPending{
+		CommentID: c.ID, SourceTaskID: env.sourceID,
+		FindingKey: closedFindingKey(c), Attempts: attempts,
+		LastError: "re-seeded unnoticed for the branch under test", CreatedAt: timeNow(),
+	}
+}
+
 // parkedRow reads the pending row with its current attempt count.
 func (env followUpEnv) parkedRow(t *testing.T, commentID uuid.UUID) *domain.ClosedFollowUpPending {
 	t.Helper()
@@ -1092,4 +1108,167 @@ func TestClosedFollowUp_DeliveryDoesNotDiscardUnlandedParkNotice(t *testing.T) {
 	assert.Zero(t, delivered)
 	assert.Zero(t, retried, "the row is gone — nothing left to work")
 	assert.Zero(t, escalated)
+}
+
+// ---------------------------------------------------------------------------
+// The reconcile lease (#a2368528, from the codex-review R7 finding on
+// !1083): ListDue selects without a lock, so a pass that runs while another
+// is mid-delivery of the same row used to deliver it too — a duplicate
+// «уже открыта» notice and, on a closed root, a double-counted reopen slot.
+// ---------------------------------------------------------------------------
+
+// The card's RED test, decomposed with the DB-level race below: two passes
+// meet on one row, and the row must be delivered exactly once. Pass B is run
+// re-entrantly INSIDE pass A's first roots-Claim — synchronously, inside the
+// delivery attempt itself — which is the exact overlap window, made
+// deterministic instead of slept for. Before the lease B delivered the row
+// too (this test failed on overlapDelivered and on the duplicate notice);
+// after it B reads A's lease and skips.
+func TestClosedFollowUp_LeaseMakesOverlapDeliverOnce(t *testing.T) {
+	collapseFollowUpRetrySleeps(t)
+	env := setupFollowUpEnv(t)
+	c := env.comment(t, "нахожу: два прохода встретились на одной строке")
+	require.Len(t, env.taskSvc.createdTasks(), 1, "sanity: delivered inline while healthy")
+
+	// The crash window's redelivery shape: the row is back, notice stamped.
+	env.repark(t, c, 1)
+
+	// Arm the hook only now: env.comment() above already made its own roots
+	// Claim (the inline delivery), so counting calls from 1 would fire inside
+	// the inline path where no row exists yet. The first Claim AFTER this
+	// point is pass A's delivery attempt — the overlap window itself.
+	var overlapRan bool
+	var overlapDelivered int
+	env.rootsRepo.onRootsClaim = func(call int) {
+		if overlapRan {
+			return
+		}
+		overlapRan = true
+		// Pass B: a whole reconcile while pass A sits INSIDE its delivery
+		// attempt for the same row.
+		d, _, _, err := env.svc.ReconcileClosedFollowUpPending(context.Background())
+		require.NoError(t, err)
+		overlapDelivered = d
+	}
+	delivered, retried, escalated, err := env.svc.ReconcileClosedFollowUpPending(context.Background())
+	require.NoError(t, err)
+
+	assert.Zero(t, overlapDelivered,
+		"the overlapping pass must find the row leased and skip it, not deliver it again")
+	assert.Equal(t, 1, delivered, "the lease holder's own delivery completes")
+	assert.Zero(t, retried)
+	assert.Zero(t, escalated)
+	assert.Nil(t, env.parkedRow(t, c.ID), "the holder delivered and retired the row")
+	assert.Len(t, env.taskSvc.createdTasks(), 1, "one finding, one root, across both passes")
+
+	var alreadyOpen int
+	for _, n := range env.systemNotices() {
+		if strings.Contains(n.Body, "уже открыта") {
+			alreadyOpen++
+		}
+	}
+	assert.Equal(t, 1, alreadyOpen,
+		"one delivery outcome notice for one finding — the duplicate is what the lease removes")
+}
+
+// The P1 window codex-review round 1 found in !1085: on the NORMAL path the
+// pass posts the park notice and stamps noticed_at BEFORE attempting the
+// delivery. If that progress write released the reconcile lease, a second
+// pass arriving while the first sits inside claimAndCreateRoot would claim
+// the row and deliver the finding again — the exact duplicate the lease
+// exists to remove, one write early. The lease must hold through the WHOLE
+// row unit, notice stamp included: only the row's end (the loop's release,
+// the row's delete) or a dead pass's TTL gives the row back.
+func TestClosedFollowUp_LeaseHoldsThroughUnlandedNotice(t *testing.T) {
+	collapseFollowUpRetrySleeps(t)
+	env := setupFollowUpEnv(t)
+	c := env.comment(t, "находка: лиз держится до конца строки, уведомление внутри")
+	require.Len(t, env.taskSvc.createdTasks(), 1, "sanity: delivered inline while healthy")
+
+	// The enqueue-crash shape: the row is back, and this time its park
+	// notice has NOT landed — reconcile works the notice before delivery.
+	env.reparkUnnoticed(t, c, 0)
+
+	// Armed after env.comment()'s own inline Claim; the first Claim from
+	// here is pass A's delivery attempt, which runs AFTER A has stamped
+	// noticed_at — the moment the old code gave the row away.
+	var overlapRan bool
+	var overlapDelivered int
+	env.rootsRepo.onRootsClaim = func(call int) {
+		if overlapRan {
+			return
+		}
+		overlapRan = true
+		d, _, _, err := env.svc.ReconcileClosedFollowUpPending(context.Background())
+		require.NoError(t, err)
+		overlapDelivered = d
+	}
+	delivered, retried, escalated, err := env.svc.ReconcileClosedFollowUpPending(context.Background())
+	require.NoError(t, err)
+
+	assert.Zero(t, overlapDelivered,
+		"a second pass arriving after the notice stamp must still find the row leased — the lease covers the whole row unit, not the part after the notice")
+	assert.Equal(t, 1, delivered, "the holder's own delivery completes")
+	assert.Zero(t, retried)
+	assert.Zero(t, escalated)
+	assert.Nil(t, env.parkedRow(t, c.ID), "the holder delivered and retired the row")
+	assert.Len(t, env.taskSvc.createdTasks(), 1, "one finding, one root, across both passes")
+
+	var alreadyOpen int
+	for _, n := range env.systemNotices() {
+		if strings.Contains(n.Body, "уже открыта") {
+			alreadyOpen++
+		}
+	}
+	assert.Equal(t, 1, alreadyOpen,
+		"one delivery outcome notice for one finding — the notice stamp is not a lease release")
+}
+
+// The lease must not halve a surviving row's retry cadence: the row is
+// handed back at the END of its unit (the loop's release after every
+// progress write), so the pass AFTER a failed attempt claims the row again
+// on the very next tick instead of waiting out the TTL. Three failing passes
+// must count three attempts and leave no lease behind.
+func TestClosedFollowUp_LeaseReleasedAtRowEndKeepsCadence(t *testing.T) {
+	collapseFollowUpRetrySleeps(t)
+	env := setupFollowUpEnv(t, func(e *followUpEnv) {
+		e.rootsRepo.errToReturn = fmt.Errorf("identity store unreachable")
+	})
+	c := env.comment(t, "нахожу: аренда не должна замедлять повторы")
+
+	for pass := 1; pass <= 3; pass++ {
+		delivered, retried, _, err := env.svc.ReconcileClosedFollowUpPending(context.Background())
+		require.NoError(t, err)
+		assert.Zero(t, delivered)
+		assert.Equal(t, 1, retried,
+			"pass %d: the row must be claimable again — the lease died at the row's end, not with the TTL", pass)
+	}
+	row := env.parkedRow(t, c.ID)
+	require.NotNil(t, row)
+	assert.Equal(t, 3, row.Attempts, "every tick worked the row; none was spent waiting out a lease")
+	assert.Nil(t, row.ClaimedUntil, "a failed pass leaves no lease behind")
+}
+
+// The lease store itself is down while the queue reads fine: the pass says so
+// (metric + WARNING) and skips the row untouched — no attempt burned, no
+// half-work. The next pass with a readable store picks the row up whole.
+func TestClosedFollowUp_LeaseClaimErrorSkipsRowWithSignal(t *testing.T) {
+	collapseFollowUpRetrySleeps(t)
+	env := setupFollowUpEnv(t, func(e *followUpEnv) {
+		e.rootsRepo.errToReturn = fmt.Errorf("identity store unreachable")
+	})
+	c := env.comment(t, "нахожу: стор аренды не читается")
+
+	env.pendingRepo.claimErr = fmt.Errorf("lease store unreachable")
+	before := closedFollowUpErrorCount(t, "reconcile", "claim_lease")
+	delivered, retried, escalated, err := env.svc.ReconcileClosedFollowUpPending(context.Background())
+	require.NoError(t, err)
+
+	assert.Zero(t, delivered)
+	assert.Zero(t, retried, "a claim error is a skip, not a failed attempt — the row's budget is not the lease's to spend")
+	assert.Zero(t, escalated)
+	assert.Greater(t, closedFollowUpErrorCount(t, "reconcile", "claim_lease"), before)
+	row := env.parkedRow(t, c.ID)
+	require.NotNil(t, row)
+	assert.Zero(t, row.Attempts, "the row waits for the next pass exactly as it was found")
 }
