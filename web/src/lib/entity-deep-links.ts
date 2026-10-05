@@ -9,8 +9,14 @@ export function projectSettingsTab(search: URLSearchParams): string {
   return tab && projectSettingsTabs.includes(tab) ? tab : "general";
 }
 
-export function artifactHref(taskId: string, artifactId: string): string {
-  return `/t/${encodeURIComponent(taskId)}?${new URLSearchParams({ artifact: artifactId })}`;
+/**
+ * An artifact's permanent address: `/a/<id>`, its own page, not a query
+ * parameter on the owning task. The task-scoped form (`/t/<task>?artifact=`)
+ * only worked while the reader could list that task's artifacts — and made
+ * the link say "task" when it meant "file".
+ */
+export function artifactHref(artifactId: string): string {
+  return `/a/${encodeURIComponent(artifactId)}`;
 }
 
 export function scheduleHref(wsSlug: string, projectSlug: string, scheduleId: string): string {

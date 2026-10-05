@@ -12,6 +12,10 @@
  * These tests pin both the fixed case (`/d/`) and the case that already
  * worked (`/t/`) as a positive control — a change that "fixed" `/d/` by
  * accident while breaking `/t/` would be just as wrong.
+ *
+ * `/a/:artifactId` (the artifact's own page, #eb6fde4e) joined the list the
+ * same way — caught by the e2e suite in CI, where the page opened Activity
+ * instead of the artifact.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -40,6 +44,7 @@ function renderDeepLink(initialPath: string, resolveProject = false) {
         children: [
           { path: "w/:wsSlug/activity", element: <div data-testid="activity-page">Activity</div> },
           { path: "t/:taskId", element: <div data-testid="task-deep-link">TaskDeepLink</div> },
+          { path: "a/:artifactId", element: <div data-testid="artifact-view">ArtifactView</div> },
           { path: "d/:docId", element: <div data-testid="doc-deep-link">DocDeepLink</div> },
           { path: "p/:projectId", element: resolveProject ? <ProjectDeepLinkResolver /> : <div data-testid="project-deep-link">ProjectDeepLink</div> },
         ],
@@ -119,5 +124,13 @@ describe("AppLayout — deep-link routes are not redirected to activity", () => 
     await screen.findByTestId("task-deep-link");
     expect(screen.queryByTestId("activity-page")).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/t/some-task-id");
+  });
+
+  it("lets /a/:artifactId render its page instead of bouncing to /w/<slug>/activity (#eb6fde4e)", async () => {
+    const router = renderDeepLink("/a/some-artifact-id");
+
+    await screen.findByTestId("artifact-view");
+    expect(screen.queryByTestId("activity-page")).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/a/some-artifact-id");
   });
 });

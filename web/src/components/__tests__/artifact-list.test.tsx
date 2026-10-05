@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ArtifactList } from "@/components/artifact-list";
 import type { Artifact } from "@/types";
 
@@ -27,99 +27,102 @@ function makeArtifact(overrides: Partial<Artifact>): Artifact {
   };
 }
 
+function stubList(artifact: Artifact) {
+  vi.mocked(api).mockImplementation((path: string) => {
+    if (path === "/api/v1/tasks/task-1/artifacts") {
+      return Promise.resolve({ items: [artifact], total: 1 });
+    }
+    return Promise.reject(new Error(`unexpected path: ${path}`));
+  });
+}
+
 describe("ArtifactList — Open in new tab", () => {
   beforeEach(() => {
     vi.mocked(api).mockReset();
     vi.spyOn(window, "open").mockImplementation(() => null);
   });
 
-  it("requests the inline-disposition download URL when clicked", async () => {
-    const artifact = makeArtifact({});
-    vi.mocked(api).mockImplementation((path: string) => {
-      if (path === "/api/v1/tasks/task-1/artifacts") {
-        return Promise.resolve({ items: [artifact], total: 1 });
-      }
-      if (path === "/api/v1/artifacts/artifact-1/download?disposition=inline") {
-        return Promise.resolve({ url: "https://s3.example.com/presigned-inline" });
-      }
-      return Promise.reject(new Error(`unexpected path: ${path}`));
-    });
+  it("opens the artifact's own /a/<id> page, not a presigned URL", async () => {
+    stubList(makeArtifact({}));
 
     render(<ArtifactList taskId="task-1" />);
 
-    const openButton = await screen.findByTitle("Open in new tab");
-    fireEvent.click(openButton);
+    fireEvent.click(await screen.findByTitle("Open in new tab"));
 
-    await waitFor(() => {
-      expect(window.open).toHaveBeenCalledWith(
-        "https://s3.example.com/presigned-inline",
-        "_blank",
-      );
-    });
+    expect(window.open).toHaveBeenCalledWith("/a/artifact-1", "_blank");
+    // The old behaviour minted a presigned URL first; that call is gone.
+    expect(vi.mocked(api)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api).mock.calls[0]?.[0]).toBe("/api/v1/tasks/task-1/artifacts");
   });
 
-  it("hides the button for mime types the browser can't render inline", async () => {
-    const artifact = makeArtifact({
-      name: "archive.zip",
-      artifact_type: "file",
-      mime_type: "application/zip",
-    });
-    vi.mocked(api).mockImplementation((path: string) => {
-      if (path === "/api/v1/tasks/task-1/artifacts") {
-        return Promise.resolve({ items: [artifact], total: 1 });
-      }
-      return Promise.reject(new Error(`unexpected path: ${path}`));
-    });
+  /**
+   * The reported bug (#eb6fde4e), pinned: an artifact carrying
+   * `metadata.tr_public_url` must open ITS OWN page in Mesh. The old code
+   * window.open'd the Team Relay URL — which answers 401 on a private share
+   * — before any other consideration. Asserting what window.open was NOT
+   * given matters as much as what it was: a test that only checks the /a/
+   * call would still pass if the TR branch ran first and this one second.
+   */
+  it("never window.opens metadata.tr_public_url, whatever the mime type", async () => {
+    stubList(
+      makeArtifact({
+        name: "doc.docx",
+        mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        metadata: { tr_public_url: "https://docs.entire.vc/contenthub/t1/report" },
+      }),
+    );
+
+    render(<ArtifactList taskId="task-1" />);
+
+    fireEvent.click(await screen.findByTitle("Open in new tab"));
+
+    expect(window.open).toHaveBeenCalledWith("/a/artifact-1", "_blank");
+    expect(window.open).not.toHaveBeenCalledWith(
+      "https://docs.entire.vc/contenthub/t1/report",
+      expect.anything(),
+    );
+    expect(vi.mocked(api).mock.calls.map((c) => c[0])).not.toContain(
+      expect.stringContaining("/download"),
+    );
+  });
+
+  it("offers a tab for a browser-unrenderable file too — the page handles it", async () => {
+    stubList(
+      makeArtifact({
+        name: "archive.zip",
+        artifact_type: "file",
+        mime_type: "application/zip",
+      }),
+    );
 
     render(<ArtifactList taskId="task-1" />);
 
     await screen.findByText("archive.zip");
-    expect(screen.queryByTitle("Open in new tab")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("Open in new tab"));
+    expect(window.open).toHaveBeenCalledWith("/a/artifact-1", "_blank");
     expect(screen.getByTitle("Download")).toBeInTheDocument();
   });
 
   /**
-   * The reported bug, at the level the reader meets it: a `.md` artifact must
-   * offer an in-app preview, and must NOT offer the browser tab that shows it
-   * as raw source. Both halves are asserted — "Preview exists" alone would pass
-   * on a row that shows both buttons, which is still the old behaviour plus a
-   * new one beside it.
+   * A `.md` artifact keeps the Preview affordance (an eye, not a tab) — and
+   * the preview now IS the /a/ page in a new tab. Both halves asserted: a
+   * row showing both buttons would pass an "eye exists" check while keeping
+   * the old tab affordance beside the new one.
    */
-  it("offers Preview and not a browser tab for a markdown artifact", async () => {
-    const artifact = makeArtifact({
-      name: "audit.md",
-      artifact_type: "report",
-      mime_type: "text/markdown; charset=utf-8",
-    });
-    vi.mocked(api).mockImplementation((path: string) => {
-      if (path === "/api/v1/tasks/task-1/artifacts") {
-        return Promise.resolve({ items: [artifact], total: 1 });
-      }
-      return Promise.reject(new Error(`unexpected path: ${path}`));
-    });
+  it("offers Preview and not a browser tab for a markdown artifact, opening /a/<id>", async () => {
+    stubList(
+      makeArtifact({
+        name: "audit.md",
+        artifact_type: "report",
+        mime_type: "text/markdown; charset=utf-8",
+      }),
+    );
 
     render(<ArtifactList taskId="task-1" />);
 
-    expect(await screen.findByTitle("Preview")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTitle("Preview"));
+    expect(window.open).toHaveBeenCalledWith("/a/artifact-1", "_blank");
     expect(screen.queryByTitle("Open in new tab")).not.toBeInTheDocument();
     expect(screen.getByTitle("Download")).toBeInTheDocument();
-  });
-
-  it("still shows the button for a TR-linked artifact regardless of mime type", async () => {
-    const artifact = makeArtifact({
-      name: "doc.docx",
-      mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      metadata: { tr_public_url: "https://relay.example.com/doc" },
-    });
-    vi.mocked(api).mockImplementation((path: string) => {
-      if (path === "/api/v1/tasks/task-1/artifacts") {
-        return Promise.resolve({ items: [artifact], total: 1 });
-      }
-      return Promise.reject(new Error(`unexpected path: ${path}`));
-    });
-
-    render(<ArtifactList taskId="task-1" />);
-
-    expect(await screen.findByTitle("Open in new tab")).toBeInTheDocument();
   });
 });

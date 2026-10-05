@@ -20,12 +20,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AttachmentSourceMenu } from "@/components/AttachmentSourceMenu";
-import { uploadArtifact } from "@/lib/task-artifacts";
+import { downloadArtifact, uploadArtifact } from "@/lib/task-artifacts";
 import { documentMarkdownLink } from "@/lib/docs/doc-link";
 import type { DocumentSearchHit } from "@/lib/docs/document-search";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { ArtifactPreviewDialog } from "@/components/artifact-preview-dialog";
 import { previewKindFor } from "@/lib/artifact-preview";
 import type { Artifact, ArtifactType } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -70,10 +69,10 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
   data: "outline",
 };
 
-// Deciding how an artifact opens now lives in lib/artifact-preview, because the
-// decision has three outcomes rather than two: render it here, hand it to the
-// browser, or offer only Download. See that module for why text is no longer in
-// the "hand it to the browser" bucket.
+// Deciding how an artifact opens now lives in lib/artifact-preview — here it
+// only picks the affordance (an eye for text we render, a tab icon for
+// everything else). Both open the artifact's own page, /a/<id>, which does the
+// real deciding about how the bytes are shown.
 
 export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArtifactId }: ArtifactListProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -84,7 +83,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [previewing, setPreviewing] = useState<Artifact | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { enabled: hasTrIntegration } = useProjectTrIntegration(projId);
@@ -194,57 +192,30 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
     [handleUploadFiles],
   );
 
-  // Open = a Team Relay artifact opens in Team Relay; anything else opens through
-  // its S3 presigned URL.
+  // Open = the artifact's own page in Mesh, `/a/<id>`, in a new tab. Every
+  // artifact, one destination — the reader's session is the only credential
+  // involved.
   //
-  // It used to ask the server to mint a short-lived embed token first and open
-  // THAT. The token existed to authenticate an <iframe> we embedded, and the
-  // iframe is gone (D10) — a Team Relay document is now read and rendered by our
-  // own editor. Minting an embed token to open a new browser tab was the last
-  // caller of that machinery, and keeping a credential-minting endpoint alive for
-  // it would have left exactly the orphan this unit set out to remove.
-  //
-  // Named change, not a silent one: on a PRIVATE share the reader previously got
-  // an authenticated view via that token and now gets Team Relay's own page,
-  // where they sign in as themselves. That is what every other "Open in Team
-  // Relay" control in this product already does, and it is the correct party to
-  // be deciding whether this person may read that share.
-  const handleOpen = async (artifactId: string, trPublicUrl?: string) => {
-    if (trPublicUrl) {
-      window.open(trPublicUrl, "_blank");
-      return;
-    }
-    try {
-      const data = await api<{ url: string }>(
-        `/api/v1/artifacts/${artifactId}/download?disposition=inline`,
-      );
-      window.open(data.url, "_blank");
-    } catch {
-      // The bare API endpoint requires auth the browser won't send on a plain
-      // window.open — it can only ever 401, so don't fall back to it.
-      toast("Could not open file — try downloading it instead");
-    }
+  // It used to branch three ways, and the first one was the bug (#eb6fde4e):
+  // `metadata.tr_public_url` won over everything and sent the reader to
+  // docs.entire.vc, where a private share answers 401 and even a public one
+  // makes Team Relay's page — not ours — decide who reads the file. The bytes
+  // are ours; the page renders them. The old "hand the browser the presigned
+  // URL" branch is gone for the same reason: a tab of raw JSON or a forced
+  // download is a worse answer than a page we control. When a confirmed
+  // "published to Team Relay" flag arrives from the backend, a separate
+  // button will offer that page — deliberately not this one.
+  const handleOpen = (artifactId: string) => {
+    window.open(artifactHref(artifactId), "_blank");
   };
 
   // Download = force a real file download (fetch blob + anchor download)
   const handleDownload = async (artifactId: string, name: string) => {
     setDownloadingId(artifactId);
     try {
-      const data = await api<{ url: string }>(
-        `/api/v1/artifacts/${artifactId}/download`,
-      );
-      const resp = await fetch(data.url);
-      const blob = await resp.blob();
-      const objUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objUrl;
-      a.download = name;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(objUrl);
+      await downloadArtifact(artifactId, name);
     } catch {
-      // Same reasoning as handleOpen: the bare API endpoint 401s without auth.
+      // The bare API endpoint 401s without auth.
       toast("Could not download file");
     } finally {
       setDownloadingId(null);
@@ -343,10 +314,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
         const Icon = artifactTypeIcons[artifact.artifact_type] ?? File;
         const badgeVariant = artifactTypeBadgeVariant[artifact.artifact_type] ?? "secondary";
         const previewKind = previewKindFor(artifact);
-        const trPublicUrl =
-          typeof artifact.metadata?.tr_public_url === "string"
-            ? artifact.metadata.tr_public_url
-            : undefined;
 
         return (
           <EntityAnchor
@@ -374,44 +341,36 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
             </div>
 
             <div className="ml-3 flex shrink-0 items-center gap-1">
-              <a href={artifactHref(taskId, artifact.id)} title="Link to artifact" aria-label="Link to artifact"
+              <a href={artifactHref(artifact.id)} title="Link to artifact" aria-label="Link to artifact"
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted">
                 <Link className="h-4 w-4" />
               </a>
-              {/* A Team Relay artifact keeps opening in Team Relay: the bytes
-                  are not ours to render and the share decides who may read
-                  them. Checked before the kind, so it wins. */}
-              {trPublicUrl ? (
+              {/* Text we render ourselves gets the Preview affordance (an eye);
+                  everything else gets the tab affordance. Both now lead to the
+                  same place — /a/<id> in a new tab — where the page decides
+                  how to render. `tr_public_url` is deliberately not consulted
+                  here anymore (see handleOpen). */}
+              {previewKind === "markdown" || previewKind === "text" ? (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => void handleOpen(artifact.id, trPublicUrl)}
-                  title="Open in new tab"
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </Button>
-              ) : previewKind === "markdown" || previewKind === "text" ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setPreviewing(artifact)}
+                  onClick={() => handleOpen(artifact.id)}
                   title="Preview"
                 >
                   <Eye className="h-4 w-4" />
                 </Button>
-              ) : previewKind === "external" ? (
+              ) : (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => void handleOpen(artifact.id)}
+                  onClick={() => handleOpen(artifact.id)}
                   title="Open in new tab"
                 >
                   <ExternalLink className="h-4 w-4" />
                 </Button>
-              ) : null}
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -437,11 +396,6 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
         );
       })}
       {uploadZone}
-      <ArtifactPreviewDialog
-        artifact={previewing}
-        onClose={() => setPreviewing(null)}
-        onDownload={(id, name) => void handleDownload(id, name)}
-      />
     </div>
   );
 }
