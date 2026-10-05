@@ -20,7 +20,7 @@ RUN go mod download
 #
 # Bumping MESH_MCP_REF is a routine dependency bump (like any go.mod version bump), not a
 # release process — point it at a newer commit on evc-mesh-mcp's main branch.
-ARG MESH_MCP_REF=5046a95f2ddfeec3898b4dc83ba443409282d284
+ARG MESH_MCP_REF=1d4dc370a05b21e3f42b14bf599a248f890de232
 RUN CGO_ENABLED=0 GOOS=linux GOBIN=/bin go install -trimpath \
       -ldflags="-s -w -X github.com/entire-vc/evc-mesh-mcp/internal/mcp.BuildSHA=${MESH_MCP_REF}" \
       github.com/entire-vc/evc-mesh-mcp@${MESH_MCP_REF} && \
