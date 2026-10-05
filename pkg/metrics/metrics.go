@@ -116,6 +116,52 @@ var (
 		[]string{"search_mode"},
 	)
 
+	// memoryRecallTopScoreBuckets split the top-1 final-score distribution of
+	// recall. They are not guessed: on 2026-10-05 (#2c44a087) 30 real prod
+	// queries were replayed read-only through both arms (BM25 with OR-fallback +
+	// dense over the recency pool, RRF 0.3/0.7, freshness applied) and the
+	// resulting top-1 scores were strictly bimodal:
+	//
+	//	dense-arm-only winners  0.7/(60+1) = 0.01148   (8/30 real queries)
+	//	both-arms winners       0.01435..0.01639 = 1/61 (21/30)
+	//	bm25-only mode, whole   0.3/(60+1) = 0.00492 max
+	//
+	// with an EMPTY gap between 0.0115 and 0.0143. The bucket edges encode that
+	// structure: le=0.005 closes over the entire bm25-only range, le=0.012 on
+	// hybrid separates "the dense arm alone decided the top result" from "both
+	// arms agreed on it", and 0.014..0.017 give resolution inside the healthy
+	// hybrid band (theoretical max 1/61). 0.020/0.030 are headroom.
+	memoryRecallTopScoreBuckets = []float64{
+		0.001, 0.002, 0.003, 0.004, 0.005,
+		0.008, 0.010, 0.011, 0.012, 0.013,
+		0.014, 0.015, 0.016, 0.017, 0.020, 0.030,
+	}
+
+	// MemoryRecallTopScore observes the best score of a recall's FINAL result,
+	// by the mode it was served in. It exists because "returned items" and
+	// "returned something useful" are different things: the dense arm always
+	// returns nearest neighbours, so on hybrid an unmatchable query still yields
+	// a non-empty page and mesh_memory_recall_empty_total stays near zero
+	// (#2c44a087: 8 of 30 real prod recalls were dense-only at exactly
+	// 0.7/(60+1)). The top-1 score is what separates them — on hybrid,
+	// sum(rate(..._bucket{search_mode="hybrid",le="0.012"}[15m]))
+	// / rate(..._count[15m]) is the useless-recall share.
+	//
+	// Observed once per served recall, next to RecordMemoryRecall's denominator,
+	// so _count matches mesh_memory_recall_total. The value is the final page's
+	// best RETRIEVAL score (post-RRF, post-filters, post-freshness/decay):
+	// synthetic pinned rows (injected at a sentinel 2.0 that no retrieval score
+	// can reach) are excluded, and a page with no retrieval rows at all — empty,
+	// or saved only by pinned injection — observes 0.0 into the lowest bucket.
+	MemoryRecallTopScore = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "mesh_memory_recall_top_score",
+			Help:    "Distribution of the best final-result score per memory recall, by search mode; 0 when retrieval contributed no rows (empty or pinned-only page). RRF scores are rank-based: bm25-only tops at 0.3/61, hybrid at 1/61; on hybrid le=0.012 marks a dense-arm-only winner.",
+			Buckets: memoryRecallTopScoreBuckets,
+		},
+		[]string{"search_mode"},
+	)
+
 	// MemoryEmbedInFlight counts embed calls (write or query) that have started
 	// and not yet finished — queued for an embedSem slot, actively embedding, or
 	// storing the result. It is a backlog depth, not a slot-occupancy count: it
@@ -287,6 +333,15 @@ func RecordMemoryRecall(searchMode string) {
 // RecordMemoryRecall's denominator.
 func RecordMemoryRecallEmpty(searchMode string) {
 	MemoryRecallEmptyTotal.WithLabelValues(searchMode).Inc()
+}
+
+// ObserveMemoryRecallTopScore records the best final-result score of a recall
+// (0 when retrieval contributed no rows), labelled with the search mode it was
+// served in. Call it once per served recall, next to RecordMemoryRecall — the
+// histogram's _count must stay equal to mesh_memory_recall_total so bucket
+// ratios read as shares of all recalls, not of some subset.
+func ObserveMemoryRecallTopScore(searchMode string, score float64) {
+	MemoryRecallTopScore.WithLabelValues(searchMode).Observe(score)
 }
 
 // StartMemoryEmbedInFlight marks one embed call (write or query) as accepted but

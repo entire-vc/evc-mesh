@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -176,4 +177,196 @@ func TestRecall_EmptyResultIncrementsEmptyCounter(t *testing.T) {
 	require.Empty(t, results)
 	require.Equal(t, domain.SearchModeBM25Only, mode)
 	assert.Equal(t, before+1, recallEmptyValue(t, domain.SearchModeBM25Only), "an empty recall must increment the counter by exactly 1")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// mesh_memory_recall_top_score — the QUALITY counterpart to the empty counter.
+// The dense arm always returns nearest neighbours, so on hybrid an unmatchable
+// query still returns a page and empty_total stays flat; the top-1 final score
+// is what tells those pages apart. Prod-measured anchors (#2c44a087, 30 real
+// queries replayed read-only): both-arms winners 0.0144..0.0164 = 1/61,
+// dense-only winners exactly 0.7/61 ≈ 0.0115, bm25-only mode tops at 0.3/61.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func recallTopScoreHist(t *testing.T, mode domain.SearchMode) *dto.Histogram {
+	t.Helper()
+	m := &dto.Metric{}
+	c, err := pkgmetrics.MemoryRecallTopScore.GetMetricWithLabelValues(string(mode))
+	require.NoError(t, err)
+	// The vec hands out a bare Observer; only the full Histogram exposes buckets.
+	h, ok := c.(prometheus.Histogram)
+	require.True(t, ok, "a HistogramVec child must implement prometheus.Histogram")
+	require.NoError(t, h.Write(m))
+	return m.GetHistogram()
+}
+
+func recallTopScoreCount(t *testing.T, mode domain.SearchMode) uint64 {
+	t.Helper()
+	return recallTopScoreHist(t, mode).GetSampleCount()
+}
+
+// recallTopScoreBelow returns the cumulative count of observations ≤ le.
+func recallTopScoreBelow(t *testing.T, mode domain.SearchMode, le float64) uint64 {
+	t.Helper()
+	for _, b := range recallTopScoreHist(t, mode).GetBucket() {
+		if b.GetUpperBound() == le {
+			return b.GetCumulativeCount()
+		}
+	}
+	t.Fatalf("mesh_memory_recall_top_score has no bucket le=%v", le)
+	return 0
+}
+
+func vecHit(id uuid.UUID) domain.ScoredMemory {
+	return domain.ScoredMemory{
+		Memory: domain.Memory{
+			ID:              id,
+			Key:             "dense-hit",
+			FreshnessScore:  1.0,
+			ImportanceScore: 0.8,
+		},
+		Score: 0.9, // raw cosine; RRF uses only the rank
+	}
+}
+
+// Every served recall observes exactly one top score into its mode's series: a
+// BM25 rank-1 hit lands at 0.3/61 ≈ 0.0049 (inside le=0.005, NOT the 0 bucket),
+// an empty recall observes 0.0 into the lowest bucket. Delete the Observe call
+// and both count assertions fail — that is the red control.
+func TestRecall_TopScoreObservedPerRecall(t *testing.T) {
+	countBefore := recallTopScoreCount(t, domain.SearchModeBM25Only)
+	leZeroBefore := recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.001)
+	leArmBefore := recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.005)
+
+	hit := newMemoryService(hitRepo()) // noop embedder → bm25-only
+	results, mode, err := hit.Recall(context.Background(), recallOpts())
+	require.NoError(t, err)
+	require.NotEmpty(t, results)
+	require.Equal(t, domain.SearchModeBM25Only, mode)
+	assert.Equal(t, countBefore+1, recallTopScoreCount(t, domain.SearchModeBM25Only), "a served recall observes exactly one top score")
+	assert.Equal(t, leArmBefore+1, recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.005),
+		"a BM25-only rank-1 hit scores 0.3/61 ≈ 0.0049 — inside le=0.005")
+	assert.Equal(t, leZeroBefore, recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.001),
+		"a recall with results must not observe into the 0 bucket")
+
+	empty := newMemoryService(&mockMemoryRepo{})
+	results, mode, err = empty.Recall(context.Background(), recallOpts())
+	require.NoError(t, err)
+	require.Empty(t, results)
+	require.Equal(t, domain.SearchModeBM25Only, mode)
+	assert.Equal(t, countBefore+2, recallTopScoreCount(t, domain.SearchModeBM25Only))
+	assert.Equal(t, leZeroBefore+1, recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.001),
+		"an empty recall observes 0.0 into the lowest bucket")
+}
+
+// The whole point of the metric, as measured on prod: on hybrid, a page whose
+// winner BOTH arms ranked first scores 1/61 ≈ 0.0164, while a page whose winner
+// only the dense arm found scores 0.7/61 ≈ 0.0115 — non-empty, but the
+// "useless recall" signature that mesh_memory_recall_empty_total cannot see.
+// The two must land on opposite sides of the le=0.012 bucket edge.
+func TestRecall_TopScoreHybridSeparatesBothArmsFromDenseOnly(t *testing.T) {
+	bothBefore := recallTopScoreBelow(t, domain.SearchModeHybrid, 0.017)
+	denseOnlyBefore := recallTopScoreBelow(t, domain.SearchModeHybrid, 0.012)
+
+	shared := uuid.New()
+	// Both arms must rank the SAME item first: hitRepo() would mint its own id
+	// and the fused winner would be dense-only — a different (also useful) case.
+	both := &mockMemoryRepo{
+		fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{vecHit(shared)}, nil
+		},
+		vectorSearchFn: func(_ context.Context, _ []float32, _ uuid.UUID, _ *uuid.UUID, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
+			return []domain.ScoredMemory{vecHit(shared)}, nil
+		},
+	}
+	svcBoth := NewMemoryService(both, &mockMemoryEdgeRepo{}, &stubEmbedder{vec: []float32{0.1, 0.2, 0.3}})
+	results, mode, err := svcBoth.Recall(context.Background(), recallOpts())
+	require.NoError(t, err)
+	require.NotEmpty(t, results)
+	require.Equal(t, domain.SearchModeHybrid, mode)
+	assert.Equal(t, bothBefore+1, recallTopScoreBelow(t, domain.SearchModeHybrid, 0.017),
+		"a both-arms rank-1 winner scores 1/61 ≈ 0.0164 — inside le=0.017")
+	assert.Equal(t, denseOnlyBefore, recallTopScoreBelow(t, domain.SearchModeHybrid, 0.012),
+		"1/61 ≈ 0.0164 must NOT land in the dense-only bucket")
+
+	denseOnly := &mockMemoryRepo{} // FTS arm returns nothing
+	denseOnly.vectorSearchFn = func(_ context.Context, _ []float32, _ uuid.UUID, _ *uuid.UUID, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
+		return []domain.ScoredMemory{vecHit(uuid.New())}, nil
+	}
+	svcDense := NewMemoryService(denseOnly, &mockMemoryEdgeRepo{}, &stubEmbedder{vec: []float32{0.1, 0.2, 0.3}})
+	results, mode, err = svcDense.Recall(context.Background(), recallOpts())
+	require.NoError(t, err)
+	require.NotEmpty(t, results, "the dense arm always returns neighbours — this page is NOT empty")
+	require.Equal(t, domain.SearchModeHybrid, mode)
+	assert.Equal(t, denseOnlyBefore+1, recallTopScoreBelow(t, domain.SearchModeHybrid, 0.012),
+		"a dense-arm-only winner scores 0.7/61 ≈ 0.0115 — inside le=0.012")
+}
+
+// A page saved entirely by pinned injection is non-empty (the caller got rows,
+// empty_total stays flat) but retrieval found NOTHING — the top score must
+// observe 0.0, not the synthetic 2.0 sentinel pinned rows carry.
+func TestRecall_TopScoreExcludesSyntheticPinned(t *testing.T) {
+	countBefore := recallTopScoreCount(t, domain.SearchModeBM25Only)
+	leZeroBefore := recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.001)
+	leSentinelBefore := recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.030)
+	emptyBefore := recallEmptyValue(t, domain.SearchModeBM25Only)
+
+	pinned := &mockMemoryRepo{} // both retrieval arms return nothing
+	pinned.findPinnedFn = func(_ context.Context, _ uuid.UUID, _ *uuid.UUID) ([]domain.Memory, error) {
+		return []domain.Memory{{ID: uuid.New(), Key: "kind:pinned row", FreshnessScore: 1.0, ImportanceScore: 1.0}}, nil
+	}
+	svc := newMemoryService(pinned) // noop embedder → bm25-only
+
+	results, mode, err := svc.Recall(context.Background(), recallOpts())
+	require.NoError(t, err)
+	require.NotEmpty(t, results, "pinned injection surfaces the row despite empty retrieval")
+	require.Equal(t, domain.SearchModeBM25Only, mode)
+	assert.Equal(t, emptyBefore, recallEmptyValue(t, domain.SearchModeBM25Only),
+		"a pinned-only page is not empty for the counter…")
+	assert.Equal(t, countBefore+1, recallTopScoreCount(t, domain.SearchModeBM25Only),
+		"…but it IS one more served recall for the histogram")
+	assert.Equal(t, leZeroBefore+1, recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.001),
+		"and its top score is 0.0: no retrieval row reached the page")
+	// A 2.0 sentinel would land ABOVE every finite bucket, so "observations above
+	// le=0.030" (count minus last finite cumulative) is the sentinel detector.
+	deltaCount := recallTopScoreCount(t, domain.SearchModeBM25Only) - countBefore
+	deltaAboveLast := deltaCount - (recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.030) - leSentinelBefore)
+	assert.EqualValues(t, uint64(0), deltaAboveLast,
+		"nothing may be observed above le=0.030 — the synthetic 2.0 pinned sentinel must never reach the histogram")
+}
+
+// The displacement half of the pinned story (#2c44a087 review P1): retrieval
+// DID find something, but eligible pinned rows fill the whole limit and the
+// final trim discards every retrieval row. The caller's page is pinned-only —
+// retrieval contributed nothing to what was actually served — so the top score
+// must observe 0.0, not the pre-injection retrieval score. Capturing before
+// the injection+trim (the original implementation) fails exactly this test.
+func TestRecall_TopScorePinnedDisplacementObservedAsZero(t *testing.T) {
+	leZeroBefore := recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.001)
+	leArmBefore := recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.005)
+
+	pinned := hitRepo() // BM25 arm returns a rank-1 hit (0.3/61)…
+	pinned.findPinnedFn = func(_ context.Context, _ uuid.UUID, _ *uuid.UUID) ([]domain.Memory, error) {
+		return []domain.Memory{{ID: uuid.New(), Key: "kind:pinned row", FreshnessScore: 1.0, ImportanceScore: 1.0}}, nil
+	}
+	svc := newMemoryService(pinned) // noop embedder → bm25-only
+
+	// …and limit=1 lets the single pinned row displace that hit entirely.
+	countBefore := recallTopScoreCount(t, domain.SearchModeBM25Only)
+	opts := recallOpts()
+	opts.Limit = 1
+	results, mode, err := svc.Recall(context.Background(), opts)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, domain.SearchModeBM25Only, mode)
+	require.Equal(t, "kind:pinned row", results[0].Key, "the pinned row must be the one the caller received")
+
+	assert.Equal(t, countBefore+1, recallTopScoreCount(t, domain.SearchModeBM25Only), "exactly one observation for the served recall")
+	// le=0.001 is the discriminator: 0.0 lands inside it, the displaced 0.3/61
+	// hit (0.0049) does NOT. A pre-injection capture (the P1 bug) leaves this
+	// bucket flat while le=0.005 moves — that inversion is the red control.
+	assert.Equal(t, leZeroBefore+1, recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.001),
+		"the observed top score is 0.0: no retrieval row reached the served page, even though retrieval found one pre-injection")
+	assert.Equal(t, leArmBefore+1, recallTopScoreBelow(t, domain.SearchModeBM25Only, 0.005),
+		"buckets are cumulative — a 0.0 observation also lands inside le=0.005 (this pins that it is 0.0 and not something in (0.001, 0.005])")
 }
