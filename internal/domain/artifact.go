@@ -60,6 +60,12 @@ type Artifact struct {
 	// presigned URL is short-lived — shipping it here would just relocate
 	// the dead-link problem to a later timestamp.
 	DownloadPath string `json:"download_path"`
+
+	// There is deliberately NO `url` field here, unlike Task, Document, Project,
+	// Comment and Agent. The web app has no page for an artifact: it lives in the
+	// Artifacts tab of its task, so the link a human wants is the task's own url
+	// (task_id is on this struct). DownloadPath is the machine address. Adding a
+	// url that pointed anywhere else would invent a page that does not exist.
 }
 
 // sensitiveArtifactMetadataKeys are Metadata fields the service layer needs

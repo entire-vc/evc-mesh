@@ -42,7 +42,12 @@ type Agent struct {
 	SupervisorUserID *uuid.UUID `json:"supervisor_user_id,omitempty" db:"supervisor_user_id"`
 	Name             string     `json:"name" db:"name"`
 	Slug             string     `json:"slug" db:"slug"`
-	AgentType        AgentType  `json:"agent_type" db:"agent_type"`
+	// URL is the canonical deep-link to the agent's page,
+	// https://<host>/w/<workspace slug>/team/agent/<agent slug>. Never stored:
+	// HTTP handlers fill it from the request origin and the workspace slug, same
+	// pattern as Project.URL. Empty when the workspace lookup fails or outside HTTP.
+	URL       string    `json:"url,omitempty" db:"-"`
+	AgentType AgentType `json:"agent_type" db:"agent_type"`
 	// Model is the LLM the agent runs on (AgentType is the harness). nil = not
 	// reported; never defaulted. Self-reported via PATCH /agents/me or heartbeat.
 	Model *string `json:"model" db:"model"`

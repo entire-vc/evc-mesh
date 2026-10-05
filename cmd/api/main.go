@@ -829,6 +829,7 @@ func main() {
 	// e.Shutdown, which would otherwise wait on them until its deadline.
 	httpShutdownCh := make(chan struct{})
 	agentHandler.SetShutdownSignal(httpShutdownCh)
+	agentHandler.SetWorkspaceService(workspaceService)
 	eventHandler := handler.NewEventHandler(eventBusService)
 	activityHandler := handler.NewActivityHandler(activityLogService)
 	secretHandler := handler.NewSecretHandler(secretService, activityLogService)
