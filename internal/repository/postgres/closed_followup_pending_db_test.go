@@ -27,6 +27,9 @@ import (
 //	MarkEscalated→ first-write-wins stamp retiring the row from the due set
 //	MarkNoticed  → first-write-wins stamp that does NOT retire the row (a
 //	               noticed finding is still an undelivered one)
+//	ClaimForReconcile → one atomic lease UPDATE: of N concurrent claimants
+//	               exactly one wins; expired leases are reclaimable
+//	ReleaseClaim → the end-of-unit lease release (progress writes hold it)
 //	Delete       → idempotent
 //
 // The table has no FKs by design (it must stay writable while the rest of
@@ -224,4 +227,112 @@ func TestClosedFollowUpPendingRepo_MarkAttemptIsAtomicUnderConcurrency(t *testin
 	require.Len(t, due, 1)
 	assert.Equal(t, perPass*passes, due[0].Attempts,
 		"every concurrent MarkAttempt must be counted exactly once — the budget is the escalation trigger")
+}
+
+// The lease column's whole contract (#a2368528, from the codex-review R7
+// finding on !1083): ClaimForReconcile is ONE atomic UPDATE, so of N
+// concurrent claimants exactly one wins; an unexpired lease refuses a second
+// claimant; an EXPIRED lease is claimable again (a pass that died mid-row
+// returns its rows by TTL, never by hand); and every progress write releases
+// the lease — a failing row keeps its per-pass retry cadence instead of
+// waiting out the TTL. With the service-level overlap test in
+// comment_closed_task_followup_pending_test.go this is the card's "two
+// parallel reconcile passes over one row → one delivery" acceptance,
+// decomposed: atomicity of the claim here, the skip in the loop there.
+func TestClosedFollowUpPendingRepo_ClaimLeaseIsAtomic(t *testing.T) {
+	repo, sourceID := newClosedFollowUpPendingTest(t)
+	ctx := context.Background()
+	leaseFor := 10 * time.Minute // ClosedFollowUpClaimTTL in production
+
+	seed := func(key string) uuid.UUID {
+		id := uuid.New()
+		require.NoError(t, repo.Enqueue(ctx, &domain.ClosedFollowUpPending{
+			CommentID: id, SourceTaskID: sourceID, FindingKey: key,
+			Attempts: 0, LastError: "seed", CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		}))
+		return id
+	}
+	claimedUntil := func(id uuid.UUID) *time.Time {
+		var v *time.Time
+		require.NoError(t, repo.db.GetContext(ctx, &v,
+			`SELECT claimed_until FROM closed_followup_pending WHERE comment_id = $1`, id))
+		return v
+	}
+
+	// Row A — the lifecycle. Unleased: the first claim takes it, the second
+	// is refused while the lease is live.
+	a := seed("txt:lease-a")
+	claimed, err := repo.ClaimForReconcile(ctx, a, time.Now().UTC().Add(leaseFor))
+	require.NoError(t, err)
+	assert.True(t, claimed)
+	assert.NotNil(t, claimedUntil(a), "a taken lease is visible in the row")
+	claimed, err = repo.ClaimForReconcile(ctx, a, time.Now().UTC().Add(leaseFor))
+	require.NoError(t, err)
+	assert.False(t, claimed, "a live lease refuses a second claimant — the atomic UPDATE is the lock")
+
+	// Progress writes HOLD the lease to the end of the row unit: a stamp is
+	// work INSIDE the unit, and a mid-row release is the overlap window
+	// reopening — MarkNoticed lands BEFORE the delivery attempt on the
+	// normal path, so its release would let a second pass claim the row
+	// while the first is still delivering (codex-review round 2 on !1085,
+	// the P1 this table's lease exists to close). Only ReleaseClaim, the
+	// row's delete, or TTL expiry give a leased row back.
+	_, err = repo.MarkAttempt(ctx, a, "failed again")
+	require.NoError(t, err)
+	assert.NotNil(t, claimedUntil(a), "MarkAttempt holds the lease — the failed pass owns its row to the unit's end")
+	claimed, err = repo.ClaimForReconcile(ctx, a, time.Now().UTC().Add(leaseFor))
+	require.NoError(t, err)
+	assert.False(t, claimed, "a progress write is not a release — the row stays unclaimable mid-unit")
+	require.NoError(t, repo.MarkNoticed(ctx, a, time.Now().UTC()))
+	assert.NotNil(t, claimedUntil(a), "MarkNoticed holds the lease — the notice stamp precedes delivery")
+	require.NoError(t, repo.MarkEscalated(ctx, a, time.Now().UTC()))
+	assert.NotNil(t, claimedUntil(a), "MarkEscalated holds the lease to the unit's end")
+
+	// An EXPIRED lease is a dead lease: a pass that crashed mid-row loses
+	// its rows by TTL, so the row comes back on its own.
+	_, err = repo.db.ExecContext(ctx,
+		`UPDATE closed_followup_pending SET claimed_until = now() - interval '1 minute' WHERE comment_id = $1`, a)
+	require.NoError(t, err)
+	claimed, err = repo.ClaimForReconcile(ctx, a, time.Now().UTC().Add(leaseFor))
+	require.NoError(t, err)
+	assert.True(t, claimed, "an expired lease is reclaimable — the TTL is the crash recovery, not a lock")
+
+	// ReleaseClaim: the keep-path write for a row that survives a pass with
+	// no progress stamp (delivered, park notice still unlanded).
+	require.NoError(t, repo.ReleaseClaim(ctx, a))
+	assert.Nil(t, claimedUntil(a))
+	claimed, err = repo.ClaimForReconcile(ctx, a, time.Now().UTC().Add(leaseFor))
+	require.NoError(t, err)
+	assert.True(t, claimed, "a released row is claimable again immediately")
+
+	// Row B — the race itself: N concurrent claimants on one unleased row,
+	// exactly one winner. This is the SQL-level half of "two parallel
+	// reconcile passes over one row deliver once": if two claimants could
+	// both win, the loop's lease check would be advisory, not a lock.
+	b := seed("txt:lease-b")
+	const claimants = 8
+	winners := make(chan bool, claimants)
+	var wg sync.WaitGroup
+	for i := 0; i < claimants; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w, werr := repo.ClaimForReconcile(ctx, b, time.Now().UTC().Add(leaseFor))
+			if werr != nil {
+				t.Errorf("claim: %v", werr)
+				return
+			}
+			winners <- w
+		}()
+	}
+	wg.Wait()
+	close(winners)
+	var won int
+	for w := range winners {
+		if w {
+			won++
+		}
+	}
+	assert.Equal(t, 1, won, "exactly one of the concurrent claimants takes the row — RowsAffected is the arbiter")
+	assert.NotNil(t, claimedUntil(b), "the winner's lease is persisted")
 }

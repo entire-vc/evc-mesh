@@ -31,6 +31,16 @@ import (
 // it is NULL. A row past the budget leaves the due set only when BOTH
 // stamps are set: retiring on EscalatedAt alone stranded a park notice that
 // never landed (codex-review P1, round 5).
+//
+// ClaimedUntil is the reconcile lease (#a2368528, from the R7 finding on
+// !1083): while it is in the future, one pass owns the row and every other
+// pass — a second replica's, or an overlapping inline delivery — must skip
+// it, because ListDue carries no lock of its own. NULL (or past) means
+// unleased. The lease covers the WHOLE row unit — no progress write
+// releases it mid-row (codex-review round 2 on !1085: a MarkNoticed release
+// reopened the overlap window before delivery) — so the row comes back only
+// at its unit's end (the loop's ReleaseClaim, the row's Delete) or by TTL
+// expiry, and a row that survives a pass keeps its 5-minute retry cadence.
 type ClosedFollowUpPending struct {
 	CommentID    uuid.UUID  `db:"comment_id"`
 	SourceTaskID uuid.UUID  `db:"source_task_id"`
@@ -40,4 +50,5 @@ type ClosedFollowUpPending struct {
 	CreatedAt    time.Time  `db:"created_at"`
 	EscalatedAt  *time.Time `db:"escalated_at"`
 	NoticedAt    *time.Time `db:"noticed_at"`
+	ClaimedUntil *time.Time `db:"claimed_until"`
 }

@@ -366,6 +366,17 @@ type ClosedFollowUpPendingRepository interface {
 	// commenter cannot see is a queue, not a delivery (codex-review P1,
 	// round 4).
 	MarkNoticed(ctx context.Context, commentID uuid.UUID, at time.Time) error
+	// ClaimForReconcile atomically leases one row to the calling pass:
+	// true when the row was unleased (or its lease expired) and is now
+	// held until leaseUntil, false when another pass holds it. The lease
+	// is what keeps one finding delivered exactly once across concurrent
+	// passes — ListDue carries no lock (#a2368528).
+	ClaimForReconcile(ctx context.Context, commentID uuid.UUID, leaseUntil time.Time) (bool, error)
+	// ReleaseClaim drops the lease at the end of a pass's row unit — the
+	// ONLY release besides the row's delete (progress writes hold the lease
+	// to here, so the unit is covered whole; without this call a kept row
+	// would wait out the entire TTL and halve its own retry cadence).
+	ReleaseClaim(ctx context.Context, commentID uuid.UUID) error
 	// Delete removes the row once delivery succeeded (or its comment/source
 	// vanished and there is nothing left to deliver).
 	Delete(ctx context.Context, commentID uuid.UUID) error

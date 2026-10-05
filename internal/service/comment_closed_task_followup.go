@@ -716,6 +716,14 @@ const (
 	ClosedFollowUpReconcileInterval    = 5 * time.Minute
 	ClosedFollowUpReconcileMaxAttempts = 10
 	closedFollowUpReconcileBatch       = 50
+	// ClosedFollowUpClaimTTL is how long a reconcile pass's lease on a row
+	// outlives the pass itself (#a2368528). It must cover one whole pass —
+	// the scheduler grants the pass a context with the reconcile interval's
+	// own timeout — with margin for a slow batch, so a pass that dies
+	// mid-row loses its rows by expiry rather than by hand. The loop hands
+	// the lease back at the end of every row unit, so the TTL is only ever
+	// paid by a dead pass's rows, never by a live one.
+	ClosedFollowUpClaimTTL = 2 * ClosedFollowUpReconcileInterval
 )
 
 // ReconcileClosedFollowUpPending drains the pending queue: every row still
@@ -734,15 +742,17 @@ const (
 // claimAndCreateRoot may create cards through taskSvc.Create, which writes
 // the actor into activity_log.
 //
-// Concurrency invariant (codex-review round 7): passes are SINGLE-FLIGHT —
-// the scheduler runs the pass inline in its ticker loop, so one process never
-// works two passes at once, and the deployment (deploy/docker/mesh) runs one
-// api container. ListDue therefore needs no lease: a row it returns is worked
-// by exactly one pass. If the api is ever scaled past one replica, add a
-// per-row claim (a claimed_until lease column) BEFORE the replica ships —
-// until then the worst an overlapping inline delivery of the same comment
-// can do is a duplicate system comment and one extra reopen slot, because
-// Claim and TryReopen stay atomic and the notices are once-ever by stamp.
+// Concurrency (codex-review round 7 named the window, #a2368528 closed it):
+// passes were single-flight by construction — the scheduler runs the pass
+// inline in its ticker loop and the deployment runs one api container — but
+// that is a deployment fact, not a mechanism. Every row is now CLAIMED
+// atomically (claimed_until lease, TTL ClosedFollowUpClaimTTL) before any
+// work on it, so a second pass over the same row — another replica's, or an
+// overlapping inline delivery of the same comment — reads the lease and
+// skips. The lease covers the whole row unit (no progress write releases it
+// mid-row — codex-review round 2 on !1085); the loop hands it back at the
+// unit's end, which keeps a surviving row's retry cadence at the pass
+// interval, and only a pass that dies mid-row holds its rows to the TTL.
 func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (delivered, retried, escalated int, err error) {
 	if closedFollowUpDisabled() {
 		return 0, 0, 0, nil
@@ -763,106 +773,150 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 		}
 		row := &due[i]
 
-		// A row at or past the budget is listed for its NOTICES alone. The
-		// finding's delivery is not retried — the budget bought the human,
-		// not a resurrection — but visibility is TWO stamps, and the row
-		// leaves the due set only when both have landed: retiring it on the
-		// escalation alone would strand a park notice that never landed
-		// (codex-review P1, round 5 — round 3 made the escalation durable,
-		// round 4 the park notice; this is their intersection).
-		if row.Attempts >= ClosedFollowUpReconcileMaxAttempts {
-			if row.NoticedAt == nil {
-				s.ensurePendingNotice(ctx, "reconcile", row.SourceTaskID, row.CommentID)
+		// The lease before the work (#a2368528): ListDue selects without a
+		// lock, so the row is taken atomically here — a second pass reading
+		// this row mid-delivery (another replica's pass, or an overlapping
+		// inline window) gets false and skips. Claiming BEFORE every branch,
+		// including the notice-only ones, because those double-post too.
+		claimed, cerr := s.followUpPending.ClaimForReconcile(ctx, row.CommentID, timeNow().Add(ClosedFollowUpClaimTTL))
+		if cerr != nil {
+			metrics.RecordClosedFollowUpError("reconcile", "claim_lease")
+			log.Printf("[closed-followup-reconcile] WARNING: lease comment=%s not taken (row left to the next pass): %v",
+				row.CommentID, cerr)
+			continue
+		}
+		if !claimed {
+			// Another pass holds this row right now; its outcome is its own.
+			// Skipping costs nothing: if the holder fails, its row-unit end
+			// releases the row and the next tick retries it.
+			continue
+		}
+
+		// The row's work runs as one unit and the lease covers the WHOLE
+		// unit — no write inside it releases the row (#a2368528, codex-review
+		// round 2 on !1085: MarkNoticed clearing the lease mid-row let a
+		// second pass claim the row while the first was still delivering).
+		// The release below therefore runs on EVERY exit: a progress write
+		// kept the lease to here, a delete makes the release a no-op, and
+		// every exit that leaves the row due — a failed attempt, an
+		// unwritable counter, notice-only work, a kept row — restores the
+		// next pass's claim instead of holding the row to the TTL and
+		// halving its cadence. Only a pass that DIES mid-row keeps its
+		// lease, which is exactly what the TTL is for.
+		func() {
+			// A row at or past the budget is listed for its NOTICES alone. The
+			// finding's delivery is not retried — the budget bought the human,
+			// not a resurrection — but visibility is TWO stamps, and the row
+			// leaves the due set only when both have landed: retiring it on the
+			// escalation alone would strand a park notice that never landed
+			// (codex-review P1, round 5 — round 3 made the escalation durable,
+			// round 4 the park notice; this is their intersection).
+			if row.Attempts >= ClosedFollowUpReconcileMaxAttempts {
+				if row.NoticedAt == nil {
+					s.ensurePendingNotice(ctx, "reconcile", row.SourceTaskID, row.CommentID)
+				}
+				if row.EscalatedAt != nil {
+					// The escalation already landed; this pass works the row
+					// only for its park notice, and it stays listed until that
+					// one lands too.
+					retried++
+					return
+				}
+				if s.deliverEscalationNotice(ctx, row, fmt.Errorf("%s", row.LastError)) {
+					escalated++
+				} else {
+					retried++
+				}
+				return
 			}
-			if row.EscalatedAt != nil {
-				// The escalation already landed; this pass works the row
-				// only for its park notice, and it stays listed until that
-				// one lands too.
+
+			comment, err := s.commentRepo.GetByID(ctx, row.CommentID)
+			if err != nil {
+				if s.markPendingAttempt(ctx, row, "comment_read", err) {
+					escalated++
+				}
 				retried++
-				continue
+				return
 			}
-			if s.deliverEscalationNotice(ctx, row, fmt.Errorf("%s", row.LastError)) {
-				escalated++
-			} else {
+			if comment == nil {
+				// The remark itself is gone — deleted by an admin, wiped with the
+				// card. Nothing left to deliver; holding the row would just burn
+				// its attempts against a future that cannot happen.
+				_ = s.followUpPending.Delete(ctx, row.CommentID)
+				return
+			}
+			task, err := s.taskRepo.GetByID(ctx, row.SourceTaskID)
+			if err != nil {
+				if s.markPendingAttempt(ctx, row, "task_read", err) {
+					escalated++
+				}
 				retried++
+				return
 			}
-			continue
-		}
+			if task == nil {
+				_ = s.followUpPending.Delete(ctx, row.CommentID)
+				return
+			}
 
-		comment, err := s.commentRepo.GetByID(ctx, row.CommentID)
-		if err != nil {
-			if s.markPendingAttempt(ctx, row, "comment_read", err) {
-				escalated++
+			// The park must be visible to its commenter before more delivery
+			// work: a notice that failed to write at enqueue time is retried
+			// here, on every pass that works the row, until it lands — a queued
+			// finding nobody can see is a queue, not a delivery (codex-review
+			// P1, round 4). noticed_at makes it once-ever per row. The answer is
+			// carried in a local, not re-read from row: the copy predates the
+			// stamp this call may write (round 6).
+			noticed := row.NoticedAt != nil
+			if !noticed {
+				noticed = s.ensurePendingNotice(ctx, "reconcile", row.SourceTaskID, row.CommentID)
 			}
-			retried++
-			continue
-		}
-		if comment == nil {
-			// The remark itself is gone — deleted by an admin, wiped with the
-			// card. Nothing left to deliver; holding the row would just burn
-			// its attempts against a future that cannot happen.
-			_ = s.followUpPending.Delete(ctx, row.CommentID)
-			continue
-		}
-		task, err := s.taskRepo.GetByID(ctx, row.SourceTaskID)
-		if err != nil {
-			if s.markPendingAttempt(ctx, row, "task_read", err) {
-				escalated++
-			}
-			retried++
-			continue
-		}
-		if task == nil {
-			_ = s.followUpPending.Delete(ctx, row.CommentID)
-			continue
-		}
 
-		// The park must be visible to its commenter before more delivery
-		// work: a notice that failed to write at enqueue time is retried
-		// here, on every pass that works the row, until it lands — a queued
-		// finding nobody can see is a queue, not a delivery (codex-review
-		// P1, round 4). noticed_at makes it once-ever per row. The answer is
-		// carried in a local, not re-read from row: the copy predates the
-		// stamp this call may write (round 6).
-		noticed := row.NoticedAt != nil
-		if !noticed {
-			noticed = s.ensurePendingNotice(ctx, "reconcile", row.SourceTaskID, row.CommentID)
-		}
-
-		if err := s.claimAndCreateRoot(ctx, task, comment, true); err != nil {
-			if s.markPendingAttempt(ctx, row, followUpOp(err), err) {
-				escalated++
+			if err := s.claimAndCreateRoot(ctx, task, comment, true); err != nil {
+				if s.markPendingAttempt(ctx, row, followUpOp(err), err) {
+					escalated++
+				}
+				retried++
+				return
 			}
-			retried++
-			continue
-		}
-		// Delivered: the finding has its root (or its permanent terminal
-		// outcome — wedged winner, no todo column — which is equally done).
-		// But the delete must not discard an unlanded park notice
-		// (codex-review P1, round 6): postFollowUpNotice inside the
-		// delivery is best-effort, so a row whose «не подтверждена» write
-		// failed at enqueue AND this pass keeps its retry path — it stays
-		// due, the next pass re-posts the notice and re-delivers
-		// idempotently, and only a landed notice lets the row go. `noticed`
-		// is the pass-local truth: the stamp this same pass may have
-		// written lives in the store, not in the stale row copy.
-		if !noticed {
-			log.Printf("[closed-followup-reconcile] WARNING: delivered comment=%s but its park notice has not landed — row kept, notice retried next pass",
-				row.CommentID)
+			// Delivered: the finding has its root (or its permanent terminal
+			// outcome — wedged winner, no todo column — which is equally done).
+			// But the delete must not discard an unlanded park notice
+			// (codex-review P1, round 6): postFollowUpNotice inside the
+			// delivery is best-effort, so a row whose «не подтверждена» write
+			// failed at enqueue AND this pass keeps its retry path — it stays
+			// due, the next pass re-posts the notice and re-delivers
+			// idempotently, and only a landed notice lets the row go. `noticed`
+			// is the pass-local truth: the stamp this same pass may have
+			// written lives in the store, not in the stale row copy.
+			if !noticed {
+				log.Printf("[closed-followup-reconcile] WARNING: delivered comment=%s but its park notice has not landed — row kept, notice retried next pass",
+					row.CommentID)
+				metrics.RecordClosedFollowUpPending("delivered")
+				delivered++
+				return
+			}
+			if derr := s.followUpPending.Delete(ctx, row.CommentID); derr != nil {
+				log.Printf("[closed-followup-reconcile] WARNING: delivered comment=%s but pending row not deleted (it will re-deliver idempotently next pass): %v",
+					row.CommentID, derr)
+			}
 			metrics.RecordClosedFollowUpPending("delivered")
 			delivered++
-			continue
-		}
-		if derr := s.followUpPending.Delete(ctx, row.CommentID); derr != nil {
-			log.Printf("[closed-followup-reconcile] WARNING: delivered comment=%s but pending row not deleted (it will re-deliver idempotently next pass): %v",
-				row.CommentID, derr)
-		}
-		metrics.RecordClosedFollowUpPending("delivered")
-		delivered++
-		log.Printf("[closed-followup-reconcile] delivered comment=%s key=%q after %d attempt(s)",
-			row.CommentID, row.FindingKey, row.Attempts+1)
+			log.Printf("[closed-followup-reconcile] delivered comment=%s key=%q after %d attempt(s)",
+				row.CommentID, row.FindingKey, row.Attempts+1)
+		}()
+		s.releaseReconcileClaim(ctx, row.CommentID)
 	}
 	return delivered, retried, escalated, nil
+}
+
+// releaseReconcileClaim hands a row's lease back when the pass is done with
+// it (#a2368528). Quiet and best-effort by design: a failed release costs
+// the row one TTL of retry cadence, never correctness — the lease expires on
+// its own — and on a deleted row the UPDATE is a harmless no-op.
+func (s *commentService) releaseReconcileClaim(ctx context.Context, commentID uuid.UUID) {
+	if err := s.followUpPending.ReleaseClaim(ctx, commentID); err != nil {
+		log.Printf("[closed-followup-reconcile] WARNING: lease release comment=%s failed (row waits out the TTL): %v",
+			commentID, err)
+	}
 }
 
 // markPendingAttempt records one failed reconcile pass on a pending row: the

@@ -14,7 +14,8 @@ var (
 	// be written, the database is wholly down), "reconcile" (a 5-minute retry
 	// attempt failed again) — and op names the failing operation ("claim",
 	// "get_root", "root_card_read", "status_read", "create_root", "reopen",
-	// "escalation_notice", "pending_notice", ...) rather than the
+	// "escalation_notice", "pending_notice", "claim_lease" (the reconcile
+	// lease store itself unreadable, #a2368528), ...) rather than the
 	// raw error string, which would be unbounded label cardinality. The full
 	// error text rides in the log line next to the counter.
 	ClosedFollowUpErrorsTotal = promauto.NewCounterVec(
