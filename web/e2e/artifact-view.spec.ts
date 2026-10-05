@@ -67,6 +67,12 @@ const failedApiCalls: string[] = [];
 /** Any request that leaves the app's own origin while opening an artifact. */
 const foreignOriginRequests: string[] = [];
 
+// Fixed, not page.url(): the first goto fires while the page is still on
+// about:blank, and a page-relative comparison would flag our own navigation.
+const appOrigin = new URL(
+  process.env.APP_BASE_URL || "http://localhost:3007"
+).origin;
+
 function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${accessToken}` };
 }
@@ -185,13 +191,19 @@ test.beforeAll(async ({ browser }) => {
     // same machine, not a third party. Anything else off-origin (a Team
     // Relay host, an analytics beacon) is exactly what this suite watches for.
     if (/^(localhost|127\.0\.0\.1)$/.test(url.hostname)) return;
-    if (url.origin !== new URL(page.url()).origin) {
+    if (url.origin !== appOrigin) {
       foreignOriginRequests.push(req.url());
     }
   });
   page.on("response", (resp) => {
     const url = new URL(resp.url());
     if (!url.pathname.startsWith("/api/v1/")) return;
+    // 404 on the Team Relay integration probe is the contract's "not
+    // wired up for this project" answer — useProjectTrIntegration treats
+    // it as enabled=false by design; the sandbox project has no TR.
+    if (resp.status() === 404 && url.pathname.endsWith("/integrations/team-relay")) {
+      return;
+    }
     if (resp.status() >= 400 && !url.pathname.endsWith("/auth/refresh")) {
       failedApiCalls.push(`${resp.status()} ${resp.request().method()} ${url.pathname}`);
     }
@@ -242,7 +254,9 @@ test("clicking Preview on the task page opens /a/<id> in a new tab", async () =>
   await page.goto(`/w/${wsSlug}/p/${projectSlug}/t/${taskId}`, {
     waitUntil: "domcontentloaded",
   });
-  await page.getByRole("button", { name: "Artifacts", exact: true }).click();
+  // The tab's accessible name is "Artifacts <count>" once the badge renders,
+  // and bare "Artifacts" while the count is still loading — match both.
+  await page.getByRole("button", { name: /^Artifacts(\s+\d+)?$/ }).click();
 
   const row = page.locator(`[data-artifact-id="${csvArtifactId}"]`);
   await expect(row).toBeVisible({ timeout: 15_000 });
