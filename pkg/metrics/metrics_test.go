@@ -91,3 +91,16 @@ func TestMemoryEmbedInFlight(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(MemoryEmbedInFlight),
 		"must return to exactly 0 once every started call has finished")
 }
+
+// The empty-recall counter is labelled by search mode and is independent of the
+// total: RecordMemoryRecallEmpty moves only its own series.
+func TestRecordMemoryRecallEmpty(t *testing.T) {
+	empty := MemoryRecallEmptyTotal.WithLabelValues("hybrid")
+	total := MemoryRecallTotal.WithLabelValues("hybrid")
+	emptyBefore, totalBefore := testutil.ToFloat64(empty), testutil.ToFloat64(total)
+
+	RecordMemoryRecallEmpty("hybrid")
+
+	assert.Equal(t, emptyBefore+1, testutil.ToFloat64(empty))
+	assert.Equal(t, totalBefore, testutil.ToFloat64(total), "empty must not move the total")
+}

@@ -104,6 +104,18 @@ var (
 		[]string{"search_mode"},
 	)
 
+	// MemoryRecallEmptyTotal counts recalls that returned ZERO items to the
+	// caller, by the mode they were served in. With mesh_memory_recall_total it
+	// gives the empty-recall share: empty/total. Counted on the final result
+	// (after merge, filters and trim), not per arm.
+	MemoryRecallEmptyTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mesh_memory_recall_empty_total",
+			Help: "Total memory recall calls that returned no items, by the search mode actually served (hybrid|bm25-only)",
+		},
+		[]string{"search_mode"},
+	)
+
 	// MemoryEmbedInFlight counts embed calls (write or query) that have started
 	// and not yet finished — queued for an embedSem slot, actively embedding, or
 	// storing the result. It is a backlog depth, not a slot-occupancy count: it
@@ -268,6 +280,13 @@ func RecordMemoryEmbedFailure(op string) {
 // was actually served in ("hybrid" or "bm25-only").
 func RecordMemoryRecall(searchMode string) {
 	MemoryRecallTotal.WithLabelValues(searchMode).Inc()
+}
+
+// RecordMemoryRecallEmpty records a recall that returned no items, labelled with
+// the search mode it was served in. Call it once per recall, next to
+// RecordMemoryRecall's denominator.
+func RecordMemoryRecallEmpty(searchMode string) {
+	MemoryRecallEmptyTotal.WithLabelValues(searchMode).Inc()
 }
 
 // StartMemoryEmbedInFlight marks one embed call (write or query) as accepted but

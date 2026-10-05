@@ -6,10 +6,12 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 )
 
 // ---------------------------------------------------------------------------
@@ -145,4 +147,33 @@ func TestSearchMode_Degraded(t *testing.T) {
 	assert.False(t, domain.SearchModeHybrid.Degraded())
 	assert.True(t, domain.SearchModeBM25Only.Degraded())
 	assert.True(t, domain.SearchMode("").Degraded(), "an unknown mode is not a healthy one")
+}
+
+func recallEmptyValue(t *testing.T, mode domain.SearchMode) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	c, err := pkgmetrics.MemoryRecallEmptyTotal.GetMetricWithLabelValues(string(mode))
+	require.NoError(t, err)
+	require.NoError(t, c.Write(m))
+	return m.GetCounter().GetValue()
+}
+
+// A recall that returns no items moves mesh_memory_recall_empty_total; one that
+// returns a hit does not. The second half is the red control for the first.
+func TestRecall_EmptyResultIncrementsEmptyCounter(t *testing.T) {
+	before := recallEmptyValue(t, domain.SearchModeBM25Only)
+
+	hit := newMemoryService(hitRepo()) // noop embedder → bm25-only
+	results, mode, err := hit.Recall(context.Background(), recallOpts())
+	require.NoError(t, err)
+	require.NotEmpty(t, results)
+	require.Equal(t, domain.SearchModeBM25Only, mode)
+	assert.Equal(t, before, recallEmptyValue(t, domain.SearchModeBM25Only), "a recall with results must not count as empty")
+
+	empty := newMemoryService(&mockMemoryRepo{})
+	results, mode, err = empty.Recall(context.Background(), recallOpts())
+	require.NoError(t, err)
+	require.Empty(t, results)
+	require.Equal(t, domain.SearchModeBM25Only, mode)
+	assert.Equal(t, before+1, recallEmptyValue(t, domain.SearchModeBM25Only), "an empty recall must increment the counter by exactly 1")
 }
