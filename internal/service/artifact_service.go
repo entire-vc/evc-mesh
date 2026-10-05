@@ -145,8 +145,21 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 					return
 				}
 			}
-			publicURL, _, _ := rp.Publish(context.Background(), art.TaskID, art.Name, content, art.MimeType)
-			// Persist only the relay public URL.
+			publicURL, _, pubErr := rp.Publish(context.Background(), art.TaskID, art.Name, content, art.MimeType)
+			if pubErr != nil {
+				log.Printf("teamrelay: publish failed for artifact %s: %v — TR metadata not written", art.ID, pubErr)
+				return
+			}
+			// Persist only a CONFIRMED publication: tr_public_url plus the
+			// tr_published flag the UI gates the "Open in Team Relay" button on.
+			//
+			// The publisher returns a non-empty URL only when the relay accepted the
+			// upload (2xx) AND the URL serves anonymously. A private share still gets
+			// a URL built by the relay, but that URL can never open for a browser
+			// without Team Relay credentials — persisting it would advertise a link
+			// that 401s, which is exactly what this gate exists to prevent. A publish
+			// error or timeout writes nothing at all. Existing metadata is never
+			// rewritten or cleaned up here.
 			//
 			// The share's agent key was persisted here too, in the clear, so the UI
 			// could build tr_public_url + ?agent_key= without a round-trip. That put
@@ -157,6 +170,7 @@ func (s *artifactService) Upload(ctx context.Context, input UploadArtifactInput)
 			// endpoint instead; nothing needs it stored.
 			if publicURL != "" {
 				meta := mergeMetadata(art.Metadata, "tr_public_url", publicURL)
+				meta = mergeMetadata(meta, "tr_published", true)
 				if upErr := repo.UpdateMetadata(context.Background(), art.ID, meta); upErr != nil {
 					log.Printf("teamrelay: failed to persist TR metadata for artifact %s: %v", art.ID, upErr)
 				}
@@ -254,7 +268,7 @@ func (s *artifactService) ListByTask(ctx context.Context, taskID uuid.UUID, pg p
 
 // mergeMetadata sets key=value in an existing JSONB metadata blob, preserving any
 // other keys. A nil/empty/invalid blob is treated as an empty object.
-func mergeMetadata(existing json.RawMessage, key, value string) json.RawMessage {
+func mergeMetadata(existing json.RawMessage, key string, value any) json.RawMessage {
 	m := map[string]any{}
 	if len(existing) > 0 {
 		_ = json.Unmarshal(existing, &m) // on error, fall back to empty object

@@ -1593,9 +1593,12 @@ type DocumentMentionService interface {
 }
 
 // RelayPublisher is the optional interface for publishing artifacts to Team Relay.
-// Publish returns the artifact's public (browser-renderable) URL and the agent key
-// that was used to authenticate the upload (empty string for public shares or when
-// the relay omits one). Errors are best-effort context.
+// Publish returns the artifact's public (browser-renderable) URL only when publication
+// is confirmed — the relay accepted the upload and the URL serves to an anonymous
+// browser; it returns "" for private/unpublished shares and when confirmation fails,
+// so a non-empty URL is safe to advertise as publicly openable. The agent key that
+// authenticated the upload (empty string for public shares) is returned alongside;
+// errors carry transport-level failures.
 type RelayPublisher interface {
 	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (publicURL, agentKey string, err error)
 }
