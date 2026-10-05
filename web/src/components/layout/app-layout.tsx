@@ -213,6 +213,9 @@ export function AppLayout() {
     location.pathname.startsWith("/t/") ||
     location.pathname.startsWith("/tasks/") ||
     location.pathname.startsWith("/d/") ||
+    // An artifact's own page: the id resolves its workspace server-side, so it
+    // must not bounce to the default workspace home before it loads (#eb6fde4e).
+    location.pathname.startsWith("/a/") ||
     isProjectDeepLinkRoute;
 
   // Close sidebar on route change (mobile)

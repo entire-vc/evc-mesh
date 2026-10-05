@@ -110,6 +110,11 @@ const TaskDeepLinkResolver = lazy(() =>
     default: m.TaskDeepLinkResolver,
   })),
 );
+const ArtifactViewPage = lazy(() =>
+  import("@/pages/artifact-view").then((m) => ({
+    default: m.ArtifactViewPage,
+  })),
+);
 const DocumentDeepLinkResolver = lazy(() =>
   import("@/pages/entity-deep-links").then((m) => ({
     default: m.DocumentDeepLinkResolver,
@@ -421,6 +426,17 @@ const router = createBrowserRouter(
           element={
             <LazyPage>
               <TaskDeepLinkResolver />
+            </LazyPage>
+          }
+        />
+        {/* An artifact's permanent page. Not nested under the workspace routes:
+            the id resolves its own workspace server-side (like t/:taskId), so
+            the link works from anywhere and survives workspace moves. */}
+        <Route
+          path="a/:artifactId"
+          element={
+            <LazyPage>
+              <ArtifactViewPage />
             </LazyPage>
           }
         />

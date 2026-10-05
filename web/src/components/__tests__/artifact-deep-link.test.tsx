@@ -25,7 +25,7 @@ describe("artifact address", () => {
     expect(row).toHaveAttribute("data-focused", "true");
     await waitFor(() => expect(scroll).toHaveBeenCalled());
     expect(screen.getByRole("link", { name: "Link to artifact" }))
-      .toHaveAttribute("href", "/t/task-1?artifact=artifact-2");
+      .toHaveAttribute("href", "/a/artifact-2");
   });
   it("waits for loading to finish before saying a target was not found", async () => {
     let complete!: (data: unknown) => void;

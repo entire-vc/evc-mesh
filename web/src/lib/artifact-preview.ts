@@ -94,6 +94,30 @@ export interface PreviewableArtifact {
   mime_type: string;
 }
 
+/**
+ * The text family, split further for a full page (route `/a/<id>`), where
+ * there is room for more than a `<pre>`: JSON gets pretty-printed, CSV gets a
+ * table. The modal-style preview decides only between "we render it" and "the
+ * browser does" (previewKindFor); this refines the "we render it" bucket.
+ */
+export type TextViewKind = "markdown" | "json" | "csv" | "text";
+
+const JSON_MIME_TYPES = new Set(["application/json"]);
+const JSON_EXTENSIONS = /\.(json|ndjson)$/i;
+const CSV_MIME_TYPES = new Set(["text/csv", "application/csv"]);
+const CSV_EXTENSIONS = /\.csv$/i;
+
+export function textViewFor(artifact: PreviewableArtifact): TextViewKind {
+  const mime = baseMimeType(artifact.mime_type);
+  const name = artifact.name ?? "";
+  if (MARKDOWN_MIME_TYPES.has(mime) || MARKDOWN_EXTENSIONS.test(name)) {
+    return "markdown";
+  }
+  if (JSON_MIME_TYPES.has(mime) || JSON_EXTENSIONS.test(name)) return "json";
+  if (CSV_MIME_TYPES.has(mime) || CSV_EXTENSIONS.test(name)) return "csv";
+  return "text";
+}
+
 export function previewKindFor(artifact: PreviewableArtifact): PreviewKind {
   const mime = baseMimeType(artifact.mime_type);
   const name = artifact.name ?? "";

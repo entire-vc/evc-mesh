@@ -63,6 +63,30 @@ export async function uploadArtifact(
 }
 
 /**
+ * Force a real file download of an artifact: fetch the bytes as a blob and
+ * click a throwaway anchor with a `download` attribute, so the browser saves
+ * `name` instead of navigating to whatever the storage would serve.
+ *
+ * Lifted out of artifact-list.tsx when the `/a/<id>` page (artifact-view.tsx)
+ * needed the same behaviour — two hand-rolled copies of the blob dance is one
+ * more than this deserves. The presigned URL is fetched through `api()` for
+ * the same 401-refresh-and-replay reason uploadArtifact is.
+ */
+export async function downloadArtifact(artifactId: string, name: string): Promise<void> {
+  const data = await api<{ url: string }>(`/api/v1/artifacts/${artifactId}/download`);
+  const resp = await fetch(data.url);
+  const blob = await resp.blob();
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objUrl;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objUrl);
+}
+
+/**
  * An image dropped or pasted into a task that does not exist yet.
  *
  * The create dialog cannot upload — there is no task to own the bytes — so the
