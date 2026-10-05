@@ -1550,6 +1550,10 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		_ = s.memRepo.TouchAccessed(ctx, ids)
 	}
 
+	if len(merged) == 0 {
+		pkgmetrics.RecordMemoryRecallEmpty(string(searchMode))
+	}
+
 	return merged, stats, nil
 }
 
