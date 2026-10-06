@@ -1929,6 +1929,16 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
+	// Repeat ask after an answer (task #a36fa51d): the previous marker already got a
+	// human reply or a recorded decision and this one does not name a new subject.
+	// Do not arm; quote the answer. Opt-out is an explicit `supersedes:`.
+	if !citesSupersedes(comment) {
+		if ans := s.findAnswerSincePriorMarker(ctx, task, comment); ans != nil {
+			s.postRepeatAskNotice(ctx, task, ans)
+			return
+		}
+	}
+
 	// Arm the sticky human_gate flag regardless of delegation level so the MoveTask
 	// gate protects the task even after a delegation_level change (audit P0 #3).
 	//
@@ -2670,6 +2680,11 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		return
 	}
 	if comment.AuthorType != domain.ActorTypeAgent {
+		return
+	}
+	// Task #a36fa51d: fiddler/balancer/no-stall comments are posted under the
+	// author's key but carry none of their intent — never a withdrawal.
+	if isServiceComment(comment.Body) {
 		return
 	}
 	if !hasNegatorInScope(comment.Body) {
