@@ -33,7 +33,7 @@ func TestTaskRepo_Update_SendsStartAfterColumn(t *testing.T) {
 	taskID := uuid.New()
 	startAfter := time.Now().UTC().Truncate(time.Microsecond)
 
-	mock.ExpectExec(regexp.QuoteMeta("start_after = $29")).
+	mock.ExpectQuery(regexp.QuoteMeta("start_after = $29")).
 		WithArgs(
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
@@ -44,7 +44,7 @@ func TestTaskRepo_Update_SendsStartAfterColumn(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			startAfter, // $29 — the field this test exists to pin
 		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"checked_out_by", "checkout_token", "checkout_expires", "checkout_acquired_at", "checkout_session_id", "checkout_request_id", "checkout_generation", "changed"}).AddRow(nil, nil, nil, nil, nil, nil, 0, false))
 
 	task := &domain.Task{ID: taskID, StartAfter: &startAfter}
 	require.NoError(t, repo.Update(context.Background(), task))
@@ -55,8 +55,8 @@ func TestTaskRepo_Update_NotFound(t *testing.T) {
 	repo, mock := newTaskRepoMock(t)
 	taskID := uuid.New()
 
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE tasks")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tasks")).
+		WillReturnRows(sqlmock.NewRows([]string{"checked_out_by"}))
 
 	err := repo.Update(context.Background(), &domain.Task{ID: taskID})
 	require.Error(t, err, "zero rows affected must surface as an error, not a silent no-op")

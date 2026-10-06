@@ -253,15 +253,16 @@ func TestForceReleaseCheckout_ClearsHolderWithoutToken(t *testing.T) {
 	tokenID := uuid.New()
 	expires := frozenTime.Add(10 * time.Minute)
 	taskRepo.items[taskID] = &domain.Task{
-		ID:              taskID,
-		ProjectID:       uuid.New(),
-		Title:           "Locked task",
-		CheckedOutBy:    &holderID,
-		CheckoutToken:   &tokenID,
-		CheckoutExpires: &expires,
+		ID:                 taskID,
+		ProjectID:          uuid.New(),
+		Title:              "Locked task",
+		CheckedOutBy:       &holderID,
+		CheckoutToken:      &tokenID,
+		CheckoutExpires:    &expires,
+		CheckoutGeneration: 1,
 	}
 
-	err := svc.ForceReleaseCheckout(context.Background(), taskID)
+	err := svc.ForceReleaseCheckout(actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeUser), taskID, domain.CheckoutExpectation{Holder: &holderID, Generation: 1, Reason: "recover stopped session"})
 	require.NoError(t, err)
 
 	updated := taskRepo.items[taskID]
@@ -274,9 +275,10 @@ func TestForceReleaseCheckout_ClearsHolderWithoutToken(t *testing.T) {
 func TestForceReleaseCheckout_NoOpOnUnlockedTask(t *testing.T) {
 	svc, taskRepo, _, _ := setupCheckoutTaskService()
 	taskID := uuid.New()
+	holderID := uuid.New()
 	taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: uuid.New(), Title: "Unlocked"}
 
-	require.NoError(t, svc.ForceReleaseCheckout(context.Background(), taskID))
+	require.NoError(t, svc.ForceReleaseCheckout(actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeUser), taskID, domain.CheckoutExpectation{Holder: &holderID, Generation: 1, Reason: "recover stopped session"}))
 }
 
 func TestCheckoutConflictError_AsTarget(t *testing.T) {

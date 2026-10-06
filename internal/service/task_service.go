@@ -1194,14 +1194,17 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			switch newStatus.Category {
 			case domain.StatusCategoryDone, domain.StatusCategoryReview, domain.StatusCategoryCancelled:
 				previousHolder := task.CheckedOutBy.String()
-				if relErr := s.taskRepo.ForceReleaseCheckout(ctx, taskID); relErr != nil {
+				released, relErr := s.taskRepo.CompareReleaseCheckout(ctx, taskID, domain.CheckoutExpectation{Token: task.CheckoutToken, Holder: task.CheckedOutBy, SessionID: task.CheckoutSessionID, Generation: task.CheckoutGeneration})
+				if relErr != nil {
 					log.Printf("[checkout-auto-release] WARNING: failed to release checkout on task %s: %v", taskID, relErr)
-				} else {
+				} else if released != nil {
 					s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_released_auto", map[string]interface{}{
 						"reason":          "terminal_status_transition",
 						"new_status":      newStatus.Name,
 						"new_category":    string(newStatus.Category),
 						"previous_holder": previousHolder,
+						"generation":      released.Generation,
+						"session_id":      released.SessionID,
 					})
 					task.CheckedOutBy = nil
 					task.CheckoutToken = nil
@@ -2946,8 +2949,8 @@ func (s *taskService) moveSubtasksToProject(
 // calling agent. The TTL is clamped to [1, 240] minutes; default is 15.
 // Only agents may checkout — users should assign tasks instead.
 // sessionMetadata is recorded into the activity log entry (forensics) and is
-// never persisted on the task row, so the schema is unchanged.
-func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*CheckoutResult, error) {
+// distinct from the persisted session/request checkout scope.
+func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}, scopes ...domain.CheckoutScope) (*CheckoutResult, error) {
 	actorID, actorType := actorctx.FromContext(ctx)
 	if actorType != domain.ActorTypeAgent || actorID == uuid.Nil {
 		return nil, apierror.BadRequest("only agents can checkout tasks")
@@ -2984,10 +2987,17 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 		ttlMinutes = 240
 	}
 
+	scope := domain.CheckoutScope{}
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
+	if (scope.SessionID == nil) != (scope.RequestID == nil) || (scope.SessionID != nil && (*scope.SessionID == uuid.Nil || *scope.RequestID == uuid.Nil)) {
+		return nil, apierror.BadRequest("session_id and request_id must be non-zero UUIDs supplied together")
+	}
 	token := uuid.New()
 	expiresAt := timeNow().Add(time.Duration(ttlMinutes) * time.Minute)
-
-	if err = s.taskRepo.AtomicCheckout(ctx, taskID, actorID, token, expiresAt); err != nil {
+	lease, err := s.taskRepo.AcquireCheckout(ctx, taskID, actorID, token, expiresAt, scope)
+	if err != nil {
 		if errors.Is(err, pgRepo.ErrCheckoutConflict) {
 			// Fetch the task to surface the current holder's info in the error.
 			latest, fetchErr := s.taskRepo.GetByID(ctx, taskID)
@@ -3013,13 +3023,18 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 	}
 
 	payload := map[string]interface{}{
-		"expires_at": expiresAt.Format(time.RFC3339),
+		"expires_at": lease.ExpiresAt.Format(time.RFC3339),
 		"ttl_min":    ttlMinutes,
+		"generation": lease.Generation,
+		"session_id": lease.SessionID,
+		"request_id": lease.RequestID,
 	}
 	if len(sessionMetadata) > 0 {
 		payload["session_metadata"] = sessionMetadata
 	}
-	s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
+	if lease.Changed {
+		s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_acquired", payload)
+	}
 
 	// Reflect the checkout on the board: a card in an agent's hands belongs in
 	// In Progress, not in Todo.
@@ -3027,14 +3042,7 @@ func (s *taskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMin
 		s.reflectCheckoutInStatus(ctx, task, actorID)
 	}
 
-	return &CheckoutResult{
-		TaskID:          taskID,
-		CheckoutToken:   token,
-		CheckedOutBy:    actorID,
-		ExpiresAt:       expiresAt,
-		DelegationLevel: task.DelegationLevel,
-		ProjectID:       task.ProjectID,
-	}, nil
+	return checkoutResult(task, taskID, lease), nil
 }
 
 // reflectCheckoutInStatus moves a just-checked-out todo task into the project's
@@ -3104,94 +3112,106 @@ func (s *taskService) findStatusIDByCategory(ctx context.Context, projectID uuid
 
 // ReleaseCheckout clears the checkout on a task. The token must match.
 func (s *taskService) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
-	err := s.taskRepo.ReleaseCheckout(ctx, taskID, token)
-	if err != nil {
-		if errors.Is(err, pgRepo.ErrInvalidCheckoutToken) {
-			return apierror.Forbidden("invalid checkout token")
-		}
-		return err
-	}
-	return nil
+	return s.releaseExpectedCheckout(ctx, taskID, domain.CheckoutExpectation{Token: &token}, "task.checkout_released", "token")
 }
 
-// SelfReleaseCheckout releases the checkout held by the calling agent without
-// requiring the checkout_token. The caller's identity (from actorctx) must
-// match the current lock holder; otherwise 403 is returned. No-op when the
-// task is not locked.
-func (s *taskService) SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
-	callerID, _ := actorctx.FromContext(ctx)
-	if callerID == uuid.Nil {
+func (s *taskService) SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID, inputs ...domain.CheckoutExpectation) error {
+	caller, _ := actorctx.FromContext(ctx)
+	if caller == uuid.Nil {
 		return apierror.Forbidden("authenticated identity required to self-release")
 	}
-	task, err := s.taskRepo.GetByID(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if task == nil || task.CheckedOutBy == nil {
-		return nil // not locked — idempotent no-op
-	}
-	if *task.CheckedOutBy != callerID {
-		return apierror.Forbidden("cannot release a lock held by another agent")
-	}
-	return s.ForceReleaseCheckout(ctx, taskID)
-}
-
-// ExtendCheckout extends the TTL of an existing checkout identified by token.
-// The TTL is clamped to [1, 240] minutes; default is 15.
-func (s *taskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error) {
-	if ttlMinutes <= 0 {
-		ttlMinutes = 15
-	}
-	if ttlMinutes > 240 {
-		ttlMinutes = 240
-	}
-
-	newExpires := timeNow().Add(time.Duration(ttlMinutes) * time.Minute)
-	err := s.taskRepo.ExtendCheckout(ctx, taskID, token, newExpires)
-	if err != nil {
-		if errors.Is(err, pgRepo.ErrInvalidCheckoutToken) {
-			return nil, apierror.Forbidden("invalid or expired checkout token")
+	expected := domain.CheckoutExpectation{Holder: &caller, Legacy: true}
+	if len(inputs) > 0 {
+		expected = inputs[0]
+		expected.Holder = &caller
+		expected.Token = nil
+		expected.Legacy = false
+		if expected.Generation <= 0 || expected.SessionID == nil || *expected.SessionID == uuid.Nil {
+			return apierror.BadRequest("session_id and generation are required for scoped release")
 		}
-		return nil, err
 	}
-
-	// Fetch the task to get the agent ID for the response.
-	task, fetchErr := s.taskRepo.GetByID(ctx, taskID)
-	if fetchErr != nil || task == nil || task.CheckedOutBy == nil {
-		// Token was valid (no error from ExtendCheckout), just return what we know.
-		actorID, _ := actorctx.FromContext(ctx)
-		return &CheckoutResult{
-			TaskID:        taskID,
-			CheckoutToken: token,
-			CheckedOutBy:  actorID,
-			ExpiresAt:     newExpires,
-		}, nil
+	reason := "owner_release"
+	if expected.Legacy {
+		reason = "legacy_unscoped"
 	}
-
-	return &CheckoutResult{
-		TaskID:          taskID,
-		CheckoutToken:   token,
-		CheckedOutBy:    *task.CheckedOutBy,
-		ExpiresAt:       newExpires,
-		DelegationLevel: task.DelegationLevel,
-		ProjectID:       task.ProjectID,
-	}, nil
+	return s.releaseExpectedCheckout(ctx, taskID, expected, "task.checkout_released", reason)
 }
 
-// ForceReleaseCheckout clears the checkout without token verification.
-// The handler layer must enforce authorization before calling this — the
-// service trusts its caller and performs the release unconditionally.
-func (s *taskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
-	if err := s.taskRepo.ForceReleaseCheckout(ctx, taskID); err != nil {
+func (s *taskService) releaseExpectedCheckout(ctx context.Context, id uuid.UUID, expected domain.CheckoutExpectation, action, reason string) error {
+	lease, err := s.taskRepo.CompareReleaseCheckout(ctx, id, expected)
+	if errors.Is(err, pgRepo.ErrInvalidCheckoutToken) {
+		return apierror.Forbidden("checkout precondition does not match")
+	}
+	if err != nil {
 		return err
 	}
-	actorID, _ := actorctx.FromContext(ctx)
-	if task, err := s.taskRepo.GetByID(ctx, taskID); err == nil && task != nil {
-		s.logActivity(ctx, task.ProjectID, taskID, "task.checkout_force_released", map[string]interface{}{
-			"actor_id": actorID.String(),
-		})
+	if lease == nil {
+		return nil
+	}
+	if task, fetchErr := s.taskRepo.GetByID(ctx, id); fetchErr == nil && task != nil {
+		s.logActivity(ctx, task.ProjectID, id, action, map[string]interface{}{"reason": reason, "previous_holder": lease.Holder, "generation": lease.Generation, "session_id": lease.SessionID})
 	}
 	return nil
+}
+
+func checkoutResult(task *domain.Task, id uuid.UUID, lease *domain.CheckoutLease) *CheckoutResult {
+	result := &CheckoutResult{TaskID: id, CheckoutToken: *lease.Token, CheckedOutBy: *lease.Holder, ExpiresAt: *lease.ExpiresAt, Generation: lease.Generation, SessionID: lease.SessionID, RequestID: lease.RequestID}
+	if task != nil {
+		result.ProjectID = task.ProjectID
+		result.DelegationLevel = task.DelegationLevel
+	}
+	return result
+}
+
+func (s *taskService) ExtendCheckout(ctx context.Context, id, token uuid.UUID, ttl int, inputs ...domain.CheckoutExpectation) (*CheckoutResult, error) {
+	if ttl <= 0 {
+		ttl = 15
+	}
+	if ttl > 240 {
+		ttl = 240
+	}
+	expected := domain.CheckoutExpectation{Token: &token}
+	if token == uuid.Nil {
+		if len(inputs) == 0 {
+			return nil, apierror.BadRequest("checkout token or generation precondition required")
+		}
+		expected = inputs[0]
+		caller, _ := actorctx.FromContext(ctx)
+		expected.Holder = &caller
+		expected.Token = nil
+		expected.Legacy = false
+		if caller == uuid.Nil || expected.Generation <= 0 || expected.SessionID == nil || *expected.SessionID == uuid.Nil {
+			return nil, apierror.BadRequest("session_id and generation required")
+		}
+	}
+	lease, err := s.taskRepo.ExtendScopedCheckout(ctx, id, expected, timeNow().Add(time.Duration(ttl)*time.Minute))
+	if errors.Is(err, pgRepo.ErrInvalidCheckoutToken) {
+		return nil, apierror.Forbidden("invalid or expired checkout precondition")
+	}
+	if err != nil {
+		return nil, err
+	}
+	task, _ := s.taskRepo.GetByID(ctx, id)
+	return checkoutResult(task, id, lease), nil
+}
+
+// Force recovery is a human admin operation; the handler additionally enforces
+// workspace owner/admin RBAC. The generation and reason must be explicit.
+func (s *taskService) ForceReleaseCheckout(ctx context.Context, id uuid.UUID, inputs ...domain.CheckoutExpectation) error {
+	_, kind := actorctx.FromContext(ctx)
+	if kind != domain.ActorTypeUser {
+		return apierror.Forbidden("admin recovery requires a human workspace owner/admin")
+	}
+	if len(inputs) == 0 || inputs[0].Generation <= 0 || inputs[0].Holder == nil || *inputs[0].Holder == uuid.Nil || strings.TrimSpace(inputs[0].Reason) == "" {
+		return apierror.BadRequest("recovery requires previous_holder, generation and reason")
+	}
+	expected := inputs[0]
+	expected.Token = nil
+	expected.Legacy = false
+	if expected.SessionID != nil && *expected.SessionID == uuid.Nil {
+		return apierror.BadRequest("session_id must be a nonzero UUID")
+	}
+	return s.releaseExpectedCheckout(ctx, id, expected, "task.checkout_force_released", strings.TrimSpace(expected.Reason))
 }
 
 // applyReviewAssignee assigns a configured reviewer when a task transitions to review category.

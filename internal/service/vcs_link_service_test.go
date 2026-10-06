@@ -343,13 +343,17 @@ func (t *fakeTaskService) GetDefaultStatus(context.Context, uuid.UUID) (*domain.
 func (t *fakeTaskService) BulkUpdate(context.Context, uuid.UUID, BulkUpdateTasksInput) BulkUpdateTasksResult {
 	return BulkUpdateTasksResult{}
 }
-func (t *fakeTaskService) CheckoutTask(context.Context, uuid.UUID, int, map[string]interface{}) (*CheckoutResult, error) {
+func (t *fakeTaskService) CheckoutTask(context.Context, uuid.UUID, int, map[string]interface{}, ...domain.CheckoutScope) (*CheckoutResult, error) {
 	return nil, nil
 }
-func (t *fakeTaskService) ForceReleaseCheckout(context.Context, uuid.UUID) error       { return nil }
-func (t *fakeTaskService) SelfReleaseCheckout(context.Context, uuid.UUID) error        { return nil }
+func (t *fakeTaskService) ForceReleaseCheckout(context.Context, uuid.UUID, ...domain.CheckoutExpectation) error {
+	return nil
+}
+func (t *fakeTaskService) SelfReleaseCheckout(context.Context, uuid.UUID, ...domain.CheckoutExpectation) error {
+	return nil
+}
 func (t *fakeTaskService) ReleaseCheckout(context.Context, uuid.UUID, uuid.UUID) error { return nil }
-func (t *fakeTaskService) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, int) (*CheckoutResult, error) {
+func (t *fakeTaskService) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, int, ...domain.CheckoutExpectation) (*CheckoutResult, error) {
 	return nil, nil
 }
 func (t *fakeTaskService) MoveToProject(context.Context, uuid.UUID, uuid.UUID) (*domain.Task, error) {
@@ -1361,4 +1365,14 @@ func TestHandlePR_UpsertRepoError_Propagates(t *testing.T) {
 	_, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db unavailable")
+}
+
+func (r *fakeTaskRepo) AcquireCheckout(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Time, domain.CheckoutScope) (*domain.CheckoutLease, error) {
+	return nil, nil
+}
+func (r *fakeTaskRepo) CompareReleaseCheckout(context.Context, uuid.UUID, domain.CheckoutExpectation) (*domain.CheckoutLease, error) {
+	return nil, nil
+}
+func (r *fakeTaskRepo) ExtendScopedCheckout(context.Context, uuid.UUID, domain.CheckoutExpectation, time.Time) (*domain.CheckoutLease, error) {
+	return nil, nil
 }

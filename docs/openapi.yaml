@@ -1147,6 +1147,19 @@ components:
           format: date-time
           description: When the checkout expires
 
+        generation:
+          type: integer
+          format: int64
+          description: Monotonic lease generation; retain it with the session ID for cleanup
+        session_id:
+          type: string
+          format: uuid
+          description: Session scope, absent for a legacy checkout
+        request_id:
+          type: string
+          format: uuid
+          description: Stable acquire retry ID within the session
+
     # ---------- Spark Catalog ----------
     SparkAgentManifest:
       type: object
@@ -5964,11 +5977,15 @@ paths:
       summary: Acquire exclusive checkout on a task
       operationId: checkoutTask
       description: |
-        Atomically locks a task for the calling agent. Returns a checkout_token
-        that must be provided for release/extend. If the task is already checked
-        out by another non-expired agent, returns 409 Conflict.
-        Same-agent re-checkout is idempotent (returns new token).
-        Only agents can checkout tasks (not human users).
+        Atomically locks a task for the calling agent and returns its token and generation.
+        Send session_id and request_id together as nonzero UUIDs. Keep request_id stable
+        when retrying the same acquire: the original token, generation and deadline are
+        returned. A different active session/request returns 409 even for the same agent.
+        After release or expiry, use a fresh request_id; retrying the retired request
+        cannot reacquire its last lease. Generation increases on each new acquire.
+        Legacy requests omit both IDs; a same-holder retry keeps token/generation and
+        refreshes the TTL. Only agents can checkout tasks (not human users).
+        Unscoped bulk agent heartbeats extend legacy leases only; scoped leases require PATCH.
       security:
         - AgentKeyAuth: []
       requestBody:
@@ -5984,6 +6001,16 @@ paths:
                   default: 15
                   minimum: 1
                   maximum: 240
+                session_id:
+                  type: string
+                  format: uuid
+                request_id:
+                  type: string
+                  format: uuid
+                session_metadata:
+                  type: object
+                  additionalProperties: true
+                  description: Optional forensic context, recorded in the audit only
       responses:
         "200":
           description: Checkout acquired
@@ -6023,24 +6050,50 @@ paths:
       tags: [TaskCheckout]
       summary: Release a task checkout
       operationId: releaseCheckout
+      parameters:
+        - name: force
+          in: query
+          schema:
+            type: boolean
+            default: false
       description: |
-        Releases an exclusive checkout. The checkout_token must match
-        the token returned by the checkout operation.
+        Conditionally releases the matching checkout_token, or the calling holder's
+        session_id plus generation. An empty body can release only a legacy unscoped
+        checkout held by the caller and is audited as legacy_unscoped. A duplicate
+        release after the lease is empty succeeds without another release audit;
+        a stale request against a newer active lease returns 403.
+        force=true is human workspace owner/admin recovery only. It requires reason,
+        previous_holder and generation (and session_id for a scoped lease); it never
+        infers the current generation. Ordinary agents receive 403, including on their
+        own lease. Audit contains the previous holder/generation/reason, never the token.
       security:
         - AgentKeyAuth: []
         - BearerAuth: []
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [checkout_token]
               properties:
                 checkout_token:
                   type: string
                   format: uuid
                   description: Token returned by the checkout operation
+                session_id:
+                  type: string
+                  format: uuid
+                generation:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                previous_holder:
+                  type: string
+                  format: uuid
+                  description: Required for human admin recovery
+                reason:
+                  type: string
+                  description: Required nonempty reason for human admin recovery
       responses:
         "204":
           description: Checkout released
@@ -6061,8 +6114,9 @@ paths:
       summary: Extend a task checkout TTL
       operationId: extendCheckout
       description: |
-        Extends the TTL of an existing checkout. The checkout_token must match
-        and the checkout must not have expired.
+        Extends the TTL of an unexpired checkout with a matching checkout_token,
+        or the calling holder's session_id plus generation. A stale token or
+        generation returns 403 and does not change the newer lease.
       security:
         - AgentKeyAuth: []
         - BearerAuth: []
@@ -6072,12 +6126,18 @@ paths:
           application/json:
             schema:
               type: object
-              required: [checkout_token]
               properties:
                 checkout_token:
                   type: string
                   format: uuid
                   description: Token returned by the checkout operation
+                session_id:
+                  type: string
+                  format: uuid
+                generation:
+                  type: integer
+                  format: int64
+                  minimum: 1
                 ttl_minutes:
                   type: integer
                   description: New TTL in minutes (1-240, default 15)

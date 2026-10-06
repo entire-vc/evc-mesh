@@ -1285,24 +1285,31 @@ func (h *TaskHandler) BulkUpdate(c echo.Context) error {
 }
 
 // checkoutRequest represents the JSON body for POST /tasks/:task_id/checkout.
-// checkoutRequest represents the JSON body for POST /tasks/:task_id/checkout.
 // SessionMetadata is optional forensic context (hostname, pid, branch, etc.)
 // that is recorded into the activity log entry only — never persisted on
-// the task row, so the schema is unchanged.
+// the task row. SessionID/RequestID form the persisted retry scope.
 type checkoutRequest struct {
 	TTLMinutes      int                    `json:"ttl_minutes"`
 	SessionMetadata map[string]interface{} `json:"session_metadata,omitempty"`
+	SessionID       *uuid.UUID             `json:"session_id,omitempty"`
+	RequestID       *uuid.UUID             `json:"request_id,omitempty"`
 }
 
 // releaseCheckoutRequest represents the JSON body for DELETE /tasks/:task_id/checkout.
 type releaseCheckoutRequest struct {
-	CheckoutToken string `json:"checkout_token"`
+	CheckoutToken  string     `json:"checkout_token"`
+	SessionID      *uuid.UUID `json:"session_id,omitempty"`
+	Generation     int64      `json:"generation,omitempty"`
+	PreviousHolder *uuid.UUID `json:"previous_holder,omitempty"`
+	Reason         string     `json:"reason,omitempty"`
 }
 
 // extendCheckoutRequest represents the JSON body for PATCH /tasks/:task_id/checkout.
 type extendCheckoutRequest struct {
-	CheckoutToken string `json:"checkout_token"`
-	TTLMinutes    int    `json:"ttl_minutes"`
+	CheckoutToken string     `json:"checkout_token"`
+	TTLMinutes    int        `json:"ttl_minutes"`
+	SessionID     *uuid.UUID `json:"session_id,omitempty"`
+	Generation    int64      `json:"generation,omitempty"`
 }
 
 // Checkout handles POST /tasks/:task_id/checkout
@@ -1317,7 +1324,7 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	result, err := h.taskService.CheckoutTask(c.Request().Context(), taskID, req.TTLMinutes, req.SessionMetadata)
+	result, err := h.taskService.CheckoutTask(c.Request().Context(), taskID, req.TTLMinutes, req.SessionMetadata, domain.CheckoutScope{SessionID: req.SessionID, RequestID: req.RequestID})
 	if err != nil {
 		var conflict *service.CheckoutConflictError
 		if errors.As(err, &conflict) {
@@ -1352,48 +1359,34 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 	return c.JSON(http.StatusOK, result)
 }
 
-// ReleaseCheckout handles DELETE /tasks/:task_id/checkout.
-//
-// When the ?force=true query parameter is present, the request is treated as
-// an admin force-unlock: no checkout_token is required, but the caller must
-// be authenticated. Stricter RBAC (workspace.admin) is not enforced here yet
-// — see admin-RBAC TODO in the design doc.
+// ReleaseCheckout handles owner cleanup or generation-scoped admin recovery.
+// The route enforces owner/admin permissions for force=true before this handler.
 func (h *TaskHandler) ReleaseCheckout(c echo.Context) error {
-	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
+	id, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
 	if err != nil {
 		return handleError(c, err)
 	}
-
-	if c.QueryParam("force") == "true" {
-		if forceErr := h.taskService.ForceReleaseCheckout(c.Request().Context(), taskID); forceErr != nil {
-			return handleError(c, forceErr)
-		}
-		return c.NoContent(http.StatusNoContent)
-	}
-
 	var req releaseCheckoutRequest
 	if err = c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
-
-	if req.CheckoutToken == "" {
-		// No token provided — fall back to identity-based self-release.
-		// The caller must be the lock holder; see SelfReleaseCheckout.
-		if releaseErr := h.taskService.SelfReleaseCheckout(c.Request().Context(), taskID); releaseErr != nil {
-			return handleError(c, releaseErr)
+	switch {
+	case c.QueryParam("force") == "true":
+		err = h.taskService.ForceReleaseCheckout(c.Request().Context(), id, domain.CheckoutExpectation{Holder: req.PreviousHolder, Generation: req.Generation, SessionID: req.SessionID, Reason: req.Reason})
+	case req.CheckoutToken != "":
+		token, parseErr := uuid.Parse(req.CheckoutToken)
+		if parseErr != nil || token == uuid.Nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid checkout_token"))
 		}
-		return c.NoContent(http.StatusNoContent)
+		err = h.taskService.ReleaseCheckout(c.Request().Context(), id, token)
+	case req.SessionID != nil || req.Generation != 0:
+		err = h.taskService.SelfReleaseCheckout(c.Request().Context(), id, domain.CheckoutExpectation{SessionID: req.SessionID, Generation: req.Generation})
+	default:
+		err = h.taskService.SelfReleaseCheckout(c.Request().Context(), id)
 	}
-
-	token, err := uuid.Parse(req.CheckoutToken)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid checkout_token"))
-	}
-
-	if err := h.taskService.ReleaseCheckout(c.Request().Context(), taskID, token); err != nil {
 		return handleError(c, err)
 	}
-
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -1409,16 +1402,16 @@ func (h *TaskHandler) ExtendCheckout(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	if req.CheckoutToken == "" {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("checkout_token is required"))
+	token := uuid.Nil
+	if req.CheckoutToken != "" {
+		token, err = uuid.Parse(req.CheckoutToken)
+		if err != nil || token == uuid.Nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid checkout_token"))
+		}
+	} else if req.Generation <= 0 || req.SessionID == nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("checkout_token or session_id+generation is required"))
 	}
-
-	token, err := uuid.Parse(req.CheckoutToken)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid checkout_token"))
-	}
-
-	result, err := h.taskService.ExtendCheckout(c.Request().Context(), taskID, token, req.TTLMinutes)
+	result, err := h.taskService.ExtendCheckout(c.Request().Context(), taskID, token, req.TTLMinutes, domain.CheckoutExpectation{SessionID: req.SessionID, Generation: req.Generation})
 	if err != nil {
 		return handleError(c, err)
 	}

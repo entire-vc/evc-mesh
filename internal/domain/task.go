@@ -177,6 +177,9 @@ type Task struct {
 	CheckoutToken      *uuid.UUID `json:"checkout_token,omitempty" db:"checkout_token"`
 	CheckoutExpires    *time.Time `json:"checkout_expires,omitempty" db:"checkout_expires"`
 	CheckoutAcquiredAt *time.Time `json:"checkout_acquired_at,omitempty" db:"checkout_acquired_at"`
+	CheckoutSessionID  *uuid.UUID `json:"checkout_session_id,omitempty" db:"checkout_session_id"`
+	CheckoutRequestID  *uuid.UUID `json:"checkout_request_id,omitempty" db:"checkout_request_id"`
+	CheckoutGeneration int64      `json:"checkout_generation" db:"checkout_generation"`
 
 	// Computed fields — populated by enriched list/get queries, not stored columns.
 	SubtaskCount  int     `json:"subtask_count"`
