@@ -84,7 +84,7 @@ func (s *autoTransitionService) EvaluateOnTaskMove(ctx context.Context, taskID u
 
 		// Check parent subtask completion.
 		if task.ParentTaskID != nil {
-			if err := s.CheckSubtaskCompletion(ctx, *task.ParentTaskID); err != nil {
+			if err := s.checkSubtaskCompletion(ctx, *task.ParentTaskID, taskID); err != nil {
 				log.Printf("[auto-transition] WARNING: CheckSubtaskCompletion for parent %s failed: %v", *task.ParentTaskID, err)
 			}
 		}
@@ -101,129 +101,108 @@ func (s *autoTransitionService) EvaluateOnTaskMove(ctx context.Context, taskID u
 // If so, and the parent is in "in_progress" category, it moves the parent to "review"
 // (or "done" if no "review" status exists in the project).
 func (s *autoTransitionService) CheckSubtaskCompletion(ctx context.Context, parentTaskID uuid.UUID) error {
-	// 1. Get the parent task.
-	parent, err := s.taskRepo.GetByID(ctx, parentTaskID)
+	return s.checkSubtaskCompletion(ctx, parentTaskID, parentTaskID)
+}
+
+func (s *autoTransitionService) checkSubtaskCompletion(ctx context.Context, parentTaskID, triggerTaskID uuid.UUID) error {
+	candidate := func() (*domain.Task, uuid.UUID, error) { return s.parentTransitionCandidate(ctx, parentTaskID) }
+	return s.moveAutomatic(ctx, parentTaskID, triggerTaskID, domain.TriggerAllSubtasksDone, candidate)
+}
+
+func (s *autoTransitionService) parentTransitionCandidate(ctx context.Context, taskID uuid.UUID) (*domain.Task, uuid.UUID, error) {
+	parent, err := s.taskSnapshot(ctx, taskID)
+	if err != nil || parent == nil {
+		return nil, uuid.Nil, err
+	}
+	if reason := autoTransitionGate(parent, timeNow()); reason != "" {
+		log.Printf("[auto-transition] holding parent %s: %s", taskID, reason)
+		return nil, uuid.Nil, nil
+	}
+	status, err := s.statusRepo.GetByID(ctx, parent.StatusID)
+	if err != nil || status == nil {
+		return nil, uuid.Nil, err
+	}
+	fromReview := status.Category == domain.StatusCategoryReview
+	if (fromReview && !hasUmbrellaLabel(parent.Labels)) || (!fromReview && status.Category != domain.StatusCategoryInProgress) {
+		return nil, uuid.Nil, nil
+	}
+	subtasks, err := s.taskRepo.ListSubtasks(ctx, taskID)
 	if err != nil {
-		return err
+		return nil, uuid.Nil, err
 	}
-	if parent == nil {
-		return nil
-	}
-
-	// 2. Get the parent's current status category.
-	parentStatus, err := s.statusRepo.GetByID(ctx, parent.StatusID)
-	if err != nil {
-		return err
-	}
-	if parentStatus == nil {
-		return nil
-	}
-
-	// A parent already sitting in "review" only auto-closes here when it carries an
-	// explicit kind:epic/kind:umbrella label (see hasUmbrellaLabel) — otherwise this
-	// is unreachable ground exactly as before 2026-09-07 (#d1eff1c6). Fail-closed on
-	// purpose and deliberately NOT an inferred signal (e.g. "no AC in description"):
-	// an unlabeled parent sitting in review may carry its own evidence obligation, and
-	// a false-positive close there would silently hide unfinished work behind a status
-	// that looks routine — invisible and expensive. A false negative (a real umbrella
-	// stays stuck in review because nobody labeled it) just leaves today's problem
-	// exactly as visible as it is now — cheap, and fixed by adding the label.
-	//
-	// Why "review" needs handling at all, separately from "in_progress" below: a
-	// captain/epic parent commonly reaches review once (via this same rule, first
-	// batch of subtasks done), then gains MORE subtasks later as the sprint continues.
-	// Those later subtasks completing re-enters this function, but the old code only
-	// ever looked at "in_progress" — a parent already in review was silently exempt
-	// forever, which is exactly how #52f407e0 and friends sat in review for 27-85 days.
-	isLabeledUmbrella := hasUmbrellaLabel(parent.Labels)
-	fromReview := parentStatus.Category == domain.StatusCategoryReview
-	switch {
-	case fromReview && !isLabeledUmbrella:
-		return nil
-	case !fromReview && parentStatus.Category != domain.StatusCategoryInProgress:
-		return nil
-	}
-
-	// Supervised parent: skip auto-transition; a human must manually sign off.
-	// Parent stays in in_progress; no error is returned so the subtask's move succeeds.
-	if parent.DelegationLevel == domain.DelegationLevelSupervised {
-		log.Printf("[auto-transition] Parent task %s is supervised — skipping auto-move to review/done, requires human signoff", parentTaskID)
-		return nil
-	}
-
-	// 3. Get all subtasks.
-	subtasks, err := s.taskRepo.ListSubtasks(ctx, parentTaskID)
-	if err != nil {
-		return err
-	}
-	if len(subtasks) == 0 {
-		return nil // no subtasks — rule does not apply
-	}
-
-	// 4. Build a category map for statuses we encounter.
-	categoryByStatusID := make(map[uuid.UUID]domain.StatusCategory)
-	var st *domain.TaskStatus
+	categories := make(map[uuid.UUID]domain.StatusCategory)
 	for _, sub := range subtasks {
-		if _, seen := categoryByStatusID[sub.StatusID]; !seen {
-			st, err = s.statusRepo.GetByID(ctx, sub.StatusID)
-			if err != nil {
-				return err
-			}
-			if st != nil {
-				categoryByStatusID[sub.StatusID] = st.Category
-			}
+		st, statusErr := s.statusRepo.GetByID(ctx, sub.StatusID)
+		if statusErr != nil {
+			return nil, uuid.Nil, statusErr
+		}
+		if st != nil {
+			categories[sub.StatusID] = st.Category
 		}
 	}
-
-	// 5. Check if all subtasks are done or cancelled.
-	if !allSubtasksTerminal(subtasks, categoryByStatusID) {
-		return nil
+	if !allSubtasksTerminal(subtasks, categories) {
+		return nil, uuid.Nil, nil
 	}
-
-	var targetStatusID uuid.UUID
+	target, exists, err := s.resolveTargetFromRule(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	if exists && target == uuid.Nil {
+		return nil, uuid.Nil, nil
+	}
 	if fromReview {
-		// Labeled umbrella already in review with every (including newly added)
-		// subtask now terminal: close it directly. The configured-rule lookup below
-		// answers a different question — "where does a freshly in_progress parent
-		// land" — and doesn't apply once a parent has already made that trip once.
-		targetStatusID, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryDone)
-		if err != nil {
-			return err
-		}
-		if targetStatusID == uuid.Nil {
-			return nil // no "done" status in this project — nothing to move to
-		}
-	} else {
-		// 6. Check if a configured rule overrides the target status.
-		targetStatusID, err = s.resolveTargetFromRule(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone)
-		if err != nil {
-			return err
-		}
-
-		// Fallback: prefer "review", fall back to "done".
-		// But if a disabled rule exists, respect the explicit disable — don't auto-transition at all.
-		if targetStatusID == uuid.Nil {
-			if s.ruleExistsForTrigger(ctx, parent.ProjectID, domain.TriggerAllSubtasksDone) {
-				return nil // rule exists but is disabled; honour the user's explicit opt-out
-			}
-			targetStatusID, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
-			if err != nil {
-				return err
-			}
-		}
-		if targetStatusID == uuid.Nil {
-			return nil // no suitable target status found
-		}
+		// Only explicitly labelled umbrellas may finish a prior review cycle.
+		target, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryDone)
+	} else if !exists {
+		target, err = s.findTargetStatus(ctx, parent.ProjectID, domain.StatusCategoryReview, domain.StatusCategoryDone)
 	}
+	return parent, target, err
+}
 
-	log.Printf("[auto-transition] Moving parent task %s to review/done because all subtasks are complete", parentTaskID)
-	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
-	if err := s.taskSvc.MoveTask(sysCtx, parentTaskID, MoveTaskInput{StatusID: &targetStatusID}); err != nil {
+// taskSnapshot prevents mutable repository test doubles/caches from changing the
+// preconditions after eligibility has been evaluated.
+func (s *autoTransitionService) taskSnapshot(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+	task, err := s.taskRepo.GetByID(ctx, id)
+	if err != nil || task == nil {
+		return nil, err
+	}
+	snapshot := *task
+	snapshot.Labels = append([]string(nil), task.Labels...)
+	snapshot.CustomFields = append([]byte(nil), task.CustomFields...)
+	return &snapshot, nil
+}
+
+// moveAutomatic owns a fresh read immediately before moving. Re-evaluating the
+// full candidate also catches reblocks, new children and rule/gate changes that
+// do not necessarily update the candidate task's timestamp.
+func (s *autoTransitionService) moveAutomatic(ctx context.Context, taskID, triggerTaskID uuid.UUID, reason domain.AutoTransitionTrigger, candidate func() (*domain.Task, uuid.UUID, error)) error {
+	initial, target, err := candidate()
+	if err != nil || initial == nil || target == uuid.Nil {
 		return err
 	}
-
-	if fromReview {
-		s.postUmbrellaCloseComment(ctx, parent, subtasks)
+	fresh, freshTarget, err := candidate()
+	if err != nil {
+		return err
+	}
+	if fresh == nil || freshTarget != target || fresh.StatusID != initial.StatusID || !fresh.UpdatedAt.Equal(initial.UpdatedAt) {
+		log.Printf("[auto-transition] holding task %s: candidate changed before move", taskID)
+		return nil
+	}
+	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
+	if err := s.taskSvc.MoveTask(sysCtx, taskID, MoveTaskInput{
+		StatusID: &target, ExpectedStatusID: &fresh.StatusID, ExpectedUpdatedAt: &fresh.UpdatedAt,
+		Source: "auto_transition", Reason: string(reason), TriggerTaskID: &triggerTaskID,
+	}); err != nil {
+		return err
+	}
+	if reason == domain.TriggerAllSubtasksDone {
+		oldStatus, err := s.statusRepo.GetByID(ctx, fresh.StatusID)
+		if err == nil && oldStatus != nil && oldStatus.Category == domain.StatusCategoryReview {
+			subtasks, err := s.taskRepo.ListSubtasks(ctx, taskID)
+			if err == nil {
+				s.postUmbrellaCloseComment(ctx, fresh, subtasks)
+			}
+		}
 	}
 	return nil
 }
@@ -297,7 +276,7 @@ func (s *autoTransitionService) CheckDependencyResolution(ctx context.Context, r
 			continue
 		}
 
-		if err := s.tryUnblockTask(ctx, dep.TaskID); err != nil {
+		if err := s.tryUnblockTask(ctx, dep.TaskID, resolvedTaskID); err != nil {
 			log.Printf("[auto-transition] WARNING: tryUnblockTask for task %s failed: %v", dep.TaskID, err)
 		}
 	}
@@ -305,118 +284,97 @@ func (s *autoTransitionService) CheckDependencyResolution(ctx context.Context, r
 }
 
 // tryUnblockTask checks if a specific task can be moved from "backlog" to "todo".
-func (s *autoTransitionService) tryUnblockTask(ctx context.Context, taskID uuid.UUID) error {
-	task, err := s.taskRepo.GetByID(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if task == nil {
-		return nil
-	}
+func (s *autoTransitionService) tryUnblockTask(ctx context.Context, taskID, triggerTaskID uuid.UUID) error {
+	candidate := func() (*domain.Task, uuid.UUID, error) { return s.dependencyTransitionCandidate(ctx, taskID) }
+	return s.moveAutomatic(ctx, taskID, triggerTaskID, domain.TriggerBlockingDepResolved, candidate)
+}
 
-	// Only unblock tasks that are in "backlog".
-	currentStatus, err := s.statusRepo.GetByID(ctx, task.StatusID)
+func (s *autoTransitionService) dependencyTransitionCandidate(ctx context.Context, taskID uuid.UUID) (*domain.Task, uuid.UUID, error) {
+	task, err := s.taskSnapshot(ctx, taskID)
+	if err != nil || task == nil {
+		return nil, uuid.Nil, err
+	}
+	status, err := s.statusRepo.GetByID(ctx, task.StatusID)
+	if err != nil || status == nil {
+		return nil, uuid.Nil, err
+	}
+	if status.Category != domain.StatusCategoryBacklog {
+		return nil, uuid.Nil, nil
+	}
+	if reason := dependencyParkIneligibility(task, timeNow()); reason != "" {
+		log.Printf("[auto-transition] holding task %s: %s", taskID, reason)
+		return nil, uuid.Nil, nil
+	}
+	deps, err := s.depRepo.ListByTask(ctx, taskID)
 	if err != nil {
-		return err
+		return nil, uuid.Nil, err
 	}
-	if currentStatus == nil || currentStatus.Category != domain.StatusCategoryBacklog {
-		return nil
-	}
-
-	// Check if ALL blocking dependencies are now done.
-	allDeps, err := s.depRepo.ListByTask(ctx, taskID)
-	if err != nil {
-		return err
-	}
-
-	// Build category map for blocker tasks.
-	categoryByTaskID := make(map[uuid.UUID]domain.StatusCategory)
-	var blocker *domain.Task
-	var blockerStatus *domain.TaskStatus
-	for _, dep := range allDeps {
+	categories := make(map[uuid.UUID]domain.StatusCategory)
+	blockers := 0
+	for _, dep := range deps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
 			continue
 		}
-		if _, seen := categoryByTaskID[dep.DependsOnTaskID]; !seen {
-			blocker, err = s.taskRepo.GetByID(ctx, dep.DependsOnTaskID)
-			if err != nil {
-				return err
-			}
-			if blocker == nil {
-				continue
-			}
-			blockerStatus, err = s.statusRepo.GetByID(ctx, blocker.StatusID)
-			if err != nil {
-				return err
-			}
-			if blockerStatus != nil {
-				categoryByTaskID[dep.DependsOnTaskID] = blockerStatus.Category
-			}
+		blockers++
+		blocker, blockerErr := s.taskRepo.GetByID(ctx, dep.DependsOnTaskID)
+		if blockerErr != nil {
+			return nil, uuid.Nil, blockerErr
+		}
+		if blocker == nil {
+			continue
+		}
+		st, statusErr := s.statusRepo.GetByID(ctx, blocker.StatusID)
+		if statusErr != nil {
+			return nil, uuid.Nil, statusErr
+		}
+		if st != nil {
+			categories[blocker.ID] = st.Category
 		}
 	}
-
-	if hasUnresolvedBlockers(allDeps, categoryByTaskID) {
-		return nil // still blocked
+	// An event whose edge has since been deleted is not proof of resolution.
+	if blockers == 0 || hasUnresolvedBlockers(deps, categories) {
+		return nil, uuid.Nil, nil
 	}
-
-	// Check if a configured rule overrides the target status.
-	targetStatusID, err := s.resolveTargetFromRule(ctx, task.ProjectID, domain.TriggerBlockingDepResolved)
+	target, exists, err := s.resolveTargetFromRule(ctx, task.ProjectID, domain.TriggerBlockingDepResolved)
 	if err != nil {
-		return err
+		return nil, uuid.Nil, err
 	}
-
-	// Fallback: move to "todo".
-	if targetStatusID == uuid.Nil {
-		targetStatusID, err = s.findTargetStatus(ctx, task.ProjectID, domain.StatusCategoryTodo)
-		if err != nil {
-			return err
-		}
+	if !exists {
+		target, err = s.findTargetStatus(ctx, task.ProjectID, domain.StatusCategoryTodo)
 	}
-	if targetStatusID == uuid.Nil {
-		return nil
-	}
-
-	log.Printf("[auto-transition] Unblocking task %s (all blocking deps resolved) → moving to todo", taskID)
-	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
-	return s.taskSvc.MoveTask(sysCtx, taskID, MoveTaskInput{StatusID: &targetStatusID})
+	return task, target, err
 }
 
-// resolveTargetFromRule looks up a configured, enabled rule for the given trigger and
-// returns its target_status_id. Returns uuid.Nil if ruleRepo is nil or no matching
-// enabled rule exists.
-func (s *autoTransitionService) resolveTargetFromRule(ctx context.Context, projectID uuid.UUID, trigger domain.AutoTransitionTrigger) (uuid.UUID, error) {
+// One configuration read distinguishes absent (fallback allowed) from disabled
+// (explicit opt-out). Errors and conflicting duplicate rules fail closed.
+func (s *autoTransitionService) resolveTargetFromRule(ctx context.Context, projectID uuid.UUID, trigger domain.AutoTransitionTrigger) (uuid.UUID, bool, error) {
 	if s.ruleRepo == nil {
-		return uuid.Nil, nil
+		return uuid.Nil, false, nil
 	}
 	rules, err := s.ruleRepo.List(ctx, projectID)
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, false, err
 	}
-	for _, r := range rules {
-		if r.Trigger == trigger && r.IsEnabled {
-			return r.TargetStatusID, nil
+	var matching *domain.AutoTransitionRule
+	for i := range rules {
+		if rules[i].Trigger != trigger {
+			continue
 		}
-	}
-	return uuid.Nil, nil
-}
-
-// ruleExistsForTrigger returns true if any rule (enabled or disabled) exists for
-// the given trigger in the project. Used to distinguish "disabled rule" (do nothing)
-// from "no rule at all" (fall back to category lookup).
-func (s *autoTransitionService) ruleExistsForTrigger(ctx context.Context, projectID uuid.UUID, trigger domain.AutoTransitionTrigger) bool {
-	if s.ruleRepo == nil {
-		return false
-	}
-	rules, err := s.ruleRepo.List(ctx, projectID)
-	if err != nil {
-		return false
-	}
-	for _, r := range rules {
-		if r.Trigger == trigger {
-			return true
+		if matching != nil {
+			return uuid.Nil, true, fmt.Errorf("conflicting auto-transition rules for %s", trigger)
 		}
+		matching = &rules[i]
 	}
-	return false
+	if matching == nil {
+		return uuid.Nil, false, nil
+	}
+	if !matching.IsEnabled {
+		return uuid.Nil, true, nil
+	}
+	if matching.TargetStatusID == uuid.Nil {
+		return uuid.Nil, true, fmt.Errorf("auto-transition rule %s has no target", matching.ID)
+	}
+	return matching.TargetStatusID, true, nil
 }
 
 // findTargetStatus returns the first status in a project matching any of the given

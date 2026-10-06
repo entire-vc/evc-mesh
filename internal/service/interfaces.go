@@ -57,6 +57,9 @@ type MoveTaskInput struct {
 	// Source identifies the call origin for audit log: "mcp", "api", "ui".
 	// Not bound from the JSON body directly; set by the handler layer.
 	Source string `json:"-"`
+	// Internal automatic-transition audit context; never bound from user JSON.
+	Reason        string     `json:"-"`
+	TriggerTaskID *uuid.UUID `json:"-"`
 }
 
 // AssignTaskInput holds parameters for assigning a task.

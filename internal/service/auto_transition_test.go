@@ -341,6 +341,7 @@ func TestAutoTransition_BlockingDepResolved_UnblocksDependent(t *testing.T) {
 	taskA := seedTask(taskRepo, projectID, doneStatus.ID, nil, "Task A (blocker)")
 	// Task B depends on Task A and is in backlog.
 	taskB := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Task B (blocked)")
+	taskB.Labels = []string{"park:dependency"}
 
 	// Dependency: B blocks depends on A.
 	dep := &domain.TaskDependency{
@@ -363,6 +364,7 @@ func TestAutoTransition_BlockingDepResolved_UnblocksDependent(t *testing.T) {
 // clear the dependency, unblocking the dependent backlog→todo — matching
 // intake-sweep all_deps_cleared. Before the fix, a cancelled blocker left the
 // dependent stuck in backlog server-side (only `done` cleared).
+
 func TestAutoTransition_CancelledBlocker_UnblocksDependent(t *testing.T) {
 	ctx := context.Background()
 	svc, taskRepo, statusRepo, depRepo := buildAutoTransitionFixture()
@@ -376,6 +378,7 @@ func TestAutoTransition_CancelledBlocker_UnblocksDependent(t *testing.T) {
 	taskA := seedTask(taskRepo, projectID, cancelledStatus.ID, nil, "Task A (cancelled blocker)")
 	// Task B depends on Task A and is in backlog.
 	taskB := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Task B (blocked)")
+	taskB.Labels = []string{"park:dependency"}
 
 	dep := &domain.TaskDependency{
 		ID:              uuid.New(),
@@ -408,6 +411,7 @@ func TestAutoTransition_PartialDepResolved_NoUnblock(t *testing.T) {
 	taskC := seedTask(taskRepo, projectID, inProgressStatus.ID, nil, "Task C")
 	// Task B depends on BOTH A and C.
 	taskB := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Task B")
+	taskB.Labels = []string{"park:dependency"}
 
 	dep1 := &domain.TaskDependency{
 		ID:              uuid.New(),
@@ -509,6 +513,7 @@ func TestAutoTransition_EvaluateOnTaskMove_TriggersBothChecks(t *testing.T) {
 
 	// Dependent task blocked by the subtask.
 	dependent := seedTask(taskRepo, projectID, backlogStatus.ID, nil, "Dependent")
+	dependent.Labels = []string{"park:dependency"}
 	dep := &domain.TaskDependency{
 		ID:              uuid.New(),
 		TaskID:          dependent.ID,

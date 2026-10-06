@@ -1226,6 +1226,12 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		if input.Source != "" {
 			moveChanges["source"] = input.Source
 		}
+		if input.Reason != "" {
+			moveChanges["reason"] = input.Reason
+		}
+		if input.TriggerTaskID != nil {
+			moveChanges["trigger_task_id"] = input.TriggerTaskID.String()
+		}
 
 		// Emit task-flow Prometheus metrics.
 		var dur *time.Duration
