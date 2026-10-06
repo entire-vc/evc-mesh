@@ -1474,7 +1474,7 @@ func main() {
 	api.POST("/tasks/:task_id/subtasks", taskHandler.CreateSubtask, wsAccess, rbac(mw.PermCreateTask))
 	api.POST("/tasks/:task_id/assign", taskHandler.AssignTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/checkout", taskHandler.Checkout, wsAccess, connectorRBAC(mw.PermUpdateTask))
-	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout, wsAccess, connectorRBAC(mw.PermUpdateTask))
+	api.DELETE("/tasks/:task_id/checkout", taskHandler.ReleaseCheckout, wsAccess, connectorRBAC(mw.PermUpdateTask), mw.RequireCheckoutRecoveryPermission(workspaceMemberRepo))
 	api.PATCH("/tasks/:task_id/checkout", taskHandler.ExtendCheckout, wsAccess, connectorRBAC(mw.PermUpdateTask))
 	api.PATCH("/tasks/:task_id/ship", taskHandler.ShipTask, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext, wsAccess)

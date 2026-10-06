@@ -524,7 +524,7 @@ func (m *MockTaskService) BulkUpdate(ctx context.Context, projectID uuid.UUID, i
 	return service.BulkUpdateTasksResult{Updated: len(input.TaskIDs)}
 }
 
-func (m *MockTaskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*service.CheckoutResult, error) {
+func (m *MockTaskService) CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}, scopes ...domain.CheckoutScope) (*service.CheckoutResult, error) {
 	if m.CheckoutTaskFunc != nil {
 		return m.CheckoutTaskFunc(ctx, taskID, ttlMinutes, sessionMetadata)
 	}
@@ -538,21 +538,21 @@ func (m *MockTaskService) ReleaseCheckout(ctx context.Context, taskID, token uui
 	return nil
 }
 
-func (m *MockTaskService) SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
+func (m *MockTaskService) SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID, expected ...domain.CheckoutExpectation) error {
 	if m.SelfReleaseCheckoutFunc != nil {
 		return m.SelfReleaseCheckoutFunc(ctx, taskID)
 	}
 	return nil
 }
 
-func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*service.CheckoutResult, error) {
+func (m *MockTaskService) ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int, expected ...domain.CheckoutExpectation) (*service.CheckoutResult, error) {
 	if m.ExtendCheckoutFunc != nil {
 		return m.ExtendCheckoutFunc(ctx, taskID, token, ttlMinutes)
 	}
 	return nil, nil
 }
 
-func (m *MockTaskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
+func (m *MockTaskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID, expected ...domain.CheckoutExpectation) error {
 	if m.ForceReleaseCheckoutFunc != nil {
 		return m.ForceReleaseCheckoutFunc(ctx, taskID)
 	}

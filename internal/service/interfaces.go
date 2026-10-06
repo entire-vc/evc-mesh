@@ -119,6 +119,9 @@ type CheckoutResult struct {
 	ExpiresAt       time.Time              `json:"expires_at"`
 	DelegationLevel domain.DelegationLevel `json:"delegation_level"`
 	ProjectID       uuid.UUID              `json:"project_id"`
+	SessionID       *uuid.UUID             `json:"session_id,omitempty"`
+	RequestID       *uuid.UUID             `json:"request_id,omitempty"`
+	Generation      int64                  `json:"generation"`
 }
 
 // CheckoutConflictError is returned when CheckoutTask finds the task locked by
@@ -174,7 +177,7 @@ type TaskService interface {
 	// task is already locked by a different non-expired agent. sessionMetadata is
 	// optional forensic context (hostname, pid, branch, etc.) recorded into the
 	// activity log entry — pass nil to omit.
-	CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}) (*CheckoutResult, error)
+	CheckoutTask(ctx context.Context, taskID uuid.UUID, ttlMinutes int, sessionMetadata map[string]interface{}, scopes ...domain.CheckoutScope) (*CheckoutResult, error)
 	// ReleaseCheckout releases the checkout identified by the given token.
 	// Returns an error when the token does not match.
 	ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error
@@ -182,14 +185,14 @@ type TaskService interface {
 	// requiring the checkout_token. The caller's identity (from actorctx) must
 	// match the current lock holder; otherwise 403 is returned. No-op when the
 	// task is not locked.
-	SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID) error
+	SelfReleaseCheckout(ctx context.Context, taskID uuid.UUID, expected ...domain.CheckoutExpectation) error
 	// ExtendCheckout extends the checkout TTL identified by the given token.
 	// Returns an error when the token does not match or the checkout has expired.
-	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int) (*CheckoutResult, error)
+	ExtendCheckout(ctx context.Context, taskID, token uuid.UUID, ttlMinutes int, expected ...domain.CheckoutExpectation) (*CheckoutResult, error)
 	// ForceReleaseCheckout clears the checkout without token verification.
 	// Intended for admin recovery when the holder cannot release the lock
 	// (e.g. crash, lost token). Callers must enforce authorization themselves.
-	ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error
+	ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID, expected ...domain.CheckoutExpectation) error
 	// MoveToProject moves a task to a different project, resetting status to the
 	// target project's default and recalculating task_number atomically.
 	// Returns an error if the task is already in the target project.

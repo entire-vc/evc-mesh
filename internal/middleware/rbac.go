@@ -390,3 +390,17 @@ func hasPermission(role string, perm Permission) bool {
 	}
 	return perms[perm]
 }
+
+// RequireCheckoutRecoveryPermission keeps ordinary owner cleanup available while
+// restricting explicit force recovery to human workspace owners/admins.
+func RequireCheckoutRecoveryPermission(members repository.WorkspaceMemberRepository) echo.MiddlewareFunc {
+	admin := RequirePermission(PermManageMembers, members)
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if c.QueryParam("force") == "true" {
+				return admin(next)(c)
+			}
+			return next(c)
+		}
+	}
+}

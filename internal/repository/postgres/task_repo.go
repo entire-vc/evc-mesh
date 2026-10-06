@@ -83,7 +83,7 @@ const taskBaseColsNoAlias = `
 	task_number, created_by, created_by_type, created_at, updated_at,
 	completed_at, deleted_at,
 	recurring_schedule_id, recurring_instance_number,
-	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at,
+	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at, checkout_session_id, checkout_request_id, checkout_generation,
 	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
 	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type,
 	reviewer_id, reviewer_type, human_gate_class, human_gate_armed_at,
@@ -237,6 +237,9 @@ type taskRow struct {
 	CheckoutToken      *uuid.UUID `db:"checkout_token"`
 	CheckoutExpires    *time.Time `db:"checkout_expires"`
 	CheckoutAcquiredAt *time.Time `db:"checkout_acquired_at"`
+	CheckoutSessionID  *uuid.UUID `db:"checkout_session_id"`
+	CheckoutRequestID  *uuid.UUID `db:"checkout_request_id"`
+	CheckoutGeneration int64      `db:"checkout_generation"`
 
 	// Computed enrichment fields populated by enriched queries.
 	SubtaskCount  int     `db:"subtask_count"`
@@ -301,6 +304,9 @@ func (r *taskRow) toDomain() domain.Task {
 		CheckoutToken:           r.CheckoutToken,
 		CheckoutExpires:         r.CheckoutExpires,
 		CheckoutAcquiredAt:      r.CheckoutAcquiredAt,
+		CheckoutSessionID:       r.CheckoutSessionID,
+		CheckoutRequestID:       r.CheckoutRequestID,
+		CheckoutGeneration:      r.CheckoutGeneration,
 		SubtaskCount:            r.SubtaskCount,
 		AssigneeName:            r.AssigneeName,
 		ReviewerName:            r.ReviewerName,
@@ -649,6 +655,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    pre_review_assignee_id = $25, pre_review_assignee_type = $26,
 		    reviewer_id = $27, reviewer_type = $28, start_after = $29
 		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING checked_out_by,checkout_token,checkout_expires,checkout_acquired_at,checkout_session_id,checkout_request_id,checkout_generation,false AS changed
 	`
 	customFields := task.CustomFields
 	if customFields == nil {
@@ -663,7 +670,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		delegationLevel = domain.DelegationLevelAuto
 	}
 	dbStart := time.Now()
-	res, err := r.db.ExecContext(ctx, q,
+	var lease domain.CheckoutLease
+	err := r.db.GetContext(ctx, &lease, q,
 		task.ID, task.StatusID, task.Title, task.Description,
 		task.AssigneeID, task.AssigneeType, task.Priority,
 		task.ParentTaskID, task.Position, task.DueDate,
@@ -676,13 +684,14 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.ReviewerID, task.ReviewerType, task.StartAfter,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
+	if errors.Is(err, sql.ErrNoRows) {
+		return apierror.NotFound("Task")
+	}
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return apierror.NotFound("Task")
-	}
+	task.CheckedOutBy, task.CheckoutToken, task.CheckoutExpires, task.CheckoutAcquiredAt = lease.Holder, lease.Token, lease.ExpiresAt, lease.AcquiredAt
+	task.CheckoutSessionID, task.CheckoutRequestID, task.CheckoutGeneration = lease.SessionID, lease.RequestID, lease.Generation
 	return nil
 }
 
@@ -1329,67 +1338,16 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 	return pagination.NewPage(items, totalCount, pg), nil
 }
 
-// AtomicCheckout attempts to acquire an exclusive application-level lock on the task
-// for the given agent. The UPDATE is conditional: it only succeeds when the task is
-// unchecked (checked_out_by IS NULL), the existing checkout has expired
-// (checkout_expires < now()), or the requesting agent already holds the checkout
-// (same-agent re-checkout is idempotent).
-//
-// If the task is locked by a different, non-expired agent, the UPDATE matches 0 rows
-// and ErrCheckoutConflict is returned. No SELECT FOR UPDATE is needed because the
-// single UPDATE statement is itself atomic in PostgreSQL.
+// AtomicCheckout is the legacy unscoped adapter. Same-holder retries preserve
+// the existing token; callers needing the actual lease use AcquireCheckout.
 func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {
-	const query = `
-		UPDATE tasks
-		SET checked_out_by       = $1,
-		    checkout_token        = $2,
-		    checkout_expires      = $3,
-		    checkout_acquired_at  = CASE
-		        WHEN checked_out_by = $1 THEN checkout_acquired_at
-		        ELSE now()
-		    END,
-		    updated_at            = now()
-		WHERE id = $4
-		  AND deleted_at IS NULL
-		  AND (
-		        checked_out_by IS NULL
-		        OR checkout_expires < now()
-		        OR checked_out_by = $1
-		      )`
-	res, err := r.db.ExecContext(ctx, query, agentID, token, expiresAt, taskID)
-	if err != nil {
-		return err
-	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		return ErrCheckoutConflict
-	}
-	return nil
+	_, err := r.AcquireCheckout(ctx, taskID, agentID, token, expiresAt, domain.CheckoutScope{})
+	return err
 }
 
-// ReleaseCheckout clears the checkout fields on a task. The token must match the
-// stored checkout_token — this prevents a different agent from accidentally
-// releasing another agent's lock.
 func (r *TaskRepo) ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error {
-	const query = `
-		UPDATE tasks
-		SET checked_out_by      = NULL,
-		    checkout_token       = NULL,
-		    checkout_expires     = NULL,
-		    checkout_acquired_at = NULL,
-		    updated_at           = now()
-		WHERE id = $1
-		  AND checkout_token = $2
-		  AND deleted_at IS NULL`
-	res, err := r.db.ExecContext(ctx, query, taskID, token)
-	if err != nil {
-		return err
-	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		return ErrInvalidCheckoutToken
-	}
-	return nil
+	_, err := r.CompareReleaseCheckout(ctx, taskID, domain.CheckoutExpectation{Token: &token})
+	return err
 }
 
 // MoveToProject atomically moves a task to a different project by updating
@@ -1433,23 +1391,10 @@ func (r *TaskRepo) MoveToProject(ctx context.Context, taskID, targetProjectID, t
 	return tx.Commit()
 }
 
-// ForceReleaseCheckout clears the checkout fields without token verification.
-// Used by the service layer for auto-release on terminal status transitions
-// (done/review/cancelled) and for admin force-unlock via the
-// `DELETE /tasks/:id/checkout?force=true` endpoint. Returns nil even when the
-// task held no checkout — the caller treats this as idempotent cleanup.
-func (r *TaskRepo) ForceReleaseCheckout(ctx context.Context, taskID uuid.UUID) error {
-	const query = `
-		UPDATE tasks
-		SET checked_out_by      = NULL,
-		    checkout_token       = NULL,
-		    checkout_expires     = NULL,
-		    checkout_acquired_at = NULL,
-		    updated_at           = now()
-		WHERE id = $1
-		  AND deleted_at IS NULL`
-	_, err := r.db.ExecContext(ctx, query, taskID)
-	return err
+// ForceReleaseCheckout refuses the obsolete unscoped force operation.
+// Call CompareReleaseCheckout with an explicit expected generation or token.
+func (r *TaskRepo) ForceReleaseCheckout(context.Context, uuid.UUID) error {
+	return apierror.Forbidden("checkout generation required; unscoped force release is disabled")
 }
 
 // ReleaseExpiredCheckouts clears checkout fields on all tasks whose checkout_expires
@@ -1672,6 +1617,7 @@ func (r *TaskRepo) ExtendCheckoutsOnHeartbeat(ctx context.Context, agentID uuid.
 		    updated_at = now()
 		FROM project_rules pr
 		WHERE t.checked_out_by = $1
+		  AND t.checkout_session_id IS NULL
 		  AND t.checkout_expires IS NOT NULL
 		  AND t.deleted_at IS NULL
 		  AND pr.project_id = t.project_id
@@ -1738,7 +1684,7 @@ func (r *TaskRepo) ListOpenByRecurringScheduleID(ctx context.Context, scheduleID
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number,
-		t.checked_out_by, t.checkout_token, t.checkout_expires, t.checkout_acquired_at,
+		t.checked_out_by, t.checkout_token, t.checkout_expires, t.checkout_acquired_at, t.checkout_session_id, t.checkout_request_id, t.checkout_generation,
 		t.delegation_level, t.thread_id, ` + taskComputedColsAliased + `
 		FROM tasks t
 		INNER JOIN task_statuses ts ON ts.id = t.status_id

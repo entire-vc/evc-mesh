@@ -295,19 +295,19 @@ func (s *StubTaskService) GetUserActiveTasks(_ context.Context, _, _ uuid.UUID, 
 func (s *StubTaskService) BulkUpdate(_ context.Context, _ uuid.UUID, _ BulkUpdateTasksInput) BulkUpdateTasksResult {
 	panic("StubTaskService.BulkUpdate not implemented")
 }
-func (s *StubTaskService) CheckoutTask(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*CheckoutResult, error) {
+func (s *StubTaskService) CheckoutTask(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}, scopes ...domain.CheckoutScope) (*CheckoutResult, error) {
 	panic("StubTaskService.CheckoutTask not implemented")
 }
 func (s *StubTaskService) ReleaseCheckout(_ context.Context, _, _ uuid.UUID) error {
 	panic("StubTaskService.ReleaseCheckout not implemented")
 }
-func (s *StubTaskService) SelfReleaseCheckout(_ context.Context, _ uuid.UUID) error {
+func (s *StubTaskService) SelfReleaseCheckout(_ context.Context, _ uuid.UUID, expected ...domain.CheckoutExpectation) error {
 	panic("StubTaskService.SelfReleaseCheckout not implemented")
 }
-func (s *StubTaskService) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ int) (*CheckoutResult, error) {
+func (s *StubTaskService) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ int, expected ...domain.CheckoutExpectation) (*CheckoutResult, error) {
 	panic("StubTaskService.ExtendCheckout not implemented")
 }
-func (s *StubTaskService) ForceReleaseCheckout(_ context.Context, _ uuid.UUID) error {
+func (s *StubTaskService) ForceReleaseCheckout(_ context.Context, _ uuid.UUID, expected ...domain.CheckoutExpectation) error {
 	panic("StubTaskService.ForceReleaseCheckout not implemented")
 }
 func (s *StubTaskService) MoveToProject(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {

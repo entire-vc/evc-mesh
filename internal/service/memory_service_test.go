@@ -4549,3 +4549,13 @@ func testutilCounterValue(t *testing.T, op string) float64 {
 	require.NoError(t, c.Write(m))
 	return m.GetCounter().GetValue()
 }
+
+func (r *mockTaskRepo) AcquireCheckout(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Time, domain.CheckoutScope) (*domain.CheckoutLease, error) {
+	return nil, nil
+}
+func (r *mockTaskRepo) CompareReleaseCheckout(context.Context, uuid.UUID, domain.CheckoutExpectation) (*domain.CheckoutLease, error) {
+	return nil, nil
+}
+func (r *mockTaskRepo) ExtendScopedCheckout(context.Context, uuid.UUID, domain.CheckoutExpectation, time.Time) (*domain.CheckoutLease, error) {
+	return nil, nil
+}

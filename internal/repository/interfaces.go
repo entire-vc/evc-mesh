@@ -134,6 +134,9 @@ type TaskRepository interface {
 	// AtomicCheckout acquires an exclusive application-level lock on the task for the
 	// given agent. Returns ErrCheckoutConflict if locked by another non-expired agent.
 	AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error
+	AcquireCheckout(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Time, domain.CheckoutScope) (*domain.CheckoutLease, error)
+	CompareReleaseCheckout(context.Context, uuid.UUID, domain.CheckoutExpectation) (*domain.CheckoutLease, error)
+	ExtendScopedCheckout(context.Context, uuid.UUID, domain.CheckoutExpectation, time.Time) (*domain.CheckoutLease, error)
 	// ReleaseCheckout clears the checkout fields. Returns ErrInvalidCheckoutToken when
 	// the provided token does not match.
 	ReleaseCheckout(ctx context.Context, taskID, token uuid.UUID) error
