@@ -3695,26 +3695,30 @@ func (s *taskService) postMarkerDefaultAppliedComment(ctx context.Context, in do
 	if task.GateDeadline != nil {
 		deadlineText = task.GateDeadline.Format(time.RFC3339)
 	}
-	classNote := "По истечении дедлайна дефолт применится автоматически."
-	if task.HumanGateClass == domain.HumanGateClassHard {
-		classNote = "Класс hard — дедлайн только для эскалации/видимости, авто-применения не будет, " +
-			"вопрос ждёт человека."
-	}
-
 	now := timeNow()
+	body := fmt.Sprintf(
+		"⚠️ Гейт взведён маркером без явного `recommended_default` — применён системный дефолт:\n"+
+			"«%s», дедлайн %s.\nПо истечении дедлайна дефолт применится автоматически.\n"+
+			"Явный дефолт в следующий раз убережёт от этого: `По умолчанию: <текст>` строкой в маркере.",
+		domain.DefaultMarkerRecommendedDefault, deadlineText,
+	)
+	if task.HumanGateClass == domain.HumanGateClassHard {
+		// Task #a36fa51d: a hard gate never auto-applies, so quoting the default
+		// reads as an automatic decision and a human believed the question closed.
+		body = fmt.Sprintf(
+			"⏸ Гейт взведён, класс hard: авто-применения не будет, вопрос ждёт ответа человека (дедлайн %s нужен только для эскалации).\n"+
+				"Рекомендованный вариант отвечающему не навязан — он отвечает одним словом или своим решением.",
+			deadlineText,
+		)
+	}
 	sysComment := &domain.Comment{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
-		Body: fmt.Sprintf(
-			"⚠️ Гейт взведён маркером без явного `recommended_default` — применён системный дефолт:\n"+
-				"«%s», дедлайн %s.\n%s\n"+
-				"Явный дефолт в следующий раз убережёт от этого: `По умолчанию: <текст>` строкой в маркере.",
-			domain.DefaultMarkerRecommendedDefault, deadlineText, classNote,
-		),
-		CreatedAt: now,
-		UpdatedAt: now,
+		Body:       body,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[human-gate] WARNING: create default-applied notice on task %s failed: %v", task.ID, err)
