@@ -143,6 +143,7 @@ const (
 	ComputedStatusOnline  ComputedAgentStatus = "online"
 	ComputedStatusIdle    ComputedAgentStatus = "idle"
 	ComputedStatusOffline ComputedAgentStatus = "offline"
+	ComputedStatusPaused  ComputedAgentStatus = "paused"
 )
 
 const (
@@ -151,9 +152,12 @@ const (
 )
 
 // ComputedStatus returns the agent's derived presence status. If the agent has
-// an active SSE connection it is always "online". Otherwise the recency of
-// last_heartbeat determines online/idle/offline.
+// a fleet pause, that overrides transport liveness. Otherwise SSE and
+// last_heartbeat determine online/idle/offline.
 func (a *Agent) ComputedStatus(sseConnected bool) ComputedAgentStatus {
+	if a.FleetPaused() {
+		return ComputedStatusPaused
+	}
 	if sseConnected {
 		return ComputedStatusOnline
 	}
@@ -169,6 +173,25 @@ func (a *Agent) ComputedStatus(sseConnected bool) ComputedAgentStatus {
 	default:
 		return ComputedStatusOffline
 	}
+}
+
+// FleetPaused accepts both supported capabilities shapes. The publisher changes
+// only this marker; unrelated profile capabilities survive pause/resume.
+func (a *Agent) FleetPaused() bool {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(a.Capabilities, &object) == nil && object != nil {
+		var paused bool
+		return json.Unmarshal(object["fleet_paused"], &paused) == nil && paused
+	}
+	var list []string
+	if json.Unmarshal(a.Capabilities, &list) == nil {
+		for _, capability := range list {
+			if capability == "fleet-paused" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // DefaultHeartbeatStaleThreshold is the default time after which an agent's heartbeat is considered stale.
