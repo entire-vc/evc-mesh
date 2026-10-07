@@ -62,8 +62,10 @@ func parkedSnapshot(task *domain.Task, p domain.ParkedWaitPlan, actor uuid.UUID,
 	}
 	switch p.Lease.Mode {
 	case "absent":
+		// A released lease retains session/request as a tombstone so its request
+		// cannot be replayed. Only the active lease fields define ownership.
 		if task.CheckedOutBy != nil || task.CheckoutToken != nil || task.CheckoutExpires != nil ||
-			task.CheckoutSessionID != nil || task.CheckoutRequestID != nil || task.CheckoutAcquiredAt != nil {
+			task.CheckoutAcquiredAt != nil {
 			return parkedConflict()
 		}
 	case "owned":
