@@ -4,7 +4,6 @@ import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  ArrowRight,
   Bot,
   Monitor,
   User,
@@ -16,18 +15,9 @@ import { useMemberStore } from "@/stores/member";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
-interface ActivityLogEntry {
-  id: string;
-  workspace_id: string;
-  entity_type: string;
-  entity_id: string;
-  action: string;
-  actor_id: string;
-  actor_type: "user" | "agent" | "system";
-  actor_name?: string;
-  changes: Record<string, { old: unknown; new: unknown }>;
-  created_at: string;
-}
+import { decodeActivityChanges, describeActivity } from "@/lib/activity";
+import { ActivityDetails } from "@/components/activity-details";
+import type { ActivityLog as ActivityLogEntry } from "@/types";
 
 interface PaginatedActivityResponse {
   items: ActivityLogEntry[];
@@ -49,78 +39,6 @@ function ActorTypeIcon({ type }: { type: ActivityLogEntry["actor_type"] }) {
     return <Monitor className="h-4 w-4 text-muted-foreground" />;
   }
   return <User className="h-4 w-4 text-sky-500" />;
-}
-
-// Format ISO date strings to dd.mm.yyyy HH:MM
-function formatDateValue(iso: string): string {
-  try {
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2, "0");
-    const min = String(d.getMinutes()).padStart(2, "0");
-    // Skip time if midnight (date-only field)
-    if (hh === "00" && min === "00") return `${dd}.${mm}.${yyyy}`;
-    return `${dd}.${mm}.${yyyy} ${hh}:${min}`;
-  } catch {
-    return iso;
-  }
-}
-
-// Check if a string looks like an ISO date
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/;
-
-// Check if a string looks like a UUID
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function formatValue(value: unknown, _field?: string, nameMap?: Map<string, string>): string {
-  if (value === null || value === undefined) return "none";
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number") return String(value);
-  if (typeof value === "string") {
-    // Resolve UUIDs to names for assignee/actor fields
-    if (UUID_RE.test(value) && nameMap?.has(value)) {
-      return nameMap.get(value)!;
-    }
-    // Format ISO dates
-    if (ISO_DATE_RE.test(value)) {
-      return formatDateValue(value);
-    }
-    return value;
-  }
-  return JSON.stringify(value);
-}
-
-function formatFieldName(field: string): string {
-  return field
-    .replace(/_/g, " ")
-    .replace(/\bid\b/g, "ID")
-    .replace(/^\w/, (c) => c.toUpperCase());
-}
-
-function formatActionDescription(entry: ActivityLogEntry, nameMap?: Map<string, string>): string {
-  const changeKeys = Object.keys(entry.changes ?? {});
-
-  if (changeKeys.length === 0) {
-    // No detailed changes -- use action as-is
-    return entry.action.replace(/_/g, " ");
-  }
-
-  // Build human-readable description from changes
-  const descriptions = changeKeys.map((field) => {
-    const change = entry.changes[field];
-    if (!change) return `${formatFieldName(field)} changed`;
-    const oldVal = formatValue(change.old, field, nameMap);
-    const newVal = formatValue(change.new, field, nameMap);
-    if (oldVal === "none") {
-      return `${formatFieldName(field)} set to "${newVal}"`;
-    }
-    return `${formatFieldName(field)} changed from "${oldVal}" to "${newVal}"`;
-  });
-
-  return descriptions.join(", ");
 }
 
 export function ActivityLog({ taskId }: ActivityLogProps) {
@@ -213,7 +131,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
     <div className="space-y-0">
       {entries.map((entry, index) => {
         const isLast = index === entries.length - 1;
-        const changeKeys = Object.keys(entry.changes ?? {});
+        const details = decodeActivityChanges(entry.changes);
 
         return (
           <div key={entry.id} className="relative flex gap-3 pb-4">
@@ -234,35 +152,10 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
                   {entry.actor_name || entry.actor_type}<AgentShortTag id={entry.actor_id} type={entry.actor_type} />
                 </span>
                 {" "}
-                {formatActionDescription(entry, nameMap)}
+                {describeActivity(entry.action, details, nameMap)}
               </p>
 
-              {/* Detailed changes */}
-              {changeKeys.length > 0 && (
-                <div className="mt-1.5 space-y-1">
-                  {changeKeys.map((field) => {
-                    const change = (entry.changes ?? {})[field];
-                    if (!change) return null;
-                    return (
-                      <div
-                        key={field}
-                        className="flex items-center gap-1.5 text-xs text-muted-foreground"
-                      >
-                        <span className="font-medium">
-                          {formatFieldName(field)}:
-                        </span>
-                        <code className="rounded bg-muted px-1 py-0.5">
-                          {formatValue(change.old, field, nameMap)}
-                        </code>
-                        <ArrowRight className="h-3 w-3" />
-                        <code className="rounded bg-muted px-1 py-0.5">
-                          {formatValue(change.new, field, nameMap)}
-                        </code>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <ActivityDetails details={details} names={nameMap} />
 
               <span className="mt-1 block text-xs text-muted-foreground">
                 {formatRelative(entry.created_at)}

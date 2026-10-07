@@ -604,7 +604,9 @@ export interface ActivityLog {
   action: string;
   actor_id: string;
   actor_type: ActorType;
-  changes: Record<string, unknown>;
+  actor_name?: string;
+  // Historical JSON includes field diffs, scalar metadata and null payloads.
+  changes: unknown;
   created_at: string;
 }
 
