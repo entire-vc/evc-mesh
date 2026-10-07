@@ -36,4 +36,6 @@ type TaskTransition struct {
 	Reaper            *ReaperExpectation
 	AlarmDue          *time.Time
 	AlarmLabels       []string
+	// Automatic moves must leave registered WAITs to their atomic consumer.
+	DisallowParkedWait bool
 }

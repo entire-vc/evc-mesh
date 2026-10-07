@@ -106,3 +106,38 @@ func TestAutoTransitionM4_PostgresBarrier(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoTransitionDoesNotStealDurableWait(t *testing.T) {
+	f := newRecurringActorTypeFixture(t)
+	ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+	tasks := postgres.NewTaskRepo(f.db)
+	statuses := postgres.NewTaskStatusRepo(f.db)
+	deps := postgres.NewTaskDependencyRepo(f.db)
+	svc := NewTaskService(tasks, statuses, deps, postgres.NewActivityLogRepo(f.db), WithProjectRepo(postgres.NewProjectRepo(f.db)))
+	backlog := &domain.TaskStatus{ID: uuid.New(), ProjectID: f.projectID, Name: "Backlog", Slug: "backlog", Category: domain.StatusCategoryBacklog, Color: "#ffffff", Position: 1}
+	done := &domain.TaskStatus{ID: uuid.New(), ProjectID: f.projectID, Name: "Done", Slug: "done", Category: domain.StatusCategoryDone, Color: "#ffffff", Position: 2}
+	require.NoError(t, statuses.Create(ctx, backlog))
+	require.NoError(t, statuses.Create(ctx, done))
+	blocked := &domain.Task{ID: uuid.New(), ProjectID: f.projectID, StatusID: backlog.ID, Title: "durable wait", Labels: []string{"park:dependency"}, AssigneeType: domain.AssigneeTypeUnassigned, Priority: domain.PriorityMedium, CreatedByType: domain.ActorTypeSystem}
+	blocker := &domain.Task{ID: uuid.New(), ProjectID: f.projectID, StatusID: done.ID, Title: "done blocker", AssigneeType: domain.AssigneeTypeUnassigned, Priority: domain.PriorityMedium, CreatedByType: domain.ActorTypeSystem}
+	require.NoError(t, svc.Create(ctx, blocked))
+	require.NoError(t, svc.Create(ctx, blocker))
+	require.NoError(t, deps.Create(ctx, &domain.TaskDependency{ID: uuid.New(), TaskID: blocked.ID, DependsOnTaskID: blocker.ID, DependencyType: domain.DependencyTypeBlocks, CreatedAt: time.Now()}))
+	// Repository tests cover real registration validation and atomic release.
+	// This fixture specifically checks production service→repository wiring.
+	_, err := f.db.ExecContext(ctx, `INSERT INTO parked_waits(id,task_id,wait_comment_id,plan,registered_by,registered_by_type,result) VALUES($1,$2,$3,'{}',$4,'system','{}')`, uuid.New(), blocked.ID, uuid.New(), uuid.Nil)
+	require.NoError(t, err)
+	before, err := tasks.GetByID(ctx, blocked.ID)
+	require.NoError(t, err)
+	auto := NewAutoTransitionService(tasks, statuses, deps, svc, nil, nil)
+	require.NoError(t, auto.CheckDependencyResolution(ctx, blocker.ID))
+	after, err := tasks.GetByID(ctx, blocked.ID)
+	require.NoError(t, err)
+	require.Equal(t, *before, *after)
+	var moved int
+	require.NoError(t, f.db.GetContext(ctx, &moved, `SELECT count(*) FROM activity_log WHERE entity_id=$1 AND action='task.moved'`, blocked.ID))
+	require.Zero(t, moved)
+	t.Cleanup(func() {
+		_, _ = f.db.ExecContext(context.Background(), "DELETE FROM activity_log WHERE workspace_id=$1", f.workspaceID)
+	})
+}

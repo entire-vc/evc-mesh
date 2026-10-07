@@ -1192,6 +1192,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 
 	task.UpdatedAt = timeNow()
 	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
+	transition.DisallowParkedWait = input.Source == "auto_transition"
 	if writer, ok := s.taskRepo.(interface {
 		UpdateTransition(context.Context, *domain.Task, domain.TaskTransition) error
 	}); ok {

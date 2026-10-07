@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -28,6 +29,33 @@ func (r *TaskRepo) taskConflict(ctx context.Context, id uuid.UUID) error {
 // at one SQL linearization point. It never copies title, gates or other fields
 // from the caller's snapshot. All legacy writes also invalidate task.version.
 func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, input domain.TaskTransition) error {
+	var queryer sqlx.QueryerContext = r.db
+	var tx *sqlx.Tx
+	var lockedConflict *domain.TaskConflict
+	if input.DisallowParkedWait {
+		var err error
+		tx, err = r.db.BeginTxx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		// Registration holds this same row lock but does not advance task.version.
+		// Read the registration only AFTER locking: an UPDATE NOT EXISTS alone
+		// can retain a snapshot from before a concurrent registration committed.
+		current, lockErr := lockParkedTask(ctx, tx, task.ID)
+		if lockErr != nil {
+			return lockErr
+		}
+		lockedConflict = &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt}
+		var registered bool
+		if err := tx.GetContext(ctx, &registered, `SELECT EXISTS(SELECT 1 FROM parked_waits WHERE task_id=$1 AND release_id IS NULL)`, task.ID); err != nil {
+			return err
+		}
+		if registered {
+			return lockedConflict
+		}
+		queryer = tx
+	}
 	q := `UPDATE tasks t SET status_id=$2, position=$3, completed_at=$4,
  status_changed_at=$5, assignee_id=$6, assignee_type=$7,
  pre_review_assignee_id=$8, pre_review_assignee_type=$9, updated_at=$10,
@@ -69,11 +97,21 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 		domain.CheckoutLease
 		Version int64 `db:"version"`
 	}
-	if err := r.db.GetContext(ctx, &result, q, args...); err != nil {
+	if err := sqlx.GetContext(ctx, queryer, &result, q, args...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// The locked row is authoritative and cannot change until rollback.
+			// Do not request another pool connection while holding this one.
+			if lockedConflict != nil {
+				return lockedConflict
+			}
 			return r.taskConflict(ctx, task.ID)
 		}
 		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	task.Version = result.Version
 	if input.AlarmDue != nil {
