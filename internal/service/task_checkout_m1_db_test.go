@@ -107,6 +107,30 @@ func TestCheckoutM1_PostgresAdminRecoveryAudit(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestCheckoutM1_PostgresTerminalReleaseRetainsReplayTombstone(t *testing.T) {
+	f, repo, svc, id, owner := newCheckoutM1Fixture(t)
+	ctx := agentContext(owner)
+	scope := checkoutScope()
+	old, err := svc.CheckoutTask(ctx, id, 30, nil, scope)
+	require.NoError(t, err)
+	review := &domain.TaskStatus{ID: uuid.New(), ProjectID: f.projectID, Name: "Review", Slug: "review", Category: domain.StatusCategoryReview, Color: "#ffffff", Position: 2}
+	require.NoError(t, postgres.NewTaskStatusRepo(f.db).Create(ctx, review))
+	require.NoError(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &review.ID}))
+	task, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Nil(t, task.CheckedOutBy)
+	require.Nil(t, task.CheckoutToken)
+	require.Nil(t, task.CheckoutExpires)
+	require.Equal(t, scope.SessionID, task.CheckoutSessionID)
+	require.Equal(t, scope.RequestID, task.CheckoutRequestID)
+	_, err = svc.CheckoutTask(ctx, id, 30, nil, scope)
+	require.Error(t, err, "terminal auto-release must not replay the old request")
+	fresh, err := svc.CheckoutTask(ctx, id, 30, nil, checkoutScope())
+	require.NoError(t, err)
+	require.Greater(t, fresh.Generation, old.Generation)
+	require.Error(t, svc.ReleaseCheckout(ctx, id, old.CheckoutToken))
+}
+
 type checkoutCommitBarrier struct {
 	repository.TaskRepository
 	ready     chan struct{}

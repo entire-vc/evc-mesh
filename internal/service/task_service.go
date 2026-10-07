@@ -1242,6 +1242,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 					task.CheckedOutBy = nil
 					task.CheckoutToken = nil
 					task.CheckoutExpires = nil
+					task.CheckoutAcquiredAt = nil
 				}
 			}
 		}

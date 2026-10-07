@@ -82,6 +82,48 @@ func parked409(t *testing.T, err error) {
 	require.Equal(t, 409, e.Code)
 }
 
+func TestParkedWaitRegisterAfterCheckoutRelease(t *testing.T) {
+	for _, release := range []string{"explicit", "expired"} {
+		t.Run(release, func(t *testing.T) {
+			f := newParkedFixture(t)
+			scope := generationScope()
+			expires := time.Now().Add(time.Hour)
+			if release == "expired" {
+				expires = time.Now().Add(-time.Minute)
+			}
+			lease, err := f.repo.AcquireCheckout(f.ctx, f.id, f.owner, uuid.New(), expires, scope)
+			require.NoError(t, err)
+			if release == "explicit" {
+				released, releaseErr := f.repo.CompareReleaseCheckout(f.ctx, f.id, domain.CheckoutExpectation{Token: lease.Token})
+				require.NoError(t, releaseErr)
+				require.NotNil(t, released)
+			} else {
+				n, releaseErr := f.repo.ReleaseExpiredCheckouts(f.ctx)
+				require.NoError(t, releaseErr)
+				require.EqualValues(t, 1, n)
+			}
+			// The request identity remains as a tombstone, so the old request
+			// cannot recreate this lease while WAIT registration succeeds.
+			task, err := f.repo.GetByID(f.ctx, f.id)
+			require.NoError(t, err)
+			require.Nil(t, task.CheckedOutBy)
+			require.Equal(t, scope.SessionID, task.CheckoutSessionID)
+			require.Equal(t, scope.RequestID, task.CheckoutRequestID)
+			f.register(t)
+			_, err = f.repo.AcquireCheckout(f.ctx, f.id, f.owner, uuid.New(), time.Now().Add(time.Hour), scope)
+			require.ErrorIs(t, err, ErrCheckoutConflict)
+			fresh, err := f.repo.AcquireCheckout(f.ctx, f.id, f.owner, uuid.New(), time.Now().Add(time.Hour), generationScope())
+			require.NoError(t, err)
+			require.Greater(t, fresh.Generation, lease.Generation)
+			_, err = f.repo.CompareReleaseCheckout(f.ctx, f.id, domain.CheckoutExpectation{Token: lease.Token})
+			require.ErrorIs(t, err, ErrInvalidCheckoutToken)
+			current, err := f.repo.GetByID(f.ctx, f.id)
+			require.NoError(t, err)
+			require.Equal(t, fresh.Token, current.CheckoutToken)
+		})
+	}
+}
+
 func TestParkedWaitEmptyRemovalPreservesLabels(t *testing.T) {
 	for _, nilLabels := range []bool{true, false} {
 		t.Run(fmt.Sprint(nilLabels), func(t *testing.T) {
