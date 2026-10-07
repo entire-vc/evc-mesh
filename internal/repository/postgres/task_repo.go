@@ -77,7 +77,7 @@ var timeNow = time.Now
 // We provide two variants below: one without a table alias (for plain
 // FROM tasks queries) and one with "t." (for joined queries).
 const taskBaseColsNoAlias = `
-	id, project_id, status_id, title, description,
+	id, version, project_id, status_id, title, description,
 	assignee_id, assignee_type, priority, parent_task_id, position,
 	due_date, start_after, estimated_hours, custom_fields, labels,
 	task_number, created_by, created_by_type, created_at, updated_at,
@@ -178,6 +178,7 @@ const taskComputedColsAliased = `
 // taskRow is the DB row representation (includes task_number and deleted_at
 // that the domain model does not have, plus 4 computed enrichment fields).
 type taskRow struct {
+	Version        int64               `db:"version"`
 	ID             uuid.UUID           `db:"id"`
 	ProjectID      uuid.UUID           `db:"project_id"`
 	StatusID       uuid.UUID           `db:"status_id"`
@@ -260,6 +261,7 @@ type taskRow struct {
 func (r *taskRow) toDomain() domain.Task {
 	return domain.Task{
 		ID:                      r.ID,
+		Version:                 r.Version,
 		ProjectID:               r.ProjectID,
 		StatusID:                r.StatusID,
 		Title:                   r.Title,
@@ -524,6 +526,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 		}()
 		pkgmetrics.RecordDBQuery("task.create", time.Since(dbStart))
 		if err == nil {
+			task.Version = 1
 			return nil
 		}
 		if isTaskNumberConflict(err) {
@@ -623,7 +626,7 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		return nil, err
 	}
 
-	dataQ := fmt.Sprintf(`SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+	dataQ := fmt.Sprintf(`SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -654,8 +657,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    completion_signal = $23, status_changed_at = $24,
 		    pre_review_assignee_id = $25, pre_review_assignee_type = $26,
 		    reviewer_id = $27, reviewer_type = $28, start_after = $29
-		WHERE id = $1 AND deleted_at IS NULL
-		RETURNING checked_out_by,checkout_token,checkout_expires,checkout_acquired_at,checkout_session_id,checkout_request_id,checkout_generation,false AS changed
+		WHERE id = $1 AND deleted_at IS NULL AND version = $30
+		RETURNING version,checked_out_by,checkout_token,checkout_expires,checkout_acquired_at,checkout_session_id,checkout_request_id,checkout_generation,false AS changed
 	`
 	customFields := task.CustomFields
 	if customFields == nil {
@@ -670,8 +673,11 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		delegationLevel = domain.DelegationLevelAuto
 	}
 	dbStart := time.Now()
-	var lease domain.CheckoutLease
-	err := r.db.GetContext(ctx, &lease, q,
+	var result struct {
+		domain.CheckoutLease
+		Version int64 `db:"version"`
+	}
+	err := r.db.GetContext(ctx, &result, q,
 		task.ID, task.StatusID, task.Title, task.Description,
 		task.AssigneeID, task.AssigneeType, task.Priority,
 		task.ParentTaskID, task.Position, task.DueDate,
@@ -681,15 +687,17 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		delegationLevel, task.ThreadID,
 		task.HumanGate, task.IsShipped, task.AssignedBy, task.CompletionSignal, task.StatusChangedAt,
 		task.PreReviewAssigneeID, task.PreReviewAssigneeType,
-		task.ReviewerID, task.ReviewerType, task.StartAfter,
+		task.ReviewerID, task.ReviewerType, task.StartAfter, task.Version,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if errors.Is(err, sql.ErrNoRows) {
-		return apierror.NotFound("Task")
+		return r.taskConflict(ctx, task.ID)
 	}
 	if err != nil {
 		return err
 	}
+	task.Version = result.Version
+	lease := result.CheckoutLease
 	task.CheckedOutBy, task.CheckoutToken, task.CheckoutExpires, task.CheckoutAcquiredAt = lease.Holder, lease.Token, lease.ExpiresAt, lease.AcquiredAt
 	task.CheckoutSessionID, task.CheckoutRequestID, task.CheckoutGeneration = lease.SessionID, lease.RequestID, lease.Generation
 	return nil
@@ -1314,7 +1322,7 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 		return nil, err
 	}
 
-	dataQ := `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -1411,7 +1419,8 @@ func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
 		    updated_at           = now()
 		WHERE checkout_expires < now()
 		  AND checkout_expires IS NOT NULL
-		  AND deleted_at IS NULL`
+		  AND deleted_at IS NULL
+ AND status_id NOT IN (SELECT id FROM task_statuses WHERE category = 'in_progress')`
 	res, err := r.db.ExecContext(ctx, query)
 	if err != nil {
 		return 0, err
@@ -1421,8 +1430,8 @@ func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
 }
 
 // FindExpiredInProgressCheckouts returns tasks whose checkout_expires is in the past
-// and whose status category is in_progress. Uses FOR UPDATE SKIP LOCKED to avoid
-// double-processing when multiple reaper goroutines race (unlikely, but safe).
+// and whose status category is in_progress. Selection is only a snapshot; the
+// transition must repeat lease/version predicates at the conditional write.
 func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain.Task, error) {
 	const q = `
 		SELECT ` + taskBaseColsNoAlias + `
@@ -1651,7 +1660,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 		return nil, err
 	}
 
-	const dataQ = `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+	const dataQ = `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -1678,7 +1687,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 // ListOpenByRecurringScheduleID returns non-terminal tasks (not done/cancelled/deleted)
 // belonging to the given recurring schedule, excluding exceptTaskID (the new instance).
 func (r *TaskRepo) ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error) {
-	const q = `SELECT t.id, t.project_id, t.status_id, t.title, t.description,
+	const q = `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,

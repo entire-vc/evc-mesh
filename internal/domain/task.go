@@ -58,6 +58,7 @@ const (
 
 // Task is the central entity -- a unit of work that can be assigned to users or agents.
 type Task struct {
+	Version   int64     `json:"version" db:"version"`
 	ID        uuid.UUID `json:"id" db:"id"`
 	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
 	StatusID  uuid.UUID `json:"status_id" db:"status_id"`

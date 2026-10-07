@@ -176,6 +176,7 @@ type moveTaskRequest struct {
 	Position          *float64            `json:"position"`
 	AssigneeID        *uuid.UUID          `json:"assignee_id,omitempty"`
 	AssigneeType      domain.AssigneeType `json:"assignee_type,omitempty"`
+	ExpectedVersion   *int64              `json:"expected_version,omitempty"`
 	ExpectedStatusID  *uuid.UUID          `json:"expected_status_id,omitempty"`
 	ExpectedUpdatedAt *time.Time          `json:"expected_updated_at,omitempty"`
 	Source            string              `json:"source,omitempty"` // "mcp" | "api" | "ui"
@@ -1040,6 +1041,7 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 		AssigneeType:      req.AssigneeType,
 		ExpectedStatusID:  req.ExpectedStatusID,
 		ExpectedUpdatedAt: req.ExpectedUpdatedAt,
+		ExpectedVersion:   req.ExpectedVersion,
 		Source:            req.Source,
 	}
 	if input.Source == "" {
@@ -1827,6 +1829,7 @@ func handleError(c echo.Context, err error) error {
 			"code":               "cas_conflict",
 			"message":            "Task was modified concurrently — re-read the task and retry",
 			"current_status_id":  casErr.CurrentStatusID,
+			"current_version":    casErr.CurrentVersion,
 			"current_updated_at": casErr.CurrentUpdatedAt,
 		})
 	}

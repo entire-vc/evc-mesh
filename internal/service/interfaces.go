@@ -51,6 +51,7 @@ type MoveTaskInput struct {
 
 	// CAS preconditions — optional, ignored if nil. Either or both can be set.
 	// If the current task state does not match, MoveTask returns CASConflictError.
+	ExpectedVersion   *int64     `json:"expected_version,omitempty"`
 	ExpectedStatusID  *uuid.UUID `json:"expected_status_id,omitempty"`
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
 
@@ -58,8 +59,11 @@ type MoveTaskInput struct {
 	// Not bound from the JSON body directly; set by the handler layer.
 	Source string `json:"-"`
 	// Internal automatic-transition audit context; never bound from user JSON.
-	Reason        string     `json:"-"`
-	TriggerTaskID *uuid.UUID `json:"-"`
+	Reason        string                    `json:"-"`
+	TriggerTaskID *uuid.UUID                `json:"-"`
+	Reaper        *domain.ReaperExpectation `json:"-"`
+	AlarmDue      *time.Time                `json:"-"`
+	AlarmLabels   []string                  `json:"-"`
 }
 
 // AssignTaskInput holds parameters for assigning a task.

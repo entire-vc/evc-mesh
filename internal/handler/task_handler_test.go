@@ -2717,7 +2717,9 @@ func TestTaskHandler_MoveTask_CASConflict_Returns409(t *testing.T) {
 
 	mockSvc := &MockTaskService{
 		MoveTaskFunc: func(ctx context.Context, tid uuid.UUID, input service.MoveTaskInput) error {
+			require.Equal(t, int64(7), *input.ExpectedVersion)
 			return &service.CASConflictError{
+				CurrentVersion:   8,
 				CurrentStatusID:  currentStatusID,
 				CurrentUpdatedAt: currentUpdatedAt,
 			}
@@ -2726,7 +2728,7 @@ func TestTaskHandler_MoveTask_CASConflict_Returns409(t *testing.T) {
 
 	h, e := setupTaskTest(mockSvc)
 
-	body := `{"status_id":"` + statusID.String() + `","expected_status_id":"` + uuid.New().String() + `"}`
+	body := `{"status_id":"` + statusID.String() + `","expected_version":7,"expected_status_id":"` + uuid.New().String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
@@ -2742,6 +2744,7 @@ func TestTaskHandler_MoveTask_CASConflict_Returns409(t *testing.T) {
 	var body409 map[string]interface{}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body409))
 	assert.Equal(t, "cas_conflict", body409["code"])
+	assert.Equal(t, float64(8), body409["current_version"])
 	assert.NotEmpty(t, body409["current_status_id"])
 	assert.NotEmpty(t, body409["current_updated_at"])
 }
