@@ -1458,6 +1458,8 @@ func main() {
 	api.PATCH("/tasks/:task_id", taskHandler.Update, wsAccess, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id", taskHandler.Delete, wsAccess, rbac(mw.PermDeleteTask))
 	api.POST("/tasks/:task_id/move", taskHandler.MoveTask, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/parked-waits", taskHandler.RegisterParkedWait, wsAccess, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/parked-waits/release", taskHandler.ReleaseParkedWait, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/move-to-project", taskHandler.MoveToProject, wsAccess, rbac(mw.PermUpdateTask))
 	// Statuses of the task's project, under the SAME gate as /tasks/:task_id/move.
 	// Resolving a status slug is a precondition of the move; gating the lookup more
