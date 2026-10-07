@@ -96,12 +96,17 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 
 	// Check for cycle: if we add taskID -> dependsOnTaskID, then from
 	// dependsOnTaskID we should not be able to reach taskID.
-	hasCycle, err := s.CheckCycle(ctx, dep.TaskID, dep.DependsOnTaskID)
-	if err != nil {
-		return err
-	}
-	if hasCycle {
-		return apierror.BadRequest("adding this dependency would create a cycle")
+	atomicHierarchy := s.atomicHierarchy()
+	// PostgreSQL performs the complete graph check under its workspace lock.
+	// An unlocked dependency-only walk cannot establish absence of a cycle.
+	if dep.DependencyType == domain.DependencyTypeBlocks && !atomicHierarchy {
+		hasCycle, err := s.CheckCycle(ctx, dep.TaskID, dep.DependsOnTaskID)
+		if err != nil {
+			return err
+		}
+		if hasCycle {
+			return apierror.BadRequest("adding this dependency would create a cycle")
+		}
 	}
 
 	// is_child_of is the only dependency type that also drives the actual
@@ -121,12 +126,14 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 		if task.ParentTaskID != nil && *task.ParentTaskID != dep.DependsOnTaskID {
 			return apierror.Conflict("task already has a parent; remove the existing parent relationship first")
 		}
-		hasParentCycle, err := s.hasParentCycle(ctx, dep.TaskID, dep.DependsOnTaskID)
-		if err != nil {
-			return err
-		}
-		if hasParentCycle {
-			return apierror.BadRequest("adding this dependency would create a cycle in the task hierarchy")
+		if !atomicHierarchy {
+			hasParentCycle, err := s.hasParentCycle(ctx, dep.TaskID, dep.DependsOnTaskID)
+			if err != nil {
+				return err
+			}
+			if hasParentCycle {
+				return apierror.BadRequest("adding this dependency would create a cycle in the task hierarchy")
+			}
 		}
 	}
 
@@ -139,7 +146,7 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 		return err
 	}
 
-	if dep.DependencyType == domain.DependencyTypeIsChildOf {
+	if dep.DependencyType == domain.DependencyTypeIsChildOf && !atomicHierarchy {
 		parentID := dep.DependsOnTaskID
 		task.ParentTaskID = &parentID
 		if err := s.taskRepo.Update(ctx, task); err != nil {
@@ -148,6 +155,11 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 	}
 
 	return nil
+}
+
+func (s *taskDependencyService) atomicHierarchy() bool {
+	writer, ok := s.depRepo.(interface{ AtomicHierarchy() bool })
+	return ok && writer.AtomicHierarchy()
 }
 
 // hasParentCycle reports whether making newParentID the parent of taskID
@@ -198,7 +210,7 @@ func (s *taskDependencyService) Delete(ctx context.Context, id uuid.UUID) error 
 		return err
 	}
 
-	if dep == nil || dep.DependencyType != domain.DependencyTypeIsChildOf {
+	if s.atomicHierarchy() || dep == nil || dep.DependencyType != domain.DependencyTypeIsChildOf {
 		return nil
 	}
 
@@ -313,6 +325,9 @@ func (s *taskDependencyService) dfs(ctx context.Context, current, target uuid.UU
 	}
 
 	for _, dep := range deps {
+		if dep.DependencyType == domain.DependencyTypeRelatesTo || dep.DependencyType == domain.DependencyTypeIsChildOf {
+			continue
+		}
 		found, err := s.dfs(ctx, dep.DependsOnTaskID, target, visited)
 		if err != nil {
 			return false, err

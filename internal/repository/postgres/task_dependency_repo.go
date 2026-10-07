@@ -22,6 +22,10 @@ func NewTaskDependencyRepo(db *sqlx.DB) *TaskDependencyRepo {
 	return &TaskDependencyRepo{db: db}
 }
 
+// AtomicHierarchy reports that the completion graph triggers persist an
+// is_child_of edge and its parent side effect in the same transaction.
+func (r *TaskDependencyRepo) AtomicHierarchy() bool { return true }
+
 // taskDependencySelectCols is every column domain.TaskDependency scans,
 // listed explicitly — see agentSelectCols in agent_repo.go for why
 // `SELECT *` is unsafe: sqlx refuses to scan a column with no matching
@@ -30,14 +34,27 @@ func NewTaskDependencyRepo(db *sqlx.DB) *TaskDependencyRepo {
 const taskDependencySelectCols = `id, task_id, depends_on_task_id, dependency_type, created_at`
 
 func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDependency) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Separate lock statement: all following reads see the preceding writer's
+	// commit. Calling the function also fails closed if the migration is absent.
+	if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id) FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`, dep.TaskID); err != nil {
+		return err
+	}
 	const q = `
 		INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`
-	_, err := r.db.ExecContext(ctx, q,
+	_, err = tx.ExecContext(ctx, q,
 		dep.ID, dep.TaskID, dep.DependsOnTaskID, dep.DependencyType, dep.CreatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetByID returns the dependency, or (nil, nil) when no row matches.
@@ -54,8 +71,16 @@ func (r *TaskDependencyRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain
 }
 
 func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id) FROM task_dependencies d JOIN tasks t ON t.id=d.task_id JOIN projects p ON p.id=t.project_id WHERE d.id=$1`, id); err != nil {
+		return err
+	}
 	const q = `DELETE FROM task_dependencies WHERE id = $1`
-	res, err := r.db.ExecContext(ctx, q, id)
+	res, err := tx.ExecContext(ctx, q, id)
 	if err != nil {
 		return err
 	}
@@ -63,7 +88,7 @@ func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	if n == 0 {
 		return apierror.NotFound("TaskDependency")
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ListByTask returns all dependencies where the given task depends on another.
