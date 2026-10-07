@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 
 EXIT_OK = 0
@@ -38,7 +39,8 @@ EXIT_INCONCLUSIVE = 2
 
 # github.com/org/repo/internal/foo/bar.go:12.34,15.2 3 1
 PROFILE_LINE = re.compile(
-    r"^(?P<file>.+\.go):(?P<start>\d+)\.\d+,(?P<end>\d+)\.\d+\s+(?P<stmts>\d+)\s+(?P<count>\d+)$"
+    r"^(?P<file>.+\.go):(?P<start>\d+)\.(?P<start_col>\d+),"
+    r"(?P<end>\d+)\.(?P<end_col>\d+)\s+(?P<stmts>\d+)\s+(?P<count>\d+)$"
 )
 # @@ -12,3 +14,7 @@
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<len>\d+))? @@")
@@ -91,8 +93,8 @@ def changed_line_ranges(base: str, repo_root: str) -> dict[str, set[int]]:
     return changed
 
 
-def parse_profile(path: str, module: str) -> dict[str, list[tuple[int, int, int, int]]]:
-    """Return {repo-relative path: [(startLine, endLine, numStmts, execCount)]}.
+def parse_profile(path: str, module: str) -> dict[str, list[tuple[int, int, int, int, int, int]]]:
+    """Return file records with start/end line and column, statement and hit counts.
 
     Coverage profiles name files by import path; the diff names them relative to the
     repo root. Stripping the module prefix is what lets the two be intersected at
@@ -102,26 +104,62 @@ def parse_profile(path: str, module: str) -> dict[str, list[tuple[int, int, int,
     blocks: dict[str, list[tuple[int, int, int, int]]] = defaultdict(list)
     prefix = module.rstrip("/") + "/"
     with open(path, encoding="utf-8") as fh:
-        for raw in fh:
+        header = fh.readline().strip()
+        if header not in {"mode: atomic", "mode: count", "mode: set"}:
+            raise ValueError(f"{path}: missing or invalid coverage mode")
+        for number, raw in enumerate(fh, start=2):
             raw = raw.strip()
-            if not raw or raw.startswith("mode:"):
+            if not raw:
                 continue
             m = PROFILE_LINE.match(raw)
             if not m:
-                continue
+                raise ValueError(f"{path}:{number}: invalid coverage record")
+            start = (int(m.group("start")), int(m.group("start_col")))
+            end = (int(m.group("end")), int(m.group("end_col")))
+            if start[0] < 1 or start[1] < 1 or end < start:
+                raise ValueError(f"{path}:{number}: invalid coverage range")
             f = m.group("file")
             rel = f[len(prefix):] if f.startswith(prefix) else f
             if rel.endswith("_test.go"):
                 continue
-            blocks[rel].append(
-                (int(m.group("start")), int(m.group("end")),
-                 int(m.group("stmts")), int(m.group("count")))
-            )
+            blocks[rel].append((*start, *end, int(m.group("stmts")), int(m.group("count"))))
     return blocks
 
 
+def instrumented_blocks(path: str, repo_root: str) -> list[tuple[int, int, int, int, int]]:
+    """Get the executable blocks Go expects, including blocks absent from a profile."""
+    with tempfile.TemporaryDirectory() as directory:
+        output = os.path.join(directory, "instrumented.go")
+        try:
+            subprocess.run(
+                ["go", "tool", "cover", "-mode=atomic", "-o", output, path],
+                cwd=repo_root, capture_output=True, text=True, check=True,
+            )
+            with open(output, encoding="utf-8") as fh:
+                instrumented = fh.read()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ValueError(f"cannot inspect Go coverage blocks in {path}: {exc}") from exc
+    positions = re.search(r"Pos:\s*\[3\s*\*\s*(\d+)\]uint32\s*\{(.*?)\n\s*\}",
+                          instrumented, re.DOTALL)
+    statements = re.search(r"NumStmt:\s*\[(\d+)\]uint16\s*\{(.*?)\n\s*\}",
+                           instrumented, re.DOTALL)
+    if not positions or not statements:
+        raise ValueError(f"cannot read Go coverage instrumentation for {path}")
+    pos = re.findall(r"^\s*(\d+),\s*(\d+),\s*(0x[0-9a-fA-F]+|\d+),",
+                     positions.group(2), re.MULTILINE)
+    nums = re.findall(r"^\s*(\d+)\s*,", statements.group(2), re.MULTILINE)
+    if not (len(pos) == len(nums) == int(positions.group(1)) == int(statements.group(1))):
+        raise ValueError(f"incomplete Go coverage instrumentation for {path}")
+    result = []
+    for (start, end, packed), num in zip(pos, nums):
+        # GoCover.Pos packs end column in the high half and start column low.
+        columns = int(packed, 0)
+        result.append((int(start), columns & 0xffff, int(end), columns >> 16, int(num)))
+    return result
+
+
 def measure(changed: dict[str, set[int]],
-            blocks: dict[str, list[tuple[int, int, int, int]]]
+            blocks: dict[str, list[tuple[int, int, int, int, int, int]]]
             ) -> tuple[int, int, list[str]]:
     """Intersect changed lines with coverage blocks.
 
@@ -133,7 +171,7 @@ def measure(changed: dict[str, set[int]],
     total = covered = 0
     uncovered: list[str] = []
     for path, lines in sorted(changed.items()):
-        for start, end, stmts, count in blocks.get(path, []):
+        for start, _, end, _, stmts, count in blocks.get(path, []):
             if any(start <= n <= end for n in lines):
                 total += stmts
                 if count > 0:
@@ -150,6 +188,8 @@ def main() -> int:
     ap.add_argument("--threshold", type=float, default=80.0)
     ap.add_argument("--repo-root", default=".")
     ap.add_argument("--module", default="")
+    ap.add_argument("--exclude-file", action="append", default=[],
+                    help="post-image source of a confirmed main package")
     args = ap.parse_args()
 
     module = args.module
@@ -182,19 +222,26 @@ def main() -> int:
         print("No non-test Go lines changed — nothing to gate.")
         return EXIT_OK
 
-    blocks = parse_profile(args.profile, module)
+    changed = {path: lines for path, lines in changed.items() if path not in args.exclude_file}
+    try:
+        blocks = parse_profile(args.profile, module)
+        missing = []
+        for path, lines in changed.items():
+            measured = {block[:5] for block in blocks.get(path, [])}
+            for block in instrumented_blocks(path, args.repo_root):
+                start, _, end, _, stmts = block
+                if stmts > 0 and any(start <= line <= end for line in lines) and block not in measured:
+                    missing.append(f"{path}:{start}-{end}")
+        if missing:
+            raise ValueError(f"coverage profile is missing changed executable blocks: {missing}")
+    except (OSError, ValueError) as exc:
+        print(f"::error::cannot measure diff coverage: {exc}")
+        return EXIT_INCONCLUSIVE
     covered, total, uncovered = measure(changed, blocks)
 
     if total == 0:
-        # Reached when the change is real Go but carries no statements (comments,
-        # imports, declarations), or when the profile covers none of the changed
-        # files. The second case is a measurement failure wearing the first case's
-        # clothes, so they are told apart rather than both waved through.
-        if blocks and not any(p in blocks for p in changed):
-            print("::error::the coverage profile covers none of the changed files — "
-                  f"module prefix or affected-set is wrong (module={module}); "
-                  f"changed={sorted(changed)[:5]}")
-            return EXIT_INCONCLUSIVE
+        # Missing executable files were rejected above. The remaining changes
+        # touch only comments, imports, declarations or unchanged block gaps.
         print("Changed Go lines contain no measurable statements — nothing to gate.")
         return EXIT_OK
 
