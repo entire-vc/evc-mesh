@@ -664,10 +664,12 @@ test:
     # silence, the runner's only slot held, the whole fleet's queue stalled) fails
     # fast with a goroutine dump naming what's blocked, instead of running out the
     # job timeout with nothing to diagnose.
-    - sh scripts/ci/go-test-stall-watchdog.sh ./... -race -coverprofile=coverage.out -covermode=atomic
+    # The runner fixes the watchdog's full race/atomic args and only mints the
+    # SHA/toolchain/profile manifest after that invocation succeeds.
+    - python3 scripts/ci/coverage_artifact.py run coverage.out coverage-manifest.json
   artifacts:
-    when: always
-    paths: [coverage.out]
+    when: on_success
+    paths: [coverage.out, coverage-manifest.json]
     expire_in: 1 week
 
 # ── repo-integration ────────────────────────────────────────────────────────
@@ -909,12 +911,12 @@ tenancy-rbac-gate:
 # the aggregate of the affected set (see the comment inside diff_coverage.py
 # for why — pre-existing debt in packages the author never opened must not
 # hold an unrelated PR hostage). The shell runner propagates failures from the
-# affected-set, tests, profiles and diff measurement. Self-checks always run,
-# including on script-only changes that have no Go diff to measure.
+# affected-set, successful full-suite profile and diff measurement. Self-checks
+# always run, including on script-only changes that have no Go diff to measure.
 #
-# `needs: [lint]` intentionally skips waiting on the `gate` stage explicitly:
-# `lint` itself only starts once `hold-gate` (stage: gate) has completed, so
-# the ordering is preserved through stage sequencing, not duplicated here.
+# `test` runs the same race/atomic, untagged full set that this gate used to
+# repeat package by package. Its success-only artifact is mandatory here;
+# `lint` still carries the hold-gate ordering through stage sequencing.
 #
 # Restricted to merge_request pipelines: $CI_MERGE_REQUEST_DIFF_BASE_SHA,
 # which this gate diffs against, only exists in that context — same reason
@@ -923,7 +925,10 @@ coverage-gate:
   stage: test
   image: golang:1.25-alpine
   timeout: 30m
-  needs: [lint]
+  needs:
+    - job: lint
+    - job: test
+      artifacts: true
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
@@ -933,30 +938,19 @@ coverage-gate:
     # against $CI_MERGE_REQUEST_DIFF_BASE_SHA, which a shallow clone may not
     # contain (GitLab's default GIT_DEPTH is a truncated clone).
     GIT_DEPTH: "0"
-  services:
-    - name: postgres:16
-      alias: postgres
-    - name: redis:7-alpine
-      alias: redis
-    - name: nats:2-alpine
-      alias: nats
   cache:
     key: go-mod-$CI_COMMIT_REF_SLUG
     paths: [.gocache/, .gomodcache/]
     policy: pull
   before_script:
-    - apk add --no-cache git build-base bash python3 postgresql-client
-    - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
-    - pg_isready -h postgres -U mesh
-    - go install github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION
-    - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
+    - apk add --no-cache git build-base bash python3
   script:
     - python3 scripts/ci/test_diff_coverage.py
     - python3 scripts/ci/test_coverage_gate.py
-    - bash scripts/ci/coverage_gate.sh "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+    - bash scripts/ci/coverage_gate.sh "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --reuse coverage-manifest.json coverage.out
   artifacts:
     when: always
-    paths: [coverage-affected-summary.txt]
+    paths: [coverage-full-summary.txt]
     expire_in: 1 week
 
 # ── test:web ─────────────────────────────────────────────────────────────────

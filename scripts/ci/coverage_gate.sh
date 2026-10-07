@@ -4,6 +4,17 @@
 set -euo pipefail
 
 BASE="${1:?coverage_gate.sh requires a non-empty diff base}"
+reuse_profile=""
+if [ "$#" -gt 1 ]; then
+  if [ "$#" -ne 4 ] || [ "$2" != --reuse ]; then
+    echo "ERROR: expected --reuse MANIFEST PROFILE" >&2
+    exit 1
+  fi
+  reuse_profile="$4"
+  # This must precede the empty-diff skip: a missing or stale successful test
+  # artifact is never equivalent to a confirmed empty set.
+  python3 scripts/ci/coverage_artifact.py verify "$reuse_profile" "$3"
+fi
 echo "Diff base: $BASE"
 AFFECTED=$(bash docs/ci-templates/scripts/affected_set_go.sh "$BASE")
 echo "Affected packages: $AFFECTED"
@@ -40,6 +51,12 @@ while IFS= read -r pkg; do
     done
     continue
   fi
+  if [ -n "$reuse_profile" ]; then
+    # The successful upstream test job already ran ./... with race/atomic.
+    # Re-running affected packages here only duplicates CPU and DB setup.
+    profiles+=("$reuse_profile")
+    continue
+  fi
   profile="$coverage_tmp/cover_${#profiles[@]}.out"
   profiles+=("$profile")
   go test -race -covermode=atomic -coverprofile="$profile" "$pkg" 2>&1 || {
@@ -59,10 +76,22 @@ if [ "${#profiles[@]}" -eq 0 ]; then
   exit 0
 fi
 
-python3 scripts/ci/merge_coverage_profiles.py "$coverage_tmp/merged.out" "${profiles[@]}"
+if [ -n "$reuse_profile" ]; then
+  # The manifest validated the single complete full-suite profile. Avoid
+  # appending it once per affected package when computing the summary.
+  cp "$reuse_profile" "$coverage_tmp/merged.out"
+else
+  python3 scripts/ci/merge_coverage_profiles.py "$coverage_tmp/merged.out" "${profiles[@]}"
+fi
 go tool cover -func="$coverage_tmp/merged.out" > "$coverage_tmp/summary.txt"
 cat "$coverage_tmp/summary.txt"
-cp "$coverage_tmp/summary.txt" "${CI_PROJECT_DIR:-$PWD}/coverage-affected-summary.txt"
+summary_name=coverage-affected-summary.txt
+if [ -n "$reuse_profile" ]; then
+  # This total spans ./..., while the diff threshold below still measures
+  # only changed executable blocks. Do not label the total "affected".
+  summary_name=coverage-full-summary.txt
+fi
+cp "$coverage_tmp/summary.txt" "${CI_PROJECT_DIR:-$PWD}/$summary_name"
 if ! grep -Eq '^total:.*[0-9]+\.[0-9]+%$' "$coverage_tmp/summary.txt"; then
   echo "ERROR: coverage summary has no total" >&2
   exit 1
