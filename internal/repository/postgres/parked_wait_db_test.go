@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,16 +105,29 @@ func TestParkedWaitEmptyRemovalPreservesLabels(t *testing.T) {
 }
 
 func TestParkedWaitReleaseExactlyOnce(t *testing.T) {
+	t.Run("legacy", func(t *testing.T) { parkedWaitExactlyOnce(t, nil) })
+	t.Run("required jobs", func(t *testing.T) { parkedWaitExactlyOnce(t, []string{"build", "verify"}) })
+}
+
+func parkedWaitExactlyOnce(t *testing.T, jobs []string) {
+	t.Helper()
 	f := newParkedFixture(t)
+	f.plan.Condition.RequiredJobs = jobs
 	f.register(t)
 	input := f.request()
 	start := make(chan struct{})
 	results := make(chan *domain.ParkedWaitResult, 2)
 	errs := make(chan error, 2)
+	var providerReads atomic.Int32
 	for i := 0; i < 2; i++ {
 		go func() {
 			<-start
-			r, err := f.repo.ReleaseParkedWait(f.ctx, f.id, input, "success")
+			r, err := f.repo.ReleaseParkedWaitVerified(f.ctx, f.id, input, func(context.Context, *domain.Task, domain.ParkedWaitPlan) (string, error) {
+				if providerReads.Add(1) != 1 {
+					return "", apierror.ServiceUnavailable("provider offline after first release")
+				}
+				return "success", nil
+			})
 			results <- r
 			errs <- err
 		}()
@@ -122,6 +136,7 @@ func TestParkedWaitReleaseExactlyOnce(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		require.NoError(t, <-errs)
 	}
+	require.Equal(t, int32(1), providerReads.Load())
 	a, b := <-results, <-results
 	require.Equal(t, a.ActivityID, b.ActivityID)
 	require.NotEqual(t, a.Replayed, b.Replayed)
@@ -145,6 +160,13 @@ func TestParkedWaitReleaseExactlyOnce(t *testing.T) {
 	require.Equal(t, "parked-wait-api", changes["source"])
 	require.Equal(t, f.plan.WaitCommentID.String(), changes["wait_comment_id"])
 	require.Equal(t, "success", changes["pipeline_status"])
+	if jobs != nil {
+		require.Equal(t, []any{"build", "verify"}, changes["required_jobs"])
+		changed := f.plan
+		changed.Condition.RequiredJobs = []string{"build"}
+		_, err = f.repo.RegisterParkedWait(f.ctx, f.id, changed)
+		parked409(t, err)
+	}
 	_, err = f.repo.ReleaseParkedWait(f.ctx, f.id, f.request(), "success")
 	parked409(t, err)
 	// A lost response can be retried after later edits and without GitLab access.
@@ -156,6 +178,38 @@ func TestParkedWaitReleaseExactlyOnce(t *testing.T) {
 	reg, err := f.repo.RegisterParkedWait(f.ctx, f.id, f.plan)
 	require.NoError(t, err)
 	require.True(t, reg.Replayed)
+}
+
+func TestParkedWaitVerificationFailureRollsBack(t *testing.T) {
+	f := newParkedFixture(t)
+	f.plan.Condition.RequiredJobs = []string{"build"}
+	f.register(t)
+	input := f.request()
+	_, err := f.repo.ReleaseParkedWaitVerified(f.ctx, f.id, input, func(context.Context, *domain.Task, domain.ParkedWaitPlan) (string, error) {
+		return "", apierror.ServiceUnavailable("provider unavailable")
+	})
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, 503, apiErr.Code)
+	f.assertHeld(t)
+	result, err := f.repo.ReleaseParkedWaitVerified(f.ctx, f.id, input, func(context.Context, *domain.Task, domain.ParkedWaitPlan) (string, error) {
+		return "success", nil
+	})
+	require.NoError(t, err)
+	require.True(t, result.Released)
+}
+
+func TestParkedRequiredJobsCannotReleaseOnOtherTerminalStatus(t *testing.T) {
+	for _, status := range []string{"manual", "running", "failed", "skipped", "canceled", ""} {
+		t.Run(status, func(t *testing.T) {
+			f := newParkedFixture(t)
+			f.plan.Condition.RequiredJobs = []string{"build", "verify"}
+			f.register(t)
+			_, err := f.repo.ReleaseParkedWait(f.ctx, f.id, f.request(), status)
+			parked409(t, err)
+			f.assertHeld(t)
+		})
+	}
 }
 
 // Observe an actual PostgreSQL lock wait, rather than assuming goroutine timing.

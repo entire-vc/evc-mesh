@@ -110,6 +110,32 @@ func TestParkedSnapshotRejectsChangedAndProtectedTaskState(t *testing.T) {
 
 func ptrTime(value time.Time) *time.Time { return &value }
 
+func TestParkedRequiredJobsValidation(t *testing.T) {
+	for _, jobs := range [][]string{{}, {""}, {" "}, {"build", "build"}, make([]string, 21)} {
+		p := validParkedPlan()
+		p.Condition.RequiredJobs = jobs
+		require.Error(t, validateParkedPlan(p), "jobs=%v", jobs)
+	}
+	for _, reason := range []string{"dependency", "date"} {
+		p := validParkedPlan()
+		p.Reason = reason
+		p.Condition = domain.ParkedWaitCondition{RequiredJobs: []string{"build"}}
+		if reason == "dependency" {
+			id := uuid.New()
+			p.Condition.TaskID = &id
+		} else {
+			p.Condition.NotBefore = ptrTime(time.Now())
+			p.Condition.TimeSemantics = "not_before"
+		}
+		require.Error(t, validateParkedPlan(p))
+	}
+	for _, jobs := range [][]string{nil, {"build:contenthub"}, {"a", "b"}} {
+		p := validParkedPlan()
+		p.Condition.RequiredJobs = jobs
+		require.NoError(t, validateParkedPlan(p))
+	}
+}
+
 func TestParkedSnapshotAllowsMatchingCustomParkReason(t *testing.T) {
 	owner, project := uuid.New(), uuid.New()
 	plan := validParkedPlan()
