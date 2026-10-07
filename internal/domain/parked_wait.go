@@ -31,6 +31,7 @@ type ParkedWaitCondition struct {
 	TaskID        *uuid.UUID `json:"task_id,omitempty"`
 	ProjectPath   string     `json:"project_path,omitempty"`
 	PipelineID    int        `json:"pipeline_id,omitempty"`
+	RequiredJobs  []string   `json:"required_jobs,omitempty"`
 	NotBefore     *time.Time `json:"not_before,omitempty"`
 	TimeSemantics string     `json:"time_semantics,omitempty"`
 }

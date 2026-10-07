@@ -74,6 +74,7 @@ Field rules:
 | `feed_receipt_id`, timestamps | Persisted caller receipt; WAIT creation must be inside the closed window. Future windows are rejected (one minute clock allowance). |
 | `feed_source` | Required literal `confirmed_feed`; unknown/missing/legacy sources are rejected. No legacy registration fallback. |
 | `reason`, `condition` | Exactly one of the conditions below; independent or unknown reasons are rejected. |
+| `condition.required_jobs` | Optional for pipelines only: 1–20 unique, nonempty exact job names. The registered list is immutable; release requests do not supply names or readiness. Omit to retain aggregate terminal semantics. An explicit empty list is rejected. |
 | `remove_labels` | At most eight unique existing labels from the reason-specific allowlist. Empty array, null or omitted all subtract nothing; remaining park/gate labels still hold. |
 | `expected_start_after` | Exact current timestamp or null; must match even when it is not cleared. |
 | `clear_start_after` | Only if WAIT comment metadata contains `{"parked_wait":{"start_after":"<same timestamp>"}}`. Caller assertion alone is insufficient. |
@@ -93,6 +94,62 @@ at a token boundary; `#9176` does not match `#91760`.
 All independent human/manual/freeze/no-promote gates hold. A future unowned
 `start_after` holds even if the pipeline or blockers are terminal. The optional
 canonical `custom_fields.park_reason` must agree with the registered reason.
+
+### Required jobs in a mixed pipeline
+
+Rollout gate: this additive field is pending deployment until its merge and the
+production API version and required-job validation are verified. The contract was
+published to Khan, the parked-wake consumer owner, on 2026-10-07 in integration
+task `65a9d860-251d-4590-97c1-4cd19319ce3f`, comments
+`5772639b-c232-4260-85f6-b18b9a6376b0` (schema) and
+`9bb8a77d-31c4-4ca4-975e-1b3f18ca9d0c` (implementation and rollout gate).
+The handoff specifies the optional immutable pipeline-only list, exact retry,
+legacy behavior when absent and retained WAIT until live support. Consumer
+activation must follow
+that server verification and its own integration acceptance. A published schema
+alone is not proof that the running API supports it.
+
+For a pipeline that remains `manual` because unrelated products have manual jobs,
+register the specific jobs the wait needs:
+
+```json
+{
+  "project_path": "group/deploy",
+  "pipeline_id": 9181,
+  "required_jobs": ["build:product", "deploy:product", "verify:product"]
+}
+```
+
+The server reads jobs from the workspace-configured GitLab instance, includes all
+retry attempts, verifies the exact pipeline ID on every row, and selects the
+largest job ID for each exact name. Readiness requires every selected job to be
+`success`; unrelated `manual` or `failed` jobs and the aggregate status do not
+affect readiness. Missing, skipped, running, failed, cancelled, pending or newly
+retried required jobs prevent release. There is no client-provided `ready` flag.
+
+Every page must have consistent pagination metadata and the complete expected
+number of rows. Missing metadata, duplicate/unsorted IDs, provider failures,
+truncated responses and changing pagination fail closed. Verification is bounded
+to 100 pages of 100 jobs and eight seconds for the entire verification. Every page
+is read again to detect status changes anywhere in the snapshot; the head is
+checked once more after a multi-page verification to detect retries during that
+second traversal.
+This verifies a provider snapshot; GitLab and the task transaction do not share a
+lock. A retry created after the final provider read is a subsequent event.
+
+The release body, owner/project/version/lease/human/all-blockers fences and exact
+retry behavior remain unchanged. The list must be persisted with registration
+before sending; changing it requires a fresh owner-authored registration rather
+than retrying a different body. Activity records include `required_jobs`; when it
+is present, `pipeline_status: "success"` describes the required-job verification,
+not an aggregate success claim. A committed release replays its stored receipt
+without contacting GitLab, even after a lost response and later provider failure.
+Provider verification runs under the release transaction's task and receipt locks.
+Workspace and provider configuration are resolved before opening that transaction,
+so verification never reserves another database connection while holding its own.
+Concurrent retries wait for that receipt and replay it without another provider
+read. A verification failure rolls back the transaction and retains the WAIT.
+Without `required_jobs`, the existing aggregate terminal behavior remains intact.
 
 ## Terminal event and release
 

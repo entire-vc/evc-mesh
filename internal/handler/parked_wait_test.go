@@ -52,7 +52,7 @@ func invokeParkedWait(t *testing.T, path, body string, handler func(echo.Context
 
 func TestRegisterParkedWait_HTTPBehavior(t *testing.T) {
 	taskID, registrationID := uuid.New(), uuid.New()
-	plan := domain.ParkedWaitPlan{ID: registrationID, ExpectedVersion: 7, Reason: "pipeline", FeedSource: "gitlab"}
+	plan := domain.ParkedWaitPlan{ID: registrationID, ExpectedVersion: 7, Reason: "pipeline", FeedSource: "gitlab", Condition: domain.ParkedWaitCondition{ProjectPath: "group/project", PipelineID: 93, RequiredJobs: []string{"build", "verify"}}}
 	body, err := json.Marshal(plan)
 	require.NoError(t, err)
 

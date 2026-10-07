@@ -246,6 +246,15 @@ func (r *TaskRepo) GetParkedWait(ctx context.Context, taskID, id uuid.UUID) (*do
 // ReleaseParkedWait commits the narrow label subtraction, lease effects, wake,
 // receipt and visible activity together. verifiedStatus is server-derived.
 func (r *TaskRepo) ReleaseParkedWait(ctx context.Context, taskID uuid.UUID, input domain.ReleaseParkedWait, verifiedStatus string) (*domain.ParkedWaitResult, error) {
+	return r.ReleaseParkedWaitVerified(ctx, taskID, input, func(context.Context, *domain.Task, domain.ParkedWaitPlan) (string, error) {
+		return verifiedStatus, nil
+	})
+}
+
+// ReleaseParkedWaitVerified serializes provider verification with the durable
+// receipt. A concurrent retry sees the committed receipt under the row locks and
+// returns it before invoking verify, including during a provider outage.
+func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UUID, input domain.ReleaseParkedWait, verify func(context.Context, *domain.Task, domain.ParkedWaitPlan) (string, error)) (*domain.ParkedWaitResult, error) {
 	actor, kind, err := parkedActor(ctx)
 	if err != nil {
 		return nil, err
@@ -347,6 +356,17 @@ func (r *TaskRepo) ReleaseParkedWait(ctx context.Context, taskID uuid.UUID, inpu
 			return nil, parkedConflict()
 		}
 	}
+	verifiedStatus, err := verify(ctx, task, p)
+	if err != nil {
+		return nil, err
+	}
+	// Provider reads are bounded but a holder lease can expire during that read.
+	if checkErr := tx.GetContext(ctx, &now, `SELECT clock_timestamp()`); checkErr != nil {
+		return nil, checkErr
+	}
+	if checkErr := parkedSnapshot(task, p, actor, now); checkErr != nil {
+		return nil, checkErr
+	}
 	switch p.Reason {
 	case "dependency":
 		if len(blockers) == 0 || !slices.ContainsFunc(blockers, func(b struct {
@@ -363,12 +383,12 @@ func (r *TaskRepo) ReleaseParkedWait(ctx context.Context, taskID uuid.UUID, inpu
 			return nil, parkedConflict()
 		}
 	case "pipeline":
-		if !terminalPipelineStatus(verifiedStatus) {
+		if !terminalPipelineStatus(verifiedStatus) || (p.Condition.RequiredJobs != nil && verifiedStatus != "success") {
 			return nil, parkedConflict()
 		}
 	}
 	activityID := uuid.New()
-	changes, err := json.Marshal(map[string]any{"status": map[string]string{"old": old.Name, "new": target.Name}, "source": "parked-wait-api", "reason": p.Reason, "trigger": input.Trigger, "pipeline_status": verifiedStatus, "wait_comment_id": p.WaitCommentID, "feed_receipt_id": p.FeedReceiptID, "registration_id": p.ID, "release_id": input.ReleaseID, "removed_labels": p.RemoveLabels, "cleared_start_after": p.ClearStartAfter, "old_version": task.Version, "new_version": task.Version + 1})
+	changes, err := json.Marshal(map[string]any{"status": map[string]string{"old": old.Name, "new": target.Name}, "source": "parked-wait-api", "reason": p.Reason, "trigger": input.Trigger, "pipeline_status": verifiedStatus, "required_jobs": p.Condition.RequiredJobs, "wait_comment_id": p.WaitCommentID, "feed_receipt_id": p.FeedReceiptID, "registration_id": p.ID, "release_id": input.ReleaseID, "removed_labels": p.RemoveLabels, "cleared_start_after": p.ClearStartAfter, "old_version": task.Version, "new_version": task.Version + 1})
 	if err != nil {
 		return nil, err
 	}
@@ -425,6 +445,18 @@ func parkedWaitToken(line, token string) bool {
 	return rest == "" || strings.HasPrefix(rest, ":") || strings.HasPrefix(rest, " ")
 }
 func validateParkedPlan(p domain.ParkedWaitPlan) error {
+	if p.Condition.RequiredJobs != nil {
+		if p.Reason != "pipeline" || len(p.Condition.RequiredJobs) < 1 || len(p.Condition.RequiredJobs) > 20 {
+			return apierror.BadRequest("required_jobs must contain 1..20 unique names and is only supported for pipelines")
+		}
+		seenJobs := make(map[string]bool)
+		for _, name := range p.Condition.RequiredJobs {
+			if strings.TrimSpace(name) == "" || seenJobs[name] {
+				return apierror.BadRequest("required_jobs must contain unique nonempty exact names")
+			}
+			seenJobs[name] = true
+		}
+	}
 	if p.FeedSource != "confirmed_feed" {
 		return apierror.BadRequest("confirmed feed receipt with captured project and owner required; legacy discovery cannot authorize registration")
 	}
