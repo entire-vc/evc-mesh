@@ -254,10 +254,13 @@ migration-gate:
     # exits 0 — clean-looking output for a check that did not run.
     GIT_DEPTH: "0"
   before_script:
-    - apk add --no-cache bash git
+    # This source contract check is required on MRs even though publication is
+    # optional: it protects the publisher's eligibility and failure semantics.
+    - apk add --no-cache bash git python3
   script:
     - |
       set -eu
+      python3 scripts/ci/test_goose_image_publisher_contract.py
       # Fail closed if the target branch is not reachable. Without this the
       # script's "SKIP: origin/<base> not found" path prints OK and exits 0,
       # which is exactly the shape this gate exists to stop believing.
@@ -1198,6 +1201,63 @@ build:api:
     - apk add --no-cache git build-base
   script:
     - go build -o /dev/null ./cmd/api
+
+# Optional convenience publisher for the Goose tool image. This is deliberately
+# manual and allow_failure: true: an unplayed or failed publication must not
+# block the ordinary main pipeline or its deploy. A green pipeline is not
+# evidence that an image was published. The artifact records the builder's
+# digest as unverified; independently read the registry manifest and compare its
+# digest before approving any consumer change. Keep consumers on their current
+# pinned setup until that verification is complete.
+build:ci-goose-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  tags: [docker]
+  needs: []
+  timeout: 15m
+  rules:
+    - if: '$CI_PROJECT_PATH == "entire-vc/evc-mesh" && $CI_COMMIT_BRANCH == "main" && $CI_COMMIT_REF_PROTECTED == "true" && $CI_PIPELINE_SOURCE == "push"'
+      when: manual
+      allow_failure: true
+    - when: never
+  script:
+    - |
+      set +x
+      set -eu
+      [ "${CI_DEBUG_TRACE:-false}" != "true" ] || { echo "REFUSING: debug trace could expose registry credentials"; exit 1; }
+      [ "$CI_PROJECT_PATH" = "entire-vc/evc-mesh" ] || { echo "REFUSING: non-canonical project"; exit 1; }
+      [ "$CI_COMMIT_BRANCH" = "main" ] || { echo "REFUSING: not canonical main"; exit 1; }
+      [ "$CI_COMMIT_REF_PROTECTED" = "true" ] || { echo "REFUSING: ref is not protected"; exit 1; }
+      [ "$CI_PIPELINE_SOURCE" = "push" ] || { echo "REFUSING: not a push pipeline"; exit 1; }
+      [ "$GOOSE_VERSION" = "v3.27.3" ] || { echo "REFUSING: unexpected Goose version"; exit 1; }
+      [ -n "$CI_JOB_ID" ] && [ -n "$CI_COMMIT_SHA" ] || { echo "REFUSING: missing immutable build identity"; exit 1; }
+      mkdir -p /kaniko/.docker
+      AUTH=$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_JOB_TOKEN" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > /kaniko/.docker/config.json
+      IMAGE="$CI_REGISTRY_IMAGE/ci/goose"
+      TAG="sha-$CI_COMMIT_SHA-job-$CI_JOB_ID"
+      /kaniko/executor \
+        --context "$CI_PROJECT_DIR/scripts/ci/images/goose" \
+        --dockerfile "$CI_PROJECT_DIR/scripts/ci/images/goose/Dockerfile" \
+        --custom-platform=linux/amd64 \
+        --build-arg "GOOSE_VERSION=$GOOSE_VERSION" \
+        --build-arg "SOURCE_COMMIT=$CI_COMMIT_SHA" \
+        --destination "$IMAGE:$TAG" \
+        --digest-file "$CI_PROJECT_DIR/goose-image.digest"
+      test -s "$CI_PROJECT_DIR/goose-image.digest" || { echo "REFUSING: builder did not return digest"; exit 1; }
+      DIGEST=$(cat "$CI_PROJECT_DIR/goose-image.digest")
+      printf '%s\n' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "REFUSING: malformed builder digest"; exit 1; }
+      printf 'status=builder-pushed-unverified\nimage=%s\ntag=%s\ncommit=%s\ngoose_version=%s\nplatform=linux/amd64\ndigest=%s\n' \
+        "$IMAGE" "$TAG" "$CI_COMMIT_SHA" "$GOOSE_VERSION" "$DIGEST" > "$CI_PROJECT_DIR/goose-image-publication.env"
+      echo "Builder pushed $IMAGE@$DIGEST; registry digest still requires independent verification before consumer use."
+  artifacts:
+    when: on_success
+    paths:
+      - goose-image.digest
+      - goose-image-publication.env
+    expire_in: 1 year
 
 build:web:
   stage: build
