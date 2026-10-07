@@ -6,9 +6,12 @@ are injected, so these controls exercise orchestration rather than replacing it.
 COVERAGE_GATE_SOURCE_ROOT can point at a known-bad snapshot for red controls.
 """
 from pathlib import Path
+import hashlib
+import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -78,6 +81,8 @@ class TestCoverageGate(unittest.TestCase):
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)
         for relative in ('docs/ci-templates/scripts/affected_set_go.sh',
+                         'scripts/ci/coverage_artifact.py',
+                         'scripts/ci/go-test-stall-watchdog.sh',
                          'scripts/ci/diff_coverage.py', 'scripts/ci/test_diff_coverage.py',
                          'scripts/ci/merge_coverage_profiles.py'):
             original = SOURCE / relative
@@ -132,6 +137,189 @@ class TestCoverageGate(unittest.TestCase):
         return subprocess.run([BASH, 'runner.sh', self.base if base is None else base],
                               cwd=self.root, env=dict(self.env, COVERAGE_TEST_FAULT=fault),
                               capture_output=True, text=True, timeout=120)
+
+    def make_reuse_artifact(self):
+        """Model a successful upstream full-suite race run at this exact commit."""
+        sha = self.git('rev-parse', 'HEAD').stdout.strip()
+        self.env.update(CI_COMMIT_SHA=sha, CI_PIPELINE_ID='12345')
+        run = subprocess.run([REAL_GO, 'test', './...', '-race',
+                              '-coverprofile=coverage.out', '-covermode=atomic'],
+                             cwd=self.root, env=self.env, capture_output=True,
+                             text=True, timeout=120)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        created = subprocess.run(
+            [sys.executable, 'scripts/ci/coverage_artifact.py', 'create',
+             'coverage.out', 'coverage-manifest.json'],
+            cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+        return json.loads((self.root / 'coverage-manifest.json').read_text())
+
+    def run_reuse_gate(self, fault='', base=None):
+        return subprocess.run([BASH, 'runner.sh',
+                               self.base if base is None else base,
+                               '--reuse', 'coverage-manifest.json', 'coverage.out'],
+                              cwd=self.root,
+                              env=dict(self.env, COVERAGE_TEST_FAULT=fault),
+                              capture_output=True, text=True, timeout=120)
+
+    def test_full_suite_runner_mints_manifest_only_after_success(self):
+        self.good_diff()
+        self.env.update(CI_COMMIT_SHA=self.git('rev-parse', 'HEAD').stdout.strip(),
+                        CI_PIPELINE_ID='12345', POLL_SECONDS='1')
+        invocation = [sys.executable, 'scripts/ci/coverage_artifact.py', 'run',
+                      'coverage.out', 'coverage-manifest.json']
+        self.write('coverage-manifest.json', '{"stale": true}\n')
+        for fault, expected in (('test_fail', False), ('', True)):
+            with self.subTest(fault=fault):
+                result = subprocess.run(invocation, cwd=self.root,
+                                        env=dict(self.env, COVERAGE_TEST_FAULT=fault),
+                                        capture_output=True, text=True, timeout=120)
+                self.assertEqual(result.returncode == 0, expected,
+                                 result.stdout + result.stderr)
+                self.assertEqual((self.root / 'coverage-manifest.json').exists(),
+                                 expected)
+        self.assertEqual(self.run_reuse_gate('test_fail').returncode, 0)
+
+    def test_full_suite_runner_cannot_certify_stale_profile_after_no_output_success(self):
+        self.good_diff()
+        self.make_reuse_artifact()
+        result = subprocess.run(
+            [sys.executable, 'scripts/ci/coverage_artifact.py', 'run',
+             'coverage.out', 'coverage-manifest.json'],
+            cwd=self.root,
+            env=dict(self.env, COVERAGE_TEST_FAULT='missing_profile', POLL_SECONDS='1'),
+            capture_output=True, text=True, timeout=120)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.root / 'coverage-manifest.json').exists())
+
+    def test_reused_successful_full_suite_profile_skips_package_retest(self):
+        self.good_diff()
+        self.make_reuse_artifact()
+        result = self.run_reuse_gate('test_fail')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Diff coverage 100.0% >= 80%', result.stdout)
+
+    def test_reused_profile_missing_manifest_fails_closed(self):
+        self.good_diff()
+        self.make_reuse_artifact()
+        (self.root / 'coverage-manifest.json').unlink()
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_profile_wrong_sha_fails_closed(self):
+        self.good_diff()
+        manifest = self.make_reuse_artifact()
+        manifest['commit_sha'] = self.base
+        (self.root / 'coverage-manifest.json').write_text(json.dumps(manifest))
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_profile_truncated_fails_closed(self):
+        self.good_diff()
+        self.make_reuse_artifact()
+        path = self.root / 'coverage.out'
+        path.write_bytes(path.read_bytes()[:20])
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_profile_malformed_fails_closed(self):
+        self.good_diff()
+        self.make_reuse_artifact()
+        path = self.root / 'coverage.out'
+        path.write_text('mode: atomic\ngarbage\n')
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_profile_missing_fails_closed(self):
+        self.good_diff()
+        self.make_reuse_artifact()
+        (self.root / 'coverage.out').unlink()
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_profile_partial_with_matching_hash_fails_closed(self):
+        self.write('a.go', 'package gate\nfunc F() int { return 2 }\nfunc G() int { return 3 }\n')
+        self.write('a_test.go', 'package gate\nimport "testing"\n'
+                   'func TestF(t *testing.T) { if F() != 2 || G() != 3 { t.Fatal("wrong") } }\n')
+        self.commit('change two covered functions')
+        manifest = self.make_reuse_artifact()
+        path = self.root / 'coverage.out'
+        records = path.read_text().splitlines(keepends=True)
+        self.assertGreaterEqual(len(records), 3)
+        path.write_text(''.join(records[:2]))
+        profile = path.read_bytes()
+        manifest['profile_sha256'] = hashlib.sha256(profile).hexdigest()
+        manifest['profile_size'] = len(profile)
+        (self.root / 'coverage-manifest.json').write_text(json.dumps(manifest))
+        self.rejects(self.run_reuse_gate(), 'missing full-suite coverage blocks')
+
+    def test_reused_profile_different_go_flags_fails_closed(self):
+        self.good_diff()
+        self.make_reuse_artifact()
+        self.env['GOFLAGS'] = '-tags=coverage_extra'
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_docs_only_profile_different_target_features_fails_closed(self):
+        self.write('README.md', 'documentation change\n')
+        self.commit('docs only')
+        self.make_reuse_artifact()
+        for key, value in (('GOARM64', 'v9.0'), ('GOAMD64', 'v3'),
+                           ('GO386', 'softfloat'), ('GORISCV64', 'rva22u64')):
+            with self.subTest(key=key):
+                self.env[key] = value
+                try:
+                    self.rejects(self.run_reuse_gate('test_fail'), 'go_env differs')
+                finally:
+                    self.env.pop(key)
+
+    def test_reused_profile_wrong_pipeline_fails_closed(self):
+        self.good_diff()
+        manifest = self.make_reuse_artifact()
+        manifest['pipeline_id'] = 'other-pipeline'
+        (self.root / 'coverage-manifest.json').write_text(json.dumps(manifest))
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_profile_retains_coverage_threshold(self):
+        self.write('a.go', 'package gate\nfunc F() int { return 1 }\nfunc Untested() int { return 99 }\n')
+        self.commit('add untested function')
+        self.make_reuse_artifact()
+        self.rejects(self.run_reuse_gate(), 'threshold')
+
+    def test_reused_profile_retains_no_tests_threshold(self):
+        self.write('other/o.go', 'package other\nfunc Other() int { return 1 }\n')
+        self.commit('add untested package')
+        self.make_reuse_artifact()
+        self.rejects(self.run_reuse_gate(), 'threshold')
+
+    def test_reused_no_go_diff_requires_valid_artifact(self):
+        self.write('README.md', 'documentation change\n')
+        self.commit('docs')
+        self.make_reuse_artifact()
+        (self.root / 'coverage-manifest.json').unlink()
+        self.rejects(self.run_reuse_gate())
+
+    def test_reused_no_go_diff_rejects_partial_matching_profile(self):
+        self.write('other/o.go', 'package other\nfunc Other() int { return 1 }\n')
+        self.commit('add second package')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+        self.write('README.md', 'documentation change\n')
+        self.commit('docs only')
+        manifest = self.make_reuse_artifact()
+        path = self.root / 'coverage.out'
+        records = path.read_text().splitlines(keepends=True)
+        self.assertGreaterEqual(len(records), 3)
+        path.write_text(''.join(records[:2]))
+        profile = path.read_bytes()
+        manifest['profile_sha256'] = hashlib.sha256(profile).hexdigest()
+        manifest['profile_size'] = len(profile)
+        (self.root / 'coverage-manifest.json').write_text(json.dumps(manifest))
+        self.rejects(self.run_reuse_gate('test_fail'), 'missing full-suite coverage blocks')
+
+    def test_reused_no_go_diff_ignores_inactive_tagged_source(self):
+        self.write('tagged.go', '//go:build coverage_extra\n\npackage gate\n'
+                   'func Inactive() int { return 2 }\n')
+        self.commit('add inactive source')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+        self.write('README.md', 'documentation change\n')
+        self.commit('docs only')
+        self.make_reuse_artifact()
+        result = self.run_reuse_gate('test_fail')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def rejects(self, result, marker=None):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
