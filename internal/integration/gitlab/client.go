@@ -76,6 +76,39 @@ type mergeRequestResponse struct {
 	State string `json:"state"`
 }
 
+// GetPipelineStatus verifies the exact pipeline on the configured GitLab host.
+// No caller-supplied host or reported status is trusted.
+func (c *Client) GetPipelineStatus(ctx context.Context, projectPath string, id int) (string, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/pipelines/%d", c.baseURL, urlpkg.PathEscape(projectPath), id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		req.Header.Set("PRIVATE-TOKEN", c.token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gitlab pipeline: unexpected status %d", resp.StatusCode)
+	}
+	var body struct {
+		ID     int    `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	if body.ID != id || body.Status == "" {
+		return "", fmt.Errorf("gitlab pipeline: response identity/status mismatch")
+	}
+	return body.Status, nil
+}
+
 // GetMergeRequestState calls GET /api/v4/projects/:id/merge_requests/:iid,
 // where :id is the URL-encoded "namespace/project" path (GitLab accepts
 // either the numeric project id or this URL-encoded path form; the path
