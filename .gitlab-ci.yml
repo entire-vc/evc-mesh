@@ -717,6 +717,8 @@ repo-integration:
   script:
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" $GOPATH/bin/goose -dir migrations up
     - go test ./internal/repository/postgres/... -v -race -tags=integration
+    # Exercise completion-cycle refusals through the real HTTP handler + PG.
+    - go test ./internal/handler -v -race -tags=integration -run '^TestCompletionGraphHTTP'
 
 # ── tenancy-rbac-gate ──────────────────────────────────────────────────────
 # Ports `.github/workflows/ci.yml`'s "Tenancy & RBAC gate" (#e64a383f /

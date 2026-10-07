@@ -489,6 +489,11 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 			if _, err = tx.ExecContext(ctx, qLock, task.ProjectID); err != nil {
 				return err
 			}
+			if task.ParentTaskID != nil {
+				if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(workspace_id) FROM projects WHERE id=$1`, task.ProjectID); err != nil {
+					return err
+				}
+			}
 			// Statement 2: INSERT with fresh READ COMMITTED snapshot (taken now, after
 			// the lock was granted and all prior concurrent inserts have committed).
 			_, err = tx.ExecContext(ctx, qInsert,
@@ -677,7 +682,23 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		domain.CheckoutLease
 		Version int64 `db:"version"`
 	}
-	err := r.db.GetContext(ctx, &result, q,
+	var reader interface {
+		GetContext(context.Context, interface{}, string, ...interface{}) error
+	} = r.db
+	var tx *sqlx.Tx
+	if task.ParentTaskID != nil {
+		var err error
+		tx, err = r.db.BeginTxx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err = tx.ExecContext(ctx, `SELECT completion_graph_lock(p.workspace_id) FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`, task.ID); err != nil {
+			return err
+		}
+		reader = tx
+	}
+	err := reader.GetContext(ctx, &result, q,
 		task.ID, task.StatusID, task.Title, task.Description,
 		task.AssigneeID, task.AssigneeType, task.Priority,
 		task.ParentTaskID, task.Position, task.DueDate,
@@ -695,6 +716,11 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 	}
 	if err != nil {
 		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	task.Version = result.Version
 	lease := result.CheckoutLease

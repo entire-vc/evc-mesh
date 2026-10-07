@@ -1875,6 +1875,12 @@ func handleError(c echo.Context, err error) error {
 		case "23503": // foreign_key_violation
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("referenced entity not found"))
 		case "23514": // check_violation
+			if pqErr.Constraint == "completion_cycle" {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequestWithDetails("operation would create a completion cycle", pqErr.Detail))
+			}
+			if pqErr.Constraint == "completion_scope" {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest(pqErr.Message))
+			}
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("value violates constraint"))
 		case "22P02": // invalid_text_representation (bad enum)
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid value for field"))
