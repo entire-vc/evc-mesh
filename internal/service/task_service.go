@@ -886,15 +886,22 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		return apierror.NotFound("Task")
 	}
 
+	oldVersion := task.Version
+	if input.ExpectedVersion != nil && *input.ExpectedVersion != task.Version {
+		return &CASConflictError{CurrentVersion: task.Version, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt}
+	}
+
 	// CAS precondition: fail fast if the caller's snapshot is stale.
 	if input.ExpectedStatusID != nil && *input.ExpectedStatusID != task.StatusID {
 		return &CASConflictError{
+			CurrentVersion:   task.Version,
 			CurrentStatusID:  task.StatusID,
 			CurrentUpdatedAt: task.UpdatedAt,
 		}
 	}
 	if input.ExpectedUpdatedAt != nil && !input.ExpectedUpdatedAt.Equal(task.UpdatedAt) {
 		return &CASConflictError{
+			CurrentVersion:   task.Version,
 			CurrentStatusID:  task.StatusID,
 			CurrentUpdatedAt: task.UpdatedAt,
 		}
@@ -902,12 +909,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 
 	// Tenancy of an explicit assignee is decided BEFORE anything is applied.
 	//
-	// The move and the assignment are one request but two writes, and the
-	// assignment write happens well after the status change has been persisted and
-	// logged. Checking it at the point of use would leave a refused assignment
-	// sitting on top of an already-committed move — half the request applied, with
-	// the failure reported as if the whole of it had failed. Refusing here costs
-	// one directory read and keeps the operation atomic from the caller's side.
+	// Resolve tenancy before preparing the atomic status and assignment write.
 	if input.AssigneeID != nil {
 		assigneeType := s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
 		if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, input.AssigneeID, assigneeType); err != nil {
@@ -918,7 +920,12 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	oldStatusID := task.StatusID
 	oldPosition := task.Position
 	oldStatusChangedAt := task.StatusChangedAt
+	// Policy checks see the alarm that will commit in the same guarded write.
+	if input.AlarmDue != nil {
+		task.DueDate, task.Labels = input.AlarmDue, input.AlarmLabels
+	}
 
+	var transitionViolation map[string]interface{}
 	statusChanged := false
 	if input.StatusID != nil && *input.StatusID != oldStatusID {
 		status, err := s.statusRepo.GetByID(ctx, *input.StatusID)
@@ -994,9 +1001,8 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		// Not exempted for system actors, on the same reasoning as the triage-entry
 		// gate: the point is that no caller creates an unwakeable park. Every in-tree
 		// system park path already complies by construction — checkoutLeaseReaper.parkTask
-		// and the enforceBlockingTriage backlog fallback both write due_date via
-		// taskRepo.Update BEFORE calling MoveTask, and MoveTask re-reads the task, so
-		// they arrive here already armed.
+		// prepares its alarm in this transition; the enforceBlockingTriage fallback
+		// writes due_date before calling MoveTask. Both reach this check armed.
 		//
 		// ⚠️ Deliberate divergence from midPipelineConfig's documented fail-OPEN
 		// contract: ParkAlarmRequired() answers TRUE on a nil block, so an unreadable
@@ -1017,13 +1023,13 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			if enfMode == domain.RuleConfigEnforcementStrict {
 				return apierror.ForbiddenWithDetails("workflow_transition_blocked", vMsg)
 			}
-			// Advisory: permit the move but record the violation in the activity log.
-			s.logActivity(ctx, task.ProjectID, taskID, "task.transition_violation", map[string]interface{}{
+			// Advisory: record the permitted violation only after the move commits.
+			transitionViolation = map[string]interface{}{
 				"violation":        vMsg,
 				"from_status_id":   oldStatusID.String(),
 				"to_status_id":     status.ID.String(),
 				"enforcement_mode": "advisory",
-			})
+			}
 		}
 
 		// Review-evidence gate: block evidence-less moves to review.
@@ -1172,14 +1178,41 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		task.Position = *input.Position
 	}
 
+	oldAssigneeID, oldAssigneeType := task.AssigneeID, task.AssigneeType
+	assignmentReason, assignmentErr := s.prepareTransitionAssignee(ctx, task, oldStatusID, input, statusChanged)
+	if assignmentErr != nil {
+		return assignmentErr
+	}
+	assignmentChanged := !sameAssigneeID(oldAssigneeID, task.AssigneeID) || oldAssigneeType != task.AssigneeType
+
 	// Nothing changed — return early without touching the DB.
-	if !statusChanged && !positionChanged {
+	if !statusChanged && !positionChanged && !assignmentChanged && input.AlarmDue == nil {
 		return nil
 	}
 
 	task.UpdatedAt = timeNow()
-	if err := s.taskRepo.Update(ctx, task); err != nil {
-		return err
+	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
+	if writer, ok := s.taskRepo.(interface {
+		UpdateTransition(context.Context, *domain.Task, domain.TaskTransition) error
+	}); ok {
+		if err := writer.UpdateTransition(ctx, task, transition); err != nil {
+			return err
+		}
+	} else {
+		// Minimal repository doubles can exercise policy without SQL. Reaper guards
+		// are never silently downgraded on an implementation lacking the atomic API.
+		if input.Reaper != nil {
+			return fmt.Errorf("repository lacks guarded task transitions")
+		}
+		if input.AlarmDue != nil {
+			task.DueDate, task.Labels = input.AlarmDue, input.AlarmLabels
+		}
+		if err := s.taskRepo.Update(ctx, task); err != nil {
+			return err
+		}
+	}
+	if transitionViolation != nil {
+		s.logActivity(ctx, task.ProjectID, taskID, "task.transition_violation", transitionViolation)
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, taskID)
@@ -1248,6 +1281,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		moveChanges["position"] = map[string]interface{}{"old": oldPosition, "new": *input.Position}
 	}
 	if len(moveChanges) > 0 {
+		moveChanges["old_version"], moveChanges["new_version"] = oldVersion, task.Version
 		s.logActivity(ctx, task.ProjectID, taskID, "task.moved", moveChanges)
 	}
 
@@ -1261,39 +1295,12 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		}
 	}
 
-	// Apply explicit assignee if provided in the move request.
-	if input.AssigneeID != nil {
-		task.AssigneeID = input.AssigneeID
-		task.AssigneeType = s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
-		// Already vetted at the top of MoveTask; this call is the enrolment, and
-		// the error path is unreachable in practice. It is still propagated rather
-		// than dropped, so that the guard cannot be silently defeated by a future
-		// edit that removes the up-front check.
-		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
-			return err
-		}
-		task.UpdatedAt = timeNow()
-		if err := s.taskRepo.Update(ctx, task); err != nil {
-			log.Printf("[move-assign] WARNING: failed to assign task %s: %v", taskID, err)
-		}
-		s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-			"assignee_id": map[string]any{"new": input.AssigneeID.String()},
-		})
-	}
-
-	// Reviewer assignment when moved to "review" category, and the mirror-image restore
-	// when bounced back out of review to todo/in_progress.
-	// Consults OnTransition.SetReviewer from the project workflow config; if none is configured
-	// the current assignee (the builder) is preserved — no creator bounce.
-	// Both are skipped entirely when an explicit assignee_id is provided in the move request.
-	if statusChanged && input.AssigneeID == nil {
-		if newStatus, err := s.statusRepo.GetByID(ctx, *input.StatusID); err == nil && newStatus != nil {
-			switch newStatus.Category {
-			case domain.StatusCategoryReview:
-				s.applyReviewAssignee(ctx, task, oldStatusID)
-			case domain.StatusCategoryTodo, domain.StatusCategoryInProgress:
-				s.restorePreReviewAssignee(ctx, task, oldStatusID)
-			}
+	if assignmentChanged {
+		changes := map[string]interface{}{"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": task.AssigneeID}, "reason": assignmentReason, "source": input.Source, "old_version": oldVersion, "new_version": task.Version}
+		s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", changes)
+		s.notifyAssignedAgent(ctx, task, "task.assigned", changes)
+		if input.AssigneeID == nil {
+			s.postAssigneeChangeComment(ctx, task, oldAssigneeID, task.AssigneeID, assignmentReason)
 		}
 	}
 
@@ -2074,15 +2081,7 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 // CASConflictError is returned by MoveTask when an expected_status_id or
 // expected_updated_at precondition does not match the current task state.
 // Callers should re-read the task using the returned fields and retry.
-type CASConflictError struct {
-	CurrentStatusID  uuid.UUID `json:"current_status_id"`
-	CurrentUpdatedAt time.Time `json:"current_updated_at"`
-}
-
-func (e *CASConflictError) Error() string {
-	return fmt.Sprintf("cas_conflict: task status is %s (updated_at=%s)",
-		e.CurrentStatusID, e.CurrentUpdatedAt.Format(time.RFC3339))
-}
+type CASConflictError = domain.TaskConflict
 
 // ListRevisionStaleError is returned by List (ADR-0004,
 // dev-docs/adrs/0004-task-list-revision-and-stale-cursor.md) when a caller's
@@ -3214,160 +3213,82 @@ func (s *taskService) ForceReleaseCheckout(ctx context.Context, id uuid.UUID, in
 	return s.releaseExpectedCheckout(ctx, id, expected, "task.checkout_force_released", strings.TrimSpace(expected.Reason))
 }
 
-// applyReviewAssignee assigns a configured reviewer when a task transitions to review category.
-// Consults WorkflowRulesConfig.Transitions[fromStatus].OnTransition.SetReviewer; if not set,
-// the current assignee is preserved (no bounce to creator).
-func (s *taskService) applyReviewAssignee(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID) {
-	if s.rulesConfigSvc == nil {
-		return
+// prepareTransitionAssignee computes assignment and the review stash before the
+// atomic status update. Notifications and comments are emitted only after commit.
+func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID, input MoveTaskInput, changed bool) (string, error) {
+	if input.AssigneeID != nil {
+		typ := s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
+		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, input.AssigneeID, typ); err != nil {
+			return "", err
+		}
+		task.AssigneeID, task.AssigneeType = input.AssigneeID, typ
+		return "explicit move assignment", nil
 	}
-
-	var oldStatusName string
-	if oldStatus, err := s.statusRepo.GetByID(ctx, oldStatusID); err == nil && oldStatus != nil {
-		oldStatusName = oldStatus.Name
+	if !changed {
+		return "", nil
 	}
-	if oldStatusName == "" {
-		return
+	next, err := s.statusRepo.GetByID(ctx, task.StatusID)
+	if err != nil {
+		return "", err
 	}
-
-	wfResp, err := s.rulesConfigSvc.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
-	if err != nil || wfResp == nil {
-		return
+	if next == nil {
+		return "", apierror.NotFound("TaskStatus")
 	}
-
-	tr, ok := wfResp.Transitions[oldStatusName]
-	if !ok || tr.OnTransition == nil || tr.OnTransition.SetReviewer == "" {
-		return
+	old, err := s.statusRepo.GetByID(ctx, oldStatusID)
+	if err != nil {
+		return "", err
 	}
-
-	reviewerID, assigneeType, err := s.resolveSetReviewer(ctx, task.ProjectID, tr.OnTransition.SetReviewer)
-	if err != nil || reviewerID == nil {
-		log.Printf("[review-assign] WARNING: cannot resolve set_reviewer=%q for task %s: %v", tr.OnTransition.SetReviewer, task.ID, err)
-		return
+	if old == nil {
+		return "", nil
 	}
-
-	if task.AssigneeID != nil && *task.AssigneeID == *reviewerID {
-		return
+	if next.Category == domain.StatusCategoryReview && s.rulesConfigSvc != nil {
+		wf, err := s.rulesConfigSvc.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
+		if err != nil || wf == nil {
+			return "", nil
+		}
+		tr, ok := wf.Transitions[old.Name]
+		if !ok || tr.OnTransition == nil || tr.OnTransition.SetReviewer == "" {
+			return "", nil
+		}
+		id, typ, err := s.resolveSetReviewer(ctx, task.ProjectID, tr.OnTransition.SetReviewer)
+		if err != nil || id == nil || sameAssigneeID(task.AssigneeID, id) {
+			return "", nil
+		}
+		if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, id, typ); err != nil {
+			log.Printf("[review-assign] REFUSED task %s: %v", task.ID, err)
+			return "", nil
+		}
+		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, id, typ); err != nil {
+			return "", err
+		}
+		previousType := task.AssigneeType
+		task.PreReviewAssigneeID, task.PreReviewAssigneeType = task.AssigneeID, &previousType
+		task.AssigneeID, task.AssigneeType = id, typ
+		return "set_reviewer on review transition", nil
 	}
-
-	// Tenancy of the configured reviewer is decided before the in-memory task is
-	// touched. This function mutates the caller's task and only then persists it,
-	// so a refusal discovered mid-way would have to be unwound — and MoveTask goes
-	// on to use the same pointer. Checking first means there is nothing to unwind.
-	//
-	// A workflow rule naming a reviewer from another workspace is a misconfigured
-	// rule, not a caller's request: it cannot be answered with a 4xx to anyone, so
-	// it is logged loudly and the rotation is skipped. The task stays with its
-	// current assignee, which is the safe outcome — the alternative is handing the
-	// card, and its callback delivery, to a foreign principal.
-	if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, reviewerID, assigneeType); err != nil {
-		log.Printf("[review-assign] REFUSED: set_reviewer=%q for task %s resolves to a principal outside "+
-			"the task's workspace, leaving the assignee unchanged: %v", tr.OnTransition.SetReviewer, task.ID, err)
-		return
+	if old.Category == domain.StatusCategoryReview && (next.Category == domain.StatusCategoryTodo || next.Category == domain.StatusCategoryInProgress) && task.PreReviewAssigneeType != nil {
+		id, typ := task.PreReviewAssigneeID, *task.PreReviewAssigneeType
+		if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, id, typ); err != nil {
+			log.Printf("[review-assign] REFUSED restore task %s: %v", task.ID, err)
+			return "", nil
+		}
+		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, id, typ); err != nil {
+			return "", err
+		}
+		task.AssigneeID, task.AssigneeType = id, typ
+		task.PreReviewAssigneeID, task.PreReviewAssigneeType = nil, nil
+		return "restored pre-review assignee on bounce out of review", nil
 	}
-
-	// Capture the current holder before it is overwritten below — this is the real
-	// "old" for the activity entry and comment, not the caller's request (there is
-	// no caller here; the server is moving the task on its own).
-	oldAssigneeID := task.AssigneeID
-	oldAssigneeType := task.AssigneeType
-
-	// Stash the current assignee so a later bounce out of review (MoveTask's
-	// restorePreReviewAssignee) can return the task to whoever was doing the work,
-	// instead of stranding it on the reviewer.
-	task.PreReviewAssigneeID = oldAssigneeID
-	task.PreReviewAssigneeType = &oldAssigneeType
-
-	task.AssigneeID = reviewerID
-	task.AssigneeType = assigneeType
-	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
-		log.Printf("[review-assign] WARNING: enrolment refused for task %s after the tenancy check passed: %v", task.ID, err)
-		return
-	}
-	task.UpdatedAt = timeNow()
-	if err := s.taskRepo.Update(ctx, task); err != nil {
-		log.Printf("[review-assign] WARNING: failed to assign set_reviewer for task %s: %v", task.ID, err)
-		return
-	}
-	log.Printf("[review-assign] task %s assigned to set_reviewer=%q on review", task.ID, tr.OnTransition.SetReviewer)
-	const reason = "set_reviewer on review transition"
-	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
-		"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": reviewerID.String()},
-		"reason":      reason,
-	})
-	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-		"assignee_id": map[string]any{"old": oldAssigneeID, "new": reviewerID.String()},
-		"reason":      reason,
-	})
-	s.postAssigneeChangeComment(ctx, task, oldAssigneeID, reviewerID, reason)
+	return "", nil
 }
-
-// restorePreReviewAssignee returns the task to whoever held it before applyReviewAssignee
-// bounced it to the configured reviewer, when the task transitions back out of a
-// review-category status without an explicit assignee_id in the move request. Without
-// this, a plain reviewer bounce (move_task review -> todo with no assignee_id) silently
-// strands the task on the reviewer instead of returning it to the executor.
-func (s *taskService) restorePreReviewAssignee(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID) {
-	oldStatus, err := s.statusRepo.GetByID(ctx, oldStatusID)
-	if err != nil || oldStatus == nil || oldStatus.Category != domain.StatusCategoryReview {
-		return
-	}
-	if task.PreReviewAssigneeType == nil {
-		// Nothing stashed — task didn't enter review via a SetReviewer bounce, or was
-		// already restored on a prior transition.
-		return
-	}
-
-	prevAssigneeID := task.PreReviewAssigneeID
-	prevAssigneeType := *task.PreReviewAssigneeType
-
-	// The stashed assignee was in-workspace when it was stashed, but the stash can
-	// outlive that fact — an agent can be moved or deleted while the card sits in
-	// review. Re-check before restoring rather than trusting the stash's age.
-	if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, prevAssigneeID, prevAssigneeType); err != nil {
-		log.Printf("[review-assign] REFUSED: pre-review assignee of task %s is no longer valid for its "+
-			"workspace, leaving the task with the reviewer: %v", task.ID, err)
-		return
-	}
-
-	// Capture the reviewer (the current holder, about to be overwritten) as the real
-	// "old" for the activity entry and comment.
-	oldAssigneeID := task.AssigneeID
-
-	task.AssigneeID = prevAssigneeID
-	task.AssigneeType = prevAssigneeType
-	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, task.AssigneeID, task.AssigneeType); err != nil {
-		log.Printf("[review-assign] WARNING: enrolment refused restoring pre-review assignee of task %s: %v", task.ID, err)
-		return
-	}
-	task.PreReviewAssigneeID = nil
-	task.PreReviewAssigneeType = nil
-	task.UpdatedAt = timeNow()
-	if err := s.taskRepo.Update(ctx, task); err != nil {
-		log.Printf("[review-assign] WARNING: failed to restore pre-review assignee for task %s: %v", task.ID, err)
-		return
-	}
-	var restoredID interface{}
-	if prevAssigneeID != nil {
-		restoredID = prevAssigneeID.String()
-	}
-	log.Printf("[review-assign] task %s assignee restored to pre-review holder on bounce out of review", task.ID)
-	const reason = "restored pre-review assignee on bounce out of review"
-	s.logActivity(ctx, task.ProjectID, task.ID, "task.assigned", map[string]interface{}{
-		"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": restoredID},
-		"reason":      reason,
-	})
-	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
-		"assignee_id": map[string]any{"old": oldAssigneeID, "new": restoredID},
-		"reason":      reason,
-	})
-	s.postAssigneeChangeComment(ctx, task, oldAssigneeID, prevAssigneeID, reason)
+func sameAssigneeID(a, b *uuid.UUID) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
 // postAssigneeChangeComment writes an audit comment on the card explaining a
-// server-initiated (not caller-requested) assignee change — applyReviewAssignee's
-// reviewer bounce and restorePreReviewAssignee's restore are the only two write
-// paths that move assignee_id without the caller asking for it, and both were
+// server-initiated (not caller-requested) assignee change. Reviewer selection
+// and pre-review assignee restoration are the two paths that move assignee_id
+// without the caller asking for it, and both were
 // previously silent: the activity log recorded "old": nil, and no comment was
 // posted at all, so an agent reading the thread had no way to tell the card had
 // moved out from under them (source: task f06ebeb7). A comment-post failure must

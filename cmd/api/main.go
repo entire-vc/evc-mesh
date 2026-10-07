@@ -1137,15 +1137,9 @@ func main() {
 				} else if n > 0 {
 					log.Printf("[lease-reaper] moved %d expired lease(s) back to todo", n)
 				}
-				// Phase 2: clear stale checkout fields on any remaining tasks.
-				//
-				// NOTE this runs even when phase 1 returned an error, and it nulls
-				// checkout_expires unconditionally — so a task phase 1 failed to move
-				// loses the very field phase 1 keys on and can never be found by it
-				// again. That is one of the routes into the in_progress-with-no-lease
-				// state phase 3 exists to clear up; phase 3 keys on the resulting
-				// state rather than on the routes in, so it covers this one without
-				// having to make the two phases transactional.
+				// Phase 2: clear expired non-in-progress leases only. An in-progress
+				// lease is released by the same guarded write that moves its task;
+				// a failed phase 1 retains its evidence for the next tick.
 				if n, err := taskRepo.ReleaseExpiredCheckouts(reaperCtx); err != nil {
 					log.Printf("[checkout-reaper] ERROR releasing expired locks: %v", err)
 				} else if n > 0 {

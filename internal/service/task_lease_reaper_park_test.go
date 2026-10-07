@@ -168,13 +168,7 @@ func TestPark_RulesReadError_FallsBackToTodo(t *testing.T) {
 	}
 }
 
-// ── ordering: the alarm is armed before the move ──────────────────────────
-
-// If the park could move first and arm second, a failure of the second step
-// would leave the card in backlog with no due_date and no label: invisible to
-// the feed AND to monitor-promotion, i.e. asleep until a human finds it. Arming
-// first means a failure leaves the card exactly where it was, to be retried next
-// tick. This test drives that failure and asserts the card did NOT move.
+// Alarm and status are committed together; a refusal leaves both unchanged.
 func TestPark_ArmFailure_LeavesTaskWhereItWasRatherThanStrandedInBacklog(t *testing.T) {
 	h := newParkHarness(t, &domain.MidPipelineConfig{AutoParkStalled: true})
 	task := h.addUnleasedTask(t, h.projectID, 4*time.Hour)
@@ -308,20 +302,8 @@ func TestPark_CommentExplainsParkNotTodoReturn(t *testing.T) {
 
 // ── retrying a park whose move is permanently refused ─────────────────────
 
-// A park whose MoveTask is refused must not re-arm the alarm on every retry.
-//
-// parkTask arms before it moves, deliberately (a half-park with no due_date and
-// no label is invisible to everything and sleeps until a human finds it). But the
-// original code re-armed unconditionally, so a MoveTask that fails *permanently*
-// — a human-gated task, a shipped task, a project rule — turned the 60s reaper
-// tick into a write loop that pushed due_date another dueHours out every pass.
-// The wake-up the park depends on therefore receded once per minute and could
-// never arrive. Measured on prod 2026-09-06, #2921ff07: 145 attempts, due_date
-// rewritten to now+24h each time.
-//
-// The clock is ADVANCED between the two attempts on purpose. Under this package's
-// usual frozen clock both attempts would compute the same due_date and the test
-// would pass against the unfixed code — a control that cannot fail.
+// A refused park must neither create an alarm nor slide an existing one.
+// Advance the clock between retries so an unconditional re-arm would fail.
 func TestPark_RetryAfterRefusedMove_DoesNotSlideTheAlarm(t *testing.T) {
 	h := newParkHarness(t, &domain.MidPipelineConfig{AutoParkStalled: true})
 	task := h.addUnleasedTask(t, h.projectID, 4*time.Hour)
@@ -343,10 +325,15 @@ func TestPark_RetryAfterRefusedMove_DoesNotSlideTheAlarm(t *testing.T) {
 		t.Fatal("parkTask reported success while MoveTask refused the move")
 	}
 	afterFirst := load()
-	if afterFirst.DueDate == nil {
-		t.Fatal("first attempt did not arm the alarm at all — the pre-arm ordering is gone")
+	if afterFirst.DueDate != nil || containsInStringArray(afterFirst.Labels, parkMonitorLabel) {
+		t.Fatal("refused move must leave both alarm and status unchanged")
 	}
-	firstDue := *afterFirst.DueDate
+	firstDue := clock.Add(24 * time.Hour)
+	armed := *afterFirst
+	armed.DueDate, armed.Labels = &firstDue, []string{parkMonitorLabel}
+	if err := h.taskRepo.Update(context.Background(), &armed); err != nil {
+		t.Fatal(err)
+	}
 
 	// A minute passes, as it does between reaper ticks.
 	clock = clock.Add(1 * time.Minute)

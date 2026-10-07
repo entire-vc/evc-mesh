@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -112,7 +113,7 @@ func (r *checkoutLeaseReaper) SweepUnleasedInProgress(ctx context.Context, older
 	if err != nil {
 		return 0, err
 	}
-	return r.handBack(ctx, tasks), nil
+	return r.handBack(ctx, tasks, olderThan), nil
 }
 
 // Activity-log actions for the two returnToTodo call sites (audit §1.2: these
@@ -141,7 +142,7 @@ const (
 // activity_log and notifying as it goes. Shared by both sweeps so they cannot
 // drift in how they hand a task back. A task that cannot be moved is skipped
 // and logged, never silently dropped.
-func (r *checkoutLeaseReaper) returnToTodo(ctx context.Context, tasks []domain.Task, activityAction string) int {
+func (r *checkoutLeaseReaper) returnToTodo(ctx context.Context, tasks []domain.Task, activityAction string, grace ...time.Duration) int {
 	if len(tasks) == 0 {
 		return 0
 	}
@@ -165,7 +166,11 @@ func (r *checkoutLeaseReaper) returnToTodo(ctx context.Context, tasks []domain.T
 			continue
 		}
 
-		if err := r.taskMover.MoveTask(sysCtx, task.ID, MoveTaskInput{StatusID: todoID}); err != nil {
+		if err := r.taskMover.MoveTask(sysCtx, task.ID, reaperMoveInput(task, todoID, activityAction, grace...)); err != nil {
+			var conflict *domain.TaskConflict
+			if errors.As(err, &conflict) {
+				continue // renewed/changed candidates are normal skips
+			}
 			log.Printf("[lease-reaper] failed to move task %s to todo: %v", task.ID, err)
 			continue
 		}
@@ -234,7 +239,11 @@ func (r *checkoutLeaseReaper) logLeaseActivity(ctx context.Context, task *domain
 		return
 	}
 
-	payload := map[string]interface{}{}
+	mode := "unleased"
+	if action == activityCheckoutLeaseExpired {
+		mode = "expired"
+	}
+	payload := map[string]interface{}{"source": "lease_reaper." + mode, "reason": action, "old_version": task.Version, "new_version": task.Version + 1, "lease_generation": task.CheckoutGeneration}
 	if task.CheckedOutBy != nil {
 		payload["previous_holder"] = task.CheckedOutBy.String()
 	}
@@ -285,7 +294,7 @@ const parkMonitorLabel = "kind:monitor"
 // spans every project in the workspace, and the flag is per-project. Configs are
 // cached for the duration of the sweep so a large batch does not re-read the
 // same project's rules once per task.
-func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task) int {
+func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task, grace ...time.Duration) int {
 	if len(tasks) == 0 {
 		return 0
 	}
@@ -307,10 +316,10 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task)
 		toTodo = append(toTodo, task)
 	}
 
-	moved := r.returnToTodo(ctx, toTodo, activityCheckoutUnleasedReturned)
+	moved := r.returnToTodo(ctx, toTodo, activityCheckoutUnleasedReturned, grace...)
 	for i := range toPark {
 		cfg := cfgCache[toPark[i].ProjectID]
-		if r.parkTask(ctx, &toPark[i], cfg.AutoParkDue()) {
+		if r.parkTask(ctx, &toPark[i], cfg.AutoParkDue(), grace...) {
 			moved++
 		}
 	}
@@ -338,15 +347,8 @@ func (r *checkoutLeaseReaper) midPipelineFor(ctx context.Context, projectID uuid
 // parkTask moves a stalled task to backlog with a due_date and the kind:monitor
 // label. Returns true when the task was actually parked.
 //
-// The alarm is armed BEFORE the move, deliberately. Parking first and arming
-// second would leave a window — and, on any failure of the second step, a
-// permanent state — in which the card sits in backlog with no due_date and no
-// label: invisible to the agent feed, invisible to monitor-promotion, and
-// therefore asleep until a human finds it. Measured cost of exactly that
-// half-park elsewhere: nine days. Arming first is the strictly safer order,
-// because a task that is armed but not yet moved is simply a task in_progress
-// with a due_date, which harms nothing and will be retried on the next tick.
-func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, dueHours int) bool {
+// Alarm, status and guarded lease decision are committed together.
+func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, dueHours int, grace ...time.Duration) bool {
 	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
 
 	backlogID := r.findStatusIDByCategory(sysCtx, task.ProjectID, domain.StatusCategoryBacklog)
@@ -357,7 +359,7 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 		// of left in_progress forever.
 		log.Printf("[lease-reaper] project %s has no backlog status, returning task %s to todo instead of parking",
 			task.ProjectID, task.ID)
-		return r.returnToTodo(ctx, []domain.Task{*task}, activityCheckoutUnleasedReturned) == 1
+		return r.returnToTodo(ctx, []domain.Task{*task}, activityCheckoutUnleasedReturned, grace...) == 1
 	}
 
 	// Arm only if not already armed. The alarm is (label + a due_date still in the
@@ -373,6 +375,7 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 	needsLabel := !containsInStringArray(task.Labels, parkMonitorLabel)
 	alreadyArmed := !needsLabel && task.DueDate != nil && task.DueDate.After(timeNow())
 
+	input := reaperMoveInput(task, backlogID, activityCheckoutUnleasedReturned, grace...)
 	if !alreadyArmed {
 		due := timeNow().Add(time.Duration(dueHours) * time.Hour)
 		labels := task.Labels
@@ -380,20 +383,19 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 			labels = append(append([]string{}, labels...), parkMonitorLabel)
 		}
 
-		updated := *task
-		updated.DueDate = &due
-		updated.Labels = labels
-		if err := r.taskRepo.Update(sysCtx, &updated); err != nil {
-			log.Printf("[lease-reaper] failed to arm park alarm on task %s, leaving it in_progress: %v", task.ID, err)
-			return false
-		}
+		input.AlarmDue, input.AlarmLabels = &due, labels
 	}
 
-	if err := r.taskMover.MoveTask(sysCtx, task.ID, MoveTaskInput{StatusID: backlogID, Source: "stall_park"}); err != nil {
+	if err := r.taskMover.MoveTask(sysCtx, task.ID, input); err != nil {
+		var conflict *domain.TaskConflict
+		if errors.As(err, &conflict) {
+			return false
+		}
 		log.Printf("[lease-reaper] failed to park task %s in backlog: %v", task.ID, err)
 		return false
 	}
 
+	r.logLeaseActivity(sysCtx, task, activityCheckoutUnleasedReturned)
 	r.postSystemComment(sysCtx, task, fmt.Sprintf(parkedCommentFmt, dueHours))
 	r.notifyAssignee(ctx, task)
 	pkgmetrics.RecordLeaseRelease(task.ProjectID.String())
@@ -415,4 +417,20 @@ func (r *checkoutLeaseReaper) findStatusIDByCategory(ctx context.Context, projec
 		}
 	}
 	return nil
+}
+
+// Candidate snapshots authorize nothing: the repository repeats all guards at
+// the write. The version also catches comments/artifacts committed since SELECT.
+func reaperMoveInput(task *domain.Task, status *uuid.UUID, action string, grace ...time.Duration) MoveTaskInput {
+	mode := "unleased"
+	if action == activityCheckoutLeaseExpired {
+		mode = "expired"
+	}
+	quiet := DefaultUnleasedGrace
+	if len(grace) > 0 {
+		quiet = grace[0]
+	}
+	return MoveTaskInput{StatusID: status, ExpectedVersion: &task.Version, ExpectedStatusID: &task.StatusID,
+		Source: "lease_reaper." + mode, Reason: action,
+		Reaper: &domain.ReaperExpectation{Mode: mode, Generation: task.CheckoutGeneration, Token: task.CheckoutToken, ExpiresAt: task.CheckoutExpires, QuietGrace: quiet}}
 }

@@ -17,11 +17,31 @@ import (
 type mockLeaseTaskMover struct {
 	moveErr   error
 	movesSeen []uuid.UUID
+	repo      *MockTaskRepository
 }
 
-func (m *mockLeaseTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, _ MoveTaskInput) error {
+func (m *mockLeaseTaskMover) MoveTask(ctx context.Context, taskID uuid.UUID, input MoveTaskInput) error {
+	if m.moveErr != nil {
+		return m.moveErr
+	}
+	if m.repo != nil {
+		task, err := m.repo.GetByID(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		updated := *task
+		if input.StatusID != nil {
+			updated.StatusID = *input.StatusID
+		}
+		if input.AlarmDue != nil {
+			updated.DueDate, updated.Labels = input.AlarmDue, input.AlarmLabels
+		}
+		if err := m.repo.Update(ctx, &updated); err != nil {
+			return err
+		}
+	}
 	m.movesSeen = append(m.movesSeen, taskID)
-	return m.moveErr
+	return nil
 }
 
 // ── minimal mock AgentNotifyService ───────────────────────────────────────
@@ -62,6 +82,7 @@ func newReaperHarness() *reaperHarness {
 		mover:       &mockLeaseTaskMover{},
 		notify:      &mockLeaseNotify{},
 	}
+	h.mover.repo = h.taskRepo
 	h.reaper = &checkoutLeaseReaper{
 		taskRepo:       h.taskRepo,
 		statusRepo:     h.statusRepo,
