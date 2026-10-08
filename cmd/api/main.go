@@ -1945,6 +1945,19 @@ func main() {
 
 	// 10. Start recurring task scheduler.
 	schedulerShutdownCh := make(chan struct{})
+	outboxCtx, cancelOutbox := context.WithCancel(context.Background())
+	defer cancelOutbox()
+	outboxDone := make(chan struct{})
+	if committedPublisher, ok := eventBusService.(interface {
+		PublishCommitted(context.Context, *domain.EventBusMessage) error
+	}); ok {
+		go func() {
+			defer close(outboxDone)
+			service.RunTaskOutbox(outboxCtx, postgres.NewTaskOutboxRepo(db), committedPublisher.PublishCommitted)
+		}()
+	} else {
+		close(outboxDone)
+	}
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -2388,6 +2401,12 @@ func main() {
 
 	// Stop the scheduler.
 	close(schedulerShutdownCh)
+	cancelOutbox()
+	select {
+	case <-outboxDone:
+	case <-time.After(10 * time.Second):
+		log.Println("[task-outbox] shutdown timed out")
+	}
 
 	// End long-lived connections first: SSE/long-poll handlers return, WS
 	// clients are closed by the hub. e.Shutdown does not track hijacked WS

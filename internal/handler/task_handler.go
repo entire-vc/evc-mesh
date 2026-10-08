@@ -179,6 +179,9 @@ type moveTaskRequest struct {
 	ExpectedVersion   *int64              `json:"expected_version,omitempty"`
 	ExpectedStatusID  *uuid.UUID          `json:"expected_status_id,omitempty"`
 	ExpectedUpdatedAt *time.Time          `json:"expected_updated_at,omitempty"`
+	Reason            string              `json:"reason,omitempty"`
+	SessionID         *uuid.UUID          `json:"session_id,omitempty"`
+	CorrelationID     *uuid.UUID          `json:"correlation_id,omitempty"`
 	Source            string              `json:"source,omitempty"` // "mcp" | "api" | "ui"
 }
 
@@ -1042,7 +1045,7 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 		ExpectedStatusID:  req.ExpectedStatusID,
 		ExpectedUpdatedAt: req.ExpectedUpdatedAt,
 		ExpectedVersion:   req.ExpectedVersion,
-		Source:            req.Source,
+		Source:            req.Source, Reason: req.Reason, SessionID: req.SessionID, CorrelationID: req.CorrelationID,
 	}
 	if input.Source == "" {
 		input.Source = "api"

@@ -111,6 +111,16 @@ func New(ctx context.Context, cfg EventBusConfig, repo repository.EventBusMessag
 // workspaceSlug and projectSlug are used to construct the NATS subject.
 // The msg must have a valid ID (used as Nats-Msg-Id for deduplication).
 func (eb *EventBus) PublishEvent(ctx context.Context, msg *domain.EventBusMessage, workspaceSlug, projectSlug string) error {
+	if err := eb.publishTransport(ctx, msg, workspaceSlug, projectSlug); err != nil {
+		return err
+	}
+	if err := eb.repo.Create(ctx, msg); err != nil {
+		log.Printf("[eventbus] WARNING: failed to persist event %s to PostgreSQL: %v", msg.ID, err)
+	}
+	return nil
+}
+
+func (eb *EventBus) publishTransport(ctx context.Context, msg *domain.EventBusMessage, workspaceSlug, projectSlug string) error {
 	// 1. Serialize the event once; NATS and Redis both send this exact payload.
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -148,12 +158,15 @@ func (eb *EventBus) PublishEvent(ctx context.Context, msg *domain.EventBusMessag
 	}
 	log.Printf("[eventbus] Published event %s to %s (seq=%d)", msg.ID, subject, ack.Sequence)
 
-	// 4. Persist to PostgreSQL (best-effort: log error but don't fail the publish).
-	if err := eb.repo.Create(ctx, msg); err != nil {
-		log.Printf("[eventbus] WARNING: failed to persist event %s to PostgreSQL: %v", msg.ID, err)
-	}
-
 	return nil
+}
+
+// PublishCommittedEvent delivers an outbox message with its original ID. The
+// PostgreSQL feed sink is already committed and keyed by that ID. JetStream
+// deduplicates retries within its window; consumers use ID for durable dedup
+// across longer crash/outage windows. Redis is a transient fan-out.
+func (eb *EventBus) PublishCommittedEvent(ctx context.Context, msg *domain.EventBusMessage, workspaceSlug, projectSlug string) error {
+	return eb.publishTransport(ctx, msg, workspaceSlug, projectSlug)
 }
 
 // GetEvents retrieves events from PostgreSQL using the repository.

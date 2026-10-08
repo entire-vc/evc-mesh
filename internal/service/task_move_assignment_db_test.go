@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
@@ -110,22 +111,34 @@ func TestMoveTask_PostgresExplicitAssignment(t *testing.T) {
 					WithEventBusService(NewEventBusService(postgres.NewEventBusMessageRepo(f.db), nil)))
 
 				if rejectWrite {
-					// Real PostgreSQL refusal on this fixture's single connection.
-					// Avoid table-wide DDL locks while other packages share the CI database.
+					// A real CHECK refusal on this fixture's isolated task table. BeginTx
+					// explicitly chooses READ WRITE, so session default_transaction_read_only
+					// no longer injects a write failure once the transition is transactional.
 					f.db.SetMaxOpenConns(1)
 					f.db.SetMaxIdleConns(1)
-					_, err = f.db.Exec(`SET default_transaction_read_only = on`)
+					schema := pq.QuoteIdentifier("refuse_" + uuid.NewString())
+					// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- test-only SQL identifiers are pq.QuoteIdentifier of generated UUIDs; table selectors are fixed literals, values are bound or canonical UUIDs; no external input
+					_, err = f.db.Exec(`CREATE SCHEMA ` + schema)
 					require.NoError(t, err)
 					t.Cleanup(func() {
-						_, cleanupErr := f.db.Exec(`SET default_transaction_read_only = off`)
-						require.NoError(t, cleanupErr)
+						// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- test-only SQL identifiers are pq.QuoteIdentifier of generated UUIDs; table selectors are fixed literals, values are bound or canonical UUIDs; no external input
+						_, e := f.db.Exec(`SET search_path=public; DROP SCHEMA ` + schema + ` CASCADE`)
+						require.NoError(t, e)
 					})
+					// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- test-only SQL identifiers are pq.QuoteIdentifier of generated UUIDs; table selectors are fixed literals, values are bound or canonical UUIDs; no external input
+					_, err = f.db.Exec(`CREATE TABLE ` + schema + `.tasks(LIKE public.tasks INCLUDING ALL)`)
+					require.NoError(t, err)
+					_, err = f.db.Exec(`INSERT INTO `+schema+`.tasks SELECT * FROM public.tasks WHERE id=$1`, id)
+					require.NoError(t, err)
+					// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query -- test-only SQL identifiers are pq.QuoteIdentifier of generated UUIDs; table selectors are fixed literals, values are bound or canonical UUIDs; no external input
+					_, err = f.db.Exec(`ALTER TABLE ` + schema + `.tasks ADD CONSTRAINT refuse_update CHECK (id <> '` + id.String() + `'::uuid) NOT VALID; SET search_path=` + schema + `,public`)
+					require.NoError(t, err)
 				}
 
 				input := MoveTaskInput{StatusID: &target, AssigneeID: &nextAssignee, AssigneeType: domain.AssigneeTypeAgent, Source: "api"}
 				err = svc.MoveTask(ctx, id, input)
 				if rejectWrite {
-					require.ErrorContains(t, err, "read-only transaction", "database refusal must not report success")
+					require.ErrorContains(t, err, "refuse_update", "database refusal must not report success")
 				} else {
 					require.NoError(t, err)
 				}

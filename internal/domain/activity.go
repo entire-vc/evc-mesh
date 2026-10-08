@@ -20,6 +20,18 @@ type ActivityLog struct {
 	Changes     json.RawMessage `json:"changes" db:"changes"`
 	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
 
+	// Additive durable transition metadata. Legacy activities keep null versions.
+	EventID         *uuid.UUID `json:"event_id,omitempty" db:"event_id"`
+	Source          string     `json:"source" db:"source"`
+	Reason          string     `json:"reason,omitempty" db:"reason"`
+	SessionID       *uuid.UUID `json:"session_id,omitempty" db:"session_id"`
+	CorrelationID   *uuid.UUID `json:"correlation_id,omitempty" db:"correlation_id"`
+	OldVersion      *int64     `json:"old_version,omitempty" db:"old_version"`
+	NewVersion      *int64     `json:"new_version,omitempty" db:"new_version"`
+	LeaseGeneration *int64     `json:"lease_generation,omitempty" db:"lease_generation"`
+	PreviousHolder  *uuid.UUID `json:"previous_holder,omitempty" db:"previous_holder"`
+	TriggerTaskID   *uuid.UUID `json:"trigger_task_id,omitempty" db:"trigger_task_id"`
+
 	// Computed (not a DB column — populated via subquery in SELECT).
 	ActorName *string `json:"actor_name,omitempty" db:"actor_name"`
 }

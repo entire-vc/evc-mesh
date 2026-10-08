@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -32,28 +34,31 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 	var queryer sqlx.QueryerContext = r.db
 	var tx *sqlx.Tx
 	var lockedConflict *domain.TaskConflict
-	if input.DisallowParkedWait {
+	if input.DisallowParkedWait || input.Audit != nil {
 		var err error
 		tx, err = r.db.BeginTxx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		// Registration holds this same row lock but does not advance task.version.
-		// Read the registration only AFTER locking: an UPDATE NOT EXISTS alone
-		// can retain a snapshot from before a concurrent registration committed.
-		current, lockErr := lockParkedTask(ctx, tx, task.ID)
-		if lockErr != nil {
-			return lockErr
+		if input.DisallowParkedWait {
+			// Registration holds this same row lock but does not advance task.version.
+			// Read the registration only AFTER locking: an UPDATE NOT EXISTS alone
+			// can retain a snapshot from before a concurrent registration committed.
+			current, lockErr := lockParkedTask(ctx, tx, task.ID)
+			if lockErr != nil {
+				return lockErr
+			}
+			lockedConflict = &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt}
+			var registered bool
+			if err := tx.GetContext(ctx, &registered, `SELECT EXISTS(SELECT 1 FROM parked_waits WHERE task_id=$1 AND release_id IS NULL)`, task.ID); err != nil {
+				return err
+			}
+			if registered {
+				return lockedConflict
+			}
 		}
-		lockedConflict = &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt}
-		var registered bool
-		if err := tx.GetContext(ctx, &registered, `SELECT EXISTS(SELECT 1 FROM parked_waits WHERE task_id=$1 AND release_id IS NULL)`, task.ID); err != nil {
-			return err
-		}
-		if registered {
-			return lockedConflict
-		}
+
 		queryer = tx
 	}
 	q := `UPDATE tasks t SET status_id=$2, position=$3, completed_at=$4,
@@ -64,8 +69,13 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 	args := []any{task.ID, task.StatusID, task.Position, task.CompletedAt, task.StatusChangedAt,
 		task.AssigneeID, task.AssigneeType, task.PreReviewAssigneeID, task.PreReviewAssigneeType,
 		task.UpdatedAt, input.ExpectedVersion, input.ExpectedStatusID, input.ExpectedUpdatedAt, input.AlarmDue, pq.Array(input.AlarmLabels)}
-	if input.Reaper != nil && input.Reaper.Mode == "expired" {
-		q += `, checked_out_by=NULL,checkout_token=NULL,checkout_expires=NULL,checkout_acquired_at=NULL,checkout_session_id=NULL,checkout_request_id=NULL`
+	if input.ReleaseCheckout || (input.Reaper != nil && input.Reaper.Mode == "expired") {
+		q += `, checked_out_by=NULL,checkout_token=NULL,checkout_expires=NULL,checkout_acquired_at=NULL`
+		// Terminal release retains the session/request replay tombstone owned by
+		// checkout API A; the established expired-reaper path clears its old scope.
+		if !input.ReleaseCheckout {
+			q += `,checkout_session_id=NULL,checkout_request_id=NULL`
+		}
 	}
 	q += ` WHERE t.id=$1 AND t.deleted_at IS NULL AND t.version=$11
  AND ($12::uuid IS NULL OR t.status_id=$12)
@@ -92,6 +102,12 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 			return fmt.Errorf("unknown reaper mode %q", g.Mode)
 		}
 	}
+	if input.AssignedBy != nil {
+		args = append(args, *input.AssignedBy)
+		// This SET clause is appended before WHERE, including reaper predicates.
+		where := strings.Index(q, " WHERE t.id=")
+		q = q[:where] + fmt.Sprintf(", assigned_by=$%d", len(args)) + q[where:]
+	}
 	q += ` RETURNING version,checked_out_by,checkout_token,checkout_expires,checkout_acquired_at,checkout_session_id,checkout_request_id,checkout_generation,false AS changed`
 	var result struct {
 		domain.CheckoutLease
@@ -104,9 +120,27 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 			if lockedConflict != nil {
 				return lockedConflict
 			}
+			if tx != nil {
+				var current struct {
+					Version   int64     `db:"version"`
+					StatusID  uuid.UUID `db:"status_id"`
+					UpdatedAt time.Time `db:"updated_at"`
+				}
+				if readErr := tx.GetContext(ctx, &current, `SELECT version,status_id,updated_at FROM tasks WHERE id=$1 AND deleted_at IS NULL`, task.ID); errors.Is(readErr, sql.ErrNoRows) {
+					return apierror.NotFound("Task")
+				} else if readErr != nil {
+					return readErr
+				}
+				return &domain.TaskConflict{CurrentVersion: current.Version, CurrentStatusID: current.StatusID, CurrentUpdatedAt: current.UpdatedAt}
+			}
 			return r.taskConflict(ctx, task.ID)
 		}
 		return err
+	}
+	if input.Audit != nil {
+		if err := writeTransitionAudit(ctx, tx, task, input.ExpectedVersion, result.Version, input.Audit); err != nil {
+			return err
+		}
 	}
 	if tx != nil {
 		if err := tx.Commit(); err != nil {

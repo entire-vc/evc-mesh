@@ -1193,12 +1193,21 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	task.UpdatedAt = timeNow()
 	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
 	transition.DisallowParkedWait = input.Source == "auto_transition"
+	transition.Audit = s.moveAudit(ctx, task, input, oldStatusID, oldPosition, oldAssigneeID, oldAssigneeType, statusChanged, positionChanged, assignmentChanged, assignmentReason, transitionViolation)
+	if statusChanged && task.CheckedOutBy != nil {
+		if st, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && st != nil && (st.Category == domain.StatusCategoryDone || st.Category == domain.StatusCategoryReview || st.Category == domain.StatusCategoryCancelled) {
+			transition.ReleaseCheckout = true
+			transition.Audit.Entries = append(transition.Audit.Entries, domain.TaskAuditEntry{Action: "task.checkout_released_auto", Changes: map[string]any{"reason": "terminal_status_transition", "new_status": st.Name, "new_category": string(st.Category)}})
+		}
+	}
+	durable := false
 	if writer, ok := s.taskRepo.(interface {
 		UpdateTransition(context.Context, *domain.Task, domain.TaskTransition) error
 	}); ok {
 		if err := writer.UpdateTransition(ctx, task, transition); err != nil {
 			return err
 		}
+		durable = true
 	} else {
 		// Minimal repository doubles can exercise policy without SQL. Reaper guards
 		// are never silently downgraded on an implementation lacking the atomic API.
@@ -1212,7 +1221,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			return err
 		}
 	}
-	if transitionViolation != nil {
+	if transitionViolation != nil && !durable {
 		s.logActivity(ctx, task.ProjectID, taskID, "task.transition_violation", transitionViolation)
 	}
 	if s.ctxCacheInv != nil {
@@ -1223,7 +1232,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	// (done, review, cancelled). The current holder is unlikely to call
 	// release_task on a task they just handed off, and a stale lock blocks
 	// other agents from picking it up after the move.
-	if statusChanged && task.CheckedOutBy != nil {
+	if !durable && statusChanged && task.CheckedOutBy != nil {
 		if newStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && newStatus != nil {
 			switch newStatus.Category {
 			case domain.StatusCategoryDone, domain.StatusCategoryReview, domain.StatusCategoryCancelled:
@@ -1284,7 +1293,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 	}
 	if len(moveChanges) > 0 {
 		moveChanges["old_version"], moveChanges["new_version"] = oldVersion, task.Version
-		s.logActivity(ctx, task.ProjectID, taskID, "task.moved", moveChanges)
+		if !durable {
+			s.logActivity(ctx, task.ProjectID, taskID, "task.moved", moveChanges)
+		}
 	}
 
 	// Fire auto-transition checks when the status changed.
@@ -1299,7 +1310,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 
 	if assignmentChanged {
 		changes := map[string]interface{}{"assignee_id": map[string]interface{}{"old": oldAssigneeID, "new": task.AssigneeID}, "reason": assignmentReason, "source": input.Source, "old_version": oldVersion, "new_version": task.Version}
-		s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", changes)
+		if !durable {
+			s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", changes)
+		}
 		s.notifyAssignedAgent(ctx, task, "task.assigned", changes)
 		if input.AssigneeID == nil {
 			s.postAssigneeChangeComment(ctx, task, oldAssigneeID, task.AssigneeID, assignmentReason)
@@ -1378,16 +1391,29 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	task.AssignedBy = source
 	task.UpdatedAt = timeNow()
 
-	if err := s.taskRepo.Update(ctx, task); err != nil {
+	changes := map[string]any{"assignee_id": map[string]any{"old": oldAssigneeID, "new": input.AssigneeID}, "assignee_type": map[string]any{"old": oldAssigneeType, "new": resolvedType}, "assignment_source": source}
+	durable := false
+	if writer, ok := s.taskRepo.(interface {
+		UpdateTransition(context.Context, *domain.Task, domain.TaskTransition) error
+	}); ok {
+		audit := newTransitionAudit(ctx, task, MoveTaskInput{Source: "api"})
+		audit.Entries = []domain.TaskAuditEntry{{Action: "task.assigned", Changes: changes}}
+		if err := writer.UpdateTransition(ctx, task, domain.TaskTransition{ExpectedVersion: task.Version, AssignedBy: &source, Audit: audit}); err != nil {
+			return err
+		}
+		durable = true
+	} else if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, taskID)
 	}
-	s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
-		"assignee_id":   map[string]interface{}{"old": oldAssigneeID, "new": input.AssigneeID},
-		"assignee_type": map[string]interface{}{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
-	})
+	if !durable {
+		s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
+			"assignee_id":   map[string]interface{}{"old": oldAssigneeID, "new": input.AssigneeID},
+			"assignee_type": map[string]interface{}{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},
+		})
+	}
 
 	// Notify newly assigned agent via push mechanisms (callback_url, SSE, long-poll).
 	s.notifyAssignedAgent(ctx, task, "task.assigned", map[string]any{
