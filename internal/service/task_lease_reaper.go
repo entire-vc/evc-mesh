@@ -227,6 +227,9 @@ func (r *checkoutLeaseReaper) postSystemComment(ctx context.Context, task *domai
 // above) and a shared helper would need to widen one of them to match the
 // other for no real gain.
 func (r *checkoutLeaseReaper) logLeaseActivity(ctx context.Context, task *domain.Task, action string) {
+	if mover, ok := r.taskMover.(interface{ DurableTaskTransitions() bool }); ok && mover.DurableTaskTransitions() {
+		return
+	}
 	if r.activityRepo == nil || r.projectRepo == nil {
 		return
 	}

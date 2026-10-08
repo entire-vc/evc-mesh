@@ -59,6 +59,8 @@ type MoveTaskInput struct {
 	// Not bound from the JSON body directly; set by the handler layer.
 	Source string `json:"-"`
 	// Internal automatic-transition audit context; never bound from user JSON.
+	SessionID     *uuid.UUID                `json:"-"`
+	CorrelationID *uuid.UUID                `json:"-"`
 	Reason        string                    `json:"-"`
 	TriggerTaskID *uuid.UUID                `json:"-"`
 	Reaper        *domain.ReaperExpectation `json:"-"`

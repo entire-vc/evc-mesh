@@ -17,6 +17,7 @@ import (
 // actor_name resolved via correlated subquery (same pattern as task assignee_name).
 const activityEnrichedSelect = `SELECT a.id, a.workspace_id, a.entity_type, a.entity_id,
 	a.action, a.actor_id, a.actor_type, a.changes, a.created_at,
+ a.event_id, a.source, a.reason, a.session_id, a.correlation_id, a.old_version, a.new_version, a.lease_generation, a.previous_holder, a.trigger_task_id,
 	CASE
 		WHEN a.actor_type = 'agent' THEN
 			(SELECT name FROM agents WHERE id = a.actor_id AND deleted_at IS NULL)

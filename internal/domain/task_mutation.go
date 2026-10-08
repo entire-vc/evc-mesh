@@ -30,6 +30,9 @@ type ReaperExpectation struct {
 // TaskTransition updates only transition-owned fields. A reaper alarm and lease
 // release, when requested, are committed with the status and assignment.
 type TaskTransition struct {
+	Audit             *TransitionAudit
+	AssignedBy        *AssignmentSource
+	ReleaseCheckout   bool
 	ExpectedVersion   int64
 	ExpectedStatusID  *uuid.UUID
 	ExpectedUpdatedAt *time.Time
