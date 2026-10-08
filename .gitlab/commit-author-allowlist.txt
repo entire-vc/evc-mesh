@@ -20,3 +20,5 @@ proto@entire.vc
 riker@entire.vc
 robert@entire.vc
 verne@entire.vc
+# Preserve the published graph API checkpoint authored by Mario and committed by Linus.
+sha:156995f2e200146287ab32f936c9c7cc5ee73c3d
