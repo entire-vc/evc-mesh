@@ -582,9 +582,15 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 	if err = c.Bind(&pg); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid pagination parameters"))
 	}
-	pg.Normalize()
+	if refused, jsonErr := rejectBadSortDir(c, pg); refused {
+		return jsonErr
+	}
+	pg.NormalizeWithDefaultSort("updated_at", "desc")
 
-	filter := repository.TaskFilter{Search: q.Search}
+	filter, filterErr := q.taskFilter()
+	if filterErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(filterErr.Error()))
+	}
 
 	page, err := h.taskService.Search(c.Request().Context(), wsID, filter, pg)
 	if err != nil {
@@ -867,12 +873,57 @@ func (h *TaskHandler) Delete(c echo.Context) error {
 type listTasksQuery struct {
 	Status         string `query:"status"`          // comma-separated status UUIDs
 	StatusID       string `query:"status_id"`       // single status UUID alias
-	StatusCategory string `query:"status_category"` // backlog|todo|in_progress|review|done|cancelled
+	StatusCategory string `query:"status_category"` // triage|backlog|todo|in_progress|review|done|cancelled
+	AssigneeID     string `query:"assignee_id"`
 	AssigneeType   string `query:"assignee_type"`
 	Priority       string `query:"priority"`
 	Labels         string `query:"labels"`
 	Search         string `query:"search"`
 	HumanGate      string `query:"human_gate"`
+}
+
+// taskFilter shares supported list filters between project lists and workspace
+// search. Invalid identity/category inputs must not silently widen a query.
+func (q listTasksQuery) taskFilter() (repository.TaskFilter, error) {
+	filter := repository.TaskFilter{Search: q.Search}
+	if q.AssigneeID != "" {
+		id, err := uuid.Parse(q.AssigneeID)
+		if err != nil {
+			return filter, fmt.Errorf("assignee_id must be a UUID")
+		}
+		filter.AssigneeID = &id
+	}
+	if q.StatusCategory != "" {
+		cat := domain.StatusCategory(q.StatusCategory)
+		switch cat {
+		case domain.StatusCategoryTriage, domain.StatusCategoryBacklog, domain.StatusCategoryTodo, domain.StatusCategoryInProgress, domain.StatusCategoryReview, domain.StatusCategoryDone, domain.StatusCategoryCancelled:
+			filter.StatusCategory = &cat
+		default:
+			return filter, fmt.Errorf("invalid status_category; allowed values: triage, backlog, todo, in_progress, review, done, cancelled")
+		}
+	}
+	if q.AssigneeType != "" {
+		at := domain.AssigneeType(q.AssigneeType)
+		filter.AssigneeType = &at
+	}
+	if q.Priority != "" {
+		p := domain.Priority(q.Priority)
+		filter.Priority = &p
+	}
+	if q.Labels != "" {
+		filter.Labels = []string{q.Labels}
+	}
+	if q.HumanGate != "" {
+		if hg, err := strconv.ParseBool(q.HumanGate); err == nil {
+			filter.HumanGate = &hg
+		}
+	}
+	for _, raw := range strings.Split(q.Status+","+q.StatusID, ",") {
+		if id, err := uuid.Parse(strings.TrimSpace(raw)); err == nil {
+			filter.StatusIDs = append(filter.StatusIDs, id)
+		}
+	}
+	return filter, nil
 }
 
 // List handles GET /projects/:proj_id/tasks
@@ -918,38 +969,11 @@ func (h *TaskHandler) List(c echo.Context) error {
 	if refused, jsonErr := rejectBadSortDir(c, pg); refused {
 		return jsonErr
 	}
-	pg.Normalize()
+	pg.NormalizeWithDefaultSort("updated_at", "desc")
 
-	filter := repository.TaskFilter{
-		Search: q.Search,
-	}
-
-	if q.AssigneeType != "" {
-		at := domain.AssigneeType(q.AssigneeType)
-		filter.AssigneeType = &at
-	}
-	if q.Priority != "" {
-		p := domain.Priority(q.Priority)
-		filter.Priority = &p
-	}
-	if q.Labels != "" {
-		filter.Labels = []string{q.Labels}
-	}
-	if q.HumanGate != "" {
-		if hg, parseErr := strconv.ParseBool(q.HumanGate); parseErr == nil {
-			filter.HumanGate = &hg
-		}
-	}
-	// status= and status_id= both accept comma-separated UUIDs.
-	for _, raw := range strings.Split(q.Status+","+q.StatusID, ",") {
-		raw = strings.TrimSpace(raw)
-		if statusID, parseErr := uuid.Parse(raw); parseErr == nil {
-			filter.StatusIDs = append(filter.StatusIDs, statusID)
-		}
-	}
-	if q.StatusCategory != "" {
-		cat := domain.StatusCategory(q.StatusCategory)
-		filter.StatusCategory = &cat
+	filter, filterErr := q.taskFilter()
+	if filterErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(filterErr.Error()))
 	}
 
 	// Parse custom field filters from query params with "custom." prefix.
