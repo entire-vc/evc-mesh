@@ -580,7 +580,7 @@ func (r *TaskRepo) GetByShortID(ctx context.Context, prefix string) (*domain.Tas
 
 // Search searches tasks across all projects in a workspace by text query and optional filters.
 func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
-	pg.Normalize()
+	pg.NormalizeWithDefaultSort("updated_at", "desc")
 
 	args := []interface{}{workspaceID} // $1
 	conditions := []string{"p.workspace_id = $1", "t.deleted_at IS NULL", "p.deleted_at IS NULL"}
@@ -612,9 +612,19 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		args = append(args, pq.Array(filter.StatusIDs))
 		argIdx++
 	}
+	if filter.StatusCategory != nil {
+		conditions = append(conditions, fmt.Sprintf("t.status_id IN (SELECT id FROM task_statuses WHERE category = $%d)", argIdx))
+		args = append(args, *filter.StatusCategory)
+		argIdx++
+	}
 	if filter.AssigneeID != nil {
 		conditions = append(conditions, fmt.Sprintf("t.assignee_id = $%d", argIdx))
 		args = append(args, *filter.AssigneeID)
+		argIdx++
+	}
+	if filter.AssigneeType != nil {
+		conditions = append(conditions, fmt.Sprintf("t.assignee_type = $%d", argIdx))
+		args = append(args, *filter.AssigneeType)
 		argIdx++
 	}
 	if filter.Priority != nil {
@@ -623,6 +633,17 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		argIdx++
 	}
 
+	if len(filter.Labels) > 0 {
+		conditions = append(conditions, fmt.Sprintf("t.labels && $%d", argIdx))
+		args = append(args, pq.Array(filter.Labels))
+		argIdx++
+	}
+	if filter.HumanGate != nil {
+		conditions = append(conditions, fmt.Sprintf("t.human_gate = $%d", argIdx))
+		args = append(args, *filter.HumanGate)
+		argIdx++
+	}
+	order := orderClause(pg, allowedSortColumns{"created_at": "t.created_at", "updated_at": "t.updated_at", "priority": "t.priority", "due_date": "t.due_date"}, "t.updated_at") + ", t.id ASC"
 	where := "WHERE " + joinAnd(conditions)
 
 	countQ := fmt.Sprintf(`SELECT COUNT(t.id) FROM tasks t INNER JOIN projects p ON p.id = t.project_id %s`, where)
@@ -632,13 +653,13 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 	}
 
 	dataQ := fmt.Sprintf(`SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
-		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
+		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position, t.human_gate,
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
 		t.recurring_schedule_id, t.recurring_instance_number, `+taskComputedColsAliased+`
 		FROM tasks t INNER JOIN projects p ON p.id = t.project_id
-		%s ORDER BY t.updated_at DESC, t.id ASC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+		%s %s LIMIT $%d OFFSET $%d`, where, order, argIdx, argIdx+1)
 	args = append(args, pg.Limit(), pg.Offset())
 	var rows []taskRow
 	if err := r.db.SelectContext(ctx, &rows, dataQ, args...); err != nil {
@@ -1041,7 +1062,7 @@ func (r *TaskRepo) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
-	pg.Normalize()
+	pg.NormalizeWithDefaultSort("updated_at", "desc")
 
 	args := []interface{}{projectID} // $1
 	conditions := []string{"project_id = $1", "deleted_at IS NULL"}
@@ -1156,10 +1177,6 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	// Default to updated_at DESC so any task mutation (create/update/move) floats
 	// the task to the top of the first page — the "write-through" effect.
 	// Callers may override via explicit sort_by/sort_dir query params.
-	if pg.SortBy == "" {
-		pg.SortBy = "updated_at"
-		pg.SortDir = "desc"
-	}
 	order := orderClause(pg, allowedSortColumns{
 		"title":      "title",
 		"priority":   "priority",

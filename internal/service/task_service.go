@@ -837,7 +837,7 @@ func (s *taskService) GetByShortID(ctx context.Context, prefix string) (*domain.
 }
 
 func (s *taskService) List(ctx context.Context, projectID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
-	pg.Normalize()
+	pg.NormalizeWithDefaultSort("updated_at", "desc")
 
 	// Revision validation (ADR-0004): only runs when the repo is wired AND the
 	// caller sent a nonzero list_revision (i.e. this isn't page 1 of a fresh
@@ -870,7 +870,7 @@ func (s *taskService) List(ctx context.Context, projectID uuid.UUID, filter repo
 }
 
 func (s *taskService) Search(ctx context.Context, workspaceID uuid.UUID, filter repository.TaskFilter, pg pagination.Params) (*pagination.Page[domain.Task], error) {
-	pg.Normalize()
+	pg.NormalizeWithDefaultSort("updated_at", "desc")
 	return s.taskRepo.Search(ctx, workspaceID, filter, pg)
 }
 

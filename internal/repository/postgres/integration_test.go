@@ -763,6 +763,30 @@ func TestTaskRepo_List_HumanGateFilter(t *testing.T) {
 	page, err = repo.List(ctx, proj.ID, repository.TaskFilter{}, pg)
 	require.NoError(t, err)
 	assert.Equal(t, 2, page.TotalCount)
+
+	// Workspace search must filter the count and rows together, with both
+	// boolean arms and an unfiltered control in the same real database.
+	for _, tc := range []struct {
+		name  string
+		gate  *bool
+		want  uuid.UUID
+		count int
+	}{
+		{"true", &trueFlag, gated.ID, 1},
+		{"false", &falseFlag, notGated.ID, 1},
+		{"unfiltered", nil, uuid.Nil, 2},
+	} {
+		t.Run("workspace_"+tc.name, func(t *testing.T) {
+			page, err := repo.Search(ctx, proj.WorkspaceID, repository.TaskFilter{HumanGate: tc.gate}, pg)
+			require.NoError(t, err)
+			assert.Equal(t, tc.count, page.TotalCount)
+			require.Len(t, page.Items, tc.count)
+			if tc.gate != nil {
+				assert.Equal(t, tc.want, page.Items[0].ID)
+				assert.Equal(t, *tc.gate, page.Items[0].HumanGate)
+			}
+		})
+	}
 }
 
 func TestTaskRepo_ListSubtasks(t *testing.T) {
@@ -856,6 +880,30 @@ func TestTaskRepo_List_DefaultSortUpdatedAtDesc(t *testing.T) {
 	require.Len(t, page.Items, 3)
 	assert.Equal(t, taskIDs[2], page.Items[0].ID, "newest task (highest updated_at) must be first")
 	assert.Equal(t, taskIDs[0], page.Items[2].ID, "oldest task (lowest updated_at) must be last")
+
+	// The workspace search path must preserve the same recent-first default.
+	workspaceID := uuid.Nil
+	require.NoError(t, db.Get(&workspaceID, "SELECT workspace_id FROM projects WHERE id=$1", proj.ID))
+	for _, tc := range []struct {
+		name  string
+		pg    pagination.Params
+		first uuid.UUID
+	}{
+		{"default", pagination.Params{Page: 1, PageSize: 10}, taskIDs[2]},
+		{"order_asc", pagination.Params{Page: 1, PageSize: 10, Order: "asc"}, taskIDs[0]},
+		{"direction_wins", pagination.Params{Page: 1, PageSize: 10, SortDir: "desc", Order: "asc"}, taskIDs[2]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			listed, listErr := repo.List(ctx, proj.ID, repository.TaskFilter{}, tc.pg)
+			require.NoError(t, listErr)
+			require.Len(t, listed.Items, 3)
+			assert.Equal(t, tc.first, listed.Items[0].ID)
+			searched, searchErr := repo.Search(ctx, workspaceID, repository.TaskFilter{Search: "Task "}, tc.pg)
+			require.NoError(t, searchErr)
+			require.Len(t, searched.Items, 3)
+			assert.Equal(t, tc.first, searched.Items[0].ID)
+		})
+	}
 
 	// Explicit sort_by=created_at asc still works and overrides the default.
 	page, err = repo.List(ctx, proj.ID, repository.TaskFilter{}, pagination.Params{

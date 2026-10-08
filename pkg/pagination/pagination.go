@@ -71,6 +71,18 @@ func (p *Params) Normalize() {
 	}
 }
 
+// NormalizeWithDefaultSort sets endpoint-specific sorting before Normalize
+// fills in its generic ascending direction. Explicit sort or order wins.
+func (p *Params) NormalizeWithDefaultSort(sortBy, sortDir string) {
+	if p.SortBy == "" {
+		p.SortBy = sortBy
+		if p.SortDir == "" && p.Order == "" {
+			p.SortDir = sortDir
+		}
+	}
+	p.Normalize()
+}
+
 // Offset returns the SQL OFFSET for the current page.
 func (p Params) Offset() int {
 	return (p.Page - 1) * p.PageSize
