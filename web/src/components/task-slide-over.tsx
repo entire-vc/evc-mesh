@@ -125,10 +125,9 @@ export function TaskSlideOver({
   const [rightTab, setRightTab] = useState<RightTabId>("comments");
   const [hideEmpty, setHideEmpty] = useState(true);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
-  // Bumped whenever DependencyList reports a change, so the Subtasks tab
-  // refetches without the user reopening the card.
-  const [depRefreshKey, setDepRefreshKey] = useState(0);
+  // Refresh Subtasks for invalidations from either endpoint's open panel.
   const dependencies = useTaskDependencies(effectiveTaskId ?? null);
+  const depRefreshKey = dependencies.revision;
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -1197,7 +1196,6 @@ export function TaskSlideOver({
                     taskId={currentTask.id}
                     source={dependencies}
                     onOpenTask={pushTask}
-                    onChanged={() => setDepRefreshKey((k) => k + 1)}
                   />
                 </div>
               )}

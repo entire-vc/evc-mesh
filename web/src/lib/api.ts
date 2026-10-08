@@ -118,6 +118,7 @@ export class ApiRequestError extends Error {
 }
 
 interface RequestOptions {
+  signal?: AbortSignal;
   method?: string;
   body?: unknown;
   params?: Record<string, string | number | undefined>;
@@ -151,7 +152,7 @@ export async function api<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = "GET", body, params, noAuth = false, withCredentials = false } = options;
+  const { method = "GET", body, params, noAuth = false, withCredentials = false, signal } = options;
 
   let url = `${BASE_URL}${path}`;
   if (params) {
@@ -187,6 +188,7 @@ export async function api<T>(
       : "same-origin";
 
   let res = await fetch(url, {
+    ...(signal ? { signal } : {}),
     method,
     headers,
     body: serializeBody(body),
@@ -203,14 +205,17 @@ export async function api<T>(
 
     try {
       const newToken = await refreshPromise;
+      signal?.throwIfAborted();
       headers["Authorization"] = `Bearer ${newToken}`;
       res = await fetch(url, {
+        ...(signal ? { signal } : {}),
         method,
         headers,
         body: serializeBody(body),
         credentials: "same-origin",
       });
-    } catch {
+    } catch (err) {
+      if (signal?.aborted) throw err;
       accessToken = null;
       window.location.href = "/login";
       throw new ApiRequestError("Session expired", "UNAUTHORIZED", 401);

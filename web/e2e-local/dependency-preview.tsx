@@ -1,0 +1,20 @@
+// Disposable preview: real slide-over + API; normal project views navigate fullscreen.
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { createMemoryRouter, RouterProvider } from "react-router";
+import { TaskSlideOver } from "../src/components/task-slide-over";
+import { useAuthStore } from "../src/stores/auth";
+import { useProjectStore } from "../src/stores/project";
+import { useWorkspaceStore } from "../src/stores/workspace";
+import { api } from "../src/lib/api";
+import "../src/index.css";
+if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+await useAuthStore.getState().initialize();
+const params = new URLSearchParams(location.search);
+const ws = (await api<any[]>('/api/v1/workspaces')).find(w=>w.id===params.get('workspace'));
+if (!ws) throw Error('Preview workspace required');
+useWorkspaceStore.setState({currentWorkspace:ws});
+await useProjectStore.getState().fetchProjects(ws.id);
+useProjectStore.getState().setCurrentProjectBySlug(params.get('project')!);
+const id = params.get('task')!;
+createRoot(document.getElementById('root')!).render(<RouterProvider router={createMemoryRouter([{path:'/',element:<TaskSlideOver taskId={id} onClose={()=>{}}/>}])}/>);
