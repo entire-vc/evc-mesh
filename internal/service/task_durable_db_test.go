@@ -427,3 +427,38 @@ func TestTaskDurableCommittedTransport(t *testing.T) {
 	require.NoError(t, s.PublishCommitted(context.Background(), msg))
 	require.Equal(t, msg.ID, broker.id)
 }
+
+// Audit rows are stamped with application time, which may run ahead of the DB
+// clock; the audit window must still include them.
+func TestTaskDurableAudit_FutureStampedRowsIncluded(t *testing.T) {
+	f, _, svc, id, owner := newCheckoutM1Fixture(t)
+	ctx := actorctx.WithActor(context.Background(), owner, domain.ActorTypeAgent)
+	position := float64(25)
+	require.NoError(t, svc.MoveTask(ctx, id, MoveTaskInput{Position: &position, Source: "mcp", CorrelationID: &owner}))
+	_, err := f.db.Exec(`UPDATE activity_log SET created_at=now()+interval '5 minutes' WHERE entity_id=$1`, id)
+	require.NoError(t, err)
+	_, err = f.db.Exec(`UPDATE task_event_outbox SET created_at=now()+interval '5 minutes' WHERE task_id=$1`, id)
+	require.NoError(t, err)
+
+	rows, err := f.db.QueryxContext(ctx, durableAuditSQL(t), id)
+	require.NoError(t, err)
+	count := 0
+	for rows.Next() {
+		count++
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Equal(t, 1, count)
+
+	content, err := os.ReadFile("../../scripts/audit/task-transition.sql")
+	require.NoError(t, err)
+	outbox := string(content)
+	start := strings.Index(outbox, "SELECT id AS event_id, task_version")
+	require.GreaterOrEqual(t, start, 0)
+	outbox = outbox[start:]
+	end := strings.Index(outbox, ";")
+	require.Greater(t, end, 0)
+	outbox = strings.ReplaceAll(outbox[:end], ":'task_id'::uuid", "$1::uuid")
+	require.NoError(t, f.db.Get(&count, `SELECT count(*) FROM (`+outbox+`) q`, id))
+	require.Equal(t, 1, count)
+}
