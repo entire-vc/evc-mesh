@@ -9,7 +9,7 @@ SELECT id AS event_id, created_at, action, actor_id, actor_type,
 FROM activity_log
 WHERE entity_type = 'task' AND entity_id = :'task_id'::uuid
   AND event_id IS NOT NULL
-  AND created_at >= now() - interval '24 hours' AND created_at <= now()
+  AND created_at >= now() - interval '24 hours'
   AND action IN ('task.moved','task.assigned','task.checkout_lease_expired',
                  'task.checkout_unleased_returned','task.checkout_released_auto')
 ORDER BY created_at DESC, id DESC
@@ -17,7 +17,7 @@ LIMIT 500;
 SELECT id AS event_id, task_version, action, attempts, available_at, delivered_at
 FROM task_event_outbox
 WHERE task_id = :'task_id'::uuid
-  AND created_at >= now() - interval '24 hours' AND created_at <= now()
+  AND created_at >= now() - interval '24 hours'
 ORDER BY created_at DESC, id DESC
 LIMIT 500;
 COMMIT;
