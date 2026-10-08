@@ -230,11 +230,10 @@ export function TaskPanel({
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
   const [clearingGate, setClearingGate] = useState(false);
-  // Bumped whenever DependencyList reports a change, so both SubtaskList
-  // mounts (mobile + desktop tabs) refetch — an is_child_of edge added or
-  // removed there changes the Subtasks tab without the user reopening the card.
-  const [depRefreshKey, setDepRefreshKey] = useState(0);
+  // Both endpoints receive mutation invalidations, including a change made
+  // from another open panel, so SubtaskList refetches without reopening.
   const dependencies = useTaskDependencies(isCreateMode ? null : effectiveTaskId ?? null);
+  const depRefreshKey = dependencies.revision;
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -2336,7 +2335,6 @@ export function TaskPanel({
                       taskId={currentTask.id}
                       source={dependencies}
                       onOpenTask={pushTask}
-                      onChanged={() => setDepRefreshKey((k) => k + 1)}
                     />
                   </div>
                 )}
@@ -2487,7 +2485,6 @@ export function TaskPanel({
                     taskId={currentTask.id}
                     source={dependencies}
                     onOpenTask={pushTask}
-                    onChanged={() => setDepRefreshKey((k) => k + 1)}
                   />
                 </div>
               )}

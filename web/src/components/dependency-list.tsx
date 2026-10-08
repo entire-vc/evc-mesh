@@ -2,12 +2,11 @@ import { useState, useEffect, useRef } from "react";
 import { ArrowRight, ArrowLeft, Link2, GitMerge, Plus, X, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DependencyTaskPicker, type DependencyTarget } from "@/components/dependency-task-picker";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
-import { useTaskDependencies, type TaskDependenciesSource, type DependencyRow } from "@/hooks/use-task-dependencies";
-import type { DependencyType, TaskDependency } from "@/types";
+import { useTaskDependencies, refreshTaskDependencies, type TaskDependenciesSource, type DependencyRow } from "@/hooks/use-task-dependencies";
 import { apiErrorMessage } from "@/lib/api-error";
 
 // ---------------------------------------------------------------------------
@@ -61,29 +60,26 @@ const GROUP_ORDER: DisplayGroup[] = [
   "parent_of",
 ];
 
-// The 3 creatable dependency types. Creating one always produces an OUTGOING
-// edge on the current task, so the label/hint here is written from that
-// task's point of view — it's what the resulting edge will read as on this
-// task's own Dependencies tab.
+type CreateRelationship = "depends_on" | "blocks" | "related";
 const CREATE_TYPE_CONFIG: Record<
-  DependencyType,
+  CreateRelationship,
   { label: string; hint: string }
 > = {
-  blocks: {
-    label: "Blocked by",
+  depends_on: {
+    label: "Depends on",
     hint: "The task you enter must finish before this one can — it blocks this task.",
   },
-  relates_to: {
-    label: "Relates to",
+  related: {
+    label: "Related",
     hint: "Just a reference. No ordering or hierarchy is implied.",
   },
-  is_child_of: {
-    label: "Child of",
-    hint: "The task you enter becomes the PARENT of this task — this task becomes its subtask.",
+  blocks: {
+    label: "Blocks",
+    hint: "This task must finish before the selected task can — this task blocks it.",
   },
 };
 
-const CREATE_TYPE_ORDER: DependencyType[] = ["blocks", "relates_to", "is_child_of"];
+const CREATE_TYPE_ORDER: CreateRelationship[] = ["depends_on", "blocks", "related"];
 
 type DisplayRow = DependencyRow;
 
@@ -122,13 +118,12 @@ export function DependencyList({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<DependencyTarget | null>(null);
 
   const [form, setForm] = useState<{
-    depends_on_task_id: string;
-    dependency_type: DependencyType;
+    dependency_type: CreateRelationship;
   }>({
-    depends_on_task_id: "",
-    dependency_type: "blocks",
+    dependency_type: "depends_on",
   });
 
   useEffect(() => {
@@ -138,7 +133,8 @@ export function DependencyList({
     setSubmitting(false);
     setDeletingId(null);
     setConfirmDeleteId(null);
-    setForm({ depends_on_task_id: "", dependency_type: "blocks" });
+    setSelected(null);
+    setForm({ dependency_type: "depends_on" });
     return () => { currentTaskId.current = null; };
   }, [taskId]);
 
@@ -146,37 +142,29 @@ export function DependencyList({
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = form.depends_on_task_id.trim();
-    if (!trimmed) {
-      setError("Task ID is required.");
-      return;
-    }
-    // Basic UUID validation
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(trimmed)) {
-      setError("Please enter a valid task UUID (e.g. 550e8400-e29b-41d4-a716-446655440000).");
+    if (!selected || selected.task.id === taskId) {
+      setError("Choose a task to add a dependency.");
       return;
     }
     setSubmitting(true);
     setError(null);
+    const targetId = selected.task.id;
+    const ownerId = form.dependency_type === "blocks" ? targetId : taskId;
     try {
-      const created = await api<TaskDependency>(`/api/v1/tasks/${taskId}/dependencies`, {
+      await api(`/api/v1/tasks/${ownerId}/dependencies`, {
         method: "POST",
         body: {
-          depends_on_task_id: trimmed,
-          dependency_type: form.dependency_type,
+          depends_on_task_id: form.dependency_type === "blocks" ? taskId : targetId,
+          dependency_type: form.dependency_type === "related" ? "relates_to" : "blocks",
         },
       });
       // The tab can unmount while its shared parent source remains active.
-      if (!source.isCurrent()) return;
-      if (created?.id) source.update(created);
-      onChanged?.();
-      // Hydrate the created edge and refresh status/assignee from its own project.
-      await fetchDeps();
+      if (source.isCurrent()) onChanged?.();
+      await refreshTaskDependencies(taskId, targetId);
       if (currentTaskId.current !== taskId) return;
       setShowForm(false);
-      setForm({ depends_on_task_id: "", dependency_type: "blocks" });
+      setSelected(null);
+      setForm({ dependency_type: "depends_on" });
     } catch (err: unknown) {
       if (currentTaskId.current !== taskId) return;
       setError(
@@ -198,11 +186,9 @@ export function DependencyList({
       await api(`/api/v1/tasks/${row.ownerTaskId}/dependencies/${row.dep.id}`, {
         method: "DELETE",
       });
-      if (!source.isCurrent()) return;
-      source.update(row.dep.id);
-      onChanged?.();
+      if (source.isCurrent()) onChanged?.();
       if (currentTaskId.current === taskId) setConfirmDeleteId(null);
-      await fetchDeps();
+      await refreshTaskDependencies(row.dep.task_id, row.dep.depends_on_task_id);
     } catch (err) {
       if (currentTaskId.current === taskId) setError(apiErrorMessage(err, "Failed to remove dependency."));
     } finally {
@@ -346,32 +332,19 @@ export function DependencyList({
           onSubmit={(e) => void handleAdd(e)}
           className="space-y-2 rounded-lg border border-border bg-muted/20 p-3"
         >
-          <div>
-            <label htmlFor={`dependency-task-${taskId}`} className="mb-1 block text-xs text-muted-foreground">
-              Task ID (UUID)
-            </label>
-            <Input
-              id={`dependency-task-${taskId}`}
-              value={form.depends_on_task_id}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, depends_on_task_id: e.target.value }))
-              }
-              placeholder="550e8400-e29b-41d4-a716-446655440000"
-              className="h-7 font-mono text-xs"
-              autoFocus
-            />
-          </div>
+          <DependencyTaskPicker taskId={taskId} disabled={submitting} selected={selected} onSelect={setSelected} />
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
               Relationship type
             </label>
             <Select
               aria-label="Relationship type"
+              disabled={submitting}
               value={form.dependency_type}
               onChange={(e) =>
                 setForm((f) => ({
                   ...f,
-                  dependency_type: e.target.value as DependencyType,
+                  dependency_type: e.target.value as CreateRelationship,
                 }))
               }
               className="h-7 text-xs"
@@ -382,9 +355,6 @@ export function DependencyList({
                 </option>
               ))}
             </Select>
-            {/* Direction is the #1 source of silent mistakes here — is_child_of
-                especially, since picking the wrong task ID quietly inverts the
-                hierarchy with no error. Spell out what the entered task becomes. */}
             <p className="mt-1 text-[11px] text-muted-foreground">
               {selectedTypeConfig.hint}
             </p>
@@ -395,7 +365,7 @@ export function DependencyList({
               type="submit"
               size="sm"
               className="flex-1"
-              disabled={submitting || !form.depends_on_task_id.trim()}
+              disabled={submitting || !selected}
             >
               {submitting ? (
                 <>
@@ -410,10 +380,12 @@ export function DependencyList({
               type="button"
               variant="ghost"
               size="sm"
+              disabled={submitting}
               onClick={() => {
                 setShowForm(false);
+                setSelected(null);
                 setError(null);
-                setForm({ depends_on_task_id: "", dependency_type: "blocks" });
+                setForm({ dependency_type: "depends_on" });
               }}
             >
               Cancel

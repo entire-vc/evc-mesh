@@ -5,7 +5,8 @@ import { TaskPanel } from "../task-panel";
 import { TaskSlideOver } from "../task-slide-over";
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
-import type { Task, Project, TaskStatus } from "@/types";
+import { useWorkspaceStore } from "@/stores/workspace";
+import type { Workspace, Task, Project, TaskStatus } from "@/types";
 
 const id = "380cd83a-0000-4000-8000-000000000001";
 const relatedId = "11111111-0000-4000-8000-000000000001";
@@ -16,6 +17,7 @@ let requests: string[];
 let mutationWait: Promise<void> | undefined;
 
 beforeEach(() => {
+  useWorkspaceStore.setState({ currentWorkspace: { id: "workspace" } as Workspace });
   edges = [{ id: "edge", task_id: id, depends_on_task_id: relatedId, dependency_type: "blocks", related_task_title: related.title }];
   requests = [];
   mutationWait = undefined;
@@ -30,6 +32,7 @@ beforeEach(() => {
     if (path === `/api/v1/tasks/${id}/dependencies/edge` && init?.method === "DELETE") edges = [];
     if (path === `/api/v1/tasks/${id}`) data = task;
     if (path === `/api/v1/tasks/${relatedId}`) data = related;
+    if (path === "/api/v1/projects/other") data = { id: "other", workspace_id: "workspace", name: "Other project" };
     if (path === "/api/v1/projects/other/statuses") data = [{ id: "other-todo", name: "Doing elsewhere", category: "in_progress", color: "#f00" }];
     if (path === `/api/v1/tasks/${id}/dependencies`) {
       const created = { id: "new-edge", task_id: id, depends_on_task_id: relatedId, dependency_type: "relates_to" };
@@ -41,6 +44,7 @@ beforeEach(() => {
     if (path.endsWith("/vcs-links")) data = { vcs_links: [] };
     if (path.includes("cost-summary")) data = { session_count: 0 };
     if (path.includes("team-directory")) data = { agents: [], humans: [] };
+    if (path.endsWith("/team")) data = { agents: [], humans: [] };
     return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
 });
@@ -58,8 +62,9 @@ describe.each(["full", "slide"] as const)("%s task dependencies tab", (view) => 
     await screen.findByRole("button", { name: /#11111111 Cross project blocker/ });
     if (action === "add") {
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
-      fireEvent.change(screen.getByPlaceholderText(/550e8400/), { target: { value: relatedId } });
-      fireEvent.change(screen.getByRole("combobox", { name: "Relationship type" }), { target: { value: "relates_to" } });
+      fireEvent.change(screen.getByRole("combobox", { name: "Find task" }), { target: { value: relatedId } });
+      fireEvent.click(await screen.findByRole("option", { name: /Cross project blocker/ }));
+      fireEvent.change(screen.getByRole("combobox", { name: "Relationship type" }), { target: { value: "related" } });
       fireEvent.click(screen.getByRole("button", { name: "Add Dependency" }));
     } else {
       fireEvent.click(screen.getByRole("button", { name: /Remove dependency/ }));
@@ -85,8 +90,9 @@ describe.each(["full", "slide"] as const)("%s task dependencies tab", (view) => 
     expect(screen.getByText("Doing elsewhere")).toBeInTheDocument();
     expect(screen.getByText("Alex")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.change(screen.getByPlaceholderText(/550e8400/), { target: { value: relatedId } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Relationship type" }), { target: { value: "relates_to" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Find task" }), { target: { value: relatedId } });
+      fireEvent.click(await screen.findByRole("option", { name: /Cross project blocker/ }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Relationship type" }), { target: { value: "related" } });
     fireEvent.click(screen.getByRole("button", { name: "Add Dependency" }));
     await waitFor(() => expect(tabs[0]).toHaveTextContent("2 · 1 open"));
     fireEvent.click(screen.getAllByRole("button", { name: "Subtasks" })[0]!);

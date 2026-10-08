@@ -152,3 +152,28 @@ describe("refresh coordination across tabs", () => {
     expect(init.body).toBeUndefined();
   });
 });
+
+
+describe("cancelled requests during shared refresh", () => {
+  it("keeps the refreshed session and does not replay an aborted search", async () => {
+    let finishRefresh!: (response: Response) => void;
+    const refresh = new Promise<Response>(resolve => { finishRefresh = resolve; });
+    // mock: external HTTP boundary, including the shared authentication refresh.
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => url.includes("/auth/refresh")
+      ? refresh : Promise.resolve(jsonResponse({}, 401)));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("navigator", {});
+    const { api, setAccessToken, getAccessToken } = await import("@/lib/api");
+    setAccessToken("expired-test-token");
+    const controller = new AbortController();
+    const request = api("/api/v1/workspaces/test/tasks", { signal: controller.signal });
+    const rejected = expect(request).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    controller.abort();
+    finishRefresh(jsonResponse({ tokens: { access_token: "refreshed-test-token", expires_in: 900 } }));
+    await rejected;
+    expect(getAccessToken()).toBe("refreshed-test-token");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+});

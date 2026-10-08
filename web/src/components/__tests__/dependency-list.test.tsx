@@ -3,7 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { DependencyList } from "../dependency-list";
 import { DependencyBadge } from "../dependency-badge";
 import { useTaskDependencies } from "@/hooks/use-task-dependencies";
-import type { TaskDependency } from "@/types";
+import { useWorkspaceStore } from "@/stores/workspace";
+import type { Workspace, TaskDependency } from "@/types";
 
 const current = "00000000-0000-4000-8000-000000000001";
 const other = "11111111-0000-4000-8000-000000000001";
@@ -29,6 +30,7 @@ function Harness({ id = current }: { id?: string }) {
   return <><DependencyBadge source={source} /><DependencyList key={id} taskId={id} source={source} onOpenTask={openTask} onChanged={changed} /></>;
 }
 beforeEach(() => {
+  useWorkspaceStore.setState({ currentWorkspace: { id: "workspace" } as Workspace });
   outgoing = [edge("blocker")]; incoming = []; category = "in_progress";
   failList = false; failTask = false; deleted = []; override = undefined;
   openTask.mockReset(); changed.mockReset();
@@ -42,6 +44,7 @@ beforeEach(() => {
       return new Response(null, { status: 204 });
     }
     if (path.endsWith("/dependencies")) return response(failList ? { message: "offline" } : { outgoing, incoming }, failList ? 503 : 200);
+    if (path === "/api/v1/projects/related-project") return response({ workspace_id: "workspace", name: "Related project" });
     if (path.endsWith("/statuses")) return response([{ id: "status", project_id: "related-project", name: `Related ${category}`, category, color: "#f00" }]);
     return response(failTask ? { message: "forbidden" } : { id: path.split("/").slice(-1)[0], title: "Related title", project_id: "related-project", status_id: "status", assignee_name: "Alex", assignee_id: "alex" }, failTask ? 403 : 200);
   }));
@@ -81,7 +84,7 @@ describe("DependencyList shared source", () => {
     await screen.findByText("No dependencies yet.");
     expect(screen.getByText("0 · 0 open")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    expect(screen.getByPlaceholderText(/550e8400/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Find task" })).toBeInTheDocument();
   });
 
   it("does not report unknown blocker metadata as zero, and retry hydrates it", async () => {
@@ -158,7 +161,8 @@ describe("DependencyList shared source", () => {
     const { rerender } = render(<Harness />);
     await screen.findByText("1 · 1 open");
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.change(screen.getByLabelText("Task ID (UUID)"), { target: { value: newTask } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Find task" }), { target: { value: newTask } });
+    fireEvent.click(await screen.findByRole("option", { name: /Related title/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add Dependency" }));
     rerender(<Harness id={newTask} />);
     await screen.findByText("0 · 0 open");

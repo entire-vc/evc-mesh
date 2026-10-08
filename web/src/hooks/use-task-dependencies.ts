@@ -38,6 +38,16 @@ function rowsFor(data: TaskDependencyList): DependencyRow[] {
   ].filter((row, index, rows) => rows.findIndex(other => other.dep.id === row.dep.id) === index);
 }
 
+// Each open full/slide panel has its own source. Notify every source for BOTH
+// endpoints; inactive endpoints are also refetched without keeping a cache.
+const listeners = new Map<string, Set<() => Promise<void>>>();
+export async function refreshTaskDependencies(...taskIds: string[]) {
+  await Promise.allSettled([...new Set(taskIds)].flatMap(id => {
+    const sources = listeners.get(id);
+    return sources?.size ? [...sources].map(reload => reload()) : [api<TaskDependencyList>(`/api/v1/tasks/${id}/dependencies`).then(() => undefined)];
+  }));
+}
+
 // Task-scoped cache: share promises within a load, bound concurrency to four,
 // and refresh on retry/mutation so terminal status changes cannot stay cached.
 export function useTaskDependencies(taskId: string | null) {
@@ -45,6 +55,7 @@ export function useTaskDependencies(taskId: string | null) {
   latestTask.current = taskId;
   const generation = useRef(0);
   const [state, setState] = useState<DependencyState>({ taskId, phase: "loading", rows: [], checking: false });
+  const [revision, setRevision] = useState(0);
 
   const reload = useCallback(async () => {
     if (!taskId || latestTask.current !== taskId) return;
@@ -96,6 +107,14 @@ export function useTaskDependencies(taskId: string | null) {
     return () => { latestTask.current = null; generation.current++; };
   }, [reload]);
 
+  useEffect(() => {
+    if (!taskId) return;
+    const refresh = async () => { setRevision(value => value + 1); await reload(); };
+    const sources = listeners.get(taskId) ?? new Set<() => Promise<void>>();
+    sources.add(refresh); listeners.set(taskId, sources);
+    return () => { sources.delete(refresh); if (!sources.size) listeners.delete(taskId); };
+  }, [taskId, reload]);
+
   const update = useCallback((dep: TaskDependency | string) => {
     if (latestTask.current !== taskId || !taskId) return;
     generation.current++;
@@ -113,7 +132,7 @@ export function useTaskDependencies(taskId: string | null) {
   const blockers = visible.rows.filter(row => row.group === "blocked_by");
   const openBlockers = blockers.filter(row => row.status && !["done", "cancelled"].includes(row.status.category)).length;
   const unknownBlockers = blockers.filter(row => !row.status).length;
-  return { ...visible, openBlockers, unknownBlockers, reload, update, isCurrent };
+  return { ...visible, openBlockers, unknownBlockers, revision, reload, update, isCurrent };
 }
 
 export type TaskDependenciesSource = ReturnType<typeof useTaskDependencies>;
