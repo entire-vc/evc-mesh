@@ -25,7 +25,7 @@ vi.mock("@/lib/api", () => ({
   api: vi.fn((path: string) => {
     if (path.includes("/vcs-links")) return Promise.resolve({ vcs_links: [] });
     if (path.includes("/dependencies")) {
-      return Promise.resolve({ blocked_by: [], blocks: [], parent: null, children: [] });
+      return Promise.resolve({ outgoing: [], incoming: [] });
     }
     return Promise.resolve({ enabled: false });
   }),
@@ -64,7 +64,6 @@ const ONLY_AFTER_CREATE: Record<string, string> = {
   Created: "there is no creation timestamp before creation",
   Updated: "there is no update timestamp before creation",
   "VCS Links": "the endpoint is keyed on a task id",
-  Dependencies: "an edge cannot start at a node that does not exist yet",
   "Cost & Quality": "computed from sessions that have not happened yet",
 };
 
@@ -75,14 +74,15 @@ const ONLY_AFTER_CREATE: Record<string, string> = {
  * where the next regression would walk through.
  *
  * They surface because `propertyNamesOf` expands the panel ("Show empty"),
- * not because the fixture carries VCS/dependency/cost data: `showVcsLinks`
- * and `showDependencies` are `!hideEmpty || <has data>`. An earlier version of
+ * not because the fixture carries VCS/cost data: `showVcsLinks`
+ * is `!hideEmpty || <has data>`. An earlier version of
  * this file set `vcs_link_count: 1` on the fixture as if that were what made
  * the row appear; a mutation test (count → 0) kept passing and showed the
  * claim was false, so the field is gone rather than left there implying a
  * dependency the code does not have.
  */
-const DATA_GATED_EDIT_ROWS = ["VCS Links", "Dependencies", "Cost & Quality"];
+// Dependencies now live in a task-view tab, outside the Properties comparison.
+const DATA_GATED_EDIT_ROWS = ["VCS Links", "Cost & Quality"];
 
 const PROJECT: Project = {
   id: "proj-1",
@@ -200,6 +200,12 @@ async function propertyNamesOf(mode: "create" | "edit"): Promise<string[]> {
 
   const header = await screen.findAllByText("Properties");
   const panel = header[0]!.closest("div")!.parentElement!;
+  expect(within(panel).queryByText("Dependencies")).not.toBeInTheDocument();
+  if (mode === "edit") {
+    expect(screen.getAllByRole("button", { name: /Dependencies/ }).length).toBeGreaterThan(0);
+  } else {
+    expect(screen.queryByRole("button", { name: /Dependencies/ })).not.toBeInTheDocument();
+  }
 
   const toggle = within(panel).queryByText(/Show empty|Hide empty/);
   if (toggle && toggle.textContent === "Show empty") {

@@ -53,6 +53,8 @@ import { SubtaskList } from "@/components/subtask-list";
 import { ArtifactList } from "@/components/artifact-list";
 import { VCSLinks } from "@/components/vcs-links";
 import { DependencyList } from "@/components/dependency-list";
+import { DependencyBadge } from "@/components/dependency-badge";
+import { useTaskDependencies } from "@/hooks/use-task-dependencies";
 import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { DatePickerPopover } from "@/components/date-picker-popover";
 import { RichTextEditor } from "@/components/rich-text-editor";
@@ -98,9 +100,10 @@ type MobileTabId =
   | "description"
   | "comments"
   | "subtasks"
+  | "dependencies"
   | "artifacts"
   | "activity";
-type RightTabId = "comments" | "subtasks" | "artifacts" | "activity";
+type RightTabId = "comments" | "subtasks" | "dependencies" | "artifacts" | "activity";
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -110,6 +113,7 @@ const MOBILE_TABS: { id: MobileTabId; label: string }[] = [
   { id: "description", label: "Description" },
   { id: "comments", label: "Comments" },
   { id: "subtasks", label: "Subtasks" },
+  { id: "dependencies", label: "Dependencies" },
   { id: "artifacts", label: "Artifacts" },
   { id: "activity", label: "Activity" },
 ];
@@ -230,6 +234,7 @@ export function TaskPanel({
   // mounts (mobile + desktop tabs) refetch — an is_child_of edge added or
   // removed there changes the Subtasks tab without the user reopening the card.
   const [depRefreshKey, setDepRefreshKey] = useState(0);
+  const dependencies = useTaskDependencies(isCreateMode ? null : effectiveTaskId ?? null);
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -971,7 +976,6 @@ export function TaskPanel({
       ? draftEstimatedHours.trim() !== ""
       : currentTask?.estimated_hours != null);
   const showVcsLinks = !hideEmpty || (currentTask?.vcs_link_count ?? 0) > 0;
-  const showDependencies = !hideEmpty;
 
   const sortedStatuses = [...statuses].sort((a, b) => a.position - b.position);
   const createProject = createProjectId
@@ -1810,22 +1814,6 @@ export function TaskPanel({
           </>
         )}
 
-        {/* Dependencies */}
-        {showDependencies && (
-          <>
-            <div className="sm:col-span-2 my-1">
-              <Separator />
-            </div>
-            <div className="sm:col-span-2">
-              <DependencyList
-                taskId={currentTask.id}
-                onOpenTask={pushTask}
-                onChanged={() => setDepRefreshKey((k) => k + 1)}
-              />
-            </div>
-          </>
-        )}
-
         {/* Cost & Quality */}
         {costSummary && costSummary.session_count > 0 && (
           <>
@@ -2261,7 +2249,7 @@ export function TaskPanel({
               {titleBlock}
             </div>
 
-            {/* 6-tab bar with horizontal scroll + fade mask */}
+            {/* Mobile tabs with horizontal scroll */}
             <div className="sticky top-[44px] z-10 shrink-0 bg-background">
               <div
                 className="flex overflow-x-auto border-b border-border [scrollbar-width:none] [scroll-snap-type:x_mandatory] [-webkit-overflow-scrolling:touch]"
@@ -2276,11 +2264,18 @@ export function TaskPanel({
                         ? "border-primary text-foreground"
                         : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
                     )}
-                    onClick={() => setActiveMobileTab(tab.id)}
+                    onClick={(event) => {
+                      setActiveMobileTab(tab.id);
+                      if (tab.id === "dependencies") {
+                        event.currentTarget.scrollIntoView?.({ block: "nearest", inline: "start" });
+                      }
+                    }}
+                    aria-pressed={activeMobileTab === tab.id}
                   >
                     {tab.id === "subtasks" && <ListTree className="h-3.5 w-3.5" />}
                     {tab.id === "artifacts" && <Package className="h-3.5 w-3.5" />}
                     {tab.label}
+                    {tab.id === "dependencies" && <DependencyBadge source={dependencies} />}
                     {tab.id === "subtasks" &&
                       currentTask.subtask_count != null &&
                       currentTask.subtask_count > 0 && (
@@ -2334,6 +2329,17 @@ export function TaskPanel({
                     />
                   </div>
                 )}
+                {activeMobileTab === "dependencies" && (
+                  <div className="p-3">
+                    <DependencyList
+                      key={currentTask.id}
+                      taskId={currentTask.id}
+                      source={dependencies}
+                      onOpenTask={pushTask}
+                      onChanged={() => setDepRefreshKey((k) => k + 1)}
+                    />
+                  </div>
+                )}
                 {activeMobileTab === "artifacts" && (
                   <div className="p-3">
                     <ArtifactList
@@ -2376,7 +2382,7 @@ export function TaskPanel({
               </div>
             </div>
 
-            {/* RIGHT PANEL — Comments / Subtasks / Artifacts / Activity */}
+            {/* RIGHT PANEL — Comments / Subtasks / Dependencies / Artifacts / Activity */}
             <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-2/5 lg:border-t-0">
               {/* Tab bar */}
               <div className="flex shrink-0 overflow-x-auto border-b border-border">
@@ -2410,6 +2416,19 @@ export function TaskPanel({
                         {currentTask.subtask_count}
                       </Badge>
                     )}
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    activeDesktopTab === "dependencies"
+                      ? "border-primary text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )}
+                  onClick={() => setActiveDesktopTab("dependencies")}
+                  aria-pressed={activeDesktopTab === "dependencies"}
+                >
+                  Dependencies <DependencyBadge source={dependencies} />
                 </button>
                 <button
                   type="button"
@@ -2458,6 +2477,17 @@ export function TaskPanel({
                     taskId={currentTask.id}
                     onOpenSubtask={pushTask}
                     refreshKey={depRefreshKey}
+                  />
+                </div>
+              )}
+              {activeDesktopTab === "dependencies" && (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <DependencyList
+                    key={currentTask.id}
+                    taskId={currentTask.id}
+                    source={dependencies}
+                    onOpenTask={pushTask}
+                    onChanged={() => setDepRefreshKey((k) => k + 1)}
                   />
                 </div>
               )}
