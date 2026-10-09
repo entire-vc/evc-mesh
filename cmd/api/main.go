@@ -1411,6 +1411,7 @@ func main() {
 	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations", runtimeHandler.AcquireReservation)
 	api.GET("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id", runtimeHandler.GetReservation)
 	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume", runtimeHandler.ConsumeReservation)
+	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/renew", runtimeHandler.RenewReservation)
 	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release", runtimeHandler.ReleaseReservation)
 	api.POST("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.Invite, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/agent-grants/:grant_id", agentWorkspaceGrantHandler.Revoke, rbac(mw.PermManageMembers))

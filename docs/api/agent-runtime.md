@@ -61,7 +61,7 @@ and the service does not search foreign catalogs by a name supplied by the calle
 | GET `/workspaces/:ws_id/runtime/bindings/:binding_id` | desired/actual profile, preferred account, availability and reasons | exact bound agent grant or authorized receiving admin |
 | PUT `/workspaces/:ws_id/runtime/bindings/:binding_id/admission` | `{if_revision, permitted_profiles, enabled}` | receiving workspace admin; independent CAS; initially denied |
 | POST `/workspaces/:ws_id/runtime/bindings/:binding_id/preview` | purpose, source profile, required capabilities, optional artifact reference | freshly authorized binding; server resolves observations and provenance |
-| POST `/workspaces/:ws_id/runtime/bindings/:binding_id/reservations` (+ `/:reservation_id`, `/consume`, `/release`) | atomic execution admission, see "Execution admission" | exact bound agent grant |
+| POST `/workspaces/:ws_id/runtime/bindings/:binding_id/reservations` (+ `/:reservation_id`, `/consume`, `/renew`, `/release`) | atomic execution admission, see "Execution admission" | exact bound agent grant |
 | GET `/workspaces/:ws_id/runtime/capacity` (`?agent_id=` optional) | derived execution-state projection per agent identity, see "Capacity projection" | human member of `:ws_id` or an agent key presented for `:ws_id`; no OAuth connectors |
 | POST `/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance` | `controller_ref`, exact `artifact_revision`, `complete`, authors (agent id, model developer, model family); authors merge, never shrink | trusted reporting controller, bound execution scope and persisted attestation |
 
@@ -120,6 +120,7 @@ workspace of the binding.
 | --- | --- | --- |
 | POST `/reservations` | `AcquireRequest` → `201 Reservation` (replay: `200`, same body) | exact bound agent key (agent + receiving workspace + active binding grant) |
 | POST `/reservations/:reservation_id/consume` | `ConsumeRequest` → `200 Reservation` with `consume_receipt` | same bound agent key |
+| POST `/reservations/:reservation_id/renew` | `RenewRequest {fence, checkout_request_id, checkout_generation, run_lease_seconds}` → `200 Reservation`; extends the run lease of a consumed (or lapsed, `reconcile`) reservation, never shortens it; a heartbeat, safe to repeat (each call only moves the horizon to `now + run_lease_seconds` for the live writer, so a retry after a lost response cannot harm) | same bound agent key, exact original writer that still holds its live checkout and grant |
 | POST `/reservations/:reservation_id/release` | `ReleaseRequest` → `200 Reservation` with `release_receipt` | bound agent key (grant revocation does not block release) or receiving workspace owner/admin |
 | GET `/reservations/:reservation_id` | → `200 Reservation` | bound agent key or receiving workspace owner/admin |
 
@@ -229,8 +230,13 @@ grant, profile not admitted; 404 unknown binding/reservation/task (also for a
 foreign one); 409 `idempotency_scope_mismatch`, `stale_revision`,
 `writer_lease_mismatch`, `identity_cap_reached`, `task_writer_active`,
 `worker_active`, `pool_exhausted`, `fence_mismatch`, `writer_mismatch`,
-`release_unproven`; 410 `reservation_expired` / `reservation_released` (consume
-too late); 423 `runtime_disabled`, `identity_cap_unset`. Disabling the
+`release_unproven`, `not_consumed` (renew before consume); 410
+`reservation_expired` / `reservation_released` (consume or renew too late); 423
+`runtime_disabled`, `identity_cap_unset`, `controller_paused` (the profile's
+controller reported `emergency_paused`), `controller_unavailable` (its latest
+report is missing, stale, rejected, for another revision or grant). New
+acquire needs a current controller; an idempotent replay of an existing
+reservation does not. Disabling the
 connection or revoking the grant denies new acquire and consume; existing
 reservations stay occupied until released or (if unconsumed) expired.
 
@@ -256,8 +262,9 @@ AgentCapacity {
   stale_writers,  // checkouts still held past their lease expiry (unknown)
   unknown,        // reconcile + stale_writers
   occupied,       // reserved + running + reconcile + writers + stale_writers
-  ready,          // max(0, effective - occupied)
-  reason,         // "available" | "at_capacity" | "identity_cap_unset"
+  ready,          // max(0, effective - occupied); 0 while no controller of the agent is current
+  reason,         // "available" | "at_capacity" | "identity_cap_unset" | "controller_unavailable"
+  controllers,    // [{controller_ref, state: "current"|"paused"|"stale"|"unreported"}] behind the agent's bindings in this workspace; empty in direct mode
   tasks: { ready, waiting, waiting_by: { human_gate, triage, parked_wait, dependencies, start_after } }
 }
 ```

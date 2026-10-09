@@ -89,6 +89,7 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/runtime/bindings/worker-b/reservations?resource_owner_workspace_id=" + dummyUUID, map[string]any{"idempotency_key": "intruder", "profile_id": "p", "worker_ref": "w"}},
 	{http.MethodGet, "/runtime/bindings/worker-b/reservations/" + dummyUUID + "?resource_owner_workspace_id=" + dummyUUID, nil},
 	{http.MethodPost, "/runtime/bindings/worker-b/reservations/" + dummyUUID + "/consume?resource_owner_workspace_id=" + dummyUUID, map[string]any{"fence": 1}},
+	{http.MethodPost, "/runtime/bindings/worker-b/reservations/" + dummyUUID + "/renew?resource_owner_workspace_id=" + dummyUUID, map[string]any{"fence": 1}},
 	{http.MethodPost, "/runtime/bindings/worker-b/reservations/" + dummyUUID + "/release?resource_owner_workspace_id=" + dummyUUID, map[string]any{"fence": 1}},
 
 	{http.MethodPost, "/webhooks", map[string]string{"url": "https://example.invalid/hook"}},

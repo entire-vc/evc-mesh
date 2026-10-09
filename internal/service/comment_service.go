@@ -2050,8 +2050,10 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		return
 	}
 
-	// Resolve the project's triage column; graceful no-op if it has none.
-	triageID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryTriage)
+	// Resolve the project's triage column, adding the standard stage when the
+	// project has none: a hard human gate must not stay parked in a work column
+	// just because the project predates triage.
+	triageID, err := ensureTriageStatusID(ctx, s.statusRepo, task.ProjectID)
 	if err != nil || triageID == uuid.Nil {
 		return
 	}

@@ -241,8 +241,7 @@ func (r *RuntimeRepo) controllerStates(ctx context.Context, connection *domain.I
 	}
 	states := make([]domain.RuntimeControllerState, 0, len(rows))
 	for _, row := range rows {
-		controller, ok := catalog.Controllers[row.Ref]
-		if !ok {
+		if _, ok := catalog.Controllers[row.Ref]; !ok {
 			continue
 		}
 		var report domain.RuntimeReport
@@ -250,22 +249,19 @@ func (r *RuntimeRepo) controllerStates(ctx context.Context, connection *domain.I
 		if err != nil {
 			return nil, err
 		}
-		var agent uuid.UUID
-		err = r.db.GetContext(ctx, &agent, `SELECT agent_id FROM agent_workspace_grants WHERE id=$1`, row.GrantID)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
+		var grantRows int
+		err = r.db.GetContext(ctx, &grantRows, `SELECT count(*) FROM agent_workspace_grants WHERE id=$1`, row.GrantID)
 		if err != nil {
 			return nil, err
 		}
-		fingerprint, grantErr := runtimeGrant(ctx, r.db, domain.RuntimeIdentity{AgentID: agent, WorkspaceID: connection.WorkspaceID, GrantID: row.GrantID})
-		if grantErr != nil {
-			var denied *apierror.Error
-			if !errors.As(grantErr, &denied) {
-				return nil, grantErr
-			}
+		if grantRows == 0 {
+			continue
 		}
-		current := grantErr == nil && controller.ReporterGrantID == row.GrantID && fingerprint == row.Fingerprint && report.Revision == revision && report.Digest == digest && report.Status == "applied" && !report.EmergencyPaused && controller.Enabled && time.Since(row.At) <= time.Duration(controller.HeartbeatMaxAgeSeconds)*time.Second
+		liveness, err := runtimeReportLiveness(ctx, r.db, connection, catalog, row.Ref, revision, digest, row.GrantID, row.Fingerprint, row.Data, row.At)
+		if err != nil {
+			return nil, err
+		}
+		current := liveness == domain.RuntimeControllerCurrent
 		states = append(states, domain.RuntimeControllerState{ControllerRef: row.Ref, Report: report, ReceivedAt: row.At, Current: current})
 	}
 	return states, nil

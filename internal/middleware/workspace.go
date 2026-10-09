@@ -447,6 +447,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/reservations":                         true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id":         true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume": true,
+	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/renew":   true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release": true,
 	"/api/v1/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance":              true,
 	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/report":                        true,

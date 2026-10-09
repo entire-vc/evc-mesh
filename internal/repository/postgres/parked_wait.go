@@ -358,6 +358,40 @@ func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UU
 			return nil, parkedConflict()
 		}
 	}
+	// A wake re-checks everything that gated the task, not only its blockers:
+	// the assignee must still exist, be unpaused and hold a live grant in the
+	// project's workspace. Otherwise the wait stays registered and a later
+	// event retries; nothing is consumed.
+	var assignee struct {
+		Live         bool            `db:"live"`
+		Home         bool            `db:"home"`
+		Capabilities json.RawMessage `db:"capabilities"`
+	}
+	err = tx.GetContext(ctx, &assignee, `SELECT a.deleted_at IS NULL AS live, a.capabilities, a.workspace_id=pr.workspace_id AS home
+ FROM agents a, projects pr WHERE a.id=$1 AND pr.id=$2 FOR SHARE OF a`, *task.AssigneeID, task.ProjectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, parkedConflict()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !assignee.Live || (&domain.Agent{Capabilities: assignee.Capabilities}).FleetPaused() {
+		return nil, parkedConflict()
+	}
+	if !assignee.Home {
+		// A foreign agent needs a live grant. The grant row is share-locked
+		// until this transaction ends, so a concurrent revocation either
+		// commits first (and is seen here) or waits for the wake to commit.
+		var granted int
+		err = tx.GetContext(ctx, &granted, `SELECT 1 FROM agent_workspace_grants g JOIN projects pr ON pr.workspace_id=g.workspace_id
+ WHERE g.agent_id=$1 AND pr.id=$2 AND g.revoked_at IS NULL LIMIT 1 FOR SHARE OF g`, *task.AssigneeID, task.ProjectID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, parkedConflict()
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	verifiedStatus, err := verify(ctx, task, p)
 	if err != nil {
 		return nil, err
