@@ -38,7 +38,7 @@ func TestApplyHint(t *testing.T) {
 		{
 			name:     "status_not_fed without a recorded status still points at todo",
 			reason:   ReasonStatusNotFed,
-			wantHint: "this task is theirs but sits in a status their queue doesn't poll — move it to todo if they should act on it",
+			wantHint: "this task is theirs but sits in a status their queue doesn't poll — change its status only if they should pick it up as new work",
 		},
 		{
 			name:     "delivered reason has nothing to fix, no hint",
@@ -88,4 +88,17 @@ func TestApplyHint_StatusNotFedNamesTheStatus(t *testing.T) {
 	row.ApplyHint()
 	assert.Equal(t, "this task is theirs but sits in backlog, which their queue doesn't poll — move it to todo if they should act on it", row.Hint)
 	assert.NotContains(t, row.Hint, "assign", "a parked own card must not be told to assign")
+}
+
+// TestApplyHint_StatusNotFedNeverSuggestsResettingActiveWork pins #81ab35b3:
+// an in_progress/review card is the assignee's live work, so its hint must not
+// tell the author to move it to todo.
+func TestApplyHint_StatusNotFedNeverSuggestsResettingActiveWork(t *testing.T) {
+	for _, c := range []string{"in_progress", "review", "done", "cancelled", "triage"} {
+		cat := c
+		row := CommentDeliveryOutcome{Reason: ReasonStatusNotFed, TaskStatusCategory: &cat}
+		row.ApplyHint()
+		assert.NotContains(t, row.Hint, "move it to todo", c)
+		assert.Contains(t, row.Hint, c, c)
+	}
 }

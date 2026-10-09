@@ -58,6 +58,8 @@ function comment(delivery: CommentDeliveryOutcome[]): Comment {
   } as unknown as Comment;
 }
 
+let taskStatusId = "st-backlog";
+
 function serve(c: Comment) {
   mockedApi.mockImplementation((path: string, opts?: { method?: string }) => {
     if (path === "/api/v1/tasks/task-1/comments") {
@@ -67,11 +69,12 @@ function serve(c: Comment) {
       return Promise.resolve([
         { id: "st-backlog", category: "backlog", position: 0 },
         { id: "st-todo", category: "todo", position: 1 },
+        { id: "st-progress", category: "in_progress", position: 2 },
       ]);
     }
     if (path === "/api/v1/tasks/task-1/move" && opts?.method === "POST") return Promise.resolve({});
     if (path === "/api/v1/tasks/task-1" && opts?.method === "PATCH") return Promise.resolve({ id: "task-1" });
-    if (path === "/api/v1/tasks/task-1") return Promise.resolve({ id: "task-1" });
+    if (path === "/api/v1/tasks/task-1") return Promise.resolve({ id: "task-1", status_id: taskStatusId });
     throw new Error(`unexpected ${opts?.method ?? "GET"} ${path}`);
   });
 }
@@ -86,6 +89,7 @@ function mount() {
 
 beforeEach(() => {
   mockedApi.mockReset();
+  taskStatusId = "st-backlog";
   useProjectStore.setState({ projects: [PROJECT], currentProject: PROJECT });
   useWorkspaceStore.setState({ currentWorkspace: WORKSPACE });
   useRulesStore.setState({ teamDirectory: { agents: [], humans: [] } as never });
@@ -110,6 +114,17 @@ describe("CommentList — delivery miss plate", () => {
       expect(move![1]).toMatchObject({ method: "POST", body: { status_id: "st-todo" } });
     });
     expect(await screen.findByText("Moved to todo.")).toBeInTheDocument();
+  });
+
+  it("does not move a card that left backlog after the verdict was recorded", async () => {
+    taskStatusId = "st-progress";
+    serve(comment([row({})]));
+    mount();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Move to todo" }));
+
+    expect(await screen.findByText(/no longer in backlog/)).toBeInTheDocument();
+    expect(mockedApi.mock.calls.find(([p]) => p === "/api/v1/tasks/task-1/move")).toBeUndefined();
   });
 
   it("offers assignment when the card belongs to someone else", async () => {
@@ -161,7 +176,11 @@ describe("CommentList — delivery miss plate", () => {
 
 describe("missActionFor", () => {
   it("maps each reason to the single action that changes it", () => {
-    expect(missActionFor(row({ reason: "status_not_fed" }))).toBe("move_to_todo");
+    expect(missActionFor(row({ reason: "status_not_fed", task_status_category: "backlog" }))).toBe("move_to_todo");
+    // #81ab35b3: active work is never offered a reset to todo.
+    for (const c of ["in_progress", "review", "done", "triage", undefined]) {
+      expect(missActionFor(row({ reason: "status_not_fed", task_status_category: c }))).toBeNull();
+    }
     expect(missActionFor(row({ reason: "not_assignee" }))).toBe("assign");
     expect(missActionFor(row({ reason: "task_gated" }))).toBeNull();
     expect(missActionFor(row({ reason: "task_scheduled" }))).toBeNull();

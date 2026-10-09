@@ -138,7 +138,11 @@ type MissAction = "move_to_todo" | "assign";
  */
 export function missActionFor(row: CommentDeliveryOutcome): MissAction | null {
   if (row.recipient_kind !== "agent" || !row.recipient_id) return null;
-  if (row.reason === "status_not_fed") return "move_to_todo";
+  // Only a backlog card is safe to lift: an in_progress/review card is already
+  // being worked, and a move to todo would reset it (#81ab35b3).
+  if (row.reason === "status_not_fed") {
+    return row.task_status_category === "backlog" ? "move_to_todo" : null;
+  }
   if (row.reason === "not_assignee") return "assign";
   return null;
 }
@@ -152,7 +156,7 @@ function DeliveryMissPlate({
   taskId?: string;
   projId?: string;
 }) {
-  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error" | "stale">("idle");
   const task = useTaskStore((s) => (taskId ? s.tasksById[taskId] : undefined));
   const action = taskId && projId ? missActionFor(row) : null;
 
@@ -168,6 +172,14 @@ function DeliveryMissPlate({
       const store = useTaskStore.getState();
       if (action === "move_to_todo") {
         const statuses = await api<TaskStatus[]>(`/api/v1/projects/${projId}/statuses`);
+        // The verdict is a snapshot: re-read the card and refuse unless it is
+        // still in backlog, so a card picked up since is never reset (#81ab35b3).
+        const fresh = await store.fetchTask(taskId);
+        const current = (statuses ?? []).find((st) => st.id === fresh?.status_id);
+        if (current?.category !== "backlog") {
+          setState("stale");
+          return;
+        }
         const todo = (statuses ?? [])
           .filter((st) => st.category === "todo")
           .sort((a, b) => a.position - b.position)[0];
@@ -210,6 +222,9 @@ function DeliveryMissPlate({
         <span className="text-muted-foreground">
           {action === "move_to_todo" ? "Moved to todo." : `Assigned to @${row.recipient_slug}.`}
         </span>
+      )}
+      {state === "stale" && (
+        <span className="text-muted-foreground">The card is no longer in backlog — left as is.</span>
       )}
       {state === "error" && <span className="text-destructive">Couldn&apos;t apply — try from the task fields.</span>}
     </div>
