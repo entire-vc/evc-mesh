@@ -79,7 +79,11 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	return &TestEnv{
 		BaseURL:    baseURL,
 		DB:         db,
-		HTTPClient: &http.Client{Timeout: 10 * time.Second, Jar: jar},
+		// 30s, not 10s: the first request after API boot (POST /auth/register,
+		// a cold DB pool plus bcrypt on a CPU-shared runner) stalled past 10s in several of
+		// the last 14 days' tenancy-rbac-gate runs and passed on retry of
+		// the same SHA. A real hang still fails, just 20s later.
+		HTTPClient: &http.Client{Timeout: 30 * time.Second, Jar: jar},
 		t:          t,
 	}
 }

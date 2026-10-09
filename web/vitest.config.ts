@@ -5,6 +5,12 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    // The default 5s is below the cold-render cost of the full TaskPanel /
+    // settings pages on a shared CI runner: task-panel-dependencies,
+    // project-settings-deep-link and others timed out once and passed on
+    // retry of the same SHA. A genuinely hung test still fails, at 20s.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     setupFiles: ["./src/test-setup.ts"],
     // Browser and perf specs run through Playwright, outside the unit suite.
     exclude: ["e2e/**", "e2e-local/**", "perf/**", "node_modules/**"],
