@@ -2252,32 +2252,22 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 	}
 
 	// Release the sticky flag.
+	prevStatusID := task.StatusID
 	if err := s.taskSvc.SetHumanGate(ctx, task.ID, false); err != nil {
 		log.Printf("[human-gate] WARNING: SetHumanGate(false) on task %s failed: %v", task.ID, err)
 		return
 	}
 
-	// enforceTriageRelease: if the task is currently in triage, auto-return it to
-	// in_progress so the assignee can resume work without a manual status edit.
-	movedFromTriage := false
-	if s.statusRepo != nil {
-		if curStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && curStatus != nil &&
-			curStatus.Category == domain.StatusCategoryTriage {
-			if inProgressID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryInProgress); err == nil && inProgressID != uuid.Nil {
-				if moveErr := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &inProgressID}); moveErr != nil {
-					log.Printf("[human-gate] WARNING: move task %s from triage to in_progress failed: %v", task.ID, moveErr)
-				} else {
-					movedFromTriage = true
-				}
-			}
-		}
-	}
+	// The gate release itself (taskSvc.SetHumanGate(false)) returns a triage task to
+	// todo (returnTriageToTodoAfterGateClear); here we only detect that it happened so
+	// the audit comment can say so.
+	movedFromTriage := s.movedByGateRelease(ctx, task.ID, prevStatusID)
 
 	// Append a system comment to document the release in the task's audit trail.
 	now := timeNow()
 	releaseBody := "🔓 Auto: human_gate снят — Pavel прокомментировал после блокирующего запроса."
 	if movedFromTriage {
-		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → in_progress — Pavel прокомментировал после блокирующего запроса."
+		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → todo — Pavel прокомментировал после блокирующего запроса."
 	}
 	sysComment := &domain.Comment{
 		ID:         uuid.New(),
@@ -2781,6 +2771,7 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		}
 	}
 
+	prevStatusID := task.StatusID
 	if err := s.taskSvc.SetHumanGate(ctx, task.ID, false); err != nil {
 		log.Printf("[human-gate] WARNING: SetHumanGate(false) on task %s (agent withdrawal) failed: %v", task.ID, err)
 		return
@@ -2813,24 +2804,15 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		}
 	}
 
-	movedFromTriage := false
-	if s.statusRepo != nil {
-		if curStatus, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && curStatus != nil &&
-			curStatus.Category == domain.StatusCategoryTriage {
-			if inProgressID, err := findStatusIDByCategory(ctx, s.statusRepo, task.ProjectID, domain.StatusCategoryInProgress); err == nil && inProgressID != uuid.Nil {
-				if moveErr := s.taskSvc.MoveTask(ctx, task.ID, MoveTaskInput{StatusID: &inProgressID}); moveErr != nil {
-					log.Printf("[human-gate] WARNING: move task %s from triage to in_progress failed: %v", task.ID, moveErr)
-				} else {
-					movedFromTriage = true
-				}
-			}
-		}
-	}
+	// The gate release itself (taskSvc.SetHumanGate(false)) returns a triage task to
+	// todo (returnTriageToTodoAfterGateClear); here we only detect that it happened so
+	// the audit comment can say so.
+	movedFromTriage := s.movedByGateRelease(ctx, task.ID, prevStatusID)
 
 	now := timeNow()
 	releaseBody := "🔓 Auto: human_gate снят — автор запроса отозвал его сам (blocker самоустранился)."
 	if movedFromTriage {
-		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → in_progress — автор запроса отозвал его сам (blocker самоустранился)."
+		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → todo — автор запроса отозвал его сам (blocker самоустранился)."
 	}
 	sysComment := &domain.Comment{
 		ID:         uuid.New(),
@@ -3254,4 +3236,22 @@ func isAssigneeCompletionReport(comment *domain.Comment, task *domain.Task) bool
 		}
 	}
 	return false
+}
+
+// movedByGateRelease reports whether releasing the gate moved the task from its
+// pre-release status INTO todo. The move itself happens inside
+// taskSvc.SetHumanGate(false); this re-reads the task so the audit comment states what
+// actually happened and not what was attempted. A status change to anything other than
+// todo (a concurrent checkout or manual move that beat the release) is not reported as
+// the gate-release move.
+func (s *commentService) movedByGateRelease(ctx context.Context, taskID, prevStatusID uuid.UUID) bool {
+	if s.statusRepo == nil {
+		return false
+	}
+	after, err := s.taskSvc.GetByID(ctx, taskID)
+	if err != nil || after == nil || after.StatusID == prevStatusID {
+		return false
+	}
+	st, err := s.statusRepo.GetByID(ctx, after.StatusID)
+	return err == nil && st != nil && st.Category == domain.StatusCategoryTodo
 }

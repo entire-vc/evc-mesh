@@ -706,6 +706,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if err := s.taskRepo.Update(ctx, task); err != nil {
 		return err
 	}
+	if existing.HumanGate && !task.HumanGate {
+		s.returnTriageToTodoAfterGateClear(ctx, task.ID)
+	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
@@ -3754,7 +3757,7 @@ func (s *taskService) recordGatePredicate(ctx context.Context, in domain.ArmHuma
 // and leaving them on a released task would be residue every reader has to learn to
 // ignore. The history stays in the marker comment and in human_gate_decisions.
 func (s *taskService) ClearHumanGate(ctx context.Context, taskID uuid.UUID) error {
-	return s.taskRepo.SetHumanGate(ctx, taskID, false)
+	return s.SetHumanGate(ctx, taskID, false)
 }
 
 // SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
@@ -3765,7 +3768,22 @@ func (s *taskService) ClearHumanGate(ctx context.Context, taskID uuid.UUID) erro
 // withdrawal path, the soft-timeout sweep, PATCH {human_gate:false}) legitimately pass
 // false, and because the raw PATCH/UI arm has no author to attribute by construction.
 func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value bool) error {
-	return s.taskRepo.SetHumanGate(ctx, taskID, value)
+	// Only a real true -> false transition returns a triage card to todo: clearing an
+	// already-clear gate (a repeated button press, a stray DELETE) must not touch a card
+	// that was parked in triage for some other reason.
+	hadGate := false
+	if !value {
+		if prev, err := s.taskRepo.GetByID(ctx, taskID); err == nil && prev != nil {
+			hadGate = prev.HumanGate
+		}
+	}
+	if err := s.taskRepo.SetHumanGate(ctx, taskID, value); err != nil {
+		return err
+	}
+	if hadGate {
+		s.returnTriageToTodoAfterGateClear(ctx, taskID)
+	}
+	return nil
 }
 
 // SetHumanGateClass classifies the task's human_gate as hard or soft. See
