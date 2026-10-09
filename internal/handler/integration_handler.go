@@ -355,6 +355,10 @@ func maskSecrets(cfg *domain.IntegrationConfig) {
 		return
 	}
 	switch cfg.Provider {
+	case domain.IntegrationProviderAgentRuntime:
+		// Generic integration listing is open to workspace members. The scoped
+		// runtime API is the only place allowed to disclose resource inventory.
+		cfg.Config = json.RawMessage(`{"schema_version":2,"versioned_api":true}`)
 	case domain.IntegrationProviderTelegram:
 		maskTelegramConfig(cfg)
 	case domain.IntegrationProviderGitHub:

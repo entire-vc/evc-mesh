@@ -60,6 +60,9 @@ func NewIntegrationRepo(db *sqlx.DB) *IntegrationRepo {
 
 // Upsert inserts or updates an integration configuration (unique per workspace+provider).
 func (r *IntegrationRepo) Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error {
+	if cfg.Provider == domain.IntegrationProviderAgentRuntime {
+		return apierror.BadRequest("use the versioned runtime API")
+	}
 	const q = `
 		INSERT INTO integration_configs (
 			id, workspace_id, provider, config, is_active, created_at, updated_at
@@ -114,6 +117,9 @@ func (r *IntegrationRepo) Update(ctx context.Context, id uuid.UUID, input domain
 	if existing == nil {
 		return nil, apierror.NotFound("Integration")
 	}
+	if existing.Provider == domain.IntegrationProviderAgentRuntime {
+		return nil, apierror.BadRequest("use the versioned runtime API")
+	}
 
 	if input.Config != nil {
 		existing.Config = input.Config
@@ -137,6 +143,13 @@ func (r *IntegrationRepo) Update(ctx context.Context, id uuid.UUID, input domain
 
 // Delete removes an integration config by its ID.
 func (r *IntegrationRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	existing, err := r.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.Provider == domain.IntegrationProviderAgentRuntime {
+		return apierror.BadRequest("disable runtime through the versioned runtime API")
+	}
 	const q = `DELETE FROM integration_configs WHERE id = $1`
 	res, err := r.db.ExecContext(ctx, q, id)
 	if err != nil {

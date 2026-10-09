@@ -24,6 +24,9 @@ func NewIntegrationService(repo repository.IntegrationRepository) IntegrationSer
 
 // Configure creates or updates an integration config (upsert by workspace+provider).
 func (s *integrationService) Configure(ctx context.Context, input domain.CreateIntegrationInput) (*domain.IntegrationConfig, error) {
+	if input.Provider == domain.IntegrationProviderAgentRuntime {
+		return nil, apierror.BadRequest("use the versioned runtime API")
+	}
 	if input.WorkspaceID == uuid.Nil {
 		return nil, apierror.BadRequest("workspace_id is required")
 	}
@@ -74,6 +77,13 @@ func (s *integrationService) GetByID(ctx context.Context, id uuid.UUID) (*domain
 
 // Update applies a partial update to an integration config.
 func (s *integrationService) Update(ctx context.Context, id uuid.UUID, input domain.UpdateIntegrationInput) (*domain.IntegrationConfig, error) {
+	existing, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && existing.Provider == domain.IntegrationProviderAgentRuntime {
+		return nil, apierror.BadRequest("use the versioned runtime API")
+	}
 	cfg, err := s.repo.Update(ctx, id, input)
 	if err != nil {
 		return nil, fmt.Errorf("update integration: %w", err)
@@ -83,6 +93,13 @@ func (s *integrationService) Update(ctx context.Context, id uuid.UUID, input dom
 
 // Delete removes an integration config.
 func (s *integrationService) Delete(ctx context.Context, id uuid.UUID) error {
+	existing, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.Provider == domain.IntegrationProviderAgentRuntime {
+		return apierror.BadRequest("disable runtime through the versioned runtime API")
+	}
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete integration: %w", err)
 	}

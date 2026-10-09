@@ -1,0 +1,400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:entire:agent-runtime:catalog:v2",
+  "title": "Agent runtime desired catalog v2",
+  "$comment": "Strict references-only desired configuration. Cross-resource, grant, receiver admission and canonical pool checks occur server-side. Never launch authorization. Pools use provider resource identity rather than credential identity. Quota thresholds and observations are verified controller evidence, not desired client claims.",
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "grant_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "required": [
+        "agent_id",
+        "workspace_id",
+        "grant_id"
+      ]
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/ref"
+        },
+        "version": {
+          "$ref": "#/$defs/ref"
+        },
+        "reporter_grant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "heartbeat_max_age_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        }
+      },
+      "required": [
+        "host",
+        "version",
+        "reporter_grant_id",
+        "capabilities",
+        "enabled",
+        "heartbeat_max_age_seconds"
+      ]
+    },
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ref"
+        },
+        "resource_ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "threshold_ref": {
+          "$ref": "#/$defs/ref"
+        }
+      },
+      "required": [
+        "provider",
+        "resource_ref",
+        "aliases",
+        "max_concurrency"
+      ]
+    },
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/ref"
+        },
+        "credential_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^cred:[a-zA-Z0-9][a-zA-Z0-9._/-]*$"
+        },
+        "quota_pools_by_mode": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subscription": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ref"
+              },
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true
+            },
+            "api": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ref"
+              },
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true
+            }
+          },
+          "required": [],
+          "minProperties": 1
+        }
+      },
+      "required": [
+        "provider",
+        "credential_ref",
+        "quota_pools_by_mode"
+      ]
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "controller_ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "account_ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "harness": {
+          "$ref": "#/$defs/ref"
+        },
+        "model": {
+          "$ref": "#/$defs/ref"
+        },
+        "model_developer": {
+          "$ref": "#/$defs/ref"
+        },
+        "model_family": {
+          "$ref": "#/$defs/ref"
+        },
+        "execution_mode": {
+          "enum": [
+            "subscription",
+            "api"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "controller_ref",
+        "account_ref",
+        "harness",
+        "model",
+        "model_developer",
+        "model_family",
+        "execution_mode",
+        "capabilities",
+        "enabled"
+      ]
+    },
+    "qa_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "off",
+            "prefer",
+            "strict"
+          ]
+        },
+        "quota_fallback": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primary_profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          },
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "quota_edges": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "$ref": "#/$defs/ref"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ref"
+            },
+            "minItems": 0,
+            "maxItems": 256,
+            "uniqueItems": true
+          }
+        },
+        "preferred_accounts": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "$ref": "#/$defs/ref"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ref"
+          }
+        },
+        "api_reserve_providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "evidence_max_age_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "qa": {
+          "$ref": "#/$defs/qa_policy"
+        }
+      },
+      "required": [
+        "primary_profiles",
+        "quota_edges",
+        "preferred_accounts",
+        "api_reserve_providers",
+        "max_attempts",
+        "evidence_max_age_seconds",
+        "qa"
+      ]
+    },
+    "agent_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "permitted_profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ref"
+          },
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "policy": {
+          "$ref": "#/$defs/routing"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "binding",
+        "permitted_profiles",
+        "policy",
+        "enabled"
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "controllers": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ref"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/controller"
+      }
+    },
+    "accounts": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ref"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/account"
+      }
+    },
+    "pools": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ref"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/pool"
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ref"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {
+        "$ref": "#/$defs/ref"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/agent_binding"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "controllers",
+    "accounts",
+    "pools",
+    "profiles",
+    "bindings"
+  ]
+}

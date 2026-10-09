@@ -48,6 +48,9 @@ var auditGuardCalls = map[string]string{
 // is a claim a reviewer can check against the handler, not a waiver: if the
 // reason stops being true, the entry has to go and the route needs a guard.
 var auditAllowList = map[string]string{
+	"POST /workspaces/:ws_id/runtime/controllers/:controller_ref/report": "handler/repository refuses users and OAuth connectors, requires the presented owner-workspace agent key and freshly checks the controller's exact active reporter grant; it cannot mutate desired catalog, receiver admission or launch work",
+	"POST /workspaces/:ws_id/runtime/artifacts/:artifact_id/provenance":  "handler/repository refuses users and OAuth connectors and requires the presented owner-workspace agent key with a fresh exact reporter grant check; it only records authorship facts for an artifact revision and cannot mutate the catalog, admission or launch work",
+	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/preview":       "read-only advisory computation behind the same exact-grant binding check as GET binding (runtimeBoundCaller); persists nothing and always answers launch_authorized=false",
 	"PATCH /auth/me":    "handler resolves the caller with GetUserID; an agent has no user identity and gets 401",
 	"POST /auth/logout": "handler resolves the caller with GetUserID; an agent has no user identity",
 	"POST /workspaces":  "handler refuses agents outright (403 \"agents cannot create workspaces\")",

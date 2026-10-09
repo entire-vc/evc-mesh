@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "controllers": {
+    "runner-a": {
+      "host": "prepared-host",
+      "version": "v2",
+      "reporter_grant_id": "11111111-1111-4111-8111-111111111111",
+      "capabilities": [
+        "code",
+        "quota-v2"
+      ],
+      "enabled": true,
+      "heartbeat_max_age_seconds": 60
+    }
+  },
+  "accounts": {
+    "preferred": {
+      "provider": "provider-a",
+      "credential_ref": "cred:prepared-preferred",
+      "quota_pools_by_mode": {
+        "subscription": [
+          "shared-window",
+          "long-window"
+        ]
+      }
+    },
+    "reserve": {
+      "provider": "provider-a",
+      "credential_ref": "cred:prepared-reserve",
+      "quota_pools_by_mode": {
+        "subscription": [
+          "reserve-window"
+        ]
+      }
+    }
+  },
+  "pools": {
+    "shared-window": {
+      "provider": "provider-a",
+      "resource_ref": "shared-window",
+      "aliases": [
+        "another-credential-view"
+      ],
+      "max_concurrency": 1
+    },
+    "long-window": {
+      "provider": "provider-a",
+      "resource_ref": "long-window",
+      "aliases": [],
+      "max_concurrency": 1
+    },
+    "reserve-window": {
+      "provider": "provider-a",
+      "resource_ref": "reserve-window",
+      "aliases": [],
+      "max_concurrency": 1
+    }
+  },
+  "profiles": {
+    "preferred": {
+      "controller_ref": "runner-a",
+      "account_ref": "preferred",
+      "harness": "prepared-harness",
+      "model": "model-a",
+      "model_developer": "developer-a",
+      "model_family": "family-a",
+      "execution_mode": "subscription",
+      "capabilities": [
+        "code"
+      ],
+      "enabled": true
+    },
+    "reserve": {
+      "controller_ref": "runner-a",
+      "account_ref": "reserve",
+      "harness": "prepared-harness",
+      "model": "model-a",
+      "model_developer": "developer-a",
+      "model_family": "family-a",
+      "execution_mode": "subscription",
+      "capabilities": [
+        "code"
+      ],
+      "enabled": true
+    }
+  },
+  "bindings": {
+    "worker-b": {
+      "binding": {
+        "agent_id": "22222222-2222-4222-8222-222222222222",
+        "workspace_id": "33333333-3333-4333-8333-333333333333",
+        "grant_id": "44444444-4444-4444-8444-444444444444"
+      },
+      "permitted_profiles": [
+        "preferred",
+        "reserve"
+      ],
+      "policy": {
+        "primary_profiles": [
+          "preferred"
+        ],
+        "quota_edges": {
+          "preferred": [
+            "reserve"
+          ]
+        },
+        "preferred_accounts": {
+          "provider-a": "preferred"
+        },
+        "api_reserve_providers": [],
+        "max_attempts": 2,
+        "evidence_max_age_seconds": 60,
+        "qa": {
+          "mode": "strict",
+          "quota_fallback": false
+        }
+      },
+      "enabled": true
+    }
+  }
+}
