@@ -1492,6 +1492,10 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 	return taskRowsToSlice(rows), nil
 }
 
+// LiveWaitMarkerMaxAge bounds how long a trailing `⏳ WAIT` / `↻ NEXT` comment keeps an
+// unleased in_progress card out of FindStaleUnleasedInProgress.
+const LiveWaitMarkerMaxAge = 48 * time.Hour
+
 // FindStaleUnleasedInProgress returns in_progress tasks that hold NO checkout at
 // all and have been untouched for olderThan.
 //
@@ -1532,6 +1536,15 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 // by any route", which is the quantity the grace window was always meant to
 // measure.
 //
+// A card whose latest non-system comment opens with a canonical outcome marker
+// (`⏳ WAIT …` / `↻ NEXT …`) is NOT abandoned, even with no checkout: the fleet rules
+// make release_task the LAST step after a WAIT, so "in_progress, no lease, quiet" is
+// exactly what a healthy waiting card looks like. Without this exclusion the sweep
+// parked such a card in backlog ~2h after its WAIT, with start_after pushing the wake
+// a day out regardless of the event (#2777fee7: a card waiting on an open MR).
+// The exemption is capped at LiveWaitMarkerMaxAge so a WAIT nobody ever answers does
+// not make a card immortal; past the cap it is swept like any other quiet card.
+//
 // human_gate and is_shipped are excluded because a system actor is FORBIDDEN to
 // move such a task, so selecting one produces a retry loop that can never end:
 // MoveTask returns HumanGateFrozenError (backlog/done/cancelled are user-only
@@ -1567,10 +1580,23 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 		        COALESCE((SELECT max(c.created_at)  FROM comments c  WHERE c.task_id  = t.id), t.updated_at),
 		        COALESCE((SELECT max(a.created_at)  FROM artifacts a WHERE a.task_id  = t.id), t.updated_at),
 		        COALESCE((SELECT max(v.created_at)  FROM vcs_links v WHERE v.task_id  = t.id), t.updated_at)
-		      ) < now() - $1::interval`
+		      ) < now() - $1::interval
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM (
+		          SELECT c.body, c.created_at
+		          FROM comments c
+		          WHERE c.task_id = t.id AND c.author_type <> 'system'
+		          ORDER BY c.created_at DESC
+		          LIMIT 1
+		      ) lc
+		      WHERE lc.body ~ '^\s*(⏳ WAIT|↻ NEXT)'
+		        AND lc.created_at > now() - $2::interval
+		  )`
 	var rows []taskRow
 	iv := fmt.Sprintf("%d seconds", int64(olderThan.Seconds()))
-	if err := r.db.SelectContext(ctx, &rows, q, iv); err != nil {
+	waitCap := fmt.Sprintf("%d seconds", int64(LiveWaitMarkerMaxAge.Seconds()))
+	if err := r.db.SelectContext(ctx, &rows, q, iv, waitCap); err != nil {
 		return nil, err
 	}
 	return taskRowsToSlice(rows), nil
