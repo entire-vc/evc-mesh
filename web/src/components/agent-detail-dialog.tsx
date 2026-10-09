@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AgentRuntimeTabs } from "@/components/agent-runtime-tabs";
 import { ApiKeyRevealPanel } from "@/components/api-key-reveal";
 import type { Agent, AgentProfileUpdateRequest, AgentType } from "@/types";
 import { inlineLabel } from "@/lib/user-display";
@@ -449,7 +450,7 @@ export function AgentDetailDialog({
 
   // Default detail mode
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={open} onOpenChange={handleClose} className="max-w-[min(96vw,1400px)]">
       <DialogContent
         onClose={handleClose}
         className="max-h-[85vh] overflow-y-auto"
@@ -536,7 +537,11 @@ export function AgentDetailDialog({
           <p className="text-sm text-destructive">{error}</p>
         )}
 
-        <div className="mt-4 space-y-5">
+        <AgentRuntimeTabs
+          agent={agent}
+          workspaceId={currentWorkspace?.id ?? null}
+          profile={
+        <div className="space-y-5">
           {/* Status */}
           <DetailRow label="Status">
             <div className="flex items-center gap-2">
@@ -1064,6 +1069,10 @@ export function AgentDetailDialog({
             })()}
           </div>
 
+        </div>
+          }
+          access={
+        <div className="space-y-5">
           {/* Workspaces (task U4) — where this agent is connected, home
               marked separately (agent.workspace_id === grant.workspace_id,
               no cross-referencing needed here unlike the Members-tab list).
@@ -1106,8 +1115,9 @@ export function AgentDetailDialog({
                 )}
               </div>
             )}
-
         </div>
+          }
+        />
 
         {/* Management actions */}
         <div className="mt-6 flex items-center justify-between border-t border-border pt-4">

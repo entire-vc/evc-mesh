@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { RuntimeResourcesCard } from "@/components/runtime-resources-card";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -666,6 +667,7 @@ export function IntegrationsPage() {
             })}
           </div>
         )}
+        {currentWorkspace && <RuntimeResourcesCard workspaceId={currentWorkspace.id} />}
       </div>
     </div>
   );

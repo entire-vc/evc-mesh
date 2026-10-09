@@ -310,6 +310,7 @@ describe("AgentDetailDialog — Workspaces section (task U4)", () => {
 
     render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
 
+    fireEvent.click(screen.getByRole("tab", { name: "Workspace access" }));
     await screen.findByText("Home WS");
     expect(screen.getByText("Guest WS")).toBeInTheDocument();
     // Exactly one Home badge — the guest row gets only its role badge.
