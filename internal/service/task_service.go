@@ -38,6 +38,22 @@ func uuidPtrChanged(a, b *uuid.UUID) bool {
 	return *a != *b
 }
 
+// timePtrChanged and floatPtrChanged compare by value: existing and updated
+// tasks come from separate reads, so their pointers differ even when unchanged.
+func timePtrChanged(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a != b
+	}
+	return !a.Equal(*b)
+}
+
+func floatPtrChanged(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a != b
+	}
+	return *a != *b
+}
+
 type taskService struct {
 	taskRepo          repository.TaskRepository
 	statusRepo        repository.TaskStatusRepository
@@ -738,13 +754,13 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	if existing.AssigneeType != task.AssigneeType {
 		changes["assignee_type"] = map[string]interface{}{"old": string(existing.AssigneeType), "new": string(task.AssigneeType)}
 	}
-	if existing.DueDate != task.DueDate {
+	if timePtrChanged(existing.DueDate, task.DueDate) {
 		changes["due_date"] = map[string]interface{}{"old": existing.DueDate, "new": task.DueDate}
 	}
-	if existing.StartAfter != task.StartAfter {
+	if timePtrChanged(existing.StartAfter, task.StartAfter) {
 		changes["start_after"] = map[string]interface{}{"old": existing.StartAfter, "new": task.StartAfter}
 	}
-	if existing.EstimatedHours != task.EstimatedHours {
+	if floatPtrChanged(existing.EstimatedHours, task.EstimatedHours) {
 		changes["estimated_hours"] = map[string]interface{}{"old": existing.EstimatedHours, "new": task.EstimatedHours}
 	}
 	delegationLevelChanged := existing.DelegationLevel != task.DelegationLevel
@@ -759,7 +775,9 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		changes["reviewer_id"] = map[string]interface{}{"old": existing.ReviewerID, "new": task.ReviewerID}
 		changes["reviewer_type"] = map[string]interface{}{"old": existing.ReviewerType, "new": task.ReviewerType}
 	}
-	s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", changes)
+	if len(changes) > 0 {
+		s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", changes)
+	}
 
 	// Dispatch webhook for task.assigned when the assignee changes (agent wakeup pipeline).
 	if assigneeChanged && s.webhookSvc != nil && s.projectRepo != nil {
@@ -1368,6 +1386,7 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 
 	oldAssigneeID := task.AssigneeID
 	oldAssigneeType := task.AssigneeType
+	oldAssignedBy := task.AssignedBy
 
 	// Pin-assignee invariant: human assignments cannot be overridden by rule or system sources.
 	source := input.Source
@@ -1389,6 +1408,14 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 		return err
 	}
 
+	// A re-assignment that changes nothing (same assignee and type, and for a real
+	// assignee the same source/pin; e.g. unassigning an unassigned task) is not
+	// written and leaves no none→none activity row. assigned_by describes the
+	// current assignee only, so it is not a change while there is none. Push
+	// notifications below keep their existing behavior.
+	assignmentChanged := uuidPtrChanged(oldAssigneeID, input.AssigneeID) || oldAssigneeType != resolvedType ||
+		(input.AssigneeID != nil && oldAssignedBy != source)
+
 	task.AssigneeID = input.AssigneeID
 	task.AssigneeType = resolvedType
 	task.AssignedBy = source
@@ -1396,7 +1423,9 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 
 	changes := map[string]any{"assignee_id": map[string]any{"old": oldAssigneeID, "new": input.AssigneeID}, "assignee_type": map[string]any{"old": oldAssigneeType, "new": resolvedType}, "assignment_source": source}
 	durable := false
-	if writer, ok := s.taskRepo.(interface {
+	if !assignmentChanged {
+		// nothing to persist or log
+	} else if writer, ok := s.taskRepo.(interface {
 		UpdateTransition(context.Context, *domain.Task, domain.TaskTransition) error
 	}); ok {
 		audit := newTransitionAudit(ctx, task, MoveTaskInput{Source: "api"})
@@ -1411,7 +1440,7 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, taskID)
 	}
-	if !durable {
+	if !durable && assignmentChanged {
 		s.logActivity(ctx, task.ProjectID, taskID, "task.assigned", map[string]interface{}{
 			"assignee_id":   map[string]interface{}{"old": oldAssigneeID, "new": input.AssigneeID},
 			"assignee_type": map[string]interface{}{"old": string(oldAssigneeType), "new": string(input.AssigneeType)},

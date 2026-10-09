@@ -219,3 +219,109 @@ func (h *RuntimeHandler) Provenance(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]bool{"recorded": true, "launch_authorized": false})
 }
+
+// runtimeReservationScope parses the path and query shared by every
+// reservation route: receiving workspace, explicit owner and binding ref.
+func runtimeReservationScope(c echo.Context, withID bool) (ws, owner, id uuid.UUID, err error) {
+	if ws, err = runtimeWorkspace(c); err != nil {
+		return
+	}
+	if owner, err = runtimeOwner(c); err != nil {
+		return
+	}
+	if withID {
+		id, err = uuid.Parse(c.Param("reservation_id"))
+		if err != nil || id == uuid.Nil {
+			err = apierror.BadRequest("invalid reservation_id")
+		}
+	}
+	return
+}
+
+// AcquireReservation atomically reserves identity cap, task writer, worker and
+// every server-derived pool. 201 on creation, 200 on an idempotent replay.
+func (h *RuntimeHandler) AcquireReservation(c echo.Context) error {
+	ws, owner, _, err := runtimeReservationScope(c, false)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input domain.RuntimeAcquireInput
+	if err = runtimeBody(c, &input, "idempotency_key", "profile_id", "task_id", "checkout_generation", "checkout_request_id", "worker_ref",
+		"expected_catalog_revision", "expected_catalog_digest", "expected_admission_revision", "expected_profile_revision",
+		"expected_pool_set_digest", "ttl_seconds"); err != nil {
+		return handleError(c, err)
+	}
+	value, created, err := h.repo.AcquireReservation(c.Request().Context(), owner, ws, c.Param("binding_id"), runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if created {
+		return c.JSON(http.StatusCreated, value)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+func (h *RuntimeHandler) ConsumeReservation(c echo.Context) error {
+	ws, owner, id, err := runtimeReservationScope(c, true)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input domain.RuntimeConsumeInput
+	if err = runtimeBody(c, &input, "fence", "checkout_generation", "run_lease_seconds"); err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.ConsumeReservation(c.Request().Context(), owner, ws, c.Param("binding_id"), id, runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+func (h *RuntimeHandler) ReleaseReservation(c echo.Context) error {
+	ws, owner, id, err := runtimeReservationScope(c, true)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input domain.RuntimeReleaseInput
+	if err = runtimeBody(c, &input, "fence", "checkout_request_id", "checkout_generation", "stopped", "proof"); err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.ReleaseReservation(c.Request().Context(), owner, ws, c.Param("binding_id"), id, runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+func (h *RuntimeHandler) GetReservation(c echo.Context) error {
+	ws, owner, id, err := runtimeReservationScope(c, true)
+	if err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.GetReservation(c.Request().Context(), owner, ws, c.Param("binding_id"), id, runtimeActor(c))
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+// Capacity is the read-only execution-state projection; it admits nothing.
+func (h *RuntimeHandler) Capacity(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var agent *uuid.UUID
+	if raw := c.QueryParam("agent_id"); raw != "" {
+		id, parseErr := uuid.Parse(raw)
+		if parseErr != nil || id == uuid.Nil {
+			return handleError(c, apierror.BadRequest("invalid agent_id"))
+		}
+		agent = &id
+	}
+	value, err := h.repo.Capacity(c.Request().Context(), ws, runtimeActor(c), agent)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}

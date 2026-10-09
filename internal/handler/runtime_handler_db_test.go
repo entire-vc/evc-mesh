@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -113,6 +114,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 		}
 	})
 	e.GET("/workspaces/:ws_id/runtime", h.Inventory)
+	e.GET("/workspaces/:ws_id/runtime/capacity", h.Capacity)
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
@@ -120,6 +122,10 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
 	e.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", h.Provenance)
+	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations", h.AcquireReservation)
+	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id", h.GetReservation)
+	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume", h.ConsumeReservation)
+	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release", h.ReleaseReservation)
 	f.e = e
 	return f
 }
@@ -350,4 +356,112 @@ func TestRuntimeHTTPControllerDesiredIsScopedToItsController(t *testing.T) {
 
 func hdr2(f *runtimeHTTP, etag string) map[string]string {
 	return map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String(), "If-None-Match": etag}
+}
+
+// Wire contract of execution admission: status codes, strict bodies and
+// secret-free responses through the real handler, error handler and database.
+func TestRuntimeHTTPReservationLifecycle(t *testing.T) {
+	f := newRuntimeHTTP(t)
+	ctx := context.Background()
+	owner := map[string]string{"X-Test-User": f.ownerUser.String()}
+	receiver := map[string]string{"X-Test-User": f.receiverUser.String()}
+	worker := map[string]string{"X-Test-Agent": f.worker.String(), "X-Test-Agent-Workspace": f.receiver.String()}
+	ownerQuery := "?resource_owner_workspace_id=" + f.owner.String()
+	binding := "/workspaces/" + f.receiver.String() + "/runtime/bindings/worker-b"
+
+	code, _, body := f.do(http.MethodPut, "/workspaces/"+f.owner.String()+"/runtime", `{"if_revision":0,"enabled":true,"config":`+string(f.catalog)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	code, _, body = f.do(http.MethodPut, binding+"/admission"+ownerQuery, `{"if_revision":0,"enabled":true,"permitted_profiles":["preferred","reserve"]}`, receiver)
+	require.Equal(t, http.StatusOK, code, body)
+	code, view, body := f.do(http.MethodGet, binding+ownerQuery, "", worker)
+	require.Equal(t, http.StatusOK, code, body)
+
+	project := &domain.Project{ID: uuid.New(), WorkspaceID: f.receiver, Name: "Runtime", Slug: "rt-" + uuid.NewString(), DefaultAssigneeType: domain.DefaultAssigneeNone}
+	require.NoError(t, postgres.NewProjectRepo(f.db).Create(ctx, project))
+	status := &domain.TaskStatus{ID: uuid.New(), ProjectID: project.ID, Name: "Todo", Slug: "todo", Category: domain.StatusCategoryTodo, IsDefault: true, Color: "#000000"}
+	require.NoError(t, postgres.NewTaskStatusRepo(f.db).Create(ctx, status))
+	task := &domain.Task{ID: uuid.New(), ProjectID: project.ID, StatusID: status.ID, Title: "rt", AssigneeType: domain.AssigneeTypeUnassigned, Priority: domain.PriorityMedium, CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser}
+	require.NoError(t, postgres.NewTaskRepo(f.db).Create(ctx, task, nil))
+	request := uuid.New()
+	_, err := f.db.Exec(`UPDATE tasks SET checked_out_by=$2,checkout_token=$3,checkout_expires=now()+interval '1 hour',checkout_generation=1,checkout_request_id=$4 WHERE id=$1`, task.ID, f.worker, uuid.New(), request)
+	require.NoError(t, err)
+
+	catalog, err := domain.ParseRuntimeCatalog(f.catalog)
+	require.NoError(t, err)
+	pools, ok := catalog.RuntimeProfilePools(f.owner, "preferred")
+	require.True(t, ok)
+	admission := view["admission"].(map[string]any)
+	acquire := fmt.Sprintf(`{"idempotency_key":"attempt-1","profile_id":"preferred","task_id":%q,"checkout_generation":1,"checkout_request_id":%q,"worker_ref":"slot-1","expected_catalog_revision":%v,"expected_catalog_digest":%q,"expected_admission_revision":%v,"expected_profile_revision":"rev-1","expected_pool_set_digest":%q,"ttl_seconds":60}`,
+		task.ID, request, view["revision"], view["digest"], admission["revision"], domain.RuntimePoolSetDigest(pools))
+	reservations := binding + "/reservations" + ownerQuery
+
+	code, _, body = f.do(http.MethodPost, reservations, acquire, worker)
+	require.Equal(t, http.StatusLocked, code, "max_concurrent_tasks unset: "+body)
+	require.Contains(t, body, "identity_cap_unset")
+	_, err = f.db.Exec(`UPDATE agents SET max_concurrent_tasks=1 WHERE id=$1`, f.worker)
+	require.NoError(t, err)
+
+	code, _, _ = f.do(http.MethodPost, reservations, strings.Replace(acquire, `"ttl_seconds":60`, `"ttl_seconds":60,"pools":["chosen"]`, 1), worker)
+	require.Equal(t, http.StatusBadRequest, code, "client cannot name pools")
+	code, _, _ = f.do(http.MethodPost, reservations, acquire, receiver)
+	require.Equal(t, http.StatusForbidden, code, "a human admin cannot acquire for the agent")
+	code, created, body := f.do(http.MethodPost, reservations, acquire, worker)
+	require.Equal(t, http.StatusCreated, code, body)
+	for _, forbidden := range []string{"fingerprint", "idempotency", "attempt-1", "synthetic-", "cred:"} {
+		require.NotContains(t, body, forbidden)
+	}
+	code, replay, _ := f.do(http.MethodPost, reservations, acquire, worker)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, created["reservation_id"], replay["reservation_id"])
+	id := created["reservation_id"].(string)
+	fence := created["fence"]
+	item := binding + "/reservations/" + id
+
+	consume := fmt.Sprintf(`{"fence":%v,"checkout_generation":1,"run_lease_seconds":600}`, fence)
+	code, consumed, body := f.do(http.MethodPost, item+"/consume"+ownerQuery, consume, worker)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, "consumed", consumed["state"])
+
+	unproven := fmt.Sprintf(`{"fence":%v,"checkout_request_id":%q,"checkout_generation":1,"stopped":false,"proof":{"kind":"no_child","evidence_ref":""}}`, fence, request)
+	code, _, body = f.do(http.MethodPost, item+"/release"+ownerQuery, unproven, worker)
+	require.Equal(t, http.StatusConflict, code, body)
+	require.Contains(t, body, "release_unproven")
+	code, got, _ := f.do(http.MethodGet, item+ownerQuery, "", receiver)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, "consumed", got["state"], "unproven release keeps occupancy")
+
+	proven := strings.Replace(unproven, `"stopped":false`, `"stopped":true`, 1)
+	code, released, body := f.do(http.MethodPost, item+"/release"+ownerQuery, proven, worker)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, "released", released["state"])
+	code, again, _ := f.do(http.MethodPost, item+"/release"+ownerQuery, proven, worker)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, released["release_receipt"], again["release_receipt"])
+	code, _, body = f.do(http.MethodPost, item+"/consume"+ownerQuery, consume, worker)
+	require.Equal(t, http.StatusGone, code, "a late consume replay after release must never authorize a start")
+	require.Contains(t, body, "reservation_released")
+}
+
+func TestRuntimeHTTPCapacityProjection(t *testing.T) {
+	f := newRuntimeHTTP(t)
+	worker := map[string]string{"X-Test-Agent": f.worker.String(), "X-Test-Agent-Workspace": f.receiver.String()}
+	_, err := f.db.Exec(`UPDATE agents SET max_concurrent_tasks=2 WHERE id=$1`, f.worker)
+	require.NoError(t, err)
+	path := "/workspaces/" + f.receiver.String() + "/runtime/capacity"
+	code, got, body := f.do(http.MethodGet, path+"?agent_id="+f.worker.String(), "", worker)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, "durable_state", got["source"])
+	require.NotEmpty(t, got["observed_at"])
+	agents := got["agents"].([]any)
+	require.Len(t, agents, 1)
+	agent := agents[0].(map[string]any)
+	for field, want := range map[string]any{"configured": 2.0, "effective": 2.0, "reserved": 0.0, "running": 0.0, "occupied": 0.0, "ready": 2.0, "reason": "available"} {
+		require.Equal(t, want, agent[field], field)
+	}
+	require.NotContains(t, body, "task_id")
+	code, _, _ = f.do(http.MethodGet, path+"?agent_id=not-a-uuid", "", worker)
+	require.Equal(t, http.StatusBadRequest, code)
+	foreign := map[string]string{"X-Test-Agent": f.worker.String(), "X-Test-Agent-Workspace": f.owner.String()}
+	code, _, _ = f.do(http.MethodGet, path, "", foreign)
+	require.Equal(t, http.StatusForbidden, code, "a key for another workspace cannot read this projection")
 }

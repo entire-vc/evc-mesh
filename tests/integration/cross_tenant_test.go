@@ -83,6 +83,13 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPut, "/runtime/bindings/worker-b/admission?resource_owner_workspace_id=" + dummyUUID, map[string]any{"if_revision": 0, "enabled": false, "permitted_profiles": []string{}}},
 	{http.MethodPost, "/runtime/bindings/worker-b/preview?resource_owner_workspace_id=" + dummyUUID, map[string]any{"purpose": "new_launch", "required_capabilities": []string{}}},
 	{http.MethodPost, "/runtime/artifacts/" + dummyUUID + "/provenance", map[string]any{}},
+	// Capacity projection and slot reservations: a non-member must not read
+	// another tenant's execution state or acquire/consume/release its slots.
+	{http.MethodGet, "/runtime/capacity", nil},
+	{http.MethodPost, "/runtime/bindings/worker-b/reservations?resource_owner_workspace_id=" + dummyUUID, map[string]any{"idempotency_key": "intruder", "profile_id": "p", "worker_ref": "w"}},
+	{http.MethodGet, "/runtime/bindings/worker-b/reservations/" + dummyUUID + "?resource_owner_workspace_id=" + dummyUUID, nil},
+	{http.MethodPost, "/runtime/bindings/worker-b/reservations/" + dummyUUID + "/consume?resource_owner_workspace_id=" + dummyUUID, map[string]any{"fence": 1}},
+	{http.MethodPost, "/runtime/bindings/worker-b/reservations/" + dummyUUID + "/release?resource_owner_workspace_id=" + dummyUUID, map[string]any{"fence": 1}},
 
 	{http.MethodPost, "/webhooks", map[string]string{"url": "https://example.invalid/hook"}},
 	{http.MethodGet, "/webhooks", nil},
@@ -273,6 +280,7 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		suffix = strings.ReplaceAll(suffix, "/agent-grants/"+dummyUUID, "/agent-grants/:grant_id")
 		suffix = strings.ReplaceAll(suffix, "/runtime/controllers/runner-a/", "/runtime/controllers/:controller_ref/")
 		suffix = strings.ReplaceAll(suffix, "/runtime/bindings/worker-b", "/runtime/bindings/:binding_id")
+		suffix = strings.ReplaceAll(suffix, "/reservations/"+dummyUUID, "/reservations/:reservation_id")
 		suffix = strings.ReplaceAll(suffix, "/runtime/artifacts/"+dummyUUID+"/", "/runtime/artifacts/:provenance_artifact_id/")
 		return suffix
 	}
