@@ -188,6 +188,13 @@ func TestFindStaleUnleasedInProgress_LiveWaitMarker(t *testing.T) {
 	systemOnly := f.insertUnleasedTask(t, 5*time.Hour)
 	f.insertCommentAs(t, systemOnly, "system", "⏳ WAIT mr:entire-vc/evc-mesh!3", 3*time.Hour)
 
+	// the handoff: the author's WAIT is followed by another actor's comment, so the
+	// latest non-system comment is no longer a marker and the card is a candidate
+	// (the reaper then returns it to todo instead of parking it)
+	handoff := f.insertUnleasedTask(t, 5*time.Hour)
+	f.insertCommentAs(t, handoff, "agent", "⏳ WAIT mr:entire-vc/evc-mesh!4", 4*time.Hour)
+	f.insertCommentAs(t, handoff, "agent", "VERDICT: DO-NOT-SHIP — нужен фикс", 3*time.Hour)
+
 	got, err := repo.FindStaleUnleasedInProgress(context.Background(), 2*time.Hour)
 	require.NoError(t, err)
 	found := map[uuid.UUID]bool{}
@@ -195,6 +202,7 @@ func TestFindStaleUnleasedInProgress_LiveWaitMarker(t *testing.T) {
 		found[task.ID] = true
 	}
 
+	require.True(t, found[handoff], "a reviewer comment after the author's WAIT left the card exempt: the handoff is never seen")
 	require.False(t, found[exemptWait], "a live ⏳ WAIT card was swept as abandoned")
 	require.False(t, found[exemptNext], "a live ↻ NEXT card was swept as abandoned")
 	require.True(t, found[plain], "an ordinary quiet comment exempted a card; the marker match is too loose")
