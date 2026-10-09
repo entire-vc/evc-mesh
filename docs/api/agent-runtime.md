@@ -61,6 +61,8 @@ and the service does not search foreign catalogs by a name supplied by the calle
 | GET `/workspaces/:ws_id/runtime/bindings/:binding_id` | desired/actual profile, preferred account, availability and reasons | exact bound agent grant or authorized receiving admin |
 | PUT `/workspaces/:ws_id/runtime/bindings/:binding_id/admission` | `{if_revision, permitted_profiles, enabled}` | receiving workspace admin; independent CAS; initially denied |
 | POST `/workspaces/:ws_id/runtime/bindings/:binding_id/preview` | purpose, source profile, required capabilities, optional artifact reference | freshly authorized binding; server resolves observations and provenance |
+| POST `/workspaces/:ws_id/runtime/bindings/:binding_id/reservations` (+ `/:reservation_id`, `/consume`, `/release`) | atomic execution admission, see "Execution admission" | exact bound agent grant |
+| GET `/workspaces/:ws_id/runtime/capacity` (`?agent_id=` optional) | derived execution-state projection per agent identity, see "Capacity projection" | human member of `:ws_id` or an agent key presented for `:ws_id`; no OAuth connectors |
 | POST `/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance` | `controller_ref`, exact `artifact_revision`, `complete`, authors (agent id, model developer, model family); authors merge, never shrink | trusted reporting controller, bound execution scope and persisted attestation |
 
 Schema v2 is independent of monotonically increasing desired revision. Every save,
@@ -102,6 +104,180 @@ Preview performs no launch, reservation, task status update or account switching
 Concurrent capacity reservation is an authority boundary, not a side effect of GET
 or preview. Before a controller starts work it must atomically obtain/fence the
 existing exact-grant execution authority and all canonical resource pools.
+
+## Execution admission: reservation, consume, release
+
+Status: implementation contract (R3). This is the only execution authority of the
+runtime integration; preview and policy projection stay advisory. Direct mode
+(no `agent_runtime` connection, or an agent without a binding) does not use
+these routes and is unaffected.
+
+All four routes live under `/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id`
+and require `?resource_owner_workspace_id=<owner ws>`. `:ws_id` is the receiving
+workspace of the binding.
+
+| Method/path | Body → response | Caller |
+| --- | --- | --- |
+| POST `/reservations` | `AcquireRequest` → `201 Reservation` (replay: `200`, same body) | exact bound agent key (agent + receiving workspace + active binding grant) |
+| POST `/reservations/:reservation_id/consume` | `ConsumeRequest` → `200 Reservation` with `consume_receipt` | same bound agent key |
+| POST `/reservations/:reservation_id/release` | `ReleaseRequest` → `200 Reservation` with `release_receipt` | bound agent key (grant revocation does not block release) or receiving workspace owner/admin |
+| GET `/reservations/:reservation_id` | → `200 Reservation` | bound agent key or receiving workspace owner/admin |
+
+Request bodies are strict JSON (unknown/duplicate fields → 400); every field
+listed is required (`checkout_request_id` may be `null`).
+
+```
+AcquireRequest {
+  idempotency_key: string        // attempt key, ^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$
+  profile_id: string             // must be in the effective admitted profile set
+  task_id: uuid                  // task in the receiving workspace
+  checkout_generation: int64     // tasks.checkout_generation of the caller's live checkout
+  checkout_request_id: uuid|null // tasks.checkout_request_id of that checkout (writer request)
+  worker_ref: string             // controller-local worker slot, same pattern as idempotency_key
+  expected_catalog_revision: int64, expected_catalog_digest: string   // binding revision + digest
+  expected_admission_revision: int64                                  // receiving admission revision
+  expected_profile_revision: string                                   // projection profiles[].revision
+  expected_pool_set_digest: string
+  ttl_seconds: int               // 10..900, lifetime of the UNCONSUMED reservation
+}
+ConsumeRequest { fence: int64, checkout_generation: int64, run_lease_seconds: int /* 60..86400 */ }
+ReleaseRequest {
+  fence: int64, checkout_request_id: uuid|null, checkout_generation: int64,
+  stopped: bool,
+  proof: { kind: "no_child" | "stopped_process_birth_proof" | "not_started",
+           evidence_ref: string /* required for stopped_process_birth_proof, "" otherwise */ }
+}
+Reservation {
+  reservation_id: uuid, fence: int64,
+  state: "reserved" | "consumed" | "reconcile" | "released" | "expired",
+  resource_owner_workspace_id, binding_ref, agent_id, workspace_id, grant_id,
+  task_id, checkout_generation, checkout_request_id, worker_ref, controller_ref, profile_id,
+  catalog_revision, catalog_digest, admission_revision, profile_revision,
+  pools: [canonical pool id], pool_set_digest,
+  expires_at, created_at,
+  consume_receipt: null | { receipt_id: uuid, consumed_at, run_lease_expires_at },
+  release_receipt: null | { release_id: uuid, released_at, proof_kind }
+}
+```
+
+The response never contains API keys, grant-key fingerprints, credential
+references, the idempotency key or any other agent's tasks.
+
+**Pools are server-derived.** The client never names a pool. For the profile the
+server takes `accounts[profile.account_ref].quota_pools_by_mode[profile.execution_mode]`,
+resolves aliases, maps each to the canonical id
+`<owner workspace id>:<provider>:<resource_ref>` (the same ids as the policy
+projection), de-duplicates and sorts them. `pool_set_digest` = lowercase hex
+SHA-256 of those ids joined with `\n`. The client only sends the digest it
+expects; a mismatch is a stale-revision conflict.
+
+**Acquire** runs in one transaction and either reserves everything or nothing:
+1. Caller is the exact bound agent key; the binding grant is active and its key
+   unchanged (else 403). Same `idempotency_key` for this agent → the stored
+   reservation is returned unchanged (`200`), whatever its state, provided the
+   whole request scope is identical; a different scope → 409 `idempotency_scope_mismatch`.
+2. Connection enabled, binding enabled, receiving admission enabled, profile and its
+   controller enabled (else 423 `runtime_disabled`); profile admitted (else 403).
+3. Catalog revision+digest, admission revision, profile revision and pool-set
+   digest equal the expected values (else 409 `stale_revision`).
+4. Task belongs to the receiving workspace and is checked out by this agent with
+   a live lease, the given generation and writer request (else 409 `writer_lease_mismatch`).
+5. Identity cap: `agents.max_concurrent_tasks` counts the agent's reserved +
+   consumed + reconcile reservations across all workspaces, bindings and
+   controllers. `0` (unset) → 423 `identity_cap_unset` (no invented default);
+   reached → 409 `identity_cap_reached`.
+6. One active reservation per task (409 `task_writer_active`) and per
+   `(owner connection, controller, worker_ref)` (409 `worker_active`).
+7. Every canonical pool has fewer active claims than its `max_concurrency`
+   (else 409 `pool_exhausted`).
+8. A new monotonically increasing `fence` is issued; state `reserved`,
+   `expires_at = now + ttl_seconds`.
+
+**Consume** is the durable start-consumed CAS, executed after the controller
+re-checks STOP/pause/gates/dependencies and its own writer lease, right before
+spawn. It succeeds only if the fence and checkout generation match, the
+reservation is `reserved` and unexpired, and at commit time the catalog
+revision/digest, admission revision, profile revision, grant (active, same key)
+and the task's live checkout (agent, generation, writer request) are still the
+ones bound at acquire. It writes `consume_receipt`; `expires_at` becomes
+`run_lease_expires_at`. A replay on a consumed reservation with the same fence
+and generation returns the same receipt (also while `reconcile`); once the
+reservation is `released` or `expired`, consume answers 410 so a late replay can
+never authorize a start. A lost consume response is reconciled
+by `GET` or by replaying the acquire with the original `idempotency_key`; never
+by a new reservation.
+
+**TTL and reconcile.** Only an unconsumed reservation expires (`expired`, all
+claims freed). A consumed reservation past `run_lease_expires_at` is reported as
+`reconcile` and stays occupied: timeout, missing PID or controller restart never
+free capacity. Lowering `max_concurrent_tasks` or `max_concurrency` never revokes
+an active reservation; it only refuses new acquires.
+
+**Release** frees the claims only with the exact `reservation_id`, `fence`,
+`checkout_request_id` and `checkout_generation` of the original writer (else 409
+`writer_mismatch`), `stopped: true` and a positive proof: `no_child` or
+`stopped_process_birth_proof` (with `evidence_ref`); `not_started` is accepted
+only while the reservation is still `reserved`. `stopped: false`, a missing or
+unsupported proof → 409 `release_unproven`, the reservation stays occupied.
+Release replay with the same writer returns the same `release_receipt`; it never
+touches a newer reservation of the same task or worker. Releasing an already
+`expired` reservation returns it unchanged.
+
+**Errors** use the standard body `{code, message, details}`; `details` carries
+the stable reason: 400 invalid request; 403 not the bound caller, revoked/rotated
+grant, profile not admitted; 404 unknown binding/reservation/task (also for a
+foreign one); 409 `idempotency_scope_mismatch`, `stale_revision`,
+`writer_lease_mismatch`, `identity_cap_reached`, `task_writer_active`,
+`worker_active`, `pool_exhausted`, `fence_mismatch`, `writer_mismatch`,
+`release_unproven`; 410 `reservation_expired` / `reservation_released` (consume
+too late); 423 `runtime_disabled`, `identity_cap_unset`. Disabling the
+connection or revoking the grant denies new acquire and consume; existing
+reservations stay occupied until released or (if unconsumed) expired.
+
+## Capacity projection (read-only)
+
+`GET /workspaces/:ws_id/runtime/capacity` answers, for every agent identity of
+the workspace (home agents and agents with an active grant; `?agent_id=` narrows
+to one, unknown → 404), how much execution capacity is configured, occupied and
+ready. It is derived from durable state in one read-only snapshot and admits
+nothing: only `POST /reservations` grants execution. Direct mode (no runtime
+connection) uses the same projection; its occupancy is the held checkouts.
+
+```
+RuntimeCapacity { workspace_id, observed_at, source: "durable_state", agents: [AgentCapacity] }
+AgentCapacity {
+  agent_id, name,
+  configured,     // agents.max_concurrent_tasks (0 = unset)
+  effective,      // configured, or 0 when unset (no invented default)
+  reserved,       // unconsumed, unexpired reservations
+  running,        // consumed reservations inside their run lease
+  reconcile,      // consumed reservations past their run lease (unknown)
+  writers,        // held, live task checkouts without an active reservation
+  stale_writers,  // checkouts still held past their lease expiry (unknown)
+  unknown,        // reconcile + stale_writers
+  occupied,       // reserved + running + reconcile + writers + stale_writers
+  ready,          // max(0, effective - occupied)
+  reason,         // "available" | "at_capacity" | "identity_cap_unset"
+  tasks: { ready, waiting, waiting_by: { human_gate, triage, parked_wait, dependencies, start_after } }
+}
+```
+
+Capacity fields are global to the agent identity across all workspaces, like the
+reservation cap; `tasks` counts only this workspace and carries no task ids.
+Rules:
+
+- Occupancy comes only from reservations and held checkouts, never from display
+  status, Todo/In Progress or `current_tasks`. A reservation or checkout counts
+  regardless of the task's status, triage stage or `human_gate`.
+- Unknown is occupied: a consumed reservation past its run lease and a checkout
+  past its lease expiry stay in `occupied` (and in `unknown`) until released.
+- Waiting is derived, not a flag: an open (triage/todo/in_progress) task assigned
+  to the agent, without a checkout or active reservation, is `waiting` when it has
+  an armed `human_gate`, sits in a `triage`-category status, has an unreleased
+  registered parked wait, an open `blocks` dependency or a future `start_after`;
+  otherwise it is `ready`. A waiting task stops consuming capacity only after its
+  reservation is released and its checkout is released (quiesced).
+- Backlog and review tasks are not schedulable and are not counted in `tasks`.
 
 ## QA for an exact artifact revision
 

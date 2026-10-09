@@ -166,6 +166,9 @@ var declaredQueryTenantParams = map[string]string{
 
 	// GET /workspaces/:ws_id/analytics — the workspace comes from the path, where
 	// WorkspaceRLS resolves and checks it; project_id only adds a conjunct.
+	// RuntimeRepo.Capacity lists only identities of :ws_id (home agent or active
+	// grant there) after runtimeWorkspaceReader; agent_id only filters that list.
+	"runtime_handler.go:Capacity.agent_id":          "narrows: AND ($2::uuid IS NULL OR a.id=$2) — pinned by a.workspace_id=$1 OR EXISTS",
 	"analytics_handler.go:GetMetrics.project_id":    "narrows: AND t.project_id = $2 — pinned by WHERE p.workspace_id = $1",
 	"analytics_handler.go:ExportMetrics.project_id": "narrows: AND t.project_id = $2 — pinned by WHERE p.workspace_id = $1",
 
