@@ -71,7 +71,8 @@ const (
 
 	// ReasonStatusNotFed — the task IS the recipient's, but sits in a status
 	// the lane's queue does not poll (backlog, triage, in_progress, review,
-	// done…). Which one is in TaskStatusCategory. Fix: move it to todo.
+	// done…). Which one is in TaskStatusCategory. Only backlog is lifted to todo;
+	// in_progress/review are already being worked and must keep their status.
 	ReasonStatusNotFed = "status_not_fed"
 
 	// ReasonTaskGated — the task is the recipient's, but an armed human_gate
@@ -161,11 +162,7 @@ var hintsByReason = map[string]string{
 // empty rather than erroring).
 func (o *CommentDeliveryOutcome) ApplyHint() {
 	if o.Reason == ReasonStatusNotFed {
-		where := "a status their queue doesn't poll"
-		if o.TaskStatusCategory != nil && *o.TaskStatusCategory != "" {
-			where = *o.TaskStatusCategory + ", which their queue doesn't poll"
-		}
-		o.Hint = "this task is theirs but sits in " + where + " — move it to todo if they should act on it"
+		o.Hint = statusNotFedHint(o.TaskStatusCategory)
 		return
 	}
 	o.Hint = hintsByReason[o.Reason]
@@ -177,4 +174,27 @@ func ApplyHints(rows []CommentDeliveryOutcome) {
 	for i := range rows {
 		rows[i].ApplyHint()
 	}
+}
+
+// statusNotFedHint words the status_not_fed verdict by where the card sits.
+// Only backlog gets a "move it to todo" suggestion — that is the one move that
+// loses nothing. An in_progress/review card is already being worked by its
+// assignee: the comment sits on their card, and resetting the status to todo
+// would drop their progress marker, so the hint must not suggest it.
+func statusNotFedHint(cat *string) string {
+	c := ""
+	if cat != nil {
+		c = *cat
+	}
+	switch StatusCategory(c) {
+	case StatusCategoryBacklog:
+		return "this task is theirs but sits in backlog, which their queue doesn't poll — move it to todo if they should act on it"
+	case StatusCategoryInProgress, StatusCategoryReview:
+		return "this task is theirs and already " + c + " — the comment is on their active card, not queued as a new item; leave the status as is (moving it to todo would reset their work)"
+	case StatusCategoryDone, StatusCategoryCancelled:
+		return "this task is theirs but already " + c + " — reopen it explicitly if they should act on this comment"
+	case StatusCategory(""):
+		return "this task is theirs but sits in a status their queue doesn't poll — change its status only if they should pick it up as new work"
+	}
+	return "this task is theirs but sits in " + c + ", which their queue doesn't poll — change its status only if they should pick it up as new work"
 }
