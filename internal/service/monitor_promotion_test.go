@@ -191,6 +191,26 @@ func TestBacklogPromotion_PastDueUnlabelled_Promoted(t *testing.T) {
 	}
 }
 
+// Positive control for park:wait-pavel: the other park:wait-* labels are bound to a date or
+// an external event, so a passed due_date must still wake them. Without this the
+// wait-pavel guard could be a blanket park:* block and the tests above would stay green.
+func TestBacklogPromotion_PastDueOtherParkWaitLabels_Promoted(t *testing.T) {
+	for _, label := range []string{"park:wait-date", "park:wait-external"} {
+		t.Run(label, func(t *testing.T) {
+			h := newMonitorHarness()
+			projectID := uuid.New()
+			backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+			h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+			h.addTask(t, projectID, backlog.ID, []string{label}, hourAgo())
+
+			if n := h.sweep(t); n != 1 {
+				t.Errorf("%q must still be woken by a passed due_date, got n=%d", label, n)
+			}
+		})
+	}
+}
+
 func TestBacklogPromotion_PastDuePhaseVerify_Promoted(t *testing.T) {
 	h := newMonitorHarness()
 	projectID := uuid.New()
@@ -224,7 +244,7 @@ func TestBacklogPromotion_FutureDue_NotPromoted(t *testing.T) {
 // separately: they are one map in the source, and a subset check would pass while the
 // rest of the map was silently dropped.
 func TestBacklogPromotion_PastDueFreezeLabel_NotPromoted(t *testing.T) {
-	for _, label := range []string{"freeze", "no-promote", "no-intake-promote", "golden", "eval-harness"} {
+	for _, label := range []string{"freeze", "no-promote", "no-intake-promote", "park:wait-pavel", "golden", "eval-harness"} {
 		t.Run(label, func(t *testing.T) {
 			h := newMonitorHarness()
 			projectID := uuid.New()
