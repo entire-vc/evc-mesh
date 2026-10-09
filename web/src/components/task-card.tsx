@@ -42,11 +42,25 @@ interface TaskCardProps extends HTMLAttributes<HTMLDivElement> {
    * assignee avatar already says who, and repeating it is noise.
    */
   checkedOutByName?: string;
+  /**
+   * Set when the board shows this gated card in the Triage column instead of
+   * its own status column: the card's real status name, rendered next to the
+   * gate so the move is never mistaken for a status change.
+   */
+  gateStatusName?: string;
+}
+
+export function humanGateTitle(task: Pick<Task, "human_gate_class" | "gate_reason">): string {
+  const base =
+    task.human_gate_class === "soft"
+      ? "Waiting on a human sign-off (soft — auto-releases after a timeout)"
+      : "Waiting on a human sign-off (hard)";
+  return task.gate_reason ? `${base}: ${task.gate_reason}` : base;
 }
 
 export const TaskCard = memo(
   forwardRef<HTMLDivElement, TaskCardProps>(
-    ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, className, ...props }, ref) => {
+    ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, gateStatusName, className, ...props }, ref) => {
     const shortTag = useAgentShortTag(task.assignee_id, task.assignee_type);
     const holderTag = useAgentShortTag(task.checked_out_by, "agent");
     const borderColor =
@@ -158,16 +172,18 @@ export const TaskCard = memo(
           {task.human_gate && (
             <span
               className="inline-flex items-center text-amber-600 dark:text-amber-400"
-              title={
-                task.human_gate_class === "soft"
-                  ? "Waiting on a human sign-off (soft — auto-releases after a timeout)"
-                  : "Waiting on a human sign-off"
-              }
+              title={humanGateTitle(task)}
               data-testid="human-gate-indicator"
               data-human-gate-class={task.human_gate_class ?? "hard"}
             >
               <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="sr-only">Waiting on a human sign-off</span>
+              {gateStatusName ? (
+                <span className="ml-1 text-[10px] font-medium" data-testid="human-gate-status">
+                  {gateStatusName} · awaiting answer
+                </span>
+              ) : (
+                <span className="sr-only">Waiting on a human sign-off</span>
+              )}
             </span>
           )}
 

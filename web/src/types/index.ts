@@ -302,6 +302,8 @@ export interface Task {
   human_gate: boolean;
   human_gate_class?: "hard" | "soft";
   human_gate_armed_at?: string | null;
+  /** Why the card waits on a human (list and detail rows; omitted when unset). */
+  gate_reason?: string | null;
   /** Populated only by GET /tasks/:id when human_gate is true — not on list rows. */
   human_gate_info?: HumanGateInfo | null;
   /**
