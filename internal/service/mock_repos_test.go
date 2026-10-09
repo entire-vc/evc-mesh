@@ -3014,6 +3014,12 @@ func (f *fakeTaskMover) MoveTask(_ context.Context, taskID uuid.UUID, input Move
 	return f.err
 }
 
+// GetByID: the fake holds no tasks; comment-layer code that re-reads the task after a
+// gate release gets "not found" and reports "not moved".
+func (f *fakeTaskMover) GetByID(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
+	return nil, nil
+}
+
 func (f *fakeTaskMover) ArmHumanGate(_ context.Context, in domain.ArmHumanGateInput) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

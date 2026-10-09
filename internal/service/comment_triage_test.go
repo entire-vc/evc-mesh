@@ -1129,15 +1129,15 @@ func TestEnforceBlockingTriage_NegatedCompletionKeyword_ArmsGate(t *testing.T) {
 // Bug fix: Pavel's response must move the task from triage → in_progress
 // ---------------------------------------------------------------------------
 
-// TestReleaseHumanGate_TriageTask_MovesToInProgress verifies that when Pavel
-// comments on a human-gated task currently in triage, the server:
-//  1. Clears human_gate;
-//  2. Moves the task from triage → in_progress (enforceTriageRelease);
-//  3. Writes a system comment mentioning both the gate release and the status change.
-func TestReleaseHumanGate_TriageTask_MovesToInProgress(t *testing.T) {
+// TestReleaseHumanGate_TriageTask_CommentLayerDoesNotMoveToInProgress pins the comment
+// layer's half of the contract: it clears the gate and does NOT issue its own
+// triage -> in_progress move any more (it used to; that put released cards into an
+// occupied slot nobody had checked out). Where the card goes is decided once, inside
+// taskService.SetHumanGate(false) -- see human_gate_triage_return_test.go for the
+// end-to-end proof that a triage card lands in todo.
+func TestReleaseHumanGate_TriageTask_CommentLayerDoesNotMoveToInProgress(t *testing.T) {
 	env := setupTriageEnv(t, true)
 
-	// Task starts in triage with human_gate=true.
 	taskID := uuid.New()
 	env.taskRepo.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: env.projID, StatusID: env.triageID, Title: "Gated in triage",
@@ -1155,22 +1155,16 @@ func TestReleaseHumanGate_TriageTask_MovesToInProgress(t *testing.T) {
 	}
 	require.NoError(t, env.svc.Create(ctx, comment))
 
-	// 1. human_gate must be cleared.
 	gateCalls := env.taskMover.humanGateCalls()
 	require.Len(t, gateCalls, 1)
 	assert.False(t, gateCalls[0].value, "human_gate must be cleared (value=false)")
 
-	// 2. Task must be moved from triage to in_progress.
-	moves := env.taskMover.calls()
-	require.Len(t, moves, 1, "task must be moved from triage to in_progress")
-	require.NotNil(t, moves[0].input.StatusID)
-	assert.Equal(t, env.inProgressID, *moves[0].input.StatusID, "destination must be in_progress")
+	assert.Empty(t, env.taskMover.calls(), "comment layer must not move the task itself")
 
-	// 3. System comment must mention both gate release and status change.
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
 	assert.Contains(t, sys[0].Body, "human_gate снят")
-	assert.Contains(t, sys[0].Body, "in_progress")
+	assert.NotContains(t, sys[0].Body, "in_progress")
 }
 
 // TestReleaseHumanGate_InProgressTask_NoStatusMove verifies that when a human-gated
@@ -1326,9 +1320,10 @@ func TestEnforceTriageExit_HumanGateSet_NoOp(t *testing.T) {
 	}
 	require.NoError(t, env.svc.Create(ctx, comment))
 
-	// releaseHumanGate fires and produces exactly ONE move; enforceTriageExit must not add a second.
-	moves := env.taskMover.calls()
-	require.Len(t, moves, 1, "only one MoveTask call expected (from releaseHumanGate, not double)")
+	// releaseHumanGate clears the gate (the todo landing happens inside the task
+	// service); enforceTriageExit must not add its own triage -> in_progress move.
+	assert.Empty(t, env.taskMover.calls(), "no MoveTask from the comment layer on a gated card")
+	require.Len(t, env.taskMover.humanGateCalls(), 1)
 }
 
 // TestEnforceTriageExit_NoPriorRealBlock_NoOp: no prior blocking comment → no exit.
@@ -1697,9 +1692,11 @@ func TestReleaseHumanGateOnWithdrawal_TaskNotGated_NoOp(t *testing.T) {
 	assert.Empty(t, env.taskMover.humanGateCalls())
 }
 
-// TestReleaseHumanGateOnWithdrawal_TriageTask_MovesToInProgress mirrors
-// TestReleaseHumanGate_TriageTask_MovesToInProgress for the agent-withdrawal path.
-func TestReleaseHumanGateOnWithdrawal_TriageTask_MovesToInProgress(t *testing.T) {
+// TestReleaseHumanGateOnWithdrawal_TriageTask_CommentLayerDoesNotMove mirrors
+// TestReleaseHumanGate_TriageTask_CommentLayerDoesNotMoveToInProgress for the
+// agent-withdrawal path; the end-to-end todo landing is in
+// human_gate_triage_return_test.go.
+func TestReleaseHumanGateOnWithdrawal_TriageTask_CommentLayerDoesNotMove(t *testing.T) {
 	env := setupTriageEnv(t, true)
 	taskID := uuid.New()
 	askerID := uuid.New()
@@ -1722,15 +1719,12 @@ func TestReleaseHumanGateOnWithdrawal_TriageTask_MovesToInProgress(t *testing.T)
 	require.Len(t, gateCalls, 1)
 	assert.False(t, gateCalls[0].value)
 
-	moves := env.taskMover.calls()
-	require.Len(t, moves, 1, "task must be moved from triage to in_progress")
-	require.NotNil(t, moves[0].input.StatusID)
-	assert.Equal(t, env.inProgressID, *moves[0].input.StatusID)
+	assert.Empty(t, env.taskMover.calls(), "comment layer must not move the task itself")
 
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
 	assert.Contains(t, sys[0].Body, "human_gate снят")
-	assert.Contains(t, sys[0].Body, "in_progress")
+	assert.NotContains(t, sys[0].Body, "in_progress")
 }
 
 // TestReleaseHumanGateOnWithdrawal_NotifiesAssigneeAgent verifies that once the
