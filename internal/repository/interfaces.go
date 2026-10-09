@@ -124,6 +124,10 @@ type TaskRepository interface {
 	CountByStatus(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]int, error)
 	CountByStatusCategory(ctx context.Context, projectID uuid.UUID) (map[domain.StatusCategory]int, error)
 	ListByStatusCategory(ctx context.Context, workspaceID uuid.UUID, category domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error)
+	// ListTriageQueue returns the human-attention queue for a workspace: tasks in a
+	// triage-category status UNION tasks with a live human_gate (armed, not done/cancelled),
+	// de-duplicated, hard gates first then by human_gate_armed_at.
+	ListTriageQueue(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 	// ListAllBacklogTasks returns every non-deleted task currently in a backlog-category
 	// status, across ALL workspaces — global by design, mirroring FindDueBacklogTasks
 	// rather than the workspace-scoped ListByStatusCategory. Used by

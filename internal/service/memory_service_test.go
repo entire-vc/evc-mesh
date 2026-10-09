@@ -2549,6 +2549,9 @@ func (m *mockTaskRepo) CountByStatusCategory(_ context.Context, _ uuid.UUID) (ma
 func (m *mockTaskRepo) ListByStatusCategory(_ context.Context, _ uuid.UUID, _ domain.StatusCategory, _ pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) ListTriageQueue(_ context.Context, _ uuid.UUID, _ pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
 func (m *mockTaskRepo) ListAllBacklogTasks(_ context.Context) ([]domain.Task, error) {
 	return nil, nil
 }

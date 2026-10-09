@@ -1389,6 +1389,58 @@ func (r *TaskRepo) ListByStatusCategory(ctx context.Context, workspaceID uuid.UU
 	return pagination.NewPage(items, totalCount, pg), nil
 }
 
+// ListTriageQueue returns the human-attention queue of a workspace: every task in a
+// triage-category status UNION every task with a live human gate (human_gate=true,
+// status not done/cancelled). It is a single predicate over tasks, so a card that is
+// both in triage and gated appears once. Auto-delegation cards are never moved to the
+// triage status, so the gate flag is the only signal for them.
+// Order: live hard gates first, then other gated cards, then plain triage cards; within
+// the gated groups the longest-waiting (oldest human_gate_armed_at) first.
+func (r *TaskRepo) ListTriageQueue(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	pg.Normalize()
+
+	const where = `
+		FROM tasks t
+		INNER JOIN task_statuses ts ON ts.id = t.status_id
+		INNER JOIN projects p ON p.id = t.project_id
+		WHERE p.workspace_id = $1
+		  AND t.deleted_at IS NULL
+		  AND p.deleted_at IS NULL
+		  AND (
+		        ts.category = $2
+		        OR (t.human_gate = true AND ts.category NOT IN ($3, $4))
+		      )`
+
+	var totalCount int
+	if err := r.db.GetContext(ctx, &totalCount, `SELECT COUNT(t.id)`+where,
+		workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled); err != nil {
+		return nil, err
+	}
+
+	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
+		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
+		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
+		t.completed_at, t.deleted_at,
+		t.recurring_schedule_id, t.recurring_instance_number,
+		t.delegation_level, t.human_gate, t.human_gate_class, t.human_gate_armed_at,
+		t.gate_author, t.gate_author_type, t.gate_reason, t.recommended_default, t.gate_deadline,
+		` + taskComputedColsAliased + where + `
+		ORDER BY (t.human_gate AND t.human_gate_class = 'hard') DESC,
+		         t.human_gate DESC,
+		         t.human_gate_armed_at ASC NULLS LAST,
+		         t.created_at DESC
+		LIMIT $5 OFFSET $6`
+	var rows []taskRow
+	if err := r.db.SelectContext(ctx, &rows, dataQ,
+		workspaceID, domain.StatusCategoryTriage, domain.StatusCategoryDone, domain.StatusCategoryCancelled,
+		pg.Limit(), pg.Offset()); err != nil {
+		return nil, err
+	}
+
+	return pagination.NewPage(taskRowsToSlice(rows), totalCount, pg), nil
+}
+
 // AtomicCheckout is the legacy unscoped adapter. Same-holder retries preserve
 // the existing token; callers needing the actual lease use AcquireCheckout.
 func (r *TaskRepo) AtomicCheckout(ctx context.Context, taskID, agentID, token uuid.UUID, expiresAt time.Time) error {

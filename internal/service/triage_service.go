@@ -19,8 +19,10 @@ func NewTriageService(taskRepo repository.TaskRepository) TriageService {
 	return &triageService{taskRepo: taskRepo}
 }
 
-// ListTriageTasks returns paginated tasks in "triage" category across all workspace projects.
+// ListTriageTasks returns the paginated human-attention queue across all workspace
+// projects: tasks in a triage-category status plus tasks with a live human gate
+// (auto-delegation cards are never moved to triage, so the gate is the only signal).
 func (s *triageService) ListTriageTasks(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
 	pg.Normalize()
-	return s.taskRepo.ListByStatusCategory(ctx, workspaceID, domain.StatusCategoryTriage, pg)
+	return s.taskRepo.ListTriageQueue(ctx, workspaceID, pg)
 }

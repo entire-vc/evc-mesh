@@ -195,6 +195,9 @@ func (r *fakeTaskRepo) CountByStatusCategory(context.Context, uuid.UUID) (map[do
 func (r *fakeTaskRepo) ListByStatusCategory(context.Context, uuid.UUID, domain.StatusCategory, pagination.Params) (*pagination.Page[domain.Task], error) {
 	return nil, nil
 }
+func (r *fakeTaskRepo) ListTriageQueue(context.Context, uuid.UUID, pagination.Params) (*pagination.Page[domain.Task], error) {
+	return nil, nil
+}
 func (r *fakeTaskRepo) ListAllBacklogTasks(context.Context) ([]domain.Task, error) {
 	return nil, nil
 }
