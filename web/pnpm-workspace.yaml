@@ -1,5 +1,9 @@
 overrides:
   undici: '7.29.1'
+  vue: '3.5.42'
+  '@vue/server-renderer': '3.5.42'
+  prosemirror-view: '1.42.3'
+  source-map-js: '1.2.2'
 
 patchedDependencies:
   '@milkdown/ctx@7.22.1': patches/@milkdown__ctx@7.22.1.patch
