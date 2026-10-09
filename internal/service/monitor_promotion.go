@@ -28,6 +28,12 @@ import (
 //   - freeze / no-intake-promote / no-promote — an explicit human "stay in backlog"
 //     (task 383dd12a, Pavel's «из беклога не доставать»). A date must never outrank a
 //     person: the park has no expiry unless the person who set it states one.
+//   - park:wait-pavel — the park is bound to a human answer (or to the pause of the
+//     assignee's lane, which the server cannot see: it lives in fiddler's
+//     lane-availability.json), never to a date. A passed due_date left on such a card
+//     bounced it back to todo while the lane was still paused (#afff1a9d, Howard
+//     #1ceb915f / #0aaf6cf0 / #3bf20dda). park:wait-date and park:wait-external keep
+//     waking on the date: the date IS their condition.
 //   - golden / eval-harness — Agent-Eval fixtures. Promoting one makes an agent
 //     decompose and execute a synthetic fixture and pollutes the eval counts; it has
 //     recurred three times at real cost (#9f50def6, #0df1f585, #1fa93c49).
@@ -50,7 +56,7 @@ import (
 // with the sweep's retirement (#00327dc6 / #56ec28e8), which is where the comment
 // parsing has to land anyway.
 var absoluteNoPromoteLabels = map[string]struct{}{
-	"freeze": {}, "no-intake-promote": {}, "no-promote": {},
+	"freeze": {}, "no-intake-promote": {}, "no-promote": {}, "park:wait-pavel": {},
 	"golden": {}, "eval-harness": {},
 }
 
