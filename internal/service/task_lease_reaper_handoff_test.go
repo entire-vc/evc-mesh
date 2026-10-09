@@ -75,6 +75,22 @@ func TestHandoff_PeerRequestForSignatureReturnsToTodo(t *testing.T) {
 	}
 }
 
+// Riker's third case: the assignee's WAIT, then the reviewer's verdict. The SQL candidate
+// query lets the card through once the marker is no longer the newest word (see
+// TestFindStaleUnleasedInProgress_LiveWaitMarker); here the reaper must send it to todo.
+func TestHandoff_ReviewerCommentNewerThanAssigneeWaitReturnsToTodo(t *testing.T) {
+	h, task := handoffHarness(t)
+	h.say(t, task, *task.AssigneeID, domain.ActorTypeAgent, "⏳ WAIT mr:entire-vc/evc-mesh!1125\nждём ревью", 8*time.Hour, "")
+	h.say(t, task, uuid.New(), domain.ActorTypeAgent, "VERDICT: DO-NOT-SHIP — C1 correctness FAIL", 5*time.Hour, "")
+	h.sweepOne(t)
+	if got := h.category(t, task.ID); got != domain.StatusCategoryTodo {
+		t.Fatalf("got %v, want todo", got)
+	}
+	if stored := h.stored(t, task.ID); stored.DueDate != nil {
+		t.Fatalf("a handoff must not get the park alarm")
+	}
+}
+
 // A human's message after the assignee's is a handoff too.
 func TestHandoff_HumanReplyReturnsToTodo(t *testing.T) {
 	h, task := handoffHarness(t)
