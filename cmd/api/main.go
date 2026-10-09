@@ -1402,6 +1402,7 @@ func main() {
 	api.GET("/workspaces/:ws_id/runtime", runtimeHandler.Inventory, rbac(mw.PermManageWebhooks))
 	api.PUT("/workspaces/:ws_id/runtime", runtimeHandler.Save, rbac(mw.PermManageWebhooks))
 	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", runtimeHandler.Report)
+	api.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", runtimeHandler.Desired)
 	api.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", runtimeHandler.Provenance)
 	api.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", runtimeHandler.Binding)
 	api.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", runtimeHandler.Admit, rbac(mw.PermManageMembers))

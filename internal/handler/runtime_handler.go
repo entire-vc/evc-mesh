@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -102,6 +105,38 @@ func (h *RuntimeHandler) Report(c echo.Context) error {
 		return handleError(c, err)
 	}
 	return c.JSON(http.StatusOK, map[string]bool{"recorded": true, "launch_authorized": false})
+}
+
+// Desired lets a controller read its own slice of the desired catalog with the
+// reporter key it already reports with. The digest is the ETag: a controller
+// that is up to date gets 304 without the body.
+func (h *RuntimeHandler) Desired(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.Desired(c.Request().Context(), ws, c.Param("controller_ref"), runtimeActor(c))
+	if err != nil {
+		return handleError(c, err)
+	}
+	// The tag covers the whole body (revision, enabled and the controller's
+	// slice), not just the catalog digest: a save that only flips enabled
+	// keeps the digest but must not answer 304.
+	body, err := json.Marshal(value)
+	if err != nil {
+		return handleError(c, err)
+	}
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	c.Response().Header().Set("ETag", etag)
+	c.Response().Header().Set("Cache-Control", "private, no-cache")
+	for _, candidate := range strings.Split(c.Request().Header.Get("If-None-Match"), ",") {
+		candidate = strings.TrimPrefix(strings.TrimSpace(candidate), "W/")
+		if candidate == etag || candidate == "*" {
+			return c.NoContent(http.StatusNotModified)
+		}
+	}
+	return c.JSONBlob(http.StatusOK, body)
 }
 
 func (h *RuntimeHandler) Binding(c echo.Context) error {

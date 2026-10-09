@@ -271,6 +271,52 @@ func (r *RuntimeRepo) controllerStates(ctx context.Context, connection *domain.I
 	return states, nil
 }
 
+// Desired returns one controller's slice of the current desired catalog. The
+// caller must hold the exact configured reporter grant of that controller in
+// the owner workspace, the same bar as Report: another agent's key gets 403,
+// an unknown ref 404. Read-only; nothing is recorded.
+func (r *RuntimeRepo) Desired(ctx context.Context, ws uuid.UUID, ref string, actor RuntimeActor) (*domain.RuntimeDesired, error) {
+	if actor.Connector || actor.AgentID == uuid.Nil || actor.AuthWorkspaceID != ws {
+		return nil, apierror.Forbidden("controller desired state requires its exact owner-workspace agent key")
+	}
+	connection, err := runtimeConnection(ctx, r.db, ws, false)
+	if err != nil {
+		return nil, err
+	}
+	if connection == nil {
+		return nil, apierror.NotFound("Runtime controller")
+	}
+	// Catalog, revision, digest and enabled all come from one immutable
+	// revision row: reading integration_configs and the revision separately
+	// could pair an old catalog with a newer digest if Save commits between.
+	var latest struct {
+		Revision int64  `db:"revision"`
+		Digest   string `db:"digest"`
+		Config   []byte `db:"config"`
+		Enabled  bool   `db:"enabled"`
+	}
+	err = r.db.GetContext(ctx, &latest, `SELECT revision,digest,config,enabled FROM runtime_catalog_revisions WHERE integration_id=$1 ORDER BY revision DESC LIMIT 1`, connection.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, apierror.NotFound("Runtime controller")
+	}
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := domain.ParseRuntimeCatalog(latest.Config)
+	if err != nil {
+		return nil, err
+	}
+	controller, ok := catalog.Controllers[ref]
+	if !ok {
+		return nil, apierror.NotFound("Runtime controller")
+	}
+	if _, err = runtimeGrant(ctx, r.db, domain.RuntimeIdentity{AgentID: actor.AgentID, WorkspaceID: ws, GrantID: controller.ReporterGrantID}); err != nil {
+		return nil, err
+	}
+	slice, _ := catalog.DesiredFor(ref)
+	return &domain.RuntimeDesired{Revision: latest.Revision, Digest: latest.Digest, Enabled: latest.Enabled, DrainRequested: !latest.Enabled, ControllerRef: ref, Controller: controller, Catalog: slice}, nil
+}
+
 func (r *RuntimeRepo) Report(ctx context.Context, ws uuid.UUID, ref string, actor RuntimeActor, report domain.RuntimeReport) error {
 	if actor.Connector || actor.AgentID == uuid.Nil || actor.AuthWorkspaceID != ws {
 		return apierror.Forbidden("controller report requires its exact owner-workspace agent key")

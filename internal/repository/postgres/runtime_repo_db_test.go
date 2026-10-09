@@ -379,3 +379,46 @@ func TestIntegrationRepoRefusesAgentRuntimeBypass(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, still.IsActive)
 }
+
+func TestRuntimeRepoDesiredIsExactReporterOnly(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	_, err := f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
+	require.ErrorContains(t, err, "Runtime controller", "no connection yet")
+	snapshot, err := f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+
+	view, err := f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.Digest, view.Digest)
+	require.EqualValues(t, 1, view.Revision)
+	require.True(t, view.Enabled)
+	require.False(t, view.DrainRequested)
+	require.Equal(t, "cred:prepared-preferred", view.Catalog.Accounts["preferred"].CredentialRef)
+	require.Len(t, view.Catalog.Profiles, 2)
+	require.Contains(t, view.Catalog.Pools, "shared-window")
+
+	_, err = f.repo.Desired(ctx, f.owner, "runner-a", f.ownerActor)
+	require.ErrorContains(t, err, "exact owner-workspace", "a user is refused")
+	connector := f.reporter
+	connector.Connector = true
+	_, err = f.repo.Desired(ctx, f.owner, "runner-a", connector)
+	require.Error(t, err)
+	otherWS := f.reporter
+	otherWS.AuthWorkspaceID = f.receiver
+	_, err = f.repo.Desired(ctx, f.owner, "runner-a", otherWS)
+	require.Error(t, err)
+	_, err = f.repo.Desired(ctx, f.owner, "runner-a", RuntimeActor{AgentID: f.worker.AgentID, AuthWorkspaceID: f.owner})
+	require.ErrorContains(t, err, "exact workspace grant", "another key is refused")
+	_, err = f.repo.Desired(ctx, f.owner, "unknown", f.reporter)
+	require.ErrorContains(t, err, "Runtime controller")
+
+	off := false
+	f.input.IfRevision, f.input.Enabled = 1, &off
+	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+	view, err = f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, view.Revision)
+	require.True(t, view.DrainRequested)
+}

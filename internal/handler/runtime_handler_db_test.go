@@ -115,6 +115,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.GET("/workspaces/:ws_id/runtime", h.Inventory)
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
+	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", h.Binding)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
@@ -243,4 +244,110 @@ func TestRuntimeConnectionIsNotEditableThroughGenericIntegrations(t *testing.T) 
 	require.NotContains(t, string(masked.Config), "credential_ref")
 	require.NotContains(t, string(masked.Config), "runner-a")
 	require.Contains(t, string(masked.Config), "versioned_api")
+}
+
+// Two controllers with different reporter grants: each reads only its own
+// slice with its own key, the other's key and users are refused, and an
+// up-to-date reader gets 304.
+func TestRuntimeHTTPControllerDesiredIsScopedToItsController(t *testing.T) {
+	f := newRuntimeHTTP(t)
+	owner := map[string]string{"X-Test-User": f.ownerUser.String()}
+	reporterA := map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String()}
+	agentB, grantB := seedRuntimeAgent(t, f.db, f.owner)
+	reporterB := map[string]string{"X-Test-Agent": agentB.String(), "X-Test-Agent-Workspace": f.owner.String()}
+	worker := map[string]string{"X-Test-Agent": f.worker.String(), "X-Test-Agent-Workspace": f.receiver.String()}
+
+	catalog, err := domain.ParseRuntimeCatalog(f.catalog)
+	require.NoError(t, err)
+	b := catalog.Controllers["runner-a"]
+	b.ReporterGrantID, b.Host = grantB, "other-host"
+	catalog.Controllers["runner-b"] = b
+	catalog.Pools["pool-b"] = domain.RuntimePool{Provider: "provider-b", ResourceRef: "pool-b", Aliases: []string{}, MaxConcurrency: 1}
+	catalog.Accounts["acct-b"] = domain.RuntimeAccount{Provider: "provider-b", CredentialRef: "cred:only-for-b", QuotaPoolsByMode: map[string][]string{"subscription": {"pool-b"}}}
+	profile := catalog.Profiles["preferred"]
+	profile.ControllerRef, profile.AccountRef = "runner-b", "acct-b"
+	catalog.Profiles["only-b"] = profile
+	binding := catalog.Bindings["worker-b"]
+	binding.PermittedProfiles = append(binding.PermittedProfiles, "only-b")
+	binding.Policy.QuotaEdges["reserve"] = []string{"only-b"}
+	binding.Policy.PreferredAccounts["provider-b"] = "acct-b"
+	catalog.Bindings["worker-b"] = binding
+	raw, err := json.Marshal(catalog)
+	require.NoError(t, err)
+
+	base := "/workspaces/" + f.owner.String() + "/runtime"
+	code, _, body := f.do(http.MethodPut, base, `{"if_revision":0,"enabled":true,"config":`+string(raw)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+
+	code, a, bodyA := f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", reporterA)
+	require.Equal(t, http.StatusOK, code, bodyA)
+	require.Equal(t, "runner-a", a["controller_ref"])
+	require.Equal(t, true, a["enabled"])
+	require.Equal(t, false, a["drain_requested"])
+	require.Contains(t, bodyA, "cred:prepared-preferred", "own credential_ref is delivered to its controller")
+	for _, foreign := range []string{"only-b", "acct-b", "pool-b", "cred:only-for-b", "provider-b", "other-host"} {
+		require.NotContains(t, bodyA, foreign)
+	}
+
+	code, bView, bodyB := f.do(http.MethodGet, base+"/controllers/runner-b/desired", "", reporterB)
+	require.Equal(t, http.StatusOK, code, bodyB)
+	require.Equal(t, "runner-b", bView["controller_ref"])
+	require.Contains(t, bodyB, "cred:only-for-b")
+	for _, foreign := range []string{"cred:prepared", "reserve-window", "shared-window", `"preferred"`, `"reserve"`, "prepared-host"} {
+		require.NotContains(t, bodyB, foreign)
+	}
+
+	code, _, _ = f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", reporterB)
+	require.Equal(t, http.StatusForbidden, code, "another controller's key is refused")
+	code, _, _ = f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", worker)
+	require.Equal(t, http.StatusForbidden, code, "a receiving worker key is refused")
+	code, _, _ = f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", owner)
+	require.Equal(t, http.StatusForbidden, code, "a human admin is refused")
+	code, _, _ = f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", nil)
+	require.Equal(t, http.StatusForbidden, code, "anonymous is refused")
+	code, _, _ = f.do(http.MethodGet, base+"/controllers/nope/desired", "", reporterA)
+	require.Equal(t, http.StatusNotFound, code, "unknown ref")
+
+	req := httptest.NewRequest(http.MethodGet, base+"/controllers/runner-a/desired", http.NoBody)
+	req.Header.Set("X-Test-Agent", f.reporter.String())
+	req.Header.Set("X-Test-Agent-Workspace", f.owner.String())
+	rec := httptest.NewRecorder()
+	f.e.ServeHTTP(rec, req)
+	etag := rec.Header().Get("ETag")
+	require.NotEmpty(t, etag)
+	hdr := map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String(), "If-None-Match": etag}
+	code, _, body = f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", hdr)
+	require.Equal(t, http.StatusNotModified, code)
+	require.Empty(t, body)
+	hdr["If-None-Match"] = `"stale"`
+	code, _, _ = f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", hdr)
+	require.Equal(t, http.StatusOK, code, "a different digest gets the body")
+
+	// Same catalog, only enabled flips: the digest is unchanged but the body is
+	// not, so the old tag must not answer 304.
+	code, _, body = f.do(http.MethodPut, base, `{"if_revision":1,"enabled":false,"config":`+string(raw)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	hdr["If-None-Match"] = etag
+	code, flipped, body := f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", hdr)
+	require.Equal(t, http.StatusOK, code, "enabled-only change must not be 304: "+body)
+	require.Equal(t, a["digest"], flipped["digest"], "digest alone cannot see this change")
+	require.Equal(t, true, flipped["drain_requested"])
+
+	// Revoking the reporter grant makes the controller's old key stale.
+	_, err = f.db.ExecContext(context.Background(), `UPDATE agent_workspace_grants SET revoked_at=now() WHERE id=$1`, grantB)
+	require.NoError(t, err)
+	code, _, _ = f.do(http.MethodGet, base+"/controllers/runner-b/desired", "", reporterB)
+	require.Equal(t, http.StatusForbidden, code, "revoked reporter grant")
+
+	// A new save moves the revision and digest; 304 no longer matches.
+	code, _, body = f.do(http.MethodPut, base, `{"if_revision":2,"enabled":false,"config":`+string(f.catalog)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	code, a2, body := f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", hdr2(f, etag))
+	require.Equal(t, http.StatusOK, code, "same catalog but new revision and enabled=false must not be 304: "+body)
+	require.EqualValues(t, 3, a2["revision"])
+	require.Equal(t, true, a2["drain_requested"])
+}
+
+func hdr2(f *runtimeHTTP, etag string) map[string]string {
+	return map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String(), "If-None-Match": etag}
 }
