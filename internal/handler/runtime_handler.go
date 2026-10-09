@@ -170,7 +170,7 @@ func (h *RuntimeHandler) Provenance(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
-	artifact, err := uuid.Parse(c.Param("artifact_id"))
+	artifact, err := uuid.Parse(c.Param("provenance_artifact_id"))
 	if err != nil || artifact == uuid.Nil {
 		return handleError(c, apierror.BadRequest("invalid artifact_id"))
 	}

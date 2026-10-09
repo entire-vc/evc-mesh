@@ -60,7 +60,7 @@ and the service does not search foreign catalogs by a name supplied by the calle
 | GET `/workspaces/:ws_id/runtime/bindings/:binding_id` | desired/actual profile, preferred account, availability and reasons | exact bound agent grant or authorized receiving admin |
 | PUT `/workspaces/:ws_id/runtime/bindings/:binding_id/admission` | `{if_revision, permitted_profiles, enabled}` | receiving workspace admin; independent CAS; initially denied |
 | POST `/workspaces/:ws_id/runtime/bindings/:binding_id/preview` | purpose, source profile, required capabilities, optional artifact reference | freshly authorized binding; server resolves observations and provenance |
-| POST `/workspaces/:ws_id/runtime/artifacts/:artifact_id/provenance` | `controller_ref`, exact `artifact_revision`, `complete`, authors (agent id, model developer, model family); authors merge, never shrink | trusted reporting controller, bound execution scope and persisted attestation |
+| POST `/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance` | `controller_ref`, exact `artifact_revision`, `complete`, authors (agent id, model developer, model family); authors merge, never shrink | trusted reporting controller, bound execution scope and persisted attestation |
 
 Schema v2 is independent of monotonically increasing desired revision. Every save,
 including rollback, creates a new immutable revision. `if_revision=0` creates only
