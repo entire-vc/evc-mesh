@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dropPeers, relocateGatedToTriage } from "../board-gate-triage";
+import { dropPeers, passesSubtaskFilter, relocateGatedToTriage } from "../board-gate-triage";
 import type { StatusCategory, Task } from "@/types";
 
 const col = (id: string, name: string, category: StatusCategory) => ({ id, status: { id, name, category } });
@@ -74,5 +74,24 @@ describe("dropPeers", () => {
   });
   it("a real triage card reordered inside Triage still proceeds", () => {
     expect(ids(dropPeers("t", triage.id, triage.id, [task("t"), task("t2")], names) ?? undefined)).toEqual(["t2"]);
+  });
+});
+
+describe("passesSubtaskFilter", () => {
+  const closed = new Set(["s-done"]);
+  const sub = (over: Partial<Task> = {}) =>
+    ({ parent_task_id: "p", human_gate: false, status_id: "s-prog", ...over }) as unknown as Task;
+  it("hides a plain subtask when the toggle is off, shows it when on", () => {
+    expect(passesSubtaskFilter(sub(), false, closed)).toBe(false);
+    expect(passesSubtaskFilter(sub(), true, closed)).toBe(true);
+  });
+  it("an open gated subtask passes with the toggle off", () => {
+    expect(passesSubtaskFilter(sub({ human_gate: true }), false, closed)).toBe(true);
+  });
+  it("a closed gated subtask stays hidden with the toggle off", () => {
+    expect(passesSubtaskFilter(sub({ human_gate: true, status_id: "s-done" }), false, closed)).toBe(false);
+  });
+  it("a top-level card always passes", () => {
+    expect(passesSubtaskFilter(sub({ parent_task_id: undefined }), false, closed)).toBe(true);
   });
 });
