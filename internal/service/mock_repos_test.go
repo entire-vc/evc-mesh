@@ -508,6 +508,13 @@ func (m *MockTaskRepository) CountByStatusCategory(_ context.Context, _ uuid.UUI
 	return map[domain.StatusCategory]int{}, nil
 }
 
+func (m *MockTaskRepository) ListTriageQueue(_ context.Context, _ uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	return pagination.NewPage([]domain.Task{}, 0, pg), nil
+}
+
 func (m *MockTaskRepository) ListByStatusCategory(_ context.Context, _ uuid.UUID, _ domain.StatusCategory, pg pagination.Params) (*pagination.Page[domain.Task], error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn
