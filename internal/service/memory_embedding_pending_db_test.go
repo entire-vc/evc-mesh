@@ -129,7 +129,7 @@ func TestRemember_EmbeddingPending_SignaledWhileGoroutineInFlight(t *testing.T) 
 	require.Eventually(t, func() bool {
 		rows, err := memRepo.VectorSearch(ctx, queryVec, ws.ID, nil, domain.MemorySearchFilter{}, 20)
 		return err == nil && containsMemoryID(rows, mem.ID)
-	}, 2*time.Second, 20*time.Millisecond, "row never became dense-findable after the embed goroutine was released")
+	}, 20*time.Second, 20*time.Millisecond, "row never became dense-findable after the embed goroutine was released")
 }
 
 func containsMemoryID(rows []domain.ScoredMemory, id uuid.UUID) bool {

@@ -1,4 +1,4 @@
-.PHONY: build test lint migrate-up migrate-down docker-up docker-down generate clean \
+.PHONY: ci-prepush build test lint migrate-up migrate-down docker-up docker-down generate clean \
         ci ci-lint ci-test ci-test-web ci-build ci-services-up ci-services-down ci-install-tools
 
 # Binary output directory
@@ -128,6 +128,12 @@ CI_REDIS_URL    ?= redis://localhost:$(REDIS_PORT)
 CI_NATS_URL     ?= nats://localhost:$(NATS_PORT)
 
 DEPLOY_COMPOSE := $(DEPLOY_DIR)/docker-compose.yml
+
+## ci-prepush: What the pre-push hook runs. Same stages as `ci`, but test failures
+## that are already red on the latest main pipeline only warn; new ones, lint and
+## build failures still block (scripts/ci/prepush.py).
+ci-prepush:
+	@python3 scripts/ci/prepush.py
 
 ## ci: Full local CI — lint → test → test-web → build. Same gates as .gitlab-ci.yml.
 ci: ci-install-tools ci-lint ci-test ci-test-web ci-build

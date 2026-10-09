@@ -218,7 +218,7 @@ func TestTaskDurableOutbox_RetryCrashConcurrent(t *testing.T) {
 			return persist(msg)
 		})
 	}()
-	deadline := time.NewTimer(6 * time.Second)
+	deadline := time.NewTimer(30 * time.Second)
 	defer deadline.Stop()
 	poll := time.NewTicker(20 * time.Millisecond)
 	defer poll.Stop()

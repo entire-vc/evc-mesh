@@ -957,6 +957,7 @@ coverage-gate:
   script:
     - python3 scripts/ci/test_diff_coverage.py
     - python3 scripts/ci/test_coverage_gate.py
+    - python3 scripts/ci/test_prepush.py
     - bash scripts/ci/coverage_gate.sh "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --reuse coverage-manifest.json coverage.out
   artifacts:
     when: always
