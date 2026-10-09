@@ -41,6 +41,7 @@ import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-tool
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
+import { dropPeers, relocateGatedToTriage } from "@/lib/board-gate-triage";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
 import { PerfProfiler } from "@/lib/perf-profiler";
@@ -138,6 +139,8 @@ interface SortableTaskCardProps {
   onEditClick: (task: Task) => void;
   /** Display name of the card's checkout holder, when it is resolvable. */
   checkedOutByName?: string;
+  /** Real status name, set only for a gated card shown in the Triage column. */
+  gateStatusName?: string;
 }
 
 export function sortableTaskCardPropsEqual(
@@ -156,7 +159,8 @@ export function sortableTaskCardPropsEqual(
     prev.statusCategory === next.statusCategory &&
     prev.onClick === next.onClick &&
     prev.onEditClick === next.onEditClick &&
-    prev.checkedOutByName === next.checkedOutByName
+    prev.checkedOutByName === next.checkedOutByName &&
+    prev.gateStatusName === next.gateStatusName
   );
 }
 
@@ -167,6 +171,7 @@ const SortableTaskCard = memo(function SortableTaskCard({
   onClick,
   onEditClick,
   checkedOutByName,
+  gateStatusName,
 }: SortableTaskCardProps) {
   const {
     attributes,
@@ -213,6 +218,7 @@ const SortableTaskCard = memo(function SortableTaskCard({
           onClick={handleClick}
           onEditClick={handleEditClick}
           checkedOutByName={checkedOutByName}
+          gateStatusName={gateStatusName}
         />
       </PerfProfiler>
     </div>
@@ -232,6 +238,8 @@ interface BoardColumnProps {
   onTaskEdit: (task: Task) => void;
   /** Resolves a checkout holder's id to a display name. */
   holderNameById: Map<string, string>;
+  /** taskId -> real status name for gated cards listed in this (Triage) column. */
+  gateStatusByTask?: Record<string, string>;
 }
 
 /** True when both arrays hold the SAME task objects, in the same order —
@@ -261,6 +269,13 @@ export function holderMapsEqual(a: Map<string, string>, b: Map<string, string>):
   return true;
 }
 
+function gateStatusEqual(a?: Record<string, string>, b?: Record<string, string>): boolean {
+  if (a === b) return true;
+  const ka = Object.keys(a ?? {});
+  if (ka.length !== Object.keys(b ?? {}).length) return false;
+  return ka.every((k) => a?.[k] === b?.[k]);
+}
+
 export function boardColumnPropsEqual(prev: BoardColumnProps, next: BoardColumnProps): boolean {
   if (!boardCardMemoEnabled()) return false;
   return (
@@ -270,11 +285,12 @@ export function boardColumnPropsEqual(prev: BoardColumnProps, next: BoardColumnP
     prev.onAddTask === next.onAddTask &&
     prev.onTaskClick === next.onTaskClick &&
     prev.onTaskEdit === next.onTaskEdit &&
-    holderMapsEqual(prev.holderNameById, next.holderNameById)
+    holderMapsEqual(prev.holderNameById, next.holderNameById) &&
+    gateStatusEqual(prev.gateStatusByTask, next.gateStatusByTask)
   );
 }
 
-const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById }: BoardColumnProps) {
+const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById, gateStatusByTask }: BoardColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
 
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
@@ -343,6 +359,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
               checkedOutByName={
                 task.checked_out_by ? holderNameById.get(task.checked_out_by) : undefined
               }
+              gateStatusName={gateStatusByTask?.[task.id]}
             />
           ))}
         </SortableContext>
@@ -370,6 +387,8 @@ function PriorityIcon({ priority }: { priority: Priority }) {
 // ---------------------------------------------------------------------------
 // Sort helper — sort tasks within a column by the given SortBy value
 // ---------------------------------------------------------------------------
+
+const NO_GATE_STATUS: Record<string, string> = {};
 
 function sortTasks(tasks: Task[], sortBy: SortBy): Task[] {
   if (sortBy === "manual") {
@@ -703,7 +722,7 @@ export function BoardPage() {
   // Build columns + task groups based on groupBy
   // ---------------------------------------------------------------------------
 
-  const { columns: rawColumns, tasksByColumn } = useMemo((): {
+  const { columns: rawColumns, tasksByColumn: baseTasksByColumn } = useMemo((): {
     columns: BoardCol[];
     tasksByColumn: Record<string, Task[]>;
   } => {
@@ -859,6 +878,19 @@ export function BoardPage() {
     return stabilized;
   }, [rawColumns]);
 
+  // Cards waiting on a human are listed in the Triage column (once, with their
+  // real status shown) so the human sees them without any status change.
+  const { tasksByColumn, gateStatusByTask } = useMemo(() => {
+    if (groupBy !== "status") return { tasksByColumn: baseTasksByColumn, gateStatusByTask: NO_GATE_STATUS };
+    const r = relocateGatedToTriage(
+      rawColumns,
+      baseTasksByColumn,
+      new Set(filteredTasks.map((t) => t.id)),
+      (rows) => sortTasks(rows, sortBy),
+    );
+    return { tasksByColumn: r.tasksByColumn, gateStatusByTask: r.statusNameByTask };
+  }, [groupBy, rawColumns, baseTasksByColumn, filteredTasks, sortBy]);
+
   // DnD is only fully active when groupBy === 'status'
   // (we disable cross-column drag for other groupings to keep status intact)
   const dndEnabled = groupBy === "status";
@@ -910,9 +942,15 @@ export function BoardPage() {
       // For status grouping, targetColId IS the status id
       const targetStatusId = targetColId;
 
-      const targetTasks = (tasksByColumn[targetColId] ?? []).filter(
-        (t) => t.id !== draggedTask.id,
+      // Gated cards listed in Triage only by gate keep their real status.
+      const targetTasks = dropPeers(
+        draggedTask.id,
+        sourceColId,
+        targetColId,
+        tasksByColumn[targetColId] ?? [],
+        gateStatusByTask,
       );
+      if (!targetTasks) return;
 
       let dropIndex = targetTasks.length;
       const overStr = String(over.id);
@@ -930,7 +968,7 @@ export function BoardPage() {
         position: newPosition,
       });
     },
-    [dndEnabled, findColumnId, tasksByColumn, moveTask],
+    [dndEnabled, findColumnId, tasksByColumn, gateStatusByTask, moveTask],
   );
 
   const handleDragCancel = useCallback(() => setActiveTask(null), []);
@@ -1116,6 +1154,7 @@ export function BoardPage() {
                 onTaskClick={handleTaskClick}
                 onTaskEdit={handleTaskClick}
                 holderNameById={holderNameById}
+                gateStatusByTask={col.status?.category === "triage" ? gateStatusByTask : undefined}
               />
             ))}
 
