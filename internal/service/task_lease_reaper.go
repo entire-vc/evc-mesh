@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // leaseTaskMover is the narrow slice of TaskService needed by the reaper.
@@ -305,6 +307,7 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 
 	cfgCache := make(map[uuid.UUID]*domain.MidPipelineConfig)
 	var toPark, toTodo []domain.Task
+	var moved int
 
 	for i := range tasks {
 		task := tasks[i]
@@ -314,13 +317,24 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 			cfgCache[task.ProjectID] = cfg
 		}
 		if cfg.ParkStalled() {
+			// A move handed to the card's own executor by someone else is not an
+			// abandoned card: parking it strands the executor's next step in
+			// backlog where nothing feeds it. Give it back to them instead.
+			if handoff := r.handoffComment(ctx, &task); handoff != nil {
+				if r.returnToTodo(ctx, []domain.Task{task}, activityCheckoutUnleasedReturned, grace...) == 1 {
+					r.postSystemComment(actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem), &task,
+						fmt.Sprintf(handoffCommentFmt, handoff.ID))
+					moved++
+				}
+				continue
+			}
 			toPark = append(toPark, task)
 			continue
 		}
 		toTodo = append(toTodo, task)
 	}
 
-	moved := r.returnToTodo(ctx, toTodo, activityCheckoutUnleasedReturned, grace...)
+	moved += r.returnToTodo(ctx, toTodo, activityCheckoutUnleasedReturned, grace...)
 	for i := range toPark {
 		cfg := cfgCache[toPark[i].ProjectID]
 		if r.parkTask(ctx, &toPark[i], cfg.AutoParkDue(), grace...) {
@@ -328,6 +342,68 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 		}
 	}
 	return moved
+}
+
+// handoffScanLimit bounds how many recent comments the handoff decision reads.
+const handoffScanLimit = 30
+
+// handoffCommentFmt is the system note left when a handoff is returned to todo.
+// Its `handoff:<comment id>` token is the loop guard: the same handoff is never
+// returned twice, the second time the card parks like any abandoned one.
+const handoffCommentFmt = "↩️ Ход передан исполнителю карточки (последний живой комментарий не от assignee): " +
+	"карточка возвращена в todo того же исполнителя, а не запаркована в backlog. Повторно эта же передача в todo не возвращается. [handoff:%s]"
+
+// handoffComment returns the newest live comment when it was written by someone
+// other than the task's assignee, i.e. the turn now belongs to the assignee.
+// System and informational comments are skipped. It answers nil (park as an
+// abandoned card) when the assignee had the last word, there is no assignee or no
+// such comment, the comment list cannot be read, or this very handoff was already
+// returned once (a system note carrying its id exists).
+func (r *checkoutLeaseReaper) handoffComment(ctx context.Context, task *domain.Task) *domain.Comment {
+	if r.commentRepo == nil || task.AssigneeID == nil {
+		return nil
+	}
+	// ListByTask always returns oldest-first whatever SortDir says, so walk the
+	// pages from the last one backwards, newest comment first, until the live
+	// comment is found. Internal comments count: a handoff can be internal.
+	// A handoff note is always newer than the comment it answers, so every note
+	// that could match is seen before the walk reaches that comment.
+	filter := repository.CommentFilter{IncludeInternal: true}
+	params := pagination.Params{Page: 1, PageSize: handoffScanLimit}
+	page, err := r.commentRepo.ListByTask(ctx, task.ID, filter, params)
+	if err != nil || page == nil {
+		return nil
+	}
+	notes := make([]string, 0, 1)
+	for pageNo := max(page.TotalPages, 1); pageNo >= 1; pageNo-- {
+		if pageNo != page.Page {
+			params.Page = pageNo
+			if page, err = r.commentRepo.ListByTask(ctx, task.ID, filter, params); err != nil || page == nil {
+				return nil
+			}
+		}
+		for i := len(page.Items) - 1; i >= 0; i-- {
+			c := &page.Items[i]
+			if c.AuthorType == domain.ActorTypeSystem {
+				notes = append(notes, c.Body)
+				continue
+			}
+			if commentIsInformational(c.Metadata) {
+				continue
+			}
+			if c.AuthorID == *task.AssigneeID {
+				return nil
+			}
+			token := "[handoff:" + c.ID.String() + "]"
+			for _, body := range notes {
+				if strings.Contains(body, token) {
+					return nil
+				}
+			}
+			return c
+		}
+	}
+	return nil
 }
 
 // midPipelineFor reads a project's mid-pipeline config. A missing service, a
