@@ -434,16 +434,16 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // (runtimeBoundCaller), Report requires the owner-workspace key of that
 // controller. A ref from another catalog or another grant answers not found.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
-	"/api/v1/memories/:id":                                                 true,
-	"/api/v1/memories/:id/related":                                         true,
-	"/api/v1/memories/:id/revisions":                                       true,
-	"/api/v1/notifications/preferences/:pref_id":                           true,
-	"/api/v1/oauth/grants/:oauth_grant_id":                                 true,
-	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id":               true,
-	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/admission":     true,
-	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/preview":       true,
-	"/api/v1/workspaces/:ws_id/runtime/artifacts/:artifact_id/provenance":  true,
-	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/report": true,
+	"/api/v1/memories/:id":                                                           true,
+	"/api/v1/memories/:id/related":                                                   true,
+	"/api/v1/memories/:id/revisions":                                                 true,
+	"/api/v1/notifications/preferences/:pref_id":                                     true,
+	"/api/v1/oauth/grants/:oauth_grant_id":                                           true,
+	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id":                         true,
+	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/admission":               true,
+	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/preview":                 true,
+	"/api/v1/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance": true,
+	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/report":           true,
 }
 
 // workspaceScopeExemptRoutes lists routes that carry one of WorkspaceScopedParams

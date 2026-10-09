@@ -172,3 +172,97 @@ func TestRuntimePreviewReserveEdgeNeverPreemptsLaterPrimary(t *testing.T) {
 	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, nil, RuntimePreviewInput{Purpose: "new_launch"}, now)
 	require.Equal(t, "third", result.SelectedProfileID, "a reserve edge never precedes an available later primary")
 }
+
+func reviewFixture(t *testing.T) (*RuntimeCatalog, RuntimeBinding, map[string]RuntimeCandidateEvidence, time.Time) {
+	c, b, facts, now := runtimeRouteFixture(t)
+	independent := facts["reserve"]
+	independent.ActualModelDeveloper, independent.ActualModelFamily = "developer-b", "family-b"
+	facts["reserve"] = independent
+	return c, b, facts, now
+}
+
+func reviewRequest() (*RuntimeProvenance, RuntimePreviewInput) {
+	artifact := uuid.New()
+	provenance := &RuntimeProvenance{ArtifactID: artifact, Revision: "exact-sha", Complete: true, Authors: []RuntimeAuthor{{AgentID: uuid.New(), ModelDeveloper: "developer-a", ModelFamily: "family-a"}}}
+	return provenance, RuntimePreviewInput{Purpose: "new_launch", ArtifactID: artifact, ArtifactRevision: "exact-sha"}
+}
+
+// A configured soft threshold is a routing trigger, not proof that the independent
+// reviewer's quota is spent: it must not let strict QA fall back to a non-independent one.
+func TestRuntimePreviewQAThresholdIsNotQuotaProof(t *testing.T) {
+	c, b, facts, now := reviewFixture(t)
+	provenance, request := reviewRequest()
+	b.Policy.QA.QuotaFallback = true
+	pool := c.Pools["reserve-window"]
+	pool.ThresholdRef = "soft-1"
+	c.Pools["reserve-window"] = pool
+	facts["reserve"].Pools["reserve-window"] = RuntimePoolObservation{State: "threshold", ThresholdRef: "soft-1", EvidenceKind: "configured_threshold", Verified: true, ObservedAt: now.Add(-time.Second)}
+	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.Empty(t, result.SelectedProfileID)
+	require.False(t, result.QACompromise)
+	require.Equal(t, "strict_independent_review_unavailable", result.Reason)
+	// control: the same shape with confirmed exhaustion still relaxes.
+	facts["reserve"].Pools["reserve-window"] = RuntimePoolObservation{State: "exhausted", Verified: true, ObservedAt: now.Add(-time.Second)}
+	result = PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.Equal(t, "preferred", result.SelectedProfileID)
+	require.True(t, result.QACompromise)
+}
+
+// The independent reviewer is found by the normal primary/edge walk, not by the
+// first available entry of the permitted list.
+func TestRuntimePreviewIndependentReviewerFollowsRouteWalk(t *testing.T) {
+	c, b, facts, now := reviewFixture(t)
+	provenance, request := reviewRequest()
+	c.Accounts["stray"] = RuntimeAccount{Provider: "provider-stray", CredentialRef: "cred:stray", QuotaPoolsByMode: map[string][]string{"subscription": {"stray-window"}}}
+	stray := c.Profiles["reserve"]
+	stray.AccountRef = "stray"
+	c.Profiles["stray"] = stray
+	c.Pools["stray-window"] = RuntimePool{Provider: "provider-stray", ResourceRef: "stray-window", Aliases: []string{}, MaxConcurrency: 1}
+	for _, f := range facts {
+		f.Pools["stray-window"] = RuntimePoolObservation{State: "available", Verified: true, ObservedAt: now.Add(-time.Second)}
+	}
+	facts["stray"] = RuntimeCandidateEvidence{ControllerCurrent: true, Pools: facts["preferred"].Pools, ActualModelDeveloper: "developer-b", ActualModelFamily: "family-b"}
+	b.PermittedProfiles = append(slices.Clone(b.PermittedProfiles), "stray")
+	facts["reserve"].Pools["reserve-window"] = RuntimePoolObservation{State: "exhausted", Verified: true, ObservedAt: now.Add(-time.Second)}
+	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.NotEqual(t, "stray", result.SelectedProfileID, "a profile outside primary_profiles/quota_edges is not routable")
+	require.Empty(t, result.SelectedProfileID)
+	require.Equal(t, "strict_independent_review_unavailable", result.Reason)
+}
+
+// A sibling whose evidence is unknown stops the walk: reserve/API is not reached
+// past evidence the controller could not provide.
+func TestRuntimePreviewUnknownSiblingStopsWalk(t *testing.T) {
+	for _, state := range []string{"unknown", "auth_error", "network_error"} {
+		t.Run(state, func(t *testing.T) {
+			c, b, facts, now := runtimeRouteFixture(t)
+			c.Accounts["other"] = RuntimeAccount{Provider: "provider-b", CredentialRef: "cred:other", QuotaPoolsByMode: map[string][]string{"subscription": {"other-window"}}}
+			other := c.Profiles["preferred"]
+			other.AccountRef = "other"
+			c.Profiles["other"] = other
+			c.Pools["other-window"] = RuntimePool{Provider: "provider-b", ResourceRef: "other-window", Aliases: []string{}, MaxConcurrency: 1}
+			for _, f := range facts {
+				f.Pools["other-window"] = RuntimePoolObservation{State: state, Verified: true, ObservedAt: now.Add(-time.Second)}
+			}
+			facts["other"] = RuntimeCandidateEvidence{ControllerCurrent: true, Pools: facts["preferred"].Pools, ActualModelDeveloper: other.ModelDeveloper, ActualModelFamily: other.ModelFamily}
+			b.PermittedProfiles = append(slices.Clone(b.PermittedProfiles), "other")
+			b.Policy.PrimaryProfiles = []string{"preferred", "other"}
+			facts["preferred"].Pools["long-window"] = RuntimePoolObservation{State: "exhausted", Verified: true, ObservedAt: now.Add(-time.Second)}
+			result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, nil, RuntimePreviewInput{Purpose: "new_launch"}, now)
+			require.Empty(t, result.SelectedProfileID)
+			require.Equal(t, "sibling_evidence_unknown", result.Reason)
+		})
+	}
+}
+
+// A configured threshold on the primary still opens the reserve edge.
+func TestRuntimePreviewConfiguredThresholdStillTriggersReserve(t *testing.T) {
+	c, b, facts, now := runtimeRouteFixture(t)
+	pool := c.Pools["long-window"]
+	pool.ThresholdRef = "soft-1"
+	c.Pools["long-window"] = pool
+	facts["preferred"].Pools["long-window"] = RuntimePoolObservation{State: "threshold", ThresholdRef: "soft-1", EvidenceKind: "configured_threshold", Verified: true, ObservedAt: now.Add(-time.Second)}
+	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, nil, RuntimePreviewInput{Purpose: "new_launch"}, now)
+	require.Equal(t, "reserve", result.SelectedProfileID)
+	require.Equal(t, "threshold_blocked", result.Trace[0].Reason)
+}

@@ -471,3 +471,25 @@ func pathParams(path string) []string {
 	}
 	return params
 }
+
+// TestHandlerCheckedRoutesDoNotUseResolverParams: a handler-checked route exists
+// because its id is not a row this database can resolve. If it nevertheless spells
+// that id with a resolver parameter name, the central guard resolves it against an
+// unrelated table and refuses the legitimate caller (the runtime provenance route
+// did this with :artifact_id: an artifact living in the receiving workspace made the
+// owner-workspace key get 403/404).
+func TestHandlerCheckedRoutesDoNotUseResolverParams(t *testing.T) {
+	scoped := make(map[string]bool, len(WorkspaceScopedParams))
+	for _, p := range WorkspaceScopedParams {
+		scoped[p] = true
+	}
+	require.NotEmpty(t, workspaceScopeHandlerCheckedRoutes)
+	for path := range workspaceScopeHandlerCheckedRoutes {
+		for _, p := range pathParams(strings.TrimPrefix(path, "/api/v1")) {
+			if p == "ws_id" {
+				continue
+			}
+			assert.False(t, scoped[p], "%s: :%s is a resolver param, rename it", path, p)
+		}
+	}
+}

@@ -128,7 +128,7 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 				return "capability_missing"
 			}
 		}
-		quota := false
+		quota, threshold := false, false
 		for _, ref := range account.QuotaPoolsByMode[profile.ExecutionMode] {
 			pool, _ := c.ResolvePool(ref)
 			fact, found := observation.Pools[pool]
@@ -143,7 +143,7 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 				if c.Pools[pool].ThresholdRef == "" || c.Pools[pool].ThresholdRef != fact.ThresholdRef || fact.EvidenceKind != "configured_threshold" {
 					return "pool_evidence_unknown"
 				}
-				quota = true
+				threshold = true
 			default:
 				return "pool_evidence_unknown"
 			}
@@ -151,50 +151,36 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 		if quota {
 			return "quota_blocked"
 		}
+		if threshold {
+			return "threshold_blocked"
+		}
 		return "available"
 	}
-	// Strict QA is evaluated over ALL permitted alternatives, outside the route
-	// attempt limit. A limit cannot hide one independent usable/unknown option
-	// and manufacture permission to relax strict.
-	if review && binding.Policy.QA.Mode != "off" {
-		independent, allQuota, available := 0, true, ""
-		unknownModel := false
+	// Strict QA fallback is decided over ALL permitted alternatives, outside the
+	// route attempt limit. A limit cannot hide one independent usable/unknown
+	// option and manufacture permission to relax strict. Only confirmed quota
+	// exhaustion counts toward it: a configured soft threshold is a routing
+	// trigger, not proof that every independent option is spent.
+	qaFilter := review && binding.Policy.QA.Mode != "off"
+	relaxable := func() bool {
+		independent, allQuota := 0, true
 		for _, ref := range binding.PermittedProfiles {
 			if !slices.Contains(admitted, ref) {
 				continue
 			}
 			observation := evidence[ref]
 			if observation.ActualModelDeveloper == "" || observation.ActualModelFamily == "" {
-				unknownModel = true
-				continue
+				return false
 			}
 			if !runtimeIndependent(observation, provenance) {
 				continue
 			}
 			independent++
-			reason := assess(ref)
-			result.Trace = append(result.Trace, RuntimeTrace{ProfileID: ref, Reason: reason})
-			if reason != "quota_blocked" {
+			if assess(ref) != "quota_blocked" {
 				allQuota = false
 			}
-			if reason == "available" && available == "" {
-				available = ref
-			}
 		}
-		if available != "" {
-			result.SelectedProfileID = available
-			result.SelectedAccountRef = c.Profiles[available].AccountRef
-			result.Reason = "independent_reviewer_available"
-			return result
-		}
-		if binding.Policy.QA.Mode == "strict" {
-			if !binding.Policy.QA.QuotaFallback || independent == 0 || !allQuota || unknownModel {
-				result.Reason = "strict_independent_review_unavailable"
-				return result
-			}
-			result.QAMode = "prefer"
-			result.QACompromise = true
-		}
+		return binding.Policy.QA.QuotaFallback && independent > 0 && allQuota
 	}
 	// Preference changes the account within an explicitly ordered provider
 	// group, never the order of unrelated providers or downstream quota edges.
@@ -233,67 +219,87 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 		}
 		return groups
 	}
-	visited := map[string]bool{}
-	attempts := 0
-	inspect := func(ref string) string {
-		if visited[ref] {
-			return "already_visited"
+	// route runs the primary/edge walk. With accept set, an available profile that
+	// is not acceptable (not an independent reviewer) is skipped like a blocked
+	// one, so every primary/edge/attempt/purpose rule still applies to the reviewer.
+	// terminal means result.Reason is final.
+	route := func(accept func(string) bool) (selected string, terminal bool) {
+		result.Trace = []RuntimeTrace{}
+		visited := map[string]bool{}
+		attempts := 0
+		inspect := func(ref string, filtered bool) string {
+			if visited[ref] {
+				return "already_visited"
+			}
+			visited[ref] = true
+			if attempts >= binding.Policy.MaxAttempts {
+				return "attempt_limit"
+			}
+			attempts++
+			reason := assess(ref)
+			if reason == "available" && filtered && accept != nil && !accept(ref) {
+				reason = "not_independent"
+			}
+			result.Trace = append(result.Trace, RuntimeTrace{ProfileID: ref, Reason: reason})
+			return reason
 		}
-		visited[ref] = true
-		if attempts >= binding.Policy.MaxAttempts {
-			return "attempt_limit"
+		blocked := func(reason string) bool {
+			return reason == "quota_blocked" || reason == "threshold_blocked" || reason == "not_independent"
 		}
-		attempts++
-		reason := assess(ref)
-		result.Trace = append(result.Trace, RuntimeTrace{ProfileID: ref, Reason: reason})
-		return reason
-	}
-	walk := func(pending [][]string, edgesLast bool) string {
-		for len(pending) > 0 {
-			group := pending[0]
-			pending = pending[1:]
-			var children [][]string
-			for _, ref := range group {
-				reason := inspect(ref)
-				if reason == "available" {
-					return ref
+		// An unknown sibling must not be read as "nothing there": the walk stops
+		// instead of reaching reserve/API past evidence it could not obtain.
+		unknown := func(reason string) bool {
+			return reason == "pool_evidence_unknown" || reason == "pool_evidence_unavailable" || reason == "controller_unavailable"
+		}
+		walk := func(pending [][]string, edgesLast bool) string {
+			for len(pending) > 0 {
+				group := pending[0]
+				pending = pending[1:]
+				var children [][]string
+				for _, ref := range group {
+					reason := inspect(ref, true)
+					if reason == "available" {
+						return ref
+					}
+					if reason == "attempt_limit" {
+						result.Reason = reason
+						return ""
+					}
+					if unknown(reason) {
+						result.Reason = "sibling_evidence_unknown"
+						return ""
+					}
+					if blocked(reason) {
+						children = append(children, groups(binding.Policy.QuotaEdges[ref])...)
+					}
 				}
-				if reason == "attempt_limit" {
-					result.Reason = reason
-					return ""
-				}
-				if reason == "quota_blocked" {
-					children = append(children, groups(binding.Policy.QuotaEdges[ref])...)
+				if edgesLast {
+					pending = append(pending, children...)
+				} else {
+					pending = append(children, pending...)
 				}
 			}
-			if edgesLast {
-				pending = append(pending, children...)
-			} else {
-				pending = append(children, pending...)
+			return ""
+		}
+		if request.Purpose == "quota_reserve" {
+			if !slices.Contains(binding.PermittedProfiles, request.SourceProfileID) {
+				result.Reason = "source_not_permitted"
+				return "", true
 			}
+			reason := inspect(request.SourceProfileID, false)
+			if reason != "quota_blocked" && reason != "threshold_blocked" {
+				result.Reason = "source_has_no_sole_quota_trigger"
+				return "", true
+			}
+			return walk(groups(binding.Policy.QuotaEdges[request.SourceProfileID]), false), false
 		}
-		return ""
-	}
-	var selected string
-	if request.Purpose == "quota_reserve" {
-		if !slices.Contains(binding.PermittedProfiles, request.SourceProfileID) {
-			result.Reason = "source_not_permitted"
-			return result
-		}
-		reason := inspect(request.SourceProfileID)
-		if reason != "quota_blocked" {
-			result.Reason = "source_has_no_sole_quota_trigger"
-			return result
-		}
-		selected = walk(groups(binding.Policy.QuotaEdges[request.SourceProfileID]), false)
-	} else {
 		primaryGroups := groups(binding.Policy.PrimaryProfiles)
 		first := primaryGroups[0][0]
-		reason := inspect(first)
-		switch reason {
-		case "available":
-			selected = first
-		case "quota_blocked":
+		reason := inspect(first, true)
+		switch {
+		case reason == "available":
+			return first, false
+		case blocked(reason):
 			var pending [][]string
 			if len(primaryGroups[0]) > 1 {
 				pending = append(pending, primaryGroups[0][1:])
@@ -301,10 +307,38 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 			pending = append(pending, primaryGroups[1:]...)
 			// Every remaining primary group is tried before any reserve edge.
 			pending = append(pending, groups(binding.Policy.QuotaEdges[first])...)
-			selected = walk(pending, true)
+			return walk(pending, true), false
 		default:
 			result.Reason = "primary_has_no_sole_quota_trigger"
+			return "", true
+		}
+	}
+	var accept func(string) bool
+	if qaFilter {
+		accept = func(ref string) bool {
+			observation := evidence[ref]
+			return observation.ActualModelDeveloper != "" && observation.ActualModelFamily != "" && runtimeIndependent(observation, provenance)
+		}
+	}
+	selected, terminal := route(accept)
+	if terminal {
+		return result
+	}
+	independentPick := selected != "" && qaFilter
+	if selected == "" && qaFilter && result.Reason == "no_available_route" {
+		switch {
+		case binding.Policy.QA.Mode == "strict" && !relaxable():
+			result.Reason = "strict_independent_review_unavailable"
 			return result
+		case binding.Policy.QA.Mode == "strict" || binding.Policy.QA.Mode == "prefer":
+			if binding.Policy.QA.Mode == "strict" {
+				result.QAMode = "prefer"
+				result.QACompromise = true
+			}
+			selected, terminal = route(nil)
+			if terminal {
+				return result
+			}
 		}
 	}
 	if selected != "" {
@@ -313,6 +347,9 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 		provider := c.Accounts[result.SelectedAccountRef].Provider
 		result.PreferredAccountRef = binding.Policy.PreferredAccounts[provider]
 		result.Reason = "profile_available"
+		if independentPick {
+			result.Reason = "independent_reviewer_available"
+		}
 	}
 	return result
 }

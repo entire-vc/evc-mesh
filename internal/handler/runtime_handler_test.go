@@ -21,7 +21,7 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
-	e.POST("/workspaces/:ws_id/runtime/artifacts/:artifact_id/provenance", h.Provenance)
+	e.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", h.Provenance)
 
 	ws := uuid.New().String()
 	owner := "?resource_owner_workspace_id=" + uuid.New().String()

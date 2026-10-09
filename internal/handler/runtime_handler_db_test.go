@@ -118,7 +118,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", h.Binding)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
-	e.POST("/workspaces/:ws_id/runtime/artifacts/:artifact_id/provenance", h.Provenance)
+	e.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", h.Provenance)
 	f.e = e
 	return f
 }

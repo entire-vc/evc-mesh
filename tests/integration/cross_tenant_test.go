@@ -272,7 +272,7 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		suffix = strings.ReplaceAll(suffix, "/agent-grants/"+dummyUUID, "/agent-grants/:grant_id")
 		suffix = strings.ReplaceAll(suffix, "/runtime/controllers/runner-a/", "/runtime/controllers/:controller_ref/")
 		suffix = strings.ReplaceAll(suffix, "/runtime/bindings/worker-b", "/runtime/bindings/:binding_id")
-		suffix = strings.ReplaceAll(suffix, "/runtime/artifacts/"+dummyUUID+"/", "/runtime/artifacts/:artifact_id/")
+		suffix = strings.ReplaceAll(suffix, "/runtime/artifacts/"+dummyUUID+"/", "/runtime/artifacts/:provenance_artifact_id/")
 		return suffix
 	}
 
