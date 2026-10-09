@@ -15,13 +15,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // ---------------------------------------------------------------------------
@@ -168,6 +171,14 @@ func (m *memDedupStore) Claim(_ context.Context, id string) (bool, error) {
 	}
 	m.seen[id] = struct{}{}
 	return true, nil
+}
+
+// Release implements WebhookDedupStore.Release.
+func (m *memDedupStore) Release(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.seen, id)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -349,24 +360,141 @@ func TestGitHubWebhook_PullRequest_DelegatesToService(t *testing.T) {
 	assert.Equal(t, "example/repo", ev.Repository)
 }
 
-// TestGitHubWebhook_PullRequest_ServiceErrorReturns200Logged guards the
-// behaviour that webhook senders should not see a 5xx when the orchestrator
-// hits a transient DB error — we log and ack instead, so GitHub does not
-// retry-storm us.
-func TestGitHubWebhook_PullRequest_ServiceErrorReturns200Logged(t *testing.T) {
-	svc := &stubVCSLinkService{
-		handleErr: errors.New("db down"),
-	}
+// A transient service failure (DB down) must answer 5xx so the delivery is
+// retried, and must release the dedup claim — otherwise the redelivery with
+// the SAME X-GitHub-Delivery is swallowed as "duplicate" and the event is
+// lost exactly as with the old 200 "error_logged" (#b593c566).
+func TestGitHubWebhook_PullRequest_TransientServiceError_503AndRetryIsProcessed(t *testing.T) {
+	svc := &stubVCSLinkService{handleErr: errors.New("db down")}
 	dedup := newMemDedupStore()
 	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(dedup))
-
 	body := newPullRequestPayload(t, "closed", 42, "MESH-"+uuid.New().String(), "", true, "abc1234")
-	req := newPullRequestRequest(t, body, "delivery-svc-err", "")
-	rec := httptest.NewRecorder()
-	c := echo.New().NewContext(req, rec)
 
-	require.NoError(t, h.GitHubWebhook(c))
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-svc-err", ""), rec)))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "error", resp["status"])
+	assert.Equal(t, true, resp["retry"])
+
+	// Redelivery, same delivery id, service healthy again → processed, 200 ok.
+	svc.mu.Lock()
+	svc.handleErr = nil
+	svc.handleResult = service.PRHandleResult{TaskID: uuid.New(), Reason: "transitioned", Transitioned: true}
+	svc.mu.Unlock()
+	rec = httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-svc-err", ""), rec)))
 	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "ok", resp["status"], "retry must be processed, not answered as duplicate")
+	assert.Len(t, svc.handleCalls, 2)
+
+	// A third send after success IS a duplicate: the claim is kept on success.
+	rec = httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-svc-err", ""), rec)))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "duplicate", resp["status"])
+	assert.Len(t, svc.handleCalls, 2)
+}
+
+// A refusal that fails identically on every redelivery (a 4xx apierror, a
+// MoveTask policy gate) keeps the historical 200 "error_logged" and keeps the
+// claim: a 5xx would only spend the provider's failure budget.
+func TestGitHubWebhook_PullRequest_PermanentServiceError_200KeepsClaim(t *testing.T) {
+	for name, perr := range map[string]error{
+		"apierror_conflict": fmt.Errorf("upsert vcs link: %w", apierror.Conflict("identity taken")),
+		"human_gate":        fmt.Errorf("move task: %w", &service.HumanGateFrozenError{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := &stubVCSLinkService{handleErr: perr}
+			dedup := newMemDedupStore()
+			h := NewVCSLinkHandler(svc, WithWebhookDedupStore(dedup))
+			body := newPullRequestPayload(t, "closed", 43, "MESH-"+uuid.New().String(), "", true, "abc1234")
+
+			rec := httptest.NewRecorder()
+			require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-perm-"+name, ""), rec)))
+			assert.Equal(t, http.StatusOK, rec.Code)
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			assert.Equal(t, "error_logged", resp["status"])
+
+			rec = httptest.NewRecorder()
+			require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-perm-"+name, ""), rec)))
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			assert.Equal(t, "duplicate", resp["status"])
+			assert.Len(t, svc.handleCalls, 1)
+		})
+	}
+}
+
+// orderingDedupStore records whether the response had already been written
+// when Release ran — the claim must be gone BEFORE the provider can see 503,
+// or a fast redelivery races it and is answered "duplicate".
+type orderingDedupStore struct {
+	*memDedupStore
+	rec              *httptest.ResponseRecorder
+	bodyAtRelease    int
+	releaseWasCalled bool
+}
+
+func (s *orderingDedupStore) Release(ctx context.Context, id string) error {
+	s.releaseWasCalled = true
+	s.bodyAtRelease = s.rec.Body.Len()
+	return s.memDedupStore.Release(ctx, id)
+}
+
+func TestGitHubWebhook_PullRequest_TransientError_ClaimReleasedBeforeResponse(t *testing.T) {
+	svc := &stubVCSLinkService{handleErr: errors.New("db down")}
+	rec := httptest.NewRecorder()
+	dedup := &orderingDedupStore{memDedupStore: newMemDedupStore(), rec: rec}
+	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(dedup))
+	body := newPullRequestPayload(t, "closed", 45, "MESH-"+uuid.New().String(), "", true, "abc1234")
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-order", ""), rec)))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.True(t, dedup.releaseWasCalled)
+	assert.Zero(t, dedup.bodyAtRelease, "claim must be released before the 503 is written")
+}
+
+// flakyReleaseDedupStore fails the first failReleases Release calls.
+type flakyReleaseDedupStore struct {
+	*memDedupStore
+	failReleases int
+	releaseCalls int
+}
+
+func (s *flakyReleaseDedupStore) Release(ctx context.Context, id string) error {
+	s.releaseCalls++
+	if s.releaseCalls <= s.failReleases {
+		return errors.New("redis: connection reset")
+	}
+	return s.memDedupStore.Release(ctx, id)
+}
+
+func TestGitHubWebhook_PullRequest_TransientError_ReleaseFailureIsRetried(t *testing.T) {
+	prev := webhookReleaseBackoff
+	webhookReleaseBackoff = 0
+	t.Cleanup(func() { webhookReleaseBackoff = prev })
+	svc := &stubVCSLinkService{handleErr: errors.New("db down")}
+	dedup := &flakyReleaseDedupStore{memDedupStore: newMemDedupStore(), failReleases: 1}
+	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(dedup))
+	body := newPullRequestPayload(t, "closed", 46, "MESH-"+uuid.New().String(), "", true, "abc1234")
+
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-flaky", ""), rec)))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, 2, dedup.releaseCalls, "a transient Release failure must be retried")
+
+	svc.mu.Lock()
+	svc.handleErr = nil
+	svc.handleResult = service.PRHandleResult{TaskID: uuid.New(), Reason: "transitioned", Transitioned: true}
+	svc.mu.Unlock()
+	rec = httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-flaky", ""), rec)))
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "ok", resp["status"], "redelivery must be processed once the claim is released")
 }
 
 // TestGitHubWebhook_NoSignatureWhenSecretConfigured covers the existing 401
@@ -554,21 +682,45 @@ func TestGitLabWebhook_MergeRequest_DelegatesToService(t *testing.T) {
 	assert.Equal(t, "entire-vc/evc-mesh", ev.ProjectPath)
 }
 
-// A service-layer error must not surface as a 5xx — same "log and ack"
-// policy as GitHub, so GitLab doesn't retry-storm us.
-func TestGitLabWebhook_MergeRequest_ServiceErrorReturns200Logged(t *testing.T) {
-	svc := &stubVCSLinkService{
-		gitlabHandleErr: errors.New("db down"),
-	}
+// A transient service failure must surface as 5xx so the MR event is not
+// silently lost (#b593c566: a "closed" MR hook answered 200 "error_logged"
+// left the link open forever); the redelivery is then processed normally.
+func TestGitLabWebhook_MergeRequest_TransientServiceError_503ThenRetryOK(t *testing.T) {
+	svc := &stubVCSLinkService{gitlabHandleErr: errors.New("db down")}
 	h := NewVCSLinkHandler(svc)
+	body := newMergeRequestPayload(t, "close", 42, "MESH-"+uuid.New().String(), "", "closed", "")
 
-	body := newMergeRequestPayload(t, "merge", 42, "MESH-"+uuid.New().String(), "", "merged", "abc1234")
-	req := newMergeRequestRequest(t, body, "Merge Request Hook", "")
 	rec := httptest.NewRecorder()
-	c := echo.New().NewContext(req, rec)
+	require.NoError(t, h.GitLabWebhook(echo.New().NewContext(newMergeRequestRequest(t, body, "Merge Request Hook", ""), rec)))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "error", resp["status"])
+	assert.Equal(t, true, resp["retry"])
 
-	require.NoError(t, h.GitLabWebhook(c))
+	svc.mu.Lock()
+	svc.gitlabHandleErr = nil
+	svc.gitlabHandleResult = service.PRHandleResult{TaskID: uuid.New(), Reason: "closed_without_merge"}
+	svc.mu.Unlock()
+	rec = httptest.NewRecorder()
+	require.NoError(t, h.GitLabWebhook(echo.New().NewContext(newMergeRequestRequest(t, body, "Merge Request Hook", ""), rec)))
 	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "ok", resp["status"])
+}
+
+// Permanent refusals keep 200 on GitLab too: GitLab auto-disables a hook
+// after repeated failures, and a deterministic refusal would get there.
+func TestGitLabWebhook_MergeRequest_PermanentServiceError_200Logged(t *testing.T) {
+	svc := &stubVCSLinkService{gitlabHandleErr: fmt.Errorf("move task: %w", &service.DoneEvidenceError{})}
+	h := NewVCSLinkHandler(svc)
+	body := newMergeRequestPayload(t, "merge", 45, "MESH-"+uuid.New().String(), "", "merged", "abc1234")
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.GitLabWebhook(echo.New().NewContext(newMergeRequestRequest(t, body, "Merge Request Hook", ""), rec)))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "error_logged", resp["status"])
 }
 
 // No secret configured → no token required at all (backward-compatible
@@ -787,4 +939,74 @@ func TestVCSLinkHandler_Create_RejectsUnknownStatus(t *testing.T) {
 	for _, name := range domain.VCSLinkStatusNames {
 		assert.Contains(t, respBody, name)
 	}
+}
+
+// redisWebhookDedupStore is the production dedup store; the fakes above never
+// exercise its Redis calls.
+func TestRedisWebhookDedupStore_ClaimReleaseRoundTrip(t *testing.T) {
+	mr := miniredis.RunT(t)
+	store := NewRedisWebhookDedupStore(redis.NewClient(&redis.Options{Addr: mr.Addr()}))
+	ctx := context.Background()
+
+	ok, err := store.Claim(ctx, "d-1")
+	require.NoError(t, err)
+	assert.True(t, ok, "first claim is fresh")
+	ok, err = store.Claim(ctx, "d-1")
+	require.NoError(t, err)
+	assert.False(t, ok, "second claim of the same delivery is a duplicate")
+
+	require.NoError(t, store.Release(ctx, "d-1"))
+	ok, err = store.Claim(ctx, "d-1")
+	require.NoError(t, err)
+	assert.True(t, ok, "a released claim is fresh again")
+}
+
+func TestRedisWebhookDedupStore_RedisDownSurfacesError(t *testing.T) {
+	mr := miniredis.RunT(t)
+	store := NewRedisWebhookDedupStore(redis.NewClient(&redis.Options{Addr: mr.Addr()}))
+	mr.Close()
+
+	_, err := store.Claim(context.Background(), "d-2")
+	assert.Error(t, err)
+	assert.Error(t, store.Release(context.Background(), "d-2"))
+}
+
+func TestRedisWebhookDedupStore_NilClientIsNoop(t *testing.T) {
+	store := &redisWebhookDedupStore{}
+	ok, err := store.Claim(context.Background(), "d-3")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.NoError(t, store.Release(context.Background(), "d-3"))
+}
+
+// alwaysFailReleaseDedupStore never manages to release.
+type alwaysFailReleaseDedupStore struct {
+	*memDedupStore
+	calls int
+}
+
+func (s *alwaysFailReleaseDedupStore) Release(context.Context, string) error {
+	s.calls++
+	return errors.New("redis: down")
+}
+
+func TestGitHubWebhook_PullRequest_TransientError_ReleaseGivesUpAfterAllAttempts(t *testing.T) {
+	prev := webhookReleaseBackoff
+	webhookReleaseBackoff = 0
+	t.Cleanup(func() { webhookReleaseBackoff = prev })
+	svc := &stubVCSLinkService{handleErr: errors.New("db down")}
+	dedup := &alwaysFailReleaseDedupStore{memDedupStore: newMemDedupStore()}
+	h := NewVCSLinkHandler(svc, WithWebhookDedupStore(dedup))
+	body := newPullRequestPayload(t, "closed", 47, "MESH-"+uuid.New().String(), "", true, "abc1234")
+
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.GitHubWebhook(echo.New().NewContext(newPullRequestRequest(t, body, "delivery-dead", ""), rec)))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "the failure must still reach the provider")
+	assert.Equal(t, webhookReleaseAttempts, dedup.calls)
+}
+
+func TestReleaseDelivery_NoDedupStoreIsNoop(t *testing.T) {
+	h := NewVCSLinkHandler(&stubVCSLinkService{})
+	c := echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/", http.NoBody), httptest.NewRecorder())
+	assert.NotPanics(t, func() { h.releaseDelivery(c, "d-none") })
 }

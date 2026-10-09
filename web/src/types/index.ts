@@ -1222,6 +1222,13 @@ export interface VCSLink {
   status: VCSLinkStatus | "";
   metadata: Record<string, unknown>;
   created_at: string;
+  /**
+   * When `status` was last confirmed by a status-carrying write (provider
+   * webhook or an explicit-status re-link). `null` = never confirmed: an
+   * "open" PR link with null may well have been closed or merged since.
+   * Optional so older API responses without the field still type-check.
+   */
+  status_synced_at?: string | null;
 }
 
 export interface CreateVCSLinkRequest {

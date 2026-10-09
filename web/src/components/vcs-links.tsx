@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
 import type { VCSLink, VCSLinkType, CreateVCSLinkRequest } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
+import { formatDateTime, formatRelative } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,6 +39,37 @@ const PR_STATUS_CONFIG: Record<
   merged: { label: "Merged", className: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200" },
   closed: { label: "Closed", className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
 };
+
+/**
+ * How fresh an OPEN PR link's status is. An "open" badge is only as true as
+ * the last webhook that confirmed it — a lost "closed"/"merged" delivery used
+ * to leave it open forever with nothing hinting at it. Merged/closed are
+ * terminal, so they get no hint.
+ */
+export function PRSyncHint({ link }: { link: VCSLink }) {
+  if (link.link_type !== "pr" || link.status !== "open") return null;
+  const syncedAt = link.status_synced_at;
+  if (!syncedAt) {
+    return (
+      <span
+        className="text-muted-foreground"
+        title="This open status has never been confirmed by a provider webhook"
+        data-testid="pr-sync-hint"
+      >
+        not verified
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-muted-foreground"
+      title={`Status last confirmed ${formatDateTime(syncedAt)}`}
+      data-testid="pr-sync-hint"
+    >
+      synced {formatRelative(syncedAt)}
+    </span>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -175,6 +207,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {cfg.label} #{link.external_id} &middot; {link.provider}
+                    {link.status === "open" && link.link_type === "pr" && (<> &middot; <PRSyncHint link={link} /></>)}
                   </p>
                 </div>
                 <button

@@ -299,6 +299,9 @@ type fakeTaskService struct {
 	taskRepo   *fakeTaskRepo
 	statusRepo *fakeStatusRepo
 	moveCalls  []moveCall
+	// moveErrOnce, when set, is returned by the next MoveTask (which then
+	// changes nothing, like the real guarded transition) and cleared.
+	moveErrOnce error
 }
 
 func (t *fakeTaskService) Create(context.Context, *domain.Task) error { return nil }
@@ -319,6 +322,10 @@ func (t *fakeTaskService) List(context.Context, uuid.UUID, repository.TaskFilter
 func (t *fakeTaskService) MoveTask(_ context.Context, taskID uuid.UUID, input MoveTaskInput) error {
 	if input.StatusID == nil {
 		return nil
+	}
+	if err := t.moveErrOnce; err != nil {
+		t.moveErrOnce = nil
+		return err
 	}
 	t.moveCalls = append(t.moveCalls, moveCall{taskID: taskID, input: input})
 	tk := t.taskRepo.tasks[taskID]
@@ -1375,4 +1382,35 @@ func (r *fakeTaskRepo) CompareReleaseCheckout(context.Context, uuid.UUID, domain
 }
 func (r *fakeTaskRepo) ExtendScopedCheckout(context.Context, uuid.UUID, domain.CheckoutExpectation, time.Time) (*domain.CheckoutLease, error) {
 	return nil, nil
+}
+
+// #b593c566 retry-safety: a delivery whose link upsert succeeded but whose
+// transition failed transiently now gets a 5xx and is redelivered. The
+// redelivery must complete the transition exactly once and post exactly one
+// comment — the failed attempt returns BEFORE any comment is written (every
+// comment in applyPRTransitionPolicy is posted only on a path that then
+// returns success), and MoveTask commits nothing when it errors.
+func TestHandleMR_RedeliveryAfterTransitionFailure_TransitionsOnceOneComment(t *testing.T) {
+	h := newHarness(t)
+	task := h.makeTask(t, domain.StatusCategoryInProgress)
+	h.taskSvc.moveErrOnce = errors.New("db unavailable")
+
+	ev := mergedMREvent(515, task.ID, "MESH-"+task.ID.String())
+	_, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.Error(t, err)
+	assert.Empty(t, h.commentSvc.created, "a failed attempt must not leave a comment behind")
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryInProgress], h.taskRepo.tasks[task.ID].StatusID)
+
+	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
+	require.NoError(t, err)
+	assert.True(t, res.Transitioned)
+	assert.Equal(t, "review", res.NewStatus)
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[task.ID].StatusID)
+	require.Len(t, h.taskSvc.moveCalls, 1)
+	require.Len(t, h.commentSvc.created, 1)
+	assert.Contains(t, h.commentSvc.created[0].Body, "MR !515 merged")
+
+	links, _ := h.repo.ListByTask(context.Background(), task.ID)
+	require.Len(t, links, 1)
+	assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status)
 }
