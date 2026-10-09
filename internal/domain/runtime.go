@@ -345,3 +345,108 @@ func (c *RuntimeCatalog) ValidateReferences() error {
 	}
 	return nil
 }
+
+// RuntimeDesired is one controller's slice of the desired catalog. It holds
+// only what that controller executes: its own profiles, the accounts those
+// profiles use (with credential_ref, a reference and never a secret value),
+// the pools those accounts draw from, and the bindings that may run on it.
+type RuntimeDesired struct {
+	Revision       int64                 `json:"revision"`
+	Digest         string                `json:"digest"`
+	Enabled        bool                  `json:"enabled"`
+	DrainRequested bool                  `json:"drain_requested"`
+	ControllerRef  string                `json:"controller_ref"`
+	Controller     RuntimeController     `json:"controller"`
+	Catalog        RuntimeDesiredCatalog `json:"catalog"`
+}
+
+type RuntimeDesiredCatalog struct {
+	Accounts map[string]RuntimeAccount `json:"accounts"`
+	Pools    map[string]RuntimePool    `json:"pools"`
+	Profiles map[string]RuntimeProfile `json:"profiles"`
+	Bindings map[string]RuntimeBinding `json:"bindings"`
+}
+
+// DesiredFor projects the catalog onto one controller. A binding is included
+// when it permits at least one profile of this controller; the references it
+// carries to profiles or accounts of other controllers are dropped so nothing
+// about a sibling controller leaks through policy.
+func (c *RuntimeCatalog) DesiredFor(ref string) (RuntimeDesiredCatalog, bool) {
+	if _, ok := c.Controllers[ref]; !ok {
+		return RuntimeDesiredCatalog{}, false
+	}
+	out := RuntimeDesiredCatalog{
+		Accounts: map[string]RuntimeAccount{},
+		Pools:    map[string]RuntimePool{},
+		Profiles: map[string]RuntimeProfile{},
+		Bindings: map[string]RuntimeBinding{},
+	}
+	for name, p := range c.Profiles {
+		if p.ControllerRef != ref {
+			continue
+		}
+		out.Profiles[name] = p
+		account, ok := c.Accounts[p.AccountRef]
+		if !ok {
+			continue
+		}
+		// Only the modes this controller's profiles run in: the account's
+		// pool lists for other modes belong to nobody here.
+		narrowed, seen := out.Accounts[p.AccountRef]
+		if !seen {
+			narrowed = account
+			narrowed.QuotaPoolsByMode = map[string][]string{}
+		}
+		narrowed.QuotaPoolsByMode[p.ExecutionMode] = account.QuotaPoolsByMode[p.ExecutionMode]
+		out.Accounts[p.AccountRef] = narrowed
+		for _, pool := range account.QuotaPoolsByMode[p.ExecutionMode] {
+			if canonical, found := c.ResolvePool(pool); found {
+				out.Pools[canonical] = c.Pools[canonical]
+			}
+		}
+	}
+	own := func(profile string) bool { _, ok := out.Profiles[profile]; return ok }
+	keep := func(in []string) []string {
+		kept := []string{}
+		for _, v := range in {
+			if own(v) {
+				kept = append(kept, v)
+			}
+		}
+		return kept
+	}
+	for name, b := range c.Bindings {
+		permitted := keep(b.PermittedProfiles)
+		if len(permitted) == 0 {
+			continue
+		}
+		b.PermittedProfiles = permitted
+		b.Policy.PrimaryProfiles = keep(b.Policy.PrimaryProfiles)
+		edges := map[string][]string{}
+		for from, to := range b.Policy.QuotaEdges {
+			if own(from) {
+				edges[from] = keep(to)
+			}
+		}
+		b.Policy.QuotaEdges = edges
+		preferred := map[string]string{}
+		for provider, account := range b.Policy.PreferredAccounts {
+			if _, ok := out.Accounts[account]; ok {
+				preferred[provider] = account
+			}
+		}
+		b.Policy.PreferredAccounts = preferred
+		providers := []string{}
+		for _, provider := range b.Policy.APIReserveProviders {
+			for _, account := range out.Accounts {
+				if account.Provider == provider {
+					providers = append(providers, provider)
+					break
+				}
+			}
+		}
+		b.Policy.APIReserveProviders = providers
+		out.Bindings[name] = b
+	}
+	return out, true
+}

@@ -19,6 +19,7 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 	h := NewRuntimeHandler(nil)
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
+	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
 	e.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", h.Provenance)
@@ -32,6 +33,7 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 		{"save unknown secret field", http.MethodPut, "/workspaces/" + ws + "/runtime", `{"if_revision":0,"enabled":true,"config":{},"api_key":"x"}`},
 		{"save invalid workspace", http.MethodPut, "/workspaces/not-a-uuid/runtime", `{"if_revision":0,"enabled":true,"config":{}}`},
 		{"report missing pools", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/report", `{"schema_version":2,"revision":1,"digest":"d","status":"applied","capabilities":[],"emergency_paused":false}`},
+		{"desired invalid workspace", http.MethodGet, "/workspaces/not-a-uuid/runtime/controllers/runner-a/desired", ``},
 		{"admission without owner", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/admission", `{"if_revision":0,"enabled":true,"permitted_profiles":[]}`},
 		{"admission missing profiles", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/admission" + owner, `{"if_revision":0,"enabled":true}`},
 		{"preview forged qa flag", http.MethodPost, "/workspaces/" + ws + "/runtime/bindings/b/preview" + owner, `{"purpose":"new_launch","required_capabilities":[],"qa_allowed":true}`},

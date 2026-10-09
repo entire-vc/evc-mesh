@@ -78,6 +78,7 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodGet, "/runtime", nil},
 	{http.MethodPut, "/runtime", map[string]any{"if_revision": 0, "enabled": false, "config": map[string]any{}}},
 	{http.MethodPost, "/runtime/controllers/runner-a/report", map[string]any{}},
+	{http.MethodGet, "/runtime/controllers/runner-a/desired", nil},
 	{http.MethodGet, "/runtime/bindings/worker-b?resource_owner_workspace_id=" + dummyUUID, nil},
 	{http.MethodPut, "/runtime/bindings/worker-b/admission?resource_owner_workspace_id=" + dummyUUID, map[string]any{"if_revision": 0, "enabled": false, "permitted_profiles": []string{}}},
 	{http.MethodPost, "/runtime/bindings/worker-b/preview?resource_owner_workspace_id=" + dummyUUID, map[string]any{"purpose": "new_launch", "required_capabilities": []string{}}},

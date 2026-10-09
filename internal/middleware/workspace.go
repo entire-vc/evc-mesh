@@ -431,7 +431,7 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // catalog, so there is no row to resolve a workspace from. RuntimeRepo checks
 // them itself: Binding/Admit/Preview resolve the ref in the owner catalog and
 // require the exact agent+workspace grant for the presented caller
-// (runtimeBoundCaller), Report requires the owner-workspace key of that
+// (runtimeBoundCaller), Report and Desired require the owner-workspace key of that
 // controller. A ref from another catalog or another grant answers not found.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/memories/:id":                                                           true,
@@ -444,6 +444,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/preview":                 true,
 	"/api/v1/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance": true,
 	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/report":           true,
+	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/desired":          true,
 }
 
 // workspaceScopeExemptRoutes lists routes that carry one of WorkspaceScopedParams

@@ -62,3 +62,68 @@ func TestRuntimeCatalogRejectsUnsafeRequests(t *testing.T) {
 		require.NotContains(t, err.Error(), "synthetic-value")
 	}
 }
+
+func TestRuntimeDesiredForNarrowsToOneController(t *testing.T) {
+	c, err := ParseRuntimeCatalog(runtimeExample(t))
+	require.NoError(t, err)
+	other := c.Controllers["runner-a"]
+	other.Host = "other-host"
+	c.Controllers["runner-b"] = other
+	c.Pools["pool-b"] = RuntimePool{Provider: "provider-b", ResourceRef: "pool-b", Aliases: []string{}, MaxConcurrency: 1}
+	c.Accounts["acct-b"] = RuntimeAccount{Provider: "provider-b", CredentialRef: "cred:only-b", QuotaPoolsByMode: map[string][]string{"subscription": {"pool-b"}}}
+	p := c.Profiles["preferred"]
+	p.ControllerRef, p.AccountRef = "runner-b", "acct-b"
+	c.Profiles["only-b"] = p
+	b := c.Bindings["worker-b"]
+	b.PermittedProfiles = append(b.PermittedProfiles, "only-b")
+	b.Policy.PrimaryProfiles = append(b.Policy.PrimaryProfiles, "only-b")
+	b.Policy.QuotaEdges["reserve"] = []string{"only-b"}
+	b.Policy.QuotaEdges["only-b"] = []string{"preferred"}
+	b.Policy.PreferredAccounts["provider-b"] = "acct-b"
+	b.Policy.APIReserveProviders = []string{"provider-a", "provider-b"}
+	c.Bindings["worker-b"] = b
+	acct := c.Accounts["preferred"]
+	acct.QuotaPoolsByMode["api"] = []string{"reserve-window"}
+	c.Accounts["preferred"] = acct
+	c.Bindings["only-b-binding"] = RuntimeBinding{PermittedProfiles: []string{"only-b"}, Policy: RuntimePolicy{PrimaryProfiles: []string{"only-b"}}}
+
+	_, ok := c.DesiredFor("missing")
+	require.False(t, ok)
+
+	a, ok := c.DesiredFor("runner-a")
+	require.True(t, ok)
+	require.ElementsMatch(t, []string{"preferred", "reserve"}, keysOf(a.Profiles))
+	require.ElementsMatch(t, []string{"preferred", "reserve"}, keysOf(a.Accounts))
+	require.ElementsMatch(t, []string{"shared-window", "long-window", "reserve-window"}, keysOf(a.Pools))
+	require.Equal(t, []string{"worker-b"}, keysOf(a.Bindings))
+	pol := a.Bindings["worker-b"]
+	require.Equal(t, []string{"preferred", "reserve"}, pol.PermittedProfiles)
+	require.Equal(t, []string{"preferred"}, pol.Policy.PrimaryProfiles)
+	require.Equal(t, map[string][]string{"preferred": {"reserve"}, "reserve": {}}, pol.Policy.QuotaEdges)
+	require.Equal(t, map[string]string{"provider-a": "preferred"}, pol.Policy.PreferredAccounts)
+	require.Equal(t, []string{"provider-a"}, pol.Policy.APIReserveProviders)
+	require.NotContains(t, a.Accounts["preferred"].QuotaPoolsByMode, "api", "a mode no profile of this controller runs in")
+	require.Equal(t, []string{"provider-b"}, c.mustDesired(t, "runner-b").Bindings["worker-b"].Policy.APIReserveProviders)
+
+	bView, ok := c.DesiredFor("runner-b")
+	require.True(t, ok)
+	require.Equal(t, []string{"only-b"}, keysOf(bView.Profiles))
+	require.ElementsMatch(t, []string{"worker-b", "only-b-binding"}, keysOf(bView.Bindings))
+	require.Equal(t, map[string]string{"provider-b": "acct-b"}, bView.Bindings["worker-b"].Policy.PreferredAccounts)
+	require.Equal(t, "cred:only-b", bView.Accounts["acct-b"].CredentialRef)
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func (c *RuntimeCatalog) mustDesired(t *testing.T, ref string) RuntimeDesiredCatalog {
+	t.Helper()
+	d, ok := c.DesiredFor(ref)
+	require.True(t, ok)
+	return d
+}
