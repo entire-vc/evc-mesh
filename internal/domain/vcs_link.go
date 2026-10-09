@@ -100,6 +100,11 @@ type VCSLink struct {
 	Status     VCSLinkStatus   `json:"status" db:"status"`
 	Metadata   json.RawMessage `json:"metadata" db:"metadata"`
 	CreatedAt  time.Time       `json:"created_at" db:"created_at"`
+	// StatusSyncedAt is when Status was last written by a status-carrying
+	// source (provider webhook or an explicit-status re-link, both via
+	// Upsert). Nil means the status has never been confirmed — for an open
+	// PR link that is "we do not know whether it is still open".
+	StatusSyncedAt *time.Time `json:"status_synced_at" db:"status_synced_at"`
 }
 
 // NormalizeVCSURL folds cosmetic differences in a VCS object's URL — scheme

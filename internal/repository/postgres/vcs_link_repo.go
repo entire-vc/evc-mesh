@@ -28,6 +28,9 @@ type vcsLinkRow struct {
 	Status     string    `db:"status"`
 	Metadata   []byte    `db:"metadata"`
 	CreatedAt  time.Time `db:"created_at"`
+	// StatusSyncedAt is nullable: rows that predate the column, and rows
+	// written by Create (no status stated), read NULL = never confirmed.
+	StatusSyncedAt *time.Time `db:"status_synced_at"`
 }
 
 func (r *vcsLinkRow) toDomain() domain.VCSLink {
@@ -46,6 +49,8 @@ func (r *vcsLinkRow) toDomain() domain.VCSLink {
 		Status:     domain.VCSLinkStatus(r.Status),
 		Metadata:   metadata,
 		CreatedAt:  r.CreatedAt,
+
+		StatusSyncedAt: r.StatusSyncedAt,
 	}
 }
 
@@ -53,7 +58,7 @@ func (r *vcsLinkRow) toDomain() domain.VCSLink {
 // see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
 // refuses to scan a column with no matching struct field, so an additive
 // migration to this table breaks every read until redeployed.
-const vcsLinkSelectCols = `id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at`
+const vcsLinkSelectCols = `id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at, status_synced_at`
 
 // VCSLinkRepo implements repository.VCSLinkRepository with PostgreSQL.
 type VCSLinkRepo struct {
@@ -245,6 +250,12 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 // happened to generate before finding out the row already existed
 // (#b73171fa: the caller-supplied values used to be echoed back verbatim,
 // making an update look like a freshly created duplicate).
+//
+// Both branches stamp status_synced_at = now() (database clock, so every
+// writer agrees on one time source) and reflect it back into
+// link.StatusSyncedAt: every Upsert caller states the status it is writing
+// (a webhook delivery, or a manual re-link with an explicit status), so the
+// write IS a confirmation of that status at that moment.
 func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, error) {
 	metadata := link.Metadata
 	if metadata == nil {
@@ -280,16 +291,18 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 		const insertQ = `
 			INSERT INTO vcs_links (
 				id, task_id, provider, link_type, external_id,
-				url, title, status, metadata, created_at
+				url, title, status, metadata, created_at, status_synced_at
 			) VALUES (
 				$1, $2, $3, $4, $5,
-				$6, $7, $8, $9, $10
+				$6, $7, $8, $9, $10, now()
 			)
+			RETURNING status_synced_at
 		`
-		if _, execErr := tx.ExecContext(ctx, insertQ,
+		var syncedAt time.Time
+		if execErr := tx.QueryRowxContext(ctx, insertQ,
 			link.ID, link.TaskID, string(link.Provider), string(link.LinkType), link.ExternalID,
 			link.URL, link.Title, string(link.Status), metadata, link.CreatedAt,
-		); execErr != nil {
+		).Scan(&syncedAt); execErr != nil {
 			if isVCSLinkUniqueViolation(execErr) {
 				return false, apierror.Conflict(fmt.Sprintf(
 					"a %s %s link with external_id %q already exists on this task under a different url — "+
@@ -302,6 +315,7 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 		if commitErr := tx.Commit(); commitErr != nil {
 			return false, commitErr
 		}
+		link.StatusSyncedAt = &syncedAt
 		return true, nil
 	}
 
@@ -316,12 +330,15 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 
 	const updateQ = `
 		UPDATE vcs_links
-		SET provider = $1, external_id = $2, status = $3, title = $4, metadata = $5, url = $6
+		SET provider = $1, external_id = $2, status = $3, title = $4, metadata = $5, url = $6,
+		    status_synced_at = now()
 		WHERE id = $7
+		RETURNING status_synced_at
 	`
-	if _, execErr := tx.ExecContext(ctx, updateQ,
+	var syncedAt time.Time
+	if execErr := tx.QueryRowxContext(ctx, updateQ,
 		string(link.Provider), link.ExternalID, string(link.Status), link.Title, metadata, link.URL, primary.ID,
-	); execErr != nil {
+	).Scan(&syncedAt); execErr != nil {
 		if isVCSLinkUniqueViolation(execErr) {
 			return false, apierror.Conflict(fmt.Sprintf(
 				"cannot update this link to provider=%s external_id=%q — a different link on this task "+
@@ -333,6 +350,7 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 	}
 	link.ID = primary.ID
 	link.CreatedAt = primary.CreatedAt
+	link.StatusSyncedAt = &syncedAt
 	if commitErr := tx.Commit(); commitErr != nil {
 		return false, commitErr
 	}

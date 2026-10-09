@@ -28,6 +28,11 @@ import (
 // a comfortable margin to absorb every retry without remembering forever.
 const webhookDeliveryTTL = 7 * 24 * time.Hour
 
+// Bounded retry for releasing a dedup claim after a failed delivery.
+const webhookReleaseAttempts = 3
+
+var webhookReleaseBackoff = 100 * time.Millisecond
+
 // WebhookDedupStore is the minimum surface the GitHub webhook handler needs
 // from a dedup backend. Implemented by Redis in prod and by an in-memory
 // map in tests.
@@ -36,6 +41,11 @@ type WebhookDedupStore interface {
 	// the first to record it (i.e. the request is fresh and should be
 	// processed), false if a previous call already recorded it (duplicate).
 	Claim(ctx context.Context, deliveryID string) (bool, error)
+	// Release undoes a Claim whose delivery was NOT processed, so the
+	// provider's redelivery of the same X-GitHub-Delivery (a resend keeps the
+	// id) is processed instead of being swallowed as a duplicate. Required,
+	// not optional: a store that cannot release loses the retried event.
+	Release(ctx context.Context, deliveryID string) error
 }
 
 // redisWebhookDedupStore is a Redis-backed WebhookDedupStore.
@@ -56,7 +66,7 @@ func (s *redisWebhookDedupStore) Claim(ctx context.Context, deliveryID string) (
 	if s.rdb == nil {
 		return true, nil
 	}
-	key := "mesh:webhook:gh:delivery:" + deliveryID
+	key := githubDeliveryKey(deliveryID)
 	res, err := s.rdb.SetArgs(ctx, key, "1", redis.SetArgs{Mode: "NX", TTL: webhookDeliveryTTL}).Result()
 	if err != nil {
 		// redis.Nil here means NX rejected the set — duplicate, not a real error.
@@ -67,6 +77,66 @@ func (s *redisWebhookDedupStore) Claim(ctx context.Context, deliveryID string) (
 	}
 	// SetArgs returns "OK" on success.
 	return res == "OK", nil
+}
+
+// Release deletes the delivery key so a redelivery is treated as fresh.
+func (s *redisWebhookDedupStore) Release(ctx context.Context, deliveryID string) error {
+	if s.rdb == nil {
+		return nil
+	}
+	return s.rdb.Del(ctx, githubDeliveryKey(deliveryID)).Err()
+}
+
+func githubDeliveryKey(deliveryID string) string {
+	return "mesh:webhook:gh:delivery:" + deliveryID
+}
+
+// webhookRetryable reports whether a webhook service error is worth a
+// provider redelivery. Infrastructure failures (DB down, a timeout, a CAS
+// race lost to a concurrent writer) are: the same payload can succeed later,
+// so we answer 5xx and the delivery is retried instead of being lost — a
+// 200 here is how a GitLab "closed" MR left its link open forever.
+//
+// A refusal is not: a 4xx apierror (e.g. an identity Conflict on Upsert) or
+// one of MoveTask's policy gates (human gate, evidence/DoD gates, workflow
+// rules...) fails identically on every redelivery. Answering those with 5xx
+// would only burn the provider's failure budget — GitLab auto-disables a
+// hook after repeated consecutive failures, which would silently drop every
+// LATER delivery for every project on that hook. Those keep today's
+// 200 "error_logged".
+func webhookRetryable(err error) bool {
+	var apiErr *apierror.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode() >= http.StatusInternalServerError
+	}
+	var (
+		humanGate    *service.HumanGateFrozenError
+		doneEvidence *service.DoneEvidenceError
+		review       *service.ReviewEvidenceError
+		dodGate      *service.DodGateBlockedError
+		rules        *service.RuleViolationError
+		parkAlarm    *service.ParkAlarmError
+		triage       *service.TriageEntryError
+		shipped      *service.TaskShippedError
+		pinned       *service.AssignmentPinnedError
+	)
+	switch {
+	case errors.As(err, &humanGate), errors.As(err, &doneEvidence), errors.As(err, &review),
+		errors.As(err, &dodGate), errors.As(err, &rules), errors.As(err, &parkAlarm),
+		errors.As(err, &triage), errors.As(err, &shipped), errors.As(err, &pinned):
+		return false
+	}
+	return true
+}
+
+// webhookServiceErrorResponse answers a failed PR/MR handle: 503 with
+// retry=true when a redelivery can succeed, otherwise the historical 200
+// "error_logged" (see webhookRetryable).
+func webhookServiceErrorResponse(c echo.Context, err error) error {
+	if webhookRetryable(err) {
+		return c.JSON(http.StatusServiceUnavailable, map[string]any{"status": "error", "retry": true})
+	}
+	return c.JSON(http.StatusOK, map[string]any{"status": "error_logged", "retry": false})
 }
 
 // VCSLinkHandler handles HTTP requests for VCS link management.
@@ -438,8 +508,15 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 		}
 		result, herr := h.vcsService.HandleGitHubPullRequestEvent(ctx, ev)
 		if herr != nil {
-			c.Logger().Errorf("github webhook: pull_request handler: %v", herr)
-			return c.JSON(http.StatusOK, map[string]string{"status": "error_logged"})
+			c.Logger().Errorf("github webhook: pull_request handler delivery=%s: %v", deliveryID, herr)
+			if webhookRetryable(herr) {
+				// The claim above was taken BEFORE processing; left in place,
+				// the redelivery (same X-GitHub-Delivery) would be answered
+				// "duplicate" and the event lost exactly as before. Released
+				// BEFORE the 503 is written so a fast redelivery cannot race it.
+				h.releaseDelivery(c, deliveryID)
+			}
+			return webhookServiceErrorResponse(c, herr)
 		}
 		return c.JSON(http.StatusOK, map[string]any{
 			"status":       "ok",
@@ -486,6 +563,29 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// releaseDelivery undoes the dedup Claim for a delivery that failed
+// retryably. Best effort: a Release error only means the redelivery will be
+// seen as a duplicate — logged so it is visible.
+func (h *VCSLinkHandler) releaseDelivery(c echo.Context, deliveryID string) {
+	if h.dedup == nil {
+		return
+	}
+	// A claim that outlives a failed delivery turns the provider's redelivery
+	// into a silent "duplicate", so a transient Release failure is retried a
+	// few times before giving up. If every attempt fails (Redis hard down) the
+	// claim stays until its TTL: logged loudly, and the 503 still tells the
+	// provider the delivery failed so the failure is visible and resendable.
+	var err error
+	for attempt := 0; attempt < webhookReleaseAttempts; attempt++ {
+		if err = h.dedup.Release(c.Request().Context(), deliveryID); err == nil {
+			return
+		}
+		c.Logger().Warnf("github webhook: release dedup claim delivery=%s attempt %d/%d: %v", deliveryID, attempt+1, webhookReleaseAttempts, err)
+		time.Sleep(webhookReleaseBackoff)
+	}
+	c.Logger().Errorf("github webhook: release dedup claim delivery=%s failed after %d attempts, redelivery will be dropped as duplicate until the claim expires: %v", deliveryID, webhookReleaseAttempts, err)
 }
 
 // GitLabWebhookPayload holds the fields we care about from a GitLab
@@ -602,8 +702,8 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 	}
 	result, herr := h.vcsService.HandleGitLabMergeRequestEvent(c.Request().Context(), ev)
 	if herr != nil {
-		c.Logger().Errorf("gitlab webhook: merge_request handler: %v", herr)
-		return c.JSON(http.StatusOK, map[string]string{"status": "error_logged"})
+		c.Logger().Errorf("gitlab webhook: merge_request handler mr=%s!%d: %v", ev.ProjectPath, ev.MRIID, herr)
+		return webhookServiceErrorResponse(c, herr)
 	}
 	return c.JSON(http.StatusOK, map[string]any{
 		"status":       "ok",
