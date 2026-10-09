@@ -63,3 +63,17 @@ export function dropPeers(
   if (statusNameByTask[draggedId] !== undefined && sourceColId === targetColId) return null;
   return targetTasks.filter((t) => t.id !== draggedId && statusNameByTask[t.id] === undefined);
 }
+
+/**
+ * The "Subtasks" toggle hides child cards from the board, but a child that is
+ * waiting on a human must still reach the human: an open gated subtask passes
+ * the toggle. Closed ones (done/cancelled) stay hidden.
+ */
+export function passesSubtaskFilter(
+  task: Pick<Task, "parent_task_id" | "human_gate" | "status_id">,
+  showSubtasks: boolean,
+  closedStatusIds: ReadonlySet<string>,
+): boolean {
+  if (showSubtasks || !task.parent_task_id) return true;
+  return Boolean(task.human_gate) && !closedStatusIds.has(task.status_id);
+}

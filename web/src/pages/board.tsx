@@ -41,7 +41,7 @@ import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-tool
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
-import { dropPeers, relocateGatedToTriage } from "@/lib/board-gate-triage";
+import { dropPeers, passesSubtaskFilter, relocateGatedToTriage } from "@/lib/board-gate-triage";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
 import { PerfProfiler } from "@/lib/perf-profiler";
@@ -685,10 +685,15 @@ export function BoardPage() {
   // Applied before grouping.
   // ---------------------------------------------------------------------------
 
+  const closedStatusIds = useMemo(
+    () => new Set(statuses.filter((s) => s.category === "done" || s.category === "cancelled").map((s) => s.id)),
+    [statuses],
+  );
+
   const filteredTasks = useMemo(() => {
     // First pass: basic filters (subtasks, search, priority, assignee)
     const basic = tasks.filter((task) => {
-      if (!showSubtasks && task.parent_task_id) return false;
+      if (!passesSubtaskFilter(task, showSubtasks, closedStatusIds)) return false;
       if (searchQuery && !task.title.toLowerCase().includes(searchQuery.toLowerCase())) {
         return false;
       }
@@ -709,6 +714,7 @@ export function BoardPage() {
   }, [
     tasks,
     showSubtasks,
+    closedStatusIds,
     searchQuery,
     priorityFilter,
     assigneeFilter,
