@@ -337,6 +337,18 @@ class TestCoverageGate(unittest.TestCase):
         self.commit('add untested function')
         self.rejects(self.run_gate(), 'threshold')
 
+    def test_diff_touching_only_build_tagged_test_package_passes(self):
+        # tests/integration is entirely behind `//go:build integration`; a diff
+        # that only edits it has no buildable package under the gate's flags,
+        # which is not a measurement error.
+        self.write('integ/x_test.go', '//go:build integration\n\npackage integ\n')
+        self.commit('add tagged-only package')
+        self.base = self.git('rev-parse', 'HEAD').stdout.strip()
+        self.write('integ/x_test.go', '//go:build integration\n\npackage integ\n\nvar changed = 1\n')
+        self.commit('edit tagged-only package')
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_affected_set_bad_ref_fails(self):
         self.good_diff()
         self.rejects(self.run_gate(base='missing-ref'))

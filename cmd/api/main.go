@@ -155,6 +155,7 @@ func main() {
 	savedViewRepo := postgres.NewSavedViewRepo(db)
 	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
 	integrationRepo := postgres.NewIntegrationRepo(db)
+	runtimeRepo := postgres.NewRuntimeRepo(db)
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
 	ruleRepo := postgres.NewRuleRepo(db)
@@ -842,6 +843,7 @@ func main() {
 		handler.WithWebhookDedupStore(handler.NewRedisWebhookDedupStore(agentNotifyRedis)),
 	)
 	integrationHandler := handler.NewIntegrationHandler(integrationService, telegramClient, telegramBotManager)
+	runtimeHandler := handler.NewRuntimeHandler(runtimeRepo)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
@@ -1397,6 +1399,13 @@ func main() {
 	// X-Agent-Key caller 403s on Invite/Revoke unconditionally; nothing extra
 	// needed here to keep "the workspace side always initiates" true.
 	api.GET("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.List)
+	api.GET("/workspaces/:ws_id/runtime", runtimeHandler.Inventory, rbac(mw.PermManageWebhooks))
+	api.PUT("/workspaces/:ws_id/runtime", runtimeHandler.Save, rbac(mw.PermManageWebhooks))
+	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", runtimeHandler.Report)
+	api.POST("/workspaces/:ws_id/runtime/artifacts/:artifact_id/provenance", runtimeHandler.Provenance)
+	api.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", runtimeHandler.Binding)
+	api.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", runtimeHandler.Admit, rbac(mw.PermManageMembers))
+	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", runtimeHandler.Preview)
 	api.POST("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.Invite, rbac(mw.PermManageMembers))
 	api.DELETE("/workspaces/:ws_id/agent-grants/:grant_id", agentWorkspaceGrantHandler.Revoke, rbac(mw.PermManageMembers))
 

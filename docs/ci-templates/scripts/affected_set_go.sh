@@ -49,6 +49,17 @@ for dir in "${!CHANGED_DIRS[@]}"; do
       DELETED_DIRS["$dir"]=1
       continue
     fi
+    # A package whose every file sits behind a build tag (tests/integration)
+    # has nothing the gate's own `go test -race` can build or measure. Plain
+    # `go list` fails on it with "build constraints exclude all Go files", which
+    # would turn an edit to such a test into a measurement error. Counting the
+    # buildable files with -e leaves real errors to the plain go list below.
+    buildable="$(cd "$MODULE_ROOT" && go list -e -race -f '{{len .GoFiles}} {{len .CgoFiles}} {{len .TestGoFiles}} {{len .XTestGoFiles}} {{len .IgnoredGoFiles}}' "./$dir" 2>/dev/null || true)"
+    read -r n_go n_cgo n_test n_xtest n_ignored <<< "$buildable"
+    if [ "${n_go:-x}" = 0 ] && [ "${n_cgo:-x}" = 0 ] && [ "${n_test:-x}" = 0 ] && [ "${n_xtest:-x}" = 0 ] && [ "${n_ignored:-0}" -gt 0 ]; then
+      echo "skip (every file is build-tagged out, nothing to measure): $dir" >&2
+      continue
+    fi
     import_path="$(cd "$MODULE_ROOT" && go list -race "./$dir")"
     if [ -z "$import_path" ]; then
       echo "ERROR: go list returned no import path for $dir" >&2

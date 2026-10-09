@@ -73,6 +73,16 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/agent-grants", map[string]string{"agent_id": dummyUUID, "role": "member"}},
 	{http.MethodDelete, "/agent-grants/" + dummyUUID, nil},
 
+	// Agent runtime catalog: a non-member must be refused before any handler
+	// reads the owner's resource inventory or accepts a controller/consent write.
+	{http.MethodGet, "/runtime", nil},
+	{http.MethodPut, "/runtime", map[string]any{"if_revision": 0, "enabled": false, "config": map[string]any{}}},
+	{http.MethodPost, "/runtime/controllers/runner-a/report", map[string]any{}},
+	{http.MethodGet, "/runtime/bindings/worker-b?resource_owner_workspace_id=" + dummyUUID, nil},
+	{http.MethodPut, "/runtime/bindings/worker-b/admission?resource_owner_workspace_id=" + dummyUUID, map[string]any{"if_revision": 0, "enabled": false, "permitted_profiles": []string{}}},
+	{http.MethodPost, "/runtime/bindings/worker-b/preview?resource_owner_workspace_id=" + dummyUUID, map[string]any{"purpose": "new_launch", "required_capabilities": []string{}}},
+	{http.MethodPost, "/runtime/artifacts/" + dummyUUID + "/provenance", map[string]any{}},
+
 	{http.MethodPost, "/webhooks", map[string]string{"url": "https://example.invalid/hook"}},
 	{http.MethodGet, "/webhooks", nil},
 
@@ -260,6 +270,9 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		suffix = strings.ReplaceAll(suffix, "/members/"+dummyUUID, "/members/:user_id")
 		suffix = strings.ReplaceAll(suffix, "/invites/"+dummyUUID, "/invites/:invite_id")
 		suffix = strings.ReplaceAll(suffix, "/agent-grants/"+dummyUUID, "/agent-grants/:grant_id")
+		suffix = strings.ReplaceAll(suffix, "/runtime/controllers/runner-a/", "/runtime/controllers/:controller_ref/")
+		suffix = strings.ReplaceAll(suffix, "/runtime/bindings/worker-b", "/runtime/bindings/:binding_id")
+		suffix = strings.ReplaceAll(suffix, "/runtime/artifacts/"+dummyUUID+"/", "/runtime/artifacts/:artifact_id/")
 		return suffix
 	}
 
