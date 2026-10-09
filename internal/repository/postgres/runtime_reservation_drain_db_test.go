@@ -109,6 +109,7 @@ func TestRuntimeReservationGrantRevocationIsolatesGrants(t *testing.T) {
 	f.setCap(t, 3)
 	a := f.scopeA()
 	b := f.addSecondGrant(t)
+	f.reportControllers(t, false)
 
 	taskRun, reqRun := f.taskIn(t, a)
 	running, err := f.acquireIn(a, a.key, f.inputIn(t, a, taskRun, reqRun, "a-run", "a-run"))
@@ -226,6 +227,7 @@ func TestRuntimeReservationDisableDrainsExisting(t *testing.T) {
 	f.input.Enabled = &enabled
 	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
 	require.NoError(t, err)
+	f.reportControllers(t, false) // controllers re-apply the new revision before admitting
 	_, err = f.acquireIn(a, a.key, fresh)
 	requireReason(t, err, http.StatusConflict, "stale_revision")
 	_, err = f.acquireIn(a, a.key, f.inputIn(t, a, taskNew, reqNew, "new", "new-3"))

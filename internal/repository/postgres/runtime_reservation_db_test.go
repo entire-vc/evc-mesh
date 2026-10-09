@@ -51,6 +51,7 @@ func seedReservation(t *testing.T, mutate func(*domain.RuntimeCatalog)) reservat
 	enabled := true
 	_, err = f.repo.Admit(ctx, f.owner, f.receiver, "worker-b", f.receiverActor, RuntimeAdmissionInput{Enabled: &enabled, PermittedProfiles: b.PermittedProfiles})
 	require.NoError(t, err)
+	f.reportControllers(t, false)
 	p := &domain.Project{ID: uuid.New(), WorkspaceID: f.receiver, Name: "Runtime", Slug: "runtime-" + uuid.NewString(), DefaultAssigneeType: domain.DefaultAssigneeNone}
 	require.NoError(t, NewProjectRepo(f.db).Create(ctx, p))
 	status := &domain.TaskStatus{ID: uuid.New(), ProjectID: p.ID, Name: "Todo", Slug: "todo", Category: domain.StatusCategoryTodo, IsDefault: true, Color: "#000000"}
@@ -62,6 +63,19 @@ func seedReservation(t *testing.T, mutate func(*domain.RuntimeCatalog)) reservat
 		_, _ = f.db.Exec(`UPDATE tasks SET checked_out_by=NULL,checkout_expires=NULL WHERE checked_out_by=$1`, f.worker.AgentID)
 	})
 	return reservationFixture{runtimeFixture: f, project: p.ID, status: status.ID}
+}
+
+// reportControllers makes both controllers current at the latest catalog
+// revision, or emergency-paused when paused is set.
+func (f runtimeFixture) reportControllers(t *testing.T, paused bool) {
+	t.Helper()
+	snapshot, err := f.repo.Inventory(context.Background(), f.owner, f.ownerActor)
+	require.NoError(t, err)
+	for _, ref := range []string{"runner-a", "runner-b"} {
+		report := domain.RuntimeReport{SchemaVersion: 2, Revision: snapshot.Revision, Digest: snapshot.Digest, Status: "applied",
+			Capabilities: f.catalog.Controllers[ref].Capabilities, EmergencyPaused: paused, Pools: map[string]domain.RuntimePoolObservation{}}
+		require.NoError(t, f.repo.Report(context.Background(), f.owner, ref, f.reporter, report))
+	}
 }
 
 func (f runtimeFixture) setCap(t *testing.T, n int) {
@@ -276,6 +290,7 @@ func TestRuntimeReservationStaleRevisionBetweenAcquireAndConsume(t *testing.T) {
 	require.NoError(t, err)
 	requireReason(t, consume(res), http.StatusConflict, "stale_revision")
 
+	f.reportControllers(t, false) // controllers re-apply the new revision before admitting
 	task, request = f.checkedOutTask(t)
 	res, _, err = f.acquire(f.acquireInput(t, "preferred", task, request, "w2", "k2"))
 	require.NoError(t, err)

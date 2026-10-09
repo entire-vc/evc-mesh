@@ -408,6 +408,43 @@ func findStatusIDByCategory(ctx context.Context, statusRepo repository.TaskStatu
 	return uuid.Nil, nil
 }
 
+// ensureTriageStatusID returns the project's triage status, adding the standard
+// one when the project has none. It is idempotent and safe against a concurrent
+// caller: the (project, slug) unique key makes the loser re-read the winner's
+// row. The new status goes first on the board; existing statuses, tasks, gates
+// and assignees are untouched.
+func ensureTriageStatusID(ctx context.Context, statusRepo repository.TaskStatusRepository, projectID uuid.UUID) (uuid.UUID, error) {
+	id, err := findStatusIDByCategory(ctx, statusRepo, projectID, domain.StatusCategoryTriage)
+	if err != nil || id != uuid.Nil {
+		return id, err
+	}
+	existing, err := statusRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	position := 0
+	for _, st := range existing {
+		position = max(position, st.Position+1)
+	}
+	created := &domain.TaskStatus{ID: uuid.New(), ProjectID: projectID, Name: "Triage", Slug: "triage", Color: "#EF4444", Category: domain.StatusCategoryTriage, Position: position}
+	if createErr := statusRepo.Create(ctx, created); createErr != nil {
+		id, err = findStatusIDByCategory(ctx, statusRepo, projectID, domain.StatusCategoryTriage)
+		if err == nil && id != uuid.Nil {
+			return id, nil
+		}
+		return uuid.Nil, createErr
+	}
+	order := make([]uuid.UUID, 0, len(existing)+1)
+	order = append(order, created.ID)
+	for _, st := range existing {
+		order = append(order, st.ID)
+	}
+	if reorderErr := statusRepo.Reorder(ctx, projectID, order); reorderErr != nil {
+		log.Printf("[triage-stage] WARNING: reorder after adding triage to project %s failed: %v", projectID, reorderErr)
+	}
+	return created.ID, nil
+}
+
 // allSubtasksTerminal returns true if every subtask has a "done" or "cancelled" category.
 func allSubtasksTerminal(subtasks []domain.Task, categoryByStatusID map[uuid.UUID]domain.StatusCategory) bool {
 	if len(subtasks) == 0 {

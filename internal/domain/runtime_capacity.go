@@ -13,7 +13,26 @@ const (
 	RuntimeCapacityAtCapacity  = "at_capacity"
 	RuntimeCapacityCapUnset    = "identity_cap_unset"
 	RuntimeCapacitySourceStore = "durable_state"
+	// RuntimeCapacityControllerDown: every controller that could start this
+	// identity's work is paused, stale or silent. Nothing new is admitted, but
+	// reservations already held stay occupied.
+	RuntimeCapacityControllerDown = "controller_unavailable"
 )
+
+// Controller liveness as seen by admission. Anything other than current is
+// unsafe to admit through.
+const (
+	RuntimeControllerCurrent    = "current"
+	RuntimeControllerPaused     = "paused"
+	RuntimeControllerStale      = "stale"
+	RuntimeControllerUnreported = "unreported"
+)
+
+// RuntimeAgentController is one controller that serves a binding of the agent.
+type RuntimeAgentController struct {
+	ControllerRef string `json:"controller_ref"`
+	State         string `json:"state"`
+}
 
 // RuntimeCapacity is the read-only execution-state projection of a workspace's
 // agent identities (GET /workspaces/:ws_id/runtime/capacity). It authorizes
@@ -50,6 +69,9 @@ type RuntimeAgentCapacity struct {
 	Ready    int                `json:"ready"`
 	Reason   string             `json:"reason"`
 	Tasks    RuntimeTaskCapView `json:"tasks"`
+	// Controllers lists the controllers behind the agent's runtime bindings in
+	// this workspace; empty for direct-mode agents.
+	Controllers []RuntimeAgentController `json:"controllers"`
 }
 
 // RuntimeTaskCapView: the agent's open assigned tasks in this workspace that
@@ -80,7 +102,18 @@ func (c *RuntimeAgentCapacity) Derive() {
 		c.Ready, c.Reason = 0, RuntimeCapacityCapUnset
 	case c.Occupied >= c.Effective:
 		c.Ready, c.Reason = 0, RuntimeCapacityAtCapacity
+	case len(c.Controllers) > 0 && !c.controllerCurrent():
+		c.Ready, c.Reason = 0, RuntimeCapacityControllerDown
 	default:
 		c.Ready, c.Reason = c.Effective-c.Occupied, RuntimeCapacityAvailable
 	}
+}
+
+func (c *RuntimeAgentCapacity) controllerCurrent() bool {
+	for _, controller := range c.Controllers {
+		if controller.State == RuntimeControllerCurrent {
+			return true
+		}
+	}
+	return false
 }

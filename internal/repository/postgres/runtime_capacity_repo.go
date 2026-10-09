@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -89,9 +90,13 @@ func (r *RuntimeRepo) Capacity(ctx context.Context, ws uuid.UUID, actor RuntimeA
 	index := make(map[uuid.UUID]int, len(agents))
 	for i, a := range agents {
 		ids[i], index[a.ID] = a.ID, i
-		out.Agents = append(out.Agents, domain.RuntimeAgentCapacity{AgentID: a.ID, Name: a.Name, Configured: a.Configured})
+		out.Agents = append(out.Agents, domain.RuntimeAgentCapacity{AgentID: a.ID, Name: a.Name, Configured: a.Configured, Controllers: []domain.RuntimeAgentController{}})
 	}
 	idArray := pq.Array(ids)
+	err = runtimeAgentControllers(ctx, tx, ws, out.Agents, index)
+	if err != nil {
+		return nil, err
+	}
 
 	// Reservations are identity-global, across every workspace and controller.
 	var reservations []struct {
@@ -178,4 +183,58 @@ FROM idle GROUP BY agent_id`, ws, idArray)
 		out.Agents[i].Derive()
 	}
 	return out, nil
+}
+
+// runtimeAgentControllers lists, per agent, the controllers behind its runtime
+// bindings in workspace ws with their liveness. A controller that is paused,
+// stale or silent cannot start new work, so the projection never reports such
+// an agent as ready.
+func runtimeAgentControllers(ctx context.Context, tx *sqlx.Tx, ws uuid.UUID, agents []domain.RuntimeAgentCapacity, index map[uuid.UUID]int) error {
+	var rows []integrationConfigRow
+	err := tx.SelectContext(ctx, &rows, `SELECT `+integrationConfigSelectCols+` FROM integration_configs WHERE provider='agent_runtime' ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		connection := row.toDomain()
+		catalog, parseErr := domain.ParseRuntimeCatalog(connection.Config)
+		if parseErr != nil {
+			continue
+		}
+		refs := map[uuid.UUID][]string{}
+		for _, binding := range catalog.Bindings {
+			if binding.Binding.WorkspaceID != ws {
+				continue
+			}
+			i, ok := index[binding.Binding.AgentID]
+			if !ok {
+				continue
+			}
+			for _, profile := range binding.PermittedProfiles {
+				ref := catalog.Profiles[profile].ControllerRef
+				if ref != "" && !slices.Contains(refs[agents[i].AgentID], ref) {
+					refs[agents[i].AgentID] = append(refs[agents[i].AgentID], ref)
+				}
+			}
+		}
+		if len(refs) == 0 {
+			continue
+		}
+		revision, digest, revErr := runtimeRevision(ctx, tx, connection.ID)
+		if revErr != nil {
+			return revErr
+		}
+		for agent, controllers := range refs {
+			slices.Sort(controllers)
+			for _, ref := range controllers {
+				state, stateErr := runtimeControllerLiveness(ctx, tx, &connection, catalog, ref, revision, digest)
+				if stateErr != nil {
+					return stateErr
+				}
+				c := &agents[index[agent]]
+				c.Controllers = append(c.Controllers, domain.RuntimeAgentController{ControllerRef: ref, State: state})
+			}
+		}
+	}
+	return nil
 }

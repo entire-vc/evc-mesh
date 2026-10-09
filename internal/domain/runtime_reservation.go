@@ -61,6 +61,20 @@ func (in RuntimeConsumeInput) Valid() bool {
 	return in.Fence > 0 && in.CheckoutGeneration > 0 && in.RunLeaseSeconds >= 60 && in.RunLeaseSeconds <= 86400
 }
 
+// RuntimeRenewInput extends the run lease of a consumed reservation. Only the
+// exact original writer may renew; renewal never shortens a lease.
+type RuntimeRenewInput struct {
+	Fence              int64      `json:"fence"`
+	CheckoutRequestID  *uuid.UUID `json:"checkout_request_id"`
+	CheckoutGeneration int64      `json:"checkout_generation"`
+	RunLeaseSeconds    int        `json:"run_lease_seconds"`
+}
+
+func (in RuntimeRenewInput) Valid() bool {
+	return in.Fence > 0 && in.CheckoutGeneration > 0 && (in.CheckoutRequestID == nil || *in.CheckoutRequestID != uuid.Nil) &&
+		in.RunLeaseSeconds >= 60 && in.RunLeaseSeconds <= 86400
+}
+
 type RuntimeReleaseProof struct {
 	Kind        string `json:"kind"`
 	EvidenceRef string `json:"evidence_ref"`

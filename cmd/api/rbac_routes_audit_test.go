@@ -53,6 +53,7 @@ var auditAllowList = map[string]string{
 	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/preview":                              "read-only advisory computation behind the same exact-grant binding check as GET binding (runtimeBoundCaller); persists nothing and always answers launch_authorized=false",
 	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/reservations":                         "RuntimeRepo refuses OAuth connectors and every caller except the exact bound agent key (runtimeReservationWriter + runtimeBoundCaller); no role grants execution admission",
 	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume": "RuntimeRepo refuses OAuth connectors and every caller except the bound agent key that owns the reservation",
+	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/renew":   "RuntimeRepo refuses OAuth connectors and every caller except the bound agent key that owns the reservation, with the exact writer fence and a live checkout",
 	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release": "RuntimeRepo refuses OAuth connectors; only the reservation's own agent key or a receiving-workspace owner/admin with the exact writer fence and a stop proof",
 	"PATCH /auth/me":    "handler resolves the caller with GetUserID; an agent has no user identity and gets 401",
 	"POST /auth/logout": "handler resolves the caller with GetUserID; an agent has no user identity",

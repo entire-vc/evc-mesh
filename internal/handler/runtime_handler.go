@@ -277,6 +277,23 @@ func (h *RuntimeHandler) ConsumeReservation(c echo.Context) error {
 	return c.JSON(http.StatusOK, value)
 }
 
+// RenewReservation is the run-lease heartbeat of the exact original writer.
+func (h *RuntimeHandler) RenewReservation(c echo.Context) error {
+	ws, owner, id, err := runtimeReservationScope(c, true)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input domain.RuntimeRenewInput
+	if err = runtimeBody(c, &input, "fence", "checkout_request_id", "checkout_generation", "run_lease_seconds"); err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.RenewReservation(c.Request().Context(), owner, ws, c.Param("binding_id"), id, runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
 func (h *RuntimeHandler) ReleaseReservation(c echo.Context) error {
 	ws, owner, id, err := runtimeReservationScope(c, true)
 	if err != nil {

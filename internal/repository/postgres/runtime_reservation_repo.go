@@ -343,6 +343,19 @@ func (r *RuntimeRepo) AcquireReservation(ctx context.Context, owner, receiver uu
 		in.ExpectedPoolSetDigest != poolDigest {
 		return nil, false, runtimeReservationErr(http.StatusConflict, "stale_revision")
 	}
+	// New work is admitted only through a controller that is provably alive and
+	// current. Paused, stale or silent means unknown, which is never free.
+	liveness, err := runtimeControllerLiveness(ctx, tx, target.connection, target.catalog, target.catalog.Profiles[in.ProfileID].ControllerRef, target.revision, target.digest)
+	if err != nil {
+		return nil, false, err
+	}
+	switch liveness {
+	case domain.RuntimeControllerCurrent:
+	case domain.RuntimeControllerPaused:
+		return nil, false, runtimeReservationErr(http.StatusLocked, "controller_paused")
+	default:
+		return nil, false, runtimeReservationErr(http.StatusLocked, "controller_unavailable")
+	}
 	err = runtimeTaskWriter(ctx, tx, in.TaskID, receiver, agent, in.CheckoutGeneration, in.CheckoutRequestID)
 	if err != nil {
 		return nil, false, err
@@ -513,6 +526,65 @@ func (r *RuntimeRepo) ConsumeReservation(ctx context.Context, owner, receiver uu
 		return nil, err
 	}
 	return consumed.toDomain(owner)
+}
+
+// RenewReservation extends the run lease of a consumed reservation. Only the
+// exact original writer, still holding its live checkout and a live grant, may
+// renew. It never shortens a lease. It is a heartbeat, safe to repeat: every call
+// moves the horizon to now+run_lease_seconds for the live writer only, so a retry
+// after a lost response can lengthen the lease but never harm it. A reservation whose lease already
+// lapsed (reconcile) can be renewed by that writer; nobody else revives it.
+func (r *RuntimeRepo) RenewReservation(ctx context.Context, owner, receiver uuid.UUID, ref string, id uuid.UUID, actor RuntimeActor, in domain.RuntimeRenewInput) (*domain.RuntimeReservation, error) {
+	if !in.Valid() {
+		return nil, apierror.BadRequest("invalid runtime renew request")
+	}
+	err := runtimeReservationWriter(actor, receiver)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	target, err := runtimeLoadTarget(ctx, tx, owner, receiver, ref, actor)
+	if err != nil {
+		return nil, err
+	}
+	row, err := runtimeLockedReservation(ctx, tx, id, target.connection.ID, receiver, ref)
+	if err != nil {
+		return nil, err
+	}
+	if row.AgentID != actor.AgentID {
+		return nil, apierror.NotFound("Runtime reservation")
+	}
+	if row.Fence != in.Fence || row.CheckoutGeneration != in.CheckoutGeneration || !sameRequest(row.CheckoutRequestID, in.CheckoutRequestID) {
+		return nil, runtimeReservationErr(http.StatusConflict, "writer_mismatch")
+	}
+	switch row.State {
+	case domain.RuntimeReservationReserved:
+		return nil, runtimeReservationErr(http.StatusConflict, "not_consumed")
+	case domain.RuntimeReservationReleased, domain.RuntimeReservationExpired:
+		return nil, runtimeReservationErr(http.StatusGone, "reservation_"+row.State)
+	}
+	if target.binding.Binding.GrantID != row.GrantID || target.binding.Binding.AgentID != row.AgentID || target.fingerprint != row.GrantFingerprint {
+		return nil, runtimeReservationErr(http.StatusForbidden, "grant_changed")
+	}
+	err = runtimeTaskWriter(ctx, tx, row.TaskID, receiver, row.AgentID, row.CheckoutGeneration, nullUUIDPtr(row.CheckoutRequestID))
+	if err != nil {
+		return nil, err
+	}
+	var renewed runtimeReservationRow
+	err = tx.GetContext(ctx, &renewed, `UPDATE runtime_reservations SET expires_at=GREATEST(expires_at,now()+make_interval(secs=>$2))
+ WHERE id=$1 AND state='consumed' RETURNING `+runtimeReservationCols, row.ID, in.RunLeaseSeconds)
+	if err != nil {
+		return nil, err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+	return renewed.toDomain(owner)
 }
 
 // ReleaseReservation frees occupancy only for the exact original writer and a

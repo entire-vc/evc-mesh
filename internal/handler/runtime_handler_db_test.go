@@ -125,6 +125,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations", h.AcquireReservation)
 	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id", h.GetReservation)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume", h.ConsumeReservation)
+	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/renew", h.RenewReservation)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release", h.ReleaseReservation)
 	f.e = e
 	return f
@@ -376,6 +377,14 @@ func TestRuntimeHTTPReservationLifecycle(t *testing.T) {
 	code, view, body := f.do(http.MethodGet, binding+ownerQuery, "", worker)
 	require.Equal(t, http.StatusOK, code, body)
 
+	// Admission needs a current controller report for the applied revision.
+	reporter := map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String()}
+	capabilities, err := json.Marshal(f.capabilities)
+	require.NoError(t, err)
+	report := fmt.Sprintf(`{"schema_version":2,"revision":%v,"digest":%q,"status":"applied","capabilities":%s,"emergency_paused":false,"pools":{}}`, view["revision"], view["digest"], capabilities)
+	code, _, body = f.do(http.MethodPost, "/workspaces/"+f.owner.String()+"/runtime/controllers/runner-a/report", report, reporter)
+	require.Equal(t, http.StatusOK, code, body)
+
 	project := &domain.Project{ID: uuid.New(), WorkspaceID: f.receiver, Name: "Runtime", Slug: "rt-" + uuid.NewString(), DefaultAssigneeType: domain.DefaultAssigneeNone}
 	require.NoError(t, postgres.NewProjectRepo(f.db).Create(ctx, project))
 	status := &domain.TaskStatus{ID: uuid.New(), ProjectID: project.ID, Name: "Todo", Slug: "todo", Category: domain.StatusCategoryTodo, IsDefault: true, Color: "#000000"}
@@ -383,7 +392,7 @@ func TestRuntimeHTTPReservationLifecycle(t *testing.T) {
 	task := &domain.Task{ID: uuid.New(), ProjectID: project.ID, StatusID: status.ID, Title: "rt", AssigneeType: domain.AssigneeTypeUnassigned, Priority: domain.PriorityMedium, CreatedBy: uuid.New(), CreatedByType: domain.ActorTypeUser}
 	require.NoError(t, postgres.NewTaskRepo(f.db).Create(ctx, task, nil))
 	request := uuid.New()
-	_, err := f.db.Exec(`UPDATE tasks SET checked_out_by=$2,checkout_token=$3,checkout_expires=now()+interval '1 hour',checkout_generation=1,checkout_request_id=$4 WHERE id=$1`, task.ID, f.worker, uuid.New(), request)
+	_, err = f.db.Exec(`UPDATE tasks SET checked_out_by=$2,checkout_token=$3,checkout_expires=now()+interval '1 hour',checkout_generation=1,checkout_request_id=$4 WHERE id=$1`, task.ID, f.worker, uuid.New(), request)
 	require.NoError(t, err)
 
 	catalog, err := domain.ParseRuntimeCatalog(f.catalog)
@@ -421,6 +430,15 @@ func TestRuntimeHTTPReservationLifecycle(t *testing.T) {
 	code, consumed, body := f.do(http.MethodPost, item+"/consume"+ownerQuery, consume, worker)
 	require.Equal(t, http.StatusOK, code, body)
 	require.Equal(t, "consumed", consumed["state"])
+
+	renew := fmt.Sprintf(`{"fence":%v,"checkout_request_id":%q,"checkout_generation":1,"run_lease_seconds":900}`, fence, request)
+	code, renewed, body := f.do(http.MethodPost, item+"/renew"+ownerQuery, renew, worker)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, "consumed", renewed["state"])
+	code, _, body = f.do(http.MethodPost, item+"/renew"+ownerQuery, `{"fence":1}`, worker)
+	require.Equal(t, http.StatusBadRequest, code, "renew body is strict: "+body)
+	code, _, body = f.do(http.MethodPost, item+"/renew"+ownerQuery, strings.Replace(renew, `"checkout_generation":1`, `"checkout_generation":2`, 1), worker)
+	require.Equal(t, http.StatusConflict, code, "another generation is not the writer: "+body)
 
 	unproven := fmt.Sprintf(`{"fence":%v,"checkout_request_id":%q,"checkout_generation":1,"stopped":false,"proof":{"kind":"no_child","evidence_ref":""}}`, fence, request)
 	code, _, body = f.do(http.MethodPost, item+"/release"+ownerQuery, unproven, worker)

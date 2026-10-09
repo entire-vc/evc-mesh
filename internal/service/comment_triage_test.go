@@ -583,7 +583,10 @@ func TestEnforceBlockingTriage_EditMarkerAlreadyPresent_NoReFire(t *testing.T) {
 	assert.Empty(t, env.taskMover.calls())
 }
 
-func TestEnforceBlockingTriage_NoTriageColumn_GracefulNoOp(t *testing.T) {
+// A project that predates triage gets the standard stage added and the task is
+// moved into it; the old behaviour (leave a hard gate parked in a work column)
+// is gone.
+func TestEnforceBlockingTriage_NoTriageColumn_AddsStageAndMoves(t *testing.T) {
 	env := setupTriageEnv(t, false) // project has no triage status
 	taskID := env.seedTask(env.inProgressID)
 
@@ -595,8 +598,12 @@ func TestEnforceBlockingTriage_NoTriageColumn_GracefulNoOp(t *testing.T) {
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 
-	assert.Empty(t, env.taskMover.calls())
-	assert.Empty(t, env.systemComments())
+	moves := env.taskMover.calls()
+	require.Len(t, moves, 1)
+	require.NotNil(t, moves[0].input.StatusID)
+	status, ok := env.statusRepo.items[*moves[0].input.StatusID]
+	require.True(t, ok, "the moved-to status exists in the project")
+	assert.Equal(t, domain.StatusCategoryTriage, status.Category)
 }
 
 func TestEnforceBlockingTriage_QuotedMarker_NoOp(t *testing.T) {
