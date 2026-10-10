@@ -237,4 +237,81 @@ describe("AgentRuntimeTabs", () => {
     await waitFor(() => expect(t0).toHaveAttribute("aria-selected", "true"));
     expect(t1).toHaveAttribute("tabindex", "-1");
   });
+
+  describe("router decision preview", () => {
+    const previewBody = {
+      selected_profile_id: "main-sub", selected_account_ref: "main", preferred_account_ref: "main",
+      reason: "preferred_available", trace: [{ profile_id: "reserve", reason: "not_needed" }],
+      revision: 4, launch_authorized: false, qa_mode: "strict", qa_compromise: false,
+    };
+    const ask = async (previewResponse: unknown) => {
+      vi.mocked(api).mockImplementation(async (url: string) => {
+        if (String(url).includes("/preview")) {
+          if (previewResponse instanceof Error) throw previewResponse;
+          return previewResponse;
+        }
+        return envelope();
+      });
+      renderTabs();
+      open("Execution & routes");
+      fireEvent.click(await screen.findByRole("button", { name: "Explain routing now" }));
+    };
+
+    it("POSTs the preview for this binding and shows selected profile, account and reason", async () => {
+      await ask(previewBody);
+      const box = await screen.findByTestId("runtime-preview");
+      expect(box.textContent).toContain("main-sub");
+      expect(box.textContent).toContain("preferred_available");
+      expect(box.textContent).toContain("reserve: not_needed");
+      const call = vi.mocked(api).mock.calls.find((c) => String(c[0]).includes("/preview"))!;
+      expect(String(call[0])).toContain(`/runtime/bindings/worker-b/preview?resource_owner_workspace_id=${b.workspace_id}`);
+      expect((call[1] as { method: string }).method).toBe("POST");
+    });
+
+    it("403 is a refusal, not a result", async () => {
+      await ask(apiErr(403));
+      expect(await screen.findByText(/not allowed to see/)).toBeInTheDocument();
+      expect(screen.queryByTestId("runtime-preview")).toBeNull();
+    });
+
+    it("409 asks to reload instead of showing a stale decision", async () => {
+      await ask(apiErr(409));
+      expect(await screen.findByText(/configuration changed meanwhile/)).toBeInTheDocument();
+      expect(screen.queryByTestId("runtime-preview")).toBeNull();
+    });
+
+    it("a body that is not the contract shape is not shown as success", async () => {
+      await ask({ ok: true });
+      expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
+      expect(screen.queryByTestId("runtime-preview")).toBeNull();
+    });
+
+    it("a partial body (reason + trace only) is not shown as success", async () => {
+      await ask({ reason: "profile_available", trace: [] });
+      expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
+      expect(screen.queryByTestId("runtime-preview")).toBeNull();
+    });
+
+    it("a preview claiming launch_authorized=true is not shown as success", async () => {
+      await ask({ ...previewBody, launch_authorized: true });
+      expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
+      expect(screen.queryByTestId("runtime-preview")).toBeNull();
+    });
+
+    it("a malformed trace entry rejects the whole body", async () => {
+      await ask({ ...previewBody, trace: [{ profile_id: "reserve" }] });
+      expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
+      expect(screen.queryByTestId("runtime-preview")).toBeNull();
+    });
+
+    it("labels the preferred account also when the router picked it", async () => {
+      await ask(previewBody);
+      expect((await screen.findByTestId("runtime-preview-preferred")).textContent).toContain("preferred account");
+    });
+
+    it("shows the preferred account when it differs from the selected one", async () => {
+      await ask({ ...previewBody, preferred_account_ref: "other" });
+      expect((await screen.findByTestId("runtime-preview-preferred")).textContent).toContain("preferred: other");
+    });
+  });
 });

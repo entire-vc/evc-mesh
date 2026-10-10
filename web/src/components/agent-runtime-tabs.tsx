@@ -10,6 +10,8 @@ import {
   findAgentBinding,
   poolObservations,
   preferredVsActual,
+  previewBinding,
+  type PreviewResult,
   rankRoutes,
   type RuntimeBinding,
   type RuntimeController,
@@ -119,7 +121,14 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentR
         )}
         {tab === "execution" && (
           <RuntimeSection load={load} onRetry={reload} agent={agent} workspaceId={workspaceId}>
-            {(state, found) => <ExecutionBlock state={state} binding={found?.binding ?? null} />}
+            {(state, found) => (
+              <ExecutionBlock
+                state={state}
+                binding={found?.binding ?? null}
+                bindingRef={found?.ref ?? ""}
+                workspaceId={workspaceId}
+              />
+            )}
           </RuntimeSection>
         )}
         {tab === "state" && (
@@ -186,6 +195,69 @@ function Heading({ children }: { children: ReactNode }) {
   );
 }
 
+function PreviewPanel({ workspaceId, bindingRef }: { workspaceId: string | null; bindingRef: string }) {
+  const [result, setResult] = useState<PreviewResult | "loading" | null>(null);
+  const run = () => {
+    if (!workspaceId) return;
+    setResult("loading");
+    void previewBinding(workspaceId, bindingRef).then(setResult);
+  };
+  return (
+    <div>
+      <Heading>Router decision now</Heading>
+      <Button size="sm" variant="outline" onClick={run} disabled={!workspaceId || result === "loading"}>
+        {result === "loading" ? "Asking the router…" : "Explain routing now"}
+      </Button>
+      <p className="mt-1 text-xs text-muted-foreground">Advisory only: nothing is launched or reserved.</p>
+      {result && result !== "loading" && <PreviewResultView result={result} />}
+    </div>
+  );
+}
+
+function PreviewResultView({ result }: { result: PreviewResult }) {
+  if (result.kind === "forbidden") return <Note>You are not allowed to see this agent&apos;s router decision.</Note>;
+  if (result.kind === "stale") return <Note>The runtime configuration changed meanwhile. Reload and ask again.</Note>;
+  if (result.kind === "unavailable") return <Note>The router decision could not be loaded. Nothing is assumed.</Note>;
+  const p = result.preview;
+  return (
+    <div className="mt-2 space-y-1.5 text-sm" data-testid="runtime-preview">
+      <p>
+        {p.selectedProfileId ? (
+          <>
+            Would pick <span className="font-medium">{p.selectedProfileId}</span> on account{" "}
+            <span className="font-medium">{p.selectedAccountRef || "?"}</span>
+            {p.preferredAccountRef && (
+              <span className="text-muted-foreground" data-testid="runtime-preview-preferred">
+                {p.preferredAccountRef === p.selectedAccountRef
+                  ? " (preferred account)"
+                  : ` (preferred: ${p.preferredAccountRef})`}
+              </span>
+            )}
+          </>
+        ) : (
+          <>No route available right now</>
+        )}
+        <span className="text-muted-foreground"> · reason: {p.reason}</span>
+      </p>
+      {p.qaMode && (
+        <p className="text-xs text-muted-foreground">
+          QA {p.qaMode}
+          {p.qaCompromise ? " · compromise, not strict acceptance" : ""}
+        </p>
+      )}
+      {p.trace.length > 0 && (
+        <ul className="space-y-0.5 text-xs text-muted-foreground">
+          {p.trace.map((t, i) => (
+            <li key={`${t.profileId}-${i}`}>
+              {t.profileId}: {t.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 const NoBinding = () => <Note>This agent has no runtime binding in this workspace.</Note>;
 
 function AdmissionBlock({ binding }: { binding: RuntimeBinding | null; state: RuntimeState }) {
@@ -201,7 +273,17 @@ function AdmissionBlock({ binding }: { binding: RuntimeBinding | null; state: Ru
   );
 }
 
-function ExecutionBlock({ state, binding }: { state: RuntimeState; binding: RuntimeBinding | null }) {
+function ExecutionBlock({
+  state,
+  binding,
+  bindingRef,
+  workspaceId,
+}: {
+  state: RuntimeState;
+  binding: RuntimeBinding | null;
+  bindingRef: string;
+  workspaceId: string | null;
+}) {
   if (!binding) return <NoBinding />;
   const { catalog } = state;
   const observed = poolObservations(state.controllers);
@@ -216,6 +298,9 @@ function ExecutionBlock({ state, binding }: { state: RuntimeState; binding: Runt
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
+      <section className="lg:col-span-2">
+        <PreviewPanel workspaceId={workspaceId} bindingRef={bindingRef} />
+      </section>
       <section className="lg:col-span-2">
         <Heading>Allowed routes, in order</Heading>
         {routes.length === 0 ? (
