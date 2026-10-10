@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -335,4 +336,56 @@ func TestMoveTask_DodGate_MetricPass_Increments(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, before+1, promtestutil.ToFloat64(passCounter), "pass counter must increment by 1")
+}
+
+// ---------------------------------------------------------------------------
+// runtime_state (task e3328f00)
+// ---------------------------------------------------------------------------
+
+func TestSetRuntimeState_RoundTripAndClear(t *testing.T) {
+	ts, taskID, _ := buildDodEnv(t, domain.ProjectSettings{})
+	ctx := context.Background()
+	for _, k := range []domain.RuntimeKind{domain.RuntimeKindWorking, domain.RuntimeKindWaiting, domain.RuntimeKindQueued, domain.RuntimeKindStopped} {
+		lane := "linus"
+		got, err := ts.SetRuntimeState(ctx, taskID, &domain.RuntimeState{Kind: k, Lane: &lane})
+		require.NoError(t, err, k)
+		require.NotNil(t, got)
+		assert.Equal(t, k, got.Kind)
+		assert.Equal(t, domain.RuntimeStateSourceExplicit, got.Source)
+		assert.Equal(t, "linus", *got.Lane)
+	}
+	got, err := ts.SetRuntimeState(ctx, taskID, nil)
+	require.NoError(t, err)
+	assert.Nil(t, got, "cleared, no checkout -> no state")
+}
+
+func TestSetRuntimeState_CheckoutFallbackOnTodoCard(t *testing.T) {
+	ts, taskID, _ := buildDodEnv(t, domain.ProjectSettings{})
+	repo := ts.taskRepo.(*MockTaskRepository)
+	holder := uuid.New()
+	acquired := time.Now().Add(-time.Minute)
+	expires := time.Now().Add(time.Hour)
+	task := repo.items[taskID]
+	task.CheckedOutBy, task.CheckoutAcquiredAt, task.CheckoutExpires = &holder, &acquired, &expires
+
+	got, err := ts.SetRuntimeState(context.Background(), taskID, nil)
+	require.NoError(t, err)
+	require.NotNil(t, got, "live checkout -> working even with nothing stored")
+	assert.Equal(t, domain.RuntimeKindWorking, got.Kind)
+	assert.Equal(t, domain.RuntimeStateSourceCheckout, got.Source)
+}
+
+func TestSetRuntimeState_InvalidKindRejectedAndNotStored(t *testing.T) {
+	ts, taskID, _ := buildDodEnv(t, domain.ProjectSettings{})
+	_, err := ts.SetRuntimeState(context.Background(), taskID, &domain.RuntimeState{Kind: "dozing"})
+	var vErr *domain.RuntimeStateValidationError
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, "kind", vErr.Field)
+	assert.Empty(t, ts.taskRepo.(*MockTaskRepository).runtimeRaw)
+}
+
+func TestSetRuntimeState_UnknownTask(t *testing.T) {
+	ts, _, _ := buildDodEnv(t, domain.ProjectSettings{})
+	_, err := ts.SetRuntimeState(context.Background(), uuid.New(), &domain.RuntimeState{Kind: domain.RuntimeKindQueued})
+	require.Error(t, err)
 }

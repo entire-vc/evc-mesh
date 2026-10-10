@@ -399,6 +399,7 @@ func (m *MockActivityLogService) Export(ctx context.Context, workspaceID uuid.UU
 
 // MockTaskService implements service.TaskService for testing.
 type MockTaskService struct {
+	SetRuntimeStateFunc      func(state *domain.RuntimeState) (*domain.RuntimeState, error)
 	ArmHumanGateFunc         func(ctx context.Context, in domain.ArmHumanGateInput) error
 	ClearHumanGateFunc       func(ctx context.Context, id uuid.UUID) error
 	CreateFunc               func(ctx context.Context, task *domain.Task) error
@@ -618,6 +619,13 @@ func (m *MockTaskService) TriageParkDueHours(_ context.Context, _ uuid.UUID) int
 func (m *MockTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
 func (m *MockTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
+}
+
+func (m *MockTaskService) SetRuntimeState(_ context.Context, _ uuid.UUID, state *domain.RuntimeState) (*domain.RuntimeState, error) {
+	if m.SetRuntimeStateFunc != nil {
+		return m.SetRuntimeStateFunc(state)
+	}
+	return state, nil
 }
 
 func (m *MockTaskService) ValidateAssigneeForProject(ctx context.Context, projectID uuid.UUID, assigneeID *uuid.UUID, assigneeType domain.AssigneeType) (domain.AssigneeType, error) {

@@ -2561,6 +2561,34 @@ func (e *DodGateBlockedError) Error() string {
 	return fmt.Sprintf("move to done blocked: required DoD gate(s) not passed: %s", strings.Join(e.BlockingGates, ", "))
 }
 
+// SetRuntimeState validates and stores the runtime state of a card, or clears it
+// when state is nil, and returns the effective state read back from the row.
+func (s *taskService) SetRuntimeState(ctx context.Context, taskID uuid.UUID, state *domain.RuntimeState) (*domain.RuntimeState, error) {
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task == nil {
+		return nil, apierror.NotFound("Task")
+	}
+	if state != nil {
+		if vErr := state.Normalize(time.Now().UTC()); vErr != nil {
+			return nil, vErr
+		}
+	}
+	if setErr := s.taskRepo.SetRuntimeState(ctx, taskID, state); setErr != nil {
+		return nil, setErr
+	}
+	updated, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		return nil, apierror.NotFound("Task")
+	}
+	return updated.RuntimeState, nil
+}
+
 // SetDodCheck upserts a named gate entry in the task's dod_checks map.
 // Returns an error if the gate name is not in the project's dod_gates config.
 func (s *taskService) SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error {

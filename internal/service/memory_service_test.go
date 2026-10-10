@@ -2593,6 +2593,9 @@ func (m *mockTaskRepo) FindExpiredDefaultGates(_ context.Context, _ time.Time) (
 	return nil, nil
 }
 func (m *mockTaskRepo) SetShipped(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+func (m *mockTaskRepo) SetRuntimeState(_ context.Context, _ uuid.UUID, _ *domain.RuntimeState) error {
+	return nil
+}
 func (m *mockTaskRepo) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }

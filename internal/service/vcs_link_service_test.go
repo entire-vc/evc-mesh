@@ -246,6 +246,9 @@ func (r *fakeTaskRepo) FindExpiredDefaultGates(context.Context, time.Time) ([]do
 	return nil, nil
 }
 func (r *fakeTaskRepo) SetShipped(context.Context, uuid.UUID, bool) error { return nil }
+func (r *fakeTaskRepo) SetRuntimeState(context.Context, uuid.UUID, *domain.RuntimeState) error {
+	return nil
+}
 func (r *fakeTaskRepo) SetDodCheck(context.Context, uuid.UUID, string, string, string) error {
 	return nil
 }
@@ -399,6 +402,9 @@ func (t *fakeTaskService) TriageParkDueHours(context.Context, uuid.UUID) int {
 	return domain.DefaultTriageParkDueHours
 }
 func (t *fakeTaskService) ShipTask(context.Context, uuid.UUID, bool) error { return nil }
+func (t *fakeTaskService) SetRuntimeState(context.Context, uuid.UUID, *domain.RuntimeState) (*domain.RuntimeState, error) {
+	return nil, nil
+}
 func (t *fakeTaskService) SetDodCheck(context.Context, uuid.UUID, string, string, string) error {
 	return nil
 }

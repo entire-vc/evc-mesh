@@ -319,6 +319,55 @@ components:
           type: string
           format: date-time
           nullable: true
+        runtime_state:
+          allOf:
+            - $ref: '#/components/schemas/RuntimeState'
+          nullable: true
+          description: Effective operational state; absent when nothing is stored and no live checkout.
+
+    RuntimeState:
+      type: object
+      required: [kind, since, updated_at]
+      description: |
+        What is physically happening with a card right now, orthogonal to its Mesh status.
+        Effective value = the stored one; with nothing stored, `working` derived from a
+        live checkout (since = checkout_acquired_at, lane = checked_out_by,
+        source = checkout), including for todo cards.
+      properties:
+        kind:
+          type: string
+          enum: [working, waiting, queued, stopped]
+        since:
+          type: string
+          format: date-time
+        until:
+          type: string
+          format: date-time
+          nullable: true
+        ref:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: "What it is waiting on / working in, e.g. pipeline:g/p#7"
+        lane:
+          type: string
+          nullable: true
+          maxLength: 500
+        reason:
+          type: string
+          nullable: true
+          maxLength: 500
+        updated_at:
+          type: string
+          format: date-time
+          description: Set by the server on every write; staleness is measured from it.
+        source:
+          type: string
+          enum: [explicit, checkout]
+          description: Computed on read.
+        stale:
+          type: boolean
+          description: Computed on read. True when updated_at is older than 15 minutes or until has passed.
 
     Comment:
       type: object
@@ -1775,6 +1824,14 @@ paths:
           description: Search in title and description
           schema:
             type: string
+        - name: runtime_kind
+          in: query
+          description: |
+            Keep tasks whose effective runtime_state has this kind. `working` also matches
+            a card with no stored state but a live checkout. Unknown value -> 400.
+          schema:
+            type: string
+            enum: [working, waiting, queued, stopped]
       responses:
         "200":
           description: Paginated list of tasks
@@ -5964,6 +6021,61 @@ paths:
   # ------------------------------------------------------------------
   # Task Checkout (Atomic Locking)
   # ------------------------------------------------------------------
+  /api/v1/tasks/{task_id}/runtime-state:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [Tasks]
+      summary: Set the runtime state of a card
+      operationId: putTaskRuntimeState
+      description: |
+        Stores the operational state (working / waiting / queued / stopped). Does not
+        change the Mesh status and does not bump the task version. Re-PUT to refresh;
+        a state not refreshed for 15 minutes is reported with stale=true.
+        `kind: null` clears the state. Requires workspace access and update_task.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  nullable: true
+                  enum: [working, waiting, queued, stopped]
+                since:
+                  type: string
+                  format: date-time
+                  description: Defaults to now.
+                until:
+                  type: string
+                  format: date-time
+                ref: {type: string}
+                lane: {type: string}
+                reason: {type: string}
+      responses:
+        '200':
+          description: 'The effective state after the write; the body is {"runtime_state": null} when cleared and there is no live checkout.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeState'
+        '422':
+          description: Invalid value; body names the offending `field`.
+    delete:
+      tags: [Tasks]
+      summary: Clear the runtime state of a card
+      operationId: deleteTaskRuntimeState
+      responses:
+        '204':
+          description: Cleared. A live checkout still reads as working.
+
   /api/v1/tasks/{task_id}/checkout:
     parameters:
       - name: task_id

@@ -265,6 +265,9 @@ type TaskService interface {
 	// reporter is a free-form string identifying the caller (e.g. "verify-driver").
 	// Returns an error if the gate name is not configured on the project's dod_gates.
 	SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error
+	// SetRuntimeState validates and stores a card's runtime state (nil clears it) and
+	// returns the EFFECTIVE state afterwards (nil when cleared and no live checkout).
+	SetRuntimeState(ctx context.Context, taskID uuid.UUID, state *domain.RuntimeState) (*domain.RuntimeState, error)
 	// ValidateAssigneeForProject resolves assigneeID's true type via directory
 	// lookup (the same resolution every task write path applies before
 	// enrolling) and refuses it with AssigneeNotInWorkspaceError if it does not

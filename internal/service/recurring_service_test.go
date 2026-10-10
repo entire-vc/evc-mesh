@@ -370,6 +370,9 @@ func (s *StubTaskService) TriageParkDueHours(_ context.Context, _ uuid.UUID) int
 	return domain.DefaultTriageParkDueHours
 }
 func (s *StubTaskService) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+func (s *StubTaskService) SetRuntimeState(context.Context, uuid.UUID, *domain.RuntimeState) (*domain.RuntimeState, error) {
+	return nil, nil
+}
 func (s *StubTaskService) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }

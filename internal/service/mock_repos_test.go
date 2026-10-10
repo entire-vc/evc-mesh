@@ -274,6 +274,8 @@ func (m *MockProjectRepository) List(_ context.Context, workspaceID uuid.UUID, _
 // ---------------------------------------------------------------------------
 
 type MockTaskRepository struct {
+	// runtimeRaw is the tasks.runtime_state column per task (see SetRuntimeState).
+	runtimeRaw map[uuid.UUID][]byte
 	// LastListByAssigneeWorkspace records the workspace argument of the most recent
 	// ListByAssignee call, so a caller can be checked for scoping its own feed read.
 	LastListByAssigneeWorkspace uuid.UUID
@@ -384,6 +386,9 @@ func (m *MockTaskRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.T
 	if !ok {
 		return nil, nil
 	}
+	// Resolve in place (pointer identity is relied on elsewhere), like the real
+	// repo's toDomain does on every read.
+	t.RuntimeState = domain.ResolveRuntimeState(m.runtimeRaw[id], t, time.Now().UTC())
 	return t, nil
 }
 
@@ -954,6 +959,29 @@ func (m *MockTaskRepository) SetShipped(_ context.Context, taskID uuid.UUID, val
 		t.IsShipped = value
 		m.items[taskID] = t
 	}
+	return nil
+}
+
+// SetRuntimeState stores the state the way the real repo does (marshalled, so the
+// read-time fields are dropped) and GetByID resolves it again via ResolveRuntimeState.
+func (m *MockTaskRepository) SetRuntimeState(_ context.Context, taskID uuid.UUID, state *domain.RuntimeState) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.runtimeRaw == nil {
+		m.runtimeRaw = map[uuid.UUID][]byte{}
+	}
+	if state == nil {
+		delete(m.runtimeRaw, taskID)
+		return nil
+	}
+	raw, err := state.Marshal()
+	if err != nil {
+		return err
+	}
+	m.runtimeRaw[taskID] = raw
 	return nil
 }
 
@@ -3077,6 +3105,9 @@ func (f *fakeTaskMover) TriageParkDueHours(_ context.Context, _ uuid.UUID) int {
 }
 
 func (f *fakeTaskMover) ShipTask(_ context.Context, _ uuid.UUID, _ bool) error { return nil }
+func (f *fakeTaskMover) SetRuntimeState(_ context.Context, _ uuid.UUID, _ *domain.RuntimeState) (*domain.RuntimeState, error) {
+	return nil, nil
+}
 func (f *fakeTaskMover) SetDodCheck(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return nil
 }
