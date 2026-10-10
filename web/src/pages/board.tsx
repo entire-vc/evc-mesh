@@ -30,6 +30,7 @@ import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
 import { useCustomFieldStore } from "@/stores/custom-field";
 import { useMemberStore } from "@/stores/member";
+import { useDeferredRefetch } from "@/hooks/use-deferred-refetch";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -506,14 +507,18 @@ export function BoardPage() {
 
   const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS));
 
-  // Debounce ref to avoid re-fetching too rapidly on burst events.
-  const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const debouncedRefetch = useCallback(() => {
-    if (refetchTimer.current) clearTimeout(refetchTimer.current);
-    refetchTimer.current = setTimeout(() => {
-      if (currentProject) fetchTasks(currentProject.id);
-    }, 500);
-  }, [currentProject, fetchTasks]);
+  // A WS event refreshes in the background (no skeleton remount), debounced. While
+  // a card is being dragged the refresh waits for the drop/cancel, so the lists do
+  // not change under the pointer.
+  const {
+    schedule: debouncedRefetch,
+    startDrag: markDragStart,
+    flush: flushPendingRefetch,
+  } = useDeferredRefetch(
+    useCallback(() => {
+      if (currentProject) fetchTasks(currentProject.id, undefined, { background: true });
+    }, [currentProject, fetchTasks]),
+  );
 
   // Listen for real-time WebSocket events.
   useWebSocket({
@@ -906,7 +911,8 @@ export function BoardPage() {
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const data = event.active.data.current as { task: Task; columnId: string } | undefined;
     if (data?.task) setActiveTask(data.task);
-  }, []);
+    markDragStart();
+  }, [markDragStart]);
 
   const findColumnId = useCallback(
     (overId: string | number): string | null => {
@@ -977,7 +983,14 @@ export function BoardPage() {
     [dndEnabled, findColumnId, tasksByColumn, gateStatusByTask, moveTask],
   );
 
-  const handleDragCancel = useCallback(() => setActiveTask(null), []);
+  const handleDragCancel = useCallback(() => {
+    setActiveTask(null);
+    flushPendingRefetch();
+  }, [flushPendingRefetch]);
+  const handleDragEndThenRefresh = useCallback(
+    (event: DragEndEvent) => handleDragEnd(event).finally(flushPendingRefetch),
+    [handleDragEnd, flushPendingRefetch],
+  );
 
   // ----- New task helpers -----
 
@@ -1146,7 +1159,7 @@ export function BoardPage() {
           collisionDetection={closestCorners}
           onDragStart={handleDragStart}
           onDragOver={handleDragOver}
-          onDragEnd={handleDragEnd}
+          onDragEnd={handleDragEndThenRefresh}
           onDragCancel={handleDragCancel}
         >
           <div className="flex gap-4 overflow-x-auto pb-4">

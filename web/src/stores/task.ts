@@ -28,6 +28,7 @@ interface TaskState {
   fetchTasks: (
     projectId: string,
     params?: Record<string, string | number | undefined>,
+    opts?: { background?: boolean },
   ) => Promise<void>;
   fetchTask: (taskId: string) => Promise<Task>;
   createTask: (projectId: string, req: CreateTaskRequest) => Promise<Task>;
@@ -45,6 +46,7 @@ interface TaskState {
 // board) and must not overwrite the list — it used to, when the Lab request
 // was the slower one.
 let latestFetchTasks = 0;
+let foregroundInFlight = 0;
 
 // Local status moves the server may not reflect yet. moveTask applies a move
 // to the store BEFORE its POST returns (a dropped card stays where it was
@@ -111,10 +113,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   fetchTasks: async (
     projectId: string,
     params?: Record<string, string | number | undefined>,
+    opts?: { background?: boolean },
   ) => {
+    const background = opts?.background === true;
+    // A background refresh never touches isLoading, so it must not displace a
+    // foreground fetch that owns it (that fetch would be discarded and isLoading
+    // would stay true). The foreground fetch brings fresh data anyway.
+    if (background && foregroundInFlight > 0) return;
     const requestId = ++latestFetchTasks;
     const startedAt = ++clock;
-    set({ isLoading: true, error: null });
+    // A background refresh (WS event) swaps data in place: raising isLoading
+    // would unmount the board into skeletons and drop a drag in progress.
+    if (!background) {
+      foregroundInFlight++;
+      set({ isLoading: true, error: null });
+    }
     try {
       const data = await api<PaginatedResponse<Task>>(
         `/api/v1/projects/${projectId}/tasks`,
@@ -152,12 +165,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         page: data.page,
         perPage: data.per_page ?? data.page_size ?? 50,
         hasMore: data.has_more,
-        isLoading: false,
-        error: null,
+        ...(background ? {} : { isLoading: false, error: null }),
       });
       get().groupByStatus();
     } catch (error) {
       if (requestId !== latestFetchTasks) return;
+      // A failed background refresh keeps what the user already sees.
+      if (background) return;
       set({
         tasks: [],
         tasksByStatus: {},
@@ -168,6 +182,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         perPage: 50,
         hasMore: false,
       });
+    } finally {
+      if (!background) foregroundInFlight--;
     }
   },
 
