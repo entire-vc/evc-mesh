@@ -209,7 +209,25 @@ test("dragging a card to another column moves it server-side, not just in the DO
   await page.mouse.move(startX + 10, startY, { steps: 2 });
   await page.mouse.move(endX, startY, { steps: 10 });
   await page.mouse.move(endX, endY, { steps: 10 });
+  // The drop's own server round-trip, awaited as such. The board applies the
+  // move only after POST /move answers (stores/task.ts), so a DOM assertion
+  // with the default 5s expect timeout was really a 5s budget on live prod's
+  // /move latency: on its slow tail the card was still in the source column
+  // (jobs 155165, 160044, 177207 — dnd-kit had already announced the drop).
+  // Wait for the response itself, name its status, and only then check what
+  // the board and the server show.
+  const moveResponse = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/tasks/${dragTaskId}/move`,
+    { timeout: 30_000 }
+  );
   await page.mouse.up();
+  const move = await moveResponse;
+  expect(
+    move.ok(),
+    `the drop's POST /move must succeed: ${move.status()} ${await move.text()}`
+  ).toBe(true);
 
   // DOM: gone from the source column, present exactly once in the target.
   await expect(columnTaskLocator(sourceStatusId, dragTaskId)).toHaveCount(0);

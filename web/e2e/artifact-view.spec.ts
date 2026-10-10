@@ -104,8 +104,11 @@ async function uploadArtifact(
 }
 
 test.beforeAll(async ({ browser }) => {
-  // A 429 retry honours the server's Retry-After (up to 65s).
-  test.setTimeout(120_000);
+  // Worst case, all sequential: a 429 retry honouring Retry-After (up to
+  // 65s), the deploy probe's refresh (30s) and its deploy signal (30s), then
+  // the fixture writes. 180s covers the sum with room for the writes, so a
+  // slow-but-successful run fails on the step that was slow, not on the hook.
+  test.setTimeout(180_000);
 
   context = await browser.newContext();
 
@@ -123,15 +126,39 @@ test.beforeAll(async ({ browser }) => {
   // Listener-free page: it must not pollute the foreign-origin accounting.
   {
     const probe = await context.newPage();
+    // Booting the app trades this context's ONE-SHOT refresh cookie for a new
+    // one (POST /auth/refresh). The probe used to close on a fixed 4s timer;
+    // when the refresh answer had not landed by then, the rotated cookie was
+    // dropped with the page, the context kept the consumed one, and the next
+    // page's refresh was a replay — past the server's 10s grace window that
+    // is theft: every session revoked, the suite on /login (jobs 165830,
+    // 167052: "Welcome back" instead of the CSV table). So: wait for the
+    // rotation itself, then decide on a positive signal from either build.
+    const bootRefresh = probe.waitForResponse(
+      (r) =>
+        r.request().method() === "POST" &&
+        new URL(r.url()).pathname === "/api/v1/auth/refresh",
+      { timeout: 30_000 }
+    );
     await probe.goto("/a/00000000-0000-0000-0000-000000000000", {
       waitUntil: "domcontentloaded",
     });
-    try {
-      await probe.waitForURL(/\/w\/.+\/activity$/, { timeout: 4_000 });
-      routeDeployed = false;
-    } catch {
-      routeDeployed = true;
-    }
+    const refresh = await bootRefresh;
+    await refresh.finished();
+    expect(
+      refresh.status(),
+      "the deploy probe's session bootstrap (POST /auth/refresh) must succeed"
+    ).toBe(200);
+    // With the route the page renders its not-found state; without it the app
+    // redirects to /w/<first-workspace>/activity. Whichever comes first —
+    // neither within the timeout fails the hook instead of guessing.
+    routeDeployed = await Promise.race([
+      probe
+        .getByRole("heading", { name: "Artifact not found" })
+        .waitFor({ timeout: 30_000 })
+        .then(() => true),
+      probe.waitForURL(/\/w\/.+\/activity$/, { timeout: 30_000 }).then(() => false),
+    ]);
     await probe.close();
     if (!routeDeployed) return; // no fixtures for a run whose tests all skip
   }
