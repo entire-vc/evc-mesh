@@ -3701,7 +3701,34 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 	if autoFilledDefault {
 		s.postMarkerDefaultAppliedComment(ctx, in)
 	}
+	if in.Source == domain.ArmHumanGateSourceAPI {
+		s.postAPIArmHintComment(ctx, in.TaskID)
+	}
 	return nil
+}
+
+// postAPIArmHintComment tells the human, at the moment the gate goes up, which door
+// lifts it. An API/button-armed gate leaves no "❓ Blocking" comment, so a reply in
+// the thread does not release it (task #fc63d720); the person reading the card has
+// to hear that BEFORE replying, not discover it from silence. Best-effort.
+func (s *taskService) postAPIArmHintComment(ctx context.Context, taskID uuid.UUID) {
+	if s.commentRepo == nil {
+		return
+	}
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     taskID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body: "🤖 Auto: human_gate взведён через API/кнопку — " + endpointGateHintMarker +
+			" «Снять гейт» в карточке (агент — clear_human_gate), ответ комментарием его не снимает.",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create API-arm hint on task %s failed: %v", taskID, err)
+	}
 }
 
 // postMarkerDefaultAppliedComment tells the gate's own author, on the task itself, that

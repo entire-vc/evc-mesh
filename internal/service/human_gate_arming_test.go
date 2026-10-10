@@ -303,8 +303,32 @@ func TestArmHumanGate_APISourceWithDefault_DoesNotPostWarningComment(t *testing.
 		Predicate: allowingPredicate(),
 	}))
 
-	assert.Nil(t, firstCommentOn(commentRepo, taskID),
+	// The arm-time "which door lifts this gate" hint (#fc63d720) is expected; the
+	// auto-fill notice is what must be absent.
+	found := firstCommentOn(commentRepo, taskID)
+	require.NotNil(t, found)
+	assert.Contains(t, found.Body, endpointGateHintMarker)
+	assert.NotContains(t, found.Body, "recommended_default",
 		"an API arm that already states a default must not get the auto-fill notice")
+	assert.NotContains(t, found.Body, "дефолт")
+}
+
+// Task #fc63d720: an API/button arm leaves no marker comment, so a human reply
+// cannot lift it — the card must say so at arm time, naming the door that works.
+func TestArmHumanGate_APISource_PostsHowToClearHint(t *testing.T) {
+	svc, _, commentRepo, taskID := newArmingTestServiceWithComments(t)
+
+	require.NoError(t, svc.ArmHumanGate(context.Background(), domain.ArmHumanGateInput{
+		TaskID: taskID, Author: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Reason: "r", RecommendedDefault: "d",
+		Source:    domain.ArmHumanGateSourceAPI,
+		Predicate: allowingPredicate(),
+	}))
+
+	found := firstCommentOn(commentRepo, taskID)
+	require.NotNil(t, found)
+	assert.Contains(t, found.Body, "clear_human_gate")
+	assert.Contains(t, found.Body, endpointGateHintMarker)
 }
 
 // TestClearHumanGate_DropsTheAskWithIt: the ask metadata describes a LIVE question.
