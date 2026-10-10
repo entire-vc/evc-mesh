@@ -46,6 +46,57 @@ interface TaskState {
 // was the slower one.
 let latestFetchTasks = 0;
 
+// Local status moves the server may not reflect yet. moveTask applies a move
+// to the store BEFORE its POST returns (a dropped card stays where it was
+// dropped instead of snapping back for the whole round-trip), so a task list
+// fetched before the move was confirmed must not put the card back: every
+// fetchTasks answer is overlaid with the moves its request could not have
+// seen. `clock` orders fetch starts against move confirmations.
+//
+// One record per task, because a card can be dropped again before the first
+// answer lands. What the card shows is always derived the same way: the
+// newest move still in flight, else the newest move the server accepted,
+// else where the card was before the first of them. A refusal therefore
+// falls back to that, never to another move's optimistic destination.
+let clock = 0;
+type Placement = { status_id: string; position?: number };
+interface LocalMoves {
+  /** Where the card was before the first move of this record. */
+  base: Placement;
+  /** Moves in flight, by issue order. */
+  pending: Map<number, Placement>;
+  /** Newest accepted move (by issue order) and the clock when it was accepted. */
+  accepted: { seq: number; at: number; to: Placement } | null;
+}
+let moveSeq = 0;
+const localMoves = new Map<string, LocalMoves>();
+
+function shownPlacement(rec: LocalMoves): Placement {
+  if (rec.pending.size > 0) return rec.pending.get(Math.max(...rec.pending.keys()))!;
+  return rec.accepted?.to ?? rec.base;
+}
+
+function overlayLocalMoves(items: Task[], fetchStartedAt: number): Task[] {
+  for (const [id, rec] of localMoves) {
+    // Nothing in flight and accepted before this fetch started: the answer
+    // already carries it.
+    if (rec.pending.size === 0 && (rec.accepted === null || rec.accepted.at < fetchStartedAt))
+      localMoves.delete(id);
+  }
+  if (localMoves.size === 0) return items;
+  return items.map((t) => {
+    const rec = localMoves.get(t.id);
+    if (!rec) return t;
+    const to = shownPlacement(rec);
+    return { ...t, status_id: to.status_id, position: to.position ?? t.position };
+  });
+}
+
+/** Test hook: forget local moves between unit tests. */
+export function __resetLocalMovesForTest(): void {
+  localMoves.clear();
+}
+
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
   tasksById: {},
@@ -62,6 +113,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     params?: Record<string, string | number | undefined>,
   ) => {
     const requestId = ++latestFetchTasks;
+    const startedAt = ++clock;
     set({ isLoading: true, error: null });
     try {
       const data = await api<PaginatedResponse<Task>>(
@@ -74,7 +126,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         { params: { page_size: "200", include_description: "false", ...params } },
       );
       if (requestId !== latestFetchTasks) return;
-      const items = data.items ?? [];
+      const items = overlayLocalMoves(data.items ?? [], startedAt);
       const prevById = get().tasksById;
       set({
         tasks: items,
@@ -234,34 +286,75 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   moveTask: async (taskId: string, req: MoveTaskRequest) => {
-    await api(`/api/v1/tasks/${taskId}/move`, {
-      method: "POST",
-      body: req,
-    });
-    // Optimistic: update local state
-    if (req.status_id) {
+    // Optimistic: the local state changes first and is rolled back if the
+    // server refuses. Waiting for the POST first left a dragged card in its
+    // source column for the whole round-trip — on prod's slow tail long
+    // enough for authed-e2e's board-drag-filter to see "still in the source
+    // column" after 5s (jobs 155165, 160044, 177207), and on a loaded CI
+    // runner long enough to flip perf-counters' board.drag into a second
+    // render (448 DOM mutations / 16 layouts / ~100 style recalcs instead of
+    // 447/13/~77 — 3 false reds 04–10.10, web/perf/README.md).
+    const setStatus = (status_id: string, position: number | undefined) => {
       set((state) => ({
         tasks: state.tasks.map((t) =>
-          t.id === taskId
-            ? {
-                ...t,
-                status_id: req.status_id!,
-                position: req.position ?? t.position,
-              }
-            : t,
+          t.id === taskId ? { ...t, status_id, position: position ?? t.position } : t,
         ),
         tasksById: state.tasksById[taskId]
           ? {
               ...state.tasksById,
               [taskId]: {
                 ...state.tasksById[taskId],
-                status_id: req.status_id!,
-                position: req.position ?? state.tasksById[taskId]!.position,
+                status_id,
+                position: position ?? state.tasksById[taskId]!.position,
               },
             }
           : state.tasksById,
       }));
       get().groupByStatus();
+    };
+
+    let seq = 0;
+    if (req.status_id) {
+      let rec = localMoves.get(taskId);
+      if (!rec) {
+        const known = get().tasksById[taskId] ?? get().tasks.find((t) => t.id === taskId);
+        rec = {
+          base: known
+            ? { status_id: known.status_id, position: known.position }
+            : { status_id: req.status_id, position: req.position },
+          pending: new Map(),
+          accepted: null,
+        };
+        localMoves.set(taskId, rec);
+      }
+      seq = ++moveSeq;
+      rec.pending.set(seq, { status_id: req.status_id, position: req.position });
+      setStatus(req.status_id, req.position);
+    }
+
+    try {
+      await api(`/api/v1/tasks/${taskId}/move`, {
+        method: "POST",
+        body: req,
+      });
+    } catch (error) {
+      const rec = seq ? localMoves.get(taskId) : undefined;
+      if (rec?.pending.delete(seq)) {
+        const to = shownPlacement(rec);
+        if (rec.pending.size === 0 && rec.accepted === null) localMoves.delete(taskId);
+        setStatus(to.status_id, to.position);
+      }
+      throw error;
+    }
+    const rec = seq ? localMoves.get(taskId) : undefined;
+    const to = rec?.pending.get(seq);
+    if (rec && to) {
+      rec.pending.delete(seq);
+      if (rec.accepted === null || seq > rec.accepted.seq)
+        rec.accepted = { seq, at: ++clock, to };
+      // No store write here: an acceptance never changes what the card shows
+      // (the newest move in flight, or this one), and a write would cost the
+      // board a re-render on every drop.
     }
   },
 

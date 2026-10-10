@@ -21,6 +21,19 @@
 // has ever seen. Where a ceiling sits above every sample, S is 0 and the real
 // tail is unknown: the "≤" column is the rule-of-three bound (3/n).
 //
+// Independence is an assumption, and CI broke it: runs of ONE job share the
+// runner's load and the ephemeral API's latency, and the counters follow that
+// latency (board.drag before #da03cd09: a slow POST /move put every run of the
+// job in the 448/16/~100 mode). On 303 reports from 04–10.10 the model put the
+// joint false red at 0.28%; 2.0% of those jobs actually went red on code that
+// passed on retry. So every row also carries the OBSERVED job-level rate — the
+// share of reports whose own gated minimum is over the ceiling — and
+// `tightest` must keep both under --alpha: the model's rule-of-three bound
+// covers the unseen tail, the observed rate covers what the model cannot see.
+// (The observed rate is not rule-of-three bounded itself: 3/jobs would need
+// 300+ reports before any ceiling passes at α=1%.) Only reports with at least
+// --repeat runs count, minimised over their first --repeat runs.
+//
 // Usage, from web/:
 //   node perf/gate-power.mjs [--repeat 3] [--shift 1] [--alpha 0.01]
 //        [--power 0.95] [--max-repeat 25] [--only board.drag] report.json…
@@ -93,11 +106,22 @@ export function catchRate(d, ceiling, repeat, shift) {
  * more sensitive, so nothing above it is worth considering. null when even the
  * largest observed value is not defensible (too few samples).
  */
-export function tightest(d, repeat, alpha) {
-  const grid = [...new Set([...d.first, ...d.rest])].sort((a, b) => a - b);
-  for (const c of grid) if (falseRedBound(d, c, repeat) <= alpha) return c;
+export function tightest(d, repeat, alpha, jobMins = []) {
+  const grid = [...new Set([...d.first, ...d.rest, ...jobMins])].sort((a, b) => a - b);
+  for (const c of grid)
+    if (falseRedBound(d, c, repeat) <= alpha && observedFalseRed(jobMins, c) <= alpha)
+      return c;
   return null;
 }
+
+/**
+ * Share of jobs whose own gated minimum is over the ceiling — what CI
+ * actually did, correlation within a job included. 0 when there are no jobs.
+ */
+export function observedFalseRed(jobMins, ceiling) {
+  return jobMins.length ? survival(jobMins, ceiling) : 0;
+}
+
 
 /**
  * Smallest repeat in [from, maxRepeat] whose tightest ceiling also catches a
@@ -105,6 +129,8 @@ export function tightest(d, repeat, alpha) {
  * maxRepeat does it — the spread itself has to shrink.
  */
 export function recommend(d, { from, maxRepeat, alpha, power, shift }) {
+  // Job-level minima exist only for the repeat the reports were taken at, so
+  // the search over other repeats is the independent model alone.
   for (let n = from; n <= maxRepeat; n++) {
     const c = tightest(d, n, alpha);
     if (c !== null && catchRate(d, c, n, shift) >= power)
@@ -170,23 +196,35 @@ function parseArgs(argv) {
   return opts;
 }
 
-/** key → pooled per-run samples (first run / later runs), across every report given. */
-function poolRuns(files) {
+/**
+ * key → pooled per-run samples (first run / later runs) plus each report's own
+ * gated minimum over its first `repeat` runs (jobMins), across every report.
+ */
+export function poolReports(reports, repeat) {
   const pooled = new Map();
-  for (const f of files) {
-    const report = JSON.parse(readFileSync(f, "utf8"));
+  for (const report of reports) {
     for (const [path, { runs }] of Object.entries(report.paths ?? {})) {
       for (const metric of GATED) {
         const key = `${path}.${metric}`;
-        if (!pooled.has(key)) pooled.set(key, { first: [], rest: [] });
+        if (!pooled.has(key)) pooled.set(key, { first: [], rest: [], jobMins: [] });
+        const entry = pooled.get(key);
         runs.forEach((r, i) => {
-          if (typeof r[metric] === "number")
-            pooled.get(key)[i === 0 ? "first" : "rest"].push(r[metric]);
+          if (typeof r[metric] === "number") entry[i === 0 ? "first" : "rest"].push(r[metric]);
         });
+        const gatedRuns = runs.slice(0, repeat).map((r) => r[metric]);
+        if (gatedRuns.length === repeat && gatedRuns.every((x) => typeof x === "number"))
+          entry.jobMins.push(Math.min(...gatedRuns));
       }
     }
   }
   return pooled;
+}
+
+function poolRuns(files, repeat) {
+  return poolReports(
+    files.map((f) => JSON.parse(readFileSync(f, "utf8"))),
+    repeat,
+  );
 }
 
 export function analyse(pooled, budget, opts) {
@@ -196,8 +234,10 @@ export function analyse(pooled, budget, opts) {
     const samples = [...split.first, ...split.rest];
     if (samples.length === 0) continue;
     const d = dist(split.first, split.rest);
+    const jobMins = split.jobMins ?? [];
     const ceiling = budget[key];
     if (ceiling === undefined) continue;
+    const tight = tightest(d, opts.repeat, opts.alpha, jobMins);
     const rec = recommend(d, {
       from: opts.repeat,
       maxRepeat: opts.maxRepeat,
@@ -215,11 +255,10 @@ export function analyse(pooled, budget, opts) {
       falseRedBound: falseRedBound(d, ceiling, opts.repeat),
       caught: catchRate(d, ceiling, opts.repeat, opts.shift),
       minDetectable: minDetectable(d, ceiling, opts.repeat, opts.power),
-      tight: tightest(d, opts.repeat, opts.alpha),
-      tightCaught: (() => {
-        const c = tightest(d, opts.repeat, opts.alpha);
-        return c === null ? 0 : catchRate(d, c, opts.repeat, opts.shift);
-      })(),
+      jobs: jobMins.length,
+      observed: observedFalseRed(jobMins, ceiling),
+      tight,
+      tightCaught: tight === null ? 0 : catchRate(d, tight, opts.repeat, opts.shift),
       rec,
       recFalseRedBound: rec ? falseRedBound(d, rec.ceiling, rec.repeat) : null,
     });
@@ -235,6 +274,7 @@ function print(rows, opts) {
     "ceil",
     `falseRed@N=${opts.repeat}`,
     "≤",
+    "observed (jobs)",
     `caught(+${opts.shift})`,
     `minDetect@${pct(opts.power)}`,
     `tightest@N=${opts.repeat} (caught +${opts.shift})`,
@@ -247,6 +287,7 @@ function print(rows, opts) {
     String(r.ceiling),
     pct(r.falseRed),
     pct(r.falseRedBound),
+    r.jobs ? `${pct(r.observed)} (${r.jobs})` : "-",
     pct(r.caught),
     r.minDetectable === Infinity ? "never" : `+${r.minDetectable}`,
     r.tight === null ? "none" : `${r.tight} (${pct(r.tightCaught)})`,
@@ -264,9 +305,20 @@ function print(rows, opts) {
   const jointBound =
     1 - rows.reduce((acc, r) => acc * (1 - r.falseRedBound), 1);
   const blind = rows.filter((r) => r.caught < opts.power).map((r) => r.key);
+  const jobs = Math.max(0, ...rows.map((r) => r.jobs));
+  const observedJoint = jobs ? rows.reduce((a, r) => a + r.observed * r.jobs, 0) / jobs : 0;
+  // Runs within one job are correlated when CI did worse than the model's own bound.
+  const correlated = rows.filter((r) => r.observed > r.falseRedBound).map((r) => r.key);
   console.log(
     `\njoint false red at N=${opts.repeat} over ${rows.length} metrics (independent): ${pct(joint)} (bound ${pct(jointBound)})`,
   );
+  if (jobs)
+    console.log(
+      `observed: ≤${pct(observedJoint)} of ${jobs} jobs went red on at least one metric (sum over metrics, upper bound)` +
+        (correlated.length
+          ? `\nruns within a job are NOT independent for (observed > model bound):\n  ${correlated.join("\n  ")}`
+          : ""),
+    );
   console.log(
     `metrics that let a +${opts.shift} regression through more than ${pct(1 - opts.power)} of the time: ${blind.length}${blind.length ? `\n  ${blind.join("\n  ")}` : ""}`,
   );
@@ -417,6 +469,38 @@ function selftest() {
     (1 / 3) ** 3,
   );
 
+  // Correlated within a job (the CI shape): 8 jobs of 400 have every run at
+  // 99, the rest are spread 70–85. Pooled as independent runs the model sees
+  // 24 of 1200 above 98 and calls the false red (2%)^3 ≈ 0.0008%; CI went red
+  // in 2% of jobs. The observed rate must say so and `tightest` must not pick 98.
+  const correlatedReports = [];
+  for (let j = 0; j < 400; j++) {
+    const v = j < 8 ? [99, 99, 99] : [70 + (j % 16), 72 + (j % 14), 75 + (j % 11)];
+    correlatedReports.push({
+      paths: { "board.drag": { runs: v.map((x) => ({ recalc_style_count: x })) } },
+    });
+  }
+  const corr = poolReports(correlatedReports, 3).get("board.drag.recalc_style_count");
+  const corrD = dist(corr.first, corr.rest);
+  expect("correlated: independent model calls 98 safe", falseRed(corrD, 98, 3), (p) => p < 0.0001);
+  expect("correlated: observed job rate at 98 is 2%", observedFalseRed(corr.jobMins, 98), 0.02);
+  expect(
+    "correlated: tightest refuses 98 once jobs are counted",
+    tightest(corrD, 3, 0.01, corr.jobMins),
+    99,
+  );
+  expect(
+    "correlated: without jobs the model alone would take a ceiling ≤ 98",
+    tightest(corrD, 3, 0.01),
+    (c) => c !== null && c <= 98,
+  );
+  expect("no jobs: observed rate is 0", observedFalseRed([], 5), 0);
+  expect(
+    "short report (fewer runs than --repeat) gives no job minimum",
+    poolReports([{ paths: { p: { runs: [{ layout_count: 1 }] } } }], 3).get("p.layout_count").jobMins,
+    (xs) => xs.length === 0,
+  );
+
   if (bad) {
     console.error(`[gate-power] selftest: ${bad} case(s) behaved wrongly`);
     process.exit(1);
@@ -439,5 +523,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const budget = JSON.parse(
     readFileSync(opts.budget ?? resolve(here, "budget.json"), "utf8"),
   );
-  print(analyse(poolRuns(opts.files), budget, opts), opts);
+  print(analyse(poolRuns(opts.files, opts.repeat), budget, opts), opts);
 }
