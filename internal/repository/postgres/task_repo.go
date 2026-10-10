@@ -87,7 +87,8 @@ const taskBaseColsNoAlias = `
 	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
 	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type,
 	reviewer_id, reviewer_type, human_gate_class, human_gate_armed_at,
-	gate_author, gate_author_type, gate_reason, recommended_default, gate_deadline`
+	gate_author, gate_author_type, gate_reason, recommended_default, gate_deadline,
+	runtime_state`
 
 const taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
@@ -242,6 +243,9 @@ type taskRow struct {
 	CheckoutRequestID  *uuid.UUID `db:"checkout_request_id"`
 	CheckoutGeneration int64      `db:"checkout_generation"`
 
+	// RuntimeState is the raw tasks.runtime_state JSONB; toDomain resolves it.
+	RuntimeState []byte `db:"runtime_state"`
+
 	// Computed enrichment fields populated by enriched queries.
 	SubtaskCount  int     `db:"subtask_count"`
 	AssigneeName  *string `db:"assignee_name"`
@@ -259,6 +263,12 @@ type taskRow struct {
 }
 
 func (r *taskRow) toDomain() domain.Task {
+	t := r.toDomainBase()
+	t.RuntimeState = domain.ResolveRuntimeState(r.RuntimeState, &t, time.Now().UTC())
+	return t
+}
+
+func (r *taskRow) toDomainBase() domain.Task {
 	return domain.Task{
 		ID:                      r.ID,
 		Version:                 r.Version,
@@ -643,6 +653,11 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		args = append(args, *filter.HumanGate)
 		argIdx++
 	}
+	if filter.RuntimeKind != nil {
+		conditions = append(conditions, runtimeKindCondition("t.", argIdx))
+		args = append(args, string(*filter.RuntimeKind))
+		argIdx++
+	}
 	order := orderClause(pg, allowedSortColumns{"created_at": "t.created_at", "updated_at": "t.updated_at", "priority": "t.priority", "due_date": "t.due_date"}, "t.updated_at") + ", t.id ASC"
 	where := "WHERE " + joinAnd(conditions)
 
@@ -657,7 +672,8 @@ func (r *TaskRepo) Search(ctx context.Context, workspaceID uuid.UUID, filter rep
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
 		t.completed_at, t.deleted_at,
-		t.recurring_schedule_id, t.recurring_instance_number, `+taskComputedColsAliased+`
+		t.recurring_schedule_id, t.recurring_instance_number,
+		t.runtime_state, t.checked_out_by, t.checkout_expires, t.checkout_acquired_at, `+taskComputedColsAliased+`
 		FROM tasks t INNER JOIN projects p ON p.id = t.project_id
 		%s %s LIMIT $%d OFFSET $%d`, where, order, argIdx, argIdx+1)
 	args = append(args, pg.Limit(), pg.Offset())
@@ -1045,6 +1061,41 @@ func (r *TaskRepo) SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, 
 	return nil
 }
 
+// runtimeKindCondition is the SQL for TaskFilter.RuntimeKind. It mirrors
+// domain.ResolveRuntimeState: a stored kind matches by value, and `working` also
+// matches a card with nothing usable stored (NULL, or JSON without a kind, which the
+// resolver also treats as absent) but a live checkout. prefix is the table alias
+// ("t." or "").
+func runtimeKindCondition(prefix string, argIdx int) string {
+	return fmt.Sprintf(`(%[1]sruntime_state->>'kind' = $%[2]d OR ($%[2]d = 'working' AND (%[1]sruntime_state IS NULL OR %[1]sruntime_state->>'kind' IS NULL)
+		AND %[1]schecked_out_by IS NOT NULL AND (%[1]scheckout_expires IS NULL OR %[1]scheckout_expires > NOW())))`, prefix, argIdx)
+}
+
+// SetRuntimeState stores the runtime state JSON, or NULL when state is nil. It
+// deliberately leaves updated_at/version alone: this is a status beacon refreshed
+// every few minutes, not an edit, and must not make a concurrent PATCH 409.
+func (r *TaskRepo) SetRuntimeState(ctx context.Context, taskID uuid.UUID, state *domain.RuntimeState) error {
+	var payload any
+	if state != nil {
+		raw, err := state.Marshal()
+		if err != nil {
+			return err
+		}
+		payload = string(raw)
+	}
+	dbStart := time.Now()
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET runtime_state = $2::jsonb WHERE id = $1 AND deleted_at IS NULL`, taskID, payload)
+	pkgmetrics.RecordDBQuery("task.set_runtime_state", time.Since(dbStart))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apierror.NotFound("Task")
+	}
+	return nil
+}
+
 // Delete performs a soft delete by setting deleted_at.
 func (r *TaskRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	const q = `UPDATE tasks SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
@@ -1103,6 +1154,11 @@ func (r *TaskRepo) List(ctx context.Context, projectID uuid.UUID, filter reposit
 	if len(filter.Labels) > 0 {
 		conditions = append(conditions, fmt.Sprintf("labels && $%d", argIdx))
 		args = append(args, pq.Array(filter.Labels))
+		argIdx++
+	}
+	if filter.RuntimeKind != nil {
+		conditions = append(conditions, runtimeKindCondition("", argIdx))
+		args = append(args, string(*filter.RuntimeKind))
 		argIdx++
 	}
 	if filter.Search != "" {

@@ -880,6 +880,7 @@ type listTasksQuery struct {
 	Labels         string `query:"labels"`
 	Search         string `query:"search"`
 	HumanGate      string `query:"human_gate"`
+	RuntimeKind    string `query:"runtime_kind"` // working|waiting|queued|stopped
 }
 
 // taskFilter shares supported list filters between project lists and workspace
@@ -917,6 +918,13 @@ func (q listTasksQuery) taskFilter() (repository.TaskFilter, error) {
 		if hg, err := strconv.ParseBool(q.HumanGate); err == nil {
 			filter.HumanGate = &hg
 		}
+	}
+	if q.RuntimeKind != "" {
+		k := domain.RuntimeKind(q.RuntimeKind)
+		if !domain.ValidRuntimeKind(k) {
+			return filter, fmt.Errorf("invalid runtime_kind; allowed values: working, waiting, queued, stopped")
+		}
+		filter.RuntimeKind = &k
 	}
 	for _, raw := range strings.Split(q.Status+","+q.StatusID, ",") {
 		if id, err := uuid.Parse(strings.TrimSpace(raw)); err == nil {

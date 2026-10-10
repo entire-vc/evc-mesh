@@ -1505,6 +1505,9 @@ func main() {
 	// handler (mirroring the human-gate-decisions revoke route above).
 	api.POST("/tasks/:task_id/human-gate", taskHandler.ArmHumanGate, wsAccess, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id/human-gate", taskHandler.ClearHumanGate, wsAccess, rbac(mw.PermUpdateTask))
+	// Operational state of a card (working/waiting/queued/stopped), orthogonal to its status.
+	api.PUT("/tasks/:task_id/runtime-state", taskHandler.PutRuntimeState, wsAccess, rbac(mw.PermUpdateTask))
+	api.DELETE("/tasks/:task_id/runtime-state", taskHandler.DeleteRuntimeState, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)
 
 	// Dependency routes.

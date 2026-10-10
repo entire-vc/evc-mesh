@@ -205,6 +205,11 @@ type Task struct {
 	// whose own status is still open, on every enriched list/get query — same
 	// computed-field mechanism as SubtaskCount itself, not a separate fetch.
 	FalseOpen *FalseOpenSignal `json:"false_open,omitempty"`
+	// RuntimeState is the card's operational state (working/waiting/queued/stopped),
+	// orthogonal to the Mesh status. Effective value: the stored one, else `working`
+	// derived from a live checkout (see ResolveRuntimeState). Never written through
+	// Update() — only PUT/DELETE /tasks/:id/runtime-state.
+	RuntimeState *RuntimeState `json:"runtime_state,omitempty" db:"-"`
 }
 
 // FalseOpenSignal reports whether an open umbrella's own content is stale

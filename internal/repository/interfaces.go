@@ -64,7 +64,10 @@ type TaskFilter struct {
 	Search         string
 	HasDueDate     *bool
 	HumanGate      *bool
-	CustomFields   map[string]CustomFieldFilter // key = field slug
+	// RuntimeKind keeps tasks whose effective runtime_state has this kind. For
+	// `working` that includes cards with no stored state but a live checkout.
+	RuntimeKind  *domain.RuntimeKind
+	CustomFields map[string]CustomFieldFilter // key = field slug
 }
 
 // AssigneeTaskFilter narrows the principal's own task feed (GET /agents/me/tasks
@@ -235,6 +238,9 @@ type TaskRepository interface {
 	// SetDodCheck upserts a single named gate entry in the task's dod_checks JSONB column.
 	// status must be "pending", "pass", or "fail". reporter identifies the caller.
 	SetDodCheck(ctx context.Context, taskID uuid.UUID, gateName, status, reporter string) error
+	// SetRuntimeState stores the (already normalized) runtime state; nil clears it.
+	// Touches only runtime_state — not updated_at/version, so it never races a PATCH.
+	SetRuntimeState(ctx context.Context, taskID uuid.UUID, state *domain.RuntimeState) error
 }
 
 // TaskStatusRepository manages persistence for task statuses.
