@@ -126,6 +126,22 @@ func TestRemember_EmbeddingPending_SignaledWhileGoroutineInFlight(t *testing.T) 
 
 	// Eventual consistency: once the goroutine is unblocked, the row must
 	// become dense-findable (proves the gate wasn't just permanently broken).
+	//
+	// Why 20s and not the original 2s (#da03cd09). After the release the only
+	// work left is one Embed that returns at once and one UPDATE
+	// (embedAndStore → MemoryRepo.UpdateEmbedding); there is no backoff, lease
+	// or second goroutine on this path, and -race -count=20 shows no race.
+	// Measured release → visible: 15-51 ms locally, including a full
+	// `go test -race ./...` alongside it. The 2s budget failed in CI twice in
+	// 14 days (jobs 140945, 176741; both green on retry of the same SHA), with
+	// the pre-release half of the test also taking ~2s, i.e. the shared
+	// runner's Postgres was stalling every query, not this code path. The
+	// same red reproduces locally with Postgres limited to 0.02 CPU next to
+	// two concurrent package runs: at 2s, 10 of 15 runs failed; at 20s, 15 of
+	// 15 passed with release → visible at 1.4-8.4s (median 3.4s). Eventually
+	// returns as soon as the row is visible, so the
+	// larger budget costs nothing on a green run; a real regression (row never
+	// embedded) still fails, 18s later.
 	require.Eventually(t, func() bool {
 		rows, err := memRepo.VectorSearch(ctx, queryVec, ws.ID, nil, domain.MemorySearchFilter{}, 20)
 		return err == nil && containsMemoryID(rows, mem.ID)

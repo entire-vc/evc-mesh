@@ -218,6 +218,20 @@ func TestTaskDurableOutbox_RetryCrashConcurrent(t *testing.T) {
 			return persist(msg)
 		})
 	}()
+	// Why 30s and not the original 6s (#da03cd09). This phase has a built-in
+	// floor of 3-4s that the old budget did not account for: RunTaskOutbox
+	// ticks once a second (task_outbox_worker.go), the first tick's failed
+	// publish sets available_at = now + 2^(attempts+1)s = 2s
+	// (TaskOutboxRepo.DeliverNext, task_outbox.go), and the retry is picked up
+	// only on the first tick after that — measured 3.02-4.02s locally under
+	// -race -count=20, never anything else. So 6s left about 2s for every DB
+	// round trip of two ticks plus the polling. With Postgres starved (0.02
+	// CPU, two concurrent package runs) the phase stretched to 3.6-7.1s; CI
+	// failed it twice in 14 days at 7.3s and 11.5s total test time (jobs
+	// 171491, 176072, both green on retry of the same SHA). No race: the row
+	// lock is held only inside DeliverNext and the previous phase's worker has
+	// committed (<-done) before this one starts. The deadline is only a hang
+	// detector; a green run still finishes in ~4s.
 	deadline := time.NewTimer(30 * time.Second)
 	defer deadline.Stop()
 	poll := time.NewTicker(20 * time.Millisecond)
