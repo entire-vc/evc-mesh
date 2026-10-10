@@ -107,6 +107,35 @@ func (h *RuntimeHandler) Report(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]bool{"recorded": true, "launch_authorized": false})
 }
 
+// ReportQuota accepts detailed quota observations. Additive to Report; like it,
+// the answer never authorizes a launch.
+func (h *RuntimeHandler) ReportQuota(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input domain.RuntimeQuotaReport
+	if err = runtimeBody(c, &input, "schema_version", "observations"); err != nil {
+		return handleError(c, err)
+	}
+	if err = h.repo.ReportQuota(c.Request().Context(), ws, c.Param("controller_ref"), runtimeActor(c), input); err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"recorded": len(input.Observations), "launch_authorized": false})
+}
+
+func (h *RuntimeHandler) QuotaObservations(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.QuotaObservations(c.Request().Context(), ws, c.Param("controller_ref"), runtimeActor(c))
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
 // Desired lets a controller read its own slice of the desired catalog with the
 // reporter key it already reports with. The digest is the ETag: a controller
 // that is up to date gets 304 without the body.

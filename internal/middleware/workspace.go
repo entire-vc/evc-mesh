@@ -452,6 +452,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance":              true,
 	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/report":                        true,
 	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/desired":                       true,
+	"/api/v1/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations":            true,
 }
 
 // workspaceScopeExemptRoutes lists routes that carry one of WorkspaceScopedParams
