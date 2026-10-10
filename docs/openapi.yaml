@@ -6061,11 +6061,23 @@ paths:
                 reason: {type: string}
       responses:
         '200':
-          description: 'The effective state after the write; the body is {"runtime_state": null} when cleared and there is no live checkout.'
+          description: 'The effective state after the write. When the state is cleared (`kind: null`) and there is no live checkout, the body is {"runtime_state": null}; a live checkout still reads as working.'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RuntimeState'
+                oneOf:
+                  - $ref: '#/components/schemas/RuntimeState'
+                  - type: object
+                    required: [runtime_state]
+                    properties:
+                      runtime_state:
+                        nullable: true
+                        enum: [null]
+                        description: Always null; nothing is stored and no checkout is live.
+              examples:
+                cleared:
+                  summary: Cleared, no live checkout
+                  value: {runtime_state: null}
         '422':
           description: Invalid value; body names the offending `field`.
     delete:
