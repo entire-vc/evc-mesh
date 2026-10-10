@@ -537,6 +537,80 @@ over two counters that are now (near-)constant, so a future regression on
 either one will redden on the very next PR rather than needing another
 25-run calibration pass to notice.
 
+### Runs of one job are not independent; `board.drag` followed the API (#da03cd09)
+
+`gate-power.mjs` treats runs as independent draws. On CI they are not: the
+three runs of one job share the runner's load and the ephemeral API's
+latency, and several counters follow that latency. Measured on 303
+`perf-counters` reports from 04–10.10 (all jobs, `rep*.json` artifacts):
+
+| | |
+|---|---|
+| model's joint false red at N=3 | 0.28% (bound 0.59%) |
+| jobs that went red on a budget and passed on retry of the same SHA | 6 of 303 (2.0%) |
+| `board.drag.recalc_style_count > 98` | model 0.05%, observed 1.02% (3 jobs, every run 99–107) |
+| `task.open.layout_count > 5` | model 0.04%, observed 0.66% (2 jobs, every run 6) |
+
+The table now carries an **observed (jobs)** column — the share of reports
+whose own gated minimum is over the ceiling — and `tightest` must keep
+both the model's bound and the observed rate under `--alpha`. The summary
+lists every metric where CI did worse than the model's own bound.
+
+`board.drag` was the clearest case, and its cause was in the app, not the
+runner. `stores/task.ts` `moveTask` awaited `POST /tasks/:id/move` before
+touching local state, so after a drop the card was drawn back in its source
+column for the whole round trip and jumped to the target when the answer
+landed. A fast API hid that inside one render; a slow one did not. Every
+CI run fell in one of two modes:
+
+| | runs | dom_mutations | layout_count | recalc_style_count (median) | ms (median) |
+|---|---|---|---|---|---|
+| answer before the drop settled | 781 | 447 | 12–13 | 78 | 2074 |
+| answer after it | 104 | 448 | 13–16 | 100 | 3110 |
+
+Reproduced locally by delaying every non-GET `/api` request with
+`page.route` (not committed): 1500 ms put all six runs in the second mode
+(448 / 16 / 97–101 — over the old ceiling of 98 on unchanged code). After
+the fix `moveTask` updates the store first and rolls back on a refusal, and
+a task list fetched before the move was confirmed is overlaid with it (a
+WS-triggered refetch answered from pre-move state was the second road to
+the same snap-back — authed-e2e job 160044). 25-run records after the fix,
+per condition:
+
+| condition | react_commits | board_card_commits | layout_count | recalc_style_count | dom_mutations |
+|---|---|---|---|---|---|
+| plain | 33 | 1080 | 11–13 | 72–81 | 442 |
+| writes +1500 ms | 32–33 | 1079–1080 | 11–13 | 74–81 | 442 |
+| reads +0–400 ms random | 32–33 | 1079–1080 | 11–13 | 72–82 | 442 |
+| CPU throttle 8x | 32–33 | 1079–1080 | 13 | 75–84 | 442 |
+
+New `board.drag` ceilings, from 6 CI reports of this code (job 179703 and
+five retries of it: every run 33 / 1080 / 13 / 442, recalc 75–87) plus the
+118 local runs above. `react_commits` 36 → 33, `board_card_commits`
+1282 → 1080, `layout_count` 16 → 13, `dom_mutations` 448 → 442: constant on
+CI, so the ceiling is the value. `recalc_style_count` 98 → 86: it still
+follows the runner, so it was priced on the 210 pre-fix CI jobs whose every
+run was single-render (same work as the fixed path) plus the 6 new ones —
+216 jobs, gated minima 57–84. `gate-power.mjs` at N=3:
+
+| ceiling | model bound | observed (216 jobs) | +k caught 95% |
+|---|---|---|---|
+| 82 (`tightest`) | 0.29% | 0.93% | +18 |
+| 84 | 0.03% | 0 | +20 |
+| **86** | **0.003%** | **0** | **+22** |
+| 98 (old) | — | 1.02% (pre-fix) | +34 |
+
+86 rather than `tightest`: 82 and 83 sit inside what 216 jobs already did,
+and a recalc ceiling catches only double-digit regressions at any of these
+values, so two more steps of margin cost almost nothing in sensitivity.
+
+The read paths (`task.open`, `view.switch`, `board.open`) still follow the
+order their GETs land in — 0–400 ms of random read latency moves
+`task.open.layout_count` to 6–8 and `view.switch.dom_mutations` to 172/325.
+That is the fetch race described under "Minimum of three"; it is an app
+property, and the observed column is what keeps it from being priced at
+zero.
+
 ### Running it locally
 
 ```bash
