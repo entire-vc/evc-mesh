@@ -118,6 +118,8 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
+	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.ReportQuota)
+	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.QuotaObservations)
 	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", h.Binding)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/policy", h.SetPolicy)

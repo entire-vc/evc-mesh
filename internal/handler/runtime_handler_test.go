@@ -20,6 +20,7 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
+	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.ReportQuota)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/policy", h.SetPolicy)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
@@ -44,6 +45,10 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 		{"save unknown secret field", http.MethodPut, "/workspaces/" + ws + "/runtime", `{"if_revision":0,"enabled":true,"config":{},"api_key":"x"}`},
 		{"save invalid workspace", http.MethodPut, "/workspaces/not-a-uuid/runtime", `{"if_revision":0,"enabled":true,"config":{}}`},
 		{"report missing pools", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/report", `{"schema_version":2,"revision":1,"digest":"d","status":"applied","capabilities":[],"emergency_paused":false}`},
+		{"quota missing observations", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/quota-observations", `{"schema_version":1}`},
+		{"quota unknown field", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/quota-observations", `{"schema_version":1,"observations":[],"token":"x"}`},
+		{"quota explicit null", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/quota-observations", `{"schema_version":1,"observations":[{"pool":"p","provider":"x","window":"5h","unit":"fraction","used_fraction":null,"observed_at":"2026-01-01T00:00:00Z","source":"s","confidence":"high","max_age_seconds":60,"status":"unknown"}]}`},
+		{"quota invalid workspace", http.MethodPost, "/workspaces/nope/runtime/controllers/runner-a/quota-observations", `{"schema_version":1,"observations":[]}`},
 		{"desired invalid workspace", http.MethodGet, "/workspaces/not-a-uuid/runtime/controllers/runner-a/desired", ``},
 		{"admission without owner", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/admission", `{"if_revision":0,"enabled":true,"permitted_profiles":[]}`},
 		{"admission missing profiles", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/admission" + owner, `{"if_revision":0,"enabled":true}`},
