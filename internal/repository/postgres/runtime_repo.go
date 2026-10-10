@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"time"
 
@@ -30,6 +31,14 @@ type RuntimeSave struct {
 	IfRevision int64           `json:"if_revision"`
 	Enabled    *bool           `json:"enabled"`
 	Config     json.RawMessage `json:"config"`
+}
+
+// RuntimePolicySave is the strict body of PUT .../bindings/:id/policy.
+// PermittedProfiles is optional: nil leaves the binding's list unchanged.
+type RuntimePolicySave struct {
+	IfRevision        int64                `json:"if_revision"`
+	PermittedProfiles []string             `json:"permitted_profiles"`
+	Policy            domain.RuntimePolicy `json:"policy"`
 }
 
 type RuntimeAdmissionInput struct {
@@ -490,13 +499,100 @@ func (r *RuntimeRepo) Binding(ctx context.Context, owner, receiver uuid.UUID, re
 	if err != nil {
 		return nil, err
 	}
+	return runtimeBindingView(owner, ref, connection.IsActive, catalog, binding, admission, revision, digest), nil
+}
+
+// runtimeBindingView is shared by the receiver read and the owner's policy save,
+// so both answer in the same shape.
+func runtimeBindingView(owner uuid.UUID, ref string, active bool, catalog *domain.RuntimeCatalog, binding domain.RuntimeBinding, admission RuntimeAdmission, revision int64, digest string) *RuntimeBindingView {
 	profiles := map[string]domain.RuntimeProfile{}
 	for _, p := range admission.PermittedProfiles {
 		profiles[p] = catalog.Profiles[p]
 	}
 	// A receiver sees its own binding and permitted profile descriptions, never
 	// the owner's catalog, credentials, unrelated tasks or other agents.
-	return &RuntimeBindingView{ResourceOwnerWorkspaceID: owner, BindingRef: ref, Revision: revision, Digest: digest, Enabled: connection.IsActive && admission.Enabled, DrainRequested: !connection.IsActive, Binding: binding, Admission: admission, Profiles: profiles, PolicyProjection: runtimePolicyProjection(owner, catalog, binding, admission.PermittedProfiles, revision)}, nil
+	return &RuntimeBindingView{ResourceOwnerWorkspaceID: owner, BindingRef: ref, Revision: revision, Digest: digest, Enabled: active && admission.Enabled, DrainRequested: !active, Binding: binding, Admission: admission, Profiles: profiles, PolicyProjection: runtimePolicyProjection(owner, catalog, binding, admission.PermittedProfiles, revision)}
+}
+
+// SetBindingPolicy rewrites the routing policy (and optionally the permitted
+// profiles) of one binding inside the stored catalog. The server holds the
+// unredacted catalog, so credential references and every other entry stay
+// untouched and the client never has to echo a redacted catalog back. The save
+// is a normal compare-and-swap on the catalog revision and creates a new
+// immutable revision, exactly like Save.
+func (r *RuntimeRepo) SetBindingPolicy(ctx context.Context, owner, receiver uuid.UUID, ref string, actor RuntimeActor, input RuntimePolicySave) (*RuntimeBindingView, error) {
+	if input.IfRevision < 0 || len(input.PermittedProfiles) > 256 {
+		return nil, apierror.BadRequest("invalid binding policy")
+	}
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = runtimeAdmin(ctx, tx, owner, actor)
+	if err != nil {
+		return nil, err
+	}
+	connection, err := runtimeConnection(ctx, tx, owner, true)
+	if err != nil {
+		return nil, err
+	}
+	if connection == nil {
+		return nil, apierror.NotFound("Runtime binding")
+	}
+	revision, _, err := runtimeRevision(ctx, tx, connection.ID)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := domain.ParseRuntimeCatalog(connection.Config)
+	if err != nil {
+		return nil, err
+	}
+	binding, ok := catalog.Bindings[ref]
+	if !ok || binding.Binding.WorkspaceID != receiver {
+		return nil, apierror.NotFound("Runtime binding")
+	}
+	if revision != input.IfRevision {
+		return nil, &apierror.Error{Code: http.StatusConflict, Message: "runtime desired revision changed", Details: "stale_revision"}
+	}
+	binding.Policy = input.Policy
+	if input.PermittedProfiles != nil {
+		binding.PermittedProfiles = input.PermittedProfiles
+	}
+	catalog.Bindings[ref] = binding
+	canonical, err := json.Marshal(catalog)
+	if err != nil {
+		return nil, err
+	}
+	// Same validation as a full save: schema, profiles within permitted, known
+	// accounts, explicit API-reserve opt-in.
+	catalog, err = domain.ParseRuntimeCatalog(canonical)
+	if err != nil {
+		return nil, apierror.BadRequest("invalid binding policy")
+	}
+	binding = catalog.Bindings[ref]
+	hash := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(hash[:])
+	revision++
+	if _, err = tx.ExecContext(ctx, `INSERT INTO runtime_catalog_revisions(integration_id,revision,digest,config,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6)`, connection.ID, revision, digest, canonical, connection.IsActive, actor.UserID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE integration_configs SET config=$2,updated_at=now() WHERE id=$1`, connection.ID, canonical); err != nil {
+		return nil, err
+	}
+	fingerprint, err := runtimeGrant(ctx, tx, binding.Binding)
+	if err != nil {
+		return nil, err
+	}
+	admission, err := runtimeAdmission(ctx, tx, connection.ID, ref, binding, fingerprint, digest)
+	if err != nil {
+		return nil, err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+	return runtimeBindingView(owner, ref, connection.IsActive, catalog, binding, admission, revision, digest), nil
 }
 
 func runtimePolicyProjection(owner uuid.UUID, catalog *domain.RuntimeCatalog, binding domain.RuntimeBinding, admitted []string, revision int64) map[string]any {

@@ -429,7 +429,7 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // controller by a catalog ref, not by a database id: :binding_id and
 // :controller_ref are strings inside the resource-owner workspace's versioned
 // catalog, so there is no row to resolve a workspace from. RuntimeRepo checks
-// them itself: Binding/Admit/Preview and the reservation routes resolve the ref
+// them itself: Binding/Admit/SetBindingPolicy/Preview and the reservation routes resolve the ref
 // in the owner catalog (a :reservation_id is looked up only inside that
 // connection, binding and receiving workspace) and
 // require the exact agent+workspace grant for the presented caller
@@ -443,6 +443,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/oauth/grants/:oauth_grant_id":                                                        true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id":                                      true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/admission":                            true,
+	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/policy":                               true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/preview":                              true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/reservations":                         true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id":         true,

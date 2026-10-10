@@ -81,6 +81,7 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodGet, "/runtime/controllers/runner-a/desired", nil},
 	{http.MethodGet, "/runtime/bindings/worker-b?resource_owner_workspace_id=" + dummyUUID, nil},
 	{http.MethodPut, "/runtime/bindings/worker-b/admission?resource_owner_workspace_id=" + dummyUUID, map[string]any{"if_revision": 0, "enabled": false, "permitted_profiles": []string{}}},
+	{http.MethodPut, "/runtime/bindings/worker-b/policy?resource_owner_workspace_id=" + dummyUUID, map[string]any{"if_revision": 0, "policy": map[string]any{}}},
 	{http.MethodPost, "/runtime/bindings/worker-b/preview?resource_owner_workspace_id=" + dummyUUID, map[string]any{"purpose": "new_launch", "required_capabilities": []string{}}},
 	{http.MethodPost, "/runtime/artifacts/" + dummyUUID + "/provenance", map[string]any{}},
 	// Capacity projection and slot reservations: a non-member must not read

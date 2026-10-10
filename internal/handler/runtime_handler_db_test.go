@@ -120,6 +120,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", h.Binding)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
+	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/policy", h.SetPolicy)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
 	e.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", h.Provenance)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations", h.AcquireReservation)
@@ -482,4 +483,103 @@ func TestRuntimeHTTPCapacityProjection(t *testing.T) {
 	foreign := map[string]string{"X-Test-Agent": f.worker.String(), "X-Test-Agent-Workspace": f.owner.String()}
 	code, _, _ = f.do(http.MethodGet, path, "", foreign)
 	require.Equal(t, http.StatusForbidden, code, "a key for another workspace cannot read this projection")
+}
+
+// The UI reads the catalog with credential_ref blanked, so it cannot send the
+// catalog back. The policy route edits one binding server-side instead.
+func TestRuntimeHTTPBindingPolicyWithoutResendingCatalog(t *testing.T) {
+	f := newRuntimeHTTP(t)
+	owner := map[string]string{"X-Test-User": f.ownerUser.String()}
+	receiver := map[string]string{"X-Test-User": f.receiverUser.String()}
+	reporter := map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String()}
+	base := "/workspaces/" + f.owner.String() + "/runtime"
+	query := "?resource_owner_workspace_id=" + f.owner.String()
+	policyURL := "/workspaces/" + f.receiver.String() + "/runtime/bindings/worker-b/policy" + query
+
+	code, _, body := f.do(http.MethodPut, base, `{"if_revision":0,"enabled":true,"config":`+string(f.catalog)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+
+	policy := func(primary string, reserve string) string {
+		return `{"primary_profiles":["` + primary + `"],"quota_edges":{},"preferred_accounts":{},"api_reserve_providers":[` + reserve + `],"max_attempts":3,"evidence_max_age_seconds":120,"qa":{"mode":"strict","quota_fallback":true}}`
+	}
+	good := `{"if_revision":1,"policy":` + policy("reserve", "") + `}`
+
+	// Red controls first: each of these must be refused and change nothing.
+	code, _, body = f.do(http.MethodPut, policyURL, good, receiver)
+	require.Equal(t, http.StatusForbidden, code, "a non-admin of the owner workspace: "+body)
+	code, _, body = f.do(http.MethodPut, policyURL, good, reporter)
+	require.Equal(t, http.StatusForbidden, code, "an agent key: "+body)
+	code, _, body = f.do(http.MethodPut, policyURL, `{"if_revision":1,"policy":`+policy("reserve", "")+`,"credential_ref":"x"}`, owner)
+	require.Equal(t, http.StatusBadRequest, code, "unknown top-level field: "+body)
+	code, _, body = f.do(http.MethodPut, policyURL, `{"if_revision":1,"policy":{"primary_profiles":["reserve"],"surprise":1}}`, owner)
+	require.Equal(t, http.StatusBadRequest, code, "unknown policy field: "+body)
+	code, _, body = f.do(http.MethodPut, policyURL, `{"if_revision":1,"policy":`+policy("not-permitted", "")+`}`, owner)
+	require.Equal(t, http.StatusBadRequest, code, "profile outside permitted_profiles: "+body)
+	code, _, body = f.do(http.MethodPut, policyURL, `{"if_revision":1,"permitted_profiles":["preferred"],"policy":`+policy("reserve", "")+`}`, owner)
+	require.Equal(t, http.StatusBadRequest, code, "policy refers to a profile the new permitted list drops: "+body)
+	code, _, body = f.do(http.MethodPut, policyURL, `{"if_revision":1,"policy":{"primary_profiles":["reserve"]}}`, owner)
+	require.Equal(t, http.StatusBadRequest, code, "partial routing block: "+body)
+	code, _, body = f.do(http.MethodPut, strings.Replace(policyURL, "worker-b", "no-such-binding", 1), good, owner)
+	require.Equal(t, http.StatusNotFound, code, body)
+
+	code, snapshot, _ := f.do(http.MethodGet, base, "", owner)
+	require.Equal(t, http.StatusOK, code)
+	require.EqualValues(t, 1, snapshot["revision"], "refused writes created no revision")
+	before, _ := snapshot["digest"].(string)
+
+	code, view, body := f.do(http.MethodPut, policyURL, good, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.EqualValues(t, 2, view["revision"])
+	require.NotEqual(t, before, view["digest"])
+	require.NotContains(t, body, "credential_ref")
+	require.NotContains(t, body, "synthetic-")
+	binding := view["binding"].(map[string]any)
+	require.EqualValues(t, 3, binding["policy"].(map[string]any)["max_attempts"])
+
+	code, _, body = f.do(http.MethodPut, policyURL, good, owner)
+	require.Equal(t, http.StatusConflict, code, "stale if_revision: "+body)
+	require.Contains(t, body, "stale_revision")
+
+	// GET /runtime shows the new revision and the changed policy only.
+	code, snapshot, body = f.do(http.MethodGet, base, "", owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.EqualValues(t, 2, snapshot["revision"])
+	catalog := snapshot["config"].(map[string]any)
+	policyNow := catalog["bindings"].(map[string]any)["worker-b"].(map[string]any)["policy"].(map[string]any)
+	require.Equal(t, []any{"reserve"}, policyNow["primary_profiles"])
+
+	// The stored catalog differs from the original in the policy of worker-b
+	// and nowhere else: credential_ref and every other entry are intact.
+	var stored []byte
+	require.NoError(t, f.db.Get(&stored, `SELECT r.config FROM runtime_catalog_revisions r JOIN integration_configs c ON c.id=r.integration_id WHERE c.workspace_id=$1 AND c.provider='agent_runtime' AND r.revision=2`, f.owner))
+	var was, now map[string]any
+	require.NoError(t, json.Unmarshal(f.catalog, &was))
+	require.NoError(t, json.Unmarshal(stored, &now))
+	require.Equal(t, was["accounts"], now["accounts"], "credential_ref untouched")
+	for _, key := range []string{"controllers", "pools", "profiles", "schema_version"} {
+		require.Equal(t, was[key], now[key], key)
+	}
+	wasB := was["bindings"].(map[string]any)["worker-b"].(map[string]any)
+	nowB := now["bindings"].(map[string]any)["worker-b"].(map[string]any)
+	require.Equal(t, wasB["binding"], nowB["binding"])
+	require.Equal(t, wasB["permitted_profiles"], nowB["permitted_profiles"])
+	require.NotEqual(t, wasB["policy"], nowB["policy"])
+	require.Equal(t, 2, countCredentialRefs(t, stored), "both accounts keep a non-empty credential_ref")
+}
+
+func countCredentialRefs(t *testing.T, raw []byte) int {
+	t.Helper()
+	var c struct {
+		Accounts map[string]struct {
+			CredentialRef string `json:"credential_ref"`
+		} `json:"accounts"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &c))
+	n := 0
+	for _, a := range c.Accounts {
+		if a.CredentialRef != "" {
+			n++
+		}
+	}
+	return n
 }
