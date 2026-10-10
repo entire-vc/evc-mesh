@@ -2199,6 +2199,72 @@ func (s *commentService) parkDisqualifiedGate(ctx context.Context, task *domain.
 	}
 }
 
+// endpointGateHintMarker identifies the system comment postEndpointGateHint writes,
+// so a thread gets the hint once, not after every human comment. It is also the
+// phrase the arm-time text (taskService.postAPIArmHintComment) carries.
+const endpointGateHintMarker = "гейт снимается кнопкой"
+
+// endpointGateHintBody is the text a human sees when they comment on a gate that
+// no comment can lift. Prefixed "🤖 Auto:" so isServiceComment never reads it as
+// the gate author's words.
+const endpointGateHintBody = "🤖 Auto: human_gate поднят не маркером «❓ Blocking», а через API/кнопку — " +
+	"комментарий его не снимает: " + endpointGateHintMarker + " «Снять гейт» в карточке " +
+	"(для агента — clear_human_gate / DELETE /tasks/{id}/human-gate). Ваш комментарий сохранён и виден исполнителю."
+
+// scanForBlockingMarker walks every page of taskID's thread (excluding excludeID)
+// and reports whether any comment carries a blocking marker, and whether the
+// endpoint-gate hint was already posted. It stops early only once both are known.
+func (s *commentService) scanForBlockingMarker(ctx context.Context, taskID, excludeID uuid.UUID) (foundBlocking, hintPosted bool, err error) {
+	pg := pagination.Params{Page: 1, PageSize: pagination.MaxPageSize}
+	pg.Normalize()
+	for {
+		page, listErr := s.commentRepo.ListByTask(ctx, taskID, repository.CommentFilter{IncludeInternal: true}, pg)
+		if listErr != nil {
+			return false, false, listErr
+		}
+		if page != nil {
+			for _, c := range page.Items {
+				if c.ID == excludeID {
+					continue
+				}
+				if hasBlockingMarker(c.Body) {
+					// A marker means the comment path owns this gate; the hint is moot.
+					return true, hintPosted, nil
+				}
+				if c.AuthorType == domain.ActorTypeSystem && strings.Contains(c.Body, endpointGateHintMarker) {
+					hintPosted = true
+				}
+			}
+		}
+		if page == nil || !page.HasMore {
+			return false, hintPosted, nil
+		}
+		pg.Page++
+	}
+}
+
+// postEndpointGateHint answers a human comment on a gate that a comment cannot
+// lift. Best-effort, like every other step of the release path.
+func (s *commentService) postEndpointGateHint(ctx context.Context, task *domain.Task) {
+	now := timeNow()
+	sysComment := &domain.Comment{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		AuthorID:   systemActorID,
+		AuthorType: domain.ActorTypeSystem,
+		Body:       endpointGateHintBody,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
+		log.Printf("[human-gate] WARNING: create endpoint-gate hint on task %s failed: %v", task.ID, err)
+		return
+	}
+	if s.ctxCacheInv != nil {
+		s.ctxCacheInv.Invalidate(ctx, task.ID)
+	}
+}
+
 // releaseHumanGate is the symmetric counterpart to enforceBlockingTriage. When a human
 // user (Pavel) posts a comment on a task whose human_gate flag is true, and at least one
 // prior comment on that task carries a "❓ Blocking @user" marker, the gate is cleared:
@@ -2215,7 +2281,9 @@ func (s *commentService) parkDisqualifiedGate(ctx context.Context, task *domain.
 //   - task.HumanGate must be true;
 //   - comment.AuthorType must be ActorTypeUser (agents/system cannot release the gate);
 //   - at least one prior comment on the task (excluding this one) must carry a blocking
-//     marker (ensures the gate had a backing signal, not just a manual PATCH).
+//     marker (ensures the gate had a backing signal, not just a manual PATCH). The whole
+//     thread is scanned, however long. Without a marker the gate stays up and a one-time
+//     system hint names the door that does lift it (clear endpoint / button).
 func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.Comment, task *domain.Task, wsID uuid.UUID) {
 	if s.taskSvc == nil {
 		return
@@ -2227,29 +2295,24 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 		return
 	}
 
-	// Scan the most recent comments for a prior blocking marker.
-	// PageSize 100 covers realistic task depths; SortDir "desc" returns newest first.
-	pg := pagination.Params{Page: 1, PageSize: 100, SortDir: "desc"}
-	pg.Normalize()
-	page, err := s.commentRepo.ListByTask(ctx, task.ID, repository.CommentFilter{IncludeInternal: true}, pg)
+	// Walk the WHOLE thread for a prior blocking marker. The real repository
+	// hardcodes ORDER BY created_at ASC (SortDir is ignored), so a single
+	// PageSize-100 read only ever saw the OLDEST 100 comments: on a longer thread
+	// a marker past comment 100 was invisible and a human's answer silently left
+	// the gate up (task #fc63d720). Same page walk as scanHumanGateOwnership.
+	foundBlocking, hintPosted, err := s.scanForBlockingMarker(ctx, task.ID, comment.ID)
 	if err != nil {
 		log.Printf("[human-gate] WARNING: ListByTask on task %s failed: %v", task.ID, err)
 		return
 	}
-
-	foundBlocking := false
-	if page != nil {
-		for _, c := range page.Items {
-			if c.ID == comment.ID {
-				continue // skip the comment we just persisted
-			}
-			if hasBlockingMarker(c.Body) {
-				foundBlocking = true
-				break
-			}
-		}
-	}
 	if !foundBlocking {
+		// No marker backs this gate: it was armed through a door a comment does not
+		// open (set_human_gate / button → clear_endpoint, or a raw PATCH). By design
+		// a human comment does not lift it, but doing so SILENTLY reads as "the system
+		// ignored my answer" — say which door works, once per thread.
+		if !hintPosted {
+			s.postEndpointGateHint(ctx, task)
+		}
 		return
 	}
 

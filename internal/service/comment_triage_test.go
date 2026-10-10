@@ -875,7 +875,8 @@ func TestReleaseHumanGate_NoPriorBlockingComment_NoOp(t *testing.T) {
 	require.NoError(t, env.svc.Create(ctx, comment))
 
 	assert.Empty(t, env.taskMover.humanGateCalls(), "must not release when no prior blocking comment")
-	assert.Empty(t, env.systemComments())
+	assert.Empty(t, env.releaseComments())
+	assert.Len(t, env.endpointGateHints(), 1, "the only system comment is the endpoint-gate hint (#fc63d720)")
 }
 
 func TestReleaseHumanGate_AgentComment_NoOp(t *testing.T) {
@@ -2946,4 +2947,75 @@ func TestGetHumanGateOwner_RawArmedNoMarker_StillNoLiveMarker(t *testing.T) {
 	assert.Nil(t, info.OwnerAgentID)
 	assert.False(t, info.ClearableByOwner)
 	assert.Equal(t, "no_live_marker", info.ReasonIfNot)
+}
+
+// Task #fc63d720. The real CommentRepo returns a thread oldest-first and ignores
+// SortDir, so releaseHumanGate's old single PageSize-100 read saw only the first
+// 100 comments. A marker sitting PAST comment 100 is the shape that fell off the
+// end of that read — here the marker is comment #121 of 130.
+func TestReleaseHumanGate_MarkerBeyondFirstPage_StillReleases(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID)
+
+	base := time.Now().Add(-5 * time.Hour)
+	mk := func(i int, body string, at domain.ActorType) {
+		cid := uuid.New()
+		env.commentRepo.items[cid] = &domain.Comment{
+			ID: cid, TaskID: taskID, AuthorID: uuid.New(), AuthorType: at,
+			Body: body, CreatedAt: base.Add(time.Duration(i) * time.Second),
+		}
+	}
+	for i := 0; i < 130; i++ {
+		body := "progress note"
+		if i == 120 {
+			body = "❓ **Blocking @pavel**: need your approval"
+		}
+		mk(i, body, domain.ActorTypeAgent)
+	}
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+		TaskID: taskID, AuthorID: pavelID, AuthorType: domain.ActorTypeUser, Body: "Ок, делайте.",
+	}))
+
+	gateCalls := env.taskMover.humanGateCalls()
+	require.Len(t, gateCalls, 1, "marker past page 1 must still be found")
+	assert.False(t, gateCalls[0].value)
+	assert.Len(t, env.releaseComments(), 1)
+}
+
+// Endpoint-armed gate (no marker comment): a human comment leaves the gate up but
+// must not be met with silence — one system hint names the door that works.
+func TestReleaseHumanGate_EndpointArmed_HumanCommentGetsHintOnce(t *testing.T) {
+	env := setupTriageEnv(t, true)
+	taskID := env.seedGatedTask(env.inProgressID) // no marker comment
+
+	pavelID := uuid.New()
+	ctx := actorctx.WithActor(context.Background(), pavelID, domain.ActorTypeUser)
+	say := func(body string) {
+		require.NoError(t, env.svc.Create(ctx, &domain.Comment{
+			TaskID: taskID, AuthorID: pavelID, AuthorType: domain.ActorTypeUser, Body: body,
+		}))
+	}
+	say("Ок, делайте.")
+
+	assert.Empty(t, env.taskMover.humanGateCalls(), "a comment must not lift an endpoint-armed gate")
+	assert.Empty(t, env.releaseComments())
+	hints := env.endpointGateHints()
+	require.Len(t, hints, 1, "the human must be told which door lifts the gate")
+	assert.Contains(t, hints[0].Body, "clear_human_gate")
+
+	say("Ещё раз: ок.")
+	assert.Len(t, env.endpointGateHints(), 1, "hint is posted once per thread, not after every comment")
+}
+
+func (env triageTestEnv) endpointGateHints() []domain.Comment {
+	var out []domain.Comment
+	for _, c := range env.systemComments() {
+		if strings.Contains(c.Body, endpointGateHintMarker) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
