@@ -333,3 +333,83 @@ export function poolObservations(controllers: ControllerState[]): Record<string,
   }
   return out;
 }
+
+export interface RuntimePreview {
+  selectedProfileId: string;
+  selectedAccountRef: string;
+  preferredAccountRef: string;
+  reason: string;
+  trace: { profileId: string; reason: string }[];
+  revision: number;
+  qaMode: string;
+  qaCompromise: boolean;
+}
+
+export type PreviewResult =
+  | { kind: "ok"; preview: RuntimePreview }
+  | { kind: "forbidden" }
+  | { kind: "stale" }
+  | { kind: "unavailable" };
+
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/**
+ * POST .../preview body → typed preview. The always-present contract fields
+ * (reason, trace[], revision, launch_authorized=false, qa_compromise) must all
+ * have their type (a preview that claims a launch is authorized is not the contract); a partial body or a malformed trace entry is null, never a result.
+ */
+export function normalizePreview(raw: unknown): RuntimePreview | null {
+  if (
+    !isObject(raw) ||
+    typeof raw.reason !== "string" ||
+    !Array.isArray(raw.trace) ||
+    typeof raw.revision !== "number" ||
+    raw.launch_authorized !== false ||
+    typeof raw.qa_compromise !== "boolean"
+  ) {
+    return null;
+  }
+  for (const k of ["selected_profile_id", "selected_account_ref", "preferred_account_ref", "qa_mode"]) {
+    if (raw[k] !== undefined && typeof raw[k] !== "string") return null;
+  }
+  const trace: RuntimePreview["trace"] = [];
+  for (const t of raw.trace) {
+    if (!isObject(t) || typeof t.profile_id !== "string" || typeof t.reason !== "string") return null;
+    trace.push({ profileId: t.profile_id, reason: t.reason });
+  }
+  return {
+    selectedProfileId: str(raw.selected_profile_id),
+    selectedAccountRef: str(raw.selected_account_ref),
+    preferredAccountRef: str(raw.preferred_account_ref),
+    reason: raw.reason,
+    trace,
+    revision: raw.revision,
+    qaMode: str(raw.qa_mode),
+    qaCompromise: raw.qa_compromise,
+  };
+}
+
+/**
+ * Advisory "which route would the router pick now and why" (R1 preview/explain).
+ * It launches nothing and reserves nothing. 403 = not allowed to see it, 409 =
+ * the catalog changed under us (reload and ask again); no failure is shown as a result.
+ */
+export async function previewBinding(
+  workspaceId: string,
+  bindingRef: string,
+  purpose: "new_launch" | "quota_reserve" = "new_launch",
+): Promise<PreviewResult> {
+  try {
+    const raw = await api<unknown>(
+      `/api/v1/workspaces/${workspaceId}/runtime/bindings/${encodeURIComponent(bindingRef)}/preview?resource_owner_workspace_id=${workspaceId}`,
+      { method: "POST", body: { purpose, required_capabilities: [] } },
+    );
+    const preview = normalizePreview(raw);
+    return preview ? { kind: "ok", preview } : { kind: "unavailable" };
+  } catch (err) {
+    const status = (err as { status?: number } | null)?.status;
+    if (status === 403) return { kind: "forbidden" };
+    if (status === 409) return { kind: "stale" };
+    return { kind: "unavailable" };
+  }
+}
