@@ -21,6 +21,7 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", h.Admit)
+	e.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/policy", h.SetPolicy)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
 	e.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", h.Provenance)
 	e.GET("/workspaces/:ws_id/runtime/capacity", h.Capacity)
@@ -46,6 +47,11 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 		{"desired invalid workspace", http.MethodGet, "/workspaces/not-a-uuid/runtime/controllers/runner-a/desired", ``},
 		{"admission without owner", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/admission", `{"if_revision":0,"enabled":true,"permitted_profiles":[]}`},
 		{"admission missing profiles", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/admission" + owner, `{"if_revision":0,"enabled":true}`},
+		{"policy without owner", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/policy", `{"if_revision":1,"policy":{}}`},
+		{"policy missing if_revision", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/policy" + owner, `{"policy":{}}`},
+		{"policy missing policy", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/policy" + owner, `{"if_revision":1}`},
+		{"policy credential field", http.MethodPut, "/workspaces/" + ws + "/runtime/bindings/b/policy" + owner, `{"if_revision":1,"policy":{},"credential_ref":"x"}`},
+		{"policy invalid workspace", http.MethodPut, "/workspaces/not-a-uuid/runtime/bindings/b/policy" + owner, `{"if_revision":1,"policy":{}}`},
 		{"preview forged qa flag", http.MethodPost, "/workspaces/" + ws + "/runtime/bindings/b/preview" + owner, `{"purpose":"new_launch","required_capabilities":[],"qa_allowed":true}`},
 		{"provenance invalid artifact", http.MethodPost, "/workspaces/" + ws + "/runtime/artifacts/nope/provenance", `{"controller_ref":"c","artifact_revision":"s","complete":true,"authors":[]}`},
 		{"provenance artifact in body", http.MethodPost, "/workspaces/" + ws + "/runtime/artifacts/" + uuid.New().String() + "/provenance", `{"controller_ref":"c","artifact_id":"` + uuid.New().String() + `","artifact_revision":"s","complete":true,"authors":[]}`},

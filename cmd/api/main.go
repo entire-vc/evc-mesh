@@ -1407,6 +1407,9 @@ func main() {
 	api.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", runtimeHandler.Provenance)
 	api.GET("/workspaces/:ws_id/runtime/bindings/:binding_id", runtimeHandler.Binding)
 	api.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/admission", runtimeHandler.Admit, rbac(mw.PermManageMembers))
+	// :ws_id is the receiver; the resource owner comes from the query and its admin
+	// check runs in the repo transaction, so there is no receiver-side role gate.
+	api.PUT("/workspaces/:ws_id/runtime/bindings/:binding_id/policy", runtimeHandler.SetPolicy)
 	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", runtimeHandler.Preview)
 	api.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations", runtimeHandler.AcquireReservation)
 	api.GET("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id", runtimeHandler.GetReservation)

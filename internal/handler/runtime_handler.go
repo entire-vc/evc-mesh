@@ -175,6 +175,28 @@ func (h *RuntimeHandler) Admit(c echo.Context) error {
 	return c.JSON(http.StatusOK, value)
 }
 
+// SetPolicy changes the routing policy of one binding without the client
+// resending (or being able to read back) the catalog's credential references.
+func (h *RuntimeHandler) SetPolicy(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	owner, err := runtimeOwner(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input postgres.RuntimePolicySave
+	if err = runtimeBody(c, &input, "if_revision", "policy"); err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.SetBindingPolicy(c.Request().Context(), owner, ws, c.Param("binding_id"), runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
 // Preview explains which profile the resolver would pick. It is advisory:
 // the response always carries launch_authorized=false.
 func (h *RuntimeHandler) Preview(c echo.Context) error {
