@@ -1384,6 +1384,14 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 		return apierror.NotFound("Task")
 	}
 
+	// The caller's snapshot is the only thing that can be stale here: the write
+	// below already carries ExpectedVersion for the read→write window, but a
+	// checkout (or any edit) that landed after the caller decided and before this
+	// fresh read is invisible to it. Checkout bumps updated_at.
+	if input.ExpectedUpdatedAt != nil && !input.ExpectedUpdatedAt.Equal(task.UpdatedAt) {
+		return &CASConflictError{CurrentVersion: task.Version, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt}
+	}
+
 	oldAssigneeID := task.AssigneeID
 	oldAssigneeType := task.AssigneeType
 	oldAssignedBy := task.AssignedBy

@@ -78,6 +78,12 @@ type AssignTaskInput struct {
 	// already pinned by a human, AssignTask returns AssignmentPinnedError (422).
 	// Defaults to AssignmentSourceSystem when omitted.
 	Source domain.AssignmentSource `json:"source"`
+	// ExpectedUpdatedAt is an optional compare-and-set precondition. A caller that
+	// decided to assign from a snapshot of the task (e.g. "nobody holds the
+	// checkout") passes that snapshot's updated_at; the write is refused with a
+	// CASConflictError if the task changed since, including a checkout taken in
+	// between. The read→write window inside AssignTask is covered by the row version.
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
 }
 
 // CreateSubtaskInput holds parameters for creating a subtask.
