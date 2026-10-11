@@ -1172,7 +1172,6 @@ export function BoardPage() {
         />
       </div>
 
-      <p className="text-xs text-muted-foreground">Column counts match cards with the current filters. Closed tasks and subtasks follow the toolbar settings.</p>
       {listProjectId === currentProject?.id && listError && (
         <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
           <span>{listComplete ? "Couldn't refresh tasks. Showing the last complete list." : "Couldn't load all tasks. Counts are unavailable."}</span>
