@@ -384,6 +384,11 @@ describe("AgentRuntimeTabs", () => {
       expect(body.permitted_profiles).toEqual(["reserve", "main"]);
     });
 
+    it("explains that Primary runs first and the list orders only one route's reserves", async () => {
+      await edit({ revision: 5 });
+      expect(screen.getByText(/Primary routes run first\. This list orders only the reserves of one route/)).toBeInTheDocument();
+    });
+
     it("reserve order follows the edited order: quota_edges are reordered and pruned", async () => {
       expect(orderQuotaEdges({ a: ["r1", "r2", "gone"], gone: ["r1"] }, ["r2", "a", "r1"])).toEqual({ a: ["r2", "r1"] });
       await edit({ revision: 5 });
