@@ -10,7 +10,7 @@ import { AgentShortTag } from "@/components/agent-short-tag";
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Search, ChevronDown, ChevronUp, ArrowUpDown, Plus, RefreshCw, Filter, Lock, Users, X } from "lucide-react";
+import { Search, ChevronDown, ChevronUp, ArrowUpDown, Plus, RefreshCw, Filter, Lock, Play, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -66,6 +66,10 @@ export interface BoardToolbarProps {
   // "Waiting on me" (human_gate=true) toggle
   humanGateOnly: boolean;
   onHumanGateOnlyChange: (v: boolean) => void;
+
+  // "Actually being worked" (runtime_state.kind=working) toggle
+  workingOnly?: boolean;
+  onWorkingOnlyChange?: (v: boolean) => void;
 
   // Subtasks toggle
   showSubtasks: boolean;
@@ -285,6 +289,8 @@ export function BoardToolbar({
   onShowClosedChange,
   humanGateOnly,
   onHumanGateOnlyChange,
+  workingOnly = false,
+  onWorkingOnlyChange,
   showSubtasks,
   onShowSubtasksChange,
   searchQuery,
@@ -388,6 +394,13 @@ export function BoardToolbar({
             Waiting on me
           </ToggleButton>
 
+          {onWorkingOnlyChange && (
+            <ToggleButton active={workingOnly} onClick={() => onWorkingOnlyChange(!workingOnly)}>
+              <Play className="h-3 w-3" aria-hidden="true" />
+              Реально в работе
+            </ToggleButton>
+          )}
+
           <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-36 text-xs">
             <option value="all">All Assignees</option>
             <option value="user">User</option>
@@ -487,6 +500,13 @@ export function BoardToolbar({
             <Lock className="h-3 w-3" aria-hidden="true" />
             Waiting on me
           </ToggleButton>
+
+          {onWorkingOnlyChange && (
+            <ToggleButton active={workingOnly} onClick={() => onWorkingOnlyChange(!workingOnly)}>
+              <Play className="h-3 w-3" aria-hidden="true" />
+              Реально в работе
+            </ToggleButton>
+          )}
 
           <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-32 text-xs">
             <option value="all">All Assignees</option>

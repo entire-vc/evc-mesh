@@ -31,6 +31,8 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import { RuntimeStateBadge } from "@/components/runtime-state-badge";
+import { readableRuntimeState } from "@/lib/runtime-state";
 import { useBlocker, useLocation, useNavigate } from "react-router";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
@@ -1383,6 +1385,16 @@ export function TaskPanel({
               </option>
             ))}
         </Select>
+
+        {/* Live work state — beside the status, never replacing it */}
+        {currentTask.runtime_state && (
+          <>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">Now</label>
+            <div className="flex min-w-0 items-center pt-0.5" data-testid="runtime-state-row">
+              <RuntimeStateBadge state={readableRuntimeState(currentTask)!} variant="line" />
+            </div>
+          </>
+        )}
 
         {/* Human gate */}
         {currentTask.human_gate && (
