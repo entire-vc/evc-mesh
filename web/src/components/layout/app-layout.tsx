@@ -138,7 +138,8 @@ export function AppLayout() {
   const shownProjectId = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     if (currentProjectId && shownProjectId.current && shownProjectId.current !== currentProjectId) {
-      useTaskStore.setState({ tasks: [], tasksByStatus: {}, total: 0, hasMore: false });
+      useTaskStore.setState({ tasks: [], tasksByStatus: {}, total: 0, hasMore: false,
+        listProjectId: null, listComplete: false, listError: null });
       useProjectStore.setState({ statuses: [] });
     }
     if (currentProjectId) shownProjectId.current = currentProjectId;

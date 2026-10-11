@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import { buildDuplicateRequest } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/api-error";
+import { fetchCompleteTaskList } from "@/lib/task-list";
 import type {
   CreateTaskRequest,
   MoveTaskRequest,
@@ -24,12 +25,16 @@ interface TaskState {
   page: number;
   perPage: number;
   hasMore: boolean;
+  listProjectId: string | null;
+  listComplete: boolean;
+  listError: string | null;
 
   fetchTasks: (
     projectId: string,
     params?: Record<string, string | number | undefined>,
-    opts?: { background?: boolean },
+    opts?: { background?: boolean; allPages?: boolean },
   ) => Promise<void>;
+  fetchAllTasks: (projectId: string, opts?: { background?: boolean }) => Promise<void>;
   fetchTask: (taskId: string) => Promise<Task>;
   createTask: (projectId: string, req: CreateTaskRequest) => Promise<Task>;
   updateTask: (taskId: string, req: UpdateTaskRequest) => Promise<Task>;
@@ -109,11 +114,16 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   page: 1,
   perPage: 50,
   hasMore: false,
+  listProjectId: null,
+  listComplete: false,
+  listError: null,
+
+  fetchAllTasks: (projectId, opts) => get().fetchTasks(projectId, undefined, { ...opts, allPages: true }),
 
   fetchTasks: async (
     projectId: string,
     params?: Record<string, string | number | undefined>,
-    opts?: { background?: boolean },
+    opts?: { background?: boolean; allPages?: boolean },
   ) => {
     const background = opts?.background === true;
     // A background refresh never touches isLoading, so it must not displace a
@@ -124,12 +134,23 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const startedAt = ++clock;
     // A background refresh (WS event) swaps data in place: raising isLoading
     // would unmount the board into skeletons and drop a drag in progress.
+    const keepSnapshot = opts?.allPages && get().listProjectId === projectId && get().listComplete;
     if (!background) {
       foregroundInFlight++;
-      set({ isLoading: true, error: null });
+      set({ isLoading: true, error: null, listError: null, listProjectId: projectId,
+        listComplete: Boolean(keepSnapshot),
+        // Only a full Board load needs to clear an incomplete snapshot. Keep the
+        // existing List page while its loading skeleton is shown so derived
+        // toolbar options do not disappear and reappear during navigation.
+        ...(opts?.allPages && !keepSnapshot
+          ? { tasks: [], tasksByStatus: {}, total: 0, hasMore: false }
+          : {}),
+      });
     }
     try {
-      const data = await api<PaginatedResponse<Task>>(
+      const data = opts?.allPages
+        ? await fetchCompleteTaskList(projectId, params, () => requestId === latestFetchTasks)
+        : await api<PaginatedResponse<Task>>(
         `/api/v1/projects/${projectId}/tasks`,
         // include_description=false: descriptions were 703 KB of the 917 KB this
         // call returned for a 200-task board, and nothing on a card renders them.
@@ -138,7 +159,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         // frontend deploy that lands before the backend one is merely slow.
         { params: { page_size: "200", include_description: "false", ...params } },
       );
-      if (requestId !== latestFetchTasks) return;
+      if (requestId !== latestFetchTasks || !data) return;
       const items = overlayLocalMoves(data.items ?? [], startedAt);
       const prevById = get().tasksById;
       set({
@@ -164,23 +185,26 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         total: data.total_count ?? data.total ?? 0,
         page: data.page,
         perPage: data.per_page ?? data.page_size ?? 50,
-        hasMore: data.has_more,
+        hasMore: data.has_more ?? false,
+        listComplete: opts?.allPages ?? false,
+        listError: null,
         ...(background ? {} : { isLoading: false, error: null }),
       });
       get().groupByStatus();
     } catch (error) {
       if (requestId !== latestFetchTasks) return;
-      // A failed background refresh keeps what the user already sees.
-      if (background) return;
+      // A failed background refresh keeps what the user already sees. A complete
+      // board still says so (listError) instead of silently going stale.
+      if (background) {
+        if (opts?.allPages) set({ listError: getErrorMessage(error) });
+        return;
+      }
       set({
-        tasks: [],
-        tasksByStatus: {},
         isLoading: false,
         error: getErrorMessage(error),
-        total: 0,
-        page: 1,
-        perPage: 50,
-        hasMore: false,
+        listError: getErrorMessage(error),
+        ...(!keepSnapshot ? { tasks: [], tasksByStatus: {}, total: 0, page: 1,
+          perPage: 50, hasMore: false, listComplete: false } : {}),
       });
     } finally {
       if (!background) foregroundInFlight--;

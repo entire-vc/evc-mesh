@@ -1184,6 +1184,7 @@ authed-e2e:
         echo "step to make it green — it is what keeps cdn.playwright.dev out of the merge path."
         exit 1
       fi
+    - npx playwright test --config board-e2e/playwright.config.ts
     - |
       npx playwright test
       if [ "${BOARD_DRAG_FILTER_STRESS:-0}" = "1" ]; then

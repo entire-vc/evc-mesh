@@ -642,6 +642,7 @@ export interface PaginatedResponse<T> {
   per_page: number;
   page_size: number;
   has_more: boolean;
+  list_revision?: number;
 }
 
 export interface Mention {
