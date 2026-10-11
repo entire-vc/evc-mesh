@@ -604,12 +604,12 @@ run was single-render (same work as the fixed path) plus the 6 new ones —
 and a recalc ceiling catches only double-digit regressions at any of these
 values, so two more steps of margin cost almost nothing in sensitivity.
 
-The read paths (`task.open`, `view.switch`, `board.open`) still follow the
-order their GETs land in — 0–400 ms of random read latency moves
-`task.open.layout_count` to 6–8 and `view.switch.dom_mutations` to 172/325.
-That is the fetch race described under "Minimum of three"; it is an app
-property, and the observed column is what keeps it from being priced at
-zero.
+The read paths (`task.open`, `board.open`) still follow the order their GETs
+land in — 0–400 ms of random read latency moves `task.open.layout_count` to
+6–8. That is the fetch race described under "Minimum of three"; it is an app
+property, and the observed column is what keeps it from being priced at zero.
+`view.switch` had the same race (172/325 DOM mutations) until the list view
+started waiting for statuses and custom fields; see the latency section below.
 
 ### Running it locally
 
@@ -658,3 +658,19 @@ and `TaskCard` is not memoised, so every store update already re-renders
 every card — the regression is the baseline. A render that changes nothing in
 the DOM is caught only above the `board_card_commits` ceiling, i.e. only once
 the race above is fixed and that ceiling drops to 150.
+
+### Read latency knob: `PERF_GET_DELAY_MAX_MS`
+
+`PERF_GET_DELAY_MAX_MS=400 PERF_GET_DELAY_SEED=<n>` delays every API GET by a
+seeded-random 0..400 ms, so the order the responses land in changes between
+seeds. Off by default (the gated CI runs stay deterministic). `PERF_TRACE=1`
+prints the API requests each measured action issued.
+
+Measured before the fix (seeds 1-3, 6 runs each, 0 ms delay as control):
+`view.switch.dom_mutations` 19 (control) vs 19/172/325 under delay; cause: the
+list built its table from the task list, then rebuilt it when statuses / custom
+fields landed. Now the skeleton stays until both have answered: 16 on every
+seed (ceiling 20 -> 17). `task.open` issued the comments/members GETs twice
+(panel mounted for one frame before its own loading skeleton); fixed, but its
+layout count under delay (6-8 vs 4) stays: comments, custom fields and the
+team-relay flag are separate sections that each paint when they arrive.

@@ -190,15 +190,33 @@ export function ListViewPage() {
     [page, perPage, humanGateOnly],
   );
 
+  // The rows are laid out from statuses (grouping) and custom-field definitions
+  // (columns). If the task list lands before either, the table is built and then
+  // rebuilt, and how many DOM mutations that costs depends on which GET answered
+  // first. So the skeleton stays up until both have answered once for this
+  // project; later refetches (pagination, filter) do not blank the table.
+  const [metaReadyFor, setMetaReadyFor] = useState<string | null>(null);
+  const projectId = currentProject?.id;
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    Promise.allSettled([
+      fetchStatuses(projectId),
+      // Custom fields API may not be available yet
+      fetchCustomFields(projectId).catch(() => {}),
+    ]).then(() => {
+      if (!cancelled) setMetaReadyFor(projectId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, fetchStatuses, fetchCustomFields]);
+
   useEffect(() => {
     if (currentProject) {
-      fetchStatuses(currentProject.id);
       fetchTasks(currentProject.id, fetchParams);
-      fetchCustomFields(currentProject.id).catch(() => {
-        // Custom fields API may not be available yet
-      });
     }
-  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, fetchParams]);
+  }, [currentProject, fetchTasks, fetchParams]);
 
   // Toggling the filter changes which page-1 items are "correct" for the
   // current URL page number — jump back to page 1 so the user doesn't land
@@ -790,7 +808,7 @@ export function ListViewPage() {
       </div>
 
       {/* Table */}
-      {isLoading ? (
+      {isLoading || metaReadyFor !== currentProject?.id ? (
         <div className="space-y-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-10 w-full rounded-lg" />
