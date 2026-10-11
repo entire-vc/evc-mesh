@@ -914,7 +914,26 @@ export function BoardPage() {
 
   // ----- Drag handlers -----
 
+  // dnd-kit only reports a drag after the pointer has moved 5px, but the list must
+  // not change under a pressed pointer before that either. The press arms the same
+  // hold; if dnd-kit never activates (a click, a short hold), the release lets the
+  // held refresh go — a macrotask later, so a real drop's own flush runs first.
+  const dragActiveRef = useRef(false);
+  const handleCardPointerDownCapture = useCallback(() => {
+    markDragStart();
+    const release = () => {
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+      setTimeout(() => {
+        if (!dragActiveRef.current) flushPendingRefetch();
+      }, 0);
+    };
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
+  }, [markDragStart, flushPendingRefetch]);
+
   const handleDragStart = useCallback((event: DragStartEvent) => {
+    dragActiveRef.current = true;
     const data = event.active.data.current as { task: Task; columnId: string } | undefined;
     if (data?.task) setActiveTask(data.task);
     markDragStart();
@@ -990,11 +1009,16 @@ export function BoardPage() {
   );
 
   const handleDragCancel = useCallback(() => {
+    dragActiveRef.current = false;
     setActiveTask(null);
     flushPendingRefetch();
   }, [flushPendingRefetch]);
   const handleDragEndThenRefresh = useCallback(
-    (event: DragEndEvent) => handleDragEnd(event).finally(flushPendingRefetch),
+    (event: DragEndEvent) =>
+      handleDragEnd(event).finally(() => {
+        dragActiveRef.current = false;
+        flushPendingRefetch();
+      }),
     [handleDragEnd, flushPendingRefetch],
   );
 
@@ -1180,7 +1204,7 @@ export function BoardPage() {
           onDragEnd={handleDragEndThenRefresh}
           onDragCancel={handleDragCancel}
         >
-          <div className="flex gap-4 overflow-x-auto pb-4">
+          <div className="flex gap-4 overflow-x-auto pb-4" onPointerDownCapture={handleCardPointerDownCapture}>
             {columns.map((col) => (
               <BoardColumn
                 key={col.id}
