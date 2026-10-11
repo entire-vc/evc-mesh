@@ -2,12 +2,13 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 import { buildDuplicateRequest } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/api-error";
-import { fetchCompleteTaskList } from "@/lib/task-list";
+import { fetchBoardSnapshot, fetchClosedPage, type ClosedSlice } from "@/lib/board-load";
 import type {
   CreateTaskRequest,
   MoveTaskRequest,
   PaginatedResponse,
   Task,
+  TaskStatus,
   UpdateTaskRequest,
 } from "@/types";
 
@@ -26,15 +27,30 @@ interface TaskState {
   perPage: number;
   hasMore: boolean;
   listProjectId: string | null;
+  /** Board: open work of listProjectId is fully loaded (closed: see closedSlices). */
   listComplete: boolean;
   listError: string | null;
+  /** Board: per closed status, the loaded slice and the server total. */
+  closedSlices: Record<string, ClosedSlice>;
 
+  /** List view: one explicit page. */
   fetchTasks: (
     projectId: string,
     params?: Record<string, string | number | undefined>,
-    opts?: { background?: boolean; allPages?: boolean },
+    opts?: { background?: boolean },
   ) => Promise<void>;
-  fetchAllTasks: (projectId: string, opts?: { background?: boolean }) => Promise<void>;
+  /** Board: all open work + the newest slice of each closed status. */
+  fetchBoardTasks: (
+    projectId: string,
+    /** This project's statuses: a promise (the loading state is entered at
+     * once, in the same render as the statuses request) or a getter (read when
+     * the load actually starts — a coalesced rerun must not use the list that
+     * was current when its event arrived). */
+    statuses: BoardStatusesArg,
+    opts?: { background?: boolean },
+  ) => Promise<void>;
+  /** Board: the next page of one closed status, on demand. Rejects on failure. */
+  loadMoreClosed: (projectId: string, statusId: string) => Promise<void>;
   fetchTask: (taskId: string) => Promise<Task>;
   createTask: (projectId: string, req: CreateTaskRequest) => Promise<Task>;
   updateTask: (taskId: string, req: UpdateTaskRequest) => Promise<Task>;
@@ -52,6 +68,22 @@ interface TaskState {
 // was the slower one.
 let latestFetchTasks = 0;
 let foregroundInFlight = 0;
+
+// Board refreshes are coalesced: while one board load is in flight, further
+// background refreshes (WS events) only mark it dirty, and exactly one more
+// runs when it finishes. Starting a new load per event used to discard the
+// one in flight (requestId), so under a steady stream of fleet writes a slow
+// load could be superseded forever and the board never refreshed at all.
+let boardInFlight = 0;
+type BoardStatuses = Pick<TaskStatus, "id" | "category">[];
+type BoardStatusesArg = BoardStatuses | Promise<BoardStatuses> | (() => BoardStatuses);
+let boardRefreshQueued: { projectId: string; statuses: BoardStatusesArg } | null = null;
+
+/** The Board unmounted: a queued refresh must not land on another page that
+ * shares this store (List, Calendar) and replace its list. */
+export function cancelBoardRefresh(): void {
+  boardRefreshQueued = null;
+}
 
 // Local status moves the server may not reflect yet. moveTask applies a move
 // to the store BEFORE its POST returns (a dropped card stays where it was
@@ -104,6 +136,35 @@ export function __resetLocalMovesForTest(): void {
   localMoves.clear();
 }
 
+/** Test hook: forget queued board refreshes between unit tests. */
+export function __resetBoardQueueForTest(): void {
+  boardInFlight = 0;
+  boardRefreshQueued = null;
+  foregroundInFlight = 0;
+}
+
+/** Description-preserving merge of list items into the by-id cache. */
+function mergeById(prevById: Record<string, Task>, items: Task[]): Record<string, Task> {
+  return {
+    ...prevById,
+    ...Object.fromEntries(
+      items.map((task) => {
+        // Merge rather than overwrite: these items carry no description, and
+        // the slide-over renders currentTask.description from this cache
+        // while its own fetch is still in flight. A blind overwrite blanks
+        // the text of an already-opened task for that window.
+        const known = prevById[task.id]?.description;
+        return [
+          task.id,
+          task.description === undefined && known !== undefined
+            ? { ...task, description: known }
+            : task,
+        ] as const;
+      }),
+    ),
+  };
+}
+
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
   tasksById: {},
@@ -117,40 +178,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   listProjectId: null,
   listComplete: false,
   listError: null,
-
-  fetchAllTasks: (projectId, opts) => get().fetchTasks(projectId, undefined, { ...opts, allPages: true }),
+  closedSlices: {},
 
   fetchTasks: async (
     projectId: string,
     params?: Record<string, string | number | undefined>,
-    opts?: { background?: boolean; allPages?: boolean },
+    opts?: { background?: boolean },
   ) => {
     const background = opts?.background === true;
     // A background refresh never touches isLoading, so it must not displace a
     // foreground fetch that owns it (that fetch would be discarded and isLoading
     // would stay true). The foreground fetch brings fresh data anyway.
     if (background && foregroundInFlight > 0) return;
+    boardRefreshQueued = null;
     const requestId = ++latestFetchTasks;
     const startedAt = ++clock;
-    // A background refresh (WS event) swaps data in place: raising isLoading
-    // would unmount the board into skeletons and drop a drag in progress.
-    const keepSnapshot = opts?.allPages && get().listProjectId === projectId && get().listComplete;
     if (!background) {
       foregroundInFlight++;
-      set({ isLoading: true, error: null, listError: null, listProjectId: projectId,
-        listComplete: Boolean(keepSnapshot),
-        // Only a full Board load needs to clear an incomplete snapshot. Keep the
-        // existing List page while its loading skeleton is shown so derived
-        // toolbar options do not disappear and reappear during navigation.
-        ...(opts?.allPages && !keepSnapshot
-          ? { tasks: [], tasksByStatus: {}, total: 0, hasMore: false }
-          : {}),
-      });
+      // Keep the existing List page while its loading skeleton is shown so
+      // derived toolbar options do not disappear and reappear during navigation.
+      set({ isLoading: true, error: null, listError: null, listProjectId: projectId, listComplete: false });
     }
     try {
-      const data = opts?.allPages
-        ? await fetchCompleteTaskList(projectId, params, () => requestId === latestFetchTasks)
-        : await api<PaginatedResponse<Task>>(
+      const data = await api<PaginatedResponse<Task>>(
         `/api/v1/projects/${projectId}/tasks`,
         // include_description=false: descriptions were 703 KB of the 917 KB this
         // call returned for a 200-task board, and nothing on a card renders them.
@@ -161,54 +211,137 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       );
       if (requestId !== latestFetchTasks || !data) return;
       const items = overlayLocalMoves(data.items ?? [], startedAt);
-      const prevById = get().tasksById;
       set({
         tasks: items,
-        tasksById: {
-          ...prevById,
-          ...Object.fromEntries(
-            items.map((task) => {
-              // Merge rather than overwrite: these items carry no description, and
-              // the slide-over renders currentTask.description from this cache
-              // while its own fetch is still in flight. A blind overwrite blanks
-              // the text of an already-opened task for that window.
-              const known = prevById[task.id]?.description;
-              return [
-                task.id,
-                task.description === undefined && known !== undefined
-                  ? { ...task, description: known }
-                  : task,
-              ] as const;
-            }),
-          ),
-        },
+        tasksById: mergeById(get().tasksById, items),
         total: data.total_count ?? data.total ?? 0,
         page: data.page,
         perPage: data.per_page ?? data.page_size ?? 50,
         hasMore: data.has_more ?? false,
-        listComplete: opts?.allPages ?? false,
+        listComplete: false,
+        closedSlices: {},
         listError: null,
         ...(background ? {} : { isLoading: false, error: null }),
       });
       get().groupByStatus();
     } catch (error) {
       if (requestId !== latestFetchTasks) return;
-      // A failed background refresh keeps what the user already sees. A complete
-      // board still says so (listError) instead of silently going stale.
+      if (background) return;
+      set({
+        isLoading: false,
+        error: getErrorMessage(error),
+        listError: getErrorMessage(error),
+        tasks: [], tasksByStatus: {}, total: 0, page: 1, perPage: 50, hasMore: false, listComplete: false,
+      });
+    } finally {
+      if (!background) foregroundInFlight--;
+    }
+  },
+
+  fetchBoardTasks: async (projectId, statuses, opts) => {
+    const background = opts?.background === true;
+    if (background && (foregroundInFlight > 0 || boardInFlight > 0)) {
+      // Coalesce: one more refresh after the load in flight, whatever the
+      // number of events that arrived meanwhile.
+      if (get().listProjectId === projectId) boardRefreshQueued = { projectId, statuses };
+      return;
+    }
+    if (!background) boardRefreshQueued = null;
+    const requestId = ++latestFetchTasks;
+    const startedAt = ++clock;
+    const isCurrent = () => requestId === latestFetchTasks;
+    const sameProject = get().listProjectId === projectId;
+    const keepSnapshot = sameProject && get().listComplete;
+    // A refresh keeps the closed pages the user already asked for.
+    const closedPages = sameProject
+      ? Object.fromEntries(Object.entries(get().closedSlices).map(([id, s]) => [id, s.pages]))
+      : {};
+    boardInFlight++;
+    if (!background) {
+      foregroundInFlight++;
+      set({ isLoading: true, error: null, listError: null, listProjectId: projectId,
+        listComplete: keepSnapshot,
+        ...(keepSnapshot ? {} : { tasks: [], tasksByStatus: {}, closedSlices: {} }),
+      });
+    }
+    try {
+      const list = await (typeof statuses === "function" ? statuses() : statuses);
+      // A background refresh before this project's statuses arrived would
+      // publish an empty "complete" board: keep what is shown instead.
+      if (background && !list.length) return;
+      const snap = await fetchBoardSnapshot(projectId, list, closedPages, isCurrent);
+      if (!isCurrent() || !snap) return;
+      // "Load more" landed while this load ran: publishing would collapse that
+      // column back to the pages this load started with. Drop it and run one
+      // more, which starts from the new page counts.
+      if (background && Object.entries(get().closedSlices).some(([id, s]) => s.pages > (closedPages[id] ?? 1))) {
+        boardRefreshQueued = { projectId, statuses };
+        return;
+      }
+      const items = overlayLocalMoves(snap.items, startedAt);
+      set({
+        tasks: items,
+        tasksById: mergeById(get().tasksById, items),
+        listProjectId: projectId,
+        listComplete: true,
+        listError: null,
+        // Unchanged slices keep their object, so their columns (memoized on
+        // it) do not re-render on every WS refresh.
+        closedSlices: Object.fromEntries(Object.entries(snap.closed).map(([id, c]) => {
+          const prev = get().closedSlices[id];
+          return [id, prev && prev.pages === c.pages && prev.loaded === c.loaded &&
+            prev.total === c.total && prev.hasMore === c.hasMore ? prev : c];
+        })),
+        ...(background ? {} : { isLoading: false, error: null }),
+      });
+      get().groupByStatus();
+    } catch (error) {
+      if (!isCurrent()) return;
+      // A failed background refresh keeps what the user already sees, and says
+      // so (listError) instead of silently going stale.
       if (background) {
-        if (opts?.allPages) set({ listError: getErrorMessage(error) });
+        set({ listError: getErrorMessage(error) });
         return;
       }
       set({
         isLoading: false,
         error: getErrorMessage(error),
         listError: getErrorMessage(error),
-        ...(!keepSnapshot ? { tasks: [], tasksByStatus: {}, total: 0, page: 1,
-          perPage: 50, hasMore: false, listComplete: false } : {}),
+        ...(!keepSnapshot ? { tasks: [], tasksByStatus: {}, listComplete: false, closedSlices: {} } : {}),
       });
     } finally {
+      boardInFlight--;
       if (!background) foregroundInFlight--;
+      const queued = boardRefreshQueued;
+      if (queued && boardInFlight === 0 && foregroundInFlight === 0) {
+        boardRefreshQueued = null;
+        if (queued.projectId === get().listProjectId) {
+          void get().fetchBoardTasks(queued.projectId, queued.statuses, { background: true });
+        }
+      }
     }
+  },
+
+  loadMoreClosed: async (projectId, statusId) => {
+    const slice = get().closedSlices[statusId];
+    if (get().listProjectId !== projectId || !slice?.hasMore) return;
+    const startedAt = ++clock;
+    const page = slice.pages + 1;
+    const next = await fetchClosedPage(projectId, statusId, page);
+    const cur = get().closedSlices[statusId];
+    // A foreground reload (or another project) replaced the board meanwhile,
+    // or another call already loaded this page: drop the answer.
+    if (get().listProjectId !== projectId || !cur || cur.pages >= page) return;
+    const known = new Set(get().tasks.map((t) => t.id));
+    const fresh = overlayLocalMoves(next.items.filter((t) => !known.has(t.id)), startedAt);
+    set((s) => ({
+      tasks: [...s.tasks, ...fresh],
+      tasksById: mergeById(s.tasksById, fresh),
+      closedSlices: { ...s.closedSlices, [statusId]: {
+        pages: page, loaded: cur.loaded + fresh.length, total: next.total, hasMore: next.hasMore,
+      } },
+    }));
+    get().groupByStatus();
   },
 
   fetchTask: async (taskId: string): Promise<Task> => {
