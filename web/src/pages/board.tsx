@@ -49,6 +49,7 @@ import { PerfProfiler } from "@/lib/perf-profiler";
 import { isClosedCategory, type ClosedSlice } from "@/lib/board-load";
 import { apiErrorMessage } from "@/lib/api-error";
 import { loadRuntimeFlags } from "@/lib/runtime-flags";
+import { isWorking } from "@/lib/runtime-state";
 import {
   BOARD_FILTER_DEFAULTS,
   GROUP_BY_VALUES,
@@ -579,6 +580,7 @@ export function BoardPage() {
   const [showClosed, setShowClosed] = useState(false);
   const [showSubtasks, setShowSubtasks] = useState(false);
   const [humanGateOnly, setHumanGateOnly] = useState(false);
+  const [workingOnly, setWorkingOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
@@ -806,6 +808,8 @@ export function BoardPage() {
         return false;
       }
       if (humanGateOnly && !task.human_gate) return false;
+      // The list endpoint returns the effective runtime_state (checkout fallback included), and the board holds the full list.
+      if (workingOnly && !isWorking(task)) return false;
       return true;
     });
 
@@ -821,6 +825,7 @@ export function BoardPage() {
     assigneeFilter,
     assigneeIdsFilter,
     humanGateOnly,
+    workingOnly,
     selectedTags,
     cfFilters,
   ]);
@@ -834,6 +839,7 @@ export function BoardPage() {
     assigneeFilter !== "all" ||
     assigneeIdsFilter.length > 0 ||
     humanGateOnly ||
+    workingOnly ||
     selectedTags.length > 0 ||
     Object.keys(cfFilters).length > 0 ||
     !showSubtasks;
@@ -1221,6 +1227,7 @@ export function BoardPage() {
     setShowClosed(BOARD_FILTER_DEFAULTS.showClosed);
     setShowSubtasks(BOARD_FILTER_DEFAULTS.showSubtasks);
     setHumanGateOnly(BOARD_FILTER_DEFAULTS.humanGateOnly);
+    setWorkingOnly(false);
     clearResetFiltersRequest();
   }, [resetFiltersRequest, clearResetFiltersRequest]);
 
@@ -1270,6 +1277,8 @@ export function BoardPage() {
           onShowClosedChange={setShowClosed}
           humanGateOnly={humanGateOnly}
           onHumanGateOnlyChange={setHumanGateOnly}
+          workingOnly={workingOnly}
+          onWorkingOnlyChange={setWorkingOnly}
           showSubtasks={showSubtasks}
           onShowSubtasksChange={setShowSubtasks}
           searchQuery={searchQuery}

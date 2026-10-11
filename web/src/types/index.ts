@@ -315,6 +315,33 @@ export interface Task {
    * already done/cancelled.
    */
   false_open?: FalseOpenSignal | null;
+  /**
+   * Live state of the work behind the card (task #813725af, parent #4d9b9828).
+   * Separate from the Mesh status on purpose: a todo card can be worked on right
+   * now and an in_progress card can be waiting. Absent/null until the server
+   * (or fiddler) has a value.
+   */
+  runtime_state?: RuntimeState | null;
+}
+
+export type RuntimeStateKind = "working" | "waiting" | "queued" | "stopped";
+
+export interface RuntimeState {
+  kind: RuntimeStateKind;
+  /** When the state began (ISO). */
+  since?: string | null;
+  /** When a waiting state is expected to end (ISO). */
+  until?: string | null;
+  /** What is awaited: `card:#8hex`, `pipeline:g/p#id`, `mr:g/p!iid`, `decision:@name`. */
+  ref?: string | null;
+  /** Lane holding / queueing the card. */
+  lane?: string | null;
+  /** Free text; for `queued` may carry the queue position, for `stopped` the cause. */
+  reason?: string | null;
+  /** Queue position (queued only), 1-based. */
+  position?: number | null;
+  /** The publisher has gone quiet — the value may be out of date. */
+  stale?: boolean;
 }
 
 export interface HumanGateInfo {

@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { formatRelative } from "@/lib/utils";
 import { AssigneeAvatar } from "@/components/assignee-avatar";
 import { PriorityFlag } from "@/components/priority-flag";
+import { RuntimeStateBadge } from "@/components/runtime-state-badge";
+import { readableRuntimeState } from "@/lib/runtime-state";
 import { DelegationLevelBadge } from "@/components/delegation-level-select";
 import type { Task, StatusCategory } from "@/types";
 
@@ -157,6 +159,12 @@ export const TaskCard = memo(
                 {label}
               </Badge>
             ))}
+          </div>
+        )}
+
+        {task.runtime_state && (
+          <div className="mt-1.5 flex min-w-0">
+            <RuntimeStateBadge state={readableRuntimeState(task)!} />
           </div>
         )}
 
