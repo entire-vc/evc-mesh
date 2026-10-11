@@ -20,8 +20,9 @@ const tasks = Array.from({ length: 331 }, (_, i) => ({
   created_at: "2026-10-01T10:00:00Z", updated_at: "2026-10-01T10:00:00Z", custom_fields: {},
   context: {}, human_gate: false, due_date: null, subtask_count: i === 0 ? 1 : 0, comment_count: 0,
 }));
+// Newest-updated first: the API's default list order.
 const initialOrder = [...tasks.slice(282), ...tasks.slice(0, 282)];
-let mode = "normal", revision = 47, ordered = initialOrder, pageTwoCalls = 0;
+let mode = "normal", ordered = initialOrder, taskCalls = [];
 const sockets = new Set();
 const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:3019");
@@ -34,7 +35,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST") {
       let raw = ""; for await (const part of req) raw += part;
       const next = JSON.parse(raw);
-      mode = next.mode ?? "normal"; revision = next.revision ?? 47; pageTwoCalls = 0;
+      mode = next.mode ?? "normal"; taskCalls = [];
       ordered = next.reordered ? [...tasks.slice(315, 319), ...initialOrder.filter((task) => !tasks.slice(315, 319).includes(task))] : initialOrder;
       if (next.event) {
         const payload = Buffer.from(JSON.stringify({ type: "context_update", data: {}, project_id: project.id }));
@@ -42,29 +43,27 @@ const server = http.createServer(async (req, res) => {
         for (const socket of sockets) socket.write(frame);
       }
     }
-    body = { mode, revision, pageTwoCalls };
+    body = { mode, taskCalls };
   } else if (url.pathname === "/api/v1/auth/refresh") body = { tokens: { access_token: "fixture-only-token" } };
   else if (url.pathname === "/api/v1/auth/me") body = user;
   else if (url.pathname === "/api/v1/workspaces") body = [workspace];
   else if (url.pathname.endsWith("/projects")) body = { items: [project, otherProject], total_count: 2 };
-  else if (url.pathname.endsWith("/statuses")) body = statuses;
+  else if (url.pathname.endsWith("/statuses")) body = url.pathname.includes("/other-project/") ? statuses.map((s) => ({ ...s, project_id: otherProject.id })) : statuses;
   else if (url.pathname.endsWith("/tasks")) {
     const page = Number(url.searchParams.get("page") ?? 1), size = Number(url.searchParams.get("page_size") ?? 200);
+    const ids = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
     if (url.pathname.includes("/other-project/")) {
-      body = { items: [{ ...tasks[315], id: "other-task", project_id: otherProject.id, title: "Other project's only task" }], page: 1, page_size: size,
-        total_count: 1, has_more: false, list_revision: 7 };
+      const rows = ids.length && !ids.includes("backlog") ? [] : [{ ...tasks[300], id: "other-task", project_id: otherProject.id, title: "Other project's only task" }];
+      body = { items: rows, page, page_size: size, total_count: rows.length, has_more: false };
       res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify(body));
     }
-    if (page === 2) pageTwoCalls++;
-    if (page === 2 && mode === "slow") await new Promise((r) => setTimeout(r, 1500));
-    if (page === 2 && mode === "error") { status = 503; body = { message: "Fixture page unavailable" }; }
-    else if (page === 2 && mode === "stale" && pageTwoCalls === 1) {
-      revision++; status = 410; body = { error: "list_revision_stale" };
-    } else {
-      const requested = Number(url.searchParams.get("list_revision") ?? revision);
-      if (requested !== revision) { status = 410; body = { error: "list_revision_stale" }; }
-      else body = { items: ordered.slice((page - 1) * size, page * size), page, page_size: size,
-        total_count: tasks.length, has_more: page * size < tasks.length, list_revision: revision };
+    taskCalls.push({ status: url.searchParams.get("status"), page, list_revision: url.searchParams.get("list_revision") });
+    if (mode === "slow") await new Promise((r) => setTimeout(r, 1500));
+    if (mode === "error") { status = 503; body = { message: "Fixture tasks unavailable" }; }
+    else {
+      const rows = ids.length ? ordered.filter((task) => ids.includes(task.status_id)) : ordered;
+      body = { items: rows.slice((page - 1) * size, page * size), page, page_size: size,
+        total_count: rows.length, has_more: page * size < rows.length, list_revision: 47 };
     }
   } else if (url.pathname.endsWith("/custom-fields")) body = [];
   else if (url.pathname.endsWith("/members/me")) body = { role: "owner" };

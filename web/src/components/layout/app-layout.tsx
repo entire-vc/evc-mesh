@@ -139,7 +139,7 @@ export function AppLayout() {
   useLayoutEffect(() => {
     if (currentProjectId && shownProjectId.current && shownProjectId.current !== currentProjectId) {
       useTaskStore.setState({ tasks: [], tasksByStatus: {}, total: 0, hasMore: false,
-        listProjectId: null, listComplete: false, listError: null });
+        listProjectId: null, listComplete: false, listError: null, closedSlices: {} });
       useProjectStore.setState({ statuses: [] });
     }
     if (currentProjectId) shownProjectId.current = currentProjectId;

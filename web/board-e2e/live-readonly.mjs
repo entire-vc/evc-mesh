@@ -1,5 +1,5 @@
 // Read-only production acceptance. Uses a NEW browser context and native login,
-// never a copied refresh cookie. Logs only counts and task-list metadata.
+// never a copied refresh cookie. Logs only counts, timings and task-list metadata.
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { chromium, expect } from "@playwright/test";
@@ -24,30 +24,28 @@ try {
   };
   const statuses = await api(`/projects/${project}/statuses`);
   const page = await context.newPage();
+  // Count what the Board itself asks for: the regression this guards against
+  // (!1104) walked every page of the project on every load and WS refresh.
+  const taskRequests = [];
+  page.on("request", (r) => { if (/\/projects\/[^/]+\/tasks(\?|$)/.test(r.url())) taskRequests.push(r.url()); });
   await page.addInitScript((id) => localStorage.setItem(`mesh_board_filters_${id}`, JSON.stringify({ showClosed: true, showSubtasks: true })), project);
+  const started = Date.now();
   await page.goto(`${base}/w/ws-006901c7/p/contenthub`);
-  await page.getByRole("button", { name: "Closed", exact: true }).waitFor();
-  const tasks = [];
-  let revision, total;
-  for (let n = 1; ; n++) {
-    const data = await api(`/projects/${project}/tasks?page_size=200&include_description=false&page=${n}${n > 1 ? `&list_revision=${revision}` : ""}`);
-    revision ??= data.list_revision; total ??= data.total_count;
-    expect(data.list_revision).toBe(revision); expect(data.total_count).toBe(total);
-    tasks.push(...data.items);
-    if (!data.has_more) break;
-  }
-  await api(`/projects/${project}/tasks?page_size=1&include_description=false&list_revision=${revision}`);
-  expect(new Set(tasks.map((task) => task.id)).size).toBe(total);
-  console.log(`Full API: ${total} unique tasks; list_revision=${revision}`);
+  await page.locator('[data-testid="board-column"]').first().waitFor();
+  console.log(`Board rendered in ${Date.now() - started} ms with ${taskRequests.length} task-list requests`);
+  for (const url of taskRequests) expect(new URL(url).searchParams.get("list_revision")).toBeNull();
   for (const status of statuses) {
-    const expected = tasks.filter((task) => task.status_id === status.id).length;
+    const data = await api(`/projects/${project}/tasks?status=${status.id}&page_size=200&include_description=false`);
+    const closed = status.category === "done" || status.category === "cancelled";
+    const expected = closed ? data.items.length : data.total_count;
+    if (!closed) expect(data.has_more).toBe(false);
     const column = page.locator(`[data-testid="board-column"][data-status-id="${status.id}"]`);
     const rendered = await column.locator('[data-testid="task-card"]').count();
-    console.log(`${status.name}: API=${expected}; Board=${rendered}`);
+    console.log(`${status.name}: API total=${data.total_count}; Board cards=${rendered}`);
     await expect(column.locator('[data-testid="task-card"]')).toHaveCount(expected, { timeout: 15000 });
-    await expect(column.locator("..").getByText(String(expected), { exact: true })).toBeVisible();
+    await expect(column.locator("..").getByTestId("column-count")).toHaveText(String(data.total_count));
   }
-  console.log("PASS: live Board counts and all cards match the full API with Closed/Subtasks enabled.");
+  console.log("PASS: open columns complete, closed columns show the newest slice and the server total.");
   await context.close();
 } finally {
   await browser.close();

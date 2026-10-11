@@ -27,7 +27,7 @@ import {
   Plus,
 } from "lucide-react";
 import { useProjectStore } from "@/stores/project";
-import { useTaskStore } from "@/stores/task";
+import { cancelBoardRefresh, useTaskStore } from "@/stores/task";
 import { useCustomFieldStore } from "@/stores/custom-field";
 import { useMemberStore } from "@/stores/member";
 import { useDeferredRefetch } from "@/hooks/use-deferred-refetch";
@@ -46,6 +46,8 @@ import { dropPeers, passesSubtaskFilter, relocateGatedToTriage } from "@/lib/boa
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
 import { PerfProfiler } from "@/lib/perf-profiler";
+import { isClosedCategory, type ClosedSlice } from "@/lib/board-load";
+import { apiErrorMessage } from "@/lib/api-error";
 import { loadRuntimeFlags } from "@/lib/runtime-flags";
 import {
   BOARD_FILTER_DEFAULTS,
@@ -241,6 +243,55 @@ interface BoardColumnProps {
   holderNameById: Map<string, string>;
   /** taskId -> real status name for gated cards listed in this (Triage) column. */
   gateStatusByTask?: Record<string, string>;
+  /** Closed status column (Board, status grouping): only a slice is loaded. */
+  closed?: ClosedColumnInfo;
+}
+
+/** What a closed column knows about the cards it does not hold. */
+export interface ClosedColumnInfo {
+  slice: ClosedSlice;
+  /** Any board filter is on: the server total no longer counts what is shown. */
+  filtersActive: boolean;
+  /** Next page of this status; rejects on failure. */
+  onLoadMore: (statusId: string) => Promise<void>;
+}
+
+/** "Showing latest N of TOTAL" + an explicit Load more (never automatic). */
+function ClosedSliceFooter({ statusId, closed }: { statusId: string; closed: ClosedColumnInfo }) {
+  // null = idle, "" = loading, otherwise the last error.
+  const [state, setState] = useState<string | null>(null);
+  return (
+    <div className="mt-2 space-y-1 text-center text-xs text-muted-foreground" data-testid="closed-slice">
+      <p>
+        Showing latest {closed.slice.loaded} of {closed.slice.total}
+        {closed.filtersActive ? " · filters apply to loaded cards" : ""}
+      </p>
+      {state && <p role="alert" className="text-destructive">{state}</p>}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={state === ""}
+        onClick={() => {
+          setState("");
+          closed.onLoadMore(statusId).then(() => setState(null), (e: unknown) => setState(apiErrorMessage(e, "Request failed")));
+        }}
+      >
+        {state === "" ? "Loading…" : "Load more"}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Header count for a column. A closed column whose slice is partial shows the
+ * server's total when no filter is on — that IS the number of cards in it.
+ * With a filter on, the server cannot answer (the subtask, tag and custom-field
+ * filters have no API equivalent), so it shows what matched among the loaded
+ * cards with a "+": at least that many, maybe more in the unloaded rest.
+ */
+export function columnCountLabel(visible: number, closed: ClosedColumnInfo | undefined): string {
+  if (!closed || !closed.slice.hasMore) return String(visible);
+  return closed.filtersActive ? `${visible}+` : String(closed.slice.total);
 }
 
 /** True when both arrays hold the SAME task objects, in the same order —
@@ -287,11 +338,13 @@ export function boardColumnPropsEqual(prev: BoardColumnProps, next: BoardColumnP
     prev.onTaskClick === next.onTaskClick &&
     prev.onTaskEdit === next.onTaskEdit &&
     holderMapsEqual(prev.holderNameById, next.holderNameById) &&
-    gateStatusEqual(prev.gateStatusByTask, next.gateStatusByTask)
+    gateStatusEqual(prev.gateStatusByTask, next.gateStatusByTask) &&
+    // closedInfoByStatus (BoardPage) rebuilds these only when an input changes.
+    prev.closed === next.closed
   );
 }
 
-const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById, gateStatusByTask }: BoardColumnProps) {
+const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById, gateStatusByTask, closed }: BoardColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
 
   const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
@@ -317,8 +370,8 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
             />
           )}
           <span className="text-sm font-semibold">{col.title}<AgentShortTag id={col.assigneeId} type={col.assigneeType} /></span>
-          <Badge variant="secondary" className="text-xs">
-            {tasks.length}
+          <Badge variant="secondary" className="text-xs" data-testid="column-count">
+            {columnCountLabel(tasks.length, closed)}
           </Badge>
         </div>
         {col.status && (
@@ -371,6 +424,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
           </p>
         )}
       </div>
+      {closed?.slice.hasMore && <ClosedSliceFooter statusId={col.id} closed={closed} />}
     </div>
   );
 }, boardColumnPropsEqual);
@@ -456,7 +510,10 @@ export function BoardPage() {
       fetchStatuses: s.fetchStatuses,
     })),
   );
-  const { tasks, tasksByStatus, isLoading, listProjectId, listComplete, listError, fetchTasks, moveTask } = useTaskStore(
+  const {
+    tasks, tasksByStatus, isLoading, listProjectId, listComplete, listError,
+    closedSlices, fetchBoardTasks, loadMoreClosed, moveTask,
+  } = useTaskStore(
     useShallow((s) => ({
       tasks: s.tasks,
       tasksByStatus: s.tasksByStatus,
@@ -464,10 +521,42 @@ export function BoardPage() {
       listProjectId: s.listProjectId,
       listComplete: s.listComplete,
       listError: s.listError,
-      fetchTasks: s.fetchAllTasks,
+      closedSlices: s.closedSlices,
+      fetchBoardTasks: s.fetchBoardTasks,
+      loadMoreClosed: s.loadMoreClosed,
       moveTask: s.moveTask,
     })),
   );
+  // Open work is loaded in full, closed statuses as a newest-first slice
+  // (lib/board-load.ts). Statuses are read at call time: the load needs to
+  // know which status ids are open and which closed.
+  const fetchTasks = useCallback(
+    (projectId: string, opts?: { background?: boolean; statusesLoaded?: Promise<void> }) => {
+      const ofProject = () =>
+        useProjectStore.getState().statuses.filter((s) => !s.project_id || s.project_id === projectId);
+      return fetchBoardTasks(
+        projectId,
+        opts?.statusesLoaded
+          ? opts.statusesLoaded.then(() => {
+              const list = ofProject();
+              // fetchStatuses swallows its error into an empty list; without
+              // this the board would show an empty, "complete" project.
+              const failed = useProjectStore.getState().error;
+              if (!list.length && failed) throw new Error(failed);
+              return list;
+            })
+          : ofProject,
+        opts,
+      );
+    },
+    [fetchBoardTasks],
+  );
+  // Reload statuses with the tasks: a failed statuses request is a reason to retry.
+  const reloadBoard = useCallback(
+    (projectId: string) => fetchTasks(projectId, { statusesLoaded: fetchStatuses(projectId) }),
+    [fetchTasks, fetchStatuses],
+  );
+  useEffect(() => cancelBoardRefresh, []);
   const { fields: customFieldDefs, fetchFields: fetchCustomFields } = useCustomFieldStore(
     useShallow((s) => ({ fields: s.fields, fetchFields: s.fetchFields })),
   );
@@ -550,15 +639,17 @@ export function BoardPage() {
   });
 
   useEffect(() => {
-    if (currentProject) {
-      fetchStatuses(currentProject.id);
-      fetchTasks(currentProject.id);
-      fetchCustomFields(currentProject.id).catch(() => {
-        // Custom fields API may not be available yet
-      });
-      fetchProjectMembers(currentProject.id);
-    }
-  }, [currentProject, fetchStatuses, fetchTasks, fetchCustomFields, fetchProjectMembers]);
+    if (!currentProject) return;
+    // Tasks are requested by status id (open in full, closed as a slice), so
+    // the task requests wait for the statuses. A failed statuses fetch leaves
+    // an empty list: the board then says "No statuses configured", as before.
+    // A project switch supersedes this load inside the store (request id).
+    void reloadBoard(currentProject.id);
+    fetchCustomFields(currentProject.id).catch(() => {
+      // Custom fields API may not be available yet
+    });
+    fetchProjectMembers(currentProject.id);
+  }, [currentProject, reloadBoard, fetchCustomFields, fetchProjectMembers]);
 
   // Restore this project's persisted grouping/sort/filters (or defaults, if
   // this is the first visit) so a reload or navigating away and back doesn't
@@ -733,6 +824,37 @@ export function BoardPage() {
     selectedTags,
     cfFilters,
   ]);
+
+  // Closed columns hold a slice; their header count needs to know whether any
+  // filter narrows what is shown (columnCountLabel). Hiding subtasks counts:
+  // closed subtasks are hidden then, and the server total includes them.
+  const filtersActive =
+    searchQuery !== "" ||
+    priorityFilter !== "all" ||
+    assigneeFilter !== "all" ||
+    assigneeIdsFilter.length > 0 ||
+    humanGateOnly ||
+    selectedTags.length > 0 ||
+    Object.keys(cfFilters).length > 0 ||
+    !showSubtasks;
+  const projectId = currentProject?.id;
+  const closedInfoByStatus = useMemo(() => {
+    const out: Record<string, ClosedColumnInfo> = {};
+    const onLoadMore = (statusId: string) => loadMoreClosed(projectId ?? "", statusId);
+    for (const [id, slice] of Object.entries(closedSlices)) out[id] = { slice, filtersActive, onLoadMore };
+    return out;
+  }, [closedSlices, filtersActive, loadMoreClosed, projectId]);
+  // Other groupings mix open and closed cards in one column; say once that the
+  // closed part is a slice.
+  const closedPartial = useMemo(() => {
+    let loaded = 0, total = 0, partial = false;
+    for (const slice of Object.values(closedSlices)) {
+      loaded += slice.loaded;
+      total += slice.total;
+      partial ||= slice.hasMore;
+    }
+    return partial ? { loaded, total } : null;
+  }, [closedSlices]);
 
   // ---------------------------------------------------------------------------
   // Build columns + task groups based on groupBy
@@ -1175,14 +1297,20 @@ export function BoardPage() {
       {listProjectId === currentProject?.id && listError && (
         <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
           <span>{listComplete ? "Couldn't refresh tasks. Showing the last complete list." : "Couldn't load all tasks. Counts are unavailable."}</span>
-          <Button variant="outline" size="sm" disabled={isLoading} onClick={() => currentProject && fetchTasks(currentProject.id)}>Retry</Button>
+          <Button variant="outline" size="sm" disabled={isLoading} onClick={() => currentProject && reloadBoard(currentProject.id)}>Retry</Button>
         </div>
       )}
       {isLoading && listComplete && listProjectId === currentProject?.id && (
         <p role="status" className="text-xs text-muted-foreground">Refreshing tasks… Showing the last complete list.</p>
       )}
 
-      {/* No counts are rendered until every page belongs to one complete snapshot. */}
+      {showClosed && groupBy !== "status" && closedPartial && listComplete && listProjectId === currentProject?.id && (
+        <p role="status" className="text-xs text-muted-foreground" data-testid="closed-partial-note">
+          Closed: latest {closedPartial.loaded} of {closedPartial.total} loaded. Group by Status to load more.
+        </p>
+      )}
+
+      {/* Nothing renders until all open work is loaded: open counts are exact. */}
       {!listComplete || listProjectId !== currentProject?.id ? (
         listError && !isLoading && listProjectId === currentProject?.id ? null :
         <div className="flex gap-4 overflow-x-auto pb-4">
@@ -1215,6 +1343,11 @@ export function BoardPage() {
                 onTaskEdit={handleTaskClick}
                 holderNameById={holderNameById}
                 gateStatusByTask={col.status?.category === "triage" ? gateStatusByTask : undefined}
+                closed={
+                  groupBy === "status" && col.status && isClosedCategory(col.status.category)
+                    ? closedInfoByStatus[col.id]
+                    : undefined
+                }
               />
             ))}
 
@@ -1258,7 +1391,7 @@ export function BoardPage() {
         taskId={slideOverTaskId}
         onClose={() => setSlideOverTaskId(null)}
         onTaskUpdated={() => {
-          if (currentProject) fetchTasks(currentProject.id);
+          if (currentProject) fetchTasks(currentProject.id, { background: true });
         }}
       />
     </div>
