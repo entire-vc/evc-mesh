@@ -723,7 +723,7 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 		return err
 	}
 	if existing.HumanGate && !task.HumanGate {
-		s.returnTriageToTodoAfterGateClear(ctx, task.ID)
+		s.afterGateClear(ctx, existing)
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, task.ID)
@@ -3337,17 +3337,9 @@ func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domai
 	if old == nil {
 		return "", nil
 	}
-	if next.Category == domain.StatusCategoryReview && s.rulesConfigSvc != nil {
-		wf, err := s.rulesConfigSvc.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
-		if err != nil || wf == nil {
-			return "", nil
-		}
-		tr, ok := wf.Transitions[old.Name]
-		if !ok || tr.OnTransition == nil || tr.OnTransition.SetReviewer == "" {
-			return "", nil
-		}
-		id, typ, err := s.resolveSetReviewer(ctx, task.ProjectID, tr.OnTransition.SetReviewer)
-		if err != nil || id == nil || sameAssigneeID(task.AssigneeID, id) {
+	if next.Category == domain.StatusCategoryReview {
+		id, typ, reason := s.resolveReviewTarget(ctx, task, old)
+		if id == nil || sameAssigneeID(task.AssigneeID, id) {
 			return "", nil
 		}
 		if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, id, typ); err != nil {
@@ -3360,7 +3352,7 @@ func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domai
 		previousType := task.AssigneeType
 		task.PreReviewAssigneeID, task.PreReviewAssigneeType = task.AssigneeID, &previousType
 		task.AssigneeID, task.AssigneeType = id, typ
-		return "set_reviewer on review transition", nil
+		return reason, nil
 	}
 	if old.Category == domain.StatusCategoryReview && (next.Category == domain.StatusCategoryTodo || next.Category == domain.StatusCategoryInProgress) && task.PreReviewAssigneeType != nil {
 		id, typ := task.PreReviewAssigneeID, *task.PreReviewAssigneeType
@@ -3377,6 +3369,43 @@ func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domai
 	}
 	return "", nil
 }
+
+// resolveReviewTarget picks who a card entering review goes to, or nil to leave it
+// where it is. The project's workflow set_reviewer wins. Without one, a card the
+// executor created for itself (alert cards, self-filed chores) would sit in review
+// on the very agent who did the work, and no review path feeds it (#994e02f4,
+// #d81f8b30; task #8f191cf7): that case falls back to the project lead
+// (default_assignee). Cards created by somebody else keep the builder — the
+// existing contract, no creator bounce.
+func (s *taskService) resolveReviewTarget(ctx context.Context, task *domain.Task, old *domain.TaskStatus) (*uuid.UUID, domain.AssigneeType, string) {
+	if s.rulesConfigSvc == nil {
+		return nil, "", ""
+	}
+	wf, wfErr := s.rulesConfigSvc.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
+	if wfErr != nil {
+		// Unknown whether a reviewer is configured: do not guess the lead fallback.
+		return nil, "", ""
+	}
+	if wf != nil {
+		if tr, ok := wf.Transitions[old.Name]; ok && tr.OnTransition != nil && tr.OnTransition.SetReviewer != "" {
+			id, typ, err := s.resolveSetReviewer(ctx, task.ProjectID, tr.OnTransition.SetReviewer)
+			if err == nil && id != nil {
+				return id, typ, "set_reviewer on review transition"
+			}
+			return nil, "", ""
+		}
+	}
+	if task.AssigneeID == nil || task.AssigneeType != domain.AssigneeTypeAgent ||
+		task.CreatedBy != *task.AssigneeID || task.CreatedByType != domain.ActorTypeAgent {
+		return nil, "", ""
+	}
+	id, typ, err := s.resolveSetReviewer(ctx, task.ProjectID, "lead")
+	if err != nil || id == nil {
+		return nil, "", ""
+	}
+	return id, typ, "self-created card entering review: routed to the project lead"
+}
+
 func sameAssigneeID(a, b *uuid.UUID) bool {
 	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
@@ -3863,17 +3892,20 @@ func (s *taskService) SetHumanGate(ctx context.Context, taskID uuid.UUID, value 
 	// Only a real true -> false transition returns a triage card to todo: clearing an
 	// already-clear gate (a repeated button press, a stray DELETE) must not touch a card
 	// that was parked in triage for some other reason.
-	hadGate := false
+	var prevGated *domain.Task
 	if !value {
-		if prev, err := s.taskRepo.GetByID(ctx, taskID); err == nil && prev != nil {
-			hadGate = prev.HumanGate
+		if prev, err := s.taskRepo.GetByID(ctx, taskID); err == nil && prev != nil && prev.HumanGate {
+			// Snapshot: the repository wipes gate_author on release, and the hand-back
+			// below needs to know who asked.
+			snap := *prev
+			prevGated = &snap
 		}
 	}
 	if err := s.taskRepo.SetHumanGate(ctx, taskID, value); err != nil {
 		return err
 	}
-	if hadGate {
-		s.returnTriageToTodoAfterGateClear(ctx, taskID)
+	if prevGated != nil {
+		s.afterGateClear(ctx, prevGated)
 	}
 	return nil
 }

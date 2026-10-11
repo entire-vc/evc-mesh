@@ -61,6 +61,7 @@ var assigneeWriteVerdict = map[string]string{
 	"taskService.AssignTask":                "funnel: ensureAssigneeProjectMember before taskRepo.Update",
 	"taskService.CreateSubtask":             "funnel: ensureAssigneeProjectMember before taskRepo.Create",
 	"taskService.prepareTransitionAssignee": "funnel: assertAssigneeInProjectWorkspace before reviewer rotation or restore, ensureAssigneeProjectMember before the atomic write",
+	"taskService.handBackToGateAuthor":      "delegated: taskService.AssignTask performs the write and the funnel",
 	"taskService.applyAutoAssign":           "delegated: taskService.Create and taskService.CreateSubtask both funnel after calling it",
 	"taskService.bulkUpdateOne":             "delegated: taskService.Update performs the write and the funnel",
 

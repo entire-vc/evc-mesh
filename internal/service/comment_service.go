@@ -2742,6 +2742,12 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	if isServiceComment(comment.Body) {
 		return
 	}
+	// Task #8f191cf7 (#0f3e944d, twice): the author's own «⏳ WAIT …» / «↻ NEXT …»
+	// line means "state kept", not "ask withdrawn" — a negator word in its prose
+	// ("resolved mapping paths") must not lift the gate.
+	if isHoldMarkerComment(comment.Body) {
+		return
+	}
 	if !hasNegatorInScope(comment.Body) {
 		s.reportWithdrawalMiss(ctx, comment, task)
 		return

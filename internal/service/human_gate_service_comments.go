@@ -184,3 +184,19 @@ func (s *commentService) postRepeatAskNotice(ctx context.Context, task *domain.T
 		s.ctxCacheInv.Invalidate(ctx, task.ID)
 	}
 }
+
+// isHoldMarkerComment reports whether body OPENS with the fleet's outcome marker
+// «⏳ WAIT …» / «↻ NEXT …». Such a line says "I keep the current state"; it is
+// never a retraction of a Pavel-ask, however many negators the prose below it
+// holds ("не закрываю", "не создаётся"). Only the first non-empty line counts: a
+// marker buried in the tail of a longer comment does not make it a status line.
+func isHoldMarkerComment(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		return strings.HasPrefix(line, "⏳ WAIT") || strings.HasPrefix(line, "↻ NEXT")
+	}
+	return false
+}

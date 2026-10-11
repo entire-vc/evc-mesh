@@ -74,6 +74,8 @@ func (s *humanGateSoftTimeoutService) SweepExpiredSoftGates(ctx context.Context)
 
 	var released int
 	for _, c := range candidates {
+		// No hand-back to the gate author here (unlike taskService.afterGateClear): nobody
+		// answered, so a person-held card must stay with that person, in the digest.
 		if err := s.taskRepo.SetHumanGate(ctx, c.TaskID, false); err != nil {
 			log.Printf("[human-gate-soft-timeout] WARNING: SetHumanGate(false) on task %s failed: %v", c.TaskID, err)
 			continue

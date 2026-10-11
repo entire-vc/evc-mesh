@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"github.com/google/uuid"
@@ -9,6 +10,58 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
+
+// afterGateClear runs the follow-ups of a real true -> false human_gate transition:
+// triage -> todo, then hand a human-held card back to the agent that raised the ask.
+// prev is the task as it was while still gated (gate_author is wiped by the release).
+func (s *taskService) afterGateClear(ctx context.Context, prev *domain.Task) {
+	s.returnTriageToTodoAfterGateClear(ctx, prev.ID)
+	s.handBackToGateAuthor(ctx, prev)
+}
+
+// handBackToGateAuthor: a card whose assignee is a person (the ask was parked on
+// Pavel) must not stay on that person once they have answered — "проверяйте и
+// закрывайте" was addressed to an agent, and nobody checked for 7-10 days
+// (#346bd658, #d7c420c1; task #8f191cf7). The agent that armed the gate takes it
+// back. Left alone: agent-held cards, cards of a gate with no agent author (raw
+// PATCH/UI arm), terminal cards, and a card somebody checked out in the meantime (also when that checkout
+// lands after the check: AssignTask compares the snapshot's updated_at).
+// A pinned (human-assigned) card refuses the system source — logged, not forced.
+func (s *taskService) handBackToGateAuthor(ctx context.Context, prev *domain.Task) {
+	if prev.GateAuthor == nil || prev.GateAuthorType == nil || *prev.GateAuthorType != domain.ActorTypeAgent {
+		return
+	}
+	fresh, err := s.taskRepo.GetByID(ctx, prev.ID)
+	if err != nil || fresh == nil || fresh.HumanGate || hasLiveCheckout(fresh) {
+		return
+	}
+	if fresh.AssigneeID == nil || fresh.AssigneeType != domain.AssigneeTypeUser {
+		return
+	}
+	if st, err := s.statusRepo.GetByID(ctx, fresh.StatusID); err != nil || st == nil ||
+		st.Category == domain.StatusCategoryDone || st.Category == domain.StatusCategoryCancelled {
+		return
+	}
+	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
+	author := *prev.GateAuthor
+	// The snapshot the checks above were made on: a checkout taken after it moves
+	// updated_at, so AssignTask refuses instead of overwriting the new holder's card.
+	seen := fresh.UpdatedAt
+	if err := s.AssignTask(sysCtx, fresh.ID, AssignTaskInput{
+		AssigneeID: &author, AssigneeType: domain.AssigneeTypeAgent, Source: domain.AssignmentSourceSystem,
+		ExpectedUpdatedAt: &seen,
+	}); err != nil {
+		var conflict *CASConflictError
+		if errors.As(err, &conflict) {
+			// Somebody took the card after the snapshot: no hand-back needed, not a failure.
+			log.Printf("[human-gate] hand-back of task %s skipped: card changed after the snapshot (cas_conflict)", fresh.ID)
+			return
+		}
+		log.Printf("[human-gate] WARNING: hand-back of task %s to gate author %s failed: %v", fresh.ID, author, err)
+		return
+	}
+	s.postAssigneeChangeComment(ctx, fresh, fresh.AssigneeID, &author, "human_gate снят — карточка вернулась агенту, поднявшему вопрос")
+}
 
 // returnTriageToTodoAfterGateClear is the ONE place that decides where a task goes when a
 // human_gate comes down. Every release path (button/DELETE, recorded decision, human
