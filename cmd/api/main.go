@@ -1125,7 +1125,7 @@ func main() {
 	// retries after the original holder's session dies.
 	// leaseReaper additionally moves expired in_progress tasks back to todo so that
 	// the capacity slot (max_in_progress) is freed for other agents.
-	leaseReaper := service.NewCheckoutLeaseReaper(taskRepo, taskStatusRepo, commentRepo, taskService, agentNotifySvc, rulesService, activityLogRepo, projectRepo)
+	leaseReaper := service.NewCheckoutLeaseReaper(taskRepo, taskStatusRepo, commentRepo, taskService, agentNotifySvc, rulesService, activityLogRepo, projectRepo, taskDependencyRepo)
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)

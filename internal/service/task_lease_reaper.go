@@ -32,6 +32,15 @@ type midPipelineSource interface {
 	GetProjectWorkflowRules(ctx context.Context, projectID uuid.UUID, callerAgentID *uuid.UUID) (*domain.WorkflowRulesResponse, error)
 }
 
+// openDependentSource is the narrow slice of the dependency repository the reaper
+// needs to tell whether parking a card would strand work that waits on it.
+// Nilable: a reaper built without one never asks and parks as before.
+type openDependentSource interface {
+	// HasOpenBlockedDependents reports whether a `blocks` dependency names
+	// blockerID as the blocker of a live task that is not done/cancelled.
+	HasOpenBlockedDependents(ctx context.Context, blockerID uuid.UUID) (bool, error)
+}
+
 // CheckoutLeaseReaper finds in_progress tasks whose checkout TTL has expired without
 // a heartbeat and returns them to todo, freeing their capacity slot.
 type CheckoutLeaseReaper interface {
@@ -59,6 +68,9 @@ type checkoutLeaseReaper struct {
 	// postSystemComment's nil commentRepo check above it.
 	activityRepo repository.ActivityLogRepository
 	projectRepo  repository.ProjectRepository
+	// dependents may be nil, in which case handBack never consults dependencies
+	// and parks exactly as it did before this field existed.
+	dependents openDependentSource
 }
 
 // NewCheckoutLeaseReaper constructs a CheckoutLeaseReaper.
@@ -69,6 +81,8 @@ type checkoutLeaseReaper struct {
 // tasks back to todo exactly as before this option existed.
 // activityRepo/projectRepo may be nil, in which case logLeaseActivity is a no-op
 // (the pre-existing behavior for every caller before this pair existed).
+// dependents may be nil, in which case a card blocking open work can still be
+// parked (the pre-existing behaviour).
 func NewCheckoutLeaseReaper(
 	taskRepo repository.TaskRepository,
 	statusRepo repository.TaskStatusRepository,
@@ -78,6 +92,7 @@ func NewCheckoutLeaseReaper(
 	rulesSvc midPipelineSource,
 	activityRepo repository.ActivityLogRepository,
 	projectRepo repository.ProjectRepository,
+	dependents openDependentSource,
 ) CheckoutLeaseReaper {
 	return &checkoutLeaseReaper{
 		taskRepo:       taskRepo,
@@ -88,6 +103,7 @@ func NewCheckoutLeaseReaper(
 		rulesSvc:       rulesSvc,
 		activityRepo:   activityRepo,
 		projectRepo:    projectRepo,
+		dependents:     dependents,
 	}
 }
 
@@ -132,7 +148,8 @@ const (
 const (
 	parkedCommentFmt = "🅿️ Задача висела в in_progress **без чекаута** и без признаков работы " +
 		"(ни комментария, ни артефакта, ни VCS-link, ни обновления статуса за окно простоя; последний " +
-		"комментарий не `⏳ WAIT`/`↻ NEXT` или такой маркер старше 48 ч) — **запаркована в backlog** " +
+		"комментарий не содержит строки, начинающейся с `⏳ WAIT`/`↻ NEXT`, или он старше 48 ч; " +
+		"открытые задачи от неё не зависят) — **запаркована в backlog** " +
 		"c `due_date` через %d ч и меткой `kind:monitor`.\n\n" +
 		"Почему в backlog, а не в todo: возврат в todo кладёт карточку обратно в подачу немедленно, " +
 		"и застрявшая карточка кормится тому же лейну снова и снова. Парк разрывает петлю, " +
@@ -328,6 +345,27 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 				}
 				continue
 			}
+			// A card that open work formally waits on is not parked either:
+			// backlog takes it out of every feed, and the dependent then waits on
+			// a card nobody is working (#53f30091 blocked #14580276 for ~16 h on
+			// 11.10). Hand it back to its own assignee's todo instead.
+			//
+			// Unreadable dependency state decides nothing: the card stays where it
+			// is and the next tick (60 s) asks again. Parking on a guess may strand
+			// a dependent for a day; returning on a guess turns a DB outage into a
+			// workspace-wide re-feed of every stale card.
+			blocking, err := r.blocksOpenDependent(ctx, &task)
+			if err != nil {
+				log.Printf("[lease-reaper] cannot read dependents of task %s, leaving it for the next tick: %v", task.ID, err)
+				continue
+			}
+			if blocking {
+				if r.returnToTodo(ctx, []domain.Task{task}, activityCheckoutUnleasedReturned, grace...) == 1 {
+					r.postSystemComment(actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem), &task, blockerReturnedComment)
+					moved++
+				}
+				continue
+			}
 			toPark = append(toPark, task)
 			continue
 		}
@@ -342,6 +380,25 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 		}
 	}
 	return moved
+}
+
+// blockerReturnedComment explains, on the card itself, why a stalled card went
+// back to todo instead of backlog. Without it the lane and its lead see a card
+// bounce back into the feed with no reason. A repeat is bounded by the feed's
+// own per-card refeed cap, which escalates the card to the lead.
+const blockerReturnedComment = "↩️ Карточка висела в in_progress без чекаута и без признаков работы, " +
+	"но **не запаркована**: от неё по зависимости `blocks` ждёт открытая задача, а из backlog " +
+	"карточку никто не подаёт. Возвращена в todo того же исполнителя. Если ждёте внешнего события — " +
+	"оставьте строку `⏳ WAIT …` в последнем комментарии."
+
+// blocksOpenDependent reports whether parking task would strand an open task
+// that has it as a `blocks` dependency. With no source wired it answers false
+// (park as before).
+func (r *checkoutLeaseReaper) blocksOpenDependent(ctx context.Context, task *domain.Task) (bool, error) {
+	if r.dependents == nil {
+		return false, nil
+	}
+	return r.dependents.HasOpenBlockedDependents(ctx, task.ID)
 }
 
 // handoffScanLimit bounds how many recent comments the handoff decision reads.
