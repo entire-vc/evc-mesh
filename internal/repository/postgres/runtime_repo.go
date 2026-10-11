@@ -540,7 +540,7 @@ func (r *RuntimeRepo) SetBindingPolicy(ctx context.Context, owner, receiver uuid
 	if connection == nil {
 		return nil, apierror.NotFound("Runtime binding")
 	}
-	revision, _, err := runtimeRevision(ctx, tx, connection.ID)
+	revision, oldDigest, err := runtimeRevision(ctx, tx, connection.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -582,6 +582,16 @@ func (r *RuntimeRepo) SetBindingPolicy(ctx context.Context, owner, receiver uuid
 	}
 	fingerprint, err := runtimeGrant(ctx, tx, binding.Binding)
 	if err != nil {
+		return nil, err
+	}
+	// The receiver's admission is bound to the catalog digest, which this edit
+	// just changed. A policy edit only reorders and re-prefers profiles the
+	// receiver already admitted (catalog validation rejects anything outside the
+	// permitted list; the admitted set is intersected with it on read), so an
+	// admission that matched the previous digest and the current grant is carried
+	// to the new digest instead of silently disabling the agent. Its revision is
+	// the receiver's token and stays as is.
+	if _, err = tx.ExecContext(ctx, `UPDATE runtime_binding_admissions SET catalog_digest=$3 WHERE integration_id=$1 AND binding_ref=$2 AND catalog_digest=$4 AND workspace_id=$5 AND agent_id=$6 AND grant_id=$7 AND grant_fingerprint=$8`, connection.ID, ref, digest, oldDigest, binding.Binding.WorkspaceID, binding.Binding.AgentID, binding.Binding.GrantID, fingerprint); err != nil {
 		return nil, err
 	}
 	admission, err := runtimeAdmission(ctx, tx, connection.ID, ref, binding, fingerprint, digest)
