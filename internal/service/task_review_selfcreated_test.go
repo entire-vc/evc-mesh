@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -92,4 +93,39 @@ func TestMoveToReview_WorkflowLookupErrorSkipsLeadFallback(t *testing.T) {
 	require.NoError(t, svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &newID}))
 	require.NotNil(t, taskRepo.items[taskID].AssigneeID)
 	assert.Equal(t, builderID, *taskRepo.items[taskID].AssigneeID)
+}
+
+// default_assignee is stored as "agent:<uuid>" by the rules API. The lead fallback
+// used to look that string up as a slug, miss, and leave the card on the builder
+// (found by the live check of #8f191cf7 on the mesh project).
+func TestMoveToReview_SelfCreatedLeadByAgentIDForms(t *testing.T) {
+	for _, form := range []string{"agent:%s", "%s"} {
+		t.Run(form, func(t *testing.T) {
+			projectID, workspaceID := uuid.New(), testDefaultWorkspaceID
+			builderID, leadID := uuid.New(), uuid.New()
+			wf := &domain.WorkflowRulesResponse{WorkflowRulesConfig: domain.WorkflowRulesConfig{
+				Transitions: map[string]domain.TransitionRule{"in_progress": {Allowed: []string{"review"}}},
+			}}
+			rules := &domain.EffectiveAssignmentRules{
+				DefaultAssignee: &domain.EffectiveAssignmentRule{Value: fmt.Sprintf(form, leadID), Source: "project"},
+			}
+			svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wf, rules)
+			oldID, newID, taskID := uuid.New(), uuid.New(), uuid.New()
+			statusRepo.items[oldID] = &domain.TaskStatus{ID: oldID, ProjectID: projectID, Category: domain.StatusCategoryInProgress, Name: "in_progress"}
+			statusRepo.items[newID] = &domain.TaskStatus{ID: newID, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
+			projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: workspaceID}
+			agentRepo.items[builderID] = &domain.Agent{ID: builderID, WorkspaceID: workspaceID, Slug: "builder"}
+			agentRepo.items[leadID] = &domain.Agent{ID: leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+			taskRepo.items[taskID] = &domain.Task{
+				ID: taskID, ProjectID: projectID, StatusID: oldID,
+				AssigneeID: &builderID, AssigneeType: domain.AssigneeTypeAgent,
+				CreatedBy: builderID, CreatedByType: domain.ActorTypeAgent,
+			}
+
+			require.NoError(t, svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &newID}))
+			got := taskRepo.items[taskID].AssigneeID
+			require.NotNil(t, got)
+			assert.Equal(t, leadID, *got, "self-created card must go to the lead named by id")
+		})
+	}
 }

@@ -3469,6 +3469,19 @@ func (s *taskService) resolveSetReviewer(ctx context.Context, projectID uuid.UUI
 	if err != nil || proj == nil {
 		return nil, "", fmt.Errorf("project %s not found: %w", projectID, err)
 	}
+	// default_assignee is stored either as a slug or as "agent:<uuid>" (the form
+	// the rules API writes); a slug lookup of the latter always misses and the
+	// lead fallback silently never fires (task #8f191cf7 live check).
+	if raw := strings.TrimPrefix(slug, "agent:"); raw != slug || uuid.Validate(raw) == nil {
+		if agentID, perr := uuid.Parse(raw); perr == nil {
+			agent, gerr := s.agentRepo.GetByID(ctx, agentID)
+			if gerr != nil || agent == nil || agent.WorkspaceID != proj.WorkspaceID {
+				return nil, "", fmt.Errorf("agent id=%q not found in workspace: %v", raw, gerr)
+			}
+			id := agent.ID
+			return &id, domain.AssigneeTypeAgent, nil
+		}
+	}
 	agent, err := s.agentRepo.GetBySlug(ctx, proj.WorkspaceID, slug)
 	if err != nil || agent == nil {
 		return nil, "", fmt.Errorf("agent slug=%q not found in workspace: %w", slug, err)
