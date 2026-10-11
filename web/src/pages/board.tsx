@@ -444,7 +444,7 @@ export function BoardPage() {
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   // useShallow, not a bare store call: each store here carries fields this
-  // page never reads (error/total/page/… on the task store, for instance),
+  // page never reads (total/page/… on the task store, for instance),
   // and a bare `useStore()` re-renders on ANY of them changing, not just the
   // ones destructured below. A drag's own moveTask touches several of those
   // unrelated fields in the same `set()` — without this, every column and
@@ -456,12 +456,15 @@ export function BoardPage() {
       fetchStatuses: s.fetchStatuses,
     })),
   );
-  const { tasks, tasksByStatus, isLoading, fetchTasks, moveTask } = useTaskStore(
+  const { tasks, tasksByStatus, isLoading, listProjectId, listComplete, listError, fetchTasks, moveTask } = useTaskStore(
     useShallow((s) => ({
       tasks: s.tasks,
       tasksByStatus: s.tasksByStatus,
       isLoading: s.isLoading,
-      fetchTasks: s.fetchTasks,
+      listProjectId: s.listProjectId,
+      listComplete: s.listComplete,
+      listError: s.listError,
+      fetchTasks: s.fetchAllTasks,
       moveTask: s.moveTask,
     })),
   );
@@ -516,7 +519,7 @@ export function BoardPage() {
     flush: flushPendingRefetch,
   } = useDeferredRefetch(
     useCallback(() => {
-      if (currentProject) fetchTasks(currentProject.id, undefined, { background: true });
+      if (currentProject) fetchTasks(currentProject.id, { background: true });
     }, [currentProject, fetchTasks]),
   );
 
@@ -698,6 +701,7 @@ export function BoardPage() {
   const filteredTasks = useMemo(() => {
     // First pass: basic filters (subtasks, search, priority, assignee)
     const basic = tasks.filter((task) => {
+      if (!showClosed && closedStatusIds.has(task.status_id)) return false;
       if (!passesSubtaskFilter(task, showSubtasks, closedStatusIds)) return false;
       if (searchQuery && !task.title.toLowerCase().includes(searchQuery.toLowerCase())) {
         return false;
@@ -718,6 +722,7 @@ export function BoardPage() {
     return applyViewFilters(basic, selectedTags, cfFilters);
   }, [
     tasks,
+    showClosed,
     showSubtasks,
     closedStatusIds,
     searchQuery,
@@ -754,10 +759,11 @@ export function BoardPage() {
       }));
 
       const byCol: Record<string, Task[]> = {};
+      const filteredIds = new Set(filteredTasks.map((task) => task.id));
       for (const col of cols) {
         const raw = tasksByStatus[col.id] ?? [];
         // Apply global filters
-        const filtered = raw.filter((t) => filteredTasks.some((ft) => ft.id === t.id));
+        const filtered = raw.filter((t) => filteredIds.has(t.id));
         byCol[col.id] = sortTasks(filtered, sortBy);
       }
 
@@ -1142,8 +1148,20 @@ export function BoardPage() {
         />
       </div>
 
-      {/* Board */}
-      {isLoading ? (
+      <p className="text-xs text-muted-foreground">Column counts match cards with the current filters. Closed tasks and subtasks follow the toolbar settings.</p>
+      {listProjectId === currentProject?.id && listError && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
+          <span>{listComplete ? "Couldn't refresh tasks. Showing the last complete list." : "Couldn't load all tasks. Counts are unavailable."}</span>
+          <Button variant="outline" size="sm" disabled={isLoading} onClick={() => currentProject && fetchTasks(currentProject.id)}>Retry</Button>
+        </div>
+      )}
+      {isLoading && listComplete && listProjectId === currentProject?.id && (
+        <p role="status" className="text-xs text-muted-foreground">Refreshing tasks… Showing the last complete list.</p>
+      )}
+
+      {/* No counts are rendered until every page belongs to one complete snapshot. */}
+      {!listComplete || listProjectId !== currentProject?.id ? (
+        listError && !isLoading && listProjectId === currentProject?.id ? null :
         <div className="flex gap-4 overflow-x-auto pb-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="w-72 shrink-0 space-y-3">

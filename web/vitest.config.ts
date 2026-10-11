@@ -13,7 +13,7 @@ export default defineConfig({
     hookTimeout: 20_000,
     setupFiles: ["./src/test-setup.ts"],
     // Browser and perf specs run through Playwright, outside the unit suite.
-    exclude: ["e2e/**", "e2e-local/**", "perf/**", "node_modules/**"],
+    exclude: ["e2e/**", "e2e-local/**", "board-e2e/**", "perf/**", "node_modules/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],
