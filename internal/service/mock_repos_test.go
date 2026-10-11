@@ -2619,6 +2619,7 @@ func (m *MockStorageClient) Download(_ context.Context, key string) (io.ReadClos
 type MockRulesService struct {
 	effectiveRules *domain.EffectiveAssignmentRules
 	workflowRules  *domain.WorkflowRulesResponse
+	workflowErr    error
 	errToReturn    error
 }
 
@@ -2661,7 +2662,7 @@ func (m *MockRulesService) SetProjectAssignmentRules(_ context.Context, _ uuid.U
 	panic("MockRulesService.SetProjectAssignmentRules not implemented")
 }
 func (m *MockRulesService) GetProjectWorkflowRules(_ context.Context, _ uuid.UUID, _ *uuid.UUID) (*domain.WorkflowRulesResponse, error) {
-	return m.workflowRules, nil
+	return m.workflowRules, m.workflowErr
 }
 func (m *MockRulesService) SetProjectWorkflowRules(_ context.Context, _ uuid.UUID, _ domain.WorkflowRulesConfig) error {
 	panic("MockRulesService.SetProjectWorkflowRules not implemented")

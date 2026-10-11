@@ -264,3 +264,69 @@ func TestGateClear_AlreadyClear_TriageCardNotMoved(t *testing.T) {
 		})
 	}
 }
+
+// Task #8f191cf7 (rule 4, #346bd658 / #d7c420c1): after the person answers, a card
+// parked on them goes back to the agent that raised the ask.
+func TestGateClear_HandsPersonHeldCardBackToGateAuthor(t *testing.T) {
+	for name := range newGateReturnEnv(t).releasers() {
+		t.Run(name, func(t *testing.T) {
+			env := newGateReturnEnv(t)
+			task := env.seed(domain.StatusCategoryTodo, env.status[domain.StatusCategoryTodo], true)
+			person, agent := uuid.New(), uuid.New()
+			agentType := domain.ActorTypeAgent
+			env.registerAgent(agent)
+			task.AssigneeID, task.AssigneeType = &person, domain.AssigneeTypeUser
+			task.GateAuthor, task.GateAuthorType = &agent, &agentType
+
+			require.NoError(t, env.releasers()[name](task))
+
+			got := env.repo.items[task.ID]
+			assert.False(t, got.HumanGate)
+			require.NotNil(t, got.AssigneeID)
+			assert.Equal(t, agent, *got.AssigneeID, "card must return to the agent that asked")
+			assert.Equal(t, domain.AssigneeTypeAgent, got.AssigneeType)
+		})
+	}
+}
+
+func TestGateClear_HandBackLeavesOthersAlone(t *testing.T) {
+	person, agent, other := uuid.New(), uuid.New(), uuid.New()
+	agentType, userType := domain.ActorTypeAgent, domain.ActorTypeUser
+	cases := map[string]func(*domain.Task, gateReturnEnv){
+		"agent already holds it": func(tk *domain.Task, _ gateReturnEnv) {
+			tk.AssigneeID, tk.AssigneeType = &other, domain.AssigneeTypeAgent
+			tk.GateAuthor, tk.GateAuthorType = &agent, &agentType
+		},
+		"gate has no agent author": func(tk *domain.Task, _ gateReturnEnv) {
+			tk.AssigneeID, tk.AssigneeType = &person, domain.AssigneeTypeUser
+			tk.GateAuthor, tk.GateAuthorType = &person, &userType
+		},
+		"raw-armed gate (no author)": func(tk *domain.Task, _ gateReturnEnv) {
+			tk.AssigneeID, tk.AssigneeType = &person, domain.AssigneeTypeUser
+		},
+		"done card": func(tk *domain.Task, e gateReturnEnv) {
+			tk.StatusID = e.status[domain.StatusCategoryDone]
+			tk.AssigneeID, tk.AssigneeType = &person, domain.AssigneeTypeUser
+			tk.GateAuthor, tk.GateAuthorType = &agent, &agentType
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := newGateReturnEnv(t)
+			task := env.seed(domain.StatusCategoryTodo, env.status[domain.StatusCategoryTodo], true)
+			mutate(task, env)
+			wantID, wantType := *task.AssigneeID, task.AssigneeType
+			require.NoError(t, env.ts.SetHumanGate(context.Background(), task.ID, false))
+			got := env.repo.items[task.ID]
+			assert.Equal(t, wantID, *got.AssigneeID)
+			assert.Equal(t, wantType, got.AssigneeType)
+		})
+	}
+}
+
+// registerAgent makes the project and the agent real for the tenancy guard that
+// AssignTask runs, so the hand-back is judged on its own rules.
+func (e gateReturnEnv) registerAgent(agentID uuid.UUID) {
+	e.ts.projectRepo.(*MockProjectRepository).items[e.projID] = &domain.Project{ID: e.projID, WorkspaceID: testDefaultWorkspaceID}
+	e.ts.agentRepo.(*MockAgentRepository).items[agentID] = &domain.Agent{ID: agentID, WorkspaceID: testDefaultWorkspaceID, Slug: "asker"}
+}

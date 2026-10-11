@@ -248,3 +248,57 @@ func TestAssignTask_PostgresExpectedUpdatedAtLosesToCheckout(t *testing.T) {
 		})
 	}
 }
+
+// racingCheckoutRepo takes a checkout the moment the hand-back's fresh read has
+// returned, i.e. after the snapshot its checks were made on and before the write.
+type racingCheckoutRepo struct {
+	*postgres.TaskRepo
+	t       *testing.T
+	owner   uuid.UUID
+	enabled bool
+	fired   bool
+}
+
+func (r *racingCheckoutRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+	task, err := r.TaskRepo.GetByID(ctx, id)
+	if r.enabled && !r.fired && err == nil {
+		r.fired = true
+		_, cerr := r.AcquireCheckout(ctx, id, r.owner, uuid.New(), time.Now().Add(time.Hour), checkoutScope())
+		require.NoError(r.t, cerr)
+	}
+	return task, err
+}
+
+// handBackToGateAuthor must not move a person-held card to the gate author when a
+// checkout lands between its fresh read and the write.
+func TestHandBackToGateAuthor_PostgresCheckoutAfterSnapshotKeepsAssignee(t *testing.T) {
+	for _, raced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("checkout_after_snapshot=%t", raced), func(t *testing.T) {
+			f, repo, _, id, owner := newCheckoutM1Fixture(t)
+			ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+			person, author := uuid.New(), uuid.New()
+			_, err := f.db.Exec(`INSERT INTO agents(id,workspace_id,name,slug,api_key_hash,api_key_prefix) VALUES($1,$2,'handback author',$3,'fixture-hash','test')`, author, f.workspaceID, author.String())
+			require.NoError(t, err)
+			_, err = f.db.Exec(`UPDATE tasks SET assignee_id=$1, assignee_type='user' WHERE id=$2`, person, id)
+			require.NoError(t, err)
+
+			racing := &racingCheckoutRepo{TaskRepo: repo, t: t, owner: owner, enabled: raced}
+			svc := NewTaskService(racing, postgres.NewTaskStatusRepo(f.db), nil, postgres.NewActivityLogRepo(f.db),
+				WithProjectRepo(postgres.NewProjectRepo(f.db)), WithTaskAgentRepo(postgres.NewAgentRepo(f.db)),
+				WithProjectMemberRepoTask(postgres.NewProjectMemberRepo(f.db)),
+				WithEventBusService(NewEventBusService(postgres.NewEventBusMessageRepo(f.db), nil))).(*taskService)
+			agentType := domain.ActorTypeAgent
+			svc.handBackToGateAuthor(ctx, &domain.Task{ID: id, GateAuthor: &author, GateAuthorType: &agentType})
+
+			fresh, err := repo.GetByID(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, fresh.AssigneeID)
+			if raced {
+				require.Equal(t, person, *fresh.AssigneeID, "a card taken after the snapshot must not be handed back")
+				require.NotNil(t, fresh.CheckedOutBy, "the racing checkout is intact")
+			} else {
+				require.Equal(t, author, *fresh.AssigneeID, "positive control: no race hands the card back")
+			}
+		})
+	}
+}
