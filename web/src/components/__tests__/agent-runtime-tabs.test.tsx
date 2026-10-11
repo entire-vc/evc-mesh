@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AgentRuntimeTabs } from "@/components/agent-runtime-tabs";
 import type { Agent } from "@/types";
+import { orderQuotaEdges } from "@/components/agent-runtime-policy-editor";
 
 vi.mock("@/lib/api", () => ({ api: vi.fn() }));
 import { api } from "@/lib/api";
@@ -312,6 +313,93 @@ describe("AgentRuntimeTabs", () => {
     it("shows the preferred account when it differs from the selected one", async () => {
       await ask({ ...previewBody, preferred_account_ref: "other" });
       expect((await screen.findByTestId("runtime-preview-preferred")).textContent).toContain("preferred: other");
+    });
+  });
+  describe("policy editor", () => {
+    const edit = async (putResponse: unknown) => {
+      vi.mocked(api).mockImplementation(async (_url: string, opts?: { method?: string }) => {
+        if (opts?.method === "PUT") {
+          if (putResponse instanceof Error) throw putResponse;
+          return putResponse;
+        }
+        return envelope();
+      });
+      renderTabs();
+      open("Execution & routes");
+      fireEvent.click(await screen.findByRole("button", { name: "Edit routes" }));
+      await screen.findByRole("form", { name: "Edit routes" });
+    };
+    const put = () => vi.mocked(api).mock.calls.find((c) => (c[1] as { method?: string } | undefined)?.method === "PUT")!;
+    const save = () => fireEvent.click(screen.getByRole("button", { name: "Save routes" }));
+
+    it("PUTs only the policy with if_revision from the loaded catalog, and no credential data", async () => {
+      await edit({ revision: 5, digest: "d" });
+      fireEvent.change(screen.getByLabelText("QA mode"), { target: { value: "prefer" } });
+      save();
+      await screen.findByText("Saved as revision 5.");
+      const [url, opts] = put();
+      expect(String(url)).toContain(`/runtime/bindings/worker-b/policy?resource_owner_workspace_id=${b.workspace_id}`);
+      const body = (opts as { body: Record<string, unknown> }).body;
+      expect(body.if_revision).toBe(4);
+      expect((body.policy as { qa: { mode: string } }).qa.mode).toBe("prefer");
+      expect(JSON.stringify(body)).not.toContain("credential_ref");
+    });
+
+    it("API reserve is off unless explicitly ticked", async () => {
+      await edit({ revision: 5 });
+      save();
+      await screen.findByText("Saved as revision 5.");
+      expect(((put()[1] as { body: { policy: { api_reserve_providers: string[] } } }).body.policy.api_reserve_providers)).toEqual([]);
+    });
+
+    it("409 is an honest conflict: nothing saved, reload offered", async () => {
+      await edit(apiErr(409));
+      save();
+      expect((await screen.findByRole("alert")).textContent).toContain("Nothing was saved");
+      expect(screen.queryByText(/Saved as revision/)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save routes" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    });
+
+    it("403 is a refusal, not a success", async () => {
+      await edit(apiErr(403));
+      save();
+      expect((await screen.findByRole("alert")).textContent).toContain("owner or admin");
+      expect(screen.queryByText(/Saved as revision/)).toBeNull();
+    });
+
+    it("a 200 without a numeric revision is not shown as saved", async () => {
+      await edit({ ok: true });
+      save();
+      expect((await screen.findByRole("alert")).textContent).toContain("Nothing was changed");
+      expect(screen.queryByText(/Saved as revision/)).toBeNull();
+    });
+
+    it("reordering sends the new order and primary follows permitted order", async () => {
+      await edit({ revision: 5 });
+      fireEvent.click(screen.getByRole("button", { name: "Move reserve up" }));
+      save();
+      await screen.findByText("Saved as revision 5.");
+      const body = (put()[1] as { body: { permitted_profiles: string[] } }).body;
+      expect(body.permitted_profiles).toEqual(["reserve", "main"]);
+    });
+
+    it("reserve order follows the edited order: quota_edges are reordered and pruned", async () => {
+      expect(orderQuotaEdges({ a: ["r1", "r2", "gone"], gone: ["r1"] }, ["r2", "a", "r1"])).toEqual({ a: ["r2", "r1"] });
+      await edit({ revision: 5 });
+      fireEvent.click(screen.getByRole("button", { name: "Remove reserve" }));
+      save();
+      await screen.findByText("Saved as revision 5.");
+      const body = (put()[1] as { body: { policy: { quota_edges: Record<string, string[]> } } }).body;
+      expect(body.policy.quota_edges).toEqual({ main: [] });
+    });
+
+    it("a non-admin (403 on load) gets no editor", async () => {
+      vi.mocked(api).mockRejectedValue(apiErr(403));
+      renderTabs();
+      open("Execution & routes");
+      await screen.findByText(/admins only/);
+      expect(screen.queryByRole("button", { name: "Edit routes" })).toBeNull();
     });
   });
 });

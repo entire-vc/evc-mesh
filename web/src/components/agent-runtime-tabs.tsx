@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
+import { PolicyEditor } from "@/components/agent-runtime-policy-editor";
 import {
   controllerSync,
   fetchWorkspaceRuntime,
@@ -44,13 +45,14 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentR
   const requestId = useRef(0);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-  const reload = useCallback(() => {
+  const reload = useCallback((quiet = false) => {
     const id = ++requestId.current;
     if (!workspaceId) {
       setLoad({ kind: "unavailable" });
       return;
     }
-    setLoad("loading");
+    // quiet: refresh behind an open editor without unmounting it.
+    if (!quiet) setLoad("loading");
     void fetchWorkspaceRuntime(workspaceId).then((result) => {
       // A slower response for a previous agent/workspace must not overwrite a newer one.
       if (requestId.current === id) setLoad(result);
@@ -114,25 +116,26 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentR
         {tab === "access" && (
           <div className="space-y-5">
             {access}
-            <RuntimeSection load={load} onRetry={reload} agent={agent} workspaceId={workspaceId}>
+            <RuntimeSection load={load} onRetry={() => reload()} agent={agent} workspaceId={workspaceId}>
               {(state, found) => <AdmissionBlock binding={found?.binding ?? null} state={state} />}
             </RuntimeSection>
           </div>
         )}
         {tab === "execution" && (
-          <RuntimeSection load={load} onRetry={reload} agent={agent} workspaceId={workspaceId}>
+          <RuntimeSection load={load} onRetry={() => reload()} agent={agent} workspaceId={workspaceId}>
             {(state, found) => (
               <ExecutionBlock
                 state={state}
                 binding={found?.binding ?? null}
                 bindingRef={found?.ref ?? ""}
                 workspaceId={workspaceId}
+                onReload={reload}
               />
             )}
           </RuntimeSection>
         )}
         {tab === "state" && (
-          <RuntimeSection load={load} onRetry={reload} agent={agent} workspaceId={workspaceId}>
+          <RuntimeSection load={load} onRetry={() => reload()} agent={agent} workspaceId={workspaceId}>
             {(state) => <StateBlock state={state} />}
           </RuntimeSection>
         )}
@@ -278,12 +281,15 @@ function ExecutionBlock({
   binding,
   bindingRef,
   workspaceId,
+  onReload,
 }: {
   state: RuntimeState;
   binding: RuntimeBinding | null;
   bindingRef: string;
   workspaceId: string | null;
+  onReload: (quiet?: boolean) => void;
 }) {
+  const [editing, setEditing] = useState(false);
   if (!binding) return <NoBinding />;
   const { catalog } = state;
   const observed = poolObservations(state.controllers);
@@ -301,6 +307,25 @@ function ExecutionBlock({
       <section className="lg:col-span-2">
         <PreviewPanel workspaceId={workspaceId} bindingRef={bindingRef} />
       </section>
+      {workspaceId && (
+        <section className="lg:col-span-2">
+          {editing ? (
+            <PolicyEditor
+              workspaceId={workspaceId}
+              bindingRef={bindingRef}
+              binding={binding}
+              catalog={catalog}
+              revision={state.revision}
+              onReload={onReload}
+              onClose={() => setEditing(false)}
+            />
+          ) : (
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              Edit routes
+            </Button>
+          )}
+        </section>
+      )}
       <section className="lg:col-span-2">
         <Heading>Allowed routes, in order</Heading>
         {routes.length === 0 ? (
