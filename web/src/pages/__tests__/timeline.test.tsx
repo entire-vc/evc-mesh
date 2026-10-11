@@ -93,6 +93,47 @@ describe("dependencies overview and focus", () => {
     fireEvent.click(screen.getByRole("button", { name: "Inspect task #cycle14" }));
     await waitFor(() => expect(screen.getByTestId("url").textContent).toContain("focus=cycle14"));
   });
+  it("collapses the cycle members page when the focus changes and keeps it collapsed on Browser Back", async () => {
+    fetchMock.mockImplementation(input => {
+      const g = graph(new URL(String(input), "http://local").searchParams.get("focus") || "center");
+      g.cycle_count = 1; g.cycle_ids = Array.from({ length: 15 }, (_, i) => `cycle${i}`);
+      return respond(g);
+    });
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect cycle members" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next 10 members" }));
+    expect(within(screen.getByRole("list", { name: "Cycle members" })).getAllByRole("listitem")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", { name: "New focus" }));
+    await waitFor(() => expect(screen.getByTestId("url").textContent).toContain("focus=new"));
+    expect(await screen.findByRole("button", { name: "Inspect cycle members" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Cycle members" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Browser Back" }));
+    await waitFor(() => expect(screen.getByTestId("url").textContent).toContain("focus=center"));
+    expect(await screen.findByRole("button", { name: "Inspect cycle members" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Cycle members" })).toBeNull();
+  });
+  it("keeps the cycle members page on a refresh of the same revision and collapses it when the revision changes", async () => {
+    let revision = "r1";
+    fetchMock.mockImplementation(() => {
+      const g = graph(); g.revision = revision;
+      g.cycle_count = 1; g.cycle_ids = Array.from({ length: 15 }, (_, i) => `cycle${i}`);
+      return respond(g);
+    });
+    show();
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect cycle members" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next 10 members" }));
+    const calls = fetchMock.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    expect(within(screen.getByRole("list", { name: "Cycle members" })).getAllByRole("listitem")).toHaveLength(5);
+    revision = "r2";
+    const calls2 = fetchMock.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls2));
+    expect(await screen.findByRole("button", { name: "Inspect cycle members" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Cycle members" })).toBeNull();
+  });
   it("preserves canonical direction, changes focus and restores it with Browser Back", async () => {
     show();
     expect(await within(await screen.findByRole("region", { name: "What blocks this task" })).findByRole("button", { name: "Task blocker" })).toBeVisible();
