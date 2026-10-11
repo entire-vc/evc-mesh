@@ -1604,6 +1604,32 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 // unleased in_progress card out of FindStaleUnleasedInProgress.
 const LiveWaitMarkerMaxAge = 48 * time.Hour
 
+// liveMarkerLineRE is the Postgres ARE that recognises a live outcome marker in a
+// comment body. It mirrors the fleet drivers' parsers (bob scripts/fleet_wait.py
+// DECLARATION, fleet_turn_outcome.py OUTCOME_LINE_RE), which test every line of
+// the declaration, stripped, against `⏳\s*WAIT\b|↻ NEXT(\s*:|$)` with re.I:
+//
+//   - (?n) newline-sensitive: `^` and `$` match at every line boundary, so a
+//     marker on ANY line counts, not only one that opens the whole body. Without
+//     it `^` anchors to the start of the body, and a report that ends with its
+//     WAIT line (the normal way a lead writes it) is invisible: #53f30091 was
+//     parked on 11.10 two hours after a comment whose last line was
+//     `⏳ WAIT card:#2d54f716`, and the card it blocked stalled ~16 h.
+//   - (?i) case-insensitive, as re.I.
+//   - `[[:space:]]*` before the marker: the fleet strips each line. A marker that
+//     does not open its line (prose quoting one) is not a declaration.
+//   - `⏳[[:blank:]]*WAIT\M`: word boundary after WAIT, so `⏳ WAITING` is prose.
+//     [[:blank:]] (space/tab), not [[:space:]], keeps the gap inside one line.
+//   - `↻ NEXT` followed by `:` or end of line, as `↻ NEXT(\s*:|$)`. The trailing
+//     [[:space:]]* also absorbs a CR before the LF of a CRLF body.
+//
+// Two known differences from the fleet, both deliberate or harmless:
+//   - `❓ Blocking` is a fleet declaration too but is NOT exempted here: a card
+//     waiting on a human is held by human_gate, which this query already excludes.
+//   - [[:space:]] follows the DB locale while Python \s is Unicode, so a marker
+//     indented with a no-break space is a declaration to the fleet only.
+const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:blank:]]*:|[[:space:]]*$))`
+
 // FindStaleUnleasedInProgress returns in_progress tasks that hold NO checkout at
 // all and have been untouched for olderThan.
 //
@@ -1644,8 +1670,9 @@ const LiveWaitMarkerMaxAge = 48 * time.Hour
 // by any route", which is the quantity the grace window was always meant to
 // measure.
 //
-// A card whose latest non-system comment opens with a canonical outcome marker
-// (`⏳ WAIT …` / `↻ NEXT …`) is NOT abandoned, even with no checkout: the fleet rules
+// A card whose latest non-system comment carries a canonical outcome marker at the
+// start of any of its lines (`⏳ WAIT …` / `↻ NEXT …`, see liveMarkerLineRE) is NOT
+// abandoned, even with no checkout: the fleet rules
 // make release_task the LAST step after a WAIT, so "in_progress, no lease, quiet" is
 // exactly what a healthy waiting card looks like. Without this exclusion the sweep
 // parked such a card in backlog ~2h after its WAIT, with start_after pushing the wake
@@ -1698,7 +1725,7 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 		          ORDER BY c.created_at DESC
 		          LIMIT 1
 		      ) lc
-		      WHERE lc.body ~ '^\s*(⏳ WAIT|↻ NEXT)'
+		      WHERE lc.body ~ '` + liveMarkerLineRE + `'
 		        AND lc.created_at > now() - $2::interval
 		  )`
 	var rows []taskRow

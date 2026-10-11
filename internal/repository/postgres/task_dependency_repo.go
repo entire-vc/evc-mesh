@@ -128,3 +128,41 @@ func (r *TaskDependencyRepo) Exists(ctx context.Context, taskID, dependsOnTaskID
 	}
 	return exists, nil
 }
+
+// HasOpenBlockedDependents reports whether some open task is held up by
+// blockerID: a `blocks` edge where blockerID is depends_on_task_id and the
+// dependent (task_id) is live and not in a done/cancelled status. The lease
+// reaper reads it to keep such a card out of backlog, where nothing feeds it
+// and the dependent would wait on it indefinitely.
+//
+// "Open" deliberately includes backlog and triage dependents: a blocked card
+// usually waits in backlog, and tryUnblockTask promotes exactly those once the
+// blocker is done, so they are the ones a parked blocker strands.
+//
+// Both endpoints must sit in the same workspace and in live projects, the
+// scoping the dependency graph applies to legacy cross-tenant rows
+// (wsEdgesCTE); the blocker side (b, bp) is joined only for that check.
+func (r *TaskDependencyRepo) HasOpenBlockedDependents(ctx context.Context, blockerID uuid.UUID) (bool, error) {
+	const q = `
+		SELECT EXISTS (
+		    SELECT 1
+		    FROM task_dependencies d
+		    JOIN tasks dep          ON dep.id = d.task_id
+		    JOIN task_statuses s    ON s.id = dep.status_id
+		    JOIN projects dp        ON dp.id = dep.project_id
+		    JOIN tasks b            ON b.id = d.depends_on_task_id
+		    JOIN projects bp        ON bp.id = b.project_id
+		    WHERE d.depends_on_task_id = $1
+		      AND d.dependency_type = 'blocks'
+		      AND dep.deleted_at IS NULL
+		      AND s.category NOT IN ('done', 'cancelled')
+		      AND dp.workspace_id = bp.workspace_id
+		      AND dp.deleted_at IS NULL
+		      AND bp.deleted_at IS NULL
+		)`
+	var open bool
+	if err := r.db.GetContext(ctx, &open, q, blockerID); err != nil {
+		return false, err
+	}
+	return open, nil
+}
