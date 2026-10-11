@@ -1,609 +1,264 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
-import {
-  AlertTriangle,
-  ArrowRight,
-  Bot,
-  GitBranch,
-  Info,
-  Loader2,
-  User,
-} from "lucide-react";
-import { api } from "@/lib/api";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, GitBranch, Loader2 } from "lucide-react";
+import { ApiRequestError } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { priorityConfig } from "@/lib/utils";
+import { blockerSummary, graphPage, loadDependencyGraph, type BranchName,
+  type DependencyGraph, type DependencyNode } from "@/lib/dependency-graph";
 import { useProjectStore } from "@/stores/project";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Task, TaskDependency, StatusCategory } from "@/types";
+import { Input } from "@/components/ui/input";
+import { TaskSlideOver } from "@/components/task-slide-over";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 88;
-const COL_GAP = 100;
-const ROW_GAP = 32;
-const PADDING = 48;
-
-const STATUS_CATEGORY_COLORS: Record<StatusCategory, string> = {
-  backlog: "#9ca3af",
-  triage: "#f59e0b",
-  todo: "#60a5fa",
-  in_progress: "#f59e0b",
-  review: "#a78bfa",
-  done: "#22c55e",
-  cancelled: "#ef4444",
+const statusColor: Record<string, string> = {
+  backlog: "bg-gray-400", triage: "bg-amber-500", todo: "bg-blue-500", in_progress: "bg-amber-500",
+  review: "bg-violet-500", done: "bg-green-600", cancelled: "bg-gray-400",
 };
 
-// Use CSS-variable classes (bg-card) instead of dark: variants to ensure
-// correct rendering inside SVG foreignObject where dark: may not propagate.
-const STATUS_CATEGORY_BG: Record<StatusCategory, string> = {
-  backlog: "bg-card border-border",
-  triage: "bg-card border-amber-500/30",
-  todo: "bg-card border-blue-500/30",
-  in_progress: "bg-card border-amber-500/30",
-  review: "bg-card border-violet-500/30",
-  done: "bg-card border-green-500/30",
-  cancelled: "bg-card border-red-500/30",
-};
-
-// ---------------------------------------------------------------------------
-// Graph layout types
-// ---------------------------------------------------------------------------
-
-interface NodePosition {
-  taskId: string;
-  col: number;
-  row: number;
-  x: number;
-  y: number;
+function savedPosition(key: string): number | undefined {
+  try { return JSON.parse(sessionStorage.getItem("dependency-positions") || "{}")[key]; }
+  catch { return undefined; }
+}
+function savePosition(key: string, value: number) {
+  try {
+    const positions = JSON.parse(sessionStorage.getItem("dependency-positions") || "{}");
+    delete positions[key];
+    positions[key] = value;
+    sessionStorage.setItem("dependency-positions", JSON.stringify(Object.fromEntries(Object.entries(positions).slice(-20))));
+  } catch { /* Scrolling remains usable when browser storage is unavailable. */ }
 }
 
-// ---------------------------------------------------------------------------
-// Layout algorithm: assign layers (columns) via longest-path layering.
-// Only tasks that participate in "blocks" relationships are included.
-// ---------------------------------------------------------------------------
-
-function buildLayeredLayout(
-  tasks: Task[],
-  deps: TaskDependency[],
-): { nodes: NodePosition[]; width: number; height: number } {
-  const taskMap = new Map(tasks.map((t) => [t.id, t]));
-
-  // blockedBy[taskId] = set of task IDs that block taskId
-  // A "blocks" dependency: depends_on_task_id blocks task_id
-  const blockedBy = new Map<string, Set<string>>();
-
-  for (const dep of deps) {
-    if (dep.dependency_type !== "blocks") continue;
-    if (!blockedBy.has(dep.task_id)) blockedBy.set(dep.task_id, new Set());
-    blockedBy.get(dep.task_id)!.add(dep.depends_on_task_id);
-  }
-
-  // All task IDs participating in blocking relationships
-  const inGraph = new Set<string>();
-  for (const dep of deps) {
-    if (dep.dependency_type !== "blocks") continue;
-    inGraph.add(dep.task_id);
-    inGraph.add(dep.depends_on_task_id);
-  }
-
-  // Assign columns via longest-path topological layering
-  const colAssignment = new Map<string, number>();
-
-  function assignCol(taskId: string, visited: Set<string>): number {
-    if (colAssignment.has(taskId)) return colAssignment.get(taskId)!;
-    if (visited.has(taskId)) return 0; // cycle protection
-    visited.add(taskId);
-
-    const blockers = blockedBy.get(taskId);
-    if (!blockers || blockers.size === 0) {
-      colAssignment.set(taskId, 0);
-      return 0;
-    }
-
-    let maxBlockerCol = 0;
-    for (const blockerId of blockers) {
-      if (taskMap.has(blockerId)) {
-        const c = assignCol(blockerId, new Set(visited));
-        maxBlockerCol = Math.max(maxBlockerCol, c + 1);
-      }
-    }
-    colAssignment.set(taskId, maxBlockerCol);
-    return maxBlockerCol;
-  }
-
-  for (const taskId of inGraph) {
-    if (taskMap.has(taskId)) {
-      assignCol(taskId, new Set());
-    }
-  }
-
-  // Group tasks by column
-  const columnGroups = new Map<number, string[]>();
-  for (const [taskId, col] of colAssignment) {
-    if (!columnGroups.has(col)) columnGroups.set(col, []);
-    columnGroups.get(col)!.push(taskId);
-  }
-
-  // Build node positions
-  const nodes: NodePosition[] = [];
-  const sortedCols = Array.from(columnGroups.keys()).sort((a, b) => a - b);
-
-  let maxRows = 0;
-  for (const col of sortedCols) {
-    const group = columnGroups.get(col)!;
-    maxRows = Math.max(maxRows, group.length);
-    const colIndex = sortedCols.indexOf(col);
-    for (let row = 0; row < group.length; row++) {
-      nodes.push({
-        taskId: group[row]!,
-        col: colIndex,
-        row,
-        x: PADDING + colIndex * (NODE_WIDTH + COL_GAP),
-        y: PADDING + row * (NODE_HEIGHT + ROW_GAP),
-      });
-    }
-  }
-
-  const totalCols = sortedCols.length || 1;
-  const numRows = maxRows || 1;
-  const width =
-    PADDING * 2 + totalCols * NODE_WIDTH + (totalCols - 1) * COL_GAP;
-  const height =
-    PADDING * 2 + numRows * NODE_HEIGHT + Math.max(0, numRows - 1) * ROW_GAP;
-
-  return { nodes, width: Math.max(width, 400), height: Math.max(height, 200) };
-}
-
-// Standalone layout: grid of all tasks with no dependencies
-function buildStandaloneLayout(
-  tasks: Task[],
-  cols = 4,
-): { nodes: NodePosition[]; width: number; height: number } {
-  const nodes: NodePosition[] = [];
-  for (let i = 0; i < tasks.length; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    nodes.push({
-      taskId: tasks[i]!.id,
-      col,
-      row,
-      x: PADDING + col * (NODE_WIDTH + COL_GAP),
-      y: PADDING + row * (NODE_HEIGHT + ROW_GAP),
-    });
-  }
-
-  const numRows = Math.ceil(tasks.length / cols);
-  const numCols = Math.min(tasks.length, cols);
-  const width =
-    PADDING * 2 + numCols * NODE_WIDTH + Math.max(0, numCols - 1) * COL_GAP;
-  const height =
-    PADDING * 2 +
-    numRows * NODE_HEIGHT +
-    Math.max(0, numRows - 1) * ROW_GAP;
-
-  return { nodes, width: Math.max(width, 400), height: Math.max(height, 200) };
-}
-
-// ---------------------------------------------------------------------------
-// SVG arrow between two nodes
-// ---------------------------------------------------------------------------
-
-function DependencyArrow({
-  from,
-  to,
-}: {
-  from: NodePosition;
-  to: NodePosition;
+function NodeCard({ node, selected, currentProjectId, focus, open, filterHidden = false }: {
+  node: DependencyNode; selected?: boolean; currentProjectId: string;
+  focus: (id: string) => void; open: (id: string) => void; filterHidden?: boolean;
 }) {
-  const startX = from.x + NODE_WIDTH;
-  const startY = from.y + NODE_HEIGHT / 2;
-  const endX = to.x;
-  const endY = to.y + NODE_HEIGHT / 2;
-
-  // Horizontal bezier with adaptive control point offset
-  const cpOffset = Math.min(Math.abs(endX - startX) * 0.45, 80);
-  const d = `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`;
-
-  return (
-    <g>
-      <path
-        d={d}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.5}
-        className="text-muted-foreground/50"
-        markerEnd="url(#arrowhead)"
-      />
-    </g>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Task node card rendered in SVG via foreignObject
-// ---------------------------------------------------------------------------
-
-function TaskNode({
-  task,
-  node,
-  category,
-  onClick,
-}: {
-  task: Task;
-  node: NodePosition;
-  category: StatusCategory;
-  onClick: () => void;
-}) {
-  const pConfig = priorityConfig[task.priority];
-  const accentColor = STATUS_CATEGORY_COLORS[category];
-  const bgClass = STATUS_CATEGORY_BG[category];
-
-  return (
-    <foreignObject
-      x={node.x}
-      y={node.y}
-      width={NODE_WIDTH}
-      height={NODE_HEIGHT}
-    >
-      <div
-        className={cn(
-          "flex h-full cursor-pointer flex-col justify-between rounded-lg border-2 px-3 py-2.5 text-card-foreground transition-all hover:shadow-md hover:brightness-95 dark:hover:brightness-110 active:scale-[0.98]",
-          bgClass,
-        )}
-        style={{ borderLeftColor: accentColor, borderLeftWidth: 4 }}
-        onClick={onClick}
-      >
-        <p
-          className="line-clamp-2 text-xs font-semibold leading-snug text-foreground"
-          title={task.title}
-        >
-          {task.title}
-        </p>
-        <div className="mt-1 flex items-center justify-between gap-1">
-          <div className="flex items-center gap-1">
-            {task.priority !== "none" && (
-              <Badge
-                variant="secondary"
-                className={cn("h-4 px-1 text-[9px]", pConfig.color)}
-              >
-                {pConfig.label}
-              </Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-1">
-            {task.assignee_type === "agent" ? (
-              <Bot className="h-3 w-3 text-violet-500" />
-            ) : task.assignee_type === "user" ? (
-              <User className="h-3 w-3 text-sky-500" />
-            ) : null}
-          </div>
-        </div>
+  const available = node.availability === "available";
+  return <article data-dependency-node={node.id} className={cn("min-w-0 rounded-xl border border-border bg-card p-4 text-sm shadow-sm",
+    selected && "border-primary ring-1 ring-primary/20")}>
+    {available ? <>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5"><span aria-hidden="true" className={cn("h-2 w-2 rounded-full", statusColor[node.status_category ?? ""])} />
+          {node.status_name || node.status_category}</span><span className="break-words">{node.assignee_name || "Unassigned"}</span>
       </div>
-    </foreignObject>
-  );
+      <button type="button" onClick={() => focus(node.id)} aria-current={selected ? "true" : undefined}
+        className="min-h-11 w-full break-words text-left text-base font-semibold leading-6 hover:text-primary focus-visible:outline-2 focus-visible:outline-primary">
+        {node.title}
+      </button>
+      <p className="mt-2 text-xs text-muted-foreground">#{node.id.slice(0, 8)} · {node.priority || "none"}</p>
+      {node.project_id !== currentProjectId && <p className="mt-2 break-words text-xs">Other project: {node.project_name || node.project_slug}</p>}
+      {node.cycle && <p className="mt-2 text-amber-700 dark:text-amber-400">Cycle detected</p>}
+      {node.human_gate && <p className="mt-2">Human approval required</p>}
+      {node.start_after && <p className="mt-2 break-words">Scheduled after {new Date(node.start_after).toLocaleString(undefined)}</p>}
+      {filterHidden && <p className="mt-2 text-xs text-muted-foreground">Outside the overview search; kept to preserve the chain.</p>}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button variant="ghost" size="sm" className="min-h-11 whitespace-normal" onClick={() => focus(node.id)}>
+          {selected ? "In focus" : "Follow chain →"}</Button>
+        <Button variant="outline" size="sm" className="min-h-11 whitespace-normal" onClick={() => open(node.id)}>Open task</Button>
+      </div>
+    </> : <>
+      <p className="font-medium">{node.availability === "restricted" ? "Unavailable dependency" : "Missing dependency"}</p>
+      <p className="mt-2 text-muted-foreground">Dependency check is incomplete. Task details cannot be established.</p>
+    </>}
+  </article>;
 }
-
-// ---------------------------------------------------------------------------
-// Batch API response type
-// ---------------------------------------------------------------------------
-
-interface DependencyGraphResponse {
-  tasks: Task[];
-  dependencies: TaskDependency[];
-}
-
-// ---------------------------------------------------------------------------
-// Timeline page component
-// ---------------------------------------------------------------------------
 
 export function TimelinePage() {
-  const { wsSlug, projectSlug } = useParams();
-  const navigate = useNavigate();
-  const { currentProject, statuses, fetchStatuses } = useProjectStore();
-
-  const [graphTasks, setGraphTasks] = useState<Task[]>([]);
-  const [deps, setDeps] = useState<TaskDependency[]>([]);
-  const [loading, setLoading] = useState(false);
+  const currentProject = useProjectStore(s => s.currentProject);
+  const [query, setQuery] = useSearchParams();
+  const focus = query.get("focus") || "";
+  const search = query.get("search") || "";
+  const completed = query.get("completed") === "true";
+  const page = graphPage(query.get("page")), before = graphPage(query.get("before")), after = graphPage(query.get("after")), relations = graphPage(query.get("relations"), 0);
+  const scope = useMemo(() => ({ focus, search, completed, page, before, after, relations }), [focus, search, completed, page, before, after, relations]);
+  const requestKey = JSON.stringify([currentProject?.id, scope]);
+  const [snapshot, setSnapshot] = useState<{ key: string; graph: DependencyGraph } | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // When tasks exist but no blocking deps, allow user to show all tasks anyway
-  const [showAllTasks, setShowAllTasks] = useState(false);
-  const svgContainerRef = useRef<HTMLDivElement>(null);
+  const [notice, setNotice] = useState("");
+  const [retry, setRetry] = useState(0);
+  const [panelId, setPanelId] = useState<string | null>(null);
+  const [cyclePage, setCyclePage] = useState(0);
+  const revealSearch = query.get("reveal") === "true";
+  const history = useRef<string[]>([]);
+  const cache = useRef(new Map<string, DependencyGraph>());
+  const root = useRef<HTMLDivElement>(null);
+  const positions = useRef(new Map<string, number>());
+  const positionKey = requestKey + revealSearch;
+  const graph = snapshot?.key === requestKey ? snapshot.graph : cache.current.get(requestKey);
+  useEffect(() => { setCyclePage(0); }, [requestKey, graph?.revision]);
+  useLayoutEffect(() => {
+    const main = root.current?.closest("main");
+    if (!main || loading || !graph) return;
+    const saved = positions.current.get(positionKey) ?? savedPosition(positionKey) ?? 0;
+    main.scrollTop = Number.isFinite(saved) ? saved : 0;
+    const save = () => {
+      positions.current.set(positionKey, main.scrollTop);
+      if (positions.current.size > 20) positions.current.delete(positions.current.keys().next().value!);
+      savePosition(positionKey, main.scrollTop);
+    };
+    main.addEventListener("scroll", save);
+    return () => main.removeEventListener("scroll", save);
+  }, [positionKey, graph, loading]);
+  const projectId = currentProject?.id;
+  const queryRef = useRef(query);
+  queryRef.current = query;
 
-  // Fetch statuses
-  useEffect(() => {
-    if (currentProject) {
-      fetchStatuses(currentProject.id);
-    }
-  }, [currentProject, fetchStatuses]);
-
-  // Fetch tasks + dependencies in a single batch call
-  useEffect(() => {
-    if (!currentProject) return;
-    setLoading(true);
-    setError(null);
-    setShowAllTasks(false);
-    api<DependencyGraphResponse>(
-      `/api/v1/projects/${currentProject.id}/dependency-graph`,
-    )
-      .then((result) => {
-        setGraphTasks(result.tasks ?? []);
-        setDeps(result.dependencies ?? []);
-      })
-      .catch(() => {
-        setError("Failed to load dependency graph");
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [currentProject]);
-
-  // Build status category lookup
-  const statusCategoryMap = useMemo(() => {
-    const map = new Map<string, StatusCategory>();
-    for (const s of statuses) {
-      map.set(s.id, s.category);
-    }
-    return map;
-  }, [statuses]);
-
-  // Blocking deps only (edges rendered as arrows)
-  const blockingDeps = useMemo(
-    () => deps.filter((d) => d.dependency_type === "blocks"),
-    [deps],
-  );
-
-  // Tasks that participate in at least one "blocks" dependency
-  const connectedTaskIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const d of blockingDeps) {
-      ids.add(d.task_id);
-      ids.add(d.depends_on_task_id);
-    }
-    return ids;
-  }, [blockingDeps]);
-
-  const hasDependencies = blockingDeps.length > 0;
-
-  // Tasks to use for DAG layout (only connected ones)
-  const dagTasks = useMemo(
-    () => graphTasks.filter((t) => connectedTaskIds.has(t.id)),
-    [graphTasks, connectedTaskIds],
-  );
-
-  // Build the DAG layout (only connected tasks)
-  const dagLayout = useMemo(() => {
-    if (dagTasks.length === 0) return null;
-    return buildLayeredLayout(dagTasks, blockingDeps);
-  }, [dagTasks, blockingDeps]);
-
-  // Build standalone grid layout (all tasks)
-  const standaloneLayout = useMemo(() => {
-    if (graphTasks.length === 0) return null;
-    return buildStandaloneLayout(graphTasks);
-  }, [graphTasks]);
-
-  // Build lookup maps for the active layout
-  const activeLayout = hasDependencies
-    ? dagLayout
-    : showAllTasks
-      ? standaloneLayout
-      : null;
-
-  const taskMap = useMemo(
-    () => new Map(graphTasks.map((t) => [t.id, t])),
-    [graphTasks],
-  );
-
-  const nodeMap = useMemo(() => {
-    if (!activeLayout) return new Map<string, NodePosition>();
-    return new Map(activeLayout.nodes.map((n) => [n.taskId, n]));
-  }, [activeLayout]);
-
-  // Edges that have both endpoints in the layout
-  const visibleEdges = useMemo(() => {
-    if (!hasDependencies) return [];
-    return blockingDeps.filter(
-      (d) => nodeMap.has(d.task_id) && nodeMap.has(d.depends_on_task_id),
-    );
-  }, [blockingDeps, hasDependencies, nodeMap]);
-
-  const handleTaskClick = useCallback(
-    (taskId: string) => {
-      navigate(`/w/${wsSlug}/p/${projectSlug}/t/${taskId}`);
-    },
-    [navigate, wsSlug, projectSlug],
-  );
-
-  // ---------------------------------------------------------------------------
-  // Render states
-  // ---------------------------------------------------------------------------
-
-  if (!currentProject) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <p className="text-muted-foreground">
-          Project &quot;{projectSlug}&quot; not found
-        </p>
-      </div>
-    );
+  function update(values: Record<string, string | null>, replace = false) {
+    const next = new URLSearchParams(queryRef.current);
+    for (const [key, value] of Object.entries(values)) { if (value === null) next.delete(key); else next.set(key, value); }
+    setQuery(next, { replace });
+  }
+  function select(id: string) {
+    if (id === focus) return;
+    history.current.push(query.toString());
+    update({ focus: id, before: null, after: null, relations: null, reveal: null });
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Error */}
-      {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          {error}
-        </div>
-      )}
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    setLoading(true); setError(null);
+    const cached = cache.current.get(requestKey);
+    if (cached) setSnapshot({ key: requestKey, graph: cached });
+    let latest: DependencyGraph | undefined;
+    loadDependencyGraph(projectId, scope, data => {
+      latest = data; setSnapshot({ key: requestKey, graph: data });
+    }, () => cancelled, controller.signal)
+      .then(() => {
+        if (!cancelled && latest) {
+          cache.current.set(requestKey, latest);
+          if (cache.current.size > 20) cache.current.delete(cache.current.keys().next().value!);
+        }
+      })
+      .catch(cause => {
+        if (cancelled) return;
+        if (cause instanceof ApiRequestError && cause.status === 409) {
+          setSnapshot(null);
+          cache.current.clear();
+          setNotice("Dependencies changed. Pagination restarted with the latest data.");
+          const next = new URLSearchParams(queryRef.current);
+          for (const key of ["page", "before", "after", "relations"]) next.delete(key);
+          setQuery(next, { replace: true });
+          setRetry(n => n + 1);
+        } else setError(cause instanceof ApiRequestError && cause.status === 404
+          ? "Selected task was deleted or is unavailable." : "Could not load dependencies. Dependency check is incomplete.");
+      }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; controller.abort(); };
+  }, [projectId, scope, requestKey, retry, setQuery]);
 
-      {/* Loading */}
-      {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          <span className="ml-2 text-sm text-muted-foreground">
-            Loading dependency graph...
-          </span>
-        </div>
-      ) : graphTasks.length === 0 ? (
-        /* No tasks at all */
-        <div className="flex flex-col items-center justify-center py-20">
-          <GitBranch className="mb-4 h-12 w-12 text-muted-foreground/50" />
-          <h3 className="mb-2 text-lg font-semibold">No tasks yet</h3>
-          <p className="max-w-sm text-center text-sm text-muted-foreground">
-            Create tasks and add blocking dependencies between them to see the
-            dependency graph.
-          </p>
-        </div>
-      ) : !hasDependencies && !showAllTasks ? (
-        /* Tasks exist but no blocking dependencies */
-        <div className="flex flex-col items-center justify-center py-20">
-          <Info className="mb-4 h-12 w-12 text-muted-foreground/50" />
-          <h3 className="mb-2 text-lg font-semibold">No dependencies found</h3>
-          <p className="mb-6 max-w-sm text-center text-sm text-muted-foreground">
-            Add blocking dependencies between tasks to see the dependency graph.
-            You can set a dependency when editing a task.
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowAllTasks(true)}
-          >
-            Show all {graphTasks.length} tasks anyway
-          </Button>
-        </div>
-      ) : activeLayout ? (
-        <>
-          {/* Legend */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-            <span className="font-medium">Legend:</span>
-            {(
-              [
-                ["backlog", "Backlog"],
-                ["todo", "To Do"],
-                ["in_progress", "In Progress"],
-                ["review", "Review"],
-                ["done", "Done"],
-                ["cancelled", "Cancelled"],
-              ] as [StatusCategory, string][]
-            ).map(([cat, label]) => (
-              <span key={cat} className="flex items-center gap-1">
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: STATUS_CATEGORY_COLORS[cat] }}
-                />
-                {label}
-              </span>
-            ))}
-            {hasDependencies && (
-              <span className="flex items-center gap-1">
-                <ArrowRight className="h-3 w-3" />
-                blocks
-              </span>
-            )}
-          </div>
+  const nodes = new Map(graph?.tasks.map(t => [t.id, t]) ?? []);
+  const center = focus ? nodes.get(focus) : undefined;
+  const cycleTitle = (id: string) => nodes.get(id)?.availability === "available" ? nodes.get(id)?.title : "Unavailable task";
+  const matchesSearch = (node: DependencyNode) => !search || `${node.title || ""} ${node.id}`.toLowerCase().includes(search.toLowerCase());
+  const renderNode = (node: DependencyNode, selected = false) => <NodeCard key={node.id} node={node} selected={selected}
+    currentProjectId={projectId!} focus={select} open={setPanelId} filterHidden={Boolean(focus && !matchesSearch(node))} />;
 
-          {/* "showing all tasks" notice */}
-          {!hasDependencies && showAllTasks && (
-            <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-400">
-              <Info className="h-3.5 w-3.5 shrink-0" />
-              No blocking dependencies — showing all tasks as a grid. Add
-              dependencies in task details to see the graph.
-              <button
-                className="ml-auto shrink-0 underline hover:no-underline"
-                onClick={() => setShowAllTasks(false)}
-              >
-                Hide
-              </button>
-            </div>
-          )}
+  function branch(name: BranchName, title: string) {
+    if (!graph) return null;
+    const data = graph[name];
+    const list = data.ids.map(id => nodes.get(id)).filter((n): n is DependencyNode => Boolean(n));
+    const hidden = list.filter(n => n.availability === "available" && !matchesSearch(n));
+    const visible = revealSearch ? list : list.filter(n => n.availability !== "available" || matchesSearch(n));
+    return <section aria-label={title} className="min-w-0 space-y-3">
+      <h2 className="text-sm font-semibold">{title} <span className="text-muted-foreground">({data.total_count})</span></h2>
+      {visible.map(n => <div key={n.id}>{name === "relations" && <p className="mb-1 text-xs text-muted-foreground">{
+        center?.parent_task_id === n.id ? "Parent task" : n.parent_task_id === focus ? "Subtask" :
+          graph!.dependencies.some(e => e.dependency_type === "is_child_of" && e.task_id === focus && e.depends_on_task_id === n.id)
+            ? "Parent task" : graph!.dependencies.some(e => e.dependency_type === "is_child_of" && e.task_id === n.id && e.depends_on_task_id === focus)
+              ? "Subtask" : "Related task"}</p>}{renderNode(n)}</div>)}
+      {hidden.length > 0 && !revealSearch && <Button variant="outline" className="min-h-11 w-full whitespace-normal" onClick={() => update({ reveal: "true" })}>
+        {hidden.length} hidden by search · reveal</Button>}
+      {!completed && name !== "relations" && data.completed_count > 0 && <Button variant="outline" className="min-h-11 w-full whitespace-normal" onClick={() => update({ completed: "true", before: null, after: null, relations: null })}>
+        ✓ {data.completed_count} completed · expand original links</Button>}
+      {data.total_count === 0 && <p className="rounded-lg border border-border border-dashed p-4 text-sm text-muted-foreground">No direct {name === "before" ? "blockers" : name === "after" ? "dependents" : "relations"}</p>}
+      {data.unknown_count > 0 && <p className="text-sm text-amber-700 dark:text-amber-400">{data.unknown_count} unavailable or missing</p>}
+      {(data.has_more || (name === "relations" && scope.relations === 0 && data.total_count > 0)) && <Button variant="outline"
+        disabled={loading} className="min-h-11 w-full whitespace-normal" onClick={() => update({ [name]: String((name === "relations" ? scope.relations : data.page) + 1) })}>
+        Show more {name === "relations" ? "relations" : name === "before" ? "blockers" : "dependents"} · {Math.max(0, data.total_count - list.length - (!completed ? data.completed_count : 0))} remaining</Button>}
+    </section>;
+  }
 
-          {/* DAG SVG */}
-          <div
-            ref={svgContainerRef}
-            className="overflow-auto rounded-xl border border-border bg-muted/20 p-0"
-            style={{ minHeight: 200 }}
-          >
-            <svg
-              width={activeLayout.width}
-              height={activeLayout.height}
-              className="block"
-            >
-              <defs>
-                <marker
-                  id="arrowhead"
-                  markerWidth="10"
-                  markerHeight="7"
-                  refX="9"
-                  refY="3.5"
-                  orient="auto"
-                >
-                  <polygon
-                    points="0 0, 10 3.5, 0 7"
-                    className="fill-muted-foreground/50"
-                  />
-                </marker>
-              </defs>
+  const groups = new Map<string, DependencyNode[]>();
+  if (!focus && graph) for (const node of graph.tasks.slice((graph.page - 1) * graph.page_size)) {
+    const key = node.parent_task_id || "";
+    groups.set(key, [...(groups.get(key) ?? []), node]);
+  }
 
-              {/* Arrows */}
-              {visibleEdges.map((dep) => {
-                const fromNode = nodeMap.get(dep.depends_on_task_id);
-                const toNode = nodeMap.get(dep.task_id);
-                if (!fromNode || !toNode) return null;
-                return (
-                  <DependencyArrow
-                    key={dep.id}
-                    from={fromNode}
-                    to={toNode}
-                  />
-                );
-              })}
-
-              {/* Task nodes */}
-              {activeLayout.nodes.map((node) => {
-                const task = taskMap.get(node.taskId);
-                if (!task) return null;
-                const category =
-                  statusCategoryMap.get(task.status_id) ?? "backlog";
-                return (
-                  <TaskNode
-                    key={node.taskId}
-                    task={task}
-                    node={node}
-                    category={category}
-                    onClick={() => handleTaskClick(node.taskId)}
-                  />
-                );
-              })}
-            </svg>
-          </div>
-
-          {/* Stats footer */}
-          <div className="flex flex-wrap gap-6 text-xs text-muted-foreground">
-            <span>
-              {activeLayout.nodes.length} task
-              {activeLayout.nodes.length !== 1 ? "s" : ""} shown
-            </span>
-            {hasDependencies && (
-              <>
-                <span>
-                  {visibleEdges.length} blocking relationship
-                  {visibleEdges.length !== 1 ? "s" : ""}
-                </span>
-                {graphTasks.length - dagTasks.length > 0 && (
-                  <span>
-                    {graphTasks.length - dagTasks.length} standalone (not shown)
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-        </>
-      ) : null}
+  if (!currentProject) return <p className="py-12 text-center text-muted-foreground">Project not found</p>;
+  return <div ref={root} className="min-w-0 space-y-5" data-dependencies-view>
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><h1 className="flex items-center gap-2 text-xl font-semibold"><GitBranch className="h-5 w-5" /> Dependencies</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Follow one chain at a time. Blocker → task → dependent.</p></div>
+      <Button variant="outline" disabled={loading} onClick={() => { setNotice(""); setRetry(n => n + 1); }}>Refresh</Button>
     </div>
-  );
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3">
+      <Button variant={focus ? "outline" : "secondary"} onClick={() => { history.current.push(query.toString()); update({ focus: null, before: null, after: null, relations: null }); }}>Overview</Button>
+      {focus && <span className="text-sm font-medium">Task chain</span>}
+      <label className="min-w-0 flex-1 basis-48 text-sm">Search title or ID<Input value={search} className="mt-1 w-full"
+        placeholder="Find a task" onChange={e => update({ search: e.target.value || null, page: null, reveal: null }, true)} /></label>
+      <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={completed}
+        onChange={e => update({ completed: e.target.checked ? "true" : null, page: null, before: null, after: null, relations: null })} /> Show completed</label>
+    </div>
+    {notice && <p role="status" className="rounded-lg border border-border p-3 text-sm">{notice}</p>}
+    {error && <div role="alert" className="rounded-lg border border-destructive p-4 text-sm"><p>{error}</p>
+      <Button variant="outline" className="mt-3" onClick={() => setRetry(n => n + 1)}>Retry</Button></div>}
+    {loading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading dependencies…</p>}
+    {graph && <>
+      <p className="text-sm text-muted-foreground" aria-live="polite">{focus ? `${graph.total_count} unique tasks in this neighborhood` : `${graph.tasks.length} of ${graph.total_count} matching tasks loaded · Page ${graph.page}`} · {graph.completed_count} completed
+        {!graph.visibility_complete && " · Visibility incomplete"}{loading && " · Loading continuation"}{error && " · Partial data"}</p>
+      {graph.cycle_count > 0 && <div role="status" className="space-y-2 rounded-lg border border-amber-500 p-3 text-sm">
+        <p>Cycle detected · {graph.cycle_count} tasks in the cycle. Blocking order cannot be established.</p>
+        <p className="text-muted-foreground">Available cycle tasks in this view:</p>
+        {graph.cycle_ids.map(id => nodes.get(id)).filter((n): n is DependencyNode => Boolean(n && n.availability === "available")).map(n =>
+          <Button key={n.id} variant="ghost" className="min-h-11 max-w-full whitespace-normal break-words" onClick={() => select(n.id)}>{n.title}</Button>)}
+        {graph.dependencies.filter(e => e.dependency_type === "blocks" && graph.cycle_ids.includes(e.task_id) && graph.cycle_ids.includes(e.depends_on_task_id)).map(e =>
+          <p key={e.id} className="break-words text-xs">{cycleTitle(e.depends_on_task_id)} {e.task_id === e.depends_on_task_id ? "blocks itself (self-loop)" : `blocks ${cycleTitle(e.task_id)}`}</p>)}
+        <p className="text-xs text-muted-foreground">Edges shown for loaded direct neighbors. Inspect a member to continue the cycle.</p>
+        {cyclePage === 0 ? <Button variant="outline" onClick={() => setCyclePage(1)}>Inspect cycle members</Button> : <>
+          <ul className="space-y-2" aria-label="Cycle members">
+            {graph.cycle_ids.slice((cyclePage - 1) * 10, cyclePage * 10).map(id => {
+              const node = nodes.get(id);
+              return <li key={id} className="break-words">{node && node.availability !== "available" ? "Unavailable dependency" :
+                <Button variant="ghost" className="min-h-11 max-w-full whitespace-normal break-all" onClick={() => select(id)}>
+                  {node?.title || `Inspect task #${id}`}</Button>}</li>;
+            })}
+          </ul>
+          <div className="flex flex-wrap items-center gap-2">
+            {cyclePage > 1 && <Button variant="outline" onClick={() => setCyclePage(n => n - 1)}>Previous members</Button>}
+            {cyclePage * 10 < graph.cycle_ids.length && <Button variant="outline" onClick={() => setCyclePage(n => n + 1)}>Next 10 members</Button>}
+            <Button variant="ghost" onClick={() => setCyclePage(0)}>Hide members</Button>
+          </div>
+        </>}
+      </div>}
+      {focus && center ? <>
+        <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)]">
+          <div className="order-3 min-w-0 lg:order-1">{branch("before", "What blocks this task")}</div>
+          <div aria-hidden="true" className="order-2 flex items-center justify-center gap-2 pt-3 text-xs text-muted-foreground"><ArrowRight className="hidden lg:block" /><ArrowUp className="lg:hidden" /><span className="lg:hidden">Blockers → selected task</span></div>
+          <section className="order-1 min-w-0 space-y-3 lg:order-3" aria-label="Selected task"><h2 className="text-sm font-semibold">Selected task</h2>{renderNode(center, true)}
+            <p className="text-sm" aria-live="polite">{loading || error ? "Dependency check is incomplete" : blockerSummary(center, graph)}</p>
+            <p className="text-xs text-muted-foreground">Other workflow and scheduling limits still apply.</p></section>
+          <div aria-hidden="true" className="order-4 flex items-center justify-center gap-2 pt-3 text-xs text-muted-foreground"><ArrowRight className="hidden lg:block" /><ArrowDown className="lg:hidden" /><span className="lg:hidden">Selected task → dependents</span></div>
+          <div className="order-5 min-w-0">{branch("after", "What waits for this task")}</div>
+        </div>
+        <div className="border-t border-border pt-4">{branch("relations", "Parent, subtasks and related tasks")}</div>
+      </> : !focus ? <>
+        {[...groups].map(([parent, list]) => <section key={parent} aria-label={parent ? `Parent ${parent}` : "Without an epic"} className="space-y-3">
+          <h2 className="break-words text-sm font-semibold">{parent ? `Parent: ${nodes.get(parent)?.title || `#${parent.slice(0, 8)}`}` : "Without an epic"}
+            <span className="ml-2 text-muted-foreground">{list.length} unique loaded tasks</span></h2>
+          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{list.map(node => <div key={node.id} className="min-w-0">
+            {renderNode(node)}<p className="mt-2 text-xs text-muted-foreground">{node.unfinished_blockers} unfinished direct blockers · {node.unknown_blockers} unknown · {node.dependents} direct dependents</p>
+          </div>)}</div>
+        </section>)}
+        {graph.tasks.length === 0 && <p className="rounded-xl border border-border border-dashed p-8 text-center">{search ? "No matching tasks" : "No open tasks"}</p>}
+        {!completed && graph.completed_count > 0 && <Button variant="outline" className="min-h-11 whitespace-normal" onClick={() => update({ completed: "true", page: null })}>✓ {graph.completed_count} completed · expand</Button>}
+        {graph.page > 1 && <Button variant="outline" disabled={loading} onClick={() => update({ page: String(graph.page - 1) })}>Previous page</Button>}
+        {graph.has_more && <Button variant="outline" disabled={loading} onClick={() => update({ page: String(graph.page + 1) })}>Load next 50 · {Math.max(0, graph.total_count - graph.tasks.length)} remaining</Button>}
+      </> : null}
+    </>}
+    <Button variant="ghost" disabled={history.current.length === 0} onClick={() => {
+      const previous = history.current.pop(); if (previous !== undefined) setQuery(new URLSearchParams(previous));
+    }}><ArrowLeft className="mr-2 h-4 w-4" /> Previous focus</Button>
+    {panelId && <TaskSlideOver taskId={panelId} onClose={() => setPanelId(null)} onTaskUpdated={() => setRetry(n => n + 1)} />}
+  </div>;
 }

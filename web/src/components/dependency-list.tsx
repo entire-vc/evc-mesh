@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Link, useParams } from "react-router";
 import { ArrowRight, ArrowLeft, Link2, GitMerge, Plus, X, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -6,6 +7,7 @@ import { DependencyTaskPicker, type DependencyTarget } from "@/components/depend
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
+import { useProjectStore } from "@/stores/project";
 import { useTaskDependencies, refreshTaskDependencies, type TaskDependenciesSource, type DependencyRow } from "@/hooks/use-task-dependencies";
 import { apiErrorMessage } from "@/lib/api-error";
 
@@ -108,6 +110,8 @@ export function DependencyList({
   onChanged,
   onOpenTask,
 }: DependencyListProps) {
+  const { currentProject } = useProjectStore();
+  const { wsSlug } = useParams();
   const ownSource = useTaskDependencies(sharedSource ? null : taskId);
   const source = sharedSource ?? ownSource;
   const { rows, reload: fetchDeps } = source;
@@ -234,6 +238,7 @@ export function DependencyList({
         <div className="flex items-center gap-2 text-sm font-medium">
           <Link2 className="h-4 w-4" />
           Dependencies
+          {wsSlug && currentProject && <Link className="ml-2 underline underline-offset-2" to={`/w/${wsSlug}/p/${currentProject.slug}/timeline?focus=${taskId}`}>View dependencies</Link>}
           {rows.length > 0 && (
             <span className="text-xs text-muted-foreground">
               ({rows.length})

@@ -824,7 +824,7 @@ func main() {
 	documentAttachmentHandler := handler.NewDocumentAttachmentHandler(documentAttachmentService)
 	documentCommentHandler := handler.NewDocumentCommentHandler(documentCommentService)
 	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
-	depHandler := handler.NewDependencyHandler(depService, taskService)
+	depHandler := handler.NewDependencyHandler(depService, taskService).WithGraphReader(taskDependencyRepo)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
 	// Closed first thing on SIGTERM so SSE streams and long-polls end before
 	// e.Shutdown, which would otherwise wait on them until its deadline.
