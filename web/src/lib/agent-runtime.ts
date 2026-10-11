@@ -413,3 +413,40 @@ export async function previewBinding(
     return { kind: "unavailable" };
   }
 }
+
+export type SavePolicyResult =
+  | { kind: "ok"; revision: number }
+  | { kind: "forbidden" }
+  | { kind: "stale" }
+  | { kind: "invalid"; message: string }
+  | { kind: "unavailable" };
+
+/**
+ * PUT .../bindings/:id/policy (R1b). The server edits only this binding inside the
+ * stored catalog, so credential refs never travel. `ifRevision` is the catalog
+ * revision the edit started from: a conflict (409) is reported, never retried
+ * or merged. Success needs a numeric `revision` in the body, a bare 200 is not one.
+ */
+export async function saveBindingPolicy(
+  workspaceId: string,
+  bindingRef: string,
+  ifRevision: number,
+  permittedProfiles: string[],
+  policy: RuntimeRoutingPolicy,
+): Promise<SavePolicyResult> {
+  try {
+    const raw = await api<unknown>(
+      `/api/v1/workspaces/${workspaceId}/runtime/bindings/${encodeURIComponent(bindingRef)}/policy?resource_owner_workspace_id=${workspaceId}`,
+      { method: "PUT", body: { if_revision: ifRevision, permitted_profiles: permittedProfiles, policy } },
+    );
+    return isObject(raw) && typeof raw.revision === "number"
+      ? { kind: "ok", revision: raw.revision }
+      : { kind: "unavailable" };
+  } catch (err) {
+    const e = err as { status?: number; message?: string } | null;
+    if (e?.status === 403) return { kind: "forbidden" };
+    if (e?.status === 409) return { kind: "stale" };
+    if (e?.status === 400 || e?.status === 422) return { kind: "invalid", message: e.message ?? "" };
+    return { kind: "unavailable" };
+  }
+}
