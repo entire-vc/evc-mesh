@@ -77,7 +77,7 @@ export function TimelinePage() {
   const [notice, setNotice] = useState("");
   const [retry, setRetry] = useState(0);
   const [panelId, setPanelId] = useState<string | null>(null);
-  const [cyclePage, setCyclePage] = useState(0);
+  const [cycleState, setCycleState] = useState<{ key: string; page: number }>({ key: "", page: 0 });
   const revealSearch = query.get("reveal") === "true";
   const history = useRef<string[]>([]);
   const cache = useRef(new Map<string, DependencyGraph>());
@@ -85,7 +85,12 @@ export function TimelinePage() {
   const positions = useRef(new Map<string, number>());
   const positionKey = requestKey + revealSearch;
   const graph = snapshot?.key === requestKey ? snapshot.graph : cache.current.get(requestKey);
-  useEffect(() => { setCyclePage(0); }, [requestKey, graph?.revision]);
+  // The members page belongs to one graph revision. It is reset while rendering (not in an effect), so a click made right after the graph appears cannot be overwritten by a late reset.
+  const cycleKey = `${requestKey}|${graph?.revision}`;
+  if (cycleState.key !== cycleKey) setCycleState({ key: cycleKey, page: 0 });
+  const cyclePage = cycleState.key === cycleKey ? cycleState.page : 0;
+  const setCyclePage = (next: number | ((n: number) => number)) =>
+    setCycleState(prev => ({ key: cycleKey, page: typeof next === "function" ? next(prev.key === cycleKey ? prev.page : 0) : next }));
   useLayoutEffect(() => {
     const main = root.current?.closest("main");
     if (!main || loading || !graph) return;
