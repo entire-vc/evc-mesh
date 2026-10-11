@@ -1124,6 +1124,9 @@ type assignTaskRequest struct {
 	// Source defaults to "system" when omitted. Pass "human" to set a human pin.
 	// Rule/system sources are rejected if the task is already pinned by a human.
 	Source domain.AssignmentSource `json:"source"`
+	// ExpectedUpdatedAt makes the assignment conditional: 409 cas_conflict if the
+	// task changed (e.g. was checked out) since the caller read it.
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
 }
 
 // AssignTask handles POST /tasks/:task_id/assign
@@ -1151,6 +1154,8 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 		AssigneeID:   req.AssigneeID,
 		AssigneeType: assigneeType,
 		Source:       req.Source,
+
+		ExpectedUpdatedAt: req.ExpectedUpdatedAt,
 	}
 
 	if err = h.taskService.AssignTask(c.Request().Context(), taskID, input); err != nil {

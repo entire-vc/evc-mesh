@@ -206,3 +206,45 @@ func TestMoveTask_PostgresAtomicParkAlarm(t *testing.T) {
 	require.Contains(t, after.Labels, "monitor")
 	require.Equal(t, before.Version+1, after.Version, "alarm and status share one write")
 }
+
+// AssignTask must refuse when a checkout lands after the caller decided
+// ("nobody holds this card") and before AssignTask's own fresh read: the row
+// version it reads then is already post-checkout, so only the caller's
+// updated_at snapshot can reveal the race.
+func TestAssignTask_PostgresExpectedUpdatedAtLosesToCheckout(t *testing.T) {
+	for _, raced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("checkout_after_snapshot=%t", raced), func(t *testing.T) {
+			f, repo, _, id, owner := newCheckoutM1Fixture(t)
+			ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+			next := uuid.New()
+			_, err := f.db.Exec(`INSERT INTO agents(id,workspace_id,name,slug,api_key_hash,api_key_prefix) VALUES($1,$2,'assign cas fixture',$3,'fixture-hash','test')`, next, f.workspaceID, next.String())
+			require.NoError(t, err)
+			snapshot, err := repo.GetByID(ctx, id)
+			require.NoError(t, err)
+			seen := snapshot.UpdatedAt
+			if raced {
+				_, err = repo.AcquireCheckout(ctx, id, owner, uuid.New(), time.Now().Add(time.Hour), checkoutScope())
+				require.NoError(t, err)
+			}
+
+			svc := NewTaskService(repo, postgres.NewTaskStatusRepo(f.db), nil, postgres.NewActivityLogRepo(f.db),
+				WithProjectRepo(postgres.NewProjectRepo(f.db)), WithTaskAgentRepo(postgres.NewAgentRepo(f.db)),
+				WithProjectMemberRepoTask(postgres.NewProjectMemberRepo(f.db)),
+				WithEventBusService(NewEventBusService(postgres.NewEventBusMessageRepo(f.db), nil)))
+			err = svc.AssignTask(ctx, id, AssignTaskInput{AssigneeID: &next, AssigneeType: domain.AssigneeTypeAgent, ExpectedUpdatedAt: &seen})
+
+			fresh, readErr := repo.GetByID(ctx, id)
+			require.NoError(t, readErr)
+			if raced {
+				var conflict *domain.TaskConflict
+				require.ErrorAs(t, err, &conflict)
+				require.Nil(t, fresh.AssigneeID, "refused assignment must not land")
+				require.NotNil(t, fresh.CheckedOutBy, "the racing checkout is intact")
+			} else {
+				require.NoError(t, err, "positive control: unchanged snapshot assigns")
+				require.NotNil(t, fresh.AssigneeID)
+				require.Equal(t, next, *fresh.AssigneeID)
+			}
+		})
+	}
+}
