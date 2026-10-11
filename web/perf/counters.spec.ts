@@ -149,8 +149,18 @@ async function measure(action: () => Promise<void>): Promise<Sample> {
   });
   const before = await cdpMetrics();
   const t0 = Date.now();
+  const trace: string[] = [];
+  const onReq = (r: { method(): string; url(): string }) => {
+    const u = new URL(r.url());
+    if (u.pathname.startsWith("/api/")) trace.push(`${Date.now() - t0}ms ${r.method()} ${u.pathname}`);
+  };
+  if (process.env.PERF_TRACE === "1") page.on("request", onReq);
   await action();
   await settle();
+  if (process.env.PERF_TRACE === "1") {
+    page.off("request", onReq);
+    console.log(`[trace] ${trace.join(" | ")}`);
+  }
   const ms = Date.now() - t0 - QUIET_MS;
   const after = await cdpMetrics();
   const { commits, mutations } = await page.evaluate(() => ({
@@ -225,6 +235,25 @@ test.beforeAll(async ({ browser }) => {
   // the API during the run. The socket is answered locally and never talks
   // to the server: the app sees a connected, silent channel.
   await context.routeWebSocket(/\/ws(\?|$)/, () => {});
+
+  // Optional read latency: PERF_GET_DELAY_MAX_MS=400 delays every API GET by a
+  // seeded-random 0..400 ms so the order the responses land in changes between
+  // runs (PERF_GET_DELAY_SEED picks the sequence). Off by default: the gated
+  // runs stay deterministic. Used to measure the fetch-order race on the read
+  // paths (task.open, view.switch).
+  const getDelayMax = Number(process.env.PERF_GET_DELAY_MAX_MS || 0);
+  if (getDelayMax > 0) {
+    let seed = Number(process.env.PERF_GET_DELAY_SEED || 1) >>> 0;
+    const rand = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 2 ** 32;
+    };
+    await context.route(/\/api\/v1\//, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      await new Promise((r) => setTimeout(r, Math.floor(rand() * getDelayMax)));
+      await route.continue();
+    });
+  }
 
   page = await context.newPage();
   page.on("request", (r) => {

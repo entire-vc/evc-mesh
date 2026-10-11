@@ -203,7 +203,16 @@ export function TaskPanel({
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
   const { templates, fetchTemplates } = useTemplateStore();
 
-  const [loading, setLoading] = useState(false);
+  // Born loading when there is a task to load: the load effect below sets it on
+  // the first commit anyway, and starting at false mounted the whole panel (and
+  // its comments/members GETs) for one frame before unmounting it into the
+  // skeleton and mounting it again — a second set of GETs whose arrival order
+  // moved task.open's layout count.
+  const [loadingFlag, setLoading] = useState(Boolean(effectiveTaskId));
+  // Id whose load finished. Switching to another task inside a mounted panel is
+  // loading from the render that changes the id, not from the effect after it.
+  const [settledTaskId, setSettledTaskId] = useState<string | null>(null);
+  const loading = loadingFlag || (Boolean(effectiveTaskId) && settledTaskId !== effectiveTaskId);
   const [activeMobileTab, setActiveMobileTab] = useState<MobileTabId>("details");
   const [activeDesktopTab, setActiveDesktopTab] = useState<RightTabId>("comments");
 
@@ -407,7 +416,10 @@ export function TaskPanel({
       } catch {
         // error handled by store
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setSettledTaskId(effectiveTaskId!);
+          setLoading(false);
+        }
       }
     }
 
