@@ -42,7 +42,7 @@ function renderBar(currentView: ProjectViewTab, projectId?: string) {
 
 function openKebab() {
   fireEvent.click(screen.getByRole("button", { name: /more views/i }));
-  return screen.getByRole("menuitem", { name: /timeline/i }).parentElement!;
+  return screen.getByRole("menuitem", { name: /dependencies/i }).parentElement!;
 }
 
 describe("ViewTabBar", () => {
@@ -84,7 +84,7 @@ describe("ViewTabBar", () => {
     expect(formats.map((i) => i.textContent?.trim())).toEqual([
       // Phone-only entry; present in the DOM at every width, hidden above `sm`.
       "Calendar",
-      "Timeline",
+      "Dependencies",
       "Updates",
       "Save current view",
     ]);
@@ -95,7 +95,7 @@ describe("ViewTabBar", () => {
   it("navigates to timeline and updates from the kebab", () => {
     renderBar("board");
     openKebab();
-    fireEvent.click(screen.getByRole("menuitem", { name: /timeline/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /dependencies/i }));
     expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/timeline");
 
     openKebab();
@@ -107,7 +107,7 @@ describe("ViewTabBar", () => {
     renderBar("timeline");
     openKebab();
     expect(
-      screen.getByRole("menuitem", { name: /timeline/i }),
+      screen.getByRole("menuitem", { name: /dependencies/i }),
     ).toHaveAttribute("aria-current", "page");
   });
 

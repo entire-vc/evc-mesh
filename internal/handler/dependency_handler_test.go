@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -314,4 +316,65 @@ func TestDependencyHandler_Delete_NotFound(t *testing.T) {
 	err := h.Delete(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+type graphReaderFunc func(context.Context, uuid.UUID, uuid.UUID, domain.GraphScope) (*domain.GraphSnapshot, error)
+
+func (f graphReaderFunc) ReadGraph(ctx context.Context, p, foc uuid.UUID, s domain.GraphScope) (*domain.GraphSnapshot, error) {
+	return f(ctx, p, foc, s)
+}
+
+func TestDependencyGraph_PaginationMustBeExplicit(t *testing.T) {
+	projectID := uuid.New()
+	actorID := uuid.New()
+	snapshot := &domain.GraphSnapshot{Revision: "r1"}
+	for i := 0; i < 201; i++ {
+		snapshot.Nodes = append(snapshot.Nodes, domain.GraphNode{ID: uuid.New(), ProjectID: &projectID, Availability: "available"})
+	}
+	h := NewDependencyHandler(nil, nil).WithGraphReader(graphReaderFunc(func(_ context.Context, p, f uuid.UUID, s domain.GraphScope) (*domain.GraphSnapshot, error) {
+		require.Equal(t, projectID, p)
+		require.Equal(t, actorID, s.ActorID)
+		return snapshot, nil
+	}))
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(httptest.NewRequest("GET", "/?page_size=200", http.NoBody), rec)
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+	c.Set(middleware.ContextKeyUserID, actorID)
+	c.Set(middleware.ContextKeyWorkspaceID, uuid.New())
+	require.NoError(t, h.DependencyGraph(c))
+	require.Equal(t, 200, rec.Code)
+	var body service.GraphResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Tasks, 200)
+	require.True(t, body.HasMore)
+	require.False(t, body.Complete)
+	require.Equal(t, 201, body.Total)
+	rec = httptest.NewRecorder()
+	c = e.NewContext(httptest.NewRequest("GET", "/?page_size=200&page=2&revision=r1", http.NoBody), rec)
+	c.SetParamNames("proj_id")
+	c.SetParamValues(projectID.String())
+	c.Set(middleware.ContextKeyUserID, actorID)
+	c.Set(middleware.ContextKeyWorkspaceID, uuid.New())
+	require.NoError(t, h.DependencyGraph(c))
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Tasks, 1)
+	require.True(t, body.Complete)
+}
+
+func TestDependencyGraph_ActorAndInputGuards(t *testing.T) {
+	h := NewDependencyHandler(nil, nil).WithGraphReader(graphReaderFunc(func(_ context.Context, _, _ uuid.UUID, _ domain.GraphScope) (*domain.GraphSnapshot, error) {
+		t.Fatal("must fail before reading")
+		return nil, nil
+	}))
+	for _, query := range []string{"", "?focus=wrong", "?before_page=-1", "?page=1000001"} {
+		e := echo.New()
+		rec := httptest.NewRecorder()
+		c := e.NewContext(httptest.NewRequest("GET", "/"+query, http.NoBody), rec)
+		c.SetParamNames("proj_id")
+		c.SetParamValues(uuid.NewString())
+		require.NoError(t, h.DependencyGraph(c))
+		require.True(t, rec.Code == 400 || rec.Code == 403)
+	}
 }

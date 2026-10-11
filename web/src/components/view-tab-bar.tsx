@@ -81,7 +81,7 @@ const TABS = [
 const FORMATS = [
   {
     id: "timeline" as const,
-    label: "Timeline",
+    label: "Dependencies",
     Icon: GitBranch,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/timeline`,
   },

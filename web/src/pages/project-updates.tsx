@@ -329,7 +329,7 @@ export function ProjectUpdatesPage() {
               to={`/w/${wsSlug}/p/${projectSlug}/timeline`}
               className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-accent"
             >
-              <GitBranch className="h-4 w-4" /> Timeline
+              <GitBranch className="h-4 w-4" /> Dependencies
             </Link>
             <span className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1.5 text-sm font-medium">
               <FileText className="h-4 w-4" /> Updates

@@ -55,6 +55,24 @@ describe("access token storage", () => {
 });
 
 describe("api() credentials handling", () => {
+  it("keeps a refreshed session when an obsolete graph request is aborted during its retry", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({}, 401))
+      .mockResolvedValueOnce(jsonResponse({ tokens: { access_token: "refreshed-session", expires_in: 900 } }))
+      .mockImplementationOnce((_url, options: RequestInit) => {
+        expect(options.signal).toBe(controller.signal);
+        controller.abort();
+        return Promise.reject(new DOMException("Obsolete scope", "AbortError"));
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const { api, getAccessToken } = await import("@/lib/api");
+    await expect(api("/api/v1/projects/project/dependency-graph", { signal: controller.signal }))
+      .rejects.toThrow("Obsolete scope");
+    expect(getAccessToken()).toBe("refreshed-session");
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+
   it("sends credentials 'omit' for a plain noAuth request", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ ok: true })));
     const { api } = await import("@/lib/api");

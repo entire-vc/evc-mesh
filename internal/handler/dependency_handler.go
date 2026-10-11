@@ -2,6 +2,9 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
+
+	"github.com/entire-vc/evc-mesh/internal/middleware"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -10,18 +13,24 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
-	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // DependencyHandler handles HTTP requests for task dependency management.
 type DependencyHandler struct {
 	depService  service.TaskDependencyService
 	taskService service.TaskService
+	graphReader repository.DependencyGraphReader
 }
 
 // NewDependencyHandler creates a new DependencyHandler with the given services.
 func NewDependencyHandler(ds service.TaskDependencyService, ts service.TaskService) *DependencyHandler {
 	return &DependencyHandler{depService: ds, taskService: ts}
+}
+
+// WithGraphReader wires the bulk, read-only projection independently of write services.
+func (h *DependencyHandler) WithGraphReader(reader repository.DependencyGraphReader) *DependencyHandler {
+	h.graphReader = reader
+	return h
 }
 
 // createDependencyRequest represents the JSON body for creating a dependency.
@@ -139,54 +148,69 @@ func (h *DependencyHandler) Delete(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// dependencyGraphResponse is returned by the DependencyGraph endpoint.
-type dependencyGraphResponse struct {
-	Tasks        []domain.Task           `json:"tasks"`
-	Dependencies []domain.TaskDependency `json:"dependencies"`
-}
-
-// DependencyGraph handles GET /projects/:proj_id/dependency-graph
-// It returns all tasks for the project together with all their dependencies in a single response,
-// avoiding N+1 fetches on the client side.
+// DependencyGraph preserves the route and tasks/dependencies keys while making
+// pagination and completeness explicit. No task-by-task fallback is permitted.
 func (h *DependencyHandler) DependencyGraph(c echo.Context) error {
-	projIDStr := c.Param("proj_id")
-	projID, err := uuid.Parse(projIDStr)
+	projectID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid proj_id"))
+		return handleError(c, apierror.BadRequest("invalid proj_id"))
 	}
-
-	ctx := c.Request().Context()
-
-	// Fetch all tasks for the project (up to 1000).
-	pg := pagination.Params{Page: 1, PageSize: 1000}
-	pg.Normalize()
-	taskPage, err := h.taskService.List(ctx, projID, repository.TaskFilter{}, pg)
-	if err != nil {
-		return handleError(c, err)
+	if h.graphReader == nil {
+		return handleError(c, apierror.InternalError("dependency graph reader unavailable"))
 	}
-
-	// Collect all dependencies for these tasks, deduplicating by ID.
-	seen := make(map[uuid.UUID]bool)
-	var allDeps []domain.TaskDependency
-	for _, task := range taskPage.Items {
-		deps, err := h.depService.ListByTask(ctx, task.ID)
+	opts := service.GraphOptions{}
+	// Existing timeline clients get the complete compact graph. New overview
+	// clients opt into pagination; a focus parameter selects the bounded view.
+	switch c.QueryParam("mode") {
+	case "", "overview":
+		opts.Legacy = len(c.QueryParams()) == 0
+	default:
+		return handleError(c, apierror.BadRequest("invalid mode"))
+	}
+	if raw := c.QueryParam("focus"); raw != "" {
+		opts.Focus, err = uuid.Parse(raw)
 		if err != nil {
-			return handleError(c, err)
+			return handleError(c, apierror.BadRequest("invalid focus"))
 		}
-		for _, d := range deps {
-			if !seen[d.ID] {
-				seen[d.ID] = true
-				allDeps = append(allDeps, d)
+	}
+	for name, target := range map[string]*int{"page": &opts.Page, "page_size": &opts.PageSize, "before_page": &opts.BeforePage, "after_page": &opts.AfterPage, "relations_page": &opts.RelationsPage} {
+		if raw := c.QueryParam(name); raw != "" {
+			*target, err = strconv.Atoi(raw)
+			if err != nil || *target < 1 || *target > 1000000 {
+				return handleError(c, apierror.BadRequest("invalid "+name))
 			}
 		}
 	}
-
-	if allDeps == nil {
-		allDeps = []domain.TaskDependency{}
+	if raw := c.QueryParam("completed"); raw != "" {
+		if raw != "true" && raw != "false" {
+			return handleError(c, apierror.BadRequest("invalid completed"))
+		}
+		opts.Completed = raw == "true"
 	}
-
-	return c.JSON(http.StatusOK, dependencyGraphResponse{
-		Tasks:        taskPage.Items,
-		Dependencies: allDeps,
-	})
+	opts.Search = c.QueryParam("search")
+	opts.Revision = c.QueryParam("revision")
+	scope := domain.GraphScope{Agent: middleware.IsAgent(c)}
+	scope.WorkspaceID, err = middleware.GetWorkspaceID(c)
+	if err != nil {
+		return handleError(c, apierror.Forbidden("workspace context required"))
+	}
+	if scope.Agent {
+		scope.ActorID, err = middleware.GetAgentID(c)
+	} else {
+		scope.ActorID, err = middleware.GetUserID(c)
+		role, _ := c.Get(middleware.ContextKeyWorkspaceRole).(string)
+		scope.Admin = role == domain.RoleAdmin || role == domain.RoleOwner
+	}
+	if err != nil {
+		return handleError(c, apierror.Forbidden("actor context required"))
+	}
+	snapshot, err := h.graphReader.ReadGraph(c.Request().Context(), projectID, opts.Focus, scope)
+	if err != nil {
+		return handleError(c, err)
+	}
+	result, err := service.ProjectGraph(snapshot, projectID, opts)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, result)
 }
