@@ -100,6 +100,9 @@ export function PolicyEditor({ workspaceId, bindingRef, binding, catalog, revisi
         <legend className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Allowed routes, in order
         </legend>
+        <p className="text-xs text-muted-foreground">
+          Primary routes run first. This list orders only the reserves of one route; it does not make a route primary.
+        </p>
         {allowed.map((ref, i) => (
           <div key={ref} className="flex flex-wrap items-center gap-2 text-sm">
             <span className="w-5 text-muted-foreground">{i + 1}.</span>
