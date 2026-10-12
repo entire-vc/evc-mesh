@@ -6,12 +6,15 @@
 # CI. That makes it exactly the kind of guard that rots unnoticed: it looks alive
 # because it is never contradicted. So this script contradicts it on purpose.
 #
-# Four cases, and the first two are the load-bearing ones:
+# Five cases, and the first two are the load-bearing ones:
 #
 #   RED    a deadlocked test          -> must dump goroutine stacks AND exit non-zero
 #   GREEN  an ordinary passing test   -> must exit 0 and stream the result through
 #   RED    an ordinary failing test   -> must preserve go test's non-zero exit
 #   GREEN  a slow-but-talking test    -> must NOT fire while output keeps arriving
+#   GREEN  a silent CPU-busy test     -> must NOT fire while CPU keeps being used
+#                                        (a package `go test` reports only at its end,
+#                                        on a starved runner: Mesh #362289cb)
 #
 # The last one matters as much as the first: a watchdog that kills healthy long
 # runs is worse than none, because it teaches everyone to raise the limit until
@@ -157,6 +160,36 @@ if [ "$RC" -eq 0 ]; then
 else
     fail "killed a healthy long run (exit $RC) - watchdog is measuring duration, not silence"
     tail -15 "$WORK/chatty.log"
+fi
+
+cat > busy_test.go <<'EOF'
+package stallcontrol
+
+import (
+	"testing"
+	"time"
+)
+
+// Silent (go test prints nothing until the package ends) but burning CPU for
+// longer than STALL_SECONDS: a slow package, not a wedge.
+func TestSilentButBusy(t *testing.T) {
+	end := time.Now().Add(14 * time.Second)
+	x := 0
+	for time.Now().Before(end) {
+		x++
+	}
+	_ = x
+}
+EOF
+
+echo "case 5 (GREEN): silent but CPU-busy test must NOT be killed"
+STALL_SECONDS=6 POLL_SECONDS=2 sh "$WATCHDOG" . \
+    -run TestSilentButBusy -count=1 >"$WORK/busy.log" 2>&1 && RC=0 || RC=$?
+if [ "$RC" -eq 0 ]; then
+    pass "survived silence longer than STALL_SECONDS while using CPU"
+else
+    fail "killed a silent CPU-bound run (exit $RC) - watchdog is treating a slow package as a wedge"
+    tail -8 "$WORK/busy.log"
 fi
 
 echo ""

@@ -666,6 +666,10 @@ test:
       [ "$GOOSE_ACTUAL" = "goose version: $GOOSE_VERSION" ] || { echo "REFUSING: Goose image version mismatch"; exit 1; }
   script:
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" goose -dir migrations up
+    # Red/green control for the watchdog below: deadlock -> dump + exit 124, silent
+    # CPU-busy slow package -> survives (Mesh #362289cb). A guard nobody has seen
+    # fire is indistinguishable from a broken one.
+    - sh scripts/ci/test-go-test-stall-watchdog.sh
     # go-test-stall-watchdog wraps `go test` so a wedge (Mesh #405872aa: 28min of
     # silence, the runner's only slot held, the whole fleet's queue stalled) fails
     # fast with a goroutine dump naming what's blocked, instead of running out the
