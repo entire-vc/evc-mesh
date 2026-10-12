@@ -21,8 +21,8 @@ and `data-testid="task-card"` / `data-task-id` in `web/src/pages/board.tsx`
 - The sandbox project has at least two non-closed statuses (required for a
   cross-column drag to mean anything) — read live via
   `GET /api/v1/projects/:id/statuses`, not assumed from a fixture file.
-- This suite creates its own throwaway task (`[e2e-board] drag+filter
-  <run-tag>`) via `POST /api/v1/projects/:id/tasks` rather than reusing the
+- This suite creates two owned throwaway tasks: `[e2e-board] drag+filter
+  <run-tag>` and `[e2e-board] nonmatching control`, both in open statuses, via `POST /api/v1/projects/:id/tasks` rather than reusing the
   permanent "E2E read fixture — do not delete" row — dragging or filtering
   around a task other suites may be reading concurrently would be a shared
   fixture race, not a fixture reuse.
@@ -53,7 +53,7 @@ and `data-testid="task-card"` / `data-task-id` in `web/src/pages/board.tsx`
   "different from the source", which a drop into a third, unintended column
   would also satisfy.
 - **Filter, behavioral:** before filtering, the board shows more than one
-  card (the throwaway task is not the only row — otherwise a search that
+  card (both owned tasks are visible before search — otherwise a search that
   "returns everything" could pass by accident). After typing the run-tag,
   the board shows **exactly one** card, and its `data-task-id` is the
   throwaway task's — not `toBeVisible()` on a card already there, and not a
@@ -87,9 +87,12 @@ failing `/api/v1/*` calls, resource-timing `responseStatus >= 500`.
 
 ## Test data
 
-- One throwaway task per run, title-prefixed `[e2e-board]`, deleted in
-  `afterAll` regardless of which assertion failed. Cleanup is itself
-  deep-verified: after the `DELETE`, a `GET` on the same id must answer 404 —
+- Two owned throwaway tasks per run, title-prefixed `[e2e-board]`. Only the
+  drag/search match contains the run-tag; the control must not match it.
+  Every successfully created ID is tracked immediately, so partial setup
+  still cleans up its rows. `afterAll` attempts every DELETE and fresh GET
+  even if one fails, then closes the context in `finally`. Each GET must
+  answer 404 —
   a `DELETE` returning 204 without the row actually being gone would
   otherwise report false success (the same class of gap `docs-write-path.md`
   closes for documents).

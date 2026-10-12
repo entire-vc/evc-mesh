@@ -38,7 +38,8 @@ let wsSlug = "";
 let projectSlug = "";
 
 let dragTaskId = "";
-let created = false;
+let controlTaskId = "";
+const createdTaskIds: string[] = [];
 let sourceStatusId = "";
 let targetStatusId = "";
 
@@ -58,6 +59,8 @@ const runTag = process.env.CI_JOB_ID
     ? `gh-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
     : `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const dragTaskTitle = `${SCRATCH_PREFIX} drag+filter ${runTag}`;
+// Deliberately excludes runTag: this owned card must disappear during search.
+const controlTaskTitle = `${SCRATCH_PREFIX} nonmatching control`;
 
 const boardUrl = () => `/w/${wsSlug}/p/${projectSlug}`;
 
@@ -128,17 +131,18 @@ test.beforeAll(async ({ browser }) => {
   sourceStatusId = visibleStatuses[0]!.id;
   targetStatusId = visibleStatuses[1]!.id;
 
-  const createRes = await api.post(`/api/v1/projects/${projectId}/tasks`, {
-    headers: authHeaders(),
-    data: { title: dragTaskTitle, status_id: sourceStatusId },
-  });
-  expect(
-    createRes.status(),
-    `POST .../tasks failed: ${createRes.status()} ${await createRes.text()}`
-  ).toBe(201);
-  const task = (await createRes.json()) as { id: string };
-  dragTaskId = task.id;
-  created = true;
+  for (const title of [dragTaskTitle, controlTaskTitle]) {
+    const createRes = await api.post(`/api/v1/projects/${projectId}/tasks`, {
+      headers: authHeaders(),
+      data: { title, status_id: sourceStatusId },
+    });
+    expect(createRes.status(), "creating an owned board fixture must succeed").toBe(201);
+    const task = (await createRes.json()) as { id: string };
+    // Track immediately so a later setup failure still cleans up this row.
+    createdTaskIds.push(task.id);
+  }
+  dragTaskId = createdTaskIds[0]!;
+  controlTaskId = createdTaskIds[1]!;
 
   page = await context.newPage();
   await page.addInitScript(() => {
@@ -162,20 +166,27 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  if (created && dragTaskId) {
-    const delRes = await api.delete(`/api/v1/tasks/${dragTaskId}`, { headers: authHeaders() });
-    console.log(`[cleanup] DELETE task ${dragTaskId} -> ${delRes.status()}`);
-    expect(delRes.ok(), `DELETE /api/v1/tasks/${dragTaskId} failed: ${delRes.status()}`).toBe(
-      true
-    );
-
-    // Deep-verify the cleanup: a 204 without the row actually gone would
-    // otherwise report false success (docs-write-path.md closes the same gap
-    // for documents).
-    const getRes = await api.get(`/api/v1/tasks/${dragTaskId}`, { headers: authHeaders() });
-    expect(getRes.status(), "the deleted task must 404 on a fresh GET").toBe(404);
+  const cleanupFailures: string[] = [];
+  try {
+    for (const taskId of createdTaskIds) {
+      try {
+        const delRes = await api.delete(`/api/v1/tasks/${taskId}`, { headers: authHeaders() });
+        if (!delRes.ok()) cleanupFailures.push("owned task DELETE failed");
+      } catch {
+        cleanupFailures.push("owned task DELETE request failed");
+      }
+      // Verify every row independently, even when a DELETE failed.
+      try {
+        const getRes = await api.get(`/api/v1/tasks/${taskId}`, { headers: authHeaders() });
+        if (getRes.status() !== 404) cleanupFailures.push("deleted owned task did not return 404");
+      } catch {
+        cleanupFailures.push("owned task verification request failed");
+      }
+    }
+    expect(cleanupFailures, "all owned board fixtures must be deleted and verified").toEqual([]);
+  } finally {
+    await context?.close();
   }
-  await context?.close();
 });
 
 test("dragging a card to another column moves it server-side, not just in the DOM", async () => {
@@ -268,6 +279,8 @@ test("the toolbar search filter narrows to the matching card and back", async ()
   });
   await page.goto(boardUrl(), { waitUntil: "domcontentloaded" });
   const cards = page.locator('[data-testid="task-card"]');
+  await expect(taskCard(dragTaskId)).toBeVisible({ timeout: 15_000 });
+  await expect(taskCard(controlTaskId)).toBeVisible({ timeout: 15_000 });
   await expect
     .poll(() => cards.count(), {
       message:
@@ -297,7 +310,10 @@ test("the toolbar search filter narrows to the matching card and back", async ()
   await expect(page.locator('[data-testid="task-card"]')).toHaveCount(1, { timeout: 10_000 });
   await expect(taskCard(dragTaskId)).toBeVisible();
 
+  await expect(taskCard(controlTaskId)).toHaveCount(0);
   await searchBox.fill("");
+  await expect(taskCard(dragTaskId)).toBeVisible();
+  await expect(taskCard(controlTaskId)).toBeVisible();
 
   // Reversible: clearing the filter restores the exact pre-filter count, not
   // just "more than one" (which a filter stuck in a different broken state
