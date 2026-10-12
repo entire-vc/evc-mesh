@@ -379,9 +379,9 @@ func (m *MockTaskRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.T
 		m.mu.Unlock()
 		return nil, nil
 	}
-	m.mu.Unlock()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// Write lock, not RLock: the resolve below mutates the shared *Task, so two
+	// concurrent readers under RLock race on t.RuntimeState.
+	defer m.mu.Unlock()
 	t, ok := m.items[id]
 	if !ok {
 		return nil, nil
