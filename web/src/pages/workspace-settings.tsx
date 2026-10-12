@@ -39,6 +39,7 @@ import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { InviteMemberDialog } from "@/components/invite-member-dialog";
 import { InviteAgentDialog } from "@/components/invite-agent-dialog";
+import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { InviteLinkBox } from "@/components/invite-link-box";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -727,6 +728,7 @@ export function WorkspaceSettingsPage() {
 
   // Agent grants state (task U4)
   const [inviteAgentDialogOpen, setInviteAgentDialogOpen] = useState(false);
+  const [editAgentId, setEditAgentId] = useState<string | null>(null);
   const [grantToRevoke, setGrantToRevoke] =
     useState<AgentWorkspaceGrantWithAgent | null>(null);
   const [isRevokingGrant, setIsRevokingGrant] = useState(false);
@@ -1763,6 +1765,21 @@ export function WorkspaceSettingsPage() {
                         {grant.role}
                       </Badge>
 
+                      {/* Edit opens the same agent card as the org chart. Only
+                          for home agents: a guest's card belongs to its home
+                          workspace, which this workspace's admin can't edit. */}
+                      {canManageMembers && isHome && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground"
+                          onClick={() => setEditAgentId(grant.agent_id)}
+                          title="Edit agent"
+                          aria-label={`Edit agent ${grant.agent.name}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
                       {canManageMembers && !isHome && (
                         <Button
                           variant="ghost"
@@ -2410,6 +2427,14 @@ export function WorkspaceSettingsPage() {
       />
 
       {/* Invite Agent Dialog */}
+      <AgentDetailDialog
+        open={editAgentId !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditAgentId(null);
+        }}
+        agent={agents.find((a) => a.id === editAgentId) ?? null}
+      />
+
       <InviteAgentDialog
         open={inviteAgentDialogOpen}
         onClose={() => setInviteAgentDialogOpen(false)}
