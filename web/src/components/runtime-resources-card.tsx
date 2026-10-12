@@ -4,7 +4,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ControllerList } from "@/components/agent-runtime-tabs";
-import { fetchWorkspaceRuntime, poolObservations, type RuntimeLoad, type RuntimeState } from "@/lib/agent-runtime";
+import {
+  fetchQuotaObservations,
+  fetchWorkspaceRuntime,
+  formatUsedFraction,
+  poolObservations,
+  type QuotaLoad,
+  type QuotaWindow,
+  type RuntimeLoad,
+  type RuntimeState,
+  formatObservedAtUtc,
+} from "@/lib/agent-runtime";
 
 // Read-only inventory of the workspace runtime: controllers, accounts, pools,
 // desired vs applied revision. Credential references are never rendered.
@@ -58,7 +68,7 @@ export function RuntimeResourcesCard({ workspaceId }: { workspaceId: string }) {
             No runtime connection in this workspace. Agents run in direct mode; runtime facts are unknown.
           </p>
         )}
-        {load !== "loading" && load.kind === "ok" && <Inventory state={load.state} />}
+        {load !== "loading" && load.kind === "ok" && <Inventory state={load.state} workspaceId={workspaceId} />}
       </CardContent>
     </Card>
   );
@@ -68,8 +78,31 @@ function H({ children }: { children: string }) {
   return <h3 className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">{children}</h3>;
 }
 
-function Inventory({ state }: { state: RuntimeState }) {
+// Raw per-window readings of every controller. Route availability still comes
+// from the report state shown next to the pool; these numbers do not change it.
+function useQuotaWindows(workspaceId: string, refs: string[]): QuotaLoad | "loading" {
+  const [result, setResult] = useState<QuotaLoad | "loading">("loading");
+  const key = refs.join("\n");
+  useEffect(() => {
+    let live = true;
+    setResult("loading");
+    void Promise.all(refs.map((r) => fetchQuotaObservations(workspaceId, r))).then((all) => {
+      if (!live) return;
+      const bad = all.find((r) => r.kind !== "ok");
+      if (bad) return setResult(bad);
+      setResult({ kind: "ok", windows: all.flatMap((r) => (r.kind === "ok" ? r.windows : [])) });
+    });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, key]);
+  return result;
+}
+
+function Inventory({ state, workspaceId }: { state: RuntimeState; workspaceId: string }) {
   const { catalog } = state;
+  const quota = useQuotaWindows(workspaceId, Object.keys(catalog.controllers));
   const controllers = Object.entries(catalog.controllers);
   const accounts = Object.entries(catalog.accounts);
   const pools = Object.entries(catalog.pools);
@@ -139,6 +172,7 @@ function Inventory({ state }: { state: RuntimeState }) {
                     {p.aliases.length > 0 && ` · aliases: ${p.aliases.join(", ")}`}
                     {o ? ` · ${o.state}${o.verified ? "" : " (unverified)"}` : " · no observation"}
                   </span>
+                  <PoolWindows pool={ref} quota={quota} />
                 </li>
               );
             })}
@@ -146,5 +180,26 @@ function Inventory({ state }: { state: RuntimeState }) {
         )}
       </section>
     </div>
+  );
+}
+
+function PoolWindows({ pool, quota }: { pool: string; quota: QuotaLoad | "loading" }) {
+  if (quota === "loading") return <p className="text-xs text-muted-foreground">Loading usage…</p>;
+  if (quota.kind === "forbidden") return <p className="text-xs text-muted-foreground">Usage is visible to workspace admins only.</p>;
+  if (quota.kind === "unavailable") {
+    return <p className="text-xs text-muted-foreground">Usage unavailable. Nothing is assumed.</p>;
+  }
+  const windows: QuotaWindow[] = quota.windows.filter((w) => w.pool === pool);
+  if (windows.length === 0) return <p className="text-xs text-muted-foreground">No usage readings.</p>;
+  return (
+    <ul aria-label={`Usage of ${pool}`} className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+      {windows.map((w) => (
+        <li key={w.window}>
+          {w.window}: <span className="text-foreground">{formatUsedFraction(w)}</span>
+          {" · "}
+          <time dateTime={w.observedAt}>{formatObservedAtUtc(w.observedAt)}</time>
+        </li>
+      ))}
+    </ul>
   );
 }
