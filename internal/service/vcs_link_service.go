@@ -346,8 +346,11 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		return PRHandleResult{TaskID: taskID, Reason: "not_closed"}, nil
 	}
 
-	return s.applyPRTransitionPolicy(ctx, taskID, ev.PRMerged,
+	res, err := s.applyPRTransitionPolicy(ctx, taskID, ev.PRMerged,
 		fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), "github-webhook")
+	s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitHub, strconv.Itoa(ev.PRNumber), ev.PRHTMLURL, taskID,
+		ev.PRMerged, fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), "github-webhook")
+	return res, err
 }
 
 // HandleGitLabMergeRequestEvent applies the same webhook → task transition
@@ -453,8 +456,80 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		return PRHandleResult{TaskID: taskID, Reason: "not_closed"}, nil
 	}
 
-	return s.applyPRTransitionPolicy(ctx, taskID, linkStatus == domain.VCSLinkStatusMerged,
+	merged := linkStatus == domain.VCSLinkStatusMerged
+	res, err := s.applyPRTransitionPolicy(ctx, taskID, merged,
 		fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
+	s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitLab, strconv.Itoa(ev.MRIID), ev.MRURL, taskID,
+		merged, fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
+	return res, err
+}
+
+// closeReviewSubjects settles the review cards bound to this PR/MR (links
+// carrying role=review, see taskService.bindReviewSubject) once it reaches a
+// terminal state. The task the payload names is the work; a review of it is a
+// different card that no title, body or branch mentions, so without this the
+// webhook never reaches it (#fecda06c, #863bb5de).
+//
+// Matching is by the normalised URL, not by external_id: an MR iid is only
+// unique within its project, so !19 of one repository must not settle a
+// review of !19 in another. Merged → the review card goes to done from any
+// open status (its subject no longer exists to be reviewed); closed without
+// merge → comment only. Failures are logged and never fail the delivery: the
+// primary transition has already been applied and a redelivery would redo it.
+func (s *vcsLinkService) closeReviewSubjects(ctx context.Context, workspaceID uuid.UUID, provider domain.VCSProvider, externalID, rawURL string, primary uuid.UUID, merged bool, refLabel, mergeRefLabel, source string) {
+	if s.taskRepo == nil || s.statusRepo == nil || s.taskSvc == nil || s.commentSvc == nil || rawURL == "" {
+		return
+	}
+	links, err := s.repo.ListByExternalID(ctx, provider, domain.VCSLinkTypePR, externalID)
+	if err != nil {
+		log.Printf("[vcs-webhook] review-subjects list %s: %v", refLabel, err)
+		return
+	}
+	want := domain.NormalizeVCSURL(rawURL)
+	for _, l := range s.filterLinksInWorkspace(ctx, workspaceID, links) {
+		if l.TaskID == primary || !l.IsReviewSubject() || domain.NormalizeVCSURL(l.URL) != want {
+			continue
+		}
+		l := l
+		if merged {
+			l.Status = domain.VCSLinkStatusMerged
+		} else {
+			l.Status = domain.VCSLinkStatusClosed
+		}
+		if _, err := s.repo.Upsert(ctx, &l); err != nil {
+			log.Printf("[vcs-webhook] review-subject upsert task=%s: %v", l.TaskID, err)
+			continue
+		}
+		if !merged {
+			body := fmt.Sprintf("🤖 Auto: %s closed without merge — the review card stays open.", refLabel)
+			if cerr := s.postSystemComment(ctx, l.TaskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", l.TaskID, cerr)
+			}
+			continue
+		}
+		task, err := s.taskRepo.GetByID(ctx, l.TaskID)
+		if err != nil || task == nil {
+			log.Printf("[vcs-webhook] review-subject get task=%s: %v", l.TaskID, err)
+			continue
+		}
+		cur, err := s.statusRepo.GetByID(ctx, task.StatusID)
+		if err != nil || cur == nil || cur.Category == domain.StatusCategoryDone || cur.Category == domain.StatusCategoryCancelled {
+			continue
+		}
+		done, err := s.resolveStatusBySlug(ctx, task.ProjectID, "done")
+		if err != nil || done == nil {
+			log.Printf("[vcs-webhook] review-subject no done status task=%s: %v", l.TaskID, err)
+			continue
+		}
+		if err := s.taskSvc.MoveTask(ctx, l.TaskID, MoveTaskInput{StatusID: &done.ID}); err != nil {
+			log.Printf("[vcs-webhook] review-subject move task=%s: %v", l.TaskID, err)
+			continue
+		}
+		body := fmt.Sprintf("🤖 Auto: %s merged (commit `%s`) — the reviewed change is in, review card closed.", refLabel, mergeRefLabel)
+		if cerr := s.postSystemComment(ctx, l.TaskID, body, source); cerr != nil {
+			log.Printf("[vcs-webhook] post comment failed task=%s: %v", l.TaskID, cerr)
+		}
+	}
 }
 
 // applyPRTransitionPolicy runs the merge/close transition policy shared by

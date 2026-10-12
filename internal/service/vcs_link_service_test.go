@@ -39,6 +39,8 @@ type fakeVCSLinkRepo struct {
 	// path, e.g. #b73171fa's Upsert).
 	createErr error
 	upsertErr error
+	// upsertErrFor fails Upsert only for links of this task.
+	upsertErrFor uuid.UUID
 }
 
 func newFakeVCSLinkRepo() *fakeVCSLinkRepo {
@@ -105,6 +107,9 @@ func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, er
 	defer r.mu.Unlock()
 	if r.upsertErr != nil {
 		return false, r.upsertErr
+	}
+	if r.upsertErrFor != uuid.Nil && l.TaskID == r.upsertErrFor {
+		return false, errors.New("upsert failed for task")
 	}
 	key := conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID)
 	if existingID, ok := r.upsertKey[key]; ok {

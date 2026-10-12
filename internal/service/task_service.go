@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -578,6 +579,8 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	}
 	s.publishTaskEvent(ctx, wsID, task.ProjectID, task.ID, actorID, actorType, "task.created", changes)
 
+	s.bindReviewSubject(ctx, task)
+
 	// Dispatch webhook for task.created (agent wakeup pipeline).
 	if s.webhookSvc != nil {
 		go s.webhookSvc.Dispatch(ctx, wsID, "task.created", map[string]interface{}{
@@ -606,6 +609,39 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	s.notifyReviewer(ctx, task, "task.reviewer_assigned", "Review requested: "+task.Title)
 
 	return nil
+}
+
+// bindReviewSubject links a freshly created review card to the one PR/MR its
+// description names, so the merge webhook can find the card and close it
+// (#fecda06c; before this a self-filed review card was never linked and sat
+// open after its subject merged, e.g. #863bb5de). Exactly one distinct URL is
+// required: several are prose about other changes, and a wrong binding would
+// close a card for the wrong merge. Best-effort — a failure is logged, never
+// fails the create.
+func (s *taskService) bindReviewSubject(ctx context.Context, task *domain.Task) {
+	if s.vcsLinkRepo == nil || !slices.Contains([]string(task.Labels), "review") {
+		return
+	}
+	refs := domain.ExtractChangeRequestRefs(task.Description)
+	if len(refs) != 1 {
+		return
+	}
+	ref := refs[0]
+	link := &domain.VCSLink{
+		ID:         uuid.New(),
+		TaskID:     task.ID,
+		Provider:   ref.Provider,
+		LinkType:   domain.VCSLinkTypePR,
+		ExternalID: ref.ExternalID,
+		URL:        ref.URL,
+		Title:      task.Title,
+		Status:     domain.VCSLinkStatusOpen,
+		Metadata:   []byte(`{"role":"review","source":"description"}`),
+		CreatedAt:  timeNow(),
+	}
+	if err := s.vcsLinkRepo.Create(ctx, link); err != nil {
+		log.Printf("[review-bind] task=%s url=%s: %v", task.ID, ref.URL, err)
+	}
 }
 
 // GetDefaultStatus returns the default task status for a project.
@@ -1107,6 +1143,11 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 						workspaceID, _ := s.resolveProjectWorkspace(ctx, task.ProjectID)
 						for _, l := range links {
 							if l.LinkType != domain.VCSLinkTypePR || l.Status == domain.VCSLinkStatusMerged || l.Status == domain.VCSLinkStatusClosed {
+								continue
+							}
+							// A review card's deliverable is the verdict, not the
+							// merge of the MR it reviews (#fecda06c).
+							if l.IsReviewSubject() {
 								continue
 							}
 							// Cached status says not-yet-merged (or unknown).
