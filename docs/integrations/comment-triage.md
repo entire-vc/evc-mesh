@@ -168,7 +168,7 @@ miss for an agent named in the same body.
 
 | `outcome` | Meaning |
 |-----------|---------|
-| `delivered` | Reached a path the recipient demonstrably consumes (`reason: task_queue` — assigned + todo-category status — or `reason: notification` — a subscribed channel). |
+| `delivered` | Reached a path the recipient demonstrably consumes (`reason: task_queue` — assigned + todo-category status — or `reason: notification` — a subscribed channel). Also `reason: thread_only` / `channel: thread`: the card is the recipient's own and in_progress/review, so the comment lies in their thread, but it starts **no turn** for their lane (the `task.mentioned` event only reaches their stream) and the card is not in their feed — not the same as notified. |
 | `skipped` | No delivery was attempted, or none could reach — always paired with a `reason`. |
 | `failed` | A write delivery depended on returned an error (`reason: event_persist_failed`). |
 
@@ -178,9 +178,9 @@ the task isn't in their queue — the case this section exists for),
 `self_mention` (author mentioned themselves).
 
 `hint` is a computed, read-only field present only for a reason the comment's
-own author can act on — today, only `no_queue_path` (fix: assign the task to
-them). It is absent (not empty-string) on every other outcome, including
-`delivered`.
+own author can act on or should know about — today `no_queue_path` (fix:
+assign the task to them) and the `delivered` reason `thread_only` (no turn is
+started for the lane). It is absent (not empty-string) on every other outcome.
 
 Full field reference: [`docs/mcp-reference.md`](../mcp-reference.md#12-add_comment).
 See also the `mention-and-wake` skill, which documents that a mention alone

@@ -133,6 +133,14 @@ func decideDelivery(f deliveryFacts) (outcome, reason, channel, presence string)
 	if f.InTaskQueue && !f.Gated && !f.Scheduled {
 		return domain.DeliveryDelivered, domain.ReasonTaskQueue, domain.ChannelTaskQueue, p
 	}
+	// The recipient's own card, already being worked: the comment is in the
+	// thread they will read, but nothing wakes them and the card is not in the
+	// feed they poll. Its own reason and channel keep that from being read as
+	// task_queue; the status is never moved (it would reset their work).
+	if f.IsAssignee && (f.StatusCategory == string(domain.StatusCategoryInProgress) ||
+		f.StatusCategory == string(domain.StatusCategoryReview)) {
+		return domain.DeliveryDelivered, domain.ReasonThreadOnly, domain.ChannelThread, p
+	}
 	if f.Presence == domain.ComputedStatusOffline {
 		return domain.DeliverySkipped, domain.ReasonRecipientOffline, domain.ChannelNone, p
 	}

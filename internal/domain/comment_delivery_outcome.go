@@ -75,6 +75,14 @@ const (
 	// in_progress/review are already being worked and must keep their status.
 	ReasonStatusNotFed = "status_not_fed"
 
+	// ReasonThreadOnly — the task IS the recipient's and is in_progress/review:
+	// the comment lies in the thread of the card they are working, and nothing
+	// more. Their lane is NOT woken and the card is NOT in the feed they poll;
+	// they see the comment when they next read the card. Recorded as delivered
+	// (the comment is reachable on their own card) but under its own reason and
+	// channel so an author never reads it as "notified".
+	ReasonThreadOnly = "thread_only"
+
 	// ReasonTaskGated — the task is the recipient's, but an armed human_gate
 	// holds it: the feeder skips gated cards whatever their status. Moving or
 	// assigning changes nothing until the gate is answered.
@@ -103,7 +111,10 @@ const (
 const (
 	ChannelTaskQueue    = "task_queue"
 	ChannelNotification = "notification"
-	ChannelNone         = "none"
+	// ChannelThread — the comment is in the recipient's own active card, no
+	// push and no queue entry. See ReasonThreadOnly.
+	ChannelThread = "thread"
+	ChannelNone   = "none"
 )
 
 // Recipient kinds.
@@ -153,6 +164,7 @@ type CommentDeliveryOutcome struct {
 var hintsByReason = map[string]string{
 	ReasonNoQueuePath:   "recipient is alive but this task isn't in their queue — it is assigned to someone else or not in todo",
 	ReasonNotAssignee:   "recipient is alive but this task is assigned to someone else — assign it to them if they should act on it",
+	ReasonThreadOnly:    "the comment is in the thread of their active card, but it starts no turn for their lane (only the mention event reaches their stream, which does not act on events) — they will see it when they next read the card; ping them another way if it is urgent",
 	ReasonTaskGated:     "this task is frozen by an armed human gate — they won't pick it up until the gate is answered",
 	ReasonTaskScheduled: "this task is scheduled for later (start_after) — they won't pick it up before that date",
 }
