@@ -7,12 +7,14 @@ import { cn } from "@/lib/cn";
 import { agentStatusConfig, isAgentStale } from "@/lib/agent-utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAgentStore } from "@/stores/agent";
+import { useMemberStore } from "@/stores/member";
 import { useRulesStore } from "@/stores/rules";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentDetailDialog } from "@/components/agent-detail-dialog";
+import { InvitedAgentDialog } from "@/components/invited-agent-dialog";
 import { RegisterAgentDialog } from "@/components/register-agent-dialog";
 import { InviteMemberDialog } from "@/components/invite-member-dialog";
 import type { Agent, OrgChartAgentNode, TeamDirectoryHuman } from "@/types";
@@ -174,6 +176,15 @@ function AgentCard({
           <span className="font-medium text-sm truncate" title={agentLabel(agent.name, agent.short_tag)}>
             {agent.name}<AgentShortTag tag={agent.short_tag} />
           </span>
+          {agent.is_home === false && (
+            <Badge
+              variant="outline"
+              className="ml-auto shrink-0 px-1 py-0 h-4 text-[10px]"
+              title="Invited from another workspace"
+            >
+              Invited
+            </Badge>
+          )}
         </div>
 
         {agent.role && (
@@ -478,6 +489,7 @@ export function OrgChartPage() {
   const { currentWorkspace } = useWorkspaceStore();
   const { orgChart, isOrgChartLoading, fetchOrgChart } = useRulesStore();
   const { agents, fetchAgents } = useAgentStore();
+  const { myRole, fetchMyRole } = useMemberStore();
 
   // View mode from URL: /org-chart = tree, /org-chart/grid = grid
   const location = useLocation();
@@ -492,8 +504,9 @@ export function OrgChartPage() {
     if (currentWorkspace) {
       void fetchOrgChart(currentWorkspace.id);
       void fetchAgents(currentWorkspace.id);
+      void fetchMyRole(currentWorkspace.id);
     }
-  }, [currentWorkspace, fetchOrgChart, fetchAgents]);
+  }, [currentWorkspace, fetchOrgChart, fetchAgents, fetchMyRole]);
 
   // The org-chart payload is fetched separately from the agents list that the
   // detail dialog edits, so overlay the edited fields from the agents store —
@@ -505,9 +518,25 @@ export function OrgChartPage() {
   const humans = orgChart?.humans ?? [];
   const workspaceName = orgChart?.workspace ?? currentWorkspace?.name ?? "";
 
-  const selectedAgent: Agent | null = selectedAgentId
-    ? agents.find((a) => a.id === selectedAgentId) ?? null
-    : null;
+  // Invited (guest) agents are not in the workspace's own agents list, so the
+  // regular detail dialog cannot open them — they get their own card.
+  const selectedGuest: OrgChartAgentNode | null = useMemo(() => {
+    if (!selectedAgentId) return null;
+    const walk = (nodes: OrgChartAgentNode[]): OrgChartAgentNode | null => {
+      for (const n of nodes) {
+        if (n.id === selectedAgentId) return n.is_home === false ? n : null;
+        const hit = walk(n.children ?? []);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return walk(agentTree);
+  }, [agentTree, selectedAgentId]);
+
+  const selectedAgent: Agent | null =
+    selectedAgentId && !selectedGuest
+      ? agents.find((a) => a.id === selectedAgentId) ?? null
+      : null;
 
   const handleAgentClick = (agentId: string) => {
     setSelectedAgentId(agentId);
@@ -559,7 +588,7 @@ export function OrgChartPage() {
 
       {/* Agent detail dialog */}
       <AgentDetailDialog
-        open={selectedAgentId !== null}
+        open={selectedAgentId !== null && !selectedGuest}
         onOpenChange={(open) => {
           if (!open) setSelectedAgentId(null);
         }}
@@ -569,6 +598,14 @@ export function OrgChartPage() {
       {/* Register agent dialog */}
       {currentWorkspace && (
         <>
+          <InvitedAgentDialog
+            open={selectedGuest !== null}
+            onClose={() => setSelectedAgentId(null)}
+            onChanged={() => void fetchOrgChart(currentWorkspace.id)}
+            workspaceId={currentWorkspace.id}
+            agent={selectedGuest}
+            canManage={myRole === "owner" || myRole === "admin"}
+          />
           <RegisterAgentDialog
             open={registerOpen}
             onOpenChange={setRegisterOpen}

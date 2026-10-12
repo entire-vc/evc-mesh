@@ -1053,6 +1053,8 @@ export interface TeamDirectoryAgent {
   heartbeat_message?: string;
   is_stale?: boolean;
   short_tag?: string | null;
+  /** false = invited guest (home workspace elsewhere, agent_workspace_grants). */
+  is_home?: boolean;
 }
 
 export interface TeamDirectoryHuman {
