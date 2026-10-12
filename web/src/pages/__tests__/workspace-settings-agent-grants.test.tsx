@@ -197,3 +197,30 @@ describe("WorkspaceSettingsPage — connected agents list (task U4 AC1/AC2)", ()
     expect(screen.getByText("HomeBot")).toBeInTheDocument();
   });
 });
+
+describe("WorkspaceSettingsPage — edit agent from the members list (regression #1102175b)", () => {
+  const routes = {
+    "/api/v1/workspaces/ws1/agents": { items: [{ id: "agent-home", workspace_id: "ws1", name: "HomeBot", agent_type: "claude_code", status: "online", capabilities: [], metadata: {}, last_heartbeat: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }], total: 1 },
+    "/api/v1/workspaces/ws1/agent-grants": { agent_grants: [HOME_GRANT, GUEST_GRANT], count: 2 },
+  };
+
+  it("shows Edit agent on the home row only, and it opens the agent card", async () => {
+    mockApiByRoute("admin", routes);
+    await openMembersTab();
+    await screen.findByText("GuestBot");
+
+    const edit = screen.getAllByTitle("Edit agent");
+    expect(edit).toHaveLength(1);
+    expect(edit[0]).toHaveAttribute("aria-label", "Edit agent HomeBot");
+
+    fireEvent.click(edit[0]!);
+    expect(await screen.findByText("Status")).toBeInTheDocument();
+  });
+
+  it("hides Edit agent from a member", async () => {
+    mockApiByRoute("member", routes);
+    await openMembersTab();
+    await screen.findByText("GuestBot");
+    expect(screen.queryByTitle("Edit agent")).not.toBeInTheDocument();
+  });
+});
