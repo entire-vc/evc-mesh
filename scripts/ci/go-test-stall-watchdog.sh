@@ -26,8 +26,9 @@
 #
 # ## What it does
 #
-# Runs `go test` in its own process group and watches its output. If nothing new
-# is written for $STALL_SECONDS, it sends SIGQUIT to the WHOLE PROCESS GROUP.
+# Runs `go test` in its own process group and watches its output and the CPU its
+# process tree uses. If nothing new is written AND no CPU is consumed for
+# $STALL_SECONDS, it sends SIGQUIT to the WHOLE PROCESS GROUP.
 # Every process involved is a Go program — the `go` tool, `compile`, `link`, the
 # test binary — and the Go runtime answers SIGQUIT by dumping all goroutine stacks
 # and dying. That is what turns "28 minutes of nothing" into "here is exactly
@@ -138,23 +139,56 @@ stop_tail() {
     wait "$TAIL_PID" 2>/dev/null || true
 }
 
+# CPU seconds*100 consumed by the live process tree under $1. `go test` prints a
+# package's result only when the package finishes, so a healthy but slow package
+# (internal/repository/postgres: 290-337s under -race on the shared runner, CPU-
+# starved, Mesh #362289cb) is silent for longer than STALL_SECONDS. Silence alone
+# cannot tell that from a wedge; a wedge burns no CPU. `ps -o time=` is cumulative
+# CPU in `[d-][hh:]mm:ss[.cc]` on both busybox and macOS. A change in either
+# direction counts as life: a child that exits drops out of the sum.
+tree_cpu() {
+    ps $_PS_ALL_FLAG -o pid=,ppid=,time= 2>/dev/null | awk -v root="$1" '
+        function secs(t,   d, a, n, i, s, days) {
+            days = 0
+            if (t ~ /-/) { split(t, d, "-"); days = d[1]; t = d[2] }
+            n = split(t, a, ":"); s = 0
+            for (i = 1; i <= n; i++) s = s * 60 + a[i]
+            return s + days * 86400
+        }
+        { parent[$1] = $2; cpu[$1] = secs($3) }
+        END {
+            total = 0
+            for (p in cpu) {
+                q = p
+                for (i = 0; i < 12 && q != "" && q != 0; i++) {
+                    if (q == root) { total += cpu[p]; break }
+                    q = parent[q]
+                }
+            }
+            printf "%d\n", total * 100
+        }'
+}
+
 LAST_SIZE=-1
+LAST_CPU=-1
 QUIET_FOR=0
 
 while kill -0 "$GO_PID" 2>/dev/null; do
     sleep "$POLL_SECONDS"
     SIZE=$(wc -c <"$OUT" | tr -d ' ')
-    if [ "$SIZE" = "$LAST_SIZE" ]; then
+    CPU=$(tree_cpu "$GO_PID")
+    if [ "$SIZE" = "$LAST_SIZE" ] && [ "$CPU" = "$LAST_CPU" ]; then
         QUIET_FOR=$((QUIET_FOR + POLL_SECONDS))
     else
         QUIET_FOR=0
         LAST_SIZE=$SIZE
+        LAST_CPU=$CPU
     fi
 
     if [ "$QUIET_FOR" -ge "$STALL_SECONDS" ]; then
         echo ""
         echo "=============================================================================="
-        echo "STALLED: no output from 'go test' for ${QUIET_FOR}s (limit ${STALL_SECONDS}s)."
+        echo "STALLED: no output from 'go test' for ${QUIET_FOR}s (limit ${STALL_SECONDS}s), and no CPU used by its process tree."
         echo "Sending SIGQUIT to the go test process tree - every Go process in it dumps"
         echo "all goroutine stacks below. The wedged one is the point of this job now."
         echo "=============================================================================="
