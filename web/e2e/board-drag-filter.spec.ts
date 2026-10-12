@@ -252,10 +252,19 @@ test("the toolbar search filter narrows to the matching card and back", async ()
   // Exercise a cold board with a slow task response, rather than inheriting
   // the drag test's loaded DOM. The precondition must wait for real cards.
   const tasksUrl = `**/api/v1/projects/${projectId}/tasks*`;
+  const pendingTaskRoutes = new Set<Promise<void>>();
   await page.route(tasksUrl, async (route) => {
-    const response = await route.fetch();
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    await route.fulfill({ response });
+    const work = (async () => {
+      const response = await route.fetch();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await route.fulfill({ response });
+    })();
+    pendingTaskRoutes.add(work);
+    try {
+      await work;
+    } finally {
+      pendingTaskRoutes.delete(work);
+    }
   });
   await page.goto(boardUrl(), { waitUntil: "domcontentloaded" });
   const cards = page.locator('[data-testid="task-card"]');
@@ -268,6 +277,11 @@ test("the toolbar search filter narrows to the matching card and back", async ()
     .toBeGreaterThan(1);
   await expect(taskCard(dragTaskId)).toBeVisible();
   const cardCountBefore = await cards.count();
+  // Cards from one response can render while another delayed response is
+  // still in flight. Removing interception then handles that route before
+  // its callback can fulfil it. Drain callbacks before removing the route;
+  // their errors must still fail the test.
+  while (pendingTaskRoutes.size) await Promise.all([...pendingTaskRoutes]);
   await page.unroute(tasksUrl);
 
   // The board toolbar's search box shares its placeholder with the global

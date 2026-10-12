@@ -140,10 +140,14 @@ test.beforeAll(async ({ browser }) => {
         new URL(r.url()).pathname === "/api/v1/auth/refresh",
       { timeout: 30_000 }
     );
-    await probe.goto("/a/00000000-0000-0000-0000-000000000000", {
-      waitUntil: "domcontentloaded",
-    });
-    const refresh = await bootRefresh;
+    // Observe both failures immediately: a refresh timeout must not become an
+    // unhandled rejection while navigation is still pending (or has failed).
+    const [, refresh] = await Promise.all([
+      probe.goto("/a/00000000-0000-0000-0000-000000000000", {
+        waitUntil: "domcontentloaded",
+      }),
+      bootRefresh,
+    ]);
     await refresh.finished();
     expect(
       refresh.status(),
