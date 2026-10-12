@@ -146,6 +146,9 @@ variables:
     internal/repository/postgres/memory_edges_repo.go
     internal/repository/postgres/memory_chunk_rank.go
     internal/repository/postgres/memory_chunk_repo.go
+    internal/repository/postgres/memory_recall_candidates.go
+    internal/service/memory_final_recall.go
+    internal/domain/memory_final_recall.go
     internal/reconciler/
     pkg/sdk/memories.go
     scripts/memory-bench/

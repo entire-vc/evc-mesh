@@ -435,6 +435,68 @@ func TestRecallGraph_SortedByCompositeScore(t *testing.T) {
 	}
 }
 
+// TestRecallGraph_EqualCompositeOrderIsStable pins the order of graph neighbours
+// that tie on CompositeScore. Nodes are collected from a map, so without an ID
+// tie-break the order of equal-score neighbours changes from process to process
+// (#e0bbfdc5: positions 10/11 of one recall flipped between two passes).
+func TestRecallGraph_EqualCompositeOrderIsStable(t *testing.T) {
+	seedID := uuid.New()
+	neighborIDs := make([]uuid.UUID, 8)
+	for i := range neighborIDs {
+		neighborIDs[i] = uuid.New()
+	}
+	byID := map[uuid.UUID]bool{}
+	for _, id := range neighborIDs {
+		byID[id] = true
+	}
+
+	run := func() []uuid.UUID {
+		clearRecallGraphCache()
+		opts := freshOpts("equal composite tie-break")
+		mem := &mockMemoryRepo{
+			fullTextSearchRankedFn: func(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ string, _ domain.MemorySearchFilter, _ int) ([]domain.ScoredMemory, error) {
+				return []domain.ScoredMemory{graphSeed(seedID, 0.6)}, nil
+			},
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Memory, error) {
+				if byID[id] {
+					return graphNeighbor(opts.WorkspaceID, id, 0.5), nil
+				}
+				return nil, nil
+			},
+		}
+		er := &testEdgeRepo{
+			getNeighborsFn: func(_ context.Context, ids []uuid.UUID, _ float64, _ int) ([]domain.MemoryEdge, error) {
+				var edges []domain.MemoryEdge
+				for _, id := range ids {
+					if id == seedID {
+						for _, n := range neighborIDs {
+							edges = append(edges, graphEdge(seedID, n, 0.7))
+						}
+					}
+				}
+				return edges, nil
+			},
+		}
+		results, err := newGraphService(mem, er).RecallGraph(context.Background(), opts)
+		require.NoError(t, err)
+		require.Len(t, results, len(neighborIDs)+1)
+		for i := 2; i < len(results); i++ {
+			require.Equal(t, results[1].CompositeScore, results[i].CompositeScore, "fixture must produce tied neighbours")
+			assert.Less(t, results[i-1].ID.String(), results[i].ID.String(), "tied neighbours must be ordered by ID")
+		}
+		ids := make([]uuid.UUID, len(results))
+		for i, r := range results {
+			ids[i] = r.ID
+		}
+		return ids
+	}
+
+	first := run()
+	for n := 0; n < 50; n++ {
+		require.Equal(t, first, run(), "run %d reordered tied neighbours", n)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 10. TestRecallGraph_HopDistance
 // ---------------------------------------------------------------------------

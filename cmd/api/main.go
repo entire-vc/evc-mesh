@@ -1938,6 +1938,7 @@ func main() {
 	api.POST("/memories", memoryHandler.Remember, connectorRBAC(mw.PermWriteMemory))
 	api.GET("/memories", memoryHandler.List)
 	api.GET("/memories/search", memoryHandler.Search)
+	api.GET("/memories/recall-final/v1", memoryHandler.FinalRecall)
 	api.GET("/memories/recall_graph", memoryHandler.RecallGraph)
 	api.GET("/memories/export", memoryHandler.ExportMemories)
 	api.POST("/memories/import", memoryHandler.ImportMemories, connectorRBAC(mw.PermWriteMemory))

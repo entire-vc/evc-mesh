@@ -679,7 +679,80 @@ func handlerRoutes(t *testing.T) map[string][]registeredRoute {
 	}
 	require.NotEmpty(t, out,
 		"no handler routes resolved from cmd/api/main.go — the registration style has changed")
+	// A registered wrapper can delegate query binding to a shared method. Carry
+	// every wrapper's route to that method, including write routes; ignoring them
+	// would make the narrowing invariant blind after a handler refactor.
+	entries, err := os.ReadDir(filepath.Join("..", "handler"))
+	require.NoError(t, err)
+	delegations := map[string][]string{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(token.NewFileSet(), filepath.Join("..", "handler", entry.Name()), nil, 0)
+		require.NoError(t, parseErr)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || fn.Recv == nil || len(fn.Recv.List[0].Names) == 0 {
+				continue
+			}
+			recv := receiverTypeName(fn)
+			caller := recv + "." + fn.Name.Name
+			receiverName := fn.Recv.List[0].Names[0].Name
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, isCall := node.(*ast.CallExpr)
+				if !isCall {
+					return true
+				}
+				selector, isSelector := call.Fun.(*ast.SelectorExpr)
+				if !isSelector {
+					return true
+				}
+				ident, isIdent := selector.X.(*ast.Ident)
+				if isIdent && ident.Name == receiverName {
+					delegations[caller] = append(delegations[caller], recv+"."+selector.Sel.Name)
+				}
+				return true
+			})
+		}
+	}
+	inheritQueryRoutes(out, delegations)
 	return out
+}
+
+func inheritQueryRoutes(routes map[string][]registeredRoute, delegations map[string][]string) {
+	for changed := true; changed; {
+		changed = false
+		for caller, callees := range delegations {
+			for _, callee := range callees {
+				for _, route := range routes[caller] {
+					found := false
+					for _, existing := range routes[callee] {
+						found = found || existing == route
+					}
+					if !found {
+						routes[callee] = append(routes[callee], route)
+						changed = true
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestQueryTenantRoutesFollowDelegationIncludingWrites(t *testing.T) {
+	routes := map[string][]registeredRoute{
+		"Handler.Read":  {{method: "GET", path: "/read"}},
+		"Handler.Write": {{method: "POST", path: "/write"}},
+	}
+	inheritQueryRoutes(routes, map[string][]string{
+		"Handler.Read": {"Handler.bind"}, "Handler.Write": {"Handler.shared"},
+		"Handler.shared": {"Handler.bind"}, "Handler.bind": {"Handler.shared"},
+	})
+	assert.ElementsMatch(t, []registeredRoute{{method: "GET", path: "/read"}, {method: "POST", path: "/write"}}, routes["Handler.bind"])
+	actual := handlerRoutes(t)
+	assert.Contains(t, actual["MemoryHandler.search"], registeredRoute{method: "GET", path: "/memories/search"})
+	assert.Contains(t, actual["MemoryHandler.search"], registeredRoute{method: "GET", path: "/memories/recall-final/v1"})
 }
 
 // queryParamOwners maps a declaration owner — a handler function, or a struct whose

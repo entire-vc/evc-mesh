@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -1236,6 +1237,12 @@ func (s *memoryService) Recall(ctx context.Context, opts domain.RecallOpts) ([]d
 // When extended filter params are present (TagsAny, CreatedBy, Since, Until, etc.),
 // the repository List method is used instead of FullTextSearch for precise SQL filtering.
 func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallOpts) ([]domain.ScoredMemory, domain.RecallStats, error) {
+	return s.recallCandidates(ctx, opts, true)
+}
+
+// recallCandidates is internal: only the canonical final selection may suppress
+// feedback. There is deliberately no client-supplied ID acknowledgement endpoint.
+func (s *memoryService) recallCandidates(ctx context.Context, opts domain.RecallOpts, feedback bool) ([]domain.ScoredMemory, domain.RecallStats, error) {
 	if opts.Query == "" {
 		return nil, domain.RecallStats{}, apierror.ValidationError(map[string]string{
 			"q": "search query is required",
@@ -1268,6 +1275,11 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	// AND leaves the pool sized by ineligible rows. Pre-filtering makes poolSize a budget
 	// over the eligible set instead. See task #2c087b2a.
 	searchFilter := opts.SearchFilter()
+	if !feedback {
+		searchFilter.IncludeExpired = opts.IncludeExpired
+		searchFilter.IncludeArchived = opts.IncludeArchived
+		searchFilter.IncludeSuperseded = !opts.ExcludeSuperseded
+	}
 
 	var (
 		kwResults  []domain.ScoredMemory
@@ -1404,7 +1416,7 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	// Default: exclude superseded memories unless the caller explicitly opts in.
 	// ExcludeSuperseded=false means "let me see superseded" — zero value = false so
 	// the caller must pass true to get the default behaviour; we flip the default here.
-	if !opts.ExcludeSuperseded {
+	if feedback && !opts.ExcludeSuperseded {
 		// Only skip the default when the caller explicitly passed a StatusFilter that
 		// includes superseded, signalling they want to see those memories.
 		wantSuperseded := false
@@ -1531,6 +1543,10 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		merged = append(pinnedScored, merged...)
 	}
 
+	if !feedback {
+		merged = finalEligible(merged, opts, time.Now())
+	}
+
 	// ── Step 7: Trim to requested limit — LAST, after every injection ────────
 	// Everything that can add rows must run above this line. `limit` is a
 	// contract with the caller, not a hint applied midway through the pipeline.
@@ -1568,7 +1584,7 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 	// branch (task #c5b5fb48) never fired in production — almost any review_needed
 	// row surfaces in SOME recall's candidate pool sooner or later. Moved here to
 	// match BoostRelevance's existing, correct scope.
-	if len(merged) > 0 {
+	if feedback && len(merged) > 0 {
 		ids := make([]uuid.UUID, len(merged))
 		for i, r := range merged {
 			ids[i] = r.ID
@@ -1577,14 +1593,16 @@ func (s *memoryService) RecallWithStats(ctx context.Context, opts domain.RecallO
 		_ = s.memRepo.TouchAccessed(ctx, ids)
 	}
 
-	if len(merged) == 0 {
+	if feedback && len(merged) == 0 {
 		pkgmetrics.RecordMemoryRecallEmpty(string(searchMode))
 	}
 	// Unconditional — including empty and pinned-only pages (topScore 0.0), and
 	// excluding only the validation-error early returns that never ran the arms.
 	// That keeps _count equal to mesh_memory_recall_total, so a bucket's share
 	// of _count reads directly as "share of all recalls this useless".
-	pkgmetrics.ObserveMemoryRecallTopScore(string(searchMode), topScore)
+	if feedback {
+		pkgmetrics.ObserveMemoryRecallTopScore(string(searchMode), topScore)
+	}
 
 	return merged, stats, nil
 }
@@ -2735,8 +2753,13 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 		results = append(results, n.result)
 	}
 
+	// nodes is a map, so equal composite scores would otherwise come out in a
+	// different order on every call; break ties by ID to keep the result stable.
 	slices.SortFunc(results, func(a, b domain.RecallGraphResult) int {
-		return cmp.Compare(b.CompositeScore, a.CompositeScore)
+		if c := cmp.Compare(b.CompositeScore, a.CompositeScore); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.ID[:], b.ID[:])
 	})
 
 	// ── Step 4: Cache and return ───────────────────────────────────────────────

@@ -62,6 +62,7 @@ var mcpToolRoutes = map[string]string{
 
 	// Memory & Knowledge
 	"POST /api/v1/memories":                    "remember",
+	"GET /api/v1/memories/recall-final/v1":     "recall",
 	"GET /api/v1/memories/search":              "recall",
 	"GET /api/v1/memories/recall_graph":        "recall_with_graph",
 	"DELETE /api/v1/memories/:id":              "forget",

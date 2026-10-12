@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -355,6 +356,16 @@ func (h *MemoryHandler) List(c echo.Context) error {
 // Search handles GET /api/v1/memories/search
 // Full-text search across memories with optional extended filters.
 func (h *MemoryHandler) Search(c echo.Context) error {
+	return h.search(c, false)
+}
+
+// FinalRecall handles GET /api/v1/memories/recall-final/v1. A missing capability
+// fails closed, including when a legacy MemoryService implementation is injected.
+func (h *MemoryHandler) FinalRecall(c echo.Context) error {
+	return h.search(c, true)
+}
+
+func (h *MemoryHandler) search(c echo.Context, final bool) error {
 	var q searchMemoriesQuery
 	if err := c.Bind(&q); err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid query parameters"))
@@ -475,6 +486,70 @@ func (h *MemoryHandler) Search(c echo.Context) error {
 		opts.HalfLifeDays = f
 	}
 
+	if final {
+		for name, value := range map[string]*float32{"min_importance": opts.MinImportance, "relevance_min": opts.RelevanceMin} {
+			if value != nil && (math.IsNaN(float64(*value)) || math.IsInf(float64(*value), 0) || *value < 0 || *value > 1) {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid "+name))
+			}
+		}
+		if math.IsNaN(opts.RecencyWeight) || math.IsInf(opts.RecencyWeight, 0) || math.IsNaN(opts.HalfLifeDays) || math.IsInf(opts.HalfLifeDays, 0) {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("non-finite recall parameter"))
+		}
+		for name, target := range map[string]*bool{"include_expired": &opts.IncludeExpired, "exclude_superseded": &opts.ExcludeSuperseded, "apply_recency_decay": &opts.ApplyDecay} {
+			if raw := c.QueryParam(name); raw != "" {
+				value, parseErr := strconv.ParseBool(raw)
+				if parseErr != nil {
+					return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid "+name))
+				}
+				*target = value
+			}
+		}
+		if q.Limit != "" {
+			n, e := strconv.Atoi(q.Limit)
+			if e != nil || n < 1 || n > 50 {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid final recall limit"))
+			}
+			opts.Limit = n
+		}
+		if q.Offset != "" {
+			n, e := strconv.Atoi(q.Offset)
+			if e != nil || n < 0 || n > 150 {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid final recall offset"))
+			}
+			opts.Offset = n
+		}
+		if opts.Scope != "" && opts.Scope != domain.ScopeAgent && opts.Scope != domain.ScopeProject && opts.Scope != domain.ScopeWorkspace {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid scope"))
+		}
+		graph := false
+		if raw := c.QueryParam("graph"); raw != "" {
+			var e error
+			graph, e = strconv.ParseBool(raw)
+			if e != nil {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid graph"))
+			}
+		}
+		if raw := c.QueryParam("include_archived"); raw != "" {
+			var e error
+			opts.IncludeArchived, e = strconv.ParseBool(raw)
+			if e != nil {
+				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid include_archived"))
+			}
+		}
+		ms, ok := h.memoryService.(service.FinalRecallService)
+		if !ok {
+			return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("final recall v1 is unavailable"))
+		}
+		result, e := ms.FinalRecall(c.Request().Context(), domain.FinalRecallOpts{RecallOpts: opts, Graph: graph})
+		if e != nil {
+			return handleError(c, e)
+		}
+		return c.JSON(http.StatusOK, map[string]any{
+			"final_recall_version": 1, "items": result.Items, "total": len(result.Items), "limit": opts.Limit, "offset": opts.Offset,
+			"candidate_limit": result.CandidateLimit, "graph_boost_count": result.GraphBoostCount,
+			"search_mode": string(result.Stats.Mode), "degraded": result.Stats.Mode.Degraded(), "dense_rows": result.Stats.DenseRows, "sparse_rows": result.Stats.SparseRows,
+		})
+	}
 	results, stats, err := h.memoryService.RecallWithStats(c.Request().Context(), opts)
 	if err != nil {
 		return handleError(c, err)

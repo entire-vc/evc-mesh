@@ -297,16 +297,17 @@ type RecallOpts struct {
 	Limit       int
 
 	// Extended filter params (Phase 2 — memory API extensions).
-	TagsAny        []string         // OR filter: memory must contain at least one of these tags
-	CreatedBy      *uuid.UUID       // agent_id filter
-	SourceType     MemorySourceType // "agent" | "human" | "system"; empty means no filter
-	Since          *time.Time       // created_at >=
-	Until          *time.Time       // created_at <=
-	RelevanceMin   *float32         // relevance >=
-	MinImportance  *float32         // importance_score >= (default 0.4 applied at service layer)
-	IncludeExpired bool             // if false, filters expires_at > now() OR expires_at IS NULL
-	OrderBy        string           // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
-	ApplyDecay     bool             // if true, sort by relevance * pow(0.95, days_since_created)
+	TagsAny         []string         // OR filter: memory must contain at least one of these tags
+	CreatedBy       *uuid.UUID       // agent_id filter
+	SourceType      MemorySourceType // "agent" | "human" | "system"; empty means no filter
+	Since           *time.Time       // created_at >=
+	Until           *time.Time       // created_at <=
+	RelevanceMin    *float32         // relevance >=
+	MinImportance   *float32         // importance_score >= (default 0.4 applied at service layer)
+	IncludeExpired  bool             // if false, filters expires_at > now() OR expires_at IS NULL
+	IncludeArchived bool             // final-recall opt-in only; legacy search is unchanged
+	OrderBy         string           // "created_at:desc", "relevance:desc", "decayed_relevance:desc"
+	ApplyDecay      bool             // if true, sort by relevance * pow(0.95, days_since_created)
 	// RecencyWeight blends an exponential recency-decay factor into the full-text
 	// ranking. 0.0 (default) = exactly the legacy behavior (rank by FTS score only);
 	// 1.0 = rank purely by recency. Values are clamped to [0,1]. See MemoryRepository.FullTextSearch.
@@ -382,6 +383,9 @@ type MemoryListResult struct {
 // entirely unenforced in bm25-only mode (the fail-open path taken whenever the embedder
 // is down). See task #2c087b2a.
 type MemorySearchFilter struct {
+	IncludeExpired    bool
+	IncludeArchived   bool
+	IncludeSuperseded bool
 	// Scope restricts rows to a single memory scope ("workspace", "project", "agent").
 	// Empty means no scope restriction.
 	Scope string

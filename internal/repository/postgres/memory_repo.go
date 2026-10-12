@@ -1186,9 +1186,8 @@ func (r *MemoryRepo) vectorCandidateIDs(ctx context.Context, workspaceID uuid.UU
 		// invisible: recall still returns results, just fewer and worse ones,
 		// having quietly degraded to BM25-only for the affected rows.
 		"(embedding IS NOT NULL OR EXISTS (SELECT 1 FROM memory_chunks c WHERE c.memory_id = memories.id))",
-		"(expires_at IS NULL OR expires_at > NOW())",
-		"archived = false",
 	}
+	conditions = append(conditions, recallLifecycleConditions(filter, false)...)
 	argIdx := 2
 
 	if projectID != nil {
@@ -1776,11 +1775,9 @@ func (r *MemoryRepo) FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, p
 	args := []interface{}{wsID, query} // $1=workspace_id, $2=query
 	conditions := []string{
 		"workspace_id = $1",
-		"(expires_at IS NULL OR expires_at > NOW())",
-		"archived = false",
-		"status != 'superseded'",
 		"to_tsvector('english', content || ' ' || COALESCE(key, '')) @@ plainto_tsquery('english', $2)",
 	}
+	conditions = append(conditions, recallLifecycleConditions(filter, true)...)
 	argIdx := 3
 
 	if projID != nil {
@@ -1891,11 +1888,9 @@ func (r *MemoryRepo) ftsRankedORFallback(
 	args := []interface{}{wsID, orFragment} // $1=workspace_id, $2=OR tsquery fragment
 	conditions := []string{
 		"workspace_id = $1",
-		"(expires_at IS NULL OR expires_at > NOW())",
-		"archived = false",
-		"status != 'superseded'",
 		"to_tsvector('english', content || ' ' || COALESCE(key, '')) @@ to_tsquery('english', $2)",
 	}
+	conditions = append(conditions, recallLifecycleConditions(filter, true)...)
 	argIdx := 3
 
 	if projID != nil {
