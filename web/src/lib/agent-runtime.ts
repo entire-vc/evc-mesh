@@ -334,6 +334,79 @@ export function poolObservations(controllers: ControllerState[]): Record<string,
   return out;
 }
 
+export interface QuotaWindow {
+  pool: string;
+  window: string;
+  /** null = the provider gave no number; it is never shown as 0 %. */
+  usedFraction: number | null;
+  observedAt: string;
+  stale: boolean;
+}
+
+export type QuotaLoad =
+  | { kind: "ok"; windows: QuotaWindow[] }
+  | { kind: "forbidden" }
+  | { kind: "unavailable" };
+
+// Date.parse alone accepts a bare year; the API contract is an RFC 3339 timestamp.
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+// Date.parse also normalizes Feb 30 into March 2: require the calendar fields to round-trip.
+function isValidRfc3339(v: string): boolean {
+  if (!RFC3339.test(v) || Number.isNaN(Date.parse(v))) return false;
+  const [y = NaN, mo = NaN, d = NaN, h = NaN, mi = NaN, sec = NaN] = v.slice(0, 19).split(/[-T:]/).map(Number);
+  const c = new Date(Date.UTC(y, mo - 1, d, h, mi, sec));
+  return c.getUTCFullYear() === y && c.getUTCMonth() === mo - 1 && c.getUTCDate() === d
+    && c.getUTCHours() === h && c.getUTCMinutes() === mi && c.getUTCSeconds() === sec;
+}
+
+/** HH:MMZ in UTC, whatever offset the server sent. */
+export function formatObservedAtUtc(iso: string): string {
+  return `${new Date(iso).toISOString().slice(11, 16)}Z`;
+}
+
+const QUOTA_STATUSES = ["available", "exhausted", "unknown", "auth_error", "network_error"];
+
+// GET .../controllers/:ref/quota-observations (RuntimeQuotaList). One malformed
+// record makes the whole list null: a partial list would read as "no data".
+export function normalizeQuotaObservations(raw: unknown): QuotaWindow[] | null {
+  if (!isObject(raw) || !Array.isArray(raw.observations)) return null;
+  const out: QuotaWindow[] = [];
+  for (const o of raw.observations) {
+    if (!isObject(o) || typeof o.pool !== "string" || typeof o.window !== "string") return null;
+    if (typeof o.provider !== "string" || typeof o.status !== "string" || !QUOTA_STATUSES.includes(o.status)) return null;
+    if (typeof o.stale !== "boolean" || typeof o.observed_at !== "string" || !isValidRfc3339(o.observed_at)) return null;
+    const f = o.used_fraction;
+    if (f !== null && (typeof f !== "number" || !Number.isFinite(f) || f < 0 || f > 1)) return null;
+    // Same rule as the server: a status without data carries no measurement.
+    if (f !== null && o.status !== "available" && o.status !== "exhausted") return null;
+    out.push({
+      pool: o.pool,
+      window: o.window,
+      usedFraction: f,
+      observedAt: o.observed_at,
+      stale: o.stale,
+    });
+  }
+  return out;
+}
+
+export async function fetchQuotaObservations(wsId: string, controllerRef: string): Promise<QuotaLoad> {
+  try {
+    const windows = normalizeQuotaObservations(
+      await api<unknown>(`/api/v1/workspaces/${wsId}/runtime/controllers/${controllerRef}/quota-observations`),
+    );
+    return windows ? { kind: "ok", windows } : { kind: "unavailable" };
+  } catch (err) {
+    return { kind: (err as { status?: number } | null)?.status === 403 ? "forbidden" : "unavailable" };
+  }
+}
+
+/** "7 %" for a number (0 stays "0 %"), "unknown" for null; a stale reading is not a current one. */
+export function formatUsedFraction(w: Pick<QuotaWindow, "usedFraction" | "stale">): string {
+  const pct = w.usedFraction === null ? "unknown" : `${Math.round(w.usedFraction * 1000) / 10} %`;
+  return w.stale ? `${pct} (stale)` : pct;
+}
+
 export interface RuntimePreview {
   selectedProfileId: string;
   selectedAccountRef: string;
