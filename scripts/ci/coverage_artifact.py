@@ -19,6 +19,7 @@ import tempfile
 from diff_coverage import instrumented_blocks, parse_profile
 
 TEST_ARGS = ['./...', '-race', '-coverprofile=coverage.out', '-covermode=atomic']
+FULL_SUITE_STALL_SECONDS = '420'
 # Keep the target-feature selectors in step with `go help environment`.
 # GOARCH alone does not bind GOARM64, GO386, GORISCV64, etc.; these can change
 # selected build tags and executable code without changing the commit or profile.
@@ -123,8 +124,17 @@ def run_full_suite(profile: Path, manifest: Path) -> None:
     # A successful runner that fails to emit a profile must not certify bytes
     # left behind by an earlier checkout or invocation.
     profile.unlink(missing_ok=True)
+    # `go test ./...` prints a package's result only when that package finishes,
+    # so the watchdog's quiet window is "longest package, started alongside its
+    # siblings". internal/repository/postgres and internal/handler run ~85s each
+    # on an idle runner but took 140-184s on a loaded one (main #10371, !1166
+    # #10368: stack showed a live DB call in [IO wait] under a minute, not a
+    # wedge), and the default 180s window killed healthy runs. A real wedge is
+    # minutes of nothing until the job timeout, so 420s still catches it.
+    env = dict(os.environ)
+    env.setdefault('STALL_SECONDS', FULL_SUITE_STALL_SECONDS)
     subprocess.run(['sh', 'scripts/ci/go-test-stall-watchdog.sh', *TEST_ARGS],
-                   check=True)
+                   check=True, env=env)
     create(profile, manifest)
 
 
