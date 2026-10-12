@@ -36,6 +36,9 @@ func newGraphDBFixture(t *testing.T, count int) graphDBFixture {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("DATABASE_URL is required for graph PostgreSQL checks in CI; refusing to skip silently")
+		}
 		t.Skip("DATABASE_URL is required for graph PostgreSQL checks")
 	}
 	db, err := sqlx.Connect("postgres", dsn)
@@ -401,4 +404,86 @@ func TestDependencyGraphDB_HTTPDensePaginationAndFocus(t *testing.T) {
 	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	t.Logf("real PostgreSQL 1000 nodes / 3000 edges: focus p50=%s p95=%s; SQL instrumentation=%t", latencies[10], latencies[18], enabled)
+}
+
+// A member of project A who is not a member of project B must not receive B's
+// task fields through the HTTP endpoint, whether B's task is the focus itself or
+// only linked to an A task by a dependency.
+func TestDependencyGraphDB_HTTPForeignProjectFocusDoesNotLeakFields(t *testing.T) {
+	f := newGraphDBFixture(t, 1)
+	local := f.ids(t)[0]
+	other, todo, done, secret := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	f.addProject(t, other, todo, done, false)
+	f.exec(t, `INSERT INTO tasks(id,project_id,status_id,title,description,task_number,created_by,assignee_id,assignee_type) VALUES($1,$2,$3,'Leaky-title-7f3a','Leaky-description-7f3a',1,$4,$4,'user')`, secret, other, todo, f.user)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type) VALUES($1,$2,$3,'blocks')`, uuid.New(), local, secret)
+
+	// Positive control: once the user is a member of B the same marker is served,
+	// so the absence assertions below cannot pass on an empty or erroring body.
+	f.exec(t, `INSERT INTO project_members(id,workspace_id,project_id,user_id) VALUES($1,$2,$3,$4)`, uuid.New(), f.ws, other, f.user)
+	rec := f.request(t, "?focus="+local.String(), f.user, "member")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Leaky-title-7f3a", "control: member of B must see B's title")
+	require.Contains(t, rec.Body.String(), "Graph reader", "control: member of B must see B's assignee name")
+	f.exec(t, `DELETE FROM project_members WHERE project_id=$1 AND user_id=$2`, other, f.user)
+
+	// The HTTP layer would also reject a redacted focus, so pin the repository
+	// guard itself: without it ReadGraph would return a snapshot with a restricted
+	// centre node instead of this error.
+	_, err := postgres.NewTaskDependencyRepo(f.db).ReadGraph(context.Background(), f.project, secret, domain.GraphScope{WorkspaceID: f.ws, ActorID: f.user})
+	require.EqualError(t, err, "[404] Task not found", "repository must refuse a focus task of a project the actor is not a member of")
+
+	for name, query := range map[string]string{
+		"focus on foreign task":              "?focus=" + secret.String(),
+		"focus on foreign task, overview":    "?mode=overview&focus=" + secret.String(),
+		"focus on local task linked to it":   "?focus=" + local.String(),
+		"overview linked to foreign blocker": "?mode=overview&page=1&page_size=50",
+		"legacy full graph":                  "",
+	} {
+		rec := f.request(t, query, f.user, "member")
+		body := rec.Body.String()
+		assert.NotContains(t, body, "Leaky-title-7f3a", name)
+		assert.NotContains(t, body, "Leaky-description-7f3a", name)
+		assert.NotContains(t, body, "Graph reader", name+": assignee name of the foreign task")
+		if node := findGraphNode(t, body, secret.String()); node != nil {
+			for _, field := range []string{"title", "description", "assignee_name", "assignee_id"} {
+				assert.Empty(t, node[field], name+": restricted node must not carry "+field)
+			}
+		} else if name == "focus on local task linked to it" {
+			t.Fatalf("%s: expected the foreign blocker as a restricted node, got %s", name, body)
+		}
+		if query == "?focus="+secret.String() || query == "?mode=overview&focus="+secret.String() {
+			assert.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, rec.Code, name+": "+body)
+		}
+	}
+}
+
+// findGraphNode returns the JSON object whose id is wanted, anywhere in body.
+func findGraphNode(t *testing.T, body, id string) map[string]any {
+	t.Helper()
+	var doc any
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return nil
+	}
+	var walk func(v any) map[string]any
+	walk = func(v any) map[string]any {
+		switch x := v.(type) {
+		case map[string]any:
+			if x["id"] == id {
+				return x
+			}
+			for _, c := range x {
+				if n := walk(c); n != nil {
+					return n
+				}
+			}
+		case []any:
+			for _, c := range x {
+				if n := walk(c); n != nil {
+					return n
+				}
+			}
+		}
+		return nil
+	}
+	return walk(doc)
 }
