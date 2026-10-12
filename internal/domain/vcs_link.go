@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -151,4 +152,56 @@ type CreateVCSLinkInput struct {
 	Title      string          `json:"title"`
 	Status     VCSLinkStatus   `json:"status"`
 	Metadata   json.RawMessage `json:"metadata"`
+}
+
+// VCSLinkRoleReview marks a link whose task is a review of the PR/MR rather
+// than the work that produced it. The review card is closed by the merge of
+// its subject and is not held back by that merge not having happened yet
+// (the verdict is the deliverable), so both the webhook fan-out and the
+// done-evidence gate read this marker (#fecda06c).
+const VCSLinkRoleReview = "review"
+
+// IsReviewSubject reports whether the link was recorded as the subject of a
+// review card (metadata {"role":"review"}).
+func (l VCSLink) IsReviewSubject() bool {
+	var m struct {
+		Role string `json:"role"`
+	}
+	if len(l.Metadata) == 0 || json.Unmarshal(l.Metadata, &m) != nil {
+		return false
+	}
+	return m.Role == VCSLinkRoleReview
+}
+
+var changeRequestURLRe = regexp.MustCompile(`https?://[^\s)>\]"'<]+?/(?:-/merge_requests|pull)/\d+`)
+
+// ChangeRequestRef is a PR/MR named by a URL.
+type ChangeRequestRef struct {
+	Provider   VCSProvider
+	ExternalID string
+	URL        string
+}
+
+// ExtractChangeRequestRefs returns the distinct PR/MR URLs found in text, in
+// order of appearance. github.com .../pull/N is a GitHub PR; any other host
+// with .../-/merge_requests/N is a GitLab MR.
+func ExtractChangeRequestRefs(text string) []ChangeRequestRef {
+	var refs []ChangeRequestRef
+	seen := map[string]bool{}
+	for _, raw := range changeRequestURLRe.FindAllString(text, -1) {
+		norm := NormalizeVCSURL(raw)
+		if seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		idx := strings.LastIndex(norm, "/")
+		ref := ChangeRequestRef{ExternalID: norm[idx+1:], URL: norm}
+		if strings.Contains(norm, "/-/merge_requests/") {
+			ref.Provider = VCSProviderGitLab
+		} else {
+			ref.Provider = VCSProviderGitHub
+		}
+		refs = append(refs, ref)
+	}
+	return refs
 }

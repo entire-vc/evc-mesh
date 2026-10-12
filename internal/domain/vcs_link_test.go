@@ -156,3 +156,41 @@ func TestNormalizeVCSURL_MalformedInputComparesConsistently(t *testing.T) {
 		t.Fatalf("same malformed input normalized differently: %q vs %q", a, b)
 	}
 }
+
+func TestVCSLink_IsReviewSubject(t *testing.T) {
+	tests := []struct {
+		name string
+		meta []byte
+		want bool
+	}{
+		{"role review", []byte(`{"role":"review"}`), true},
+		{"role review with source", []byte(`{"role":"review","source":"description"}`), true},
+		{"other role", []byte(`{"role":"work"}`), false},
+		{"no role", []byte(`{}`), false},
+		{"empty metadata", nil, false},
+		{"malformed metadata", []byte(`{"role":`), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (VCSLink{Metadata: tc.meta}).IsReviewSubject(); got != tc.want {
+				t.Fatalf("IsReviewSubject() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractChangeRequestRefs(t *testing.T) {
+	refs := ExtractChangeRequestRefs("MR: https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19, again (https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19/) and https://github.com/o/r/pull/5.")
+	if len(refs) != 2 {
+		t.Fatalf("got %d refs, want 2 (duplicate URL must collapse): %+v", len(refs), refs)
+	}
+	if refs[0].Provider != VCSProviderGitLab || refs[0].ExternalID != "19" {
+		t.Errorf("first ref = %+v, want gitlab !19", refs[0])
+	}
+	if refs[1].Provider != VCSProviderGitHub || refs[1].ExternalID != "5" {
+		t.Errorf("second ref = %+v, want github #5", refs[1])
+	}
+	if got := ExtractChangeRequestRefs("no links, MR !19"); len(got) != 0 {
+		t.Errorf("prose without URL produced refs: %+v", got)
+	}
+}
