@@ -140,40 +140,11 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 		seen[a.ID] = true
 	}
 
-	// GUEST agents: home workspace is elsewhere, but an active
-	// agent_workspace_grants connection reaches into THIS workspace (task
-	// U3/#71627c5a). agentRepo.List above filters on agents.workspace_id and
-	// can never see these — agent_workspace_grants is the only place that
-	// does, same asymmetry #7661fc5d found on the authentication side.
-	if s.agentGrantRepo != nil {
-		grants, gerr := s.agentGrantRepo.ListActiveByWorkspace(ctx, workspaceID)
-		if gerr != nil {
-			return nil, fmt.Errorf("list active agent workspace grants: %w", gerr)
-		}
-		for _, g := range grants {
-			if seen[g.AgentID] {
-				// A home agent should never also carry a distinct grant row
-				// into its own home workspace under the current invite flow,
-				// but if the data ever disagrees, the home listing above is
-				// the fuller, authoritative record — do not add a second,
-				// guest-flavored duplicate of it.
-				continue
-			}
-			agent, aerr := s.agentRepo.GetByID(ctx, g.AgentID)
-			if aerr != nil {
-				return nil, fmt.Errorf("get guest agent %s: %w", g.AgentID, aerr)
-			}
-			if agent == nil {
-				// A grant outliving the agent it points at is not a known
-				// reachable state (no ON DELETE CASCADE gap here), but
-				// skipping one ghost row is cheaper than failing the whole
-				// directory over it.
-				continue
-			}
-			agents = append(agents, s.buildTeamDirectoryAgent(ctx, workspaceID, agent, false, activeCategories))
-			seen[g.AgentID] = true
-		}
+	guests, err := s.listGuestDirectoryAgents(ctx, workspaceID, seen, activeCategories)
+	if err != nil {
+		return nil, err
 	}
+	agents = append(agents, guests...)
 
 	// Get human members with their profile data.
 	members, err := s.memberRepo.List(ctx, workspaceID)
@@ -206,6 +177,47 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 	}, nil
 }
 
+// listGuestDirectoryAgents returns the GUEST agents of a workspace: home
+// workspace is elsewhere, but an active agent_workspace_grants connection
+// reaches into THIS workspace (task U3/#71627c5a). agentRepo.List and
+// ListWithProjects filter on agents.workspace_id and can never see these —
+// agent_workspace_grants is the only place that does, same asymmetry
+// #7661fc5d found on the authentication side. seen holds the ids already
+// listed as home agents and is extended with the guests returned.
+func (s *rulesService) listGuestDirectoryAgents(ctx context.Context, workspaceID uuid.UUID, seen map[uuid.UUID]bool, activeCategories []string) ([]domain.TeamDirectoryAgent, error) {
+	if s.agentGrantRepo == nil {
+		return nil, nil
+	}
+	grants, err := s.agentGrantRepo.ListActiveByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list active agent workspace grants: %w", err)
+	}
+	var guests []domain.TeamDirectoryAgent
+	for _, g := range grants {
+		if seen[g.AgentID] {
+			// A home agent should never also carry a distinct grant row
+			// into its own home workspace under the current invite flow,
+			// but if the data ever disagrees, the home listing is the
+			// fuller, authoritative record — do not add a second,
+			// guest-flavored duplicate of it.
+			continue
+		}
+		agent, aerr := s.agentRepo.GetByID(ctx, g.AgentID)
+		if aerr != nil {
+			return nil, fmt.Errorf("get guest agent %s: %w", g.AgentID, aerr)
+		}
+		if agent == nil {
+			// A grant outliving the agent it points at is not a known
+			// reachable state, but skipping one ghost row is cheaper than
+			// failing the whole directory over it.
+			continue
+		}
+		guests = append(guests, s.buildTeamDirectoryAgent(ctx, workspaceID, agent, false, activeCategories))
+		seen[g.AgentID] = true
+	}
+	return guests, nil
+}
+
 // buildTeamDirectoryAgent turns a domain.Agent into its team-directory
 // representation for workspaceID, tagging IsHome so a guest (task
 // U3/#71627c5a — home workspace is elsewhere, reached here via an active
@@ -218,6 +230,12 @@ func (s *rulesService) buildTeamDirectoryAgent(ctx context.Context, workspaceID 
 			currentTasks = cnt
 		}
 	}
+	parentID, supervisorID := a.ParentAgentID, a.SupervisorUserID
+	if !isHome {
+		// Both point into the agent's HOME workspace; a guest listing must
+		// not carry foreign ids (a user id of another workspace).
+		parentID, supervisorID = nil, nil
+	}
 	return domain.TeamDirectoryAgent{
 		ID:                 a.ID,
 		Name:               a.Name,
@@ -226,8 +244,8 @@ func (s *rulesService) buildTeamDirectoryAgent(ctx context.Context, workspaceID 
 		AgentType:          a.AgentType,
 		Model:              a.Model,
 		ShortTag:           a.ShortTag,
-		ParentAgentID:      a.ParentAgentID,
-		SupervisorUserID:   a.SupervisorUserID,
+		ParentAgentID:      parentID,
+		SupervisorUserID:   supervisorID,
 		Role:               a.Role,
 		Capabilities:       a.Capabilities,
 		ResponsibilityZone: a.ResponsibilityZone,
@@ -311,12 +329,8 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 			IsStale:            a.IsHeartbeatStale(),
 			ComputedStatus:     a.ComputedStatus(presence.IsConnected(a.ID)),
 			LastSeenAt:         a.LastHeartbeat,
-			// ListWithProjects, like GetTeamDirectory's pre-#71627c5a form,
-			// only ever sees home agents (agents.workspace_id) — no guest
-			// listing here yet, so every row genuinely IS home. Left true
-			// rather than defaulting to false so this endpoint does not
-			// silently start claiming every one of its agents is a guest the
-			// moment IsHome exists on the shared struct.
+			// ListWithProjects only sees home agents (agents.workspace_id);
+			// guests are appended below from agent_workspace_grants.
 			IsHome: true,
 		})
 	}
@@ -345,6 +359,18 @@ func (s *rulesService) GetTeamDirectoryTree(ctx context.Context, workspaceID uui
 			Projects:           projects,
 		})
 	}
+
+	// Guests (invited via agent_workspace_grants) belong in the tree too, or
+	// the Team page cannot show them. They are tagged is_home=false.
+	seen := make(map[uuid.UUID]bool, len(dirAgents))
+	for i := range dirAgents {
+		seen[dirAgents[i].ID] = true
+	}
+	guests, err := s.listGuestDirectoryAgents(ctx, workspaceID, seen, activeCategories)
+	if err != nil {
+		return nil, err
+	}
+	dirAgents = append(dirAgents, guests...)
 
 	agentTree := buildAgentTree(dirAgents)
 

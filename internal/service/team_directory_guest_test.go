@@ -168,3 +168,60 @@ func TestGetTeamDirectory_GrantLookupErrorPropagates(t *testing.T) {
 	_, err := svc.GetTeamDirectory(ctx, targetWS)
 	require.Error(t, err)
 }
+
+// TestGetTeamDirectoryTree_GuestAgentVisibility: the Team page reads
+// ?format=tree, which used to list home agents only — an invited guest
+// (agent_workspace_grants) never reached the UI. The guest must appear as a
+// root node tagged is_home=false, carrying none of its home-workspace refs.
+func TestGetTeamDirectoryTree_GuestAgentVisibility(t *testing.T) {
+	ctx := context.Background()
+	wsRepo := NewMockWorkspaceRepository()
+	agentRepo := NewMockAgentRepository()
+	memberRepo := NewMockWorkspaceMemberRepository()
+	grantRepo := NewMockAgentWorkspaceGrantRepository()
+
+	targetWS := uuid.New()
+	homeWS := uuid.New()
+	require.NoError(t, wsRepo.Create(ctx, &domain.Workspace{ID: targetWS, Name: "Target"}))
+
+	homeAgentID := uuid.New()
+	agentRepo.items[homeAgentID] = &domain.Agent{ID: homeAgentID, WorkspaceID: targetWS, Slug: "native", Name: "Native"}
+
+	foreignUser := uuid.New()
+	foreignParent := uuid.New()
+	guestAgentID := uuid.New()
+	agentRepo.items[guestAgentID] = &domain.Agent{
+		ID: guestAgentID, WorkspaceID: homeWS, Slug: "guest", Name: "Guest",
+		SupervisorUserID: &foreignUser, ParentAgentID: &foreignParent,
+	}
+	grantRepo.Seed(&domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: guestAgentID, WorkspaceID: targetWS})
+
+	// Revoked grant: must not be listed.
+	revokedAgentID := uuid.New()
+	agentRepo.items[revokedAgentID] = &domain.Agent{ID: revokedAgentID, WorkspaceID: homeWS, Slug: "gone", Name: "Gone"}
+	revoked := &domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: revokedAgentID, WorkspaceID: targetWS}
+	grantRepo.Seed(revoked)
+	grantRepo.SeedRevoke(revoked.ID, timeNow())
+
+	svc := NewRulesServiceWithOptions(
+		nil, nil, nil, agentRepo, memberRepo, wsRepo, nil,
+		WithRulesAgentGrantRepo(grantRepo),
+	)
+
+	tree, err := svc.GetTeamDirectoryTree(ctx, targetWS)
+	require.NoError(t, err)
+	require.Len(t, tree.AgentTree, 2, "home agent and guest, not the revoked one")
+
+	byID := map[uuid.UUID]domain.TeamDirectoryAgentNode{}
+	for _, n := range tree.AgentTree {
+		byID[n.ID] = n
+	}
+	assert.True(t, byID[homeAgentID].IsHome)
+	guest, ok := byID[guestAgentID]
+	require.True(t, ok, "guest missing from the tree")
+	assert.False(t, guest.IsHome)
+	assert.Nil(t, guest.SupervisorUserID, "foreign supervisor id must not leak")
+	assert.Nil(t, guest.ParentAgentID, "foreign parent id must not leak")
+	_, leaked := byID[revokedAgentID]
+	assert.False(t, leaked, "revoked grant must not be listed")
+}
