@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mesh.entire.host/schemas/extensions/manifest.v1.json",
+  "title": "Mesh extension manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "name", "version", "kind", "runtime", "mesh_api", "publisher", "description", "category", "levels", "capabilities"],
+  "properties": {
+    "schema": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,40}$",
+      "not": { "anyOf": [{ "pattern": "mesh" }, { "pattern": "-(plugin|extension)$" }] }
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "kind": { "enum": ["integration", "plugin"] },
+    "runtime": { "enum": ["builtin", "external"] },
+    "mesh_api": { "type": "string", "pattern": "^(>=|<=|>|<|=)?[1-9][0-9]*( (>=|<=|>|<|=)?[1-9][0-9]*)*$" },
+    "publisher": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "category": { "enum": ["development", "communication", "documents", "agents", "security", "analytics", "entire-vc"] },
+    "tags": { "type": "array", "maxItems": 10, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,29}$" } },
+    "icon": { "type": "string", "minLength": 1 },
+    "license": { "type": "string", "minLength": 1 },
+    "repository": { "type": "string", "format": "uri" },
+    "homepage": { "type": "string", "format": "uri" },
+    "levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instance", "workspace", "project"],
+      "properties": {
+        "instance": { "type": "boolean" },
+        "workspace": { "type": "boolean" },
+        "project": { "type": "boolean" }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "instance": { "$ref": "#/$defs/settingsLevel" },
+        "workspace": { "$ref": "#/$defs/settingsLevel" },
+        "project": { "$ref": "#/$defs/settingsLevel" }
+      }
+    },
+    "schemas": { "type": "object", "additionalProperties": { "$ref": "#/$defs/settingsLevel" } },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(tasks|comments|artifacts|docs|projects|workspaces|members|agents|agent_keys|vcs_links|events|secrets):(read|write)$" }
+        },
+        "events": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "task.created", "task.updated", "task.moved", "task.assigned", "task.completed",
+              "comment.created", "artifact.uploaded", "doc.updated",
+              "project.created", "project.updated",
+              "workspace.member.added", "workspace.member.removed",
+              "agent.key.issued", "agent.key.revoked",
+              "extension.installed", "extension.connected", "extension.disabled", "extension.updated"
+            ]
+          }
+        },
+        "webhooks_in": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$" } },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed_domains"],
+          "properties": {
+            "allowed_domains": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "reasoning": { "type": "string" }
+          }
+        },
+        "ui": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/slot" } },
+        "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "external": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["base_url_setting", "health_path", "install_path", "events_path"],
+          "properties": {
+            "base_url_setting": { "type": "string", "minLength": 1 },
+            "health_path": { "type": "string", "pattern": "^/" },
+            "install_path": { "type": "string", "pattern": "^/" },
+            "events_path": { "type": "string", "pattern": "^/" },
+            "ui": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/slot" },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "title"],
+                "properties": {
+                  "path": { "type": "string", "pattern": "^/" },
+                  "title": { "type": "string", "minLength": 1 },
+                  "icon": { "type": "string" }
+                }
+              }
+            },
+            "image": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "runtime": { "const": "builtin" } } },
+      "then": { "properties": { "external": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "runtime": { "const": "external" } } },
+      "then": { "required": ["external"], "properties": { "external": { "type": "object" } } }
+    }
+  ],
+  "$defs": {
+    "slot": {
+      "enum": ["workspace.settings", "project.settings", "task.panel", "task.badge", "task.actions", "sidebar.item", "command", "doc.panel"]
+    },
+    "settingsLevel": {
+      "type": "object",
+      "properties": {
+        "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "field": {
+      "type": "object",
+      "properties": {
+        "x-secret": { "type": "boolean" },
+        "x-widget": { "enum": ["project-picker", "agent-picker", "textarea", "toggle", "select", "list", "group"] },
+        "x-visible-if": { "type": "object" },
+        "x-help": { "type": "string" }
+      }
+    }
+  }
+}

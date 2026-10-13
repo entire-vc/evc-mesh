@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "id": "gitlab",
+  "name": "GitLab",
+  "version": "1.4.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "MR и пайплайны GitLab в карточках задач; гейты на пайплайн",
+  "category": "development",
+  "tags": [
+    "vcs",
+    "ci"
+  ],
+  "icon": "icon.svg",
+  "license": "Apache-2.0",
+  "repository": "https://git.entire.host/entire-vc/evc-mesh",
+  "homepage": "https://mesh.entire.host/docs/extensions/gitlab",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": true
+  },
+  "settings": {
+    "instance": {
+      "$ref": "#/schemas/connection"
+    },
+    "workspace": {
+      "$ref": "#/schemas/connection"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "repo_path": {
+          "type": "string",
+          "title": "Репозиторий (group/project)"
+        }
+      },
+      "required": [
+        "repo_path"
+      ]
+    }
+  },
+  "schemas": {
+    "connection": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Адрес GitLab"
+        },
+        "token": {
+          "type": "string",
+          "title": "Токен",
+          "x-secret": true
+        },
+        "webhook_secret": {
+          "type": "string",
+          "title": "Секрет вебхука",
+          "x-secret": true
+        }
+      },
+      "required": [
+        "base_url",
+        "token"
+      ]
+    }
+  },
+  "capabilities": {
+    "api": [
+      "tasks:read",
+      "tasks:write",
+      "comments:write",
+      "vcs_links:write"
+    ],
+    "events": [
+      "task.updated",
+      "comment.created"
+    ],
+    "webhooks_in": [
+      "gitlab"
+    ],
+    "network": {
+      "allowed_domains": [
+        "{settings.base_url}"
+      ],
+      "reasoning": "вызовы API GitLab по адресу из настроек"
+    },
+    "ui": [
+      "task.panel",
+      "task.badge",
+      "project.settings",
+      "workspace.settings"
+    ],
+    "secrets": [
+      "token",
+      "webhook_secret"
+    ]
+  },
+  "external": {
+    "base_url_setting": "hello_url",
+    "health_path": "/healthz",
+    "install_path": "/mesh/install",
+    "events_path": "/mesh/events"
+  }
+}
