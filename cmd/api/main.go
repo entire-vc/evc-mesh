@@ -270,13 +270,8 @@ func main() {
 		service.MemoryWithDocIndex(documentChunkRepo, os.Getenv("DOC_INDEX_RECALL") == "true"),
 	)
 
-	// Slack service sends notifications via Slack Incoming Webhooks when a workspace has
-	// an active Slack integration configured. It is injected into webhookService below.
-	slackService := service.NewSlackService(integrationRepo, cfg.Email.BaseURL)
-
 	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
-	// SlackService is co-injected so that every Dispatch call also notifies Slack when configured.
-	webhookService := service.NewWebhookService(webhookRepo, service.WithSlackService(slackService))
+	webhookService := service.NewWebhookService(webhookRepo)
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
 

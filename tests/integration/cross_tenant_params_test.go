@@ -210,7 +210,7 @@ func (f *victimFixture) createFlatObjects(t *testing.T) {
 	})
 
 	f.intID = f.create(t, "POST", "/api/v1/workspaces/"+f.wsID+"/integrations", map[string]any{
-		"provider": "slack",
+		"provider": "spark",
 		"config":   map[string]any{"token": "victim-secret-token"},
 	})
 

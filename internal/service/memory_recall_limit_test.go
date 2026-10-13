@@ -50,7 +50,7 @@ func TestRecall_PinnedInjection_RespectsLimit(t *testing.T) {
 		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
 			wsID := uuid.New()
 
-			// The arm returns a full page on its own, so there is no slack for
+			// The arm returns a full page on its own, so there is no headroom for
 			// pinned rows to occupy without displacing something.
 			armRows := retrievalRows(wsID, limit)
 

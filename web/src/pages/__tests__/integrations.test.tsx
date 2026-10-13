@@ -192,8 +192,7 @@ describe("IntegrationsPage — mcp is reference-only (#4a3195a5)", () => {
     // pre-existing (no bot token set) and mcp is excluded by #4a3195a5 —
     // leaving exactly 3. This count has stepped down twice: 5 -> 4 when mcp
     // stopped rendering a switch that switched nothing, 4 -> 3 when slack
-    // left the page (#84599ead — the backend stays, it is just not
-    // advertised). A change here must name which provider moved and why.
+    // left the page (#84599ead; its backend was removed in #c9f9834f). A change here must name which provider moved and why.
     expect(screen.getAllByRole("button", { name: "Enable" })).toHaveLength(3);
   });
 

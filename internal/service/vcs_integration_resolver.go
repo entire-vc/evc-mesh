@@ -139,7 +139,7 @@ type VCSEnvFallback struct {
 // fields the row left empty — is deliberate (§4: "не смешивать уровни
 // внутри одного провайдера").
 //
-// GitHub/GitLab differ from Slack/Telegram in one respect this resolver has
+// GitHub/GitLab differ from Telegram in one respect this resolver has
 // to account for: both are reached through a SINGLE shared webhook endpoint
 // (/webhooks/github, /webhooks/gitlab) with no workspace_id in the URL, so
 // which workspace's config should validate an inbound delivery isn't known

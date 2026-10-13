@@ -224,7 +224,7 @@ func seedIntegration(t *testing.T, db *sqlx.DB, fx coverageFixture, provider dom
 func TestIntegrationRepoGetByID_ReturnsEveryListedColumn(t *testing.T) {
 	db := selectStarCoverageTestDB(t)
 	fx := newCoverageFixture(t, db)
-	seeded := seedIntegration(t, db, fx, domain.IntegrationProviderSlack, true)
+	seeded := seedIntegration(t, db, fx, domain.IntegrationProviderGitLab, true)
 
 	got, err := NewIntegrationRepo(db).GetByID(context.Background(), seeded.ID)
 	require.NoError(t, err)
@@ -232,7 +232,7 @@ func TestIntegrationRepoGetByID_ReturnsEveryListedColumn(t *testing.T) {
 
 	assert.Equal(t, seeded.ID, got.ID)
 	assert.Equal(t, fx.workspaceID, got.WorkspaceID)
-	assert.Equal(t, domain.IntegrationProviderSlack, got.Provider)
+	assert.Equal(t, domain.IntegrationProviderGitLab, got.Provider)
 	assert.JSONEq(t, `{"webhook": "https://example.com/hook"}`, string(got.Config),
 		"config is the entire payload of this row; an omitted column reads as {}")
 	assert.True(t, got.IsActive)
@@ -244,7 +244,7 @@ func TestIntegrationRepoGetByProvider_KeysOnWorkspaceAndProvider(t *testing.T) {
 	db := selectStarCoverageTestDB(t)
 	fx := newCoverageFixture(t, db)
 	seeded := seedIntegration(t, db, fx, domain.IntegrationProviderGitHub, true)
-	seedIntegration(t, db, fx, domain.IntegrationProviderSlack, false)
+	seedIntegration(t, db, fx, domain.IntegrationProviderGitLab, false)
 
 	repo := NewIntegrationRepo(db)
 
@@ -266,20 +266,20 @@ func TestIntegrationRepoListByWorkspace_ReturnsFullyPopulatedRows(t *testing.T) 
 	db := selectStarCoverageTestDB(t)
 	fx := newCoverageFixture(t, db)
 	github := seedIntegration(t, db, fx, domain.IntegrationProviderGitHub, true)
-	slack := seedIntegration(t, db, fx, domain.IntegrationProviderSlack, false)
+	gitlab := seedIntegration(t, db, fx, domain.IntegrationProviderGitLab, false)
 
 	configs, err := NewIntegrationRepo(db).ListByWorkspace(context.Background(), fx.workspaceID)
 	require.NoError(t, err)
 	require.Len(t, configs, 2)
 
-	// ORDER BY provider ASC: "github" before "slack".
+	// ORDER BY provider ASC: "github" before "gitlab".
 	assert.Equal(t, github.ID, configs[0].ID)
 	assert.Equal(t, domain.IntegrationProviderGitHub, configs[0].Provider)
 	assert.True(t, configs[0].IsActive)
 	assert.JSONEq(t, `{"webhook": "https://example.com/hook"}`, string(configs[0].Config))
 
-	assert.Equal(t, slack.ID, configs[1].ID)
-	assert.Equal(t, domain.IntegrationProviderSlack, configs[1].Provider)
+	assert.Equal(t, gitlab.ID, configs[1].ID)
+	assert.Equal(t, domain.IntegrationProviderGitLab, configs[1].Provider)
 	assert.False(t, configs[1].IsActive,
 		"is_active must be read per row, not defaulted")
 }

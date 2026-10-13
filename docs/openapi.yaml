@@ -892,7 +892,7 @@ components:
           format: uuid
         provider:
           type: string
-          enum: [slack, github, spark, mcp]
+          enum: [github, gitlab, spark, mcp, telegram]
         config:
           type: object
         is_active:
@@ -4757,7 +4757,7 @@ paths:
               properties:
                 provider:
                   type: string
-                  enum: [slack, github, spark, mcp]
+                  enum: [github, gitlab, spark, mcp, telegram]
                 config:
                   type: object
                 is_active:
