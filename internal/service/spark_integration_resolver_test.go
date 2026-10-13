@@ -23,7 +23,7 @@ func TestDecodeSparkIntegration_NilOrWrongProvider_NotUsableNotDisabled(t *testi
 	if _, usable, disabled := decodeSparkIntegration(nil); usable || disabled {
 		t.Fatalf("nil config must be neither usable nor disabled, got usable=%v disabled=%v", usable, disabled)
 	}
-	wrongProvider := &domain.IntegrationConfig{Provider: domain.IntegrationProviderSlack, IsActive: true, Config: sparkCfg("https://spark.entire.vc")}
+	wrongProvider := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: sparkCfg("https://spark.entire.vc")}
 	if _, usable, disabled := decodeSparkIntegration(wrongProvider); usable || disabled {
 		t.Fatalf("wrong-provider row must be neither usable nor disabled, got usable=%v disabled=%v", usable, disabled)
 	}

@@ -141,7 +141,7 @@ func TestExtendCheckoutsOnHeartbeat_ProjectOptedIn_Extends(t *testing.T) {
 	require.NotNil(t, after)
 	assert.True(t, after.After(*before),
 		"checkout_expires must move forward: before=%v after=%v", before, after)
-	// Default extension is 30 minutes; allow slack for test execution time.
+	// Default extension is 30 minutes; allow margin for test execution time.
 	assert.WithinDuration(t, time.Now().Add(30*time.Minute), *after, 2*time.Minute)
 }
 

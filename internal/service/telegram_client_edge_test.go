@@ -79,7 +79,7 @@ func TestDecodeTelegramIntegration_EdgeCases(t *testing.T) {
 
 	t.Run("wrong provider", func(t *testing.T) {
 		cfg := telegramIntegration(true, "tok")
-		cfg.Provider = "slack"
+		cfg.Provider = "github"
 		_, _, ok := decodeTelegramIntegration(cfg)
 		assert.False(t, ok)
 	})

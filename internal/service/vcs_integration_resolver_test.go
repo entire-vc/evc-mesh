@@ -12,10 +12,8 @@ import (
 )
 
 // fakeVCSIntegrationRepo is a minimal repository.IntegrationRepository stub
-// for VCSIntegrationResolver's tests — unlike fakeIntegrationRepo
-// (slack_service_test.go, single fixed config regardless of workspace/
-// provider), this one is keyed by (workspace, provider) and supports
-// multiple active rows for ListActiveByProvider, since the resolver's
+// for VCSIntegrationResolver's tests, keyed by (workspace, provider) and
+// supporting multiple active rows for ListActiveByProvider, since the resolver's
 // webhook-secret union path genuinely needs more than one.
 type fakeVCSIntegrationRepo struct {
 	byWorkspaceProvider map[string]*domain.IntegrationConfig

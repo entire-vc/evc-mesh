@@ -28,7 +28,7 @@ func TestDecodeTeamRelayIntegration_NilOrWrongProvider_NotUsableNotDisabled(t *t
 	if _, usable, disabled := decodeTeamRelayIntegration(nil); usable || disabled {
 		t.Fatalf("nil config must be neither usable nor disabled, got usable=%v disabled=%v", usable, disabled)
 	}
-	wrongProvider := &domain.IntegrationConfig{Provider: domain.IntegrationProviderSlack, IsActive: true, Config: teamRelayCfg("https://cp.tr.entire.vc")}
+	wrongProvider := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: teamRelayCfg("https://cp.tr.entire.vc")}
 	if _, usable, disabled := decodeTeamRelayIntegration(wrongProvider); usable || disabled {
 		t.Fatalf("wrong-provider row must be neither usable nor disabled, got usable=%v disabled=%v", usable, disabled)
 	}

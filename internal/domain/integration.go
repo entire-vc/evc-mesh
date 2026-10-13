@@ -11,7 +11,6 @@ import (
 type IntegrationProvider string
 
 const (
-	IntegrationProviderSlack    IntegrationProvider = "slack"
 	IntegrationProviderGitHub   IntegrationProvider = "github"
 	IntegrationProviderGitLab   IntegrationProvider = "gitlab"
 	IntegrationProviderSpark    IntegrationProvider = "spark"

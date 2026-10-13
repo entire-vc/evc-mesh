@@ -1277,7 +1277,7 @@ export interface CreateVCSLinkRequest {
 
 // Integration types
 
-export type IntegrationProvider = "slack" | "github" | "gitlab" | "spark" | "mcp" | "telegram";
+export type IntegrationProvider = "github" | "gitlab" | "spark" | "mcp" | "telegram";
 
 // ---------------------------------------------------------------------------
 // Secrets (write-only store)

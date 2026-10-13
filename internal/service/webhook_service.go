@@ -41,21 +41,12 @@ const (
 
 // webhookService implements WebhookService.
 type webhookService struct {
-	repo     repository.WebhookRepository
-	client   *http.Client
-	slackSvc SlackService
+	repo   repository.WebhookRepository
+	client *http.Client
 }
 
 // WebhookServiceOption configures optional dependencies for webhookService.
 type WebhookServiceOption func(*webhookService)
-
-// WithSlackService injects a SlackService into the webhookService.
-// When set, Dispatch will also send Slack notifications for task lifecycle events.
-func WithSlackService(ss SlackService) WebhookServiceOption {
-	return func(s *webhookService) {
-		s.slackSvc = ss
-	}
-}
 
 // NewWebhookService returns a new WebhookService backed by the given repository.
 func NewWebhookService(repo repository.WebhookRepository, opts ...WebhookServiceOption) WebhookService {
@@ -200,13 +191,11 @@ func (s *webhookService) ListDeliveries(ctx context.Context, webhookID uuid.UUID
 }
 
 // Dispatch finds active webhooks subscribed to eventType and fires HTTP POSTs asynchronously.
-// It also forwards the event to the Slack integration if one is configured.
 // This method never blocks the caller.
 func (s *webhookService) Dispatch(ctx context.Context, workspaceID uuid.UUID, eventType string, payload any) {
 	webhooks, err := s.repo.ListActiveByEvent(ctx, workspaceID, eventType)
 	if err != nil {
 		log.Printf("[webhook] failed to list active webhooks for event %s: %v", eventType, err)
-		// Continue so Slack dispatch is still attempted.
 	}
 
 	if len(webhooks) > 0 {
@@ -221,11 +210,6 @@ func (s *webhookService) Dispatch(ctx context.Context, workspaceID uuid.UUID, ev
 		}
 	}
 
-	// Forward to Slack integration (NotifyTaskEvent is itself fire-and-forget).
-	if s.slackSvc != nil {
-		event := slackEventFromPayload(eventType, payload)
-		s.slackSvc.NotifyTaskEvent(ctx, workspaceID, event)
-	}
 }
 
 // TestDelivery fetches the webhook by ID and fires a single test HTTP POST directly
@@ -369,86 +353,6 @@ func (s *webhookService) sendHTTP(wh domain.WebhookConfig, eventType string, del
 	return resp.StatusCode, string(bodyBytes), duration, nil
 }
 
-// slackEventFromPayload converts a raw webhook payload into a TaskEvent for Slack.
-// Best-effort: unknown or missing fields are left zero-valued.
-func slackEventFromPayload(eventType string, payload any) TaskEvent {
-	event := TaskEvent{EventType: eventType}
-
-	m, ok := toStringMap(payload)
-	if !ok {
-		return event
-	}
-
-	if v, ok := uuidFromMap(m, "task_id"); ok {
-		event.TaskID = v
-	}
-	if v, ok := uuidFromMap(m, "project_id"); ok {
-		event.ProjectID = v
-	}
-	if v, ok := stringFromMap(m, "title"); ok {
-		event.TaskTitle = v
-	}
-	if v, ok := stringFromMap(m, "priority"); ok {
-		event.Priority = v
-	}
-
-	return event
-}
-
-// toStringMap attempts to convert payload to map[string]interface{}.
-func toStringMap(payload any) (map[string]interface{}, bool) {
-	if m, ok := payload.(map[string]interface{}); ok {
-		return m, true
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return nil, false
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, false
-	}
-	return m, true
-}
-
-// uuidFromMap extracts a uuid.UUID from a map value that may be a string or uuid.UUID.
-func uuidFromMap(m map[string]interface{}, key string) (uuid.UUID, bool) {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return uuid.Nil, false
-	}
-	switch val := v.(type) {
-	case string:
-		id, err := uuid.Parse(val)
-		if err != nil {
-			return uuid.Nil, false
-		}
-		return id, true
-	case uuid.UUID:
-		return val, true
-	}
-	return uuid.Nil, false
-}
-
-// stringFromMap extracts a string from a map value.
-func stringFromMap(m map[string]interface{}, key string) (string, bool) {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
-}
-
-// ValidateWebhookURL is validateWebhookURL, exported so the
-// integration_handler package (a different write path for the same class of
-// address — a workspace's Slack webhook_url) can reuse the same guard
-// instead of re-deriving it. See validateWebhookURL's own doc comment for
-// what it checks.
-func ValidateWebhookURL(rawURL string) error {
-	return validateWebhookURL(rawURL)
-}
-
 // validateWebhookURL refuses a webhook URL that is visibly wrong at write
 // time: wrong scheme, a literal non-public IP, localhost, a numeric host that a
 // libc resolver would read as an IP, or a name that resolves to a non-public
@@ -457,9 +361,7 @@ func ValidateWebhookURL(rawURL string) error {
 //
 // This is a courtesy to the person configuring the webhook (fast, readable
 // error), not the security boundary: the answer for a name can change after
-// this check. The boundary is newWebhookHTTPClient (and, for Slack Incoming
-// Webhooks, newSlackHTTPClient in slack_service.go — the same predicate,
-// applied to a second write path that stores an outbound URL).
+// this check. The boundary is newWebhookHTTPClient.
 func validateWebhookURL(rawURL string) error {
 	fail := func(msg string) error {
 		return apierror.ValidationError(map[string]string{"url": msg})

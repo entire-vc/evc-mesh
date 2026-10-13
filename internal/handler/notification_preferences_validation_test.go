@@ -25,7 +25,7 @@ import (
 // the failure mode the whitelist exists to catch.
 func TestUpdatePreferences_UnknownChannelIsRejected(t *testing.T) {
 	svc := &recordingNotificationService{}
-	body := `{"workspace_id":"` + uuid.New().String() + `","channel":"slack","events":["comment.created"]}`
+	body := `{"workspace_id":"` + uuid.New().String() + `","channel":"discord","events":["comment.created"]}`
 
 	rec := putPreferencesNoTenancyGuard(t, svc, body)
 

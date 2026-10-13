@@ -1045,16 +1045,6 @@ type TriageService interface {
 	ListTriageTasks(ctx context.Context, workspaceID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.Task], error)
 }
 
-// SlackService sends notifications to a Slack workspace via Incoming Webhooks.
-// NotifyTaskEvent is fire-and-forget: it spawns a goroutine and never blocks the caller.
-type SlackService interface {
-	// SendMessage POSTs a SlackMessage to the given Incoming Webhook URL.
-	SendMessage(ctx context.Context, webhookURL string, message SlackMessage) error
-	// NotifyTaskEvent looks up the active Slack integration for the workspace and
-	// sends a rich notification if the event type is subscribed. Fire-and-forget.
-	NotifyTaskEvent(ctx context.Context, workspaceID uuid.UUID, event TaskEvent)
-}
-
 // WebhookService provides business logic for outbound webhook management.
 type WebhookService interface {
 	Create(ctx context.Context, input domain.CreateWebhookInput) (*domain.WebhookConfig, error)

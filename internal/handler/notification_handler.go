@@ -206,7 +206,7 @@ func (h *NotificationHandler) GetTelegramBotInfo(c echo.Context) error {
 //
 // The route used to store whatever string arrived. A row saved with a channel
 // nobody dispatches — a typo like "e-mail", or a channel someone assumed
-// existed, like "slack" — was answered 200 with the stored row echoed back, and
+// existed, like "discord" — was answered 200 with the stored row echoed back, and
 // then skipped by every fan-out loop without a log line, because each loop
 // selects the rows it recognises rather than rejecting the ones it does not. The
 // subscription looked saved in the UI and delivered nothing, forever, with no
