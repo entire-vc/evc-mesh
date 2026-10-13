@@ -276,3 +276,45 @@ func TestUserRepo_GetByEmailProjectsUsernameAndProvenance(t *testing.T) {
 	require.Equal(t, u.Username, got.Username)
 	require.True(t, got.DisplayNameSelfSet, "Create must persist the flag and GetByEmail must project it")
 }
+
+// A new account reads as English and not-yet-chosen; a saved choice round-trips
+// through a fresh read (what another device sees), and an empty Locale on a
+// struct that never loaded one leaves the stored value alone.
+func TestUserRepo_LocaleDefaultsAndRoundTrips(t *testing.T) {
+	db := userRepoTestDB(t)
+	repo := NewUserRepo(db)
+	ctx := context.Background()
+
+	suffix := uuid.New().String()[:8]
+	u := &domain.User{
+		ID: uuid.New(), Email: "loc-" + suffix + "@example.com", PasswordHash: "h",
+		Name: "Loc " + suffix, Username: "loc-" + suffix, IsActive: true,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, repo.Create(ctx, u))
+	t.Cleanup(func() { _, _ = db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", u.ID) })
+
+	got, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	require.Equal(t, "en", got.Locale)
+	require.False(t, got.LocaleSetExplicitly)
+
+	got.Locale, got.LocaleSetExplicitly = "ru", true
+	require.NoError(t, repo.Update(ctx, got))
+
+	again, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	require.Equal(t, "ru", again.Locale)
+	require.True(t, again.LocaleSetExplicitly)
+
+	blank := *again
+	blank.Locale = ""
+	require.NoError(t, repo.Update(ctx, &blank))
+	still, err := repo.GetByID(ctx, u.ID)
+	require.NoError(t, err)
+	require.Equal(t, "ru", still.Locale)
+
+	// The CHECK constraint is the last line of defence behind the 400.
+	_, err = db.ExecContext(ctx, "UPDATE users SET locale = 'de' WHERE id = $1", u.ID)
+	require.Error(t, err)
+}

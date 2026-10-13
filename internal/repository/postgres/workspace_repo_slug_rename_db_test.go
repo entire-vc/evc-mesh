@@ -217,3 +217,32 @@ func TestWorkspaceRepo_Delete_MaxLengthSlug_RenameStaysWithinConstraint(t *testi
 	recreated := &domain.Workspace{ID: uuid.New(), Name: "Max Slug Again", Slug: base, OwnerID: ownerID}
 	require.NoError(t, repo.Create(ctx, recreated))
 }
+
+// default_locale: a new workspace reads as 'en', an update round-trips, and an
+// empty value on a struct that never loaded one leaves the stored one alone.
+func TestWorkspaceRepo_DefaultLocaleRoundTrips(t *testing.T) {
+	db := slugRenameTestDB(t)
+	ownerID := slugRenameOwner(t, db)
+	repo := NewWorkspaceRepo(db)
+	ctx := context.Background()
+
+	ws := &domain.Workspace{ID: uuid.New(), Name: "Loc", Slug: "loc-" + uuid.New().String()[:8], OwnerID: ownerID}
+	require.NoError(t, repo.Create(ctx, ws))
+
+	got, err := repo.GetByID(ctx, ws.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "en", got.DefaultLocale)
+
+	got.DefaultLocale = "ru"
+	require.NoError(t, repo.Update(ctx, got))
+	again, err := repo.GetByID(ctx, ws.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "ru", again.DefaultLocale)
+
+	blank := *again
+	blank.DefaultLocale = ""
+	require.NoError(t, repo.Update(ctx, &blank))
+	still, err := repo.GetByID(ctx, ws.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "ru", still.DefaultLocale)
+}

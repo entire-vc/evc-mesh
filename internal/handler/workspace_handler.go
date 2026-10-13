@@ -70,6 +70,7 @@ type workspaceResponse struct {
 	IconURL           *string         `json:"icon_url"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
+	DefaultLocale     string          `json:"default_locale"`
 }
 
 func toResponse(ws *domain.Workspace) *workspaceResponse {
@@ -83,6 +84,7 @@ func toResponse(ws *domain.Workspace) *workspaceResponse {
 		BillingCustomerID: ws.BillingCustomerID,
 		CreatedAt:         ws.CreatedAt,
 		UpdatedAt:         ws.UpdatedAt,
+		DefaultLocale:     ws.DefaultLocale,
 	}
 	if ws.IconStorageKey != nil {
 		u := fmt.Sprintf("/api/v1/workspaces/%s/icon", ws.ID)
@@ -111,6 +113,8 @@ type updateWorkspaceRequest struct {
 	Name     *string          `json:"name"`
 	Slug     *string          `json:"slug"`
 	Settings *json.RawMessage `json:"settings"`
+	// DefaultLocale is the workspace-wide fallback language ("en"|"ru").
+	DefaultLocale *string `json:"default_locale"`
 }
 
 // List handles GET /workspaces
@@ -174,6 +178,8 @@ func (h *WorkspaceHandler) Create(c echo.Context) error {
 		Slug:     req.Slug,
 		OwnerID:  ownerID,
 		Settings: req.Settings,
+		// Mirrors the column default so the response matches what is stored.
+		DefaultLocale: domain.DefaultLocale,
 	}
 
 	if err := h.workspaceService.Create(c.Request().Context(), workspace); err != nil {
@@ -212,6 +218,10 @@ func (h *WorkspaceHandler) Update(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
+	if req.DefaultLocale != nil && !domain.IsSupportedLocale(*req.DefaultLocale) {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"default_locale": "unsupported locale"}))
+	}
+
 	// Fetch existing workspace first.
 	workspace, err := h.workspaceService.GetByID(c.Request().Context(), wsID)
 	if err != nil {
@@ -227,6 +237,9 @@ func (h *WorkspaceHandler) Update(c echo.Context) error {
 	}
 	if req.Settings != nil {
 		workspace.Settings = *req.Settings
+	}
+	if req.DefaultLocale != nil {
+		workspace.DefaultLocale = *req.DefaultLocale
 	}
 
 	if err := h.workspaceService.Update(c.Request().Context(), workspace); err != nil {

@@ -25,12 +25,12 @@ func NewUserRepo(db *sqlx.DB) *UserRepo {
 
 func (r *UserRepo) Create(ctx context.Context, user *domain.User) error {
 	const q = `
-		INSERT INTO users (id, email, password_hash, display_name, username, avatar_url, is_active, display_name_self_set, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO users (id, email, password_hash, display_name, username, avatar_url, is_active, display_name_self_set, locale, locale_set_explicitly, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE(NULLIF($9, ''), 'en'), $10, $11, $12)
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		user.ID, user.Email, user.PasswordHash, user.Name, user.Username,
-		user.AvatarURL, user.IsActive, user.DisplayNameSelfSet, user.CreatedAt, user.UpdatedAt,
+		user.AvatarURL, user.IsActive, user.DisplayNameSelfSet, user.Locale, user.LocaleSetExplicitly, user.CreatedAt, user.UpdatedAt,
 	)
 	return err
 }
@@ -65,7 +65,7 @@ func (r *UserRepo) Count(ctx context.Context) (int, error) {
 // constraint. Editing your own display name returned 500 for that reason alone.
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	const q = `SELECT id, email, password_hash, display_name, COALESCE(username, '') AS username,
-	                  COALESCE(avatar_url, '') AS avatar_url, is_active, display_name_self_set, created_at, updated_at
+	                  COALESCE(avatar_url, '') AS avatar_url, is_active, display_name_self_set, locale, locale_set_explicitly, created_at, updated_at
 	           FROM users WHERE id = $1`
 	var user domain.User
 	if err := r.db.GetContext(ctx, &user, q, id); err != nil {
@@ -84,7 +84,7 @@ func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, err
 // mixed-case address must never silently resolve to "no such user".
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	const q = `SELECT id, email, password_hash, display_name, COALESCE(username, '') AS username,
-	                  COALESCE(avatar_url, '') AS avatar_url, is_active, display_name_self_set, created_at, updated_at
+	                  COALESCE(avatar_url, '') AS avatar_url, is_active, display_name_self_set, locale, locale_set_explicitly, created_at, updated_at
 	           FROM users WHERE lower(email) = lower($1)`
 	var user domain.User
 	if err := r.db.GetContext(ctx, &user, q, strings.TrimSpace(email)); err != nil {
@@ -111,12 +111,14 @@ func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {
 		       is_active = $4,
 		       username = COALESCE(NULLIF($5, ''), username),
 		       display_name_self_set = $6,
-		       updated_at = $7
+		       locale = COALESCE(NULLIF($7, ''), locale),
+		       locale_set_explicitly = $8,
+		       updated_at = $9
 		 WHERE id = $1
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		user.ID, user.Name, user.AvatarURL, user.IsActive, user.Username,
-		user.DisplayNameSelfSet, time.Now(),
+		user.DisplayNameSelfSet, user.Locale, user.LocaleSetExplicitly, time.Now(),
 	)
 	return err
 }
@@ -187,7 +189,7 @@ func (r *UserRepo) GetByUsername(ctx context.Context, workspaceID uuid.UUID, use
 func (r *UserRepo) SearchAddableUsers(ctx context.Context, callerID uuid.UUID, query string, limit int) ([]domain.User, error) {
 	const q = `
 		SELECT u.id, u.email, u.password_hash, u.display_name, COALESCE(u.username, '') AS username,
-		       COALESCE(u.avatar_url, '') AS avatar_url, u.is_active, u.display_name_self_set,
+		       COALESCE(u.avatar_url, '') AS avatar_url, u.is_active, u.display_name_self_set, u.locale, u.locale_set_explicitly,
 		       u.created_at, u.updated_at
 		FROM users u
 		WHERE u.is_active

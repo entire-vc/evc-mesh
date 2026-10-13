@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/auth"
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -350,9 +351,14 @@ func (h *AuthHandler) Me(c echo.Context) error {
 
 // updateUserProfileRequest represents the JSON body for updating the current user's profile.
 type updateUserProfileRequest struct {
-	Name      string `json:"name"`
-	Username  string `json:"username"`
-	AvatarURL string `json:"avatar_url"`
+	// Name is a pointer so "absent" (a locale-only edit) differs from "" (an
+	// invalid name, still a 400 as before).
+	Name      *string `json:"name"`
+	Username  string  `json:"username"`
+	AvatarURL string  `json:"avatar_url"`
+	// Locale is optional; nil leaves the language unchanged. A request that
+	// carries only locale skips the name/username/avatar update.
+	Locale *string `json:"locale"`
 }
 
 // UpdateMe handles PATCH /api/v1/auth/me (protected endpoint).
@@ -368,9 +374,28 @@ func (h *AuthHandler) UpdateMe(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 	}
 
-	user, err := h.authService.UpdateProfile(c.Request().Context(), userID, req.Name, req.Username, req.AvatarURL)
-	if err != nil {
-		return handleError(c, err)
+	if req.Locale != nil && !domain.IsSupportedLocale(*req.Locale) {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"locale": "unsupported locale"}))
+	}
+
+	ctx := c.Request().Context()
+	var user *domain.User
+	localeOnly := req.Locale != nil && req.Name == nil && req.Username == "" && req.AvatarURL == ""
+	if !localeOnly {
+		name := ""
+		if req.Name != nil {
+			name = *req.Name
+		}
+		user, err = h.authService.UpdateProfile(ctx, userID, name, req.Username, req.AvatarURL)
+		if err != nil {
+			return handleError(c, err)
+		}
+	}
+	if req.Locale != nil {
+		user, err = h.authService.SetLocale(ctx, userID, *req.Locale)
+		if err != nil {
+			return handleError(c, err)
+		}
 	}
 
 	return c.JSON(http.StatusOK, user)
