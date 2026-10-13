@@ -392,6 +392,14 @@ components:
           type: string
         metadata:
           type: object
+        system_code:
+          type: string
+          nullable: true
+          description: Kind of a server-generated comment; null for human/agent comments and for comments written before this field existed.
+        system_params:
+          type: object
+          nullable: true
+          description: Values the system comment text is built from; null when system_code is null.
         is_internal:
           type: boolean
         created_at:
