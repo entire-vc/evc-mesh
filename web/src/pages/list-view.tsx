@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import {
   useCallback,
   useEffect,
@@ -1623,6 +1624,7 @@ function EnhancedTitleCell({
   onCancel: () => void;
   onNavigate: () => void;
 }) {
+  const { t } = useTranslation("board");
   const [draft, setDraft] = useState(task.title);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -1755,7 +1757,7 @@ function EnhancedTitleCell({
           {task.false_open?.all_children_closed && (
             <span
               className="flex items-center text-emerald-600 dark:text-emerald-400"
-              title={`False-open: все подзадачи закрыты, карточка без изменений ${task.false_open.stale_days} дн. — стоит пересмотреть приоритет`}
+              title={t("board:falseOpen.allChildrenClosed", { days: task.false_open.stale_days })}
             >
               <CircleCheck
                 className="h-3 w-3"
@@ -1766,7 +1768,7 @@ function EnhancedTitleCell({
           {task.false_open?.only_parked_children_left && (
             <span
               className="flex items-center text-sky-600 dark:text-sky-400"
-              title={`Остались только backlog-подзадачи (${task.false_open.open_children_count}), карточка без изменений ${task.false_open.stale_days} дн. — работа есть, но не движется`}
+              title={t("board:falseOpen.onlyParkedChildrenLeft", { count: task.false_open.open_children_count, days: task.false_open.stale_days })}
             >
               <Snowflake
                 className="h-3 w-3"

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import i18n, { NAMESPACES, resources, setLanguage } from "@/i18n";
+import i18n, { APP_NAMESPACES, resources, setLanguage } from "@/i18n";
+import { NAMESPACES } from "@/i18n/chunks";
 import { formatDate, formatNumber, formatRelativeShort } from "@/i18n/format";
 import { normalizeLanguage, resolveLanguage } from "@/i18n/config";
 
@@ -84,4 +85,8 @@ describe("locale files are complete", () => {
     }
     expect(missing).toEqual([]);
   });
+});
+
+it("APP_NAMESPACES lists every namespace that has locale files", () => {
+  expect([...APP_NAMESPACES].sort()).toEqual([...NAMESPACES].sort());
 });

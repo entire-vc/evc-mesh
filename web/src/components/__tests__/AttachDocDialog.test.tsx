@@ -123,7 +123,7 @@ describe("AttachDocDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Ничего не найдено")).toBeInTheDocument();
+      expect(screen.getByText("Nothing found")).toBeInTheDocument();
     });
     expect(onSelect).not.toHaveBeenCalled();
   });

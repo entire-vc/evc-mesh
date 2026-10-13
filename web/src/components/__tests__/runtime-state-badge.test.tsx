@@ -37,7 +37,7 @@ describe("RuntimeStateBadge", () => {
   it("working: names the lane and start time", () => {
     render(<RuntimeStateBadge state={{ kind: "working", lane: "Carl", since: "2026-10-10T07:20:00Z" }} />);
     expect(kind()).toBe("working");
-    expect(screen.getByTestId("runtime-state").textContent).toMatch(/В работе у Carl с \d\d:\d\d/);
+    expect(screen.getByTestId("runtime-state").textContent).toMatch(/Being worked on by Carl since \d\d:\d\d/);
   });
 
   it("waiting: renders a clickable card ref", () => {
@@ -56,20 +56,20 @@ describe("RuntimeStateBadge", () => {
   });
 
   it("waiting on a time: shows until", () => {
-    render(<RuntimeStateBadge state={{ kind: "waiting", until: "2026-10-10T19:15:00Z", reason: "событие в логе" }} />);
-    expect(screen.getByTestId("runtime-state").textContent).toMatch(/Ждёт: событие в логе до \d\d:\d\d/);
+    render(<RuntimeStateBadge state={{ kind: "waiting", until: "2026-10-10T19:15:00Z", reason: "event in the log" }} />);
+    expect(screen.getByTestId("runtime-state").textContent).toMatch(/Waiting: event in the log until \d\d:\d\d/);
   });
 
   it("queued: lane and position", () => {
     render(<RuntimeStateBadge state={{ kind: "queued", lane: "Carl", position: 2 }} />);
     expect(kind()).toBe("queued");
-    expect(screen.getByTestId("runtime-state").textContent).toContain("В очереди лейна Carl, позиция 2");
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Queued in lane Carl, position 2");
   });
 
   it("stopped: shows the reason", () => {
     render(<RuntimeStateBadge state={{ kind: "stopped", reason: "refeed-cap" }} />);
     expect(kind()).toBe("stopped");
-    expect(screen.getByTestId("runtime-state").textContent).toContain("Стоит: refeed-cap");
+    expect(screen.getByTestId("runtime-state").textContent).toContain("Stopped: refeed-cap");
   });
 
   it("stale: muted with an explicit note, kind is kept", () => {
@@ -77,8 +77,8 @@ describe("RuntimeStateBadge", () => {
     const el = screen.getByTestId("runtime-state");
     expect(el.getAttribute("data-runtime-stale")).toBe("true");
     expect(el.className).toContain("opacity-60");
-    expect(screen.getByTestId("runtime-state-stale").textContent).toContain("данные устарели");
-    expect(el.getAttribute("title")).toContain("данные устарели");
+    expect(screen.getByTestId("runtime-state-stale").textContent).toContain("data is stale");
+    expect(el.getAttribute("title")).toContain("data is stale");
   });
 
   it("fresh value has no stale note", () => {
@@ -109,7 +109,7 @@ describe("TaskCard runtime_state", () => {
     const lane = "aaaaaaaa-1111-1111-1111-111111111111";
     const rs: RuntimeState = { kind: "working", since: "2026-10-10T10:00:00Z", lane, source: "checkout", stale: false } as RuntimeState;
     const a = render(<TaskCard task={makeTask({ runtime_state: rs })} />);
-    expect(screen.getByTestId("runtime-state").textContent).toMatch(/В работе у Carl/);
+    expect(screen.getByTestId("runtime-state").textContent).toMatch(/Being worked on by Carl/);
     expect(a.container.textContent).not.toContain(lane);
     a.unmount();
     const b = render(<TaskCard task={makeTask({ runtime_state: rs, assignee_id: "bbbbbbbb-2222-2222-2222-222222222222" })} />);

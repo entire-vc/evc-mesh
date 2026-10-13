@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { APP_NAMESPACES } from "@/i18n";
 import { type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { cn } from "@/lib/cn";
@@ -13,6 +15,7 @@ import { InstallPromptBanner } from "@/components/install-prompt";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AuthLoadingSkeleton } from "@/components/layout/auth-loading-skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -27,6 +30,9 @@ import {
 } from "@/components/ui/card";
 
 export function AppLayout() {
+  // Suspends until every namespace of the current language is loaded, so no
+  // screen below renders a raw key (login only needs the bundled `common`).
+  useTranslation([...APP_NAMESPACES]);
   const { isAuthenticated, isLoading: authLoading } = useAuthStore();
   const { wsSlug, projectSlug } = useParams();
   const {
@@ -225,14 +231,7 @@ export function AppLayout() {
   }, [location.pathname]);
 
   if (authLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-background">
-        <div className="space-y-4 text-center">
-          <Skeleton className="mx-auto h-8 w-8 rounded-full" />
-          <Skeleton className="h-4 w-32" />
-        </div>
-      </div>
-    );
+    return <AuthLoadingSkeleton />;
   }
 
   if (!isAuthenticated) {
@@ -248,14 +247,7 @@ export function AppLayout() {
 
   // Show loading while fetching workspaces
   if (!initialized) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-background">
-        <div className="space-y-4 text-center">
-          <Skeleton className="mx-auto h-8 w-8 rounded-full" />
-          <Skeleton className="h-4 w-32" />
-        </div>
-      </div>
-    );
+    return <AuthLoadingSkeleton />;
   }
 
   // Redirect to first workspace root → activity. Skip deep-link routes.

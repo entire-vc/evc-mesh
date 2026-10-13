@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { forwardRef, memo, type HTMLAttributes } from "react";
@@ -63,6 +64,7 @@ export function humanGateTitle(task: Pick<Task, "human_gate_class" | "gate_reaso
 export const TaskCard = memo(
   forwardRef<HTMLDivElement, TaskCardProps>(
     ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, gateStatusName, className, ...props }, ref) => {
+    const { t } = useTranslation();
     const shortTag = useAgentShortTag(task.assignee_id, task.assignee_type);
     const holderTag = useAgentShortTag(task.checked_out_by, "agent");
     const borderColor =
@@ -198,7 +200,7 @@ export const TaskCard = memo(
           {task.false_open?.all_children_closed && (
             <span
               className="inline-flex items-center text-emerald-600 dark:text-emerald-400"
-              title={`False-open: все подзадачи закрыты, карточка без изменений ${task.false_open.stale_days} дн. — стоит пересмотреть приоритет`}
+              title={t("board:falseOpen.allChildrenClosed", { days: task.false_open.stale_days })}
               data-testid="false-open-indicator"
               data-false-open-kind="all-children-closed"
             >
@@ -210,7 +212,7 @@ export const TaskCard = memo(
           {task.false_open?.only_parked_children_left && (
             <span
               className="inline-flex items-center text-sky-600 dark:text-sky-400"
-              title={`Остались только backlog-подзадачи (${task.false_open.open_children_count}), карточка без изменений ${task.false_open.stale_days} дн. — работа есть, но не движется`}
+              title={t("board:falseOpen.onlyParkedChildrenLeft", { count: task.false_open.open_children_count, days: task.false_open.stale_days })}
               data-testid="false-open-indicator"
               data-false-open-kind="only-parked-children-left"
             >

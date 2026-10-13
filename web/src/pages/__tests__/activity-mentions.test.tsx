@@ -8,7 +8,7 @@
  * reassuring empty state is only shown when both inboxes actually answered.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 const mockedNavigate = vi.fn();
@@ -23,6 +23,7 @@ vi.mock("@/components/ui/toast", () => ({
 }));
 
 import { api } from "@/lib/api";
+import { setLanguage } from "@/i18n";
 import { ActivityPage } from "@/pages/activity-page";
 import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -215,5 +216,38 @@ describe("Activity → Mentions", () => {
 
     expect(await screen.findByText(/No mentions yet/)).toBeInTheDocument();
     expect(screen.queryByTestId("mentions-load-failed")).not.toBeInTheDocument();
+  });
+});
+
+// L2.1: section headers come from the `activity` namespace.
+describe("Activity → Mentions section labels", () => {
+  const seed = () => {
+    localStorage.setItem("mesh:activity:last_visit:acme", "2026-08-19T11:00:00Z");
+    mockInbox([TASK_MENTION], [DOC_MENTION]);
+  };
+
+  it("en: New / Shown", async () => {
+    seed();
+    renderPage();
+    await screen.findByText("Rollback Plan");
+    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.getByText("Shown")).toBeInTheDocument();
+  });
+
+  it("ru: the previous Новое / Показано", async () => {
+    await act(async () => {
+      await setLanguage("ru");
+    });
+    try {
+      seed();
+      renderPage();
+      await screen.findByText("Rollback Plan");
+      expect(screen.getByText("Новое")).toBeInTheDocument();
+      expect(screen.getByText("Показано")).toBeInTheDocument();
+    } finally {
+      await act(async () => {
+        await setLanguage("en");
+      });
+    }
   });
 });

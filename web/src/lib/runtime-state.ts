@@ -1,4 +1,5 @@
 import { format, parseISO } from "date-fns";
+import i18n from "@/i18n";
 import type { RuntimeState, RuntimeStateKind, Task } from "@/types";
 
 export interface RuntimeRef {
@@ -31,23 +32,27 @@ function clock(iso: string | null | undefined): string | null {
 
 /** Short text for the board badge and the title attribute. Refs are rendered separately (they are links). */
 export function runtimeStateText(rs: RuntimeState): string {
+  const t = (key: string, opts?: Record<string, unknown>) => i18n.t(`board:runtimeState.${key}`, opts);
   switch (rs.kind) {
     case "working": {
       const at = clock(rs.since);
-      return `В работе${rs.lane ? ` у ${rs.lane}` : ""}${at ? ` с ${at}` : ""}`;
+      return `${rs.lane ? t("workingLane", { lane: rs.lane }) : t("working")}${at ? ` ${t("since", { time: at })}` : ""}`;
     }
     case "waiting": {
       const until = clock(rs.until);
-      return `Ждёт${rs.ref ? ":" : ""}${!rs.ref && rs.reason ? `: ${rs.reason}` : ""}${until ? ` до ${until}` : ""}`;
+      return `${t("waiting")}${rs.ref ? ":" : ""}${!rs.ref && rs.reason ? `: ${rs.reason}` : ""}${until ? ` ${t("until", { time: until })}` : ""}`;
     }
     case "queued":
-      return `В очереди${rs.lane ? ` лейна ${rs.lane}` : ""}${rs.position ? `, позиция ${rs.position}` : ""}`;
+      return `${rs.lane ? t("queuedLane", { lane: rs.lane }) : t("queued")}${rs.position ? `, ${t("position", { position: rs.position })}` : ""}`;
     case "stopped":
-      return `Стоит${rs.reason ? `: ${rs.reason}` : ""}`;
+      return `${t("stopped")}${rs.reason ? `: ${rs.reason}` : ""}`;
   }
 }
 
-export const RUNTIME_STALE_NOTE = "данные устарели";
+/** Note appended to a stale state ("data is stale"). */
+export function runtimeStaleNote(): string {
+  return i18n.t("board:runtimeState.stale");
+}
 
 export function isWorking(task: Pick<Task, "runtime_state">): boolean {
   return task.runtime_state?.kind === "working";

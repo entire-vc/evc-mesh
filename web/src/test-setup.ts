@@ -1,3 +1,4 @@
+import "@/i18n"; // components call useTranslation(); initialise i18next once for every test file
 import "@testing-library/jest-dom";
 
 // jsdom does not implement matchMedia at all — any component that reads a
