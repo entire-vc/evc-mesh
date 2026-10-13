@@ -16,7 +16,7 @@ import (
 // green. This test round-trips the NEWEST migration on the same real
 // Postgres the suite runs on: down one version, the goose version must
 // actually drop; up, the exact version must be restored. For the newest
-// table-creating migration (20261013001, document_path_aliases, #ed10e6aa)
+// table-creating migration (20261013003, document_path_aliases, #ed10e6aa)
 // the schema is asserted too — the table must be gone after down and back
 // after up (AC3 of #5194afd4: up+down on real Postgres in CI). A future branch whose newest migration is something else
 // still gets the version round-trip; it should extend the schema block for
@@ -36,7 +36,7 @@ func TestNewestMigrationDownUpRoundTrip(t *testing.T) {
 	require.Less(t, after, before,
 		"down must actually lower the goose version — a no-op Down is the exact failure this test exists to catch")
 
-	ownMigration := before == 20261013001 // document_path_aliases
+	ownMigration := before == 20261013003 // document_path_aliases
 	if ownMigration {
 		require.False(t, tableExists(t, db, "document_path_aliases"),
 			"down must drop document_path_aliases")
