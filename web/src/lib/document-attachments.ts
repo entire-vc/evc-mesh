@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import type { PaginatedResponse } from "@/types";
 
 /**
  * A file uploaded into a document — mirrors domain.DocumentAttachment.
@@ -19,6 +20,10 @@ export interface DocumentAttachment {
   uploaded_by_type: "user" | "agent" | "system";
   created_at: string;
   deleted_at?: string;
+  // Where a sync-imported attachment was copied FROM (the Team Relay embed
+  // importer). Absent on every human upload; the embed rewriter keys on it.
+  source_path?: string | null;
+  source_sha256?: string | null;
 }
 
 /**
@@ -52,4 +57,22 @@ export async function uploadDocumentAttachment(
     method: "POST",
     body: form,
   });
+}
+
+/**
+ * List a document's attachments.
+ *
+ * limit=200 is the API's per-page maximum (pagination.MaxPageSize): a page
+ * with a few dozen embedded images must arrive whole, because the embed
+ * rewriter matches against the full set — a second page silently missing
+ * would render as broken images for no visible reason.
+ */
+export async function listDocumentAttachments(
+  documentId: string,
+): Promise<DocumentAttachment[]> {
+  const page = await api<PaginatedResponse<DocumentAttachment>>(
+    `/api/v1/documents/${documentId}/attachments`,
+    { params: { limit: 200 } },
+  );
+  return page.items;
 }

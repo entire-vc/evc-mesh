@@ -3904,6 +3904,38 @@ func (m *MockDocumentRepository) GetBySourceInProject(_ context.Context, project
 	return nil, nil
 }
 
+// ListLiveCopiesByShare mirrors the real query: live non-'own' rows for one
+// (project, share), sorted by source path so archive-pass tests can assert a
+// deterministic order.
+func (m *MockDocumentRepository) ListLiveCopiesByShare(_ context.Context, projectID uuid.UUID, sourceShare string) ([]domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.Document
+	for _, d := range m.items {
+		if d.ProjectID != projectID || d.DeletedAt != nil || d.SourceKind == domain.DocumentSourceOwn {
+			continue
+		}
+		if d.SourceShare != nil && *d.SourceShare == sourceShare {
+			copied := *d
+			out = append(out, copied)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		pi, pj := "", ""
+		if out[i].SourcePath != nil {
+			pi = *out[i].SourcePath
+		}
+		if out[j].SourcePath != nil {
+			pj = *out[j].SourcePath
+		}
+		return pi < pj
+	})
+	return out, nil
+}
+
 // CreateExternalCopy stores a copy row exactly as Create stores an own one —
 // the mock doesn't need two code paths just because the real repository does
 // (its reason is the INSERT column list, which doesn't exist here).
@@ -3935,6 +3967,24 @@ func (m *MockDocumentRepository) RefreshSyncedCopy(_ context.Context, id uuid.UU
 	existing.UpdatedAt = syncedAt
 	existing.Version = newVersion
 	return newVersion, nil
+}
+
+// SetEmbedSyncedSHA256 stamps the embed pass's dedup marker, mirroring the
+// postgres repo's own-document refusal so the mock can be used to prove that
+// guard too.
+func (m *MockDocumentRepository) SetEmbedSyncedSHA256(_ context.Context, id uuid.UUID, sha256 string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.items[id]
+	if !ok || existing.DeletedAt != nil || existing.SourceKind == domain.DocumentSourceOwn {
+		return apierror.NotFound("Document")
+	}
+	sha := sha256
+	existing.EmbedSyncedSHA256 = &sha
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -4021,6 +4071,59 @@ func (m *MockDocumentAttachmentRepository) ListByDocument(_ context.Context, doc
 		return items[i].ID.String() < items[j].ID.String()
 	})
 	return pagination.NewPage(items, len(items), pg), nil
+}
+
+func (m *MockDocumentAttachmentRepository) ListLiveByDocument(_ context.Context, documentID uuid.UUID) ([]domain.DocumentAttachment, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.DocumentAttachment
+	for _, att := range m.items {
+		if att.DocumentID == documentID && att.DeletedAt == nil {
+			out = append(out, *att)
+		}
+	}
+	return out, nil
+}
+
+func (m *MockDocumentAttachmentRepository) GetLiveBySourcePath(_ context.Context, documentID uuid.UUID, sourcePath string) (*domain.DocumentAttachment, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, att := range m.items {
+		if att.DocumentID == documentID && att.DeletedAt == nil &&
+			att.SourcePath != nil && *att.SourcePath == sourcePath {
+			copied := *att
+			return &copied, nil
+		}
+	}
+	return nil, nil
+}
+
+// Replace is atomic like the real one: a failure leaves the old row live.
+func (m *MockDocumentAttachmentRepository) Replace(ctx context.Context, oldID uuid.UUID, att *domain.DocumentAttachment, at time.Time) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	old, ok := m.items[oldID]
+	if !ok || old.DeletedAt != nil {
+		m.mu.Unlock()
+		return apierror.NotFound("Attachment")
+	}
+	stamp := at
+	old.DeletedAt = &stamp
+	copied := *att
+	m.items[att.ID] = &copied
+	m.mu.Unlock()
+	return nil
 }
 
 func (m *MockDocumentAttachmentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time) error {

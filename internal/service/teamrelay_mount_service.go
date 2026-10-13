@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +37,48 @@ const teamRelayRelayURLEnvVar = "MESH_TEAMRELAY_RELAY_URL"
 // Relay settings don't name one. R5 is what lets a human change it per
 // project; until it exists, this is the TTL every mounted share gets.
 const DefaultTeamRelaySyncTTL = 5 * time.Minute
+
+// defaultMountExcludedPaths is what a project with no exclusions configured
+// gets: card artifacts live on the card's artifacts tab already, so mounting a
+// second copy of them under Docs would be pure noise. See
+// TeamRelaySettings.ExcludedPaths for why this is a default applied at read
+// time rather than a value written into every settings row.
+var defaultMountExcludedPaths = []string{"artifacts"}
+
+// effectiveExcludedPaths returns the exclusion list a mount run uses. nil
+// (field absent — never configured) selects the default; an explicitly empty
+// slice selects none. Anything else is used as given, entries trimmed, blanks
+// dropped — the upsert already refuses an entry that is not a bare segment,
+// so by the time it is stored here it is clean.
+func effectiveExcludedPaths(settings domain.TeamRelaySettings) []string {
+	if settings.ExcludedPaths == nil {
+		return defaultMountExcludedPaths
+	}
+	out := make([]string, 0, len(settings.ExcludedPaths))
+	for _, p := range settings.ExcludedPaths {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// isMountPathExcluded reports whether sharePath's FIRST segment is one of the
+// excluded segments. First segment, not substring: "artifacts" excludes
+// "artifacts/card42/note.md", does not exclude "my-artifacts/x.md" or
+// "docs/artifacts-intro.md".
+func isMountPathExcluded(sharePath string, excluded []string) bool {
+	seg := sharePath
+	if i := strings.IndexByte(sharePath, '/'); i >= 0 {
+		seg = sharePath[:i]
+	}
+	for _, e := range excluded {
+		if seg == e {
+			return true
+		}
+	}
+	return false
+}
 
 // RelaySyncClient is the slice of the Team Relay sync-protocol client that
 // mounting and freshness refresh depend on. It exists so a test can substitute
@@ -148,6 +193,9 @@ type MountResult struct {
 	Mounted  int // rows created this run
 	Skipped  int // files-index entries that already had a copy row
 	Rejected int // files-index entries whose content was binary, not text — never mounted (see errBinaryFileEntry)
+	Excluded int // files-index entries skipped because their first path segment is in the exclusion list
+	Updated  int // existing copies whose source changed on the share — body rewritten this run
+	Archived int // live copies whose source file is gone from the share — soft-deleted this run (see archiveVanishedCopies)
 	Err      error
 }
 
@@ -205,6 +253,14 @@ type TeamRelayMountService interface {
 	// per-tree-read path (§3.6): the expensive walk happens here, on an
 	// explicit call, never implicitly inside a Docs tree GET.
 	SyncMount(ctx context.Context, projectID uuid.UUID) (*MountResult, error)
+	// SyncDueMounts is the scheduled counterpart of SyncMount: it walks every
+	// enabled Team Relay integration and re-runs the mount for those whose
+	// configured interval (TeamRelaySettings.SyncIntervalMinutes, default 15m)
+	// has elapsed since their last sync. A project an explicit "Sync now" is
+	// already syncing is skipped rather than waited on — the sweep must never
+	// block on one slow share. Returns how many projects it synced and how
+	// many it considered and left alone.
+	SyncDueMounts(ctx context.Context) (synced, skipped int, err error)
 	// RefreshSleepingKeyExpiries asks Team Relay's own introspection endpoint
 	// for every enabled integration's key expiry, independent of any user
 	// having opened a document or clicked "Sync now" — the two triggers
@@ -224,6 +280,26 @@ type teamRelayMountService struct {
 	piRepo       repository.ProjectIntegrationRepository
 	client       RelaySyncClient
 	keyDescriber KeyDescriber
+	// attachmentRepo is the embed importer's persistence (A4). Nil in a
+	// deployment that did not wire it: embeds are then skipped silently — an
+	// optional collaborator in exactly the way piRepo is, for the same reason
+	// (existing constructors and tests must keep compiling and behaving).
+	attachmentRepo repository.DocumentAttachmentRepository
+
+	// mountLocks carries one *sync.Mutex per project that has ever been synced.
+	// It is what makes the two sync producers — a human's "Sync now" (SyncMount,
+	// which waits) and the scheduler (SyncDueMounts, which tries and moves on) —
+	// mutually exclusive per project without serializing unrelated projects on
+	// one global lock. sync.Map because the key set is open-ended and every
+	// operation on it is load-or-store.
+	mountLocks sync.Map
+	// syncMu guards nextSyncDue, the in-memory schedule. Nothing persistent: the
+	// anchor for "when did this project last sync" is LastSyncCheckedAt in the
+	// database (recordSyncOutcome), which survives restarts; this map only
+	// carries the time FORWARD between sweeps so a restarted process doesn't
+	// re-walk every share in its first minute.
+	syncMu      sync.Mutex
+	nextSyncDue map[uuid.UUID]time.Time
 }
 
 // TeamRelayMountServiceOption configures optional collaborators, the same
@@ -241,6 +317,13 @@ func WithRelaySyncClient(c RelaySyncClient) TeamRelayMountServiceOption {
 // WithRelaySyncClient.
 func WithKeyDescriber(d KeyDescriber) TeamRelayMountServiceOption {
 	return func(s *teamRelayMountService) { s.keyDescriber = d }
+}
+
+// WithAttachmentRepository wires the embed importer's attachment persistence.
+// Without it the mount still works; image embeds in mounted bodies simply stay
+// unresolved (what every deployment did before A4).
+func WithAttachmentRepository(r repository.DocumentAttachmentRepository) TeamRelayMountServiceOption {
+	return func(s *teamRelayMountService) { s.attachmentRepo = r }
 }
 
 // NewTeamRelayMountService returns a TeamRelayMountService. storage may be nil
@@ -263,6 +346,7 @@ func NewTeamRelayMountService(
 		piRepo:       piRepo,
 		client:       realRelaySyncClient{},
 		keyDescriber: realKeyDescriber{},
+		nextSyncDue:  make(map[uuid.UUID]time.Time),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -373,6 +457,37 @@ func (s *teamRelayMountService) recordSyncOutcome(ctx context.Context, projectID
 	if setErr := s.piRepo.SetKeyExpiry(ctx, projectID, "team_relay", desc.ExpiresAt, "source"); setErr != nil {
 		log.Printf("teamrelay: set key expiry for project %s: %v", projectID, setErr)
 	}
+}
+
+// DefaultTeamRelaySyncInterval is how often the background mount sync re-runs
+// SyncMount for a project whose settings don't name an interval. Fifteen
+// minutes: often enough that a share edit appears in Mesh "by itself" within a
+// coffee break, rare enough that a hundred sleeping projects don't turn into a
+// walking-the-whole-share storm against a relay we don't own.
+const DefaultTeamRelaySyncInterval = 15 * time.Minute
+
+// MinTeamRelaySyncInterval is the floor a configured interval may not go
+// below. SyncMount walks the whole share; anything tighter than five minutes
+// is a loop that spends its life inside the walk. The upsert refuses lower
+// values at write time — this constant is the one number both sides read.
+const MinTeamRelaySyncInterval = 5 * time.Minute
+
+// syncInterval is settings.SyncIntervalMinutes as a duration: nil → default,
+// 0 → disabled (the caller checks for zero and skips), anything else → the
+// configured value floored at MinTeamRelaySyncInterval (the floor is enforced
+// at write time; the clamp here is defense for rows written by hand).
+func syncInterval(settings domain.TeamRelaySettings) time.Duration {
+	if settings.SyncIntervalMinutes == nil {
+		return DefaultTeamRelaySyncInterval
+	}
+	d := time.Duration(*settings.SyncIntervalMinutes) * time.Minute
+	if d == 0 {
+		return 0
+	}
+	if d < MinTeamRelaySyncInterval {
+		return MinTeamRelaySyncInterval
+	}
+	return d
 }
 
 // DefaultTeamRelayKeyExpiryRefreshInterval is how often
@@ -492,6 +607,29 @@ func (s *teamRelayMountService) RefreshIfStale(ctx context.Context, doc *domain.
 		return nil
 	}
 
+	return s.rewriteCopyBody(ctx, doc, remote, rs, now)
+}
+
+// refreshChangedCopy downloads a copy's source and rewrites the body when it
+// really differs — the index hash said so, the download is the authority.
+func (s *teamRelayMountService) refreshChangedCopy(ctx context.Context, doc *domain.Document, sourcePath string, rs *relaySettings) error {
+	remote, err := s.client.Download(ctx, rs.relayURL, rs.settings.ShareID, sourcePath, rs.agentKey)
+	if err != nil {
+		return err
+	}
+	now := timeNow()
+	if doc.SourceSHA256 != nil && remote.SHA256 == *doc.SourceSHA256 {
+		_, err = s.documentRepo.RefreshSyncedCopy(ctx, doc.ID, remote.SHA256, now, false)
+		return err
+	}
+	return s.rewriteCopyBody(ctx, doc, remote, rs, now)
+}
+
+// rewriteCopyBody replaces a copy's stored body with remote's: the shared tail
+// of RefreshIfStale (a document open found its source changed) and the scheduled
+// sync (the files-index hash differs from the copy's). The caller has already
+// established that remote.SHA256 differs from the stored one.
+func (s *teamRelayMountService) rewriteCopyBody(ctx context.Context, doc *domain.Document, remote *teamrelay.SyncDocument, rs *relaySettings, now time.Time) error {
 	if verr := rejectBinaryBody(remote.Content); verr != nil {
 		// The source changed to something that cannot be a document body. Refuse
 		// the refresh rather than overwrite a good, previously-synced body with
@@ -514,6 +652,13 @@ func (s *teamRelayMountService) RefreshIfStale(ctx context.Context, doc *domain.
 	doc.SyncedAt = &now
 	doc.Version = newVersion
 	doc.Body = string(remote.Content)
+	// A4: the body changed, so its embeds are stale by construction. Best-effort
+	// here too — the refresh already succeeded; an unreachable index must not
+	// turn it into a reported failure, and an unmarked pass retries on the next
+	// mount sync's backfill.
+	if ierr := s.importEmbedsForRefreshedCopy(ctx, doc, remote.Content, remote.SHA256, rs); ierr != nil {
+		log.Printf("teamrelay: refresh embeds for copy %s: %v", doc.ID, ierr)
+	}
 	return nil
 }
 
@@ -569,14 +714,142 @@ func (s *teamRelayMountService) WriteBack(ctx context.Context, doc *domain.Docum
 // treats a nil prefix exactly like any other empty segment list. There is no
 // second branch here for the two modes; if there were, it would be here.
 func (s *teamRelayMountService) SyncMount(ctx context.Context, projectID uuid.UUID) (*MountResult, error) {
+	mu := s.projectMountLock(projectID)
+	mu.Lock()
+	defer mu.Unlock()
+	return s.syncMountLocked(ctx, projectID), nil
+}
+
+// projectMountLock returns the per-project mutex, creating it on first use.
+func (s *teamRelayMountService) projectMountLock(projectID uuid.UUID) *sync.Mutex {
+	muAny, _ := s.mountLocks.LoadOrStore(projectID, &sync.Mutex{})
+	return muAny.(*sync.Mutex)
+}
+
+// markSynced pushes the project's next scheduled sync one interval out.
+func (s *teamRelayMountService) markSynced(projectID uuid.UUID, interval time.Duration) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	s.nextSyncDue[projectID] = timeNow().Add(interval)
+}
+
+// TeamRelaySyncSweepInterval is how often SyncDueMounts should be run by its
+// caller. It is NOT the sync cadence — that is per-project
+// (TeamRelaySettings.SyncIntervalMinutes) — it is how often the scheduler
+// wakes up to check whose cadence has elapsed. A minute keeps the effective
+// start of a due sync within a minute of its nominal time without the sweep
+// itself being any kind of load.
+const TeamRelaySyncSweepInterval = time.Minute
+
+// SyncDueMounts is documented on the TeamRelayMountService interface.
+//
+// The "due" decision has two anchors. Cold start (no in-memory entry): the
+// integration's LastSyncCheckedAt — the same column recordSyncOutcome already
+// stamps on every FilesIndex — plus the interval; an integration that has
+// NEVER been checked is due immediately, because an unmounted share is the
+// state this whole schedule exists to end. Warm (an entry in nextSyncDue,
+// written by any completed sync since process start): that timestamp. This is
+// why a restart doesn't re-walk every share in its first minute: the DB anchor
+// survives, only the forward-looking half of the schedule is volatile.
+//
+// Failures pace themselves: whatever SyncMount reports — a dead relay, an
+// expired key — the project's next attempt is one full interval out, the same
+// as a success. Retrying a failing share every minute would be a tight loop
+// against a service we don't own; retrying it every 15 minutes is the same
+// cadence a human repeatedly clicking "Sync now" would produce, which is the
+// loudest behavior this mechanism is allowed to have.
+func (s *teamRelayMountService) SyncDueMounts(ctx context.Context) (synced, skipped int, err error) {
+	if s.piRepo == nil {
+		return 0, 0, nil
+	}
+	integrations, err := s.piRepo.ListEnabledByType(ctx, "team_relay")
+	if err != nil {
+		return 0, 0, fmt.Errorf("teamrelay: list enabled integrations: %w", err)
+	}
+	now := timeNow()
+	for _, pi := range integrations {
+		var settings domain.TeamRelaySettings
+		if jsonErr := json.Unmarshal(pi.Settings, &settings); jsonErr != nil {
+			log.Printf("teamrelay: scheduled sync: parse settings for project %s: %v", pi.ProjectID, jsonErr)
+			skipped++
+			continue
+		}
+		if settings.ShareID == "" || pi.AgentKey == "" {
+			skipped++
+			continue
+		}
+		interval := syncInterval(settings)
+		if interval == 0 {
+			// Explicitly disabled: 0 is a setting, not an absence of one.
+			skipped++
+			continue
+		}
+
+		s.syncMu.Lock()
+		due, hasDue := s.nextSyncDue[pi.ProjectID]
+		s.syncMu.Unlock()
+		if !hasDue {
+			if pi.LastSyncCheckedAt != nil {
+				due = pi.LastSyncCheckedAt.Add(interval)
+			} else {
+				// Never synced at all: due now. A share nobody ever mounted is
+				// the state this schedule exists to end, not something to wait
+				// one interval on.
+				due = now
+			}
+		}
+		if now.Before(due) {
+			skipped++
+			continue
+		}
+
+		mu := s.projectMountLock(pi.ProjectID)
+		if !mu.TryLock() {
+			// A "Sync now" (or a previous sweep tick's sync) is in flight;
+			// when it finishes it writes nextSyncDue itself.
+			skipped++
+			continue
+		}
+		result := s.syncMountLocked(ctx, pi.ProjectID)
+		mu.Unlock()
+		synced++
+		// syncMountLocked already pushed the schedule on success; a failed
+		// attempt returns before it does, so pace failures here — same
+		// interval, no tighter retry loop (see the doc comment above).
+		s.markSynced(pi.ProjectID, interval)
+		if result != nil && result.Status != MountStatusOK && result.Status != MountStatusNotConfigured {
+			log.Printf("teamrelay: scheduled sync for project %s: status=%s err=%v", pi.ProjectID, resultStatus(result), result.Err)
+		}
+	}
+	return synced, skipped, nil
+}
+
+// resultStatus renders a MountResult's status for logs without nil-handling
+// at every call site.
+func resultStatus(r *MountResult) MountStatus {
+	if r == nil {
+		return MountStatusError
+	}
+	return r.Status
+}
+
+// syncMountLocked is the lock-held core of SyncMount. Its errors travel inside
+// MountResult (Err + a classified Status), never as a Go error — SyncMount is a
+// report, not a fallible call, and every caller treats it that way.
+func (s *teamRelayMountService) syncMountLocked(ctx context.Context, projectID uuid.UUID) *MountResult {
 	rs, err := s.settingsFor(ctx, projectID)
 	if err != nil {
 		var apiErr *apierror.Error
 		if errors.As(err, &apiErr) && apiErr.StatusCode() == 404 {
-			return &MountResult{Status: MountStatusNotConfigured}, nil
+			return &MountResult{Status: MountStatusNotConfigured}
 		}
-		return &MountResult{Status: MountStatusError, Err: err}, nil
+		return &MountResult{Status: MountStatusError, Err: err}
 	}
+
+	// Pace the next scheduled attempt however this run ends: a failed manual
+	// sync used to leave an overdue deadline behind, and the sweep then retried
+	// the failing share every minute instead of one interval out.
+	defer s.markSynced(projectID, syncInterval(rs.settings))
 
 	entries, err := s.client.FilesIndex(ctx, rs.relayURL, rs.settings.ShareID, rs.agentKey)
 	// Same accounting as RefreshIfStale's Download call — see that call site's
@@ -585,46 +858,513 @@ func (s *teamRelayMountService) SyncMount(ctx context.Context, projectID uuid.UU
 	// documents nobody has opened recently enough to hit the passive path.
 	s.recordSyncOutcome(ctx, projectID, rs, err)
 	if err != nil {
-		return &MountResult{Status: classifyMountError(err)}, nil
+		return &MountResult{Status: classifyMountError(err)}
 	}
 
 	// Stable order so a folder's placeholder is always resolved/created before
 	// any file inside it is processed, and so re-runs behave identically.
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 
+	excluded := effectiveExcludedPaths(rs.settings)
 	mountPrefix := mountPathSegments(rs.settings.DocsMountPath)
 	cache := map[string]*uuid.UUID{"": nil}
+	// Built once per sync for the embed pass — every entry, including excluded
+	// ones: an image under artifacts/ is not a document, but a body that embeds
+	// it still resolves (see syncIndexByPath).
+	indexByPath := syncIndexByPath(entries)
 	result := &MountResult{Status: MountStatusOK}
 
 	for _, entry := range entries {
+		if isMountPathExcluded(entry.Path, excluded) {
+			result.Excluded++
+			continue
+		}
 		dir, name := splitDirAndName(entry.Path)
 		segments := append(append([]string{}, mountPrefix...), dirSegments(dir)...)
 
 		parentID, ferr := s.resolveOrCreateFolderPath(ctx, projectID, segments, cache)
 		if ferr != nil {
-			return &MountResult{Status: MountStatusError, Mounted: result.Mounted, Err: ferr}, nil
+			return &MountResult{Status: MountStatusError, Mounted: result.Mounted, Err: ferr}
 		}
 
 		existing, gerr := s.documentRepo.GetBySourceInProject(ctx, projectID, rs.settings.ShareID, entry.Path)
 		if gerr != nil {
-			return &MountResult{Status: MountStatusError, Mounted: result.Mounted, Err: gerr}, nil
+			return &MountResult{Status: MountStatusError, Mounted: result.Mounted, Err: gerr}
 		}
-		if existing != nil {
-			result.Skipped++
+		// An image/PDF entry is never a document body, and its extension says
+		// so before a single byte is fetched. Counted Rejected exactly as the
+		// content-based check inside createCopyDocument would have counted it
+		// — but without the download that check needed, which matters now that
+		// syncs run on a schedule: a share with a hundred screenshots was a
+		// hundred binary rejections re-downloaded every interval, forever. The
+		// bytes still reach Mesh as an embed attachment when a mounted body
+		// references them — the one way an image belongs in Docs at all.
+		// Deliberately placed AFTER folder resolution so a folder holding only
+		// images keeps getting its placeholder: that is the tree shape every
+		// pre-A4 sync produced, and a scheduled sync must not quietly reshape
+		// it.
+		if teamrelay.IsEmbeddableFile(entry.Path) {
+			result.Rejected++
 			continue
 		}
 
-		if cerr := s.createCopyDocument(ctx, projectID, parentID, name, entry, rs); cerr != nil {
+		if existing != nil {
+			// A3: the scheduled sync is what keeps a mounted copy current when
+			// nobody opens it, so an indexed hash that differs from the copy's
+			// is refreshed here, not left for the next document open. Best-effort
+			// per file, like the embed passes below: one unreadable file must not
+			// abort the sweep over the rest of the share.
+			if existing.SourceSHA256 != nil && *existing.SourceSHA256 != entry.SHA256 {
+				if uerr := s.refreshChangedCopy(ctx, existing, entry.Path, rs); uerr != nil {
+					log.Printf("teamrelay: refresh changed copy %s (%s): %v", existing.ID, entry.Path, uerr)
+				} else {
+					result.Updated++
+					continue
+				}
+			}
+			result.Skipped++
+			// Embed maintenance (A4), two tiers. The full scan (backfillEmbeds)
+			// runs only for a body whose embed pass never completed — mounted
+			// before A4, or a pass that hit a transient failure. Everything
+			// else gets the cheap currency pass, which reads the body's
+			// ATTACHMENTS, never the body: an image can change while the body
+			// that references it does not, so the body-hash marker alone can
+			// never detect it (the exact gap the first version of this code
+			// shipped with, caught by its own test). Best-effort both ways: the
+			// mount already succeeded for this entry; an image must not undo it.
+			if !s.embedsImported(existing, entry.SHA256) &&
+				existing.SourceSHA256 != nil && *existing.SourceSHA256 == entry.SHA256 {
+				if berr := s.backfillEmbeds(ctx, existing, entry.SHA256, rs, indexByPath); berr != nil {
+					log.Printf("teamrelay: backfill embeds for copy %s (%s): %v", existing.ID, entry.Path, berr)
+				}
+			} else if s.attachmentRepo != nil {
+				if rerr := s.refreshEmbedAttachments(ctx, existing, rs, indexByPath); rerr != nil {
+					log.Printf("teamrelay: refresh embeds for copy %s (%s): %v", existing.ID, entry.Path, rerr)
+				}
+			}
+			continue
+		}
+
+		if cerr := s.createCopyDocument(ctx, projectID, parentID, name, entry, rs, indexByPath); cerr != nil {
 			if errors.Is(cerr, errBinaryFileEntry) {
 				result.Rejected++
 				continue
 			}
-			return &MountResult{Status: classifyMountError(cerr), Mounted: result.Mounted, Skipped: result.Skipped, Rejected: result.Rejected, Err: cerr}, nil
+			return &MountResult{Status: classifyMountError(cerr), Mounted: result.Mounted, Skipped: result.Skipped, Rejected: result.Rejected, Err: cerr}
 		}
 		result.Mounted++
 	}
 
-	return result, nil
+	if aerr := s.archiveVanishedCopies(ctx, projectID, rs, entries, excluded, result); aerr != nil {
+		return &MountResult{
+			Status: MountStatusError, Mounted: result.Mounted, Skipped: result.Skipped,
+			Rejected: result.Rejected, Excluded: result.Excluded, Archived: result.Archived, Err: aerr,
+		}
+	}
+
+	// A completed sync — manual or scheduled, this is the one body both go
+	// through — is the project's sync for scheduling purposes: push the next
+	// scheduled attempt one interval out so the sweep doesn't re-walk this
+	// share a minute after a human just did.
+	s.markSynced(projectID, syncInterval(rs.settings))
+
+	return result
+}
+
+// archiveVanishedCopies soft-deletes every live copy of this share whose
+// source file the files-index no longer represents — the file was deleted or
+// moved on the share, or its folder became excluded. This is the A2 half of
+// the mount contract: without it a moved file leaves its old copy behind
+// forever, listed in Docs but backed by nothing.
+//
+// "Archive" is SoftDelete, the same штатный reversible mechanism a manual
+// delete uses: the row and its stored body stay, the slug and the
+// uq_documents_source slot free up, so a file that reappears at that path
+// simply mounts fresh on the next run. There is deliberately no separate
+// archive table — a copy that comes back should not arrive as a new document
+// with a broken history.
+//
+// The empty-index guard is load-bearing, not defensive noise: a share whose
+// files-index legitimately returns zero entries (an API change, a relay bug,
+// a wrong-but-200 response) must not read as "every file was deleted". No
+// index, no verdict — nothing is archived. FilesIndex errors never reach here
+// (SyncMount returns before this runs), which is the other half of the same
+// guard: an unreachable relay must not archive the project's Docs subtree.
+func (s *teamRelayMountService) archiveVanishedCopies(
+	ctx context.Context,
+	projectID uuid.UUID,
+	rs *relaySettings,
+	entries []teamrelay.SyncIndexEntry,
+	excluded []string,
+	result *MountResult,
+) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	live, err := s.documentRepo.ListLiveCopiesByShare(ctx, projectID, rs.settings.ShareID)
+	if err != nil {
+		return err
+	}
+	indexed := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		indexed[e.Path] = struct{}{}
+	}
+	now := timeNow()
+	for _, doc := range live {
+		if doc.SourcePath == nil {
+			continue
+		}
+		// A copy under a newly-excluded folder is as unmounted as one whose
+		// file vanished: the exclusion list says this subtree must not be in
+		// Docs, and a copy mounted before the exclusion was configured is a
+		// zombie the setting was written to remove.
+		_, inIndex := indexed[*doc.SourcePath]
+		excl := isMountPathExcluded(*doc.SourcePath, excluded)
+		// "Not in the index" is not "deleted": the index lists only
+		// sync-artifact rows (see SyncIndexEntry), so a file that is still on
+		// the share but no longer carries that source drops out of it. Only a
+		// 404 on the download proves the file is gone; any other answer (the
+		// body, or an error) keeps the copy.
+		if !inIndex && !excl && !s.sourceIsGone(ctx, rs, *doc.SourcePath) {
+			continue
+		}
+		if !inIndex || excl {
+			if derr := s.documentRepo.SoftDelete(ctx, doc.ID, now, systemActorID, domain.ActorTypeSystem); derr != nil {
+				return derr
+			}
+			result.Archived++
+		}
+	}
+	return nil
+}
+
+// sourceIsGone reports whether the relay answers 404 for sourcePath. Anything
+// else — a body, an unreachable relay, a rejected key — is "not proven gone".
+func (s *teamRelayMountService) sourceIsGone(ctx context.Context, rs *relaySettings, sourcePath string) bool {
+	_, err := s.client.Download(ctx, rs.relayURL, rs.settings.ShareID, sourcePath, rs.agentKey)
+	return errors.Is(err, teamrelay.ErrNotFound)
+}
+
+// MaxTeamRelayEmbedBytes caps one embedded image/PDF download. The share's
+// files-index names the size before the download, so an over-cap reference is
+// skipped without a single byte fetched. Ten megabytes is generous for a
+// screenshot and hostile for a "note" that is really a video with the wrong
+// extension — and the cap exists because attachment storage is ours, billed
+// and backed up, while the share is a foreign system we take at its word.
+const MaxTeamRelayEmbedBytes = 10 << 20
+
+// embedsImported reports whether doc's ONE-TIME full embed scan has already
+// run for the body hash sourceSHA256 — the gate for backfillEmbeds only. It
+// deliberately does NOT mean the doc's images are current: an image can change
+// while the body hash stays put, which is what refreshEmbedAttachments exists
+// to catch. Nil marker (a copy from before A4, or an import that hit a
+// transient error) and a marker from another body hash both mean "scan".
+func (s *teamRelayMountService) embedsImported(doc *domain.Document, sourceSHA256 string) bool {
+	if s.attachmentRepo == nil {
+		return true // embeds disabled here — treat as done, skip all the work
+	}
+	return doc.EmbedSyncedSHA256 != nil && *doc.EmbedSyncedSHA256 == sourceSHA256
+}
+
+// importEmbeds copies every image/PDF the body references into Mesh's
+// attachment storage (A4). The body's own bytes are never touched: the share's
+// markdown keeps its share-relative references, and the SERVE side rewrites
+// them from the attachment records — rewriting here would be pushed back to
+// the original by the next WriteBack and corrupt it.
+//
+// Per-reference failures are contained: a reference whose target is not on the
+// files-index is a dead embed on the source side (nothing to do, not an
+// error), and a permanently undownloadable one (over the size cap, sniffed as
+// a non-image) is skipped without failing the pass. Only a TRANSIENT failure
+// (download/upload/repo error) suppresses the marker, so the next sync retries
+// it; everything else stamps documents.embed_synced_sha256 = sourceSHA256.
+//
+// The pass is best-effort from the mount's point of view on purpose: a share
+// whose text mounts fine but whose image is unreachable must not lose its
+// document over the image.
+func (s *teamRelayMountService) importEmbeds(
+	ctx context.Context,
+	doc *domain.Document,
+	body string,
+	sourceSHA256 string,
+	rs *relaySettings,
+	indexByPath map[string]teamrelay.SyncIndexEntry,
+) error {
+	if s.attachmentRepo == nil || s.storage == nil || doc.SourcePath == nil {
+		return nil
+	}
+	refs := teamrelay.FindImageRefs(body)
+	transient := false
+	done := make(map[string]bool, len(refs))
+	docDir, _ := splitDirAndName(*doc.SourcePath)
+	for _, ref := range refs {
+		for _, cand := range embedTargetCandidates(ref.Target, docDir) {
+			if done[cand] {
+				break
+			}
+			entry, ok := indexByPath[cand]
+			if !ok {
+				continue // next candidate
+			}
+			done[cand] = true
+			if err := s.syncEmbedAttachment(ctx, doc, cand, entry, rs); err != nil {
+				log.Printf("teamrelay: import embed %q for copy %s: %v", cand, doc.ID, err)
+				transient = true
+			}
+			break
+		}
+	}
+	if transient {
+		// Leave the marker unset: the next sync re-runs this pass and retries
+		// what failed. Per-reference permanent skips (above) do NOT set this —
+		// retrying them is free (size is known from the index) and silent.
+		return nil
+	}
+	if err := s.documentRepo.SetEmbedSyncedSHA256(ctx, doc.ID, sourceSHA256); err != nil {
+		return fmt.Errorf("teamrelay: stamp embed marker for %s: %w", doc.ID, err)
+	}
+	doc.EmbedSyncedSHA256 = &sourceSHA256
+	return nil
+}
+
+// embedTargetCandidates lists the share paths a single embed reference may
+// name, in resolution order, mirroring how the reference reads against the
+// referencing document's own location:
+//
+//  1. an explicit "./" or "../" path is tried relative to the document,
+//     then at the share root for compatibility with existing wiki embeds;
+//  2. a target that already carries a directory ("Notes/pic.png") is taken as
+//     share-relative, as written;
+//  3. a bare name ("pic.png") is first tried next to the referencing document
+//     ("Notes/pic.png" for a doc at "Notes/doc.md"), then at the share's root.
+//
+// The first candidate found on the files-index wins; a reference no candidate
+// matches is a dead embed and resolves to nothing. Trailing/leading slashes and
+// interior "./"/"../" are cleaned so a hand-typed path still matches the index's
+// canonical spelling.
+func embedTargetCandidates(target, docDir string) []string {
+	cleaned := path.Clean("/" + strings.TrimPrefix(target, "/"))
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "" || cleaned == "." {
+		return nil
+	}
+	if strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../") {
+		relative := strings.TrimPrefix(path.Clean("/"+docDir+"/"+target), "/")
+		if relative != cleaned {
+			return []string{relative, cleaned}
+		}
+	}
+	if strings.Contains(target, "/") {
+		return []string{cleaned}
+	}
+	if docDir == "" {
+		return []string{cleaned}
+	}
+	return []string{docDir + "/" + cleaned, cleaned}
+}
+
+// syncEmbedAttachment brings doc's attachment for share path sourcePath up to
+// date with entry: skipped outright when the live attachment already matches
+// the source hash (the common case after the first sync — no download at all),
+// and replaced (old row soft-deleted, new bytes stored) when the source file
+// changed. This is the per-reference dedup the partial unique index
+// uq_document_attachments_source enforces structurally.
+func (s *teamRelayMountService) syncEmbedAttachment(
+	ctx context.Context,
+	doc *domain.Document,
+	sourcePath string,
+	entry teamrelay.SyncIndexEntry,
+	rs *relaySettings,
+) error {
+	existing, err := s.attachmentRepo.GetLiveBySourcePath(ctx, doc.ID, sourcePath)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.SourceSHA256 != nil && *existing.SourceSHA256 == entry.SHA256 {
+		return nil
+	}
+	if entry.Size > MaxTeamRelayEmbedBytes {
+		log.Printf("teamrelay: embed %q for copy %s is %d bytes, over the %d cap — skipped", sourcePath, doc.ID, entry.Size, MaxTeamRelayEmbedBytes)
+		return nil
+	}
+
+	remote, err := s.client.Download(ctx, rs.relayURL, *doc.SourceShare, sourcePath, rs.agentKey)
+	if err != nil {
+		return err
+	}
+	contentType := http.DetectContentType(remote.Content)
+	if !isEmbeddableContentType(contentType) {
+		log.Printf("teamrelay: embed %q for copy %s sniffs as %q, not an image or pdf — skipped", sourcePath, doc.ID, contentType)
+		return nil
+	}
+	// The index claimed a hash; the download produced bytes. If they disagree
+	// the index is stale about this file, and stamping the marker now would pin
+	// an import the next sync believes is current. Treat it as transient.
+	sum := sha256.Sum256(remote.Content)
+	if hex.EncodeToString(sum[:]) != entry.SHA256 {
+		return fmt.Errorf("downloaded content hash does not match files-index hash for %q", sourcePath)
+	}
+
+	// Every step that can fail for a transient reason runs while the OLD
+	// attachment is still live: the new object is uploaded first. Soft-deleting
+	// the old row before that left a window where an upload or insert failure
+	// meant no live row at all, and the next sync — which enumerates live
+	// attachments to learn a document's source paths — had nothing to retry, so
+	// the image stayed broken until the body changed.
+	id := uuid.New()
+	name := path.Base(sourcePath)
+	storageKey := documentAttachmentStorageKey(doc.ProjectID, doc.ID, id, name)
+	if err := s.storage.Upload(ctx, storageKey, bytes.NewReader(remote.Content), int64(len(remote.Content)), contentType); err != nil {
+		return err
+	}
+	sha := entry.SHA256
+	att := &domain.DocumentAttachment{
+		ID:             id,
+		DocumentID:     doc.ID,
+		Name:           name,
+		MimeType:       contentType,
+		SizeBytes:      int64(len(remote.Content)),
+		StorageKey:     storageKey,
+		UploadedBy:     systemActorID,
+		UploadedByType: domain.ActorTypeSystem,
+		CreatedAt:      timeNow(),
+		SourcePath:     &sourcePath,
+		SourceSHA256:   &sha,
+	}
+	// Retiring the old row and inserting the new one is one transaction, so a
+	// failure leaves the OLD attachment live with its stale hash and the next
+	// sync retries. The new object is orphaned on failure and removed here.
+	var werr error
+	if existing != nil {
+		werr = s.attachmentRepo.Replace(ctx, existing.ID, att, timeNow())
+	} else {
+		werr = s.attachmentRepo.Create(ctx, att)
+	}
+	if werr != nil {
+		_ = s.storage.Delete(ctx, storageKey)
+		return werr
+	}
+	return nil
+}
+
+// isEmbeddableContentType is the byte-level half of the embed whitelist: what
+// the extension CLAIMED is checked before the download, what the bytes actually
+// are is checked after. http.DetectContentType reads only the first 512 bytes,
+// so this is cheap for the common case and catches the renamed-executable case
+// the extension check cannot.
+func isEmbeddableContentType(ct string) bool {
+	return strings.HasPrefix(ct, "image/") || ct == "application/pdf"
+}
+
+// importEmbedsForRefreshedCopy is the RefreshIfStale rewrite path's entry into
+// the embed pass: the body just changed, so the marker is stale by
+// construction. It fetches the files-index itself (RefreshIfStale normally
+// downloads a single file, not the index) — one extra call per body REWRITE,
+// never per freshness check.
+func (s *teamRelayMountService) importEmbedsForRefreshedCopy(
+	ctx context.Context,
+	doc *domain.Document,
+	body []byte,
+	sourceSHA256 string,
+	rs *relaySettings,
+) error {
+	if s.attachmentRepo == nil || s.storage == nil {
+		return nil
+	}
+	entries, err := s.client.FilesIndex(ctx, rs.relayURL, rs.settings.ShareID, rs.agentKey)
+	if err != nil {
+		return err
+	}
+	indexByPath := syncIndexByPath(entries)
+	return s.importEmbeds(ctx, doc, string(body), sourceSHA256, rs, indexByPath)
+}
+
+// syncIndexByPath is the lookup map the embed pass resolves candidates against.
+// Built from every files-index entry — including ones the mount itself
+// excludes: an image under artifacts/ is not mounted as a document, but a body
+// that embeds it still gets its image.
+func syncIndexByPath(entries []teamrelay.SyncIndexEntry) map[string]teamrelay.SyncIndexEntry {
+	m := make(map[string]teamrelay.SyncIndexEntry, len(entries))
+	for _, e := range entries {
+		m[e.Path] = e
+	}
+	return m
+}
+
+// refreshEmbedAttachments is the per-sync currency pass for an already-scanned
+// copy: it compares the document's LIVE imported attachments against the
+// files-index — no body read, no regex, a handful of rows — and reconciles the
+// differences:
+//
+//   - an attachment whose source file's hash changed is replaced
+//     (syncEmbedAttachment soft-deletes the old row);
+//   - an attachment whose source file is GONE from the share is soft-deleted —
+//     the same liveness rule archiveVanishedCopies applies to the documents
+//     themselves, for the same reason: serving an image the source no longer
+//     has is serving a stale copy of something its owner believes they deleted.
+//
+// New embeds in an unchanged body cannot appear here — the body did not
+// change, so its reference set did not either — which is exactly why this pass
+// does not need the body.
+func (s *teamRelayMountService) refreshEmbedAttachments(
+	ctx context.Context,
+	doc *domain.Document,
+	rs *relaySettings,
+	indexByPath map[string]teamrelay.SyncIndexEntry,
+) error {
+	atts, err := s.attachmentRepo.ListLiveByDocument(ctx, doc.ID)
+	if err != nil {
+		return err
+	}
+	if len(atts) == 0 {
+		return nil
+	}
+	for _, att := range atts {
+		if att.SourcePath == nil {
+			continue // a human upload; not ours to reconcile
+		}
+		entry, ok := indexByPath[*att.SourcePath]
+		if !ok {
+			if derr := s.attachmentRepo.SoftDelete(ctx, att.ID, timeNow()); derr != nil {
+				return derr
+			}
+			log.Printf("teamrelay: embed %q for copy %s vanished from the share — attachment archived", *att.SourcePath, doc.ID)
+			continue
+		}
+		att := att
+		if serr := s.syncEmbedAttachment(ctx, doc, *att.SourcePath, entry, rs); serr != nil {
+			return serr
+		}
+	}
+	return nil
+}
+
+// backfillEmbeds is the SyncMount skipped-branch entry into the embed pass: a
+// copy that already exists but has no marker (mounted before A4) or a marker
+// from a different body hash. Runs only when the stored body is CURRENT
+// (doc.SourceSHA256 == sourceSHA256) — a body the refresher has not caught up
+// with yet gets its embeds imported when it is actually refreshed, against the
+// body it will actually have.
+func (s *teamRelayMountService) backfillEmbeds(
+	ctx context.Context,
+	doc *domain.Document,
+	sourceSHA256 string,
+	rs *relaySettings,
+	indexByPath map[string]teamrelay.SyncIndexEntry,
+) error {
+	if s.attachmentRepo == nil || s.storage == nil {
+		return nil
+	}
+	rc, err := s.storage.Download(ctx, doc.StorageKey)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rc.Close() }()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return err
+	}
+	return s.importEmbeds(ctx, doc, string(body), sourceSHA256, rs, indexByPath)
 }
 
 // resolveOrCreateFolderPath walks segments from the project's top level,
@@ -728,7 +1468,7 @@ func (s *teamRelayMountService) createFolderPlaceholder(ctx context.Context, pro
 // cost, paid once per file the first time SyncMount sees it (idempotent
 // re-runs skip anything GetBySourceInProject already finds), never again on a
 // plain tree read.
-func (s *teamRelayMountService) createCopyDocument(ctx context.Context, projectID uuid.UUID, parentID *uuid.UUID, name string, entry teamrelay.SyncIndexEntry, rs *relaySettings) error {
+func (s *teamRelayMountService) createCopyDocument(ctx context.Context, projectID uuid.UUID, parentID *uuid.UUID, name string, entry teamrelay.SyncIndexEntry, rs *relaySettings, indexByPath map[string]teamrelay.SyncIndexEntry) error {
 	if s.storage == nil {
 		return fmt.Errorf("teamrelay: storage not configured, cannot mount %q", entry.Path)
 	}
@@ -786,6 +1526,12 @@ func (s *teamRelayMountService) createCopyDocument(ctx context.Context, projectI
 	if err := s.documentRepo.CreateExternalCopy(ctx, doc); err != nil {
 		_ = s.storage.Delete(ctx, storageKey)
 		return fmt.Errorf("teamrelay: create copy for %q: %w", entry.Path, err)
+	}
+	// A4: import the body's image embeds now that the copy exists. Best-effort
+	// by design — a copy that mounted is worth more than the image beside it,
+	// and an unmarked pass (importEmbeds's transient path) retries next sync.
+	if ierr := s.importEmbeds(ctx, doc, string(remote.Content), remote.SHA256, rs, indexByPath); ierr != nil {
+		log.Printf("teamrelay: import embeds for new copy %q: %v", entry.Path, ierr)
 	}
 	return nil
 }

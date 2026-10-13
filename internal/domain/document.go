@@ -70,6 +70,13 @@ type Document struct {
 	SourcePath   *string        `json:"source_path,omitempty" db:"source_path"`
 	SourceSHA256 *string        `json:"source_sha256,omitempty" db:"source_sha256"`
 	SyncedAt     *time.Time     `json:"synced_at,omitempty" db:"synced_at"`
+	// EmbedSyncedSHA256 is the source_sha256 of the body whose image embeds
+	// were last imported as attachments (see migrations/20261004001). It is the
+	// embed pass's dedup key the same way SourceSHA256 is the body's: equal
+	// means "this body's embeds are already here", different or nil means
+	// "import (again)". Only Team Relay copies carry it; own documents leave it
+	// nil forever.
+	EmbedSyncedSHA256 *string `json:"embed_synced_sha256,omitempty" db:"embed_synced_sha256"`
 
 	// ExternalAuthor is who the source says wrote the page, as free text — Team
 	// Relay names no per-file author anywhere in its sync or web-publish APIs

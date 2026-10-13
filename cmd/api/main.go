@@ -695,9 +695,14 @@ func main() {
 
 	// Constructed here, ahead of documentService, because documentService's
 	// optional Team Relay refresher needs it to resolve a project's share/agent
-	// key on every open of a mounted copy.
+	// key on every open of a mounted copy. The attachment repo wires the embed
+	// importer (image embeds of mounted copies become document attachments);
+	// without it the mount works, images in bodies just don't resolve.
 	projectIntegrationService := service.NewProjectIntegrationService(projectIntegrationRepo)
-	teamRelayMountService := service.NewTeamRelayMountService(documentRepo, documentStore, projectIntegrationService, projectIntegrationRepo)
+	teamRelayMountService := service.NewTeamRelayMountService(
+		documentRepo, documentStore, projectIntegrationService, projectIntegrationRepo,
+		service.WithAttachmentRepository(documentAttachmentRepo),
+	)
 
 	// The comment repository is here because a body write moves the comments
 	// anchored into that body: PATCH re-resolves every anchor against the markdown
@@ -1104,6 +1109,33 @@ func main() {
 		}
 	}()
 	defer trKeyRefreshCancel()
+
+	// Scheduled Team Relay mount sync: "Sync now" and document opens are the
+	// two reactive sync producers; without a third, a share nobody opens never
+	// changes in Docs no matter how long its source moves on. This sweep asks
+	// each enabled integration whose configured interval elapsed to re-run the
+	// mount (SyncDueMounts); per-project locks keep it from ever overlapping a
+	// concurrent "Sync now". Failures pace themselves at the project's own
+	// interval — see SyncDueMounts's doc comment.
+	trSyncCtx, trSyncCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(service.TeamRelaySyncSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				synced, skipped, err := teamRelayMountService.SyncDueMounts(trSyncCtx)
+				if err != nil {
+					log.Printf("[tr-sync] ERROR: %v", err)
+				} else if synced > 0 {
+					log.Printf("[tr-sync] synced %d project(s), skipped %d", synced, skipped)
+				}
+			case <-trSyncCtx.Done():
+				return
+			}
+		}
+	}()
+	defer trSyncCancel()
 
 	// Checkout reaper: periodically releases orphan task-locks whose TTL has expired.
 	// Complements the lazy expiry in AtomicCheckout — handles tasks that no agent

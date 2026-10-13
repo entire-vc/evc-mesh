@@ -57,6 +57,11 @@ import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { copyText } from "@/lib/clipboard";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import {
+  listDocumentAttachments,
+  type DocumentAttachment,
+} from "@/lib/document-attachments";
+import { applyTrEmbedAttachments } from "@/lib/tr-embeds";
 // Two unrelated anchor systems live on this page. `@/lib/docs/anchor` (D6) is
 // the fragment link that points at a paragraph; `@/lib/doc-comments` (D7) is
 // the range a comment is attached to. Same word, different features — keep the
@@ -539,6 +544,9 @@ export function DocsPage() {
   const [docLoading, setDocLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Attachments of the open Team Relay document, for the serve-time embed
+  // rewrite below. Own documents never fetch these.
+  const [trAttachments, setTrAttachments] = useState<DocumentAttachment[]>([]);
   const [editing, setEditing] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ status: "idle" });
   const [anchorMatch, setAnchorMatch] = useState<AnchorMatch | null>(null);
@@ -653,6 +661,7 @@ export function DocsPage() {
     if (!docId) {
       setOpenDoc(null);
       setDraft("");
+      setTrAttachments([]);
       savedBodyRef.current = "";
       docVersionRef.current = null;
       setLoadError(null);
@@ -675,6 +684,20 @@ export function DocsPage() {
         // next one sitting in an editor the user did not ask for.
         setEditing(false);
         setSaveState({ status: "idle" });
+        // A Team Relay copy keeps share-relative image references in its body;
+        // the imported attachments are what the reader rewrites them against.
+        // Best-effort: a failed listing renders the body unrewritten — exactly
+        // what every copy looked like before the embed importer existed.
+        setTrAttachments([]);
+        if (doc.source_kind === "team_relay") {
+          listDocumentAttachments(doc.id)
+            .then((atts) => {
+              if (!cancelled) setTrAttachments(atts);
+            })
+            .catch(() => {
+              /* render unrewritten; see above */
+            });
+        }
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -689,6 +712,18 @@ export function DocsPage() {
       cancelled = true;
     };
   }, [docId, getDocument]);
+
+  // The value the READ-ONLY renderer sees: a Team Relay copy's body with its
+  // share-relative embeds rewritten to the imported attachments' download
+  // paths. Everything writable — `draft`, the editing editor, every save —
+  // keeps the raw body, because WriteBack pushes it to the source share and
+  // a baked-in Mesh path would corrupt it there.
+  const renderedDraft = useMemo(() => {
+    if (openDoc?.source_kind !== "team_relay" || trAttachments.length === 0) {
+      return draft;
+    }
+    return applyTrEmbedAttachments(draft, openDoc.source_path ?? null, trAttachments);
+  }, [draft, openDoc, trAttachments]);
 
   // ---- Save ----------------------------------------------------------------
   const flushBody = useCallback(async () => {
@@ -1363,7 +1398,7 @@ export function DocsPage() {
                     ) : draft.trim() ? (
                       <DocEditor
                         className="flex-1"
-                        value={draft}
+                        value={renderedDraft}
                         onChange={setDraft}
                         readOnly
                         anchor={anchor}
@@ -1372,7 +1407,7 @@ export function DocsPage() {
                       />
                     ) : (
                       <div className="flex flex-col items-start gap-2">
-                        <DocEditor value={draft} onChange={setDraft} readOnly />
+                        <DocEditor value={renderedDraft} onChange={setDraft} readOnly />
                         <Button
                           type="button"
                           size="sm"

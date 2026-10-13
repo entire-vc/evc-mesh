@@ -41,6 +41,16 @@ type teamRelayResponse struct {
 	// DocsMountPath is the R3/R5-A mount-point switch (empty = project root).
 	DocsMountPath string `json:"docs_mount_path,omitempty"`
 
+	// ExcludedPaths echoes TeamRelaySettings.ExcludedPaths. nil (null in the
+	// JSON) is "never configured" and means the server default ["artifacts"]
+	// applies; an empty array is the deliberate "mount everything, artifacts
+	// included" state. No omitempty — it would erase the empty array and
+	// collapse the two states into one on every response.
+	ExcludedPaths []string `json:"excluded_paths"`
+	// SyncIntervalMinutes is the scheduled-sync cadence: absent = default
+	// (15m), 0 = scheduled sync off (refresh-on-open still works).
+	SyncIntervalMinutes *int `json:"sync_interval_minutes,omitempty"`
+
 	// KeyExpiresAt/KeyExpirySource surface R5-A's schema as-is: a nil
 	// KeyExpiresAt means the expiry is unknown, and KeyExpirySource
 	// ("manual"|"source") is the label a UI is required to show alongside any
@@ -83,22 +93,24 @@ func toTeamRelayResponse(pi *domain.ProjectIntegration) teamRelayResponse {
 	}
 
 	return teamRelayResponse{
-		ID:                 pi.ID,
-		ProjectID:          pi.ProjectID,
-		Type:               pi.Type,
-		Enabled:            pi.Enabled,
-		ShareID:            settings.ShareID,
-		ShareSlug:          settings.ShareSlug,
-		AgentKeyHint:       hint,
-		Subfolder:          settings.Subfolder,
-		IncludeProjectSlug: settings.IncludeProjectSlug,
-		DocsMountPath:      settings.DocsMountPath,
-		KeyExpiresAt:       pi.KeyExpiresAt,
-		KeyExpirySource:    pi.KeyExpirySource,
-		KeyExpiringSoon:    expiringSoon,
-		LastSyncCheckedAt:  pi.LastSyncCheckedAt,
-		LastSyncStatus:     pi.LastSyncStatus,
-		LastSyncError:      pi.LastSyncError,
+		ID:                  pi.ID,
+		ProjectID:           pi.ProjectID,
+		Type:                pi.Type,
+		Enabled:             pi.Enabled,
+		ShareID:             settings.ShareID,
+		ShareSlug:           settings.ShareSlug,
+		AgentKeyHint:        hint,
+		Subfolder:           settings.Subfolder,
+		IncludeProjectSlug:  settings.IncludeProjectSlug,
+		DocsMountPath:       settings.DocsMountPath,
+		ExcludedPaths:       settings.ExcludedPaths,
+		SyncIntervalMinutes: settings.SyncIntervalMinutes,
+		KeyExpiresAt:        pi.KeyExpiresAt,
+		KeyExpirySource:     pi.KeyExpirySource,
+		KeyExpiringSoon:     expiringSoon,
+		LastSyncCheckedAt:   pi.LastSyncCheckedAt,
+		LastSyncStatus:      pi.LastSyncStatus,
+		LastSyncError:       pi.LastSyncError,
 	}
 }
 
@@ -150,13 +162,15 @@ func (h *ProjectIntegrationHandler) UpsertTeamRelay(c echo.Context) error {
 	}
 
 	var body struct {
-		Enabled            bool   `json:"enabled"`
-		ShareID            string `json:"share_id"`
-		ShareSlug          string `json:"share_slug"`
-		AgentKey           string `json:"agent_key"`
-		Subfolder          string `json:"subfolder"`
-		IncludeProjectSlug bool   `json:"include_project_slug"`
-		DocsMountPath      string `json:"docs_mount_path"`
+		Enabled             bool     `json:"enabled"`
+		ShareID             string   `json:"share_id"`
+		ShareSlug           string   `json:"share_slug"`
+		AgentKey            string   `json:"agent_key"`
+		Subfolder           string   `json:"subfolder"`
+		IncludeProjectSlug  bool     `json:"include_project_slug"`
+		DocsMountPath       string   `json:"docs_mount_path"`
+		ExcludedPaths       []string `json:"excluded_paths"`
+		SyncIntervalMinutes *int     `json:"sync_interval_minutes"`
 	}
 	if bindErr := c.Bind(&body); bindErr != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
@@ -170,14 +184,16 @@ func (h *ProjectIntegrationHandler) UpsertTeamRelay(c echo.Context) error {
 	}
 
 	input := service.UpsertProjectIntegrationInput{
-		Enabled:            body.Enabled,
-		ShareID:            body.ShareID,
-		ShareSlug:          body.ShareSlug,
-		AgentKey:           body.AgentKey,
-		Subfolder:          body.Subfolder,
-		IncludeProjectSlug: body.IncludeProjectSlug,
-		DocsMountPath:      body.DocsMountPath,
-		CreatedBy:          createdBy,
+		Enabled:             body.Enabled,
+		ShareID:             body.ShareID,
+		ShareSlug:           body.ShareSlug,
+		AgentKey:            body.AgentKey,
+		Subfolder:           body.Subfolder,
+		IncludeProjectSlug:  body.IncludeProjectSlug,
+		DocsMountPath:       body.DocsMountPath,
+		ExcludedPaths:       body.ExcludedPaths,
+		SyncIntervalMinutes: body.SyncIntervalMinutes,
+		CreatedBy:           createdBy,
 	}
 
 	pi, err := h.piService.UpsertTeamRelay(c.Request().Context(), projectID, input)

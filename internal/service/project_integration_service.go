@@ -67,12 +67,46 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 		}
 	}
 
+	// Exclusions are matched against the FIRST path segment of a files-index
+	// entry, so an entry that names more than one segment is a configuration
+	// mistake that would silently exclude nothing — refused here, at the write,
+	// rather than discovered from a mount that ignores it. Blank entries are
+	// dropped rather than refused: trailing commas in a comma-separated form
+	// field are ordinary typing, "artifacts/,archive" must not fail the save.
+	excluded := make([]string, 0, len(input.ExcludedPaths))
+	for _, p := range input.ExcludedPaths {
+		t := strings.TrimSpace(strings.Trim(strings.TrimSpace(p), "/"))
+		if t == "" {
+			continue
+		}
+		if strings.ContainsAny(t, "/\\") || t == "." || t == ".." {
+			return nil, apierror.ValidationError(map[string]string{"excluded_paths": "each entry must be a single top-level folder name, not a path"})
+		}
+		excluded = append(excluded, t)
+	}
+
+	if input.SyncIntervalMinutes != nil && *input.SyncIntervalMinutes != 0 && *input.SyncIntervalMinutes < int(MinTeamRelaySyncInterval/time.Minute) {
+		return nil, apierror.ValidationError(map[string]string{
+			"sync_interval_minutes": "must be 0 (scheduled sync off) or at least 5 minutes",
+		})
+	}
+
+	// A nil ExcludedPaths here means "the caller did not send the field" —
+	// stored as absent so the read-side default applies (see
+	// effectiveExcludedPaths). An empty-but-present list is preserved: it is
+	// the deliberate "mount everything, artifacts included" red-control state.
+	var excludedStored []string
+	if input.ExcludedPaths != nil {
+		excludedStored = excluded
+	}
 	settings := domain.TeamRelaySettings{
-		ShareID:            input.ShareID,
-		ShareSlug:          input.ShareSlug,
-		Subfolder:          input.Subfolder,
-		IncludeProjectSlug: input.IncludeProjectSlug,
-		DocsMountPath:      input.DocsMountPath,
+		ShareID:             input.ShareID,
+		ShareSlug:           input.ShareSlug,
+		Subfolder:           input.Subfolder,
+		IncludeProjectSlug:  input.IncludeProjectSlug,
+		DocsMountPath:       input.DocsMountPath,
+		ExcludedPaths:       excludedStored,
+		SyncIntervalMinutes: input.SyncIntervalMinutes,
 	}
 	settingsJSON, _ := json.Marshal(settings)
 

@@ -37,12 +37,13 @@ type documentRow struct {
 	UpdatedAt     time.Time         `db:"updated_at"`
 	DeletedAt     *time.Time        `db:"deleted_at"`
 
-	SourceKind     domain.DocumentSource `db:"source_kind"`
-	SourceShare    *string               `db:"source_share"`
-	SourcePath     *string               `db:"source_path"`
-	SourceSHA256   *string               `db:"source_sha256"`
-	SyncedAt       *time.Time            `db:"synced_at"`
-	ExternalAuthor *string               `db:"external_author"`
+	SourceKind        domain.DocumentSource `db:"source_kind"`
+	SourceShare       *string               `db:"source_share"`
+	SourcePath        *string               `db:"source_path"`
+	SourceSHA256      *string               `db:"source_sha256"`
+	SyncedAt          *time.Time            `db:"synced_at"`
+	ExternalAuthor    *string               `db:"external_author"`
+	EmbedSyncedSHA256 *string               `db:"embed_synced_sha256"`
 
 	// Computed by documentEnrichedSelect, not stored — see actorNameExpr.
 	CreatedByName *string `db:"created_by_name"`
@@ -55,7 +56,8 @@ type documentRow struct {
 // created_at). See artifactSelectCols for why no query here uses `SELECT *`.
 const documentSelectCols = `d.id, d.project_id, d.parent_id, d.slug, d.title, d.storage_key, d.position, d.version,
 	d.created_by, d.created_by_type, d.updated_by, d.updated_by_type, d.created_at, d.updated_at, d.deleted_at,
-	d.source_kind, d.source_share, d.source_path, d.source_sha256, d.synced_at, d.external_author`
+	d.source_kind, d.source_share, d.source_path, d.source_sha256, d.synced_at, d.external_author,
+	d.embed_synced_sha256`
 
 // documentEnrichedSelect is documentSelectCols plus the two display names, each
 // resolved through to the agent or user that authored the change rather than read
@@ -84,12 +86,13 @@ func (r *documentRow) toDomain() domain.Document {
 		UpdatedAt:     r.UpdatedAt,
 		DeletedAt:     r.DeletedAt,
 
-		SourceKind:     r.SourceKind,
-		SourceShare:    r.SourceShare,
-		SourcePath:     r.SourcePath,
-		SourceSHA256:   r.SourceSHA256,
-		SyncedAt:       r.SyncedAt,
-		ExternalAuthor: r.ExternalAuthor,
+		SourceKind:        r.SourceKind,
+		SourceShare:       r.SourceShare,
+		SourcePath:        r.SourcePath,
+		SourceSHA256:      r.SourceSHA256,
+		SyncedAt:          r.SyncedAt,
+		ExternalAuthor:    r.ExternalAuthor,
+		EmbedSyncedSHA256: r.EmbedSyncedSHA256,
 
 		CreatedByName: r.CreatedByName,
 		UpdatedByName: r.UpdatedByName,
@@ -299,6 +302,26 @@ func sameParent(a, b *uuid.UUID) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// SetEmbedSyncedSHA256 stamps the embed pass's dedup marker: the source hash of
+// the body whose image embeds are now present as attachments. Guarded to copies
+// for the same belt-and-suspenders reason RefreshSyncedCopy is — an own document
+// has no embeds to import, and a marker on one would be a claim about nothing.
+func (r *DocumentRepo) SetEmbedSyncedSHA256(ctx context.Context, id uuid.UUID, sha256 string) error {
+	const q = `
+		UPDATE documents
+		   SET embed_synced_sha256 = $2
+		 WHERE id = $1 AND deleted_at IS NULL AND source_kind <> 'own'`
+	res, err := r.db.ExecContext(ctx, q, id, sha256)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return apierror.NotFound("Document")
+	}
+	return nil
 }
 
 // SoftDelete stamps deleted_at. The children go with it: ON DELETE CASCADE only
@@ -591,6 +614,26 @@ func (r *DocumentRepo) GetBySourceInProject(ctx context.Context, projectID uuid.
 	}
 	d := row.toDomain()
 	return &d, nil
+}
+
+// ListLiveCopiesByShare returns every live copy in projectID that came from
+// sourceShare — the input side of SyncMount's archive pass. Plain enriched
+// rows, no pagination: one project's copies from one share is bounded by the
+// share's own file count, the same bound SyncMount's file loop already walks.
+func (r *DocumentRepo) ListLiveCopiesByShare(ctx context.Context, projectID uuid.UUID, sourceShare string) ([]domain.Document, error) {
+	q := documentEnrichedSelect + `
+		  FROM documents d
+		 WHERE d.project_id = $1 AND d.source_share = $2 AND d.deleted_at IS NULL
+		 ORDER BY d.source_path`
+	var rows []documentRow
+	if err := r.db.SelectContext(ctx, &rows, q, projectID, sourceShare); err != nil {
+		return nil, err
+	}
+	out := make([]domain.Document, 0, len(rows))
+	for i := range rows {
+		out = append(out, rows[i].toDomain())
+	}
+	return out, nil
 }
 
 // CreateExternalCopy inserts a copy document — the five source_* /

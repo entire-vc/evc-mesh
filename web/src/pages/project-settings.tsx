@@ -1171,6 +1171,15 @@ export function ProjectSettingsPage() {
   const [trDocsMountPath, setTrDocsMountPath] = useState("");
   const [trMountMode, setTrMountMode] = useState<"root" | "path">("root");
   const [trMountPathDraft, setTrMountPathDraft] = useState("");
+  // Mount exclusions + scheduled-sync interval (#4e97f465 A1/A3). The raw
+  // forms keep what the server sent so an untouched save resends it verbatim:
+  // excluded_paths null (never configured → server default "artifacts") must
+  // not turn into [] (the deliberate "mount everything" state), and an absent
+  // interval must not turn into an explicit 0 (scheduled sync off).
+  const [trExcludedPathsRaw, setTrExcludedPathsRaw] = useState<string[] | null>(null);
+  const [trExcludedPathsDraft, setTrExcludedPathsDraft] = useState("");
+  const [trSyncIntervalRaw, setTrSyncIntervalRaw] = useState<number | null>(null);
+  const [trSyncIntervalDraft, setTrSyncIntervalDraft] = useState("");
   const [trMountSaving, setTrMountSaving] = useState(false);
   const [trMountError, setTrMountError] = useState<string | null>(null);
   const [trKeyExpiresAt, setTrKeyExpiresAt] = useState<string | null>(null);
@@ -1307,6 +1316,11 @@ export function ProjectSettingsPage() {
     subfolder: string;
     include_project_slug: boolean;
     docs_mount_path?: string;
+    // null/undefined = never configured (server default ["artifacts"]
+    // applies); [] = the deliberate "mount everything" state.
+    excluded_paths?: string[] | null;
+    // null/undefined = default cadence (15 min); 0 = scheduled sync off.
+    sync_interval_minutes?: number | null;
     key_expires_at?: string;
     key_expiry_source?: string;
     key_expiring_soon?: boolean;
@@ -1328,6 +1342,16 @@ export function ProjectSettingsPage() {
     setTrDocsMountPath(mountPath);
     setTrMountMode(mountPath ? "path" : "root");
     setTrMountPathDraft(mountPath);
+    // A never-configured exclusion list renders as the default ("artifacts")
+    // in the input, so what the user sees matches what the server does — but
+    // the RAW value is kept separately so an untouched save does not freeze
+    // the default into an explicit setting.
+    const excluded = data.excluded_paths ?? null;
+    setTrExcludedPathsRaw(excluded);
+    setTrExcludedPathsDraft((excluded ?? ["artifacts"]).join(", "));
+    const interval = data.sync_interval_minutes ?? null;
+    setTrSyncIntervalRaw(interval);
+    setTrSyncIntervalDraft(interval === null ? "" : String(interval));
     setTrKeyExpiresAt(data.key_expires_at || null);
     setTrKeyExpirySource(data.key_expiry_source || null);
     setTrKeyExpiringSoon(Boolean(data.key_expiring_soon));
@@ -1351,6 +1375,35 @@ export function ProjectSettingsPage() {
       .finally(() => setTrLoading(false));
   }, [currentProject?.id, activeTab, applyTeamRelayResponse]);
 
+  // Body values for the two settings whose "not sent" must stay "not sent".
+  // Both PATCH handlers are a full-settings replace, so an untouched field
+  // resends exactly what was loaded (null → omitted → server default), and
+  // only a deliberate edit writes an explicit value — including the
+  // deliberate edge states: [] = mount everything, 0 = scheduled sync off.
+  const trExcludedPathsBody = (): string[] | null => {
+    const parsed = trExcludedPathsDraft.split(",").map((s) => s.trim()).filter(Boolean);
+    const loaded = (trExcludedPathsRaw ?? ["artifacts"]).filter(Boolean);
+    if (parsed.join(",") === loaded.join(",")) return trExcludedPathsRaw;
+    return parsed;
+  };
+
+  const trSyncIntervalBody = (): number | null => {
+    const t = trSyncIntervalDraft.trim();
+    if (t === (trSyncIntervalRaw === null ? "" : String(trSyncIntervalRaw))) {
+      return trSyncIntervalRaw;
+    }
+    if (t === "") return null;
+    const n = Number.parseInt(t, 10);
+    return Number.isFinite(n) ? n : trSyncIntervalRaw;
+  };
+
+  const applyTrSyncSettingsToBody = (body: Record<string, unknown>) => {
+    const excluded = trExcludedPathsBody();
+    if (excluded !== null) body.excluded_paths = excluded;
+    const interval = trSyncIntervalBody();
+    if (interval !== null) body.sync_interval_minutes = interval;
+  };
+
   const handleSaveTeamRelay = async () => {
     if (!currentProject?.id) return;
     setTrSaving(true);
@@ -1363,6 +1416,7 @@ export function ProjectSettingsPage() {
         include_project_slug: trIncludeSlug,
         docs_mount_path: trDocsMountPath,
       };
+      applyTrSyncSettingsToBody(body);
       // Never send the key when switching the integration off, never an
       // empty/whitespace value and never a mask (browser/password-manager
       // autofill of "••••"): absent means "keep the stored key" server-side.
@@ -1401,13 +1455,17 @@ export function ProjectSettingsPage() {
         `/api/v1/projects/${currentProject.id}/integrations/team-relay`,
         {
           method: "PATCH",
-          body: {
-            enabled: trEnabled,
-            share_slug: trShareSlug,
-            subfolder: trSubfolder,
-            include_project_slug: trIncludeSlug,
-            docs_mount_path: nextPath,
-          },
+          body: (() => {
+            const body: Record<string, unknown> = {
+              enabled: trEnabled,
+              share_slug: trShareSlug,
+              subfolder: trSubfolder,
+              include_project_slug: trIncludeSlug,
+              docs_mount_path: nextPath,
+            };
+            applyTrSyncSettingsToBody(body);
+            return body;
+          })(),
         }
       );
       applyTeamRelayResponse(data);
@@ -1420,8 +1478,15 @@ export function ProjectSettingsPage() {
     }
   };
 
+  // The mount-card save button covers all three settings in the card (mount
+  // point, exclusions, interval): each body helper returns the loaded raw
+  // value when untouched, so identity comparison IS the dirty check — an
+  // untouched raw of null comes back as null, an untouched list as the same
+  // array reference, and only an edit produces a fresh value.
   const trMountPointDirty =
-    (trMountMode === "root" ? "" : trMountPathDraft.trim()) !== trDocsMountPath;
+    (trMountMode === "root" ? "" : trMountPathDraft.trim()) !== trDocsMountPath ||
+    trExcludedPathsBody() !== trExcludedPathsRaw ||
+    trSyncIntervalBody() !== trSyncIntervalRaw;
 
   // --- General info handlers ---
   const handleSaveGeneral = async (e: FormEvent) => {
@@ -3030,6 +3095,49 @@ export function ProjectSettingsPage() {
                       placeholder="e.g. External/Notes"
                     />
                   )}
+
+                  {/* Excluded folders + scheduled sync (#4e97f465 A1/A3).
+                      Rendered as text/number drafts over the raw server
+                      values; see the state declarations for why untouched
+                      drafts must round-trip the raw value, not the rendered
+                      default. */}
+                  <div className="space-y-1.5 pt-2">
+                    <label className="text-sm font-medium" htmlFor="tr-excluded-paths">
+                      Folders excluded from the mount
+                    </label>
+                    <Input
+                      id="tr-excluded-paths"
+                      data-testid="tr-excluded-paths"
+                      value={trExcludedPathsDraft}
+                      onChange={(e) => setTrExcludedPathsDraft(e.target.value)}
+                      placeholder="artifacts"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Top-level share folders that never appear in Docs,
+                      comma-separated. Clear the field entirely to mount
+                      everything.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="tr-sync-interval">
+                      Scheduled sync interval (minutes)
+                    </label>
+                    <Input
+                      id="tr-sync-interval"
+                      data-testid="tr-sync-interval"
+                      inputMode="numeric"
+                      value={trSyncIntervalDraft}
+                      onChange={(e) => setTrSyncIntervalDraft(e.target.value)}
+                      placeholder="15"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      How often the share re-syncs on its own. Empty = default
+                      15 min; 0 turns the scheduled sync off (sync on open
+                      keeps working).
+                    </p>
+                  </div>
+
                   {trMountError && (
                     <p className="text-sm text-destructive">{trMountError}</p>
                   )}
@@ -3040,7 +3148,7 @@ export function ProjectSettingsPage() {
                       disabled={trMountSaving || !trMountPointDirty}
                       data-testid="tr-mount-save"
                     >
-                      {trMountSaving ? "Saving…" : "Save mount point"}
+                      {trMountSaving ? "Saving…" : "Save mount settings"}
                     </Button>
                   </div>
                 </div>

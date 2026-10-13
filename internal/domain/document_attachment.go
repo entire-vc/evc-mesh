@@ -29,4 +29,13 @@ type DocumentAttachment struct {
 	UploadedByType ActorType  `json:"uploaded_by_type" db:"uploaded_by_type"`
 	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
 	DeletedAt      *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
+
+	// SourcePath/SourceSHA256 name where this attachment was copied FROM, for
+	// attachments the Team Relay mount sync imports from image embeds. The dedup
+	// key is (DocumentID, SourcePath) — unique among live rows — with
+	// SourceSHA256 as the "did the source file change" signal, the same pair of
+	// roles documents' (SourceShare, SourcePath)/SourceSHA256 play. Nil on every
+	// human upload: only the mount sync's embed importer writes these.
+	SourcePath   *string `json:"source_path,omitempty" db:"source_path"`
+	SourceSHA256 *string `json:"source_sha256,omitempty" db:"source_sha256"`
 }
