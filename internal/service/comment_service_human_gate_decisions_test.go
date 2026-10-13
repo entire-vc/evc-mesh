@@ -955,3 +955,153 @@ func TestRecordHumanGateDecision_DefaultApplied_UsesTaskSpecificWording(t *testi
 // tests — its identity doesn't matter, only that Create/GetByID/SetHumanGate
 // return it and the code under test propagates or logs it correctly.
 var errInjectedTest = errors.New("injected test error")
+
+func seedMarker(t *testing.T, env hgdEnv, taskID uuid.UUID, body string) uuid.UUID {
+	t.Helper()
+	c := &domain.Comment{
+		ID: uuid.New(), TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent,
+		Body: body, CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, env.commentRepo.Create(context.Background(), c))
+	return c.ID
+}
+
+func attestedInput(taskID uuid.UUID) domain.RecordHumanGateDecisionInput {
+	return domain.RecordHumanGateDecisionInput{
+		TaskID: taskID, CanonicalKey: strP("canonical-decision-x"), DecidedBy: uuid.New(),
+		Provenance: domain.HumanGateProvenanceAttested, Channel: domain.HumanGateChannelTelegram,
+		Quote: strP("да пусть делает"),
+	}
+}
+
+// #cb3f5274 AC1: a decision recorded with task_id but no question_ref must
+// bind to the single live marker, so the marker counts as answered.
+func TestRecordHumanGateDecision_NoQuestionRef_BindsSingleLiveMarker(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	marker := seedMarker(t, env, taskID, "❓ **Blocking @pavel**: можно?")
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), attestedInput(taskID))
+	require.NoError(t, err)
+	require.NotNil(t, d.QuestionRef, "question_ref must be filled from the live marker")
+	assert.Equal(t, marker, *d.QuestionRef)
+	assert.False(t, env.taskSvc.humanGate(taskID))
+
+	live, err := env.svc.liveBlockingMarkerIDs(context.Background(), taskID, true)
+	require.NoError(t, err)
+	assert.Empty(t, live, "the answered marker must no longer be live")
+}
+
+// #cb3f5274 AC2: two live markers and no explicit ref -> error, nothing written.
+func TestRecordHumanGateDecision_NoQuestionRef_TwoLiveMarkers_Errors(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	m1 := seedMarker(t, env, taskID, "❓ **Blocking @pavel**: вопрос один")
+	m2 := seedMarker(t, env, taskID, "❓ **Blocking @pavel**: вопрос два")
+
+	_, err := env.svc.RecordHumanGateDecision(context.Background(), attestedInput(taskID))
+	var verr *HumanGateDecisionValidationError
+	require.ErrorAs(t, err, &verr)
+	assert.Contains(t, verr.Msg, m1.String())
+	assert.Contains(t, verr.Msg, m2.String())
+	assert.Empty(t, env.hgdRepo.rows, "no decision may be written")
+	assert.True(t, env.taskSvc.humanGate(taskID))
+
+	in := attestedInput(taskID)
+	in.QuestionRef = &m2
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, m2, *d.QuestionRef, "an explicit question_ref is respected")
+
+	live, err := env.svc.liveBlockingMarkerIDs(context.Background(), taskID, true)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{m1}, live)
+}
+
+// No live marker: behavior unchanged — recorded by canonical_key alone.
+func TestRecordHumanGateDecision_NoQuestionRef_NoMarker_KeepsCanonicalKeyOnly(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), attestedInput(taskID))
+	require.NoError(t, err)
+	assert.Nil(t, d.QuestionRef)
+}
+
+func seedCommentAt(t *testing.T, env hgdEnv, taskID uuid.UUID, author domain.ActorType, authorID uuid.UUID, body string, at time.Time) uuid.UUID {
+	t.Helper()
+	c := &domain.Comment{ID: uuid.New(), TaskID: taskID, AuthorID: authorID, AuthorType: author, Body: body, CreatedAt: at}
+	require.NoError(t, env.commentRepo.Create(context.Background(), c))
+	return c.ID
+}
+
+// A marker answered by an ordinary human comment, or retracted by its author,
+// is not live — otherwise a later single marker looks ambiguous (review of !1200).
+func TestLiveBlockingMarkerIDs_IgnoresHumanAnsweredAndWithdrawn(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	agent := uuid.New()
+	t0 := time.Now().UTC().Add(-time.Hour)
+
+	seedCommentAt(t, env, taskID, domain.ActorTypeAgent, agent, "❓ **Blocking @pavel**: первый", t0)
+	seedCommentAt(t, env, taskID, domain.ActorTypeUser, uuid.New(), "ответ в комментарии", t0.Add(time.Minute))
+	retracted := seedCommentAt(t, env, taskID, domain.ActorTypeAgent, agent, "❓ **Blocking @pavel**: второй", t0.Add(2*time.Minute))
+	seedCommentAt(t, env, taskID, domain.ActorTypeAgent, agent, "Blocking снят, не требуется", t0.Add(3*time.Minute))
+	current := seedCommentAt(t, env, taskID, domain.ActorTypeAgent, agent, "❓ **Blocking @pavel**: третий", t0.Add(4*time.Minute))
+
+	live, err := env.svc.liveBlockingMarkerIDs(context.Background(), taskID, true)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{current}, live)
+	assert.NotContains(t, live, retracted)
+
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: true})
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), attestedInput(taskID))
+	require.NoError(t, err)
+	assert.Equal(t, current, *d.QuestionRef)
+}
+
+// Unrelated human chatter after the only marker must not leave it unbound.
+func TestLiveBlockingMarkerIDs_SingleMarkerFollowedByHumanChatter_StillBound(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	t0 := time.Now().UTC().Add(-time.Hour)
+	m := seedCommentAt(t, env, taskID, domain.ActorTypeAgent, uuid.New(), "❓ **Blocking @pavel**: можно?", t0)
+	seedCommentAt(t, env, taskID, domain.ActorTypeUser, uuid.New(), "кстати, другая тема", t0.Add(time.Minute))
+
+	live, err := env.svc.liveBlockingMarkerIDs(context.Background(), taskID, true)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{m}, live)
+}
+
+// With the gate already down, a marker that precedes a human comment is history:
+// no fallback binding (the decision stays canonical-key-only).
+func TestResolveQuestionRef_GateDown_HumanAnsweredMarker_NotBound(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	env.taskSvc.seed(&domain.Task{ID: taskID, HumanGate: false})
+	t0 := time.Now().UTC().Add(-time.Hour)
+	seedCommentAt(t, env, taskID, domain.ActorTypeAgent, uuid.New(), "❓ **Blocking @pavel**: можно?", t0)
+	seedCommentAt(t, env, taskID, domain.ActorTypeUser, uuid.New(), "да", t0.Add(time.Minute))
+
+	d, err := env.svc.RecordHumanGateDecision(context.Background(), attestedInput(taskID))
+	require.NoError(t, err)
+	assert.Nil(t, d.QuestionRef)
+}
+
+// A machinery comment under the agent's id that merely contains a negator is not
+// a withdrawal by that agent.
+func TestLiveBlockingMarkerIDs_ServiceCommentIsNotWithdrawal(t *testing.T) {
+	env := setupHGDEnv(t)
+	taskID := uuid.New()
+	agent := uuid.New()
+	t0 := time.Now().UTC().Add(-time.Hour)
+	m := seedCommentAt(t, env, taskID, domain.ActorTypeAgent, agent, "❓ **Blocking @pavel**: можно?", t0)
+	seedCommentAt(t, env, taskID, domain.ActorTypeAgent, agent, "🤖 auto: напоминание, вопрос не снят, не требуется отдельных действий", t0.Add(time.Minute))
+
+	live, err := env.svc.liveBlockingMarkerIDs(context.Background(), taskID, true)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{m}, live)
+}

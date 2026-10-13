@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // ErrHumanGateDecisionRepoUnavailable is returned when hgdRepo was never
@@ -64,6 +68,15 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 	}
 	if err := validateDecisionInput(input); err != nil {
 		return nil, &HumanGateDecisionValidationError{Msg: err.Error()}
+	}
+	if input.QuestionRef == nil {
+		// A decision without question_ref never covers any marker (contract §6
+		// matches by comment id), so the gate would stay open — #cb3f5274.
+		ref, err := s.resolveQuestionRef(ctx, input.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		input.QuestionRef = ref
 	}
 
 	d := &domain.HumanGateDecision{
@@ -397,4 +410,119 @@ func (s *commentService) notifyHumanGateDecision(ctx context.Context, task *doma
 		TaskID:    task.ID,
 		ProjectID: task.ProjectID,
 	})
+}
+
+// liveBlockingMarkerIDs returns the ids of the task's blocking markers that
+// still await an answer. A marker is NOT live when it is covered (by
+// question_ref) by an unrevoked decision, superseded by a newer marker after a human comment (the ordinary release path clears the gate
+// without a decision row), or retracted by a later negating comment from its
+// own author. Oldest first.
+func (s *commentService) liveBlockingMarkerIDs(ctx context.Context, taskID uuid.UUID, gateUp bool) ([]uuid.UUID, error) {
+	answered := map[uuid.UUID]bool{}
+	decisions, err := s.hgdRepo.ListByTask(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list decisions: %w", err)
+	}
+	for _, d := range decisions {
+		if d.IsDecision() && d.RevokedAt == nil && d.QuestionRef != nil {
+			answered[*d.QuestionRef] = true
+		}
+	}
+
+	type marker struct {
+		id      uuid.UUID
+		author  uuid.UUID
+		created time.Time
+	}
+	var markers []marker
+	var lastHuman time.Time
+	withdrawnAt := map[uuid.UUID]time.Time{} // author -> latest negating comment
+	pg := pagination.Params{Page: 1, PageSize: pagination.MaxPageSize}
+	pg.Normalize()
+	for {
+		page, err := s.commentRepo.ListByTask(ctx, taskID, repository.CommentFilter{IncludeInternal: true}, pg)
+		if err != nil {
+			return nil, fmt.Errorf("list comments: %w", err)
+		}
+		if page == nil {
+			break
+		}
+		for _, c := range page.Items {
+			switch {
+			case c.AuthorType == domain.ActorTypeUser:
+				if c.CreatedAt.After(lastHuman) {
+					lastHuman = c.CreatedAt
+				}
+			case c.AuthorType == domain.ActorTypeSystem:
+			case hasBlockingMarker(c.Body):
+				// Not filtered by hasNegatorInScope: the server arms the gate on the marker
+				// alone (see scanHumanGateOwnership), so a marker carrying a negator in its
+				// own body can still be the live gate.
+				if !answered[c.ID] {
+					markers = append(markers, marker{c.ID, c.AuthorID, c.CreatedAt})
+				}
+			case !isServiceComment(c.Body) && hasNegatorInScope(c.Body):
+				if c.CreatedAt.After(withdrawnAt[c.AuthorID]) {
+					withdrawnAt[c.AuthorID] = c.CreatedAt
+				}
+			}
+		}
+		if !page.HasMore {
+			break
+		}
+		pg.Page++
+	}
+
+	var live []uuid.UUID
+	var latestNotWithdrawn *uuid.UUID
+	for i, m := range markers {
+		if withdrawnAt[m.author].After(m.created) {
+			continue
+		}
+		latestNotWithdrawn = &markers[i].id
+		if m.created.After(lastHuman) {
+			live = append(live, m.id)
+		}
+	}
+	// Every marker precedes some human comment: that comment may have been
+	// unrelated discussion rather than an answer, so a gate that is still up
+	// belongs to the newest marker. Fall back to it instead of binding nothing —
+	// but only while the gate is actually up; with it down the comment was an
+	// answer and the markers are history.
+	if len(live) == 0 && gateUp && latestNotWithdrawn != nil {
+		live = append(live, *latestNotWithdrawn)
+	}
+	return live, nil
+}
+
+// resolveQuestionRef picks the question_ref for a decision recorded without
+// one: the single live marker on the task. No live marker -> nil (the decision
+// is recorded canonical_key-only, as before). Several -> a validation error
+// naming them, so the caller passes question_ref explicitly instead of the
+// server guessing which question was answered.
+func (s *commentService) resolveQuestionRef(ctx context.Context, taskID uuid.UUID) (*uuid.UUID, error) {
+	// Unknown gate state (lookup failed) is treated as up: binding the newest
+	// marker is harmless, while skipping the fallback would leave it unanswered.
+	gateUp := true
+	if s.taskSvc != nil {
+		if task, err := s.taskSvc.GetByID(ctx, taskID); err == nil && task != nil {
+			gateUp = task.HumanGate
+		}
+	}
+	live, err := s.liveBlockingMarkerIDs(ctx, taskID, gateUp)
+	if err != nil {
+		return nil, err
+	}
+	switch len(live) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &live[0], nil
+	}
+	ids := make([]string, len(live))
+	for i, id := range live {
+		ids[i] = id.String()
+	}
+	return nil, &HumanGateDecisionValidationError{Msg: fmt.Sprintf(
+		"question_ref is required: the task has %d live blocking markers (%s)", len(live), strings.Join(ids, ", "))}
 }
