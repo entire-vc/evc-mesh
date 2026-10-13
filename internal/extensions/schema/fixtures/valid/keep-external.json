@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "id": "keep",
+  "name": "Keep",
+  "version": "1.2.0",
+  "kind": "plugin",
+  "runtime": "external",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Хранилище секретов для команд и агентов",
+  "category": "security",
+  "tags": [
+    "secrets"
+  ],
+  "icon": "icon.svg",
+  "license": "Apache-2.0",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "settings": {
+    "instance": {
+      "type": "object",
+      "properties": {
+        "keep_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Адрес Keep"
+        }
+      },
+      "required": [
+        "keep_url"
+      ]
+    },
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "install_secret": {
+          "type": "string",
+          "title": "Секрет установки",
+          "x-secret": true,
+          "x-help": "Выдаётся Keep при подключении"
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "api": [
+      "members:read",
+      "agents:read",
+      "secrets:read"
+    ],
+    "events": [
+      "workspace.member.added",
+      "workspace.member.removed",
+      "agent.key.issued",
+      "agent.key.revoked"
+    ],
+    "network": {
+      "allowed_domains": [
+        "{settings.keep_url}"
+      ]
+    },
+    "ui": [
+      "workspace.settings",
+      "sidebar.item"
+    ],
+    "secrets": [
+      "install_secret"
+    ]
+  },
+  "external": {
+    "base_url_setting": "keep_url",
+    "health_path": "/healthz",
+    "install_path": "/mesh/install",
+    "events_path": "/mesh/events",
+    "ui": {
+      "sidebar.item": {
+        "path": "/mesh/ui/secrets",
+        "title": "Секреты",
+        "icon": "key"
+      }
+    },
+    "image": "git.entire.host:5050/entire-vc/evc-keep/keep:1.2.0"
+  }
+}
