@@ -21,6 +21,7 @@ import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { apiErrorMessage } from "@/lib/api-error";
 import type {
+  EffectiveIntegrationStatus,
   GitHubIntegrationConfig,
   GitLabIntegrationConfig,
   IntegrationConfig,
@@ -88,7 +89,10 @@ export function IntegrationsPage() {
 
   const [configs, setConfigs] = useState<IntegrationConfig[]>([]);
   const [loading, setLoading] = useState(true);
+  const [effective, setEffective] = useState<EffectiveIntegrationStatus[]>([]);
   const [toggling, setToggling] = useState<string | null>(null);
+  // Provider whose env-backed integration the admin is about to switch off.
+  const [confirmDisable, setConfirmDisable] = useState<string | null>(null);
 
   const [telegramTokenInput, setTelegramTokenInput] = useState("");
   const [telegramEditingToken, setTelegramEditingToken] = useState(false);
@@ -110,10 +114,12 @@ export function IntegrationsPage() {
   const fetchConfigs = useCallback(async () => {
     if (!currentWorkspace) return;
     try {
-      const res = await api<{ integrations: IntegrationConfig[] }>(
-        `/api/v1/workspaces/${currentWorkspace.id}/integrations`,
-      );
+      const res = await api<{
+        integrations: IntegrationConfig[];
+        effective?: EffectiveIntegrationStatus[];
+      }>(`/api/v1/workspaces/${currentWorkspace.id}/integrations`);
       setConfigs(res.integrations ?? []);
+      setEffective(res.effective ?? []);
     } catch {
       // ignore
     } finally {
@@ -128,6 +134,9 @@ export function IntegrationsPage() {
   useEffect(() => {
     if (currentWorkspace) void fetchMyRole(currentWorkspace.id);
   }, [currentWorkspace, fetchMyRole]);
+
+  const getEffective = (provider: IntegrationProvider) =>
+    effective.find((e) => e.provider === provider);
 
   const getConfig = (provider: IntegrationProvider) =>
     configs.find((c) => c.provider === provider);
@@ -159,6 +168,8 @@ export function IntegrationsPage() {
       setConfigs((prev) =>
         existing ? prev.map((c) => (c.id === updated.id ? updated : c)) : [...prev, updated],
       );
+      // effective status drives the toggle; refresh it from the server
+      await fetchConfigs();
       setTelegramTokenInput("");
       setTelegramEditingToken(false);
       const botUsername = (updated.config as TelegramIntegrationConfig).bot_username;
@@ -205,6 +216,8 @@ export function IntegrationsPage() {
       setConfigs((prev) =>
         existing ? prev.map((c) => (c.id === updated.id ? updated : c)) : [...prev, updated],
       );
+      // effective status drives the toggle; refresh it from the server
+      await fetchConfigs();
       setVcsFormValues((prev) => ({ ...prev, [provider]: { base_url: "", token: "", webhook_secret: "" } }));
       setVcsEditing((prev) => ({ ...prev, [provider]: false }));
       toast.success(`${label} connection saved`);
@@ -215,31 +228,45 @@ export function IntegrationsPage() {
     }
   };
 
-  const handleToggle = async (provider: IntegrationProvider, enabled: boolean) => {
+  const handleToggle = async (
+    provider: IntegrationProvider,
+    enabled: boolean,
+    confirmEnvOverride = false,
+  ) => {
     if (!currentWorkspace) return;
+    const eff = getEffective(provider);
+    const existing = getConfig(provider);
+    // Enabling with nothing to store would create an empty placeholder row that
+    // the runtime ignores while this screen claims "Enabled" — send the admin
+    // to the connection form instead.
+    if (enabled && !existing && (provider === "github" || provider === "gitlab")) {
+      setVcsEditing((prev) => ({ ...prev, [provider]: true }));
+      return;
+    }
+    if (enabled && !existing && !eff?.env_available) {
+      toast.error("Nothing to enable yet: this integration has no connection settings.");
+      return;
+    }
     setToggling(provider);
     try {
-      const existing = getConfig(provider);
       if (existing) {
-        const updated = await api<IntegrationConfig>(
-          `/api/v1/integrations/${existing.id}`,
-          { method: "PATCH", body: { is_active: enabled } },
-        );
-        setConfigs((prev) =>
-          prev.map((c) => (c.id === updated.id ? updated : c)),
-        );
+        await api<IntegrationConfig>(`/api/v1/integrations/${existing.id}`, {
+          method: "PATCH",
+          body: { is_active: enabled, confirm_env_override: confirmEnvOverride },
+        });
       } else {
-        const created = await api<IntegrationConfig>(
+        await api<IntegrationConfig>(
           `/api/v1/workspaces/${currentWorkspace.id}/integrations`,
           {
             method: "POST",
-            body: { provider, config: {}, is_active: enabled },
+            body: { provider, config: {}, is_active: enabled, confirm_env_override: confirmEnvOverride },
           },
         );
-        setConfigs((prev) => [...prev, created]);
       }
-    } catch {
-      // ignore
+      setConfirmDisable(null);
+      await fetchConfigs();
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Failed to update the integration"));
     } finally {
       setToggling(null);
     }
@@ -251,9 +278,9 @@ export function IntegrationsPage() {
     setToggling(provider);
     try {
       await api(`/api/v1/integrations/${existing.id}`, { method: "DELETE" });
-      setConfigs((prev) => prev.filter((c) => c.id !== existing.id));
-    } catch {
-      // ignore
+      await fetchConfigs();
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Failed to remove the integration"));
     } finally {
       setToggling(null);
     }
@@ -279,7 +306,12 @@ export function IntegrationsPage() {
               (provider) => provider.id !== "telegram" || canManageTelegram,
             ).map((provider) => {
               const cfg = getConfig(provider.id);
-              const isActive = cfg?.is_active ?? false;
+              const eff = getEffective(provider.id);
+              // The runtime's answer when the API provides it; the raw row is
+              // only a fallback for an older API.
+              const isActive = eff ? eff.effective_enabled : (cfg?.is_active ?? false);
+              const viaEnv = eff?.source === "env";
+              const needsEnvConfirm = isActive && !!eff?.env_available;
               const isLoading = toggling === provider.id;
               const Icon = provider.icon;
               const telegramCfg =
@@ -307,8 +339,16 @@ export function IntegrationsPage() {
                           <Icon className="h-5 w-5" />
                         </div>
                         <div>
-                          <CardTitle className="flex items-center gap-2 text-base">
+                          <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                             {provider.name}
+                            {isActive && eff && eff.source !== "none" && (
+                              <span
+                                data-testid={`source-${provider.id}`}
+                                className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground"
+                              >
+                                {viaEnv ? "Instance" : "Workspace"}
+                              </span>
+                            )}
                           </CardTitle>
                           <p className="text-xs text-muted-foreground">
                             {provider.description}
@@ -339,9 +379,13 @@ export function IntegrationsPage() {
                             size="sm"
                             variant={isActive ? "default" : "outline"}
                             disabled={isLoading}
-                            onClick={() =>
-                              void handleToggle(provider.id, !isActive)
-                            }
+                            onClick={() => {
+                              if (needsEnvConfirm) {
+                                setConfirmDisable(provider.id);
+                                return;
+                              }
+                              void handleToggle(provider.id, !isActive);
+                            }}
                             className={cn(
                               isActive &&
                                 "bg-teal-600 hover:bg-teal-700 border-teal-600",
@@ -365,6 +409,45 @@ export function IntegrationsPage() {
                       </div>
                     </div>
                   </CardHeader>
+
+                  {viaEnv && (
+                    <CardContent className="pt-0">
+                      <p className="text-xs text-muted-foreground" data-testid={`env-note-${provider.id}`}>
+                        Active (configured at the instance level)
+                      </p>
+                    </CardContent>
+                  )}
+
+                  {confirmDisable === provider.id && (
+                    <CardContent className="pt-0">
+                      <div
+                        role="alertdialog"
+                        className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 space-y-2"
+                      >
+                        <p className="text-xs">
+                          This will turn off an integration configured at the instance level.
+                          It stops working for this workspace until it is enabled again.
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            disabled={isLoading}
+                            onClick={() => void handleToggle(provider.id, false, true)}
+                          >
+                            Turn off
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setConfirmDisable(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  )}
 
                   {provider.id === "github" && (
                     <CardContent className="pt-0 space-y-3">

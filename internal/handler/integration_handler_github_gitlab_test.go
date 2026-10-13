@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
@@ -163,4 +165,94 @@ func TestIntegrationUpdate_GitLab_BaseURLOnly_PreservesTokenAndSecret(t *testing
 	assert.Equal(t, "https://gitlab.new-host.example", parsed.BaseURL)
 	assert.Equal(t, "tok", parsed.Token, "changing base_url must not wipe the token")
 	assert.Equal(t, "sec", parsed.WebhookSecret, "changing base_url must not wipe the webhook_secret")
+}
+
+// ---------------------------------------------------------------------------
+// #a4d108eb: env-backed integrations. Disabling one stores is_active=false,
+// which blocks env — it needs explicit confirmation, enforced server-side.
+// ---------------------------------------------------------------------------
+
+func newEnvBackedServer(svc *fakeIntegrationService) *echo.Echo {
+	h := NewIntegrationHandler(svc, nil, nil)
+	h.WithStatusResolver(service.NewIntegrationStatusResolver(nil,
+		service.NewVCSIntegrationResolver(nil, service.VCSEnvFallback{GitLabBaseURL: "https://git.example", GitLabToken: "t"}),
+		nil, nil, true))
+	e := echo.New()
+	e.GET("/api/v1/workspaces/:ws_id/integrations", h.List)
+	e.POST("/api/v1/workspaces/:ws_id/integrations", h.Configure)
+	e.PATCH("/api/v1/integrations/:int_id", h.Update)
+	return e
+}
+
+func TestIntegrationUpdate_DisableEnvBacked_RequiresConfirmation(t *testing.T) {
+	svc := newFakeIntegrationService()
+	e := newEnvBackedServer(svc)
+	id := uuid.New()
+	svc.byID[id] = &domain.IntegrationConfig{ID: id, WorkspaceID: uuid.New(), Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: json.RawMessage(`{"base_url":"https://x"}`)}
+
+	rec := doJSON(t, e, http.MethodPatch, "/api/v1/integrations/"+id.String(), `{"is_active":false}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.True(t, svc.byID[id].IsActive, "without confirmation the row must stay active")
+
+	rec = doJSON(t, e, http.MethodPatch, "/api/v1/integrations/"+id.String(), `{"is_active":false,"confirm_env_override":true}`)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.False(t, svc.byID[id].IsActive)
+}
+
+func TestIntegrationConfigure_DisableEnvBacked_NoRowWithoutConfirmation(t *testing.T) {
+	svc := newFakeIntegrationService()
+	e := newEnvBackedServer(svc)
+	rec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+uuid.New().String()+"/integrations",
+		`{"provider":"gitlab","config":{"base_url":"https://x"},"is_active":false}`)
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.Empty(t, svc.byID, "no is_active=false row may be created without confirmation")
+}
+
+func TestIntegrationConfigure_EnableWithEmptyConfig_Rejected(t *testing.T) {
+	svc := newFakeIntegrationService()
+	e := newEnvBackedServer(svc)
+	rec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+uuid.New().String()+"/integrations",
+		`{"provider":"gitlab","config":{},"is_active":true}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Empty(t, svc.byID, "an empty placeholder row must not be created")
+}
+
+func TestIntegrationList_NoRowEnvSet_ReportsEffectiveEnabledFromEnv(t *testing.T) {
+	svc := newFakeIntegrationService()
+	e := newEnvBackedServer(svc)
+	rec := doJSON(t, e, http.MethodGet, "/api/v1/workspaces/"+uuid.New().String()+"/integrations", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var body struct {
+		Integrations []json.RawMessage `json:"integrations"`
+		Effective    []struct {
+			Provider         string `json:"provider"`
+			EffectiveEnabled bool   `json:"effective_enabled"`
+			Source           string `json:"source"`
+			HasWorkspaceRow  bool   `json:"has_workspace_row"`
+		} `json:"effective"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Empty(t, body.Integrations, "no workspace row exists")
+	var found bool
+	for _, st := range body.Effective {
+		if st.Provider == "gitlab" {
+			found = true
+			assert.True(t, st.EffectiveEnabled)
+			assert.Equal(t, "env", st.Source)
+			assert.False(t, st.HasWorkspaceRow)
+		}
+	}
+	assert.True(t, found, "effective[] must contain gitlab: %s", rec.Body.String())
+}
+
+func TestIntegrationUpdate_EnableEmptyPlaceholderRow_Rejected(t *testing.T) {
+	svc := newFakeIntegrationService()
+	e := newEnvBackedServer(svc)
+	id := uuid.New()
+	svc.byID[id] = &domain.IntegrationConfig{ID: id, WorkspaceID: uuid.New(), Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: json.RawMessage(`{}`)}
+
+	rec := doJSON(t, e, http.MethodPatch, "/api/v1/integrations/"+id.String(), `{"is_active":true}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.False(t, svc.byID[id].IsActive, "an empty placeholder row must not be activated")
 }

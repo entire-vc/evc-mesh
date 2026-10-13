@@ -56,6 +56,7 @@ function mockApiByRoute(routes: {
   onConfigure?: (body: unknown) => void;
   configureResponse?: object;
 }) {
+  let created: IntegrationConfig | null = null;
   mockedApi.mockImplementation(
     (url: string, opts?: { method?: string; body?: unknown }) => {
       if (url === "/api/v1/workspaces/ws1/members/me") {
@@ -63,7 +64,7 @@ function mockApiByRoute(routes: {
       }
       if (url === "/api/v1/workspaces/ws1/integrations" && opts?.method === "POST") {
         routes.onConfigure?.(opts.body);
-        return Promise.resolve({
+        created = {
           id: "int1",
           workspace_id: "ws1",
           provider: "telegram",
@@ -72,10 +73,13 @@ function mockApiByRoute(routes: {
           updated_at: "2026-01-01T00:00:00Z",
           config: { bot_token_set: true, bot_username: "mesh_bot" },
           ...(routes.configureResponse ?? {}),
-        });
+        } as IntegrationConfig;
+        return Promise.resolve(created);
       }
       if (url === "/api/v1/workspaces/ws1/integrations") {
-        return Promise.resolve({ integrations: routes.integrations ?? [] });
+        return Promise.resolve({
+          integrations: created ? [...(routes.integrations ?? []), created] : (routes.integrations ?? []),
+        });
       }
       return Promise.resolve({});
     },
@@ -208,5 +212,109 @@ describe("IntegrationsPage — mcp is reference-only (#4a3195a5)", () => {
     await waitFor(() =>
       expect(screen.getByText("Claude Code / Cline — .mcp.json")).toBeInTheDocument(),
     );
+  });
+});
+
+describe("IntegrationsPage — effective status (#a4d108eb)", () => {
+  const eff = (over: Record<string, unknown>) => ({
+    provider: "gitlab",
+    effective_enabled: true,
+    source: "env",
+    has_workspace_row: false,
+    env_available: true,
+    health: "ok",
+    ...over,
+  });
+
+  function mockWithEffective(effective: unknown[], onWrite?: (url: string, opts: unknown) => void) {
+    mockedApi.mockImplementation((url: string, opts?: { method?: string }) => {
+      if (url === "/api/v1/workspaces/ws1/members/me") {
+        return Promise.resolve({ role: "admin" });
+      }
+      if (url === "/api/v1/workspaces/ws1/integrations" && !opts?.method) {
+        return Promise.resolve({ integrations: [], effective });
+      }
+      if (opts?.method) onWrite?.(url, opts);
+      return Promise.resolve({});
+    });
+  }
+
+  it("shows a no-row GitLab that runs off env as Enabled with an instance note", async () => {
+    useMemberStore.setState({ myRole: "admin" });
+    mockWithEffective([eff({})]);
+    renderPage();
+    expect(await screen.findByTestId("env-note-gitlab")).toHaveTextContent(
+      "Active (configured at the instance level)",
+    );
+    expect(screen.getByTestId("source-gitlab")).toHaveTextContent("Instance");
+  });
+
+  it("asks for confirmation before turning off an env-backed integration, and writes nothing until confirmed", async () => {
+    useMemberStore.setState({ myRole: "admin" });
+    const writes: Array<[string, unknown]> = [];
+    mockWithEffective([eff({})], (url, opts) => writes.push([url, opts]));
+    renderPage();
+    const note = await screen.findByTestId("env-note-gitlab");
+    const card = note.closest("[class*='rounded']")!.parentElement!;
+    fireEvent.click(card.querySelector("button.bg-teal-600") as HTMLElement);
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "configured at the instance level",
+    );
+    expect(writes).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect((writes[0]![1] as { body: Record<string, unknown> }).body).toMatchObject({
+      is_active: false,
+      confirm_env_override: true,
+    });
+  });
+
+  it("does not create an empty placeholder when Enable is clicked with no row and no env", async () => {
+    useMemberStore.setState({ myRole: "admin" });
+    const writes: unknown[] = [];
+    mockWithEffective(
+      [eff({ provider: "spark", effective_enabled: false, source: "none", env_available: false, health: "not_configured" })],
+      (_u, o) => writes.push(o),
+    );
+    renderPage();
+    await screen.findByText("Spark Agent Catalog");
+    // Provider order: github, gitlab, spark — Spark is the third Enable button.
+    const enableButtons = await screen.findAllByRole("button", { name: /Enable/ });
+    fireEvent.click(enableButtons[2]!);
+    expect(writes).toHaveLength(0);
+  });
+
+  it("refreshes effective status after saving a connection (badge flips without reload)", async () => {
+    useMemberStore.setState({ myRole: "admin" });
+    let saved = false;
+    mockedApi.mockImplementation((url: string, opts?: { method?: string }) => {
+      if (url === "/api/v1/workspaces/ws1/members/me") return Promise.resolve({ role: "admin" });
+      if (url === "/api/v1/workspaces/ws1/integrations" && opts?.method === "POST") {
+        saved = true;
+        return Promise.resolve({
+          id: "int9", workspace_id: "ws1", provider: "gitlab", is_active: true,
+          created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+          config: { token_set: true },
+        });
+      }
+      if (url === "/api/v1/workspaces/ws1/integrations") {
+        return Promise.resolve({
+          integrations: [],
+          effective: [
+            saved
+              ? eff({ source: "workspace", has_workspace_row: true, env_available: false })
+              : eff({ effective_enabled: false, source: "none", env_available: false, health: "not_configured" }),
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+    expect(screen.queryByTestId("source-gitlab")).not.toBeInTheDocument();
+    fireEvent.change(await screen.findByPlaceholderText("Access token"), { target: { value: "glpat-x" } });
+    const saveButtons = screen.getAllByRole("button", { name: "Save" });
+    fireEvent.click(saveButtons[saveButtons.length - 1]!);
+    expect(await screen.findByTestId("source-gitlab")).toHaveTextContent("Workspace");
   });
 });

@@ -39,6 +39,6 @@ func TestIntegrationConfigure_OtherProvidersStillWork_MCPRejectionIsScoped(t *te
 	wsID := uuid.New()
 
 	rec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/integrations",
-		`{"provider":"spark","config":{},"is_active":true}`)
+		`{"provider":"spark","config":{"base_url":"https://spark.example"},"is_active":true}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }

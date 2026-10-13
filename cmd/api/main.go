@@ -843,7 +843,8 @@ func main() {
 		handler.WithVCSIntegrationResolver(vcsIntegrationResolver), // resolves webhook secrets fresh per request (see above); supersedes the static WithGitHubWebhookSecret/WithGitLabWebhookSecret options
 		handler.WithWebhookDedupStore(handler.NewRedisWebhookDedupStore(agentNotifyRedis)),
 	)
-	integrationHandler := handler.NewIntegrationHandler(integrationService, telegramClient, telegramBotManager)
+	integrationHandler := handler.NewIntegrationHandler(integrationService, telegramClient, telegramBotManager).
+		WithStatusResolver(service.NewIntegrationStatusResolver(integrationRepo, vcsIntegrationResolver, sparkIntegrationResolver, teamRelayIntegrationResolver, cfg.Telegram.Enabled))
 	runtimeHandler := handler.NewRuntimeHandler(runtimeRepo)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)

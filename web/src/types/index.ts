@@ -1350,6 +1350,19 @@ export interface IntegrationConfig {
   updated_at: string;
 }
 
+// What the runtime actually does for one provider in this workspace
+// (GET /workspaces/:id/integrations -> effective[]). The screen renders status
+// from this, never from the row alone: an integration can run off instance env
+// with no row at all.
+export interface EffectiveIntegrationStatus {
+  provider: IntegrationProvider;
+  effective_enabled: boolean;
+  source: "workspace" | "env" | "none";
+  has_workspace_row: boolean;
+  env_available: boolean;
+  health: "ok" | "disabled" | "not_configured";
+}
+
 // A telegram IntegrationConfig's `config` is always this shape — the API
 // never returns bot_token, encrypted or not, only whether one is set.
 export interface TelegramIntegrationConfig {
