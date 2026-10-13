@@ -32,6 +32,26 @@ type IntegrationHandler struct {
 	integrationService service.IntegrationService
 	telegramClient     service.TelegramClient
 	telegramBots       *service.TelegramBotManager
+	status             *service.IntegrationStatusResolver
+}
+
+// WithStatusResolver makes List report the effective (runtime) status of each
+// provider and makes disabling an env-backed integration require explicit
+// confirmation. Without it the handler behaves as before (row-only).
+func (h *IntegrationHandler) WithStatusResolver(r *service.IntegrationStatusResolver) *IntegrationHandler {
+	h.status = r
+	return h
+}
+
+// envOverrideRequired reports whether turning provider off in this workspace
+// would block a working instance-level (env) integration, and so needs the
+// caller's explicit confirm_env_override.
+func (h *IntegrationHandler) envOverrideRequired(provider domain.IntegrationProvider, confirmed bool) *apierror.Error {
+	if h.status == nil || confirmed || !h.status.EnvAvailable(provider) {
+		return nil
+	}
+	return apierror.Conflict("disabling " + string(provider) +
+		" will turn off an integration configured at the instance level (env); resend with confirm_env_override=true to confirm")
 }
 
 // NewIntegrationHandler creates a new IntegrationHandler.
@@ -49,12 +69,17 @@ type configureIntegrationRequest struct {
 	Provider string      `json:"provider"`
 	Config   interface{} `json:"config"`
 	IsActive bool        `json:"is_active"`
+	// ConfirmEnvOverride must be true to store is_active=false for a provider
+	// that the instance env keeps running: the row would block that env.
+	ConfirmEnvOverride bool `json:"confirm_env_override"`
 }
 
 // updateIntegrationRequest is the JSON body for updating an integration.
 type updateIntegrationRequest struct {
 	Config   interface{} `json:"config"`
 	IsActive *bool       `json:"is_active"`
+	// ConfirmEnvOverride: see configureIntegrationRequest.
+	ConfirmEnvOverride bool `json:"confirm_env_override"`
 }
 
 // List handles GET /workspaces/:ws_id/integrations
@@ -76,10 +101,14 @@ func (h *IntegrationHandler) List(c echo.Context) error {
 		maskSecrets(&cfgs[i])
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"integrations": cfgs,
 		"count":        len(cfgs),
-	})
+	}
+	if h.status != nil {
+		resp["effective"] = h.status.Effective(c.Request().Context(), wsID)
+	}
+	return c.JSON(http.StatusOK, resp)
 }
 
 // Configure handles POST /workspaces/:ws_id/integrations
@@ -99,6 +128,17 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 	}
 
 	provider := domain.IntegrationProvider(req.Provider)
+
+	if !req.IsActive {
+		if apiErr := h.envOverrideRequired(provider, req.ConfirmEnvOverride); apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
+	} else if emptyConfig(req.Config) && isEnvAwareProvider(provider) {
+		// An "Enable" click with nothing to store would create a config:{}
+		// placeholder the runtime ignores while the screen shows "Enabled".
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+			"config is required to enable "+req.Provider+"; an empty placeholder row enables nothing"))
+	}
 
 	var configJSON json.RawMessage
 	switch provider {
@@ -187,6 +227,12 @@ func (h *IntegrationHandler) Update(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	if req.IsActive != nil && !*req.IsActive && existing.IsActive {
+		if apiErr := h.envOverrideRequired(existing.Provider, req.ConfirmEnvOverride); apiErr != nil {
+			return c.JSON(apiErr.StatusCode(), apiErr)
+		}
+	}
+
 	var configJSON []byte
 	switch {
 	case existing.Provider == domain.IntegrationProviderTelegram && req.Config != nil:
@@ -213,6 +259,19 @@ func (h *IntegrationHandler) Update(c echo.Context) error {
 		configJSON, err = marshalToRawJSON(req.Config)
 		if err != nil {
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid config"))
+		}
+	}
+
+	// Same placeholder guard as Configure: activating an inactive row whose
+	// resulting config is empty would show "Enabled" while the runtime ignores it.
+	if req.IsActive != nil && *req.IsActive && !existing.IsActive && isEnvAwareProvider(existing.Provider) {
+		resulting := configJSON
+		if resulting == nil {
+			resulting = existing.Config
+		}
+		if rawConfigEmpty(resulting) {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(
+				"config is required to enable "+string(existing.Provider)+"; an empty placeholder row enables nothing"))
 		}
 	}
 
@@ -255,6 +314,34 @@ func (h *IntegrationHandler) Delete(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+func isEnvAwareProvider(p domain.IntegrationProvider) bool {
+	switch p {
+	case domain.IntegrationProviderGitHub, domain.IntegrationProviderGitLab,
+		domain.IntegrationProviderSpark, domain.IntegrationProviderTeamRelay:
+		return true
+	}
+	return false
+}
+
+// emptyConfig is true for a missing config or an empty JSON object.
+// rawConfigEmpty reports whether a stored config blob carries no content
+// (nil, null, or an empty JSON object).
+func rawConfigEmpty(raw []byte) bool {
+	var m map[string]interface{}
+	if len(raw) == 0 || json.Unmarshal(raw, &m) != nil {
+		return len(raw) == 0
+	}
+	return len(m) == 0
+}
+
+func emptyConfig(cfg interface{}) bool {
+	if cfg == nil {
+		return true
+	}
+	m, ok := cfg.(map[string]interface{})
+	return ok && len(m) == 0
 }
 
 // prepareTelegramConfig validates and encrypts a bot_token present in config
