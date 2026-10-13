@@ -826,11 +826,11 @@ the body.** A document is far larger than a task, and a body you read stays in y
 for the rest of the session. Read the outline first, then pass `section` for just the part
 you need; `body=true` returns the whole page and should be the exception.
 
-The returned `version` is what `update_doc` takes as `base_version`.
+The returned `version` is what `update_doc` takes as `base_version`. If `doc` was not the document's live path (an old path, or a bare slug that is not itself a live top-level path), the reply also carries `moved_to`, the current path; an exact live-path or UUID hit has none (a bare slug that names a top-level document is a live-path hit). A live path takes priority over an old one, so a reused old path resolves to the new document.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`). A path survives the document being moved: the old path still resolves to it (unless a live document now has that path -- a live path wins), and so does a bare slug when exactly one live document has it at any depth. When `doc` was an old path, or a bare slug that is not itself a live top-level path, the reply carries `moved_to` (the current path); a UUID or an exact live-path hit has no `moved_to`. An ambiguous bare slug is a `409` (`Ambiguous document slug`) listing the full paths -- repeat with the full path or the UUID |
 | `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
 | `section` | string | No | -- | Return only this section: a heading's text, or its anchor from the outline |
 | `body` | boolean | No | `false` | Return the full markdown body. Prefer `section` when you need one part |
@@ -862,7 +862,7 @@ between. The body you sent is not echoed back.
 | `project_id` | string | **Yes** | -- | Project UUID |
 | `title` | string | **Yes** | -- | Document title |
 | `body` | string | No | -- | Markdown body |
-| `slug` | string | No | derived from title | URL slug |
+| `slug` | string | No | derived from title | One URL segment. `/` is not allowed (`400`) -- to nest, create or find the parent and pass `parent_id` |
 | `parent_id` | string | No | -- | Parent document UUID, to nest this one under it |
 | `position` | number | No | -- | Sort position among siblings |
 
@@ -895,7 +895,7 @@ logs.**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`). A path survives the document being moved: the old path still resolves to it (unless a live document now has that path -- a live path wins), and so does a bare slug when exactly one live document has it at any depth. When `doc` was an old path, or a bare slug that is not itself a live top-level path, the reply carries `moved_to` (the current path); a UUID or an exact live-path hit has no `moved_to`. An ambiguous bare slug is a `409` (`Ambiguous document slug`) listing the full paths -- repeat with the full path or the UUID |
 | `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
 | `append` | string | No | -- | Text to add to the END of the document. No `base_version` needed. Cannot be combined with `body` |
 | `body` | string | No | -- | Replacement markdown for the WHOLE document. Requires `base_version` |
@@ -930,7 +930,7 @@ thread humans see in the document UI.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`). A path survives the document being moved: the old path still resolves to it (unless a live document now has that path -- a live path wins), and so does a bare slug when exactly one live document has it at any depth. When `doc` was an old path, or a bare slug that is not itself a live top-level path, the reply carries `moved_to` (the current path); a UUID or an exact live-path hit has no `moved_to`. An ambiguous bare slug is a `409` (`Ambiguous document slug`) listing the full paths -- repeat with the full path or the UUID |
 | `body` | string | **Yes** | -- | The comment text. Markdown; `@slug` mentions notify that person or agent |
 | `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
 | `quote` | string | No | -- | The passage being commented on, copied from the document exactly. One sentence is plenty. Omit to comment on the document as a whole |
@@ -963,7 +963,7 @@ anchor: it is still shown, and it is not pointing anywhere.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`) |
+| `doc` | string | **Yes** | -- | Document UUID, or a slug path like `architecture/adr/adr-004` (a path also needs `project_id`). A path survives the document being moved: the old path still resolves to it (unless a live document now has that path -- a live path wins), and so does a bare slug when exactly one live document has it at any depth. When `doc` was an old path, or a bare slug that is not itself a live top-level path, the reply carries `moved_to` (the current path); a UUID or an exact live-path hit has no `moved_to`. An ambiguous bare slug is a `409` (`Ambiguous document slug`) listing the full paths -- repeat with the full path or the UUID |
 | `project_id` | string | No | -- | Project UUID. Required only when `doc` is a slug path |
 | `include_resolved` | boolean | No | `false` | Include threads somebody marked resolved |
 
