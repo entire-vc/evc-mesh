@@ -92,10 +92,12 @@ func (s *humanGateSoftTimeoutService) postReleaseComment(ctx context.Context, c 
 	}
 	now := timeNow()
 	comment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     c.TaskID,
-		AuthorID:   uuid.Nil,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       c.TaskID,
+		AuthorID:     uuid.Nil,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeReleaseSoftTimeout),
+		SystemParams: SysParamsJSON(map[string]any{"action": releaseSoftTimeoutSystemMark, "armed_at": c.ArmedAt.Format(time.RFC3339)}),
 		Body: fmt.Sprintf(
 			"⏳ Auto: human_gate %s (взведён %s, класс: мягкий) — фиде разморожен, "+
 				"но вопрос НЕ отвечен: он остаётся открытым и ждёт Pavel'я в дайджесте.",

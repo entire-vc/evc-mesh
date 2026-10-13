@@ -221,17 +221,19 @@ func (r *checkoutLeaseReaper) findTodoStatusID(ctx context.Context, projectID uu
 }
 
 // postSystemComment writes an audit comment on the task explaining the auto-release.
-func (r *checkoutLeaseReaper) postSystemComment(ctx context.Context, task *domain.Task, body string) {
+func (r *checkoutLeaseReaper) postSystemComment(ctx context.Context, task *domain.Task, code string, params map[string]any, body string) {
 	if r.commentRepo == nil {
 		return
 	}
 	comment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		Body:       body,
-		AuthorID:   uuid.Nil,
-		AuthorType: domain.ActorTypeSystem,
-		CreatedAt:  timeNow(),
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		Body:         body,
+		AuthorID:     uuid.Nil,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(code),
+		SystemParams: SysParamsJSON(params),
+		CreatedAt:    timeNow(),
 	}
 	if err := r.commentRepo.Create(ctx, comment); err != nil {
 		log.Printf("[lease-reaper] warning: failed to post comment on task %s: %v", task.ID, err)
@@ -340,6 +342,7 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 			if handoff := r.handoffComment(ctx, &task); handoff != nil {
 				if r.returnToTodo(ctx, []domain.Task{task}, activityCheckoutUnleasedReturned, grace...) == 1 {
 					r.postSystemComment(actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem), &task,
+						SysCodeLeaseHandoff, map[string]any{"comment_id": handoff.ID.String()},
 						fmt.Sprintf(handoffCommentFmt, handoff.ID))
 					moved++
 				}
@@ -361,7 +364,7 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 			}
 			if blocking {
 				if r.returnToTodo(ctx, []domain.Task{task}, activityCheckoutUnleasedReturned, grace...) == 1 {
-					r.postSystemComment(actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem), &task, blockerReturnedComment)
+					r.postSystemComment(actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem), &task, SysCodeLeaseBlockerReturned, nil, blockerReturnedComment)
 					moved++
 				}
 				continue
@@ -443,6 +446,12 @@ func (r *checkoutLeaseReaper) handoffComment(ctx context.Context, task *domain.T
 			c := &page.Items[i]
 			if c.AuthorType == domain.ActorTypeSystem {
 				notes = append(notes, c.Body)
+				// Code first: a note written with system_code carries the
+				// handled comment id in params; the body token above stays as
+				// the reader of notes written before the code existed.
+				if id := leaseHandoffParamID(c); id != "" {
+					notes = append(notes, "[handoff:"+id+"]")
+				}
 				continue
 			}
 			if commentIsInformational(c.Metadata) {
@@ -533,7 +542,7 @@ func (r *checkoutLeaseReaper) parkTask(ctx context.Context, task *domain.Task, d
 	}
 
 	r.logLeaseActivity(sysCtx, task, activityCheckoutUnleasedReturned)
-	r.postSystemComment(sysCtx, task, fmt.Sprintf(parkedCommentFmt, dueHours))
+	r.postSystemComment(sysCtx, task, SysCodeLeaseParked, map[string]any{"due_hours": dueHours}, fmt.Sprintf(parkedCommentFmt, dueHours))
 	r.notifyAssignee(ctx, task)
 	pkgmetrics.RecordLeaseRelease(task.ProjectID.String())
 	return true
@@ -570,4 +579,18 @@ func reaperMoveInput(task *domain.Task, status *uuid.UUID, action string, grace 
 	return MoveTaskInput{StatusID: status, ExpectedVersion: &task.Version, ExpectedStatusID: &task.StatusID,
 		Source: "lease_reaper." + mode, Reason: action,
 		Reaper: &domain.ReaperExpectation{Mode: mode, Generation: task.CheckoutGeneration, Token: task.CheckoutToken, ExpiresAt: task.CheckoutExpires, QuietGrace: quiet}}
+}
+
+// leaseHandoffParamID returns system_params.comment_id of a lease_handoff note.
+func leaseHandoffParamID(c *domain.Comment) string {
+	if c.SystemCode == nil || *c.SystemCode != SysCodeLeaseHandoff || len(c.SystemParams) == 0 {
+		return ""
+	}
+	var p struct {
+		CommentID string `json:"comment_id"`
+	}
+	if err := json.Unmarshal(c.SystemParams, &p); err != nil {
+		return ""
+	}
+	return p.CommentID
 }

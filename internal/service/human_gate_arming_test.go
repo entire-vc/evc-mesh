@@ -308,6 +308,8 @@ func TestArmHumanGate_APISourceWithDefault_DoesNotPostWarningComment(t *testing.
 	found := firstCommentOn(commentRepo, taskID)
 	require.NotNil(t, found)
 	assert.Contains(t, found.Body, endpointGateHintMarker)
+	require.NotNil(t, found.SystemCode)
+	assert.Equal(t, SysCodeAPIArmHint, *found.SystemCode)
 	assert.NotContains(t, found.Body, "recommended_default",
 		"an API arm that already states a default must not get the auto-fill notice")
 	assert.NotContains(t, found.Body, "дефолт")

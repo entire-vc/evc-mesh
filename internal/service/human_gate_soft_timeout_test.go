@@ -84,6 +84,12 @@ func TestHumanGateSoftTimeoutService_ReleasesWhatRepoReturns(t *testing.T) {
 	if !strings.Contains(found.Body, releaseSoftTimeoutSystemMark) {
 		t.Fatalf("release comment must carry its own distinct marker, got: %s", found.Body)
 	}
+	if found.SystemCode == nil || *found.SystemCode != SysCodeReleaseSoftTimeout {
+		t.Fatalf("release comment must carry system_code %q, got %v", SysCodeReleaseSoftTimeout, found.SystemCode)
+	}
+	if !isSoftTimeoutReleaseComment(found) {
+		t.Fatal("the written comment must satisfy its own recogniser")
+	}
 }
 
 // TestHumanGateSoftTimeoutService_NoCandidates_NoOp proves an empty repo result

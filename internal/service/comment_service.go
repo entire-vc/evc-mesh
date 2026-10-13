@@ -2077,10 +2077,12 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	// Blocking marker, so it cannot re-trigger enforcement regardless.
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeMovedToTriage),
+		SystemParams: SysParamsJSON(map[string]any{"target": userSlug}),
 		Body: fmt.Sprintf(
 			"🤖 Auto: задача переведена в triage из-за «❓ Blocking @%s» в комментарии выше (per CLAUDE-workflow.md §0b)",
 			userSlug,
@@ -2109,10 +2111,12 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 func (s *commentService) postSecretRotationSuppressedNotice(ctx context.Context, task *domain.Task, reason string) {
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeSecretRotationSuppressed),
+		SystemParams: SysParamsJSON(map[string]any{"reason": reason}),
 		Body: fmt.Sprintf(
 			"🔒 Гейт на Павла НЕ взведён — %s.\n\n"+
 				"Павел решил 2026-09-07: «все таски про ротацию ключей надо отменять. Мы к "+
@@ -2185,10 +2189,12 @@ func (s *commentService) parkDisqualifiedGate(ctx context.Context, task *domain.
 
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeSoftGateParked),
+		SystemParams: SysParamsJSON(map[string]any{"target": userSlug, "hours": dueHours}),
 		Body: fmt.Sprintf(
 			"🤖 Auto: «❓ Blocking @%s» — гейт мягкого класса (soft), поставлен не человеком, поэтому карточка "+
 				"НЕ ушла в triage, а припаркована в backlog с `due_date` через %d ч (per audit §2.3 C2 / "+
@@ -2239,7 +2245,7 @@ func (s *commentService) scanForBlockingMarker(ctx context.Context, taskID, excl
 					// A marker means the comment path owns this gate; the hint is moot.
 					return true, hintPosted, nil
 				}
-				if c.AuthorType == domain.ActorTypeSystem && strings.Contains(c.Body, endpointGateHintMarker) {
+				if isEndpointGateHintComment(&c) {
 					hintPosted = true
 				}
 			}
@@ -2260,6 +2266,7 @@ func (s *commentService) postEndpointGateHint(ctx context.Context, task *domain.
 		TaskID:     task.ID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
+		SystemCode: SysCodePtr(SysCodeEndpointGateHint),
 		Body:       endpointGateHintBody,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -2343,13 +2350,15 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → todo — Pavel прокомментировал после блокирующего запроса."
 	}
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
-		Body:       releaseBody,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeGateReleasedHumanReply),
+		SystemParams: SysParamsJSON(map[string]any{"from_triage": movedFromTriage}),
+		Body:         releaseBody,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[human-gate] WARNING: create system comment on task %s failed: %v", task.ID, err)
@@ -2556,7 +2565,7 @@ func (s *commentService) scanHumanGateOwnership(ctx context.Context, taskID uuid
 				// regardless of whether this comment also happens to carry a
 				// blocking marker (it never does — see hasRawArmMarker's doc —
 				// but the two checks are independent on principle).
-				if hasRawArmMarker(c.Body, c.AuthorType) && c.CreatedAt.After(lastRawArmAt) {
+				if isRawArmComment(&c) && c.CreatedAt.After(lastRawArmAt) {
 					lastRawArmAt = c.CreatedAt
 				}
 				if !hasBlockingMarker(c.Body) {
@@ -2894,13 +2903,15 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → todo — автор запроса отозвал его сам (blocker самоустранился)."
 	}
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
-		Body:       releaseBody,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeGateReleasedWithdrawn),
+		SystemParams: SysParamsJSON(map[string]any{"from_triage": movedFromTriage}),
+		Body:         releaseBody,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[human-gate] WARNING: create system comment on task %s failed: %v", task.ID, err)
@@ -2970,10 +2981,12 @@ func (s *commentService) reportWithdrawalMiss(ctx context.Context, comment *doma
 	}
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeGateStillRaised),
+		SystemParams: SysParamsJSON(map[string]any{"hint": hint}),
 		Body: "🔒 human_gate по-прежнему поднят — этот коммент его не снял: " + hint +
 			"\n\nЕсли отзыв был намеренным, повтори его **отдельным комментарием**, где слова отзыва " +
 			"(`не нужен` / `не требуется` / `снят` / …) стоят в последнем абзаце и рядом с ними нет " +
@@ -3005,6 +3018,7 @@ func (s *commentService) reportWithdrawalMarkerConflict(ctx context.Context, tas
 		TaskID:     task.ID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
+		SystemCode: SysCodePtr(SysCodeGateWithdrawalConflict),
 		Body: "🔒 human_gate по-прежнему поднят — этот коммент нёс И слова отзыва, И новый `❓ Blocking @user`, " +
 			"это противоречиво, поэтому гейт оставлен как есть (не снят). " +
 			"Если хотел снять старый вопрос и задать новый — раздели на два комментария: " +
@@ -3081,7 +3095,7 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 			if c.AuthorType == domain.ActorTypeUser {
 				continue // user comments are responses, not owner blocking markers
 			}
-			if isAutoGeneratedComment(c.Body) {
+			if isAutoGeneratedSystemComment(&c) {
 				continue // server/fiddler auto-messages aren't real questions
 			}
 			if !hasBlockingMarker(c.Body) {
@@ -3122,6 +3136,7 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 		TaskID:     task.ID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
+		SystemCode: SysCodePtr(SysCodeTriageExit),
 		Body:       "🔄 Auto: задача выведена из triage → in_progress — человек прокомментировал после блокирующего запроса.",
 		CreatedAt:  now,
 		UpdatedAt:  now,

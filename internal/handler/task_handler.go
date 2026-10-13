@@ -843,11 +843,13 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if !prevHumanGate && req.HumanGate != nil && *req.HumanGate && h.commentService != nil {
 		actorID, actorType := actorctx.FromContext(c.Request().Context())
 		_ = h.commentService.Create(c.Request().Context(), &domain.Comment{
-			TaskID:     task.ID,
-			AuthorID:   uuid.Nil,
-			AuthorType: domain.ActorTypeSystem,
-			Body:       fmt.Sprintf("🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: %s (%s)", actorID, actorType),
-			IsInternal: true,
+			TaskID:       task.ID,
+			AuthorID:     uuid.Nil,
+			AuthorType:   domain.ActorTypeSystem,
+			SystemCode:   service.SysCodePtr(service.SysCodeGateArmedRaw),
+			SystemParams: service.SysParamsJSON(map[string]any{"actor": actorID.String(), "actor_type": string(actorType)}),
+			Body:         fmt.Sprintf("🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: %s (%s)", actorID, actorType),
+			IsInternal:   true,
 		})
 	}
 
