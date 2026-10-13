@@ -1,0 +1,4 @@
+# Deliberate exceptions to scripts/check-migration-version.sh. One per line: <kind> <file>  # why
+# allow-add: may be added with a version <= max(base).  allow-remove: may be deleted/renamed away.
+allow-add 20261013001_i18n_locale.sql     # restore: prod applied it under 001 (goose_db_version, 2026-10-13); the 002 rename was wrong
+allow-remove 20261013002_i18n_locale.sql  # never applied on prod (goose_db_version has 001, 003 only)

@@ -272,6 +272,7 @@ migration-gate:
         echo "REFUSING: origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME unreachable — cannot compare versions"
         exit 1
       }
+      bash scripts/ci/test-check-migration-version.sh
       bash scripts/check-migration-version.sh migrations
 
 # ── vendor-trailer-gate ──────────────────────────────────────────────────────
