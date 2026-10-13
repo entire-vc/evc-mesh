@@ -156,12 +156,12 @@ func (r *NotificationRepo) CreateNotification(ctx context.Context, n *domain.Not
 	}
 
 	const q = `
-		INSERT INTO notifications (id, workspace_id, user_id, event_type, title, body, metadata, is_read, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, false, now())
+		INSERT INTO notifications (id, workspace_id, user_id, event_type, title, body, metadata, message_code, message_params, is_read, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, now())
 		RETURNING created_at
 	`
 	return r.db.QueryRowContext(ctx, q,
-		n.ID, n.WorkspaceID, n.UserID, n.EventType, n.Title, n.Body, meta,
+		n.ID, n.WorkspaceID, n.UserID, n.EventType, n.Title, n.Body, meta, n.MessageCode, nullableJSON(n.MessageParams),
 	).Scan(&n.CreatedAt)
 }
 
@@ -173,7 +173,7 @@ func (r *NotificationRepo) CreateNotification(ctx context.Context, n *domain.Not
 // workspaces directly and checks its own deleted_at.
 func (r *NotificationRepo) ListUnread(ctx context.Context, userID uuid.UUID, limit int) ([]domain.Notification, error) {
 	const q = `
-		SELECT n.id, n.workspace_id, n.user_id, n.event_type, n.title, n.body, n.metadata, n.is_read, n.created_at
+		SELECT n.id, n.workspace_id, n.user_id, n.event_type, n.title, n.body, n.metadata, n.message_code, n.message_params, n.is_read, n.created_at
 		FROM notifications n
 		JOIN workspaces w ON w.id = n.workspace_id
 		WHERE n.user_id = $1 AND n.is_read = false AND w.deleted_at IS NULL
@@ -303,4 +303,13 @@ func (r *NotificationRepo) FilterWorkspaceMembers(ctx context.Context, workspace
 		return nil, err
 	}
 	return members, nil
+}
+
+// nullableJSON stores an absent parameter set as SQL NULL rather than an empty
+// string, which JSONB would reject.
+func nullableJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return []byte(raw)
 }

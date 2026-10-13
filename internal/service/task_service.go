@@ -1994,7 +1994,7 @@ func (s *taskService) notifyReviewerAgent(ctx context.Context, task *domain.Task
 // were made reviewer") rather than workspace-wide news. Broadcasting those via the
 // plain dispatchUserNotification would tell every subscribed workspace member
 // about someone else's reviewer assignment.
-func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task *domain.Task, eventType, title, body string, targetUserID uuid.UUID, extraMeta map[string]any) {
+func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task *domain.Task, eventType, messageCode, title, body string, targetUserID uuid.UUID, extraMeta map[string]any) {
 	if s.notifySvc == nil || s.projectRepo == nil {
 		return
 	}
@@ -2017,15 +2017,17 @@ func (s *taskService) dispatchTargetedUserNotification(ctx context.Context, task
 		meta[k] = v
 	}
 	s.notifySvc.Notify(ctx, domain.NotificationEvent{
-		WorkspaceID:  wsID,
-		TaskID:       &taskIDCopy,
-		ProjectID:    &projIDCopy,
-		EventType:    eventType,
-		Title:        title,
-		Body:         body,
-		TargetUserID: &targetCopy,
-		Labels:       []string(task.Labels),
-		Metadata:     meta,
+		WorkspaceID:   wsID,
+		TaskID:        &taskIDCopy,
+		ProjectID:     &projIDCopy,
+		EventType:     eventType,
+		Title:         title,
+		Body:          body,
+		MessageCode:   messageCode,
+		MessageParams: map[string]any{"task": task.Title},
+		TargetUserID:  &targetCopy,
+		Labels:        []string(task.Labels),
+		Metadata:      meta,
 	})
 }
 
@@ -2044,7 +2046,7 @@ func (s *taskService) notifyAssignee(ctx context.Context, task *domain.Task, tit
 	if actorID, _ := actorctx.FromContext(ctx); actorID != uuid.Nil && actorID == *task.AssigneeID {
 		return
 	}
-	s.dispatchTargetedUserNotification(ctx, task, "task.assigned", title, "", *task.AssigneeID,
+	s.dispatchTargetedUserNotification(ctx, task, "task.assigned", "notif.task.assigned", title, "", *task.AssigneeID,
 		map[string]any{"assignee_id": *task.AssigneeID})
 }
 
@@ -2059,7 +2061,7 @@ func (s *taskService) notifyReviewer(ctx context.Context, task *domain.Task, eve
 	case domain.AssigneeTypeAgent:
 		s.notifyReviewerAgent(ctx, task, eventType, nil)
 	case domain.AssigneeTypeUser:
-		s.dispatchTargetedUserNotification(ctx, task, eventType, title, "", *task.ReviewerID, nil)
+		s.dispatchTargetedUserNotification(ctx, task, eventType, "notif."+eventType, title, "", *task.ReviewerID, nil)
 	}
 }
 
@@ -2178,7 +2180,10 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 		ProjectID:   &projIDCopy,
 		EventType:   eventType,
 		Title:       title,
-		Labels:      []string(task.Labels),
+		// eventType is task.status_changed here, the only caller.
+		MessageCode:   "notif." + eventType,
+		MessageParams: map[string]any{"task": task.Title},
+		Labels:        []string(task.Labels),
 		Metadata: map[string]any{
 			"task_id":    task.ID,
 			"task_title": task.Title,

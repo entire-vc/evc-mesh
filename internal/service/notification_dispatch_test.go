@@ -152,7 +152,7 @@ type fakeEmailService struct {
 }
 
 func (f *fakeEmailService) Enabled() bool { return f.enabled }
-func (f *fakeEmailService) SendInvite(context.Context, string, string, string) error {
+func (f *fakeEmailService) SendInvite(context.Context, string, string, string, string) error {
 	return nil
 }
 func (f *fakeEmailService) SendNotification(_ context.Context, to, subject, body string) error {

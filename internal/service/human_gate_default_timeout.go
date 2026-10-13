@@ -195,7 +195,9 @@ func (s *humanGateDefaultTimeoutService) notifyDefaultApplied(ctx context.Contex
 			"Gate deadline passed with no answer — recommended default applied: %s",
 			c.RecommendedDefault,
 		),
-		Labels: []string(task.Labels),
+		MessageCode:   "notif.task.human_gate_default_applied",
+		MessageParams: map[string]any{"task": task.Title, "default": c.RecommendedDefault},
+		Labels:        []string(task.Labels),
 		Metadata: map[string]any{
 			"task_id":             c.TaskID,
 			"task_title":          task.Title,

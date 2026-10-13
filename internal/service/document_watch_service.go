@@ -451,9 +451,17 @@ func (s *documentWatchService) dispatchNotice(ctx context.Context, n *domain.Doc
 	}
 
 	title, body := changeMessage(n, doc)
+	code := "notif.doc.changed"
+	switch {
+	case n.TitleChanged && n.BodyChanged:
+		code = "notif.doc.renamed_edited"
+	case n.TitleChanged:
+		code = "notif.doc.renamed"
+	}
 	sent := s.fanOut(ctx, doc, n.WorkspaceID, watchers,
 		principal{id: n.ActorID, kind: n.ActorKind, name: n.ActorName},
-		nil, DocumentChangedEvent, title, body, map[string]any{
+		nil, DocumentChangedEvent, title, body,
+		code, map[string]any{"actor": n.ActorName, "doc": doc.Title, "count": n.EditCount}, map[string]any{
 			"document_id":    doc.ID,
 			"document_slug":  doc.Slug,
 			"document_title": doc.Title,
@@ -534,6 +542,7 @@ func (s *documentWatchService) fanOut(
 	actor principal,
 	skip map[uuid.UUID]bool,
 	eventType, title, body string,
+	messageCode string, messageParams map[string]any,
 	metadata map[string]any,
 ) int {
 	sent := 0
@@ -574,13 +583,15 @@ func (s *documentWatchService) fanOut(
 			target := w.WatcherID
 			projectID := doc.ProjectID
 			s.notifySvc.Notify(ctx, domain.NotificationEvent{
-				WorkspaceID:  workspaceID,
-				ProjectID:    &projectID,
-				TargetUserID: &target,
-				EventType:    eventType,
-				Title:        title,
-				Body:         body,
-				Metadata:     metadata,
+				WorkspaceID:   workspaceID,
+				ProjectID:     &projectID,
+				TargetUserID:  &target,
+				EventType:     eventType,
+				Title:         title,
+				Body:          body,
+				MessageCode:   messageCode,
+				MessageParams: messageParams,
+				Metadata:      metadata,
 			})
 			sent++
 		}
@@ -618,6 +629,7 @@ func (s *documentWatchService) NotifyComment(ctx context.Context, in NotifyDocum
 		DocumentCommentedEvent,
 		who+" commented on: "+in.Document.Title,
 		truncateRunes(in.Body, maxWatchNotificationBody),
+		"notif.doc.commented", map[string]any{"actor": in.ActorName, "doc": in.Document.Title},
 		map[string]any{
 			"document_id":    in.Document.ID,
 			"document_slug":  in.Document.Slug,
@@ -661,6 +673,7 @@ func (s *documentWatchService) NotifyDeleted(ctx context.Context, doc *domain.Do
 		// notification, the page this one names cannot be opened to find out
 		// what it was about.
 		fmt.Sprintf("The document «%s» you were watching was deleted by %s.", doc.Title, who),
+		"notif.doc.deleted", map[string]any{"actor": actorctx.NameFromContext(ctx), "doc": doc.Title},
 		map[string]any{
 			"document_id":    doc.ID,
 			"document_slug":  doc.Slug,

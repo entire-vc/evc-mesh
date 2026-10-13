@@ -338,20 +338,24 @@ func (s *documentCommentService) notifyMentionedUser(
 	}
 
 	title := "You were mentioned on: " + doc.Title
+	code := "notif.doc.mentioned_anon"
 	if actorName != "" {
 		title = actorName + " mentioned you on: " + doc.Title
+		code = "notif.doc.mentioned"
 	}
 
 	projectID := doc.ProjectID
 	target := mentionedUserID
 
 	s.notifySvc.Notify(ctx, domain.NotificationEvent{
-		WorkspaceID:  workspaceID,
-		ProjectID:    &projectID,
-		TargetUserID: &target,
-		EventType:    DocumentMentionedEvent,
-		Title:        title,
-		Body:         truncateRunes(comment.Body, maxMentionNotificationBody),
+		WorkspaceID:   workspaceID,
+		ProjectID:     &projectID,
+		TargetUserID:  &target,
+		EventType:     DocumentMentionedEvent,
+		Title:         title,
+		Body:          truncateRunes(comment.Body, maxMentionNotificationBody),
+		MessageCode:   code,
+		MessageParams: map[string]any{"doc": doc.Title, "actor": actorName},
 		Metadata: map[string]any{
 			"document_id":    doc.ID,
 			"document_slug":  doc.Slug,

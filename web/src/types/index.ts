@@ -1178,6 +1178,10 @@ export interface Notification {
   event_type: string;
   title: string;
   body: string;
+  // The API already renders title/body in the viewer's language from these;
+  // absent on notifications that predate message codes.
+  message_code?: string;
+  message_params?: Record<string, unknown>;
   metadata: Record<string, unknown>;
   is_read: boolean;
   created_at: string;
