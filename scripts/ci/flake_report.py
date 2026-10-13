@@ -43,20 +43,82 @@ INTENTIONAL = {"hold-gate"}
 _ANSI = re.compile(r"\x1b\[[0-9;]*[mK]")
 _SIGNATURES = [
     ("hold label", re.compile(r"carries a hold label")),
+    # Infra causes first: a full disk or a dead database also fails whatever test was running.
+    # Anchored to the error shape, not the bare phrase: a test may print these on purpose.
+    ("runner disk full", re.compile(r"SQLSTATE 53100|\b(?:Error response from daemon|mkdir|write|failed to)\b[^\n]*no space left on device|\bENOSPC:"), "no space left on device"),
+    ("runner disk full", re.compile(r"\[ci-disk-gate\] REFUSING"), "ci-disk-gate refusal"),
+    ("postgres auth failed", re.compile(r"SQLSTATE 28P01"), "28P01"),
+    # go-test-stall-watchdog.sh exits 124 when `go test` makes no progress; the job then
+    # ends with a bare "exit code 1" because coverage_artifact.py swallows the status.
+    ("go test stalled", re.compile(r"go-test-stall-watchdog\.sh[^\n]*returned non-zero exit status 124"), "watchdog exit 124"),
+    ("docker daemon error", re.compile(r"\(system failure\): Error response from daemon: (.+)")),
     ("go test failure", re.compile(r"--- FAIL: (\S+)")),
     ("vitest failure", re.compile(r"FAIL\s+(\S+ > .+)")),
     ("playwright failure", re.compile(r"✘\s+\d+ \[[^\]]*\] › (.+?) \(")),
+    # The summary block ("  1 failed" then the spec line); each line carries a runner timestamp.
+    ("playwright failure", re.compile(r"(?m)^[^\n]*?\b\d+ failed[ \t]*\n[^\n]*?(?:\[[^\]]*\] › )?(\S+\.spec\.ts:\d+:\d+ › .+?)[ \t]*(?:─+)?$")),
     ("request timeout", re.compile(r"(Client\.Timeout exceeded[^\"]*)")),
 ]
+# Only these read the full log (a test failing is what they name); every other signature reads
+# runner evidence only, so a test that prints a docker/timeout/disk message is not taken for the runner.
+_FULL_TEXT_LABELS = ("go test failure",)
+_CONTINUATION = re.compile(r"^(?:\S+Z\s+\d+[A-Z]*\s)?(?:\t|\s{4,})\S")
+_RUN_START = re.compile(r"(?:^|\s)=== (?:RUN|CONT)\s")
+_RUN_END = re.compile(r"(?:^|\s)--- (?:PASS|FAIL|SKIP):")
+_DATA_RACE = re.compile(r"WARNING: DATA RACE")
+_GO_FAIL = re.compile(r"--- FAIL: (\S+)")
+_WAITING_FOR_SERVICES = re.compile(r"Waiting for services to be up and running")
+_RUNNER_TAIL = re.compile(r"Cleaning up|ERROR: Job failed|Running after_script|Uploading artifacts|Cleaning up file based variables|section_(?:start|end)|Terminated|Job succeeded", re.I)
 
 
 def signature(trace):
     """First recognisable failure in a job log, or the generic reason."""
     text = _ANSI.sub("", trace)
-    for label, rx in _SIGNATURES:
-        m = rx.search(text)
-        if m:
-            return f"{label}: {m.group(1) if m.groups() else ''}".rstrip(": ").strip()[:120]
+    # Lines a Go test printed itself (`foo_test.go:12: ...`) are not runner evidence: a test may
+    # print SQLSTATE 53100 or a disk-gate marker on purpose and must stay a test failure.
+    # Go indents the continuation of a multi-line t.Log/t.Errorf, so those lines are dropped too.
+    # Best effort: a real infra error reported through t.Fatalf is read as a test failure.
+    # Under `go test -v` everything between `=== RUN` and the test's `--- PASS/FAIL` line is the
+    # test's own stdout, with or without a `_test.go:` prefix.
+    kept, in_test_output, in_run = [], False, False
+    for l in text.splitlines():
+        if _RUN_START.search(l):
+            in_run = True
+        elif in_run:
+            if _RUN_END.search(l):
+                in_run = False
+            continue
+        if "_test.go:" in l:
+            in_test_output = True
+        elif in_test_output and _CONTINUATION.match(l):
+            pass
+        else:
+            in_test_output = False
+            kept.append(l)
+    infra_text = "\n".join(kept)
+    for label, rx, *fixed in _SIGNATURES:
+        m = rx.search(text if label in _FULL_TEXT_LABELS else infra_text)
+        if not m:
+            continue
+        if label == "go test failure" and _DATA_RACE.search(text):
+            # the race is not necessarily in the first failed test: name it only when unambiguous
+            if len(_GO_FAIL.findall(text)) > 1:
+                return "go data race"
+            return f"go data race: {m.group(1)}"
+        detail = fixed[0] if fixed else (m.group(1) if m.groups() else "")
+        if label == "docker daemon error":
+            # first clause only: ids, paths and the (docker.go:N:Ns) tail differ per job
+            detail = detail.split(": ")[0]
+        if label in ("runner disk full", "postgres auth failed") and detail:
+            return f"{label} ({detail})"
+        return f"{label}: {detail}".rstrip(": ").strip()[:120]
+    if _DATA_RACE.search(text):
+        return "go data race"
+    lines = [l for l in text.splitlines() if l.strip()]
+    waits = [i for i, l in enumerate(lines) if _WAITING_FOR_SERVICES.search(l)]
+    if waits and all(_RUNNER_TAIL.search(l) for l in lines[waits[-1] + 1:]):
+        # nothing but runner housekeeping/footer after the wait: the job never got to its script
+        return "job stopped while waiting for services"
     errors = [l for l in text.splitlines() if "ERROR:" in l]
     if errors:
         return "last runner error: " + errors[-1].split("ERROR:", 1)[1].strip()[:90]
