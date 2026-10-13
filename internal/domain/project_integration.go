@@ -76,6 +76,33 @@ type TeamRelaySettings struct {
 	// value to read rather than inventing a second place to store it ahead of
 	// that UI landing.
 	SyncTTLSeconds int `json:"sync_ttl_seconds,omitempty"`
+
+	// ExcludedPaths names share folders SyncMount must never materialize into
+	// Docs, matched against the FIRST segment of a files-index entry's path —
+	// "artifacts" excludes "artifacts/x.md" and everything else under
+	// "artifacts/", not a file that merely contains the word.
+	//
+	// nil (the field null/absent in the JSON — a project that has never been
+	// configured) means the default, ["artifacts"]: card artifacts are already
+	// visible on the card's artifacts tab, so a second copy under Docs is
+	// noise. An explicitly EMPTY list is different and means "no exclusions" —
+	// that is the red control proving the exclusion is a setting, not a
+	// hard-coded filter: with [], artifacts/ mounts like any other folder.
+	//
+	// No omitempty on purpose: omitempty erases an empty slice, which would
+	// collapse "configured to exclude nothing" back into "never configured"
+	// on every round trip through settingsFor. null (nil) and [] stay
+	// distinct on the wire and in the stored JSON.
+	ExcludedPaths []string `json:"excluded_paths"`
+
+	// SyncIntervalMinutes is how often the background mount sync re-runs
+	// SyncMount for this project without anyone clicking "Sync now". nil means
+	// the default (DefaultTeamRelaySyncInterval, 15m); an explicit 0 disables
+	// the scheduled sync entirely (copy refresh on open still works); a value
+	// below MinTeamRelaySyncInterval is refused at write time. Pointer rather
+	// than int for the same reason ExcludedPaths distinguishes nil from []:
+	// "unset" and "deliberately off" must not collapse into one state.
+	SyncIntervalMinutes *int `json:"sync_interval_minutes,omitempty"`
 }
 
 // RelayFileItem represents a file entry returned by the Team Relay share file-list API.

@@ -528,6 +528,12 @@ export interface ProjectDocument {
   updated_at: string;
   deleted_at?: string | null;
   body?: string;
+  // Where this document came from. Absent on documents created in Mesh; a
+  // Team Relay copy carries "team_relay" and the share-relative path it
+  // mirrors — which is what the embed rewriter resolves the body's image
+  // references against (web/src/lib/tr-embeds.ts).
+  source_kind?: "own" | "team_relay";
+  source_path?: string | null;
   // Monotonic counter bumped by every write to title or body. The value a
   // caller read is what it sends back as base_version on the next write —
   // see UpdateDocumentRequest.base_version.

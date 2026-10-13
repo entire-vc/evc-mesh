@@ -63,9 +63,11 @@ func (h *TrMountHandler) Sync(c echo.Context) error {
 	}
 
 	body := map[string]any{
-		"status":  result.Status,
-		"mounted": result.Mounted,
-		"skipped": result.Skipped,
+		"status":   result.Status,
+		"mounted":  result.Mounted,
+		"skipped":  result.Skipped,
+		"excluded": result.Excluded,
+		"archived": result.Archived,
 	}
 	if result.Err != nil {
 		// The underlying error, not just the classified status — useful for an

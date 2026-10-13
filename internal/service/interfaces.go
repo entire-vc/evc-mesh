@@ -1636,7 +1636,18 @@ type UpsertProjectIntegrationInput struct {
 	// DocsMountPath a caller had set — the only prior writer of that column was a
 	// hand-run migration/SQL statement, never this API.
 	DocsMountPath string
-	CreatedBy     *uuid.UUID
+	// ExcludedPaths and SyncIntervalMinutes are the mount-side settings from
+	// domain.TeamRelaySettings, threaded here for the same reason
+	// DocsMountPath is: the upsert rebuilds settings as a full replace, so a
+	// field without a presence here is a field every PATCH silently wipes.
+	//
+	// ExcludedPaths nil = "not sent" (read-side default ["artifacts"] applies);
+	// an empty non-nil slice = the deliberate "mount everything" state.
+	// SyncIntervalMinutes nil = default cadence; explicit 0 = scheduled sync
+	// off. Refused below MinTeamRelaySyncInterval in UpsertTeamRelay.
+	ExcludedPaths       []string
+	SyncIntervalMinutes *int
+	CreatedBy           *uuid.UUID
 }
 
 // ProjectIntegrationService manages project-level integrations.

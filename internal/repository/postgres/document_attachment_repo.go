@@ -29,16 +29,18 @@ type documentAttachmentRow struct {
 	UploadedByType domain.ActorType `db:"uploaded_by_type"`
 	CreatedAt      time.Time        `db:"created_at"`
 	DeletedAt      *time.Time       `db:"deleted_at"`
+	SourcePath     *string          `db:"source_path"`
+	SourceSHA256   *string          `db:"source_sha256"`
 }
 
 // documentAttachmentSelectCols lists every column documentAttachmentRow scans —
 // see artifactSelectCols for why no query here uses `SELECT *`.
-const documentAttachmentSelectCols = `id, document_id, name, mime_type, size_bytes, storage_key, uploaded_by, uploaded_by_type, created_at, deleted_at`
+const documentAttachmentSelectCols = `id, document_id, name, mime_type, size_bytes, storage_key, uploaded_by, uploaded_by_type, created_at, deleted_at, source_path, source_sha256`
 
 // documentAttachmentSelectColsQualified is documentAttachmentSelectCols prefixed
 // `a.`, for the query that JOINs documents and projects (all three tables have
 // created_at and deleted_at).
-const documentAttachmentSelectColsQualified = `a.id, a.document_id, a.name, a.mime_type, a.size_bytes, a.storage_key, a.uploaded_by, a.uploaded_by_type, a.created_at, a.deleted_at`
+const documentAttachmentSelectColsQualified = `a.id, a.document_id, a.name, a.mime_type, a.size_bytes, a.storage_key, a.uploaded_by, a.uploaded_by_type, a.created_at, a.deleted_at, a.source_path, a.source_sha256`
 
 func (r *documentAttachmentRow) toDomain() domain.DocumentAttachment {
 	return domain.DocumentAttachment{
@@ -52,6 +54,8 @@ func (r *documentAttachmentRow) toDomain() domain.DocumentAttachment {
 		UploadedByType: r.UploadedByType,
 		CreatedAt:      r.CreatedAt,
 		DeletedAt:      r.DeletedAt,
+		SourcePath:     r.SourcePath,
+		SourceSHA256:   r.SourceSHA256,
 	}
 }
 
@@ -67,17 +71,59 @@ func NewDocumentAttachmentRepo(db *sqlx.DB) *DocumentAttachmentRepo {
 }
 
 func (r *DocumentAttachmentRepo) Create(ctx context.Context, att *domain.DocumentAttachment) error {
+	return insertDocumentAttachment(ctx, r.db, att)
+}
+
+// Replace retires oldID and inserts att atomically; see the interface doc.
+func (r *DocumentAttachmentRepo) Replace(ctx context.Context, oldID uuid.UUID, att *domain.DocumentAttachment, at time.Time) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once committed
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE document_attachments SET deleted_at = $2 WHERE id = $1 AND deleted_at IS NULL`, oldID, at)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apierror.NotFound("Attachment")
+	}
+	if err := insertDocumentAttachment(ctx, tx, att); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertDocumentAttachment(ctx context.Context, ex sqlx.ExtContext, att *domain.DocumentAttachment) error {
 	const q = `
 		INSERT INTO document_attachments (
 			id, document_id, name, mime_type, size_bytes, storage_key,
-			uploaded_by, uploaded_by_type, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			uploaded_by, uploaded_by_type, created_at, source_path, source_sha256
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
-	_, err := r.db.ExecContext(ctx, q,
+	_, err := ex.ExecContext(ctx, q,
 		att.ID, att.DocumentID, att.Name, att.MimeType, att.SizeBytes, att.StorageKey,
-		att.UploadedBy, att.UploadedByType, att.CreatedAt,
+		att.UploadedBy, att.UploadedByType, att.CreatedAt, att.SourcePath, att.SourceSHA256,
 	)
 	return err
+}
+
+func (r *DocumentAttachmentRepo) GetLiveBySourcePath(ctx context.Context, documentID uuid.UUID, sourcePath string) (*domain.DocumentAttachment, error) {
+	const q = `
+		SELECT ` + documentAttachmentSelectCols + `
+		  FROM document_attachments
+		 WHERE document_id = $1 AND source_path = $2 AND deleted_at IS NULL`
+	var row documentAttachmentRow
+	if err := r.db.GetContext(ctx, &row, q, documentID, sourcePath); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	a := row.toDomain()
+	return &a, nil
 }
 
 // GetByIDInWorkspace returns the attachment only when its document's project
@@ -138,6 +184,25 @@ func (r *DocumentAttachmentRepo) ListByDocument(ctx context.Context, documentID 
 	}
 
 	return pagination.NewPage(items, totalCount, pg), nil
+}
+
+// ListLiveByDocument returns every live attachment of one document, oldest
+// first — the unpaginated read the embed sync's currency pass uses.
+func (r *DocumentAttachmentRepo) ListLiveByDocument(ctx context.Context, documentID uuid.UUID) ([]domain.DocumentAttachment, error) {
+	const q = `
+		SELECT ` + documentAttachmentSelectCols + `
+		  FROM document_attachments
+		 WHERE document_id = $1 AND deleted_at IS NULL
+		 ORDER BY created_at ASC, id ASC`
+	var rows []documentAttachmentRow
+	if err := r.db.SelectContext(ctx, &rows, q, documentID); err != nil {
+		return nil, err
+	}
+	out := make([]domain.DocumentAttachment, len(rows))
+	for i := range rows {
+		out[i] = rows[i].toDomain()
+	}
+	return out, nil
 }
 
 // SoftDelete stamps deleted_at. Nothing cascades: an attachment has no children,

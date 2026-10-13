@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -149,6 +150,138 @@ func TestUpsertTeamRelay_SecondPatchChangesOnlyMountPath(t *testing.T) {
 	assert.Equal(t, "External/Notes", settings.DocsMountPath)
 	assert.Equal(t, "Notes", settings.Subfolder)
 	assert.True(t, settings.IncludeProjectSlug)
+}
+
+// ---------------------------------------------------------------------------
+// Card #4e97f465: mount exclusion + scheduled-sync settings on the upsert.
+// ---------------------------------------------------------------------------
+
+// TestUpsertTeamRelay_ExclusionEntryMustBeSingleSegment: the exclusion is
+// matched against a files-index entry's FIRST path segment, so a configured
+// "artifacts/deep" can never match anything — refused at the write rather
+// than silently excluding nothing.
+func TestUpsertTeamRelay_ExclusionEntryMustBeSingleSegment(t *testing.T) {
+	repo := NewMockProjectIntegrationRepository()
+	svc := NewProjectIntegrationService(repo)
+
+	_, err := svc.UpsertTeamRelay(context.Background(), uuid.New(), UpsertProjectIntegrationInput{
+		Enabled:       true,
+		ShareSlug:     "probe-share",
+		AgentKey:      "tr_agent_" + strings.Repeat("a", 48),
+		ExcludedPaths: []string{"artifacts"},
+	})
+	require.NoError(t, err, "a bare segment is the valid case")
+
+	_, err = svc.UpsertTeamRelay(context.Background(), uuid.New(), UpsertProjectIntegrationInput{
+		Enabled:       true,
+		ShareSlug:     "probe-share",
+		AgentKey:      "tr_agent_" + strings.Repeat("a", 48),
+		ExcludedPaths: []string{"artifacts/nested"},
+	})
+	require.Error(t, err)
+	apiErr, ok := err.(*apierror.Error)
+	require.True(t, ok, "expected *apierror.Error, got %T", err)
+	assert.Contains(t, apiErr.Validation, "excluded_paths")
+}
+
+// TestUpsertTeamRelay_ExclusionListRoundTrip: an explicitly empty list is the
+// deliberate "mount everything" state and must SURVIVE the round trip as
+// empty — not come back nil (never configured) and not come back as the
+// default. Trailing-comma blanks are dropped, not fatal.
+func TestUpsertTeamRelay_ExclusionListRoundTrip(t *testing.T) {
+	repo := NewMockProjectIntegrationRepository()
+	svc := NewProjectIntegrationService(repo)
+	projectID := uuid.New()
+
+	pi, err := svc.UpsertTeamRelay(context.Background(), projectID, UpsertProjectIntegrationInput{
+		Enabled:       true,
+		ShareSlug:     "probe-share",
+		AgentKey:      "tr_agent_" + strings.Repeat("a", 48),
+		ExcludedPaths: []string{"archive", " ", ""},
+	})
+	require.NoError(t, err)
+
+	var settings domain.TeamRelaySettings
+	require.NoError(t, json.Unmarshal(pi.Settings, &settings))
+	require.NotNil(t, settings.ExcludedPaths, "an explicitly-sent list must stay explicit after the round trip")
+	assert.Equal(t, []string{"archive"}, settings.ExcludedPaths, "blank entries dropped, real ones kept")
+}
+
+// TestUpsertTeamRelay_NotSendingExclusionsLeavesDefaultToReadSide: a caller
+// that does not send the field stores ABSENT settings — the read-side default
+// ["artifacts"] applies. This is the state every pre-existing integration is
+// in the moment this code ships.
+func TestUpsertTeamRelay_NotSendingExclusionsLeavesDefaultToReadSide(t *testing.T) {
+	repo := NewMockProjectIntegrationRepository()
+	svc := NewProjectIntegrationService(repo)
+
+	pi, err := svc.UpsertTeamRelay(context.Background(), uuid.New(), UpsertProjectIntegrationInput{
+		Enabled:   true,
+		ShareSlug: "probe-share",
+		AgentKey:  "tr_agent_" + strings.Repeat("a", 48),
+	})
+	require.NoError(t, err)
+
+	var settings domain.TeamRelaySettings
+	require.NoError(t, json.Unmarshal(pi.Settings, &settings))
+	assert.Nil(t, settings.ExcludedPaths, "absent field must stay absent — the default belongs to the read side")
+}
+
+// TestUpsertTeamRelay_SyncIntervalValidation: 0 is valid (scheduled sync
+// explicitly off), 5+ is valid, anything between 1 and 4 is refused — the
+// floor exists so nobody configures a share-walking loop that never exits
+// the walk.
+func TestUpsertTeamRelay_SyncIntervalValidation(t *testing.T) {
+	repo := NewMockProjectIntegrationRepository()
+	svc := NewProjectIntegrationService(repo)
+	base := UpsertProjectIntegrationInput{
+		Enabled:   true,
+		ShareSlug: "probe-share",
+		AgentKey:  "tr_agent_" + strings.Repeat("a", 48),
+	}
+
+	zero := 0
+	_, err := svc.UpsertTeamRelay(context.Background(), uuid.New(), func() UpsertProjectIntegrationInput {
+		in := base
+		in.SyncIntervalMinutes = &zero
+		return in
+	}())
+	require.NoError(t, err, "0 = scheduled sync off, a valid explicit choice")
+
+	thirty := 30
+	_, err = svc.UpsertTeamRelay(context.Background(), uuid.New(), func() UpsertProjectIntegrationInput {
+		in := base
+		in.SyncIntervalMinutes = &thirty
+		return in
+	}())
+	require.NoError(t, err)
+
+	three := 3
+	_, err = svc.UpsertTeamRelay(context.Background(), uuid.New(), func() UpsertProjectIntegrationInput {
+		in := base
+		in.SyncIntervalMinutes = &three
+		return in
+	}())
+	require.Error(t, err)
+	apiErr, ok := err.(*apierror.Error)
+	require.True(t, ok, "expected *apierror.Error, got %T", err)
+	assert.Contains(t, apiErr.Validation, "sync_interval_minutes")
+}
+
+// TestSyncIntervalParsing pins the read-side interpretation: nil → 15m
+// default, 0 → 0 (caller disables), 3 → floored to the 5m minimum (rows
+// written by hand bypass upsert validation; the floor keeps them honest).
+func TestSyncIntervalParsing(t *testing.T) {
+	assert.Equal(t, DefaultTeamRelaySyncInterval, syncInterval(domain.TeamRelaySettings{}), "unset → default 15m")
+
+	off := 0
+	assert.Equal(t, time.Duration(0), syncInterval(domain.TeamRelaySettings{SyncIntervalMinutes: &off}), "explicit 0 → disabled")
+
+	tooLow := 3
+	assert.Equal(t, MinTeamRelaySyncInterval, syncInterval(domain.TeamRelaySettings{SyncIntervalMinutes: &tooLow}), "below the floor → clamped to it")
+
+	forty := 40
+	assert.Equal(t, 40*time.Minute, syncInterval(domain.TeamRelaySettings{SyncIntervalMinutes: &forty}))
 }
 
 // TestUpsertTeamRelay_DisableWithoutKeyKeepsStoredKey: switching the

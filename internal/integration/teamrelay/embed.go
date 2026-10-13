@@ -81,3 +81,113 @@ func IsImageEmbed(target string) bool {
 	}
 	return imageExtensions[strings.ToLower(target[idx+1:])]
 }
+
+// markdownImageRe matches standard markdown image syntax, `![alt](target)`,
+// in the two CommonMove spellings a target may take: a bare `path` with no
+// spaces, or `<a path with spaces>` in angle brackets (a title after the path
+// — `![alt](pic.png "Logo")` — matches too, because the bare-path group stops
+// at the whitespace before it).
+//
+// Team Relay's own renderer understands this form alongside `![[...]]`, and
+// real shares mix the two, so an importer that read only the wiki form would
+// silently miss every image a non-Obsidian editor embedded.
+var markdownImageRe = regexp.MustCompile(`!\[[^\]]*\]\((?:<([^>]*)>|([^)\s]+))[^)]*\)`)
+
+// embeddableExtensions is imageExtensions plus pdf, minus svg: the file types
+// the Mesh embed importer will copy into attachment storage. Everything else
+// referenced by an embed stays unreferenced by us — a video the relay only
+// placeholders anyway, or a note-embed whose target is another document, not
+// a binary. SVG renders as an image on their side but is deliberately not ours
+// to store: it is XML that can carry script, so serving it from the Mesh origin
+// is an XSS vector, and byte sniffing reports it as text/xml, never image/*.
+var embeddableExtensions = func() map[string]bool {
+	m := make(map[string]bool, len(imageExtensions)+1)
+	for k, v := range imageExtensions {
+		m[k] = v
+	}
+	delete(m, "svg")
+	m["pdf"] = true
+	return m
+}()
+
+// IsEmbeddableFile is IsImageEmbed widened by pdf: whether target names a file
+// the embed importer may copy. Kept beside IsImageEmbed rather than folded into
+// it because the two answer different questions — "renders as an image there"
+// (their renderer's rule) vs. "we are willing to store and serve it" (ours).
+func IsEmbeddableFile(target string) bool {
+	idx := strings.LastIndexByte(target, '.')
+	if idx < 0 {
+		return false
+	}
+	return embeddableExtensions[strings.ToLower(target[idx+1:])]
+}
+
+// ImageRef is one image-bearing reference in a body, from either syntax:
+// `![[pic.png]]` (Wiki, with Target as written between the brackets) or
+// `![alt](pic.png)` (Alt carrying the alt text, "" when absent).
+type ImageRef struct {
+	Target string
+	Alt    string
+	Wiki   bool
+}
+
+// FindImageRefs scans a body for every reference to an embeddable file, from
+// both syntaxes, in order of appearance. References that are not local share
+// paths — http(s) URLs, mailto:, `#` anchors, absolute `/rooted` paths — are
+// skipped: they point outside the share, so there is nothing on the share's
+// files-index to resolve them against. Targets without an embeddable extension
+// are skipped the same way (IsEmbeddableFile is the single rule for that).
+func FindImageRefs(body string) []ImageRef {
+	out := make([]ImageRef, 0, 4)
+	for _, t := range FindEmbedTargets(body) {
+		if !IsEmbeddableFile(t.Target) {
+			continue
+		}
+		if !isLocalSharePath(t.Target) {
+			continue
+		}
+		out = append(out, ImageRef{Target: t.Target, Wiki: true})
+	}
+	for _, m := range markdownImageRe.FindAllStringSubmatch(body, -1) {
+		target := m[1]
+		if target == "" {
+			target = m[2]
+		}
+		target = strings.TrimSpace(target)
+		if target == "" || !IsEmbeddableFile(target) || !isLocalSharePath(target) {
+			continue
+		}
+		out = append(out, ImageRef{Target: target, Alt: markdownImageAlt(m[0])})
+	}
+	return out
+}
+
+// isLocalSharePath reports whether target plausibly names a file ON THE SHARE:
+// no scheme (`http:`, `mailto:`, `obsidian:`), not rooted (`/etc/passwd`), not
+// a fragment. The files-index keys are share-relative paths, which is the only
+// shape a candidate resolution can look up.
+func isLocalSharePath(target string) bool {
+	if target == "" || strings.HasPrefix(target, "/") || strings.HasPrefix(target, "#") {
+		return false
+	}
+	if i := strings.Index(target, ":"); i > 0 {
+		// A colon before any slash reads as a scheme (`https:`, `data:`). A
+		// colon AFTER a slash is just a Windows-ish or titled filename
+		// ("Notes/draft:v2.png") — not a scheme.
+		if !strings.Contains(target[:i], "/") {
+			return false
+		}
+	}
+	return true
+}
+
+// markdownImageAlt pulls the alt text out of one full `![alt](target)` match.
+// The regex already guaranteed the shape; this only trims the `![`/](` hull.
+func markdownImageAlt(full string) string {
+	open := strings.Index(full, "[")
+	close_ := strings.Index(full, "](")
+	if open < 0 || close_ <= open {
+		return ""
+	}
+	return full[open+1 : close_]
+}

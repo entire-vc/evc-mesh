@@ -571,6 +571,13 @@ type DocumentRepository interface {
 	// creates the files-index entries that have no row yet, instead of walking
 	// the whole share into duplicates every time it runs.
 	GetBySourceInProject(ctx context.Context, projectID uuid.UUID, sourceShare, sourcePath string) (*domain.Document, error)
+	// ListLiveCopiesByShare returns every live copy in projectID that came from
+	// sourceShare, regardless of path — SyncMount's archive pass walks this list
+	// against a fresh files-index to find copies whose source file no longer
+	// exists. Deliberately NOT filtered by path here: which paths are gone is a
+	// decision about one index snapshot, not a property of the rows, so it stays
+	// with the caller that holds the snapshot.
+	ListLiveCopiesByShare(ctx context.Context, projectID uuid.UUID, sourceShare string) ([]domain.Document, error)
 	// CreateExternalCopy inserts a document whose source_kind is not 'own'.
 	// Create's own INSERT list omits source_kind and its four companions on
 	// purpose — see DocumentRepo.Create — relying on the column's DEFAULT 'own'
@@ -584,6 +591,10 @@ type DocumentRepository interface {
 	// caller already knows whether the hash changed (that decision is made once,
 	// by whoever calls this, and is not re-derived here from the two hashes).
 	RefreshSyncedCopy(ctx context.Context, id uuid.UUID, sourceSHA256 string, syncedAt time.Time, bumpVersion bool) (version int, err error)
+	// SetEmbedSyncedSHA256 stamps the embed pass's dedup marker: the source hash
+	// of the body whose image embeds have been imported as attachments. Refused
+	// on an own document for the same reason RefreshSyncedCopy is.
+	SetEmbedSyncedSHA256(ctx context.Context, id uuid.UUID, sha256 string) error
 	// SetSearchText stores the copy of the body that the full-text index is built
 	// from. Called after the body reaches object storage, never instead of it —
 	// S3 stays canonical and this is only what makes the row findable.
@@ -626,9 +637,24 @@ type DocumentAttachmentRepository interface {
 	// answer 404 on nil, so a stranger's id and a nonexistent one look the same.
 	GetByIDInWorkspace(ctx context.Context, id, workspaceID uuid.UUID) (*domain.DocumentAttachment, error)
 	ListByDocument(ctx context.Context, documentID uuid.UUID, pg pagination.Params) (*pagination.Page[domain.DocumentAttachment], error)
+	// ListLiveByDocument is ListByDocument unpaginated: the embed sync's
+	// currency pass reads a document's imported attachments (a handful) every
+	// mount sync, and paging a bounded set it always fully consumes is a
+	// pagination neither side means.
+	ListLiveByDocument(ctx context.Context, documentID uuid.UUID) ([]domain.DocumentAttachment, error)
+	// GetLiveBySourcePath returns the one live attachment imported from
+	// sourcePath into documentID, or nil — the read side of the
+	// uq_document_attachments_source partial unique index.
+	GetLiveBySourcePath(ctx context.Context, documentID uuid.UUID, sourcePath string) (*domain.DocumentAttachment, error)
 	// SoftDelete stamps deleted_at. The stored object is deliberately left alone —
 	// see documentAttachmentService.Delete.
 	SoftDelete(ctx context.Context, id uuid.UUID, at time.Time) error
+	// Replace retires the live attachment oldID and inserts att in ONE
+	// transaction: either the document ends up with the new live row, or the old
+	// one is untouched. Two separate writes left a window where the retire had
+	// landed and the insert had not, and a failed compensating insert then left
+	// the document with no live attachment at all.
+	Replace(ctx context.Context, oldID uuid.UUID, att *domain.DocumentAttachment, at time.Time) error
 }
 
 // DocumentCommentFilter narrows a document's comment listing.

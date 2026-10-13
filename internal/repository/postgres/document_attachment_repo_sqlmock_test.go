@@ -37,10 +37,11 @@ func documentAttachmentRows(atts ...domain.DocumentAttachment) *sqlmock.Rows {
 	rows := sqlmock.NewRows([]string{
 		"id", "document_id", "name", "mime_type", "size_bytes", "storage_key",
 		"uploaded_by", "uploaded_by_type", "created_at", "deleted_at",
+		"source_path", "source_sha256",
 	})
 	for _, a := range atts {
 		rows.AddRow(a.ID, a.DocumentID, a.Name, a.MimeType, a.SizeBytes, a.StorageKey,
-			a.UploadedBy, a.UploadedByType, a.CreatedAt, a.DeletedAt)
+			a.UploadedBy, a.UploadedByType, a.CreatedAt, a.DeletedAt, a.SourcePath, a.SourceSHA256)
 	}
 	return rows
 }
@@ -66,7 +67,7 @@ func TestDocumentAttachmentRepo_Create(t *testing.T) {
 
 	mock.ExpectExec("INSERT INTO document_attachments").
 		WithArgs(att.ID, att.DocumentID, att.Name, att.MimeType, att.SizeBytes, att.StorageKey,
-			att.UploadedBy, att.UploadedByType, att.CreatedAt).
+			att.UploadedBy, att.UploadedByType, att.CreatedAt, att.SourcePath, att.SourceSHA256).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	require.NoError(t, repo.Create(context.Background(), &att))
@@ -233,5 +234,111 @@ func TestDocumentAttachmentRepo_SoftDelete_DoesNotRestampAnAlreadyDeletedRow(t *
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	require.Error(t, repo.SoftDelete(context.Background(), id, at))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// The embed importer's read side: hit, miss, and the soft-deleted row reading
+// as a miss — the partial unique index keeps (document, source path) unique
+// among LIVE rows only, so a replaced attachment must not surface here.
+func TestDocumentAttachmentRepo_GetLiveBySourcePath(t *testing.T) {
+	src := "Notes/pic.png"
+	att := sampleDocumentAttachment()
+	att.SourcePath = &src
+
+	t.Run("hit", func(t *testing.T) {
+		repo, mock := newDocumentAttachmentRepoMock(t)
+		mock.ExpectQuery("WHERE document_id = \\$1 AND source_path = \\$2 AND deleted_at IS NULL").
+			WithArgs(att.DocumentID, src).
+			WillReturnRows(documentAttachmentRows(att))
+
+		got, err := repo.GetLiveBySourcePath(context.Background(), att.DocumentID, src)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, src, *got.SourcePath)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("miss is nil not error", func(t *testing.T) {
+		repo, mock := newDocumentAttachmentRepoMock(t)
+		mock.ExpectQuery("source_path = \\$2").
+			WithArgs(att.DocumentID, "nothing/references-me.png").
+			WillReturnRows(documentAttachmentRows())
+
+		got, err := repo.GetLiveBySourcePath(context.Background(), att.DocumentID, "nothing/references-me.png")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestDocumentAttachmentRepo_ListLiveByDocument(t *testing.T) {
+	repo, mock := newDocumentAttachmentRepoMock(t)
+	a, b := sampleDocumentAttachment(), sampleDocumentAttachment()
+	b.CreatedAt = a.CreatedAt.Add(time.Minute)
+
+	mock.ExpectQuery("WHERE document_id = \\$1 AND deleted_at IS NULL ORDER BY created_at").
+		WithArgs(a.DocumentID).
+		WillReturnRows(documentAttachmentRows(a, b))
+
+	got, err := repo.ListLiveByDocument(context.Background(), a.DocumentID)
+	require.NoError(t, err)
+	assert.Len(t, got, 2)
+	assert.Equal(t, a.ID, got[0].ID, "oldest first, like ListByDocument")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDocumentAttachmentRepo_Replace_CommitsRetireAndInsertTogether(t *testing.T) {
+	repo, mock := newDocumentAttachmentRepoMock(t)
+	att := sampleDocumentAttachment()
+	oldID := uuid.New()
+	at := time.Date(2026, 8, 19, 13, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE document_attachments SET deleted_at").
+		WithArgs(oldID, at).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO document_attachments").
+		WithArgs(att.ID, att.DocumentID, att.Name, att.MimeType, att.SizeBytes, att.StorageKey,
+			att.UploadedBy, att.UploadedByType, att.CreatedAt, att.SourcePath, att.SourceSHA256).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, repo.Replace(context.Background(), oldID, &att, at))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A failed insert must roll the retire back: this is the property the service
+// relies on to never leave a document without a live attachment.
+func TestDocumentAttachmentRepo_Replace_FailedInsertRollsBack(t *testing.T) {
+	repo, mock := newDocumentAttachmentRepoMock(t)
+	att := sampleDocumentAttachment()
+	oldID := uuid.New()
+	at := time.Now()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE document_attachments SET deleted_at").
+		WithArgs(oldID, at).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO document_attachments").
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	require.Error(t, repo.Replace(context.Background(), oldID, &att, at))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDocumentAttachmentRepo_Replace_MissingOldRowIsNotFound(t *testing.T) {
+	repo, mock := newDocumentAttachmentRepoMock(t)
+	att := sampleDocumentAttachment()
+	oldID := uuid.New()
+	at := time.Now()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE document_attachments SET deleted_at").
+		WithArgs(oldID, at).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	err := repo.Replace(context.Background(), oldID, &att, at)
+	require.Error(t, err)
+	var ae *apierror.Error
+	assert.ErrorAs(t, err, &ae)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

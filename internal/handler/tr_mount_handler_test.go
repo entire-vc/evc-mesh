@@ -51,6 +51,12 @@ func (m *mockTeamRelayMountService) RefreshSleepingKeyExpiries(_ context.Context
 	return 0, 0, nil
 }
 
+// SyncDueMounts is the other scheduler-driven method this handler never
+// calls — same reason as RefreshSleepingKeyExpiries above.
+func (m *mockTeamRelayMountService) SyncDueMounts(_ context.Context) (synced, skipped int, err error) {
+	return 0, 0, nil
+}
+
 var _ service.TeamRelayMountService = (*mockTeamRelayMountService)(nil)
 
 func trMountRequest(t *testing.T, h *TrMountHandler, projIDParam string) *httptest.ResponseRecorder {

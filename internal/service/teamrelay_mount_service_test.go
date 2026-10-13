@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
+	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
 // ---------------------------------------------------------------------------
@@ -80,13 +85,13 @@ func fakeSHA(body string) string {
 
 // seedRemote registers the default response for path: a source whose content
 // and hash match what the local copy already holds.
-func (f *fakeRelaySyncClient) seedRemote(path, body, sha256 string) {
+func (f *fakeRelaySyncClient) seedRemote(path, body, sourceSHA string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.defaultDocs == nil {
 		f.defaultDocs = map[string]*teamrelay.SyncDocument{}
 	}
-	f.defaultDocs[path] = &teamrelay.SyncDocument{Content: []byte(body), SHA256: sha256}
+	f.defaultDocs[path] = &teamrelay.SyncDocument{Content: []byte(body), SHA256: sourceSHA}
 }
 
 func (f *fakeRelaySyncClient) FilesIndex(_ context.Context, _, _, _ string) ([]teamrelay.SyncIndexEntry, error) {
@@ -159,7 +164,7 @@ func (f *fakeRelaySyncClient) Write(_ context.Context, _, _, path, _, ifMatchSHA
 // remoteBody reports what the double currently holds for path, so a test can
 // assert the original is byte-for-byte unchanged after a refused write rather
 // than merely trusting the error.
-func (f *fakeRelaySyncClient) remoteBody(path string) (body, sha256 string) {
+func (f *fakeRelaySyncClient) remoteBody(path string) (body, sourceSHA string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	d, ok := f.defaultDocs[path]
@@ -224,13 +229,14 @@ var _ KeyDescriber = (*fakeKeyDescriber)(nil)
 const testRelayShareID = "8c5e7efd-0000-0000-0000-000000000000"
 
 type mountFixture struct {
-	svc       *teamRelayMountService
-	repo      *MockDocumentRepository
-	storage   *MockStorageClient
-	piRepo    *MockProjectIntegrationRepository
-	client    *fakeRelaySyncClient
-	projectID uuid.UUID
-	wsID      uuid.UUID
+	svc         *teamRelayMountService
+	repo        *MockDocumentRepository
+	storage     *MockStorageClient
+	piRepo      *MockProjectIntegrationRepository
+	client      *fakeRelaySyncClient
+	attachments *MockDocumentAttachmentRepository
+	projectID   uuid.UUID
+	wsID        uuid.UUID
 }
 
 // setupMountFixture wires a teamRelayMountService against mocks, with a Team
@@ -265,17 +271,52 @@ func setupMountFixture(t *testing.T, mountPath string) *mountFixture {
 	timeNow = func() time.Time { return frozenTime }
 	t.Cleanup(func() { timeNow = time.Now })
 
-	svc := NewTeamRelayMountService(repo, storage, piService, piRepo, WithRelaySyncClient(client), WithKeyDescriber(&fakeKeyDescriber{})).(*teamRelayMountService)
+	attachments := NewMockDocumentAttachmentRepository()
+	svc := NewTeamRelayMountService(repo, storage, piService, piRepo,
+		WithRelaySyncClient(client), WithKeyDescriber(&fakeKeyDescriber{}),
+		WithAttachmentRepository(attachments),
+	).(*teamRelayMountService)
 
 	return &mountFixture{
-		svc:       svc,
-		repo:      repo,
-		storage:   storage,
-		piRepo:    piRepo,
-		client:    client,
-		projectID: projectID,
-		wsID:      wsID,
+		svc:         svc,
+		repo:        repo,
+		storage:     storage,
+		piRepo:      piRepo,
+		client:      client,
+		attachments: attachments,
+		projectID:   projectID,
+		wsID:        wsID,
 	}
+}
+
+// liveAttachmentsFor lists a document's live attachments — small enough a
+// helper beats repeating the loop in every embed test.
+func (f *mountFixture) liveAttachmentsFor(t *testing.T, documentID uuid.UUID) []domain.DocumentAttachment {
+	t.Helper()
+	page, err := f.attachments.ListByDocument(context.Background(), documentID, pagination.Params{})
+	require.NoError(t, err)
+	return page.Items
+}
+
+// realSHA is sha256-as-hex for fixture bytes. The embed importer verifies the
+// downloaded content's hash against the files-index claim, so unlike the doc
+// fixtures (fakeSHA — only ever compared to itself) image fixtures need the
+// real digest.
+func realSHA(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// pngFixture is minimal real-PNG-header bytes: enough for
+// http.DetectContentType to say "image/png" (it reads magic bytes only) and
+// short enough to keep the test readable.
+func pngFixture(label string) []byte {
+	return append([]byte("\x89PNG\r\n\x1a\n"), []byte(label)...)
+}
+
+// pdfFixture likewise: DetectContentType wants a %PDF- prefix.
+func pdfFixture() []byte {
+	return []byte("%PDF-1.4 fake-but-valid-magic body")
 }
 
 // setTTLSeconds rewrites the project's Team Relay settings with an explicit
@@ -296,7 +337,7 @@ func (f *mountFixture) setTTLSeconds(t *testing.T, seconds int) {
 
 // seedCopy inserts an already-mounted Team Relay copy document, synced at
 // syncedAt with body and sha256 as given.
-func (f *mountFixture) seedCopy(t *testing.T, sourcePath, body, sha256 string, syncedAt time.Time) *domain.Document {
+func (f *mountFixture) seedCopy(t *testing.T, sourcePath, body, sourceSHA string, syncedAt time.Time) *domain.Document {
 	t.Helper()
 	id := uuid.New()
 	key := documentStorageKey(f.projectID, id)
@@ -306,11 +347,11 @@ func (f *mountFixture) seedCopy(t *testing.T, sourcePath, body, sha256 string, s
 	// diverged source overrides this (downloadResult/downloadFn); a test that
 	// asserts "we never asked" gets a live, counting double either way, so the
 	// counter assertion is what fails when the gate is removed.
-	f.client.seedRemote(sourcePath, body, sha256)
+	f.client.seedRemote(sourcePath, body, sourceSHA)
 
 	share := testRelayShareID
 	path := sourcePath
-	sha := sha256
+	sha := sourceSHA
 	doc := &domain.Document{
 		ID:            id,
 		ProjectID:     f.projectID,
@@ -566,7 +607,16 @@ func TestSyncMount_ReRun_IsIdempotentAndDoesNotRedownload(t *testing.T) {
 	f := setupMountFixture(t, "")
 	f.client.indexResult = shareFixtureEntries()
 	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
-		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+		// The download reports the hash the index advertised, as a real relay
+		// does — a copy whose stored hash differs from the index's is, by
+		// design, refreshed on the next sync.
+		sha := ""
+		for _, e := range shareFixtureEntries() {
+			if e.Path == path {
+				sha = e.SHA256
+			}
+		}
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: sha}, nil
 	}
 
 	first, err := f.svc.SyncMount(context.Background(), f.projectID)
@@ -841,4 +891,1017 @@ func TestRefreshSleepingKeyExpiries_DisabledIntegration_IsNeverChecked(t *testin
 	assert.Equal(t, 1, checked, "only the ONE enabled integration from the fixture, not the disabled one just added")
 	assert.Equal(t, 1, updated)
 	assert.Equal(t, 1, describer.callCount())
+}
+
+// ---------------------------------------------------------------------------
+// Excluded paths (card #4e97f465 A1): SyncMount must not materialize entries
+// whose FIRST path segment is in the exclusion list. The default is
+// ["artifacts"] — card artifacts already live on the card's artifacts tab.
+// ---------------------------------------------------------------------------
+
+// setExcludedPaths rewrites the project's settings with an explicit exclusion
+// list, preserving the fixture's share id. nil would mean "never configured"
+// on the read side, so tests that want "no exclusions" pass []string{}.
+func (f *mountFixture) setExcludedPaths(t *testing.T, paths []string) {
+	t.Helper()
+	pi, err := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, err)
+	settingsJSON, err := json.Marshal(domain.TeamRelaySettings{
+		ShareID:       testRelayShareID,
+		ExcludedPaths: paths,
+	})
+	require.NoError(t, err)
+	pi.Settings = settingsJSON
+	require.NoError(t, f.piRepo.Upsert(context.Background(), pi))
+}
+
+// setSyncIntervalMinutes rewrites the project's scheduled-sync interval.
+// nil means "never configured" (default cadence); 0 means "off".
+func (f *mountFixture) setSyncIntervalMinutes(t *testing.T, minutes *int) {
+	t.Helper()
+	pi, err := f.piRepo.Get(context.Background(), f.projectID, "team_relay")
+	require.NoError(t, err)
+	settingsJSON, err := json.Marshal(domain.TeamRelaySettings{
+		ShareID:             testRelayShareID,
+		SyncIntervalMinutes: minutes,
+	})
+	require.NoError(t, err)
+	pi.Settings = settingsJSON
+	require.NoError(t, f.piRepo.Upsert(context.Background(), pi))
+}
+
+// advanceClock moves the service's clock forward by d for the remainder of
+// the test. Registered AFTER the fixture froze timeNow, so cleanup unwinds in
+// the right order (the fixture's own restore runs last).
+func (f *mountFixture) advanceClock(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := timeNow
+	timeNow = func() time.Time { return frozenTime.Add(d) }
+	t.Cleanup(func() { timeNow = prev })
+}
+
+func TestSyncMount_DefaultExcludesArtifacts(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+		{Path: "artifacts/card1/log.md", SHA256: "sha-log", Size: 10, Type: "doc"},
+		{Path: "artifacts/card2/report.md", SHA256: "sha-report", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 1, result.Mounted, "only the non-excluded entry mounts")
+	assert.Equal(t, 2, result.Excluded, "both artifacts entries are counted as excluded")
+
+	for _, p := range []string{"artifacts/card1/log.md", "artifacts/card2/report.md"} {
+		cp, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, p)
+		require.NoError(t, gerr)
+		assert.Nil(t, cp, "excluded entry %q must not materialize as a document", p)
+	}
+}
+
+// TestSyncMount_EmptyExclusionList_MountsArtifacts is the RED CONTROL for A1:
+// with an explicitly empty exclusion list, artifacts/ mounts like any other
+// folder. This is what proves the exclusion is a setting the read side
+// applies, not a hard-coded filter — delete the nil-vs-empty distinction in
+// effectiveExcludedPaths and this test goes red while
+// TestSyncMount_DefaultExcludesArtifacts stays green.
+func TestSyncMount_EmptyExclusionList_MountsArtifacts(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.setExcludedPaths(t, []string{})
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+		{Path: "artifacts/card1/log.md", SHA256: "sha-log", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 2, result.Mounted, "an empty exclusion list must mount artifacts/ too — this is the red control")
+	assert.Equal(t, 0, result.Excluded)
+}
+
+// TestSyncMount_CustomExclusionReplacesDefault pins that a configured list is
+// used AS GIVEN, not unioned with the default: excluding "Brandkit" stops
+// excluding "artifacts".
+func TestSyncMount_CustomExclusionReplacesDefault(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.setExcludedPaths(t, []string{"Brandkit"})
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+		{Path: "artifacts/card1/log.md", SHA256: "sha-log", Size: 10, Type: "doc"},
+		{Path: "Brandkit/logo.png", SHA256: "sha-logo", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 2, result.Mounted, "artifacts mounts: the custom list replaced the default, it did not extend it")
+	assert.Equal(t, 1, result.Excluded, "only Brandkit is excluded")
+}
+
+// TestSyncMount_ExclusionMatchesFirstSegmentNotSubstring: "artifacts" must
+// not eat "my-artifacts/x.md" or "docs/artifacts-intro.md" — first segment,
+// never substring.
+func TestSyncMount_ExclusionMatchesFirstSegmentNotSubstring(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "my-artifacts/x.md", SHA256: "sha-x", Size: 10, Type: "doc"},
+		{Path: "docs/artifacts-intro.md", SHA256: "sha-intro", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 2, result.Mounted)
+	assert.Equal(t, 0, result.Excluded)
+}
+
+// ---------------------------------------------------------------------------
+// Archive of vanished copies (card #4e97f465 A2): a copy whose source file is
+// gone from the share (deleted or moved there) is soft-deleted on sync — the
+// reversible штатный mechanism, not a row drop — so Docs stops listing a page
+// backed by nothing. Guards: an EMPTY index or an index error never archives.
+// ---------------------------------------------------------------------------
+
+func TestSyncMount_ArchivesCopyWhoseSourceVanished(t *testing.T) {
+	f := setupMountFixture(t, "")
+	gone := f.seedCopy(t, "Old Path/a.md", "old body", "sha-a", frozenTime)
+	kept := f.seedCopy(t, "New Path/b.md", "kept body", "sha-b", frozenTime)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "New Path/b.md", SHA256: "sha-b", Size: 9, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Old Path/a.md" {
+			return nil, teamrelay.ErrNotFound
+		}
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 1, result.Skipped, "the surviving entry is an existing copy")
+	assert.Equal(t, 1, result.Archived, "the vanished entry's copy is archived")
+
+	// Soft delete, not a row drop: the row stays with deleted_at stamped —
+	// reversible by design, and the uq_documents_source slot it held is freed.
+	stored, ok := f.repo.items[gone.ID]
+	require.True(t, ok, "archived copy must remain in storage — archive, not delete")
+	require.NotNil(t, stored.DeletedAt, "archived copy must carry deleted_at")
+
+	live, gerr := f.repo.GetByID(context.Background(), kept.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, live, "the copy whose source still exists stays live")
+}
+
+// TestSyncMount_MovedFilesArchiveOldCopies is the live Mesh-dev scenario this
+// card was written around: the share's folders move, the old copies (78 on
+// stale paths at the time) must not linger as live documents while the new
+// paths mount fresh.
+func TestSyncMount_MovedFilesArchiveOldCopies(t *testing.T) {
+	f := setupMountFixture(t, "")
+	for i := 0; i < 78; i++ {
+		p := fmt.Sprintf("Mesh/Old Home/card-%d.md", i)
+		f.seedCopy(t, p, "old body "+p, "sha-old-"+strconv.Itoa(i), frozenTime)
+	}
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Mesh/Mesh dev/card-0.md", SHA256: "sha-n0", Size: 10, Type: "doc"},
+		{Path: "Mesh/Mesh dev/card-1.md", SHA256: "sha-n1", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if strings.Contains(path, "Old Home") {
+			return nil, teamrelay.ErrNotFound
+		}
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 2, result.Mounted, "files at the new paths mount")
+	assert.Equal(t, 78, result.Archived, "every copy on an old path is archived")
+
+	live, err := f.repo.ListLiveCopiesByShare(context.Background(), f.projectID, testRelayShareID)
+	require.NoError(t, err)
+	assert.Len(t, live, 2, "only the two new-path copies remain live")
+}
+
+// TestSyncMount_EmptyIndexArchivesNothing is the guard: a files-index that
+// comes back EMPTY must not read as "every file was deleted". No index, no
+// verdict — even though live copies exist that no entry represents.
+func TestSyncMount_EmptyIndexArchivesNothing(t *testing.T) {
+	f := setupMountFixture(t, "")
+	doc := f.seedCopy(t, "Notes/a.md", "body", "sha-a", frozenTime)
+	f.client.indexResult = nil // relay answered, with nothing
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 0, result.Archived, "an empty index must never archive")
+
+	live, gerr := f.repo.GetByID(context.Background(), doc.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, live, "copy stays live despite representing no index entry")
+}
+
+// TestSyncMount_IndexErrorArchivesNothing is the guard's other half: an
+// unreachable relay (or a rejected key) must not archive the project's Docs
+// subtree — SyncMount returns the classified status before the archive pass.
+func TestSyncMount_IndexErrorArchivesNothing(t *testing.T) {
+	f := setupMountFixture(t, "")
+	doc := f.seedCopy(t, "Notes/a.md", "body", "sha-a", frozenTime)
+	f.client.indexResult = nil
+	f.client.indexErr = teamrelay.ErrUnreachable
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusUnreachable, result.Status)
+	assert.Equal(t, 0, result.Archived)
+
+	live, gerr := f.repo.GetByID(context.Background(), doc.ID)
+	require.NoError(t, gerr)
+	require.NotNil(t, live)
+}
+
+// TestSyncMount_ArchivesCopiesUnderNewlyExcludedFolder: adding a folder to
+// the exclusion list archives copies mounted before the exclusion existed —
+// otherwise they would linger as zombies the setting was written to remove.
+func TestSyncMount_ArchivesCopiesUnderNewlyExcludedFolder(t *testing.T) {
+	f := setupMountFixture(t, "")
+	// Mounted back when the exclusion list was explicitly empty.
+	art1 := f.seedCopy(t, "artifacts/card1/log.md", "log", "sha-log", frozenTime)
+	_ = f.seedCopy(t, "artifacts/card2/report.md", "report", "sha-report", frozenTime)
+	// Now the default exclusion (["artifacts"]) is in force and the share still
+	// lists the files — they are excluded, not gone.
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "artifacts/card1/log.md", SHA256: "sha-log", Size: 10, Type: "doc"},
+		{Path: "artifacts/card2/report.md", SHA256: "sha-report", Size: 10, Type: "doc"},
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 2, result.Excluded)
+	assert.Equal(t, 2, result.Archived, "previously-mounted excluded copies are archived, not left as zombies")
+
+	stored, ok := f.repo.items[art1.ID]
+	require.True(t, ok)
+	require.NotNil(t, stored.DeletedAt)
+}
+
+// TestSyncMount_VanishedCopyRemountsWhenFileReturns pins the reversibility
+// that made SoftDelete the right archive mechanism: soft-deleting the copy
+// freed its uq_documents_source slot, so the same path returning to the share
+// mounts a fresh copy instead of colliding with the archived row.
+func TestSyncMount_VanishedCopyRemountsWhenFileReturns(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.seedCopy(t, "Notes/back.md", "old body", "sha-old", frozenTime)
+
+	// Sync 1: the file is gone (another file remains, so the index is
+	// legitimately non-empty — the empty-index guard must not swallow this).
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/other.md", SHA256: "sha-other", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Notes/back.md" {
+			return nil, teamrelay.ErrNotFound
+		}
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Archived)
+
+	// Sync 2: the file is back — a fresh copy mounts on the freed source slot.
+	// (other.md stays in the index; dropping it here would archive it.)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/other.md", SHA256: "sha-other", Size: 10, Type: "doc"},
+		{Path: "Notes/back.md", SHA256: "sha-new", Size: 8, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("new body"), SHA256: "sha-new"}, nil
+	}
+	result, err = f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 1, result.Mounted, "the returned file mounts fresh")
+	assert.Equal(t, 0, result.Archived)
+
+	fresh, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/back.md")
+	require.NoError(t, gerr)
+	require.NotNil(t, fresh, "a live copy exists for the returned path")
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled sync (card #4e97f465 A3): SyncDueMounts re-runs the mount for
+// enabled integrations whose interval elapsed, without anyone clicking
+// "Sync now" or opening a document. Per-project locks keep it from ever
+// overlapping a manual sync; interval 0 turns the schedule off.
+// ---------------------------------------------------------------------------
+
+func TestSyncDueMounts_NeverSyncedProject_SyncsImmediately(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	synced, skipped, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced, "an integration with no last-sync stamp is due immediately — an unmounted share is what the schedule exists to end")
+	assert.Equal(t, 0, skipped)
+	assert.Equal(t, 1, f.client.filesIndexCalls)
+
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Welcome.md")
+	require.NoError(t, gerr)
+	require.NotNil(t, doc, "the scheduled sync actually mounted the file")
+}
+
+func TestSyncDueMounts_RecentlySyncedProject_WaitsForInterval(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	// A manual sync just ran (at frozenTime): both scheduling anchors —
+	// LastSyncCheckedAt in the DB and nextSyncDue in memory — are fresh.
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	synced, skipped, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced, "a project synced a moment ago is not due for a full interval")
+	assert.Equal(t, 1, skipped)
+	assert.Equal(t, 1, f.client.filesIndexCalls, "no second walk of the share")
+
+	// Fifteen minutes and a second later: due, and the sweep syncs it.
+	f.advanceClock(t, DefaultTeamRelaySyncInterval+time.Second)
+	synced, skipped, err = f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+	assert.Equal(t, 0, skipped)
+	assert.Equal(t, 2, f.client.filesIndexCalls)
+}
+
+func TestSyncDueMounts_ConfiguredIntervalIsTheCadence(t *testing.T) {
+	f := setupMountFixture(t, "")
+	minutes := 30
+	f.setSyncIntervalMinutes(t, &minutes)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	// At +15m the DEFAULT cadence would fire; the configured 30m must not.
+	f.advanceClock(t, 16*time.Minute)
+	synced, _, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced, "the configured interval, not the default, is the cadence")
+
+	f.advanceClock(t, 31*time.Minute)
+	synced, _, err = f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced, "past the configured interval the project is due")
+}
+
+func TestSyncDueMounts_IntervalZero_DisablesScheduledSync(t *testing.T) {
+	f := setupMountFixture(t, "")
+	zero := 0
+	f.setSyncIntervalMinutes(t, &zero)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+	}
+
+	synced, skipped, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced, "interval 0 is 'scheduled sync off', even for a never-synced project")
+	assert.Equal(t, 1, skipped)
+	assert.Equal(t, 0, f.client.filesIndexCalls, "the relay is never asked")
+}
+
+func TestSyncDueMounts_InFlightSync_IsSkippedNotOverlapped(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-welcome", Size: 10, Type: "doc"},
+	}
+
+	// Hold the project's mount lock, as an in-flight "Sync now" would.
+	mu := f.svc.projectMountLock(f.projectID)
+	mu.Lock()
+	synced, skipped, err := f.svc.SyncDueMounts(context.Background())
+	mu.Unlock()
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced, "a project already syncing is skipped, never queued behind or overlapped")
+	assert.Equal(t, 1, skipped)
+	assert.Equal(t, 0, f.client.filesIndexCalls, "the sweep must not block on or duplicate the in-flight sync")
+}
+
+func TestSyncDueMounts_FailurePacesNextAttemptAtTheInterval(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = nil
+	f.client.indexErr = teamrelay.ErrUnreachable
+
+	// First sweep: the attempt runs (and fails) — counted as synced, not
+	// skipped: the scheduler DID something, the relay just wasn't there.
+	synced, _, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+	assert.Equal(t, 1, f.client.filesIndexCalls)
+
+	// An immediate second sweep must NOT retry: a dead relay retried every
+	// tick would be a tight loop against a service we don't own.
+	synced, skipped, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced)
+	assert.Equal(t, 1, skipped)
+	assert.Equal(t, 1, f.client.filesIndexCalls)
+
+	// One full interval later it tries again.
+	f.advanceClock(t, DefaultTeamRelaySyncInterval+time.Second)
+	synced, _, err = f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+	assert.Equal(t, 2, f.client.filesIndexCalls)
+}
+
+func TestSyncDueMounts_ChangedSourceRefreshesExistingCopy(t *testing.T) {
+	f := setupMountFixture(t, "")
+	doc := f.seedCopy(t, "Welcome.md", "old body", "sha-old", frozenTime)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-new", Size: 8, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("new body"), SHA256: "sha-new"}, nil
+	}
+
+	synced, _, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+
+	assert.Equal(t, "new body", string(f.storage.objects[doc.StorageKey]), "the scheduled sync rewrites a copy whose source changed, without anyone opening it")
+	got, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Welcome.md")
+	require.NoError(t, gerr)
+	require.NotNil(t, got.SourceSHA256)
+	assert.Equal(t, "sha-new", *got.SourceSHA256)
+}
+
+func TestSyncDueMounts_UnchangedSourceIsNotRedownloaded(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.seedCopy(t, "Welcome.md", "same body", "sha-same", frozenTime)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Welcome.md", SHA256: "sha-same", Size: 9, Type: "doc"},
+	}
+
+	_, _, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, f.client.downloadCalls, "a matching hash costs no download — the sweep runs every interval")
+}
+
+func TestSyncMount_FailedManualSyncPacesTheScheduler(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.client.indexResult = shareFixtureEntries()
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		sha := "sha-welcome"
+		if path == "Notes/Plan.md" {
+			sha = "sha-plan"
+		}
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: sha}, nil
+	}
+
+	// A good sync leaves an in-memory deadline one interval out; let it pass,
+	// so the project is overdue when the failing manual run comes in.
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	f.advanceClock(t, DefaultTeamRelaySyncInterval+time.Second)
+
+	f.client.indexErr = teamrelay.ErrUnreachable
+	_, err = f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	callsAfterManual := f.client.filesIndexCalls
+
+	// The very next sweep must not retry: the failed manual run counts as the
+	// attempt, and the next one is a full interval out — not the stale, already
+	// elapsed deadline the earlier success left behind.
+	synced, skipped, err := f.svc.SyncDueMounts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced)
+	assert.Equal(t, 1, skipped)
+	assert.Equal(t, callsAfterManual, f.client.filesIndexCalls)
+}
+
+// ---------------------------------------------------------------------------
+// Image embeds (card #4e97f465 A4): a mounted body's ![[pic.png]] / ![alt](pic.png)
+// references resolve against the share, and each referenced image/PDF is copied
+// into Mesh attachment storage as a document attachment. The stored body is
+// never rewritten — the serve side renders from the attachment records, so
+// WriteBack can never push a rewritten link to the original.
+// ---------------------------------------------------------------------------
+
+// seedShareWithImage wires a two-file share — one markdown doc, one image next
+// to it — whose downloadFn returns real bytes and real hashes, the shape every
+// embed test below starts from. Returns the image bytes and their digest.
+func seedShareWithImage(f *mountFixture, body string) (img []byte, imgSHA string) {
+	img = pngFixture("embed-fixture")
+	imgSHA = realSHA(img)
+	docSHA := realSHA([]byte(body))
+
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: docSHA, Size: int64(len(body)), Type: "doc"},
+		{Path: "Notes/pic.png", SHA256: imgSHA, Size: int64(len(img)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		switch path {
+		case "Notes/Plan.md":
+			return &teamrelay.SyncDocument{Content: []byte(body), SHA256: docSHA}, nil
+		case "Notes/pic.png":
+			return &teamrelay.SyncDocument{Content: img, SHA256: imgSHA}, nil
+		}
+		return nil, fmt.Errorf("no fixture for %q", path)
+	}
+	return img, imgSHA
+}
+
+func TestSyncMount_ImageEmbed_ImportedAsAttachment(t *testing.T) {
+	f := setupMountFixture(t, "")
+	img, imgSHA := seedShareWithImage(f, "Plan:\n\n![[pic.png|300]]\n\n![shot](pic.png)\n\n![[Plan.md]]\n\n![[https://evil.example/x.png]]\n")
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 1, result.Mounted)
+
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	require.NotNil(t, doc)
+
+	// Both spellings resolve to the SAME share file, so ONE attachment — the
+	// .md embed is not an embeddable file, the https URL is not a share path,
+	// and neither produces anything.
+	atts := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, atts, 1, "one embedded file, one attachment — syntax repetition and non-file refs change nothing")
+	att := atts[0]
+	require.NotNil(t, att.SourcePath)
+	assert.Equal(t, "Notes/pic.png", *att.SourcePath, "a bare target resolves next to the referencing document first")
+	assert.Equal(t, "image/png", att.MimeType)
+	assert.Equal(t, int64(len(img)), att.SizeBytes)
+	require.NotNil(t, att.SourceSHA256)
+	assert.Equal(t, imgSHA, *att.SourceSHA256)
+
+	// The marker is stamped: this body's embed pass ran, a re-sync must not
+	// repeat it.
+	require.NotNil(t, doc.EmbedSyncedSHA256)
+	assert.Equal(t, doc.SourceSHA256, doc.EmbedSyncedSHA256)
+}
+
+// The mutation control for the whole pass: with the embed import removed from
+// createCopyDocument (or FindImageRefs broken), the body still mounts — but no
+// attachment appears and no marker is set, and these assertions go red.
+func TestSyncMount_EmbedDedup_NoRedownloadWhenHashUnchanged(t *testing.T) {
+	f := setupMountFixture(t, "")
+	img, imgSHA := seedShareWithImage(f, "Plan with ![[pic.png]]")
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Len(t, filter(f.client.downloadPaths, "Notes/pic.png"), 1, "first sync: exactly the embed importer's download — the entry itself is rejected by extension, unfetched")
+
+	// Second sync: doc row exists (Skipped branch), marker matches the body
+	// hash and the attachment matches the index hash — nothing may be fetched.
+	f.client.downloadPaths = nil
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Skipped)
+	assert.Equal(t, 0, result.Mounted)
+	assert.Empty(t, f.client.downloadPaths, "marker and attachment hashes both matched — the relay is not asked for anything")
+	_ = img
+	_ = imgSHA
+}
+
+func TestSyncMount_EmbedSourceChanged_ReplacesAttachment(t *testing.T) {
+	f := setupMountFixture(t, "")
+	_, _ = seedShareWithImage(f, "Plan with ![[pic.png]]")
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	first := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, first, 1)
+
+	// The image changes on the share; the doc body does not.
+	img2 := pngFixture("changed-on-the-share")
+	img2SHA := realSHA(img2)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: *doc.SourceSHA256, Size: 10, Type: "doc"},
+		{Path: "Notes/pic.png", SHA256: img2SHA, Size: int64(len(img2)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Notes/pic.png" {
+			return &teamrelay.SyncDocument{Content: img2, SHA256: img2SHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte("Plan with ![[pic.png]]"), SHA256: *doc.SourceSHA256}, nil
+	}
+
+	_, err = f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	atts := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, atts, 1, "one live attachment for the path — the old row is soft-deleted, not accumulated")
+	assert.Equal(t, img2SHA, *atts[0].SourceSHA256)
+	assert.NotEqual(t, first[0].ID, atts[0].ID, "the replacement is a new row")
+
+	// The old attachment is soft-deleted, and its bytes are still in storage
+	// (soft delete keeps the object; restores must come back intact).
+	stored, ok := f.attachments.items[first[0].ID]
+	require.True(t, ok)
+	require.NotNil(t, stored.DeletedAt, "replaced attachment is soft-deleted, not dropped")
+}
+
+func TestSyncMount_EmbedReplacementUploadFails_KeepsOldAttachmentAndRetries(t *testing.T) {
+	f := setupMountFixture(t, "")
+	_, imgSHA := seedShareWithImage(f, "Plan with ![[pic.png]]")
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	require.Len(t, f.liveAttachmentsFor(t, doc.ID), 1)
+
+	img2 := pngFixture("changed-on-the-share")
+	img2SHA := realSHA(img2)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: *doc.SourceSHA256, Size: 10, Type: "doc"},
+		{Path: "Notes/pic.png", SHA256: img2SHA, Size: int64(len(img2)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Notes/pic.png" {
+			return &teamrelay.SyncDocument{Content: img2, SHA256: img2SHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte("Plan with ![[pic.png]]"), SHA256: *doc.SourceSHA256}, nil
+	}
+
+	// The storage backend is down while the replacement is uploaded.
+	f.storage.errToReturn = errors.New("storage down")
+	_, err = f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	atts := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, atts, 1, "a failed replacement must leave the old attachment live — no live row means nothing for the next sync to retry")
+	assert.Equal(t, imgSHA, *atts[0].SourceSHA256, "still the OLD hash, so the next sync sees it as stale")
+
+	// Storage recovers: the next sync replaces it.
+	f.storage.errToReturn = nil
+	_, err = f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	atts = f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, atts, 1)
+	assert.Equal(t, img2SHA, *atts[0].SourceSHA256)
+}
+
+func TestSyncMount_EmbedOversize_SkippedWithoutDownload(t *testing.T) {
+	f := setupMountFixture(t, "")
+	// The image sits under artifacts/ — excluded from DOCUMENT mounting (the
+	// default exclusion list) but still resolvable for embeds (syncIndexByPath
+	// is built from every entry). That isolation is what makes "zero downloads
+	// of this path" attributable to the embed importer alone: without it, the
+	// mount loop itself downloads each binary entry once just to reject it.
+	img := pngFixture("oversize")
+	imgSHA := realSHA(img)
+	body := "Plan with ![[artifacts/pic.png]]"
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: realSHA([]byte(body)), Size: int64(len(body)), Type: "doc"},
+		{Path: "artifacts/pic.png", SHA256: imgSHA, Size: MaxTeamRelayEmbedBytes + 1, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "artifacts/pic.png" {
+			return &teamrelay.SyncDocument{Content: img, SHA256: imgSHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte(body), SHA256: realSHA([]byte(body))}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 1, result.Mounted, "the document itself mounts regardless")
+	assert.Equal(t, 1, result.Excluded, "the oversized image's own entry is excluded from mounting")
+
+	assert.Empty(t, filter(f.client.downloadPaths, "artifacts/pic.png"), "size comes from the index — an over-cap embed costs zero bytes")
+
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	assert.Empty(t, f.liveAttachmentsFor(t, doc.ID))
+	require.NotNil(t, doc.EmbedSyncedSHA256, "oversize is a permanent skip — the marker is still set, this body is not rescanned for it")
+}
+
+func TestSyncMount_EmbedSniffRejectsMislabeledFile(t *testing.T) {
+	f := setupMountFixture(t, "")
+	fake := []byte("this is markdown wearing a .png extension")
+	fakeSHA := realSHA(fake)
+	body := "Plan with ![[pic.png]]"
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: realSHA([]byte(body)), Size: int64(len(body)), Type: "doc"},
+		{Path: "Notes/pic.png", SHA256: fakeSHA, Size: int64(len(fake)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Notes/pic.png" {
+			return &teamrelay.SyncDocument{Content: fake, SHA256: fakeSHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte(body), SHA256: realSHA([]byte(body))}, nil
+	}
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	assert.Empty(t, f.liveAttachmentsFor(t, doc.ID), "the extension claimed an image; the bytes said text — nothing is stored")
+	require.NotNil(t, doc.EmbedSyncedSHA256, "the rejection is permanent for this content — the marker is set")
+}
+
+func TestSyncMount_EmbedCandidates_RelativeThenRootAndShareRelative(t *testing.T) {
+	f := setupMountFixture(t, "")
+	imgA, imgASHA := pngFixture("root-logo"), realSHA(pngFixture("root-logo"))
+	imgB, imgBSHA := pngFixture("assets-banner"), realSHA(pngFixture("assets-banner"))
+	rootBody := "Root embeds ![[logo.png]]"
+	notesBody := "Notes embeds ![[assets/banner.png]]"
+
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Root.md", SHA256: realSHA([]byte(rootBody)), Size: int64(len(rootBody)), Type: "doc"},
+		{Path: "Notes/Doc.md", SHA256: realSHA([]byte(notesBody)), Size: int64(len(notesBody)), Type: "doc"},
+		{Path: "logo.png", SHA256: imgASHA, Size: int64(len(imgA)), Type: "doc"},
+		{Path: "assets/banner.png", SHA256: imgBSHA, Size: int64(len(imgB)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		switch path {
+		case "Root.md":
+			return &teamrelay.SyncDocument{Content: []byte(rootBody), SHA256: realSHA([]byte(rootBody))}, nil
+		case "Notes/Doc.md":
+			return &teamrelay.SyncDocument{Content: []byte(notesBody), SHA256: realSHA([]byte(notesBody))}, nil
+		case "logo.png":
+			return &teamrelay.SyncDocument{Content: imgA, SHA256: imgASHA}, nil
+		case "assets/banner.png":
+			return &teamrelay.SyncDocument{Content: imgB, SHA256: imgBSHA}, nil
+		}
+		return nil, fmt.Errorf("no fixture for %q", path)
+	}
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	root, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Root.md")
+	require.NoError(t, gerr)
+	atts := f.liveAttachmentsFor(t, root.ID)
+	require.Len(t, atts, 1)
+	assert.Equal(t, "logo.png", *atts[0].SourcePath, "a bare target in a root document resolves at the share root")
+
+	notes, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Doc.md")
+	require.NoError(t, gerr)
+	atts = f.liveAttachmentsFor(t, notes.ID)
+	require.Len(t, atts, 1)
+	assert.Equal(t, "assets/banner.png", *atts[0].SourcePath, "a target carrying a directory is share-relative, as written")
+}
+
+func TestEmbedCandidatesExplicitRelativePaths(t *testing.T) {
+	assert.Equal(t, []string{"Notes/images/chart.png", "images/chart.png"}, embedTargetCandidates("../images/chart.png", "Notes/sub"))
+	assert.Equal(t, []string{"Notes/sub/pic.png", "pic.png"}, embedTargetCandidates("./pic.png", "Notes/sub"))
+	assert.Equal(t, []string{"pic.png"}, embedTargetCandidates("./pic.png", ""))
+}
+
+func TestSyncMount_PdfEmbed_Imported(t *testing.T) {
+	f := setupMountFixture(t, "")
+	pdf := pdfFixture()
+	pdfSHA := realSHA(pdf)
+	body := "Spec: ![[spec.pdf]]"
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Spec.md", SHA256: realSHA([]byte(body)), Size: int64(len(body)), Type: "doc"},
+		{Path: "spec.pdf", SHA256: pdfSHA, Size: int64(len(pdf)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "spec.pdf" {
+			return &teamrelay.SyncDocument{Content: pdf, SHA256: pdfSHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte(body), SHA256: realSHA([]byte(body))}, nil
+	}
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Spec.md")
+	require.NoError(t, gerr)
+	atts := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, atts, 1)
+	assert.Equal(t, "application/pdf", atts[0].MimeType)
+}
+
+// The skipped-branch backfill: a copy mounted BEFORE embeds existed (marker
+// nil) gets its images on the next sync without remounting.
+func TestSyncMount_BackfillsEmbedsForPreExistingCopy(t *testing.T) {
+	f := setupMountFixture(t, "")
+	body := "Plan with ![[pic.png]]"
+	img := pngFixture("backfill")
+	imgSHA := realSHA(img)
+	docSHA := realSHA([]byte(body))
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: docSHA, Size: int64(len(body)), Type: "doc"},
+		{Path: "Notes/pic.png", SHA256: imgSHA, Size: int64(len(img)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Notes/pic.png" {
+			return &teamrelay.SyncDocument{Content: img, SHA256: imgSHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte(body), SHA256: docSHA}, nil
+	}
+
+	// A copy that predates A4: live, current hash, no embed marker, body
+	// already in storage.
+	seeded := f.seedCopy(t, "Notes/Plan.md", body, docSHA, frozenTime)
+	seeded.EmbedSyncedSHA256 = nil
+	f.repo.items[seeded.ID] = seeded
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	atts := f.liveAttachmentsFor(t, seeded.ID)
+	require.Len(t, atts, 1, "the pre-existing copy's embed is imported by the backfill pass")
+	assert.Equal(t, "Notes/pic.png", *atts[0].SourcePath)
+}
+
+// RefreshIfStale's rewrite path re-imports embeds against the NEW body, with
+// one files-index call per rewrite (never per freshness check).
+func TestRefreshIfStale_HashChanged_ImportsEmbedsForNewBody(t *testing.T) {
+	f := setupMountFixture(t, "")
+	stale := timeNow().Add(-2 * DefaultTeamRelaySyncTTL)
+	doc := f.seedCopy(t, "Notes/Plan.md", "old body", realSHA([]byte("old body")), stale)
+
+	img := pngFixture("after-rewrite")
+	imgSHA := realSHA(img)
+	newBody := "NEW body with ![[pic.png]]"
+	newSHA := realSHA([]byte(newBody))
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Notes/pic.png" {
+			return &teamrelay.SyncDocument{Content: img, SHA256: imgSHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte(newBody), SHA256: newSHA}, nil
+	}
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: newSHA, Size: int64(len(newBody)), Type: "doc"},
+		{Path: "Notes/pic.png", SHA256: imgSHA, Size: int64(len(img)), Type: "doc"},
+	}
+
+	require.NoError(t, f.svc.RefreshIfStale(context.Background(), doc))
+
+	atts := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, atts, 1, "the rewritten body's embed is imported")
+	assert.Equal(t, imgSHA, *atts[0].SourceSHA256)
+	require.NotNil(t, doc.EmbedSyncedSHA256)
+	assert.Equal(t, newSHA, *doc.EmbedSyncedSHA256, "marker names the body whose embeds were just imported")
+}
+
+// A dead embed — the referenced file is simply not on the share — imports
+// nothing, fails nothing, and still marks the body as processed.
+func TestSyncMount_DeadEmbedReference_IsSkippedSilently(t *testing.T) {
+	f := setupMountFixture(t, "")
+	body := "Plan with ![[missing.png]]"
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: realSHA([]byte(body)), Size: int64(len(body)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte(body), SHA256: realSHA([]byte(body))}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 1, result.Mounted)
+
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	assert.Empty(t, f.liveAttachmentsFor(t, doc.ID))
+	require.NotNil(t, doc.EmbedSyncedSHA256)
+}
+
+// The currency pass's other half: the image is deleted on the share while the
+// body that references it stays byte-identical. The attachment is archived —
+// the same liveness rule the copies themselves follow.
+func TestSyncMount_ImageVanishedFromShare_ArchivesAttachment(t *testing.T) {
+	f := setupMountFixture(t, "")
+	_, _ = seedShareWithImage(f, "Plan with ![[pic.png]]")
+
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	require.Len(t, f.liveAttachmentsFor(t, doc.ID), 1)
+
+	// The image is gone; the doc's own hash did not move.
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: *doc.SourceSHA256, Size: 10, Type: "doc"},
+	}
+	_, err = f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	assert.Empty(t, f.liveAttachmentsFor(t, doc.ID), "an embed whose source file vanished is archived, not served stale forever")
+}
+
+// filter is the test-side of "was this path downloaded": the fake records every
+// download path in order, and counting one named path across them is the whole
+// question.
+func filter(paths []string, want string) []string {
+	var out []string
+	for _, p := range paths {
+		if p == want {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// TestSyncMount_DoesNotArchiveCopyStillDownloadable: the index lists only
+// sync-artifact rows, so "absent from the index" is not "deleted". A copy whose
+// file still downloads must survive, and so must one whose probe fails with
+// anything but 404 — only a 404 proves the file gone.
+func TestSyncMount_DoesNotArchiveCopyStillDownloadable(t *testing.T) {
+	f := setupMountFixture(t, "")
+	present := f.seedCopy(t, "Notes/present.md", "body", "sha-p", frozenTime)
+	flaky := f.seedCopy(t, "Notes/flaky.md", "body", "sha-f", frozenTime)
+	gone := f.seedCopy(t, "Notes/gone.md", "body", "sha-g", frozenTime)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/other.md", SHA256: "sha-other", Size: 10, Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		switch path {
+		case "Notes/gone.md":
+			return nil, teamrelay.ErrNotFound
+		case "Notes/flaky.md":
+			return nil, teamrelay.ErrUnreachable
+		}
+		return &teamrelay.SyncDocument{Content: []byte("body"), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Archived, "only the 404 copy is archived")
+	assert.NotNil(t, f.repo.items[gone.ID].DeletedAt)
+	assert.Nil(t, f.repo.items[present.ID].DeletedAt, "downloadable copy stays live")
+	assert.Nil(t, f.repo.items[flaky.ID].DeletedAt, "an unproven failure keeps the copy")
+}
+
+// TestSyncMount_EmbedReplacementInsertFails_OldAttachmentStaysLive covers the
+// window the compensating re-insert used to leave: the retire landed, the
+// insert failed, and a failing restore left no live row. Replace is one
+// transaction, so a failed insert changes nothing.
+func TestSyncMount_EmbedReplacementInsertFails_OldAttachmentStaysLive(t *testing.T) {
+	f := setupMountFixture(t, "")
+	_, imgSHA := seedShareWithImage(f, "Plan with ![[pic.png]]")
+	_, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	doc, gerr := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Notes/Plan.md")
+	require.NoError(t, gerr)
+	before := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, before, 1)
+
+	img2 := pngFixture("changed-on-the-share")
+	img2SHA := realSHA(img2)
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Notes/Plan.md", SHA256: *doc.SourceSHA256, Size: 10, Type: "doc"},
+		{Path: "Notes/pic.png", SHA256: img2SHA, Size: int64(len(img2)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "Notes/pic.png" {
+			return &teamrelay.SyncDocument{Content: img2, SHA256: img2SHA}, nil
+		}
+		return &teamrelay.SyncDocument{Content: []byte("Plan with ![[pic.png]]"), SHA256: *doc.SourceSHA256}, nil
+	}
+
+	f.attachments.createErr = errors.New("insert failed")
+	_, err = f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+
+	after := f.liveAttachmentsFor(t, doc.ID)
+	require.Len(t, after, 1)
+	assert.Equal(t, before[0].ID, after[0].ID, "the very same old row stays live, not a re-inserted copy")
+	assert.Equal(t, imgSHA, *after[0].SourceSHA256)
 }
