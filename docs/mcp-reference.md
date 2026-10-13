@@ -2,7 +2,7 @@
 
 ## Overview
 
-evc-mesh exposes **64 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
+evc-mesh exposes **65 MCP tools** via the [Model Context Protocol](https://modelcontextprotocol.io/).
 Supported transports: **stdio** (default), and over HTTP on port 8081 **SSE** and
 **Streamable HTTP** — the latter also accepting OAuth access tokens, so an MCP
 client can sign in by itself instead of being handed an agent key.
@@ -21,7 +21,7 @@ Tools are organized into 13 categories:
 
 | Category | Tools | Description |
 |----------|-------|-------------|
-| Project & Task Management | 11 | CRUD for projects, tasks, subtasks, dependencies, assignments, PR links |
+| Project & Task Management | 12 | CRUD for projects, tasks, subtasks, dependencies, assignments, PR links |
 | Comments & Artifacts | 5 | Task comments, file uploads, artifact retrieval |
 | Documents | 7 | Project document tree: create, read, edit, search, and comment on pages |
 | Memory & Knowledge | 10 | Persistent memory, project knowledge, and the canonical decision layer |
@@ -116,7 +116,7 @@ Two endpoints are served:
 
 | Endpoint | Profile | Tools |
 |----------|---------|-------|
-| `http://localhost:8081/sse` | full | 64 |
+| `http://localhost:8081/sse` | full | 65 |
 | `http://localhost:8081/core/sse` | core | 25 |
 
 Behind a reverse proxy, see
@@ -135,7 +135,7 @@ every request carries its own credential):
 
 | Endpoint on the binary | Public URL behind the bundled nginx | Profile | Tools |
 |------------------------|-------------------------------------|---------|-------|
-| `http://localhost:8081/mcp` | `https://<host>/mcp` | full | 64 |
+| `http://localhost:8081/mcp` | `https://<host>/mcp` | full | 65 |
 | `http://localhost:8081/core` | `https://<host>/mcp/core` | core | 25 |
 
 Credentials, headers only (a `?agent_key=` here is rejected with `400`):
@@ -175,7 +175,7 @@ and Caddy examples and a `curl` check.
 | `MESH_MCP_HOST` | `0.0.0.0` | No | SSE server bind host |
 | `MESH_MCP_PORT` | `8081` | No | SSE server bind port |
 | `MESH_MCP_PUBLIC_URL` | *(empty)* | No | Public base URL of the SSE server. Empty advertises the message endpoint relative to the URL the client connected to, which is correct unless a proxy serves MCP under a path prefix |
-| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (64) or `core` (25). In SSE mode the profile follows the endpoint |
+| `MESH_MCP_PROFILE` | `full` | No | Tool profile for **stdio** mode: `full` (65) or `core` (25). In SSE mode the profile follows the endpoint |
 | `MESH_MCP_OAUTH_ISSUER` | *(empty)* | No | Authorization server named in the OAuth resource metadata. Empty = the origin of the resource URL, correct whenever MCP is served on the Mesh instance's own origin |
 | `MESH_MCP_OAUTH_CACHE_TTL_SEC` | `60` | No | How long an accepted OAuth access token is trusted before it is re-checked with the API — the bound on how long a revoked token keeps working here |
 
@@ -183,7 +183,7 @@ and Caddy examples and a `curl` check.
 
 ## Tools
 
-### Project & Task Management (11 tools)
+### Project & Task Management (12 tools)
 
 #### 1. `list_projects`
 
@@ -483,7 +483,31 @@ answers "does this id exist?" for a task you do not own.
 
 ---
 
-#### 10. `assign_task`
+#### 10. `remove_dependency`
+
+Remove a dependency edge: `task_id` (the blocked task) no longer depends on `depends_on_task_id`. Use it to clear a stray or reversed `blocks` link that holds a task open. Direction matters: pass the pair in the order `add_dependency` took it.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task_id` | string | **Yes** | -- | The blocked task (the one that has the dependency) |
+| `depends_on_task_id` | string | **Yes** | -- | The blocker the edge points at |
+| `reason` | string | **Yes** | -- | Why the link is removed (min 10 chars); written to the server log |
+
+**Example request:**
+```json
+{
+  "name": "remove_dependency",
+  "arguments": {
+    "task_id": "a1b2c3d4-...",
+    "depends_on_task_id": "e5f6g7h8-...",
+    "reason": "Reversed blocks link added by mistake"
+  }
+}
+```
+
+---
+
+#### 11. `assign_task`
 
 Assign a task to a user or agent.
 
@@ -517,7 +541,7 @@ Assign a task to a user or agent.
 
 ---
 
-#### 11. `add_vcs_link`
+#### 12. `add_vcs_link`
 
 Link a task to a pull request, merge request, commit, or branch. This is what makes the
 task<->PR join real: a task with no VCS link cannot be matched to the code that implements
@@ -559,7 +583,7 @@ inferred from a GitHub or GitLab URL.
 
 ### Comments & Artifacts (5 tools)
 
-#### 12. `add_comment`
+#### 13. `add_comment`
 
 Add a comment to a task.
 
@@ -640,7 +664,7 @@ case is a missing key, not an empty string.
 
 ---
 
-#### 13. `list_comments`
+#### 14. `list_comments`
 
 List comments on a task.
 
@@ -664,7 +688,7 @@ List comments on a task.
 
 ---
 
-#### 14. `upload_artifact`
+#### 15. `upload_artifact`
 
 Upload an artifact (file, code, log, etc.) to a task.
 
@@ -696,7 +720,7 @@ Upload an artifact (file, code, log, etc.) to a task.
 
 ---
 
-#### 15. `list_artifacts`
+#### 16. `list_artifacts`
 
 List artifacts attached to a task.
 
@@ -716,7 +740,7 @@ List artifacts attached to a task.
 
 ---
 
-#### 16. `get_artifact`
+#### 17. `get_artifact`
 
 Get artifact details and optionally its content.
 
@@ -740,7 +764,7 @@ Get artifact details and optionally its content.
 
 ### Documents (7 tools)
 
-#### 17. `list_docs`
+#### 18. `list_docs`
 
 List a project's documents -- id, title, slug path, version, and who touched them last.
 Carries **no document bodies**, so it is safe to call on a whole project: use it as the map,
@@ -763,7 +787,7 @@ then `get_doc` for one page. Returns `path` and `has_children` for navigating th
 
 ---
 
-#### 18. `search_docs`
+#### 19. `search_docs`
 
 Full-text search a project's documents by title and body. Returns matching documents with a
 snippet and a `path` usable directly with `get_doc` -- this is how you find a document when
@@ -795,7 +819,7 @@ you do not already know its path. `list_docs` is the map; this is the index.
 
 ---
 
-#### 19. `get_doc`
+#### 20. `get_doc`
 
 Read a document. **By default this returns metadata plus the outline (headings) and *not*
 the body.** A document is far larger than a task, and a body you read stays in your context
@@ -827,7 +851,7 @@ The returned `version` is what `update_doc` takes as `base_version`.
 
 ---
 
-#### 20. `create_doc`
+#### 21. `create_doc`
 
 Create a document in a project. Returns its metadata and `version` -- the version is what
 `update_doc` takes as `base_version`, so a create followed by an edit needs no read in
@@ -858,7 +882,7 @@ between. The body you sent is not echoed back.
 
 ---
 
-#### 21. `update_doc`
+#### 22. `update_doc`
 
 Edit a document. Replacing the body **requires** `base_version` -- the version you got from
 `get_doc` -- and the write is refused with a `409 document_version_conflict` if anyone
@@ -894,7 +918,7 @@ logs.**
 
 ---
 
-#### 22. `comment_doc`
+#### 23. `comment_doc`
 
 Comment on a document. To comment on a specific passage, pass `quote` with the text exactly
 as the document reads it -- the server finds it and anchors the comment there, so you never
@@ -928,7 +952,7 @@ thread humans see in the document UI.
 
 ---
 
-#### 23. `list_doc_comments`
+#### 24. `list_doc_comments`
 
 Read the comments on a document as threads -- each top-level comment with its replies nested
 under it, the quoted passage it is anchored to, and who wrote it. Resolved threads are hidden
@@ -959,7 +983,7 @@ anchor: it is still shown, and it is not pointing anywhere.
 
 ### Memory & Knowledge (10 tools)
 
-#### 24. `remember`
+#### 25. `remember`
 
 Save knowledge to persistent memory. Use for decisions, conventions, and preferences.
 **UPSERT by key** -- calling with the same key updates the existing entry.
@@ -1007,7 +1031,7 @@ Save knowledge to persistent memory. Use for decisions, conventions, and prefere
 
 ---
 
-#### 25. `recall`
+#### 26. `recall`
 
 **Search** memory by keywords. Use to find a *specific* piece of knowledge, e.g. "API
 convention" or "license decision". Returns ranked results with scores. By default each item is compact: `content` is cut to about 300 characters with `content_truncated` / `content_chars` set, and service fields are omitted; pass `full=true` for the full items, or fetch one entry whole with `get_memory`. To load *all* project
@@ -1055,7 +1079,7 @@ knowledge at session start, use `get_project_knowledge` instead.
 
 ---
 
-#### 26. `recall_with_graph`
+#### 27. `recall_with_graph`
 
 Search memory with knowledge-graph expansion. Seeds from hybrid `recall`, then BFS-traverses
 `memory_edges` up to `hops` deep. Returns memories ranked by composite score, each carrying
@@ -1084,7 +1108,7 @@ decisions, connected incidents, derived learnings -- rather than one specific fa
 
 ---
 
-#### 27. `forget`
+#### 28. `forget`
 
 Delete a memory entry.
 
@@ -1107,7 +1131,7 @@ Delete a memory entry.
 
 ---
 
-#### 28. `get_project_knowledge`
+#### 29. `get_project_knowledge`
 
 Get **all permanent knowledge** for a project: decisions, conventions, accumulated context.
 Call at session start (ACP step 2). Returns workspace-level plus project-level memories. For
@@ -1135,7 +1159,7 @@ Call at session start (ACP step 2). Returns workspace-level plus project-level m
 
 ---
 
-#### 29. `set_project_knowledge`
+#### 30. `set_project_knowledge`
 
 Write a structured fact to project knowledge. **UPSERT by key.** Use it for deploy URLs,
 stack conventions, and gotchas -- facts that must still be true next month. These are the
@@ -1169,7 +1193,7 @@ records `get_project_knowledge` returns.
 
 ---
 
-#### 30. `get_canonical`
+#### 31. `get_canonical`
 
 Query the canonical knowledge layer: curated facts, decisions, and strategy docs for a topic,
 merged from `project_memories` (key `canonical:*`) and `workspace_memories`
@@ -1198,7 +1222,7 @@ that no decision was made -- flag it rather than filling the vacuum.
 
 ---
 
-#### 31. `get_canonical_updates`
+#### 32. `get_canonical_updates`
 
 Fetch canonical decisions broadcast since a given time. Call at ACP step 6 (session start) to
 catch up on directives issued since your previous session. Returns only `privacy:public`
@@ -1222,7 +1246,7 @@ records targeted at you or at all agents.
 
 ---
 
-#### 32. `record_owner_decision`
+#### 33. `record_owner_decision`
 
 Formerly `pavel_decision`. The old name is still served only when the operator sets
 `MESH_MCP_LEGACY_TOOL_ALIASES=1`, so existing callers keep working; it is not listed by the
@@ -1260,7 +1284,7 @@ failure there is reported in the result but does not undo the canonical write.
 
 ---
 
-#### 64. `get_memory`
+#### 34. `get_memory`
 
 Fetch the **full text of one memory entry** by its exact `key`. Use it after a compact `recall` when an item's `content_truncated` is `true`. There is no get-by-key endpoint on the backend, so the tool searches on the key (up to 4 pages of 50) and returns the entry whose key matches exactly; superseded entries are included and the importance floor is not applied.
 
@@ -1285,7 +1309,7 @@ Fetch the **full text of one memory entry** by its exact `key`. Use it after a c
 
 ### Event Bus (5 tools)
 
-#### 33. `publish_event`
+#### 35. `publish_event`
 
 Publish an event to the event bus.
 
@@ -1319,7 +1343,7 @@ Publish an event to the event bus.
 
 ---
 
-#### 34. `publish_summary`
+#### 36. `publish_summary`
 
 Publish a work summary event (convenience wrapper for `publish_event` with `type=summary`).
 
@@ -1359,7 +1383,7 @@ Publish a work summary event (convenience wrapper for `publish_event` with `type
 
 ---
 
-#### 35. `get_context`
+#### 37. `get_context`
 
 Get enriched context from the event bus.
 
@@ -1386,7 +1410,7 @@ Get enriched context from the event bus.
 
 ---
 
-#### 36. `get_task_context`
+#### 38. `get_task_context`
 
 Get all context for a task: details, comments, events, artifacts, dependencies.
 
@@ -1417,7 +1441,7 @@ Get all context for a task: details, comments, events, artifacts, dependencies.
 
 ---
 
-#### 37. `subscribe_events`
+#### 39. `subscribe_events`
 
 Configure push notification delivery for task events. Optionally sets a callback URL that Mesh will POST events to. Returns SSE and long-poll endpoint URLs for alternative delivery mechanisms.
 
@@ -1457,7 +1481,7 @@ See [Agent Push Notifications](agent-push-notifications.md) for full details on 
 
 ### Agent Hierarchy (2 tools)
 
-#### 38. `register_sub_agent`
+#### 40. `register_sub_agent`
 
 Register a sub-agent under the calling agent. Useful for orchestrating multi-agent workflows.
 
@@ -1484,7 +1508,7 @@ Register a sub-agent under the calling agent. Useful for orchestrating multi-age
 
 ---
 
-#### 39. `list_sub_agents`
+#### 41. `list_sub_agents`
 
 List sub-agents of an agent.
 
@@ -1507,7 +1531,7 @@ List sub-agents of an agent.
 
 ### Utility (4 tools)
 
-#### 40. `heartbeat`
+#### 42. `heartbeat`
 
 Send a heartbeat to indicate the agent is alive.
 
@@ -1529,7 +1553,7 @@ Send a heartbeat to indicate the agent is alive.
 
 ---
 
-#### 41. `get_my_tasks`
+#### 43. `get_my_tasks`
 
 Get tasks assigned to the calling agent.
 
@@ -1551,7 +1575,7 @@ Get tasks assigned to the calling agent.
 
 ---
 
-#### 42. `report_error`
+#### 44. `report_error`
 
 Report an error encountered during work.
 
@@ -1578,7 +1602,7 @@ Report an error encountered during work.
 
 ---
 
-#### 43. `session_report`
+#### 45. `session_report`
 
 Report session metrics. Call before the session ends. Returns a compliance score and session
 statistics.
@@ -1607,7 +1631,7 @@ statistics.
 
 ### Governance Rules (2 tools)
 
-#### 44. `get_my_rules`
+#### 46. `get_my_rules`
 
 Get all governance rules that apply to the calling agent. Call at the start of work to understand constraints and behavioral requirements.
 
@@ -1627,7 +1651,7 @@ Get all governance rules that apply to the calling agent. Call at the start of w
 
 ---
 
-#### 45. `get_project_rules`
+#### 47. `get_project_rules`
 
 Get all rules configured for a project (all scopes: workspace + project).
 
@@ -1649,7 +1673,7 @@ Get all rules configured for a project (all scopes: workspace + project).
 
 ### Team & Configuration (6 tools)
 
-#### 46. `get_team_directory`
+#### 48. `get_team_directory`
 
 Get the workspace team directory listing all agents and human members with their profiles.
 
@@ -1665,7 +1689,7 @@ No parameters required.
 
 ---
 
-#### 47. `get_assignment_rules`
+#### 49. `get_assignment_rules`
 
 Get effective assignment rules for a project, merged from workspace and project level with source annotations.
 
@@ -1685,7 +1709,7 @@ Get effective assignment rules for a project, merged from workspace and project 
 
 ---
 
-#### 48. `get_workflow_rules`
+#### 50. `get_workflow_rules`
 
 Get workflow rules for a project including allowed transitions, policies, and permissions for the calling agent.
 
@@ -1705,7 +1729,7 @@ Get workflow rules for a project including allowed transitions, policies, and pe
 
 ---
 
-#### 49. `update_agent_profile`
+#### 51. `update_agent_profile`
 
 Update the calling agent's profile fields such as role, capabilities, responsibility zone, and working hours.
 
@@ -1738,7 +1762,7 @@ Update the calling agent's profile fields such as role, capabilities, responsibi
 
 ---
 
-#### 50. `import_workspace_config`
+#### 52. `import_workspace_config`
 
 Import workspace configuration from YAML. Applies rules, statuses, and project templates defined in the YAML.
 
@@ -1758,7 +1782,7 @@ Import workspace configuration from YAML. Applies rules, statuses, and project t
 
 ---
 
-#### 51. `export_workspace_config`
+#### 53. `export_workspace_config`
 
 Export the current workspace configuration as YAML, including rules, project templates, and settings.
 
@@ -1776,7 +1800,7 @@ No parameters required.
 
 ### Push Notifications (1 tools)
 
-#### 52. `poll_tasks`
+#### 54. `poll_tasks`
 
 Long-poll for new task assignments. Blocks until a task is assigned to this agent or the timeout expires. Returns current assigned tasks and whether any change occurred.
 
@@ -1820,7 +1844,7 @@ See [Agent Push Notifications](agent-push-notifications.md) for full details on 
 
 ### Recurring Tasks (6 tools)
 
-#### 53. `create_recurring_task`
+#### 55. `create_recurring_task`
 
 Creates a recurring task schedule that automatically spawns task instances on a schedule. Each instance gets access to the previous instance's summary. Use this for regular automated work: weekly reports, daily checks, periodic audits.
 
@@ -1873,7 +1897,7 @@ Creates a recurring task schedule that automatically spawns task instances on a 
 
 ---
 
-#### 54. `list_recurring_schedules`
+#### 56. `list_recurring_schedules`
 
 Lists all recurring task schedules for a project.
 
@@ -1909,7 +1933,7 @@ Lists all recurring task schedules for a project.
 
 ---
 
-#### 55. `get_recurring_history`
+#### 57. `get_recurring_history`
 
 Returns the history of all instances for a recurring task schedule. Call this when you receive a recurring task to get context on what previous instances accomplished, what issues were found, and what artifacts were produced. Use it to continue work intelligently rather than starting from scratch.
 
@@ -1950,7 +1974,7 @@ Returns the history of all instances for a recurring task schedule. Call this wh
 
 ---
 
-#### 56. `trigger_recurring_now`
+#### 58. `trigger_recurring_now`
 
 Immediately creates the next instance of a recurring schedule, without waiting for the scheduled time. Useful for testing schedules or for urgent out-of-cycle execution.
 
@@ -1980,7 +2004,7 @@ Immediately creates the next instance of a recurring schedule, without waiting f
 
 ---
 
-#### 57. `update_recurring_schedule`
+#### 59. `update_recurring_schedule`
 
 Update an existing recurring task schedule -- title, description, frequency, assignee,
 priority -- or pause it with `is_active=false`. Every field is optional; omitted fields are
@@ -2014,7 +2038,7 @@ left as they are.
 
 ---
 
-#### 58. `delete_recurring_schedule`
+#### 60. `delete_recurring_schedule`
 
 Delete a recurring task schedule. **Task instances already created from it are not
 affected** -- they stay where they are; only future generation stops. To stop generation
@@ -2038,7 +2062,7 @@ reversibly, prefer `update_recurring_schedule` with `is_active=false`.
 
 ### Task Checkout (3 tools)
 
-#### 59. `checkout_task`
+#### 61. `checkout_task`
 
 Acquire an exclusive lock on a task to prevent double-work. Only agents can checkout tasks. If the task is already checked out by another non-expired agent, the call fails with a conflict error including details about the current holder. Same-agent re-checkout is idempotent and returns a fresh token.
 
@@ -2082,7 +2106,7 @@ Acquire an exclusive lock on a task to prevent double-work. Only agents can chec
 
 ---
 
-#### 60. `release_task`
+#### 62. `release_task`
 
 Release an exclusive checkout. The `checkout_token` from the checkout response must be provided. Agents should release checkouts when done working on a task to allow others to pick it up immediately rather than waiting for TTL expiry.
 
@@ -2111,7 +2135,7 @@ Release an exclusive checkout. The `checkout_token` from the checkout response m
 
 ---
 
-#### 61. `extend_checkout`
+#### 63. `extend_checkout`
 
 Extend the TTL of an active checkout. Use this when a task takes longer than expected. The checkout must not have expired already.
 
@@ -2147,7 +2171,7 @@ Extend the TTL of an active checkout. Use this when a task takes longer than exp
 
 ### Human Gate (2 tools)
 
-#### 62. `set_human_gate`
+#### 64. `set_human_gate`
 
 Arm the human gate on a task: freeze it and record **who** is waiting, **what** was asked, and **what happens if nobody answers**. Use this instead of hand-writing a `❓ Blocking @pavel` comment — the marker still works, but this path records the whole ask on the task itself, so no reader has to re-derive it from comment text.
 
@@ -2194,7 +2218,7 @@ The four predicate answers are required, each with one line of justification. Th
 
 ---
 
-#### 63. `clear_human_gate`
+#### 65. `clear_human_gate`
 
 Release a human gate. Read `human_gate_info` on `get_task` first and go by `clear_path` — there are two agent-reachable shapes and they are not interchangeable:
 

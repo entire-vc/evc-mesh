@@ -208,7 +208,7 @@ With evc-mesh connected, Claude Code can:
 > `@`-mentions someone — it reports whether the mention actually reached a
 > path the recipient consumes (their task queue, a notification), not just
 > that the comment was posted. Full field reference:
-> [`docs/mcp-reference.md`](mcp-reference.md#12-add_comment); outcome/reason
+> [`docs/mcp-reference.md`](mcp-reference.md#13-add_comment); outcome/reason
 > vocabulary: [`docs/integrations/comment-triage.md`](integrations/comment-triage.md).
 
 ---

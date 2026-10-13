@@ -182,7 +182,7 @@ own author can act on or should know about — today `no_queue_path` (fix:
 assign the task to them) and the `delivered` reason `thread_only` (no turn is
 started for the lane). It is absent (not empty-string) on every other outcome.
 
-Full field reference: [`docs/mcp-reference.md`](../mcp-reference.md#12-add_comment).
+Full field reference: [`docs/mcp-reference.md`](../mcp-reference.md#13-add_comment).
 See also the `mention-and-wake` skill, which documents that a mention alone
 does not wake a fiddler-fed agent lane — `delivery` is what now lets the
 comment's author *see* that in the response, instead of assuming the handoff
