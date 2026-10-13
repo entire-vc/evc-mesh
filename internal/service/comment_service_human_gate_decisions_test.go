@@ -254,8 +254,13 @@ func TestRecordHumanGateDecision_ReleasesLiveGate(t *testing.T) {
 
 	comments := env.systemComments(taskID)
 	require.Len(t, comments, 1)
-	assert.Contains(t, comments[0].Body, "human_gate снят")
+	assert.Contains(t, comments[0].Body, "human_gate cleared")
+	require.NotNil(t, comments[0].SystemCode)
+	assert.Equal(t, SysCodeGateDecisionRecorded, *comments[0].SystemCode)
 	assert.Contains(t, comments[0].Body, "direct")
+	for _, key := range []string{"decision", "channel", "recorded_by", "quote"} {
+		assert.Contains(t, string(comments[0].SystemParams), `"`+key+`"`, "params must carry the documented key %s", key)
+	}
 }
 
 // TestRecordHumanGateDecision_TaskNotGated_NoOpOnGate proves recording a
@@ -318,7 +323,7 @@ func TestRevokeHumanGateDecision_RefreezesTask(t *testing.T) {
 	comments := env.systemComments(taskID)
 	var sawRefreeze bool
 	for _, c := range comments {
-		if strings.Contains(c.Body, "взведён снова") {
+		if strings.Contains(c.Body, "re-armed") {
 			sawRefreeze = true
 		}
 	}
@@ -445,7 +450,7 @@ func TestEnforceBlockingTriage_RepeatQuestion_DoesNotArm(t *testing.T) {
 	assert.Empty(t, env.taskMover.humanGateCalls(), "a repeat question must never call SetHumanGate")
 	var sawNotice bool
 	for _, c := range env.systemComments() {
-		if strings.Contains(c.Body, "уже отвечен") {
+		if strings.Contains(c.Body, "already answered") {
 			sawNotice = true
 		}
 	}
@@ -947,7 +952,9 @@ func TestRecordHumanGateDecision_DefaultApplied_UsesTaskSpecificWording(t *testi
 
 	comments := env.systemComments(taskID)
 	require.Len(t, comments, 1)
-	assert.Contains(t, comments[0].Body, "дефолт применён: "+quote)
+	assert.Contains(t, comments[0].Body, "default applied: "+quote)
+	require.NotNil(t, comments[0].SystemCode)
+	assert.Equal(t, SysCodeGateAutoDefault, *comments[0].SystemCode)
 	assert.NotContains(t, comments[0].Body, "Pavel напрямую", "no one answered — this must not read as if Pavel did")
 }
 

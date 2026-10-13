@@ -60,6 +60,18 @@ func (h *parkHarness) commentBodies() []string {
 	return out
 }
 
+func (h *parkHarness) commentCodes() []string {
+	h.commentRepo.mu.Lock()
+	defer h.commentRepo.mu.Unlock()
+	var out []string
+	for _, c := range h.commentRepo.items {
+		if c.SystemCode != nil {
+			out = append(out, *c.SystemCode)
+		}
+	}
+	return out
+}
+
 // ── the behaviour change, and its off-switch ──────────────────────────────
 
 // The whole point of the flag: with it ON a stalled card goes to backlog with an
@@ -84,6 +96,15 @@ func TestPark_Enabled_ParksToBacklogWithDueDateAndMonitorLabel(t *testing.T) {
 	}
 
 	got := h.stored(t, task.ID)
+
+	if codes := h.commentCodes(); len(codes) != 1 || codes[0] != SysCodeLeaseParked {
+		t.Errorf("park comment system_code = %v, want [%s]", codes, SysCodeLeaseParked)
+	}
+	for _, b := range h.commentBodies() {
+		if strings.ContainsAny(b, "абвгдежзиклмнопрстуфхцчшщыэюя") {
+			t.Errorf("park comment still has Russian text: %q", b)
+		}
+	}
 
 	// The alarm. Without a due_date the park has no wake-up path at all.
 	if got.DueDate == nil {

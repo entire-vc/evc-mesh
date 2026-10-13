@@ -111,32 +111,40 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 
 	// default_applied gets its own wording (task #060ccaae): the generic template below
 	// reads as "someone answered" (recorderLabel defaults an absent RecordedBy to "Pavel
-	// напrямую", which would be an outright lie here), and the task's own acceptance
+	// directly", which would be an outright lie here), and the task's own acceptance
 	// criterion names this exact phrase so a reader — human or the pavel-digest.py
 	// counter — can find it without parsing provenance out of the ledger row.
-	var body string
+	var body, code string
+	params := map[string]any{"decision": d.ID.String(), "provenance": string(input.Provenance)}
 	if input.Provenance == domain.HumanGateProvenanceDefaultApplied {
+		code = SysCodeGateAutoDefault
+		params["default"] = quoteOrDash(input.Quote)
 		body = fmt.Sprintf(
-			"⏰ Auto: дефолт применён: %s\n\nГейт не получил ответа до дедлайна — сработал "+
-				"заявленный при постановке recommended_default. Решение зафиксировано (%s), "+
-				"human_gate снят.",
+			"⏰ Auto: default applied: %s\n\nThe gate got no answer before the deadline — the "+
+				"recommended_default declared when it was armed took effect. Decision recorded (%s), "+
+				"human_gate cleared.",
 			quoteOrDash(input.Quote), provenanceLabel(input.Provenance),
 		)
 	} else {
+		code = SysCodeGateDecisionRecorded
+		params["channel"] = input.Channel
+		params["recorded_by"] = recorderLabel(input.RecordedBy)
+		params["quote"] = quoteOrDash(input.Quote)
 		body = fmt.Sprintf(
-			"🔓 Auto: human_gate снят — решение зафиксировано (%s, канал %s, зафиксировал %s).\n\n> %s",
+			"🔓 Auto: human_gate cleared — decision recorded (%s, channel %s, recorded by %s).\n\n> %s",
 			provenanceLabel(input.Provenance), input.Channel, recorderLabel(input.RecordedBy), quoteOrDash(input.Quote),
 		)
 	}
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
-		SystemCode: SysCodePtr(SysCodeGateDecisionRecorded),
-		Body:       body,
-		CreatedAt:  timeNow(),
-		UpdatedAt:  timeNow(),
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(code),
+		SystemParams: SysParamsJSON(params),
+		Body:         body,
+		CreatedAt:    timeNow(),
+		UpdatedAt:    timeNow(),
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[human-gate-decision] WARNING: create system comment on task %s failed: %v", task.ID, err)
@@ -227,7 +235,7 @@ func (s *commentService) RevokeHumanGateDecision(ctx context.Context, input doma
 		AuthorType:   domain.ActorTypeSystem,
 		SystemCode:   SysCodePtr(SysCodeGateDecisionRevoked),
 		SystemParams: SysParamsJSON(map[string]any{"reason": input.Reason}),
-		Body:         fmt.Sprintf("🔒 Auto: human_gate взведён снова — запись решения отозвана (%s). Спор зафиксирован.", input.Reason),
+		Body:         fmt.Sprintf("🔒 Auto: human_gate re-armed — the decision record was revoked (%s). Dispute recorded.", input.Reason),
 		CreatedAt:    timeNow(),
 		UpdatedAt:    timeNow(),
 	}
@@ -295,7 +303,7 @@ func (s *commentService) postExistingDecisionNotice(ctx context.Context, task *d
 		SystemCode:   SysCodePtr(SysCodeGateDecisionExisting),
 		SystemParams: SysParamsJSON(map[string]any{"decision_id": existing.ID.String(), "provenance": provenance}),
 		Body: fmt.Sprintf(
-			"🔁 Auto: этот вопрос уже отвечен — запись решения %s (%s, %s) от %s. human_gate не взведён повторно.",
+			"🔁 Auto: this question is already answered — decision record %s (%s, %s) by %s. human_gate not re-armed.",
 			existing.ID, provenance, existing.CreatedAt.Format("2006-01-02"), recorderLabel(existing.RecordedBy),
 		),
 		CreatedAt: now,
@@ -362,9 +370,9 @@ func provenanceLabel(p domain.HumanGateProvenance) string {
 	case domain.HumanGateProvenanceBridged:
 		return "bridged"
 	case domain.HumanGateProvenanceAttested:
-		return "attested — агент переписал ответ, не аутентифицировано криптографически"
+		return "attested — an agent restated the answer, not cryptographically authenticated"
 	case domain.HumanGateProvenanceDefaultApplied:
-		return "default_applied — ответа не было, применён заявленный дефолт"
+		return "default_applied — there was no answer, the declared default was applied"
 	default:
 		return string(p)
 	}
@@ -372,7 +380,7 @@ func provenanceLabel(p domain.HumanGateProvenance) string {
 
 func recorderLabel(recordedBy *uuid.UUID) string {
 	if recordedBy == nil {
-		return "Pavel напрямую"
+		return "Pavel directly"
 	}
 	return recordedBy.String()
 }

@@ -60,7 +60,7 @@ func (s *taskService) handBackToGateAuthor(ctx context.Context, prev *domain.Tas
 		log.Printf("[human-gate] WARNING: hand-back of task %s to gate author %s failed: %v", fresh.ID, author, err)
 		return
 	}
-	s.postAssigneeChangeComment(ctx, fresh, fresh.AssigneeID, &author, "human_gate снят — карточка вернулась агенту, поднявшему вопрос")
+	s.postAssigneeChangeComment(ctx, fresh, fresh.AssigneeID, &author, "human_gate cleared — the card went back to the agent who raised the question")
 }
 
 // returnTriageToTodoAfterGateClear is the ONE place that decides where a task goes when a

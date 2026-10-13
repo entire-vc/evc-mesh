@@ -216,9 +216,9 @@ func (h *TaskHandler) postOwnGateClearedComment(ctx context.Context, taskID, act
 		AuthorType:   domain.ActorTypeSystem,
 		SystemCode:   service.SysCodePtr(service.SysCodeGateClearedOwnArm),
 		SystemParams: service.SysParamsJSON(map[string]any{"agent": actorID.String()}),
-		Body: fmt.Sprintf("🔓 Auto: human_gate снят автором собственного API-арма (agent: %s). "+
-			"Маркерного коммента у этого гейта не было — снятие через DELETE /human-gate, "+
-			"не отзыв аска.", actorID),
+		Body: fmt.Sprintf("🔓 Auto: human_gate cleared by the author of its own API arm (agent: %s). "+
+			"This gate had no marker comment — cleared through DELETE /human-gate, "+
+			"not a withdrawal of the ask.", actorID),
 		IsInternal: true,
 	})
 }

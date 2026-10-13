@@ -112,6 +112,9 @@ func TestPark_BlockerOfOpenDependent_ReturnedToTodoNotParked(t *testing.T) {
 	if len(bodies) != 1 || bodies[0] != blockerReturnedComment {
 		t.Fatalf("expected exactly the blocker-return note, got %q", bodies)
 	}
+	if codes := h.commentCodes(); len(codes) != 1 || codes[0] != SysCodeLeaseBlockerReturned {
+		t.Fatalf("blocker-return system_code = %v, want [%s]", codes, SysCodeLeaseBlockerReturned)
+	}
 	for _, body := range bodies {
 		if strings.HasPrefix(body, "🅿") {
 			t.Fatalf("park comment posted on a card that was not parked: %q", body)
@@ -201,6 +204,9 @@ func TestPark_HandoffWinsOverBlockerCheck(t *testing.T) {
 	}
 	if !handoffNote {
 		t.Fatal("handoff note missing")
+	}
+	if codes := h.commentCodes(); len(codes) != 1 || codes[0] != SysCodeLeaseHandoff {
+		t.Fatalf("handoff system_code = %v, want [%s]", codes, SysCodeLeaseHandoff)
 	}
 }
 

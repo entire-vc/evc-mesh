@@ -104,3 +104,19 @@ func TestEveryServerAuthoredCommentWriterSetsSystemCode(t *testing.T) {
 	}
 	assert.Empty(t, missing, "system comment written without SystemCode")
 }
+
+// The English raw-arm text is what the handler writes now; hasRawArmMarker must
+// read it as well as the Russian form already stored in old comments.
+func TestHasRawArmMarker_ReadsEnglishAndRussianForms(t *testing.T) {
+	en := "🔒 Auto: human_gate armed directly (PATCH/UI), without a marker comment — actor: 7a307a5c-ee16-4d66-9686-9f47b436096f (user)"
+	assert.True(t, hasRawArmMarker(en, domain.ActorTypeSystem))
+	assert.True(t, hasRawArmMarker(legacyRawArmBody, domain.ActorTypeSystem))
+	assert.False(t, hasRawArmMarker(en, domain.ActorTypeAgent), "only the server posts as system")
+	assert.False(t, hasRawArmMarker("human_gate was armed by someone", domain.ActorTypeSystem))
+}
+
+// The reaper's park comment is what fiddler's reaper_park() matches: an optional
+// parking emoji, then this English phrase.
+func TestParkedCommentFmt_StartsWithTheEnglishPhraseFiddlerReads(t *testing.T) {
+	assert.Regexp(t, `^\s*🅿️?\s*The task sat in in_progress`, parkedCommentFmt)
+}

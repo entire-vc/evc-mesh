@@ -311,17 +311,17 @@ func (s *monitorPromotionService) postSystemComment(ctx context.Context, task *d
 	if s.commentRepo == nil {
 		return
 	}
-	parked := "без passive-wait метки"
+	parked := "no passive-wait label"
 	if label, ok := hasParkAlarmLabel(task.Labels); ok {
-		parked = "метка " + label
+		parked = "label " + label
 	} else if len(task.Labels) > 0 {
-		parked = "метки: " + strings.Join(task.Labels, ", ")
+		parked = "labels: " + strings.Join(task.Labels, ", ")
 	}
 	comment := &domain.Comment{
 		ID:     uuid.New(),
 		TaskID: task.ID,
-		Body: "⏰ auto-unparked: due_date наступил — задача возвращена в todo (была в backlog, " +
-			parked + "). Открытых `blocks` нет.",
+		Body: "⏰ auto-unparked: due_date reached — the task is back in todo (it was in backlog, " +
+			parked + "). No open `blocks` dependencies.",
 		AuthorID:     uuid.Nil,
 		AuthorType:   domain.ActorTypeSystem,
 		SystemCode:   SysCodePtr(SysCodeMonitorUnparked),

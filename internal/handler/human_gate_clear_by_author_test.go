@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entire-vc/evc-mesh/internal/service"
+
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -104,6 +106,8 @@ func TestClearHumanGate_OwnAPIArm_AgentMayClear(t *testing.T) {
 	assert.Equal(t, domain.ActorTypeSystem, audit.AuthorType,
 		"system-authored: the one authorship no caller can forge through the comment API")
 	assert.Equal(t, uuid.Nil, audit.AuthorID)
+	require.NotNil(t, audit.SystemCode)
+	assert.Equal(t, service.SysCodeGateClearedOwnArm, *audit.SystemCode)
 	assert.Contains(t, audit.Body, owner.String(), "the record must name who released it")
 
 	// The audit comment must not be readable as an arm or as a withdrawal by the
@@ -113,7 +117,7 @@ func TestClearHumanGate_OwnAPIArm_AgentMayClear(t *testing.T) {
 		assert.NotContains(t, strings.ToLower(audit.Body), negator,
 			"the audit comment must not read as a withdrawal negator")
 	}
-	assert.NotContains(t, audit.Body, "human_gate взведён напрямую",
+	assert.NotContains(t, audit.Body, "human_gate armed directly",
 		"and must not read as a raw-arm marker either")
 }
 

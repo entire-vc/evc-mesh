@@ -108,7 +108,7 @@ const (
 	// params: {"deadline": "<time>", "default": "<text>"}.
 	SysCodeGateArmedDefault = "gate_armed_default"
 	// SysCodeGateDecisionRecorded — gate released by a recorded decision (also
-	// the default-applied release). params: none.
+	// the default-applied release). params: {"decision": "<ref>", "channel": "<text>", "recorded_by": "<text>", "quote": "<text>"}.
 	SysCodeGateDecisionRecorded = "gate_decision_recorded"
 	// SysCodeGateDecisionRevoked — gate re-armed because a recorded decision was
 	// revoked. params: {"reason": "<text>"}.
@@ -126,6 +126,9 @@ const (
 	// SysCodeWithdrawalBlockedRawArmed / ...ReaffirmPending — advice codes for
 	// a refused gate withdrawal (task_handler withdrawalBlockedAdvice reasons).
 	// params: none.
+	// SysCodeGateAutoDefault — hard-gate deadline passed, the declared
+	// recommended_default was applied. params: {"default": "<text>", "decision": "<ref>"}.
+	SysCodeGateAutoDefault                  = "gate_auto_default"
 	SysCodeWithdrawalBlockedRawArmed        = "raw_arm"
 	SysCodeWithdrawalBlockedReaffirmPending = "reaffirm_pending"
 )
@@ -146,6 +149,7 @@ var SystemCodes = []string{
 	SysCodeWithdrawalBlockedRawArmed, SysCodeWithdrawalBlockedReaffirmPending,
 	SysCodeGateArmedDefault, SysCodeGateDecisionRecorded, SysCodeGateDecisionRevoked,
 	SysCodeGateDecisionExisting, SysCodeAssigneeMentionLift, SysCodeRepeatAskRefused,
+	SysCodeGateAutoDefault,
 }
 
 // sysCode returns the pointer form comments.system_code is stored as.

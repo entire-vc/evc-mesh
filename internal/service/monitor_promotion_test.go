@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +170,16 @@ func TestBacklogPromotion_PastDueKindMonitor_PromotedToTodo(t *testing.T) {
 	h.commentRepo.mu.Unlock()
 	if numComments != 1 {
 		t.Errorf("expected 1 auto-unpark comment, got %d", numComments)
+	}
+	h.commentRepo.mu.Lock()
+	defer h.commentRepo.mu.Unlock()
+	for _, c := range h.commentRepo.items {
+		if c.SystemCode == nil || *c.SystemCode != SysCodeMonitorUnparked {
+			t.Errorf("auto-unpark comment system_code = %v, want %s", c.SystemCode, SysCodeMonitorUnparked)
+		}
+		if !strings.Contains(c.Body, "label kind:monitor") {
+			t.Errorf("auto-unpark comment not in English or lost the label: %q", c.Body)
+		}
 	}
 }
 

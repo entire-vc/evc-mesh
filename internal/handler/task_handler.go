@@ -809,11 +809,13 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if prevHumanGate && req.HumanGate != nil && !*req.HumanGate && h.commentService != nil {
 		actorID, _ := actorctx.FromContext(c.Request().Context())
 		_ = h.commentService.Create(c.Request().Context(), &domain.Comment{
-			TaskID:     task.ID,
-			AuthorID:   actorID,
-			AuthorType: domain.ActorTypeUser,
-			Body:       fmt.Sprintf("🔓 human_gate снят вручную (actor: %s)", actorID),
-			IsInternal: true,
+			TaskID:       task.ID,
+			AuthorID:     actorID,
+			AuthorType:   domain.ActorTypeUser,
+			Body:         fmt.Sprintf("🔓 human_gate cleared manually (actor: %s)", actorID),
+			SystemCode:   service.SysCodePtr(service.SysCodeGateClearedManual),
+			SystemParams: service.SysParamsJSON(map[string]any{"actor": actorID.String()}),
+			IsInternal:   true,
 		})
 	}
 
@@ -848,7 +850,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 			AuthorType:   domain.ActorTypeSystem,
 			SystemCode:   service.SysCodePtr(service.SysCodeGateArmedRaw),
 			SystemParams: service.SysParamsJSON(map[string]any{"actor": actorID.String(), "actor_type": string(actorType)}),
-			Body:         fmt.Sprintf("🔒 Auto: human_gate взведён напрямую (PATCH/UI), без маркерного коммента — actor: %s (%s)", actorID, actorType),
+			Body:         fmt.Sprintf("🔒 Auto: human_gate armed directly (PATCH/UI), without a marker comment — actor: %s (%s)", actorID, actorType),
 			IsInternal:   true,
 		})
 	}

@@ -251,6 +251,10 @@ func TestAutoTransition_ReviewParentLabeledUmbrella_AllSubtasksTerminal_ClosesTo
 	assert.Equal(t, domain.ActorTypeSystem, found.AuthorType)
 	assert.Contains(t, found.Body, sub.ID.String()[:8])
 	assert.Contains(t, found.Body, "Subtask A")
+	require.NotNil(t, found.SystemCode)
+	assert.Equal(t, SysCodeUmbrellaAutoClosed, *found.SystemCode)
+	assert.Contains(t, string(found.SystemParams), sub.ID.String()[:8])
+	assert.Contains(t, found.Body, "Auto-close")
 }
 
 func TestAutoTransition_ReviewParentUnlabeled_AllSubtasksTerminal_NoTransition(t *testing.T) {

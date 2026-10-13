@@ -1504,7 +1504,9 @@ func TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment(t *testing.T) {
 			commentCaptured = true
 			assert.Equal(t, taskID, c.TaskID)
 			assert.True(t, c.IsInternal)
-			assert.Contains(t, c.Body, "human_gate взведён напрямую")
+			assert.Contains(t, c.Body, "human_gate armed directly")
+			require.NotNil(t, c.SystemCode)
+			assert.Equal(t, service.SysCodeGateArmedRaw, *c.SystemCode)
 			return nil
 		},
 	}

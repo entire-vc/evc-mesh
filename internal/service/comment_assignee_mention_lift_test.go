@@ -135,6 +135,8 @@ func TestAssigneeMentionLift_PersonOnOwnBacklogCard_LiftsAndDelivers(t *testing.
 	for _, cm := range e.commentRepo.items {
 		if cm.AuthorType == domain.ActorTypeSystem {
 			sys = append(sys, cm.Body)
+			require.NotNil(t, cm.SystemCode)
+			assert.Equal(t, SysCodeAssigneeMentionLift, *cm.SystemCode)
 		}
 	}
 	require.Len(t, sys, 1, "the lift must leave an audit trail on the card")
