@@ -217,6 +217,18 @@ describe("WorkspaceSettingsPage — edit agent from the members list (regression
     expect(await screen.findByText("Status")).toBeInTheDocument();
   });
 
+  it("keeps long names from overlapping the badges: name truncates, badges and actions do not shrink", async () => {
+    mockApiByRoute("admin", routes);
+    await openMembersTab();
+    await screen.findByText("GuestBot");
+
+    const name = screen.getByText(/^HomeBot/);
+    expect(name).toHaveClass("block", "truncate");
+    expect(screen.getByText("Home")).toHaveClass("shrink-0");
+    expect(screen.getByTitle("Edit agent")).toHaveClass("shrink-0");
+    expect(screen.getByTitle("Revoke connection")).toHaveClass("shrink-0");
+  });
+
   it("hides Edit agent from a member", async () => {
     mockApiByRoute("member", routes);
     await openMembersTab();
