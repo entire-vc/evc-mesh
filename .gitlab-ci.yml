@@ -99,6 +99,14 @@ workflow:
     - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
       auto_cancel:
         on_new_commit: none
+    # A push to any other branch creates no pipeline. The open-MR rule above
+    # is evaluated once, at push time, and misses the common case: the branch
+    # is pushed seconds before `glab mr create`, so the push pipeline is
+    # created and then repeated by the MR pipeline on the same SHA. Jobs
+    # without their own rules still run in the MR pipeline. A branch without
+    # an MR gets CI from a draft MR or a manually started pipeline.
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
     - if: $CI_COMMIT_BRANCH
 
 stages: [gate, sast, lint, test, build, memory-gate, deploy]
