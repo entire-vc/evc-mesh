@@ -392,6 +392,9 @@ export interface Comment {
   author_name?: string;
   body: string;
   metadata: Record<string, unknown>;
+  /** Kind of a server-generated comment; null for ordinary comments. */
+  system_code: string | null;
+  system_params: Record<string, unknown> | null;
   is_internal: boolean;
   created_at: string;
   updated_at: string;

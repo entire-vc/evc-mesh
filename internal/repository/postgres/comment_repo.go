@@ -20,7 +20,7 @@ import (
 // commentEnrichedSelect provides columns for comment queries including
 // author_name resolved via correlated subquery (same pattern as task assignee_name).
 const commentEnrichedSelect = `SELECT c.id, c.task_id, c.parent_comment_id, c.author_id, c.author_type,
-	c.body, c.metadata, c.is_internal, c.created_at, c.updated_at,
+	c.body, c.metadata, c.system_code, c.system_params, c.is_internal, c.created_at, c.updated_at,
 	CASE
 		WHEN c.author_type = 'agent' THEN
 			(SELECT name FROM agents WHERE id = c.author_id AND deleted_at IS NULL)
@@ -41,8 +41,8 @@ func NewCommentRepo(db *sqlx.DB) *CommentRepo {
 
 func (r *CommentRepo) Create(ctx context.Context, comment *domain.Comment) error {
 	const q = `
-		INSERT INTO comments (id, task_id, parent_comment_id, author_id, author_type, body, metadata, is_internal, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO comments (id, task_id, parent_comment_id, author_id, author_type, body, metadata, system_code, system_params, is_internal, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`
 	metadata := comment.Metadata
 	if metadata == nil {
@@ -51,7 +51,7 @@ func (r *CommentRepo) Create(ctx context.Context, comment *domain.Comment) error
 	_, err := r.db.ExecContext(ctx, q,
 		comment.ID, comment.TaskID, comment.ParentCommentID,
 		comment.AuthorID, comment.AuthorType, comment.Body,
-		metadata, comment.IsInternal,
+		metadata, comment.SystemCode, comment.SystemParams, comment.IsInternal,
 		comment.CreatedAt, comment.UpdatedAt,
 	)
 	return err
