@@ -19,6 +19,7 @@ interface AuthState {
   fetchMe: () => Promise<void>;
   updateProfile: (name: string, username?: string, avatarURL?: string) => Promise<void>;
   checkUsername: (username: string) => Promise<boolean>;
+  setLocale: (locale: string) => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -87,6 +88,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     const user = await api<User>("/api/v1/auth/me", {
       method: "PATCH",
       body: { name, username: username ?? "", avatar_url: avatarURL ?? "" },
+    });
+    set({ user });
+  },
+
+  setLocale: async (locale: string) => {
+    const user = await api<User>("/api/v1/auth/me", {
+      method: "PATCH",
+      body: { locale },
     });
     set({ user });
   },

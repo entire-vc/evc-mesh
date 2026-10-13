@@ -55,6 +55,7 @@ func TestWorkspaceHandler_Create_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Test Workspace", result.Name)
 	assert.Equal(t, "test-ws", result.Slug)
+	assert.Equal(t, domain.DefaultLocale, result.DefaultLocale)
 }
 
 // TestWorkspaceHandler_Create_AgentRefused is the regression test for

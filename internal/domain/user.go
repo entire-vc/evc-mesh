@@ -21,9 +21,14 @@ type User struct {
 	// name; once this is true the name belongs to the account and no workspace
 	// admin can overwrite it. See migration 20260731089 for why provenance rather
 	// than role is the thing that makes an admin edit safe here.
-	DisplayNameSelfSet bool      `json:"display_name_self_set" db:"display_name_self_set"`
-	CreatedAt          time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at" db:"updated_at"`
+	DisplayNameSelfSet bool `json:"display_name_self_set" db:"display_name_self_set"`
+	// Locale is the interface language ("en"|"ru"). LocaleSetExplicitly is false
+	// until the person picks a language themselves; the web client uses it to
+	// offer (not force) a switch when the browser language differs.
+	Locale              string    `json:"locale" db:"locale"`
+	LocaleSetExplicitly bool      `json:"locale_set_explicitly" db:"locale_set_explicitly"`
+	CreatedAt           time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // NameIsPlaceholder reports whether the account has no real display name — the

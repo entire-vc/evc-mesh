@@ -776,6 +776,28 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, name, use
 	return user, nil
 }
 
+// SetLocale stores the user's interface language. An unsupported code is a
+// validation error (HTTP 400); a valid one also marks the choice as explicit,
+// so the client stops suggesting a language from the browser settings.
+func (s *Service) SetLocale(ctx context.Context, userID uuid.UUID, locale string) (*domain.User, error) {
+	if !domain.IsSupportedLocale(locale) {
+		return nil, apierror.ValidationError(map[string]string{"locale": "unsupported locale"})
+	}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, apierror.Wrap(err)
+	}
+	if user == nil {
+		return nil, apierror.NotFound("User")
+	}
+	user.Locale = locale
+	user.LocaleSetExplicitly = true
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
 // CheckUsername reports whether a username is available for the given user.
 // Returns false (not available) for invalid format; no error is returned in that case.
 func (s *Service) CheckUsername(ctx context.Context, userID uuid.UUID, username string) (bool, error) {

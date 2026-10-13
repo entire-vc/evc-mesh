@@ -42,6 +42,7 @@ import { InviteAgentDialog } from "@/components/invite-agent-dialog";
 import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { InviteLinkBox } from "@/components/invite-link-box";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LanguageSelect } from "@/components/language-select";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
 import { useMemberStore } from "@/stores/member";
@@ -1298,6 +1299,7 @@ export function WorkspaceSettingsPage() {
                 <p className="text-xs text-destructive">2–40 characters: lowercase letters, digits, hyphens; no leading/trailing hyphens</p>
               )}
             </div>
+            <LanguageSelect />
             {profileFeedback && (
               <p
                 className={cn(

@@ -28,4 +28,7 @@ type Workspace struct {
 	// can never accept a write carrying that tag, regardless of which key a
 	// client process happens to be holding.
 	IsBench bool `json:"is_bench" db:"is_bench"`
+	// DefaultLocale is the language used for workspace-level output when the
+	// recipient has no preference of their own.
+	DefaultLocale string `json:"default_locale" db:"default_locale"`
 }

@@ -28,18 +28,19 @@ type workspaceRow struct {
 	UpdatedAt         time.Time       `db:"updated_at"`
 	DeletedAt         *time.Time      `db:"deleted_at"`
 	IsBench           bool            `db:"is_bench"`
+	DefaultLocale     string          `db:"default_locale"`
 }
 
 // workspaceSelectCols is every column workspaceRow scans, listed explicitly
 // — see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
 // refuses to scan a column with no matching struct field, so an additive
 // migration to this table breaks every read until redeployed.
-const workspaceSelectCols = `id, name, slug, owner_id, settings, billing_plan_id, billing_customer_id, icon_url, created_at, updated_at, deleted_at, is_bench`
+const workspaceSelectCols = `id, name, slug, owner_id, settings, billing_plan_id, billing_customer_id, icon_url, created_at, updated_at, deleted_at, is_bench, default_locale`
 
 // workspaceSelectColsQualified is workspaceSelectCols prefixed with the `w`
 // JOIN alias, for queries that select from workspaces alongside other
 // tables.
-const workspaceSelectColsQualified = `w.id, w.name, w.slug, w.owner_id, w.settings, w.billing_plan_id, w.billing_customer_id, w.icon_url, w.created_at, w.updated_at, w.deleted_at, w.is_bench`
+const workspaceSelectColsQualified = `w.id, w.name, w.slug, w.owner_id, w.settings, w.billing_plan_id, w.billing_customer_id, w.icon_url, w.created_at, w.updated_at, w.deleted_at, w.is_bench, w.default_locale`
 
 func (r *workspaceRow) toDomain() *domain.Workspace {
 	ws := &domain.Workspace{
@@ -52,6 +53,7 @@ func (r *workspaceRow) toDomain() *domain.Workspace {
 		UpdatedAt:      r.UpdatedAt,
 		IconStorageKey: r.IconURL,
 		IsBench:        r.IsBench,
+		DefaultLocale:  r.DefaultLocale,
 	}
 	if r.BillingPlanID != nil {
 		ws.BillingPlanID = *r.BillingPlanID
@@ -124,7 +126,8 @@ func (r *WorkspaceRepo) Update(ctx context.Context, workspace *domain.Workspace)
 	const q = `
 		UPDATE workspaces
 		SET name = $2, slug = $3, settings = $4, billing_plan_id = $5, billing_customer_id = $6,
-		    icon_url = $7, updated_at = $8
+		    icon_url = $7, updated_at = $8,
+		    default_locale = COALESCE(NULLIF($9, ''), default_locale)
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 	settings := workspace.Settings
@@ -141,6 +144,7 @@ func (r *WorkspaceRepo) Update(ctx context.Context, workspace *domain.Workspace)
 	res, err := r.db.ExecContext(ctx, q,
 		workspace.ID, workspace.Name, workspace.Slug, settings,
 		billingPlanID, billingCustomerID, workspace.IconStorageKey, workspace.UpdatedAt,
+		workspace.DefaultLocale,
 	)
 	if err != nil {
 		return err

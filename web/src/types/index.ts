@@ -94,6 +94,8 @@ export interface User {
   username?: string;
   avatar_url: string;
   is_active: boolean;
+  locale?: string;
+  locale_set_explicitly?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -107,6 +109,7 @@ export interface Workspace {
   billing_plan_id: string;
   billing_customer_id: string;
   icon_url: string | null;
+  default_locale?: string;
   created_at: string;
   updated_at: string;
 }
