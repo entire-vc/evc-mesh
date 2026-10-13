@@ -115,6 +115,29 @@ func TestUpsertSendsCiphertextToTheDatabase(t *testing.T) {
 	assert.Equal(t, plaintext, back)
 }
 
+// An empty AgentKey must reach the database as NULL so upsertQuery's
+// CASE WHEN EXCLUDED.agent_key IS NOT NULL keeps the stored credential; a
+// non-NULL empty string would overwrite it.
+func TestUpsertWithEmptyKeySendsNullSoStoredKeyIsKept(t *testing.T) {
+	setEncryptionKey(t, 92)
+	repo, mock := newProjectIntegrationRepoMock(t)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("CASE WHEN EXCLUDED.agent_key IS NOT NULL")).
+		WithArgs(
+			sqlmock.AnyArg(), sqlmock.AnyArg(), "team_relay", false, sqlmock.AnyArg(),
+			(*string)(nil),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	pi := sampleIntegration("")
+	pi.Enabled = false
+	require.NoError(t, repo.Upsert(context.Background(), pi))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // The trigger rejects unencrypted credentials by default, so the one caller
 // that legitimately cannot encrypt — an instance with no key configured — has
 // to ask for the exemption explicitly, and only then.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +39,14 @@ func (s *projectIntegrationService) GetTeamRelay(ctx context.Context, projectID 
 
 // UpsertTeamRelay creates or updates the Team Relay integration for the given project.
 func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, projectID uuid.UUID, input UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error) {
+	// A supplied agent_key is validated whether or not the integration is being
+	// enabled: a malformed value (typically the "••••" mask or a browser-filled
+	// password) must be refused here with a readable reason, not fall through to
+	// the repository's generic 400. Empty means "keep the stored key".
+	if input.AgentKey != "" && !teamRelayAgentKeyPattern.MatchString(input.AgentKey) {
+		return nil, apierror.ValidationError(map[string]string{"agent_key": teamRelayAgentKeyHint(input.AgentKey)})
+	}
+
 	// Validation: enabled=true requires share_id or share_slug.
 	if input.Enabled {
 		if input.ShareID == "" && input.ShareSlug == "" {
@@ -47,10 +56,6 @@ func (s *projectIntegrationService) UpsertTeamRelay(ctx context.Context, project
 			if _, err := uuid.Parse(input.ShareID); err != nil {
 				return nil, apierror.ValidationError(map[string]string{"share_id": "must be a valid UUID"})
 			}
-		}
-		// Validate agent_key length when supplied.
-		if input.AgentKey != "" && len(input.AgentKey) < 20 {
-			return nil, apierror.ValidationError(map[string]string{"agent_key": "must be at least 20 characters"})
 		}
 		// On first create, agent_key is mandatory.
 		existing, err := s.piRepo.Get(ctx, projectID, "team_relay")
@@ -132,4 +137,15 @@ func (s *projectIntegrationService) SearchTR(ctx context.Context, shareSlug, q s
 		}
 	}
 	return filtered, nil
+}
+
+// teamRelayAgentKeyPattern matches a genuine Team Relay agent key; the
+// repository enforces the same shape as a last line of defence.
+var teamRelayAgentKeyPattern = regexp.MustCompile(`^tr_agent_[0-9a-f]{48}$`)
+
+func teamRelayAgentKeyHint(key string) string {
+	if strings.ContainsRune(key, '•') {
+		return "agent_key looks like the masked placeholder, not a real key; leave the field empty to keep the stored key or paste a new key (tr_agent_ + 48 hex characters)"
+	}
+	return "agent_key must be \"tr_agent_\" followed by 48 lowercase hex characters; leave the field empty to keep the stored key"
 }
