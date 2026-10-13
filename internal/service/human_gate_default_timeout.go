@@ -166,13 +166,12 @@ func (s *humanGateDefaultTimeoutService) returnToTodo(ctx context.Context, taskI
 	return task
 }
 
-// notifyDefaultApplied broadcasts the "default fired" event workspace-wide (no
-// TargetUserID/RelevantUserIDs — the same shape enforceBlockingTriage's
-// task.blocking_triage event uses), which reaches Pavel through his own subscription
-// without this service needing to know his user id, and reaches the gate's author too
-// when they are a subscribed user. RecordHumanGateDecision has already woken the task's
-// assignee agent as a side effect of releasing the gate; this is the separate,
-// human-facing half of "уведомление автору гейта и Павлу" the task asks for.
+// notifyDefaultApplied tells the people the gate concerns that its deadline
+// passed and the recommended default was applied: the gate's author (when a
+// person) and the task's own participants. It is not a workspace-wide event.
+// RecordHumanGateDecision has already woken the task's assignee agent as a side
+// effect of releasing the gate; this is the separate, human-facing half of
+// "уведомление автору гейта" the task asks for.
 func (s *humanGateDefaultTimeoutService) notifyDefaultApplied(ctx context.Context, task *domain.Task, c domain.HumanGateDefaultTimeoutCandidate) {
 	if s.notifySvc == nil || task == nil {
 		return
@@ -185,12 +184,18 @@ func (s *humanGateDefaultTimeoutService) notifyDefaultApplied(ctx context.Contex
 	}
 	taskIDCopy := c.TaskID
 	projIDCopy := task.ProjectID
+	var gateAuthor *uuid.UUID
+	if c.GateAuthorType == domain.ActorTypeUser && c.GateAuthor != uuid.Nil {
+		author := c.GateAuthor
+		gateAuthor = &author
+	}
 	s.notifySvc.Notify(ctx, domain.NotificationEvent{
-		WorkspaceID: wsID,
-		TaskID:      &taskIDCopy,
-		ProjectID:   &projIDCopy,
-		EventType:   "task.human_gate_default_applied",
-		Title:       "Default applied: " + task.Title,
+		WorkspaceID:     wsID,
+		TaskID:          &taskIDCopy,
+		ProjectID:       &projIDCopy,
+		RelevantUserIDs: taskParticipants(task, uuid.Nil, gateAuthor),
+		EventType:       "task.human_gate_default_applied",
+		Title:           "Default applied: " + task.Title,
 		Body: fmt.Sprintf(
 			"Gate deadline passed with no answer — recommended default applied: %s",
 			c.RecommendedDefault,

@@ -144,16 +144,16 @@ func TestCommentParticipants_AgentReplyAuthorIsNotARecipient(t *testing.T) {
 	assert.Equal(t, []uuid.UUID{assignee}, got)
 }
 
-// TestRelevantToUser_EmptySetMeansEveryone guards the distinction the field
-// depends on: a producer that has not been taught to fill RelevantUserIDs in
-// must keep delivering, not go silent.
-func TestRelevantToUser_EmptySetMeansEveryone(t *testing.T) {
+// TestRelevantToUser_EmptySetMeansNobodyUnlessBroadcast: an event that names
+// nobody is relevant to no one; Broadcast is the explicit exception.
+func TestRelevantToUser_EmptySetMeansNobodyUnlessBroadcast(t *testing.T) {
 	anyone := uuid.New()
-	assert.True(t, relevantToUser(domain.NotificationEvent{}, anyone))
-	assert.True(t, relevantToUser(domain.NotificationEvent{RelevantUserIDs: []uuid.UUID{}}, anyone))
+	assert.False(t, relevantToUser(domain.NotificationEvent{}, anyone))
+	assert.False(t, relevantToUser(domain.NotificationEvent{RelevantUserIDs: []uuid.UUID{}}, anyone))
+	assert.True(t, relevantToUser(domain.NotificationEvent{Broadcast: true}, anyone))
 
 	named := uuid.New()
-	event := domain.NotificationEvent{RelevantUserIDs: []uuid.UUID{named}}
+	event := domain.NotificationEvent{RelevantUserIDs: []uuid.UUID{named}, Broadcast: true}
 	assert.True(t, relevantToUser(event, named))
-	assert.False(t, relevantToUser(event, anyone))
+	assert.False(t, relevantToUser(event, anyone), "Broadcast never widens a named set")
 }

@@ -127,11 +127,11 @@ func TestDispatch_TelegramDeliversOnlyToTheEventSOwnPeople(t *testing.T) {
 	assert.Contains(t, msgs[0].text, "the confidential contents of somebody else's comment")
 }
 
-// TestDispatch_TelegramEventWithoutRelevanceStillBroadcasts: nil is "no
+// TestDispatch_TelegramBroadcastEventReachesEverySubscriber: nil is "no
 // relevance information", not "nobody". A producer that has not been taught to
 // name its recipients must keep delivering to its subscribers rather than
 // silently going dark.
-func TestDispatch_TelegramEventWithoutRelevanceStillBroadcasts(t *testing.T) {
+func TestDispatch_TelegramBroadcastEventReachesEverySubscriber(t *testing.T) {
 	wsID := uuid.New()
 	a, b := uuid.New(), uuid.New()
 
@@ -144,7 +144,7 @@ func TestDispatch_TelegramEventWithoutRelevanceStillBroadcasts(t *testing.T) {
 		members: map[uuid.UUID]bool{a: true, b: true},
 	}
 
-	telegramSvc(repo, client).dispatch(commentEvent(wsID)) // RelevantUserIDs unset
+	telegramSvc(repo, client).dispatch(commentEvent(wsID)) // Broadcast, no RelevantUserIDs
 
 	require.Eventually(t, func() bool { return len(client.messages()) == 2 }, time.Second, 5*time.Millisecond)
 }
@@ -208,11 +208,11 @@ func TestDispatch_RelevanceNarrowsEveryChannelNotJustTelegram(t *testing.T) {
 		"the in-app bell still stored a comment body for somebody the comment was not about")
 }
 
-// TestDispatch_NoRelevanceSetStillBroadcasts is the other half, and the reason
+// TestDispatch_BroadcastEventReachesEverySubscriber is the other half, and the reason
 // deliberately workspace-wide events did not have to be touched: an event whose
 // producer says nothing about relevance keeps reaching everyone subscribed. A
 // producer that has not been taught to fill the set in must not go silent.
-func TestDispatch_NoRelevanceSetStillBroadcasts(t *testing.T) {
+func TestDispatch_BroadcastEventReachesEverySubscriber(t *testing.T) {
 	wsID := uuid.New()
 	one, two := uuid.New(), uuid.New()
 
@@ -224,7 +224,7 @@ func TestDispatch_NoRelevanceSetStillBroadcasts(t *testing.T) {
 		members: map[uuid.UUID]bool{one: true, two: true},
 	}
 
-	event := commentEvent(wsID) // no RelevantUserIDs
+	event := commentEvent(wsID) // Broadcast, no RelevantUserIDs
 	NewNotificationService(repo).(*notificationService).dispatch(event)
 
 	settleDispatch()

@@ -211,6 +211,11 @@ func webPushPref(wsID, userID uuid.UUID) domain.NotificationPreference {
 	}
 }
 
+// commentEvent is a workspace-wide event: most dispatch tests are about
+// membership and channel plumbing, not about who the event is for, so it opts
+// into Broadcast. Tests of recipient narrowing set RelevantUserIDs or
+// TargetUserID (which take precedence), and the fail-closed tests build their
+// own event without it.
 func commentEvent(wsID uuid.UUID) domain.NotificationEvent {
 	taskID := uuid.New()
 	return domain.NotificationEvent{
@@ -219,6 +224,7 @@ func commentEvent(wsID uuid.UUID) domain.NotificationEvent {
 		EventType:   "comment.created",
 		Title:       "New comment",
 		Body:        "the confidential contents of somebody else's comment",
+		Broadcast:   true,
 	}
 }
 

@@ -72,16 +72,19 @@ type NotificationEvent struct {
 	// and the alternative — one channel quietly keeping a wider audience than
 	// the others — is the kind of difference nobody discovers until it leaks.
 	//
-	// Nil means "no relevance information available", which is not the same as
-	// "nobody is relevant": channels treat nil as the old broadcast behaviour and
-	// only narrow delivery when the caller actually supplied a set. That
-	// distinction is what keeps a producer that has not been taught to fill this
-	// in from silently going quiet, and it is why deliberately workspace-wide
-	// events (task.status_changed) can simply leave it unset.
+	// An event that names nobody (no TargetUserID, no RelevantUserIDs) is
+	// delivered to nobody unless it sets Broadcast. Silence is the safe failure:
+	// a producer that forgot to name its recipients costs a missing message, not
+	// a task's content in every subscribed colleague's Telegram.
 	//
 	// Advisory, and never widening: it can only remove recipients that the
 	// membership, subscription and TargetUserID checks already allowed.
 	RelevantUserIDs []uuid.UUID `json:"relevant_user_ids,omitempty"`
+	// Broadcast marks an event that is deliberately for every subscribed member
+	// of the workspace. It is the only way to reach more than the people the
+	// event names, it defaults to false, and it is ignored when TargetUserID or
+	// RelevantUserIDs is set. No event type in this codebase sets it today.
+	Broadcast bool `json:"broadcast,omitempty"`
 	// Labels carries the task's labels/tags at the moment the event was
 	// raised, for channels (Telegram) whose message format includes them.
 	// Not persisted; purely a dispatch-time hint from the caller, which
