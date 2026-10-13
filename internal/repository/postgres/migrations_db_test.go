@@ -15,10 +15,10 @@ import (
 // schema, so a migration whose Down is broken or a silent no-op shipped
 // green. This test round-trips the NEWEST migration on the same real
 // Postgres the suite runs on: down one version, the goose version must
-// actually drop; up, the exact version must be restored. For this branch's
-// own migration (20261004001) the schema is asserted too — the table must
-// be gone after down and back after up (AC3 of #5194afd4: up+down on real
-// Postgres in CI). A future branch whose newest migration is something else
+// actually drop; up, the exact version must be restored. For the newest
+// table-creating migration (20261013001, document_path_aliases, #ed10e6aa)
+// the schema is asserted too — the table must be gone after down and back
+// after up (AC3 of #5194afd4: up+down on real Postgres in CI). A future branch whose newest migration is something else
 // still gets the version round-trip; it should extend the schema block for
 // its own table.
 func TestNewestMigrationDownUpRoundTrip(t *testing.T) {
@@ -36,10 +36,10 @@ func TestNewestMigrationDownUpRoundTrip(t *testing.T) {
 	require.Less(t, after, before,
 		"down must actually lower the goose version — a no-op Down is the exact failure this test exists to catch")
 
-	ownMigration := before == 20261004001 // this branch's migration
+	ownMigration := before == 20261013001 // document_path_aliases
 	if ownMigration {
-		require.False(t, tableExists(t, db, "closed_followup_roots"),
-			"down must drop closed_followup_roots")
+		require.False(t, tableExists(t, db, "document_path_aliases"),
+			"down must drop document_path_aliases")
 	}
 
 	require.NoError(t, goose.Up(db, migrationsDir),
@@ -48,8 +48,8 @@ func TestNewestMigrationDownUpRoundTrip(t *testing.T) {
 		"up must restore the exact pre-down version")
 
 	if ownMigration {
-		require.True(t, tableExists(t, db, "closed_followup_roots"),
-			"up must recreate closed_followup_roots")
+		require.True(t, tableExists(t, db, "document_path_aliases"),
+			"up must recreate document_path_aliases")
 	}
 }
 

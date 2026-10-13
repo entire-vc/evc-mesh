@@ -182,6 +182,20 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expecte
 		versionExpr = "version + 1"
 	}
 
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// A move records where the subtree used to be before the UPDATE rewrites
+	// it, so the recorded paths are the ones references in the wild still use.
+	// The row lock keeps a concurrent move of the same document from slipping
+	// between this read and the write below.
+	if aerr := recordPathAliasesOnMove(ctx, tx, doc); aerr != nil {
+		return 0, aerr
+	}
+
 	q := `
 		UPDATE documents
 		   SET title = $2, parent_id = $3, position = $4, updated_at = $5,
@@ -191,17 +205,23 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expecte
 		RETURNING version`
 
 	var newVersion int
-	err := r.db.GetContext(ctx, &newVersion, q, doc.ID, doc.Title, doc.ParentID, doc.Position,
+	err = tx.GetContext(ctx, &newVersion, q, doc.ID, doc.Title, doc.ParentID, doc.Position,
 		doc.UpdatedAt, doc.UpdatedBy, doc.UpdatedByType, expectedVersion)
 	if isDocumentSlugConflict(err) {
 		return 0, apierror.Conflict("a document with this slug already exists in this location")
 	}
 	if err == nil {
+		if cerr := tx.Commit(); cerr != nil {
+			return 0, cerr
+		}
 		return newVersion, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
+	// Nothing was written; drop the aliases recorded for a move that did not
+	// happen before telling the two failure cases apart.
+	_ = tx.Rollback()
 
 	// Nothing matched. Either the row is gone (or soft-deleted), which is a 404,
 	// or it is alive at a different version, which is the conflict. The second
@@ -218,6 +238,67 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expecte
 		return 0, curErr
 	}
 	return current, repository.ErrDocumentVersionMismatch
+}
+
+// recordPathAliasesOnMove writes the current full slug path of doc and of each
+// of its live descendants into document_path_aliases when doc.ParentID differs
+// from the stored parent_id. It must run inside the move's transaction and
+// before the UPDATE: the paths it records are computed from the tree as it is
+// now, which after the UPDATE would already be the new one.
+//
+// A path an earlier move left behind is re-pointed (ON CONFLICT DO UPDATE): the
+// most recent document to vacate a path is the one a reference to it most
+// plausibly means. Slugs are not editable, so parent_id is the only change that
+// moves a path.
+func recordPathAliasesOnMove(ctx context.Context, tx *sqlx.Tx, doc *domain.Document) error {
+	var stored struct {
+		ParentID *uuid.UUID `db:"parent_id"`
+	}
+	err := tx.GetContext(ctx, &stored,
+		`SELECT parent_id FROM documents WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, doc.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Gone or deleted: the UPDATE will match nothing and report it.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if sameParent(stored.ParentID, doc.ParentID) {
+		return nil
+	}
+
+	// up walks from the document to its root, prefixing each ancestor's slug,
+	// so the row whose parent_id IS NULL carries the document's full path; down
+	// then extends that path over the live subtree. project_id is pinned on
+	// every row of the subtree walk, same rule as SubtreeInProject.
+	const q = `
+		WITH RECURSIVE up AS (
+			SELECT d.parent_id, d.slug::text AS path
+			  FROM documents d WHERE d.id = $1
+			UNION ALL
+			SELECT p.parent_id, p.slug || '/' || up.path
+			  FROM documents p JOIN up ON p.id = up.parent_id
+		), down AS (
+			SELECT d.id, (SELECT path FROM up WHERE parent_id IS NULL) AS path
+			  FROM documents d WHERE d.id = $1
+			UNION ALL
+			SELECT c.id, down.path || '/' || c.slug
+			  FROM documents c JOIN down ON c.parent_id = down.id
+			 WHERE c.project_id = $2 AND c.deleted_at IS NULL
+		)
+		INSERT INTO document_path_aliases (project_id, path, document_id)
+		SELECT $2, path, id FROM down WHERE path IS NOT NULL
+		ON CONFLICT (project_id, path) DO UPDATE
+		   SET document_id = EXCLUDED.document_id, created_at = now()`
+	_, err = tx.ExecContext(ctx, q, doc.ID, doc.ProjectID)
+	return err
+}
+
+func sameParent(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // SoftDelete stamps deleted_at. The children go with it: ON DELETE CASCADE only
@@ -354,6 +435,72 @@ func (r *DocumentRepo) GetByPathInProject(ctx context.Context, projectID uuid.UU
 		return nil, len(segments) - 1, nil
 	}
 	return doc, found.Depth, nil
+}
+
+// GetByPathAlias resolves a former path recorded by a move — see
+// repository.DocumentRepository.GetByPathAlias. The join to a live document is
+// what makes a deleted document's aliases dead: the alias row survives a soft
+// delete, but it no longer leads anywhere.
+func (r *DocumentRepo) GetByPathAlias(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error) {
+	q := documentEnrichedSelect + `
+		  FROM document_path_aliases a
+		  JOIN documents d ON d.id = a.document_id
+		 WHERE a.project_id = $1 AND a.path = $2
+		   AND d.project_id = a.project_id AND d.deleted_at IS NULL`
+	var row documentRow
+	if err := r.db.GetContext(ctx, &row, q, projectID, path); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	d := row.toDomain()
+	return &d, nil
+}
+
+// documentPathUpSQL builds the full slug path of every document in the
+// "start" CTE (one column, id) by walking each one up to its root. The final
+// row per document is the one whose parent_id IS NULL.
+const documentPathUpSQL = `
+	up AS (
+		SELECT s.id AS doc_id, d.parent_id, d.slug::text AS path
+		  FROM start s JOIN documents d ON d.id = s.id
+		UNION ALL
+		SELECT up.doc_id, p.parent_id, p.slug || '/' || up.path
+		  FROM up JOIN documents p ON p.id = up.parent_id
+	)`
+
+// FindLiveBySlug — see repository.DocumentRepository.FindLiveBySlug.
+func (r *DocumentRepo) FindLiveBySlug(ctx context.Context, projectID uuid.UUID, slug string, limit int) ([]repository.DocumentPathHit, error) {
+	q := `
+		WITH RECURSIVE start AS (
+			SELECT id FROM documents
+			 WHERE project_id = $1 AND slug = $2 AND deleted_at IS NULL
+		), ` + documentPathUpSQL + `
+		SELECT doc_id AS id, path FROM up WHERE parent_id IS NULL
+		 ORDER BY path LIMIT $3`
+	var hits []repository.DocumentPathHit
+	if err := r.db.SelectContext(ctx, &hits, q, projectID, slug, limit); err != nil {
+		return nil, err
+	}
+	return hits, nil
+}
+
+// PathOf — see repository.DocumentRepository.PathOf.
+func (r *DocumentRepo) PathOf(ctx context.Context, id uuid.UUID) (string, error) {
+	q := `
+		WITH RECURSIVE start AS (
+			SELECT id FROM documents WHERE id = $1 AND deleted_at IS NULL
+		), ` + documentPathUpSQL + `
+		SELECT path FROM up WHERE parent_id IS NULL`
+	var path string
+	if err := r.db.GetContext(ctx, &path, q, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 func (r *DocumentRepo) HasAncestor(ctx context.Context, docID, ancestorID uuid.UUID) (bool, error) {

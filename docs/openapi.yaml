@@ -488,6 +488,13 @@ components:
         body:
           type: string
           description: Markdown, present on the single-document read.
+        moved_to:
+          type: string
+          description: |
+            Set only by GET .../documents/by-path/{path} when the path did not
+            name the document where it sits now (a former path left by a move,
+            or a bare slug matched at another depth): the document's current
+            full slug path, e.g. `specs/threat-model`. Omitted on an exact hit.
 
     DocumentHeading:
       type: object
@@ -3040,11 +3047,14 @@ paths:
         Agents think in paths, and making them resolve a uuid first adds a call to
         every access.
 
-        A path is a lookup key derived from where a document currently sits, not
-        an identifier for it. Move the document and the old path stops resolving;
-        a later document that takes the slug in the old place will answer to it.
-        Paths are not versioned, aliased or redirected — the document's `id`,
-        returned here, is the reference that survives a reorganisation.
+        A path is a lookup key derived from where a document currently sits; the
+        document's `id`, returned here, is the stable identifier. Paths still
+        survive a reorganisation: on a miss of the live tree the lookup tries
+        (1) a former path recorded when the document or one of its ancestors was
+        moved, then (2) for a one-segment path, the single live document with
+        that slug at any depth. A hit through either sets `moved_to` to the
+        document's current path. A live document at the path always wins over a
+        former path.
       responses:
         "200":
           description: Document metadata and body
@@ -3056,6 +3066,10 @@ paths:
           description: |
             No such path. The details say how far it resolved and which segment
             failed.
+        "409":
+          description: |
+            A bare slug that names several live documents. The details list
+            their full paths (at most 10).
 
   # ------------------------------------------------------------------
   # Agents

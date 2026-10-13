@@ -300,6 +300,15 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 	if verr := rejectBinaryBody([]byte(input.Body)); verr != nil {
 		return nil, verr
 	}
+	// A "/" in the slug used to be stripped by Slugify, gluing folder and name
+	// together ("reports/x" became "reportsx") — a document filed nowhere the
+	// caller meant, under a name nobody would look up. The tree is expressed by
+	// parent_id, so refuse the slash and say how to get what was intended.
+	if strings.Contains(input.Slug, "/") {
+		return nil, apierror.ValidationError(map[string]string{
+			"slug": fmt.Sprintf("slug must not contain \"/\": a document's place in the tree is set with parent_id (create or find the folder first); got %q", input.Slug),
+		})
+	}
 	if s.storage == nil {
 		return nil, apierror.ServiceUnavailable("storage backend not configured; set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET")
 	}
@@ -1199,19 +1208,28 @@ func sectionLookupError(err error) error {
 //
 // ## What a path is, and what happens when a document moves
 //
-// A path is a lookup key derived from where a document currently sits, not an
-// identifier for it. Move `architecture/adr/adr-004` under `decisions/` and the
-// old path resolves to nothing; worse, a later document that takes the slug
-// `adr-004` in the old place will answer to it. The path is not versioned, not
-// aliased and not redirected.
+// A path is a lookup key derived from where a document currently sits. The
+// document's uuid is still the stable identifier and every path lookup returns
+// it, so a reference that must never break stores the id.
 //
-// That is accepted rather than fixed, for two reasons. The document's uuid is
-// still the stable identifier and every path lookup returns it, so an agent that
-// needs a reference to survive a reorganisation stores the id — the same
-// discipline a link in prose needs. And the alternative is a redirect table with
-// its own history and its own staleness, bought to make a convenience addressing
-// scheme behave like an identity it was never going to have. Filesystems and
-// wikis behave exactly this way and nobody is surprised by it.
+// Paths are nevertheless how documents are referenced in practice: cards and
+// agents name docs by path or by bare slug ("specs/threat-model",
+// "threat-model"), and a reorganisation used to turn every such mention into a
+// 404 — measured on 2026-10-13, 65 of 188 candidate documents carried about 293
+// such mentions. So a miss on the live tree is not the end of the lookup:
+//
+//  1. the live walk. A document that sits at the path right now always wins,
+//     including over an alias left behind by a move;
+//  2. a former path. Every move records the old full path of the moved
+//     document and of its whole subtree (DocumentRepository.Update), and that
+//     path keeps resolving to the document for as long as it is live and no
+//     live document takes the path back;
+//  3. a bare slug. A one-segment path that is not a top-level document matches
+//     the single live document with that slug at any depth. Several matches are
+//     a 409 listing their full paths, never a guess.
+//
+// A hit through 2 or 3 sets MovedTo to the document's current full path, so the
+// caller learns where the page lives now and can fix the reference it holds.
 func (s *documentService) GetByPath(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error) {
 	segments := splitDocumentPath(path)
 	if len(segments) == 0 {
@@ -1223,6 +1241,12 @@ func (s *documentService) GetByPath(ctx context.Context, projectID uuid.UUID, pa
 	doc, resolved, err := s.documentRepo.GetByPathInProject(ctx, projectID, segments)
 	if err != nil {
 		return nil, err
+	}
+	if doc == nil {
+		doc, err = s.resolveMovedPath(ctx, projectID, segments)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if doc == nil {
 		// Naming the segment that failed is the difference between an error a
@@ -1243,6 +1267,70 @@ func (s *documentService) GetByPath(ctx context.Context, projectID uuid.UUID, pa
 	}
 	doc.Body = body
 
+	return doc, nil
+}
+
+// maxAmbiguousSlugCandidates caps how many full paths an ambiguous bare-slug
+// error lists. Enough to pick from; a slug shared by more is not one a caller
+// should be addressing by slug at all.
+const maxAmbiguousSlugCandidates = 10
+
+// resolveMovedPath is GetByPath's fallback once the live walk has missed:
+// first a former path recorded by a move, then — for a one-segment path — the
+// bare slug at any depth. It returns nil, nil when neither applies, and sets
+// MovedTo on whatever it does return.
+func (s *documentService) resolveMovedPath(ctx context.Context, projectID uuid.UUID, segments []string) (*domain.Document, error) {
+	doc, err := s.documentRepo.GetByPathAlias(ctx, projectID, strings.Join(segments, "/"))
+	if err != nil {
+		return nil, err
+	}
+	if doc != nil {
+		current, perr := s.documentRepo.PathOf(ctx, doc.ID)
+		if perr != nil {
+			return nil, perr
+		}
+		doc.MovedTo = current
+		return doc, nil
+	}
+
+	if len(segments) != 1 {
+		return nil, nil
+	}
+	hits, err := s.documentRepo.FindLiveBySlug(ctx, projectID, segments[0], maxAmbiguousSlugCandidates+1)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case len(hits) == 0:
+		return nil, nil
+	case len(hits) > 1:
+		paths := make([]string, 0, maxAmbiguousSlugCandidates)
+		for i, h := range hits {
+			if i == maxAmbiguousSlugCandidates {
+				break
+			}
+			paths = append(paths, h.Path)
+		}
+		more := ""
+		if len(hits) > maxAmbiguousSlugCandidates {
+			more = fmt.Sprintf(" (first %d shown)", maxAmbiguousSlugCandidates)
+		}
+		conflict := apierror.Conflict("Ambiguous document slug")
+		conflict.Details = fmt.Sprintf(
+			"slug %q names several live documents; address one by its full path or id%s: %s",
+			segments[0], more, strings.Join(paths, ", "))
+		return nil, conflict
+	}
+
+	doc, err = s.documentRepo.GetByID(ctx, hits[0].ID)
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		// Deleted between the two reads: a plain miss.
+		return nil, nil
+	}
+	doc.MovedTo = hits[0].Path
 	return doc, nil
 }
 

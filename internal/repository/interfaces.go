@@ -504,6 +504,19 @@ type DocumentRepository interface {
 	// Live rows only, at every level: a soft-deleted document is not a step you can
 	// walk through, and its slug is free for a sibling to take.
 	GetByPathInProject(ctx context.Context, projectID uuid.UUID, segments []string) (doc *domain.Document, resolvedDepth int, err error)
+	// GetByPathAlias returns the live document a former path was recorded for
+	// when that document (or an ancestor) was moved, or nil when the path was
+	// never vacated or its document has since been deleted. path is the
+	// normalized slash-joined slug path. It does NOT check the live tree: callers
+	// walk that first, because a live document at a path always wins.
+	GetByPathAlias(ctx context.Context, projectID uuid.UUID, path string) (*domain.Document, error)
+	// FindLiveBySlug lists up to limit live documents in the project whose own
+	// slug is slug, at any depth, each with its current full slug path, ordered
+	// by path.
+	FindLiveBySlug(ctx context.Context, projectID uuid.UUID, slug string, limit int) ([]DocumentPathHit, error)
+	// PathOf returns the current full slug path ("specs/threat-model") of a live
+	// document, or "" when there is no live document with that id.
+	PathOf(ctx context.Context, id uuid.UUID) (string, error)
 	// Update writes title, parent_id, position, updated_at and the updated_by
 	// pair. Nothing else on a document is mutable: the body is in object storage,
 	// and project_id and slug are what its siblings are unique against.
@@ -517,6 +530,11 @@ type DocumentRepository interface {
 	// bumpVersion sets version = version + 1 in the same statement. It is passed
 	// rather than inferred because only the caller knows whether this write
 	// touched the document's content: a move in the tree must not bump.
+	//
+	// When the write changes parent_id, the old full slug path of the document
+	// and of every live descendant is recorded as a path alias pointing at that
+	// document, in the same transaction as the UPDATE — see GetByPathAlias. A
+	// write that leaves parent_id as it was records nothing.
 	//
 	// Returns the version the row now carries. On ErrDocumentVersionMismatch that
 	// is the version actually stored, which is what the caller has to be told to
@@ -578,6 +596,12 @@ type DocumentRepository interface {
 	// title AND content. workspaceID is the tenancy check, the same one
 	// GetByIDInWorkspace applies: a project id alone is not proof of ownership.
 	SearchInProject(ctx context.Context, projectID, workspaceID uuid.UUID, query string, limit int) ([]domain.DocumentSearchHit, error)
+}
+
+// DocumentPathHit is a live document id with its current full slug path.
+type DocumentPathHit struct {
+	ID   uuid.UUID `db:"id"`
+	Path string    `db:"path"`
 }
 
 // ErrDocumentVersionMismatch reports that a conditional document write found the
