@@ -186,6 +186,12 @@ func (s *notificationService) Notify(ctx context.Context, event domain.Notificat
 func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	bgCtx := context.Background()
 
+	if !hasAudience(event) {
+		log.Printf("[notification] %s for workspace %s dropped: the event names no recipients and is not marked Broadcast (task %v)",
+			event.EventType, event.WorkspaceID, event.TaskID)
+		return
+	}
+
 	// Load all enabled preferences for the workspace.
 	prefs, err := s.repo.GetPreferencesByWorkspace(bgCtx, event.WorkspaceID)
 	if err != nil {
@@ -547,10 +553,22 @@ func logUndeliverableTarget(
 		event.EventType, target, event.WorkspaceID)
 }
 
+// hasAudience reports whether the producer said who this event is for: one
+// person (TargetUserID), a set (RelevantUserIDs), or explicitly everybody
+// (Broadcast). An event with none of the three has no audience.
+func hasAudience(event domain.NotificationEvent) bool {
+	return event.TargetUserID != nil || len(event.RelevantUserIDs) > 0 || event.Broadcast
+}
+
 // relevantToUser reports whether userID is one of the people this event is
-// about, according to its producer (RelevantUserIDs). An event that carries no
-// relevance information is relevant to everyone who subscribed to it, which is
-// the behaviour every channel had before this existed.
+// about, according to its producer (RelevantUserIDs).
+//
+// An event that names nobody and is not marked Broadcast is relevant to no one:
+// the old reading, "no relevance information means everybody who subscribed",
+// is how every task status change in a workspace reached every connected
+// Telegram and mailbox. dispatch drops such an event up front and logs it; this
+// is the same rule at the point each channel asks, so a channel added later
+// cannot reintroduce the wider audience.
 //
 // Every fan-out loop calls this, in the same position as the TargetUserID check
 // it generalises. Which events narrow is decided once, by the producer that
@@ -560,7 +578,8 @@ func logUndeliverableTarget(
 // ship with a wider audience than the four before it.
 func relevantToUser(event domain.NotificationEvent, userID uuid.UUID) bool {
 	if len(event.RelevantUserIDs) == 0 {
-		return true
+		// Addressed to one person: that check has already run in the caller.
+		return event.TargetUserID != nil || event.Broadcast
 	}
 	for _, id := range event.RelevantUserIDs {
 		if id == userID {

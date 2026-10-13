@@ -44,6 +44,7 @@ func assignedEvent(ws uuid.UUID) domain.NotificationEvent {
 		Title:         "Task assigned: Fix login",
 		MessageCode:   "notif.task.assigned",
 		MessageParams: map[string]any{"task": "Fix login"},
+		Broadcast:     true, // the test is about rendering per recipient, not about who is addressed
 	}
 }
 

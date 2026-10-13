@@ -1399,7 +1399,8 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 			"status_id": map[string]any{"old": oldStatusID.String(), "new": input.StatusID.String()},
 		})
 		// Dispatch in-app notification to subscribed workspace users.
-		s.dispatchUserNotification(ctx, task, "task.status_changed", "Task status changed: "+task.Title)
+		actorID, _ := actorctx.FromContext(ctx)
+		s.dispatchUserNotification(ctx, task, "task.status_changed", "Task status changed: "+task.Title, taskParticipants(task, actorID))
 	}
 
 	// Task carrying a reviewer just landed on a review-category status: tell the
@@ -2153,15 +2154,17 @@ func (s *taskService) publishTaskEvent(ctx context.Context, wsID, projectID, tas
 	}
 }
 
-// dispatchUserNotification sends an in-app notification to every workspace member
-// subscribed to eventType. It resolves workspace_id from the project, then fires
-// NotificationService.Notify asynchronously.
+// dispatchUserNotification sends a notification to the given people (relevant:
+// the task's participants minus the actor) who subscribed to eventType. It
+// resolves workspace_id from the project, then fires NotificationService.Notify
+// asynchronously. An empty relevant set reaches nobody — see
+// NotificationEvent.Broadcast.
 //
 // It takes no body: all four call sites passed "", and unparam flags a parameter
 // that is provably always the same constant. NotificationEvent.Body stays in the
 // domain type — dispatchTargetedUserNotification still carries one — so a caller
 // that needs a body can pass it there rather than reviving a dead parameter here.
-func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain.Task, eventType, title string) {
+func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain.Task, eventType, title string, relevant []uuid.UUID) {
 	if s.notifySvc == nil || s.projectRepo == nil {
 		return
 	}
@@ -2175,11 +2178,12 @@ func (s *taskService) dispatchUserNotification(ctx context.Context, task *domain
 	taskIDCopy := task.ID
 	projIDCopy := task.ProjectID
 	s.notifySvc.Notify(ctx, domain.NotificationEvent{
-		WorkspaceID: wsID,
-		TaskID:      &taskIDCopy,
-		ProjectID:   &projIDCopy,
-		EventType:   eventType,
-		Title:       title,
+		WorkspaceID:     wsID,
+		TaskID:          &taskIDCopy,
+		ProjectID:       &projIDCopy,
+		EventType:       eventType,
+		Title:           title,
+		RelevantUserIDs: relevant,
 		// eventType is task.status_changed here, the only caller.
 		MessageCode:   "notif." + eventType,
 		MessageParams: map[string]any{"task": task.Title},

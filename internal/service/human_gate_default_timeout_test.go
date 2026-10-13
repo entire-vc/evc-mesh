@@ -287,7 +287,7 @@ func TestHumanGateDefaultTimeoutService_CancelledTask_NotReopened(t *testing.T) 
 	assert.Equal(t, 0, h.mover.moveCallsFor(taskID))
 }
 
-func TestHumanGateDefaultTimeoutService_NotifiesWorkspaceBroadcast(t *testing.T) {
+func TestHumanGateDefaultTimeoutService_NotifiesTaskPeopleNotWorkspace(t *testing.T) {
 	h := newDefaultTimeoutHarness(t)
 	taskID := h.seedExpiredGate(t, domain.StatusCategoryInProgress)
 	task, _ := h.mover.GetByID(context.Background(), taskID)
@@ -301,7 +301,8 @@ func TestHumanGateDefaultTimeoutService_NotifiesWorkspaceBroadcast(t *testing.T)
 	ev := h.notify.calls[0]
 	assert.Equal(t, "task.human_gate_default_applied", ev.EventType)
 	assert.Equal(t, wsID, ev.WorkspaceID)
-	assert.Nil(t, ev.TargetUserID, "broadcast, not targeted — reaches Pavel without the sweep needing to know his user id")
+	assert.Nil(t, ev.TargetUserID, "not one person: the gate author and the task people are RelevantUserIDs")
+	assert.False(t, ev.Broadcast, "the default-applied event is no longer workspace-wide")
 	require.NotNil(t, ev.TaskID)
 	assert.Equal(t, taskID, *ev.TaskID)
 }
