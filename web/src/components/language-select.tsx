@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, AlertTriangle } from "lucide-react";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES, suggestedLocale } from "@/lib/locale
 // Language picker for the profile. Saved on change (no reload); the choice is
 // stored on the account so another device or a new session gets the same one.
 export function LanguageSelect() {
+  const { t } = useTranslation();
   const { user, setLocale } = useAuthStore();
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -34,7 +36,7 @@ export function LanguageSelect() {
   return (
     <div className="space-y-1.5">
       <label htmlFor="profile-language" className="text-sm font-medium">
-        Язык / Language
+        {t("language.label")}
       </label>
       <Select
         id="profile-language"
@@ -43,15 +45,15 @@ export function LanguageSelect() {
       >
         {SUPPORTED_LOCALES.map((l) => (
           <option key={l.code} value={l.code}>
-            {l.label}
+            {t(`language.${l.code}`)}
           </option>
         ))}
       </Select>
       {suggestion && (
         <p className="text-xs text-muted-foreground flex items-center gap-2">
-          Ваш браузер на русском. Переключить интерфейс?
+          {t("language.suggestRu")}
           <Button type="button" size="sm" variant="outline" onClick={() => void apply(suggestion)}>
-            Русский
+            {t(`language.${suggestion}`)}
           </Button>
         </p>
       )}

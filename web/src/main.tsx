@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "@/i18n";
 import { App } from "./App";
 import { Toaster, toast } from "@/components/ui/toast";
 import { useAuthStore } from "@/stores/auth";

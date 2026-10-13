@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router";
 import { AlertCircle, Download, Loader2, RotateCcw } from "lucide-react";
@@ -266,7 +267,7 @@ function TextView({
       {state.truncated && (
         <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
           Showing the first {formatBytes(PREVIEW_MAX_CHARS)} of this file
-          &mdash; {state.omittedChars.toLocaleString("en-US")} more characters are
+          &mdash; {i18nFmt.formatNumber(state.omittedChars)} more characters are
           not shown. Download it to read the whole thing.
         </div>
       )}
@@ -554,8 +555,8 @@ function CsvView({ text }: { text: string }) {
       </div>
       {body.length > shown.length && (
         <p className="text-xs text-muted-foreground">
-          Showing the first {shown.length.toLocaleString("en-US")} of{" "}
-          {body.length.toLocaleString("en-US")} rows. Download the file for the
+          Showing the first {i18nFmt.formatNumber(shown.length)} of{" "}
+          {i18nFmt.formatNumber(body.length)} rows. Download the file for the
           rest.
         </p>
       )}

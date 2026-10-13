@@ -1,9 +1,9 @@
 // Single source of the interface languages. A third language is one more entry
-// here plus its translation file; the server list (internal/domain/locale.go)
+// here plus its translation file (the language name is `language.<code>`); the server list (internal/domain/locale.go)
 // and the CHECK constraints must be widened in the same change.
 export const SUPPORTED_LOCALES = [
-  { code: "en", label: "English" },
-  { code: "ru", label: "Русский" },
+  { code: "en" },
+  { code: "ru" },
 ] as const;
 
 export type LocaleCode = (typeof SUPPORTED_LOCALES)[number]["code"];

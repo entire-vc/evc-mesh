@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -95,7 +96,7 @@ function RoleIcon({ role }: { role: WorkspaceRole }) {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString(undefined, {
+    return i18nFmt.formatDate(iso, {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -1825,7 +1826,7 @@ export function WorkspaceSettingsPage() {
                 <div className="flex-1 min-w-0">
                   <p className="truncate text-sm font-medium">{invite.email}</p>
                   <p className="text-xs text-muted-foreground capitalize">
-                    {invite.role} · Expires {new Date(invite.expires_at).toLocaleDateString()}
+                    {invite.role} · Expires {i18nFmt.formatDate(invite.expires_at)}
                   </p>
                 </div>
                 {canManageMembers && (

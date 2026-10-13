@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { agentLabel } from "@/lib/agent-label";
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, RotateCw, Trash2 } from "lucide-react";
@@ -86,7 +87,7 @@ interface WorkspaceSecretsProps {
 }
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+  return i18nFmt.formatDate(iso, {
     year: "numeric",
     month: "short",
     day: "numeric",

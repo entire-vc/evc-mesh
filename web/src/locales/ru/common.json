@@ -1,0 +1,17 @@
+{
+  "language": {
+    "label": "Язык",
+    "en": "English",
+    "ru": "Русский",
+    "suggestRu": "Ваш браузер на русском. Переключить интерфейс?"
+  },
+  "time": {
+    "justNow": "только что",
+    "minutesAgo": "{{count}} мин назад",
+    "hoursAgo": "{{count}} ч назад",
+    "daysAgo": "{{count}} дн назад"
+  },
+  "i18nDemo": {
+    "greeting": "Привет, {{name}}"
+  }
+}

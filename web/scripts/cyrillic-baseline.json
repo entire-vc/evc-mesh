@@ -1,0 +1,8 @@
+{
+  "components/AttachDocDialog.tsx": 3,
+  "components/board-toolbar.tsx": 2,
+  "components/task-card.tsx": 2,
+  "lib/runtime-state.ts": 5,
+  "pages/activity-page.tsx": 2,
+  "pages/list-view.tsx": 2
+}

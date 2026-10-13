@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -73,10 +74,11 @@ const ALL_EVENT_TYPES = Object.keys(EVENT_TYPE_CONFIG) as EventType[];
 // ---------------------------------------------------------------------------
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], {
+  return i18nFmt.formatTime(iso, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    hourCycle: "h23",
   });
 }
 

@@ -10,6 +10,8 @@ import { AppLayout } from "@/components/layout/app-layout";
 import { LoginPage } from "@/pages/login";
 import { RegisterPage } from "@/pages/register";
 import { PageSkeleton } from "@/components/page-skeleton";
+import { useTranslation } from "react-i18next";
+import { useLanguageSync } from "@/i18n/use-language-sync";
 
 // Everything below is route-split: none of it should ship in the JS that
 // /login or /register load before first paint (perf·Б1, fleet-epic
@@ -471,9 +473,13 @@ const router = createBrowserRouter(
 );
 
 export function App() {
+  useLanguageSync();
+  // Date/number formatters read the language at call time; remounting the
+  // tree on a switch makes every already-rendered value re-format.
+  const { i18n } = useTranslation();
   return (
     <ErrorBoundary>
-      <RouterProvider router={router} />
+      <RouterProvider key={i18n.language} router={router} />
     </ErrorBoundary>
   );
 }

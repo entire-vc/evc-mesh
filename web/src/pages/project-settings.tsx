@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useAgentShortTag } from "@/hooks/use-agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
@@ -2458,7 +2459,7 @@ export function ProjectSettingsPage() {
                           {schedule.next_run_at && schedule.is_active && (
                             <span>
                               Next:{" "}
-                              {new Date(schedule.next_run_at).toLocaleString(undefined, {
+                              {i18nFmt.formatDate(schedule.next_run_at, {
                                 dateStyle: "short",
                                 timeStyle: "short",
                               })}

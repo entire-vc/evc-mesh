@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -354,7 +355,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 							<div className="rounded-lg border bg-card px-3 py-2.5">
 								<p className="text-[11px] text-muted-foreground">Sessions</p>
 								<p className="text-lg font-semibold tabular-nums">
-									{cost.session_count.toLocaleString("en-US")}
+									{i18nFmt.formatNumber(cost.session_count)}
 								</p>
 							</div>
 							<div className="rounded-lg border bg-card px-3 py-2.5">
@@ -367,9 +368,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 							</div>
 						</div>
 						<p className="text-[11px] text-muted-foreground">
-							{`${cost.reported_session_count.toLocaleString("en-US")} of ${cost.session_count.toLocaleString(
-								"en-US",
-							)} sessions reported (${Math.round(
+							{`${i18nFmt.formatNumber(cost.reported_session_count)} of ${i18nFmt.formatNumber(cost.session_count)} sessions reported (${Math.round(
 								(cost.reported_session_count / cost.session_count) * 100,
 							)}%)`}
 						</p>
