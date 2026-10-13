@@ -3487,7 +3487,7 @@ func (s *taskService) postAssigneeChangeComment(ctx context.Context, task *domai
 		SystemCode:   SysCodePtr(SysCodeAssigneeAutoChanged),
 		SystemParams: SysParamsJSON(map[string]any{"from": describe(oldID), "to": describe(newID), "reason": reason}),
 		Body: fmt.Sprintf(
-			"🔄 Авто-смена исполнителя: %s → %s (%s).",
+			"🔄 Auto: assignee changed: %s → %s (%s).",
 			describe(oldID), describe(newID), reason,
 		),
 		CreatedAt: now,

@@ -85,7 +85,7 @@ func (env triageTestEnv) seedUserReply(taskID uuid.UUID, body string, at time.Ti
 func (env triageTestEnv) repeatAskNotices() []domain.Comment {
 	var out []domain.Comment
 	for _, c := range env.systemComments() {
-		if strings.Contains(c.Body, "на прошлый вопрос уже есть ответ") {
+		if strings.Contains(c.Body, "the previous question already has an answer") {
 			out = append(out, c)
 		}
 	}

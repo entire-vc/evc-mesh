@@ -146,16 +146,16 @@ const (
 )
 
 const (
-	parkedCommentFmt = "🅿️ Задача висела в in_progress **без чекаута** и без признаков работы " +
-		"(ни комментария, ни артефакта, ни VCS-link, ни обновления статуса за окно простоя; последний " +
-		"комментарий не содержит строки, начинающейся с `⏳ WAIT`/`↻ NEXT`, или он старше 48 ч; " +
-		"открытые задачи от неё не зависят) — **запаркована в backlog** " +
-		"c `due_date` через %d ч и меткой `kind:monitor`.\n\n" +
-		"Почему в backlog, а не в todo: возврат в todo кладёт карточку обратно в подачу немедленно, " +
-		"и застрявшая карточка кормится тому же лейну снова и снова. Парк разрывает петлю, " +
-		"а метка `kind:monitor` — это то, чем карточка проснётся: по ней monitor-promotion поднимет её " +
-		"обратно в todo, когда наступит `due_date`. Без метки парк не имеет пути пробуждения вообще.\n\n" +
-		"Если работа ещё идёт — сделайте `checkout_task` заново: без чекаута карточка не удерживается."
+	parkedCommentFmt = "🅿️ The task sat in in_progress **without a checkout** and without signs of work " +
+		"(no comment, artifact, VCS link or status update within the idle window; the last " +
+		"comment has no line starting with `⏳ WAIT`/`↻ NEXT`, or it is older than 48 h; " +
+		"no open task depends on it) — **parked in backlog** " +
+		"with a `due_date` in %d h and the `kind:monitor` label.\n\n" +
+		"Why backlog and not todo: a return to todo puts the card straight back into the feed, " +
+		"and a stuck card is fed to the same lane again and again. The park breaks the loop, " +
+		"and the `kind:monitor` label is what wakes the card: monitor-promotion lifts it " +
+		"back to todo when the `due_date` arrives. Without the label a park has no way to wake at all.\n\n" +
+		"If the work is still going on, run `checkout_task` again: without a checkout the card is not held."
 )
 
 // returnToTodo moves each task to its project's first todo status, logging to
@@ -389,10 +389,10 @@ func (r *checkoutLeaseReaper) handBack(ctx context.Context, tasks []domain.Task,
 // back to todo instead of backlog. Without it the lane and its lead see a card
 // bounce back into the feed with no reason. A repeat is bounded by the feed's
 // own per-card refeed cap, which escalates the card to the lead.
-const blockerReturnedComment = "↩️ Карточка висела в in_progress без чекаута и без признаков работы, " +
-	"но **не запаркована**: от неё по зависимости `blocks` ждёт открытая задача, а из backlog " +
-	"карточку никто не подаёт. Возвращена в todo того же исполнителя. Если ждёте внешнего события — " +
-	"оставьте строку `⏳ WAIT …` в последнем комментарии."
+const blockerReturnedComment = "↩️ The card sat in in_progress without a checkout and without signs of work, " +
+	"but is **not parked**: an open task waits on it through a `blocks` dependency, and nobody feeds " +
+	"a card from backlog. Returned to todo for the same assignee. If you are waiting for an external event, " +
+	"leave a `⏳ WAIT …` line in the last comment."
 
 // blocksOpenDependent reports whether parking task would strand an open task
 // that has it as a `blocks` dependency. With no source wired it answers false
@@ -410,8 +410,8 @@ const handoffScanLimit = 30
 // handoffCommentFmt is the system note left when a handoff is returned to todo.
 // Its `handoff:<comment id>` token is the loop guard: the same handoff is never
 // returned twice, the second time the card parks like any abandoned one.
-const handoffCommentFmt = "↩️ Ход передан исполнителю карточки (последний живой комментарий не от assignee): " +
-	"карточка возвращена в todo того же исполнителя, а не запаркована в backlog. Повторно эта же передача в todo не возвращается. [handoff:%s]"
+const handoffCommentFmt = "↩️ The turn was handed to the card's assignee (the last live comment is not from the assignee): " +
+	"the card is back in todo for the same assignee, not parked in backlog. The same handoff is not returned to todo twice. [handoff:%s]"
 
 // handoffComment returns the newest live comment when it was written by someone
 // other than the task's assignee, i.e. the turn now belongs to the assignee.

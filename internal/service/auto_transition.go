@@ -240,9 +240,9 @@ func (s *autoTransitionService) postUmbrellaCloseComment(ctx context.Context, pa
 	if s.commentRepo == nil {
 		return
 	}
-	children := make([]map[string]string, 0, len(subtasks))
 	var b strings.Builder
-	fmt.Fprintf(&b, "🤖 Авто-закрытие: все %d потомков в терминальном статусе (done/cancelled), карточка помечена kind:epic/kind:umbrella — перевожу review → done без ожидания повторного приёма.\n\nПотомки:\n", len(subtasks))
+	children := make([]map[string]string, 0, len(subtasks))
+	fmt.Fprintf(&b, "🤖 Auto-close: all %d descendants are in a terminal status (done/cancelled) and the card is labelled kind:epic/kind:umbrella — moving review → done without waiting for a second acceptance.\n\nDescendants:\n", len(subtasks))
 	for _, sub := range subtasks {
 		fmt.Fprintf(&b, "- #%s %s\n", sub.ID.String()[:8], sub.Title)
 		children = append(children, map[string]string{"id": sub.ID.String()[:8], "title": sub.Title})

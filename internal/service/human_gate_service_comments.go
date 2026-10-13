@@ -142,7 +142,7 @@ func (s *commentService) findAnswerSincePriorMarker(ctx context.Context, task *d
 			if !d.IsDecision() || d.RevokedAt != nil || !d.CreatedAt.After(lastMarkerAt) {
 				continue
 			}
-			q := "решение записано"
+			q := "decision recorded"
 			if d.Quote != nil && *d.Quote != "" {
 				q = *d.Quote
 			}
@@ -169,10 +169,10 @@ func (s *commentService) postRepeatAskNotice(ctx context.Context, task *domain.T
 		SystemCode:   SysCodePtr(SysCodeRepeatAskRefused),
 		SystemParams: SysParamsJSON(map[string]any{"answered_at": ans.at.Format("2006-01-02 15:04"), "quote": quote}),
 		Body: fmt.Sprintf(
-			"🔁 Auto: human_gate НЕ взведён — на прошлый вопрос уже есть ответ (%s): «%s».\n\n"+
-				"Новый вопрос принимается только с новым предметом и явной ссылкой: строка "+
-				"`supersedes: <что именно из ответа не покрывает вопрос>` в комментарии или "+
-				"`metadata.supersedes`. Иначе работай по полученному ответу.",
+			"🔁 Auto: human_gate not armed — the previous question already has an answer (%s): «%s».\n\n"+
+				"A new question is accepted only with a new subject and an explicit reference: a line "+
+				"`supersedes: <what exactly the answer does not cover>` in the comment or "+
+				"`metadata.supersedes`. Otherwise work from the answer you got.",
 			ans.at.Format("2006-01-02 15:04"), quote,
 		),
 		CreatedAt: now,

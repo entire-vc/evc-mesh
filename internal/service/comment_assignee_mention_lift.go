@@ -122,7 +122,7 @@ func (s *commentService) liftParkedCardOnAssigneeMention(
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
 		SystemCode: SysCodePtr(SysCodeAssigneeMentionLift),
-		Body:       "🔄 Auto: задача поднята из backlog → todo — человек упомянул исполнителя на его карточке.",
+		Body:       "🔄 Auto: task lifted from backlog → todo — a person mentioned the assignee on their card.",
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
