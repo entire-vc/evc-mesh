@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useCallback, useEffect, useState } from "react";
 import { Plug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,7 @@ import { apiErrorMessage } from "@/lib/api-error";
 import type { OAuthGrant } from "@/types";
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+  return i18nFmt.formatDate(iso, {
     year: "numeric",
     month: "short",
     day: "numeric",

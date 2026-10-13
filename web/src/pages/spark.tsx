@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { Download, ExternalLink, Search, Sparkles, Star, Tag, X } from "lucide-react";
@@ -433,7 +434,7 @@ function SparkAgentCard({
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
               <Download className="h-3 w-3" />
-              {agent.downloads.toLocaleString("en-US")}
+              {i18nFmt.formatNumber(agent.downloads)}
             </span>
             <span className="flex items-center gap-1">
               <Star className="h-3 w-3" />

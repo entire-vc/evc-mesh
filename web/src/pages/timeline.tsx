@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, GitBranch, Loader2 } from "lucide-react";
@@ -48,7 +49,7 @@ function NodeCard({ node, selected, currentProjectId, focus, open, filterHidden 
       {node.project_id !== currentProjectId && <p className="mt-2 break-words text-xs">Other project: {node.project_name || node.project_slug}</p>}
       {node.cycle && <p className="mt-2 text-amber-700 dark:text-amber-400">Cycle detected</p>}
       {node.human_gate && <p className="mt-2">Human approval required</p>}
-      {node.start_after && <p className="mt-2 break-words">Scheduled after {new Date(node.start_after).toLocaleString(undefined)}</p>}
+      {node.start_after && <p className="mt-2 break-words">Scheduled after {i18nFmt.formatDateTime(node.start_after)}</p>}
       {filterHidden && <p className="mt-2 text-xs text-muted-foreground">Outside the overview search; kept to preserve the chain.</p>}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" className="min-h-11 whitespace-normal" onClick={() => focus(node.id)}>

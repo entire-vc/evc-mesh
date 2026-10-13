@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Calendar, X } from "lucide-react";
@@ -30,7 +31,7 @@ function parseTimeParts(isoDate: string): [number, number] {
 function formatDisplayDate(isoDate: string, includeTime?: boolean): string {
   const [year, month, day] = parseDateParts(isoDate);
   const d = new Date(year, month - 1, day);
-  const dateStr = d.toLocaleDateString("en-US", {
+  const dateStr = i18nFmt.formatDate(d, {
     month: "short",
     day: "numeric",
     year: "numeric",

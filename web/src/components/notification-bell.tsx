@@ -1,3 +1,5 @@
+import i18n from "@/i18n";
+import * as i18nFmt from "@/i18n/format";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useRulesStore } from "@/stores/rules";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -513,17 +515,5 @@ function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
 // ---------------------------------------------------------------------------
 
 function formatRelative(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSeconds = Math.floor(diffMs / 1000);
-
-  if (diffSeconds < 60) return "just now";
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
+  return i18nFmt.formatRelativeShort(isoString, (key, o) => i18n.t(key, o));
 }

@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -420,9 +421,7 @@ export function AnalyticsPage() {
                 metrics.event_metrics.period_fully_covered
                   ? undefined
                   : metrics.event_metrics.retained_since
-                    ? `Log only retains data since ${new Date(
-                        metrics.event_metrics.retained_since,
-                      ).toLocaleDateString()}`
+                    ? `Log only retains data since ${i18nFmt.formatDate(metrics.event_metrics.retained_since)}`
                     : "No event data retained for this period"
               }
             />
@@ -583,7 +582,7 @@ function KPICard({
           <span className="text-xs text-muted-foreground">{label}</span>
         </div>
         <span className="text-3xl font-bold tracking-tight">
-          {typeof value === "number" ? value.toLocaleString("en-US") : value}
+          {typeof value === "number" ? i18nFmt.formatNumber(value) : value}
         </span>
         {caption ? <p className="text-[11px] text-muted-foreground">{caption}</p> : null}
       </CardContent>

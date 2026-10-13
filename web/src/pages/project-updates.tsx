@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router";
 import {
@@ -75,7 +76,7 @@ function BulletList({ items }: { items: { text: string }[] }) {
 
 function UpdateCard({ update }: { update: ProjectUpdate }) {
   const [expanded, setExpanded] = useState(false);
-  const date = new Date(update.created_at).toLocaleDateString("en-US", {
+  const date = i18nFmt.formatDate(update.created_at, {
     month: "short",
     day: "numeric",
     year: "numeric",

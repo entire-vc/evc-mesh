@@ -1,16 +1,17 @@
-import { format, formatDistanceToNow, parseISO } from "date-fns";
+import { format, parseISO } from "date-fns";
+import * as i18nFormat from "@/i18n/format";
 import type { Priority, DelegationLevel, StatusCategory, Task, CreateTaskRequest } from "@/types";
 
 export function formatDate(dateString: string): string {
-  return format(parseISO(dateString), "MMM d, yyyy");
+  return i18nFormat.formatDate(dateString);
 }
 
 export function formatDateTime(dateString: string): string {
-  return format(parseISO(dateString), "MMM d, yyyy HH:mm");
+  return i18nFormat.formatDateTime(dateString);
 }
 
 export function formatRelative(dateString: string): string {
-  return formatDistanceToNow(parseISO(dateString), { addSuffix: true });
+  return i18nFormat.formatRelativeTime(dateString);
 }
 
 // Cyrillic -> Latin transliteration so slugify() doesn't collapse Cyrillic
@@ -24,7 +25,7 @@ const CYRILLIC_TRANSLIT: Record<string, string> = {
 };
 
 function transliterate(text: string): string {
-  return text.replace(/[Ѐ-ӿ]/g, (ch) => CYRILLIC_TRANSLIT[ch] ?? "");
+  return text.replace(/[\u0400-\u04FF]/g, (ch) => CYRILLIC_TRANSLIT[ch] ?? "");
 }
 
 export function slugify(text: string): string {

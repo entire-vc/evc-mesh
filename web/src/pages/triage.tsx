@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Inbox, ArrowRight, Pencil } from "lucide-react";
@@ -186,7 +187,7 @@ export function TriageTaskRow({
 }) {
   const priorityColor =
     PRIORITY_COLORS[task.priority] ?? PRIORITY_COLORS.none;
-  const createdDate = new Date(task.created_at).toLocaleDateString("en-US", {
+  const createdDate = i18nFmt.formatDate(task.created_at, {
     month: "short",
     day: "numeric",
   });

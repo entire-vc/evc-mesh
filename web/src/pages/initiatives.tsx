@@ -1,3 +1,4 @@
+import * as i18nFmt from "@/i18n/format";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   Calendar,
@@ -86,7 +87,7 @@ function InitiativeCard({
 }) {
   const statusCfg = STATUS_COLORS[initiative.status] ?? STATUS_COLORS.active;
   const targetDate = initiative.target_date
-    ? new Date(initiative.target_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    ? i18nFmt.formatDate(initiative.target_date, { month: "short", day: "numeric", year: "numeric" })
     : null;
 
   return (
@@ -305,7 +306,7 @@ function InitiativeDetail({
 
   const statusCfg = STATUS_COLORS[detail.status] ?? STATUS_COLORS.active;
   const targetDate = detail.target_date
-    ? new Date(detail.target_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    ? i18nFmt.formatDate(detail.target_date, { month: "short", day: "numeric", year: "numeric" })
     : null;
 
   return (
