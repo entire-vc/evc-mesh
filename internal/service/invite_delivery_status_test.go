@@ -25,7 +25,7 @@ type stubEmailService struct {
 
 func (s *stubEmailService) Enabled() bool { return s.enabled }
 
-func (s *stubEmailService) SendInvite(_ context.Context, _, _, _ string) error {
+func (s *stubEmailService) SendInvite(_ context.Context, _, _, _, _ string) error {
 	s.calls++
 	return s.err
 }
@@ -187,7 +187,7 @@ func TestEmailService_UnconfiguredIsDistinguishableAndKeepsTokenOutOfLogs(t *tes
 	const token = "a122f31deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef0"
 	inviteURL := "https://mesh.example.com/accept-invite/" + token
 
-	err := svc.SendInvite(context.Background(), "teammate@example.com", "Acme", inviteURL)
+	err := svc.SendInvite(context.Background(), "teammate@example.com", "Acme", inviteURL, "en")
 
 	require.ErrorIs(t, err, ErrEmailNotConfigured,
 		"an unconfigured mailer reported success, which is what made the API answer 201 for an email it never sent")

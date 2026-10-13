@@ -31,8 +31,13 @@ type Notification struct {
 	Title       string          `db:"title"        json:"title"`
 	Body        string          `db:"body"         json:"body"`
 	Metadata    json.RawMessage `db:"metadata"    json:"metadata"`
-	IsRead      bool            `db:"is_read"      json:"is_read"`
-	CreatedAt   time.Time       `db:"created_at"   json:"created_at"`
+	// MessageCode and MessageParams are what Title/Body are rendered from, in
+	// the viewer's language. Nil on rows that predate them: those display as
+	// stored. Title/Body hold the English text as the fallback.
+	MessageCode   *string         `db:"message_code"   json:"message_code,omitempty"`
+	MessageParams json.RawMessage `db:"message_params" json:"message_params,omitempty"`
+	IsRead        bool            `db:"is_read"      json:"is_read"`
+	CreatedAt     time.Time       `db:"created_at"   json:"created_at"`
 }
 
 // NotificationEvent carries the data used to build and dispatch a notification.
@@ -43,6 +48,12 @@ type NotificationEvent struct {
 	EventType   string     `json:"event_type"`
 	Title       string     `json:"title"`
 	Body        string     `json:"body"`
+	// MessageCode names the catalog entry (internal/i18n) the text is rendered
+	// from per recipient; MessageParams are its language-neutral values.
+	// Title/Body remain the English fallback for clients and agents that do not
+	// render codes, and for events raised without one.
+	MessageCode   string         `json:"message_code,omitempty"`
+	MessageParams map[string]any `json:"message_params,omitempty"`
 	// TargetUserID, when set, restricts delivery to this one user's own preference
 	// row instead of fanning out to every subscribed workspace member. Use for
 	// events that are inherently about one specific person (e.g. "you were made

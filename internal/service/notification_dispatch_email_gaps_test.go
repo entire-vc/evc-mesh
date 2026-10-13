@@ -282,7 +282,7 @@ func TestDispatch_MentionIsNotBroadcastToOtherSubscribers(t *testing.T) {
 type failingEmailService struct{}
 
 func (f *failingEmailService) Enabled() bool { return true }
-func (f *failingEmailService) SendInvite(context.Context, string, string, string) error {
+func (f *failingEmailService) SendInvite(context.Context, string, string, string, string) error {
 	return nil
 }
 func (f *failingEmailService) SendNotification(context.Context, string, string, string) error {

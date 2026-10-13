@@ -25,7 +25,7 @@ func TestSendInvite_DisplayNameFromYieldsBareEnvelopeSender(t *testing.T) {
 	})
 
 	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "Mesh <noreply@example.com>"})
-	if err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc"); err != nil {
+	if err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc", "en"); err != nil {
 		t.Fatalf("SendInvite returned error: %v", err)
 	}
 	if gotFrom != "noreply@example.com" {
@@ -41,7 +41,7 @@ func TestSendInvite_BareFromIsDeliveredUnchanged(t *testing.T) {
 	})
 
 	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"})
-	if err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc"); err != nil {
+	if err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc", "en"); err != nil {
 		t.Fatalf("SendInvite returned error: %v", err)
 	}
 	if gotFrom != "noreply@example.com" {
@@ -57,7 +57,7 @@ func TestSendInvite_EmptyFromIsConfigErrorNotSilentDrop(t *testing.T) {
 	})
 
 	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: ""})
-	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc")
+	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc", "en")
 	if err == nil {
 		t.Fatal("expected an error for empty SMTP_FROM, got nil")
 	}
@@ -74,7 +74,7 @@ func TestSendInvite_InvalidFromIsConfigError(t *testing.T) {
 	})
 
 	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "not an email address"})
-	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc")
+	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc", "en")
 	if err == nil {
 		t.Fatal("expected an error for invalid SMTP_FROM, got nil")
 	}
@@ -90,7 +90,7 @@ func TestSendInvite_TransportErrorStillPropagates(t *testing.T) {
 	})
 
 	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"})
-	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc")
+	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc", "en")
 	if err == nil || !strings.Contains(err.Error(), "Bad sender address syntax") {
 		t.Fatalf("expected wrapped transport error, got %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSendInvite_RecipientWithCRLFIsRejected(t *testing.T) {
 	})
 
 	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"})
-	err := svc.SendInvite(context.Background(), "victim@example.com\r\nBcc: attacker@evil.com", "Acme", "https://mesh.example.com/invite/abc")
+	err := svc.SendInvite(context.Background(), "victim@example.com\r\nBcc: attacker@evil.com", "Acme", "https://mesh.example.com/invite/abc", "en")
 	if err == nil {
 		t.Fatal("expected an error for a recipient address containing CRLF, got nil")
 	}
@@ -118,7 +118,7 @@ func TestSendInvite_DisabledWhenHostEmpty(t *testing.T) {
 	if svc.Enabled() {
 		t.Fatal("Enabled() should be false when Host is empty")
 	}
-	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc")
+	err := svc.SendInvite(context.Background(), "user@example.com", "Acme", "https://mesh.example.com/invite/abc", "en")
 	if !errors.Is(err, ErrEmailNotConfigured) {
 		t.Fatalf("expected ErrEmailNotConfigured, got %v", err)
 	}
@@ -249,7 +249,7 @@ func TestSendNotification_TransportErrorPropagates(t *testing.T) {
 // unescaped comment body would let anyone who can comment on a task inject
 // markup into every subscriber's notification email.
 func TestBuildNotificationEmail_EscapesUserContent(t *testing.T) {
-	html := buildNotificationEmail(`<img src=x onerror=alert(1)>`, `<script>alert(2)</script>`, "https://mesh.example.com/t/abc")
+	html := buildNotificationEmail("en", `<img src=x onerror=alert(1)>`, `<script>alert(2)</script>`, "https://mesh.example.com/t/abc")
 	if strings.Contains(html, "<img src=x") || strings.Contains(html, "<script>") {
 		t.Fatalf("event title/body were embedded unescaped: %s", html)
 	}
@@ -259,7 +259,7 @@ func TestBuildNotificationEmail_EscapesUserContent(t *testing.T) {
 }
 
 func TestBuildNotificationEmail_OmitsLinkWhenTaskURLEmpty(t *testing.T) {
-	html := buildNotificationEmail("Task assigned", "body", "")
+	html := buildNotificationEmail("en", "Task assigned", "body", "")
 	if strings.Contains(html, "View task") {
 		t.Fatalf("expected no task link when taskURL is empty, got: %s", html)
 	}

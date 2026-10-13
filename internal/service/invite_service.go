@@ -57,10 +57,13 @@ func NewInviteService(
 // already committed and its link works, so failing the whole request would
 // throw away a valid invite over a mail problem. The outcome is reported
 // instead, and the API hands the link back so the inviter can deliver it.
-func (s *inviteService) deliver(ctx context.Context, toEmail, workspaceName, inviteURL string) InviteDelivery {
+//
+// The invitee has no account yet, so the mail is written in the inviting
+// workspace's default language.
+func (s *inviteService) deliver(ctx context.Context, toEmail, workspaceName, workspaceLocale, inviteURL string) InviteDelivery {
 	d := InviteDelivery{URL: inviteURL}
 
-	err := s.emailSvc.SendInvite(ctx, toEmail, workspaceName, inviteURL)
+	err := s.emailSvc.SendInvite(ctx, toEmail, workspaceName, inviteURL, workspaceLocale)
 	switch {
 	case err == nil:
 		d.Status = InviteDeliverySent
@@ -126,7 +129,7 @@ func (s *inviteService) CreateInvite(ctx context.Context, input CreateInviteInpu
 
 	return &CreateInviteResult{
 		Invite:   invite,
-		Delivery: s.deliver(ctx, input.Email, ws.Name, inviteURL),
+		Delivery: s.deliver(ctx, input.Email, ws.Name, ws.DefaultLocale, inviteURL),
 	}, nil
 }
 
@@ -155,7 +158,7 @@ func (s *inviteService) ResendInvite(ctx context.Context, workspaceID, inviteID 
 	}
 
 	inviteURL := fmt.Sprintf("%s/accept-invite/%s", s.baseURL, invite.Token)
-	return s.deliver(ctx, invite.Email, ws.Name, inviteURL), nil
+	return s.deliver(ctx, invite.Email, ws.Name, ws.DefaultLocale, inviteURL), nil
 }
 
 // RevokeInvite deletes a pending invite of workspaceID.

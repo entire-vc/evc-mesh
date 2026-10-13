@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/entire-vc/evc-mesh/internal/config"
+	"github.com/entire-vc/evc-mesh/internal/i18n"
 )
 
 // ErrEmailNotConfigured is returned by send operations when no SMTP host is
@@ -34,7 +35,7 @@ type EmailService interface {
 	// SendInvite delivers an invitation email. It returns ErrEmailNotConfigured
 	// when email is disabled, and a wrapped transport error when a configured
 	// server refuses or is unreachable.
-	SendInvite(ctx context.Context, toEmail, workspaceName, inviteURL string) error
+	SendInvite(ctx context.Context, toEmail, workspaceName, inviteURL, locale string) error
 	// SendNotification delivers a plain transactional email — used for the
 	// email notification channel (task.assigned, comment.created, etc). Same
 	// ErrEmailNotConfigured / transport-error contract as SendInvite.
@@ -58,7 +59,7 @@ func NewEmailService(cfg config.EmailConfig) EmailService {
 
 func (s *smtpEmailService) Enabled() bool { return s.cfg.Host != "" }
 
-func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName, inviteURL string) error {
+func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName, inviteURL, locale string) error {
 	if !s.Enabled() {
 		// The accept URL carries the invite token in its path; anyone holding it
 		// can join the workspace. Logs are routinely shipped to collectors and
@@ -68,8 +69,8 @@ func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName,
 		return ErrEmailNotConfigured
 	}
 
-	subject := fmt.Sprintf("You've been invited to %s on Mesh", workspaceName)
-	body := buildInviteEmail(toEmail, workspaceName, inviteURL)
+	subject := i18n.T(locale, "invite.email.subject", map[string]any{"workspace": workspaceName})
+	body := buildInviteEmail(locale, toEmail, workspaceName, inviteURL)
 	if err := s.send(toEmail, subject, body); err != nil {
 		return fmt.Errorf("email_service.SendInvite: %w", err)
 	}
@@ -197,7 +198,7 @@ func (s *smtpEmailService) parseFrom() (envelope, header string, err error) {
 // workspaceName does not carry that risk (workspace names are not rendered
 // verbatim from a comment body) so it is not a precedent to follow here.
 // taskURL is optional: when empty, no link button is rendered.
-func buildNotificationEmail(title, body, taskURL string) string {
+func buildNotificationEmail(locale, title, body, taskURL string) string {
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE html><html><body style="font-family:sans-serif;color:#111;max-width:480px;margin:40px auto;padding:0 16px">`)
 	fmt.Fprintf(&b, `<h2 style="font-size:18px">%s</h2>`, html.EscapeString(title))
@@ -209,21 +210,24 @@ func buildNotificationEmail(title, body, taskURL string) string {
 		fmt.Fprintf(&b, `<p style="color:#555">%s</p>`, html.EscapeString(body))
 	}
 	if taskURL != "" {
-		fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">View task</a>`, taskURL)
+		fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">%s</a>`, taskURL, html.EscapeString(i18n.T(locale, "notif.email.view_task", nil)))
 	}
-	b.WriteString(`<p style="font-size:12px;color:#999">You're receiving this because of your Mesh notification settings. You can change them from the notification bell in the app.</p>`)
+	fmt.Fprintf(&b, `<p style="font-size:12px;color:#999">%s</p>`, i18n.T(locale, "notif.email.footer", nil))
 	b.WriteString(`</body></html>`)
 	return b.String()
 }
 
-func buildInviteEmail(toEmail, workspaceName, inviteURL string) string {
+func buildInviteEmail(locale, toEmail, workspaceName, inviteURL string) string {
 	_ = toEmail
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE html><html><body style="font-family:sans-serif;color:#111;max-width:480px;margin:40px auto;padding:0 16px">`)
-	fmt.Fprintf(&b, `<h2 style="font-size:20px">You've been invited to <strong>%s</strong></h2>`, workspaceName)
-	b.WriteString(`<p style="color:#555">Click the button below to accept the invitation and set up your account.</p>`)
-	fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Accept Invitation</a>`, inviteURL)
-	b.WriteString(`<p style="font-size:12px;color:#999">This link expires in 7 days. If you weren't expecting this, you can ignore this email.</p>`)
+	// The heading template is plain text; the workspace name is the only part
+	// that is not ours, and it keeps its <strong> wrapper as before.
+	heading := i18n.T(locale, "invite.email.heading", map[string]any{"workspace": "<strong>" + workspaceName + "</strong>"})
+	fmt.Fprintf(&b, `<h2 style="font-size:20px">%s</h2>`, heading)
+	fmt.Fprintf(&b, `<p style="color:#555">%s</p>`, i18n.T(locale, "invite.email.body", nil))
+	fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">%s</a>`, inviteURL, i18n.T(locale, "invite.email.button", nil))
+	fmt.Fprintf(&b, `<p style="font-size:12px;color:#999">%s</p>`, i18n.T(locale, "invite.email.expiry", nil))
 	b.WriteString(`</body></html>`)
 	return b.String()
 }

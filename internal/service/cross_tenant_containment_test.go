@@ -45,7 +45,7 @@ type recordingEmailService struct{ sent int }
 
 func (r *recordingEmailService) Enabled() bool { return true }
 
-func (r *recordingEmailService) SendInvite(context.Context, string, string, string) error {
+func (r *recordingEmailService) SendInvite(context.Context, string, string, string, string) error {
 	r.sent++
 	return nil
 }

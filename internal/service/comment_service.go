@@ -1176,6 +1176,8 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 				EventType:       "comment.created",
 				Title:           "New comment on: " + task.Title,
 				Body:            commentBody,
+				MessageCode:     "notif.comment.created",
+				MessageParams:   map[string]any{"task": task.Title},
 				RelevantUserIDs: s.commentParticipants(ctx, comment, task),
 				Labels:          []string(task.Labels),
 				Metadata: map[string]any{
@@ -1838,8 +1840,10 @@ func (s *commentService) notifyUserMention(
 	}
 
 	title := "You were mentioned on: " + task.Title
+	mentionCode := "notif.task.mentioned_anon"
 	if actorName != "" {
 		title = actorName + " mentioned you on: " + task.Title
+		mentionCode = "notif.task.mentioned"
 	}
 
 	taskIDCopy := task.ID
@@ -1847,14 +1851,16 @@ func (s *commentService) notifyUserMention(
 	mentionedCopy := mentionedUserID
 
 	s.notifySvc.Notify(ctx, domain.NotificationEvent{
-		WorkspaceID:  workspaceID,
-		TaskID:       &taskIDCopy,
-		ProjectID:    &projIDCopy,
-		TargetUserID: &mentionedCopy,
-		EventType:    "task.mentioned",
-		Title:        title,
-		Body:         body,
-		Labels:       []string(task.Labels),
+		WorkspaceID:   workspaceID,
+		TaskID:        &taskIDCopy,
+		ProjectID:     &projIDCopy,
+		TargetUserID:  &mentionedCopy,
+		EventType:     "task.mentioned",
+		Title:         title,
+		Body:          body,
+		MessageCode:   mentionCode,
+		MessageParams: map[string]any{"task": task.Title, "actor": actorName},
+		Labels:        []string(task.Labels),
 		Metadata: map[string]any{
 			"task_id":    task.ID,
 			"task_title": task.Title,
@@ -2009,14 +2015,16 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 			log.Printf("[comment-triage] dispatching task.blocking_triage notify for task %s to user %s (slug %q)",
 				task.ID, targetIDCopy, userSlug)
 			s.notifySvc.Notify(ctx, domain.NotificationEvent{
-				WorkspaceID:  wsID,
-				TaskID:       &taskIDCopy,
-				ProjectID:    &projIDCopy,
-				EventType:    "task.blocking_triage",
-				Title:        "Blocking question: " + task.Title,
-				Body:         fmt.Sprintf("@%s asked a blocking question on this task.", userSlug),
-				TargetUserID: &targetIDCopy,
-				Labels:       []string(task.Labels),
+				WorkspaceID:   wsID,
+				TaskID:        &taskIDCopy,
+				ProjectID:     &projIDCopy,
+				EventType:     "task.blocking_triage",
+				Title:         "Blocking question: " + task.Title,
+				Body:          fmt.Sprintf("@%s asked a blocking question on this task.", userSlug),
+				MessageCode:   "notif.task.blocking_triage",
+				MessageParams: map[string]any{"task": task.Title, "user": userSlug},
+				TargetUserID:  &targetIDCopy,
+				Labels:        []string(task.Labels),
 				Metadata: map[string]any{
 					"task_id":    task.ID,
 					"task_title": task.Title,

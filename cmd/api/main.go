@@ -404,6 +404,7 @@ func main() {
 	notificationOpts := []service.NotificationServiceOption{
 		service.WithPushService(pushService),
 		service.WithEmailService(emailSvc, userRepo, cfg.Email.BaseURL),
+		service.WithLocaleLookups(userRepo, workspaceRepo),
 	}
 	if cfg.Telegram.Enabled {
 		notificationOpts = append(notificationOpts,

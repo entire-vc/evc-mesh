@@ -122,6 +122,9 @@ type notificationService struct {
 	userRepo     userEmailLookup
 	emailBaseURL string
 
+	localeUsers      userEmailLookup
+	localeWorkspaces workspaceNameLookup
+
 	telegramClient       TelegramClient
 	telegramIntegrations telegramTokenLookup
 	telegramWorkspaces   workspaceNameLookup
@@ -252,9 +255,18 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			WorkspaceID: event.WorkspaceID,
 			UserID:      p.UserID,
 			EventType:   event.EventType,
-			Title:       event.Title,
-			Body:        event.Body,
-			Metadata:    meta,
+			// English fallback; the viewer's language is applied when the row
+			// is read, from the code and parameters stored beside it.
+			Title:    event.Title,
+			Body:     event.Body,
+			Metadata: meta,
+		}
+		if event.MessageCode != "" {
+			code := event.MessageCode
+			n.MessageCode = &code
+			if len(event.MessageParams) > 0 {
+				n.MessageParams, _ = json.Marshal(event.MessageParams)
+			}
 		}
 
 		if err := s.repo.CreateNotification(bgCtx, n); err != nil {
@@ -289,9 +301,10 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 			if event.TaskID != nil {
 				taskURL = "/t/" + event.TaskID.String()
 			}
+			pushTitle, pushBody := renderEventText(s.recipientLocale(bgCtx, event.WorkspaceID, *p.UserID), event)
 			pushPayload := domain.PushPayload{
-				Title: event.Title,
-				Body:  event.Body,
+				Title: pushTitle,
+				Body:  pushBody,
 				URL:   taskURL,
 				Tag: func() string {
 					if event.TaskID != nil {
@@ -369,8 +382,10 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 						userID, event.EventType, event.WorkspaceID, err)
 					return
 				}
-				body := buildNotificationEmail(event.Title, event.Body, taskURL)
-				if err := s.emailSvc.SendNotification(context.Background(), addr, event.Title, body); err != nil {
+				locale := s.recipientLocale(context.Background(), event.WorkspaceID, userID)
+				title, text := renderEventText(locale, event)
+				body := buildNotificationEmail(locale, title, text, taskURL)
+				if err := s.emailSvc.SendNotification(context.Background(), addr, title, body); err != nil {
 					// The address is logged deliberately: the failures this line
 					// exists to diagnose (a rejected sender, a typo'd custom
 					// address, a bounce) are unreadable without knowing which
@@ -421,8 +436,6 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 					projName = proj.Name
 				}
 			}
-			text := buildTelegramNotificationText(wsName, projName, event.Labels, event.Title, event.Body)
-
 			unbound := 0
 			sentTo := make(map[uuid.UUID]bool)
 			for i := range prefs {
@@ -459,6 +472,8 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 				sentTo[*p.UserID] = true
 				userID := *p.UserID
 				chatID := cfg.ChatID
+				title, tgBody := renderEventText(s.recipientLocale(bgCtx, event.WorkspaceID, userID), event)
+				text := buildTelegramNotificationText(wsName, projName, event.Labels, title, tgBody)
 				go func() {
 					sendCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
@@ -788,7 +803,25 @@ func (s *notificationService) TelegramReachable(ctx context.Context, workspaceID
 
 // ListUnread returns unread notifications for the given user (up to 50).
 func (s *notificationService) ListUnread(ctx context.Context, userID uuid.UUID) ([]domain.Notification, error) {
-	return s.repo.ListUnread(ctx, userID, 50)
+	items, err := s.repo.ListUnread(ctx, userID, 50)
+	if err != nil {
+		return nil, err
+	}
+	// Render in the viewer's language. Resolved once per workspace: a person's
+	// own choice is the same everywhere, the fallback differs per workspace.
+	locales := make(map[uuid.UUID]string)
+	for i := range items {
+		if items[i].MessageCode == nil {
+			continue
+		}
+		loc, ok := locales[items[i].WorkspaceID]
+		if !ok {
+			loc = s.recipientLocale(ctx, items[i].WorkspaceID, userID)
+			locales[items[i].WorkspaceID] = loc
+		}
+		renderStoredNotification(loc, &items[i])
+	}
+	return items, nil
 }
 
 // CountUnread returns the count of unread notifications for the given user.
