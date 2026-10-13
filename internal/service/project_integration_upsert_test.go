@@ -150,3 +150,55 @@ func TestUpsertTeamRelay_SecondPatchChangesOnlyMountPath(t *testing.T) {
 	assert.Equal(t, "Notes", settings.Subfolder)
 	assert.True(t, settings.IncludeProjectSlug)
 }
+
+// TestUpsertTeamRelay_DisableWithoutKeyKeepsStoredKey: switching the
+// integration off (and back on) without re-entering the key must not touch the
+// stored credential.
+func TestUpsertTeamRelay_DisableWithoutKeyKeepsStoredKey(t *testing.T) {
+	repo := NewMockProjectIntegrationRepository()
+	svc := NewProjectIntegrationService(repo)
+	projectID := uuid.New()
+	key := "tr_agent_" + strings.Repeat("a", 48)
+
+	_, err := svc.UpsertTeamRelay(context.Background(), projectID, UpsertProjectIntegrationInput{
+		Enabled: true, ShareSlug: "probe-share", AgentKey: key,
+	})
+	require.NoError(t, err)
+
+	for _, enabled := range []bool{false, true} {
+		got, err := svc.UpsertTeamRelay(context.Background(), projectID, UpsertProjectIntegrationInput{
+			Enabled: enabled, ShareSlug: "probe-share",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, key, got.AgentKey, "enabled=%v must keep the stored key", enabled)
+	}
+}
+
+// TestUpsertTeamRelay_MalformedKeyRejectedEvenWhenDisabled is the regression
+// for the form that echoed the "••••" mask back: it must be a readable
+// validation error on agent_key regardless of `enabled`.
+func TestUpsertTeamRelay_MalformedKeyRejectedEvenWhenDisabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, bad := range []string{"••••••••••••••", "hunter2-browser-password", "tr_agent_short"} {
+			repo := NewMockProjectIntegrationRepository()
+			svc := NewProjectIntegrationService(repo)
+			_, err := svc.UpsertTeamRelay(context.Background(), uuid.New(), UpsertProjectIntegrationInput{
+				Enabled: enabled, ShareSlug: "probe-share", AgentKey: bad,
+			})
+			require.Error(t, err, "enabled=%v key=%q", enabled, bad)
+			apiErr, ok := err.(*apierror.Error)
+			require.True(t, ok, "expected *apierror.Error, got %T", err)
+			assert.Contains(t, apiErr.Validation, "agent_key")
+		}
+	}
+}
+
+func TestUpsertTeamRelay_MaskedKeyMessageIsReadable(t *testing.T) {
+	svc := NewProjectIntegrationService(NewMockProjectIntegrationRepository())
+	_, err := svc.UpsertTeamRelay(context.Background(), uuid.New(), UpsertProjectIntegrationInput{
+		Enabled: false, AgentKey: "••••••••••••••",
+	})
+	apiErr, ok := err.(*apierror.Error)
+	require.True(t, ok)
+	assert.Contains(t, apiErr.Validation["agent_key"], "masked placeholder")
+}

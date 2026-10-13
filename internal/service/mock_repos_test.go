@@ -3180,6 +3180,10 @@ func (m *MockProjectIntegrationRepository) Upsert(_ context.Context, pi *domain.
 	if m.byKey[pi.ProjectID] == nil {
 		m.byKey[pi.ProjectID] = make(map[string]*domain.ProjectIntegration)
 	}
+	// Mirror the real upsertQuery: an empty AgentKey keeps the stored one.
+	if prev := m.byKey[pi.ProjectID][pi.Type]; prev != nil && pi.AgentKey == "" {
+		pi.AgentKey = prev.AgentKey
+	}
 	m.byKey[pi.ProjectID][pi.Type] = pi
 	return nil
 }

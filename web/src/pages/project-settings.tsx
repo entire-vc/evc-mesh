@@ -1,7 +1,7 @@
 import { useAgentShortTag } from "@/hooks/use-agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "@/components/ui/toast";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -1152,6 +1152,9 @@ export function ProjectSettingsPage() {
   const [trEnabled, setTrEnabled] = useState(false);
   const [trShareSlug, setTrShareSlug] = useState("");
   const [trAgentKey, setTrAgentKey] = useState("");
+  // True only after the user typed/pasted into the key field: autofill fires
+  // change events without key or paste events, so it never sets this.
+  const trKeyUserEdited = useRef(false);
   const [trAgentKeyHint, setTrAgentKeyHint] = useState("");
   const [trSubfolder, setTrSubfolder] = useState("Mesh/Mesh dev");
   const [trIncludeSlug, setTrIncludeSlug] = useState(true);
@@ -1319,6 +1322,7 @@ export function ProjectSettingsPage() {
     setTrSubfolder(data.subfolder || "Mesh/Mesh dev");
     setTrIncludeSlug(data.include_project_slug);
     setTrAgentKey("");
+    trKeyUserEdited.current = false;
     const mountPath = data.docs_mount_path || "";
     setTrDocsMountPath(mountPath);
     setTrMountMode(mountPath ? "path" : "root");
@@ -1358,7 +1362,13 @@ export function ProjectSettingsPage() {
         include_project_slug: trIncludeSlug,
         docs_mount_path: trDocsMountPath,
       };
-      if (trAgentKey) body.agent_key = trAgentKey;
+      // Never send the key when switching the integration off, never an
+      // empty/whitespace value and never a mask (browser/password-manager
+      // autofill of "••••"): absent means "keep the stored key" server-side.
+      const typedKey = trAgentKey.trim();
+      if (trEnabled && trKeyUserEdited.current && typedKey && !/[•●*]/.test(typedKey)) {
+        body.agent_key = typedKey;
+      }
 
       const data = await api<TeamRelayResponse>(
         `/api/v1/projects/${currentProject.id}/integrations/team-relay`,
@@ -2893,9 +2903,19 @@ export function ProjectSettingsPage() {
                     </label>
                     <Input
                       id="tr-agent-key"
+                      name="tr-agent-key"
                       type="password"
+                      autoComplete="new-password"
+                      data-1p-ignore
+                      data-lpignore="true"
                       value={trAgentKey}
                       onChange={(e) => setTrAgentKey(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete")) {
+                          trKeyUserEdited.current = true;
+                        }
+                      }}
+                      onPaste={() => { trKeyUserEdited.current = true; }}
                       placeholder={trAgentKeyHint || "Enter agent key (min 20 chars)"}
                       disabled={!trEnabled}
                     />
