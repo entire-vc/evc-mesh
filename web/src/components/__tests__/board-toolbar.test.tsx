@@ -79,10 +79,10 @@ describe("BoardToolbar dropdown triggers", () => {
 describe("BoardToolbar working-only filter", () => {
   it("is hidden without a handler and toggles when wired", () => {
     const { rerender } = render(<BoardToolbar {...baseProps()} />);
-    expect(screen.queryAllByText("Реально в работе")).toHaveLength(0);
+    expect(screen.queryAllByText("Actually working")).toHaveLength(0);
     const onWorkingOnlyChange = vi.fn();
     rerender(<BoardToolbar {...baseProps({ workingOnly: false, onWorkingOnlyChange })} />);
-    fireEvent.click(screen.getAllByText("Реально в работе")[0]!);
+    fireEvent.click(screen.getAllByText("Actually working")[0]!);
     expect(onWorkingOnlyChange).toHaveBeenCalledWith(true);
   });
 });

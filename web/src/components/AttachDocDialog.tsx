@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { BookOpen, FileText, Loader2, Search, X } from "lucide-react";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
@@ -38,7 +39,7 @@ const SCOPE_COPY: Record<
   relay: {
     title: "Attach Obsidian doc",
     icon: BookOpen,
-    placeholder: "Искать Obsidian-доки...",
+    placeholder: "",
   },
 };
 
@@ -60,6 +61,7 @@ export function AttachDocDialog({
   onClose,
   onSelect,
 }: AttachDocDialogProps) {
+  const { t } = useTranslation("attachDoc");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<DocumentSearchHit[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -149,7 +151,7 @@ export function AttachDocDialog({
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={copy.placeholder}
+            placeholder={scope === "relay" ? t("searchObsidian") : copy.placeholder}
             className="w-full rounded-md border border-border bg-background py-1.5 pl-8 pr-8 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
           {query && (
@@ -174,10 +176,10 @@ export function AttachDocDialog({
           ) : results.length === 0 ? (
             <p className="px-2 py-3 text-xs text-muted-foreground">
               {query
-                ? "Ничего не найдено"
+                ? t("nothingFound")
                 : scope === "docs"
                   ? "Start typing to search"
-                  : "Нет доступных документов"}
+                  : t("noDocs")}
             </p>
           ) : (
             <ul className="space-y-0.5">

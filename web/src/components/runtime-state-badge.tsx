@@ -1,8 +1,9 @@
 import { CirclePause, Clock, Hourglass, Play } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import {
-  RUNTIME_STALE_NOTE,
   parseRuntimeRef,
+  runtimeStaleNote,
   runtimeKindTone,
   runtimeStateText,
 } from "@/lib/runtime-state";
@@ -28,10 +29,11 @@ interface Props {
  * paint a confident "working" on the board.
  */
 export function RuntimeStateBadge({ state, variant = "badge", className }: Props) {
+  useTranslation("board"); // re-render on language change; the texts come from runtime-state.ts
   const Icon = icons[state.kind];
   const ref = parseRuntimeRef(state.ref);
   const text = runtimeStateText(state);
-  const title = state.stale ? `${text} (${RUNTIME_STALE_NOTE})` : text;
+  const title = state.stale ? `${text} (${runtimeStaleNote()})` : text;
 
   return (
     <span
@@ -67,7 +69,7 @@ export function RuntimeStateBadge({ state, variant = "badge", className }: Props
         ))}
       {state.stale && (
         <span className="shrink-0 italic" data-testid="runtime-state-stale">
-          · {RUNTIME_STALE_NOTE}
+          · {runtimeStaleNote()}
         </span>
       )}
     </span>

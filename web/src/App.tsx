@@ -10,6 +10,7 @@ import { AppLayout } from "@/components/layout/app-layout";
 import { LoginPage } from "@/pages/login";
 import { RegisterPage } from "@/pages/register";
 import { PageSkeleton } from "@/components/page-skeleton";
+import { AuthLoadingSkeleton } from "@/components/layout/auth-loading-skeleton";
 import { useTranslation } from "react-i18next";
 import { useLanguageSync } from "@/i18n/use-language-sync";
 
@@ -479,7 +480,10 @@ export function App() {
   const { i18n } = useTranslation();
   return (
     <ErrorBoundary>
-      <RouterProvider key={i18n.language} router={router} />
+      {/* AppLayout suspends while the locale chunks of the language load */}
+      <Suspense fallback={<AuthLoadingSkeleton />}>
+        <RouterProvider key={i18n.language} router={router} />
+      </Suspense>
     </ErrorBoundary>
   );
 }

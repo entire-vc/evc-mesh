@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -363,6 +364,7 @@ function MentionsTab({
   shownIds: Set<string>;
   onMentionClick: (m: MentionInboxItem) => void;
 }) {
+  const { t } = useTranslation("activity");
   const { fresh, shown } = useMemo(() => splitByLastVisit(mentions, lastVisit), [mentions, lastVisit]);
 
   if (loading) {
@@ -406,7 +408,7 @@ function MentionsTab({
       )}
       {fresh.length > 0 && (
         <section className="space-y-2">
-          <SectionHeader label="Новое" count={fresh.length} accent />
+          <SectionHeader label={t("section.new")} count={fresh.length} accent />
           {fresh.map((m) => (
             <MentionCard key={m.comment_id} mention={m} shownIds={shownIds} onClick={onMentionClick} />
           ))}
@@ -415,7 +417,7 @@ function MentionsTab({
 
       {shown.length > 0 && (
         <section className="space-y-2">
-          {fresh.length > 0 && <SectionHeader label="Показано" count={shown.length} />}
+          {fresh.length > 0 && <SectionHeader label={t("section.shown")} count={shown.length} />}
           {shown.map((m) => (
             <MentionCard key={m.comment_id} mention={m} shownIds={shownIds} onClick={onMentionClick} />
           ))}

@@ -1,0 +1,21 @@
+{
+  "runtimeState": {
+    "working": "В работе",
+    "workingLane": "В работе у {{lane}}",
+    "since": "с {{time}}",
+    "waiting": "Ждёт",
+    "until": "до {{time}}",
+    "queued": "В очереди",
+    "queuedLane": "В очереди лейна {{lane}}",
+    "position": "позиция {{position}}",
+    "stopped": "Стоит",
+    "stale": "данные устарели"
+  },
+  "filter": {
+    "reallyWorking": "Реально в работе"
+  },
+  "falseOpen": {
+    "allChildrenClosed": "False-open: все подзадачи закрыты, карточка без изменений {{days}} дн. — стоит пересмотреть приоритет",
+    "onlyParkedChildrenLeft": "Остались только backlog-подзадачи ({{count}}), карточка без изменений {{days}} дн. — работа есть, но не движется"
+  }
+}

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { AgentShortTag } from "@/components/agent-short-tag";
 /**
  * BoardToolbar — ClickUp-style controls for the Board page.
@@ -313,6 +314,7 @@ export function BoardToolbar({
   onNewTask,
   onNewRecurring,
 }: BoardToolbarProps) {
+  const { t } = useTranslation("board");
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   return (
@@ -397,7 +399,7 @@ export function BoardToolbar({
           {onWorkingOnlyChange && (
             <ToggleButton active={workingOnly} onClick={() => onWorkingOnlyChange(!workingOnly)}>
               <Play className="h-3 w-3" aria-hidden="true" />
-              Реально в работе
+              {t("filter.reallyWorking")}
             </ToggleButton>
           )}
 
@@ -504,7 +506,7 @@ export function BoardToolbar({
           {onWorkingOnlyChange && (
             <ToggleButton active={workingOnly} onClick={() => onWorkingOnlyChange(!workingOnly)}>
               <Play className="h-3 w-3" aria-hidden="true" />
-              Реально в работе
+              {t("filter.reallyWorking")}
             </ToggleButton>
           )}
 

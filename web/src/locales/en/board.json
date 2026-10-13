@@ -1,0 +1,21 @@
+{
+  "runtimeState": {
+    "working": "Working",
+    "workingLane": "Being worked on by {{lane}}",
+    "since": "since {{time}}",
+    "waiting": "Waiting",
+    "until": "until {{time}}",
+    "queued": "Queued",
+    "queuedLane": "Queued in lane {{lane}}",
+    "position": "position {{position}}",
+    "stopped": "Stopped",
+    "stale": "data is stale"
+  },
+  "filter": {
+    "reallyWorking": "Actually working"
+  },
+  "falseOpen": {
+    "allChildrenClosed": "False-open: all subtasks are closed, the card has not changed for {{days}} d. - consider revisiting its priority",
+    "onlyParkedChildrenLeft": "Only backlog subtasks are left ({{count}}), the card has not changed for {{days}} d. - there is work, but it is not moving"
+  }
+}
