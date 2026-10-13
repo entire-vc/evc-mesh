@@ -1738,7 +1738,7 @@ export function WorkspaceSettingsPage() {
                     >
                       <Avatar name={grant.agent.name} size="md" />
                       <div className="flex-1 min-w-0">
-                        <span className="truncate text-sm font-medium">
+                        <span className="block truncate text-sm font-medium">
                           {grant.agent.name}<AgentShortTag tag={grant.agent.short_tag} />
                         </span>
                       </div>
@@ -1752,7 +1752,7 @@ export function WorkspaceSettingsPage() {
                       {isHome && (
                         <Badge
                           variant="outline"
-                          className="text-xs"
+                          className="shrink-0 text-xs"
                           title="Home connection — remove or transfer the agent to change it, not revoke."
                         >
                           Home
@@ -1760,7 +1760,7 @@ export function WorkspaceSettingsPage() {
                       )}
                       <Badge
                         variant={roleBadgeVariant(grant.role)}
-                        className="capitalize"
+                        className="shrink-0 capitalize"
                       >
                         {grant.role}
                       </Badge>
@@ -1772,7 +1772,7 @@ export function WorkspaceSettingsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-muted-foreground"
+                          className="h-8 w-8 shrink-0 text-muted-foreground"
                           onClick={() => setEditAgentId(grant.agent_id)}
                           title="Edit agent"
                           aria-label={`Edit agent ${grant.agent.name}`}
@@ -1784,7 +1784,7 @@ export function WorkspaceSettingsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                           onClick={() => handleOpenRevokeGrant(grant)}
                           title="Revoke connection"
                         >
