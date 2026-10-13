@@ -1001,17 +1001,7 @@ func main() {
 	// per-request via sparkIntegrationResolver, once a workspace is known); a
 	// workspace that has disabled Spark still sees this nav link, and gets refused
 	// with a named reason if it actually tries to browse the catalog.
-	versionHandler := func(c echo.Context) error {
-		return c.JSON(200, map[string]any{
-			"commit":        BuildSHA,
-			"build_time":    BuildTime,
-			"version":       BuildVersion,
-			"environment":   BuildEnv,
-			"service":       "evc-mesh-api",
-			"spark_enabled": cfg.Spark.Enabled,
-			"spark_url":     cfg.Spark.URL,
-		})
-	}
+	versionHandler := newVersionHandler(cfg)
 	e.GET("/api/version", versionHandler)
 	e.GET("/api/v1/version", versionHandler)
 	e.GET("/api/v1/healthz/version", versionHandler)
