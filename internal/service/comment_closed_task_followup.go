@@ -178,6 +178,11 @@ func commentIsInformational(raw json.RawMessage) bool {
 
 // isDriverComment reports whether this comment was written by fleet automation.
 func isDriverComment(comment *domain.Comment) bool {
+	// A code is the primary signal; the prefix list below stays as the reader of
+	// comments written before system_code existed.
+	if comment.SystemCode != nil && *comment.SystemCode != "" {
+		return true
+	}
 	if src := commentMetadataSource(comment.Metadata); src != "" && src != "api" && src != "ui" && src != "mcp" {
 		return true
 	}
@@ -685,10 +690,12 @@ func (s *commentService) ensurePendingNotice(ctx context.Context, stage string, 
 func (s *commentService) postPendingNotice(ctx context.Context, sourceTaskID, commentID uuid.UUID) error {
 	now := timeNow()
 	sys := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     sourceTaskID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       sourceTaskID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeClosedTaskFollowupPending),
+		SystemParams: SysParamsJSON(map[string]any{"comment_id": commentID.String(), "max_attempts": ClosedFollowUpReconcileMaxAttempts}),
 		Body: fmt.Sprintf(
 			"🤖 Auto: доставка замечания (комментарий `%s`) не подтверждена — сбой чтения при поиске карточки. "+
 				"Замечание не потеряно: повторю автоматически (до %d попыток), о доставке сообщу здесь.",
@@ -1018,10 +1025,12 @@ func followUpCauseExcerpt(cause string) string {
 func (s *commentService) postEscalationNotice(ctx context.Context, row *domain.ClosedFollowUpPending, cause error) error {
 	now := timeNow()
 	sys := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     row.SourceTaskID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       row.SourceTaskID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeClosedTaskFollowupEscalated),
+		SystemParams: SysParamsJSON(map[string]any{"comment_id": row.CommentID.String(), "attempts": ClosedFollowUpReconcileMaxAttempts, "cause": followUpCauseExcerpt(cause.Error())}),
 		Body: fmt.Sprintf(
 			"🤖 Auto: доставка замечания (комментарий `%s`) не удалась после %d автоматических повторов — нужен человек. Причина последней ошибки: %s",
 			row.CommentID, ClosedFollowUpReconcileMaxAttempts, followUpCauseExcerpt(cause.Error()),
@@ -1197,6 +1206,19 @@ const (
 	followUpStormLimited
 )
 
+// followUpOutcomeName is the stable name of a notice outcome for system_params.
+func followUpOutcomeName(o followUpNoticeOutcome) string {
+	switch o {
+	case followUpAlreadyOpen:
+		return "already_open"
+	case followUpReopened:
+		return "reopened"
+	case followUpStormLimited:
+		return "storm_limited"
+	}
+	return "created"
+}
+
 // postFollowUpNotice writes the system comment that tells the commenter what
 // happened to their remark. Written straight through commentRepo rather than
 // s.Create, so it cannot re-enter any of the comment gates — and its author is
@@ -1227,13 +1249,15 @@ func (s *commentService) postFollowUpNotice(
 	}
 	now := timeNow()
 	sys := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
-		Body:       body,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeClosedTaskFollowupNotice),
+		SystemParams: SysParamsJSON(map[string]any{"reopened": outcome == followUpReopened, "outcome": followUpOutcomeName(outcome), "root": shortTaskID(followUp.ID), "source": shortTaskID(task.ID), "comment_id": comment.ID.String()}),
+		Body:         body,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := s.commentRepo.Create(ctx, sys); err != nil {
 		log.Printf("[closed-followup] WARNING: notice comment on task=%s (follow-up=%s) failed: %v",
@@ -1484,10 +1508,12 @@ func (s *commentService) waitForRootCard(ctx context.Context, rootTaskID uuid.UU
 func (s *commentService) postDeferredRepeatNotice(ctx context.Context, task *domain.Task, comment *domain.Comment) {
 	now := timeNow()
 	sys := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeClosedTaskRepeatDeferred),
+		SystemParams: SysParamsJSON(map[string]any{"comment_id": comment.ID.String()}),
 		Body: fmt.Sprintf(
 			"🤖 Auto: повтор замечания (комментарий `%s`) пока не доставлен в карточку — root ещё не виден (внутренняя гонка). "+
 				"Замечание не потеряно; следующий повтор попробует снова.",
@@ -1526,10 +1552,12 @@ func (s *commentService) postRepeatOnRoot(
 	}
 	now := timeNow()
 	sys := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     root.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       root.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeRepeatComment),
+		SystemParams: SysParamsJSON(map[string]any{"root": shortTaskID(root.ID), "reopened": reopened, "source": shortTaskID(task.ID), "comment_id": comment.ID.String()}),
 		Body: fmt.Sprintf(
 			"🤖 Auto: повтор того же замечания на закрытой карточке #%s — %s.\n\n---\n\n%s\n\n---\n\nИсточник: #%s, комментарий `%s`.",
 			shortTaskID(task.ID), verb, comment.Body, shortTaskID(task.ID), comment.ID,

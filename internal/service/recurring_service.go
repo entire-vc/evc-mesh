@@ -775,13 +775,15 @@ func (s *recurringService) recordMissedOutcome(ctx context.Context, schedule *do
 	)
 	now := time.Now()
 	comment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     newTaskID,
-		AuthorID:   uuid.Nil,
-		AuthorType: domain.ActorTypeSystem,
-		Body:       body,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           uuid.New(),
+		TaskID:       newTaskID,
+		AuthorID:     uuid.Nil,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeRecurringMissed),
+		SystemParams: SysParamsJSON(map[string]any{"count": count}),
+		Body:         body,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := s.commentRepo.Create(ctx, comment); err != nil {
 		log.Printf("[recurring] WARNING: failed to post consecutive-miss alert comment on task %s: %v", newTaskID, err)

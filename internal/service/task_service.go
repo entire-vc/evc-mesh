@@ -3480,10 +3480,12 @@ func (s *taskService) postAssigneeChangeComment(ctx context.Context, task *domai
 	}
 	now := timeNow()
 	comment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   uuid.Nil,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     uuid.Nil,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeAssigneeAutoChanged),
+		SystemParams: SysParamsJSON(map[string]any{"from": describe(oldID), "to": describe(newID), "reason": reason}),
 		Body: fmt.Sprintf(
 			"🔄 Авто-смена исполнителя: %s → %s (%s).",
 			describe(oldID), describe(newID), reason,
@@ -3640,7 +3642,7 @@ func (s *taskService) RepeatOpenInstance(ctx context.Context, taskID uuid.UUID) 
 		log.Printf("[recurring] WARNING: RepeatOpenInstance: ListByTask for task %s failed: %v — defaulting to Повтор 1", taskID, err)
 	} else {
 		for _, c := range page.Items {
-			if strings.HasPrefix(c.Body, repeatCommentPrefix) {
+			if isRepeatInstanceComment(&c) {
 				n++
 			}
 		}
@@ -3648,10 +3650,12 @@ func (s *taskService) RepeatOpenInstance(ctx context.Context, taskID uuid.UUID) 
 
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     taskID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       taskID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeRecurringRepeat),
+		SystemParams: SysParamsJSON(map[string]any{"n": n}),
 		Body: fmt.Sprintf("%s%d: расписание сработало снова, но этот инстанс ещё не закрыт — новая карточка не создана.",
 			repeatCommentPrefix, n),
 		CreatedAt: now,
@@ -3821,6 +3825,7 @@ func (s *taskService) postAPIArmHintComment(ctx context.Context, taskID uuid.UUI
 		TaskID:     taskID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
+		SystemCode: SysCodePtr(SysCodeAPIArmHint),
 		Body: "🤖 Auto: human_gate взведён через API/кнопку — " + endpointGateHintMarker +
 			" «Снять гейт» в карточке (агент — clear_human_gate), ответ комментарием его не снимает.",
 		CreatedAt: now,
@@ -3873,14 +3878,20 @@ func (s *taskService) postMarkerDefaultAppliedComment(ctx context.Context, in do
 			deadlineText,
 		)
 	}
+	armCode := SysCodeGateArmedDefault
+	if task.HumanGateClass == domain.HumanGateClassHard {
+		armCode = SysCodeGateArmedHard
+	}
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
-		Body:       body,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(armCode),
+		SystemParams: SysParamsJSON(map[string]any{"deadline": deadlineText, "default": domain.DefaultMarkerRecommendedDefault}),
+		Body:         body,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[human-gate] WARNING: create default-applied notice on task %s failed: %v", task.ID, err)

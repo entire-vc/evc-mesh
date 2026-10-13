@@ -162,10 +162,12 @@ func (s *commentService) postRepeatAskNotice(ctx context.Context, task *domain.T
 	}
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeRepeatAskRefused),
+		SystemParams: SysParamsJSON(map[string]any{"answered_at": ans.at.Format("2006-01-02 15:04"), "quote": quote}),
 		Body: fmt.Sprintf(
 			"🔁 Auto: human_gate НЕ взведён — на прошлый вопрос уже есть ответ (%s): «%s».\n\n"+
 				"Новый вопрос принимается только с новым предметом и явной ссылкой: строка "+

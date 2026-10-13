@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -210,9 +211,11 @@ func (h *TaskHandler) postOwnGateClearedComment(ctx context.Context, taskID, act
 		return
 	}
 	_ = h.commentService.Create(ctx, &domain.Comment{
-		TaskID:     taskID,
-		AuthorID:   uuid.Nil,
-		AuthorType: domain.ActorTypeSystem,
+		TaskID:       taskID,
+		AuthorID:     uuid.Nil,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   service.SysCodePtr(service.SysCodeGateClearedOwnArm),
+		SystemParams: service.SysParamsJSON(map[string]any{"agent": actorID.String()}),
 		Body: fmt.Sprintf("🔓 Auto: human_gate снят автором собственного API-арма (agent: %s). "+
 			"Маркерного коммента у этого гейта не было — снятие через DELETE /human-gate, "+
 			"не отзыв аска.", actorID),

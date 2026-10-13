@@ -240,20 +240,24 @@ func (s *autoTransitionService) postUmbrellaCloseComment(ctx context.Context, pa
 	if s.commentRepo == nil {
 		return
 	}
+	children := make([]map[string]string, 0, len(subtasks))
 	var b strings.Builder
 	fmt.Fprintf(&b, "🤖 Авто-закрытие: все %d потомков в терминальном статусе (done/cancelled), карточка помечена kind:epic/kind:umbrella — перевожу review → done без ожидания повторного приёма.\n\nПотомки:\n", len(subtasks))
 	for _, sub := range subtasks {
 		fmt.Fprintf(&b, "- #%s %s\n", sub.ID.String()[:8], sub.Title)
+		children = append(children, map[string]string{"id": sub.ID.String()[:8], "title": sub.Title})
 	}
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     parent.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
-		Body:       b.String(),
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:           uuid.New(),
+		TaskID:       parent.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeUmbrellaAutoClosed),
+		SystemParams: SysParamsJSON(map[string]any{"children": children}),
+		Body:         b.String(),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[auto-transition] WARNING: create umbrella-close comment on task %s failed: %v", parent.ID, err)

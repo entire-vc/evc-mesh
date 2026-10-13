@@ -133,6 +133,7 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 		TaskID:     task.ID,
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
+		SystemCode: SysCodePtr(SysCodeGateDecisionRecorded),
 		Body:       body,
 		CreatedAt:  timeNow(),
 		UpdatedAt:  timeNow(),
@@ -220,13 +221,15 @@ func (s *commentService) RevokeHumanGateDecision(ctx context.Context, input doma
 	}
 
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
-		Body:       fmt.Sprintf("🔒 Auto: human_gate взведён снова — запись решения отозвана (%s). Спор зафиксирован.", input.Reason),
-		CreatedAt:  timeNow(),
-		UpdatedAt:  timeNow(),
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeGateDecisionRevoked),
+		SystemParams: SysParamsJSON(map[string]any{"reason": input.Reason}),
+		Body:         fmt.Sprintf("🔒 Auto: human_gate взведён снова — запись решения отозвана (%s). Спор зафиксирован.", input.Reason),
+		CreatedAt:    timeNow(),
+		UpdatedAt:    timeNow(),
 	}
 	if err := s.commentRepo.Create(ctx, sysComment); err != nil {
 		log.Printf("[human-gate-decision] WARNING: create system comment on task %s failed: %v", task.ID, err)
@@ -285,10 +288,12 @@ func (s *commentService) postExistingDecisionNotice(ctx context.Context, task *d
 	}
 	now := timeNow()
 	sysComment := &domain.Comment{
-		ID:         uuid.New(),
-		TaskID:     task.ID,
-		AuthorID:   systemActorID,
-		AuthorType: domain.ActorTypeSystem,
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     systemActorID,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeGateDecisionExisting),
+		SystemParams: SysParamsJSON(map[string]any{"decision_id": existing.ID.String(), "provenance": provenance}),
 		Body: fmt.Sprintf(
 			"🔁 Auto: этот вопрос уже отвечен — запись решения %s (%s, %s) от %s. human_gate не взведён повторно.",
 			existing.ID, provenance, existing.CreatedAt.Format("2006-01-02"), recorderLabel(existing.RecordedBy),

@@ -322,9 +322,11 @@ func (s *monitorPromotionService) postSystemComment(ctx context.Context, task *d
 		TaskID: task.ID,
 		Body: "⏰ auto-unparked: due_date наступил — задача возвращена в todo (была в backlog, " +
 			parked + "). Открытых `blocks` нет.",
-		AuthorID:   uuid.Nil,
-		AuthorType: domain.ActorTypeSystem,
-		CreatedAt:  timeNow(),
+		AuthorID:     uuid.Nil,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeMonitorUnparked),
+		SystemParams: SysParamsJSON(map[string]any{"labels": task.Labels}),
+		CreatedAt:    timeNow(),
 	}
 	if err := s.commentRepo.Create(ctx, comment); err != nil {
 		log.Printf("[monitor-promotion] warning: failed to post comment on task %s: %v", task.ID, err)
