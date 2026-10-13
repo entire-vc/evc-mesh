@@ -249,6 +249,43 @@ func TestDocumentHandler_GetByPath(t *testing.T) {
 	assert.Equal(t, "architecture/adr/adr-004", gotPath, "the whole wildcard reaches the service")
 	assert.Contains(t, rec.Body.String(), "ADR-004")
 	assert.Contains(t, rec.Body.String(), `"version":2`, "so the caller can write back conditionally")
+	assert.NotContains(t, rec.Body.String(), "moved_to", "an exact hit carries no redirect")
+}
+
+// A document found through a former path or a bare slug tells the caller
+// where it lives now, so the stale reference can be fixed.
+func TestDocumentHandler_GetByPath_ExposesMovedTo(t *testing.T) {
+	mockSvc := &MockDocumentService{
+		GetByPathFunc: func(context.Context, uuid.UUID, string) (*domain.Document, error) {
+			return &domain.Document{ID: uuid.New(), Title: "Threat model", MovedTo: "specs/threat-model"}, nil
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := pathRequest(e, uuid.New().String(), "drafts/threat-model")
+	require.NoError(t, h.GetByPath(c))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"moved_to":"specs/threat-model"`)
+}
+
+// An ambiguous bare slug is a 409 whose details list the candidates.
+func TestDocumentHandler_GetByPath_AmbiguousSlugIsConflict(t *testing.T) {
+	mockSvc := &MockDocumentService{
+		GetByPathFunc: func(context.Context, uuid.UUID, string) (*domain.Document, error) {
+			conflict := apierror.Conflict("Ambiguous document slug")
+			conflict.Details = "alpha/notes, beta/notes"
+			return nil, conflict
+		},
+	}
+	h, e := setupDocumentTest(mockSvc)
+
+	c, rec := pathRequest(e, uuid.New().String(), "notes")
+	require.NoError(t, h.GetByPath(c))
+
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contains(t, rec.Body.String(), "alpha/notes")
+	assert.Contains(t, rec.Body.String(), "beta/notes")
 }
 
 func TestDocumentHandler_GetByPath_InvalidProjectID(t *testing.T) {

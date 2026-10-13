@@ -3518,6 +3518,8 @@ type MockDocumentRepository struct {
 	// how a test lands a competing write in the gap between "the service read the
 	// document" and "the service wrote it" without needing real concurrency.
 	beforeUpdate func()
+	// aliases mirrors document_path_aliases: projectID|path -> document id.
+	aliases map[string]uuid.UUID
 }
 
 func NewMockDocumentRepository() *MockDocumentRepository {
@@ -3622,6 +3624,23 @@ func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document,
 	if bumpVersion {
 		newVersion++
 	}
+	// Mirrors recordPathAliasesOnMove: a change of parent records the old full
+	// path of the document and its live subtree before the write lands.
+	if !sameDocParent(existing.ParentID, doc.ParentID) {
+		if m.aliases == nil {
+			m.aliases = make(map[string]uuid.UUID)
+		}
+		var record func(id uuid.UUID)
+		record = func(id uuid.UUID) {
+			m.aliases[existing.ProjectID.String()+"|"+m.pathOfLocked(id)] = id
+			for _, d := range m.items {
+				if d.ParentID != nil && *d.ParentID == id && d.DeletedAt == nil {
+					record(d.ID)
+				}
+			}
+		}
+		record(existing.ID)
+	}
 	copied := *doc
 	copied.Version = newVersion
 	m.items[doc.ID] = &copied
@@ -3663,6 +3682,77 @@ func (m *MockDocumentRepository) GetByPathInProject(_ context.Context, projectID
 	}
 	copied := *current
 	return &copied, len(segments), nil
+}
+
+func sameDocParent(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// pathOfLocked builds a document's full slug path by walking up its parents.
+// Caller holds m.mu.
+func (m *MockDocumentRepository) pathOfLocked(id uuid.UUID) string {
+	var parts []string
+	for cur, ok := m.items[id]; ok; {
+		parts = append([]string{cur.Slug}, parts...)
+		if cur.ParentID == nil {
+			break
+		}
+		cur, ok = m.items[*cur.ParentID]
+	}
+	return strings.Join(parts, "/")
+}
+
+func (m *MockDocumentRepository) GetByPathAlias(_ context.Context, projectID uuid.UUID, path string) (*domain.Document, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.aliases[projectID.String()+"|"+path]
+	if !ok {
+		return nil, nil
+	}
+	d, ok := m.items[id]
+	if !ok || d.DeletedAt != nil || d.ProjectID != projectID {
+		return nil, nil
+	}
+	copied := *d
+	return &copied, nil
+}
+
+func (m *MockDocumentRepository) FindLiveBySlug(_ context.Context, projectID uuid.UUID, slug string, limit int) ([]repository.DocumentPathHit, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var hits []repository.DocumentPathHit
+	for _, d := range m.items {
+		if d.ProjectID == projectID && d.DeletedAt == nil && d.Slug == slug {
+			hits = append(hits, repository.DocumentPathHit{ID: d.ID, Path: m.pathOfLocked(d.ID)})
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].Path < hits[j].Path })
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, nil
+}
+
+func (m *MockDocumentRepository) PathOf(_ context.Context, id uuid.UUID) (string, error) {
+	if m.errToReturn != nil {
+		return "", m.errToReturn
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	d, ok := m.items[id]
+	if !ok || d.DeletedAt != nil {
+		return "", nil
+	}
+	return m.pathOfLocked(id), nil
 }
 
 func (m *MockDocumentRepository) SoftDelete(_ context.Context, id uuid.UUID, at time.Time, by uuid.UUID, byType domain.ActorType) error {

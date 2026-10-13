@@ -289,14 +289,47 @@ func TestDocumentRepo_GetByIDInWorkspace_OtherTenantIsNil(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+// expectUpdateTxStart is the prologue every Update now runs: a transaction and
+// a locked read of the stored parent_id. storedParent equal to the document's
+// own ParentID means "not a move", so no alias write is expected after it.
+func expectUpdateTxStart(mock sqlmock.Sqlmock, storedParent *uuid.UUID) {
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT parent_id FROM documents WHERE id = \\$1 AND deleted_at IS NULL FOR UPDATE").
+		WillReturnRows(sqlmock.NewRows([]string{"parent_id"}).AddRow(storedParent))
+}
+
+// A move records the old paths BEFORE the UPDATE, inside the same
+// transaction, so a refused write leaves no alias behind and a committed one
+// never lacks its aliases.
+func TestDocumentRepo_Update_MoveRecordsAliasesInTheSameTransaction(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	newParent := uuid.New()
+	doc.ParentID = &newParent
+
+	expectUpdateTxStart(mock, nil) // stored at the top level, now moving under newParent
+	mock.ExpectExec("INSERT INTO document_path_aliases").
+		WithArgs(doc.ID, doc.ProjectID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("UPDATE documents").
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(4))
+	mock.ExpectCommit()
+
+	_, err := repo.Update(context.Background(), &doc, nil, false)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestDocumentRepo_Update(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
+	expectUpdateTxStart(mock, doc.ParentID)
 
 	mock.ExpectQuery("UPDATE documents").
 		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
 			doc.UpdatedBy, doc.UpdatedByType, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(4))
+	mock.ExpectCommit()
 
 	version, err := repo.Update(context.Background(), &doc, nil, false)
 	require.NoError(t, err)
@@ -309,9 +342,11 @@ func TestDocumentRepo_Update(t *testing.T) {
 func TestDocumentRepo_Update_BumpsVersionInTheSameStatement(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
+	expectUpdateTxStart(mock, doc.ParentID)
 
 	mock.ExpectQuery("SET title = .* version = version \\+ 1").
 		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(5))
+	mock.ExpectCommit()
 
 	version, err := repo.Update(context.Background(), &doc, nil, true)
 	require.NoError(t, err)
@@ -324,12 +359,14 @@ func TestDocumentRepo_Update_BumpsVersionInTheSameStatement(t *testing.T) {
 func TestDocumentRepo_Update_ConditionalPredicateIsInTheWrite(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
+	expectUpdateTxStart(mock, doc.ParentID)
 	expected := 4
 
 	mock.ExpectQuery("AND \\(\\$8::int IS NULL OR version = \\$8::int\\)").
 		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
 			doc.UpdatedBy, doc.UpdatedByType, expected).
 		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(5))
+	mock.ExpectCommit()
 
 	version, err := repo.Update(context.Background(), &doc, &expected, true)
 	require.NoError(t, err)
@@ -343,9 +380,11 @@ func TestDocumentRepo_Update_ConditionalPredicateIsInTheWrite(t *testing.T) {
 func TestDocumentRepo_Update_VersionMismatchReportsCurrent(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
+	expectUpdateTxStart(mock, doc.ParentID)
 	expected := 4
 
 	mock.ExpectQuery("UPDATE documents").WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
 	mock.ExpectQuery("SELECT version FROM documents").
 		WithArgs(doc.ID).
 		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(9))
@@ -362,9 +401,11 @@ func TestDocumentRepo_Update_VersionMismatchReportsCurrent(t *testing.T) {
 func TestDocumentRepo_Update_ConditionalOnMissingRowIsNotFound(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
+	expectUpdateTxStart(mock, doc.ParentID)
 	expected := 4
 
 	mock.ExpectQuery("UPDATE documents").WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
 	mock.ExpectQuery("SELECT version FROM documents").WillReturnError(sql.ErrNoRows)
 
 	_, err := repo.Update(context.Background(), &doc, &expected, true)
@@ -377,6 +418,7 @@ func TestDocumentRepo_Update_ConditionalOnMissingRowIsNotFound(t *testing.T) {
 func TestDocumentRepo_Update_NoRowsIsNotFound(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
+	expectUpdateTxStart(mock, doc.ParentID)
 
 	mock.ExpectQuery("UPDATE documents").WillReturnError(sql.ErrNoRows)
 
@@ -393,6 +435,7 @@ func TestDocumentRepo_Update_SlugConflictOnReparent(t *testing.T) {
 	repo, mock := newDocumentRepoMock(t)
 	doc := sampleDocument()
 
+	expectUpdateTxStart(mock, doc.ParentID)
 	mock.ExpectQuery("UPDATE documents").
 		WillReturnError(&pq.Error{Code: "23505", Constraint: "uq_documents_sibling_slug"})
 

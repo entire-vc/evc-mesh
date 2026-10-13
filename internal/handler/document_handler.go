@@ -307,7 +307,9 @@ func (h *DocumentHandler) Section(c echo.Context) error {
 //
 // The path is a wildcard segment rather than a query parameter so that it reads
 // the way it is written: /documents/by-path/architecture/adr/adr-004. What that
-// reference does and does not survive is on documentService.GetByPath.
+// reference does and does not survive is on documentService.GetByPath: a former
+// path or a bare slug still resolves, and the response then carries moved_to
+// with the document's current path; an ambiguous bare slug is a 409.
 func (h *DocumentHandler) GetByPath(c echo.Context) error {
 	projID, err := uuid.Parse(c.Param("proj_id"))
 	if err != nil {

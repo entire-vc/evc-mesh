@@ -244,30 +244,31 @@ func TestDocumentService_GetByPath_OtherProjectDoesNotResolve(t *testing.T) {
 	assert.Equal(t, 404, apiErr.StatusCode())
 }
 
-// The documented consequence of paths not being identifiers: move the document
-// and the old path stops resolving. Pinned as behaviour so that anyone who later
-// wants aliases has to change a test that says why there are none.
-func TestDocumentService_GetByPath_BreaksWhenTheDocumentMoves(t *testing.T) {
+// Moving a document no longer breaks the path it was filed under (#ed10e6aa):
+// the old path resolves through the alias the move recorded, and says where the
+// document lives now. The id is still the identifier that survives anything.
+func TestDocumentService_GetByPath_SurvivesWhenTheDocumentMoves(t *testing.T) {
 	f := setupDocumentService(t)
 	leaf := f.tree(t)
 
 	_, err := f.update(t, leaf.ID, UpdateDocumentInput{ClearParent: true})
 	require.NoError(t, err)
 
-	_, err = f.svc.GetByPath(context.Background(), f.projectID, "architecture/adr/adr-004")
-	var apiErr *apierror.Error
-	require.ErrorAs(t, err, &apiErr)
-	assert.Equal(t, 404, apiErr.StatusCode())
+	old, err := f.svc.GetByPath(context.Background(), f.projectID, "architecture/adr/adr-004")
+	require.NoError(t, err, "the former path resolves to the moved document")
+	assert.Equal(t, leaf.ID, old.ID)
+	assert.Equal(t, "adr-004", old.MovedTo, "and names its current path")
 
 	// The id is what survives, which is why every path lookup returns one.
 	byID, err := f.svc.GetByIDInWorkspace(context.Background(), leaf.ID, f.wsID)
 	require.NoError(t, err)
 	assert.Equal(t, leaf.ID, byID.ID)
 
-	// And it answers to its new path.
+	// And it answers to its new path, as an exact hit.
 	moved, err := f.svc.GetByPath(context.Background(), f.projectID, "adr-004")
 	require.NoError(t, err)
 	assert.Equal(t, leaf.ID, moved.ID)
+	assert.Empty(t, moved.MovedTo)
 }
 
 // A deleted document is not a step you can walk through, at any level.

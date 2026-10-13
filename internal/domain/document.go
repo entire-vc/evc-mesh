@@ -106,6 +106,13 @@ type Document struct {
 	// and project_id, none of which resolve to a URL without also knowing the
 	// document's workspace and project slugs (task #14db79fd).
 	URL string `json:"url,omitempty" db:"-"`
+
+	// MovedTo is the document's current full slug path ("specs/threat-model"),
+	// set only by a path lookup that did NOT hit the document at the path it
+	// asked for: a former path recorded when the document was moved, or a bare
+	// slug matched at another depth. It tells the caller to update the stale
+	// reference it is holding. Empty on an exact hit and in every other read.
+	MovedTo string `json:"moved_to,omitempty" db:"-"`
 }
 
 // DocumentSearchHit is one result of a full-text search over document content.
