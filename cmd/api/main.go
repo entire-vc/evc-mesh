@@ -31,6 +31,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
@@ -155,6 +156,13 @@ func main() {
 	savedViewRepo := postgres.NewSavedViewRepo(db)
 	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
 	integrationRepo := postgres.NewIntegrationRepo(db)
+
+	// Extension registry. Builtin providers register here (W1.5+); until
+	// then it is empty and the old per-provider path stays in force.
+	extensionRegistry := extensions.NewRegistry()
+	if syncErr := extensionRegistry.SyncBuiltin(context.Background(), postgres.NewInstalledExtensionRepo(db)); syncErr != nil {
+		log.Printf("[extensions] sync builtin extensions failed (registry stays usable): %v", syncErr)
+	}
 	runtimeRepo := postgres.NewRuntimeRepo(db)
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
@@ -1751,6 +1759,9 @@ func main() {
 	api.POST("/oauth/consent", oauthHandler.Decide, mw.RequireUserAuth())
 	api.GET("/oauth/grants", oauthHandler.ListGrants, mw.RequireUserAuth())
 	api.DELETE("/oauth/grants/:oauth_grant_id", oauthHandler.RevokeGrant, mw.RequireUserAuth())
+
+	// Routes contributed by registered extensions (Hooks()).
+	extensionRegistry.RegisterRoutes(e)
 
 	// GitHub webhook receiver (public — no auth, HMAC validated when configured).
 	// Two equivalent routes: the legacy /webhooks/github path that existing repos

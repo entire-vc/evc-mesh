@@ -1374,6 +1374,16 @@ type AutoTransitionRuleRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+// InstalledExtensionRepository manages the instance-level installed_extensions table.
+type InstalledExtensionRepository interface {
+	// UpsertBuiltin writes a builtin extension row from the registry at startup.
+	// An existing row of another source is left untouched; when the version
+	// changes, the old one is kept in previous_version.
+	UpsertBuiltin(ctx context.Context, ext *domain.InstalledExtension) error
+	Get(ctx context.Context, extensionID string) (*domain.InstalledExtension, error)
+	List(ctx context.Context) ([]domain.InstalledExtension, error)
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error
