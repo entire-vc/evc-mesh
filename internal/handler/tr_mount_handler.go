@@ -75,5 +75,9 @@ func (h *TrMountHandler) Sync(c echo.Context) error {
 		// anything the status itself doesn't already imply.
 		body["detail"] = result.Err.Error()
 	}
+	// A non-2xx outcome is an error response: the mount status is its stable code.
+	if code >= http.StatusBadRequest {
+		body["error_code"] = string(result.Status)
+	}
 	return c.JSON(code, body)
 }

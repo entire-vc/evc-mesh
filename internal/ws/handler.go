@@ -76,7 +76,8 @@ func Handler(hub *Hub, authService *auth.Service, agentService service.AgentServ
 			}
 
 			return c.JSON(http.StatusUnauthorized, map[string]string{
-				"error": "Authentication required",
+				"error_code": "unauthorized",
+				"error":      "Authentication required",
 			})
 		}
 
@@ -84,14 +85,16 @@ func Handler(hub *Hub, authService *auth.Service, agentService service.AgentServ
 		claims, err := authService.ValidateAccessToken(tokenString)
 		if err != nil {
 			return c.JSON(http.StatusUnauthorized, map[string]string{
-				"error": "Invalid or expired token",
+				"error_code": "unauthorized",
+				"error":      "Invalid or expired token",
 			})
 		}
 
 		userID, err := parseUUID(claims.Subject)
 		if err != nil {
 			return c.JSON(http.StatusUnauthorized, map[string]string{
-				"error": "Invalid token subject",
+				"error_code": "unauthorized",
+				"error":      "Invalid token subject",
 			})
 		}
 
@@ -104,7 +107,8 @@ func Handler(hub *Hub, authService *auth.Service, agentService service.AgentServ
 			if authz == nil {
 				log.Printf("[ws-handler] no authorizer configured; refusing workspace subscription")
 				return c.JSON(http.StatusForbidden, map[string]string{
-					"error": "Workspace access denied",
+					"error_code": "forbidden",
+					"error":      "Workspace access denied",
 				})
 			}
 			wsID, wsErr := authz.WorkspaceIDBySlug(c.Request().Context(), workspaceSlug)
@@ -113,7 +117,8 @@ func Handler(hub *Hub, authService *auth.Service, agentService service.AgentServ
 			// a cheap oracle for which workspaces exist.
 			if wsErr != nil || !authz.UserIsWorkspaceMember(c.Request().Context(), wsID, userID) {
 				return c.JSON(http.StatusForbidden, map[string]string{
-					"error": "Workspace access denied",
+					"error_code": "forbidden",
+					"error":      "Workspace access denied",
 				})
 			}
 			workspaceID = wsID
@@ -167,7 +172,8 @@ func handleAgentAuth(c echo.Context, hub *Hub, agentService service.AgentService
 	slug, err := parseWorkspaceSlugFromKey(agentKey)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, map[string]string{
-			"error": "Invalid agent key format",
+			"error_code": "unauthorized",
+			"error":      "Invalid agent key format",
 		})
 	}
 
@@ -175,7 +181,8 @@ func handleAgentAuth(c echo.Context, hub *Hub, agentService service.AgentService
 	agent, err := agentService.Authenticate(ctx, slug, agentKey)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, map[string]string{
-			"error": "Invalid agent key",
+			"error_code": "unauthorized",
+			"error":      "Invalid agent key",
 		})
 	}
 

@@ -470,7 +470,7 @@ func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, a
 		return base + ". You own this ask, so you can clear it yourself right now — but by " +
 			"WITHDRAWING it, not by this PATCH. Post a NEW comment whose LAST PARAGRAPH withdraws " +
 			"the ask, using one of the negator words the server matches: " +
-			"\"не нужен\", \"не нужно\", \"не требуется\", \"снят\", \"resolved\". " +
+			service.WithdrawalNegatorExamples() + ". " +
 			"Keep it to one short line, and do NOT re-quote the \"Blocking @\" marker — a quoted " +
 			"marker re-arms the gate instead of clearing it. Then re-read human_gate to confirm. " +
 			"Alternatively, " + recordDecision + "."
@@ -715,7 +715,8 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	// service at all, rather than silently dropping it and answering 200.
 	if req.StatusID != nil || req.StatusSlug != nil || req.Status != nil {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code": "status_change_via_patch_rejected",
+			"code":       "status_change_via_patch_rejected",
+			"error_code": "status_change_via_patch_rejected",
 			"message": "status_id/status_slug/status cannot be changed via PATCH /tasks/:id " +
 				"(this endpoint used to silently ignore them and still answer 200 — task " +
 				"#64b74e58). Use POST /tasks/:id/move with status_id instead; resolve a " +
@@ -1183,8 +1184,9 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 		var pinnedErr *service.AssignmentPinnedError
 		if errors.As(err, &pinnedErr) {
 			return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-				"code":    "assignment_pinned",
-				"message": "Task assignee is pinned by a human and cannot be overridden by rule or system sources. Pass source=human to override.",
+				"code":       "assignment_pinned",
+				"error_code": "assignment_pinned",
+				"message":    "Task assignee is pinned by a human and cannot be overridden by rule or system sources. Pass source=human to override.",
 			})
 		}
 		return handleError(c, err)
@@ -1411,9 +1413,10 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 				details["acquired_at"] = conflict.AcquiredAt
 			}
 			return c.JSON(http.StatusConflict, map[string]interface{}{
-				"code":    409,
-				"message": "Task is already checked out",
-				"details": details,
+				"code":       409,
+				"error_code": "task_already_checked_out",
+				"message":    "Task is already checked out",
+				"details":    details,
 			})
 		}
 		return handleError(c, err)
@@ -1646,6 +1649,7 @@ func (h *TaskHandler) SetDodCheck(c echo.Context) error {
 // ruleViolationAPIResponse is the JSON shape for 422 rule violation responses.
 type ruleViolationAPIResponse struct {
 	Error      string                 `json:"error"`
+	ErrorCode  string                 `json:"error_code"`
 	Message    string                 `json:"message"`
 	Violations []domain.RuleViolation `json:"violations"`
 }
@@ -1667,9 +1671,10 @@ func handleError(c echo.Context, err error) error {
 				"To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review."
 		}
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code":    "review_evidence_required",
-			"strict":  evidenceErr.Strict,
-			"message": msg,
+			"code":       "review_evidence_required",
+			"error_code": "review_evidence_required",
+			"strict":     evidenceErr.Strict,
+			"message":    msg,
 		})
 	}
 
@@ -1680,7 +1685,8 @@ func handleError(c echo.Context, err error) error {
 		// Answering "forbidden" would send them to audit their own permissions.
 		// The message never reveals which workspace the principal does belong to.
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code": "assignee_not_in_workspace",
+			"code":       "assignee_not_in_workspace",
+			"error_code": "assignee_not_in_workspace",
 			"message": "Assignee does not belong to this task's workspace. Tasks can only be assigned to " +
 				"agents and users of the workspace that owns the project. Pick an assignee from " +
 				"GET /workspaces/:ws_id/team.",
@@ -1695,11 +1701,12 @@ func handleError(c echo.Context, err error) error {
 		// measured audit §3.1: 606 mentions/week, 72% unanswered, 3.8%
 		// delivered). Name the fix, don't just refuse.
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code": "mention_handoff_required",
+			"code":       "mention_handoff_required",
+			"error_code": "mention_handoff_required",
 			"message": fmt.Sprintf(
-				"меншен не будит агента: @%s не имеет пути доставки. "+
-					"assign_task + move_task(\"todo\"), или create_subtask — "+
-					"или, если это просто FYI без хендоффа, повтори с префиксом \"fyi: @%s\".",
+				"A mention does not wake an agent: @%s has no delivery path. "+
+					"Use assign_task + move_task(\"todo\"), or create_subtask — "+
+					"or, if this is just FYI with no handoff, repeat it with the prefix \"fyi: @%s\".",
 				strings.Join(mentionHandoffErr.Slugs, ", @"), mentionHandoffErr.Slugs[0]),
 			"slugs": mentionHandoffErr.Slugs,
 		})
@@ -1713,7 +1720,8 @@ func handleError(c echo.Context, err error) error {
 		// visible in short form; the other 24 are not guessable, so a reconstructed
 		// UUID names nobody. Resolve short ids by lookup instead of arithmetic.
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code": "assignee_unresolved",
+			"code":       "assignee_unresolved",
+			"error_code": "assignee_unresolved",
 			"message": "assignee_id does not match any agent or user. If you built this id from an " +
 				"8-character short id, it is not recoverable that way — only the first 8 hex " +
 				"digits are shared. Look the principal up in GET /workspaces/:ws_id/team and " +
@@ -1733,7 +1741,8 @@ func handleError(c echo.Context, err error) error {
 		// not a silent no-op that leaves the caller thinking the assignment
 		// went through.
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code": "assignee_refuses_assignments",
+			"code":       "assignee_refuses_assignments",
+			"error_code": "assignee_refuses_assignments",
 			"message": fmt.Sprintf(
 				"agent %q has accepts_from=[] — it has declared it accepts no assignments at all. "+
 					"Assign this task to a different, active agent instead.", lane),
@@ -1743,8 +1752,9 @@ func handleError(c echo.Context, err error) error {
 	var doneEvidenceErr *service.DoneEvidenceError
 	if errors.As(err, &doneEvidenceErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code":    "done_evidence_required",
-			"message": doneEvidenceErr.Error(),
+			"code":       "done_evidence_required",
+			"error_code": "done_evidence_required",
+			"message":    doneEvidenceErr.Error(),
 		})
 	}
 
@@ -1752,6 +1762,7 @@ func handleError(c echo.Context, err error) error {
 	if errors.As(err, &dodGateErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"code":           "dod_gate_blocked",
+			"error_code":     "dod_gate_blocked",
 			"message":        dodGateErr.Error(),
 			"blocking_gates": dodGateErr.BlockingGates,
 		})
@@ -1760,17 +1771,19 @@ func handleError(c echo.Context, err error) error {
 	var triageEntryErr *service.TriageEntryError
 	if errors.As(err, &triageEntryErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code":    "triage_entry_requires_human_gate",
-			"message": triageEntryErr.Error(),
+			"code":       "triage_entry_requires_human_gate",
+			"error_code": "triage_entry_requires_human_gate",
+			"message":    triageEntryErr.Error(),
 		})
 	}
 
 	var parkAlarmErr *service.ParkAlarmError
 	if errors.As(err, &parkAlarmErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code":    "park_requires_wakeup",
-			"message": parkAlarmErr.Error(),
-			"label":   parkAlarmErr.Label,
+			"code":       "park_requires_wakeup",
+			"error_code": "park_requires_wakeup",
+			"message":    parkAlarmErr.Error(),
+			"label":      parkAlarmErr.Label,
 		})
 	}
 
@@ -1781,16 +1794,18 @@ func handleError(c echo.Context, err error) error {
 			message = "Task is awaiting human sign-off (human_gate=true). Only the gate's own author may park it in backlog while the ask is still open, and you are not that author. To close the task (done/cancelled), a human must either move it manually or call PATCH /tasks/:id with human_gate=false."
 		}
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code":    "human_gate_frozen",
-			"message": message,
+			"code":       "human_gate_frozen",
+			"error_code": "human_gate_frozen",
+			"message":    message,
 		})
 	}
 
 	var shippedErr *service.TaskShippedError
 	if errors.As(err, &shippedErr) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"code":    "task_shipped",
-			"message": "Task is marked as shipped and cannot be moved to a non-done status. To reopen it, call PATCH /tasks/:id/ship with {\"shipped\": false} first.",
+			"code":       "task_shipped",
+			"error_code": "task_shipped",
+			"message":    "Task is marked as shipped and cannot be moved to a non-done status. To reopen it, call PATCH /tasks/:id/ship with {\"shipped\": false} first.",
 		})
 	}
 
@@ -1806,6 +1821,7 @@ func handleError(c echo.Context, err error) error {
 		}
 		return c.JSON(http.StatusUnprocessableEntity, ruleViolationAPIResponse{
 			Error:      "rule_violation",
+			ErrorCode:  "rule_violation",
 			Message:    msg,
 			Violations: ruleErr.Violations,
 		})
@@ -1818,9 +1834,10 @@ func handleError(c echo.Context, err error) error {
 		// entirely. Flattening it into prose would make it unreadable by the agent
 		// that has to act on it.
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"code":    "ambiguous_quote",
-			"message": ambiguousQuoteErr.Error(),
-			"matches": ambiguousQuoteErr.Matches,
+			"code":       "ambiguous_quote",
+			"error_code": "ambiguous_quote",
+			"message":    ambiguousQuoteErr.Error(),
+			"matches":    ambiguousQuoteErr.Matches,
 		})
 	}
 
@@ -1831,7 +1848,8 @@ func handleError(c echo.Context, err error) error {
 		// was written — not the row, not the markdown in object storage — which is
 		// the part worth being able to rely on.
 		return c.JSON(http.StatusConflict, map[string]any{
-			"code": "document_version_conflict",
+			"code":       "document_version_conflict",
+			"error_code": "document_version_conflict",
 			"message": "Document was modified since you read it — re-read it, re-apply your change and " +
 				"retry with the new base_version. To add to the end of a document without reading it " +
 				"first, send append_body instead, which needs no base_version.",
@@ -1850,7 +1868,8 @@ func handleError(c echo.Context, err error) error {
 		//
 		// Nothing was written on either side, which is the part worth relying on.
 		return c.JSON(http.StatusConflict, map[string]any{
-			"code": "external_source_conflict",
+			"code":       "external_source_conflict",
+			"error_code": "external_source_conflict",
 			"message": "This document is a copy of a Team Relay document, and the original changed since you opened it. " +
 				"Nothing was written — your text is unsaved and the original is untouched. Re-open the document to load " +
 				"the current original, re-apply your change, and save again.",
@@ -1866,7 +1885,8 @@ func handleError(c echo.Context, err error) error {
 		// the conflict message here would tell the author their text was lost
 		// while it sits safely on the source.
 		return c.JSON(http.StatusConflict, map[string]any{
-			"code": "external_source_write_landed",
+			"code":       "external_source_write_landed",
+			"error_code": "external_source_write_landed",
 			// The wording is deliberately "within the sync interval", not "on the
 			// next open". RefreshIfStale is TTL-gated, and this path does NOT
 			// advance synced_at (the stamp only runs after a local write wins,
@@ -1888,6 +1908,7 @@ func handleError(c echo.Context, err error) error {
 	if errors.As(err, &casErr) {
 		return c.JSON(http.StatusConflict, map[string]interface{}{
 			"code":               "cas_conflict",
+			"error_code":         "cas_conflict",
 			"message":            "Task was modified concurrently — re-read the task and retry",
 			"current_status_id":  casErr.CurrentStatusID,
 			"current_version":    casErr.CurrentVersion,
@@ -1901,7 +1922,9 @@ func handleError(c echo.Context, err error) error {
 	var listRevErr *service.ListRevisionStaleError
 	if errors.As(err, &listRevErr) {
 		return c.JSON(http.StatusGone, map[string]interface{}{
-			"error": "list_revision_stale",
+			"error":      "list_revision_stale",
+			"error_code": "list_revision_stale",
+			"code":       "list_revision_stale",
 			"message": fmt.Sprintf(
 				"task_list_revision changed since this cursor was issued (had %d, now %d); restart pagination from page 1",
 				listRevErr.Requested, listRevErr.Current),
@@ -1916,11 +1939,12 @@ func handleError(c echo.Context, err error) error {
 		// for is too big to hand back — the same distinction the HTTP spec
 		// draws between a bad request and an entity too large to represent.
 		return c.JSON(http.StatusRequestEntityTooLarge, map[string]any{
-			"code":    "export_tree_too_large",
-			"message": fmt.Sprintf("export exceeds the %s limit: %d > %d", tooLargeErr.Kind, tooLargeErr.Actual, tooLargeErr.Limit),
-			"kind":    tooLargeErr.Kind,
-			"actual":  tooLargeErr.Actual,
-			"limit":   tooLargeErr.Limit,
+			"code":       "export_tree_too_large",
+			"error_code": "export_tree_too_large",
+			"message":    fmt.Sprintf("export exceeds the %s limit: %d > %d", tooLargeErr.Kind, tooLargeErr.Actual, tooLargeErr.Limit),
+			"kind":       tooLargeErr.Kind,
+			"actual":     tooLargeErr.Actual,
+			"limit":      tooLargeErr.Limit,
 		})
 	}
 

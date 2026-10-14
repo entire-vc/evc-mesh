@@ -2431,6 +2431,7 @@ func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {
 
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "task_already_checked_out", body["error_code"], "the conflict carries a stable machine code")
 	details, ok := body["details"].(map[string]interface{})
 	require.True(t, ok, "response must have a 'details' object")
 	assert.Equal(t, "Linus", details["checked_out_by_name"], "checked_out_by_name must always be present")

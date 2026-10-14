@@ -229,6 +229,7 @@ func (h *MemoryHandler) Remember(c echo.Context) error {
 		if errors.As(err, &conflict) {
 			return c.JSON(http.StatusConflict, echo.Map{
 				"error":            conflict.Error(),
+				"error_code":       apierror.CodeConflict,
 				"key":              conflict.Key,
 				"expected_version": conflict.Expected,
 				"actual_version":   conflict.Actual,
@@ -1248,7 +1249,7 @@ func (h *MemoryHandler) docIndexScope(c echo.Context, rawWS, rawProj string) (ws
 // Refused while DOC_INDEX_WRITE is off.
 func (h *MemoryHandler) BackfillDocIndex(c echo.Context) error {
 	if h.docIndexer == nil {
-		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "document index not configured"})
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "document index not configured", "error_code": apierror.CodeServiceUnavailable})
 	}
 	wsID, projID, err := h.docIndexScope(c, c.QueryParam("workspace_id"), c.QueryParam("project_id"))
 	if err != nil {
@@ -1262,7 +1263,7 @@ func (h *MemoryHandler) BackfillDocIndex(c echo.Context) error {
 	}
 	res, err := h.docIndexer.Backfill(c.Request().Context(), wsID, projID, limit)
 	if err != nil {
-		return c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
+		return c.JSON(http.StatusConflict, map[string]string{"error": err.Error(), "error_code": apierror.CodeConflict})
 	}
 	return c.JSON(http.StatusOK, res)
 }
@@ -1270,7 +1271,7 @@ func (h *MemoryHandler) BackfillDocIndex(c echo.Context) error {
 // DocIndexStatus handles GET /api/v1/memories/doc-index-status.
 func (h *MemoryHandler) DocIndexStatus(c echo.Context) error {
 	if h.docIndexer == nil {
-		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "document index not configured"})
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "document index not configured", "error_code": apierror.CodeServiceUnavailable})
 	}
 	wsID, projID, err := h.docIndexScope(c, c.QueryParam("workspace_id"), c.QueryParam("project_id"))
 	if err != nil {

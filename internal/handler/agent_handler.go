@@ -1192,8 +1192,10 @@ func (h *AgentHandler) EventStream(c echo.Context) error {
 		if existing == nil {
 			// Cursor unknown or expired — client must do full recovery.
 			return c.JSON(http.StatusGone, map[string]string{
-				"error":   "cursor_expired",
-				"message": "Last-Event-ID cursor expired or unknown; perform full state recovery via get_my_tasks",
+				"error":      "cursor_expired",
+				"error_code": "cursor_expired",
+				"code":       "cursor_expired",
+				"message":    "Last-Event-ID cursor expired or unknown; perform full state recovery via get_my_tasks",
 			})
 		}
 		lastEventID = parsed
