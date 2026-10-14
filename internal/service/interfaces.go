@@ -84,6 +84,9 @@ type AssignTaskInput struct {
 	// CASConflictError if the task changed since, including a checkout taken in
 	// between. The read→write window inside AssignTask is covered by the row version.
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+	// ExpectedVersion is the same precondition on the task's row version. Both
+	// given must both match.
+	ExpectedVersion *int64 `json:"expected_version,omitempty"`
 }
 
 // CreateSubtaskInput holds parameters for creating a subtask.

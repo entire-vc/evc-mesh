@@ -1430,8 +1430,8 @@ func (s *taskService) AssignTask(ctx context.Context, taskID uuid.UUID, input As
 	// below already carries ExpectedVersion for the read→write window, but a
 	// checkout (or any edit) that landed after the caller decided and before this
 	// fresh read is invisible to it. Checkout bumps updated_at.
-	if input.ExpectedUpdatedAt != nil && !input.ExpectedUpdatedAt.Equal(task.UpdatedAt) {
-		return &CASConflictError{CurrentVersion: task.Version, CurrentStatusID: task.StatusID, CurrentUpdatedAt: task.UpdatedAt}
+	if err := CheckTaskPreconditions(task, input.ExpectedUpdatedAt, input.ExpectedVersion); err != nil {
+		return err
 	}
 
 	oldAssigneeID := task.AssigneeID
