@@ -583,7 +583,7 @@ func diagnoseNegatorMiss(body string) negatorMissReason {
 var withdrawalMissHint = map[negatorMissReason]string{
 	negatorMissOutOfScope: "withdrawal words are present but outside the area the server reads — " +
 		"for a comment without a blocking marker that area is the **last paragraph** " +
-		"(not counting a closing signature such as \"— Name\") and nothing else.",
+		"(not counting a closing signature such as \"— Name\" or a closing routing line such as `↻ NEXT:` / `⏳ WAIT`) and nothing else.",
 	negatorMissBlockerStillOpen: "withdrawal words are in the area, but the same area also states " +
 		"that the blocker is still alive (`still blocked` / `not closed` / `not forgotten`) — that overrides the withdrawal in the same area.",
 	negatorMissOnlyQuoted: "withdrawal words appear only inside code, a quote or a block — " +
@@ -607,6 +607,36 @@ var signatureLineRegex = regexp.MustCompile(`^[-—–]\s*\p{L}[\p{L}'-]*(?:\s+\
 
 func isSignatureOnlyParagraph(p string) bool {
 	return signatureLineRegex.MatchString(p)
+}
+
+// routingLinePrefixes open a handoff/route line of the agent protocol: every
+// agent comment is required to END with one (`↻ NEXT: …`, `⏳ WAIT …`), because
+// fleet drivers read it. It says where the card goes next, never whether a
+// question is withdrawn.
+var routingLinePrefixes = []string{"↻ NEXT:", "⏳ WAIT", "→ NEXT"}
+
+func isRoutingLine(line string) bool {
+	line = strings.TrimSpace(line)
+	for _, p := range routingLinePrefixes {
+		if strings.HasPrefix(line, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripRoutingTail cuts a paragraph at its first routing line: that line and
+// everything after it in the same paragraph (a routing line may wrap onto
+// several lines) is the handoff, not the paragraph's statement. A paragraph
+// that is nothing but routing returns "".
+func stripRoutingTail(p string) string {
+	lines := strings.Split(p, "\n")
+	for i, l := range lines {
+		if isRoutingLine(l) {
+			return strings.TrimSpace(strings.Join(lines[:i], "\n"))
+		}
+	}
+	return p
 }
 
 // lastParagraph returns the final SUBSTANTIVE paragraph of body, trimmed of
@@ -640,6 +670,18 @@ func lastParagraph(body string) string {
 	for i := len(parts) - 1; i >= 0; i-- {
 		p := strings.TrimSpace(parts[i])
 		if p == "" || isSignatureOnlyParagraph(p) {
+			continue
+		}
+		// Fixed 2026-10-14 (task #edd71d44, live on #9888e5ed): the protocol makes
+		// the LAST paragraph of an agent comment a routing line (`↻ NEXT: …`,
+		// `⏳ WAIT …`), so a withdrawal written by the book ended in a paragraph that
+		// can never hold the withdrawal word and the gate stayed up
+		// (gate_still_raised) — two rules that could not both be obeyed. Routing
+		// lines are skipped the way a signature is, and the nearest paragraph
+		// before them is read instead. Only a comment WITHOUT its own blocking
+		// marker gets here (negatorScope); a marker paragraph carrying a routing
+		// line is a new ask and is scoped from the marker, untouched by this.
+		if p = stripRoutingTail(p); p == "" || isSignatureOnlyParagraph(p) {
 			continue
 		}
 		return p
