@@ -357,6 +357,18 @@ components:
           type: string
           nullable: true
           maxLength: 500
+          description: Optional English note; the fallback text when no reason_code is set.
+        reason_code:
+          type: string
+          nullable: true
+          enum: [review_refeed_hold, human_gate, checked_out_elsewhere, recently_done, outside_lane_scope, rescue_exhausted, turn_quarantined, guard_refused, completion_signal, supervised_todo, human_decision_gate, umbrella, turn_pending, review_cooldown, pause, park]
+          description: Closed list of machine-readable reasons; the web renders it in the viewer's language.
+        reason_params:
+          type: object
+          nullable: true
+          additionalProperties: {type: string, maxLength: 100}
+          maxProperties: 8
+          description: Placeholder values for reason_code, e.g. {"minutes":"4"}. Requires reason_code.
         updated_at:
           type: string
           format: date-time
@@ -6081,6 +6093,8 @@ paths:
                 ref: {type: string}
                 lane: {type: string}
                 reason: {type: string}
+                reason_code: {type: string, description: "One of the RuntimeState.reason_code values; 422 otherwise."}
+                reason_params: {type: object, additionalProperties: {type: string}}
       responses:
         '200':
           description: 'The effective state after the write. When the state is cleared (`kind: null`) and there is no live checkout, the body is {"runtime_state": null}; a live checkout still reads as working.'

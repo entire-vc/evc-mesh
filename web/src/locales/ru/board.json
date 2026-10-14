@@ -9,7 +9,25 @@
     "queuedLane": "В очереди лейна {{lane}}",
     "position": "позиция {{position}}",
     "stopped": "Стоит",
-    "stale": "данные устарели"
+    "stale": "данные устарели",
+    "reasons": {
+      "review_refeed_hold": "ревью было; ждёт коммита",
+      "human_gate": "ждёт человека",
+      "checked_out_elsewhere": "у другого лейна",
+      "recently_done": "недавно закрыта",
+      "outside_lane_scope": "вне выборки",
+      "rescue_exhausted": "лейн сдался",
+      "turn_quarantined": "ход в карантине",
+      "guard_refused": "лейн отказался",
+      "completion_signal": "готова; ждёт закрытия",
+      "supervised_todo": "надзор; ждёт закрытия",
+      "human_decision_gate": "ждёт решения",
+      "umbrella": "эпик: ждёт дочерних",
+      "turn_pending": "ход не закрыт",
+      "review_cooldown": "в ревью через {{minutes}} мин",
+      "pause": "пауза",
+      "park": "припаркована"
+    }
   },
   "filter": {
     "reallyWorking": "Реально в работе"

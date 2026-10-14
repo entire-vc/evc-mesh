@@ -108,3 +108,30 @@ func TestListFilter_RuntimeKind(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, f.RuntimeKind)
 }
+
+func TestPutRuntimeState_PassesReasonCodeAndParams(t *testing.T) {
+	var got *domain.RuntimeState
+	h := NewTaskHandler(&MockTaskService{SetRuntimeStateFunc: func(s *domain.RuntimeState) (*domain.RuntimeState, error) {
+		got = s
+		return s, nil
+	}})
+	rec, err := runtimeStateCall(t, h, http.MethodPut, `{"kind":"stopped","reason_code":"review_cooldown","reason_params":{"minutes":"4"}}`)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, got)
+	assert.Equal(t, "review_cooldown", *got.ReasonCode)
+	assert.Equal(t, map[string]string{"minutes": "4"}, got.ReasonParams)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "review_cooldown", body["reason_code"])
+}
+
+func TestPutRuntimeState_ReasonCodeWithoutKindIsRejected(t *testing.T) {
+	h := NewTaskHandler(&MockTaskService{SetRuntimeStateFunc: func(s *domain.RuntimeState) (*domain.RuntimeState, error) {
+		t.Fatal("must not reach the service")
+		return nil, nil
+	}})
+	rec, err := runtimeStateCall(t, h, http.MethodPut, `{"reason_code":"pause"}`)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+}

@@ -9,7 +9,25 @@
     "queuedLane": "Queued in lane {{lane}}",
     "position": "position {{position}}",
     "stopped": "Stopped",
-    "stale": "data is stale"
+    "stale": "data is stale",
+    "reasons": {
+      "review_refeed_hold": "Reviewed; awaits commit",
+      "human_gate": "Awaits human",
+      "checked_out_elsewhere": "Other lane has it",
+      "recently_done": "Recently closed",
+      "outside_lane_scope": "Not in lane scope",
+      "rescue_exhausted": "Lane gave up",
+      "turn_quarantined": "Turn quarantined",
+      "guard_refused": "Lane refused",
+      "completion_signal": "Done; awaits close",
+      "supervised_todo": "Supervised; awaits close",
+      "human_decision_gate": "Awaits decision",
+      "umbrella": "Epic: awaits children",
+      "turn_pending": "Turn not closed",
+      "review_cooldown": "In review in {{minutes}} min",
+      "pause": "Paused",
+      "park": "Parked"
+    }
   },
   "filter": {
     "reallyWorking": "Actually working"
