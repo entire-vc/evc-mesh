@@ -80,13 +80,8 @@ const PRIORITY_ORDER: Record<Priority, number> = {
   none: 4,
 };
 
-const PRIORITY_OPTIONS: { value: Priority; label: string }[] = [
-  { value: "urgent", label: "Urgent" },
-  { value: "high", label: "High" },
-  { value: "medium", label: "Medium" },
-  { value: "low", label: "Low" },
-  { value: "none", label: "None" },
-];
+// Labels resolve at render: t(`priority.${value}`) in the "list" namespace.
+const PRIORITY_OPTIONS: Priority[] = ["urgent", "high", "medium", "low", "none"];
 
 const DEFAULT_PER_PAGE = 50;
 
@@ -113,6 +108,7 @@ interface StatusGroup {
 // ---------------------------------------------------------------------------
 
 export function ListViewPage() {
+  const { t } = useTranslation("list");
   const { projectSlug, wsSlug } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -264,18 +260,18 @@ export function ListViewPage() {
   // Build allColumns from static defs + dynamic custom fields
   const allColumns = useMemo((): ColumnDef[] => {
     const staticCols: ColumnDef[] = [
-      { key: "name", label: "Name", visible: true, required: true },
-      { key: "status", label: "Status", visible: visibleColumns.has("status") },
-      { key: "priority", label: "Priority", visible: visibleColumns.has("priority") },
-      { key: "assignee", label: "Assignee", visible: visibleColumns.has("assignee") },
-      { key: "due_date", label: "Due Date", visible: visibleColumns.has("due_date") },
-      { key: "labels", label: "Labels", visible: visibleColumns.has("labels") },
+      { key: "name", label: t("columns.name"), visible: true, required: true },
+      { key: "status", label: t("columns.status"), visible: visibleColumns.has("status") },
+      { key: "priority", label: t("columns.priority"), visible: visibleColumns.has("priority") },
+      { key: "assignee", label: t("columns.assignee"), visible: visibleColumns.has("assignee") },
+      { key: "due_date", label: t("columns.dueDate"), visible: visibleColumns.has("due_date") },
+      { key: "labels", label: t("columns.labels"), visible: visibleColumns.has("labels") },
       {
         key: "estimated_hours",
-        label: "Estimate",
+        label: t("columns.estimate"),
         visible: visibleColumns.has("estimated_hours"),
       },
-      { key: "created_at", label: "Created", visible: visibleColumns.has("created_at") },
+      { key: "created_at", label: t("columns.created"), visible: visibleColumns.has("created_at") },
     ];
     const cfCols: ColumnDef[] = sortedFieldDefs.map((f) => ({
       key: `cf:${f.slug}`,
@@ -283,7 +279,7 @@ export function ListViewPage() {
       visible: visibleColumns.has(`cf:${f.slug}`),
     }));
     return [...staticCols, ...cfCols];
-  }, [sortedFieldDefs, visibleColumns]);
+  }, [sortedFieldDefs, visibleColumns, t]);
 
   const handleColumnChange = useCallback(
     (updated: { key: string; visible: boolean }[]) => {
@@ -425,7 +421,7 @@ export function ListViewPage() {
         status: {
           id: "unknown",
           project_id: "",
-          name: "Unknown",
+          name: t("status.unknown"),
           slug: "unknown",
           color: "#9ca3af",
           position: 9999,
@@ -438,7 +434,7 @@ export function ListViewPage() {
     }
 
     return groups;
-  }, [filteredSortedTasks, statuses]);
+  }, [filteredSortedTasks, statuses, t]);
 
   // ---------------------------------------------------------------------------
   // Group collapse helpers
@@ -482,7 +478,7 @@ export function ListViewPage() {
             [taskId]: result.items ?? [],
           }));
         } catch {
-          toast.error("Failed to load subtasks");
+          toast.error(t("toast.loadSubtasksFailed"));
           // Remove from expanded if failed
           setExpandedTasks((prev) => {
             const next = new Set(prev);
@@ -498,7 +494,7 @@ export function ListViewPage() {
         }
       }
     },
-    [subtaskMap],
+    [subtaskMap, t],
   );
 
   // ---------------------------------------------------------------------------
@@ -528,11 +524,11 @@ export function ListViewPage() {
         ...(({ status_id: statusId } as unknown) as Record<string, unknown>),
       } as Parameters<typeof createTask>[1]);
       await fetchTasks(currentProject.id, fetchParams);
-      toast.success("Task created");
+      toast.success(t("toast.taskCreated"));
     } catch {
-      toast.error("Failed to create task");
+      toast.error(t("toast.createFailed"));
     }
-  }, [addingTitle, addingInGroup, currentProject, createTask, fetchTasks, fetchParams]);
+  }, [addingTitle, addingInGroup, currentProject, createTask, fetchTasks, fetchParams, t]);
 
   // ---------------------------------------------------------------------------
   // Selection helpers
@@ -583,12 +579,12 @@ export function ListViewPage() {
       setEditingCell(null);
       try {
         await updateTask(taskId, req);
-        toast.success("Task updated");
+        toast.success(t("toast.taskUpdated"));
       } catch {
-        toast.error("Failed to update task");
+        toast.error(t("toast.updateFailed"));
       }
     },
-    [updateTask],
+    [updateTask, t],
   );
 
   // ---------------------------------------------------------------------------
@@ -624,16 +620,16 @@ export function ListViewPage() {
       setSelectedTaskIds(new Set());
 
       if (failed === 0) {
-        toast.success(`Updated ${ids.length} task${ids.length !== 1 ? "s" : ""}`);
+        toast.success(t("toast.bulkUpdated", { count: ids.length }));
       } else {
-        toast.error(`${failed} task${failed !== 1 ? "s" : ""} failed to update`);
+        toast.error(t("toast.bulkUpdateFailed", { count: failed }));
       }
 
       if (currentProject) {
         await fetchTasks(currentProject.id, fetchParams);
       }
     },
-    [selectedTaskIds, updateTask, moveTask, currentProject, fetchTasks, fetchParams],
+    [selectedTaskIds, updateTask, moveTask, currentProject, fetchTasks, fetchParams, t],
   );
 
   const runBulkDelete = useCallback(async () => {
@@ -655,15 +651,15 @@ export function ListViewPage() {
     setSelectedTaskIds(new Set());
 
     if (failed === 0) {
-      toast.success(`Deleted ${ids.length} task${ids.length !== 1 ? "s" : ""}`);
+      toast.success(t("toast.bulkDeleted", { count: ids.length }));
     } else {
-      toast.error(`${failed} task${failed !== 1 ? "s" : ""} failed to delete`);
+      toast.error(t("toast.bulkDeleteFailed", { count: failed }));
     }
 
     if (currentProject) {
       await fetchTasks(currentProject.id, fetchParams);
     }
-  }, [selectedTaskIds, deleteTask, currentProject, fetchTasks, fetchParams]);
+  }, [selectedTaskIds, deleteTask, currentProject, fetchTasks, fetchParams, t]);
 
   // ---------------------------------------------------------------------------
   // Navigation
@@ -748,7 +744,7 @@ export function ListViewPage() {
     return (
       <div className="flex items-center justify-center py-12">
         <p className="text-muted-foreground">
-          Project &quot;{projectSlug}&quot; not found
+          {t("projectNotFound", { slug: projectSlug })}
         </p>
       </div>
     );
@@ -781,7 +777,7 @@ export function ListViewPage() {
           onClick={() => handleHumanGateOnlyChange(!humanGateOnly)}
         >
           <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-          Waiting on me
+          {t("toolbar.waitingOnMe")}
         </Button>
 
         {/* Spacer */}
@@ -799,7 +795,7 @@ export function ListViewPage() {
               navigate(`/w/${wsSlug}/p/${currentProject.slug}/new`);
             }
           }}
-          title="New Task"
+          title={t("toolbar.newTask")}
         >
           <Plus className="h-4 w-4" />
         </Button>
@@ -818,20 +814,20 @@ export function ListViewPage() {
       ) : tasks.length === 0 && page === 1 && humanGateOnly ? (
         <div className="flex flex-col items-center justify-center py-20">
           <Lock className="mb-4 h-12 w-12 text-muted-foreground" />
-          <h3 className="mb-2 text-lg font-semibold">Nothing waiting on a human</h3>
+          <h3 className="mb-2 text-lg font-semibold">{t("empty.humanGateTitle")}</h3>
           <p className="mb-4 text-sm text-muted-foreground">
-            No tasks in this project currently have a human gate set.
+            {t("empty.humanGateDescription")}
           </p>
           <Button variant="outline" size="sm" onClick={() => handleHumanGateOnlyChange(false)}>
-            Clear filter
+            {t("empty.clearFilter")}
           </Button>
         </div>
       ) : tasks.length === 0 && page === 1 ? (
         <div className="flex flex-col items-center justify-center py-20">
           <List className="mb-4 h-12 w-12 text-muted-foreground" />
-          <h3 className="mb-2 text-lg font-semibold">No tasks yet</h3>
+          <h3 className="mb-2 text-lg font-semibold">{t("empty.noTasksTitle")}</h3>
           <p className="text-sm text-muted-foreground">
-            Create tasks to see them in list view.
+            {t("empty.noTasksDescription")}
           </p>
         </div>
       ) : (
@@ -853,11 +849,11 @@ export function ListViewPage() {
                       }}
                       onChange={toggleSelectAll}
                       className="h-4 w-4 rounded border-input cursor-pointer"
-                      aria-label="Select all tasks"
+                      aria-label={t("table.selectAll")}
                     />
                   </th>
                   <SortableHeader
-                    label="Title"
+                    label={t("columns.title")}
                     field="title"
                     currentField={sortField}
                     dir={sortDir}
@@ -866,7 +862,7 @@ export function ListViewPage() {
                   />
                   {visibleColumns.has("status") && (
                     <SortableHeader
-                      label="Status"
+                      label={t("columns.status")}
                       field="status"
                       currentField={sortField}
                       dir={sortDir}
@@ -876,7 +872,7 @@ export function ListViewPage() {
                   )}
                   {visibleColumns.has("priority") && (
                     <SortableHeader
-                      label="Priority"
+                      label={t("columns.priority")}
                       field="priority"
                       currentField={sortField}
                       dir={sortDir}
@@ -886,7 +882,7 @@ export function ListViewPage() {
                   )}
                   {visibleColumns.has("assignee") && (
                     <SortableHeader
-                      label="Assignee"
+                      label={t("columns.assignee")}
                       field="assignee"
                       currentField={sortField}
                       dir={sortDir}
@@ -896,7 +892,7 @@ export function ListViewPage() {
                   )}
                   {visibleColumns.has("due_date") && (
                     <SortableHeader
-                      label="Due Date"
+                      label={t("columns.dueDate")}
                       field="due_date"
                       currentField={sortField}
                       dir={sortDir}
@@ -906,17 +902,17 @@ export function ListViewPage() {
                   )}
                   {visibleColumns.has("labels") && (
                     <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
-                      Labels
+                      {t("columns.labels")}
                     </th>
                   )}
                   {visibleColumns.has("estimated_hours") && (
                     <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
-                      Estimate
+                      {t("columns.estimate")}
                     </th>
                   )}
                   {visibleColumns.has("created_at") && (
                     <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
-                      Created
+                      {t("columns.created")}
                     </th>
                   )}
                   {/* Dynamic custom field columns */}
@@ -977,7 +973,7 @@ export function ListViewPage() {
                               onClick={() => startAddInGroup(group.status.id)}
                             >
                               <Plus className="h-3 w-3" />
-                              Add Task
+                              {t("group.addTask")}
                             </button>
                           </div>
                         </td>
@@ -1011,7 +1007,7 @@ export function ListViewPage() {
                                   checked={isSelected}
                                   onChange={() => toggleSelectTask(task.id)}
                                   className="h-4 w-4 rounded border-input cursor-pointer"
-                                  aria-label={`Select task ${task.title}`}
+                                  aria-label={t("table.selectTask", { title: task.title })}
                                 />
                               </td>
 
@@ -1118,7 +1114,7 @@ export function ListViewPage() {
                               {visibleColumns.has("estimated_hours") && (
                                 <td className="px-3 py-2 text-xs text-muted-foreground">
                                   {task.estimated_hours != null
-                                    ? `${task.estimated_hours}h`
+                                    ? t("table.estimateHours", { hours: task.estimated_hours })
                                     : "--"}
                                 </td>
                               )}
@@ -1165,14 +1161,14 @@ export function ListViewPage() {
                                   <td colSpan={columnCount} className="px-3 py-2 pl-12">
                                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                       <Loader2 className="h-3 w-3 animate-spin" />
-                                      Loading subtasks...
+                                      {t("subtasks.loading")}
                                     </div>
                                   </td>
                                 </tr>
                               ) : subtasks.length === 0 ? (
                                 <tr key={`${task.id}-subtask-empty`} className="border-b border-border">
                                   <td colSpan={columnCount} className="px-3 py-2 pl-12">
-                                    <span className="text-xs text-muted-foreground">No subtasks</span>
+                                    <span className="text-xs text-muted-foreground">{t("subtasks.empty")}</span>
                                   </td>
                                 </tr>
                               ) : subtasks.map((subtask) => {
@@ -1206,11 +1202,11 @@ export function ListViewPage() {
                                         {subtask.human_gate && (
                                           <span
                                             className="flex-shrink-0"
-                                            title="Waiting on a human sign-off"
+                                            title={t("row.humanGate")}
                                           >
                                             <Lock
                                               className="h-3 w-3 text-amber-600 dark:text-amber-400"
-                                              aria-label="Waiting on a human sign-off"
+                                              aria-label={t("row.humanGate")}
                                             />
                                           </span>
                                         )}
@@ -1313,7 +1309,7 @@ export function ListViewPage() {
                                 ref={addInputRef}
                                 value={addingTitle}
                                 onChange={(e) => setAddingTitle(e.target.value)}
-                                placeholder="Task title..."
+                                placeholder={t("group.taskTitlePlaceholder")}
                                 className="h-7 text-xs flex-1"
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") {
@@ -1357,7 +1353,7 @@ export function ListViewPage() {
                               onClick={() => startAddInGroup(group.status.id)}
                             >
                               <Plus className="h-3 w-3" />
-                              Add Task
+                              {t("group.addTask")}
                             </button>
                           </td>
                         </tr>
@@ -1373,10 +1369,9 @@ export function ListViewPage() {
           {total > 0 && (
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>
-                Showing {rangeStart}&#8211;{rangeEnd} of {total} task
-                {total !== 1 ? "s" : ""}
+                {t("pagination.showing", { start: rangeStart, end: rangeEnd, count: total })}
                 {sortedFieldDefs.length > 0 &&
-                  ` | ${sortedFieldDefs.length} custom field${sortedFieldDefs.length !== 1 ? "s" : ""}`}
+                  ` | ${t("pagination.customFields", { count: sortedFieldDefs.length })}`}
               </span>
               <div className="flex items-center gap-2">
                 <Button
@@ -1387,10 +1382,10 @@ export function ListViewPage() {
                   onClick={() => goToPage(page - 1)}
                 >
                   <ChevronRight className="mr-0.5 h-3.5 w-3.5 rotate-180" />
-                  Previous
+                  {t("pagination.previous")}
                 </Button>
                 <span className="tabular-nums">
-                  Page {page} of {totalPages}
+                  {t("pagination.pageOf", { page, total: totalPages })}
                 </span>
                 <Button
                   variant="outline"
@@ -1399,7 +1394,7 @@ export function ListViewPage() {
                   disabled={!hasMore && page >= totalPages}
                   onClick={() => goToPage(page + 1)}
                 >
-                  Next
+                  {t("pagination.next")}
                   <ChevronRight className="ml-0.5 h-3.5 w-3.5" />
                 </Button>
               </div>
@@ -1430,11 +1425,9 @@ export function ListViewPage() {
       >
         <DialogContent onClose={() => setDeleteConfirmOpen(false)}>
           <DialogHeader>
-            <DialogTitle>Delete tasks</DialogTitle>
+            <DialogTitle>{t("deleteDialog.title")}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete {selectedTaskIds.size} task
-              {selectedTaskIds.size !== 1 ? "s" : ""}? This action cannot be
-              undone.
+              {t("deleteDialog.description", { count: selectedTaskIds.size })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1443,7 +1436,7 @@ export function ListViewPage() {
               size="sm"
               onClick={() => setDeleteConfirmOpen(false)}
             >
-              Cancel
+              {t("deleteDialog.cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -1451,8 +1444,7 @@ export function ListViewPage() {
               onClick={runBulkDelete}
             >
               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-              Delete {selectedTaskIds.size} task
-              {selectedTaskIds.size !== 1 ? "s" : ""}
+              {t("deleteDialog.confirm", { count: selectedTaskIds.size })}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1511,6 +1503,7 @@ function BulkActionBar({
   onBulkPriority,
   onBulkDelete,
 }: BulkActionBarProps) {
+  const { t } = useTranslation("list");
   return (
     <div className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2">
       <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-2.5 shadow-lg">
@@ -1518,13 +1511,13 @@ function BulkActionBar({
           <div className="flex items-center gap-2 text-sm">
             <Loader2 className="h-4 w-4 animate-spin text-primary" />
             <span>
-              Updating {progress.done}/{progress.total} tasks...
+              {t("bulk.updating", { done: progress.done, total: progress.total })}
             </span>
           </div>
         ) : (
           <>
             <span className="text-sm font-medium">
-              {selectedCount} task{selectedCount !== 1 ? "s" : ""} selected
+              {t("bulk.selected", { count: selectedCount })}
             </span>
 
             <div className="h-4 w-px bg-border" />
@@ -1540,7 +1533,7 @@ function BulkActionBar({
                 }
               }}
             >
-              <option value="">Move to status...</option>
+              <option value="">{t("bulk.moveTo")}</option>
               {statuses.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -1559,10 +1552,10 @@ function BulkActionBar({
                 }
               }}
             >
-              <option value="">Set priority...</option>
+              <option value="">{t("bulk.setPriority")}</option>
               {PRIORITY_OPTIONS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
+                <option key={p} value={p}>
+                  {t(`priority.${p}`)}
                 </option>
               ))}
             </Select>
@@ -1577,7 +1570,7 @@ function BulkActionBar({
               onClick={onBulkDelete}
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Delete
+              {t("bulk.delete")}
             </Button>
 
             {/* Clear */}
@@ -1624,7 +1617,7 @@ function EnhancedTitleCell({
   onCancel: () => void;
   onNavigate: () => void;
 }) {
-  const { t } = useTranslation("board");
+  const { t } = useTranslation("list");
   const [draft, setDraft] = useState(task.title);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -1692,7 +1685,7 @@ function EnhancedTitleCell({
               e.stopPropagation();
               onToggleSubtasks();
             }}
-            aria-label={isExpanded ? "Collapse subtasks" : "Expand subtasks"}
+            aria-label={isExpanded ? t("subtasks.collapse") : t("subtasks.expand")}
           >
             {isLoadingSubtask ? (
               <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
@@ -1726,20 +1719,20 @@ function EnhancedTitleCell({
               className="flex items-center text-amber-600 dark:text-amber-400"
               title={
                 task.human_gate_class === "soft"
-                  ? "Waiting on a human sign-off (soft — auto-releases after a timeout)"
-                  : "Waiting on a human sign-off"
+                  ? t("row.humanGateSoft")
+                  : t("row.humanGate")
               }
             >
               <Lock
                 className="h-3 w-3"
-                aria-label="Waiting on a human sign-off"
+                aria-label={t("row.humanGate")}
               />
             </span>
           )}
           {hasDescription && (
             <AlignLeft
               className="h-3 w-3 text-muted-foreground/60"
-              aria-label="Has description"
+              aria-label={t("row.hasDescription")}
             />
           )}
           {artifactCount > 0 && (
@@ -1761,7 +1754,7 @@ function EnhancedTitleCell({
             >
               <CircleCheck
                 className="h-3 w-3"
-                aria-label="False-open: all subtasks closed"
+                aria-label={t("row.falseOpenAllClosed")}
               />
             </span>
           )}
@@ -1772,7 +1765,7 @@ function EnhancedTitleCell({
             >
               <Snowflake
                 className="h-3 w-3"
-                aria-label="False-open: only parked subtasks left"
+                aria-label={t("row.falseOpenParked")}
               />
             </span>
           )}
@@ -1783,8 +1776,8 @@ function EnhancedTitleCell({
           type="button"
           className="ml-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
           onClick={(e) => { e.stopPropagation(); onNavigate(); }}
-          aria-label="Edit task"
-          title="Edit task"
+          aria-label={t("row.editTask")}
+          title={t("row.editTask")}
         >
           <Pencil className="h-3 w-3" />
         </button>
@@ -1877,6 +1870,7 @@ function EnhancedPriorityCell({
   onSave: (priority: string) => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation("list");
   if (isEditing) {
     return (
       <td
@@ -1897,8 +1891,8 @@ function EnhancedPriorityCell({
           }}
         >
           {PRIORITY_OPTIONS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
+            <option key={p} value={p}>
+              {t(`priority.${p}`)}
             </option>
           ))}
         </Select>

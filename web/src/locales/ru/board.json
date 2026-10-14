@@ -17,5 +17,142 @@
   "falseOpen": {
     "allChildrenClosed": "False-open: все подзадачи закрыты, карточка без изменений {{days}} дн. — стоит пересмотреть приоритет",
     "onlyParkedChildrenLeft": "Остались только backlog-подзадачи ({{count}}), карточка без изменений {{days}} дн. — работа есть, но не движется"
+  },
+  "toolbar": {
+    "group": {
+      "label": "Группа:",
+      "menuLabel": "Группировка",
+      "status": "Статус",
+      "priority": "Приоритет",
+      "assignee": "Исполнитель"
+    },
+    "sort": {
+      "menuLabel": "Сортировка в колонке",
+      "manual": "Вручную",
+      "updated": "Обновление",
+      "priority": "Приоритет",
+      "dueDate": "Срок",
+      "created": "Создание",
+      "title": "Название"
+    },
+    "priority": {
+      "all": "Все приоритеты"
+    },
+    "assignee": {
+      "all": "Все исполнители",
+      "user": "Человек",
+      "agent": "Агент",
+      "unassigned": "Без исполнителя"
+    },
+    "assigneeFilter": {
+      "button": "Исполнители",
+      "title": "Фильтр по исполнителю",
+      "clear": "Сбросить"
+    },
+    "subtasks": "Подзадачи",
+    "closed": "Закрытые",
+    "waitingOnMe": "Ждёт меня",
+    "filters": "Фильтры",
+    "searchPlaceholder": "Поиск задач...",
+    "newRecurring": "Новая повторяющаяся задача",
+    "newTask": "Новая задача"
+  },
+  "priority": {
+    "urgent": "Срочный",
+    "high": "Высокий",
+    "medium": "Средний",
+    "low": "Низкий",
+    "none": "Нет",
+    "noPriority": "Без приоритета"
+  },
+  "filters": {
+    "clear": "Сбросить",
+    "tag": {
+      "title": "Фильтр по метке"
+    },
+    "customFields": {
+      "button": "Фильтры",
+      "title": "Фильтр по своим полям",
+      "clearAll": "Сбросить все",
+      "apply": "Применить",
+      "contains": "Содержит...",
+      "any": "Любое",
+      "noOptions": "Варианты не заданы",
+      "min": "Мин",
+      "max": "Макс",
+      "checked": "Отмечено",
+      "unchecked": "Не отмечено",
+      "from": "С",
+      "to": "По"
+    }
+  },
+  "columnPicker": {
+    "button": "Колонки",
+    "ariaLabel": "Показать или скрыть колонки",
+    "required": "обязательная",
+    "reset": "Сбросить по умолчанию"
+  },
+  "card": {
+    "recurring": "Повторяющаяся задача",
+    "recurringNumber": "Повторяющаяся задача №{{number}}",
+    "hasVcsLinks": "Есть ссылки на VCS",
+    "edit": "Изменить задачу",
+    "hasDescription": "Есть описание",
+    "humanGate": {
+      "soft": "Ждёт подтверждения человека (мягкое — снимется само по таймауту)",
+      "hard": "Ждёт подтверждения человека (жёсткое)",
+      "withReason": "{{base}}: {{reason}}",
+      "awaitingAnswer": "{{status}} · ждёт ответа",
+      "srOnly": "Ждёт подтверждения человека"
+    },
+    "falseOpen": {
+      "allChildrenClosed": "False-open: все подзадачи закрыты",
+      "onlyParkedChildrenLeft": "False-open: остались только подзадачи в бэклоге"
+    },
+    "checkout": {
+      "lapsedTitle": "Блокировка истекла {{time}} — сессия держателя завершилась, над карточкой никто не работает",
+      "liveHolderTitle": "У {{holder}} до {{time}}",
+      "liveTitle": "В работе до {{time}}",
+      "lapsed": "Блокировка истекла",
+      "live": "Взята в работу"
+    },
+    "subtaskCount_one": "{{count}} подзадача",
+    "subtaskCount_few": "{{count}} подзадачи",
+    "subtaskCount_many": "{{count}} подзадач",
+    "subtaskCount_other": "{{count}} подзадачи"
+  },
+  "column": {
+    "addTask": "Добавить задачу",
+    "empty": "Нет задач",
+    "closedSlice": {
+      "showing": "Показаны последние {{loaded}} из {{total}}",
+      "filtersApply": " · фильтры применены к загруженным",
+      "requestFailed": "Запрос не выполнен",
+      "loading": "Загрузка…",
+      "loadMore": "Загрузить ещё"
+    }
+  },
+  "closedPartial": "Закрытые: загружены последние {{loaded}} из {{total}}. Чтобы загрузить ещё, сгруппируйте по статусу.",
+  "refresh": {
+    "failedPartial": "Не удалось обновить задачи. Показан последний полный список.",
+    "failedInitial": "Не удалось загрузить все задачи. Счётчики недоступны.",
+    "retry": "Повторить",
+    "inProgress": "Обновляем задачи… Показан последний полный список."
+  },
+  "empty": {
+    "noStatuses": {
+      "title": "Статусы не настроены",
+      "hint": "Настройте статусы задач в настройках проекта, чтобы пользоваться доской."
+    },
+    "noMatches": {
+      "title": "Нет задач под фильтры",
+      "hint": "Попробуйте изменить фильтры или группировку."
+    }
+  },
+  "toast": {
+    "agentSummary": "Сводка агента"
+  },
+  "fallback": {
+    "agent": "Агент"
   }
 }

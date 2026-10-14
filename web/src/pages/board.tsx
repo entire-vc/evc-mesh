@@ -1,5 +1,6 @@
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useParams, useNavigate } from "react-router";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -259,13 +260,14 @@ export interface ClosedColumnInfo {
 
 /** "Showing latest N of TOTAL" + an explicit Load more (never automatic). */
 function ClosedSliceFooter({ statusId, closed }: { statusId: string; closed: ClosedColumnInfo }) {
+  const { t } = useTranslation("board");
   // null = idle, "" = loading, otherwise the last error.
   const [state, setState] = useState<string | null>(null);
   return (
     <div className="mt-2 space-y-1 text-center text-xs text-muted-foreground" data-testid="closed-slice">
       <p>
-        Showing latest {closed.slice.loaded} of {closed.slice.total}
-        {closed.filtersActive ? " · filters apply to loaded cards" : ""}
+        {t("column.closedSlice.showing", { loaded: closed.slice.loaded, total: closed.slice.total })}
+        {closed.filtersActive ? t("column.closedSlice.filtersApply") : ""}
       </p>
       {state && <p role="alert" className="text-destructive">{state}</p>}
       <Button
@@ -274,10 +276,10 @@ function ClosedSliceFooter({ statusId, closed }: { statusId: string; closed: Clo
         disabled={state === ""}
         onClick={() => {
           setState("");
-          closed.onLoadMore(statusId).then(() => setState(null), (e: unknown) => setState(apiErrorMessage(e, "Request failed")));
+          closed.onLoadMore(statusId).then(() => setState(null), (e: unknown) => setState(apiErrorMessage(e, t("column.closedSlice.requestFailed"))));
         }}
       >
-        {state === "" ? "Loading…" : "Load more"}
+        {state === "" ? t("column.closedSlice.loading") : t("column.closedSlice.loadMore")}
       </Button>
     </div>
   );
@@ -346,9 +348,10 @@ export function boardColumnPropsEqual(prev: BoardColumnProps, next: BoardColumnP
 }
 
 const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById, gateStatusByTask, closed }: BoardColumnProps) {
+  const { t } = useTranslation("board");
   const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
 
-  const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
+  const taskIds = useMemo(() => tasks.map((task) => task.id), [tasks]);
 
   return (
     <div className="w-72 shrink-0">
@@ -381,7 +384,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
             size="icon"
             className="h-11 w-11 md:h-6 md:w-6"
             onClick={() => onAddTask(col.status!.id)}
-            title="Add task"
+            title={t("column.addTask")}
           >
             <Plus className="h-3 w-3" />
           </Button>
@@ -421,7 +424,7 @@ const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTas
 
         {tasks.length === 0 && (
           <p className="py-4 text-center text-xs text-muted-foreground">
-            No tasks
+            {t("column.empty")}
           </p>
         )}
       </div>
@@ -496,6 +499,7 @@ function calculatePosition(tasks: Task[], targetIndex: number): number {
 // ---------------------------------------------------------------------------
 
 export function BoardPage() {
+  const { t } = useTranslation("board");
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   // useShallow, not a bare store call: each store here carries fields this
@@ -623,7 +627,7 @@ export function BoardPage() {
         const eventType = event.type;
         if (eventType === "summary") {
           const data = event.data as Record<string, unknown>;
-          const subject = (data.subject as string) || "Agent summary";
+          const subject = (data.subject as string) || t("toast.agentSummary");
           toast(subject);
         }
         if (
@@ -636,7 +640,7 @@ export function BoardPage() {
           debouncedRefetch();
         }
       },
-      [debouncedRefetch],
+      [debouncedRefetch, t],
     ),
   });
 
@@ -749,7 +753,7 @@ export function BoardPage() {
       if (m.user) {
         byId.set(m.user.id, { id: m.user.id, name: m.user.name || m.user.email, type: "user" });
       } else if (m.agent_id) {
-        byId.set(m.agent_id, { id: m.agent_id, name: m.agent_name ?? "Agent", type: "agent" });
+        byId.set(m.agent_id, { id: m.agent_id, name: m.agent_name ?? t("fallback.agent"), type: "agent" });
       }
     }
     for (const task of tasks) {
@@ -762,7 +766,7 @@ export function BoardPage() {
       }
     }
     return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [projectMembers, tasks]);
+  }, [projectMembers, tasks, t]);
 
   // id → display name for checkout holders. Built from the same two sources as
   // assigneeCandidates: project members cover the normal case, and assignees seen
@@ -771,7 +775,7 @@ export function BoardPage() {
     const byId = new Map<string, string>();
     for (const m of projectMembers) {
       if (m.user) byId.set(m.user.id, m.user.name || m.user.email);
-      else if (m.agent_id) byId.set(m.agent_id, m.agent_name ?? "Agent");
+      else if (m.agent_id) byId.set(m.agent_id, m.agent_name ?? t("fallback.agent"));
     }
     for (const task of tasks) {
       if (task.assignee_id && task.assignee_name && !byId.has(task.assignee_id)) {
@@ -779,7 +783,7 @@ export function BoardPage() {
       }
     }
     return byId;
-  }, [projectMembers, tasks]);
+  }, [projectMembers, tasks, t]);
 
   // ---------------------------------------------------------------------------
   // Base task filter (search + priority + assignee + tags + CF + subtasks)
@@ -904,16 +908,7 @@ export function BoardPage() {
 
       const cols: BoardCol[] = priorities.map((p) => ({
         id: `priority-${p}`,
-        title:
-          p === "urgent"
-            ? "Urgent"
-            : p === "high"
-              ? "High"
-              : p === "medium"
-                ? "Medium"
-                : p === "low"
-                  ? "Low"
-                  : "No Priority",
+        title: p === "none" ? t("priority.noPriority") : t(`priority.${p}`),
         color: PRIORITY_COLORS[p],
         priority: p,
       }));
@@ -961,12 +956,12 @@ export function BoardPage() {
 
     // Ensure there's always an "Unassigned" column
     if (!seenIds.has("unassigned")) {
-      assignees.push({ id: "unassigned", name: "Unassigned", type: "unassigned" });
+      assignees.push({ id: "unassigned", name: t("toolbar.assignee.unassigned"), type: "unassigned" });
     }
 
     const cols: BoardCol[] = assignees.map((a) => ({
       id: `assignee-${a.id}`,
-      title: a.name ?? "Unassigned",
+      title: a.name ?? t("toolbar.assignee.unassigned"),
       color: "#9ca3af",
       assigneeId: a.id,
       assigneeName: a.name ?? undefined,
@@ -990,6 +985,7 @@ export function BoardPage() {
     sortedStatuses,
     tasksByStatus,
     filteredTasks,
+    t,
   ]);
 
   // BoardCol objects above are rebuilt from scratch on every recompute —
@@ -1305,17 +1301,17 @@ export function BoardPage() {
 
       {listProjectId === currentProject?.id && listError && (
         <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
-          <span>{listComplete ? "Couldn't refresh tasks. Showing the last complete list." : "Couldn't load all tasks. Counts are unavailable."}</span>
-          <Button variant="outline" size="sm" disabled={isLoading} onClick={() => currentProject && reloadBoard(currentProject.id)}>Retry</Button>
+          <span>{listComplete ? t("refresh.failedPartial") : t("refresh.failedInitial")}</span>
+          <Button variant="outline" size="sm" disabled={isLoading} onClick={() => currentProject && reloadBoard(currentProject.id)}>{t("refresh.retry")}</Button>
         </div>
       )}
       {isLoading && listComplete && listProjectId === currentProject?.id && (
-        <p role="status" className="text-xs text-muted-foreground">Refreshing tasks… Showing the last complete list.</p>
+        <p role="status" className="text-xs text-muted-foreground">{t("refresh.inProgress")}</p>
       )}
 
       {showClosed && groupBy !== "status" && closedPartial && listComplete && listProjectId === currentProject?.id && (
         <p role="status" className="text-xs text-muted-foreground" data-testid="closed-partial-note">
-          Closed: latest {closedPartial.loaded} of {closedPartial.total} loaded. Group by Status to load more.
+          {t("closedPartial", { loaded: closedPartial.loaded, total: closedPartial.total })}
         </p>
       )}
 
@@ -1366,13 +1362,13 @@ export function BoardPage() {
                   <Columns3 className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
                   <h3 className="mb-2 text-lg font-semibold">
                     {statuses.length === 0
-                      ? "No statuses configured"
-                      : "No tasks match filters"}
+                      ? t("empty.noStatuses.title")
+                      : t("empty.noMatches.title")}
                   </h3>
                   <p className="text-sm text-muted-foreground">
                     {statuses.length === 0
-                      ? "Configure task statuses in project settings to use the board."
-                      : "Try adjusting your filters or grouping."}
+                      ? t("empty.noStatuses.hint")
+                      : t("empty.noMatches.hint")}
                   </p>
                 </div>
               </div>

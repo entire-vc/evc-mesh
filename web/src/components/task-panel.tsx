@@ -34,6 +34,7 @@ import {
 import { RuntimeStateBadge } from "@/components/runtime-state-badge";
 import { readableRuntimeState } from "@/lib/runtime-state";
 import { useBlocker, useLocation, useNavigate } from "react-router";
+import { useTranslation } from "react-i18next";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
@@ -110,14 +111,15 @@ type RightTabId = "comments" | "subtasks" | "dependencies" | "artifacts" | "acti
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const MOBILE_TABS: { id: MobileTabId; label: string }[] = [
-  { id: "details", label: "Details" },
-  { id: "description", label: "Description" },
-  { id: "comments", label: "Comments" },
-  { id: "subtasks", label: "Subtasks" },
-  { id: "dependencies", label: "Dependencies" },
-  { id: "artifacts", label: "Artifacts" },
-  { id: "activity", label: "Activity" },
+// Labels resolve at render: t(`panel.tabs.${id}`).
+const MOBILE_TABS: { id: MobileTabId }[] = [
+  { id: "details" },
+  { id: "description" },
+  { id: "comments" },
+  { id: "subtasks" },
+  { id: "dependencies" },
+  { id: "artifacts" },
+  { id: "activity" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -152,12 +154,14 @@ export function TaskPanel({
   onCreated,
   onClose,
   onBack,
-  backLabel = "Back",
+  backLabel,
   onTaskUpdated,
   className,
 }: TaskPanelProps) {
+  const { t } = useTranslation("task");
   const navigate = useNavigate();
   const location = useLocation();
+  const backText = backLabel ?? t("panel.header.back");
   const isCreateMode = mode === "create";
 
   // Arriving from a mention: `?comment=<id>` names the comment somebody was
@@ -360,13 +364,13 @@ export function TaskPanel({
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     if (
-      window.confirm("Discard this task? Your unsaved changes will be lost.")
+      window.confirm(t("form.discardConfirm"))
     ) {
       blocker.proceed();
     } else {
       blocker.reset();
     }
-  }, [blocker]);
+  }, [blocker, t]);
 
   const handleBackClick = () => {
     onBack?.();
@@ -382,12 +386,12 @@ export function TaskPanel({
   const requestClose = useCallback(() => {
     if (
       isDraftDirty &&
-      !window.confirm("Discard this task? Your unsaved changes will be lost.")
+      !window.confirm(t("form.discardConfirm"))
     ) {
       return;
     }
     onClose?.();
-  }, [isDraftDirty, onClose]);
+  }, [isDraftDirty, onClose, t]);
 
   // Reset navigation stack when the root task changes
   useEffect(() => {
@@ -561,9 +565,9 @@ export function TaskPanel({
       await updateTask(currentTask.id, { title: titleDraft.trim() });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to update title"));
+      toast.error(apiErrorMessage(err, t("panel.toast.updateTitleFailed")));
     }
-  }, [currentTask, titleDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, titleDraft, updateTask, onTaskUpdated, t]);
 
   const handleTitleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") void handleTitleSave();
@@ -585,12 +589,12 @@ export function TaskPanel({
       setTimeout(() => setDescSaved(false), 1500);
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to save description"),
+        apiErrorMessage(err, t("panel.toast.saveDescriptionFailed")),
       );
     } finally {
       setDescSaving(false);
     }
-  }, [currentTask, descDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, descDraft, updateTask, onTaskUpdated, t]);
 
   // Debounced autosave for description (2s after last keystroke)
   useEffect(() => {
@@ -611,7 +615,7 @@ export function TaskPanel({
       if (taskId) await fetchTask(taskId);
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to change status"));
+      toast.error(apiErrorMessage(err, t("panel.toast.changeStatusFailed")));
     }
   };
 
@@ -631,7 +635,7 @@ export function TaskPanel({
     const questionRef = currentTask.human_gate_info?.marker_comment_id;
     if (
       !window.confirm(
-        "Clear the human gate on this task? This records that the question was answered and unfreezes the task.",
+        t("panel.humanGate.clearConfirm"),
       )
     ) {
       return;
@@ -650,10 +654,10 @@ export function TaskPanel({
       }
       if (taskId) await fetchTask(taskId);
       onTaskUpdated?.();
-      toast.success("Gate cleared");
+      toast.success(t("panel.humanGate.cleared"));
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to clear human gate"),
+        apiErrorMessage(err, t("panel.humanGate.clearFailed")),
       );
     } finally {
       setClearingGate(false);
@@ -667,7 +671,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to change priority"),
+        apiErrorMessage(err, t("panel.toast.changePriorityFailed")),
       );
     }
   };
@@ -679,7 +683,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to change delegation mode"),
+        apiErrorMessage(err, t("panel.toast.changeDelegationFailed")),
       );
     }
   };
@@ -702,7 +706,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to change assignee"),
+        apiErrorMessage(err, t("panel.toast.changeAssigneeFailed")),
       );
     }
   };
@@ -722,7 +726,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to change reviewer"),
+        apiErrorMessage(err, t("panel.toast.changeReviewerFailed")),
       );
     }
   };
@@ -736,7 +740,7 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to change due date"),
+        apiErrorMessage(err, t("panel.toast.changeDueDateFailed")),
       );
     }
   };
@@ -753,9 +757,9 @@ export function TaskPanel({
           `/w/${currentWorkspace.slug}/p/${targetProject.slug}/t/${updated.id}`,
         );
       }
-      toast.success("Task moved to another project");
+      toast.success(t("panel.toast.movedToProject"));
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to move task"));
+      toast.error(apiErrorMessage(err, t("panel.toast.moveFailed")));
     }
   };
 
@@ -769,10 +773,10 @@ export function TaskPanel({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to update estimate"),
+        apiErrorMessage(err, t("panel.toast.updateEstimateFailed")),
       );
     }
-  }, [currentTask, hoursDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, hoursDraft, updateTask, onTaskUpdated, t]);
 
   const handleHoursKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") void handleHoursSave();
@@ -800,9 +804,9 @@ export function TaskPanel({
       await updateTask(currentTask.id, { labels });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to add label"));
+      toast.error(apiErrorMessage(err, t("panel.toast.addLabelFailed")));
     }
-  }, [currentTask, labelDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, labelDraft, updateTask, onTaskUpdated, t]);
 
   const handleRemoveLabel = useCallback(
     async (label: string) => {
@@ -813,11 +817,11 @@ export function TaskPanel({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          apiErrorMessage(err, "Failed to remove label"),
+          apiErrorMessage(err, t("panel.toast.removeLabelFailed")),
         );
       }
     },
-    [currentTask, updateTask, onTaskUpdated],
+    [currentTask, updateTask, onTaskUpdated, t],
   );
 
   const handleCustomFieldChange = useCallback(
@@ -833,11 +837,11 @@ export function TaskPanel({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          apiErrorMessage(err, "Failed to update field"),
+          apiErrorMessage(err, t("panel.toast.updateFieldFailed")),
         );
       }
     },
-    [currentTask, updateTask, onTaskUpdated],
+    [currentTask, updateTask, onTaskUpdated, t],
   );
 
   // ---- Create-mode handlers --------------------------------------------------
@@ -869,7 +873,7 @@ export function TaskPanel({
   const handleCreateSubmit = useCallback(async () => {
     if (!createProjectId) return;
     if (!draftTitle.trim()) {
-      setDraftError("Title is required");
+      setDraftError(t("form.titleRequired"));
       return;
     }
 
@@ -936,7 +940,7 @@ export function TaskPanel({
       suppressNavBlockRef.current = true;
       onCreated?.(createdTask);
     } catch (err) {
-      setDraftError(apiErrorMessage(err, "Failed to create task"));
+      setDraftError(apiErrorMessage(err, t("form.createFailed")));
     } finally {
       setDraftSubmitting(false);
     }
@@ -956,6 +960,7 @@ export function TaskPanel({
     createTask,
     updateTask,
     onCreated,
+    t,
   ]);
 
   // ---- Derived state -------------------------------------------------------
@@ -1012,7 +1017,7 @@ export function TaskPanel({
       className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
       onClick={() => setHideEmpty((v) => !v)}
     >
-      {hideEmpty ? "Show empty" : "Hide empty"}
+      {hideEmpty ? t("panel.props.showEmpty") : t("panel.props.hideEmpty")}
     </button>
   );
 
@@ -1022,7 +1027,7 @@ export function TaskPanel({
     <div className="rounded-lg border border-border bg-muted/20 p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Properties
+          {t("panel.props.title")}
         </span>
         {hideEmptyToggle}
       </div>
@@ -1031,7 +1036,7 @@ export function TaskPanel({
         {/* Project — fixed by the route/prop, not editable here */}
         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
           <FolderKanban className="h-3 w-3" />
-          Project
+          {t("panel.props.project")}
         </label>
         <Select
           value={createProjectId ?? ""}
@@ -1060,14 +1065,14 @@ export function TaskPanel({
               />
             ) : null;
           })()}
-          Status
+          {t("panel.props.status")}
         </label>
         <Select
           value={draftStatusId}
           onChange={(e) => setDraftStatusId(e.target.value)}
           className="h-7 text-xs"
         >
-          <option value="">Default</option>
+          <option value="">{t("panel.props.defaultStatus")}</option>
           {sortedStatuses.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
@@ -1076,7 +1081,7 @@ export function TaskPanel({
         </Select>
 
         {/* Priority */}
-        <label className="pt-1 text-xs text-muted-foreground">Priority</label>
+        <label className="pt-1 text-xs text-muted-foreground">{t("panel.props.priority")}</label>
         <Select
           value={draftPriority}
           onChange={(e) => setDraftPriority(e.target.value as Priority)}
@@ -1090,7 +1095,7 @@ export function TaskPanel({
         </Select>
 
         {/* Delegation mode */}
-        <label className="pt-1 text-xs text-muted-foreground">Delegation</label>
+        <label className="pt-1 text-xs text-muted-foreground">{t("panel.props.delegation")}</label>
         <DelegationLevelSelect
           value={draftDelegationLevel}
           onChange={setDraftDelegationLevel}
@@ -1103,16 +1108,16 @@ export function TaskPanel({
           ) : (
             <User className="h-3 w-3" />
           )}
-          Assignee
+          {t("panel.props.assignee")}
         </label>
         <Select
           value={draftAssigneeValue}
           onChange={(e) => setDraftAssigneeValue(e.target.value)}
           className="h-7 text-xs"
         >
-          <option value="unassigned">Unassigned</option>
+          <option value="unassigned">{t("panel.props.unassigned")}</option>
           {user && !projectMembers.some((m) => m.user_id === user.id) && (
-            <option value={`user:${user.id}`}>{user.name} (you)</option>
+            <option value={`user:${user.id}`}>{user.name}{t("panel.props.youSuffix")}</option>
           )}
           {(() => {
             const ownerId = currentWorkspace?.owner_id;
@@ -1127,7 +1132,7 @@ export function TaskPanel({
               const isSelf = user?.id === m.user_id;
               return (
                 <option key={`draft-assignee-${m.id}`} value={`user:${m.user_id}`}>
-                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                  {inlineLabel(m.user)}{isSelf ? t("panel.props.youSuffix") : ""} — {m.role}
                 </option>
               );
             }
@@ -1150,16 +1155,16 @@ export function TaskPanel({
           ) : (
             <User className="h-3 w-3" />
           )}
-          Reviewer
+          {t("panel.props.reviewer")}
         </label>
         <Select
           value={draftReviewerValue}
           onChange={(e) => setDraftReviewerValue(e.target.value)}
           className="h-7 text-xs"
         >
-          <option value="unassigned">No reviewer</option>
+          <option value="unassigned">{t("panel.props.noReviewer")}</option>
           {user && !projectMembers.some((m) => m.user_id === user.id) && (
-            <option value={`user:${user.id}`}>{user.name} (you)</option>
+            <option value={`user:${user.id}`}>{user.name}{t("panel.props.youSuffix")}</option>
           )}
           {(() => {
             const ownerId = currentWorkspace?.owner_id;
@@ -1174,7 +1179,7 @@ export function TaskPanel({
               const isSelf = user?.id === m.user_id;
               return (
                 <option key={`draft-reviewer-${m.id}`} value={`user:${m.user_id}`}>
-                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                  {inlineLabel(m.user)}{isSelf ? t("panel.props.youSuffix") : ""} — {m.role}
                 </option>
               );
             }
@@ -1194,12 +1199,12 @@ export function TaskPanel({
         {showDueDate && (
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-              Due Date
+              {t("panel.props.dueDate")}
             </label>
             <DatePickerPopover
               value={draftDueDate || null}
               onChange={(val) => setDraftDueDate(val ?? "")}
-              placeholder="Set due date"
+              placeholder={t("panel.props.setDueDate")}
             />
           </>
         )}
@@ -1209,7 +1214,7 @@ export function TaskPanel({
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
               <Tag className="h-3 w-3" />
-              Labels
+              {t("panel.props.labels")}
             </label>
             <div className="flex flex-wrap items-center gap-1">
               {draftLabels.map((label) => (
@@ -1218,7 +1223,7 @@ export function TaskPanel({
                   variant="secondary"
                   className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
                   onClick={() => handleDraftRemoveLabel(label)}
-                  title="Click to remove"
+                  title={t("panel.props.clickToRemove")}
                 >
                   {label}
                   <X className="h-2 w-2" />
@@ -1232,7 +1237,7 @@ export function TaskPanel({
                   onBlur={() => handleDraftAddLabel()}
                   onKeyDown={handleDraftLabelKeyDown}
                   className="h-5 w-20 px-1 text-[10px]"
-                  placeholder="Label..."
+                  placeholder={t("panel.props.labelPlaceholder")}
                 />
               ) : (
                 <button
@@ -1240,7 +1245,7 @@ export function TaskPanel({
                   className="rounded border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-foreground"
                   onClick={() => setDraftAddingLabel(true)}
                 >
-                  + Add
+                  {t("panel.props.addLabel")}
                 </button>
               )}
             </div>
@@ -1252,7 +1257,7 @@ export function TaskPanel({
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
               <Hourglass className="h-3 w-3" />
-              Estimate
+              {t("panel.props.estimate")}
             </label>
             <Input
               type="number"
@@ -1260,7 +1265,7 @@ export function TaskPanel({
               onChange={(e) => setDraftEstimatedHours(e.target.value)}
               min={0}
               step={0.5}
-              placeholder="e.g. 4"
+              placeholder={t("panel.props.estimatePlaceholder")}
               className="h-7 w-24 text-xs"
             />
           </>
@@ -1274,7 +1279,7 @@ export function TaskPanel({
             </div>
             <label className="flex items-center gap-1 text-xs font-medium text-muted-foreground sm:col-span-2">
               <SlidersHorizontal className="h-3 w-3" />
-              Custom Fields
+              {t("panel.props.customFields")}
             </label>
             {[...customFieldDefs]
               .sort((a, b) => a.position - b.position)
@@ -1312,7 +1317,7 @@ export function TaskPanel({
             </div>
             <div className="sm:col-span-2">
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Definition of Done
+                {t("panel.props.dod")}
               </p>
               <div className="flex flex-col gap-1">
                 {dodGates.map((gate) => (
@@ -1324,7 +1329,7 @@ export function TaskPanel({
                         variant="outline"
                         className="border-orange-300 px-1 py-0 text-[9px] text-orange-600"
                       >
-                        required
+                        {t("panel.props.required")}
                       </Badge>
                     )}
                   </div>
@@ -1339,7 +1344,7 @@ export function TaskPanel({
     <div className="rounded-lg border border-border bg-muted/20 p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Properties
+          {t("panel.props.title")}
         </span>
         {hideEmptyToggle}
       </div>
@@ -1348,7 +1353,7 @@ export function TaskPanel({
         {/* Project */}
         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
           <FolderKanban className="h-3 w-3" />
-          Project
+          {t("panel.props.project")}
         </label>
         <Select
           value={currentTask.project_id}
@@ -1370,7 +1375,7 @@ export function TaskPanel({
               style={{ backgroundColor: currentStatus.color }}
             />
           )}
-          Status
+          {t("panel.props.status")}
         </label>
         <Select
           value={currentTask.status_id}
@@ -1389,7 +1394,7 @@ export function TaskPanel({
         {/* Live work state — beside the status, never replacing it */}
         {currentTask.runtime_state && (
           <>
-            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">Now</label>
+            <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">{t("panel.props.now")}</label>
             <div className="flex min-w-0 items-center pt-0.5" data-testid="runtime-state-row">
               <RuntimeStateBadge state={readableRuntimeState(currentTask)!} variant="line" />
             </div>
@@ -1401,7 +1406,7 @@ export function TaskPanel({
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
               <Lock className="h-3 w-3 text-amber-600 dark:text-amber-400" />
-              Human gate
+              {t("panel.humanGate.label")}
             </label>
             <div className="flex flex-col items-start gap-1 pt-0.5">
               <Badge
@@ -1411,12 +1416,12 @@ export function TaskPanel({
                 data-human-gate-class={currentTask.human_gate_class ?? "hard"}
               >
                 {currentTask.human_gate_class === "soft"
-                  ? "Soft gate — awaiting sign-off"
-                  : "Hard gate — awaiting sign-off"}
+                  ? t("panel.humanGate.soft")
+                  : t("panel.humanGate.hard")}
               </Badge>
               {currentTask.human_gate_info?.owner_name && (
                 <span className="text-[11px] text-muted-foreground">
-                  Raised by {currentTask.human_gate_info.owner_name}
+                  {t("panel.humanGate.raisedBy", { name: currentTask.human_gate_info.owner_name })}
                   {currentTask.human_gate_info.marker_created_at && (
                     <>
                       {" "}
@@ -1442,7 +1447,7 @@ export function TaskPanel({
                   {clearingGate ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
                   ) : (
-                    "Clear gate"
+                    t("panel.humanGate.clear")
                   )}
                 </Button>
               )}
@@ -1452,7 +1457,7 @@ export function TaskPanel({
 
         {/* Priority */}
         <label className="pt-1 text-xs text-muted-foreground">
-          Priority
+          {t("panel.props.priority")}
         </label>
         <Select
           value={currentTask.priority}
@@ -1470,7 +1475,7 @@ export function TaskPanel({
 
         {/* Delegation mode */}
         <label className="pt-1 text-xs text-muted-foreground">
-          Delegation
+          {t("panel.props.delegation")}
         </label>
         <DelegationLevelSelect
           value={currentTask.delegation_level}
@@ -1485,7 +1490,7 @@ export function TaskPanel({
           ) : (
             <User className="h-3 w-3" />
           )}
-          Assignee
+          {t("panel.props.assignee")}
         </label>
         <Select
           value={
@@ -1496,10 +1501,10 @@ export function TaskPanel({
           onChange={(e) => void handleAssigneeChange(e.target.value)}
           className="h-7 text-xs"
         >
-          <option value="unassigned">Unassigned</option>
+          <option value="unassigned">{t("panel.props.unassigned")}</option>
           {user && !projectMembers.some((m) => m.user_id === user.id) && (
             <option value={`user:${user.id}`}>
-              {user.name} (you)
+              {user.name}{t("panel.props.youSuffix")}
             </option>
           )}
           {(() => {
@@ -1515,7 +1520,7 @@ export function TaskPanel({
               const isSelf = user?.id === m.user_id;
               return (
                 <option key={m.id} value={`user:${m.user_id}`}>
-                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                  {inlineLabel(m.user)}{isSelf ? t("panel.props.youSuffix") : ""} — {m.role}
                 </option>
               );
             }
@@ -1542,7 +1547,7 @@ export function TaskPanel({
             if (!resolved) return null;
             return (
               <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
-                {agentLabel(resolved, currentTask.assignee_type === "agent" ? teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.short_tag : null)} (not a project member)
+                {agentLabel(resolved, currentTask.assignee_type === "agent" ? teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.short_tag : null)} {t("panel.props.notProjectMember")}
               </option>
             );
           })()}
@@ -1555,7 +1560,7 @@ export function TaskPanel({
           ) : (
             <User className="h-3 w-3" />
           )}
-          Reviewer
+          {t("panel.props.reviewer")}
         </label>
         <Select
           value={
@@ -1566,10 +1571,10 @@ export function TaskPanel({
           onChange={(e) => void handleReviewerChange(e.target.value)}
           className="h-7 text-xs"
         >
-          <option value="unassigned">No reviewer</option>
+          <option value="unassigned">{t("panel.props.noReviewer")}</option>
           {user && !projectMembers.some((m) => m.user_id === user.id) && (
             <option value={`user:${user.id}`}>
-              {user.name} (you)
+              {user.name}{t("panel.props.youSuffix")}
             </option>
           )}
           {(() => {
@@ -1585,7 +1590,7 @@ export function TaskPanel({
               const isSelf = user?.id === m.user_id;
               return (
                 <option key={`reviewer-${m.id}`} value={`user:${m.user_id}`}>
-                  {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                  {inlineLabel(m.user)}{isSelf ? t("panel.props.youSuffix") : ""} — {m.role}
                 </option>
               );
             }
@@ -1612,7 +1617,7 @@ export function TaskPanel({
             if (!resolved) return null;
             return (
               <option value={`${currentTask.reviewer_type}:${currentTask.reviewer_id}`}>
-                {agentLabel(resolved, currentTask.reviewer_type === "agent" ? teamDirectory?.agents.find((a) => a.id === currentTask.reviewer_id)?.short_tag : null)} (not a project member)
+                {agentLabel(resolved, currentTask.reviewer_type === "agent" ? teamDirectory?.agents.find((a) => a.id === currentTask.reviewer_id)?.short_tag : null)} {t("panel.props.notProjectMember")}
               </option>
             );
           })()}
@@ -1622,7 +1627,7 @@ export function TaskPanel({
         {showDueDate && (
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-              Due Date
+              {t("panel.props.dueDate")}
             </label>
             <DatePickerPopover
               value={
@@ -1634,7 +1639,7 @@ export function TaskPanel({
                 void handleDueDateChange(val ?? "")
               }
               includeTime
-              placeholder="Set due date"
+              placeholder={t("panel.props.setDueDate")}
             />
           </>
         )}
@@ -1644,7 +1649,7 @@ export function TaskPanel({
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
               <Tag className="h-3 w-3" />
-              Labels
+              {t("panel.props.labels")}
             </label>
             <div className="flex flex-wrap items-center gap-1">
               {(currentTask.labels ?? []).map((label) => (
@@ -1653,7 +1658,7 @@ export function TaskPanel({
                   variant="secondary"
                   className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
                   onClick={() => void handleRemoveLabel(label)}
-                  title="Click to remove"
+                  title={t("panel.props.clickToRemove")}
                 >
                   {label}
                   <X className="h-2 w-2" />
@@ -1673,7 +1678,7 @@ export function TaskPanel({
                     }
                   }}
                   className="h-5 w-20 px-1 text-[10px]"
-                  placeholder="Label..."
+                  placeholder={t("panel.props.labelPlaceholder")}
                 />
               ) : (
                 <button
@@ -1681,7 +1686,7 @@ export function TaskPanel({
                   className="rounded border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-foreground"
                   onClick={() => setAddingLabel(true)}
                 >
-                  + Add
+                  {t("panel.props.addLabel")}
                 </button>
               )}
             </div>
@@ -1693,7 +1698,7 @@ export function TaskPanel({
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
               <Hourglass className="h-3 w-3" />
-              Estimate
+              {t("panel.props.estimate")}
             </label>
             {editingHours ? (
               <Input
@@ -1704,7 +1709,7 @@ export function TaskPanel({
                 onKeyDown={handleHoursKeyDown}
                 min={0}
                 step={0.5}
-                placeholder="e.g. 4"
+                placeholder={t("panel.props.estimatePlaceholder")}
                 className="h-7 w-24 text-xs"
               />
             ) : (
@@ -1715,11 +1720,11 @@ export function TaskPanel({
               >
                 {currentTask.estimated_hours != null ? (
                   <span className="font-medium">
-                    {currentTask.estimated_hours}h
+                    {t("panel.props.hoursValue", { value: currentTask.estimated_hours })}
                   </span>
                 ) : (
                   <span className="text-muted-foreground">
-                    Set estimate
+                    {t("panel.props.setEstimate")}
                   </span>
                 )}
                 <Pencil className="h-2.5 w-2.5 text-muted-foreground" />
@@ -1736,7 +1741,7 @@ export function TaskPanel({
             </div>
             <label className="sm:col-span-2 flex items-center gap-1 text-xs font-medium text-muted-foreground">
               <SlidersHorizontal className="h-3 w-3" />
-              Custom Fields
+              {t("panel.props.customFields")}
             </label>
             {[...customFieldDefs]
               .sort((a, b) => a.position - b.position)
@@ -1775,7 +1780,7 @@ export function TaskPanel({
         <div className="sm:col-span-2 flex items-center justify-between gap-2 pt-1">
           <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
             <Clock className="h-3 w-3" />
-            Created
+            {t("panel.props.created")}
           </label>
           <span className="text-right text-xs">
             {formatDate(currentTask.created_at)}
@@ -1783,7 +1788,7 @@ export function TaskPanel({
         </div>
 
         <div className="sm:col-span-2 flex items-center justify-between gap-2">
-          <label className="shrink-0 text-xs text-muted-foreground">Updated</label>
+          <label className="shrink-0 text-xs text-muted-foreground">{t("panel.props.updated")}</label>
           <span className="text-right text-xs text-muted-foreground">
             {formatRelative(currentTask.updated_at)}
           </span>
@@ -1801,24 +1806,24 @@ export function TaskPanel({
               </div>
               <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
                 <RefreshCw className="h-3 w-3" />
-                Recurring
+                {t("panel.recurring.label")}
               </label>
               <div className="space-y-1">
                 <p className="text-xs">
-                  Run{" "}
+                  {t("panel.recurring.run")}{" "}
                   {currentTask.recurring_instance_number != null
                     ? `#${currentTask.recurring_instance_number}`
                     : ""}{" "}
                   {schedule
-                    ? `of "${schedule.title_template}"`
-                    : "of recurring schedule"}
+                    ? t("panel.recurring.ofSchedule", { title: schedule.title_template })
+                    : t("panel.recurring.ofRecurring")}
                 </p>
                 <button
                   type="button"
                   className="rounded px-1.5 py-0.5 text-xs text-primary transition-colors hover:bg-primary/10"
                   onClick={() => setRecurringHistoryOpen(true)}
                 >
-                  View history
+                  {t("panel.recurring.viewHistory")}
                 </button>
               </div>
             </>
@@ -1861,7 +1866,7 @@ export function TaskPanel({
               </div>
               <div className="sm:col-span-2">
                 <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Definition of Done
+                  {t("panel.props.dod")}
                 </p>
                 <div className="flex flex-col gap-1">
                   {dodGates.map((gate) => {
@@ -1881,7 +1886,7 @@ export function TaskPanel({
                         </span>
                         {gate.required && status !== "pass" && (
                           <Badge variant="outline" className="text-[9px] px-1 py-0 text-orange-600 border-orange-300">
-                            required
+                            {t("panel.props.required")}
                           </Badge>
                         )}
                       </div>
@@ -1899,12 +1904,12 @@ export function TaskPanel({
   const descriptionPanel = isCreateMode ? (
     <div>
       <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Description
+        {t("panel.description.title")}
       </h3>
       <RichTextEditor
         value={draftDescription}
         onChange={setDraftDescription}
-        placeholder="Add a description..."
+        placeholder={t("panel.description.placeholder")}
         projId={createProjectId}
         minHeight="5rem"
         onPendingImage={(pending) => {
@@ -1916,7 +1921,7 @@ export function TaskPanel({
     <div>
       <div className="mb-1.5 flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Description
+          {t("panel.description.title")}
         </h3>
         <div className="flex items-center gap-2">
           {editingDescription ? (
@@ -1924,13 +1929,13 @@ export function TaskPanel({
               {descSaving && (
                 <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  Saving…
+                  {t("panel.description.saving")}
                 </span>
               )}
               {descSaved && !descSaving && (
                 <span className="flex items-center gap-1 text-[11px] text-green-600">
                   <Check className="h-3 w-3" />
-                  Saved
+                  {t("panel.description.saved")}
                 </span>
               )}
               <Button
@@ -1944,7 +1949,7 @@ export function TaskPanel({
                   );
                 }}
               >
-                Done
+                {t("actions.done")}
               </Button>
               <Button
                 size="sm"
@@ -1956,7 +1961,7 @@ export function TaskPanel({
                   setEditingDescription(false);
                 }}
               >
-                Cancel
+                {t("actions.cancel")}
               </Button>
             </>
           ) : (
@@ -1966,7 +1971,7 @@ export function TaskPanel({
               onClick={() => setEditingDescription(true)}
             >
               <Pencil className="h-3 w-3" />
-              Edit
+              {t("actions.edit")}
             </button>
           )}
         </div>
@@ -1975,7 +1980,7 @@ export function TaskPanel({
         <RichTextEditor
           value={descDraft}
           onChange={setDescDraft}
-          placeholder="Add a description..."
+          placeholder={t("panel.description.placeholder")}
           projId={currentTask.project_id}
           taskId={currentTask.id}
         />
@@ -1988,7 +1993,7 @@ export function TaskPanel({
               className="cursor-text text-muted-foreground hover:text-foreground"
               onClick={() => setEditingDescription(true)}
             >
-              Add a description...
+              {t("panel.description.placeholder")}
             </span>
           )}
         </div>
@@ -2021,7 +2026,7 @@ export function TaskPanel({
       }}
       className="h-7 text-xs"
     >
-      <option value="">From template...</option>
+      <option value="">{t("form.fromTemplate")}</option>
       {templates.map((tmpl) => (
         <option key={tmpl.id} value={tmpl.id}>
           {tmpl.name}
@@ -2035,7 +2040,7 @@ export function TaskPanel({
       <Input
         value={draftTitle}
         onChange={(e) => setDraftTitle(e.target.value)}
-        placeholder="Task title *"
+        placeholder={t("form.titlePlaceholder")}
         autoFocus
         className="h-auto border-none bg-transparent p-0 text-xl font-bold tracking-tight shadow-none focus-visible:ring-1"
       />
@@ -2079,11 +2084,11 @@ export function TaskPanel({
               type="button"
               onClick={popTask}
               className="flex shrink-0 items-center gap-1 rounded p-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              title="Back to parent task"
+              title={t("panel.header.backToParent")}
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               <span className="max-w-[180px] truncate">
-                {backTask?.title ?? "Back"}
+                {backTask?.title ?? t("panel.header.back")}
               </span>
             </button>
           ) : (
@@ -2094,15 +2099,15 @@ export function TaskPanel({
                   type="button"
                   onClick={handleBackClick}
                   className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  aria-label={backLabel}
-                  title={backLabel}
+                  aria-label={backText}
+                  title={backText}
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               )}
               {isCreateMode ? (
                 <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                  New task{createProject ? ` · ${createProject.name}` : ""}
+                  {t("form.newTask")}{createProject ? ` · ${createProject.name}` : ""}
                 </span>
               ) : (
                 currentTask && (
@@ -2129,7 +2134,7 @@ export function TaskPanel({
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title="Open in new tab"
+                title={t("panel.header.openInNewTab")}
               >
                 <ExternalLink className="h-4 w-4" />
               </a>
@@ -2138,10 +2143,10 @@ export function TaskPanel({
                 onClick={async () => {
                   const url = `${window.location.origin}/t/${currentTask.id}`;
                   await navigator.clipboard.writeText(url);
-                  toast.success("Link copied");
+                  toast.success(t("panel.header.linkCopied"));
                 }}
                 className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title="Copy link"
+                title={t("panel.header.copyLink")}
               >
                 <Link className="h-4 w-4" />
               </button>
@@ -2152,7 +2157,7 @@ export function TaskPanel({
               type="button"
               onClick={requestClose}
               className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              aria-label="Close"
+              aria-label={t("panel.header.close")}
             >
               <X className="h-4 w-4" />
             </button>
@@ -2215,7 +2220,7 @@ export function TaskPanel({
                   onClick={requestClose}
                   disabled={draftSubmitting}
                 >
-                  Cancel
+                  {t("actions.cancel")}
                 </Button>
               )}
               <Button
@@ -2224,7 +2229,7 @@ export function TaskPanel({
                 onClick={() => void handleCreateSubmit()}
                 disabled={draftSubmitting}
               >
-                {draftSubmitting ? "Creating..." : "Create Task"}
+                {draftSubmitting ? t("form.creating") : t("form.submit")}
               </Button>
             </div>
           </div>
@@ -2237,21 +2242,20 @@ export function TaskPanel({
               and leaving the create screen a different shape. */}
           <div className="hidden w-2/5 shrink-0 flex-col overflow-hidden lg:flex">
             <div className="flex shrink-0 overflow-x-auto border-b border-border">
-              {["Comments", "Subtasks", "Artifacts", "Activity"].map((label) => (
+              {(["comments", "subtasks", "artifacts", "activity"] as const).map((id) => (
                 <span
-                  key={label}
+                  key={id}
                   className="flex shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 py-2.5 text-xs font-medium text-muted-foreground/50"
                 >
-                  {label === "Subtasks" && <ListTree className="h-3.5 w-3.5" />}
-                  {label === "Artifacts" && <Package className="h-3.5 w-3.5" />}
-                  {label}
+                  {id === "subtasks" && <ListTree className="h-3.5 w-3.5" />}
+                  {id === "artifacts" && <Package className="h-3.5 w-3.5" />}
+                  {t(`panel.tabs.${id}`)}
                 </span>
               ))}
             </div>
             <div className="flex flex-1 items-center justify-center p-6">
               <p className="max-w-[16rem] text-center text-xs text-muted-foreground">
-                Comments, subtasks, artifacts and activity open once the task is
-                created.
+                {t("form.rightPanelHint")}
               </p>
             </div>
           </div>
@@ -2297,7 +2301,7 @@ export function TaskPanel({
                   >
                     {tab.id === "subtasks" && <ListTree className="h-3.5 w-3.5" />}
                     {tab.id === "artifacts" && <Package className="h-3.5 w-3.5" />}
-                    {tab.label}
+                    {t(`panel.tabs.${tab.id}`)}
                     {tab.id === "dependencies" && <DependencyBadge source={dependencies} />}
                     {tab.id === "subtasks" &&
                       currentTask.subtask_count != null &&
@@ -2418,7 +2422,7 @@ export function TaskPanel({
                   )}
                   onClick={() => setActiveDesktopTab("comments")}
                 >
-                  Comments
+                  {t("panel.tabs.comments")}
                 </button>
                 <button
                   type="button"
@@ -2431,7 +2435,7 @@ export function TaskPanel({
                   onClick={() => setActiveDesktopTab("subtasks")}
                 >
                   <ListTree className="h-3.5 w-3.5" />
-                  Subtasks
+                  {t("panel.tabs.subtasks")}
                   {currentTask.subtask_count != null &&
                     currentTask.subtask_count > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
@@ -2450,7 +2454,7 @@ export function TaskPanel({
                   onClick={() => setActiveDesktopTab("dependencies")}
                   aria-pressed={activeDesktopTab === "dependencies"}
                 >
-                  Dependencies <DependencyBadge source={dependencies} />
+                  {t("panel.tabs.dependencies")} <DependencyBadge source={dependencies} />
                 </button>
                 <button
                   type="button"
@@ -2463,7 +2467,7 @@ export function TaskPanel({
                   onClick={() => setActiveDesktopTab("artifacts")}
                 >
                   <Package className="h-3.5 w-3.5" />
-                  Artifacts
+                  {t("panel.tabs.artifacts")}
                   {currentTask.artifact_count != null &&
                     currentTask.artifact_count > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
@@ -2481,7 +2485,7 @@ export function TaskPanel({
                   )}
                   onClick={() => setActiveDesktopTab("activity")}
                 >
-                  Activity
+                  {t("panel.tabs.activity")}
                 </button>
               </div>
 
@@ -2545,7 +2549,7 @@ export function TaskPanel({
       {/* No task loaded */}
       {!isCreateMode && !loading && !currentTask && taskId && (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          <p className="text-sm">Task not found.</p>
+          <p className="text-sm">{t("panel.notFound")}</p>
         </div>
       )}
 

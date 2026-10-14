@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { forwardRef, memo, type HTMLAttributes } from "react";
@@ -56,15 +57,15 @@ interface TaskCardProps extends HTMLAttributes<HTMLDivElement> {
 export function humanGateTitle(task: Pick<Task, "human_gate_class" | "gate_reason">): string {
   const base =
     task.human_gate_class === "soft"
-      ? "Waiting on a human sign-off (soft — auto-releases after a timeout)"
-      : "Waiting on a human sign-off (hard)";
-  return task.gate_reason ? `${base}: ${task.gate_reason}` : base;
+      ? i18n.t("board:card.humanGate.soft")
+      : i18n.t("board:card.humanGate.hard");
+  return task.gate_reason ? i18n.t("board:card.humanGate.withReason", { base, reason: task.gate_reason }) : base;
 }
 
 export const TaskCard = memo(
   forwardRef<HTMLDivElement, TaskCardProps>(
     ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, gateStatusName, className, ...props }, ref) => {
-    const { t } = useTranslation();
+    const { t } = useTranslation("board");
     const shortTag = useAgentShortTag(task.assignee_id, task.assignee_type);
     const holderTag = useAgentShortTag(task.checked_out_by, "agent");
     const borderColor =
@@ -112,8 +113,8 @@ export const TaskCard = memo(
               <span
                 title={
                   task.recurring_instance_number != null
-                    ? `Recurring task #${task.recurring_instance_number}`
-                    : "Recurring task"
+                    ? t("card.recurringNumber", { number: task.recurring_instance_number })
+                    : t("card.recurring")
                 }
                 className="inline-flex items-center"
               >
@@ -129,7 +130,7 @@ export const TaskCard = memo(
             {hasVcsLinks && (
               <ExternalLink
                 className="h-3.5 w-3.5 text-muted-foreground"
-                aria-label="Has VCS links"
+                aria-label={t("card.hasVcsLinks")}
               />
             )}
             {onEditClick && (
@@ -137,8 +138,8 @@ export const TaskCard = memo(
                 type="button"
                 className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
                 onClick={(e) => { e.stopPropagation(); onEditClick(e); }}
-                aria-label="Edit task"
-                title="Edit task"
+                aria-label={t("card.edit")}
+                title={t("card.edit")}
               >
                 <Pencil className="h-3.5 w-3.5" />
               </button>
@@ -149,7 +150,7 @@ export const TaskCard = memo(
         {/* Description indicator */}
         {hasDescription && (
           <div className="mt-1">
-            <AlignLeft className="h-3.5 w-3.5 text-muted-foreground" aria-label="Has description" />
+            <AlignLeft className="h-3.5 w-3.5 text-muted-foreground" aria-label={t("card.hasDescription")} />
           </div>
         )}
 
@@ -189,10 +190,10 @@ export const TaskCard = memo(
               <Lock className="h-3.5 w-3.5" aria-hidden="true" />
               {gateStatusName ? (
                 <span className="ml-1 text-[10px] font-medium" data-testid="human-gate-status">
-                  {gateStatusName} · awaiting answer
+                  {t("card.humanGate.awaitingAnswer", { status: gateStatusName })}
                 </span>
               ) : (
-                <span className="sr-only">Waiting on a human sign-off</span>
+                <span className="sr-only">{t("card.humanGate.srOnly")}</span>
               )}
             </span>
           )}
@@ -200,24 +201,24 @@ export const TaskCard = memo(
           {task.false_open?.all_children_closed && (
             <span
               className="inline-flex items-center text-emerald-600 dark:text-emerald-400"
-              title={t("board:falseOpen.allChildrenClosed", { days: task.false_open.stale_days })}
+              title={t("falseOpen.allChildrenClosed", { days: task.false_open.stale_days })}
               data-testid="false-open-indicator"
               data-false-open-kind="all-children-closed"
             >
               <CircleCheck className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="sr-only">False-open: all subtasks closed</span>
+              <span className="sr-only">{t("card.falseOpen.allChildrenClosed")}</span>
             </span>
           )}
 
           {task.false_open?.only_parked_children_left && (
             <span
               className="inline-flex items-center text-sky-600 dark:text-sky-400"
-              title={t("board:falseOpen.onlyParkedChildrenLeft", { count: task.false_open.open_children_count, days: task.false_open.stale_days })}
+              title={t("falseOpen.onlyParkedChildrenLeft", { count: task.false_open.open_children_count, days: task.false_open.stale_days })}
               data-testid="false-open-indicator"
               data-false-open-kind="only-parked-children-left"
             >
               <Snowflake className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="sr-only">False-open: only parked subtasks left</span>
+              <span className="sr-only">{t("card.falseOpen.onlyParkedChildrenLeft")}</span>
             </span>
           )}
 
@@ -246,15 +247,17 @@ export const TaskCard = memo(
               )}
               title={
                 checkoutLapsed
-                  ? `Work lock lapsed ${formatRelative(task.checkout_expires!)} — the holder's session is gone, nobody is on this`
-                  : `In ${holderIsSomeoneElse ? agentLabel(checkedOutByName!, holderTag) : "hand"}${holderIsSomeoneElse ? "'s hands" : "s"} until ${formatRelative(task.checkout_expires!)}`
+                  ? t("card.checkout.lapsedTitle", { time: formatRelative(task.checkout_expires!) })
+                  : holderIsSomeoneElse
+                    ? t("card.checkout.liveHolderTitle", { holder: agentLabel(checkedOutByName!, holderTag), time: formatRelative(task.checkout_expires!) })
+                    : t("card.checkout.liveTitle", { time: formatRelative(task.checkout_expires!) })
               }
               data-testid="checkout-indicator"
               data-checkout-state={checkoutLapsed ? "lapsed" : "live"}
             >
               <Hand className="h-3.5 w-3.5" aria-hidden="true" />
               <span className="sr-only">
-                {checkoutLapsed ? "Work lock lapsed" : "Checked out"}
+                {checkoutLapsed ? t("card.checkout.lapsed") : t("card.checkout.live")}
               </span>
               {holderIsSomeoneElse && <span>{checkedOutByName}<AgentShortTag id={task.checked_out_by} /></span>}
               <span>{formatRelative(task.checkout_expires!)}</span>
@@ -287,7 +290,7 @@ export const TaskCard = memo(
           <div className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
             <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
             <span>
-              {task.subtask_count} subtask{task.subtask_count === 1 ? "" : "s"}
+              {t("card.subtaskCount", { count: task.subtask_count })}
             </span>
           </div>
         )}

@@ -1,0 +1,80 @@
+{
+  "actions": {
+    "cancel": "Отмена",
+    "create": "Создать",
+    "creating": "Создание..."
+  },
+  "nav": {
+    "dashboard": "Дашборд",
+    "initiatives": "Инициативы",
+    "triage": "Входящие на разбор",
+    "activity": "Активность",
+    "team": "Команда",
+    "memory": "Память",
+    "sessions": "Сессии",
+    "spark": "Каталог Spark",
+    "analytics": "Аналитика",
+    "events": "События",
+    "integrations": "Интеграции",
+    "connectedApps": "Подключённые приложения",
+    "workspaceSettings": "Настройки пространства",
+    "projectSettings": "Настройки проекта"
+  },
+  "sidebar": {
+    "workspaceLogoAlt": "Рабочее пространство",
+    "workspaceSwitcher": {
+      "select": "Выберите пространство",
+      "title": "Рабочие пространства",
+      "newWorkspace": "Новое пространство"
+    },
+    "projects": {
+      "title": "Проекты",
+      "loading": "Загрузка проектов",
+      "empty": "Проектов пока нет",
+      "archived": "Архив ({{count}})",
+      "unarchive": "Вернуть из архива",
+      "unarchiveProject": "Вернуть {{name}} из архива",
+      "unarchiveFailed": "Не удалось вернуть проект из архива"
+    }
+  },
+  "createWorkspace": {
+    "title": "Новое рабочее пространство",
+    "name": "Название",
+    "namePlaceholder": "Моя команда",
+    "slug": "Slug",
+    "slugPlaceholder": "my-team",
+    "slugHint": "Используется в URL: /w/{{slug}}",
+    "failed": "Не удалось создать рабочее пространство"
+  },
+  "header": {
+    "search": {
+      "placeholder": "Поиск задач...",
+      "searching": "Поиск...",
+      "noResults": "Ничего не найдено"
+    },
+    "projectDocs": "Документы проекта",
+    "installApp": "Установить Mesh как приложение",
+    "teamTabs": {
+      "tree": "Дерево",
+      "byProject": "По проектам"
+    },
+    "userMenu": {
+      "userFallback": "Пользователь",
+      "theme": "Тема",
+      "themeDark": "Тёмная",
+      "themeLight": "Светлая",
+      "logOut": "Выйти"
+    }
+  },
+  "workspaceNotFound": {
+    "title": "Рабочее пространство не найдено",
+    "description": "«{{slug}}» не существует, удалено или у вас нет к нему доступа.",
+    "goToWorkspace": "Перейти в своё пространство"
+  },
+  "noWorkspaces": {
+    "title": "Добро пожаловать в EVC Mesh",
+    "description": "Создайте первое рабочее пространство, чтобы начать.",
+    "name": "Название пространства",
+    "submit": "Создать пространство"
+  }
+}

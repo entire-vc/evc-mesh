@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { ListTree, Loader2, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { priorityConfig } from "@/lib/utils";
@@ -21,6 +22,7 @@ interface SubtaskListProps {
 }
 
 export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListProps) {
+  const { t } = useTranslation("task");
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   const { statuses, projects } = useProjectStore();
@@ -52,7 +54,7 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
     e.preventDefault();
     const trimmed = title.trim();
     if (!trimmed) {
-      setError("Title is required.");
+      setError(t("subtasks.titleRequired"));
       return;
     }
     setSubmitting(true);
@@ -67,7 +69,7 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
       setShowForm(false);
     } catch (err: unknown) {
       setError(
-        apiErrorMessage(err, "Failed to add subtask."),
+        apiErrorMessage(err, t("subtasks.addFailed")),
       );
     } finally {
       setSubmitting(false);
@@ -82,7 +84,7 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
       <Input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        placeholder="Subtask title"
+        placeholder={t("subtasks.titlePlaceholder")}
         className="h-8 text-sm"
         autoFocus
       />
@@ -97,10 +99,10 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
           {submitting ? (
             <>
               <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-              Adding...
+              {t("subtasks.adding")}
             </>
           ) : (
-            "Add Subtask"
+            t("subtasks.submit")
           )}
         </Button>
         <Button
@@ -113,7 +115,7 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
             setTitle("");
           }}
         >
-          Cancel
+          {t("actions.cancel")}
         </Button>
       </div>
     </form>
@@ -130,7 +132,7 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
       }}
     >
       <Plus className="h-3 w-3" />
-      Add subtask
+      {t("subtasks.add")}
     </Button>
   );
 
@@ -150,7 +152,7 @@ export function SubtaskList({ taskId, onOpenSubtask, refreshKey }: SubtaskListPr
         {addSubtaskForm}
         <div className="flex flex-col items-center py-8 text-muted-foreground">
           <ListTree className="mb-2 h-8 w-8" />
-          <p className="text-sm">No subtasks.</p>
+          <p className="text-sm">{t("subtasks.empty")}</p>
         </div>
       </div>
     );

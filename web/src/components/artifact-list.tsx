@@ -12,6 +12,7 @@ import {
   Package,
   Trash2,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { formatBytes, formatRelative } from "@/lib/utils";
@@ -75,6 +76,7 @@ const artifactTypeBadgeVariant: Record<ArtifactType, "default" | "secondary" | "
 // real deciding about how the bytes are shown.
 
 export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArtifactId }: ArtifactListProps) {
+  const { t } = useTranslation("task");
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -146,8 +148,8 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
             const artifact = await uploadArtifact(taskId, file);
             setArtifacts((prev) => [...prev, artifact]);
           } catch (err) {
-            toast.error(`Could not attach ${file.name}`, {
-              description: apiErrorMessage(err, "upload failed"),
+            toast.error(t("artifacts.attachFailed", { name: file.name }), {
+              description: apiErrorMessage(err, t("artifacts.uploadFailed")),
             });
           }
         }
@@ -155,7 +157,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
         setUploading(false);
       }
     },
-    [taskId],
+    [taskId, t],
   );
 
   const handleDragOver = useCallback((e: DragEvent) => {
@@ -216,14 +218,14 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
       await downloadArtifact(artifactId, name);
     } catch {
       // The bare API endpoint 401s without auth.
-      toast("Could not download file");
+      toast(t("artifacts.downloadFailed"));
     } finally {
       setDownloadingId(null);
     }
   };
 
   const handleDelete = async (artifactId: string) => {
-    if (!window.confirm("Are you sure you want to delete this artifact?")) {
+    if (!window.confirm(t("artifacts.deleteConfirm"))) {
       return;
     }
     setDeletingId(artifactId);
@@ -263,7 +265,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
       onDrop={(e) => void handleDrop(e)}
     >
       <p className="mb-1 text-sm text-muted-foreground">
-        {uploading ? "Uploading..." : "Drop files here, or"}
+        {uploading ? t("artifacts.uploading") : t("artifacts.dropHere")}
       </p>
       {!uploading && (
         <AttachmentSourceMenu
@@ -286,13 +288,13 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
 
   if (loadError) {
     return <div role="alert" className="space-y-2 text-sm">
-      <p>Could not load artifacts.</p>
-      <Button variant="outline" onClick={() => void fetchArtifacts()}>Retry</Button>
+      <p>{t("artifacts.loadFailed")}</p>
+      <Button variant="outline" onClick={() => void fetchArtifacts()}>{t("deps.retry")}</Button>
     </div>;
   }
 
   const notFound = focusArtifactId && !artifacts.some(artifact => artifact.id === focusArtifactId)
-    ? <p role="alert" className="py-3 text-sm text-muted-foreground">Artifact not found or you don&apos;t have access.</p> : null;
+    ? <p role="alert" className="py-3 text-sm text-muted-foreground">{t("artifacts.notFound")}</p> : null;
 
   if (artifacts.length === 0) {
     return (
@@ -300,7 +302,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
         {notFound}
         <div className="flex flex-col items-center py-4 text-muted-foreground">
           <Package className="mb-2 h-8 w-8" />
-          <p className="text-sm">No artifacts uploaded yet.</p>
+          <p className="text-sm">{t("artifacts.empty")}</p>
         </div>
         {uploadZone}
       </div>
@@ -341,7 +343,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
             </div>
 
             <div className="ml-3 flex shrink-0 items-center gap-1">
-              <a href={artifactHref(artifact.id)} title="Link to artifact" aria-label="Link to artifact"
+              <a href={artifactHref(artifact.id)} title={t("artifacts.link")} aria-label={t("artifacts.link")}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted">
                 <Link className="h-4 w-4" />
               </a>
@@ -356,7 +358,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => handleOpen(artifact.id)}
-                  title="Preview"
+                  title={t("artifacts.preview")}
                 >
                   <Eye className="h-4 w-4" />
                 </Button>
@@ -366,7 +368,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => handleOpen(artifact.id)}
-                  title="Open in new tab"
+                  title={t("panel.header.openInNewTab")}
                 >
                   <ExternalLink className="h-4 w-4" />
                 </Button>
@@ -377,7 +379,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
                 className="h-8 w-8"
                 onClick={() => void handleDownload(artifact.id, artifact.name)}
                 disabled={downloadingId === artifact.id}
-                title="Download"
+                title={t("artifacts.download")}
               >
                 <Download className="h-4 w-4" />
               </Button>
@@ -387,7 +389,7 @@ export function ArtifactList({ taskId, refreshKey, projId, onDocInsert, focusArt
                 className="h-8 w-8 text-destructive"
                 onClick={() => void handleDelete(artifact.id)}
                 disabled={deletingId === artifact.id}
-                title="Delete"
+                title={t("actions.delete")}
               >
                 <Trash2 className="h-4 w-4" />
               </Button>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 
 interface LabelEditorProps {
@@ -9,6 +10,7 @@ interface LabelEditorProps {
 }
 
 export function LabelEditor({ labels, onChange, className }: LabelEditorProps) {
+  const { t } = useTranslation("task");
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -67,7 +69,7 @@ export function LabelEditor({ labels, onChange, className }: LabelEditorProps) {
           <button
             type="button"
             onClick={() => removeLabel(label)}
-            aria-label={`Remove label ${label}`}
+            aria-label={t("labels.remove", { label })}
             className="ml-1 cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
           >
             <X className="h-3 w-3" />
@@ -83,7 +85,7 @@ export function LabelEditor({ labels, onChange, className }: LabelEditorProps) {
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
-          placeholder="Label name..."
+          placeholder={t("labels.namePlaceholder")}
           className={cn(
             "h-5 w-24 rounded-full border border-dashed border-input bg-background",
             "px-2 py-0 text-xs text-foreground placeholder:text-muted-foreground",
@@ -101,7 +103,7 @@ export function LabelEditor({ labels, onChange, className }: LabelEditorProps) {
           )}
         >
           <Plus className="h-3 w-3" />
-          Add label
+          {t("labels.add")}
         </button>
       )}
     </div>

@@ -4,6 +4,7 @@
  */
 
 import { useCallback, useRef, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Tag, SlidersHorizontal, X, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -153,6 +154,7 @@ export function TagFilterDropdown({
   onChange,
   className,
 }: TagFilterDropdownProps) {
+  const { t } = useTranslation("board");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -171,7 +173,7 @@ export function TagFilterDropdown({
   const toggleTag = useCallback(
     (tag: string) => {
       if (selectedTags.includes(tag)) {
-        onChange(selectedTags.filter((t) => t !== tag));
+        onChange(selectedTags.filter((v) => v !== tag));
       } else {
         onChange([...selectedTags, tag]);
       }
@@ -209,7 +211,7 @@ export function TagFilterDropdown({
       {open && (
         <div className="absolute left-0 z-50 mt-2 w-56 rounded-lg border border-border bg-popover p-2 shadow-lg">
           <div className="mb-1.5 flex items-center justify-between px-1">
-            <span className="text-xs font-semibold text-foreground">Filter by Tag</span>
+            <span className="text-xs font-semibold text-foreground">{t("filters.tag.title")}</span>
             {activeCount > 0 && (
               <button
                 type="button"
@@ -217,7 +219,7 @@ export function TagFilterDropdown({
                 className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-destructive"
               >
                 <X className="h-3 w-3" />
-                Clear
+                {t("filters.clear")}
               </button>
             )}
           </div>
@@ -261,6 +263,7 @@ export function CustomFieldFilterDialog({
   onChange,
   className,
 }: CustomFieldFilterDialogProps) {
+  const { t } = useTranslation("board");
   const [open, setOpen] = useState(false);
   // Local draft — committed on Apply
   const [draft, setDraft] = useState<CFFilters>({});
@@ -309,7 +312,7 @@ export function CustomFieldFilterDialog({
         onClick={handleOpen}
       >
         <SlidersHorizontal className="h-3.5 w-3.5" />
-        Filters
+        {t("filters.customFields.button")}
         {activeCount > 0 && (
           <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-[10px]">
             {activeCount}
@@ -320,7 +323,7 @@ export function CustomFieldFilterDialog({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Filter by Custom Fields</DialogTitle>
+            <DialogTitle>{t("filters.customFields.title")}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
@@ -336,10 +339,10 @@ export function CustomFieldFilterDialog({
 
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={handleClear}>
-              Clear all
+              {t("filters.customFields.clearAll")}
             </Button>
             <Button size="sm" onClick={handleApply}>
-              Apply
+              {t("filters.customFields.apply")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -361,6 +364,7 @@ function CFFieldFilterRow({
   entry: CFFilterEntry | undefined;
   onChange: (patch: Partial<CFFilterEntry>) => void;
 }) {
+  const { t } = useTranslation("board");
   const ft = field.field_type;
 
   // Resolve choices for select/multiselect
@@ -383,7 +387,7 @@ function CFFieldFilterRow({
         ft === "agent_ref" ||
         ft === "json") && (
         <Input
-          placeholder={`Contains...`}
+          placeholder={t("filters.customFields.contains")}
           className="h-8 text-xs"
           value={entry?.textValue ?? ""}
           onChange={(e) =>
@@ -401,7 +405,7 @@ function CFFieldFilterRow({
             onChange({ type: "select", selectValue: e.target.value })
           }
         >
-          <option value="all">Any</option>
+          <option value="all">{t("filters.customFields.any")}</option>
           {choices.map((c) => (
             <option key={c.value} value={c.value}>
               {c.label}
@@ -414,7 +418,7 @@ function CFFieldFilterRow({
       {ft === "multiselect" && (
         <div className="flex flex-wrap gap-1.5 rounded-md border border-border p-2">
           {choices.length === 0 && (
-            <span className="text-xs text-muted-foreground">No options defined</span>
+            <span className="text-xs text-muted-foreground">{t("filters.customFields.noOptions")}</span>
           )}
           {choices.map((c) => {
             const selected = (entry?.multiselectValues ?? []).includes(c.value);
@@ -444,7 +448,7 @@ function CFFieldFilterRow({
         <div className="flex items-center gap-2">
           <Input
             type="number"
-            placeholder="Min"
+            placeholder={t("filters.customFields.min")}
             className="h-8 w-24 text-xs"
             value={entry?.numMin ?? ""}
             onChange={(e) =>
@@ -454,7 +458,7 @@ function CFFieldFilterRow({
           <span className="text-xs text-muted-foreground">—</span>
           <Input
             type="number"
-            placeholder="Max"
+            placeholder={t("filters.customFields.max")}
             className="h-8 w-24 text-xs"
             value={entry?.numMax ?? ""}
             onChange={(e) =>
@@ -473,9 +477,9 @@ function CFFieldFilterRow({
             onChange({ type: "checkbox", checkboxValue: e.target.value })
           }
         >
-          <option value="all">Any</option>
-          <option value="checked">Checked</option>
-          <option value="unchecked">Unchecked</option>
+          <option value="all">{t("filters.customFields.any")}</option>
+          <option value="checked">{t("filters.customFields.checked")}</option>
+          <option value="unchecked">{t("filters.customFields.unchecked")}</option>
         </Select>
       )}
 
@@ -483,7 +487,7 @@ function CFFieldFilterRow({
       {(ft === "date" || ft === "datetime") && (
         <div className="flex items-center gap-2">
           <div className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-muted-foreground">From</span>
+            <span className="text-[10px] text-muted-foreground">{t("filters.customFields.from")}</span>
             <Input
               type="date"
               className="h-8 text-xs"
@@ -494,7 +498,7 @@ function CFFieldFilterRow({
             />
           </div>
           <div className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-muted-foreground">To</span>
+            <span className="text-[10px] text-muted-foreground">{t("filters.customFields.to")}</span>
             <Input
               type="date"
               className="h-8 text-xs"

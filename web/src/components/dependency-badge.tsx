@@ -1,19 +1,21 @@
 import type { TaskDependenciesSource } from "@/hooks/use-task-dependencies";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 
 export function DependencyBadge({ source }: { source: TaskDependenciesSource }) {
+  const { t } = useTranslation("task");
   let label: string;
   if (source.phase === "loading") {
-    label = "Loading";
+    label = t("deps.badge.loading");
   } else if (source.phase === "error") {
-    label = "Unavailable";
+    label = t("deps.badge.unavailable");
   } else {
-    let blockers = `${source.openBlockers} open`;
+    let blockers = t("deps.badge.open", { n: source.openBlockers });
     if (source.checking) {
-      blockers = "checking";
+      blockers = t("deps.badge.checking");
     } else if (source.unknownBlockers) {
-      const known = source.openBlockers ? `${source.openBlockers}+ open · ` : "";
-      blockers = `${known}${source.unknownBlockers} unknown`;
+      const known = source.openBlockers ? t("deps.badge.openKnown", { n: source.openBlockers }) : "";
+      blockers = `${known}${t("deps.badge.unknown", { n: source.unknownBlockers })}`;
     }
     label = `${source.rows.length} · ${blockers}`;
   }

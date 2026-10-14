@@ -1,10 +1,12 @@
 import { useEffect } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { TaskPanel } from "@/components/task-panel";
 
 export function TaskDetailPage() {
+  const { t } = useTranslation("task");
   const { wsSlug, projectSlug, taskId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -55,7 +57,7 @@ export function TaskDetailPage() {
     <TaskPanel
       taskId={taskId ?? null}
       onBack={handleBack}
-      backLabel={fromTriage ? "Back to triage" : "Back to board"}
+      backLabel={fromTriage ? t("panel.header.backToTriage") : t("panel.header.backToBoard")}
       className="h-full"
     />
   );

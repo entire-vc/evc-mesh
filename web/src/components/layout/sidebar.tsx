@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
@@ -124,6 +125,7 @@ function WorkspaceLogo({
   testId = "workspace-logo",
   className,
 }: WorkspaceLogoProps) {
+  const { t } = useTranslation("shell");
   const [status, setStatus] = useState<ImageStatus>("pending");
 
   // Re-arm on URL change (workspace switch, or a fresh upload replacing the
@@ -148,7 +150,7 @@ function WorkspaceLogo({
         <img
           data-testid="workspace-logo-img"
           src={iconUrl}
-          alt={name || "Workspace"}
+          alt={name || t("sidebar.workspaceLogoAlt")}
           className={cn("h-full w-full object-cover", !isLoaded && "hidden")}
           onLoad={() => setStatus("loaded")}
           onError={() => setStatus("error")}
@@ -161,6 +163,7 @@ function WorkspaceLogo({
 }
 
 export function Sidebar({ collapsed }: SidebarProps) {
+  const { t } = useTranslation("shell");
   const { wsSlug, projectSlug } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -212,11 +215,11 @@ export function Sidebar({ collapsed }: SidebarProps) {
       setWsSlugDraft("");
       navigate(`/w/${ws.slug}`);
     } catch (err) {
-      setWsError(apiErrorMessage(err, "Failed to create workspace"));
+      setWsError(apiErrorMessage(err, t("createWorkspace.failed")));
     } finally {
       setWsCreating(false);
     }
-  }, [wsName, wsSlugDraft, createWorkspace, navigate]);
+  }, [wsName, wsSlugDraft, createWorkspace, navigate, t]);
 
   const isDashboardRoute = location.pathname.endsWith("/dashboard");
   const isOrgChartRoute = location.pathname.endsWith("/org-chart");
@@ -305,7 +308,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           </Link>
           {/* Projects */}
           {navigationPending ? (
-            <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label="Loading projects" className="space-y-2">
+            <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label={t("sidebar.projects.loading")} className="space-y-2">
               <Skeleton className="h-8 w-8 rounded-lg bg-sidebar-border" />
               <Skeleton className="h-8 w-8 rounded-lg bg-sidebar-border" />
             </div>
@@ -456,12 +459,12 @@ export function Sidebar({ collapsed }: SidebarProps) {
               variant="expanded"
             />
             <span className="flex-1 truncate text-left">
-              {currentWorkspace?.name || "Select workspace"}
+              {currentWorkspace?.name || t("sidebar.workspaceSwitcher.select")}
             </span>
             <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("sidebar.workspaceSwitcher.title")}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {workspaces.map((ws) => (
               <Link key={ws.id} to={`/w/${ws.slug}`}>
@@ -488,7 +491,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
               className="gap-2 text-muted-foreground"
             >
               <Plus className="h-3.5 w-3.5" />
-              New Workspace
+              {t("sidebar.workspaceSwitcher.newWorkspace")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -505,14 +508,14 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <LayoutDashboard className="h-4 w-4" />
-          Dashboard
+          {t("nav.dashboard")}
         </Link>
 
         {/* Projects */}
         <div className="mt-3">
           <div className="flex items-center justify-between px-2 py-1">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Projects
+              {t("sidebar.projects.title")}
             </span>
             <Button
               variant="ghost"
@@ -525,7 +528,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           </div>
           <div className="mt-1 space-y-0.5">
             {navigationPending ? (
-              <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label="Loading projects" className="space-y-2 px-2 py-2">
+              <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label={t("sidebar.projects.loading")} className="space-y-2 px-2 py-2">
                 <Skeleton className="h-6 w-full bg-sidebar-border" />
                 <Skeleton className="h-6 w-2/3 bg-sidebar-border" />
               </div>
@@ -555,7 +558,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
             ))}
             {!navigationPending && currentWorkspace && !projectsError && projects.length === 0 && (
               <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-                No projects yet
+                {t("sidebar.projects.empty")}
               </p>
             )}
           </div>
@@ -572,7 +575,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
                 ) : (
                   <ChevronRight className="h-3 w-3" />
                 )}
-                Archived ({archivedProjects.length})
+                {t("sidebar.projects.archived", { count: archivedProjects.length })}
               </button>
               {showArchived && (
                 <div className="mt-0.5 space-y-0.5">
@@ -596,15 +599,15 @@ export function Sidebar({ collapsed }: SidebarProps) {
                         variant="ghost"
                         size="icon"
                         className="h-6 w-6 shrink-0"
-                        title="Unarchive"
-                        aria-label={`Unarchive ${project.name}`}
+                        title={t("sidebar.projects.unarchive")}
+                        aria-label={t("sidebar.projects.unarchiveProject", { name: project.name })}
                         onClick={async () => {
                           setUnarchiveError(null);
                           try {
                             await unarchiveProject(project.id);
                           } catch (err) {
                             setUnarchiveError(
-                              apiErrorMessage(err, "Failed to unarchive project"),
+                              apiErrorMessage(err, t("sidebar.projects.unarchiveFailed")),
                             );
                           }
                         }}
@@ -635,7 +638,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <Target className="h-4 w-4" />
-          Initiatives
+          {t("nav.initiatives")}
         </Link>
         {/* Triage Inbox */}
         <Link
@@ -646,7 +649,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <Inbox className="h-4 w-4" />
-          Triage Inbox
+          {t("nav.triage")}
         </Link>
         {/* Activity */}
         <Link
@@ -657,7 +660,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <Bell className="h-4 w-4" />
-          Activity
+          {t("nav.activity")}
           {unseenCount > 0 && (
             <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
               {unseenCount > 99 ? "99+" : unseenCount}
@@ -676,7 +679,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <Bot className="h-4 w-4" />
-          Team
+          {t("nav.team")}
         </Link>
         {/* Memory Browser */}
         <Link
@@ -687,7 +690,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <Brain className="h-4 w-4" />
-          Memory
+          {t("nav.memory")}
         </Link>
         {/* Sessions Dashboard */}
         <Link
@@ -698,7 +701,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <MonitorDot className="h-4 w-4" />
-          Sessions
+          {t("nav.sessions")}
         </Link>
         {/* Spark Catalog — hidden when the server has MESH_SPARK_ENABLED=false */}
         {sparkEnabled && (
@@ -710,7 +713,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Sparkles className="h-4 w-4" />
-            Spark Catalog
+            {t("nav.spark")}
           </Link>
         )}
         {/* Analytics */}
@@ -722,7 +725,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <BarChart2 className="h-4 w-4" />
-          Analytics
+          {t("nav.analytics")}
         </Link>
         {/* Events */}
         <Link
@@ -733,7 +736,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <Activity className="h-4 w-4" />
-          Events
+          {t("nav.events")}
         </Link>
         {/* Integrations */}
         <Link
@@ -744,7 +747,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           )}
         >
           <Plug className="h-4 w-4" />
-          Integrations
+          {t("nav.integrations")}
         </Link>
       </nav>
 
@@ -761,7 +764,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Settings className="h-4 w-4" />
-            Workspace Settings
+            {t("nav.workspaceSettings")}
           </Link>
         )}
         {wsSlug && projectSlug && (
@@ -774,7 +777,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
             )}
           >
             <Settings className="h-4 w-4" />
-            Project Settings
+            {t("nav.projectSettings")}
           </Link>
         )}
       </div>
@@ -788,35 +791,35 @@ export function Sidebar({ collapsed }: SidebarProps) {
       <Dialog open={createWsOpen} onOpenChange={(open) => { setCreateWsOpen(open); if (!open) { setWsName(""); setWsSlugDraft(""); setWsError(null); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create Workspace</DialogTitle>
+            <DialogTitle>{t("createWorkspace.title")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Name</label>
+              <label className="text-sm font-medium">{t("createWorkspace.name")}</label>
               <Input
                 value={wsName}
                 onChange={(e) => handleWsNameChange(e.target.value)}
-                placeholder="My Team"
+                placeholder={t("createWorkspace.namePlaceholder")}
                 autoFocus
                 onKeyDown={(e) => { if (e.key === "Enter" && wsName.trim()) void handleCreateWs(); }}
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Slug</label>
+              <label className="text-sm font-medium">{t("createWorkspace.slug")}</label>
               <Input
                 value={wsSlugDraft}
                 onChange={(e) => setWsSlugDraft(e.target.value)}
-                placeholder="my-team"
+                placeholder={t("createWorkspace.slugPlaceholder")}
               />
-              <p className="text-xs text-muted-foreground">Used in URLs: /w/{wsSlugDraft || "slug"}</p>
+              <p className="text-xs text-muted-foreground">{t("createWorkspace.slugHint", { slug: wsSlugDraft || "slug" })}</p>
             </div>
             {wsError && (
               <p className="text-sm text-destructive">{wsError}</p>
             )}
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setCreateWsOpen(false)}>Cancel</Button>
+              <Button variant="outline" size="sm" onClick={() => setCreateWsOpen(false)}>{t("actions.cancel")}</Button>
               <Button size="sm" onClick={() => void handleCreateWs()} disabled={!wsName.trim() || !wsSlugDraft.trim() || wsCreating}>
-                {wsCreating ? "Creating..." : "Create"}
+                {wsCreating ? t("actions.creating") : t("actions.create")}
               </Button>
             </div>
           </div>

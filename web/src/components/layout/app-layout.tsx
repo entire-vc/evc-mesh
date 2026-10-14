@@ -1,7 +1,7 @@
-import { useTranslation } from "react-i18next";
-import { APP_NAMESPACES } from "@/i18n";
 import { type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
+import { APP_NAMESPACES } from "@/i18n";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -328,6 +328,7 @@ function WorkspaceNotFoundScreen({
   fallbackSlug: string;
 }) {
   const navigate = useNavigate();
+  const { t } = useTranslation("shell");
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-md">
@@ -335,10 +336,9 @@ function WorkspaceNotFoundScreen({
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive">
             <AlertTriangle className="h-6 w-6" />
           </div>
-          <CardTitle className="text-2xl">Workspace not found</CardTitle>
+          <CardTitle className="text-2xl">{t("workspaceNotFound.title")}</CardTitle>
           <CardDescription>
-            &quot;{slug}&quot; doesn&apos;t exist, was deleted, or you don&apos;t have
-            access to it.
+            {t("workspaceNotFound.description", { slug })}
           </CardDescription>
         </CardHeader>
         <CardFooter>
@@ -346,7 +346,7 @@ function WorkspaceNotFoundScreen({
             className="w-full"
             onClick={() => navigate(`/w/${fallbackSlug}/activity`, { replace: true })}
           >
-            Go to your workspace
+            {t("workspaceNotFound.goToWorkspace")}
           </Button>
         </CardFooter>
       </Card>
@@ -356,6 +356,7 @@ function WorkspaceNotFoundScreen({
 
 function NoWorkspacesScreen() {
   const navigate = useNavigate();
+  const { t } = useTranslation("shell");
   const { createWorkspace } = useWorkspaceStore();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
@@ -383,12 +384,12 @@ function NoWorkspacesScreen() {
         const ws = await createWorkspace({ name: name.trim(), slug: slug.trim() });
         navigate(`/w/${ws.slug}`, { replace: true });
       } catch (err) {
-        setError(apiErrorMessage(err, "Failed to create workspace"));
+        setError(apiErrorMessage(err, t("createWorkspace.failed")));
       } finally {
         setCreating(false);
       }
     },
-    [name, slug, createWorkspace, navigate],
+    [name, slug, createWorkspace, navigate, t],
   );
 
   return (
@@ -398,9 +399,9 @@ function NoWorkspacesScreen() {
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
             M
           </div>
-          <CardTitle className="text-2xl">Welcome to EVC Mesh</CardTitle>
+          <CardTitle className="text-2xl">{t("noWorkspaces.title")}</CardTitle>
           <CardDescription>
-            Create your first workspace to get started.
+            {t("noWorkspaces.description")}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
@@ -412,11 +413,11 @@ function NoWorkspacesScreen() {
             )}
             <div className="space-y-2">
               <label htmlFor="ws-name" className="text-sm font-medium">
-                Workspace name
+                {t("noWorkspaces.name")}
               </label>
               <Input
                 id="ws-name"
-                placeholder="My Team"
+                placeholder={t("createWorkspace.namePlaceholder")}
                 value={name}
                 onChange={(e) => handleNameChange(e.target.value)}
                 required
@@ -425,23 +426,23 @@ function NoWorkspacesScreen() {
             </div>
             <div className="space-y-2">
               <label htmlFor="ws-slug" className="text-sm font-medium">
-                Slug
+                {t("createWorkspace.slug")}
               </label>
               <Input
                 id="ws-slug"
-                placeholder="my-team"
+                placeholder={t("createWorkspace.slugPlaceholder")}
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
                 required
               />
               <p className="text-xs text-muted-foreground">
-                Used in URLs: /w/{slug || "..."}
+                {t("createWorkspace.slugHint", { slug: slug || "..." })}
               </p>
             </div>
           </CardContent>
           <CardFooter>
             <Button type="submit" className="w-full" disabled={creating}>
-              {creating ? "Creating..." : "Create workspace"}
+              {creating ? t("actions.creating") : t("noWorkspaces.submit")}
             </Button>
           </CardFooter>
         </form>

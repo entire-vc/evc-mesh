@@ -1,0 +1,286 @@
+{
+  "actions": {
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "done": "Done",
+    "edit": "Edit",
+    "save": "Save"
+  },
+  "artifacts": {
+    "attachFailed": "Could not attach {{name}}",
+    "deleteConfirm": "Are you sure you want to delete this artifact?",
+    "download": "Download",
+    "downloadFailed": "Could not download file",
+    "dropHere": "Drop files here, or",
+    "empty": "No artifacts uploaded yet.",
+    "link": "Link to artifact",
+    "loadFailed": "Could not load artifacts.",
+    "notFound": "Artifact not found or you don't have access.",
+    "preview": "Preview",
+    "uploadFailed": "upload failed",
+    "uploading": "Uploading..."
+  },
+  "attach": {
+    "fromComputer": "From computer",
+    "fromDocs": "From Docs",
+    "fromObsidian": "From Obsidian",
+    "trigger": "Attach"
+  },
+  "comments": {
+    "actor": {
+      "agent": "Agent",
+      "system": "System",
+      "user": "User"
+    },
+    "delivery": {
+      "assignTo": "Assign to @{{slug}}",
+      "assignedTo": "Assigned to @{{slug}}.",
+      "error": "Couldn't apply — try from the task fields.",
+      "moveToTodo": "Move to todo",
+      "movedToTodo": "Moved to todo.",
+      "stale": "The card is no longer in backlog — left as is.",
+      "wontSee": "@{{slug}} won't see this: {{hint}}"
+    },
+    "empty": "No comments yet. Be the first to comment.",
+    "internal": "Internal",
+    "internalNote": "Internal note",
+    "loadMore": "Load more",
+    "loading": "Loading...",
+    "placeholder": "Write a comment… @ to mention, [[ to link a document",
+    "reply": "Reply",
+    "replyingTo": "Replying to",
+    "submit": "Comment"
+  },
+  "cost": {
+    "spawns_few": "{{count}} spawns",
+    "spawns_many": "{{count}} spawns",
+    "spawns_one": "{{count}} spawn",
+    "spawns_other": "{{count}} spawns",
+    "title": "Cost & Quality",
+    "tokens": "tok"
+  },
+  "deps": {
+    "add": "Add",
+    "addFailed": "Failed to add dependency.",
+    "badge": {
+      "checking": "checking",
+      "loading": "Loading",
+      "open": "{{n}} open",
+      "openKnown": "{{n}}+ open · ",
+      "unavailable": "Unavailable",
+      "unknown": "{{n}} unknown"
+    },
+    "chooseTask": "Choose a task to add a dependency.",
+    "empty": "No dependencies yet.",
+    "form": {
+      "submit": "Add Dependency",
+      "type": "Relationship type"
+    },
+    "group": {
+      "blocked_by": "Blocked by",
+      "blocks": "Blocks",
+      "child_of": "Child of",
+      "parent_of": "Parent of",
+      "relates_to": "Relates to"
+    },
+    "loadFailed": "Could not load dependencies.",
+    "loading": "Loading dependencies...",
+    "metadataError": "Some task details are unavailable.",
+    "picker": {
+      "ambiguous": "This short ID is ambiguous. Enter a longer prefix or full UUID.",
+      "badShortId": "Enter a short ID with 6–12 hexadecimal characters.",
+      "label": "Find task",
+      "noMatches": "No matching tasks.",
+      "noWorkspace": "Choose a workspace before searching for a task.",
+      "otherWorkspace": "Choose a task in the current workspace.",
+      "placeholder": "Title, #shortid, or full UUID",
+      "results": "Matching tasks",
+      "searchFailed": "Could not search tasks.",
+      "searching": "Searching tasks…",
+      "selected": "Selected:",
+      "self": "A task cannot depend on itself."
+    },
+    "removeFailed": "Failed to remove dependency.",
+    "retry": "Retry",
+    "row": {
+      "assigneeUnavailable": "Assignee unavailable",
+      "blockerUnknown": "Blocker status unknown",
+      "loadingStatus": "Loading status…",
+      "openBlocker": "Open blocker",
+      "remove": "Remove dependency",
+      "removeAction": "Remove",
+      "removeConfirm": "Remove link?",
+      "statusUnavailable": "Status unavailable",
+      "taskUnavailable": "Task unavailable"
+    },
+    "type": {
+      "blocks": {
+        "hint": "This task must finish before the selected task can — this task blocks it.",
+        "label": "Blocks"
+      },
+      "depends_on": {
+        "hint": "The task you enter must finish before this one can — it blocks this task.",
+        "label": "Depends on"
+      },
+      "related": {
+        "hint": "Just a reference. No ordering or hierarchy is implied.",
+        "label": "Related"
+      }
+    },
+    "view": "View dependencies"
+  },
+  "form": {
+    "createFailed": "Failed to create task",
+    "creating": "Creating...",
+    "discardConfirm": "Discard this task? Your unsaved changes will be lost.",
+    "fromTemplate": "From template...",
+    "newTask": "New task",
+    "rightPanelHint": "Comments, subtasks, artifacts and activity open once the task is created.",
+    "submit": "Create Task",
+    "titlePlaceholder": "Task title *",
+    "titleRequired": "Title is required"
+  },
+  "labels": {
+    "add": "Add label",
+    "namePlaceholder": "Label name...",
+    "remove": "Remove label {{label}}"
+  },
+  "panel": {
+    "description": {
+      "placeholder": "Add a description...",
+      "saved": "Saved",
+      "saving": "Saving…",
+      "title": "Description"
+    },
+    "header": {
+      "back": "Back",
+      "backToBoard": "Back to board",
+      "backToParent": "Back to parent task",
+      "backToTriage": "Back to triage",
+      "close": "Close",
+      "copyLink": "Copy link",
+      "duplicate": "Duplicate task",
+      "linkCopied": "Link copied",
+      "openInNewTab": "Open in new tab",
+      "taskDetail": "Task detail"
+    },
+    "humanGate": {
+      "clear": "Clear gate",
+      "clearConfirm": "Clear the human gate on this task? This records that the question was answered and unfreezes the task.",
+      "clearFailed": "Failed to clear human gate",
+      "cleared": "Gate cleared",
+      "hard": "Hard gate — awaiting sign-off",
+      "label": "Human gate",
+      "raisedBy": "Raised by {{name}}",
+      "soft": "Soft gate — awaiting sign-off"
+    },
+    "notFound": "Task not found.",
+    "props": {
+      "addLabel": "+ Add",
+      "assignee": "Assignee",
+      "clickToRemove": "Click to remove",
+      "created": "Created",
+      "customFields": "Custom Fields",
+      "defaultStatus": "Default",
+      "delegation": "Delegation",
+      "dod": "Definition of Done",
+      "dueDate": "Due Date",
+      "estimate": "Estimate",
+      "estimatePlaceholder": "e.g. 4",
+      "hideEmpty": "Hide empty",
+      "hoursValue": "{{value}}h",
+      "labelPlaceholder": "Label...",
+      "labels": "Labels",
+      "noReviewer": "No reviewer",
+      "notProjectMember": "(not a project member)",
+      "now": "Now",
+      "priority": "Priority",
+      "project": "Project",
+      "required": "required",
+      "reviewer": "Reviewer",
+      "setDueDate": "Set due date",
+      "setEstimate": "Set estimate",
+      "showEmpty": "Show empty",
+      "status": "Status",
+      "title": "Properties",
+      "unassigned": "Unassigned",
+      "updated": "Updated",
+      "youSuffix": " (you)"
+    },
+    "recurring": {
+      "label": "Recurring",
+      "ofRecurring": "of recurring schedule",
+      "ofSchedule": "of \"{{title}}\"",
+      "run": "Run",
+      "viewHistory": "View history"
+    },
+    "tabs": {
+      "activity": "Activity",
+      "artifacts": "Artifacts",
+      "comments": "Comments",
+      "dependencies": "Dependencies",
+      "description": "Description",
+      "details": "Details",
+      "subtasks": "Subtasks"
+    },
+    "toast": {
+      "addLabelFailed": "Failed to add label",
+      "changeAssigneeFailed": "Failed to change assignee",
+      "changeDelegationFailed": "Failed to change delegation mode",
+      "changeDueDateFailed": "Failed to change due date",
+      "changePriorityFailed": "Failed to change priority",
+      "changeReviewerFailed": "Failed to change reviewer",
+      "changeStatusFailed": "Failed to change status",
+      "duplicateFailed": "Failed to duplicate task",
+      "duplicated": "Task duplicated",
+      "moveFailed": "Failed to move task",
+      "movedToProject": "Task moved to another project",
+      "removeLabelFailed": "Failed to remove label",
+      "saveDescriptionFailed": "Failed to save description",
+      "updateEstimateFailed": "Failed to update estimate",
+      "updateFieldFailed": "Failed to update field",
+      "updateTitleFailed": "Failed to update title"
+    }
+  },
+  "subtasks": {
+    "add": "Add subtask",
+    "addFailed": "Failed to add subtask.",
+    "adding": "Adding...",
+    "empty": "No subtasks.",
+    "submit": "Add Subtask",
+    "titlePlaceholder": "Subtask title",
+    "titleRequired": "Title is required."
+  },
+  "vcs": {
+    "createFailed": "Failed to create link.",
+    "empty": "No VCS links yet.",
+    "form": {
+      "idPlaceholder": "123 or abc123ef",
+      "linking": "Linking...",
+      "provider": "Provider",
+      "submit": "Add Link",
+      "title": "Title (optional)",
+      "titlePlaceholder": "Fix authentication bug",
+      "type": "Type"
+    },
+    "linkPr": "Link PR",
+    "required": "URL and external ID are required.",
+    "status": {
+      "closed": "Closed",
+      "merged": "Merged",
+      "open": "Open"
+    },
+    "sync": {
+      "lastConfirmed": "Status last confirmed {{date}}",
+      "neverConfirmed": "This open status has never been confirmed by a provider webhook",
+      "notVerified": "not verified",
+      "synced": "synced {{when}}"
+    },
+    "title": "VCS Links",
+    "type": {
+      "branch": "Branch",
+      "commit": "Commit",
+      "pr": "Pull Request"
+    }
+  }
+}

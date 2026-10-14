@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Columns3 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -24,6 +25,7 @@ export interface ColumnPickerProps {
 // ---------------------------------------------------------------------------
 
 export function ColumnPicker({ columns, onChange, className }: ColumnPickerProps) {
+  const { t } = useTranslation("board");
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -88,7 +90,7 @@ export function ColumnPicker({ columns, onChange, className }: ColumnPickerProps
         aria-expanded={open}
       >
         <Columns3 className="h-3.5 w-3.5" />
-        Columns
+        {t("columnPicker.button")}
         {visibleCount > 0 && (
           <span className="ml-0.5 rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-semibold text-primary">
             {visibleCount}
@@ -99,7 +101,7 @@ export function ColumnPicker({ columns, onChange, className }: ColumnPickerProps
       {open && (
         <div
           role="listbox"
-          aria-label="Toggle columns"
+          aria-label={t("columnPicker.ariaLabel")}
           className="absolute right-0 top-full z-50 mt-1.5 min-w-[180px] rounded-lg border border-border bg-popover shadow-lg"
         >
           <div className="px-1 py-1">
@@ -125,7 +127,7 @@ export function ColumnPicker({ columns, onChange, className }: ColumnPickerProps
                   <span className="select-none text-foreground">{col.label}</span>
                   {isDisabled && (
                     <span className="ml-auto text-[10px] text-muted-foreground">
-                      required
+                      {t("columnPicker.required")}
                     </span>
                   )}
                 </label>
@@ -139,7 +141,7 @@ export function ColumnPicker({ columns, onChange, className }: ColumnPickerProps
               onClick={handleReset}
               className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
-              Reset to default
+              {t("columnPicker.reset")}
             </button>
           </div>
         </div>
