@@ -122,14 +122,14 @@ func TestWebhookDelivery_RefusesNonPublicAddress(t *testing.T) {
 	// Positive control: the same request goes through when the predicate admits
 	// loopback, so a refusal below is the guard and not a broken fixture.
 	open := &webhookService{client: newWebhookHTTPClient(func(net.IP) bool { return true })}
-	status, _, _, err := open.sendHTTP(newTestWebhook(srv.URL), "task.created", uuid.New(), []byte(`{}`), 1)
+	status, _, _, err := open.sendSigned(srv.URL, "s3cret", "task.created", uuid.New(), []byte(`{}`))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, status)
 	require.EqualValues(t, 1, hits.Load())
 
 	hits.Store(0)
 	prod := NewWebhookService(&recordingWebhookRepo{}).(*webhookService)
-	_, _, _, err = prod.sendHTTP(newTestWebhook(srv.URL), "task.created", uuid.New(), []byte(`{}`), 1)
+	_, _, _, err = prod.sendSigned(srv.URL, "s3cret", "task.created", uuid.New(), []byte(`{}`))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errDialAddressRefused)
 	assert.True(t, isPermanentWebhookError(err))
@@ -150,7 +150,7 @@ func TestWebhookDelivery_RefusesHostnameResolvingToLoopback(t *testing.T) {
 	require.NoError(t, err)
 
 	prod := NewWebhookService(&recordingWebhookRepo{}).(*webhookService)
-	_, _, _, err = prod.sendHTTP(newTestWebhook("http://localhost:"+port+"/hook"), "task.created", uuid.New(), []byte(`{}`), 1)
+	_, _, _, err = prod.sendSigned("http://localhost:"+port+"/hook", "s3cret", "task.created", uuid.New(), []byte(`{}`))
 	require.Error(t, err)
 	// Not just "permanent": NXDOMAIN is too, and would pass on a box without a
 	// localhost entry without ever exercising the guard.
@@ -178,7 +178,7 @@ func TestWebhookDelivery_RedirectNotFollowed(t *testing.T) {
 	repo := &recordingWebhookRepo{}
 	s := &webhookService{repo: repo, client: newWebhookHTTPClient(func(net.IP) bool { return true })}
 
-	status, _, _, err := s.sendHTTP(newTestWebhook(outer.URL), "task.created", uuid.New(), []byte(`{}`), 1)
+	status, _, _, err := s.sendSigned(outer.URL, "s3cret", "task.created", uuid.New(), []byte(`{}`))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusTemporaryRedirect, status)
 	assert.Zero(t, innerHits.Load(), "the redirect target must never be requested")

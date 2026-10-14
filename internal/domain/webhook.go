@@ -25,16 +25,19 @@ type WebhookConfig struct {
 
 // WebhookDelivery records a single delivery attempt for a webhook.
 type WebhookDelivery struct {
-	ID             uuid.UUID `json:"id" db:"id"`
-	WebhookID      uuid.UUID `json:"webhook_id" db:"webhook_id"`
-	EventType      string    `json:"event_type" db:"event_type"`
-	Payload        []byte    `json:"payload" db:"payload"`
-	ResponseStatus *int      `json:"response_status,omitempty" db:"response_status"`
-	ResponseBody   *string   `json:"response_body,omitempty" db:"response_body"`
-	DurationMs     *int      `json:"duration_ms,omitempty" db:"duration_ms"`
-	Success        bool      `json:"success" db:"success"`
-	Attempt        int       `json:"attempt" db:"attempt"`
-	CreatedAt      time.Time `json:"created_at" db:"created_at"`
+	ID uuid.UUID `json:"id" db:"id"`
+	// WebhookID is uuid.Nil for a delivery to an extension subscription; that
+	// row carries SubscriptionID instead.
+	WebhookID      uuid.UUID  `json:"webhook_id" db:"webhook_id"`
+	SubscriptionID *uuid.UUID `json:"subscription_id,omitempty" db:"subscription_id"`
+	EventType      string     `json:"event_type" db:"event_type"`
+	Payload        []byte     `json:"payload" db:"payload"`
+	ResponseStatus *int       `json:"response_status,omitempty" db:"response_status"`
+	ResponseBody   *string    `json:"response_body,omitempty" db:"response_body"`
+	DurationMs     *int       `json:"duration_ms,omitempty" db:"duration_ms"`
+	Success        bool       `json:"success" db:"success"`
+	Attempt        int        `json:"attempt" db:"attempt"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
 }
 
 // CreateWebhookInput holds parameters for creating a webhook.

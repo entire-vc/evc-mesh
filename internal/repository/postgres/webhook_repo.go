@@ -56,22 +56,24 @@ func (r *webhookConfigRow) toDomain() domain.WebhookConfig {
 
 // webhookDeliveryRow is the DB row representation for webhook_deliveries.
 type webhookDeliveryRow struct {
-	ID             uuid.UUID `db:"id"`
-	WebhookID      uuid.UUID `db:"webhook_id"`
-	EventType      string    `db:"event_type"`
-	Payload        []byte    `db:"payload"`
-	ResponseStatus *int      `db:"response_status"`
-	ResponseBody   *string   `db:"response_body"`
-	DurationMs     *int      `db:"duration_ms"`
-	Success        bool      `db:"success"`
-	Attempt        int       `db:"attempt"`
-	CreatedAt      time.Time `db:"created_at"`
+	ID             uuid.UUID  `db:"id"`
+	WebhookID      uuid.UUID  `db:"webhook_id"`
+	SubscriptionID *uuid.UUID `db:"subscription_id"`
+	EventType      string     `db:"event_type"`
+	Payload        []byte     `db:"payload"`
+	ResponseStatus *int       `db:"response_status"`
+	ResponseBody   *string    `db:"response_body"`
+	DurationMs     *int       `db:"duration_ms"`
+	Success        bool       `db:"success"`
+	Attempt        int        `db:"attempt"`
+	CreatedAt      time.Time  `db:"created_at"`
 }
 
 func (r *webhookDeliveryRow) toDomain() domain.WebhookDelivery {
 	return domain.WebhookDelivery{
 		ID:             r.ID,
 		WebhookID:      r.WebhookID,
+		SubscriptionID: r.SubscriptionID,
 		EventType:      r.EventType,
 		Payload:        r.Payload,
 		ResponseStatus: r.ResponseStatus,
@@ -91,7 +93,7 @@ const webhookConfigSelectCols = `id, workspace_id, name, url, secret, events, is
 
 // webhookDeliverySelectCols is every column webhookDeliveryRow scans, listed
 // explicitly, for the same reason as webhookConfigSelectCols.
-const webhookDeliverySelectCols = `id, webhook_id, event_type, payload, response_status, response_body, duration_ms, success, attempt, created_at`
+const webhookDeliverySelectCols = `id, webhook_id, subscription_id, event_type, payload, response_status, response_body, duration_ms, success, attempt, created_at`
 
 // WebhookRepo implements repository.WebhookRepository with PostgreSQL.
 type WebhookRepo struct {
@@ -258,15 +260,21 @@ func (r *WebhookRepo) Deactivate(ctx context.Context, id uuid.UUID) error {
 func (r *WebhookRepo) CreateDelivery(ctx context.Context, delivery *domain.WebhookDelivery) error {
 	const q = `
 		INSERT INTO webhook_deliveries (
-			id, webhook_id, event_type, payload, response_status,
+			id, webhook_id, subscription_id, event_type, payload, response_status,
 			response_body, duration_ms, success, attempt, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9, $10
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11
 		)
 	`
+	// A subscription delivery has no webhook_configs row: store NULL, not the
+	// zero UUID (which would break the foreign key).
+	var webhookID *uuid.UUID
+	if delivery.WebhookID != uuid.Nil {
+		webhookID = &delivery.WebhookID
+	}
 	_, err := r.db.ExecContext(ctx, q,
-		delivery.ID, delivery.WebhookID, delivery.EventType, delivery.Payload, delivery.ResponseStatus,
+		delivery.ID, webhookID, delivery.SubscriptionID, delivery.EventType, delivery.Payload, delivery.ResponseStatus,
 		delivery.ResponseBody, delivery.DurationMs, delivery.Success, delivery.Attempt, delivery.CreatedAt,
 	)
 	return err

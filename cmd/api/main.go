@@ -279,7 +279,14 @@ func main() {
 	)
 
 	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
-	webhookService := service.NewWebhookService(webhookRepo)
+	// Extension subscriptions with delivery=webhook ride the same service; the
+	// signing secret is resolved from the workspace secret named by secret_ref.
+	webhookService := service.NewWebhookService(webhookRepo,
+		service.WithExtensionDelivery(
+			postgres.NewExtensionEventSubscriptionRepo(db),
+			postgres.NewIntegrationRepo(db),
+			postgres.NewSecretRepo(db),
+		))
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
 
@@ -563,6 +570,7 @@ func main() {
 		service.WithCommentWSPublisher(wsPublisher),
 		service.WithCommentStatusRepo(taskStatusRepo),
 		service.WithCommentProjectRepo(projectRepo),
+		service.WithCommentWebhookService(webhookService),
 		service.WithCommentContextCacheInvalidator(ctxCacheSvc),
 		service.WithCommentNotificationService(notificationService),
 		service.WithCommentTaskService(taskService),

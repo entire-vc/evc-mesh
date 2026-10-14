@@ -803,10 +803,18 @@ type commentService struct {
 	// re-delivers from this queue. nil in non-server builds — delivery then
 	// keeps P1's logged-return behavior rather than queueing.
 	followUpPending repository.ClosedFollowUpPendingRepository
+	// webhookSvc carries the public comment.created event to webhook receivers
+	// and extension subscriptions; nil disables it.
+	webhookSvc WebhookService
 }
 
 // CommentServiceOption configures optional dependencies for CommentService.
 type CommentServiceOption func(*commentService)
+
+// WithCommentWebhookService makes a created comment dispatch comment.created.
+func WithCommentWebhookService(ws WebhookService) CommentServiceOption {
+	return func(s *commentService) { s.webhookSvc = ws }
+}
 
 // WithCommentAgentNotify sets the agent notification service on the comment service.
 func WithCommentAgentNotify(ans AgentNotifyService) CommentServiceOption {
@@ -1080,6 +1088,16 @@ func (s *commentService) Create(ctx context.Context, comment *domain.Comment) er
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, comment.TaskID)
+	}
+
+	// Public event comment.created. Internal notes stay inside the workspace.
+	if s.webhookSvc != nil && wsID != uuid.Nil && !comment.IsInternal {
+		go s.webhookSvc.Dispatch(ctx, wsID, "comment.created", map[string]interface{}{
+			"comment_id": comment.ID,
+			"task_id":    comment.TaskID,
+			"project_id": task.ProjectID,
+			"author_id":  comment.AuthorID,
+		})
 	}
 
 	// Notify assigned agent about the new comment, but suppress for terminal tasks
