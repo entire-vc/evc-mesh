@@ -245,8 +245,8 @@ func hasRawArmMarker(body string, authorType domain.ActorType) bool {
 		return false
 	}
 	lower := strings.ToLower(body)
-	return strings.Contains(lower, strings.ToLower(rawArmMarkerSubstring)) ||
-		strings.Contains(lower, rawArmMarkerSubstringEN)
+	return strings.Contains(lower, rawArmMarkerSubstringEN) ||
+		strings.Contains(lower, strings.ToLower(rawArmMarkerSubstring))
 }
 
 // triageExitNegators are lower-cased substrings that, when present in a blocking comment,
@@ -581,16 +581,16 @@ func diagnoseNegatorMiss(body string) negatorMissReason {
 // wrapped in backticks: stripQuotedSpans drops code spans, so this system
 // comment cannot itself be read as a withdrawal by any later scan.
 var withdrawalMissHint = map[negatorMissReason]string{
-	negatorMissOutOfScope: "слова отзыва есть, но вне области, которую читает сервер — " +
-		"при комменте без блокирующего маркера ею является **последний абзац** " +
-		"(не считая завершающей подписи вида «— Имя»), и только он.",
-	negatorMissBlockerStillOpen: "слова отзыва попали в область, но там же стоит утверждение, " +
-		"что блокер всё ещё жив (`не закрыт` / `не забыт` / `still blocked`) — оно перебивает отзыв в той же области.",
-	negatorMissOnlyQuoted: "слова отзыва встречаются только внутри кода, цитаты или блока — " +
-		"процитированный отзыв не считается заявленным.",
-	negatorMissExplicitRefusal: "в этом же комменте где-то ещё сказано, что гейт/маркер НЕ отзывается " +
-		"(`not withdrawing` / `не отзываю` / `гейт остаётся` и т.п.) — это перебивает отзыв, " +
-		"даже если слова отзыва стоят в правильном месте.",
+	negatorMissOutOfScope: "withdrawal words are present but outside the area the server reads — " +
+		"for a comment without a blocking marker that area is the **last paragraph** " +
+		"(not counting a closing signature such as \"— Name\") and nothing else.",
+	negatorMissBlockerStillOpen: "withdrawal words are in the area, but the same area also states " +
+		"that the blocker is still alive (`still blocked` / `not closed` / `not forgotten`) — that overrides the withdrawal in the same area.",
+	negatorMissOnlyQuoted: "withdrawal words appear only inside code, a quote or a block — " +
+		"a quoted withdrawal does not count as declared.",
+	negatorMissExplicitRefusal: "the same comment says elsewhere that the gate/marker STAYS " +
+		"(`not withdrawing` / `stays as-is` / `gate stays` etc.) — that overrides the withdrawal, " +
+		"even if the withdrawal words are in the right place.",
 }
 
 // paragraphBreakRegex matches one or more consecutive blank (or whitespace-only)
@@ -2090,7 +2090,7 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 		SystemCode:   SysCodePtr(SysCodeMovedToTriage),
 		SystemParams: SysParamsJSON(map[string]any{"target": userSlug}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: задача переведена в triage из-за «❓ Blocking @%s» в комментарии выше (per CLAUDE-workflow.md §0b)",
+			"🤖 Auto: task moved to triage because of the \"❓ Blocking @%s\" in the comment above (per CLAUDE-workflow.md §0b)",
 			userSlug,
 		),
 		CreatedAt: now,
@@ -2124,16 +2124,16 @@ func (s *commentService) postSecretRotationSuppressedNotice(ctx context.Context,
 		SystemCode:   SysCodePtr(SysCodeSecretRotationSuppressed),
 		SystemParams: SysParamsJSON(map[string]any{"reason": reason}),
 		Body: fmt.Sprintf(
-			"🔒 Гейт на Павла НЕ взведён — %s.\n\n"+
-				"Павел решил 2026-09-07: «все таски про ротацию ключей надо отменять. Мы к "+
-				"этому вопросу должны вернуться системно после починки попадания в "+
-				"транскрипты, иначе это ветряная мельница». Спросить его снова — не "+
-				"осторожность, а повтор уже отвеченного вопроса.\n\n"+
-				"Что делать: вектор утечки чини сам сейчас, если он в твоём периметре — это не "+
-				"ждёт ничьего решения. Саму ротацию не делай и не спрашивай.\n\n"+
-				"Исключение — подтверждённая АКТИВНАЯ эксплуатация: заводи отдельную карточку "+
-				"с `severity:critical`, на ней этот гейт срабатывает нормально.\n\n"+
-				"Ошибся фильтр? Повесь метку `%s` на карточку и повтори маркер.",
+			"🔒 Gate on Pavel NOT armed — %s.\n\n"+
+				"Pavel decided on 2026-09-07: \"all tasks about key rotation must be cancelled. We will "+
+				"come back to this systematically after the transcript leak is fixed, otherwise it is "+
+				"tilting at windmills\". Asking him again is not caution, it repeats an "+
+				"already answered question.\n\n"+
+				"What to do: fix the leak vector yourself now if it is in your perimeter — it waits "+
+				"for nobody's decision. Do not rotate and do not ask about rotating.\n\n"+
+				"Exception — confirmed ACTIVE exploitation: open a separate card "+
+				"with `severity:critical`, and the gate works normally on it.\n\n"+
+				"Wrong filter? Put the `%s` label on the card and repeat the marker.",
 			reason, secretRotationNotSecretRotationLabel,
 		),
 		CreatedAt: now,
@@ -2202,10 +2202,10 @@ func (s *commentService) parkDisqualifiedGate(ctx context.Context, task *domain.
 		SystemCode:   SysCodePtr(SysCodeSoftGateParked),
 		SystemParams: SysParamsJSON(map[string]any{"target": userSlug, "hours": dueHours}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: «❓ Blocking @%s» — гейт мягкого класса (soft), поставлен не человеком, поэтому карточка "+
-				"НЕ ушла в triage, а припаркована в backlog с `due_date` через %d ч (per audit §2.3 C2 / "+
-				"mid_pipeline.triage_entry_strict). Ответ Pavel'я снимет гейт как обычно; жёсткие и человеком "+
-				"поставленные гейты по-прежнему уходят прямо в triage.",
+			"🤖 Auto: \"❓ Blocking @%s\" — soft-class gate, not raised by a human, so the card "+
+				"did NOT go to triage but was parked in backlog with a `due_date` in %d h (per audit §2.3 C2 / "+
+				"mid_pipeline.triage_entry_strict). Pavel's answer lifts the gate as usual; hard gates and "+
+				"gates raised by a human still go straight to triage.",
 			userSlug, dueHours,
 		),
 		CreatedAt: now,
@@ -2222,14 +2222,18 @@ func (s *commentService) parkDisqualifiedGate(ctx context.Context, task *domain.
 // endpointGateHintMarker identifies the system comment postEndpointGateHint writes,
 // so a thread gets the hint once, not after every human comment. It is also the
 // phrase the arm-time text (taskService.postAPIArmHintComment) carries.
-const endpointGateHintMarker = "гейт снимается кнопкой"
+const endpointGateHintMarker = "the gate is lifted with the button"
+
+// legacyEndpointGateHintMarker is the Russian phrase the same hints carried before
+// they were translated; comments already in the database still have it.
+const legacyEndpointGateHintMarker = "гейт снимается кнопкой"
 
 // endpointGateHintBody is the text a human sees when they comment on a gate that
 // no comment can lift. Prefixed "🤖 Auto:" so isServiceComment never reads it as
 // the gate author's words.
-const endpointGateHintBody = "🤖 Auto: human_gate поднят не маркером «❓ Blocking», а через API/кнопку — " +
-	"комментарий его не снимает: " + endpointGateHintMarker + " «Снять гейт» в карточке " +
-	"(для агента — clear_human_gate / DELETE /tasks/{id}/human-gate). Ваш комментарий сохранён и виден исполнителю."
+const endpointGateHintBody = "🤖 Auto: human_gate was raised through the API/button, not by a \"❓ Blocking\" marker — " +
+	"a comment does not lift it: " + endpointGateHintMarker + " \"Clear gate\" on the card " +
+	"(for an agent — clear_human_gate / DELETE /tasks/{id}/human-gate). Your comment is saved and visible to the assignee."
 
 // scanForBlockingMarker walks every page of taskID's thread (excluding excludeID)
 // and reports whether any comment carries a blocking marker, and whether the
@@ -2351,9 +2355,9 @@ func (s *commentService) releaseHumanGate(ctx context.Context, comment *domain.C
 
 	// Append a system comment to document the release in the task's audit trail.
 	now := timeNow()
-	releaseBody := "🔓 Auto: human_gate снят — Pavel прокомментировал после блокирующего запроса."
+	releaseBody := "🔓 Auto: human_gate cleared — Pavel commented after the blocking request."
 	if movedFromTriage {
-		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → todo — Pavel прокомментировал после блокирующего запроса."
+		releaseBody = "🔓 Auto: human_gate cleared, task moved from triage → todo — Pavel commented after the blocking request."
 	}
 	sysComment := &domain.Comment{
 		ID:           uuid.New(),
@@ -2904,9 +2908,9 @@ func (s *commentService) releaseHumanGateOnWithdrawal(ctx context.Context, comme
 	movedFromTriage := s.movedByGateRelease(ctx, task.ID, prevStatusID)
 
 	now := timeNow()
-	releaseBody := "🔓 Auto: human_gate снят — автор запроса отозвал его сам (blocker самоустранился)."
+	releaseBody := "🔓 Auto: human_gate cleared — the author of the request withdrew it (the blocker resolved itself)."
 	if movedFromTriage {
-		releaseBody = "🔓 Auto: human_gate снят, задача переведена из triage → todo — автор запроса отозвал его сам (blocker самоустранился)."
+		releaseBody = "🔓 Auto: human_gate cleared, task moved from triage → todo — the author of the request withdrew it (the blocker resolved itself)."
 	}
 	sysComment := &domain.Comment{
 		ID:           uuid.New(),
@@ -2993,11 +2997,11 @@ func (s *commentService) reportWithdrawalMiss(ctx context.Context, comment *doma
 		AuthorType:   domain.ActorTypeSystem,
 		SystemCode:   SysCodePtr(SysCodeGateStillRaised),
 		SystemParams: SysParamsJSON(map[string]any{"hint": hint}),
-		Body: "🔒 human_gate по-прежнему поднят — этот коммент его не снял: " + hint +
-			"\n\nЕсли отзыв был намеренным, повтори его **отдельным комментарием**, где слова отзыва " +
-			"(`не нужен` / `не требуется` / `снят` / …) стоят в последнем абзаце и рядом с ними нет " +
-			"утверждений, что блокер жив. Разбор и пробы оставляй предыдущим комментарием — они отзыв не портят. " +
-			"После — перечитай `human_gate`.",
+		Body: "🔒 human_gate is still raised — this comment did not lift it: " + hint +
+			"\n\nIf the withdrawal was intentional, repeat it in a **separate comment** where the withdrawal words " +
+			"(`not needed` / `not required` / `resolved` / …) are in the last paragraph with no " +
+			"statements next to them that the blocker is alive. Keep analysis and probes in the previous comment — they do not spoil the withdrawal. " +
+			"Afterwards re-read `human_gate`.",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -3025,11 +3029,11 @@ func (s *commentService) reportWithdrawalMarkerConflict(ctx context.Context, tas
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
 		SystemCode: SysCodePtr(SysCodeGateWithdrawalConflict),
-		Body: "🔒 human_gate по-прежнему поднят — этот коммент нёс И слова отзыва, И новый `❓ Blocking @user`, " +
-			"это противоречиво, поэтому гейт оставлен как есть (не снят). " +
-			"Если хотел снять старый вопрос и задать новый — раздели на два комментария: " +
-			"сперва отзыв старого отдельным комментарием (после него гейт снимется), " +
-			"затем новый `❓ **Blocking @user**` — он взведёт гейт заново на этот вопрос.",
+		Body: "🔒 human_gate is still raised — this comment carried BOTH withdrawal words AND a new `❓ Blocking @user`, " +
+			"which is contradictory, so the gate was left as is (not cleared). " +
+			"If you meant to withdraw the old question and ask a new one — split it into two comments: " +
+			"first the withdrawal of the old one as its own comment (the gate clears after it), " +
+			"then the new `❓ **Blocking @user**` — it arms the gate again for that question.",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -3143,7 +3147,7 @@ func (s *commentService) enforceTriageExit(ctx context.Context, comment *domain.
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
 		SystemCode: SysCodePtr(SysCodeTriageExit),
-		Body:       "🔄 Auto: задача выведена из triage → in_progress — человек прокомментировал после блокирующего запроса.",
+		Body:       "🔄 Auto: task moved out of triage → in_progress — a human commented after the blocking request.",
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}

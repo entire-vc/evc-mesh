@@ -1414,7 +1414,7 @@ func TestTaskService_RepeatOpenInstance_PostsIncrementingRepeatComment(t *testin
 		}
 	}
 	if !haveOne || !haveTwo {
-		t.Fatalf("expected one 'Повтор 1:' and one 'Повтор 2:' comment, got %v", repeats)
+		t.Fatalf("expected one 'Repeat 1:' and one 'Repeat 2:' comment, got %v", repeats)
 	}
 }
 
@@ -1449,7 +1449,7 @@ func TestTaskService_RepeatOpenInstance_ListByTaskErr_DefaultsToRepeatOne(t *tes
 	}
 	commentRepo.mu.RUnlock()
 	if !strings.HasPrefix(body, repeatCommentPrefix+"1:") {
-		t.Fatalf("expected a defaulted 'Повтор 1:' comment when the count lookup fails, got %q", body)
+		t.Fatalf("expected a defaulted 'Repeat 1:' comment when the count lookup fails, got %q", body)
 	}
 }
 

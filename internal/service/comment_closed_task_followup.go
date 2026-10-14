@@ -697,8 +697,8 @@ func (s *commentService) postPendingNotice(ctx context.Context, sourceTaskID, co
 		SystemCode:   SysCodePtr(SysCodeClosedTaskFollowupPending),
 		SystemParams: SysParamsJSON(map[string]any{"comment_id": commentID.String(), "max_attempts": ClosedFollowUpReconcileMaxAttempts}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: доставка замечания (комментарий `%s`) не подтверждена — сбой чтения при поиске карточки. "+
-				"Замечание не потеряно: повторю автоматически (до %d попыток), о доставке сообщу здесь.",
+			"🤖 Auto: delivery of the follow-up (comment `%s`) is not confirmed — a read failure while looking up the card. "+
+				"The follow-up is not lost: it will be retried automatically (up to %d attempts), and the outcome will be reported here.",
 			commentID, ClosedFollowUpReconcileMaxAttempts,
 		),
 		CreatedAt: now,
@@ -1032,7 +1032,7 @@ func (s *commentService) postEscalationNotice(ctx context.Context, row *domain.C
 		SystemCode:   SysCodePtr(SysCodeClosedTaskFollowupEscalated),
 		SystemParams: SysParamsJSON(map[string]any{"comment_id": row.CommentID.String(), "attempts": ClosedFollowUpReconcileMaxAttempts, "cause": followUpCauseExcerpt(cause.Error())}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: доставка замечания (комментарий `%s`) не удалась после %d автоматических повторов — нужен человек. Причина последней ошибки: %s",
+			"🤖 Auto: delivery of the follow-up (comment `%s`) failed after %d automatic retries — a human is needed. Cause of the last error: %s",
 			row.CommentID, ClosedFollowUpReconcileMaxAttempts, followUpCauseExcerpt(cause.Error()),
 		),
 		CreatedAt: now,
@@ -1115,7 +1115,7 @@ func (s *commentService) claimAndCreateRoot(
 		ID:           candidateID,
 		ProjectID:    task.ProjectID,
 		StatusID:     todoID,
-		Title:        fmt.Sprintf("Замечание к #%s — %s", shortTaskID(task.ID), followUpTitleExcerpt(comment.Body)),
+		Title:        fmt.Sprintf("Follow-up to #%s — %s", shortTaskID(task.ID), followUpTitleExcerpt(comment.Body)),
 		Description:  followUpBody(comment, task),
 		AssigneeID:   &assignee,
 		AssigneeType: domain.AssigneeTypeAgent,
@@ -1176,13 +1176,13 @@ func followUpBody(comment *domain.Comment, task *domain.Task) string {
 		author = *comment.AuthorName
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Замечание от **%s** к закрытой карточке #%s («%s»).\n\n", author, shortTaskID(task.ID), task.Title)
-	b.WriteString("Заведено автоматически: закрытая карточка никого не будит — фиддлер подаёт только `todo`, " +
-		"а @-меншен не хендофф. Комментарий в `done` остаётся непрочитанным, поэтому замечание вынесено " +
-		"сюда, в карточку, которую фид действительно подаёт.\n\n---\n\n")
+	fmt.Fprintf(&b, "Follow-up from **%s** on closed card #%s (\"%s\").\n\n", author, shortTaskID(task.ID), task.Title)
+	b.WriteString("Created automatically: a closed card wakes nobody — fiddler feeds only `todo`, " +
+		"and an @-mention is not a handoff. A comment on a `done` card stays unread, so the follow-up was moved " +
+		"here, to a card the feed does serve.\n\n---\n\n")
 	b.WriteString(comment.Body)
-	fmt.Fprintf(&b, "\n\n---\n\nИсточник: #%s, комментарий `%s`.\n", shortTaskID(task.ID), comment.ID)
-	b.WriteString("Замечание не разобрано и не принято — решение по нему твоё; если оно не требует работы, закрой эту карточку с причиной.\n")
+	fmt.Fprintf(&b, "\n\n---\n\nSource: #%s, comment `%s`.\n", shortTaskID(task.ID), comment.ID)
+	b.WriteString("The follow-up has not been triaged or accepted — the decision on it is yours; if it needs no work, close this card with a reason.\n")
 	return b.String()
 }
 
@@ -1230,22 +1230,22 @@ func (s *commentService) postFollowUpNotice(
 	comment *domain.Comment,
 	outcome followUpNoticeOutcome,
 ) {
-	verb := "заведена"
+	verb := "created"
 	switch outcome {
 	case followUpAlreadyOpen:
-		verb = "уже открыта"
+		verb = "already open"
 	case followUpReopened:
-		verb = "переоткрыта (снова `todo`, исполнитель прежний)"
+		verb = "reopened (`todo` again, same assignee)"
 	case followUpStormLimited:
-		verb = "не переоткрыта — исчерпан лимит 3 переоткрытий за 24 ч; повтор приложен комментарием к карточке"
+		verb = "not reopened — the limit of 3 reopenings per 24 h is used up; the repeat is attached as a comment on the card"
 	}
 	body := fmt.Sprintf(
-		"🤖 Auto: закрытая карточка никого не будит — комментарий в `done` фиддлер не подаёт, "+
-			"а @-меншен не хендофф. Замечание вынесено в карточку: %s #%s.",
+		"🤖 Auto: a closed card wakes nobody — fiddler does not feed a comment on a `done` card, "+
+			"and an @-mention is not a handoff. The follow-up was moved to a card: %s #%s.",
 		verb, shortTaskID(followUp.ID),
 	)
 	if outcome == followUpReopened || outcome == followUpStormLimited {
-		body += fmt.Sprintf(" Источник: #%s, комментарий `%s`.", shortTaskID(task.ID), comment.ID)
+		body += fmt.Sprintf(" Source: #%s, comment `%s`.", shortTaskID(task.ID), comment.ID)
 	}
 	now := timeNow()
 	sys := &domain.Comment{
@@ -1515,8 +1515,8 @@ func (s *commentService) postDeferredRepeatNotice(ctx context.Context, task *dom
 		SystemCode:   SysCodePtr(SysCodeClosedTaskRepeatDeferred),
 		SystemParams: SysParamsJSON(map[string]any{"comment_id": comment.ID.String()}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: повтор замечания (комментарий `%s`) пока не доставлен в карточку — root ещё не виден (внутренняя гонка). "+
-				"Замечание не потеряно; следующий повтор попробует снова.",
+			"🤖 Auto: the repeat of the follow-up (comment `%s`) is not yet delivered to the card — the root is not visible yet (internal race). "+
+				"The follow-up is not lost; the next retry will try again.",
 			comment.ID,
 		),
 		CreatedAt: now,
@@ -1546,9 +1546,9 @@ func (s *commentService) postRepeatOnRoot(
 	comment *domain.Comment,
 	reopened bool,
 ) {
-	verb := "карточка переоткрыта (повтор того же замечания)"
+	verb := "card reopened (repeat of the same follow-up)"
 	if !reopened {
-		verb = "карточка НЕ переоткрыта — исчерпан лимит переоткрытий (3 за 24 ч), повтор приложён"
+		verb = "card NOT reopened — the reopening limit (3 per 24 h) is used up, the repeat is attached"
 	}
 	now := timeNow()
 	sys := &domain.Comment{
@@ -1559,7 +1559,7 @@ func (s *commentService) postRepeatOnRoot(
 		SystemCode:   SysCodePtr(SysCodeRepeatComment),
 		SystemParams: SysParamsJSON(map[string]any{"root": shortTaskID(root.ID), "reopened": reopened, "source": shortTaskID(task.ID), "comment_id": comment.ID.String()}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: повтор того же замечания на закрытой карточке #%s — %s.\n\n---\n\n%s\n\n---\n\nИсточник: #%s, комментарий `%s`.",
+			"🤖 Auto: repeat of the same follow-up on closed card #%s — %s.\n\n---\n\n%s\n\n---\n\nSource: #%s, comment `%s`.",
 			shortTaskID(task.ID), verb, comment.Body, shortTaskID(task.ID), comment.ID,
 		),
 		CreatedAt: now,

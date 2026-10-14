@@ -26,7 +26,11 @@ const DefaultHumanGateSoftTimeout = 24 * time.Hour
 // deliberately NOT containing any of pavel-digest.py's _RESOLVED phrases or its
 // WITHDRAWAL_SYSTEM_MARK — this release answers nothing and withdraws nothing, so a
 // digest reader must keep treating the underlying ask as open. See contract §5, AC1.
-const releaseSoftTimeoutSystemMark = "снят по истечении мягкого таймаута"
+const releaseSoftTimeoutSystemMark = "released after the soft timeout"
+
+// legacyReleaseSoftTimeoutMark is the Russian phrase these comments carried before
+// they were translated; comments already in the database still have it.
+const legacyReleaseSoftTimeoutMark = "снят по истечении мягкого таймаута"
 
 // HumanGateSoftTimeoutService finds soft-classified human_gate arms past their timeout
 // window and releases them. This is a release IN NAME ONLY as far as the question is
@@ -99,8 +103,8 @@ func (s *humanGateSoftTimeoutService) postReleaseComment(ctx context.Context, c 
 		SystemCode:   SysCodePtr(SysCodeReleaseSoftTimeout),
 		SystemParams: SysParamsJSON(map[string]any{"action": releaseSoftTimeoutSystemMark, "armed_at": c.ArmedAt.Format(time.RFC3339)}),
 		Body: fmt.Sprintf(
-			"⏳ Auto: human_gate %s (взведён %s, класс: мягкий) — фиде разморожен, "+
-				"но вопрос НЕ отвечен: он остаётся открытым и ждёт Pavel'я в дайджесте.",
+			"⏳ Auto: human_gate %s (armed %s, class: soft) — the feed is unfrozen, "+
+				"but the question is NOT answered: it stays open and waits for Pavel in the digest.",
 			releaseSoftTimeoutSystemMark, c.ArmedAt.Format(time.RFC3339),
 		),
 		CreatedAt: now,
