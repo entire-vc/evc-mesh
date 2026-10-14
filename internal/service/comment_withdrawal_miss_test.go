@@ -289,7 +289,7 @@ func TestReleaseHumanGateOnWithdrawal_NegatorInFirstParagraph_ExplainsWhy(t *tes
 
 	notices := env.withdrawalMissNotices()
 	require.Len(t, notices, 1, "the author must be told the gate is still up")
-	assert.Contains(t, notices[0].Body, "последний абзац",
+	assert.Contains(t, notices[0].Body, "**last paragraph**",
 		"and told WHICH region the server actually read")
 	assert.Equal(t, domain.ActorTypeSystem, notices[0].AuthorType)
 }
@@ -339,8 +339,8 @@ func TestReleaseHumanGateOnWithdrawal_BlockerStillOpenPhrase_ExplainsWhy(t *test
 	assert.Empty(t, env.taskMover.humanGateCalls())
 	notices := env.withdrawalMissNotices()
 	require.Len(t, notices, 1)
-	assert.Contains(t, notices[0].Body, "блокер всё ещё жив")
-	assert.NotContains(t, notices[0].Body, "последний абзац",
+	assert.Contains(t, notices[0].Body, "blocker is still alive")
+	assert.NotContains(t, notices[0].Body, "**last paragraph**",
 		"this body's negator DID reach the scope — do not blame paragraph order")
 }
 
@@ -367,7 +367,7 @@ func TestReleaseHumanGateOnWithdrawal_ExplicitRefusalElsewhere_DoesNotRelease(t 
 		"the exact body that released #2aeb7bcf's gate on prod must not release this one")
 	notices := env.withdrawalMissNotices()
 	require.Len(t, notices, 1, "the author must be told the gate is still up")
-	assert.Contains(t, notices[0].Body, "НЕ отзывается")
+	assert.Contains(t, notices[0].Body, "STAYS")
 }
 
 // TestReleaseHumanGateOnWithdrawal_ExplicitRefusalEarlierParagraph_DoesNotRelease
@@ -392,7 +392,7 @@ func TestReleaseHumanGateOnWithdrawal_ExplicitRefusalEarlierParagraph_DoesNotRel
 	assert.Empty(t, env.taskMover.humanGateCalls())
 	notices := env.withdrawalMissNotices()
 	require.Len(t, notices, 1)
-	assert.Contains(t, notices[0].Body, "НЕ отзывается")
+	assert.Contains(t, notices[0].Body, "STAYS")
 }
 
 // TestReleaseHumanGateOnWithdrawal_ExplicitRefusalAlone_NoNegator_IsSilent is
@@ -566,11 +566,11 @@ func TestReportWithdrawalMiss_OrdinaryCommentStaysSilent(t *testing.T) {
 // can neither release a gate nor arm one.
 func TestReportWithdrawalMiss_NoticeCannotItselfWithdraw(t *testing.T) {
 	for reason, hint := range withdrawalMissHint {
-		body := "🔒 human_gate по-прежнему поднят — этот коммент его не снял: " + hint +
-			"\n\nЕсли отзыв был намеренным, повтори его **отдельным комментарием**, где слова отзыва " +
-			"(`не нужен` / `не требуется` / `снят` / …) стоят в последнем абзаце и рядом с ними нет " +
-			"утверждений, что блокер жив. Разбор и пробы оставляй предыдущим комментарием — они отзыв не портят. " +
-			"После — перечитай `human_gate`."
+		body := "🔒 human_gate is still raised — this comment did not lift it: " + hint +
+			"\n\nIf the withdrawal was intentional, repeat it in a **separate comment** where the withdrawal words " +
+			"(`not needed` / `not required` / `resolved` / …) are in the last paragraph with no " +
+			"statements next to them that the blocker is alive. Keep analysis and probes in the previous comment — they do not spoil the withdrawal. " +
+			"Afterwards re-read `human_gate`."
 		assert.False(t, hasNegatorInScope(body), "notice for %s must not read as a withdrawal", reason)
 		assert.False(t, hasBlockingMarker(body), "notice for %s must not arm a gate", reason)
 	}
@@ -663,7 +663,7 @@ func TestReportWithdrawalMarkerConflict_NoticeCreateFails(t *testing.T) {
 		if failNotice {
 			env.commentRepo.createFailFor = func(c *domain.Comment) bool {
 				return c.AuthorType == domain.ActorTypeSystem &&
-					strings.Contains(c.Body, "И слова отзыва, И новый")
+					strings.Contains(c.Body, "BOTH withdrawal words AND a new")
 			}
 		}
 		taskID := env.seedGatedTask(env.inProgressID)

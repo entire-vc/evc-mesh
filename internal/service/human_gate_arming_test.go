@@ -254,10 +254,10 @@ func TestArmHumanGate_MarkerWithNoDefault_PostsWarningComment(t *testing.T) {
 	found := firstCommentOn(commentRepo, taskID)
 	require.NotNil(t, found, "the WARNING must reach the task as a comment, not only the server log")
 	assert.Equal(t, domain.ActorTypeSystem, found.AuthorType)
-	assert.Contains(t, found.Body, "системный дефолт")
+	assert.Contains(t, found.Body, "system default")
 	assert.Contains(t, found.Body, domain.DefaultMarkerRecommendedDefault)
 	assert.Contains(t, found.Body, got.GateDeadline.Format(time.RFC3339))
-	assert.Contains(t, found.Body, "применится автоматически",
+	assert.Contains(t, found.Body, "the default is applied automatically",
 		"soft class must say the default applies automatically at the deadline")
 }
 
@@ -284,8 +284,8 @@ func TestArmHumanGate_MarkerWithNoDefault_HardClassNotesEscalationOnly(t *testin
 
 	found := firstCommentOn(commentRepo, taskID)
 	require.NotNil(t, found)
-	assert.Contains(t, found.Body, "эскалации")
-	assert.NotContains(t, found.Body, "применится автоматически",
+	assert.Contains(t, found.Body, "escalation")
+	assert.NotContains(t, found.Body, "the default is applied automatically",
 		"a hard gate's deadline must never be described as self-applying — nothing releases it on a clock")
 }
 

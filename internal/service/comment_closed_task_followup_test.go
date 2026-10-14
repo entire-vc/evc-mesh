@@ -281,7 +281,7 @@ func TestClosedFollowUp_ForeignAgentCommentOpensFollowUpCard(t *testing.T) {
 	assert.Contains(t, fu.Labels, followUpLabel)
 	assert.Equal(t, domain.PriorityHigh, fu.Priority, "priority is inherited from the work the remark is about")
 
-	assert.True(t, strings.HasPrefix(fu.Title, "Замечание к #"+shortTaskID(env.sourceID)+" — "),
+	assert.True(t, strings.HasPrefix(fu.Title, "Follow-up to #"+shortTaskID(env.sourceID)+" — "),
 		"title must name the source card, got %q", fu.Title)
 	assert.Contains(t, fu.Description, "Шапка не sticky", "the remark itself must travel with the card")
 	assert.Contains(t, fu.Description, shortTaskID(env.sourceID), "the card must point back at its source")
@@ -318,7 +318,7 @@ func TestClosedFollowUp_PostsNoticeNamingTheNewCard(t *testing.T) {
 	notices := env.systemNotices()
 	require.Len(t, notices, 1, "exactly one notice back to the commenter")
 	assert.Contains(t, notices[0].Body, shortTaskID(created[0].ID), "the notice must name the card it opened")
-	assert.Contains(t, notices[0].Body, "закрытая карточка никого не будит")
+	assert.Contains(t, notices[0].Body, "a closed card wakes nobody")
 	assert.Equal(t, env.sourceID, notices[0].TaskID, "the notice belongs on the card the remark was written on")
 }
 
@@ -445,7 +445,7 @@ func TestClosedFollowUp_SecondSameFindingReusesTheOpenFollowUp(t *testing.T) {
 	require.Len(t, notices, 2, "but every commenter still learns where their remark went")
 	var reused int
 	for _, n := range notices {
-		if strings.Contains(n.Body, "уже открыта") {
+		if strings.Contains(n.Body, "already open") {
 			reused++
 		}
 	}
@@ -503,11 +503,11 @@ func TestClosedFollowUp_ClosedRepeatReopensTheSameRoot(t *testing.T) {
 	onRoot := env.systemCommentsOn(root.ID)
 	require.Len(t, onRoot, 1, "exactly one system comment on the reopened root")
 	assert.Contains(t, onRoot[0].Body, "Шапка не sticky.", "the repeat body must travel onto the root")
-	assert.Contains(t, onRoot[0].Body, "переоткрыта")
+	assert.Contains(t, onRoot[0].Body, "reopened")
 
 	notices := env.systemNotices()
 	require.Len(t, notices, 2, "created + reopened notices to the two commenters")
-	env.oneSystemCommentContaining(t, env.sourceID, "переоткрыта")
+	env.oneSystemCommentContaining(t, env.sourceID, "reopened")
 }
 
 // The assignee survives the reopen untouched: the card comes back to the same
@@ -559,7 +559,7 @@ func TestClosedFollowUp_LegacyKeyNormalizesCaseAndWhitespaceOnly(t *testing.T) {
 	require.Len(t, created, 1, "case and whitespace are not findings of their own")
 	notices := env.systemNotices()
 	require.Len(t, notices, 2)
-	env.oneSystemCommentContaining(t, env.sourceID, "уже открыта")
+	env.oneSystemCommentContaining(t, env.sourceID, "already open")
 }
 
 // --- The 24h storm limit -----------------------------------------------------
@@ -596,10 +596,10 @@ func TestClosedFollowUp_FourthReopenIn24hIsStormLimited(t *testing.T) {
 	assert.Equal(t, env.doneID, env.taskRepo.items[root.ID].StatusID,
 		"the 4th reopen inside 24h must not move the root — that is the storm")
 
-	stormComment := env.oneSystemCommentContaining(t, root.ID, "НЕ переоткрыта")
+	stormComment := env.oneSystemCommentContaining(t, root.ID, "NOT reopened")
 	assert.Contains(t, stormComment.Body, "Шапка не sticky.",
 		"the repeat itself must still land on the root as a comment")
-	env.oneSystemCommentContaining(t, env.sourceID, "не переоткрыта")
+	env.oneSystemCommentContaining(t, env.sourceID, "not reopened")
 }
 
 // The limit is a window, not a lifetime lock: after 24h without a reopen the
@@ -736,7 +736,7 @@ func TestClosedFollowUp_LoserWaitsForTheWinnersCard(t *testing.T) {
 	env.comment(t, "Шапка не sticky.")
 
 	assert.Empty(t, env.taskSvc.createdTasks(), "the loser must not open a second card")
-	env.oneSystemCommentContaining(t, env.sourceID, "уже открыта")
+	env.oneSystemCommentContaining(t, env.sourceID, "already open")
 }
 
 // The winner released its claim (no todo column / failed create) exactly
@@ -767,7 +767,7 @@ func TestClosedFollowUp_ClaimReleasedWhileWaitingIsTakenOver(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, row)
 	assert.Equal(t, created[0].ID, row.RootTaskID, "the takeover's card and claim must agree")
-	env.oneSystemCommentContaining(t, env.sourceID, "заведена")
+	env.oneSystemCommentContaining(t, env.sourceID, "created")
 }
 
 // A wedged winner — claim present, card never appearing past the whole wait
@@ -785,7 +785,7 @@ func TestClosedFollowUp_WedgedWinnerDefersTheRepeatVisibly(t *testing.T) {
 	env.comment(t, "Шапка не sticky.")
 
 	assert.Empty(t, env.taskSvc.createdTasks(), "a wedged claim must not be answered with a second card")
-	env.oneSystemCommentContaining(t, env.sourceID, "пока не доставлен")
+	env.oneSystemCommentContaining(t, env.sourceID, "not yet delivered")
 	assert.Len(t, env.rootsRepo.items, 1, "the wedged claim stays — the next repeat retries against it")
 }
 
@@ -1111,7 +1111,7 @@ func TestClosedFollowUp_WhitespaceIsPartOfTheFindingIdentity(t *testing.T) {
 
 // The service-level shape of the same defect: two remarks whose explicit
 // identities JOIN to the same string are two findings, and the second must
-// get its own root — not be swallowed by "уже открыта" against the first
+// get its own root — not be swallowed by "already open" against the first
 // one's root (codex-review P1, MR !1078, round 7).
 func TestClosedFollowUp_CollidingExplicitIdentitiesAreDistinctFindings(t *testing.T) {
 	env := setupFollowUpEnv(t)

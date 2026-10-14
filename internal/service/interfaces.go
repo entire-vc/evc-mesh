@@ -226,7 +226,7 @@ type TaskService interface {
 	// RepeatOpenInstance is runOneSchedule's alternative to creating a sibling
 	// instance: when the previous instance of a schedule is still open (non-
 	// terminal) at the next tick, no new task is created at all — this posts a
-	// "🔁 Повтор N" system comment on the SAME open task (N = 1 + how many such
+	// "🔁 Repeat N" system comment on the SAME open task (N = 1 + how many such
 	// comments already exist on it) and bumps its updated_at, so one persistent
 	// unresolved check stays one card instead of spawning a new #id every period
 	// (the pattern that produced #52f407e0-style piles of near-identical cards

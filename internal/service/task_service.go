@@ -3626,9 +3626,13 @@ func (s *taskService) FindOpenRecurringInstance(ctx context.Context, scheduleID 
 // lets N survive across ticks with no schema change — the count only ever grows
 // while the instance stays open, and resets naturally once it closes and a
 // fresh instance starts its own history.
-const repeatCommentPrefix = "🔁 Повтор "
+const repeatCommentPrefix = "🔁 Repeat "
 
-// RepeatOpenInstance posts a "🔁 Повтор N" comment on taskID and bumps its
+// legacyRepeatCommentPrefix is the Russian prefix the same comments carried before
+// they were translated; instances opened earlier still hold comments with it.
+const legacyRepeatCommentPrefix = "🔁 Повтор "
+
+// RepeatOpenInstance posts a "🔁 Repeat N" comment on taskID and bumps its
 // updated_at, in place of creating a new recurring-schedule instance. See the
 // interface doc comment for why this exists.
 func (s *taskService) RepeatOpenInstance(ctx context.Context, taskID uuid.UUID) error {
@@ -3639,7 +3643,7 @@ func (s *taskService) RepeatOpenInstance(ctx context.Context, taskID uuid.UUID) 
 	n := 1
 	page, err := s.commentRepo.ListByTask(ctx, taskID, repository.CommentFilter{IncludeInternal: true}, pagination.Params{PageSize: 200})
 	if err != nil {
-		log.Printf("[recurring] WARNING: RepeatOpenInstance: ListByTask for task %s failed: %v — defaulting to Повтор 1", taskID, err)
+		log.Printf("[recurring] WARNING: RepeatOpenInstance: ListByTask for task %s failed: %v — defaulting to Repeat 1", taskID, err)
 	} else {
 		for _, c := range page.Items {
 			if isRepeatInstanceComment(&c) {
@@ -3656,7 +3660,7 @@ func (s *taskService) RepeatOpenInstance(ctx context.Context, taskID uuid.UUID) 
 		AuthorType:   domain.ActorTypeSystem,
 		SystemCode:   SysCodePtr(SysCodeRecurringRepeat),
 		SystemParams: SysParamsJSON(map[string]any{"n": n}),
-		Body: fmt.Sprintf("%s%d: расписание сработало снова, но этот инстанс ещё не закрыт — новая карточка не создана.",
+		Body: fmt.Sprintf("%s%d: the schedule fired again but this instance is not closed yet — no new card was created.",
 			repeatCommentPrefix, n),
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -3826,8 +3830,8 @@ func (s *taskService) postAPIArmHintComment(ctx context.Context, taskID uuid.UUI
 		AuthorID:   systemActorID,
 		AuthorType: domain.ActorTypeSystem,
 		SystemCode: SysCodePtr(SysCodeAPIArmHint),
-		Body: "🤖 Auto: human_gate взведён через API/кнопку — " + endpointGateHintMarker +
-			" «Снять гейт» в карточке (агент — clear_human_gate), ответ комментарием его не снимает.",
+		Body: "🤖 Auto: human_gate was raised through the API/button — " + endpointGateHintMarker +
+			" \"Clear gate\" on the card (agent — clear_human_gate), a comment reply does not lift it.",
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -3864,17 +3868,17 @@ func (s *taskService) postMarkerDefaultAppliedComment(ctx context.Context, in do
 	}
 	now := timeNow()
 	body := fmt.Sprintf(
-		"⚠️ Гейт взведён маркером без явного `recommended_default` — применён системный дефолт:\n"+
-			"«%s», дедлайн %s.\nПо истечении дедлайна дефолт применится автоматически.\n"+
-			"Явный дефолт в следующий раз убережёт от этого: `По умолчанию: <текст>` строкой в маркере.",
+		"⚠️ Gate armed by a marker without an explicit `recommended_default` — the system default was applied:\n"+
+			"\"%s\", deadline %s.\nWhen the deadline passes the default is applied automatically.\n"+
+			"An explicit default next time avoids this: a `Default: <text>` line in the marker.",
 		domain.DefaultMarkerRecommendedDefault, deadlineText,
 	)
 	if task.HumanGateClass == domain.HumanGateClassHard {
 		// Task #a36fa51d: a hard gate never auto-applies, so quoting the default
 		// reads as an automatic decision and a human believed the question closed.
 		body = fmt.Sprintf(
-			"⏸ Гейт взведён, класс hard: авто-применения не будет, вопрос ждёт ответа человека (дедлайн %s нужен только для эскалации).\n"+
-				"Рекомендованный вариант отвечающему не навязан — он отвечает одним словом или своим решением.",
+			"⏸ Gate armed, hard class: nothing is applied automatically, the question waits for a human answer (the %s deadline is only for escalation).\n"+
+				"The recommended option is not imposed on the answerer — they reply with one word or their own decision.",
 			deadlineText,
 		)
 	}

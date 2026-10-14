@@ -45,7 +45,7 @@ func TestEnforceBlockingTriage_SecretLeakCard_DoesNotArm(t *testing.T) {
 
 	sys := env.systemComments()
 	require.Len(t, sys, 1, "an explanation must replace the arm, not vanish silently")
-	assert.Contains(t, sys[0].Body, "НЕ взведён")
+	assert.Contains(t, sys[0].Body, "NOT armed")
 	assert.Contains(t, sys[0].Body, "e8388213")
 	assert.Contains(t, sys[0].Body, secretRotationNotSecretRotationLabel,
 		"the one-label undo must be discoverable in the refusal itself")

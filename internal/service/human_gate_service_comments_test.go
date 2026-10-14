@@ -189,9 +189,9 @@ func TestPostMarkerDefaultAppliedComment_HardClass_NoAutoDecisionWording(t *test
 	svc.(*taskService).postMarkerDefaultAppliedComment(context.Background(), domain.ArmHumanGateInput{TaskID: taskID})
 	c := firstCommentOn(commentRepo, taskID)
 	require.NotNil(t, c)
-	assert.Contains(t, c.Body, "авто-применения не будет")
+	assert.Contains(t, c.Body, "nothing is applied automatically")
 	assert.NotContains(t, c.Body, domain.DefaultMarkerRecommendedDefault)
-	assert.NotContains(t, c.Body, "применится автоматически")
+	assert.NotContains(t, c.Body, "the default is applied automatically")
 }
 
 func TestPostMarkerDefaultAppliedComment_SoftClass_KeepsDefault(t *testing.T) {

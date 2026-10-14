@@ -81,8 +81,8 @@ func TestClosedFollowUp_ReadErrorGoesPendingNotFailOpen(t *testing.T) {
 	assert.Equal(t, closedFindingKey(c), row.FindingKey, "the pending row keys the SAME finding identity the delivery used")
 
 	// …and said so on the source card, where the commenter is looking.
-	env.oneSystemCommentContaining(t, env.sourceID, "не подтверждена")
-	env.oneSystemCommentContaining(t, env.sourceID, "повторю автоматически")
+	env.oneSystemCommentContaining(t, env.sourceID, "is not confirmed")
+	env.oneSystemCommentContaining(t, env.sourceID, "retried automatically")
 }
 
 // TestClosedFollowUp_TransientReadErrorRetriesInlineAndDelivers: the store
@@ -102,7 +102,7 @@ func TestClosedFollowUp_TransientReadErrorRetriesInlineAndDelivers(t *testing.T)
 
 	_, parked := env.pendingRepo.items[c.ID]
 	assert.False(t, parked, "a delivery that landed on retry must not occupy the pending queue")
-	env.oneSystemCommentContaining(t, env.sourceID, "заведена")
+	env.oneSystemCommentContaining(t, env.sourceID, "created")
 
 	// And the ladder actually retried rather than succeeding by accident:
 	// the first Claim call failed by script, the root exists, so the second
@@ -164,7 +164,7 @@ func TestClosedFollowUp_ReconcileDeliversAfterRecovery(t *testing.T) {
 	require.Len(t, created, 1, "reconcile delivers exactly one root for one parked finding")
 	assert.Equal(t, domain.StatusCategoryTodo, env.statusRepo.items[created[0].StatusID].Category)
 	assert.Empty(t, env.pendingRepo.items, "a delivered row leaves the queue")
-	env.oneSystemCommentContaining(t, env.sourceID, "заведена")
+	env.oneSystemCommentContaining(t, env.sourceID, "created")
 }
 
 // TestClosedFollowUp_ReconcileRedeliveryIsIdempotent: the crash window
@@ -208,7 +208,7 @@ func TestClosedFollowUp_ReconcileRedeliveryIsIdempotent(t *testing.T) {
 }
 
 // TestClosedFollowUp_ReconcileEscalatesAtTheBudgetAndStops: ten failed
-// passes end in exactly one «нужен человек» notice with the row KEPT (a human
+// passes end in exactly one «a human is needed» notice with the row KEPT (a human
 // finding it sees the last_error), and an eleventh pass lists nothing — the
 // budget is a stop, not a forever.
 func TestClosedFollowUp_ReconcileEscalatesAtTheBudgetAndStops(t *testing.T) {
@@ -229,7 +229,7 @@ func TestClosedFollowUp_ReconcileEscalatesAtTheBudgetAndStops(t *testing.T) {
 	assert.Equal(t, ClosedFollowUpReconcileMaxAttempts, lastEscalated,
 		"the escalation lands exactly on the budget's last pass, not before")
 
-	env.oneSystemCommentContaining(t, env.sourceID, "нужен человек")
+	env.oneSystemCommentContaining(t, env.sourceID, "a human is needed")
 
 	row, ok := env.pendingRepo.items[c.ID]
 	require.True(t, ok, "an escalated row stays for the human — deleting it would be the silent loss again")
@@ -508,7 +508,7 @@ func TestClosedFollowUp_EscalationNoticeFailureIsLoggedNotSwallowed(t *testing.T
 	env := setupFollowUpEnv(t, func(e *followUpEnv) {
 		e.rootsRepo.errToReturn = fmt.Errorf("identity store unreachable")
 		e.commentRepo.createFailFor = func(cm *domain.Comment) bool {
-			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "нужен человек")
+			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "a human is needed")
 		}
 	})
 	c := env.comment(t, "находка: даже эскалация не пишется")
@@ -529,7 +529,7 @@ func TestClosedFollowUp_EscalationNoticeFailureIsLoggedNotSwallowed(t *testing.T
 	assert.Equal(t, ClosedFollowUpReconcileMaxAttempts, row.Attempts)
 
 	for _, n := range env.systemNotices() {
-		assert.NotContains(t, n.Body, "нужен человек",
+		assert.NotContains(t, n.Body, "a human is needed",
 			"the notice write failed by script — the row and the counter are the trail it leaves")
 	}
 }
@@ -676,7 +676,7 @@ func TestClosedFollowUp_RootCardReadErrorIsRetryableNotWedged(t *testing.T) {
 	require.NotNil(t, row, "an unreadable root card must PARK the repeat, not defer it terminally")
 	assert.Contains(t, row.LastError, "task store unreadable")
 	assert.Greater(t, closedFollowUpErrorCount(t, "inline", "root_card_read"), before)
-	env.oneSystemCommentContaining(t, env.sourceID, "не подтверждена")
+	env.oneSystemCommentContaining(t, env.sourceID, "is not confirmed")
 }
 
 // The same misclassification on the reconcile path would count the failed
@@ -734,7 +734,7 @@ func TestClosedFollowUp_ReconcileUnresolvableRootStatusDeliversAsComment(t *test
 
 	assert.Nil(t, env.parkedRow(t, c.ID), "a terminal outcome leaves the queue")
 	assert.Len(t, env.taskSvc.createdTasks(), 1)
-	env.oneSystemCommentContaining(t, root.ID, "повтор того же замечания")
+	env.oneSystemCommentContaining(t, root.ID, "repeat of the same follow-up")
 }
 
 // The SECOND half of the mixed-read story: the wait's classification is not
@@ -804,12 +804,12 @@ func TestClosedFollowUp_CancelledRequestStillParksTheFinding(t *testing.T) {
 	require.NotNil(t, row, "a finding whose requester is gone must still PARK — the comment outlives the request")
 	assert.Equal(t, env.sourceID, row.SourceTaskID)
 	assert.NotEmpty(t, row.LastError)
-	env.oneSystemCommentContaining(t, env.sourceID, "не подтверждена")
+	env.oneSystemCommentContaining(t, env.sourceID, "is not confirmed")
 }
 
 // The escalation is a TRANSITION, not a level: two passes that raced on one
 // row (both listed it at 9, MarkAttempt handed one the 10 and the other the
-// 11) must produce exactly one «нужен человек», from the pass that drew the
+// 11) must produce exactly one «a human is needed», from the pass that drew the
 // budget itself. Simulated by handing markPendingAttempt a row already AT the
 // budget — its MarkAttempt draws max+1 — which is the losing side of that
 // race in one call (codex-review P2, round 2).
@@ -830,8 +830,8 @@ func TestFollowUpMarkPendingAttempt_PastBudgetDoesNotEscalateAgain(t *testing.T)
 	assert.Equal(t, testutil.ToFloat64(metrics.ClosedFollowUpPendingTotal.WithLabelValues("escalated")), escalatedBefore,
 		"one escalation outcome per budget, not one per raced pass")
 	for _, n := range env.systemNotices() {
-		assert.NotContains(t, n.Body, "нужен человек",
-			"the losing side of the race posts nothing — a second «нужен человек» is the noise this guard removes")
+		assert.NotContains(t, n.Body, "a human is needed",
+			"the losing side of the race posts nothing — a second «a human is needed» is the noise this guard removes")
 	}
 	assert.Equal(t, ClosedFollowUpReconcileMaxAttempts+1, row.Attempts,
 		"the counter still records the raced pass's attempt; only the notice is refused")
@@ -850,7 +850,7 @@ func TestClosedFollowUp_EscalationNoticeRetriedUntilItLands(t *testing.T) {
 		// The notice write fails: the budget's edge is reached with the
 		// human still untold — the exact window the fix closes.
 		e.commentRepo.createFailFor = func(cm *domain.Comment) bool {
-			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "нужен человек")
+			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "a human is needed")
 		}
 	})
 	c := env.comment(t, "находка: эскалация не пишется, но не теряется")
@@ -890,11 +890,11 @@ func TestClosedFollowUp_EscalationNoticeRetriedUntilItLands(t *testing.T) {
 
 	var notices int
 	for _, n := range env.systemNotices() {
-		if strings.Contains(n.Body, "нужен человек") {
+		if strings.Contains(n.Body, "a human is needed") {
 			notices++
 		}
 	}
-	assert.Equal(t, 1, notices, "exactly one «нужен человек» for one escalation")
+	assert.Equal(t, 1, notices, "exactly one «a human is needed» for one escalation")
 
 	delivered, retried, escalated, err = env.svc.ReconcileClosedFollowUpPending(context.Background())
 	require.NoError(t, err)
@@ -917,7 +917,7 @@ func TestClosedFollowUp_PendingNoticeRetriedUntilItLands(t *testing.T) {
 		// The park notice write fails AT ENQUEUE TIME: the row is queued but
 		// its commenter is never told — the exact window the fix closes.
 		e.commentRepo.createFailFor = func(cm *domain.Comment) bool {
-			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "не подтверждена")
+			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "is not confirmed")
 		}
 	})
 	c := env.comment(t, "находка: уведомление о парковке не пишется")
@@ -925,7 +925,7 @@ func TestClosedFollowUp_PendingNoticeRetriedUntilItLands(t *testing.T) {
 	parkNotices := func() int {
 		var n int
 		for _, s := range env.systemNotices() {
-			if strings.Contains(s.Body, "не подтверждена") {
+			if strings.Contains(s.Body, "is not confirmed") {
 				n++
 			}
 		}
@@ -986,7 +986,7 @@ func TestClosedFollowUp_ParkNoticeNotStrandedByEscalation(t *testing.T) {
 		// escalation attempt on top of it.
 		e.commentRepo.createFailFor = func(cm *domain.Comment) bool {
 			return cm.AuthorType == domain.ActorTypeSystem &&
-				(strings.Contains(cm.Body, "не подтверждена") || strings.Contains(cm.Body, "нужен человек"))
+				(strings.Contains(cm.Body, "is not confirmed") || strings.Contains(cm.Body, "a human is needed"))
 		}
 	})
 	c := env.comment(t, "находка: ни один нотис не пишется")
@@ -994,9 +994,9 @@ func TestClosedFollowUp_ParkNoticeNotStrandedByEscalation(t *testing.T) {
 	notices := func() (park, escalated int) {
 		for _, s := range env.systemNotices() {
 			switch {
-			case strings.Contains(s.Body, "не подтверждена"):
+			case strings.Contains(s.Body, "is not confirmed"):
 				park++
-			case strings.Contains(s.Body, "нужен человек"):
+			case strings.Contains(s.Body, "a human is needed"):
 				escalated++
 			}
 		}
@@ -1017,7 +1017,7 @@ func TestClosedFollowUp_ParkNoticeNotStrandedByEscalation(t *testing.T) {
 	// notice still cannot. The row must not retire on the escalation —
 	// that is the exact strand round 5 closes.
 	env.commentRepo.createFailFor = func(cm *domain.Comment) bool {
-		return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "не подтверждена")
+		return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "is not confirmed")
 	}
 	delivered, retried, escalatedN, err := env.svc.ReconcileClosedFollowUpPending(context.Background())
 	require.NoError(t, err)
@@ -1066,7 +1066,7 @@ func TestClosedFollowUp_DeliveryDoesNotDiscardUnlandedParkNotice(t *testing.T) {
 		// The park notice fails at enqueue AND keeps failing: the finding
 		// queues invisibly while the identity store is down.
 		e.commentRepo.createFailFor = func(cm *domain.Comment) bool {
-			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "не подтверждена")
+			return cm.AuthorType == domain.ActorTypeSystem && strings.Contains(cm.Body, "is not confirmed")
 		}
 	})
 	c := env.comment(t, "находка: доставится быстрее, чем уведомление")
@@ -1097,7 +1097,7 @@ func TestClosedFollowUp_DeliveryDoesNotDiscardUnlandedParkNotice(t *testing.T) {
 	assert.Len(t, env.taskSvc.createdTasks(), 1, "one finding, one root, across both passes")
 	var park int
 	for _, s := range env.systemNotices() {
-		if strings.Contains(s.Body, "не подтверждена") {
+		if strings.Contains(s.Body, "is not confirmed") {
 			park++
 		}
 	}
@@ -1163,7 +1163,7 @@ func TestClosedFollowUp_LeaseMakesOverlapDeliverOnce(t *testing.T) {
 
 	var alreadyOpen int
 	for _, n := range env.systemNotices() {
-		if strings.Contains(n.Body, "уже открыта") {
+		if strings.Contains(n.Body, "already open") {
 			alreadyOpen++
 		}
 	}
@@ -1216,7 +1216,7 @@ func TestClosedFollowUp_LeaseHoldsThroughUnlandedNotice(t *testing.T) {
 
 	var alreadyOpen int
 	for _, n := range env.systemNotices() {
-		if strings.Contains(n.Body, "уже открыта") {
+		if strings.Contains(n.Body, "already open") {
 			alreadyOpen++
 		}
 	}

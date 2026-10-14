@@ -120,3 +120,16 @@ func TestHasRawArmMarker_ReadsEnglishAndRussianForms(t *testing.T) {
 func TestParkedCommentFmt_StartsWithTheEnglishPhraseFiddlerReads(t *testing.T) {
 	assert.Regexp(t, `^\s*🅿️?\s*The task sat in in_progress`, parkedCommentFmt)
 }
+
+// The English texts written since L3.2e must be recognised by their wording
+// alone too (a comment whose system_code was lost, a manual import).
+func TestRecognisers_EnglishBodiesWithoutCode(t *testing.T) {
+	sys := domain.ActorTypeSystem
+	assert.True(t, isEndpointGateHintComment(sysComment(sys, nil, endpointGateHintBody)))
+	assert.True(t, isSoftTimeoutReleaseComment(sysComment(sys, nil,
+		"⏳ Auto: human_gate released after the soft timeout (armed 2026-09-01T10:00:00Z, class: soft) — the feed is unfrozen")))
+	assert.True(t, isRepeatInstanceComment(sysComment(sys, nil,
+		"🔁 Repeat 2: the schedule fired again but this instance is not closed yet — no new card was created.")))
+	// A human quoting the phrase is not the server.
+	assert.False(t, isEndpointGateHintComment(sysComment(domain.ActorTypeUser, nil, endpointGateHintBody)))
+}

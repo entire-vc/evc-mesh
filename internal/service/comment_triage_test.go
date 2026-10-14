@@ -183,7 +183,7 @@ func (env triageTestEnv) systemComments() []domain.Comment {
 func (env triageTestEnv) releaseComments() []domain.Comment {
 	var out []domain.Comment
 	for _, c := range env.systemComments() {
-		if strings.Contains(c.Body, "human_gate снят") {
+		if strings.Contains(c.Body, "human_gate cleared") {
 			out = append(out, c)
 		}
 	}
@@ -195,7 +195,7 @@ func (env triageTestEnv) releaseComments() []domain.Comment {
 func (env triageTestEnv) withdrawalMissNotices() []domain.Comment {
 	var out []domain.Comment
 	for _, c := range env.systemComments() {
-		if strings.Contains(c.Body, "human_gate по-прежнему поднят") {
+		if strings.Contains(c.Body, "human_gate is still raised") {
 			out = append(out, c)
 		}
 	}
@@ -206,11 +206,11 @@ func (env triageTestEnv) withdrawalMissNotices() []domain.Comment {
 // reportWithdrawalMarkerConflict (#081f1354) — the trace that a comment carrying
 // BOTH a withdrawal negator AND a fresh Blocking marker was refused as
 // ambiguous, distinct from withdrawalMissNotices (a negator that plain didn't
-// count) even though both share the "human_gate по-прежнему поднят" opener.
+// count) even though both share the "human_gate is still raised" opener.
 func (env triageTestEnv) withdrawalMarkerConflictNotices() []domain.Comment {
 	var out []domain.Comment
 	for _, c := range env.systemComments() {
-		if strings.Contains(c.Body, "И слова отзыва, И новый") {
+		if strings.Contains(c.Body, "BOTH withdrawal words AND a new") {
 			out = append(out, c)
 		}
 	}
@@ -260,7 +260,7 @@ func TestEnforceBlockingTriage_BlockingHuman_MovesToTriage(t *testing.T) {
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
 	assert.Equal(t, domain.ActorTypeSystem, sys[0].AuthorType)
-	assert.Contains(t, sys[0].Body, "переведена в triage")
+	assert.Contains(t, sys[0].Body, "moved to triage")
 	assert.Contains(t, sys[0].Body, "@pavel")
 }
 
@@ -343,7 +343,7 @@ func TestEnforceBlockingTriage_Strict_SoftAgentGate_ParksToBacklogInstead(t *tes
 
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
-	assert.Contains(t, sys[0].Body, "НЕ ушла в triage")
+	assert.Contains(t, sys[0].Body, "did NOT go to triage")
 	assert.Contains(t, sys[0].Body, "backlog")
 }
 
@@ -370,7 +370,7 @@ func TestEnforceBlockingTriage_Strict_HardGate_StillMovesToTriage(t *testing.T) 
 
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
-	assert.Contains(t, sys[0].Body, "переведена в triage")
+	assert.Contains(t, sys[0].Body, "moved to triage")
 }
 
 // TestEnforceBlockingTriage_Strict_NoBacklogColumn_GracefulNoOp mirrors
@@ -852,7 +852,7 @@ func TestReleaseHumanGate_UserCommentAfterBlock_ReleasesFlag(t *testing.T) {
 	// A system comment must record the release.
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
-	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "human_gate cleared")
 
 	// No triage move must have been triggered (user comment has no blocking marker).
 	assert.Empty(t, env.taskMover.calls())
@@ -1171,7 +1171,7 @@ func TestReleaseHumanGate_TriageTask_CommentLayerDoesNotMoveToInProgress(t *test
 
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
-	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "human_gate cleared")
 	assert.NotContains(t, sys[0].Body, "in_progress")
 }
 
@@ -1206,7 +1206,7 @@ func TestReleaseHumanGate_InProgressTask_NoStatusMove(t *testing.T) {
 	// System comment must mention gate release but NOT in_progress.
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
-	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "human_gate cleared")
 	assert.NotContains(t, sys[0].Body, "in_progress")
 }
 
@@ -1529,8 +1529,8 @@ func TestReleaseHumanGateOnWithdrawal_SameAgentNegates_ReleasesFlag(t *testing.T
 
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
-	assert.Contains(t, sys[0].Body, "human_gate снят")
-	assert.Contains(t, sys[0].Body, "отозвал его сам")
+	assert.Contains(t, sys[0].Body, "human_gate cleared")
+	assert.Contains(t, sys[0].Body, "withdrew it")
 }
 
 // TestReleaseHumanGateOnWithdrawal_DifferentAgent_NoOp is the core negative
@@ -1731,7 +1731,7 @@ func TestReleaseHumanGateOnWithdrawal_TriageTask_CommentLayerDoesNotMove(t *test
 
 	sys := env.systemComments()
 	require.Len(t, sys, 1)
-	assert.Contains(t, sys[0].Body, "human_gate снят")
+	assert.Contains(t, sys[0].Body, "human_gate cleared")
 	assert.NotContains(t, sys[0].Body, "in_progress")
 }
 
@@ -1960,7 +1960,7 @@ func TestReleaseHumanGateOnWithdrawal_QuotedNegatorOnly_KeepsGate(t *testing.T) 
 			// zero system comments, and it must be a notice, never a release.
 			if tc.wantNotice {
 				require.Len(t, env.withdrawalMissNotices(), 1)
-				assert.Contains(t, env.withdrawalMissNotices()[0].Body, "только внутри кода")
+				assert.Contains(t, env.withdrawalMissNotices()[0].Body, "only inside code")
 			} else {
 				assert.Empty(t, env.withdrawalMissNotices(),
 					"a negator quoted outside the searched region reads as a paste, not a missed withdrawal")
@@ -2000,7 +2000,7 @@ func TestReleaseHumanGateOnWithdrawal_SummaryThenRealWithdrawal(t *testing.T) {
 	assert.False(t, gateCalls[0].value)
 	require.Len(t, env.releaseComments(), 1,
 		"exactly one release announcement — from the real withdrawal, not from the summary")
-	assert.Contains(t, env.releaseComments()[0].Body, "human_gate снят")
+	assert.Contains(t, env.releaseComments()[0].Body, "human_gate cleared")
 	// The summary earned a miss notice (#17829fcf); the withdrawal that worked
 	// must NOT also earn one — a comment cannot both release and be reported
 	// as not having released.
@@ -2193,7 +2193,7 @@ func TestReleaseHumanGateOnWithdrawal_LongStatusReport_LeavesGateIntact(t *testi
 	// this body is a genuine status update, and asserting intent here would be
 	// wrong.
 	require.Len(t, env.withdrawalMissNotices(), 1)
-	assert.Contains(t, env.withdrawalMissNotices()[0].Body, "последний абзац")
+	assert.Contains(t, env.withdrawalMissNotices()[0].Body, "**last paragraph**")
 	assert.NotContains(t, env.withdrawalMissNotices()[0].Body, "отклонён")
 }
 
