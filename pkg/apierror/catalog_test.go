@@ -50,20 +50,18 @@ func TestErrorJSONKeepsNumericCode(t *testing.T) {
 // locale file would show the English fallback to a Russian-speaking user.
 func TestWebLocalesCarryEveryCatalogCode(t *testing.T) {
 	for _, lang := range []string{"en", "ru"} {
-		raw, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "locales", lang, "common.json"))
+		raw, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "locales", lang, "apiErrors.json"))
 		require.NoError(t, err)
-		var doc struct {
-			APIErrors map[string]string `json:"apiErrors"`
-		}
-		require.NoError(t, json.Unmarshal(raw, &doc))
+		var apiErrors map[string]string
+		require.NoError(t, json.Unmarshal(raw, &apiErrors))
 		for _, e := range Catalog {
 			want := e.EN
 			if lang == "ru" {
 				want = e.RU
 			}
-			assert.Equal(t, want, doc.APIErrors[e.Code], "web %s locale, code %q", lang, e.Code)
+			assert.Equal(t, want, apiErrors[e.Code], "web %s locale, code %q", lang, e.Code)
 		}
-		assert.Len(t, doc.APIErrors, len(Catalog), "web %s locale has codes the catalog does not", lang)
+		assert.Len(t, apiErrors, len(Catalog), "web %s locale has codes the catalog does not", lang)
 	}
 }
 

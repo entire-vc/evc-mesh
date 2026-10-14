@@ -30,7 +30,7 @@ function firstDetailMessage(details: unknown): string | undefined {
  * is our own text, not the server's, and keeps showing as before.
  *
  * Translation by code (above) comes first: errors carry a stable `errorCode`
- * and the interface owns the text per language (locales: apiErrors.<code>).
+ * and the interface owns the text per language (locales: <lang>/apiErrors.json, a lazy namespace).
  *
  * Duck-typed rather than `instanceof ApiRequestError`: this is called from
  * components whose tests mock `@/lib/api` wholesale, where the real class is
@@ -44,12 +44,21 @@ export function apiErrorMessage(
   // over `details`, which are English field messages. A code the interface has
   // no entry for falls through to the rules below.
   const errorCode = (err as { errorCode?: unknown } | null)?.errorCode;
-  if (typeof errorCode === "string" && i18n.exists(`apiErrors.${errorCode}`)) {
-    const translated = i18n.t(`apiErrors.${errorCode}`);
-    // Field details (English, from the server) say which field is wrong, which
-    // the translated sentence cannot: append the first one. Field keys stay hidden.
-    const first = firstDetailMessage((err as { details?: unknown } | null)?.details);
-    return first ? `${translated.replace(/\.$/, "")}: ${first}` : translated;
+  if (typeof errorCode === "string") {
+    const key = `apiErrors:${errorCode}`;
+    if (i18n.hasLoadedNamespace("apiErrors")) {
+      if (i18n.exists(key)) {
+        const translated = i18n.t(key);
+        // Field details (English, from the server) say which field is wrong, which
+        // the translated sentence cannot: append the first one. Field keys stay hidden.
+        const first = firstDetailMessage((err as { details?: unknown } | null)?.details);
+        return first ? `${translated.replace(/\.$/, "")}: ${first}` : translated;
+      }
+    } else {
+      // The catalog is its own lazy chunk (not in the login bundle): start the
+      // fetch and fall through to the server's English message for this one.
+      void i18n.loadNamespaces("apiErrors");
+    }
   }
   // A coded error the interface has no text for: the server message is English by contract.
   if (typeof errorCode === "string" && errorCode !== "") {

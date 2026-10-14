@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n from "i18next";
 import "@/i18n";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -100,6 +100,28 @@ describe("apiErrorMessage by error code", () => {
       details: { title: "title is required" },
     };
     expect(apiErrorMessage(unknown, "Не удалось сохранить")).toBe("Some English prose");
+  });
+
+  it("before the lazy catalog has loaded (login) shows the server's English message and starts the load", async () => {
+    const en = i18n.getResourceBundle("en", "apiErrors");
+    const ru = i18n.getResourceBundle("ru", "apiErrors");
+    i18n.removeResourceBundle("en", "apiErrors");
+    i18n.removeResourceBundle("ru", "apiErrors");
+    // Removing the bundles does not make i18next forget the namespace was loaded,
+    // so state the "not loaded yet" condition directly.
+    const loaded = vi.spyOn(i18n, "hasLoadedNamespace").mockReturnValue(false);
+    const load = vi.spyOn(i18n, "loadNamespaces").mockResolvedValue(undefined);
+    try {
+      await i18n.changeLanguage("ru");
+      const loginError = { errorCode: "unauthorized", code: "401", status: 401, message: "Invalid credentials" };
+      expect(apiErrorMessage(loginError, "Не удалось войти")).toBe("Invalid credentials");
+      expect(load).toHaveBeenCalledWith("apiErrors");
+    } finally {
+      load.mockRestore();
+      loaded.mockRestore();
+      i18n.addResourceBundle("en", "apiErrors", en);
+      i18n.addResourceBundle("ru", "apiErrors", ru);
+    }
   });
 
   it("serverErrorCode reads error_code, a string code, or a snake_case error key", () => {

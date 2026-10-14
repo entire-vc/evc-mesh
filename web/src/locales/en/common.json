@@ -13,37 +13,5 @@
   },
   "i18nDemo": {
     "greeting": "Hello, {{name}}"
-  },
-  "apiErrors": {
-    "bad_request": "The request is invalid.",
-    "validation_failed": "Validation failed. Check the entered data.",
-    "unauthorized": "You need to sign in.",
-    "forbidden": "You don't have permission to do this.",
-    "not_found": "Not found.",
-    "conflict": "This conflicts with the current state.",
-    "rate_limited": "Too many requests. Try again later.",
-    "service_unavailable": "The service is temporarily unavailable.",
-    "internal_error": "Internal server error.",
-    "cas_conflict": "The task was changed by someone else. Reload it and try again.",
-    "document_version_conflict": "The document was changed since you opened it. Reload it and re-apply your edit.",
-    "external_source_conflict": "The original document changed since you opened it. Nothing was saved. Reopen it and re-apply your edit.",
-    "external_source_write_landed": "Your edit reached the original document and will appear here at the next sync.",
-    "list_revision_stale": "The list changed while you were paging. Start again from the first page.",
-    "cursor_expired": "The event cursor has expired. Reload the current state.",
-    "assignee_not_in_workspace": "This assignee is not part of the workspace.",
-    "assignee_unresolved": "No agent or user matches this assignee.",
-    "assignee_refuses_assignments": "This agent accepts no assignments. Choose another assignee.",
-    "assignment_pinned": "The assignee was pinned by a person and cannot be changed automatically.",
-    "mention_handoff_required": "A mention does not wake an agent. Assign the task and move it to todo instead.",
-    "status_change_via_patch_rejected": "Status cannot be changed this way. Use the move action.",
-    "review_evidence_required": "Evidence is required to send this task to review.",
-    "done_evidence_required": "Evidence is required to close this task.",
-    "dod_gate_blocked": "The definition of done is not met yet.",
-    "triage_entry_requires_human_gate": "A task can enter triage only with a question for a person.",
-    "park_requires_wakeup": "A parked task needs a wake-up condition.",
-    "human_gate_frozen": "This task is waiting for a person's decision and cannot be changed now.",
-    "task_shipped": "The task is marked as shipped. Reopen it before moving it.",
-    "ambiguous_quote": "The quoted text matches several places. Quote a longer fragment.",
-    "export_tree_too_large": "The export is too large."
   }
 }
