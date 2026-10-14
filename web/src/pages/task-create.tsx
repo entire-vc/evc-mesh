@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { useProjectStore } from "@/stores/project";
 import { TaskPanel } from "@/components/task-panel";
 import type { Task } from "@/types";
@@ -13,6 +14,7 @@ import type { Task } from "@/types";
 // so this page reads it the same way board.tsx / list-view.tsx do rather
 // than re-resolving the slug itself.
 export function TaskCreatePage() {
+  const { t } = useTranslation("task");
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -66,7 +68,7 @@ export function TaskCreatePage() {
       createDefaults={createDefaults}
       onCreated={handleCreated}
       onBack={handleCancel}
-      backLabel="Cancel"
+      backLabel={t("actions.cancel")}
       className="h-full"
     />
   );

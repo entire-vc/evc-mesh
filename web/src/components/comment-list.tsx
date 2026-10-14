@@ -1,4 +1,5 @@
 import { AgentShortTag } from "@/components/agent-short-tag";
+import { useTranslation } from "react-i18next";
 import {
   type FormEvent,
   useCallback,
@@ -51,7 +52,8 @@ function ActorIcon({ type }: { type: ActorType }) {
 }
 
 function ActorLabel({ id, type, name }: { id?: string; type: ActorType; name?: string }) {
-  const fallback = type === "agent" ? "Agent" : type === "system" ? "System" : "User";
+  const { t } = useTranslation("task");
+  const fallback = type === "agent" ? t("comments.actor.agent") : type === "system" ? t("comments.actor.system") : t("comments.actor.user");
   const displayName = name?.trim() || fallback;
   return (
     <span className="flex items-center gap-1.5 text-sm font-medium">
@@ -156,6 +158,7 @@ function DeliveryMissPlate({
   taskId?: string;
   projId?: string;
 }) {
+  const { t } = useTranslation("task");
   const [state, setState] = useState<"idle" | "busy" | "done" | "error" | "stale">("idle");
   const task = useTaskStore((s) => (taskId ? s.tasksById[taskId] : undefined));
   const action = taskId && projId ? missActionFor(row) : null;
@@ -205,7 +208,7 @@ function DeliveryMissPlate({
       className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-50/60 px-2 py-1 text-xs text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-200"
     >
       <span>
-        @{row.recipient_slug} won&apos;t see this: {row.hint}
+        {t("comments.delivery.wontSee", { slug: row.recipient_slug, hint: row.hint })}
       </span>
       {action && !alreadyAssigned && state !== "done" && (
         <Button
@@ -215,18 +218,18 @@ function DeliveryMissPlate({
           disabled={state === "busy"}
           onClick={() => void run()}
         >
-          {action === "move_to_todo" ? "Move to todo" : `Assign to @${row.recipient_slug}`}
+          {action === "move_to_todo" ? t("comments.delivery.moveToTodo") : t("comments.delivery.assignTo", { slug: row.recipient_slug })}
         </Button>
       )}
       {state === "done" && (
         <span className="text-muted-foreground">
-          {action === "move_to_todo" ? "Moved to todo." : `Assigned to @${row.recipient_slug}.`}
+          {action === "move_to_todo" ? t("comments.delivery.movedToTodo") : t("comments.delivery.assignedTo", { slug: row.recipient_slug })}
         </span>
       )}
       {state === "stale" && (
-        <span className="text-muted-foreground">The card is no longer in backlog — left as is.</span>
+        <span className="text-muted-foreground">{t("comments.delivery.stale")}</span>
       )}
-      {state === "error" && <span className="text-destructive">Couldn&apos;t apply — try from the task fields.</span>}
+      {state === "error" && <span className="text-destructive">{t("comments.delivery.error")}</span>}
     </div>
   );
 }
@@ -256,6 +259,7 @@ function CommentItem({
   wsSlug,
   focusCommentId,
 }: CommentItemProps) {
+  const { t } = useTranslation("task");
   const [hovering, setHovering] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editBody, setEditBody] = useState(comment.body);
@@ -345,7 +349,7 @@ function CommentItem({
             {comment.is_internal && (
               <Badge variant="outline" className="gap-1 text-[10px] text-yellow-600">
                 <Lock className="h-2.5 w-2.5" />
-                Internal
+                {t("comments.internal")}
               </Badge>
             )}
           </div>
@@ -357,7 +361,7 @@ function CommentItem({
                   size="icon"
                   className="h-6 w-6"
                   onClick={() => onReply(comment.id)}
-                  title="Reply"
+                  title={t("comments.reply")}
                 >
                   <Reply className="h-3 w-3" />
                 </Button>
@@ -367,7 +371,7 @@ function CommentItem({
                 size="icon"
                 className="h-6 w-6"
                 onClick={handleEditClick}
-                title="Edit"
+                title={t("actions.edit")}
               >
                 <Edit2 className="h-3 w-3" />
               </Button>
@@ -376,7 +380,7 @@ function CommentItem({
                 size="icon"
                 className="h-6 w-6 text-destructive"
                 onClick={() => onDelete(comment.id)}
-                title="Delete"
+                title={t("actions.delete")}
               >
                 <Trash2 className="h-3 w-3" />
               </Button>
@@ -401,14 +405,14 @@ function CommentItem({
                 onClick={handleCancelEdit}
                 disabled={saving}
               >
-                Cancel
+                {t("actions.cancel")}
               </Button>
               <Button
                 size="sm"
                 onClick={handleSave}
                 disabled={!editBody.trim() || saving}
               >
-                Save
+                {t("actions.save")}
               </Button>
             </div>
           </div>
@@ -456,6 +460,7 @@ function byNewestFirst(a: Comment, b: Comment): number {
 const MAX_AUTO_FOCUS_PAGES = 25;
 
 export function CommentList({ taskId, projId, focusCommentId }: CommentListProps) {
+  const { t } = useTranslation("task");
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
@@ -670,7 +675,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
       <div data-comment-scroll className="flex-1 overflow-x-hidden overflow-y-auto p-4">
         {topLevel.length === 0 && (
           <p className="py-4 text-center text-sm text-muted-foreground">
-            No comments yet. Be the first to comment.
+            {t("comments.empty")}
           </p>
         )}
 
@@ -699,7 +704,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
               onClick={() => void handleLoadEarlier()}
               disabled={loadingMore}
             >
-              {loadingMore ? "Loading..." : "Load more"}
+              {loadingMore ? t("comments.loading") : t("comments.loadMore")}
             </Button>
           </div>
         )}
@@ -711,14 +716,14 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
           {replyToComment && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Reply className="h-3 w-3" />
-              Replying to{" "}
-              <span>{replyToComment.author_name?.trim() || (replyToComment.author_type === "agent" ? "Agent" : replyToComment.author_type === "system" ? "System" : "User")}<AgentShortTag id={replyToComment.author_id} type={replyToComment.author_type} /></span>
+              {t("comments.replyingTo")}{" "}
+              <span>{replyToComment.author_name?.trim() || (replyToComment.author_type === "agent" ? t("comments.actor.agent") : replyToComment.author_type === "system" ? t("comments.actor.system") : t("comments.actor.user"))}<AgentShortTag id={replyToComment.author_id} type={replyToComment.author_type} /></span>
               <button
                 type="button"
                 className="ml-1 text-primary hover:underline"
                 onClick={handleCancelReply}
               >
-                Cancel
+                {t("actions.cancel")}
               </button>
             </div>
           )}
@@ -727,7 +732,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
             onChange={setBody}
             projId={projId}
             taskId={taskId}
-            placeholder="Write a comment… @ to mention, [[ to link a document"
+            placeholder={t("comments.placeholder")}
             minHeight="4.5rem"
             hint={null}
           />
@@ -740,11 +745,11 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
                 className="rounded border-border"
               />
               <Lock className="h-3.5 w-3.5" />
-              Internal note
+              {t("comments.internalNote")}
             </label>
             <div className="flex items-center gap-2">
               <Button type="submit" size="sm" disabled={!body.trim() || submitting}>
-                Comment
+                {t("comments.submit")}
               </Button>
             </div>
           </div>

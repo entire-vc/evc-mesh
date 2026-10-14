@@ -17,5 +17,140 @@
   "falseOpen": {
     "allChildrenClosed": "False-open: all subtasks are closed, the card has not changed for {{days}} d. - consider revisiting its priority",
     "onlyParkedChildrenLeft": "Only backlog subtasks are left ({{count}}), the card has not changed for {{days}} d. - there is work, but it is not moving"
+  },
+  "toolbar": {
+    "group": {
+      "label": "Group:",
+      "menuLabel": "Group by",
+      "status": "Status",
+      "priority": "Priority",
+      "assignee": "Assignee"
+    },
+    "sort": {
+      "menuLabel": "Sort within column",
+      "manual": "Manual",
+      "updated": "Last Updated",
+      "priority": "Priority",
+      "dueDate": "Due Date",
+      "created": "Created",
+      "title": "Title"
+    },
+    "priority": {
+      "all": "All Priorities"
+    },
+    "assignee": {
+      "all": "All Assignees",
+      "user": "User",
+      "agent": "Agent",
+      "unassigned": "Unassigned"
+    },
+    "assigneeFilter": {
+      "button": "Assignees",
+      "title": "Filter by Assignee",
+      "clear": "Clear"
+    },
+    "subtasks": "Subtasks",
+    "closed": "Closed",
+    "waitingOnMe": "Waiting on me",
+    "filters": "Filters",
+    "searchPlaceholder": "Search tasks...",
+    "newRecurring": "New Recurring Task",
+    "newTask": "New Task"
+  },
+  "priority": {
+    "urgent": "Urgent",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
+    "none": "None",
+    "noPriority": "No Priority"
+  },
+  "filters": {
+    "clear": "Clear",
+    "tag": {
+      "title": "Filter by Tag"
+    },
+    "customFields": {
+      "button": "Filters",
+      "title": "Filter by Custom Fields",
+      "clearAll": "Clear all",
+      "apply": "Apply",
+      "contains": "Contains...",
+      "any": "Any",
+      "noOptions": "No options defined",
+      "min": "Min",
+      "max": "Max",
+      "checked": "Checked",
+      "unchecked": "Unchecked",
+      "from": "From",
+      "to": "To"
+    }
+  },
+  "columnPicker": {
+    "button": "Columns",
+    "ariaLabel": "Toggle columns",
+    "required": "required",
+    "reset": "Reset to default"
+  },
+  "card": {
+    "recurring": "Recurring task",
+    "recurringNumber": "Recurring task #{{number}}",
+    "hasVcsLinks": "Has VCS links",
+    "edit": "Edit task",
+    "hasDescription": "Has description",
+    "humanGate": {
+      "soft": "Waiting on a human sign-off (soft — auto-releases after a timeout)",
+      "hard": "Waiting on a human sign-off (hard)",
+      "withReason": "{{base}}: {{reason}}",
+      "awaitingAnswer": "{{status}} · awaiting answer",
+      "srOnly": "Waiting on a human sign-off"
+    },
+    "falseOpen": {
+      "allChildrenClosed": "False-open: all subtasks closed",
+      "onlyParkedChildrenLeft": "False-open: only parked subtasks left"
+    },
+    "checkout": {
+      "lapsedTitle": "Work lock lapsed {{time}} — the holder's session is gone, nobody is on this",
+      "liveHolderTitle": "In {{holder}}'s hands until {{time}}",
+      "liveTitle": "In hands until {{time}}",
+      "lapsed": "Work lock lapsed",
+      "live": "Checked out"
+    },
+    "subtaskCount_one": "{{count}} subtask",
+    "subtaskCount_other": "{{count}} subtasks"
+  },
+  "column": {
+    "addTask": "Add task",
+    "empty": "No tasks",
+    "closedSlice": {
+      "showing": "Showing latest {{loaded}} of {{total}}",
+      "filtersApply": " · filters apply to loaded cards",
+      "requestFailed": "Request failed",
+      "loading": "Loading…",
+      "loadMore": "Load more"
+    }
+  },
+  "closedPartial": "Closed: latest {{loaded}} of {{total}} loaded. Group by Status to load more.",
+  "refresh": {
+    "failedPartial": "Couldn't refresh tasks. Showing the last complete list.",
+    "failedInitial": "Couldn't load all tasks. Counts are unavailable.",
+    "retry": "Retry",
+    "inProgress": "Refreshing tasks… Showing the last complete list."
+  },
+  "empty": {
+    "noStatuses": {
+      "title": "No statuses configured",
+      "hint": "Configure task statuses in project settings to use the board."
+    },
+    "noMatches": {
+      "title": "No tasks match filters",
+      "hint": "Try adjusting your filters or grouping."
+    }
+  },
+  "toast": {
+    "agentSummary": "Agent summary"
+  },
+  "fallback": {
+    "agent": "Agent"
   }
 }

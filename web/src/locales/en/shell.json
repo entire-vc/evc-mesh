@@ -1,0 +1,80 @@
+{
+  "actions": {
+    "cancel": "Cancel",
+    "create": "Create",
+    "creating": "Creating..."
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "initiatives": "Initiatives",
+    "triage": "Triage Inbox",
+    "activity": "Activity",
+    "team": "Team",
+    "memory": "Memory",
+    "sessions": "Sessions",
+    "spark": "Spark Catalog",
+    "analytics": "Analytics",
+    "events": "Events",
+    "integrations": "Integrations",
+    "connectedApps": "Connected apps",
+    "workspaceSettings": "Workspace Settings",
+    "projectSettings": "Project Settings"
+  },
+  "sidebar": {
+    "workspaceLogoAlt": "Workspace",
+    "workspaceSwitcher": {
+      "select": "Select workspace",
+      "title": "Workspaces",
+      "newWorkspace": "New Workspace"
+    },
+    "projects": {
+      "title": "Projects",
+      "loading": "Loading projects",
+      "empty": "No projects yet",
+      "archived": "Archived ({{count}})",
+      "unarchive": "Unarchive",
+      "unarchiveProject": "Unarchive {{name}}",
+      "unarchiveFailed": "Failed to unarchive project"
+    }
+  },
+  "createWorkspace": {
+    "title": "Create Workspace",
+    "name": "Name",
+    "namePlaceholder": "My Team",
+    "slug": "Slug",
+    "slugPlaceholder": "my-team",
+    "slugHint": "Used in URLs: /w/{{slug}}",
+    "failed": "Failed to create workspace"
+  },
+  "header": {
+    "search": {
+      "placeholder": "Search tasks...",
+      "searching": "Searching...",
+      "noResults": "No results found"
+    },
+    "projectDocs": "Project docs",
+    "installApp": "Install Mesh as app",
+    "teamTabs": {
+      "tree": "Tree",
+      "byProject": "By Project"
+    },
+    "userMenu": {
+      "userFallback": "User",
+      "theme": "Theme",
+      "themeDark": "Dark",
+      "themeLight": "Light",
+      "logOut": "Log out"
+    }
+  },
+  "workspaceNotFound": {
+    "title": "Workspace not found",
+    "description": "\"{{slug}}\" doesn't exist, was deleted, or you don't have access to it.",
+    "goToWorkspace": "Go to your workspace"
+  },
+  "noWorkspaces": {
+    "title": "Welcome to EVC Mesh",
+    "description": "Create your first workspace to get started.",
+    "name": "Workspace name",
+    "submit": "Create workspace"
+  }
+}

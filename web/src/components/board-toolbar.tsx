@@ -113,19 +113,20 @@ export interface BoardToolbarProps {
   onNewRecurring?: () => void;
 }
 
+// i18n keys (namespace "board"), resolved at render time.
 const GROUP_BY_LABELS: Record<GroupBy, string> = {
-  status: "Status",
-  priority: "Priority",
-  assignee: "Assignee",
+  status: "toolbar.group.status",
+  priority: "toolbar.group.priority",
+  assignee: "toolbar.group.assignee",
 };
 
 const SORT_BY_LABELS: Record<SortBy, string> = {
-  manual: "Manual",
-  updated: "Last Updated",
-  priority: "Priority",
-  due_date: "Due Date",
-  created: "Created",
-  title: "Title",
+  manual: "toolbar.sort.manual",
+  updated: "toolbar.sort.updated",
+  priority: "toolbar.sort.priority",
+  due_date: "toolbar.sort.dueDate",
+  created: "toolbar.sort.created",
+  title: "toolbar.sort.title",
 };
 
 // ---------------------------------------------------------------------------
@@ -177,6 +178,7 @@ function AssigneeFilterDropdown({
   onChange,
   className,
 }: AssigneeFilterDropdownProps) {
+  const { t } = useTranslation("board");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -219,7 +221,7 @@ function AssigneeFilterDropdown({
         onClick={() => setOpen((v) => !v)}
       >
         <Users className="h-3.5 w-3.5" />
-        Assignees
+        {t("toolbar.assigneeFilter.button")}
         {activeCount > 0 && (
           <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-[10px]">
             {activeCount}
@@ -231,7 +233,7 @@ function AssigneeFilterDropdown({
       {open && (
         <div className="absolute left-0 z-50 mt-2 w-60 rounded-lg border border-border bg-popover p-2 shadow-lg">
           <div className="mb-1.5 flex items-center justify-between px-1">
-            <span className="text-xs font-semibold text-foreground">Filter by Assignee</span>
+            <span className="text-xs font-semibold text-foreground">{t("toolbar.assigneeFilter.title")}</span>
             {activeCount > 0 && (
               <button
                 type="button"
@@ -239,7 +241,7 @@ function AssigneeFilterDropdown({
                 className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-destructive"
               >
                 <X className="h-3 w-3" />
-                Clear
+                {t("toolbar.assigneeFilter.clear")}
               </button>
             )}
           </div>
@@ -253,7 +255,7 @@ function AssigneeFilterDropdown({
                 className="h-3.5 w-3.5 rounded border-input"
               />
               <AssigneeAvatar type="unassigned" size="sm" />
-              <span className="truncate">Unassigned</span>
+              <span className="truncate">{t("toolbar.assignee.unassigned")}</span>
             </label>
             {candidates.map((c) => (
               <label
@@ -325,13 +327,13 @@ export function BoardToolbar({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs">
-              <span className="text-muted-foreground">Group:</span>
-              {GROUP_BY_LABELS[groupBy]}
+              <span className="text-muted-foreground">{t("toolbar.group.label")}</span>
+              {t(GROUP_BY_LABELS[groupBy])}
               <ChevronDown className="h-3 w-3 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-40">
-            <DropdownMenuLabel className="text-xs">Group by</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs">{t("toolbar.group.menuLabel")}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {(["status", "priority", "assignee"] as GroupBy[]).map((g) => (
               <DropdownMenuItem
@@ -339,7 +341,7 @@ export function BoardToolbar({
                 onClick={() => onGroupByChange(g)}
                 className={cn("text-sm", groupBy === g && "font-medium text-primary")}
               >
-                {GROUP_BY_LABELS[g]}
+                {t(GROUP_BY_LABELS[g])}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -347,7 +349,7 @@ export function BoardToolbar({
 
         {/* Subtasks toggle */}
         <ToggleButton active={showSubtasks} onClick={() => onShowSubtasksChange(!showSubtasks)}>
-          Subtasks
+          {t("toolbar.subtasks")}
         </ToggleButton>
 
         {/* Sort + secondary filters — hidden on mobile, shown inline on desktop */}
@@ -356,12 +358,12 @@ export function BoardToolbar({
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs">
                 <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
-                {SORT_BY_LABELS[sortBy]}
+                {t(SORT_BY_LABELS[sortBy])}
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-44">
-              <DropdownMenuLabel className="text-xs">Sort within column</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-xs">{t("toolbar.sort.menuLabel")}</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {(["manual", "updated", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
                 <DropdownMenuItem
@@ -369,31 +371,31 @@ export function BoardToolbar({
                   onClick={() => onSortByChange(s)}
                   className={cn("text-sm", sortBy === s && "font-medium text-primary")}
                 >
-                  {SORT_BY_LABELS[s]}
+                  {t(SORT_BY_LABELS[s])}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Select value={priorityFilter} onChange={(e) => onPriorityFilterChange(e.target.value)} className="h-8 w-36 text-xs">
-            <option value="all">All Priorities</option>
-            <option value="urgent">Urgent</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-            <option value="none">None</option>
+          <Select value={priorityFilter} onChange={(e) => onPriorityFilterChange(e.target.value)} className="h-8 w-auto min-w-36 max-w-52 text-xs">
+            <option value="all">{t("toolbar.priority.all")}</option>
+            <option value="urgent">{t("priority.urgent")}</option>
+            <option value="high">{t("priority.high")}</option>
+            <option value="medium">{t("priority.medium")}</option>
+            <option value="low">{t("priority.low")}</option>
+            <option value="none">{t("priority.none")}</option>
           </Select>
 
           <TagFilterDropdown allTags={allTags} selectedTags={selectedTags} onChange={onTagsChange} />
           <CustomFieldFilterDialog fields={filterableFields} filters={cfFilters} onChange={onCFFiltersChange} />
 
           <ToggleButton active={showClosed} onClick={() => onShowClosedChange(!showClosed)}>
-            Closed
+            {t("toolbar.closed")}
           </ToggleButton>
 
           <ToggleButton active={humanGateOnly} onClick={() => onHumanGateOnlyChange(!humanGateOnly)}>
             <Lock className="h-3 w-3" aria-hidden="true" />
-            Waiting on me
+            {t("toolbar.waitingOnMe")}
           </ToggleButton>
 
           {onWorkingOnlyChange && (
@@ -403,11 +405,11 @@ export function BoardToolbar({
             </ToggleButton>
           )}
 
-          <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-36 text-xs">
-            <option value="all">All Assignees</option>
-            <option value="user">User</option>
-            <option value="agent">Agent</option>
-            <option value="unassigned">Unassigned</option>
+          <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-auto min-w-36 max-w-52 text-xs">
+            <option value="all">{t("toolbar.assignee.all")}</option>
+            <option value="user">{t("toolbar.assignee.user")}</option>
+            <option value="agent">{t("toolbar.assignee.agent")}</option>
+            <option value="unassigned">{t("toolbar.assignee.unassigned")}</option>
           </Select>
 
           <AssigneeFilterDropdown
@@ -425,7 +427,7 @@ export function BoardToolbar({
           onClick={() => setFiltersOpen(!filtersOpen)}
         >
           <Filter className="h-3.5 w-3.5" />
-          Filters
+          {t("toolbar.filters")}
           {filtersOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
         </Button>
 
@@ -433,7 +435,7 @@ export function BoardToolbar({
         <div className="relative min-w-0 w-full sm:min-w-[140px] sm:w-auto sm:flex-1 sm:max-w-xs">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search tasks..."
+            placeholder={t("toolbar.searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
             className="h-8 pl-8 text-xs"
@@ -445,13 +447,13 @@ export function BoardToolbar({
 
         {/* New Recurring */}
         {onNewRecurring && (
-          <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={onNewRecurring} title="New Recurring Task">
+          <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={onNewRecurring} title={t("toolbar.newRecurring")}>
             <RefreshCw className="h-4 w-4" />
           </Button>
         )}
 
         {/* New Task */}
-        <Button size="sm" className="h-8 w-8 p-0" onClick={onNewTask} title="New Task">
+        <Button size="sm" className="h-8 w-8 p-0" onClick={onNewTask} title={t("toolbar.newTask")}>
           <Plus className="h-4 w-4" />
         </Button>
       </div>
@@ -463,12 +465,12 @@ export function BoardToolbar({
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs">
                 <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
-                {SORT_BY_LABELS[sortBy]}
+                {t(SORT_BY_LABELS[sortBy])}
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-44">
-              <DropdownMenuLabel className="text-xs">Sort within column</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-xs">{t("toolbar.sort.menuLabel")}</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {(["manual", "updated", "priority", "due_date", "created", "title"] as SortBy[]).map((s) => (
                 <DropdownMenuItem
@@ -476,31 +478,31 @@ export function BoardToolbar({
                   onClick={() => onSortByChange(s)}
                   className={cn("text-sm", sortBy === s && "font-medium text-primary")}
                 >
-                  {SORT_BY_LABELS[s]}
+                  {t(SORT_BY_LABELS[s])}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Select value={priorityFilter} onChange={(e) => onPriorityFilterChange(e.target.value)} className="h-8 w-32 text-xs">
-            <option value="all">All Priorities</option>
-            <option value="urgent">Urgent</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-            <option value="none">None</option>
+          <Select value={priorityFilter} onChange={(e) => onPriorityFilterChange(e.target.value)} className="h-8 w-auto min-w-32 max-w-52 text-xs">
+            <option value="all">{t("toolbar.priority.all")}</option>
+            <option value="urgent">{t("priority.urgent")}</option>
+            <option value="high">{t("priority.high")}</option>
+            <option value="medium">{t("priority.medium")}</option>
+            <option value="low">{t("priority.low")}</option>
+            <option value="none">{t("priority.none")}</option>
           </Select>
 
           <TagFilterDropdown allTags={allTags} selectedTags={selectedTags} onChange={onTagsChange} />
           <CustomFieldFilterDialog fields={filterableFields} filters={cfFilters} onChange={onCFFiltersChange} />
 
           <ToggleButton active={showClosed} onClick={() => onShowClosedChange(!showClosed)}>
-            Closed
+            {t("toolbar.closed")}
           </ToggleButton>
 
           <ToggleButton active={humanGateOnly} onClick={() => onHumanGateOnlyChange(!humanGateOnly)}>
             <Lock className="h-3 w-3" aria-hidden="true" />
-            Waiting on me
+            {t("toolbar.waitingOnMe")}
           </ToggleButton>
 
           {onWorkingOnlyChange && (
@@ -510,11 +512,11 @@ export function BoardToolbar({
             </ToggleButton>
           )}
 
-          <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-32 text-xs">
-            <option value="all">All Assignees</option>
-            <option value="user">User</option>
-            <option value="agent">Agent</option>
-            <option value="unassigned">Unassigned</option>
+          <Select value={assigneeFilter} onChange={(e) => onAssigneeFilterChange(e.target.value)} className="h-8 w-auto min-w-32 max-w-52 text-xs">
+            <option value="all">{t("toolbar.assignee.all")}</option>
+            <option value="user">{t("toolbar.assignee.user")}</option>
+            <option value="agent">{t("toolbar.assignee.agent")}</option>
+            <option value="unassigned">{t("toolbar.assignee.unassigned")}</option>
           </Select>
 
           <AssigneeFilterDropdown

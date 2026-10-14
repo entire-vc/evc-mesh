@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import type { TaskCostSummary } from "@/lib/api";
 
@@ -33,18 +34,19 @@ const qualityBadge: Record<
 };
 
 export function CostQualityBlock({ summary }: { summary: TaskCostSummary }) {
+  const { t } = useTranslation("task");
   const badge = qualityBadge[summary.quality_flag];
-  const spawns = summary.session_count === 1 ? "1 spawn" : `${summary.session_count} spawns`;
+  const spawns = t("cost.spawns", { count: summary.session_count });
 
   return (
     <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
       <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        Cost &amp; Quality
+        {t("cost.title")}
       </p>
       <p className="text-xs text-foreground">
         {formatCost(summary.total_cost)}
         {" · "}
-        {formatTokens(summary.tokens_in)} / {formatTokens(summary.tokens_out)} tok
+        {formatTokens(summary.tokens_in)} / {formatTokens(summary.tokens_out)} {t("cost.tokens")}
         {" · "}
         {spawns}
       </p>

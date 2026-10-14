@@ -69,6 +69,25 @@ function flatten(obj: Record<string, unknown>, prefix = ""): string[] {
   );
 }
 
+// Plural keys (`key_one`, `key_other`, ...) carry the CLDR categories of their
+// own language: en has one/other, ru has one/few/many/other. A plural base in en
+// therefore expects every category of the target language, not en's suffixes.
+const PLURAL_SUFFIX = /_(zero|one|two|few|many|other)$/;
+function expectedKeys(enKeys: Iterable<string>, lang: string): Set<string> {
+  const categories = new Intl.PluralRules(lang).resolvedOptions().pluralCategories;
+  const out = new Set<string>();
+  for (const k of enKeys) {
+    const m = PLURAL_SUFFIX.exec(k);
+    if (!m) {
+      out.add(k);
+      continue;
+    }
+    const base = k.slice(0, m.index);
+    for (const c of categories) out.add(`${base}_${c}`);
+  }
+  return out;
+}
+
 describe("locale files are complete", () => {
   it("every namespace exists in every language", () => {
     const langs = fs.readdirSync(path.resolve(__dirname, "../../locales"));
@@ -78,12 +97,20 @@ describe("locale files are complete", () => {
   it("every en key is in ru, and ru has no keys en lacks", () => {
     const missing: string[] = [];
     for (const ns of NAMESPACES) {
-      const en = new Set(flatten(resources.en?.[ns] ?? {}));
+      const en = expectedKeys(flatten(resources.en?.[ns] ?? {}), "ru");
       const ru = new Set(flatten(resources.ru?.[ns] ?? {}));
       for (const k of en) if (!ru.has(k)) missing.push(`ru/${ns}: missing ${k}`);
-      for (const k of ru) if (!en.has(k)) missing.push(`ru/${ns}: orphan ${k}`);
+      // ru plural forms (_few/_many) have no en counterpart: they belong to the en plural key (_other).
+      const pluralBase = (k: string) => k.replace(/_(zero|one|two|few|many|other)$/, "_other");
+      for (const k of ru) if (!en.has(k) && !en.has(pluralBase(k))) missing.push(`ru/${ns}: orphan ${k}`);
     }
     expect(missing).toEqual([]);
+  });
+
+  it("expects every ru plural category for an en plural key", () => {
+    expect([...expectedKeys(["a.n_one", "a.n_other", "b"], "ru")].sort()).toEqual(
+      ["a.n_few", "a.n_many", "a.n_one", "a.n_other", "b"],
+    );
   });
 });
 

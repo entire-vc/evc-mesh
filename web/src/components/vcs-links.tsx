@@ -8,6 +8,7 @@ import {
   Trash2,
   ExternalLink,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,20 +25,20 @@ import { formatDateTime, formatRelative } from "@/lib/utils";
 
 const LINK_TYPE_CONFIG: Record<
   VCSLinkType,
-  { label: string; icon: typeof GitPullRequest; color: string }
+  { icon: typeof GitPullRequest; color: string }
 > = {
-  pr: { label: "Pull Request", icon: GitPullRequest, color: "text-violet-500" },
-  commit: { label: "Commit", icon: GitCommit, color: "text-amber-500" },
-  branch: { label: "Branch", icon: GitBranch, color: "text-teal-500" },
+  pr: { icon: GitPullRequest, color: "text-violet-500" },
+  commit: { icon: GitCommit, color: "text-amber-500" },
+  branch: { icon: GitBranch, color: "text-teal-500" },
 };
 
 const PR_STATUS_CONFIG: Record<
   string,
-  { label: string; className: string }
+  { className: string }
 > = {
-  open: { label: "Open", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200" },
-  merged: { label: "Merged", className: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200" },
-  closed: { label: "Closed", className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
+  open: { className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200" },
+  merged: { className: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200" },
+  closed: { className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
 };
 
 /**
@@ -47,26 +48,27 @@ const PR_STATUS_CONFIG: Record<
  * terminal, so they get no hint.
  */
 export function PRSyncHint({ link }: { link: VCSLink }) {
+  const { t } = useTranslation("task");
   if (link.link_type !== "pr" || link.status !== "open") return null;
   const syncedAt = link.status_synced_at;
   if (!syncedAt) {
     return (
       <span
         className="text-muted-foreground"
-        title="This open status has never been confirmed by a provider webhook"
+        title={t("vcs.sync.neverConfirmed")}
         data-testid="pr-sync-hint"
       >
-        not verified
+        {t("vcs.sync.notVerified")}
       </span>
     );
   }
   return (
     <span
       className="text-muted-foreground"
-      title={`Status last confirmed ${formatDateTime(syncedAt)}`}
+      title={t("vcs.sync.lastConfirmed", { date: formatDateTime(syncedAt) })}
       data-testid="pr-sync-hint"
     >
-      synced {formatRelative(syncedAt)}
+      {t("vcs.sync.synced", { when: formatRelative(syncedAt) })}
     </span>
   );
 }
@@ -80,6 +82,7 @@ interface VCSLinksProps {
 }
 
 export function VCSLinks({ taskId }: VCSLinksProps) {
+  const { t } = useTranslation("task");
   const [links, setLinks] = useState<VCSLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -114,7 +117,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.url || !form.external_id) {
-      setError("URL and external ID are required.");
+      setError(t("vcs.required"));
       return;
     }
     setSubmitting(true);
@@ -128,7 +131,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
       setShowForm(false);
       setForm({ link_type: "pr", external_id: "", url: "", title: "", provider: "github" });
     } catch (err: unknown) {
-      setError(apiErrorMessage(err, "Failed to create link."));
+      setError(apiErrorMessage(err, t("vcs.createFailed")));
     } finally {
       setSubmitting(false);
     }
@@ -157,7 +160,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Link className="h-4 w-4" />
-          VCS Links
+          {t("vcs.title")}
           {links.length > 0 && (
             <span className="text-xs text-muted-foreground">({links.length})</span>
           )}
@@ -169,7 +172,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
           onClick={() => setShowForm((v) => !v)}
         >
           <Plus className="h-3 w-3" />
-          Link PR
+          {t("vcs.linkPr")}
         </Button>
       </div>
 
@@ -201,12 +204,12 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
                       <Badge
                         className={cn("shrink-0 text-[10px] px-1.5 py-0", statusCfg.className)}
                       >
-                        {statusCfg.label}
+                        {t(`vcs.status.${link.status}`)}
                       </Badge>
                     )}
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {cfg.label} #{link.external_id} &middot; {link.provider}
+                    {t(`vcs.type.${link.link_type in LINK_TYPE_CONFIG ? link.link_type : "commit"}`)} #{link.external_id} &middot; {link.provider}
                     {link.status === "open" && link.link_type === "pr" && (<> &middot; <PRSyncHint link={link} /></>)}
                   </p>
                 </div>
@@ -223,7 +226,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
       )}
 
       {links.length === 0 && !showForm && (
-        <p className="text-xs text-muted-foreground">No VCS links yet.</p>
+        <p className="text-xs text-muted-foreground">{t("vcs.empty")}</p>
       )}
 
       {/* Add link form */}
@@ -231,7 +234,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-2 rounded-lg border border-border p-3">
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-xs text-muted-foreground">Type</label>
+              <label className="text-xs text-muted-foreground">{t("vcs.form.type")}</label>
               <Select
                 value={form.link_type}
                 onChange={(e) =>
@@ -239,13 +242,13 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
                 }
                 className="mt-1"
               >
-                <option value="pr">Pull Request</option>
-                <option value="commit">Commit</option>
-                <option value="branch">Branch</option>
+                <option value="pr">{t("vcs.type.pr")}</option>
+                <option value="commit">{t("vcs.type.commit")}</option>
+                <option value="branch">{t("vcs.type.branch")}</option>
               </Select>
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">Provider</label>
+              <label className="text-xs text-muted-foreground">{t("vcs.form.provider")}</label>
               <Select
                 value={form.provider}
                 onChange={(e) =>
@@ -272,7 +275,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
               <label className="text-xs text-muted-foreground">ID / SHA</label>
               <Input
                 className="mt-1"
-                placeholder="123 or abc123ef"
+                placeholder={t("vcs.form.idPlaceholder")}
                 value={form.external_id}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, external_id: e.target.value }))
@@ -280,10 +283,10 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">Title (optional)</label>
+              <label className="text-xs text-muted-foreground">{t("vcs.form.title")}</label>
               <Input
                 className="mt-1"
-                placeholder="Fix authentication bug"
+                placeholder={t("vcs.form.titlePlaceholder")}
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
               />
@@ -292,7 +295,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
           {error && <p className="text-xs text-destructive">{error}</p>}
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={submitting} className="flex-1">
-              {submitting ? "Linking..." : "Add Link"}
+              {submitting ? t("vcs.form.linking") : t("vcs.form.submit")}
             </Button>
             <Button
               type="button"
@@ -303,7 +306,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
                 setError(null);
               }}
             >
-              Cancel
+              {t("actions.cancel")}
             </Button>
           </div>
         </form>

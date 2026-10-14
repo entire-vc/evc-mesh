@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
@@ -244,6 +245,7 @@ function useTaskSearch() {
 // ---------------------------------------------------------------------------
 
 function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
+  const { t } = useTranslation("shell");
   const navigate = useNavigate();
   const { query, handleQueryChange, results, isLoading, clear } =
     useTaskSearch();
@@ -325,7 +327,7 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
       )}
       <Input
         ref={inputRef}
-        placeholder="Search tasks..."
+        placeholder={t("header.search.placeholder")}
         className="pl-8 pr-8"
         value={query}
         onChange={(e) => {
@@ -356,11 +358,11 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
           {isLoading && results.length === 0 ? (
             <div className="flex items-center justify-center gap-2 px-3 py-4 text-sm text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Searching...
+              {t("header.search.searching")}
             </div>
           ) : results.length === 0 ? (
             <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-              No results found
+              {t("header.search.noResults")}
             </div>
           ) : (
             <ul className="max-h-80 overflow-y-auto py-1">
@@ -434,11 +436,12 @@ function DocsShortcutLink({
   wsSlug: string;
   projectSlug: string;
 }) {
+  const { t } = useTranslation("shell");
   return (
     <Link
       to={`/w/${wsSlug}/p/${projectSlug}/docs`}
-      title="Project docs"
-      aria-label="Project docs"
+      title={t("header.projectDocs")}
+      aria-label={t("header.projectDocs")}
       className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
       <BookOpen className="h-4 w-4" />
@@ -481,26 +484,27 @@ function useTeamView(): "tree" | "grid" | null {
 }
 
 interface WorkspacePage {
-  title: string;
+  /** `shell` namespace key, resolved at render. */
+  titleKey: string;
   icon: React.ComponentType<{ className?: string }>;
 }
 
 const WORKSPACE_PAGES: Array<{
   pattern: RegExp;
-  title: string;
+  titleKey: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { pattern: /\/w\/[^/]+\/?$/, title: "Dashboard", icon: LayoutDashboard },
-  { pattern: /\/w\/[^/]+\/org-chart(\/grid)?\/?$/, title: "Team", icon: Bot },
-  { pattern: /\/w\/[^/]+\/memories\/?$/, title: "Memory", icon: Brain },
-  { pattern: /\/w\/[^/]+\/sessions\/?$/, title: "Sessions", icon: MonitorDot },
-  { pattern: /\/w\/[^/]+\/spark\/?$/, title: "Spark Catalog", icon: Sparkles },
-  { pattern: /\/w\/[^/]+\/events\/?$/, title: "Events", icon: Activity },
-  { pattern: /\/w\/[^/]+\/analytics\/?$/, title: "Analytics", icon: BarChart2 },
-  { pattern: /\/w\/[^/]+\/integrations\/?$/, title: "Integrations", icon: Settings },
-  { pattern: /\/w\/[^/]+\/initiatives\/?$/, title: "Initiatives", icon: Target },
-  { pattern: /\/w\/[^/]+\/triage\/?$/, title: "Triage Inbox", icon: Inbox },
-  { pattern: /\/w\/[^/]+\/connected-apps\/?$/, title: "Connected apps", icon: Plug },
+  { pattern: /\/w\/[^/]+\/?$/, titleKey: "nav.dashboard", icon: LayoutDashboard },
+  { pattern: /\/w\/[^/]+\/org-chart(\/grid)?\/?$/, titleKey: "nav.team", icon: Bot },
+  { pattern: /\/w\/[^/]+\/memories\/?$/, titleKey: "nav.memory", icon: Brain },
+  { pattern: /\/w\/[^/]+\/sessions\/?$/, titleKey: "nav.sessions", icon: MonitorDot },
+  { pattern: /\/w\/[^/]+\/spark\/?$/, titleKey: "nav.spark", icon: Sparkles },
+  { pattern: /\/w\/[^/]+\/events\/?$/, titleKey: "nav.events", icon: Activity },
+  { pattern: /\/w\/[^/]+\/analytics\/?$/, titleKey: "nav.analytics", icon: BarChart2 },
+  { pattern: /\/w\/[^/]+\/integrations\/?$/, titleKey: "nav.integrations", icon: Settings },
+  { pattern: /\/w\/[^/]+\/initiatives\/?$/, titleKey: "nav.initiatives", icon: Target },
+  { pattern: /\/w\/[^/]+\/triage\/?$/, titleKey: "nav.triage", icon: Inbox },
+  { pattern: /\/w\/[^/]+\/connected-apps\/?$/, titleKey: "nav.connectedApps", icon: Plug },
 ];
 
 function useWorkspacePage(): WorkspacePage | null {
@@ -510,7 +514,7 @@ function useWorkspacePage(): WorkspacePage | null {
   if (/\/w\/[^/]+\/p\//.test(path)) return null;
   for (const entry of WORKSPACE_PAGES) {
     if (entry.pattern.test(path)) {
-      return { title: entry.title, icon: entry.icon };
+      return { titleKey: entry.titleKey, icon: entry.icon };
     }
   }
   return null;
@@ -519,13 +523,13 @@ function useWorkspacePage(): WorkspacePage | null {
 const TEAM_TABS = [
   {
     id: "tree" as const,
-    label: "Tree",
+    labelKey: "header.teamTabs.tree",
     Icon: Network,
     path: (ws: string) => `/w/${ws}/org-chart`,
   },
   {
     id: "grid" as const,
-    label: "By Project",
+    labelKey: "header.teamTabs.byProject",
     Icon: LayoutGrid,
     path: (ws: string) => `/w/${ws}/org-chart/grid`,
   },
@@ -533,9 +537,10 @@ const TEAM_TABS = [
 
 function TeamViewTabs({ currentView, wsSlug }: { currentView: "tree" | "grid"; wsSlug: string }) {
   const navigate = useNavigate();
+  const { t } = useTranslation("shell");
   return (
     <div className="flex items-center gap-0 ml-1 sm:ml-4">
-      {TEAM_TABS.map(({ id, label, Icon, path }) => {
+      {TEAM_TABS.map(({ id, labelKey, Icon, path }) => {
         const isActive = currentView === id;
         return (
           <button
@@ -549,7 +554,7 @@ function TeamViewTabs({ currentView, wsSlug }: { currentView: "tree" | "grid"; w
             )}
           >
             <Icon className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{label}</span>
+            <span className="hidden sm:inline">{t(labelKey)}</span>
           </button>
         );
       })}
@@ -558,6 +563,7 @@ function TeamViewTabs({ currentView, wsSlug }: { currentView: "tree" | "grid"; w
 }
 
 export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps) {
+  const { t } = useTranslation("shell");
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
@@ -615,7 +621,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
                 <ChevronRight className="h-3 w-3 shrink-0" />
                 <span className="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
                   <workspacePage.icon className="h-3.5 w-3.5" />
-                  {workspacePage.title}
+                  {t(workspacePage.titleKey)}
                 </span>
               </>
             )}
@@ -662,7 +668,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
           variant="ghost"
           size="icon"
           onClick={onInstall}
-          title="Install Mesh as app"
+          title={t("header.installApp")}
           className="hidden md:inline-flex"
         >
           <Download className="h-4 w-4" />
@@ -674,7 +680,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
           ACTIVE right now, not just an icon that flips after the click. */}
       <DropdownMenu>
         <DropdownMenuTrigger>
-          <Avatar name={user?.name || "User"} src={user?.avatar_url} size="sm" />
+          <Avatar name={user?.name || t("header.userMenu.userFallback")} src={user?.avatar_url} size="sm" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <div className="px-2 py-1.5">
@@ -688,9 +694,9 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
             ) : (
               <Sun className="mr-2 h-4 w-4" />
             )}
-            <span className="flex-1">Theme</span>
+            <span className="flex-1">{t("header.userMenu.theme")}</span>
             <span className="text-xs text-muted-foreground">
-              {isDark ? "Dark" : "Light"}
+              {isDark ? t("header.userMenu.themeDark") : t("header.userMenu.themeLight")}
             </span>
           </DropdownMenuItem>
           {(wsSlug ?? currentWorkspace?.slug) && (
@@ -700,13 +706,13 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
               }
             >
               <Plug className="mr-2 h-4 w-4" />
-              Connected apps
+              {t("nav.connectedApps")}
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout}>
             <LogOut className="mr-2 h-4 w-4" />
-            Log out
+            {t("header.userMenu.logOut")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -25,6 +25,7 @@ import {
   User,
   X,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useTaskStore } from "@/stores/task";
 import { useProjectStore } from "@/stores/project";
 import { useCustomFieldStore } from "@/stores/custom-field";
@@ -94,6 +95,7 @@ export function TaskSlideOver({
   onClose,
   onTaskUpdated,
 }: TaskSlideOverProps) {
+  const { t } = useTranslation("task");
   // Task navigation stack — must be declared before selectors that depend on it
   const [taskIdStack, setTaskIdStack] = useState<string[]>([]);
   const effectiveTaskId =
@@ -289,9 +291,9 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { title: titleDraft.trim() });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to update title"));
+      toast.error(apiErrorMessage(err, t("panel.toast.updateTitleFailed")));
     }
-  }, [currentTask, titleDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, titleDraft, updateTask, onTaskUpdated, t]);
 
   const handleTitleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") void handleTitleSave();
@@ -314,12 +316,12 @@ export function TaskSlideOver({
       setTimeout(() => setDescSaved(false), 1500);
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to save description"),
+        apiErrorMessage(err, t("panel.toast.saveDescriptionFailed")),
       );
     } finally {
       setDescSaving(false);
     }
-  }, [currentTask, descDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, descDraft, updateTask, onTaskUpdated, t]);
 
   // Debounced autosave for description (2s after last keystroke)
   useEffect(() => {
@@ -340,7 +342,7 @@ export function TaskSlideOver({
       if (taskId) await fetchTask(taskId);
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to change status"));
+      toast.error(apiErrorMessage(err, t("panel.toast.changeStatusFailed")));
     }
   };
 
@@ -350,7 +352,7 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { priority });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to change priority"));
+      toast.error(apiErrorMessage(err, t("panel.toast.changePriorityFailed")));
     }
   };
 
@@ -360,7 +362,7 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { delegation_level: level });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to change delegation mode"));
+      toast.error(apiErrorMessage(err, t("panel.toast.changeDelegationFailed")));
     }
   };
 
@@ -382,7 +384,7 @@ export function TaskSlideOver({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to change assignee"),
+        apiErrorMessage(err, t("panel.toast.changeAssigneeFailed")),
       );
     }
   };
@@ -396,7 +398,7 @@ export function TaskSlideOver({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to change due date"),
+        apiErrorMessage(err, t("panel.toast.changeDueDateFailed")),
       );
     }
   };
@@ -406,16 +408,16 @@ export function TaskSlideOver({
     try {
       const newTask = await duplicateTask(currentTask);
       onTaskUpdated?.();
-      toast.success("Task duplicated");
+      toast.success(t("panel.toast.duplicated"));
       if (newTask?.id) {
         await fetchTask(newTask.id);
       }
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to duplicate task"),
+        apiErrorMessage(err, t("panel.toast.duplicateFailed")),
       );
     }
-  }, [currentTask, duplicateTask, fetchTask, onTaskUpdated]);
+  }, [currentTask, duplicateTask, fetchTask, onTaskUpdated, t]);
 
   const handleHoursSave = useCallback(async () => {
     setEditingHours(false);
@@ -427,10 +429,10 @@ export function TaskSlideOver({
       onTaskUpdated?.();
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to update estimate"),
+        apiErrorMessage(err, t("panel.toast.updateEstimateFailed")),
       );
     }
-  }, [currentTask, hoursDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, hoursDraft, updateTask, onTaskUpdated, t]);
 
   const handleHoursKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") void handleHoursSave();
@@ -458,9 +460,9 @@ export function TaskSlideOver({
       await updateTask(currentTask.id, { labels });
       onTaskUpdated?.();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to add label"));
+      toast.error(apiErrorMessage(err, t("panel.toast.addLabelFailed")));
     }
-  }, [currentTask, labelDraft, updateTask, onTaskUpdated]);
+  }, [currentTask, labelDraft, updateTask, onTaskUpdated, t]);
 
   const handleRemoveLabel = useCallback(
     async (label: string) => {
@@ -471,11 +473,11 @@ export function TaskSlideOver({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          apiErrorMessage(err, "Failed to remove label"),
+          apiErrorMessage(err, t("panel.toast.removeLabelFailed")),
         );
       }
     },
-    [currentTask, updateTask, onTaskUpdated],
+    [currentTask, updateTask, onTaskUpdated, t],
   );
 
   const handleCustomFieldChange = useCallback(
@@ -491,11 +493,11 @@ export function TaskSlideOver({
         onTaskUpdated?.();
       } catch (err) {
         toast.error(
-          apiErrorMessage(err, "Failed to update field"),
+          apiErrorMessage(err, t("panel.toast.updateFieldFailed")),
         );
       }
     },
-    [currentTask, updateTask, onTaskUpdated],
+    [currentTask, updateTask, onTaskUpdated, t],
   );
 
   // ---- Derived state -------------------------------------------------------
@@ -533,7 +535,7 @@ export function TaskSlideOver({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Task detail"
+        aria-label={t("panel.header.taskDetail")}
         className={cn(
           "fixed right-0 top-0 z-50 flex h-full w-full flex-col bg-background shadow-2xl transition-transform duration-300 ease-in-out sm:w-[90vw] lg:w-[72vw] xl:w-[65vw]",
           open ? "translate-x-0" : "translate-x-full",
@@ -549,11 +551,11 @@ export function TaskSlideOver({
                 type="button"
                 onClick={popTask}
                 className="flex shrink-0 items-center gap-1 rounded p-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title="Back to parent task"
+                title={t("panel.header.backToParent")}
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 <span className="max-w-[180px] truncate">
-                  {backTask?.title ?? "Back"}
+                  {backTask?.title ?? t("panel.header.back")}
                 </span>
               </button>
             ) : (
@@ -578,7 +580,7 @@ export function TaskSlideOver({
                   type="button"
                   onClick={() => void handleDuplicate()}
                   className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  title="Duplicate task"
+                  title={t("panel.header.duplicate")}
                 >
                   <Copy className="h-4 w-4" />
                 </button>
@@ -587,7 +589,7 @@ export function TaskSlideOver({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  title="Open in new tab"
+                  title={t("panel.header.openInNewTab")}
                 >
                   <ExternalLink className="h-4 w-4" />
                 </a>
@@ -596,10 +598,10 @@ export function TaskSlideOver({
                   onClick={async () => {
                     const url = `${window.location.origin}/t/${currentTask.id}`;
                     await navigator.clipboard.writeText(url);
-                    toast.success("Link copied");
+                    toast.success(t("panel.header.linkCopied"));
                   }}
                   className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  title="Copy link"
+                  title={t("panel.header.copyLink")}
                 >
                   <Link className="h-4 w-4" />
                 </button>
@@ -609,7 +611,7 @@ export function TaskSlideOver({
               type="button"
               onClick={onClose}
               className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              aria-label="Close"
+              aria-label={t("panel.header.close")}
             >
               <X className="h-4 w-4" />
             </button>
@@ -674,14 +676,14 @@ export function TaskSlideOver({
                 <div className="rounded-lg border border-border bg-muted/20 p-3">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Properties
+                      {t("panel.props.title")}
                     </span>
                     <button
                       type="button"
                       className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                       onClick={() => setHideEmpty((v) => !v)}
                     >
-                      {hideEmpty ? "Show empty" : "Hide empty"}
+                      {hideEmpty ? t("panel.props.showEmpty") : t("panel.props.hideEmpty")}
                     </button>
                   </div>
 
@@ -694,7 +696,7 @@ export function TaskSlideOver({
                           style={{ backgroundColor: currentStatus.color }}
                         />
                       )}
-                      Status
+                      {t("panel.props.status")}
                     </label>
                     <Select
                       value={currentTask.status_id}
@@ -712,7 +714,7 @@ export function TaskSlideOver({
 
                     {/* Priority */}
                     <label className="pt-1 text-xs text-muted-foreground">
-                      Priority
+                      {t("panel.props.priority")}
                     </label>
                     <Select
                       value={currentTask.priority}
@@ -730,7 +732,7 @@ export function TaskSlideOver({
 
                     {/* Delegation mode */}
                     <label className="pt-1 text-xs text-muted-foreground">
-                      Delegation
+                      {t("panel.props.delegation")}
                     </label>
                     <DelegationLevelSelect
                       value={currentTask.delegation_level}
@@ -745,7 +747,7 @@ export function TaskSlideOver({
                       ) : (
                         <User className="h-3 w-3" />
                       )}
-                      Assignee
+                      {t("panel.props.assignee")}
                     </label>
                     <Select
                       value={
@@ -756,10 +758,10 @@ export function TaskSlideOver({
                       onChange={(e) => void handleAssigneeChange(e.target.value)}
                       className="h-7 text-xs"
                     >
-                      <option value="unassigned">Unassigned</option>
+                      <option value="unassigned">{t("panel.props.unassigned")}</option>
                       {user && !projectMembers.some((m) => m.user_id === user.id) && (
                         <option value={`user:${user.id}`}>
-                          {user.name} (you)
+                          {user.name}{t("panel.props.youSuffix")}
                         </option>
                       )}
                       {(() => {
@@ -775,7 +777,7 @@ export function TaskSlideOver({
                           const isSelf = user && m.user.id === user.id;
                           return (
                             <option key={m.id} value={`user:${m.user.id}`}>
-                              {inlineLabel(m.user)}{isSelf ? " (you)" : ""} — {m.role}
+                              {inlineLabel(m.user)}{isSelf ? t("panel.props.youSuffix") : ""} — {m.role}
                             </option>
                           );
                         }
@@ -802,7 +804,7 @@ export function TaskSlideOver({
                         if (!resolved) return null;
                         return (
                           <option value={`${currentTask.assignee_type}:${currentTask.assignee_id}`}>
-                            {agentLabel(resolved, currentTask.assignee_type === "agent" ? teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.short_tag : null)} (not a project member)
+                            {agentLabel(resolved, currentTask.assignee_type === "agent" ? teamDirectory?.agents.find((a) => a.id === currentTask.assignee_id)?.short_tag : null)} {t("panel.props.notProjectMember")}
                           </option>
                         );
                       })()}
@@ -812,7 +814,7 @@ export function TaskSlideOver({
                     {showDueDate && (
                       <>
                         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-                          Due Date
+                          {t("panel.props.dueDate")}
                         </label>
                         <DatePickerPopover
                           value={
@@ -824,7 +826,7 @@ export function TaskSlideOver({
                             void handleDueDateChange(val ?? "")
                           }
                           includeTime
-                          placeholder="Set due date"
+                          placeholder={t("panel.props.setDueDate")}
                         />
                       </>
                     )}
@@ -834,7 +836,7 @@ export function TaskSlideOver({
                       <>
                         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
                           <Tag className="h-3 w-3" />
-                          Labels
+                          {t("panel.props.labels")}
                         </label>
                         <div className="flex flex-wrap items-center gap-1">
                           {(currentTask.labels ?? []).map((label) => (
@@ -843,7 +845,7 @@ export function TaskSlideOver({
                               variant="secondary"
                               className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
                               onClick={() => void handleRemoveLabel(label)}
-                              title="Click to remove"
+                              title={t("panel.props.clickToRemove")}
                             >
                               {label}
                               <X className="h-2 w-2" />
@@ -863,7 +865,7 @@ export function TaskSlideOver({
                                 }
                               }}
                               className="h-5 w-20 px-1 text-[10px]"
-                              placeholder="Label..."
+                              placeholder={t("panel.props.labelPlaceholder")}
                             />
                           ) : (
                             <button
@@ -871,7 +873,7 @@ export function TaskSlideOver({
                               className="rounded border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-foreground"
                               onClick={() => setAddingLabel(true)}
                             >
-                              + Add
+                              {t("panel.props.addLabel")}
                             </button>
                           )}
                         </div>
@@ -883,7 +885,7 @@ export function TaskSlideOver({
                       <>
                         <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
                           <Hourglass className="h-3 w-3" />
-                          Estimate
+                          {t("panel.props.estimate")}
                         </label>
                         {editingHours ? (
                           <Input
@@ -894,7 +896,7 @@ export function TaskSlideOver({
                             onKeyDown={handleHoursKeyDown}
                             min={0}
                             step={0.5}
-                            placeholder="e.g. 4"
+                            placeholder={t("panel.props.estimatePlaceholder")}
                             className="h-7 w-24 text-xs"
                           />
                         ) : (
@@ -905,11 +907,11 @@ export function TaskSlideOver({
                           >
                             {currentTask.estimated_hours != null ? (
                               <span className="font-medium">
-                                {currentTask.estimated_hours}h
+                                {t("panel.props.hoursValue", { value: currentTask.estimated_hours })}
                               </span>
                             ) : (
                               <span className="text-muted-foreground">
-                                Set estimate
+                                {t("panel.props.setEstimate")}
                               </span>
                             )}
                             <Pencil className="h-2.5 w-2.5 text-muted-foreground" />
@@ -926,7 +928,7 @@ export function TaskSlideOver({
                         </div>
                         <label className="col-span-2 flex items-center gap-1 text-xs font-medium text-muted-foreground">
                           <SlidersHorizontal className="h-3 w-3" />
-                          Custom Fields
+                          {t("panel.props.customFields")}
                         </label>
                         {[...customFieldDefs]
                           .sort((a, b) => a.position - b.position)
@@ -967,13 +969,13 @@ export function TaskSlideOver({
                     <div className="col-span-2 flex items-center justify-between gap-2 pt-1">
                       <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                         <Clock className="h-3 w-3" />
-                        Created
+                        {t("panel.props.created")}
                       </label>
                       <span className="text-right text-xs">{formatDate(currentTask.created_at)}</span>
                     </div>
 
                     <div className="col-span-2 flex items-center justify-between gap-2">
-                      <label className="shrink-0 text-xs text-muted-foreground">Updated</label>
+                      <label className="shrink-0 text-xs text-muted-foreground">{t("panel.props.updated")}</label>
                       <span className="text-right text-xs text-muted-foreground">
                         {formatRelative(currentTask.updated_at)}
                       </span>
@@ -1009,7 +1011,7 @@ export function TaskSlideOver({
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Description
+                      {t("panel.description.title")}
                     </h3>
                     <div className="flex items-center gap-2">
                       {editingDescription ? (
@@ -1017,13 +1019,13 @@ export function TaskSlideOver({
                           {descSaving && (
                             <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                               <Loader2 className="h-3 w-3 animate-spin" />
-                              Saving…
+                              {t("panel.description.saving")}
                             </span>
                           )}
                           {descSaved && !descSaving && (
                             <span className="flex items-center gap-1 text-[11px] text-green-600">
                               <Check className="h-3 w-3" />
-                              Saved
+                              {t("panel.description.saved")}
                             </span>
                           )}
                           <Button
@@ -1037,7 +1039,7 @@ export function TaskSlideOver({
                               );
                             }}
                           >
-                            Done
+                            {t("actions.done")}
                           </Button>
                           <Button
                             size="sm"
@@ -1049,7 +1051,7 @@ export function TaskSlideOver({
                               setEditingDescription(false);
                             }}
                           >
-                            Cancel
+                            {t("actions.cancel")}
                           </Button>
                         </>
                       ) : (
@@ -1059,7 +1061,7 @@ export function TaskSlideOver({
                           onClick={() => setEditingDescription(true)}
                         >
                           <Pencil className="h-3 w-3" />
-                          Edit
+                          {t("actions.edit")}
                         </button>
                       )}
                     </div>
@@ -1068,7 +1070,7 @@ export function TaskSlideOver({
                     <RichTextEditor
                       value={descDraft}
                       onChange={setDescDraft}
-                      placeholder="Add a description..."
+                      placeholder={t("panel.description.placeholder")}
                       projId={currentTask.project_id}
                       taskId={currentTask.id}
                     />
@@ -1083,7 +1085,7 @@ export function TaskSlideOver({
                           className="cursor-text text-muted-foreground hover:text-foreground"
                           onClick={() => setEditingDescription(true)}
                         >
-                          Add a description...
+                          {t("panel.description.placeholder")}
                         </span>
                       )}
                     </div>
@@ -1109,7 +1111,7 @@ export function TaskSlideOver({
                   )}
                   onClick={() => setRightTab("comments")}
                 >
-                  Comments
+                  {t("panel.tabs.comments")}
                 </button>
                 <button
                   type="button"
@@ -1122,7 +1124,7 @@ export function TaskSlideOver({
                   onClick={() => setRightTab("subtasks")}
                 >
                   <ListTree className="h-3.5 w-3.5" />
-                  Subtasks
+                  {t("panel.tabs.subtasks")}
                   {currentTask.subtask_count != null &&
                     currentTask.subtask_count > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
@@ -1141,7 +1143,7 @@ export function TaskSlideOver({
                   onClick={() => setRightTab("dependencies")}
                   aria-pressed={rightTab === "dependencies"}
                 >
-                  Dependencies <DependencyBadge source={dependencies} />
+                  {t("panel.tabs.dependencies")} <DependencyBadge source={dependencies} />
                 </button>
                 <button
                   type="button"
@@ -1154,7 +1156,7 @@ export function TaskSlideOver({
                   onClick={() => setRightTab("artifacts")}
                 >
                   <Package className="h-3.5 w-3.5" />
-                  Artifacts
+                  {t("panel.tabs.artifacts")}
                   {currentTask.artifact_count != null &&
                     currentTask.artifact_count > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
@@ -1172,7 +1174,7 @@ export function TaskSlideOver({
                   )}
                   onClick={() => setRightTab("activity")}
                 >
-                  Activity
+                  {t("panel.tabs.activity")}
                 </button>
               </div>
 
@@ -1230,7 +1232,7 @@ export function TaskSlideOver({
         {/* No task loaded (taskId set but not fetched yet or error) */}
         {!loading && !currentTask && taskId && (
           <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <p className="text-sm">Task not found.</p>
+            <p className="text-sm">{t("panel.notFound")}</p>
           </div>
         )}
       </div>

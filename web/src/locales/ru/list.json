@@ -1,0 +1,122 @@
+{
+  "projectNotFound": "Проект «{{slug}}» не найден",
+  "priority": {
+    "urgent": "Срочный",
+    "high": "Высокий",
+    "medium": "Средний",
+    "low": "Низкий",
+    "none": "Нет"
+  },
+  "columns": {
+    "name": "Название",
+    "title": "Название",
+    "status": "Статус",
+    "priority": "Приоритет",
+    "assignee": "Исполнитель",
+    "dueDate": "Срок",
+    "labels": "Метки",
+    "estimate": "Оценка",
+    "created": "Создано"
+  },
+  "columnPicker": {
+    "button": "Колонки",
+    "toggle": "Показать или скрыть колонки",
+    "required": "обязательно",
+    "reset": "Сбросить по умолчанию"
+  },
+  "status": {
+    "unknown": "Неизвестно"
+  },
+  "toolbar": {
+    "waitingOnMe": "Ждут меня",
+    "newTask": "Новая задача"
+  },
+  "empty": {
+    "humanGateTitle": "Ничего не ждёт человека",
+    "humanGateDescription": "Сейчас ни у одной задачи проекта нет human gate.",
+    "clearFilter": "Сбросить фильтр",
+    "noTasksTitle": "Задач пока нет",
+    "noTasksDescription": "Создайте задачи, чтобы увидеть их в списке."
+  },
+  "table": {
+    "selectAll": "Выбрать все задачи",
+    "selectTask": "Выбрать задачу {{title}}",
+    "estimateHours": "{{hours}} ч"
+  },
+  "group": {
+    "addTask": "Добавить задачу",
+    "taskTitlePlaceholder": "Название задачи..."
+  },
+  "subtasks": {
+    "loading": "Загрузка подзадач...",
+    "empty": "Нет подзадач",
+    "expand": "Развернуть подзадачи",
+    "collapse": "Свернуть подзадачи"
+  },
+  "row": {
+    "humanGate": "Ждёт подтверждения человека",
+    "humanGateSoft": "Ждёт подтверждения человека (мягкий gate — снимется сам по таймауту)",
+    "hasDescription": "Есть описание",
+    "falseOpenAllClosed": "False-open: все подзадачи закрыты",
+    "falseOpenParked": "False-open: остались только отложенные подзадачи",
+    "editTask": "Редактировать задачу"
+  },
+  "pagination": {
+    "showing_one": "Показано {{start}}–{{end}} из {{count}} задачи",
+    "showing_few": "Показано {{start}}–{{end}} из {{count}} задач",
+    "showing_many": "Показано {{start}}–{{end}} из {{count}} задач",
+    "showing_other": "Показано {{start}}–{{end}} из {{count}} задачи",
+    "customFields_one": "{{count}} пользовательское поле",
+    "customFields_few": "{{count}} пользовательских поля",
+    "customFields_many": "{{count}} пользовательских полей",
+    "customFields_other": "{{count}} пользовательского поля",
+    "previous": "Назад",
+    "next": "Вперёд",
+    "pageOf": "Стр. {{page}} из {{total}}"
+  },
+  "bulk": {
+    "updating": "Обновление задач: {{done}}/{{total}}...",
+    "selected_one": "Выбрана {{count}} задача",
+    "selected_few": "Выбрано {{count}} задачи",
+    "selected_many": "Выбрано {{count}} задач",
+    "selected_other": "Выбрано {{count}} задачи",
+    "moveTo": "Перенести в статус...",
+    "setPriority": "Задать приоритет...",
+    "delete": "Удалить"
+  },
+  "deleteDialog": {
+    "title": "Удалить задачи",
+    "description_one": "Удалить {{count}} задачу? Это действие нельзя отменить.",
+    "description_few": "Удалить {{count}} задачи? Это действие нельзя отменить.",
+    "description_many": "Удалить {{count}} задач? Это действие нельзя отменить.",
+    "description_other": "Удалить {{count}} задачи? Это действие нельзя отменить.",
+    "cancel": "Отмена",
+    "confirm_one": "Удалить {{count}} задачу",
+    "confirm_few": "Удалить {{count}} задачи",
+    "confirm_many": "Удалить {{count}} задач",
+    "confirm_other": "Удалить {{count}} задачи"
+  },
+  "toast": {
+    "loadSubtasksFailed": "Не удалось загрузить подзадачи",
+    "taskCreated": "Задача создана",
+    "createFailed": "Не удалось создать задачу",
+    "taskUpdated": "Задача обновлена",
+    "updateFailed": "Не удалось обновить задачу",
+    "bulkUpdated_one": "Обновлена {{count}} задача",
+    "bulkUpdated_few": "Обновлено {{count}} задачи",
+    "bulkUpdated_many": "Обновлено {{count}} задач",
+    "bulkUpdated_other": "Обновлено {{count}} задачи",
+    "bulkUpdateFailed_one": "Не удалось обновить {{count}} задачу",
+    "bulkUpdateFailed_few": "Не удалось обновить {{count}} задачи",
+    "bulkUpdateFailed_many": "Не удалось обновить {{count}} задач",
+    "bulkUpdateFailed_other": "Не удалось обновить {{count}} задачи",
+    "bulkDeleted_one": "Удалена {{count}} задача",
+    "bulkDeleted_few": "Удалено {{count}} задачи",
+    "bulkDeleted_many": "Удалено {{count}} задач",
+    "bulkDeleted_other": "Удалено {{count}} задачи",
+    "bulkDeleteFailed_one": "Не удалось удалить {{count}} задачу",
+    "bulkDeleteFailed_few": "Не удалось удалить {{count}} задачи",
+    "bulkDeleteFailed_many": "Не удалось удалить {{count}} задач",
+    "bulkDeleteFailed_other": "Не удалось удалить {{count}} задачи"
+  }
+}

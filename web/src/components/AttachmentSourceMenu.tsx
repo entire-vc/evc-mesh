@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { BookOpen, FileText, Paperclip, Upload } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -53,6 +54,7 @@ export function AttachmentSourceMenu({
   className,
   label,
 }: AttachmentSourceMenuProps) {
+  const { t } = useTranslation("task");
   const [docDialogOpen, setDocDialogOpen] = useState(false);
   const [relayDialogOpen, setRelayDialogOpen] = useState(false);
 
@@ -61,24 +63,24 @@ export function AttachmentSourceMenu({
       <DropdownMenu>
         <DropdownMenuTrigger
           disabled={disabled}
-          title={disabled ? disabledTitle : "Attach"}
+          title={disabled ? disabledTitle : t("attach.trigger")}
           className={cn(
             "flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline disabled:opacity-60",
             className,
           )}
         >
           <Paperclip className="h-3.5 w-3.5" />
-          {label ?? "Attach"}
+          {label ?? t("attach.trigger")}
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={onPickFiles}>
             <Upload className="mr-2 h-3.5 w-3.5" />
-            From computer
+            {t("attach.fromComputer")}
           </DropdownMenuItem>
           {projId && (
             <DropdownMenuItem onClick={() => setDocDialogOpen(true)}>
               <FileText className="mr-2 h-3.5 w-3.5" />
-              From Docs
+              {t("attach.fromDocs")}
             </DropdownMenuItem>
           )}
           {hasTrIntegration && projId && (
@@ -97,7 +99,7 @@ export function AttachmentSourceMenu({
             >
               <BookOpen className="mr-2 mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
-                From Obsidian
+                {t("attach.fromObsidian")}
                 {obsidianDisabledReason && (
                   <span className="block text-[11px] leading-tight">
                     {obsidianDisabledReason}

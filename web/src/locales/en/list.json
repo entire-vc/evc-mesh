@@ -1,0 +1,104 @@
+{
+  "projectNotFound": "Project \"{{slug}}\" not found",
+  "priority": {
+    "urgent": "Urgent",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
+    "none": "None"
+  },
+  "columns": {
+    "name": "Name",
+    "title": "Title",
+    "status": "Status",
+    "priority": "Priority",
+    "assignee": "Assignee",
+    "dueDate": "Due Date",
+    "labels": "Labels",
+    "estimate": "Estimate",
+    "created": "Created"
+  },
+  "columnPicker": {
+    "button": "Columns",
+    "toggle": "Toggle columns",
+    "required": "required",
+    "reset": "Reset to default"
+  },
+  "status": {
+    "unknown": "Unknown"
+  },
+  "toolbar": {
+    "waitingOnMe": "Waiting on me",
+    "newTask": "New Task"
+  },
+  "empty": {
+    "humanGateTitle": "Nothing waiting on a human",
+    "humanGateDescription": "No tasks in this project currently have a human gate set.",
+    "clearFilter": "Clear filter",
+    "noTasksTitle": "No tasks yet",
+    "noTasksDescription": "Create tasks to see them in list view."
+  },
+  "table": {
+    "selectAll": "Select all tasks",
+    "selectTask": "Select task {{title}}",
+    "estimateHours": "{{hours}}h"
+  },
+  "group": {
+    "addTask": "Add Task",
+    "taskTitlePlaceholder": "Task title..."
+  },
+  "subtasks": {
+    "loading": "Loading subtasks...",
+    "empty": "No subtasks",
+    "expand": "Expand subtasks",
+    "collapse": "Collapse subtasks"
+  },
+  "row": {
+    "humanGate": "Waiting on a human sign-off",
+    "humanGateSoft": "Waiting on a human sign-off (soft — auto-releases after a timeout)",
+    "hasDescription": "Has description",
+    "falseOpenAllClosed": "False-open: all subtasks closed",
+    "falseOpenParked": "False-open: only parked subtasks left",
+    "editTask": "Edit task"
+  },
+  "pagination": {
+    "showing_one": "Showing {{start}}–{{end}} of {{count}} task",
+    "showing_other": "Showing {{start}}–{{end}} of {{count}} tasks",
+    "customFields_one": "{{count}} custom field",
+    "customFields_other": "{{count}} custom fields",
+    "previous": "Previous",
+    "next": "Next",
+    "pageOf": "Page {{page}} of {{total}}"
+  },
+  "bulk": {
+    "updating": "Updating {{done}}/{{total}} tasks...",
+    "selected_one": "{{count}} task selected",
+    "selected_other": "{{count}} tasks selected",
+    "moveTo": "Move to status...",
+    "setPriority": "Set priority...",
+    "delete": "Delete"
+  },
+  "deleteDialog": {
+    "title": "Delete tasks",
+    "description_one": "Are you sure you want to delete {{count}} task? This action cannot be undone.",
+    "description_other": "Are you sure you want to delete {{count}} tasks? This action cannot be undone.",
+    "cancel": "Cancel",
+    "confirm_one": "Delete {{count}} task",
+    "confirm_other": "Delete {{count}} tasks"
+  },
+  "toast": {
+    "loadSubtasksFailed": "Failed to load subtasks",
+    "taskCreated": "Task created",
+    "createFailed": "Failed to create task",
+    "taskUpdated": "Task updated",
+    "updateFailed": "Failed to update task",
+    "bulkUpdated_one": "Updated {{count}} task",
+    "bulkUpdated_other": "Updated {{count}} tasks",
+    "bulkUpdateFailed_one": "{{count}} task failed to update",
+    "bulkUpdateFailed_other": "{{count}} tasks failed to update",
+    "bulkDeleted_one": "Deleted {{count}} task",
+    "bulkDeleted_other": "Deleted {{count}} tasks",
+    "bulkDeleteFailed_one": "{{count}} task failed to delete",
+    "bulkDeleteFailed_other": "{{count}} tasks failed to delete"
+  }
+}
