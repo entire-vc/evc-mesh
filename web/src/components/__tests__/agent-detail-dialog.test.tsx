@@ -417,3 +417,17 @@ describe("AgentDetailDialog — harness and model (task #5548367d)", () => {
     await waitFor(() => expect(screen.queryByText("Failed to update model")).toBeNull());
   });
 });
+
+describe("AgentDetailDialog — home runtime tabs stay (invited dialog regression guard)", () => {
+  beforeEach(() => {
+    vi.mocked(api).mockReset();
+    vi.mocked(api).mockImplementation(() => Promise.reject(Object.assign(new Error("x"), { code: "e", status: 500 })));
+  });
+
+  it("still renders the same four tabs", () => {
+    render(<AgentDetailDialog open onOpenChange={vi.fn()} agent={baseAgent} />);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "Profile", "Workspace access", "Execution & routes", "Observed state",
+    ]);
+  });
+});

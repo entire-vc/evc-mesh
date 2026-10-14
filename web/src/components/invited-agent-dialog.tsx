@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ApiKeyRevealPanel } from "@/components/api-key-reveal";
+import { AgentRuntimeTabs } from "@/components/agent-runtime-tabs";
 import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
 import type { OrgChartAgentNode, WorkspaceRole } from "@/types";
 
@@ -155,7 +156,7 @@ export function InvitedAgentDialog({
         if (!next) finish();
       }}
     >
-      <DialogContent onClose={finish}>
+      <DialogContent onClose={finish} className="max-h-[85vh] overflow-y-auto">
         {step === "key" && apiKey ? (
           <div>
             <DialogHeader>
@@ -218,29 +219,37 @@ export function InvitedAgentDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <dl className="mt-4 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-2 text-sm">
-              {agent.role && (
-                <>
-                  <dt className="text-muted-foreground">{t("invitedAgent.role")}</dt>
-                  <dd>{agent.role}</dd>
-                </>
-              )}
-              <dt className="text-muted-foreground">{t("invitedAgent.status")}</dt>
-              <dd className="flex items-center gap-1.5">
-                <span className={`h-2 w-2 rounded-full ${statusCfg.dotColor}`} />
-                {t(`invitedAgent.statuses.${agent.status}`, { defaultValue: statusCfg.label })}
-              </dd>
-              {grant && (
-                <>
-                  <dt className="text-muted-foreground">{t("invitedAgent.workspaceRole")}</dt>
-                  <dd className="capitalize">
-                    {t(`invitedAgent.roles.${grant.role}`, { defaultValue: grant.role })}
+            <AgentRuntimeTabs
+              agent={agent}
+              workspaceId={workspaceId}
+              profile={
+                <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-2 text-sm">
+                  {agent.role && (
+                    <>
+                      <dt className="text-muted-foreground">{t("invitedAgent.role")}</dt>
+                      <dd>{agent.role}</dd>
+                    </>
+                  )}
+                  <dt className="text-muted-foreground">{t("invitedAgent.status")}</dt>
+                  <dd className="flex items-center gap-1.5">
+                    <span className={`h-2 w-2 rounded-full ${statusCfg.dotColor}`} />
+                    {t(`invitedAgent.statuses.${agent.status}`, { defaultValue: statusCfg.label })}
                   </dd>
-                  <dt className="text-muted-foreground">{t("invitedAgent.key")}</dt>
-                  <dd className="font-mono text-xs">{grant.api_key_prefix}…</dd>
-                </>
-              )}
-            </dl>
+                </dl>
+              }
+              access={
+                grant ? (
+                  <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-2 text-sm">
+                    <dt className="text-muted-foreground">{t("invitedAgent.workspaceRole")}</dt>
+                    <dd className="capitalize">
+                      {t(`invitedAgent.roles.${grant.role}`, { defaultValue: grant.role })}
+                    </dd>
+                    <dt className="text-muted-foreground">{t("invitedAgent.key")}</dt>
+                    <dd className="font-mono text-xs">{grant.api_key_prefix}…</dd>
+                  </dl>
+                ) : null
+              }
+            />
 
             {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
 
