@@ -57,7 +57,7 @@ const server = http.createServer(async (req, res) => {
       body = { items: rows, page, page_size: size, total_count: rows.length, has_more: false };
       res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify(body));
     }
-    taskCalls.push({ status: url.searchParams.get("status"), page, list_revision: url.searchParams.get("list_revision") });
+    taskCalls.push({ tag: url.searchParams.get("e2e"), status: url.searchParams.get("status"), page, list_revision: url.searchParams.get("list_revision") });
     if (mode === "slow") await new Promise((r) => setTimeout(r, 1500));
     if (mode === "error") { status = 503; body = { message: "Fixture tasks unavailable" }; }
     else {

@@ -1221,11 +1221,38 @@ authed-e2e:
         exit 1
       fi
     - npx playwright test --config board-e2e/playwright.config.ts
+    # Cold stand: the first API request stalls past the 5s assertion default.
+    # The spec must wait for the board's readiness event, not race it.
+    - BOARD_E2E_COLD_START_MS=6000 npx playwright test --config board-e2e/playwright.config.ts
     - |
       npx playwright test
       if [ "${BOARD_DRAG_FILTER_STRESS:-0}" = "1" ]; then
         timeout 600 npx playwright test e2e/board-drag-filter.spec.ts --repeat-each=20 --project=authed-e2e
       fi
+  artifacts:
+    when: always
+    paths: [web/playwright-report/]
+    expire_in: 1 week
+
+# A change to the pagination spec or its stand is exercised 20 times, in its
+# own job so it neither extends authed-e2e nor depends on drag-filter changes.
+authed-e2e-pagination-stress:
+  stage: test
+  image: mcr.microsoft.com/playwright:v1.62.1-jammy
+  timeout: 25m
+  needs: [lint]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH)'
+      changes: [web/board-e2e/**/*]
+  variables:
+    APP_BASE_URL: "$MESH_PROD_APP_BASE_URL"
+    PLAYWRIGHT_DOWNLOAD_HOST: "http://127.0.0.1:9"
+  before_script:
+    - corepack enable
+    - cd web && pnpm install --frozen-lockfile
+  script:
+    - npx playwright install chromium
+    - timeout 900 npx playwright test --config board-e2e/playwright.config.ts --repeat-each=20
   artifacts:
     when: always
     paths: [web/playwright-report/]
