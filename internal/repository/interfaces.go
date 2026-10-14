@@ -1384,6 +1384,19 @@ type InstalledExtensionRepository interface {
 	List(ctx context.Context) ([]domain.InstalledExtension, error)
 }
 
+// ExtensionEventSubscriptionRepository manages extension_event_subscriptions.
+type ExtensionEventSubscriptionRepository interface {
+	// Create inserts a subscription; a duplicate (connection, event, delivery,
+	// target) returns the existing row unchanged.
+	Create(ctx context.Context, sub *domain.ExtensionEventSubscription) (*domain.ExtensionEventSubscription, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.ExtensionEventSubscription, error)
+	ListByConnection(ctx context.Context, connectionID uuid.UUID) ([]domain.ExtensionEventSubscription, error)
+	// ListByEvent returns every subscription to one public event across all
+	// connections; the delivery side filters on the connection's workspace.
+	ListByEvent(ctx context.Context, event string) ([]domain.ExtensionEventSubscription, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error

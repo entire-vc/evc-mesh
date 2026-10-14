@@ -277,6 +277,12 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                           WHERE dc.id = $1`)},
 	{param: "webhook_id", resolve: uuidResolver(`SELECT workspace_id FROM webhook_configs WHERE id = $1`)},
 	{param: "int_id", resolve: uuidResolver(`SELECT workspace_id FROM integration_configs WHERE id = $1`)},
+	// An extension event subscription belongs to the workspace of the connection
+	// (integration_configs row) it hangs off.
+	{param: "sub_id", resolve: uuidResolver(`SELECT ic.workspace_id
+	                            FROM extension_event_subscriptions es
+	                            JOIN integration_configs ic ON es.connection_id = ic.id
+	                           WHERE es.id = $1`)},
 	{param: "tmpl_id", resolve: uuidResolver(`SELECT p.workspace_id
 	                            FROM task_templates tt
 	                            JOIN projects p ON tt.project_id = p.id
