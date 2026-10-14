@@ -846,6 +846,8 @@ func main() {
 	customFieldHandler := handler.NewCustomFieldHandler(customFieldService)
 	taskContextHandler := handler.NewTaskContextHandlerWithCache(taskService, commentService, artifactService, depService, eventBusService, ctxCacheSvc, initiativeRepo)
 	webhookHandler := handler.NewWebhookHandler(webhookService)
+	extensionEventHandler := handler.NewExtensionEventHandler(service.NewExtensionEventSubscriptionService(
+		postgres.NewExtensionEventSubscriptionRepo(db), integrationRepo, postgres.NewInstalledExtensionRepo(db)))
 	savedViewHandler := handler.NewSavedViewHandler(savedViewService)
 	vcsLinkHandler := handler.NewVCSLinkHandler(vcsLinkService,
 		handler.WithVCSIntegrationResolver(vcsIntegrationResolver), // resolves webhook secrets fresh per request (see above); supersedes the static WithGitHubWebhookSecret/WithGitLabWebhookSecret options
@@ -1796,6 +1798,10 @@ func main() {
 	api.DELETE("/secrets/:secret_id", secretHandler.Delete, rbac(mw.PermManageSecrets))
 
 	// Integration config routes.
+	api.GET("/extensions/events", extensionEventHandler.ListEvents)
+	api.GET("/integrations/:int_id/event-subscriptions", extensionEventHandler.List, rbac(mw.PermManageWebhooks))
+	api.POST("/integrations/:int_id/event-subscriptions", extensionEventHandler.Subscribe, rbac(mw.PermManageWebhooks))
+	api.DELETE("/event-subscriptions/:sub_id", extensionEventHandler.Unsubscribe, rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)
 	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, rbac(mw.PermManageWebhooks))
 	api.PATCH("/integrations/:int_id", integrationHandler.Update, rbac(mw.PermManageWebhooks))
