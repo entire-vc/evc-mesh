@@ -2272,7 +2272,7 @@ func main() {
 	log.Println("Backlog due-date promotion sweeper started (60s interval)")
 
 	// 10b-quater. Backlog promotion ADVISORY sweeper (task #9f3f4064, parent #00327dc6,
-	// unit 1 of 4). Mirrors fleet-ops/scripts/mesh-intake-sweep.py's backlog→todo decision
+	// unit 1 of 4). Mirrors <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo decision
 	// server-side, log-only — it NEVER calls MoveTask. Runs alongside the live Python
 	// sweep for a 7-day parallel comparison (#f928e5af); only after that comparison
 	// shows zero unexplained divergence (#e96abbff) does a LATER task flip this to
