@@ -356,6 +356,10 @@ var workspaceScopedPairParams = []struct{ param, query string }{
 	               JOIN projects p ON pm.project_id = p.id
 	              WHERE p.workspace_id = $1 AND pm.user_id = $2
 	              LIMIT 1`},
+	// DELETE /agents/:agent_id/keys/:key_id — an additional agent key belongs to
+	// the tenant of its agent. "primary" (the original key) is not a uuid and is
+	// skipped here; the service resolves it from :agent_id alone.
+	{"key_id", `SELECT 1 FROM agent_api_keys WHERE workspace_id = $1 AND id = $2 LIMIT 1`},
 }
 
 // uuidResolver turns a "give me this object's workspace_id" query into a resolver.
@@ -652,6 +656,17 @@ func RequireWorkspaceMember(db *sqlx.DB) echo.MiddlewareFunc {
 			if IsAgent(c) {
 				authWsID, err := GetAgentAuthWorkspaceID(c)
 				if err != nil || authWsID != wsID {
+					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+				}
+				return next(c)
+			}
+
+			// Extension actors: the token is scoped to one workspace, set once by
+			// ExtensionAuth. The workspace this request is ABOUT must be that one;
+			// there is no membership table to consult, the token is the proof.
+			if IsExtension(c) {
+				extWsID, ok := c.Get(ContextKeyExtensionWorkspaceID).(uuid.UUID)
+				if !ok || extWsID != wsID {
 					return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
 				}
 				return next(c)

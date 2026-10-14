@@ -319,6 +319,17 @@ func main() {
 		configurable.SetAgentActivityLogRepo(agentActLogRepo)
 		configurable.SetAgentWorkspaceGrantRepo(agentWorkspaceGrantRepo)
 	}
+	// Additional agent keys (POST /agents/:id/keys): Authenticate consults them,
+	// the cache re-checks revocation on every hit.
+	agentAPIKeyRepo := postgres.NewAgentAPIKeyRepo(db)
+	if configurable, ok := agentService.(service.AgentAPIKeyConfigurable); ok {
+		configurable.SetAgentAPIKeyRepo(agentAPIKeyRepo)
+	}
+	agentKeyService := service.NewAgentKeyService(agentRepo, workspaceRepo, agentAPIKeyRepo, activityLogRepo, webhookService, agentService.(service.AgentCacheInvalidator))
+	agentKeyHandler := handler.NewAgentKeyHandler(agentKeyService)
+	// Service principal of extension connections (ext_ tokens).
+	extensionActorService := service.NewExtensionActorService(postgres.NewExtensionActorRepo(db), integrationRepo, workspaceRepo)
+	extensionActorHandler := handler.NewExtensionActorHandler(extensionActorService)
 	// Invite/revoke/list on top of the same table (task U3) — a separate
 	// service from AgentService/agentService above: that one only ever READS
 	// agent_workspace_grants (the auth path), this one owns the writes.
@@ -1339,7 +1350,13 @@ func main() {
 
 	// --- Protected routes (JWT or Agent Key) ---
 	api := v1.Group("")
+	// ExtensionAuth first: an ext_ token is resolved here (invalid one = 401, no
+	// fall-through) and DualAuth then skips the request.
+	api.Use(mw.ExtensionAuth(extensionActorService))
 	api.Use(mw.DualAuth(authService, agentService, oauthService))
+	// Deny-by-default route -> capability check for extension actors; inert for
+	// every other principal.
+	api.Use(mw.ExtensionCapabilityGuard(extensionActorService))
 	api.Use(activityTracker.Middleware())
 	api.Use(toolBreakdownTracker.Middleware())
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
@@ -1701,6 +1718,9 @@ func main() {
 	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))
 	api.DELETE("/agents/:agent_id", agentHandler.Delete, rbac(mw.PermDeleteAgent))
 	api.POST("/agents/:agent_id/regenerate-key", agentHandler.RegenerateKey, rbac(mw.PermDeleteAgent))
+	api.GET("/agents/:agent_id/keys", agentKeyHandler.List, rbac(mw.PermDeleteAgent))
+	api.POST("/agents/:agent_id/keys", agentKeyHandler.Issue, rbac(mw.PermDeleteAgent))
+	api.DELETE("/agents/:agent_id/keys/:key_id", agentKeyHandler.Revoke, rbac(mw.PermDeleteAgent))
 	api.GET("/agents/:agent_id/sub-agents", agentHandler.ListSubAgents)
 	api.GET("/agents/:agent_id/heartbeat", agentHandler.GetAgentHeartbeat)
 	api.GET("/agents/:agent_id/activity", agentHandler.ListAgentActivity)
@@ -1812,6 +1832,8 @@ func main() {
 	api.DELETE("/event-subscriptions/:sub_id", extensionEventHandler.Unsubscribe, rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)
 	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, rbac(mw.PermManageWebhooks))
+	api.POST("/integrations/:int_id/rotate-token", extensionActorHandler.RotateToken, rbac(mw.PermManageWebhooks))
+	api.GET("/ext/me", extensionActorHandler.Me)
 	api.PATCH("/integrations/:int_id", integrationHandler.Update, rbac(mw.PermManageWebhooks))
 	api.DELETE("/integrations/:int_id", integrationHandler.Delete, rbac(mw.PermManageWebhooks))
 

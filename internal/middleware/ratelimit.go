@@ -219,6 +219,9 @@ func RateLimitKeyByActor(c echo.Context) string {
 	if id, ok := c.Get(ContextKeyAgentID).(interface{ String() string }); ok {
 		return "agent:" + id.String()
 	}
+	if p := GetExtensionPrincipal(c); p != nil {
+		return "ext:" + p.ActorID.String()
+	}
 	return "ip:" + c.RealIP()
 }
 
@@ -232,6 +235,8 @@ func keyTypeFromKey(key string) string {
 		return "user"
 	case strings.HasPrefix(key, "agent:"):
 		return "agent"
+	case strings.HasPrefix(key, "ext:"):
+		return "extension"
 	case strings.HasPrefix(key, "global:"):
 		return "global"
 	default:

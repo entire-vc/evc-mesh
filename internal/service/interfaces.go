@@ -867,6 +867,22 @@ type GrantRevocationChecker interface {
 	IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (bool, error)
 }
 
+// AgentKeyRevocationChecker is an optional capability of AgentService, the
+// additional-key twin of GrantRevocationChecker: a cache hit for a login made
+// with a key from POST /agents/{id}/keys re-checks that row before it is
+// trusted, so DELETE .../keys/{id} takes effect on every API instance at once
+// and not only on the one that served the DELETE.
+type AgentKeyRevocationChecker interface {
+	IsAgentKeyRevoked(ctx context.Context, keyID uuid.UUID) (bool, error)
+}
+
+// AgentAPIKeyConfigurable wires the additional-key repository after
+// construction. Separate from AgentServiceConfigurable so that existing
+// implementations of that interface (test doubles) stay valid.
+type AgentAPIKeyConfigurable interface {
+	SetAgentAPIKeyRepo(repo repository.AgentAPIKeyRepository)
+}
+
 // WorkspaceDeletionChecker is an optional capability of AgentService, the
 // same shape as GrantRevocationChecker above but for the OTHER thing that can
 // go stale under a cache hit: the workspace itself.

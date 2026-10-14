@@ -199,6 +199,15 @@ func RequirePermission(perm Permission, memberRepo repository.WorkspaceMemberRep
 			// than its user" true as routes are added. Read routes are outside that
 			// promise by design: a viewer's connector reads what the viewer reads,
 			// and the tenant boundary on them is group-wide (WorkspaceRLS).
+			// --- Extension actors: not a workspace role, not an agent. The route is
+			// authorized by ExtensionCapabilityGuard (allow-list of route →
+			// consented capability) which runs earlier on the same group; an
+			// extension reaching this point already holds the capability that
+			// route requires, and a route the guard does not map never gets here.
+			if IsExtension(c) {
+				return next(c)
+			}
+
 			if IsAgent(c) {
 				if !agentPerms[perm] {
 					// PermRegisterAgent gets its own message: the generic

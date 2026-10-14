@@ -142,6 +142,11 @@ func ActorMayAccessWorkspace(c echo.Context, db *sqlx.DB, wsID uuid.UUID) bool {
 	}
 	ctx := c.Request().Context()
 
+	if IsExtension(c) {
+		extWsID, ok := c.Get(ContextKeyExtensionWorkspaceID).(uuid.UUID)
+		return ok && extWsID == wsID
+	}
+
 	if IsAgent(c) {
 		authWsID, err := GetAgentAuthWorkspaceID(c)
 		return err == nil && authWsID == wsID

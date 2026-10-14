@@ -26,6 +26,8 @@ const commentEnrichedSelect = `SELECT c.id, c.task_id, c.parent_comment_id, c.au
 			(SELECT name FROM agents WHERE id = c.author_id AND deleted_at IS NULL)
 		WHEN c.author_type = 'user' THEN
 			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = c.author_id)
+		WHEN c.author_type = 'extension' THEN
+			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = c.author_id)
 		ELSE NULL
 	END AS author_name`
 
@@ -168,6 +170,8 @@ const commentViewSelect = `SELECT
 			(SELECT name FROM agents WHERE id = c.author_id AND deleted_at IS NULL)
 		WHEN c.author_type = 'user' THEN
 			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = c.author_id)
+		WHEN c.author_type = 'extension' THEN
+			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = c.author_id)
 		ELSE ''
 	END AS author_name,
 	c.is_internal,

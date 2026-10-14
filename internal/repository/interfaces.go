@@ -1397,6 +1397,42 @@ type ExtensionEventSubscriptionRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
+// ExtensionActorRepository manages extension_actors.
+type ExtensionActorRepository interface {
+	// Issue creates the actor of a connection, or re-arms it with a new token
+	// after a revoke (same actor_id, revoked_at cleared, violations reset).
+	// An already active actor is replaced the same way: the old token stops at once.
+	Issue(ctx context.Context, a *domain.ExtensionActor) (*domain.ExtensionActor, error)
+	GetByConnection(ctx context.Context, connectionID uuid.UUID) (*domain.ExtensionActor, error)
+	// GetByTokenHash finds the actor a token digest belongs to: its current
+	// token, or the previous one while prev_token_expires_at is in the future.
+	// Revoked actors are returned (RevokedAt set) so the caller can tell
+	// "revoked" from "unknown"; both are a 401.
+	GetByTokenHash(ctx context.Context, hash string, now time.Time) (*domain.ExtensionActor, error)
+	// Rotate installs newHash as the current token and keeps the old one valid
+	// until prevExpiresAt. Reports false when the actor is missing or revoked.
+	Rotate(ctx context.Context, connectionID uuid.UUID, newHash string, prevExpiresAt time.Time) (bool, error)
+	// Revoke sets revoked_at and drops the previous token. Idempotent; reports
+	// whether this call changed anything.
+	Revoke(ctx context.Context, connectionID uuid.UUID) (bool, error)
+	// RecordViolation increments the violation counter shown in the health of
+	// the connection.
+	RecordViolation(ctx context.Context, connectionID uuid.UUID, what string) error
+}
+
+// AgentAPIKeyRepository manages agent_api_keys.
+type AgentAPIKeyRepository interface {
+	Create(ctx context.Context, k *domain.AgentAPIKey) error
+	// GetByPrefix returns the key row for (workspace, prefix), active or revoked.
+	GetByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.AgentAPIKey, error)
+	GetByID(ctx context.Context, agentID, keyID uuid.UUID) (*domain.AgentAPIKey, error)
+	IsRevoked(ctx context.Context, id uuid.UUID) (bool, error)
+	// Revoke sets revoked_at; reports whether it changed anything.
+	Revoke(ctx context.Context, agentID, keyID uuid.UUID) (bool, error)
+	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]domain.AgentAPIKey, error)
+	CountActiveByAgent(ctx context.Context, agentID uuid.UUID) (int, error)
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error
