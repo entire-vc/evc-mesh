@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -17,11 +18,16 @@ import (
 type Registry struct {
 	mu        sync.RWMutex
 	providers map[string]Provider
+	consents  ConsentStore
+	health    *statusCache
 }
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{providers: map[string]Provider{}}
+	return &Registry{
+		providers: map[string]Provider{},
+		health:    &statusCache{now: time.Now, entries: map[healthKey]healthEntry{}},
+	}
 }
 
 // Register adds a provider. The manifest id must be non-empty and unique.
