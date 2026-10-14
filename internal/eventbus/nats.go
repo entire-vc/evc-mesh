@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -59,6 +60,15 @@ type streamCreator interface {
 // Format: events.{workspace_slug}.{project_slug}.{event_type}
 func BuildSubject(workspaceSlug, projectSlug, eventType string) string {
 	return fmt.Sprintf("%s.%s.%s.%s", SubjectPrefix, workspaceSlug, projectSlug, eventType)
+}
+
+// ExtensionSubject is the subject an extension connection receives its
+// delivery=nats events on: events.{workspace_slug}._ext.{connection_id}.{event}.
+// It lives under the stream's events.> wildcard, so it is durable like every
+// other event. The "_ext" token cannot be a project slug (slugs are lowercase
+// letters, digits and hyphens), so no project's subject can ever equal it.
+func ExtensionSubject(workspaceSlug string, connectionID uuid.UUID, event string) string {
+	return fmt.Sprintf("%s.%s._ext.%s.%s", SubjectPrefix, workspaceSlug, connectionID, event)
 }
 
 // buildStreamConfig translates an EventBusConfig into the JetStream stream

@@ -120,6 +120,17 @@ func (eb *EventBus) PublishEvent(ctx context.Context, msg *domain.EventBusMessag
 	return nil
 }
 
+// PublishExtensionEvent publishes one already-serialised event to an extension
+// connection's subject (see ExtensionSubject). msgID dedups a redelivery inside
+// the stream's duplicate window. It does not touch Redis or the events table:
+// an extension delivery is not a workspace event.
+func (eb *EventBus) PublishExtensionEvent(ctx context.Context, subject string, data []byte, msgID string) error {
+	if _, err := eb.js.Publish(ctx, subject, data, jetstream.WithMsgID(msgID)); err != nil {
+		return fmt.Errorf("failed to publish to NATS subject %s: %w", subject, err)
+	}
+	return nil
+}
+
 func (eb *EventBus) publishTransport(ctx context.Context, msg *domain.EventBusMessage, workspaceSlug, projectSlug string) error {
 	// 1. Serialize the event once; NATS and Redis both send this exact payload.
 	data, err := json.Marshal(msg)

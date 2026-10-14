@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
@@ -34,6 +36,33 @@ type extensionDelivery struct {
 	subs         repository.ExtensionEventSubscriptionRepository
 	integrations repository.IntegrationRepository
 	secrets      repository.SecretMaterializer
+	// nats and workspaces serve delivery=nats; nil until the event bus is up
+	// (it is created after the webhook service), in which case nats
+	// subscriptions are skipped.
+	nats       ExtensionEventPublisher
+	workspaces repository.WorkspaceRepository
+}
+
+// ExtensionEventPublisher puts one serialised event on an extension
+// connection's NATS subject. *eventbus.EventBus implements it.
+type ExtensionEventPublisher interface {
+	PublishExtensionEvent(ctx context.Context, subject string, data []byte, msgID string) error
+}
+
+// ExtensionNATSConfigurable is implemented by the webhook service so main can
+// hand it the event bus once that is connected.
+type ExtensionNATSConfigurable interface {
+	SetExtensionNATS(pub ExtensionEventPublisher, workspaces repository.WorkspaceRepository)
+}
+
+// SetExtensionNATS enables delivery=nats once the event bus is connected. Call
+// it before the server starts taking requests.
+func (s *webhookService) SetExtensionNATS(pub ExtensionEventPublisher, workspaces repository.WorkspaceRepository) {
+	if s.ext == nil {
+		return
+	}
+	s.ext.nats = pub
+	s.ext.workspaces = workspaces
 }
 
 // WithExtensionDelivery makes Dispatch also deliver to extension subscriptions.
@@ -47,7 +76,7 @@ func WithExtensionDelivery(
 	}
 }
 
-// dispatchExtensions delivers the event to every webhook subscription of an
+// dispatchExtensions delivers the event to every webhook or nats subscription of an
 // active connection in workspaceID. One goroutine per subscription; a failure of
 // one never affects another.
 func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uuid.UUID, eventType string, payloadBytes []byte) {
@@ -64,7 +93,7 @@ func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uui
 	inWorkspace := map[uuid.UUID]bool{}
 	for i := range subs {
 		sub := subs[i]
-		if sub.Delivery != domain.ExtensionDeliveryWebhook {
+		if sub.Delivery != domain.ExtensionDeliveryWebhook && sub.Delivery != domain.ExtensionDeliveryNATS {
 			continue
 		}
 		ok, seen := inWorkspace[sub.ConnectionID]
@@ -73,7 +102,12 @@ func (s *webhookService) dispatchExtensions(ctx context.Context, workspaceID uui
 			ok = err == nil && conn != nil && conn.IsActive && conn.WorkspaceID == workspaceID
 			inWorkspace[sub.ConnectionID] = ok
 		}
-		if ok {
+		if !ok {
+			continue
+		}
+		if sub.Delivery == domain.ExtensionDeliveryNATS {
+			go s.publishToSubscription(workspaceID, sub, event, payloadBytes)
+		} else {
 			go s.deliverToSubscription(workspaceID, sub, event, payloadBytes)
 		}
 	}
@@ -129,4 +163,43 @@ func (e *extensionDelivery) resolveSecret(ctx context.Context, workspaceID uuid.
 		return all[i].Value, ""
 	}
 	return "", "secret " + ref + " not found"
+}
+
+// extensionNATSEnvelope is the body published to an extension's subject.
+type extensionNATSEnvelope struct {
+	Event          string          `json:"event"`
+	SubscriptionID uuid.UUID       `json:"subscription_id"`
+	WorkspaceID    uuid.UUID       `json:"workspace_id"`
+	Payload        json.RawMessage `json:"payload"`
+	CreatedAt      time.Time       `json:"created_at"`
+}
+
+// publishToSubscription publishes one event to the connection's own subject
+// (eventbus.ExtensionSubject). Other connections and the workspace's regular
+// event subjects never see it. A failure is logged, not retried: JetStream
+// owns durability once the publish is acknowledged.
+func (s *webhookService) publishToSubscription(workspaceID uuid.UUID, sub domain.ExtensionEventSubscription, event string, payloadBytes []byte) {
+	if s.ext.nats == nil || s.ext.workspaces == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ws, err := s.ext.workspaces.GetByID(ctx, workspaceID)
+	if err != nil || ws == nil {
+		log.Printf("[webhook] nats delivery for subscription %s: workspace lookup failed", sub.ID)
+		return
+	}
+	id := uuid.New()
+	body, err := json.Marshal(extensionNATSEnvelope{
+		Event: event, SubscriptionID: sub.ID, WorkspaceID: workspaceID,
+		Payload: payloadBytes, CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		log.Printf("[webhook] nats delivery for subscription %s: marshal failed: %v", sub.ID, err)
+		return
+	}
+	subject := eventbus.ExtensionSubject(ws.Slug, sub.ConnectionID, event)
+	if err := s.ext.nats.PublishExtensionEvent(ctx, subject, body, id.String()); err != nil {
+		log.Printf("[webhook] nats delivery for subscription %s failed: %v", sub.ID, err)
+	}
 }
