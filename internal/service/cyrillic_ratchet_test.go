@@ -47,6 +47,11 @@ var cyrillicLiteralAllowlist = map[string]string{
 	"task_handler.go:handleError":      "mention-handoff error text (L3.3)",
 	"task_handler.go:gateClearRefusal": "lists the Russian withdrawal words the marker accepts (L3.3)",
 	// Error hints of the task handler belong to L3.3.
+	// Audit-trail comment bodies: thread scans match on this exact Russian wording (see the file comment), so they change together with the matcher.
+	"human_gate_audit_text.go:GateRawArmAuditBody":             "audit comment body read back by thread scans",
+	"human_gate_audit_text.go:GateClearedByOwnAPIArmAuditBody": "audit comment body read back by thread scans",
+	"human_gate_audit_text.go:GateClearedManuallyAuditBody":    "audit comment body read back by thread scans",
+	"human_gate_audit_text.go:WithdrawalNegatorExamples":       "quotes the Russian withdrawal words the marker accepts",
 }
 
 var cyrillicRe = regexp.MustCompile(`[А-Яа-яЁё]`)
