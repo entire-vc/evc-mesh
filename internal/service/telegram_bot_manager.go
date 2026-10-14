@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/i18n"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
@@ -305,7 +306,7 @@ func (m *TelegramBotManager) handleUpdate(ctx context.Context, workspaceID uuid.
 // "right token, wrong account".
 func (m *TelegramBotManager) handleStart(ctx context.Context, workspaceID uuid.UUID, botToken string, chatID int64, fromUsername, bindToken string) {
 	if bindToken == "" {
-		m.replyNeutral(ctx, botToken, chatID)
+		m.replyNeutral(ctx, botToken, chatID, workspaceID)
 		return
 	}
 
@@ -341,7 +342,7 @@ func (m *TelegramBotManager) handleStart(ctx context.Context, workspaceID uuid.U
 	}
 
 	if match == nil {
-		m.replyNeutral(ctx, botToken, chatID)
+		m.replyNeutral(ctx, botToken, chatID, workspaceID)
 		return
 	}
 
@@ -366,8 +367,14 @@ func (m *TelegramBotManager) handleStart(ctx context.Context, workspaceID uuid.U
 // expired one, or one that belongs to someone else. The wording never
 // varies with the reason, so it carries no information about which case
 // applies.
-func (m *TelegramBotManager) replyNeutral(ctx context.Context, botToken string, chatID int64) {
-	const text = "Бот доступен только пользователям Mesh — получите персональную ссылку в настройках уведомлений вашего воркспейса."
+func (m *TelegramBotManager) replyNeutral(ctx context.Context, botToken string, chatID int64, workspaceID uuid.UUID) {
+	// The sender is not a Mesh user, so there is no users.locale to read: the
+	// workspace's default language applies (i18n.Normalize falls back to en).
+	locale := i18n.Default
+	if ws, err := m.workspaces.GetByID(ctx, workspaceID); err == nil && ws != nil {
+		locale = ws.DefaultLocale
+	}
+	text := i18n.T(locale, "bot.start.unlinked", nil)
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := m.client.SendMessage(sendCtx, botToken, chatID, text); err != nil {
@@ -379,9 +386,14 @@ func (m *TelegramBotManager) replyNeutral(ctx context.Context, botToken string, 
 // user's projects in this one workspace (the workspace that owns the bot
 // which just bound them — not every workspace they belong to elsewhere).
 func (m *TelegramBotManager) sendWelcome(ctx context.Context, botToken string, chatID int64, workspaceID, userID uuid.UUID) {
-	displayName := "коллега"
-	if user, err := m.users.GetByID(ctx, userID); err == nil && user != nil && user.Name != "" {
+	locale := i18n.Default
+	var displayName string
+	if user, err := m.users.GetByID(ctx, userID); err == nil && user != nil {
+		locale = user.Locale
 		displayName = user.Name
+	}
+	if displayName == "" {
+		displayName = i18n.T(locale, "bot.welcome.name_fallback", nil)
 	}
 
 	wsName := ""
@@ -389,7 +401,7 @@ func (m *TelegramBotManager) sendWelcome(ctx context.Context, botToken string, c
 		wsName = ws.Name
 	}
 
-	projectList := "пока нет проектов"
+	projectList := i18n.T(locale, "bot.welcome.no_projects", nil)
 	if projects, err := m.projects.ListForUserInWorkspace(ctx, workspaceID, userID); err == nil && len(projects) > 0 {
 		lines := make([]string, len(projects))
 		for i := range projects {
@@ -398,10 +410,7 @@ func (m *TelegramBotManager) sendWelcome(ctx context.Context, botToken string, c
 		projectList = strings.Join(lines, "\n")
 	}
 
-	text := fmt.Sprintf(
-		"Добро пожаловать, %s, ваша учётная запись успешно привязана.\nВот список ваших проектов:\n%s",
-		displayName, projectList,
-	)
+	text := i18n.T(locale, "bot.welcome", map[string]any{"name": displayName, "projects": projectList})
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := m.client.SendMessage(sendCtx, botToken, chatID, text); err != nil {

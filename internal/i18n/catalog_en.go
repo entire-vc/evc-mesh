@@ -43,4 +43,9 @@ var catalogEN = map[string]string{
 	"invite.email.body":     "Click the button below to accept the invitation and set up your account.",
 	"invite.email.button":   "Accept Invitation",
 	"invite.email.expiry":   "This link expires in 7 days. If you weren't expecting this, you can ignore this email.",
+
+	"bot.start.unlinked":        "This bot is for Mesh users only. Get your personal link in your workspace notification settings.",
+	"bot.welcome.name_fallback": "there",
+	"bot.welcome.no_projects":   "no projects yet",
+	"bot.welcome":               "Welcome, {name}! Your account is linked.\nYour projects:\n{projects}",
 }
