@@ -40,7 +40,7 @@ func DirectOnly() echo.MiddlewareFunc {
 			h := c.Request().Header
 			for _, name := range forwardingHeaders {
 				if _, present := h[http.CanonicalHeaderKey(name)]; present {
-					return c.JSON(http.StatusNotFound, map[string]string{"message": "Not Found"})
+					return echo.ErrNotFound
 				}
 			}
 			return next(c)

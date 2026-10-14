@@ -1225,6 +1225,7 @@ export interface ApiError {
   error?: string;
   message?: string;
   code: string | number;
+  error_code?: string;
   details?: Record<string, string>;
   validation?: Record<string, string>;
 }

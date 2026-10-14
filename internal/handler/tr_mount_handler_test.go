@@ -121,6 +121,12 @@ func TestTrMountHandler_EachStatusGetsItsOwnHTTPCode(t *testing.T) {
 			assert.Equal(t, string(tc.status), body["status"], "the named status must survive to the body, not just the code")
 			assert.EqualValues(t, 3, body["mounted"])
 			assert.EqualValues(t, 4, body["skipped"])
+			if tc.wantCode >= http.StatusBadRequest {
+				assert.Equal(t, string(tc.status), body["error_code"], "a failing mount status is also its stable error_code")
+			} else {
+				_, hasCode := body["error_code"]
+				assert.False(t, hasCode, "a 2xx outcome is not an error response")
+			}
 
 			if tc.wantDetail == "" {
 				_, hasDetail := body["detail"]

@@ -84,6 +84,6 @@ func TestAuthHandler_Login_InactiveWrongPassword_IndistinguishableFromNonexisten
 	// "equal to each other" but no longer the documented invalid-credentials
 	// 401 apierror shape) still fails loudly here rather than passing this
 	// test vacuously.
-	assert.JSONEq(t, `{"code":401,"message":"invalid email or password"}`, inactiveRec.Body.String())
+	assert.JSONEq(t, `{"code":401,"error_code":"unauthorized","message":"invalid email or password"}`, inactiveRec.Body.String())
 	assert.Equal(t, "application/json", inactiveRec.Header().Get("Content-Type"))
 }

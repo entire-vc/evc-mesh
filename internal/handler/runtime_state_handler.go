@@ -47,9 +47,10 @@ func (h *TaskHandler) PutRuntimeState(c echo.Context) error {
 	// silently deleting the stored state would also drop what the caller sent.
 	if req.Kind == nil && (req.Since != nil || req.Until != nil || req.Ref != nil || req.Lane != nil || req.Reason != nil || req.ReasonCode != nil || req.ReasonParams != nil) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-			"error":   "Unprocessable Entity",
-			"message": "invalid runtime_state: kind is required unless the state is being cleared",
-			"field":   "kind",
+			"error":      "Unprocessable Entity",
+			"error_code": apierror.CodeValidationFailed,
+			"message":    "invalid runtime_state: kind is required unless the state is being cleared",
+			"field":      "kind",
 		})
 	}
 
@@ -81,9 +82,10 @@ func (h *TaskHandler) writeRuntimeState(c echo.Context, taskID uuid.UUID, state 
 		var vErr *domain.RuntimeStateValidationError
 		if errors.As(err, &vErr) {
 			return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-				"error":   "Unprocessable Entity",
-				"message": "invalid runtime_state: " + vErr.Field + " " + vErr.Message,
-				"field":   vErr.Field,
+				"error":      "Unprocessable Entity",
+				"error_code": apierror.CodeValidationFailed,
+				"message":    "invalid runtime_state: " + vErr.Field + " " + vErr.Message,
+				"field":      vErr.Field,
 			})
 		}
 		return handleError(c, err)

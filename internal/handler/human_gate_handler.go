@@ -81,7 +81,8 @@ func (h *TaskHandler) ArmHumanGate(c echo.Context) error {
 		var vErr *domain.ArmHumanGateValidationError
 		if errors.As(armErr, &vErr) {
 			return c.JSON(http.StatusUnprocessableEntity, map[string]any{
-				"error": "Unprocessable Entity",
+				"error":      "Unprocessable Entity",
+				"error_code": apierror.CodeValidationFailed,
 				// The field name goes in the MESSAGE too, not only in the separate
 				// "field" key. A caller that logs or surfaces just the message —
 				// which is what most of them do — would otherwise read "required —

@@ -103,19 +103,34 @@ export class ApiRequestError extends Error {
   code: string;
   status: number;
   details?: Record<string, string>;
+  // Stable machine-readable error identifier (server catalog,
+  // pkg/apierror/catalog.go); the interface translates by it.
+  errorCode?: string;
 
   constructor(
     message: string,
     code: string,
     status: number,
     details?: Record<string, string>,
+    errorCode?: string,
   ) {
     super(message);
     this.name = "ApiRequestError";
     this.code = code;
     this.status = status;
     this.details = details;
+    this.errorCode = errorCode;
   }
+}
+
+// The stable code of an error body: `error_code` (apierror), else a string
+// `code` (ad-hoc responses such as cas_conflict), else a snake_case `error`
+// (list_revision_stale). A numeric `code` is just the HTTP status.
+export function serverErrorCode(body: ApiError): string | undefined {
+  if (typeof body.error_code === "string" && body.error_code) return body.error_code;
+  if (typeof body.code === "string" && /^[a-z][a-z0-9_]*$/.test(body.code)) return body.code;
+  if (typeof body.error === "string" && /^[a-z][a-z0-9_]*$/.test(body.error)) return body.error;
+  return undefined;
 }
 
 interface RequestOptions {
@@ -253,6 +268,7 @@ export async function api<T>(
       String(err.code || "UNKNOWN"),
       res.status,
       err.validation || err.details,
+      serverErrorCode(err),
     );
   }
 
@@ -327,6 +343,7 @@ export async function apiBlob(
       String(err.code || "UNKNOWN"),
       res.status,
       err.validation || err.details,
+      serverErrorCode(err),
     );
   }
 
