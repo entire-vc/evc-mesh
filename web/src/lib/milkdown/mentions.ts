@@ -1,3 +1,5 @@
+import i18n from "@/i18n";
+
 export interface MentionEntry {
   kind: "agent" | "user";
 }
@@ -80,7 +82,7 @@ export function linkMentions(
         a.className = MENTION_CLASS;
         a.href = `/w/${wsSlug}/team/${entry.kind}/${slug}`;
         a.dataset.mentionSlug = slug;
-        a.setAttribute("aria-label", `Open team profile for @${slug}`);
+        a.setAttribute("aria-label", i18n.t("misc:mention.openProfile", { slug }));
         // textContent, not innerHTML: the slug is content, and content is never
         // markup here.
         a.textContent = `@${slug}`;

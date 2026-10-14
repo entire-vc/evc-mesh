@@ -1,3 +1,4 @@
+import { miscT } from "@/lib/misc-t";
 import { create } from "zustand";
 import { api, getAccessToken } from "@/lib/api";
 import type {
@@ -226,7 +227,7 @@ export const useRulesStore = create<RulesState>((set) => ({
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
-    if (!res.ok) throw new Error("Export failed");
+    if (!res.ok) throw new Error(miscT("rules.exportFailed", "Export failed"));
     return res.text();
   },
 

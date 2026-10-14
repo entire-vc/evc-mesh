@@ -1,3 +1,4 @@
+import { miscT } from "@/lib/misc-t";
 /** The activity API contains both field diffs and event metadata in `changes`.
  * Only an object with exactly two own keys, old and new, is a field diff.
  * Everything else is retained as event data, including partial legacy objects.
@@ -65,19 +66,19 @@ export function formatActivityValue(value: unknown, names?: Map<string, string>)
   return String(value);
 }
 
-const ACTION_LABELS: Record<string, string> = {
-  "task.checkout_acquired": "Checkout acquired",
-  "task.checkout_renewed": "Checkout renewed",
-  "task.checkout_released": "Checkout released",
-  "task.checkout_released_auto": "Checkout released automatically",
-  "task.checkout_force_released": "Checkout released by administrator",
-  "task.checkout_lease_expired": "Checkout expired",
-  "task.checkout_auto_progress": "Moved to In Progress after checkout",
-  "task.checkout_auto_progress_failed": "Could not move to In Progress after checkout",
+const ACTION_LABELS: Record<string, [key: string, en: string]> = {
+  "task.checkout_acquired": ["activityAction.checkoutAcquired", "Checkout acquired"],
+  "task.checkout_renewed": ["activityAction.checkoutRenewed", "Checkout renewed"],
+  "task.checkout_released": ["activityAction.checkoutReleased", "Checkout released"],
+  "task.checkout_released_auto": ["activityAction.checkoutReleasedAuto", "Checkout released automatically"],
+  "task.checkout_force_released": ["activityAction.checkoutForceReleased", "Checkout released by administrator"],
+  "task.checkout_lease_expired": ["activityAction.checkoutLeaseExpired", "Checkout expired"],
+  "task.checkout_auto_progress": ["activityAction.checkoutAutoProgress", "Moved to In Progress after checkout"],
+  "task.checkout_auto_progress_failed": ["activityAction.checkoutAutoProgressFailed", "Could not move to In Progress after checkout"],
 };
 
 export function describeActivity(action: string, details: ActivityDetail[], names?: Map<string, string>): string {
-  const label = hasOwn(ACTION_LABELS, action) ? ACTION_LABELS[action]! : action.replace(/[._]/g, " ");
+  const label = hasOwn(ACTION_LABELS, action) ? miscT(...ACTION_LABELS[action]!) : action.replace(/[._]/g, " ");
   const diffs = details.flatMap((detail) => {
     if (detail.kind !== "diff") return [];
     const field = formatActivityField(detail.field);

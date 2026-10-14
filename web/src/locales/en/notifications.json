@@ -1,0 +1,171 @@
+{
+  "bell": {
+    "label": "Notifications",
+    "labelUnread_one": "Notifications ({{count}} unread)",
+    "labelUnread_other": "Notifications ({{count}} unread)",
+    "title": "Notifications",
+    "markAllTitle": "Mark all as read",
+    "markAll": "Mark all read",
+    "settings": "Notification settings",
+    "empty": "No notifications",
+    "mentionsFailed": "Some mentions could not be loaded",
+    "allCaughtUp": "All caught up",
+    "markRead": "Mark as read",
+    "mentionedYouOn": " mentioned you on: {{title}}"
+  },
+  "settings": {
+    "title": "Notification Settings",
+    "subtitle": "Configure which events send you in-app notifications.",
+    "tabs": {
+      "inApp": "In-App",
+      "push": "Browser Push",
+      "email": "Email",
+      "telegram": "Telegram",
+      "unavailable": "(unavailable)"
+    },
+    "actions": {
+      "saved": "Saved",
+      "saving": "Saving...",
+      "save": "Save preferences"
+    },
+    "events": {
+      "taskAssigned": {
+        "label": "Task assigned",
+        "description": "When a task is assigned to you or someone in your workspace",
+        "pushDescription": "When a task is assigned to you"
+      },
+      "statusChanged": {
+        "label": "Status changed",
+        "description": "When a task's status changes",
+        "pushDescription": "When a task status changes"
+      },
+      "commentCreated": {
+        "label": "New comment",
+        "description": "When a comment is added to a task",
+        "pushDescription": "When a comment is added"
+      },
+      "taskMentioned": {
+        "label": "Mention",
+        "description": "When someone @mentions you in a comment",
+        "pushDescription": "When someone @mentions you"
+      },
+      "documentMentioned": {
+        "label": "Mention on a document",
+        "description": "When someone @mentions you in a comment on a document page",
+        "pushDescription": "When someone @mentions you on a document page"
+      },
+      "blockingTriage": {
+        "label": "Blocking triage",
+        "description": "When a task you're mentioned in is auto-moved to triage as a blocker",
+        "pushDescription": "When a task you blocked is auto-moved to triage"
+      },
+      "reviewerAssigned": {
+        "label": "Review requested",
+        "description": "When you're set as the reviewer on a task",
+        "pushDescription": "When you're set as the reviewer on a task"
+      },
+      "readyForReview": {
+        "label": "Ready for review",
+        "description": "When a task you're reviewing moves to a review status",
+        "pushDescription": "When a task you're reviewing moves to a review status"
+      }
+    },
+    "inApp": {
+      "title": "In-App Notifications",
+      "description": "Choose which events you want to be notified about. Notifications appear in the bell icon in the header.",
+      "enable": "Enable notifications",
+      "enableHint": "Receive in-app notifications for workspace activity"
+    },
+    "push": {
+      "title": "Browser Push Notifications",
+      "description": "Receive native browser notifications even when Mesh is not in the foreground.",
+      "status": "Status",
+      "blocked": "Blocked — re-enable in browser settings",
+      "enabled": "Enabled",
+      "notEnabled": "Not enabled",
+      "enable": "Enable",
+      "disable": "Disable"
+    },
+    "email": {
+      "title": "Email Notifications",
+      "description": "Receive notifications by email, at the account address or a custom one you set below.",
+      "unavailableTitle": "Email notifications are not available",
+      "unavailableHint": "This Mesh instance has no outbound email server configured. Ask your administrator to set one up to enable this channel.",
+      "enable": "Enable email notifications",
+      "enableHint": "Receive an email for the events selected below",
+      "address": "Email address",
+      "addressHint": "Defaults to your account email. Change it to deliver notifications somewhere else."
+    },
+    "telegram": {
+      "title": "Telegram Notifications",
+      "description": "Receive notifications from a Telegram bot connected to this workspace.",
+      "notConnectedTitle": "Telegram is not connected",
+      "notConnectedHint": "Ask a workspace owner or admin to connect a bot from the <b>Integrations</b> page.",
+      "unreachableTitle": "Telegram notifications cannot be delivered right now",
+      "unreachableFallback": "This server could not reach the Telegram Bot API.",
+      "enable": "Enable Telegram notifications",
+      "enableHint": "Receive a message for the events selected below",
+      "username": "Telegram username",
+      "usernameHint": "Save your username, then open the bot below to finish connecting.",
+      "connected": "Connected — @{{bot}} can message you",
+      "disconnecting": "Disconnecting...",
+      "disconnect": "Disconnect",
+      "openBot": "Open @{{bot}} to finish connecting",
+      "noLink": "Save with the toggle above enabled to get a connection link."
+    },
+    "toast": {
+      "enablePushFailed": "Failed to enable browser push",
+      "disablePushFailed": "Failed to disable browser push",
+      "savePushFailed": "Failed to save push preferences",
+      "saveFailed": "Failed to save notification settings",
+      "emailRequired": "Enter an email address",
+      "saveEmailFailed": "Failed to save email notification settings",
+      "telegramUsernameRequired": "Enter your Telegram username",
+      "telegramDisconnected": "Telegram disconnected — the bot can no longer message you",
+      "telegramDisconnectFailed": "Failed to disconnect Telegram",
+      "saveTelegramFailed": "Failed to save Telegram notification settings"
+    }
+  },
+  "dashboard": {
+    "mentions": {
+      "title": "Mentions",
+      "myComments": "my comments",
+      "allRecent": "all recent",
+      "loadFailed": "Mentions could not be loaded",
+      "empty": "No mentions yet",
+      "document": "Document",
+      "task": "Task"
+    },
+    "triage": {
+      "title": "Triage",
+      "empty": "Inbox is empty"
+    },
+    "myTasks": {
+      "title": "My Tasks",
+      "empty": "No active tasks assigned to you"
+    },
+    "sessions": {
+      "title": "Sessions",
+      "empty": "No agents online"
+    },
+    "short": {
+      "now": "now",
+      "minutes": "{{count}}m",
+      "hours": "{{count}}h",
+      "days": "{{count}}d"
+    },
+    "priority": {
+      "urgent": "urgent",
+      "high": "high",
+      "medium": "medium",
+      "low": "low",
+      "none": "none"
+    },
+    "agentStatus": {
+      "online": "online",
+      "busy": "busy",
+      "offline": "offline",
+      "error": "error"
+    }
+  }
+}

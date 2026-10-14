@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -22,12 +23,7 @@ interface StatusDialogProps {
   status?: TaskStatus;
 }
 
-const categoryOptions: { value: StatusCategory; label: string }[] = (
-  Object.entries(statusCategoryConfig) as [StatusCategory, { label: string }][]
-).map(([value, config]) => ({
-  value,
-  label: config.label,
-}));
+const categoryValues = Object.keys(statusCategoryConfig) as StatusCategory[];
 
 export function StatusDialog({
   open,
@@ -35,6 +31,7 @@ export function StatusDialog({
   projectId,
   status,
 }: StatusDialogProps) {
+  const { t } = useTranslation("settings");
   const { createStatus, updateStatus } = useProjectStore();
 
   const isEdit = !!status;
@@ -86,11 +83,11 @@ export function StatusDialog({
     e.preventDefault();
 
     if (!name.trim()) {
-      setError("Name is required");
+      setError(t("statusDialog.errors.nameRequired"));
       return;
     }
     if (!slug.trim()) {
-      setError("Slug is required");
+      setError(t("statusDialog.errors.slugRequired"));
       return;
     }
 
@@ -115,7 +112,7 @@ export function StatusDialog({
       onClose();
     } catch (err) {
       setError(
-        apiErrorMessage(err, "Failed to save status"),
+        apiErrorMessage(err, t("statusDialog.errors.saveFailed")),
       );
     } finally {
       setIsSubmitting(false);
@@ -132,22 +129,22 @@ export function StatusDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent onClose={onClose}>
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Status" : "Create Status"}</DialogTitle>
+          <DialogTitle>{isEdit ? t("statusDialog.title.edit") : t("statusDialog.title.create")}</DialogTitle>
           <DialogDescription>
             {isEdit
-              ? "Update the task status configuration."
-              : "Add a new task status to your project."}
+              ? t("statusDialog.description.edit")
+              : t("statusDialog.description.create")}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="sd-name" className="text-sm font-medium">
-              Name <span className="text-destructive">*</span>
+              {t("statusDialog.fields.name")} <span className="text-destructive">*</span>
             </label>
             <Input
               id="sd-name"
-              placeholder="e.g. In Review"
+              placeholder={t("statusDialog.fields.namePlaceholder")}
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               autoFocus
@@ -156,22 +153,22 @@ export function StatusDialog({
 
           <div className="space-y-1.5">
             <label htmlFor="sd-slug" className="text-sm font-medium">
-              Slug <span className="text-destructive">*</span>
+              {t("statusDialog.fields.slug")} <span className="text-destructive">*</span>
             </label>
             <Input
               id="sd-slug"
-              placeholder="e.g. in-review"
+              placeholder={t("statusDialog.fields.slugPlaceholder")}
               value={slug}
               onChange={(e) => handleSlugChange(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              Auto-generated from name. You can edit it manually.
+              {t("statusDialog.fields.slugHint")}
             </p>
           </div>
 
           <div className="space-y-1.5">
             <label htmlFor="sd-color" className="text-sm font-medium">
-              Color
+              {t("statusDialog.fields.color")}
             </label>
             <div className="flex items-center gap-3">
               <input
@@ -197,16 +194,16 @@ export function StatusDialog({
 
           <div className="space-y-1.5">
             <label htmlFor="sd-category" className="text-sm font-medium">
-              Category
+              {t("statusDialog.fields.category")}
             </label>
             <Select
               id="sd-category"
               value={category}
               onChange={(e) => setCategory(e.target.value as StatusCategory)}
             >
-              {categoryOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
+              {categoryValues.map((value) => (
+                <option key={value} value={value}>
+                  {t(`statusDialog.categories.${value}`)}
                 </option>
               ))}
             </Select>
@@ -221,11 +218,11 @@ export function StatusDialog({
               className="h-4 w-4 rounded border-input"
             />
             <label htmlFor="sd-default" className="text-sm font-medium">
-              Default status
+              {t("statusDialog.fields.default")}
             </label>
             {isDefault && (
               <span className="text-xs text-muted-foreground">
-                (new tasks will be assigned this status)
+                {t("statusDialog.fields.defaultHint")}
               </span>
             )}
           </div>
@@ -239,14 +236,14 @@ export function StatusDialog({
               onClick={onClose}
               disabled={isSubmitting}
             >
-              Cancel
+              {t("statusDialog.cancel")}
             </Button>
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting
-                ? "Saving..."
+                ? t("statusDialog.saving")
                 : isEdit
-                  ? "Save Changes"
-                  : "Create Status"}
+                  ? t("statusDialog.saveChanges")
+                  : t("statusDialog.createStatus")}
             </Button>
           </DialogFooter>
         </form>

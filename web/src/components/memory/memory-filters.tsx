@@ -1,5 +1,6 @@
 import { agentLabel } from "@/lib/agent-label";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
@@ -92,11 +93,12 @@ interface TagMultiSelectProps {
 }
 
 function TagMultiSelect({ selected, available, onChange }: TagMultiSelectProps) {
+  const { t } = useTranslation("misc");
   const [input, setInput] = useState("");
 
   const toggle = (tag: string) => {
     if (selected.includes(tag)) {
-      onChange(selected.filter((t) => t !== tag));
+      onChange(selected.filter((s) => s !== tag));
     } else {
       onChange([...selected, tag]);
     }
@@ -109,7 +111,7 @@ function TagMultiSelect({ selected, available, onChange }: TagMultiSelectProps) 
   };
 
   // Suggestions = available tags not already selected.
-  const suggestions = available.filter((t) => !selected.includes(t));
+  const suggestions = available.filter((s) => !selected.includes(s));
 
   return (
     <div className="space-y-2">
@@ -132,7 +134,7 @@ function TagMultiSelect({ selected, available, onChange }: TagMultiSelectProps) 
 
       {/* Free-text add */}
       <Input
-        placeholder="Add tag and press Enter…"
+        placeholder={t("memory.filters.addTag")}
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
@@ -181,6 +183,7 @@ export function MemoryFiltersPanel({
   agents,
   availableTags,
 }: MemoryFiltersPanelProps) {
+  const { t } = useTranslation("misc");
   const set = (patch: Partial<MemoryFilter>) => onChange({ ...filter, ...patch });
   const relPct = Math.round((filter.relevanceMin ?? 0) * 100);
 
@@ -196,30 +199,30 @@ export function MemoryFiltersPanel({
       {/* Row 1: Scope + Source */}
       <div className="flex flex-wrap gap-x-8 gap-y-4">
         <div>
-          <FieldLabel>Scope</FieldLabel>
+          <FieldLabel>{t("memory.filters.scope")}</FieldLabel>
           <Segmented
             value={filter.scope ?? "all"}
             onChange={(v) => set({ scope: v })}
             options={[
-              { value: "all", label: "All" },
-              { value: "workspace", label: "Workspace" },
-              { value: "project", label: "Project" },
-              { value: "agent", label: "Agent" },
+              { value: "all", label: t("memory.filters.all") },
+              { value: "workspace", label: t("memory.scope.workspace") },
+              { value: "project", label: t("memory.scope.project") },
+              { value: "agent", label: t("memory.scope.agent") },
             ]}
           />
         </div>
         <div>
-          <FieldLabel>Source</FieldLabel>
+          <FieldLabel>{t("memory.filters.source")}</FieldLabel>
           <Segmented
             value={filter.sourceType ?? ""}
             onChange={(v) =>
               set({ sourceType: v, createdBy: v === "agent" ? filter.createdBy : "" })
             }
             options={[
-              { value: "", label: "All" },
-              { value: "agent", label: "Agent" },
-              { value: "human", label: "Human" },
-              { value: "system", label: "System" },
+              { value: "", label: t("memory.filters.all") },
+              { value: "agent", label: t("memory.source.agent") },
+              { value: "human", label: t("memory.source.human") },
+              { value: "system", label: t("memory.source.system") },
             ]}
           />
         </div>
@@ -228,12 +231,12 @@ export function MemoryFiltersPanel({
       {/* Source agent (only when Source = Agent) */}
       {filter.sourceType === "agent" && (
         <div className="max-w-xs">
-          <FieldLabel>Source agent</FieldLabel>
+          <FieldLabel>{t("memory.filters.sourceAgent")}</FieldLabel>
           <Select
             value={filter.createdBy ?? ""}
             onChange={(e) => set({ createdBy: e.target.value })}
           >
-            <option value="">Any agent</option>
+            <option value="">{t("memory.filters.anyAgent")}</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {agentLabel(a.name, a.short_tag)}
@@ -246,13 +249,13 @@ export function MemoryFiltersPanel({
       {/* Tags */}
       <div>
         <div className="mb-1.5 flex items-center justify-between">
-          <FieldLabel>Tags</FieldLabel>
+          <FieldLabel>{t("memory.filters.tags")}</FieldLabel>
           <Segmented
             value={filter.tagsMode ?? "all"}
             onChange={(v) => set({ tagsMode: v })}
             options={[
-              { value: "all", label: "Match all" },
-              { value: "any", label: "Match any" },
+              { value: "all", label: t("memory.filters.matchAll") },
+              { value: "any", label: t("memory.filters.matchAny") },
             ]}
           />
         </div>
@@ -265,7 +268,7 @@ export function MemoryFiltersPanel({
 
       {/* Date range */}
       <div>
-        <FieldLabel>Created between</FieldLabel>
+        <FieldLabel>{t("memory.filters.createdBetween")}</FieldLabel>
         <div className="flex flex-wrap items-center gap-2">
           <Input
             type="date"
@@ -282,13 +285,13 @@ export function MemoryFiltersPanel({
           />
           <div className="flex gap-1">
             <Button type="button" size="sm" variant="outline" onClick={() => presetRange(1)}>
-              24h
+              {t("memory.filters.preset24h")}
             </Button>
             <Button type="button" size="sm" variant="outline" onClick={() => presetRange(7)}>
-              7d
+              {t("memory.filters.preset7d")}
             </Button>
             <Button type="button" size="sm" variant="outline" onClick={() => presetRange(30)}>
-              30d
+              {t("memory.filters.preset30d")}
             </Button>
           </div>
         </div>
@@ -297,7 +300,7 @@ export function MemoryFiltersPanel({
       {/* Relevance + Sort */}
       <div className="flex flex-wrap gap-x-8 gap-y-4">
         <div className="min-w-[220px]">
-          <FieldLabel>Minimum relevance — {relPct}%</FieldLabel>
+          <FieldLabel>{t("memory.filters.minRelevance", { pct: relPct })}</FieldLabel>
           <div className="flex items-center gap-3">
             <input
               type="range"
@@ -316,19 +319,19 @@ export function MemoryFiltersPanel({
                 set({ relevanceMin: (filter.relevanceMin ?? 0) >= 0.3 ? 0 : 0.3 })
               }
             >
-              Hide stale
+              {t("memory.filters.hideStale")}
             </Button>
           </div>
         </div>
         <div className="min-w-[200px]">
-          <FieldLabel>Sort by</FieldLabel>
+          <FieldLabel>{t("memory.filters.sortBy")}</FieldLabel>
           <Select
             value={filter.orderBy ?? "created_at:desc"}
             onChange={(e) => set({ orderBy: e.target.value as MemoryOrderBy })}
           >
-            <option value="created_at:desc">Most recent</option>
-            <option value="relevance:desc">Most relevant</option>
-            <option value="decayed_relevance:desc">Decayed relevance</option>
+            <option value="created_at:desc">{t("memory.filters.sortRecent")}</option>
+            <option value="relevance:desc">{t("memory.filters.sortRelevant")}</option>
+            <option value="decayed_relevance:desc">{t("memory.filters.sortDecayed")}</option>
           </Select>
         </div>
       </div>
@@ -343,7 +346,7 @@ export function MemoryFiltersPanel({
               onChange={(e) => set({ includeExpired: e.target.checked })}
               className="h-3.5 w-3.5 cursor-pointer accent-primary"
             />
-            Include expired memories
+            {t("memory.filters.includeExpired")}
           </label>
           <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
             <input
@@ -352,11 +355,11 @@ export function MemoryFiltersPanel({
               onChange={(e) => set({ includeArchived: e.target.checked })}
               className="h-3.5 w-3.5 cursor-pointer accent-primary"
             />
-            Show archived memories
+            {t("memory.filters.showArchived")}
           </label>
         </div>
         <Button type="button" size="sm" variant="ghost" onClick={onReset}>
-          Reset filters
+          {t("memory.page.resetFilters")}
         </Button>
       </div>
     </div>

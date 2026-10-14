@@ -32,14 +32,16 @@ import type { ActorType, DocumentComment } from "@/types";
 /** What the body renderer needs to tell a mention from an @ in prose. */
 type MentionDirectory = ReturnType<typeof useMentionDirectory>;
 import "@/components/doc-comments.css";
+import { useTranslation } from "react-i18next";
 
 // ---------------------------------------------------------------------------
 // Small pieces
 // ---------------------------------------------------------------------------
 
 function ActorLabel({ id, type, name }: { id?: string; type: ActorType; name?: string | null }) {
+  const { t } = useTranslation("docs");
   const Icon = type === "agent" ? Bot : User;
-  const fallback = type === "agent" ? "Agent" : type === "system" ? "System" : "User";
+  const fallback = type === "agent" ? t("comments.actor.agent") : type === "system" ? t("comments.actor.system") : t("comments.actor.user");
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
       <Icon
@@ -90,14 +92,15 @@ function Quote({
  * filtering it out would be — loses the discussion along with the position.
  */
 function PlacementNotice({ placement }: { placement: ThreadPlacement }) {
+  const { t } = useTranslation("docs");
   if (placement === "anchored") return null;
 
   const text =
     placement === "page"
-      ? "On the page as a whole"
+      ? t("comments.placement.page")
       : placement === "orphaned"
-        ? "No longer attached — the position was lost"
-        : "No longer attached — this text is not in the page any more";
+        ? t("comments.placement.orphaned")
+        : t("comments.placement.detached");
 
   return (
     <p className="mb-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
@@ -126,6 +129,7 @@ export function Composer({
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation("docs");
   const [value, setValue] = useState(initialValue);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -202,7 +206,7 @@ export function Composer({
           disabled={!value.trim() || busy}
           onClick={() => void submit()}
         >
-          {busy ? "Saving..." : submitLabel}
+          {busy ? t("save.saving") : submitLabel}
         </Button>
         <Button
           type="button"
@@ -212,7 +216,7 @@ export function Composer({
           onClick={onCancel}
           disabled={busy}
         >
-          Cancel
+          {t("actions.cancel")}
         </Button>
       </div>
     </div>
@@ -234,6 +238,7 @@ function CommentBody({
   directory: MentionDirectory;
   isReply?: boolean;
 }) {
+  const { t } = useTranslation("docs");
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const mine = controller.canModify(comment);
@@ -245,16 +250,16 @@ function CommentBody({
         <ActorLabel id={comment.author_id} type={comment.author_type} name={comment.author_name} />
         <span className="shrink-0 text-[11px] text-muted-foreground">
           {formatRelative(comment.created_at)}
-          {edited && " · edited"}
+          {edited && t("comments.edited")}
         </span>
       </div>
 
       {editing ? (
         <div className="mt-1.5">
           <Composer
-            placeholder="Edit your comment"
+            placeholder={t("comments.editPlaceholder")}
             initialValue={comment.body}
-            submitLabel="Save"
+            submitLabel={t("dialog.save")}
             autoFocus
             onSubmit={async (body) => {
               await controller.edit(comment.id, body);
@@ -278,7 +283,7 @@ function CommentBody({
         <div className="mt-1 flex items-center gap-1">
           {confirmingDelete ? (
             <>
-              <span className="text-[11px] text-muted-foreground">Delete?</span>
+              <span className="text-[11px] text-muted-foreground">{t("comments.deleteConfirm")}</span>
               <Button
                 type="button"
                 size="sm"
@@ -286,7 +291,7 @@ function CommentBody({
                 className="h-6 px-1.5 text-[11px] text-destructive"
                 onClick={() => void controller.remove(comment.id)}
               >
-                Yes
+                {t("comments.yes")}
               </Button>
               <Button
                 type="button"
@@ -295,7 +300,7 @@ function CommentBody({
                 className="h-6 px-1.5 text-[11px]"
                 onClick={() => setConfirmingDelete(false)}
               >
-                No
+                {t("comments.no")}
               </Button>
             </>
           ) : (
@@ -309,7 +314,7 @@ function CommentBody({
                 disabled={controller.readOnly}
               >
                 <Pencil className="h-3 w-3" />
-                Edit
+                {t("actions.edit")}
               </Button>
               <Button
                 type="button"
@@ -320,7 +325,7 @@ function CommentBody({
                 disabled={controller.readOnly}
               >
                 <Trash2 className="h-3 w-3" />
-                Delete
+                {t("actions.delete")}
               </Button>
             </>
           )}
@@ -343,6 +348,7 @@ export function Thread({
   controller: DocCommentsController;
   directory: MentionDirectory;
 }) {
+  const { t } = useTranslation("docs");
   const [replying, setReplying] = useState(false);
   const ref = useRef<HTMLElement>(null);
   const active = controller.activeThreadId === thread.root.id;
@@ -368,8 +374,8 @@ export function Thread({
       {thread.resolved && (
         <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-success">
           <Check className="h-3 w-3" />
-          Resolved
-          {thread.root.resolved_by_name ? ` by ${thread.root.resolved_by_name}` : ""}
+          {t("comments.resolved")}
+          {thread.root.resolved_by_name ? t("comments.resolvedBy", { name: thread.root.resolved_by_name }) : ""}
         </p>
       )}
 
@@ -401,7 +407,7 @@ export function Thread({
               onClick={() => setReplying(true)}
             >
               <CornerDownRight className="h-3 w-3" />
-              Reply
+              {t("comments.reply")}
             </Button>
           )}
           {/* Resolve is open to any workspace member — putting a thread away is
@@ -416,12 +422,12 @@ export function Thread({
             {thread.resolved ? (
               <>
                 <RotateCcw className="h-3 w-3" />
-                Unresolve
+                {t("comments.unresolve")}
               </>
             ) : (
               <>
                 <Check className="h-3 w-3" />
-                Resolve
+                {t("comments.resolve")}
               </>
             )}
           </Button>
@@ -431,8 +437,8 @@ export function Thread({
       {replying && (
         <div className="mt-2">
           <Composer
-            placeholder="Reply… @ to mention"
-            submitLabel="Reply"
+            placeholder={t("comments.replyPlaceholder")}
+            submitLabel={t("comments.reply")}
             autoFocus
             onSubmit={async (body) => {
               await controller.reply(thread.root.id, body);
@@ -461,6 +467,7 @@ export function DocCommentRail({
   showResolved,
   onShowResolvedChange,
 }: DocCommentRailProps) {
+  const { t } = useTranslation("docs");
   const { threads, draft, isLoading, error } = controller;
   // Once for the whole rail, not once per comment: fetchTeamDirectory is
   // unconditional, so a hook inside CommentBody would issue one request per
@@ -471,13 +478,13 @@ export function DocCommentRail({
 
   return (
     <aside
-      aria-label="Comments"
+      aria-label={t("comments.title")}
       data-testid="doc-comment-rail"
       className="w-full shrink-0 border-t border-border pt-4 lg:w-80 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0"
     >
       <div className="flex items-center justify-between gap-2 pb-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Comments
+          {t("comments.title")}
         </h2>
         {resolvedCount > 0 && (
           <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -487,16 +494,14 @@ export function DocCommentRail({
               checked={showResolved}
               onChange={(e) => onShowResolvedChange(e.target.checked)}
             />
-            Show resolved ({resolvedCount})
+            {t("comments.showResolved", { count: resolvedCount })}
           </label>
         )}
       </div>
 
       {controller.readOnly && (
         <p className="mb-3 rounded-md bg-muted px-2.5 py-2 text-[11px] text-muted-foreground">
-          Comments are read-only while you are editing. A comment is pinned to a
-          position in the saved page, and the page in front of you is not saved
-          yet. Choose Done to comment again.
+          {t("comments.readOnly")}
         </p>
       )}
 
@@ -512,9 +517,7 @@ export function DocCommentRail({
                 <p className="mb-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
                   <Link2Off className="mt-0.5 h-3 w-3 shrink-0" />
                   <span>
-                    This selection could not be pinned to a position in the page
-                    source. The comment will be saved with the quote only, and
-                    will show as no longer attached.
+                    {t("comments.unplaceable")}
                   </span>
                 </p>
               )}
@@ -527,8 +530,8 @@ export function DocCommentRail({
             <PlacementNotice placement="page" />
           )}
           <Composer
-            placeholder="Add a comment… @ to mention"
-            submitLabel="Comment"
+            placeholder={t("comments.addPlaceholder")}
+            submitLabel={t("comments.submit")}
             autoFocus
             onSubmit={controller.submitDraft}
             onCancel={controller.cancelDraft}
@@ -539,14 +542,14 @@ export function DocCommentRail({
       {error ? (
         <p className="text-xs text-destructive">{error}</p>
       ) : isLoading && threads.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Loading comments...</p>
+        <p className="text-xs text-muted-foreground">{t("comments.loading")}</p>
       ) : visible.length === 0 && !draft ? (
         <div className="flex flex-col items-start gap-1 text-xs text-muted-foreground">
           <MessageSquare className="h-5 w-5" />
           <p>
             {threads.length === 0
-              ? "No comments yet."
-              : "No open comments. Turn on “Show resolved” to see the rest."}
+              ? t("comments.empty")
+              : t("comments.noOpen")}
           </p>
         </div>
       ) : (
@@ -581,6 +584,7 @@ export function DocCommentAffordance({
 }: {
   controller: DocCommentsController;
 }) {
+  const { t } = useTranslation("docs");
   const pending = controller.pendingSelection;
   if (!pending || controller.readOnly) return null;
 
@@ -598,7 +602,7 @@ export function DocCommentAffordance({
         onClick={controller.startDraft}
       >
         <MessageSquarePlus className="h-3.5 w-3.5" />
-        Comment
+        {t("comments.submit")}
       </Button>
     </div>
   );
@@ -634,6 +638,7 @@ export function DocCommentPageEntry({
   controller: DocCommentsController;
   onOpenRail: () => void;
 }) {
+  const { t } = useTranslation("docs");
   if (controller.readOnly) return null;
 
   return (
@@ -643,8 +648,8 @@ export function DocCommentPageEntry({
       size="icon"
       data-testid="doc-comment-page-entry"
       className="h-7 w-7"
-      title="Comment on the whole document"
-      aria-label="Comment on the whole document"
+      title={t("comments.onWholeDocument")}
+      aria-label={t("comments.onWholeDocument")}
       onClick={() => {
         onOpenRail();
         controller.startPageDraft();
@@ -668,6 +673,7 @@ export function DocCommentToggle({
   open: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation("docs");
   const { unresolvedCount, totalCount } = controller;
 
   return (
@@ -681,7 +687,7 @@ export function DocCommentToggle({
       onClick={onToggle}
     >
       <MessageSquare className="h-3.5 w-3.5" />
-      Comments
+      {t("comments.title")}
       {/* The badge counts what is still OPEN, never the total. A document with
           one resolved thread and nothing outstanding showing "1" reads as one
           comment waiting for you, which is the opposite of what it means — so
@@ -689,14 +695,14 @@ export function DocCommentToggle({
       {unresolvedCount > 0 ? (
         <span
           className="rounded bg-yellow-400/25 px-1 text-[11px] font-medium tabular-nums text-yellow-900 dark:text-yellow-200"
-          title={`${unresolvedCount} open of ${totalCount}`}
+          title={t("comments.openOf", { open: unresolvedCount, total: totalCount })}
         >
           {unresolvedCount}
         </span>
       ) : totalCount > 0 ? (
         <Check
           className="h-3.5 w-3.5 text-success"
-          aria-label={`All ${totalCount} resolved`}
+          aria-label={t("comments.allResolved", { total: totalCount })}
         />
       ) : null}
     </Button>

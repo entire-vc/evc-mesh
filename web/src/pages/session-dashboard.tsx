@@ -3,6 +3,8 @@ import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
+import { Trans, useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import {
 	ArrowUpRight,
 	Bot,
@@ -58,12 +60,12 @@ interface AgentsStatusResponse {
 
 const statusConfig: Record<
 	AgentStatusEntry["status"],
-	{ label: string; dotColor: string }
+	{ labelKey: string; dotColor: string }
 > = {
-	online: { label: "Online", dotColor: "bg-green-500" },
-	busy: { label: "Busy", dotColor: "bg-yellow-500" },
-	offline: { label: "Offline", dotColor: "bg-gray-400" },
-	error: { label: "Error", dotColor: "bg-red-500" },
+	online: { labelKey: "integrations:sessions.status.online", dotColor: "bg-green-500" },
+	busy: { labelKey: "integrations:sessions.status.busy", dotColor: "bg-yellow-500" },
+	offline: { labelKey: "integrations:sessions.status.offline", dotColor: "bg-gray-400" },
+	error: { labelKey: "integrations:sessions.status.error", dotColor: "bg-red-500" },
 };
 
 // ---------------------------------------------------------------------------
@@ -74,11 +76,14 @@ const EPHEMERAL_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 function getEphemeralPresenceLabel(agent: AgentStatusEntry): string {
 	const isEffectivelyOffline = agent.is_stale || agent.status === "offline" || agent.status === "error";
-	if (!isEffectivelyOffline) return statusConfig[agent.status]?.label ?? agent.status;
-	if (!agent.last_heartbeat_at) return "Never seen";
+	if (!isEffectivelyOffline) {
+		const key = statusConfig[agent.status]?.labelKey;
+		return key ? i18n.t(key) : agent.status;
+	}
+	if (!agent.last_heartbeat_at) return i18n.t("integrations:sessions.neverSeen");
 	const ageMs = Date.now() - new Date(agent.last_heartbeat_at).getTime();
-	if (ageMs > EPHEMERAL_THRESHOLD_MS) return "Offline";
-	return `last run ${formatRelative(agent.last_heartbeat_at)}`;
+	if (ageMs > EPHEMERAL_THRESHOLD_MS) return i18n.t("integrations:sessions.status.offline");
+	return i18n.t("integrations:sessions.lastRun", { when: formatRelative(agent.last_heartbeat_at) });
 }
 
 // ---------------------------------------------------------------------------
@@ -105,13 +110,14 @@ interface AgentSessionCardProps {
 // Exported for component tests: the page-level data flow is mocked elsewhere,
 // the card itself is what #6b322896 exercises.
 export function AgentSessionCard({ agent }: AgentSessionCardProps) {
+	const { t } = useTranslation("integrations");
 	const [statusExpanded, setStatusExpanded] = useState(false);
 	const [taskExpanded, setTaskExpanded] = useState(false);
 	const statusCfg = agent.is_stale
 		? statusConfig.offline
 		: statusConfig[agent.status] ?? statusConfig.offline;
 	const typeCfg = agentTypeConfig[agent.agent_type as keyof typeof agentTypeConfig] ?? {
-		label: agent.agent_type ?? "Agent",
+		label: agent.agent_type ?? t("sessions.agentFallback"),
 		color: "bg-gray-100 text-gray-700",
 	};
 	const presenceLabel = getEphemeralPresenceLabel(agent);
@@ -156,12 +162,12 @@ export function AgentSessionCard({ agent }: AgentSessionCardProps) {
 					{agent.last_heartbeat_at ? (
 						<>
 							<Wifi className="h-3 w-3 shrink-0" />
-							<span>Last seen {formatRelative(agent.last_heartbeat_at)}</span>
+							<span>{t("sessions.lastSeen", { when: formatRelative(agent.last_heartbeat_at) })}</span>
 						</>
 					) : (
 						<>
 							<WifiOff className="h-3 w-3 shrink-0" />
-							<span>Never connected</span>
+							<span>{t("sessions.neverConnected")}</span>
 						</>
 					)}
 				</div>
@@ -203,7 +209,7 @@ export function AgentSessionCard({ agent }: AgentSessionCardProps) {
 					<div className="flex items-start gap-1.5">
 						<Clock className="h-3 w-3 mt-0.5 shrink-0" />
 						<span className="min-w-0">
-							Working on{" "}
+							{t("sessions.workingOn")}{" "}
 							{agent.current_task_title &&
 							agent.current_task_title.length > TASK_EXPAND_THRESHOLD ? (
 								<>
@@ -230,7 +236,7 @@ export function AgentSessionCard({ agent }: AgentSessionCardProps) {
 									</button>
 									<Link
 										to={`/t/${agent.current_task_id}`}
-										aria-label="Open task"
+										aria-label={t("sessions.openTask")}
 										className="text-primary underline-offset-2 hover:underline md:hidden"
 									>
 										<ArrowUpRight className="inline h-3 w-3" aria-hidden="true" />
@@ -294,6 +300,7 @@ interface CostTrackingSectionProps {
 }
 
 export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSectionProps) {
+	const { t } = useTranslation("integrations");
 	const hasData = !isLoading && !!cost && cost.session_count > 0;
 
 	return (
@@ -301,10 +308,10 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 			<CardHeader className="flex flex-row items-center justify-between gap-2">
 				<CardTitle className="flex items-center gap-2 text-base">
 					<DollarSign className="h-4 w-4" />
-					Cost Tracking
+					{t("sessions.cost.title")}
 				</CardTitle>
 				<span className="text-xs text-muted-foreground">
-					Last {COST_RANGE_DAYS} days
+					{t("sessions.cost.lastDays", { days: COST_RANGE_DAYS })}
 				</span>
 			</CardHeader>
 			<CardContent className="space-y-4">
@@ -317,15 +324,16 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 				) : !hasData ? (
 					<div className="space-y-3 text-sm text-muted-foreground">
 						<p>
-							No cost data reported yet for this period. Cost data is available
-							when agents use the{" "}
-							<code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
-								session_report
-							</code>{" "}
-							MCP tool at the end of each session.
+							<Trans
+								i18nKey="sessions.cost.noData"
+								ns="integrations"
+								components={{
+									code: <code className="rounded bg-muted px-1 py-0.5 text-xs font-mono" />,
+								}}
+							/>
 						</p>
 						<div className="rounded-lg border border-dashed p-3 text-xs">
-							<p className="font-medium text-foreground mb-1">Example MCP call:</p>
+							<p className="font-medium text-foreground mb-1">{t("sessions.cost.exampleCall")}</p>
 							<pre className="overflow-x-auto text-muted-foreground">
 {`session_report({
   "tasks_completed": 3,
@@ -341,25 +349,25 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 						{/* KPI row */}
 						<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
 							<div className="rounded-lg border bg-card px-3 py-2.5">
-								<p className="text-[11px] text-muted-foreground">Reported cost</p>
+								<p className="text-[11px] text-muted-foreground">{t("sessions.cost.reportedCost")}</p>
 								<p className="text-lg font-semibold tabular-nums">
 									{cost.reported_session_count > 0 ? formatCost(cost.total_cost) : "—"}
 								</p>
 							</div>
 							<div className="rounded-lg border bg-card px-3 py-2.5">
-								<p className="text-[11px] text-muted-foreground">Tokens in / out</p>
+								<p className="text-[11px] text-muted-foreground">{t("sessions.cost.tokensInOut")}</p>
 								<p className="text-lg font-semibold tabular-nums">
 									{formatTokens(cost.total_tokens_in)} / {formatTokens(cost.total_tokens_out)}
 								</p>
 							</div>
 							<div className="rounded-lg border bg-card px-3 py-2.5">
-								<p className="text-[11px] text-muted-foreground">Sessions</p>
+								<p className="text-[11px] text-muted-foreground">{t("sessions.cost.sessions")}</p>
 								<p className="text-lg font-semibold tabular-nums">
 									{i18nFmt.formatNumber(cost.session_count)}
 								</p>
 							</div>
 							<div className="rounded-lg border bg-card px-3 py-2.5">
-								<p className="text-[11px] text-muted-foreground">Avg / reported session</p>
+								<p className="text-[11px] text-muted-foreground">{t("sessions.cost.avgPerSession")}</p>
 								<p className="text-lg font-semibold tabular-nums">
 									{cost.reported_session_count > 0
 										? formatCost(cost.total_cost / cost.reported_session_count)
@@ -368,19 +376,23 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 							</div>
 						</div>
 						<p className="text-[11px] text-muted-foreground">
-							{`${i18nFmt.formatNumber(cost.reported_session_count)} of ${i18nFmt.formatNumber(cost.session_count)} sessions reported (${Math.round(
-								(cost.reported_session_count / cost.session_count) * 100,
-							)}%)`}
+							{t("sessions.cost.reportedOf", {
+								reported: i18nFmt.formatNumber(cost.reported_session_count),
+								total: i18nFmt.formatNumber(cost.session_count),
+								percent: Math.round(
+									(cost.reported_session_count / cost.session_count) * 100,
+								),
+							})}
 						</p>
 
 						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 							{/* Spend by agent */}
 							<div>
 								<p className="mb-2 text-xs font-medium text-muted-foreground">
-									Spend by agent
+									{t("sessions.cost.spendByAgent")}
 								</p>
 								{cost.by_agent.length === 0 ? (
-									<p className="text-xs text-muted-foreground">No agent data.</p>
+									<p className="text-xs text-muted-foreground">{t("sessions.cost.noAgentData")}</p>
 								) : (
 									<div className="space-y-1.5">
 										{cost.by_agent.slice(0, TOP_AGENTS_LIMIT).map((row) => (
@@ -401,10 +413,10 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 							{/* Top expensive tasks */}
 							<div>
 								<p className="mb-2 text-xs font-medium text-muted-foreground">
-									Most expensive tasks
+									{t("sessions.cost.expensiveTasks")}
 								</p>
 								{cost.top_tasks.length === 0 ? (
-									<p className="text-xs text-muted-foreground">No task-linked sessions.</p>
+									<p className="text-xs text-muted-foreground">{t("sessions.cost.noTaskSessions")}</p>
 								) : (
 									<div className="space-y-1.5">
 										{cost.top_tasks.slice(0, TOP_TASKS_LIMIT).map((row) => (
@@ -432,7 +444,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 							to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
 							className="inline-block text-xs text-primary underline-offset-4 hover:underline"
 						>
-							View full analytics →
+							{t("sessions.cost.viewAnalytics")}
 						</Link>
 					</>
 				)}
@@ -446,6 +458,7 @@ export function CostTrackingSection({ cost, isLoading, wsSlug }: CostTrackingSec
 // ---------------------------------------------------------------------------
 
 export function SessionDashboardPage() {
+	const { t } = useTranslation("integrations");
   useMentionDirectory();
 	const { wsSlug } = useParams<{ wsSlug: string }>();
 	const { currentWorkspace } = useWorkspaceStore();
@@ -526,17 +539,17 @@ export function SessionDashboardPage() {
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
 					<span className="h-2 w-2 rounded-full bg-green-500" />
 					<span className="font-medium">{onlineCount}</span>
-					<span className="text-muted-foreground">online</span>
+					<span className="text-muted-foreground">{t("sessions.chips.online")}</span>
 				</div>
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
 					<span className="h-2 w-2 rounded-full bg-yellow-500" />
 					<span className="font-medium">{busyCount}</span>
-					<span className="text-muted-foreground">busy</span>
+					<span className="text-muted-foreground">{t("sessions.chips.busy")}</span>
 				</div>
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
 					<span className="h-2 w-2 rounded-full bg-gray-400" />
 					<span className="font-medium">{offlineCount}</span>
-					<span className="text-muted-foreground">offline / error</span>
+					<span className="text-muted-foreground">{t("sessions.chips.offlineError")}</span>
 				</div>
 			</div>
 
@@ -550,12 +563,12 @@ export function SessionDashboardPage() {
 			) : agents.length === 0 ? (
 				<div className="flex flex-col items-center gap-3 py-16 text-center text-muted-foreground">
 					<Bot className="h-10 w-10 opacity-40" />
-					<p className="text-sm">No agents registered in this workspace.</p>
+					<p className="text-sm">{t("sessions.noAgents")}</p>
 					<Link
 						to={wsSlug ? `/w/${wsSlug}/org-chart` : "/"}
 						className="text-sm text-primary underline-offset-4 hover:underline"
 					>
-						Go to Team page to register agents
+						{t("sessions.goToTeam")}
 					</Link>
 				</div>
 			) : (

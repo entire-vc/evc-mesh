@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import {
   Bold,
   Code,
@@ -66,6 +67,7 @@ import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { apiErrorMessage } from "@/lib/api-error";
 import "@/components/doc-editor.css";
+import i18n from "@/i18n";
 
 /**
  * The editor for task descriptions and comments.
@@ -97,8 +99,8 @@ const PROSE_CLASS = "mesh-doc-prose text-sm text-foreground focus:outline-none";
  * leave the writer's text exactly as they wrote it.
  */
 function reportUploadFailure(file: File, err: unknown): void {
-  toast.error(`Could not attach ${file.name}`, {
-    description: apiErrorMessage(err, "upload failed"),
+  toast.error(i18n.t("misc:editor.attachFailed", { name: file.name }), {
+    description: apiErrorMessage(err, i18n.t("misc:editor.uploadFailed")),
   });
 }
 
@@ -188,6 +190,7 @@ function RichTextEditorInner({
   minHeight = "7rem",
   onKeyDown,
 }: RichTextEditorProps) {
+  const { t } = useTranslation("misc");
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Read by the editor factory, which is created once and must not close over
@@ -377,8 +380,8 @@ function RichTextEditorInner({
       } catch (err) {
         // Left exactly as it was: a failed delete must not also corrupt the
         // document by removing a reference to an artifact that is still there.
-        toast.error("Could not remove attachment", {
-          description: apiErrorMessage(err, "delete failed"),
+        toast.error(i18n.t("misc:editor.removeAttachmentFailed"), {
+          description: apiErrorMessage(err, i18n.t("misc:editor.deleteFailed")),
         });
         deletingIdRef.current = null;
         return;
@@ -636,51 +639,51 @@ function RichTextEditorInner({
       )}
     >
       <div className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 py-1">
-        <ToolbarButton title="Bold (Ctrl+B)" onClick={() => runCommand(toggleStrongCommand.key)}>
+        <ToolbarButton title={t("editor.bold")} onClick={() => runCommand(toggleStrongCommand.key)}>
           <Bold className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton title="Italic (Ctrl+I)" onClick={() => runCommand(toggleEmphasisCommand.key)}>
+        <ToolbarButton title={t("editor.italic")} onClick={() => runCommand(toggleEmphasisCommand.key)}>
           <Italic className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton title="Inline code" onClick={() => runCommand(toggleInlineCodeCommand.key)}>
+        <ToolbarButton title={t("editor.inlineCode")} onClick={() => runCommand(toggleInlineCodeCommand.key)}>
           <Code className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton title="Link" onClick={() => setLinkOpen((v) => !v)}>
+        <ToolbarButton title={t("editor.link")} onClick={() => setLinkOpen((v) => !v)}>
           <LinkIcon className="h-3.5 w-3.5" />
         </ToolbarButton>
 
         <div className="mx-1 h-3.5 w-px bg-border" />
 
-        <ToolbarButton title="Bullet list" onClick={() => runCommand(wrapInBulletListCommand.key)}>
+        <ToolbarButton title={t("editor.bulletList")} onClick={() => runCommand(wrapInBulletListCommand.key)}>
           <List className="h-3.5 w-3.5" />
         </ToolbarButton>
         <ToolbarButton
-          title="Numbered list"
+          title={t("editor.numberedList")}
           onClick={() => runCommand(wrapInOrderedListCommand.key)}
         >
           <ListOrdered className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton title="Quote" onClick={() => runCommand(wrapInBlockquoteCommand.key)}>
+        <ToolbarButton title={t("editor.quote")} onClick={() => runCommand(wrapInBlockquoteCommand.key)}>
           <Quote className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton title="Code block" onClick={() => runCommand(createCodeBlockCommand.key)}>
+        <ToolbarButton title={t("editor.codeBlock")} onClick={() => runCommand(createCodeBlockCommand.key)}>
           <SquareCode className="h-3.5 w-3.5" />
         </ToolbarButton>
-        <ToolbarButton title="Table" onClick={() => runCommand(insertTableCommand.key)}>
+        <ToolbarButton title={t("editor.table")} onClick={() => runCommand(insertTableCommand.key)}>
           <TableIcon className="h-3.5 w-3.5" />
         </ToolbarButton>
 
         <div className="mx-1 h-3.5 w-px bg-border" />
 
         <ToolbarButton
-          title={taskId ? "Insert image" : "Save the task to attach images"}
+          title={taskId ? t("editor.insertImage") : t("editor.saveToAttachImages")}
           disabled={!taskId}
           onClick={() => imageInputRef.current?.click()}
         >
           <ImageIcon className="h-3.5 w-3.5" />
         </ToolbarButton>
         <ToolbarButton
-          title={taskId ? "Attach file" : "Save the task to attach files"}
+          title={taskId ? t("editor.attachFile") : t("editor.saveToAttachFiles")}
           disabled={!taskId}
           onClick={() => fileInputRef.current?.click()}
         >
@@ -703,7 +706,7 @@ function RichTextEditorInner({
         />
 
         <div className="flex-1" />
-        {uploading && <span className="mr-2 text-xs text-muted-foreground">Uploading...</span>}
+        {uploading && <span className="mr-2 text-xs text-muted-foreground">{t("editor.uploading")}</span>}
       </div>
 
       {linkOpen && (
@@ -716,14 +719,14 @@ function RichTextEditorInner({
             value={linkHref}
             onChange={(e) => setLinkHref(e.target.value)}
             placeholder="https://example.com"
-            aria-label="Link URL"
+            aria-label={t("editor.linkUrl")}
             className="h-7 flex-1 rounded border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
           />
           <button
             type="submit"
             className={cn("h-7 rounded px-2 text-xs text-muted-foreground", TOOLBAR_HOVER)}
           >
-            Apply
+            {t("editor.apply")}
           </button>
         </form>
       )}
@@ -741,7 +744,7 @@ function RichTextEditorInner({
 
       {hint !== null && (
         <div className="border-t border-border px-3 py-1 text-[11px] text-muted-foreground">
-          {hint ?? "Rich text — tables, task lists and footnotes supported."}
+          {hint ?? t("editor.hint")}
         </div>
       )}
 

@@ -3,6 +3,7 @@ import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { CalendarDays, Download, Printer, TrendingUp, Users, Zap } from "lucide-react";
 import { api, getAccessToken } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -47,13 +48,16 @@ interface BarChartProps {
 }
 
 function HorizontalBarChart({ data, height = 20 }: BarChartProps) {
+  const { t } = useTranslation("integrations");
   const max = Math.max(...data.map((d) => d.value), 1);
   return (
     <div className="space-y-2">
       {data.map(({ label, value, color }) => (
         <div key={label} className="flex items-center gap-2">
           <span className="w-24 shrink-0 text-right text-xs capitalize text-muted-foreground">
-            {label.replace("_", " ")}
+            {t(`analytics.labels.${label}`, {
+              defaultValue: label.replace("_", " "),
+            })}
           </span>
           <div className="relative flex-1" style={{ height }}>
             <div
@@ -81,10 +85,11 @@ interface TimelineChartProps {
 }
 
 function TimelineChart({ data }: TimelineChartProps) {
+  const { t } = useTranslation("integrations");
   if (data.length === 0) {
     return (
       <p className="py-8 text-center text-xs text-muted-foreground">
-        No data in selected period.
+        {t("analytics.timeline.empty")}
       </p>
     );
   }
@@ -122,7 +127,7 @@ function TimelineChart({ data }: TimelineChartProps) {
   const tickInterval = Math.max(1, Math.ceil(data.length / 8));
   const ticks = data
     .map((d, i) => ({ x: PAD.left + i * xStep, label: d.date.slice(5), i }))
-    .filter((t) => t.i % tickInterval === 0);
+    .filter((tick) => tick.i % tickInterval === 0);
 
   return (
     <div className="overflow-x-auto">
@@ -196,11 +201,11 @@ function TimelineChart({ data }: TimelineChartProps) {
       <div className="mt-1 flex gap-4 justify-center">
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <span className="inline-block h-2 w-4 rounded-sm bg-teal-400" />
-          Created
+          {t("analytics.timeline.created")}
         </div>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <span className="inline-block h-2 w-4 rounded-sm bg-violet-400" />
-          Completed
+          {t("analytics.timeline.completed")}
         </div>
       </div>
     </div>
@@ -211,17 +216,17 @@ function TimelineChart({ data }: TimelineChartProps) {
 // Main page
 // ---------------------------------------------------------------------------
 
-const PRESET_RANGES = [
-  { label: "Last 7 days", days: 7 },
-  { label: "Last 30 days", days: 30 },
-  { label: "Last 90 days", days: 90 },
-];
+const PRESET_RANGE_DAYS = [7, 30, 90] as const;
 
 // ---------------------------------------------------------------------------
 // CSV download helper
 // ---------------------------------------------------------------------------
 
-async function downloadCSV(url: string, filename: string): Promise<void> {
+async function downloadCSV(
+  url: string,
+  filename: string,
+  failedMessage: (statusText: string) => string,
+): Promise<void> {
   const token = getAccessToken();
   const headers: Record<string, string> = {};
   if (token) {
@@ -230,7 +235,7 @@ async function downloadCSV(url: string, filename: string): Promise<void> {
 
   const res = await fetch(url, { headers });
   if (!res.ok) {
-    throw new Error(`Export failed: ${res.statusText}`);
+    throw new Error(failedMessage(res.statusText));
   }
 
   const blob = await res.blob();
@@ -245,6 +250,7 @@ async function downloadCSV(url: string, filename: string): Promise<void> {
 }
 
 export function AnalyticsPage() {
+  const { t } = useTranslation("integrations");
   useMentionDirectory();
   useParams();
   const { currentWorkspace } = useWorkspaceStore();
@@ -312,13 +318,15 @@ export function AnalyticsPage() {
       }).toString();
       const url = `/api/v1/workspaces/${currentWorkspace.id}/analytics/export?${qs}`;
       const filename = `analytics-${p.from || new Date().toISOString().slice(0, 10)}.csv`;
-      await downloadCSV(url, filename);
+      await downloadCSV(url, filename, (statusText) =>
+        t("analytics.exportFailed", { statusText }),
+      );
     } catch (err) {
       console.error("CSV export failed:", err);
     } finally {
       setExporting(false);
     }
-  }, [currentWorkspace]);
+  }, [currentWorkspace, t]);
 
   const statusData = metrics
     ? Object.entries(metrics.task_metrics.by_status_category ?? {}).map(
@@ -343,7 +351,7 @@ export function AnalyticsPage() {
           onChange={(e) => setProjectFilter(e.target.value)}
           className="w-48"
         >
-          <option value="">All Projects</option>
+          <option value="">{t("analytics.allProjects")}</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -355,9 +363,9 @@ export function AnalyticsPage() {
           onChange={(e) => setRangeDays(Number(e.target.value))}
           className="w-40"
         >
-          {PRESET_RANGES.map(({ label, days }) => (
+          {PRESET_RANGE_DAYS.map((days) => (
             <option key={days} value={days}>
-              {label}
+              {t(`analytics.range.d${days}`)}
             </option>
           ))}
         </Select>
@@ -368,19 +376,19 @@ export function AnalyticsPage() {
           onClick={() => void handleExportCSV()}
           disabled={exporting || loading}
           className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
-          title="Export data as CSV"
+          title={t("analytics.export.title")}
         >
           <Download className="h-3.5 w-3.5" />
-          {exporting ? "Exporting..." : "Export CSV"}
+          {exporting ? t("analytics.export.busy") : t("analytics.export.label")}
         </button>
         <button
           type="button"
           onClick={() => window.print()}
           className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-          title="Print or save as PDF"
+          title={t("analytics.print.title")}
         >
           <Printer className="h-3.5 w-3.5" />
-          Print / PDF
+          {t("analytics.print.label")}
         </button>
       </div>
 
@@ -396,22 +404,22 @@ export function AnalyticsPage() {
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <KPICard
               icon={<TrendingUp className="h-5 w-5 text-teal-500" />}
-              label="Total Tasks"
+              label={t("analytics.kpi.totalTasks")}
               value={metrics.task_metrics.total}
             />
             <KPICard
               icon={<CalendarDays className="h-5 w-5 text-blue-500" />}
-              label="Created (period)"
+              label={t("analytics.kpi.created")}
               value={metrics.task_metrics.created_this_period}
             />
             <KPICard
               icon={<TrendingUp className="h-5 w-5 text-emerald-500" />}
-              label="Completed (period)"
+              label={t("analytics.kpi.completed")}
               value={metrics.task_metrics.completed_this_period}
             />
             <KPICard
               icon={<Zap className="h-5 w-5 text-amber-500" />}
-              label="Total Events"
+              label={t("analytics.kpi.totalEvents")}
               value={
                 metrics.event_metrics.period_fully_covered
                   ? metrics.event_metrics.total_events
@@ -421,8 +429,12 @@ export function AnalyticsPage() {
                 metrics.event_metrics.period_fully_covered
                   ? undefined
                   : metrics.event_metrics.retained_since
-                    ? `Log only retains data since ${i18nFmt.formatDate(metrics.event_metrics.retained_since)}`
-                    : "No event data retained for this period"
+                    ? t("analytics.kpi.retainedSince", {
+                        date: i18nFmt.formatDate(
+                          metrics.event_metrics.retained_since,
+                        ),
+                      })
+                    : t("analytics.kpi.noRetained")
               }
             />
           </div>
@@ -432,7 +444,7 @@ export function AnalyticsPage() {
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Tasks by Status</CardTitle>
+              <CardTitle className="text-sm">{t("analytics.cards.byStatus")}</CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -445,7 +457,7 @@ export function AnalyticsPage() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Tasks by Priority</CardTitle>
+              <CardTitle className="text-sm">{t("analytics.cards.byPriority")}</CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -460,7 +472,7 @@ export function AnalyticsPage() {
         {/* Activity timeline */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm">Activity Timeline</CardTitle>
+            <CardTitle className="text-sm">{t("analytics.cards.timeline")}</CardTitle>
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -476,7 +488,7 @@ export function AnalyticsPage() {
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-sm">
               <Users className="h-4 w-4" />
-              Agent Leaderboard
+              {t("analytics.cards.leaderboard")}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -485,8 +497,8 @@ export function AnalyticsPage() {
             ) : metrics && (metrics.agent_metrics.tasks_by_agent ?? []).length > 0 ? (
               <div className="space-y-1">
                 <div className="grid grid-cols-3 text-xs font-medium text-muted-foreground border-b pb-2 mb-2">
-                  <span className="col-span-2">Agent</span>
-                  <span className="text-right">Completed</span>
+                  <span className="col-span-2">{t("analytics.leaderboard.agent")}</span>
+                  <span className="text-right">{t("analytics.leaderboard.completed")}</span>
                 </div>
                 {(metrics.agent_metrics.tasks_by_agent ?? []).map((row, idx) => (
                   <div
@@ -505,7 +517,7 @@ export function AnalyticsPage() {
               </div>
             ) : !loading ? (
               <p className="text-center text-xs text-muted-foreground py-4">
-                No agent task data yet.
+                {t("analytics.leaderboard.empty")}
               </p>
             ) : null}
           </CardContent>
@@ -515,16 +527,16 @@ export function AnalyticsPage() {
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Agents</CardTitle>
+              <CardTitle className="text-sm">{t("analytics.cards.agents")}</CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
                 <Skeleton className="h-16 w-full" />
               ) : metrics ? (
                 <div className="flex gap-8">
-                  <Stat label="Total" value={metrics.agent_metrics.total_agents} />
+                  <Stat label={t("analytics.agents.total")} value={metrics.agent_metrics.total_agents} />
                   <Separator orientation="vertical" className="h-12" />
-                  <Stat label="Active" value={metrics.agent_metrics.active_agents} />
+                  <Stat label={t("analytics.agents.active")} value={metrics.agent_metrics.active_agents} />
                 </div>
               ) : null}
             </CardContent>
@@ -532,7 +544,7 @@ export function AnalyticsPage() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Events by Type</CardTitle>
+              <CardTitle className="text-sm">{t("analytics.cards.eventsByType")}</CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -547,8 +559,8 @@ export function AnalyticsPage() {
               ) : (
                 <p className="text-center text-xs text-muted-foreground py-4">
                   {metrics && !metrics.event_metrics.period_fully_covered
-                    ? "Event log doesn't retain data this far back — no breakdown available."
-                    : "No events yet."}
+                    ? t("analytics.events.notRetained")
+                    : t("analytics.events.empty")}
                 </p>
               )}
             </CardContent>

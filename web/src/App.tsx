@@ -13,6 +13,7 @@ import { PageSkeleton } from "@/components/page-skeleton";
 import { AuthLoadingSkeleton } from "@/components/layout/auth-loading-skeleton";
 import { useTranslation } from "react-i18next";
 import { useLanguageSync } from "@/i18n/use-language-sync";
+import { miscT } from "@/lib/misc-t";
 
 // Everything below is route-split: none of it should ship in the JS that
 // /login or /register load before first paint (perf·Б1, fleet-epic
@@ -155,7 +156,7 @@ class ErrorBoundary extends Component<
     if (this.state.error) {
       return (
         <div style={{ padding: 40, fontFamily: "monospace" }}>
-          <h1 style={{ color: "red" }}>Application Error</h1>
+          <h1 style={{ color: "red" }}>{miscT("errorBoundary.title", "Application Error")}</h1>
           <pre style={{ whiteSpace: "pre-wrap", marginTop: 16 }}>
             {this.state.error.message}
           </pre>
@@ -171,7 +172,7 @@ class ErrorBoundary extends Component<
             }}
             style={{ marginTop: 16, padding: "8px 16px", cursor: "pointer" }}
           >
-            Reload
+            {miscT("errorBoundary.reload", "Reload")}
           </button>
         </div>
       );

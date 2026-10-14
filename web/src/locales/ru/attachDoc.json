@@ -1,5 +1,10 @@
 {
-  "searchObsidian": "Искать Obsidian-доки...",
+  "attachObsidian": "Прикрепить документ Obsidian",
+  "linkDocument": "Сослаться на документ",
+  "noDocs": "Нет доступных документов",
   "nothingFound": "Ничего не найдено",
-  "noDocs": "Нет доступных документов"
+  "searchDocuments": "Поиск по документам...",
+  "searchFailed": "Поиск не удался",
+  "searchObsidian": "Искать Obsidian-доки...",
+  "startTyping": "Начните вводить для поиска"
 }

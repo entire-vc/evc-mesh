@@ -2,6 +2,7 @@ import { AgentShortTag } from "@/components/agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
+import { useTranslation } from "react-i18next";
 import { Bot, Plus, User, UserPlus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, isAgentStale } from "@/lib/agent-utils";
@@ -146,6 +147,13 @@ const statusBorderColors: Record<string, string> = {
   error: "border-l-red-500",
 };
 
+const STATUS_KEYS: Record<string, string> = {
+  online: "orgChart.status.online",
+  offline: "orgChart.status.offline",
+  busy: "orgChart.status.busy",
+  error: "orgChart.status.error",
+};
+
 function AgentCard({
   agent,
   onClick,
@@ -153,6 +161,7 @@ function AgentCard({
   agent: OrgChartAgentNode;
   onClick?: () => void;
 }) {
+  const { t } = useTranslation("integrations");
   const stale = agent.is_stale ?? isAgentStale(agent);
   const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
     label: agent.status,
@@ -180,9 +189,9 @@ function AgentCard({
             <Badge
               variant="outline"
               className="ml-auto shrink-0 px-1 py-0 h-4 text-[10px]"
-              title="Invited from another workspace"
+              title={t("orgChart.invitedTitle")}
             >
-              Invited
+              {t("orgChart.invited")}
             </Badge>
           )}
         </div>
@@ -200,8 +209,8 @@ function AgentCard({
         <div className="flex items-center gap-1.5">
           <span className={cn("h-2 w-2 rounded-full shrink-0", statusCfg.dotColor)} />
           <span className="text-xs text-muted-foreground">
-            {statusCfg.label}
-            {stale && agent.status === "online" && " (stale)"}
+            {STATUS_KEYS[agent.status] ? t(STATUS_KEYS[agent.status]!) : statusCfg.label}
+            {stale && agent.status === "online" && ` ${t("orgChart.stale")}`}
           </span>
           {agent.max_concurrent_tasks > 0 && (
             <span className="ml-auto text-xs text-muted-foreground tabular-nums">
@@ -327,13 +336,14 @@ function TreeView({
   humans: TeamDirectoryHuman[];
   onAgentClick: (agentId: string) => void;
 }) {
+  const { t } = useTranslation("integrations");
   const unifiedRoots = useMemo(
     () => buildUnifiedTree(agentTree, humans),
     [agentTree, humans],
   );
 
   if (unifiedRoots.length === 0) {
-    return <p className="text-sm text-muted-foreground">No team members yet.</p>;
+    return <p className="text-sm text-muted-foreground">{t("orgChart.empty")}</p>;
   }
 
   return (
@@ -360,6 +370,7 @@ function GridView({
   humans: TeamDirectoryHuman[];
   onAgentClick: (agentId: string) => void;
 }) {
+  const { t } = useTranslation("integrations");
   function flattenTree(nodes: OrgChartAgentNode[]): OrgChartAgentNode[] {
     const result: OrgChartAgentNode[] = [];
     for (const n of nodes) {
@@ -421,7 +432,7 @@ function GridView({
         <div>
           <h3 className="text-sm font-semibold mb-3 flex items-center gap-2 text-muted-foreground">
             <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground" />
-            No project
+            {t("orgChart.noProject")}
             <span className="text-xs font-normal">
               ({unassignedAgents.length + unassignedHumans.length})
             </span>
@@ -438,7 +449,7 @@ function GridView({
       )}
 
       {projects.length === 0 && !hasUnassigned && (
-        <p className="text-sm text-muted-foreground">No team members yet.</p>
+        <p className="text-sm text-muted-foreground">{t("orgChart.empty")}</p>
       )}
     </div>
   );
@@ -486,6 +497,7 @@ function overlayAgentEdits(tree: OrgChartAgentNode[], agents: Agent[]): OrgChart
 }
 
 export function OrgChartPage() {
+  const { t } = useTranslation("integrations");
   const { currentWorkspace } = useWorkspaceStore();
   const { orgChart, isOrgChartLoading, fetchOrgChart } = useRulesStore();
   const { agents, fetchAgents } = useAgentStore();
@@ -560,7 +572,7 @@ export function OrgChartPage() {
             onClick={() => setRegisterOpen(true)}
           >
             <Plus className="h-3.5 w-3.5" />
-            Register Agent
+            {t("orgChart.registerAgent")}
           </Button>
           <Button
             variant="outline"
@@ -569,7 +581,7 @@ export function OrgChartPage() {
             onClick={() => setInviteOpen(true)}
           >
             <UserPlus className="h-3.5 w-3.5" />
-            Invite Member
+            {t("orgChart.inviteMember")}
           </Button>
 
         </div>

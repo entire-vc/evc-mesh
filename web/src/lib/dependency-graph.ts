@@ -1,3 +1,4 @@
+import { miscT } from "@/lib/misc-t";
 import { api, ApiRequestError } from "@/lib/api";
 import type { Priority, StatusCategory } from "@/types";
 
@@ -54,11 +55,11 @@ export interface DependencyGraph {
 }
 
 export function blockerSummary(node: DependencyNode, graph?: DependencyGraph): string {
-  if (node.availability !== "available" || node.unknown_blockers > 0) return "There is an unavailable dependency";
-  if (node.unfinished_blockers > 0) return `${node.unfinished_blockers} unfinished direct blockers`;
+  if (node.availability !== "available" || node.unknown_blockers > 0) return miscT("dependencyGraph.unavailable", "There is an unavailable dependency");
+  if (node.unfinished_blockers > 0) return miscT("dependencyGraph.unfinishedBlockers", `${node.unfinished_blockers} unfinished direct blockers`, { count: node.unfinished_blockers });
   if (!graph || !graph.visibility_complete || graph.before.has_more || graph.before.unknown_count > 0 ||
-      graph.before.ids.length < graph.before.total_count) return "Dependency check is incomplete";
-  return "No unfinished direct blockers";
+      graph.before.ids.length < graph.before.total_count) return miscT("dependencyGraph.incomplete", "Dependency check is incomplete");
+  return miscT("dependencyGraph.noBlockers", "No unfinished direct blockers");
 }
 export function mergeGraphPages(previous: DependencyGraph, next: DependencyGraph): DependencyGraph {
   if (previous.revision !== next.revision) throw new ApiRequestError("Graph revision changed", "CONFLICT", 409);

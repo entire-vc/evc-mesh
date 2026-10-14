@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
 import {
@@ -42,14 +43,14 @@ const statusCategoryColors: Record<StatusCategory, string> = {
   triage: "text-orange-500",
 };
 
-const statusCategoryLabels: Record<StatusCategory, string> = {
-  done: "Done",
-  cancelled: "Cancelled",
-  in_progress: "In Progress",
-  review: "In Review",
-  todo: "To Do",
-  backlog: "Backlog",
-  triage: "Triage",
+const statusCategoryLabelKeys: Record<StatusCategory, string> = {
+  done: "recurring.history.status.done",
+  cancelled: "recurring.history.status.cancelled",
+  in_progress: "recurring.history.status.in_progress",
+  review: "recurring.history.status.review",
+  todo: "recurring.history.status.todo",
+  backlog: "recurring.history.status.backlog",
+  triage: "recurring.history.status.triage",
 };
 
 interface RecurringHistoryPanelProps {
@@ -65,6 +66,7 @@ export function RecurringHistoryPanel({
   schedule,
   currentInstanceNumber,
 }: RecurringHistoryPanelProps) {
+  const { t } = useTranslation("settings");
   const { history, isLoading, fetchHistory } = useRecurringStore();
   const navigate = useNavigate();
   const { wsSlug, projectSlug } = useParams();
@@ -88,7 +90,7 @@ export function RecurringHistoryPanel({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4 text-muted-foreground" />
-            Recurring History
+            {t("recurring.history.title")}
           </DialogTitle>
           <p className="text-sm text-muted-foreground">
             "{schedule.title_template}"
@@ -105,7 +107,7 @@ export function RecurringHistoryPanel({
           ) : history.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin opacity-50" />
-              <p>No instances created yet.</p>
+              <p>{t("recurring.history.empty")}</p>
             </div>
           ) : (
             history.map((instance) => {
@@ -126,7 +128,7 @@ export function RecurringHistoryPanel({
                       "border-primary/40 bg-primary/5",
                   )}
                   onClick={() => handleInstanceClick(instance.task_id)}
-                  title="Click to open task"
+                  title={t("recurring.history.openTask")}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
@@ -140,15 +142,16 @@ export function RecurringHistoryPanel({
                     <div className="flex shrink-0 items-center gap-2">
                       {isCurrentInstance && (
                         <Badge variant="secondary" className="text-[10px]">
-                          current
+                          {t("recurring.history.current")}
                         </Badge>
                       )}
                       <Badge
                         variant="outline"
                         className={cn("text-[10px]", colorClass)}
                       >
-                        {statusCategoryLabels[instance.status_category] ??
-                          instance.status_category}
+                        {statusCategoryLabelKeys[instance.status_category]
+                          ? t(statusCategoryLabelKeys[instance.status_category])
+                          : instance.status_category}
                       </Badge>
                     </div>
                   </div>

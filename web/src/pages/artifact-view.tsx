@@ -1,6 +1,7 @@
 import * as i18nFmt from "@/i18n/format";
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { AlertCircle, Download, Loader2, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
@@ -58,6 +59,7 @@ type TextState =
 const MAX_CSV_ROWS = 1000;
 
 export function ArtifactViewPage() {
+  const { t } = useTranslation("integrations");
   const { artifactId } = useParams<{ artifactId: string }>();
   const { isAuthenticated } = useAuthStore();
   const location = useLocation();
@@ -80,7 +82,7 @@ export function ArtifactViewPage() {
         if (cancelled) return;
         setMeta({
           status: "error",
-          message: apiErrorMessage(err, "could not load artifact"),
+          message: apiErrorMessage(err, t("artifactView.loadFailed")),
         });
       }
     })();
@@ -89,7 +91,7 @@ export function ArtifactViewPage() {
     };
     // `attempt` is deliberately absent: metadata doesn't expire, only the
     // presigned URL does — Retry re-mints below without re-fetching this.
-  }, [artifactId, isAuthenticated]);
+  }, [artifactId, isAuthenticated, t]);
 
   if (!isAuthenticated) {
     return (
@@ -104,7 +106,7 @@ export function ArtifactViewPage() {
     return (
       <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        <span>Loading artifact...</span>
+        <span>{t("artifactView.loadingArtifact")}</span>
       </div>
     );
   }
@@ -112,10 +114,9 @@ export function ArtifactViewPage() {
   if (meta.status === "error") {
     return (
       <div className="mx-auto max-w-md p-8 text-center">
-        <h1 className="text-lg font-semibold">Artifact not found</h1>
+        <h1 className="text-lg font-semibold">{t("artifactView.notFound.title")}</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          The file may have been deleted, or you don&apos;t have access to its
-          workspace.
+          {t("artifactView.notFound.hint")}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">{meta.message}</p>
       </div>
@@ -149,13 +150,13 @@ export function ArtifactViewPage() {
             to={`/t/${artifact.task_id}`}
             className="underline-offset-2 hover:underline"
           >
-            open task
+            {t("artifactView.openTask")}
           </Link>
         </div>
         <div>
           <Button variant="outline" size="sm" onClick={() => void handleDownload()} disabled={downloading}>
             <Download className="mr-1.5 h-3.5 w-3.5" />
-            Download
+            {t("artifactView.download")}
           </Button>
         </div>
       </header>
@@ -166,8 +167,7 @@ export function ArtifactViewPage() {
         <NativeView artifact={artifact} attempt={attempt} onRetry={() => setAttempt((n) => n + 1)} />
       ) : (
         <div className="rounded-md border border-border bg-muted/50 px-4 py-6 text-sm text-muted-foreground">
-          This file can&apos;t be shown in the browser. Download it to open it
-          locally.
+          {t("artifactView.notPreviewable")}
         </div>
       )}
     </div>
@@ -192,6 +192,7 @@ function TextView({
   attempt: number;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation("integrations");
   const [state, setState] = useState<TextState>({ status: "loading" });
 
   useEffect(() => {
@@ -206,7 +207,7 @@ function TextView({
         );
         const resp = await fetch(url, { signal: controller.signal });
         if (!resp.ok) {
-          throw new Error(`storage returned ${resp.status}`);
+          throw new Error(t("artifactView.storageError", { status: resp.status }));
         }
         const body = await resp.text();
         if (cancelled) return;
@@ -220,7 +221,7 @@ function TextView({
         if (cancelled || controller.signal.aborted) return;
         setState({
           status: "error",
-          message: apiErrorMessage(err, "could not load file"),
+          message: apiErrorMessage(err, t("artifactView.fileLoadFailed")),
         });
       }
     })();
@@ -229,13 +230,13 @@ function TextView({
       cancelled = true;
       controller.abort();
     };
-  }, [artifact.id, attempt]);
+  }, [artifact.id, attempt, t]);
 
   if (state.status === "loading") {
     return (
       <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        <span>Loading preview...</span>
+        <span>{t("artifactView.loadingPreview")}</span>
       </div>
     );
   }
@@ -246,15 +247,15 @@ function TextView({
         <div className="flex items-start gap-2 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <p className="font-medium">Could not load preview</p>
+            <p className="font-medium">{t("artifactView.previewError")}</p>
             <p className="text-muted-foreground">
-              The link may have expired. {state.message}
+              {t("artifactView.linkExpired")} {state.message}
             </p>
           </div>
         </div>
         <Button variant="outline" size="sm" onClick={onRetry}>
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-          Try again
+          {t("artifactView.tryAgain")}
         </Button>
       </div>
     );
@@ -266,9 +267,10 @@ function TextView({
     <div className="space-y-4">
       {state.truncated && (
         <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-          Showing the first {formatBytes(PREVIEW_MAX_CHARS)} of this file
-          &mdash; {i18nFmt.formatNumber(state.omittedChars)} more characters are
-          not shown. Download it to read the whole thing.
+          {t("artifactView.truncated", {
+            size: formatBytes(PREVIEW_MAX_CHARS),
+            omitted: i18nFmt.formatNumber(state.omittedChars),
+          })}
         </div>
       )}
       {view === "markdown" ? (
@@ -302,6 +304,7 @@ function NativeView({
   attempt: number;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation("integrations");
   const [state, setState] = useState<NativeState>({ status: "loading" });
 
   useEffect(() => {
@@ -317,20 +320,20 @@ function NativeView({
         if (cancelled) return;
         setState({
           status: "error",
-          message: apiErrorMessage(err, "could not load file"),
+          message: apiErrorMessage(err, t("artifactView.fileLoadFailed")),
         });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [artifact.id, attempt]);
+  }, [artifact.id, attempt, t]);
 
   if (state.status === "loading") {
     return (
       <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        <span>Loading file...</span>
+        <span>{t("artifactView.loadingFile")}</span>
       </div>
     );
   }
@@ -341,15 +344,15 @@ function NativeView({
         <div className="flex items-start gap-2 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <p className="font-medium">Could not load file</p>
+            <p className="font-medium">{t("artifactView.fileError")}</p>
             <p className="text-muted-foreground">
-              The link may have expired. {state.message}
+              {t("artifactView.linkExpired")} {state.message}
             </p>
           </div>
         </div>
         <Button variant="outline" size="sm" onClick={onRetry}>
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-          Try again
+          {t("artifactView.tryAgain")}
         </Button>
       </div>
     );
@@ -387,7 +390,7 @@ function NativeView({
       rel="noopener noreferrer"
       className="text-sm underline underline-offset-2"
     >
-      Open file
+      {t("artifactView.openFile")}
     </a>
   );
 }
@@ -515,10 +518,11 @@ function parseCsv(text: string): string[][] {
 }
 
 function CsvView({ text }: { text: string }) {
+  const { t } = useTranslation("integrations");
   const rows = useMemo(() => parseCsv(text), [text]);
   if (rows.length === 0) {
     return (
-      <p className="py-4 text-sm text-muted-foreground">This CSV file is empty.</p>
+      <p className="py-4 text-sm text-muted-foreground">{t("artifactView.csvEmpty")}</p>
     );
   }
   const header = rows[0]!;
@@ -555,9 +559,10 @@ function CsvView({ text }: { text: string }) {
       </div>
       {body.length > shown.length && (
         <p className="text-xs text-muted-foreground">
-          Showing the first {i18nFmt.formatNumber(shown.length)} of{" "}
-          {i18nFmt.formatNumber(body.length)} rows. Download the file for the
-          rest.
+          {t("artifactView.csvTruncated", {
+            shown: i18nFmt.formatNumber(shown.length),
+            total: i18nFmt.formatNumber(body.length),
+          })}
         </p>
       )}
     </div>

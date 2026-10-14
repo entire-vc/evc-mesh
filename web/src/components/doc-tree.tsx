@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
   ChevronRight,
@@ -170,6 +171,7 @@ export function DocTree({
 }: DocTreeProps) {
   // Collapsed rather than expanded: a document created under a node is visible
   // the moment it appears, without the tree having to be told about it.
+  const { t } = useTranslation("docs");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const toggle = (id: string) => {
@@ -184,7 +186,7 @@ export function DocTree({
   const nodes = buildDocTree(documents);
 
   return (
-    <ul role="tree" aria-label="Documents" className="space-y-0.5">
+    <ul role="tree" aria-label={t("tree.heading")} className="space-y-0.5">
       {nodes.map((node) => (
         <DocTreeItem
           key={node.doc.id}
@@ -223,6 +225,7 @@ function DocTreeItem({
   onMove,
   onDelete,
 }: DocTreeItemProps) {
+  const { t } = useTranslation("docs");
   const { doc, children } = node;
   const hasChildren = children.length > 0;
   const isOpen = hasChildren && !collapsed.has(doc.id);
@@ -267,7 +270,7 @@ function DocTreeItem({
         {hasChildren ? (
           <button
             type="button"
-            aria-label={isOpen ? `Collapse ${doc.title}` : `Expand ${doc.title}`}
+            aria-label={isOpen ? t("tree.collapse", { title: doc.title }) : t("tree.expand", { title: doc.title })}
             onClick={() => onToggle(doc.id)}
             className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
           >
@@ -295,8 +298,8 @@ function DocTreeItem({
         <div className="flex shrink-0 items-center opacity-100 md:opacity-0 focus-within:opacity-100 group-hover:opacity-100">
           <button
             type="button"
-            title="New page inside"
-            aria-label={`New page inside ${doc.title}`}
+            title={t("tree.newInside")}
+            aria-label={t("tree.newInsideOf", { title: doc.title })}
             onClick={() => onCreateChild(doc)}
             className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
           >
@@ -304,24 +307,24 @@ function DocTreeItem({
           </button>
           <DropdownMenu>
             <DropdownMenuTrigger
-              title="Page actions"
-              aria-label={`Actions for ${doc.title}`}
+              title={t("tree.pageActions")}
+              aria-label={t("tree.actionsFor", { title: doc.title })}
               className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
             >
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent className="min-w-[9rem]">
               <DropdownMenuItem onClick={() => onRename(doc)}>
-                Rename
+                {t("actions.rename")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onMove(doc)}>
-                Move to...
+                {t("tree.moveTo")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onDelete(doc)}
                 className="text-destructive"
               >
-                Delete
+                {t("actions.delete")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

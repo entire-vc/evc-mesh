@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useParams, useLocation } from "react-router";
+import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { api } from "@/lib/api";
@@ -7,12 +8,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { PaginatedResponse, Project, Task } from "@/types";
 
 export function TaskDeepLinkResolver() {
+  const { t } = useTranslation("misc");
   const { taskId } = useParams<{ taskId: string }>();
   const { isAuthenticated } = useAuthStore();
   const location = useLocation();
   const { workspaces, fetchWorkspaces } = useWorkspaceStore();
   const [target, setTarget] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // i18n key under misc:deepLink, resolved at render.
+  const [error, setError] = useState<"taskNoProjectAccess" | "taskNoAccess" | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated || !taskId) return;
@@ -38,7 +41,7 @@ export function TaskDeepLinkResolver() {
         }
         if (cancelled) return;
         if (!projectSlug || !wsSlug) {
-          setError("Task is in a workspace or project you don't have access to.");
+          setError("taskNoProjectAccess");
           return;
         }
         // Preserve the query string (namely `?comment=<id>` from a mention
@@ -47,7 +50,7 @@ export function TaskDeepLinkResolver() {
         // it does have.
         setTarget(`/w/${wsSlug}/p/${projectSlug}/t/${task.id}${location.search}`);
       } catch {
-        setError("Task not found or you don't have access.");
+        setError("taskNoAccess");
       }
     })();
     return () => {
@@ -66,8 +69,8 @@ export function TaskDeepLinkResolver() {
   if (error) {
     return (
       <div className="mx-auto max-w-md p-8 text-center">
-        <h1 className="text-lg font-semibold">Task not found</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{error}</p>
+        <h1 className="text-lg font-semibold">{t("deepLink.taskNotFound")}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{t(`deepLink.${error}`)}</p>
       </div>
     );
   }

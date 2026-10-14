@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { Bell } from "lucide-react";
 import { subscribeUser, unsubscribeUser, isSubscribed, getPermissionState } from "@/lib/push";
 import { toast } from "@/components/ui/toast";
@@ -22,6 +23,7 @@ const VALID_TABS: TabId[] = ["in-app", "push", "email", "telegram"];
 // ---------------------------------------------------------------------------
 
 export default function NotificationSettingsPage() {
+  const { t } = useTranslation("notifications");
   const { wsId } = useParams();
   const { currentWorkspace } = useWorkspaceStore();
   const {
@@ -124,7 +126,7 @@ export default function NotificationSettingsPage() {
       setPushPermission(await getPermissionState());
       setPushSubscribed(true);
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to enable browser push"));
+      toast.error(apiErrorMessage(err, t("settings.toast.enablePushFailed")));
     } finally {
       setPushLoading(false);
     }
@@ -136,7 +138,7 @@ export default function NotificationSettingsPage() {
       await unsubscribeUser();
       setPushSubscribed(false);
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to disable browser push"));
+      toast.error(apiErrorMessage(err, t("settings.toast.disablePushFailed")));
     } finally {
       setPushLoading(false);
     }
@@ -164,7 +166,7 @@ export default function NotificationSettingsPage() {
       setTimeout(() => setPushEventsSaved(false), 2000);
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to save push preferences"),
+        apiErrorMessage(err, t("settings.toast.savePushFailed")),
       );
     } finally {
       setPushEventsSaving(false);
@@ -260,7 +262,7 @@ export default function NotificationSettingsPage() {
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to save notification settings"),
+        apiErrorMessage(err, t("settings.toast.saveFailed")),
       );
     } finally {
       setIsSaving(false);
@@ -284,7 +286,7 @@ export default function NotificationSettingsPage() {
     if (!wsID) return;
     const trimmed = emailAddress.trim();
     if (!trimmed) {
-      toast.error("Enter an email address");
+      toast.error(t("settings.toast.emailRequired"));
       return;
     }
 
@@ -301,7 +303,7 @@ export default function NotificationSettingsPage() {
       setTimeout(() => setEmailSaved(false), 2000);
     } catch (err) {
       toast.error(
-        apiErrorMessage(err, "Failed to save email notification settings"),
+        apiErrorMessage(err, t("settings.toast.saveEmailFailed")),
       );
     } finally {
       setEmailSaving(false);
@@ -331,7 +333,7 @@ export default function NotificationSettingsPage() {
     const trimmed = telegramUsername.trim();
     const nextEnabled = unbind ? false : telegramEnabled;
     if (nextEnabled && !trimmed) {
-      toast.error("Enter your Telegram username");
+      toast.error(t("settings.toast.telegramUsernameRequired"));
       return;
     }
 
@@ -354,7 +356,7 @@ export default function NotificationSettingsPage() {
       );
       if (unbind) {
         setTelegramEnabled(false);
-        toast.success("Telegram disconnected — the bot can no longer message you");
+        toast.success(t("settings.toast.telegramDisconnected"));
       } else {
         setTelegramSaved(true);
         setTimeout(() => setTelegramSaved(false), 2000);
@@ -363,7 +365,7 @@ export default function NotificationSettingsPage() {
       toast.error(
         apiErrorMessage(
           err,
-          unbind ? "Failed to disconnect Telegram" : "Failed to save Telegram notification settings",
+          unbind ? t("settings.toast.telegramDisconnectFailed") : t("settings.toast.saveTelegramFailed"),
         ),
       );
     } finally {
@@ -380,9 +382,9 @@ export default function NotificationSettingsPage() {
       <div className="flex items-center gap-3">
         <Bell className="h-6 w-6 text-primary" />
         <div>
-          <h1 className="text-xl font-semibold">Notification Settings</h1>
+          <h1 className="text-xl font-semibold">{t("settings.title")}</h1>
           <p className="text-sm text-muted-foreground">
-            Configure which events send you in-app notifications.
+            {t("settings.subtitle")}
           </p>
         </div>
       </div>

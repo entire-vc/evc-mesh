@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/stores/auth";
 import { useAuthConfig } from "@/hooks/use-auth-config";
 import { ApiRequestError } from "@/lib/api";
@@ -20,6 +21,10 @@ import {
 } from "@/components/ui/card";
 
 export function LoginPage() {
+  // No Suspense here: /login is painted by the static shell in index.html and
+  // must not drop to a skeleton while the `misc` chunk loads. Until it arrives
+  // t() returns the English default, which is exactly what the shell shows.
+  const { t } = useTranslation("misc", { useSuspense: false });
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { isAuthenticated, login } = useAuthStore();
@@ -65,13 +70,13 @@ export function LoginPage() {
         if (err instanceof ApiRequestError) {
           setError(err.message);
         } else {
-          setError("An unexpected error occurred");
+          setError(t("errors.unexpected", "An unexpected error occurred"));
         }
       } finally {
         setLoading(false);
       }
     },
-    [email, password, login, navigate, searchParams],
+    [email, password, login, navigate, searchParams, t],
   );
 
   if (isAuthenticated) {
@@ -85,9 +90,9 @@ export function LoginPage() {
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
             M
           </div>
-          <CardTitle className="text-2xl">Welcome back</CardTitle>
+          <CardTitle className="text-2xl">{t("auth.login.title", "Welcome back")}</CardTitle>
           <CardDescription>
-            Sign in to your EVC Mesh account
+            {t("auth.login.subtitle", "Sign in to your EVC Mesh account")}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
@@ -99,12 +104,12 @@ export function LoginPage() {
             )}
             <div className="space-y-2">
               <label htmlFor="email" className="text-sm font-medium">
-                Email
+                {t("auth.email", "Email")}
               </label>
               <Input
                 id="email"
                 type="email"
-                placeholder="you@example.com"
+                placeholder={t("auth.emailPlaceholder", "you@example.com")}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -113,12 +118,12 @@ export function LoginPage() {
             </div>
             <div className="space-y-2">
               <label htmlFor="password" className="text-sm font-medium">
-                Password
+                {t("auth.password", "Password")}
               </label>
               <Input
                 id="password"
                 type="password"
-                placeholder="Your password"
+                placeholder={t("auth.login.passwordPlaceholder", "Your password")}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -128,13 +133,13 @@ export function LoginPage() {
           </CardContent>
           <CardFooter className="flex-col gap-4">
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Signing in..." : "Sign in"}
+              {loading ? t("auth.login.submitting", "Signing in...") : t("auth.login.submit", "Sign in")}
             </Button>
             {registrationEnabled && (
               <p className="text-center text-sm text-muted-foreground">
-                Don&apos;t have an account?{" "}
+                {t("auth.login.noAccount", "Don't have an account?")}{" "}
                 <Link to="/register" className="text-primary hover:underline">
-                  Register
+                  {t("auth.login.register", "Register")}
                 </Link>
               </p>
             )}

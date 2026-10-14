@@ -1,4 +1,5 @@
 import { Bot, User } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { cn } from "@/lib/cn";
 import type { Mentionable } from "@/types";
@@ -38,12 +39,13 @@ export function MentionMenu({
   onHover?: (index: number) => void;
   className?: string;
 }) {
+  const { t } = useTranslation("misc");
   if (suggestions.length === 0) return null;
 
   return (
     <div
       role="listbox"
-      aria-label="Mention a person or agent"
+      aria-label={t("mention.listLabel")}
       className={cn(
         "max-h-48 overflow-y-auto rounded-md border border-border bg-background shadow-md",
         className ?? "w-72",
@@ -75,7 +77,7 @@ export function MentionMenu({
           )}
           <span className="font-mono text-xs text-muted-foreground">@{m.slug}</span>
           <span className="truncate">{m.display_name}<AgentShortTag tag={m.kind === "agent" ? m.short_tag : null} /></span>
-          <span className="ml-auto text-[10px] capitalize text-muted-foreground">{m.kind}</span>
+          <span className="ml-auto text-[10px] capitalize text-muted-foreground">{t(`mention.kind.${m.kind}`)}</span>
         </button>
       ))}
     </div>

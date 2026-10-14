@@ -1,4 +1,5 @@
 import * as i18nFmt from "@/i18n/format";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Inbox, ArrowRight, Pencil } from "lucide-react";
@@ -41,6 +42,7 @@ function MoveDialog({
   onOpenChange: (open: boolean) => void;
   onMoved: (taskId: string) => void;
 }) {
+  const { t } = useTranslation("settings");
   const { projects } = useProjectStore();
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -92,16 +94,16 @@ function MoveDialog({
         body: { status_id: selectedStatusId },
       });
       const statusName =
-        statuses.find((s) => s.id === selectedStatusId)?.name ?? "new status";
-      toast.success(`Moved to "${statusName}"`);
+        statuses.find((s) => s.id === selectedStatusId)?.name ?? t("triage.move.newStatus");
+      toast.success(t("triage.move.movedTo", { status: statusName }));
       onMoved(task.id);
       onOpenChange(false);
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to move task"));
+      toast.error(apiErrorMessage(err, t("triage.move.failed")));
     } finally {
       setIsMoving(false);
     }
-  }, [task, selectedStatusId, statuses, onMoved, onOpenChange]);
+  }, [task, selectedStatusId, statuses, onMoved, onOpenChange, t]);
 
   if (!task) return null;
 
@@ -109,7 +111,7 @@ function MoveDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent onClose={() => onOpenChange(false)}>
         <DialogHeader>
-          <DialogTitle>Move Task</DialogTitle>
+          <DialogTitle>{t("triage.move.title")}</DialogTitle>
           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
             {task.title}
           </p>
@@ -117,7 +119,7 @@ function MoveDialog({
 
         <div className="mt-4 space-y-4">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Target Project</label>
+            <label className="text-sm font-medium">{t("triage.move.targetProject")}</label>
             <Select
               value={selectedProjectId}
               onChange={(e) => setSelectedProjectId(e.target.value)}
@@ -131,7 +133,7 @@ function MoveDialog({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Target Status</label>
+            <label className="text-sm font-medium">{t("triage.move.targetStatus")}</label>
             {isLoadingStatuses ? (
               <div className="h-9 animate-pulse rounded-md border border-border bg-muted" />
             ) : (
@@ -141,7 +143,7 @@ function MoveDialog({
                 disabled={statuses.length === 0}
               >
                 {statuses.length === 0 ? (
-                  <option value="">No statuses available</option>
+                  <option value="">{t("triage.move.noStatuses")}</option>
                 ) : (
                   statuses.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -160,13 +162,13 @@ function MoveDialog({
             onClick={() => onOpenChange(false)}
             disabled={isMoving}
           >
-            Cancel
+            {t("triage.move.cancel")}
           </Button>
           <Button
             onClick={handleMove}
             disabled={isMoving || !selectedStatusId || isLoadingStatuses}
           >
-            {isMoving ? "Moving..." : "Move Task"}
+            {isMoving ? t("triage.move.moving") : t("triage.move.title")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -185,6 +187,7 @@ export function TriageTaskRow({
   onMove: (task: Task) => void;
   onEdit: (task: Task) => void;
 }) {
+  const { t } = useTranslation("settings");
   const priorityColor =
     PRIORITY_COLORS[task.priority] ?? PRIORITY_COLORS.none;
   const createdDate = i18nFmt.formatDate(task.created_at, {
@@ -204,12 +207,12 @@ export function TriageTaskRow({
             <span
               className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityColor}`}
             >
-              {task.priority}
+              {t(`triage.priority.${task.priority}`, { defaultValue: task.priority })}
             </span>
             {task.created_by_name && (
               <>
                 <span className="text-xs text-muted-foreground">·</span>
-                <span className="text-xs text-muted-foreground">by {task.created_by_name}</span>
+                <span className="text-xs text-muted-foreground">{t("triage.row.by", { name: task.created_by_name })}</span>
               </>
             )}
             <span className="text-xs text-muted-foreground">·</span>
@@ -233,8 +236,8 @@ export function TriageTaskRow({
             type="button"
             className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             onClick={() => onEdit(task)}
-            aria-label="Edit task"
-            title="Edit task"
+            aria-label={t("triage.row.editTask")}
+            title={t("triage.row.editTask")}
           >
             <Pencil className="h-4 w-4" />
           </button>
@@ -244,7 +247,7 @@ export function TriageTaskRow({
             className="h-7 gap-1 text-xs"
             onClick={() => onMove(task)}
           >
-            Move
+            {t("triage.row.move")}
             <ArrowRight className="h-3 w-3" />
           </Button>
         </div>
@@ -254,6 +257,7 @@ export function TriageTaskRow({
 }
 
 export function TriagePage() {
+  const { t } = useTranslation("settings");
   const navigate = useNavigate();
   const { currentWorkspace } = useWorkspaceStore();
   const { projects, fetchProjects } = useProjectStore();
@@ -315,7 +319,7 @@ export function TriagePage() {
 
   // Remove the task from the triage list once it has been successfully moved.
   const handleMoved = useCallback((taskId: string) => {
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    setTasks((prev) => prev.filter((item) => item.id !== taskId));
     setTotal((prev) => Math.max(0, prev - 1));
   }, []);
 
@@ -323,7 +327,7 @@ export function TriagePage() {
     <div className="space-y-6">
       {total > 0 && (
         <p className="text-sm text-muted-foreground">
-          {total} task{total !== 1 ? "s" : ""} awaiting triage
+          {t("triage.page.awaiting", { count: total })}
         </p>
       )}
 
@@ -342,9 +346,9 @@ export function TriagePage() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Inbox className="mb-4 h-12 w-12 text-muted-foreground" />
-            <h3 className="mb-2 text-lg font-semibold">Inbox is empty</h3>
+            <h3 className="mb-2 text-lg font-semibold">{t("triage.page.inboxEmpty")}</h3>
             <p className="text-sm text-muted-foreground">
-              Tasks assigned to a "triage" status category will appear here.
+              {t("triage.page.inboxEmptyText")}
             </p>
           </CardContent>
         </Card>
@@ -354,7 +358,7 @@ export function TriagePage() {
             <TriageTaskRow
               key={task.id}
               task={task}
-              projectName={projectMap[task.project_id] ?? "Unknown Project"}
+              projectName={projectMap[task.project_id] ?? t("triage.page.unknownProject")}
               onMove={handleMoveClick}
               onEdit={handleEditClick}
             />

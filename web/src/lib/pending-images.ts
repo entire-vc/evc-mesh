@@ -3,6 +3,7 @@ import { artifactDownloadPath } from "@/lib/artifact-links";
 import { toast } from "@/components/ui/toast";
 import type { PendingImage } from "@/lib/task-artifacts";
 import { apiErrorMessage } from "@/lib/api-error";
+import i18n from "@/i18n";
 
 /**
  * Upload images that were pasted into a task's description before the task
@@ -38,8 +39,8 @@ export async function uploadPendingImages(
       const realMd = `![${pending.file.name}](${artifactDownloadPath(artifact.id)})`;
       updatedDescription = updatedDescription.replace(pending.placeholder, realMd);
     } catch (err) {
-      toast.error(`Could not attach ${pending.file.name}`, {
-        description: apiErrorMessage(err, "upload failed"),
+      toast.error(i18n.t("misc:editor.attachFailed", { name: pending.file.name }), {
+        description: apiErrorMessage(err, i18n.t("misc:editor.uploadFailed")),
       });
       updatedDescription = updatedDescription.replace(pending.placeholder, "");
     }

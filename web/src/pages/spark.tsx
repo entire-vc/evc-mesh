@@ -1,5 +1,6 @@
 import * as i18nFmt from "@/i18n/format";
 import { useCallback, useEffect, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import { Download, ExternalLink, Search, Sparkles, Star, Tag, X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -47,15 +48,19 @@ const DOMAIN_TAGS = [
 // Agent type options for the filter dropdown — derived from the shared
 // agentTypeConfig (web/src/lib/agent-utils.ts) so a new harness only needs
 // to be added there, not copy-pasted into every page that lists agent types.
-const AGENT_TYPE_OPTIONS = [
-  { value: "all", label: "All Types" },
-  ...Object.entries(agentTypeConfig).map(([value, config]) => ({
-    value,
-    label: config.label,
-  })),
-];
+function buildAgentTypeOptions(allLabel: string) {
+  return [
+    { value: "all", label: allLabel },
+    ...Object.entries(agentTypeConfig).map(([value, config]) => ({
+      value,
+      label: config.label,
+    })),
+  ];
+}
 
 export function SparkPage() {
+  const { t } = useTranslation("integrations");
+  const AGENT_TYPE_OPTIONS = buildAgentTypeOptions(t("spark.allTypes"));
   const { currentWorkspace } = useWorkspaceStore();
   const {
     agents,
@@ -189,13 +194,12 @@ export function SparkPage() {
         <Card className="max-w-md w-full">
           <CardContent className="flex flex-col items-center py-10 text-center">
             <Sparkles className="mb-4 h-12 w-12 text-muted-foreground" />
-            <h2 className="mb-2 text-lg font-semibold">Spark catalog is not enabled</h2>
+            <h2 className="mb-2 text-lg font-semibold">{t("spark.notEnabledTitle")}</h2>
             <p className="mb-6 text-sm text-muted-foreground">
-              Enable the Spark Agent Catalog integration to browse and install AI
-              agents into your workspace.
+              {t("spark.notEnabledBody")}
             </p>
             <Link to={`/w/${currentWorkspace?.slug}/integrations`}>
-              <Button>Go to Integrations</Button>
+              <Button>{t("spark.goToIntegrations")}</Button>
             </Link>
           </CardContent>
         </Card>
@@ -204,7 +208,7 @@ export function SparkPage() {
   }
 
   const displayedAgents = hasSearched ? agents : popularAgents;
-  const sectionTitle = hasSearched ? "Search results" : "Popular agents";
+  const sectionTitle = hasSearched ? t("spark.searchResults") : t("spark.popularAgents");
 
   return (
     <div className="space-y-6">
@@ -225,7 +229,7 @@ export function SparkPage() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search agents..."
+              placeholder={t("spark.searchPlaceholder")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -243,12 +247,12 @@ export function SparkPage() {
               </option>
             ))}
           </Select>
-          <Button onClick={() => void handleSearch()}>Search</Button>
+          <Button onClick={() => void handleSearch()}>{t("spark.search")}</Button>
         </div>
 
         {/* Row 2: domain expertise badge-pills */}
         <div className="space-y-2">
-          <p className="text-xs font-medium text-muted-foreground">Domain expertise</p>
+          <p className="text-xs font-medium text-muted-foreground">{t("spark.domainExpertise")}</p>
           <div className="flex flex-wrap gap-1.5">
             {DOMAIN_TAGS.map((tag) => {
               const active = activeDomainTags.includes(tag);
@@ -277,7 +281,7 @@ export function SparkPage() {
             <div className="relative">
               <Tag className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Custom tag..."
+                placeholder={t("spark.customTagPlaceholder")}
                 value={customTagInput}
                 onChange={(e) => setCustomTagInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -290,7 +294,7 @@ export function SparkPage() {
               />
             </div>
             <Button variant="outline" size="sm" onClick={addCustomTag} className="h-8 text-xs">
-              Add tag
+              {t("spark.addTag")}
             </Button>
           </div>
           {customTags.map((tag) => (
@@ -334,19 +338,18 @@ export function SparkPage() {
               <Sparkles className="mb-4 h-12 w-12 text-muted-foreground" />
               {hasSearched ? (
                 <>
-                  <h3 className="mb-2 text-lg font-semibold">No agents found</h3>
+                  <h3 className="mb-2 text-lg font-semibold">{t("spark.noAgentsTitle")}</h3>
                   <p className="text-center text-sm text-muted-foreground">
-                    Try a different search query or remove some filters.
+                    {t("spark.noAgentsBody")}
                   </p>
                 </>
               ) : (
                 <>
                   <h3 className="mb-2 text-lg font-semibold">
-                    Spark catalog unavailable
+                    {t("spark.unavailableTitle")}
                   </h3>
                   <p className="text-center text-sm text-muted-foreground">
-                    The Spark catalog could not be reached. Check that
-                    MESH_SPARK_ENABLED=true and the service is running.
+                    {t("spark.unavailableBody")}
                   </p>
                 </>
               )}
@@ -392,6 +395,7 @@ function SparkAgentCard({
   onOpen: () => void;
   onInstall: () => void;
 }) {
+  const { t } = useTranslation("integrations");
   const typeConfig = agentTypeDisplay(agent.agent_type);
 
   return (
@@ -406,11 +410,11 @@ function SparkAgentCard({
             {typeConfig.label}
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground">by {agent.author}</p>
+        <p className="text-xs text-muted-foreground">{t("spark.by", { author: agent.author })}</p>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3">
         <p className="line-clamp-2 text-sm text-muted-foreground">
-          {agent.description || "No description provided."}
+          {agent.description || t("spark.noDescription")}
         </p>
 
         {/* Tags */}
@@ -455,7 +459,7 @@ function SparkAgentCard({
             }}
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            Open
+            {t("spark.open")}
           </Button>
           <Button
             size="sm"
@@ -466,7 +470,7 @@ function SparkAgentCard({
               onInstall();
             }}
           >
-            Install
+            {t("spark.install")}
           </Button>
         </div>
       </CardContent>
@@ -489,6 +493,7 @@ function InstallDialog({
   agent: SparkAgentManifest;
   workspaceId: string;
 }) {
+  const { t } = useTranslation("integrations");
   const { install, isInstalling, lastInstallResult, clearInstallResult, error } =
     useSparkStore();
   const [done, setDone] = useState(false);
@@ -501,9 +506,9 @@ function InstallDialog({
       await install(agent.id, workspaceId);
       setDone(true);
     } catch (err) {
-      setInstallError(apiErrorMessage(err, "Installation failed"));
+      setInstallError(apiErrorMessage(err, t("spark.installFailed")));
     }
-  }, [agent.id, workspaceId, install]);
+  }, [agent.id, workspaceId, install, t]);
 
   const handleCopyKey = useCallback(async () => {
     if (lastInstallResult?.api_key) {
@@ -526,12 +531,12 @@ function InstallDialog({
       <DialogContent onClose={handleClose}>
         <DialogHeader>
           <DialogTitle>
-            {done ? "Agent installed" : `Install "${agent.name}"`}
+            {done ? t("spark.installedTitle") : t("spark.installTitle", { name: agent.name })}
           </DialogTitle>
           <DialogDescription>
             {done
-              ? "Save your API key — it will only be shown once."
-              : `This will register "${agent.name}" as an agent in your workspace.`}
+              ? t("spark.installedDesc")
+              : t("spark.installDesc", { name: agent.name })}
           </DialogDescription>
         </DialogHeader>
 
@@ -539,20 +544,23 @@ function InstallDialog({
           <div className="space-y-4 py-2">
             <div className="rounded-lg border border-border bg-muted/50 p-4">
               <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                API Key (copy now — shown once)
+                {t("spark.apiKeyLabel")}
               </p>
               <code className="break-all text-xs">{lastInstallResult.api_key}</code>
             </div>
             <Button variant="outline" className="w-full" onClick={() => void handleCopyKey()}>
-              {copied ? "Copied!" : "Copy API key"}
+              {copied ? t("spark.copied") : t("spark.copyKey")}
             </Button>
           </div>
         ) : (
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
-              Agent will be created with type{" "}
-              <strong>{agent.agent_type}</strong> and capabilities from the
-              Spark manifest.
+              <Trans
+                i18nKey="spark.createInfo"
+                ns="integrations"
+                values={{ type: agent.agent_type }}
+                components={{ strong: <strong /> }}
+              />
             </p>
             {(installError ?? error) && (
               <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
@@ -564,14 +572,14 @@ function InstallDialog({
 
         <DialogFooter>
           {done ? (
-            <Button onClick={handleClose}>Done</Button>
+            <Button onClick={handleClose}>{t("spark.done")}</Button>
           ) : (
             <>
               <Button variant="outline" onClick={handleClose}>
-                Cancel
+                {t("spark.cancel")}
               </Button>
               <Button onClick={() => void handleInstall()} disabled={isInstalling}>
-                {isInstalling ? "Installing..." : "Install"}
+                {isInstalling ? t("spark.installing") : t("spark.install")}
               </Button>
             </>
           )}

@@ -7,17 +7,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-
-const PUSH_EVENTS = [
-  { key: "task.assigned", label: "Task assigned", desc: "When a task is assigned to you" },
-  { key: "task.status_changed", label: "Status changed", desc: "When a task status changes" },
-  { key: "comment.created", label: "New comment", desc: "When a comment is added" },
-  { key: "task.mentioned", label: "Mention", desc: "When someone @mentions you" },
-  { key: "document.mentioned", label: "Mention on a document", desc: "When someone @mentions you on a document page" },
-  { key: "task.blocking_triage", label: "Blocking triage", desc: "When a task you blocked is auto-moved to triage" },
-  { key: "task.reviewer_assigned", label: "Review requested", desc: "When you're set as the reviewer on a task" },
-  { key: "task.ready_for_review", label: "Ready for review", desc: "When a task you're reviewing moves to a review status" },
-];
+import { useTranslation } from "react-i18next";
+import { NOTIFICATION_EVENTS } from "./constants";
 
 interface BrowserPushTabProps {
   pushPermission: NotificationPermission;
@@ -44,29 +35,29 @@ export function BrowserPushTab({
   pushEventsSaved,
   onSavePushEvents,
 }: BrowserPushTabProps) {
+  const { t } = useTranslation("notifications");
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <Monitor className="h-4 w-4" />
-          Browser Push Notifications
+          {t("settings.push.title")}
         </CardTitle>
         <CardDescription>
-          Receive native browser notifications even when Mesh is not in the
-          foreground.
+          {t("settings.push.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Permission status */}
         <div className="flex items-center justify-between rounded-lg border border-border p-3">
           <div>
-            <p className="font-medium">Status</p>
+            <p className="font-medium">{t("settings.push.status")}</p>
             <p className="text-sm text-muted-foreground">
               {pushPermission === 'denied'
-                ? 'Blocked — re-enable in browser settings'
+                ? t('settings.push.blocked')
                 : pushSubscribed
-                ? 'Enabled'
-                : 'Not enabled'}
+                ? t('settings.push.enabled')
+                : t('settings.push.notEnabled')}
             </p>
           </div>
           {pushPermission === 'denied' ? (
@@ -79,12 +70,12 @@ export function BrowserPushTab({
               disabled={pushLoading}
             >
               <MonitorOff className="mr-1 h-4 w-4" />
-              Disable
+              {t("settings.push.disable")}
             </Button>
           ) : (
             <Button size="sm" onClick={onEnablePush} disabled={pushLoading}>
               <Monitor className="mr-1 h-4 w-4" />
-              Enable
+              {t("settings.push.enable")}
             </Button>
           )}
         </div>
@@ -93,14 +84,14 @@ export function BrowserPushTab({
         {pushSubscribed && (
           <>
             <div className="space-y-2">
-              {PUSH_EVENTS.map((evt) => (
+              {NOTIFICATION_EVENTS.map((evt) => (
                 <div
                   key={evt.key}
                   className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-accent/30"
                 >
                   <div>
-                    <p className="font-medium">{evt.label}</p>
-                    <p className="text-sm text-muted-foreground">{evt.desc}</p>
+                    <p className="font-medium">{t(`settings.events.${evt.id}.label`)}</p>
+                    <p className="text-sm text-muted-foreground">{t(`settings.events.${evt.id}.pushDescription`)}</p>
                   </div>
                   <button
                     role="switch"
@@ -126,9 +117,9 @@ export function BrowserPushTab({
                 className="gap-2"
               >
                 {pushEventsSaved ? (
-                  <><Check className="h-4 w-4" />Saved</>
+                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
                 ) : (
-                  <><Save className="h-4 w-4" />{pushEventsSaving ? 'Saving...' : 'Save preferences'}</>
+                  <><Save className="h-4 w-4" />{pushEventsSaving ? t('settings.actions.saving') : t('settings.actions.save')}</>
                 )}
               </Button>
             </div>

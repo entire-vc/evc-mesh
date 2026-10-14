@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { miscT } from "@/lib/misc-t";
 import { api, ApiRequestError } from "@/lib/api";
 import type {
   CreateInviteResponse,
@@ -136,7 +137,7 @@ export const useMemberStore = create<MemberState>((set) => ({
         const message =
           err instanceof ApiRequestError
             ? err.message
-            : "Could not reach the server to check your role";
+            : miscT("errors.roleCheckUnreachable", "Could not reach the server to check your role");
         set({ myRole: null, myRoleError: message });
       }
     }

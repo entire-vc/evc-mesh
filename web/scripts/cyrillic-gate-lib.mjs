@@ -1,11 +1,7 @@
 // Cyrillic gate: web UI strings live in src/locales/<lang>/*.json, never in
 // .ts/.tsx. Finds Cyrillic in code outside locales/, tests and comments.
 //
-// Two modes (see check-cyrillic.mjs):
-//   baseline (default) - only NEW violations fail: per-file count above
-//                        scripts/cyrillic-baseline.json. Line numbers are not
-//                        used, so unrelated edits do not move the baseline.
-//   --strict           - baseline ignored; every hit fails (switch on after L2.3).
+// Strict: every hit fails (the baseline mode ended with L2.3, baseline = 0).
 import fs from "node:fs";
 import path from "node:path";
 
@@ -81,12 +77,7 @@ export function scan(srcRoot) {
   return { filesScanned: files.length, hits };
 }
 
-/** Violations to report: all of them in strict mode, else only those above the baseline. */
-export function violations(hits, baseline, strict) {
-  const out = [];
-  for (const [file, list] of Object.entries(hits)) {
-    const allowed = strict ? 0 : (baseline[file] ?? 0);
-    if (list.length > allowed) out.push({ file, allowed, found: list.length, lines: list });
-  }
-  return out;
+/** Violations to report: every hit fails. */
+export function violations(hits) {
+  return Object.entries(hits).map(([file, list]) => ({ file, found: list.length, lines: list }));
 }

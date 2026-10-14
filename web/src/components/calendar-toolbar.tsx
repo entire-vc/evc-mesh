@@ -1,5 +1,6 @@
+import { useTranslation } from "react-i18next";
+import { formatDate } from "@/i18n/format";
 import { ChevronLeft, ChevronRight, Filter, RefreshCw, Search } from "lucide-react";
-import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -28,10 +29,11 @@ export function CalendarToolbar({
   onSearchChange,
   onNewRecurring,
 }: CalendarToolbarProps) {
+  const { t } = useTranslation("settings");
   return (
     <div className="flex items-center gap-3">
       <Button variant="outline" size="sm" onClick={onToday}>
-        Today
+        {t("calendar.toolbar.today")}
       </Button>
 
       <div className="flex items-center gap-1">
@@ -44,7 +46,7 @@ export function CalendarToolbar({
       </div>
 
       <h2 className="text-lg font-semibold">
-        {format(currentMonth, "MMMM yyyy")}
+        {formatDate(currentMonth, { month: "long", year: "numeric" })}
       </h2>
 
       <div className="flex-1" />
@@ -55,20 +57,20 @@ export function CalendarToolbar({
         onClick={onToggleUnscheduled}
       >
         <Filter className="mr-1.5 h-3.5 w-3.5" />
-        {unscheduledCount} Unscheduled
+        {t("calendar.toolbar.unscheduled", { count: unscheduledCount })}
       </Button>
 
       {onNewRecurring && (
-        <Button variant="outline" size="sm" onClick={onNewRecurring} title="New Recurring Task">
+        <Button variant="outline" size="sm" onClick={onNewRecurring} title={t("calendar.toolbar.newRecurringTitle")}>
           <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-          Recurring
+          {t("calendar.toolbar.recurring")}
         </Button>
       )}
 
       <div className="relative w-48">
         <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="Filter tasks..."
+          placeholder={t("calendar.toolbar.filterPlaceholder")}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           className="h-8 pl-7 text-sm"

@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { formatDate } from "@/i18n/format";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { addMonths, format, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isToday } from "date-fns";
@@ -118,6 +120,7 @@ function DraggableUnscheduledRow({
   onClick,
   isBeingDragged,
 }: DraggableUnscheduledRowProps) {
+  const { t } = useTranslation("settings");
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
     data: { task, source: "unscheduled" } satisfies DragData,
@@ -153,7 +156,7 @@ function DraggableUnscheduledRow({
       <span className="min-w-0 flex-1 truncate">{task.title}</span>
       {task.priority !== "none" && (
         <Badge variant="outline" className="shrink-0 text-[10px]">
-          {task.priority}
+          {t(`priorityBadge.${task.priority}`)}
         </Badge>
       )}
     </div>
@@ -187,6 +190,7 @@ function DroppableDayCell({
   onTaskClick,
   onAddTask,
 }: DroppableDayCellProps) {
+  const { t } = useTranslation("settings");
   const { setNodeRef, isOver } = useDroppable({ id: `date:${dateKey}` });
 
   return (
@@ -215,7 +219,7 @@ function DroppableDayCell({
         <button
           onClick={() => onAddTask(dateKey)}
           className="hidden h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground group-hover:flex"
-          title="Add task"
+          title={t("calendar.grid.addTask")}
         >
           <Plus className="h-3 w-3" />
         </button>
@@ -235,7 +239,7 @@ function DroppableDayCell({
         ))}
         {dayTasks.length > 4 && (
           <span className="block px-1.5 text-[10px] text-muted-foreground">
-            +{dayTasks.length - 4} more
+            {t("calendar.grid.more", { count: dayTasks.length - 4 })}
           </span>
         )}
 
@@ -251,8 +255,6 @@ function DroppableDayCell({
 // ---------------------------------------------------------------------------
 // DnD-aware Calendar Grid (replaces <CalendarGrid>)
 // ---------------------------------------------------------------------------
-
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 interface DndCalendarGridProps {
   currentMonth: Date;
@@ -279,11 +281,14 @@ function DndCalendarGrid({
     return eachDayOfInterval({ start: calStart, end: calEnd });
   }, [currentMonth]);
 
+  // Weekday header labels follow the UI language; week starts on Monday.
+  const weekdays = days.slice(0, 7).map((d) => formatDate(d, { weekday: "short" }));
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden rounded-lg border border-border">
       {/* Weekday header */}
       <div className="grid grid-cols-7 border-b border-border bg-muted/30">
-        {WEEKDAYS.map((day) => (
+        {weekdays.map((day) => (
           <div
             key={day}
             className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground"
@@ -338,6 +343,7 @@ function DndCalendarUnscheduled({
   activeTaskId,
   onTaskClick,
 }: DndCalendarUnscheduledProps) {
+  const { t } = useTranslation("settings");
   const { setNodeRef, isOver } = useDroppable({ id: "unscheduled" });
 
   return (
@@ -351,7 +357,7 @@ function DndCalendarUnscheduled({
       {tasks.length === 0 && !isOver ? (
         <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
           <CalendarOff className="mb-2 h-8 w-8" />
-          <p className="text-sm">No unscheduled tasks</p>
+          <p className="text-sm">{t("calendar.unscheduled.empty")}</p>
         </div>
       ) : (
         <div className="space-y-1.5">
@@ -400,6 +406,7 @@ function DragOverlayCard({ task, statusMap }: { task: Task; statusMap: Map<strin
 // ---------------------------------------------------------------------------
 
 export function CalendarPage() {
+  const { t } = useTranslation("settings");
   const { wsSlug } = useParams();
   const navigate = useNavigate();
   const { currentProject, statuses, fetchStatuses } = useProjectStore();
@@ -444,7 +451,7 @@ export function CalendarPage() {
       (event: WSMessage) => {
         if (event.type === "summary") {
           const data = event.data as Record<string, unknown>;
-          toast((data.subject as string) || "Agent summary");
+          toast((data.subject as string) || t("calendar.agentSummary"));
         }
         if (
           event.type === "status_change" ||
@@ -455,7 +462,7 @@ export function CalendarPage() {
           debouncedRefetch();
         }
       },
-      [debouncedRefetch],
+      [debouncedRefetch, t],
     ),
   });
 
@@ -581,7 +588,7 @@ export function CalendarPage() {
         // Optimistic update
         const taskStore = useTaskStore.getState();
         taskStore.updateTask(draggedTask.id, { due_date: null }).catch(() => {
-          toast("Failed to remove due date");
+          toast(t("calendar.toast.removeDueDateFailed"));
           if (currentProject) fetchTasks(currentProject.id);
         });
         return;
@@ -597,12 +604,12 @@ export function CalendarPage() {
 
         const taskStore = useTaskStore.getState();
         taskStore.updateTask(draggedTask.id, { due_date: `${newDate}T00:00:00Z` }).catch(() => {
-          toast("Failed to update due date");
+          toast(t("calendar.toast.updateDueDateFailed"));
           if (currentProject) fetchTasks(currentProject.id);
         });
       }
     },
-    [currentProject, fetchTasks],
+    [currentProject, fetchTasks, t],
   );
 
   const handleDragCancel = useCallback(() => {
@@ -644,7 +651,7 @@ export function CalendarPage() {
         <div className="flex flex-1 items-center justify-center">
           <div className="text-center">
             <CalendarIcon className="mx-auto mb-3 h-10 w-10 animate-pulse text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">Loading calendar...</p>
+            <p className="text-sm text-muted-foreground">{t("calendar.loading")}</p>
           </div>
         </div>
       ) : (
@@ -669,9 +676,9 @@ export function CalendarPage() {
             {showUnscheduled && (
               <div className="flex w-64 shrink-0 flex-col rounded-lg border border-border">
                 <div className="border-b border-border px-3 py-2">
-                  <h3 className="text-sm font-semibold">Unscheduled</h3>
+                  <h3 className="text-sm font-semibold">{t("calendar.unscheduled.title")}</h3>
                   <p className="text-xs text-muted-foreground">
-                    {unscheduled.length} task{unscheduled.length !== 1 ? "s" : ""}
+                    {t("calendar.unscheduled.taskCount", { count: unscheduled.length })}
                   </p>
                 </div>
                 <DndCalendarUnscheduled

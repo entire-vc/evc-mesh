@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useAgentShortTag } from "@/hooks/use-agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { cn } from "@/lib/cn";
@@ -51,6 +52,7 @@ export function AssigneeAvatar({
   size = "md",
   className,
 }: AssigneeAvatarProps) {
+  const { t } = useTranslation("settings");
   const savedTag = useAgentShortTag(id, type);
   const tag = shortTag === undefined ? savedTag : shortTag;
   const baseClasses = cn(
@@ -79,8 +81,8 @@ export function AssigneeAvatar({
     return (
       <span
         className={cn(baseClasses, "bg-violet-100 text-violet-600 dark:bg-violet-900 dark:text-violet-300", className)}
-        title="AI agent"
-        aria-label="AI agent"
+        title={t("avatar.aiAgent")}
+        aria-label={t("avatar.aiAgent")}
       >
         AI
       </span>
@@ -92,8 +94,8 @@ export function AssigneeAvatar({
     return (
       <span
         className={cn(baseClasses, "bg-sky-100 text-sky-600 dark:bg-sky-900 dark:text-sky-300", className)}
-        title="User"
-        aria-label="User"
+        title={t("avatar.user")}
+        aria-label={t("avatar.user")}
       >
         U
       </span>
@@ -108,8 +110,8 @@ export function AssigneeAvatar({
         "border-2 border-dashed border-muted-foreground/40 text-muted-foreground/40",
         className,
       )}
-      title="Unassigned"
-      aria-label="Unassigned"
+      title={t("avatar.unassigned")}
+      aria-label={t("avatar.unassigned")}
     >
       {/* intentionally empty */}
     </span>

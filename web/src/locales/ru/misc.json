@@ -1,0 +1,280 @@
+{
+  "auth": {
+    "email": "Email",
+    "emailPlaceholder": "you@example.com",
+    "password": "Пароль",
+    "name": "Имя",
+    "namePlaceholder": "Ваше имя",
+    "login": {
+      "title": "С возвращением",
+      "subtitle": "Войдите в свой аккаунт EVC Mesh",
+      "passwordPlaceholder": "Ваш пароль",
+      "submitting": "Вход...",
+      "submit": "Войти",
+      "noAccount": "Нет аккаунта?",
+      "register": "Зарегистрироваться"
+    },
+    "register": {
+      "closedTitle": "Регистрация закрыта",
+      "closedBody": "Этот сервер не принимает новые регистрации. Попросите приглашение у администратора или войдите, если у вас уже есть аккаунт.",
+      "backToSignIn": "Вернуться ко входу",
+      "title": "Создание аккаунта",
+      "subtitle": "Начните работу с EVC Mesh",
+      "passwordPlaceholder": "Не меньше 8 символов",
+      "submitting": "Создание аккаунта...",
+      "submit": "Создать аккаунт",
+      "haveAccount": "Уже есть аккаунт?",
+      "signIn": "Войти"
+    }
+  },
+  "invite": {
+    "accept": {
+      "invalid": "Ссылка-приглашение недействительна или срок её действия истёк.",
+      "nameRequired": "Укажите имя — его видит команда в задачах и комментариях",
+      "passwordRequired": "Введите пароль",
+      "passwordMismatch": "Пароли не совпадают",
+      "failed": "Не удалось принять приглашение",
+      "loading": "Загрузка приглашения…",
+      "notFoundTitle": "Приглашение не найдено",
+      "noLongerValid": "Эта ссылка-приглашение больше недействительна.",
+      "goToLogin": "Перейти ко входу",
+      "title": "Принять приглашение",
+      "invitedAs": "Вас пригласили с ролью <b>{{role}}</b>.",
+      "signingInAs": "Вход как <b>{{email}}</b>",
+      "nameLabel": "Ваше имя",
+      "namePlaceholder": "Ваше имя",
+      "nameHint": "Отображается в задачах, комментариях и упоминаниях. Его можно изменить позже.",
+      "passwordLabel": "Пароль",
+      "passwordPlaceholder": "Минимум 8 символов",
+      "confirmLabel": "Подтвердите пароль",
+      "confirmPlaceholder": "Повторите пароль",
+      "submitting": "Присоединение…",
+      "submit": "Принять и присоединиться"
+    },
+    "member": {
+      "emailRequired": "Введите email",
+      "passwordRequired": "Чтобы создать аккаунт сразу, задайте пароль",
+      "nameRequired": "Укажите имя — его видит команда в задачах и упоминаниях",
+      "sent": "Приглашение отправлено на {{email}}",
+      "addFailed": "Не удалось добавить участника",
+      "title": "Добавить участника",
+      "description": "Введите адрес. Если у него уже есть аккаунт, выберите его из списка — тот же логин присоединится к этому пространству, второй аккаунт не создаётся.",
+      "emailLabel": "Адрес email",
+      "emailPlaceholder": "user@example.com",
+      "noNameSet": "имя не указано",
+      "alreadyMember": "Уже участник",
+      "existingAccount": "Существующий аккаунт — присоединится к пространству с тем же логином.",
+      "clear": "Сбросить",
+      "howToAdd": "Способ добавления",
+      "modeLink": "Отправить ссылку-приглашение",
+      "modeLinkHint": "Пользователь получит письмо и сам задаст пароль.",
+      "modeCreate": "Создать сейчас с паролем",
+      "modeCreateHint": "Аккаунт создаётся сразу — передайте данные для входа вручную.",
+      "nameLabel": "Имя",
+      "namePlaceholder": "Анна Смирнова",
+      "nameHint": "Отображается в задачах, комментариях и упоминаниях. Его можно изменить позже.",
+      "passwordLabel": "Пароль",
+      "passwordPlaceholder": "Минимум 8 символов",
+      "roleLabel": "Роль",
+      "roles": {
+        "member": "Участник",
+        "admin": "Администратор",
+        "viewer": "Наблюдатель"
+      },
+      "roleHint": "Участники видят и редактируют задачи. Администраторы управляют настройками. Наблюдатели имеют доступ только на чтение.",
+      "handoffTitle": "Приглашение создано — письмо не отправлено",
+      "handoffNotConfigured": "На этом сервере не настроена почта. Отправьте ссылку приглашённому сами.",
+      "handoffFailed": "Не удалось отправить письмо с приглашением. Приглашение действует — отправьте ссылку приглашённому сами.",
+      "mailServerSaid": "Ответ почтового сервера: {{error}}",
+      "done": "Готово",
+      "cancel": "Отмена",
+      "sending": "Отправка...",
+      "adding": "Добавление...",
+      "sendInvite": "Отправить приглашение",
+      "addMember": "Добавить участника"
+    },
+    "link": {
+      "copied": "Скопировано",
+      "copy": "Копировать"
+    }
+  },
+  "deepLink": {
+    "projectNotFound": "Проект не найден",
+    "projectNoAccess": "Проект не найден или у вас нет доступа.",
+    "loadingProject": "Загрузка проекта",
+    "taskNotFound": "Задача не найдена",
+    "taskNoProjectAccess": "Задача находится в пространстве или проекте, к которому у вас нет доступа.",
+    "taskNoAccess": "Задача не найдена или у вас нет доступа."
+  },
+  "memory": {
+    "source": {
+      "agent": "Агент",
+      "human": "Человек",
+      "system": "Система"
+    },
+    "scope": {
+      "workspace": "Пространство",
+      "project": "Проект",
+      "agent": "Агент"
+    },
+    "scopeBadge": {
+      "workspace": "пространство",
+      "project": "проект",
+      "agent": "агент"
+    },
+    "card": {
+      "score": "оценка {{score}}",
+      "showLess": "Свернуть",
+      "showMore": "Показать полностью",
+      "relevance": "Релевантность",
+      "updated": "обновлено",
+      "stale": "устарело",
+      "archived": "в архиве",
+      "confirm": "Подтвердить"
+    },
+    "form": {
+      "createFailed": "Не удалось создать запись памяти",
+      "key": "Ключ (формат slug)",
+      "keyPlaceholder": "например, project-context",
+      "keyTitle": "Только строчные латинские буквы, цифры, дефисы и подчёркивания",
+      "scope": "Область",
+      "content": "Содержимое",
+      "contentPlaceholder": "Содержимое записи (поддерживается Markdown)",
+      "tags": "Теги (через запятую)",
+      "tagsPlaceholder": "например, context, onboarding, api",
+      "saving": "Сохранение...",
+      "save": "Сохранить запись"
+    },
+    "page": {
+      "new": "Новая запись",
+      "create": "Новая запись памяти",
+      "searchPlaceholder": "Поиск по памяти...",
+      "filters": "Фильтры",
+      "activeFilters_one": "{{count}} активный фильтр",
+      "activeFilters_few": "{{count}} активных фильтра",
+      "activeFilters_many": "{{count}} активных фильтров",
+      "activeFilters_other": "{{count}} активного фильтра",
+      "clear": "Сбросить",
+      "results_one": "{{count}} результат",
+      "results_few": "{{count}} результата",
+      "results_many": "{{count}} результатов",
+      "results_other": "{{count}} результата",
+      "resultsFor": " по запросу «{{query}}»",
+      "noMatches": "Под фильтры не подходит ни одна запись.",
+      "empty": "Записей памяти пока нет.",
+      "resetFilters": "Сбросить фильтры",
+      "emptyHint": "Используйте MCP-инструменты recall/remember или создайте запись выше."
+    },
+    "filters": {
+      "addTag": "Введите тег и нажмите Enter…",
+      "scope": "Область",
+      "all": "Все",
+      "source": "Источник",
+      "sourceAgent": "Агент-источник",
+      "anyAgent": "Любой агент",
+      "tags": "Теги",
+      "matchAll": "Все теги",
+      "matchAny": "Любой тег",
+      "createdBetween": "Создано в период",
+      "preset24h": "24 ч",
+      "preset7d": "7 дн",
+      "preset30d": "30 дн",
+      "minRelevance": "Минимальная релевантность — {{pct}}%",
+      "hideStale": "Скрыть устаревшие",
+      "sortBy": "Сортировка",
+      "sortRecent": "Сначала новые",
+      "sortRelevant": "Самые релевантные",
+      "sortDecayed": "Релевантность с затуханием",
+      "includeExpired": "Показывать истёкшие записи",
+      "showArchived": "Показывать архивные записи"
+    }
+  },
+  "errors": {
+    "unexpected": "Произошла непредвиденная ошибка",
+    "sessionTooLarge": "Браузер отправляет слишком большую сохранённую сессию, и сервер её отклонил. Очистите cookies этого сайта и попробуйте снова.",
+    "serverError": "Ошибка сервера ({{status}})",
+    "requestFailed": "Запрос не выполнен",
+    "sessionExpired": "Сессия истекла",
+    "failedToSave": "Не удалось сохранить",
+    "malformedTaskList": "Некорректный список задач. Попробуйте ещё раз.",
+    "loadWorkspaces": "Не удалось загрузить пространства",
+    "uploadFailed": "Загрузка не удалась",
+    "roleCheckUnreachable": "Не удалось связаться с сервером, чтобы проверить вашу роль"
+  },
+  "errorBoundary": {
+    "title": "Ошибка приложения",
+    "reload": "Перезагрузить"
+  },
+  "mention": {
+    "listLabel": "Упомянуть человека или агента",
+    "kind": {
+      "agent": "агент",
+      "user": "человек"
+    },
+    "openProfile": "Открыть профиль участника @{{slug}}"
+  },
+  "editor": {
+    "apply": "Применить",
+    "attachFailed": "Не удалось прикрепить {{name}}",
+    "attachFile": "Прикрепить файл",
+    "bold": "Жирный (Ctrl+B)",
+    "bulletList": "Маркированный список",
+    "codeBlock": "Блок кода",
+    "deleteFailed": "удаление не удалось",
+    "hint": "Форматированный текст — поддерживаются таблицы, списки задач и сноски.",
+    "inlineCode": "Код в строке",
+    "insertImage": "Вставить изображение",
+    "italic": "Курсив (Ctrl+I)",
+    "link": "Ссылка",
+    "linkUrl": "URL ссылки",
+    "numberedList": "Нумерованный список",
+    "quote": "Цитата",
+    "removeAttachment": "Удалить вложение",
+    "removeAttachmentFailed": "Не удалось удалить вложение",
+    "saveToAttachFiles": "Сохраните задачу, чтобы прикреплять файлы",
+    "saveToAttachImages": "Сохраните задачу, чтобы прикреплять изображения",
+    "table": "Таблица",
+    "uploadFailed": "загрузка не удалась",
+    "uploading": "Загрузка..."
+  },
+  "relayDoc": {
+    "collapse": "Свернуть документ",
+    "expand": "Развернуть документ",
+    "open": "Открыть",
+    "openFolder": "Открыть папку",
+    "openFolderInRelay": "Открыть папку в Team Relay",
+    "openInRelay": "Открыть в Team Relay"
+  },
+  "artifactLinks": {
+    "failedToLoadSuffix": " (не удалось загрузить)",
+    "openFailed": "Не удалось открыть файл"
+  },
+  "activityAction": {
+    "checkoutAcquired": "Задача взята в работу",
+    "checkoutRenewed": "Захват задачи продлён",
+    "checkoutReleased": "Захват задачи снят",
+    "checkoutReleasedAuto": "Захват задачи снят автоматически",
+    "checkoutForceReleased": "Захват задачи снят администратором",
+    "checkoutLeaseExpired": "Захват задачи истёк",
+    "checkoutAutoProgress": "Переведена в «В работе» после захвата",
+    "checkoutAutoProgressFailed": "Не удалось перевести в «В работе» после захвата"
+  },
+  "dependencyGraph": {
+    "unavailable": "Есть недоступная зависимость",
+    "unfinishedBlockers": "Незавершённых прямых блокеров: {{count}}",
+    "incomplete": "Проверка зависимостей неполная",
+    "noBlockers": "Нет незавершённых прямых блокеров"
+  },
+  "spark": {
+    "searchFailed": "Не удалось выполнить поиск в каталоге Spark",
+    "popularFailed": "Не удалось загрузить популярных агентов",
+    "fetchFailed": "Не удалось получить агента",
+    "installFailed": "Не удалось установить агента"
+  },
+  "rules": {
+    "exportFailed": "Не удалось выполнить экспорт"
+  },
+  "push": {
+    "notSupported": "Push-уведомления не поддерживаются"
+  }
+}

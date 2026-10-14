@@ -1,5 +1,6 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -80,6 +81,7 @@ function RefSelect({
   placeholder: string;
   compact?: boolean;
 }) {
+  const { t } = useTranslation("settings");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -153,14 +155,14 @@ function RefSelect({
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search..."
+              placeholder={t("customField.renderer.search")}
               className="h-7 text-xs"
             />
           </div>
           <ul className="max-h-48 overflow-y-auto py-1">
             {filtered.length === 0 ? (
               <li className="px-3 py-2 text-xs text-muted-foreground">
-                No results
+                {t("customField.renderer.noResults")}
               </li>
             ) : (
               filtered.map((opt) => (
@@ -202,7 +204,7 @@ function RefSelect({
                   setQuery("");
                 }}
               >
-                Clear selection
+                {t("customField.renderer.clearSelection")}
               </button>
             </div>
           )}
@@ -222,6 +224,7 @@ function UserRefSelect({
   onChange: (id: string | null) => void;
   compact?: boolean;
 }) {
+  const { t } = useTranslation("settings");
   const { currentWorkspace } = useWorkspaceStore();
   const { workspaceMembers, fetchWorkspaceMembers } = useMemberStore();
 
@@ -247,7 +250,7 @@ function UserRefSelect({
       value={value}
       onChange={onChange}
       options={options}
-      placeholder="Select user..."
+      placeholder={t("customField.renderer.selectUser")}
       compact={compact}
     />
   );
@@ -263,6 +266,7 @@ function AgentRefSelect({
   onChange: (id: string | null) => void;
   compact?: boolean;
 }) {
+  const { t } = useTranslation("settings");
   const { currentWorkspace } = useWorkspaceStore();
   const { agents, fetchAgents } = useAgentStore();
 
@@ -284,7 +288,7 @@ function AgentRefSelect({
       value={value}
       onChange={onChange}
       options={options}
-      placeholder="Select agent..."
+      placeholder={t("customField.renderer.selectAgent")}
       compact={compact}
     />
   );
@@ -305,6 +309,7 @@ export function CustomFieldRenderer({
   readOnly = false,
   compact = false,
 }: CustomFieldRendererProps) {
+  const { t } = useTranslation("settings");
   const [jsonDraft, setJsonDraft] = useState<string>(
     field.field_type === "json" && value != null
       ? JSON.stringify(value, null, 2)
@@ -322,7 +327,7 @@ export function CustomFieldRenderer({
           type="text"
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value || null)}
-          placeholder={getPlaceholder(field.options, `Enter ${field.name}...`)}
+          placeholder={getPlaceholder(field.options, t("customField.renderer.enter", { name: field.name }))}
           className={cn("h-8 text-xs", compact && "h-7")}
         />
       );
@@ -340,7 +345,7 @@ export function CustomFieldRenderer({
           }}
           min={minVal}
           max={maxVal}
-          placeholder={getPlaceholder(field.options, `Enter ${field.name}...`)}
+          placeholder={getPlaceholder(field.options, t("customField.renderer.enter", { name: field.name }))}
           className={cn("h-8 text-xs", compact && "h-7")}
         />
       );
@@ -351,7 +356,7 @@ export function CustomFieldRenderer({
         <DatePickerPopover
           value={(value as string) ?? null}
           onChange={(val) => onChange(val)}
-          placeholder={getPlaceholder(field.options, `Set ${field.name}...`)}
+          placeholder={getPlaceholder(field.options, t("customField.renderer.set", { name: field.name }))}
           className={compact ? "text-xs" : ""}
         />
       );
@@ -362,7 +367,7 @@ export function CustomFieldRenderer({
           value={(value as string) ?? null}
           onChange={(val) => onChange(val)}
           includeTime
-          placeholder={getPlaceholder(field.options, `Set ${field.name}...`)}
+          placeholder={getPlaceholder(field.options, t("customField.renderer.set", { name: field.name }))}
           className={compact ? "text-xs" : ""}
         />
       );
@@ -375,7 +380,7 @@ export function CustomFieldRenderer({
           onChange={(e) => onChange(e.target.value || null)}
           className={cn("h-8 text-xs", compact && "h-7")}
         >
-          <option value="">-- Select --</option>
+          <option value="">{t("customField.renderer.selectOption")}</option>
           {choices.map((choice) => (
             <option key={choice.value} value={choice.value}>
               {choice.label}
@@ -497,7 +502,7 @@ export function CustomFieldRenderer({
     default:
       return (
         <span className="text-xs text-muted-foreground">
-          Unsupported field type: {field.field_type}
+          {t("customField.renderer.unsupported", { type: field.field_type })}
         </span>
       );
   }
@@ -516,6 +521,7 @@ function CustomFieldReadOnly({
   value: unknown;
   compact?: boolean;
 }) {
+  const { t } = useTranslation("settings");
   if (value == null || value === "") {
     if (compact) return null;
     return <span className="text-xs text-muted-foreground">--</span>;
@@ -529,7 +535,7 @@ function CustomFieldReadOnly({
             "inline-block h-2.5 w-2.5 rounded-full",
             value ? "bg-green-500" : "bg-gray-400",
           )}
-          title={value ? "Yes" : "No"}
+          title={value ? t("customField.renderer.yes") : t("customField.renderer.no")}
         />
       );
 

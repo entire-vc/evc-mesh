@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import { Select } from "@/components/ui/select";
 import type { DelegationLevel } from "@/types";
@@ -18,6 +19,7 @@ export function DelegationLevelSelect({
   className,
   disabled,
 }: DelegationLevelSelectProps) {
+  const { t } = useTranslation("settings");
   const effective: DelegationLevel = value ?? "review";
   return (
     <div className={cn("space-y-0.5", className)}>
@@ -28,13 +30,13 @@ export function DelegationLevelSelect({
         disabled={disabled}
       >
         {DELEGATION_LEVELS.map((lvl) => (
-          <option key={lvl} value={lvl} title={delegationLevelConfig[lvl].description}>
-            {delegationLevelConfig[lvl].label}
+          <option key={lvl} value={lvl} title={t(`delegation.${lvl}.description`)}>
+            {t(`delegation.${lvl}.label`)}
           </option>
         ))}
       </Select>
       <p className="text-[10px] text-muted-foreground leading-tight">
-        {delegationLevelConfig[effective].description}
+        {t(`delegation.${effective}.description`)}
       </p>
     </div>
   );
@@ -46,14 +48,15 @@ export interface DelegationLevelBadgeProps {
 }
 
 export function DelegationLevelBadge({ value, className }: DelegationLevelBadgeProps) {
+  const { t } = useTranslation("settings");
   const effective: DelegationLevel = value ?? "review";
   const cfg = delegationLevelConfig[effective];
   return (
     <span
       className={cn("text-[10px] font-medium", cfg.color, className)}
-      title={cfg.description}
+      title={t(`delegation.${effective}.description`)}
     >
-      {cfg.label}
+      {t(`delegation.${effective}.label`)}
     </span>
   );
 }

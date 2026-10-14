@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { buildDocPath } from "@/components/doc-tree";
 import { cn } from "@/lib/cn";
 import type { ProjectDocument } from "@/types";
@@ -28,11 +29,12 @@ export interface DocBreadcrumbsProps {
 export function DocBreadcrumbs({
   documents,
   current,
-  rootLabel = "Documents",
+  rootLabel,
   onNavigateRoot,
   onNavigate,
   className,
 }: DocBreadcrumbsProps) {
+  const { t } = useTranslation("docs");
   const path = buildDocPath(documents, current.id);
   // The leaf's title comes from `current`, not from the list: after a rename
   // the open document is updated first, and reading the stale copy would show
@@ -40,7 +42,7 @@ export function DocBreadcrumbs({
   const ancestors = path.length > 0 ? path.slice(0, -1) : [];
 
   return (
-    <nav aria-label="Breadcrumb" className={cn("min-w-0", className)}>
+    <nav aria-label={t("breadcrumbs.label")} className={cn("min-w-0", className)}>
       <ol className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-xs text-muted-foreground">
         <li className="flex items-center gap-x-1">
           <button
@@ -48,7 +50,7 @@ export function DocBreadcrumbs({
             onClick={onNavigateRoot}
             className="rounded-sm hover:text-foreground hover:underline"
           >
-            {rootLabel}
+            {rootLabel ?? t("tree.heading")}
           </button>
           <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0 opacity-60" />
         </li>

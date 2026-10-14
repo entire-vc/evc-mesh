@@ -6,10 +6,10 @@ import path from "node:path";
 
 // Drives the real CLI (scripts/check-cyrillic.mjs) against a throwaway source
 // tree: red on a planted Russian string, green on a clean tree, and the
-// baseline / strict / allow-list rules.
+// allow-list rules. Strict only: there is no baseline.
 const CLI = path.resolve(__dirname, "../../scripts/check-cyrillic.mjs");
 
-function run(files: Record<string, string>, extra: string[] = [], baseline?: Record<string, number>) {
+function run(files: Record<string, string>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyr-gate-"));
   try {
     for (const [rel, body] of Object.entries(files)) {
@@ -17,9 +17,7 @@ function run(files: Record<string, string>, extra: string[] = [], baseline?: Rec
       fs.mkdirSync(path.dirname(full), { recursive: true });
       fs.writeFileSync(full, body);
     }
-    const baselineFile = path.join(dir, "baseline.json");
-    fs.writeFileSync(baselineFile, JSON.stringify(baseline ?? {}));
-    const r = spawnSync(process.execPath, [CLI, "--src", path.join(dir, "src"), "--baseline", baselineFile, ...extra], {
+    const r = spawnSync(process.execPath, [CLI, "--src", path.join(dir, "src")], {
       encoding: "utf8",
     });
     return { code: r.status, out: (r.stdout ?? "") + (r.stderr ?? "") };
@@ -63,11 +61,9 @@ describe("check-cyrillic gate", () => {
     expect(r.out).toContain("lib/utils.ts");
   });
 
-  it("baseline tolerates known lines but fails on one more; --strict fails on all", () => {
-    const files = { "p.tsx": `export const a = "${RU}";\n` };
-    expect(run(files, [], { "p.tsx": 1 }).code).toBe(0);
-    expect(run({ "p.tsx": `export const a = "${RU}";\nexport const b = "${RU}";\n` }, [], { "p.tsx": 1 }).code).toBe(1);
-    expect(run(files, ["--strict"], { "p.tsx": 1 }).code).toBe(1);
+  it("has no baseline: one Russian line in a file is red", () => {
+    expect(run({ "p.tsx": `export const a = "${RU}";
+` }).code).toBe(1);
   });
 
   it("fails loudly when it finds no source files (a blind scan must not look green)", () => {

@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import {
   AlertCircle,
   Check,
@@ -106,10 +107,11 @@ type ExportFormat = "pdf" | "md" | "docx";
 // Labels are a direct translation of Pavel's own directive (2026-09-02) —
 // not gated by the visible-copy approval this feature's dialog text is
 // still waiting on (§1r.A, Mesh task #6a0c7ae3).
+// Values are `docs` locale keys, resolved with t() at render.
 const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
-  pdf: "Export as PDF",
-  md: "Export as Markdown",
-  docx: "Export as DOCX",
+  pdf: "export.asPdf",
+  md: "export.asMarkdown",
+  docx: "export.asDocx",
 };
 
 type SaveState =
@@ -156,6 +158,7 @@ function TitleDialog({
   onClose: () => void;
   onSubmit: (value: string) => void;
 }) {
+  const { t } = useTranslation("docs");
   const [value, setValue] = useState(initialValue);
 
   // The dialog is mounted once per opening (see the `open &&` at the call site),
@@ -188,7 +191,7 @@ function TitleDialog({
               autoFocus
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="Untitled"
+              placeholder={t("dialog.untitled")}
             />
           </div>
           <DialogFooter>
@@ -198,10 +201,10 @@ function TitleDialog({
               onClick={onClose}
               disabled={isLoading}
             >
-              Cancel
+              {t("actions.cancel")}
             </Button>
             <Button type="submit" disabled={!value.trim() || isLoading}>
-              {isLoading ? "Working..." : confirmText}
+              {isLoading ? t("dialog.working") : confirmText}
             </Button>
           </DialogFooter>
         </form>
@@ -275,6 +278,7 @@ function MoveDialog({
 }) {
   // null is "top level", which is a real destination and not "nothing picked" —
   // hence a separate `touched` flag rather than treating null as unset.
+  const { t } = useTranslation("docs");
   const [selected, setSelected] = useState<string | null>(doc.parent_id);
 
   const currentParent = doc.parent_id;
@@ -283,11 +287,11 @@ function MoveDialog({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent onClose={onClose}>
         <DialogHeader>
-          <DialogTitle>Move "{doc.title}"</DialogTitle>
+          <DialogTitle>{t("move.title", { title: doc.title })}</DialogTitle>
         </DialogHeader>
 
         <div className="mt-4 max-h-72 overflow-y-auto rounded-md border border-border p-1">
-          <ul role="listbox" aria-label="New parent" className="space-y-0.5">
+          <ul role="listbox" aria-label={t("move.newParent")} className="space-y-0.5">
             <li>
               <button
                 type="button"
@@ -301,10 +305,10 @@ function MoveDialog({
               >
                 {selected === null && <SelectedBar />}
                 <NotebookText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">Top level</span>
+                <span className="truncate">{t("move.topLevel")}</span>
                 {currentParent === null && (
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    current
+                    {t("move.current")}
                   </span>
                 )}
               </button>
@@ -327,7 +331,7 @@ function MoveDialog({
                   <span className="truncate">{target.title}</span>
                   {currentParent === target.id && (
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                      current
+                      {t("move.current")}
                     </span>
                   )}
                 </button>
@@ -343,14 +347,14 @@ function MoveDialog({
             onClick={onClose}
             disabled={isLoading}
           >
-            Cancel
+            {t("actions.cancel")}
           </Button>
           <Button
             type="button"
             onClick={() => onSubmit(selected)}
             disabled={isLoading || selected === currentParent}
           >
-            {isLoading ? "Moving..." : "Move"}
+            {isLoading ? t("move.moving") : t("move.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -380,17 +384,18 @@ function ExportDialog({
   onClose: () => void;
   onSubmit: (scope: "self" | "tree") => void;
 }) {
+  const { t } = useTranslation("docs");
   const [scope, setScope] = useState<"self" | "tree">("self");
 
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
       <DialogContent onClose={onClose} data-testid="export-dialog">
         <DialogHeader>
-          <DialogTitle>Export "{doc.title}"</DialogTitle>
+          <DialogTitle>{t("export.title", { title: doc.title })}</DialogTitle>
         </DialogHeader>
 
         <fieldset className="mt-2 space-y-2">
-          <legend className="sr-only">What to include</legend>
+          <legend className="sr-only">{t("export.whatToInclude")}</legend>
           <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted">
             <input
               type="radio"
@@ -400,7 +405,7 @@ function ExportDialog({
               onChange={() => setScope("self")}
               className="h-4 w-4"
             />
-            Just this document
+            {t("export.justThis")}
           </label>
           <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted">
             <input
@@ -411,16 +416,16 @@ function ExportDialog({
               onChange={() => setScope("tree")}
               className="h-4 w-4"
             />
-            Include sub-documents ({childCount})
+            {t("export.includeChildren", { count: childCount })}
           </label>
         </fieldset>
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
-            Cancel
+            {t("actions.cancel")}
           </Button>
           <Button type="button" onClick={() => onSubmit(scope)} disabled={isLoading}>
-            {isLoading ? "Exporting..." : "Export"}
+            {isLoading ? t("export.exporting") : t("export.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -439,11 +444,12 @@ function SaveIndicator({
   state: SaveState;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation("docs");
   if (state.status === "saving") {
     return (
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" />
-        Saving...
+        {t("save.saving")}
       </span>
     );
   }
@@ -451,7 +457,7 @@ function SaveIndicator({
     return (
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Check className="h-3 w-3" />
-        Saved
+        {t("save.saved")}
       </span>
     );
   }
@@ -459,7 +465,7 @@ function SaveIndicator({
     return (
       <span className="flex items-center gap-1 text-xs text-destructive">
         <AlertCircle className="h-3 w-3" />
-        Not saved: {state.message}
+        {t("save.notSaved", { message: state.message })}
         <Button
           type="button"
           variant="ghost"
@@ -467,7 +473,7 @@ function SaveIndicator({
           className="h-6 px-2 text-xs"
           onClick={onRetry}
         >
-          Retry
+          {t("save.retry")}
         </Button>
       </span>
     );
@@ -479,7 +485,7 @@ function SaveIndicator({
     return (
       <span className="flex items-center gap-1 text-xs text-destructive">
         <AlertCircle className="h-3 w-3" />
-        this page changed elsewhere
+        {t("save.conflict")}
       </span>
     );
   }
@@ -502,12 +508,13 @@ function SaveIndicator({
  * the paragraph itself is on screen, and a banner would only be noise.
  */
 function AnchorNotice({ match }: { match: AnchorMatch }) {
+  const { t } = useTranslation("docs");
   if (match.status === "exact" || match.status === "moved") return null;
 
   const text =
     match.status === "edited"
-      ? "This paragraph has been edited since the link was created. You are at its place in the document, but the text is not what was linked."
-      : "The linked paragraph is no longer in this document. It was edited or removed after the link was created.";
+      ? t("anchor.edited")
+      : t("anchor.lost");
 
   return (
     <div className="flex items-start gap-2 border-b border-border bg-muted/60 px-4 py-2 text-xs text-muted-foreground">
@@ -525,6 +532,7 @@ export function DocsPage() {
   const { wsSlug, projectSlug, docId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const { t } = useTranslation("docs");
   const { currentProject } = useProjectStore();
   const {
     documents,
@@ -702,7 +710,7 @@ export function DocsPage() {
       .catch((err: unknown) => {
         if (cancelled) return;
         setOpenDoc(null);
-        setLoadError(errorMessage(err, "Failed to open document"));
+        setLoadError(errorMessage(err, t("errors.openFailed")));
       })
       .finally(() => {
         if (!cancelled) setDocLoading(false);
@@ -758,10 +766,10 @@ export function DocsPage() {
       }
       setSaveState({
         status: "error",
-        message: errorMessage(err, "save failed"),
+        message: errorMessage(err, t("errors.saveFailed")),
       });
     }
-  }, [openDoc, draft, updateDocument, getDocument]);
+  }, [openDoc, draft, updateDocument, getDocument, t]);
 
   // Debounced autosave, mirroring the task description editor.
   useEffect(() => {
@@ -791,12 +799,12 @@ export function DocsPage() {
         base_version: docVersionRef.current ?? undefined,
       }).catch((err: unknown) => {
         const message = isVersionConflict(err)
-          ? "this page changed elsewhere"
-          : errorMessage(err, "save failed");
-        toast.error(`"${doc.title}" was not saved: ${message}`);
+          ? t("save.conflict")
+          : errorMessage(err, t("errors.saveFailed"));
+        toast.error(t("errors.notSavedToast", { title: doc.title, message }));
       });
     };
-  }, [docId, updateDocument]);
+  }, [docId, updateDocument, t]);
 
   // ---- Paragraph links (D6) ------------------------------------------------
   // The anchor rides in the hash: it names a fragment of the document, no
@@ -817,11 +825,11 @@ export function DocsPage() {
       if (!docId) return;
       const url = `${window.location.origin}${docsPath}/${docId}${anchorToHash(built)}`;
       void copyText(url).then(
-        () => toast.success("Link to paragraph copied"),
-        () => toast.error("Could not copy the link"),
+        () => toast.success(t("anchor.copied")),
+        () => toast.error(t("anchor.copyFailed")),
       );
     },
-    [docId, docsPath],
+    [docId, docsPath, t],
   );
 
   // ---- Comments (D7) -------------------------------------------------------
@@ -909,7 +917,7 @@ export function DocsPage() {
       setCreateUnder(null);
       navigate(`${docsPath}/${doc.id}`);
     } catch (err) {
-      toast.error(errorMessage(err, "Failed to create page"));
+      toast.error(errorMessage(err, t("errors.createFailed")));
     } finally {
       setCreating(false);
     }
@@ -923,7 +931,7 @@ export function DocsPage() {
       if (openDoc?.id === updated.id) setOpenDoc(updated);
       setRenameTarget(null);
     } catch (err) {
-      toast.error(errorMessage(err, "Failed to rename page"));
+      toast.error(errorMessage(err, t("errors.renameFailed")));
     } finally {
       setRenaming(false);
     }
@@ -945,7 +953,7 @@ export function DocsPage() {
       // The server refuses a move whose destination already holds a live child
       // with this slug (409). That is the one failure a user can act on, so it
       // is surfaced verbatim rather than folded into a generic message.
-      toast.error(errorMessage(err, "Failed to move page"));
+      toast.error(errorMessage(err, t("errors.moveFailed")));
     } finally {
       setMoving(false);
     }
@@ -964,7 +972,7 @@ export function DocsPage() {
         navigate(docsPath);
       }
     } catch (err) {
-      toast.error(errorMessage(err, "Failed to delete page"));
+      toast.error(errorMessage(err, t("errors.deleteFailed")));
     } finally {
       setDeleting(false);
     }
@@ -992,7 +1000,7 @@ export function DocsPage() {
       URL.revokeObjectURL(objUrl);
       setExportPrompt(null);
     } catch (err) {
-      toast.error(errorMessage(err, "Failed to export"));
+      toast.error(errorMessage(err, t("errors.exportFailed")));
     } finally {
       setExporting(false);
     }
@@ -1053,7 +1061,7 @@ export function DocsPage() {
       >
         <div className="flex items-center justify-between gap-2 pb-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Documents
+            {t("tree.heading")}
           </h2>
           <Button
             type="button"
@@ -1064,7 +1072,7 @@ export function DocsPage() {
             disabled={!projectId}
           >
             <Plus className="h-3.5 w-3.5" />
-            New
+            {t("tree.new")}
           </Button>
         </div>
 
@@ -1074,8 +1082,8 @@ export function DocsPage() {
             type="search"
             value={docSearchQuery}
             onChange={(e) => setDocSearchQuery(e.target.value)}
-            placeholder="Search documents..."
-            aria-label="Search documents"
+            placeholder={t("search.placeholder")}
+            aria-label={t("search.label")}
             disabled={!projectId}
             className="h-8 pl-8 pr-7 text-xs"
           />
@@ -1083,7 +1091,7 @@ export function DocsPage() {
             <button
               type="button"
               onClick={clearDocSearch}
-              aria-label="Clear search"
+              aria-label={t("search.clear")}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" />
@@ -1100,7 +1108,7 @@ export function DocsPage() {
               </div>
             ) : !docSearchResults || docSearchResults.length === 0 ? (
               <p className="p-2 text-xs text-muted-foreground">
-                {docSearchLoading ? "Searching..." : "No documents match"}
+                {docSearchLoading ? t("search.searching") : t("search.noMatch")}
               </p>
             ) : (
               <ul>
@@ -1160,7 +1168,7 @@ export function DocsPage() {
           ) : documents.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 p-4 text-center">
               <NotebookText className="h-6 w-6 text-muted-foreground" />
-              <p className="text-xs text-muted-foreground">No documents yet</p>
+              <p className="text-xs text-muted-foreground">{t("empty.noDocuments")}</p>
               <Button
                 type="button"
                 size="sm"
@@ -1169,7 +1177,7 @@ export function DocsPage() {
                 disabled={!projectId}
               >
                 <Plus className="h-3.5 w-3.5" />
-                New page
+                {t("tree.newPage")}
               </Button>
             </div>
           ) : (
@@ -1191,7 +1199,7 @@ export function DocsPage() {
           its left to resize. */}
       <ResizableDivider
         className="hidden md:block"
-        label="Resize document tree"
+        label={t("tree.resize")}
         value={treeWidth}
         min={DOC_TREE_MIN_WIDTH}
         max={DOC_TREE_MAX_WIDTH}
@@ -1230,7 +1238,7 @@ export function DocsPage() {
               className="mt-1 md:hidden"
               onClick={() => navigate(docsPath)}
             >
-              Documents
+              {t("tree.heading")}
             </Button>
           </div>
         ) : openDoc ? (
@@ -1307,7 +1315,7 @@ export function DocsPage() {
                       className="h-7 px-2 text-xs"
                       onClick={handleDone}
                     >
-                      Done
+                      {t("actions.done")}
                     </Button>
                   ) : (
                     <Button
@@ -1318,42 +1326,42 @@ export function DocsPage() {
                       onClick={() => setEditing(true)}
                     >
                       <Pencil className="h-3.5 w-3.5" />
-                      Edit
+                      {t("actions.edit")}
                     </Button>
                   )}
                   {/* Rare and destructive live behind the overflow, so the one
                       thing you came to do stays the one obvious button. */}
                   <DropdownMenu>
                     <DropdownMenuTrigger
-                      title="More actions"
-                      aria-label="More actions"
+                      title={t("actions.more")}
+                      aria-label={t("actions.more")}
                       className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <MoreHorizontal className="h-4 w-4" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent className="min-w-[9rem]">
                       <DropdownMenuItem onClick={() => setRenameTarget(openDoc)}>
-                        Rename
+                        {t("actions.rename")}
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => setMoveTarget(openDoc)}>
-                        Move
+                        {t("actions.move")}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={() => handleExportClick("pdf")}>
-                        {EXPORT_FORMAT_LABEL.pdf}
+                        {t(EXPORT_FORMAT_LABEL.pdf)}
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => handleExportClick("md")}>
-                        {EXPORT_FORMAT_LABEL.md}
+                        {t(EXPORT_FORMAT_LABEL.md)}
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => handleExportClick("docx")}>
-                        {EXPORT_FORMAT_LABEL.docx}
+                        {t(EXPORT_FORMAT_LABEL.docx)}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onClick={() => setDeleteTarget(openDoc)}
                         className="text-destructive"
                       >
-                        Delete
+                        {t("actions.delete")}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -1415,7 +1423,7 @@ export function DocsPage() {
                           onClick={() => setEditing(true)}
                         >
                           <Pencil className="h-3.5 w-3.5" />
-                          Start writing
+                          {t("empty.startWriting")}
                         </Button>
                       </div>
                     )}
@@ -1463,12 +1471,12 @@ export function DocsPage() {
           <div className="flex flex-1 flex-col items-center justify-center gap-2 overflow-y-auto p-6 text-center">
             <FilePlus2 className="h-10 w-10 text-muted-foreground" />
             <h3 className="text-sm font-semibold">
-              {documents.length === 0 ? "No documents yet" : "No document selected"}
+              {documents.length === 0 ? t("empty.noDocuments") : t("empty.noSelection")}
             </h3>
             <p className="max-w-xs text-sm text-muted-foreground">
               {documents.length === 0
-                ? "Project documents live here. Create the first page to get started."
-                : "Pick a page from the tree, or create a new one."}
+                ? t("empty.noDocumentsHint")
+                : t("empty.noSelectionHint")}
             </p>
             <Button
               type="button"
@@ -1477,7 +1485,7 @@ export function DocsPage() {
               disabled={!projectId}
             >
               <Plus className="h-4 w-4" />
-              New page
+              {t("tree.newPage")}
             </Button>
           </div>
         )}
@@ -1486,10 +1494,10 @@ export function DocsPage() {
       {createOpen && (
         <TitleDialog
           open
-          title={createUnder ? `New page in "${createUnder.title}"` : "New page"}
-          label="Title"
+          title={createUnder ? t("dialog.newPageIn", { title: createUnder.title }) : t("tree.newPage")}
+          label={t("dialog.titleLabel")}
           initialValue=""
-          confirmText="Create"
+          confirmText={t("dialog.create")}
           isLoading={creating}
           onClose={() => {
             setCreateOpen(false);
@@ -1502,10 +1510,10 @@ export function DocsPage() {
       {renameTarget && (
         <TitleDialog
           open
-          title="Rename page"
-          label="Title"
+          title={t("dialog.renameTitle")}
+          label={t("dialog.titleLabel")}
           initialValue={renameTarget.title}
-          confirmText="Save"
+          confirmText={t("dialog.save")}
           isLoading={renaming}
           onClose={() => setRenameTarget(null)}
           onSubmit={(value) => void handleRename(value)}
@@ -1537,15 +1545,15 @@ export function DocsPage() {
         open={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void handleDelete()}
-        title="Delete page"
+        title={t("delete.title")}
         description={
           deleteTarget
             ? childCount > 0
-              ? `Delete "${deleteTarget.title}" and its ${childCount} nested page${childCount === 1 ? "" : "s"}?`
-              : `Delete "${deleteTarget.title}"?`
+              ? t("delete.confirmWithChildren", { title: deleteTarget.title, count: childCount })
+              : t("delete.confirm", { title: deleteTarget.title })
             : ""
         }
-        confirmText="Delete"
+        confirmText={t("actions.delete")}
         variant="destructive"
         isLoading={deleting}
       />

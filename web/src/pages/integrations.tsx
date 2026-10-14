@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router";
+import { Trans, useTranslation } from "react-i18next";
 import {
   CheckCircle2,
   Circle,
@@ -36,7 +37,8 @@ import type {
 interface ProviderMeta {
   id: IntegrationProvider;
   name: string;
-  description: string;
+  descriptionKey: string;
+  nameKey?: string;
   icon: React.ComponentType<{ className?: string }>;
 }
 
@@ -44,36 +46,33 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "github",
     name: "GitHub",
-    description:
-      "Link pull requests and commits to tasks. Receive webhook events to auto-update task status.",
+    descriptionKey: "integrationsPage.providers.github",
     icon: GitBranch,
   },
   {
     id: "gitlab",
     name: "GitLab",
-    description:
-      "Link merge requests to tasks on a self-hosted GitLab instance. Receive webhook events to auto-update task status.",
+    descriptionKey: "integrationsPage.providers.gitlab",
     icon: GitMerge,
   },
   {
     id: "spark",
     name: "Spark Agent Catalog",
-    description:
-      "Browse and install AI agents from the Spark catalog into your workspace.",
+    nameKey: "integrationsPage.providers.sparkName",
+    descriptionKey: "integrationsPage.providers.spark",
     icon: Sparkles,
   },
   {
     id: "mcp",
     name: "MCP Server",
-    description:
-      "Connect AI agents (Claude Code, Cline, Aider) via Model Context Protocol. Supports stdio and SSE transports.",
+    nameKey: "integrationsPage.providers.mcpName",
+    descriptionKey: "integrationsPage.providers.mcp",
     icon: Server,
   },
   {
     id: "telegram",
     name: "Telegram",
-    description:
-      "Deliver notifications and activity to a Telegram bot. Each member connects their own account from Notification Settings.",
+    descriptionKey: "integrationsPage.providers.telegram",
     icon: Send,
   },
 ];
@@ -83,6 +82,7 @@ const PROVIDERS: ProviderMeta[] = [
 // ---------------------------------------------------------------------------
 
 export function IntegrationsPage() {
+  const { t } = useTranslation("integrations");
   useParams();
   const { currentWorkspace } = useWorkspaceStore();
   const { myRole, fetchMyRole } = useMemberStore();
@@ -145,7 +145,7 @@ export function IntegrationsPage() {
     if (!currentWorkspace) return;
     const token = telegramTokenInput.trim();
     if (!token) {
-      toast.error("Enter a bot token");
+      toast.error(t("integrationsPage.enterBotToken"));
       return;
     }
 
@@ -173,9 +173,13 @@ export function IntegrationsPage() {
       setTelegramTokenInput("");
       setTelegramEditingToken(false);
       const botUsername = (updated.config as TelegramIntegrationConfig).bot_username;
-      toast.success(botUsername ? `Connected as @${botUsername}` : "Telegram bot connected");
+      toast.success(
+        botUsername
+          ? t("integrationsPage.connectedAsToast", { username: botUsername })
+          : t("integrationsPage.telegramConnectedToast"),
+      );
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to save the Telegram bot token"));
+      toast.error(apiErrorMessage(err, t("integrationsPage.telegramSaveFailed")));
     } finally {
       setTelegramSaving(false);
     }
@@ -195,7 +199,7 @@ export function IntegrationsPage() {
     if (values.token.trim()) config.token = values.token.trim();
     if (values.webhook_secret.trim()) config.webhook_secret = values.webhook_secret.trim();
     if (Object.keys(config).length === 0) {
-      toast.error("Enter at least one field to save");
+      toast.error(t("integrationsPage.enterOneField"));
       return;
     }
 
@@ -220,9 +224,9 @@ export function IntegrationsPage() {
       await fetchConfigs();
       setVcsFormValues((prev) => ({ ...prev, [provider]: { base_url: "", token: "", webhook_secret: "" } }));
       setVcsEditing((prev) => ({ ...prev, [provider]: false }));
-      toast.success(`${label} connection saved`);
+      toast.success(t("integrationsPage.vcsSaved", { label }));
     } catch (err) {
-      toast.error(apiErrorMessage(err, `Failed to save the ${label} connection`));
+      toast.error(apiErrorMessage(err, t("integrationsPage.vcsSaveFailed", { label })));
     } finally {
       setVcsSaving(null);
     }
@@ -244,7 +248,7 @@ export function IntegrationsPage() {
       return;
     }
     if (enabled && !existing && !eff?.env_available) {
-      toast.error("Nothing to enable yet: this integration has no connection settings.");
+      toast.error(t("integrationsPage.nothingToEnable"));
       return;
     }
     setToggling(provider);
@@ -266,7 +270,7 @@ export function IntegrationsPage() {
       setConfirmDisable(null);
       await fetchConfigs();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to update the integration"));
+      toast.error(apiErrorMessage(err, t("integrationsPage.updateFailed")));
     } finally {
       setToggling(null);
     }
@@ -280,7 +284,7 @@ export function IntegrationsPage() {
       await api(`/api/v1/integrations/${existing.id}`, { method: "DELETE" });
       await fetchConfigs();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to remove the integration"));
+      toast.error(apiErrorMessage(err, t("integrationsPage.removeFailed")));
     } finally {
       setToggling(null);
     }
@@ -290,8 +294,7 @@ export function IntegrationsPage() {
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto">
         <p className="mb-6 text-sm text-muted-foreground max-w-prose">
-          Connect Entire VC Mesh with external services to automate workflows and
-          keep your team in sync.
+          {t("integrationsPage.intro")}
         </p>
 
         {loading ? (
@@ -340,18 +343,20 @@ export function IntegrationsPage() {
                         </div>
                         <div>
                           <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                            {provider.name}
+                            {provider.nameKey ? t(provider.nameKey) : provider.name}
                             {isActive && eff && eff.source !== "none" && (
                               <span
                                 data-testid={`source-${provider.id}`}
                                 className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground"
                               >
-                                {viaEnv ? "Instance" : "Workspace"}
+                                {viaEnv
+                                  ? t("integrationsPage.sourceInstance")
+                                  : t("integrationsPage.sourceWorkspace")}
                               </span>
                             )}
                           </CardTitle>
                           <p className="text-xs text-muted-foreground">
-                            {provider.description}
+                            {t(provider.descriptionKey)}
                           </p>
                         </div>
                       </div>
@@ -363,7 +368,7 @@ export function IntegrationsPage() {
                             className="text-xs text-muted-foreground hover:text-destructive transition-colors"
                             disabled={isLoading}
                           >
-                            Remove
+                            {t("integrationsPage.remove")}
                           </button>
                         )}
                         {/* mcp is a reference-only connection card — a static
@@ -396,12 +401,12 @@ export function IntegrationsPage() {
                             ) : isActive ? (
                               <span className="flex items-center gap-1.5">
                                 <CheckCircle2 className="h-3.5 w-3.5" />
-                                Enabled
+                                {t("integrationsPage.enabled")}
                               </span>
                             ) : (
                               <span className="flex items-center gap-1.5">
                                 <Circle className="h-3.5 w-3.5" />
-                                Enable
+                                {t("integrationsPage.enable")}
                               </span>
                             )}
                           </Button>
@@ -413,7 +418,7 @@ export function IntegrationsPage() {
                   {viaEnv && (
                     <CardContent className="pt-0">
                       <p className="text-xs text-muted-foreground" data-testid={`env-note-${provider.id}`}>
-                        Active (configured at the instance level)
+                        {t("integrationsPage.envNote")}
                       </p>
                     </CardContent>
                   )}
@@ -425,8 +430,7 @@ export function IntegrationsPage() {
                         className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 space-y-2"
                       >
                         <p className="text-xs">
-                          This will turn off an integration configured at the instance level.
-                          It stops working for this workspace until it is enabled again.
+                          {t("integrationsPage.confirmDisable.message")}
                         </p>
                         <div className="flex flex-wrap gap-2">
                           <Button
@@ -435,14 +439,14 @@ export function IntegrationsPage() {
                             disabled={isLoading}
                             onClick={() => void handleToggle(provider.id, false, true)}
                           >
-                            Turn off
+                            {t("integrationsPage.confirmDisable.turnOff")}
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => setConfirmDisable(null)}
                           >
-                            Cancel
+                            {t("integrationsPage.cancel")}
                           </Button>
                         </div>
                       </div>
@@ -453,14 +457,15 @@ export function IntegrationsPage() {
                     <CardContent className="pt-0 space-y-3">
                       <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                         <p className="text-xs font-medium text-muted-foreground mb-1">
-                          Connection
+                          {t("integrationsPage.connection")}
                         </p>
                         {githubCfg?.token_set || githubCfg?.webhook_secret_set ? (
                           !vcsEditing.github ? (
                             <div className="flex items-center justify-between">
                               <p className="text-xs text-muted-foreground">
-                                Using a workspace-configured token
-                                {githubCfg.webhook_secret_set ? " and webhook secret" : ""}.
+                                {githubCfg.webhook_secret_set
+                                  ? t("integrationsPage.github.usingTokenAndSecret")
+                                  : t("integrationsPage.github.usingToken")}
                               </p>
                               <button
                                 onClick={() =>
@@ -468,7 +473,7 @@ export function IntegrationsPage() {
                                 }
                                 className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors"
                               >
-                                Change
+                                {t("integrationsPage.change")}
                               </button>
                             </div>
                           ) : (
@@ -489,9 +494,7 @@ export function IntegrationsPage() {
                         ) : (
                           <>
                             <p className="text-xs text-muted-foreground mb-2">
-                              Optional: connect a personal access token for live PR-status
-                              checks and to set a workspace-specific webhook secret. Without
-                              one, this deployment's instance-wide default is used.
+                              {t("integrationsPage.github.connectPrompt")}
                             </p>
                             <VcsConnectForm
                               provider="github"
@@ -509,20 +512,25 @@ export function IntegrationsPage() {
                       {isActive && (
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                           <p className="text-xs font-medium text-muted-foreground mb-1">
-                            Webhook URL
+                            {t("integrationsPage.webhookUrl")}
                           </p>
                           <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
                             {window.location.origin}/webhooks/github
                           </code>
                           <p className="mt-2 text-xs text-muted-foreground">
-                            Add this URL to your GitHub repository under{" "}
-                            <strong>Settings &rarr; Webhooks</strong>. Select{" "}
-                            <em>Pull requests</em> and <em>Pushes</em> events.
-                            Include{" "}
-                            <code className="rounded bg-background px-1">
-                              MESH-{"<task-id>"}
-                            </code>{" "}
-                            in commit messages or PR titles to auto-link tasks.
+                            <Trans
+                              t={t}
+                              i18nKey="integrationsPage.github.webhookHelp"
+                              components={{
+                                strong: <strong />,
+                                em: <em />,
+                                code: (
+                                  <code className="rounded bg-background px-1">
+                                    MESH-{"<task-id>"}
+                                  </code>
+                                ),
+                              }}
+                            />
                           </p>
                         </div>
                       )}
@@ -533,22 +541,25 @@ export function IntegrationsPage() {
                     <CardContent className="pt-0 space-y-3">
                       <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                         <p className="text-xs font-medium text-muted-foreground mb-1">
-                          Connection
+                          {t("integrationsPage.connection")}
                         </p>
                         {gitlabCfg?.token_set || gitlabCfg?.webhook_secret_set || gitlabCfg?.base_url ? (
                           !vcsEditing.gitlab ? (
                             <div className="flex items-center justify-between">
                               <p className="text-xs text-muted-foreground">
                                 {gitlabCfg.base_url ? (
-                                  <>
-                                    Connected to{" "}
-                                    <span className="font-medium text-foreground">
-                                      {gitlabCfg.base_url}
-                                    </span>
-                                    .
-                                  </>
+                                  <Trans
+                                    t={t}
+                                    i18nKey="integrationsPage.gitlab.connectedTo"
+                                    values={{ url: gitlabCfg.base_url }}
+                                    components={{
+                                      url: (
+                                        <span className="font-medium text-foreground" />
+                                      ),
+                                    }}
+                                  />
                                 ) : (
-                                  "Connected."
+                                  t("integrationsPage.gitlab.connected")
                                 )}
                               </p>
                               <button
@@ -557,7 +568,7 @@ export function IntegrationsPage() {
                                 }
                                 className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors"
                               >
-                                Change
+                                {t("integrationsPage.change")}
                               </button>
                             </div>
                           ) : (
@@ -578,8 +589,7 @@ export function IntegrationsPage() {
                         ) : (
                           <>
                             <p className="text-xs text-muted-foreground mb-2">
-                              Connect your self-hosted GitLab instance: base URL, an access
-                              token for live MR-status checks, and a webhook secret.
+                              {t("integrationsPage.gitlab.connectPrompt")}
                             </p>
                             <VcsConnectForm
                               provider="gitlab"
@@ -597,19 +607,25 @@ export function IntegrationsPage() {
                       {isActive && (
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                           <p className="text-xs font-medium text-muted-foreground mb-1">
-                            Webhook URL
+                            {t("integrationsPage.webhookUrl")}
                           </p>
                           <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
                             {window.location.origin}/webhooks/gitlab
                           </code>
                           <p className="mt-2 text-xs text-muted-foreground">
-                            Add this URL to your GitLab project under{" "}
-                            <strong>Settings &rarr; Webhooks</strong>. Select{" "}
-                            <em>Merge request events</em>. Include{" "}
-                            <code className="rounded bg-background px-1">
-                              MESH-{"<task-id>"}
-                            </code>{" "}
-                            in commit messages or MR titles to auto-link tasks.
+                            <Trans
+                              t={t}
+                              i18nKey="integrationsPage.gitlab.webhookHelp"
+                              components={{
+                                strong: <strong />,
+                                em: <em />,
+                                code: (
+                                  <code className="rounded bg-background px-1">
+                                    MESH-{"<task-id>"}
+                                  </code>
+                                ),
+                              }}
+                            />
                           </p>
                         </div>
                       )}
@@ -620,14 +636,18 @@ export function IntegrationsPage() {
                     <CardContent className="pt-0">
                       <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                         <p className="text-xs text-muted-foreground">
-                          Spark catalog is enabled. Go to{" "}
-                          <a
-                            href={`/w/${currentWorkspace?.slug}/spark`}
-                            className="text-primary hover:underline font-medium"
-                          >
-                            Spark Catalog
-                          </a>{" "}
-                          to browse and install agents.
+                          <Trans
+                            t={t}
+                            i18nKey="integrationsPage.spark.enabledNote"
+                            components={{
+                              link: (
+                                <a
+                                  href={`/w/${currentWorkspace?.slug}/spark`}
+                                  className="text-primary hover:underline font-medium"
+                                />
+                              ),
+                            }}
+                          />
                         </p>
                       </div>
                     </CardContent>
@@ -642,13 +662,19 @@ export function IntegrationsPage() {
                       <div className="space-y-3">
                         <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
                           <p className="text-xs font-medium text-muted-foreground mb-1">
-                            SSE Endpoint (remote agents)
+                            {t("integrationsPage.mcp.sseEndpoint")}
                           </p>
                           <code className="block rounded bg-background px-2 py-1.5 text-xs font-mono select-all">
                             {window.location.origin}/mcp/sse
                           </code>
                           <p className="text-xs text-muted-foreground mt-1.5">
-                            Requires your deployment to route <code className="rounded bg-muted px-1">/mcp</code> to the MCP server. If it does not connect, use the stdio config below.
+                            <Trans
+                              t={t}
+                              i18nKey="integrationsPage.mcp.sseNote"
+                              components={{
+                                code: <code className="rounded bg-muted px-1" />,
+                              }}
+                            />
                           </p>
                         </div>
 
@@ -670,16 +696,19 @@ export function IntegrationsPage() {
                         </div>
 
                         <p className="text-xs text-muted-foreground">
-                          Register an agent in{" "}
-                          <a
-                            href={`/w/${currentWorkspace?.slug}/agents`}
-                            className="text-primary hover:underline font-medium"
-                          >
-                            Agents
-                          </a>{" "}
-                          to get an API key, then use it in{" "}
-                          <code className="rounded bg-muted px-1">MESH_AGENT_KEY</code>.
-                          MCP provides 34 tools: task management, comments, events, artifacts, and more.
+                          <Trans
+                            t={t}
+                            i18nKey="integrationsPage.mcp.registerHelp"
+                            components={{
+                              link: (
+                                <a
+                                  href={`/w/${currentWorkspace?.slug}/agents`}
+                                  className="text-primary hover:underline font-medium"
+                                />
+                              ),
+                              code: <code className="rounded bg-muted px-1" />,
+                            }}
+                          />
                         </p>
                       </div>
                     </CardContent>
@@ -690,26 +719,30 @@ export function IntegrationsPage() {
                       {telegramTokenSet && !telegramEditingToken ? (
                         <div className="flex items-center justify-between rounded-lg border border-dashed border-border bg-muted/30 p-3">
                           <p className="text-xs text-muted-foreground">
-                            Connected as{" "}
-                            <span className="font-medium text-foreground">
-                              @{telegramCfg?.bot_username}
-                            </span>
-                            . Members connect from their own Notification Settings.
+                            <Trans
+                              t={t}
+                              i18nKey="integrationsPage.telegram.connectedAs"
+                              values={{ username: telegramCfg?.bot_username ?? "" }}
+                              components={{
+                                name: <span className="font-medium text-foreground" />,
+                              }}
+                            />
                           </p>
                           <button
                             onClick={() => setTelegramEditingToken(true)}
                             className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors"
                           >
-                            Change token
+                            {t("integrationsPage.telegram.changeToken")}
                           </button>
                         </div>
                       ) : (
                         <div className="space-y-2">
                           <p className="text-xs text-muted-foreground">
-                            Create a bot with{" "}
-                            <span className="font-medium">@BotFather</span> on
-                            Telegram and paste its token here. The token is
-                            encrypted at rest and never shown again.
+                            <Trans
+                              t={t}
+                              i18nKey="integrationsPage.telegram.createBot"
+                              components={{ bot: <span className="font-medium" /> }}
+                            />
                           </p>
                           <div className="flex gap-2">
                             <Input
@@ -725,7 +758,9 @@ export function IntegrationsPage() {
                               onClick={() => void handleSaveTelegramToken()}
                               disabled={telegramSaving || !telegramTokenInput.trim()}
                             >
-                              {telegramSaving ? "Connecting…" : "Connect"}
+                              {telegramSaving
+                                ? t("integrationsPage.telegram.connecting")
+                                : t("integrationsPage.telegram.connect")}
                             </Button>
                             {telegramTokenSet && (
                               <Button
@@ -737,7 +772,7 @@ export function IntegrationsPage() {
                                   setTelegramTokenInput("");
                                 }}
                               >
-                                Cancel
+                                {t("integrationsPage.cancel")}
                               </Button>
                             )}
                           </div>
@@ -788,6 +823,7 @@ function VcsConnectForm({
   onCancel?: () => void;
   showCancel?: boolean;
 }) {
+  const { t } = useTranslation("integrations");
   const canSave =
     !saving &&
     (values.token.trim() !== "" ||
@@ -807,7 +843,11 @@ function VcsConnectForm({
       )}
       <Input
         type="password"
-        placeholder={provider === "github" ? "Personal access token" : "Access token"}
+        placeholder={
+          provider === "github"
+            ? t("integrationsPage.vcsForm.personalToken")
+            : t("integrationsPage.vcsForm.accessToken")
+        }
         value={values.token}
         onChange={(e) => onChange({ ...values, token: e.target.value })}
         disabled={saving}
@@ -815,7 +855,7 @@ function VcsConnectForm({
       />
       <Input
         type="password"
-        placeholder="Webhook secret"
+        placeholder={t("integrationsPage.vcsForm.webhookSecret")}
         value={values.webhook_secret}
         onChange={(e) => onChange({ ...values, webhook_secret: e.target.value })}
         disabled={saving}
@@ -823,11 +863,11 @@ function VcsConnectForm({
       />
       <div className="flex gap-2">
         <Button size="sm" onClick={onSave} disabled={!canSave}>
-          {saving ? "Saving…" : "Save"}
+          {saving ? t("integrationsPage.vcsForm.saving") : t("integrationsPage.vcsForm.save")}
         </Button>
         {showCancel && onCancel && (
           <Button size="sm" variant="outline" disabled={saving} onClick={onCancel}>
-            Cancel
+            {t("integrationsPage.cancel")}
           </Button>
         )}
       </div>

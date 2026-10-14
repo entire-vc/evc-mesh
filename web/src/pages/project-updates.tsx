@@ -1,6 +1,7 @@
 import * as i18nFmt from "@/i18n/format";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import {
   CheckCircle,
   ChevronDown,
@@ -30,41 +31,39 @@ import { Link } from "react-router";
 import { cn } from "@/lib/cn";
 import { apiErrorMessage } from "@/lib/api-error";
 
-const STATUS_CONFIG: Record<UpdateStatus, { label: string; color: string; icon: React.ReactNode }> = {
+const STATUS_CONFIG: Record<UpdateStatus, { color: string; icon: React.ReactNode }> = {
   on_track: {
-    label: "On Track",
     color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
     icon: <TrendingUp className="h-3 w-3" />,
   },
   at_risk: {
-    label: "At Risk",
     color: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
     icon: <Minus className="h-3 w-3" />,
   },
   off_track: {
-    label: "Off Track",
     color: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
     icon: <TrendingDown className="h-3 w-3" />,
   },
   completed: {
-    label: "Completed",
     color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
     icon: <CheckCircle className="h-3 w-3" />,
   },
 };
 
 function StatusBadge({ status }: { status: UpdateStatus }) {
+  const { t } = useTranslation("settings");
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.on_track;
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", cfg.color)}>
       {cfg.icon}
-      {cfg.label}
+      {t(`updates.status.${status in STATUS_CONFIG ? status : "on_track"}`)}
     </span>
   );
 }
 
 function BulletList({ items }: { items: { text: string }[] }) {
-  if (!items || items.length === 0) return <p className="text-sm text-muted-foreground italic">None</p>;
+  const { t } = useTranslation("settings");
+  if (!items || items.length === 0) return <p className="text-sm text-muted-foreground italic">{t("updates.none")}</p>;
   return (
     <ul className="list-disc pl-4 space-y-1">
       {items.map((item, i) => (
@@ -75,6 +74,7 @@ function BulletList({ items }: { items: { text: string }[] }) {
 }
 
 function UpdateCard({ update }: { update: ProjectUpdate }) {
+  const { t } = useTranslation("settings");
   const [expanded, setExpanded] = useState(false);
   const date = i18nFmt.formatDate(update.created_at, {
     month: "short",
@@ -111,37 +111,37 @@ function UpdateCard({ update }: { update: ProjectUpdate }) {
             <div className="flex gap-4 rounded-lg bg-muted/50 p-3">
               <div className="text-center">
                 <p className="text-xl font-bold">{update.metrics.tasks_completed}</p>
-                <p className="text-xs text-muted-foreground">Done</p>
+                <p className="text-xs text-muted-foreground">{t("updates.metrics.done")}</p>
               </div>
               <div className="text-center">
                 <p className="text-xl font-bold">{update.metrics.tasks_in_progress}</p>
-                <p className="text-xs text-muted-foreground">In Progress</p>
+                <p className="text-xs text-muted-foreground">{t("updates.metrics.inProgress")}</p>
               </div>
               <div className="text-center">
                 <p className="text-xl font-bold">{update.metrics.tasks_total}</p>
-                <p className="text-xs text-muted-foreground">Total</p>
+                <p className="text-xs text-muted-foreground">{t("updates.metrics.total")}</p>
               </div>
               {update.metrics.tasks_total > 0 && (
                 <div className="text-center">
                   <p className="text-xl font-bold">
                     {Math.round(((update.metrics.tasks_completed ?? 0) / (update.metrics.tasks_total || 1)) * 100)}%
                   </p>
-                  <p className="text-xs text-muted-foreground">Complete</p>
+                  <p className="text-xs text-muted-foreground">{t("updates.metrics.complete")}</p>
                 </div>
               )}
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
-              <h4 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 mb-2">Highlights</h4>
+              <h4 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 mb-2">{t("updates.metrics.highlights")}</h4>
               <BulletList items={update.highlights ?? []} />
             </div>
             <div>
-              <h4 className="text-sm font-semibold text-red-700 dark:text-red-400 mb-2">Blockers</h4>
+              <h4 className="text-sm font-semibold text-red-700 dark:text-red-400 mb-2">{t("updates.metrics.blockers")}</h4>
               <BulletList items={update.blockers ?? []} />
             </div>
             <div>
-              <h4 className="text-sm font-semibold text-blue-700 dark:text-blue-400 mb-2">Next Steps</h4>
+              <h4 className="text-sm font-semibold text-blue-700 dark:text-blue-400 mb-2">{t("updates.metrics.nextSteps")}</h4>
               <BulletList items={update.next_steps ?? []} />
             </div>
           </div>
@@ -158,6 +158,7 @@ function NewUpdateForm({
   projectId: string;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("settings");
   const { createUpdate } = useProjectUpdateStore();
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState<UpdateStatus>("on_track");
@@ -170,7 +171,7 @@ function NewUpdateForm({
   const parseLines = (raw: string) =>
     raw
       .split("\n")
-      .map((t) => t.trim())
+      .map((line) => line.trim())
       .filter(Boolean)
       .map((text) => ({ text }));
 
@@ -189,51 +190,51 @@ function NewUpdateForm({
           next_steps: parseLines(nextStepsRaw),
         };
         await createUpdate(projectId, req);
-        toast.success("Update posted");
+        toast.success(t("updates.toast.posted"));
         onClose();
       } catch (err) {
-        toast.error(apiErrorMessage(err, "Failed to create update"));
+        toast.error(apiErrorMessage(err, t("updates.toast.createFailed")));
       } finally {
         setSubmitting(false);
       }
     },
-    [title, status, summary, highlightsRaw, blockersRaw, nextStepsRaw, projectId, createUpdate, onClose],
+    [title, status, summary, highlightsRaw, blockersRaw, nextStepsRaw, projectId, createUpdate, onClose, t],
   );
 
   return (
     <Card className="border-primary/30">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">New Status Update</CardTitle>
+        <CardTitle className="text-base">{t("updates.form.heading")}</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1">
-              <label className="text-sm font-medium">Title</label>
+              <label className="text-sm font-medium">{t("updates.form.title")}</label>
               <Input
-                placeholder="Sprint 5 Update"
+                placeholder={t("updates.form.titlePlaceholder")}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 required
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">Status</label>
+              <label className="text-sm font-medium">{t("updates.form.status")}</label>
               <Select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as UpdateStatus)}
               >
-                <option value="on_track">On Track</option>
-                <option value="at_risk">At Risk</option>
-                <option value="off_track">Off Track</option>
-                <option value="completed">Completed</option>
+                <option value="on_track">{t("updates.status.on_track")}</option>
+                <option value="at_risk">{t("updates.status.at_risk")}</option>
+                <option value="off_track">{t("updates.status.off_track")}</option>
+                <option value="completed">{t("updates.status.completed")}</option>
               </Select>
             </div>
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-medium">Summary</label>
+            <label className="text-sm font-medium">{t("updates.form.summary")}</label>
             <Textarea
-              placeholder="Brief overview of project status..."
+              placeholder={t("updates.form.summaryPlaceholder")}
               value={summary}
               onChange={(e) => setSummary(e.target.value)}
               rows={2}
@@ -243,10 +244,10 @@ function NewUpdateForm({
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1">
               <label className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
-                Highlights (one per line)
+                {t("updates.form.highlightsLabel")}
               </label>
               <Textarea
-                placeholder="Feature X shipped"
+                placeholder={t("updates.form.highlightsPlaceholder")}
                 value={highlightsRaw}
                 onChange={(e) => setHighlightsRaw(e.target.value)}
                 rows={3}
@@ -254,10 +255,10 @@ function NewUpdateForm({
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium text-red-700 dark:text-red-400">
-                Blockers (one per line)
+                {t("updates.form.blockersLabel")}
               </label>
               <Textarea
-                placeholder="Waiting on API design"
+                placeholder={t("updates.form.blockersPlaceholder")}
                 value={blockersRaw}
                 onChange={(e) => setBlockersRaw(e.target.value)}
                 rows={3}
@@ -265,10 +266,10 @@ function NewUpdateForm({
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium text-blue-700 dark:text-blue-400">
-                Next Steps (one per line)
+                {t("updates.form.nextStepsLabel")}
               </label>
               <Textarea
-                placeholder="Complete auth module"
+                placeholder={t("updates.form.nextStepsPlaceholder")}
                 value={nextStepsRaw}
                 onChange={(e) => setNextStepsRaw(e.target.value)}
                 rows={3}
@@ -277,10 +278,10 @@ function NewUpdateForm({
           </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
+              {t("updates.form.cancel")}
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? "Posting..." : "Post Update"}
+              {submitting ? t("updates.form.posting") : t("updates.form.post")}
             </Button>
           </div>
         </form>
@@ -290,6 +291,7 @@ function NewUpdateForm({
 }
 
 export function ProjectUpdatesPage() {
+  const { t } = useTranslation("settings");
   const { wsSlug, projectSlug } = useParams();
   const { currentProject } = useProjectStore();
   const { updates, isLoading, fetchUpdates } = useProjectUpdateStore();
@@ -307,9 +309,9 @@ export function ProjectUpdatesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
-            {currentProject?.name ?? "Project"}
+            {currentProject?.name ?? t("updates.page.project")}
           </h1>
-          <p className="text-muted-foreground">Status updates and progress reports</p>
+          <p className="text-muted-foreground">{t("updates.page.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
           {/* View toggle links */}
@@ -318,27 +320,27 @@ export function ProjectUpdatesPage() {
               to={`/w/${wsSlug}/p/${projectSlug}`}
               className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-accent"
             >
-              <Columns3 className="h-4 w-4" /> Board
+              <Columns3 className="h-4 w-4" /> {t("updates.page.board")}
             </Link>
             <Link
               to={`/w/${wsSlug}/p/${projectSlug}/list`}
               className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-accent"
             >
-              <List className="h-4 w-4" /> List
+              <List className="h-4 w-4" /> {t("updates.page.list")}
             </Link>
             <Link
               to={`/w/${wsSlug}/p/${projectSlug}/timeline`}
               className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-accent"
             >
-              <GitBranch className="h-4 w-4" /> Dependencies
+              <GitBranch className="h-4 w-4" /> {t("updates.page.dependencies")}
             </Link>
             <span className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1.5 text-sm font-medium">
-              <FileText className="h-4 w-4" /> Updates
+              <FileText className="h-4 w-4" /> {t("updates.page.updates")}
             </span>
           </div>
           <Button onClick={() => setShowForm(true)}>
             <Plus className="h-4 w-4" />
-            New Update
+            {t("updates.page.newUpdate")}
           </Button>
         </div>
       </div>
@@ -365,13 +367,13 @@ export function ProjectUpdatesPage() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <FileText className="mb-4 h-12 w-12 text-muted-foreground" />
-            <h3 className="mb-2 text-lg font-semibold">No updates yet</h3>
+            <h3 className="mb-2 text-lg font-semibold">{t("updates.page.emptyTitle")}</h3>
             <p className="mb-4 text-sm text-muted-foreground">
-              Post the first status update to keep your team informed.
+              {t("updates.page.emptyText")}
             </p>
             <Button onClick={() => setShowForm(true)}>
               <Plus className="h-4 w-4" />
-              Post Update
+              {t("updates.page.postUpdate")}
             </Button>
           </CardContent>
         </Card>

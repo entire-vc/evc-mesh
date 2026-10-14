@@ -1,3 +1,4 @@
+import { miscT } from "@/lib/misc-t";
 import { api } from "@/lib/api";
 import type { PaginatedResponse, StatusCategory, Task, TaskStatus } from "@/types";
 
@@ -62,7 +63,8 @@ function pageParams(statusIds: string[], page: number, oldestFirst: boolean) {
   };
 }
 
-const MALFORMED = "Malformed task list. Please try again.";
+// Resolved when thrown, in the current interface language.
+const malformed = () => miscT("errors.malformedTaskList", "Malformed task list. Please try again.");
 
 /** One page of `statusIds`, newest-updated first, checked for shape and project. */
 async function getPage(projectId: string, statusIds: string[], page: number, oldestFirst = false) {
@@ -72,7 +74,7 @@ async function getPage(projectId: string, statusIds: string[], page: number, old
   const total = data.total_count ?? data.total;
   const items = data.items ?? [];
   if (!Number.isSafeInteger(total) || total < 0 || data.page !== page ||
-      items.some((t) => t.project_id !== projectId)) throw new BoardLoadError(MALFORMED);
+      items.some((t) => t.project_id !== projectId)) throw new BoardLoadError(malformed());
   return { items, total, hasMore: Boolean(data.has_more) };
 }
 

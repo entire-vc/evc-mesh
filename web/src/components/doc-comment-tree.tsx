@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { MessageSquare } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { Composer, Thread } from "@/components/doc-comment-rail";
 import type {
@@ -90,6 +91,7 @@ export function DocCommentTree({
   showResolved,
   onShowResolvedChange,
 }: DocCommentTreeProps) {
+  const { t } = useTranslation("docs");
   const { threads, readOnly } = controller;
   // Once for the whole tree, not once per comment — see the hook's own note.
   const directory = useMentionDirectory();
@@ -106,13 +108,13 @@ export function DocCommentTree({
 
   return (
     <section
-      aria-label="Comments"
+      aria-label={t("comments.title")}
       data-testid="doc-comment-tree"
       className="mt-10 border-t border-border pt-5"
     >
       <div className="flex items-center justify-between gap-2 pb-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Comments
+          {t("comments.title")}
         </h2>
         {resolvedCount > 0 && (
           <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -122,7 +124,7 @@ export function DocCommentTree({
               checked={showResolved}
               onChange={(e) => onShowResolvedChange(e.target.checked)}
             />
-            Show resolved ({resolvedCount})
+            {t("comments.showResolved", { count: resolvedCount })}
           </label>
         )}
       </div>
@@ -130,7 +132,7 @@ export function DocCommentTree({
       {ordered.length === 0 ? (
         <div className="flex flex-col items-start gap-1 pb-4 text-xs text-muted-foreground">
           <MessageSquare className="h-5 w-5" />
-          <p>No comments yet.</p>
+          <p>{t("comments.empty")}</p>
         </div>
       ) : (
         <div className="space-y-3 pb-4">
@@ -152,8 +154,8 @@ export function DocCommentTree({
         <div className="border-t border-border pt-4">
           <Composer
             key={composerKey}
-            placeholder="Add a comment… @ to mention"
-            submitLabel="Comment"
+            placeholder={t("comments.addPlaceholder")}
+            submitLabel={t("comments.submit")}
             onSubmit={controller.submitPageComment}
             onCancel={() => setComposerKey((n) => n + 1)}
           />

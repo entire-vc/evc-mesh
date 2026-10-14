@@ -1,0 +1,1212 @@
+{
+  "addMember": {
+    "roles": {
+      "member": "Member",
+      "admin": "Admin",
+      "viewer": "Viewer"
+    },
+    "selectMember": "Please select a member",
+    "failed": "Failed to add member",
+    "title": "Add Project Member",
+    "description": "Add a workspace member to this project with a specific role.",
+    "allAdded": "All workspace members are already added to this project.",
+    "member": "Member",
+    "role": "Role",
+    "cancel": "Cancel",
+    "adding": "Adding...",
+    "add": "Add Member"
+  },
+  "avatar": {
+    "aiAgent": "AI agent",
+    "user": "User",
+    "unassigned": "Unassigned"
+  },
+  "calendar": {
+    "agentSummary": "Agent summary",
+    "loading": "Loading calendar...",
+    "toast": {
+      "removeDueDateFailed": "Failed to remove due date",
+      "updateDueDateFailed": "Failed to update due date"
+    },
+    "grid": {
+      "addTask": "Add task",
+      "more": "+{{count}} more"
+    },
+    "toolbar": {
+      "today": "Today",
+      "unscheduled": "{{count}} Unscheduled",
+      "newRecurringTitle": "New Recurring Task",
+      "recurring": "Recurring",
+      "filterPlaceholder": "Filter tasks..."
+    },
+    "unscheduled": {
+      "empty": "No unscheduled tasks",
+      "title": "Unscheduled",
+      "taskCount_one": "{{count}} task",
+      "taskCount_other": "{{count}} tasks"
+    }
+  },
+  "confirm": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "processing": "Processing...",
+    "typePrefix": "Type",
+    "typeSuffix": "to confirm:"
+  },
+  "createProject": {
+    "nameSlugRequired": "Name and slug are required",
+    "noWorkspace": "No workspace selected",
+    "failed": "Failed to create project",
+    "title": "New Project",
+    "yourWorkspace": "your workspace",
+    "description": "Create a new project in {{workspace}}.",
+    "name": "Name",
+    "namePlaceholder": "My Project",
+    "slug": "Slug",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Optional description...",
+    "cancel": "Cancel",
+    "creating": "Creating...",
+    "create": "Create Project"
+  },
+  "customField": {
+    "title": {
+      "edit": "Edit Custom Field",
+      "create": "Create Custom Field"
+    },
+    "description": {
+      "edit": "Update the custom field definition.",
+      "create": "Add a new custom field to your project."
+    },
+    "fields": {
+      "name": "Name",
+      "namePlaceholder": "e.g. Story Points",
+      "slug": "Slug",
+      "fieldType": "Field Type",
+      "description": "Description",
+      "descriptionPlaceholder": "Optional description..."
+    },
+    "types": {
+      "text": "Text",
+      "number": "Number",
+      "date": "Date",
+      "datetime": "Date & Time",
+      "select": "Select",
+      "multiselect": "Multi-Select",
+      "url": "URL",
+      "email": "Email",
+      "checkbox": "Checkbox",
+      "user_ref": "User Reference",
+      "agent_ref": "Agent Reference",
+      "json": "JSON"
+    },
+    "choices": {
+      "title": "Choices",
+      "simpleMode": "Simple mode",
+      "advancedMode": "Advanced (label + color)",
+      "valuePlaceholder": "Value {{n}}",
+      "labelPlaceholder": "Display label",
+      "colorTitle": "Choice color",
+      "add": "Add Choice"
+    },
+    "number": {
+      "constraints": "Number Constraints (optional)",
+      "min": "Min",
+      "max": "Max"
+    },
+    "text": {
+      "constraints": "Text Constraints (optional)",
+      "regex": "Regex pattern",
+      "regexPlaceholder": "e.g. ^[a-z]+$",
+      "maxLength": "Max length",
+      "maxLengthPlaceholder": "e.g. 255"
+    },
+    "required": "Required field",
+    "visibleToAgents": "Visible to agents",
+    "visibleToAgentsHint": "(agents can read/write this field via MCP)",
+    "errors": {
+      "nameRequired": "Name is required",
+      "slugRequired": "Slug is required",
+      "choiceRequired": "At least one choice is required for select fields",
+      "saveFailed": "Failed to save custom field"
+    },
+    "cancel": "Cancel",
+    "saving": "Saving...",
+    "saveChanges": "Save Changes",
+    "createField": "Create Field",
+    "renderer": {
+      "search": "Search...",
+      "noResults": "No results",
+      "clearSelection": "Clear selection",
+      "selectUser": "Select user...",
+      "selectAgent": "Select agent...",
+      "enter": "Enter {{name}}...",
+      "set": "Set {{name}}...",
+      "selectOption": "-- Select --",
+      "unsupported": "Unsupported field type: {{type}}",
+      "yes": "Yes",
+      "no": "No"
+    }
+  },
+  "delegation": {
+    "review": {
+      "label": "Review required",
+      "description": "Agent prepares artifact, waits for approval before executing."
+    },
+    "auto": {
+      "label": "Auto-execute",
+      "description": "Agent completes task autonomously, notifies only."
+    },
+    "supervised": {
+      "label": "Supervised",
+      "description": "Agent proposes a plan; human triggers execution."
+    }
+  },
+  "initiatives": {
+    "statusBadge": {
+      "active": "active",
+      "completed": "completed",
+      "archived": "archived"
+    },
+    "status": {
+      "active": "Active",
+      "completed": "Completed",
+      "archived": "Archived"
+    },
+    "progress": {
+      "completed": "Completed",
+      "noTasks": "No tasks yet",
+      "tasksDone": "{{completed}}/{{total}} tasks done"
+    },
+    "card": {
+      "target": "Target: {{date}}"
+    },
+    "form": {
+      "heading": "New Initiative",
+      "name": "Name",
+      "namePlaceholder": "Q2 Platform Modernization",
+      "description": "Description",
+      "descriptionPlaceholder": "Strategic objective description...",
+      "project": "Project",
+      "noProject": "No project",
+      "status": "Status",
+      "targetDate": "Target Date",
+      "cancel": "Cancel",
+      "creating": "Creating...",
+      "create": "Create Initiative"
+    },
+    "toast": {
+      "created": "Initiative created",
+      "createFailed": "Failed to create initiative",
+      "linked": "Project linked",
+      "linkFailed": "Failed to link project",
+      "unlinked": "Project unlinked",
+      "unlinkFailed": "Failed to unlink project",
+      "deleted": "Initiative deleted",
+      "deleteFailed": "Failed to delete initiative"
+    },
+    "confirmDelete": "Delete initiative \"{{name}}\"? This cannot be undone.",
+    "detail": {
+      "back": "← Back",
+      "linkProject": "Link Project",
+      "selectProject": "Select a project...",
+      "link": "Link",
+      "linkedProjects": "Linked Projects ({{n}})",
+      "noLinked": "No projects linked yet."
+    },
+    "page": {
+      "newInitiative": "New Initiative",
+      "emptyTitle": "No initiatives yet",
+      "emptyText": "Create strategic objectives to group and track related projects.",
+      "createInitiative": "Create Initiative"
+    }
+  },
+  "install": {
+    "bannerLabel": "Install app",
+    "title": "Install Mesh",
+    "addToHome": "Add to home screen",
+    "install": "Install",
+    "dismiss": "Dismiss",
+    "asApp": "Install Mesh as app"
+  },
+  "priority": {
+    "urgent": "Urgent",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
+    "noPriority": "No priority"
+  },
+  "priorityBadge": {
+    "urgent": "urgent",
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "none": "none"
+  },
+  "project": {
+    "fieldType": {
+      "text": "Text",
+      "number": "Number",
+      "date": "Date",
+      "datetime": "Date & Time",
+      "select": "Select",
+      "multiselect": "Multi-Select",
+      "url": "URL",
+      "email": "Email",
+      "checkbox": "Checkbox",
+      "user_ref": "User Ref",
+      "agent_ref": "Agent Ref",
+      "json": "JSON"
+    },
+    "priority": {
+      "urgent": "Urgent",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low",
+      "none": "None"
+    },
+    "role": {
+      "owner": "owner",
+      "admin": "admin",
+      "member": "member",
+      "viewer": "viewer",
+      "agent": "agent"
+    },
+    "workflow": {
+      "saved": "Workflow rules saved.",
+      "enforcementMode": "Enforcement Mode",
+      "advisory": "Advisory",
+      "strict": "Strict",
+      "strictHint": "Strict mode blocks task actions that violate workflow rules.",
+      "advisoryHint": "Advisory mode warns on violations but does not block actions.",
+      "strictConfirmTitle": "Enable Strict Enforcement?",
+      "strictConfirmDesc": "Strict mode will block task actions that violate workflow rules. Are you sure you want to enable strict enforcement?",
+      "strictConfirmOk": "Enable Strict",
+      "allowedTransitions": "Allowed Transitions",
+      "addTransition": "Add Transition",
+      "noTransitions": "No transitions configured. All transitions are permitted when no rules are set.",
+      "selectStatus": "Select status...",
+      "allowedActors": "Allowed actors",
+      "roles": "Roles",
+      "specificActors": "Specific actors",
+      "addActor": "+ Add agent or member...",
+      "myPermissions": "My permissions ({{role}})",
+      "createTasks": "Create tasks",
+      "deleteTasks": "Delete tasks",
+      "reassign": "Reassign",
+      "no": "no ",
+      "desc": "Configure allowed status transitions and enforcement mode for this project"
+    },
+    "rules": {
+      "saveFailed": "Failed to save rules",
+      "saving": "Saving...",
+      "save": "Save Rules"
+    },
+    "common": {
+      "agents": "Agents",
+      "members": "Members",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "cancel": "Cancel",
+      "save": "Save",
+      "delete": "Delete"
+    },
+    "assign": {
+      "selectAssignee": "Select assignee...",
+      "saved": "Project assignment rules saved.",
+      "inheritedFrom": "Inherited from {{source}}",
+      "defaultAssignee": "Default Assignee",
+      "noneInherit": "None (inherit from workspace)",
+      "overrideHint": "Overrides workspace-level default assignee for this project.",
+      "byTaskType": "By Task Type",
+      "addRule": "Add Rule",
+      "noTypeRules": "No type-based rules for this project.",
+      "taskType": "Task type",
+      "byPriority": "By Priority",
+      "noPriorityRules": "No priority-based rules for this project.",
+      "fallbackChain": "Fallback Chain",
+      "add": "Add",
+      "noFallback": "No fallback chain for this project.",
+      "desc": "Project-level assignment overrides. Rules marked \"Inherited from workspace\" come from workspace settings."
+    },
+    "tabs": {
+      "general": "General",
+      "statuses": "Statuses",
+      "custom-fields": "Custom Fields",
+      "members": "Members",
+      "workflow": "Workflow Rules",
+      "assignment": "Assignment Rules",
+      "recurring": "Recurring",
+      "templates": "Templates",
+      "integrations": "Integrations"
+    },
+    "tr": {
+      "saved": "Team Relay settings saved.",
+      "mountSaved": "Mount point saved.",
+      "mountSaveFailed": "Failed to save mount point",
+      "desc": "Publish artifact summaries to an Obsidian share folder so your team can read them outside of Mesh.",
+      "enable": "Enable Team Relay publishing",
+      "shareSlug": "Share Slug",
+      "shareSlugPlaceholder": "e.g. mesh-dev-share",
+      "agentKey": "Agent Key",
+      "agentKeyPlaceholder": "Enter agent key (min 20 chars)",
+      "currentKey": "Current key: {{hint}} — leave blank to keep",
+      "subfolder": "Subfolder",
+      "includeSlug": "Include project slug in path",
+      "saving": "Saving…",
+      "mountTitle": "Team Relay — Docs mount",
+      "mountDesc": "Where the connected share shows up in this project's Docs, and whether the connection is healthy.",
+      "notConnected": "No Team Relay share connected to this project yet — configure one above first.",
+      "connectedShare": "Connected share",
+      "none": "(none)",
+      "mountPoint": "Mount point",
+      "atRoot": "At the project's Docs root",
+      "atPath": "At a path inside Docs",
+      "pathPlaceholder": "e.g. External/Notes",
+      "excluded": "Folders excluded from the mount",
+      "excludedHint": "Top-level share folders that never appear in Docs, comma-separated. Clear the field entirely to mount everything.",
+      "syncInterval": "Scheduled sync interval (minutes)",
+      "syncIntervalHint": "How often the share re-syncs on its own. Empty = default 15 min; 0 turns the scheduled sync off (sync on open keeps working).",
+      "saveMount": "Save mount settings",
+      "lastSync": "Last sync check",
+      "reachable": "Reachable",
+      "keyExpired": "Key expired",
+      "lastChecked": "— last checked {{when}}",
+      "syncFailed": "Sync check failed",
+      "notChecked": "Not checked yet",
+      "keyExpiry": "Key expiry",
+      "setManually": "Set manually",
+      "fromTr": "From Team Relay",
+      "expiringSoon": "Expiring soon",
+      "unknown": "Unknown"
+    },
+    "general": {
+      "saveFailed": "Failed to save settings",
+      "nameRequired": "Name is required",
+      "saved": "Project settings saved successfully.",
+      "title": "General Information",
+      "desc": "Basic project information and configuration",
+      "name": "Name",
+      "namePlaceholder": "Project name",
+      "slug": "Slug",
+      "slugHint": "Used in URLs. Changing this will affect existing links.",
+      "description": "Description",
+      "descriptionPlaceholder": "Optional project description...",
+      "icon": "Icon",
+      "iconPlaceholder": "Emoji or short text (e.g. \\uD83D\\uDE80)",
+      "saveChanges": "Save Changes"
+    },
+    "statuses": {
+      "deleteFailed": "Failed to delete status. It may still have tasks assigned.",
+      "title": "Task Statuses",
+      "desc": "Configure status columns for your project board",
+      "add": "Add Status",
+      "empty": "No statuses configured yet. Add your first status to get started.",
+      "default": "Default",
+      "edit": "Edit status",
+      "delete": "Delete status",
+      "deleteTitle": "Delete Status",
+      "deleteConfirm": "Are you sure you want to delete the \"{{name}}\" status? This will fail if any tasks are currently using this status."
+    },
+    "fields": {
+      "deleteFailed": "Failed to delete custom field.",
+      "title": "Custom Fields",
+      "desc": "Define custom data fields for tasks in this project",
+      "add": "Add Field",
+      "empty": "No custom fields configured yet. Add fields to capture additional data on tasks.",
+      "required": "Required",
+      "edit": "Edit field",
+      "delete": "Delete field",
+      "deleteTitle": "Delete Custom Field",
+      "deleteConfirm": "Are you sure you want to delete the \"{{name}}\" custom field? Any values stored in this field on tasks will be lost.",
+      "deleteOk": "Delete Field"
+    },
+    "members": {
+      "removeFailed": "Failed to remove member",
+      "addAgentFailed": "Failed to add agent",
+      "userMembers": "User Members",
+      "userMembersDesc": "Users with access to this project. Workspace owners and admins (human members) always have access.",
+      "addUser": "Add User",
+      "noUsers": "No user members added yet.",
+      "you": "(you)",
+      "noName": "No name set",
+      "roleAdmin": "Admin",
+      "roleMember": "Member",
+      "roleViewer": "Viewer",
+      "removeFromProject": "Remove from project",
+      "agentMembers": "Agent Members",
+      "agentMembersDesc": "AI agents with access to this project via API/MCP. Workspace role does not grant access — an agent must be added here explicitly, regardless of its workspace role.",
+      "addAgent": "Add Agent",
+      "noAgents": "No agent members added yet.",
+      "agent": "Agent",
+      "removeAgent": "Remove agent from project",
+      "addAgentToProject": "Add Agent to Project",
+      "selectAgent": "Select agent...",
+      "adding": "Adding...",
+      "removeTitle": "Remove Member",
+      "removeConfirm": "Are you sure you want to remove {{who}} from this project?",
+      "thisAgent": "this agent",
+      "thisMember": "this member"
+    },
+    "title": "Project Settings",
+    "notFound": "Project \"{{slug}}\" not found",
+    "statusCategory": {
+      "backlog": "Backlog",
+      "triage": "Triage",
+      "todo": "To Do",
+      "in_progress": "In Progress",
+      "review": "Review",
+      "done": "Done",
+      "cancelled": "Cancelled"
+    },
+    "priorityLc": {
+      "urgent": "urgent",
+      "high": "high",
+      "medium": "medium",
+      "low": "low",
+      "none": "none"
+    },
+    "recurring": {
+      "title": "Recurring Schedules",
+      "desc": "Automatically create task instances on a schedule. Recurring tasks can carry context from previous runs.",
+      "newSchedule": "New Schedule",
+      "loading": "Loading recurring schedules…",
+      "loadFailed": "Could not load recurring schedules.",
+      "retry": "Retry",
+      "notFound": "Schedule not found or you don't have access.",
+      "empty": "No recurring schedules yet. Create one to automatically generate tasks on a schedule.",
+      "active": "Active",
+      "paused": "Paused",
+      "customFreq": "Custom ({{cron}})",
+      "frequency": {
+        "daily": "daily",
+        "weekly": "weekly",
+        "monthly": "monthly",
+        "custom": "custom"
+      },
+      "priority": "Priority: {{priority}}",
+      "instances_one": "{{count}} instance",
+      "instances_other": "{{count}} instances",
+      "next": "Next:",
+      "link": "Link to schedule",
+      "history": "View history",
+      "edit": "Edit schedule",
+      "pause": "Pause",
+      "resume": "Resume",
+      "trigger": "Trigger now",
+      "delete": "Delete schedule",
+      "deleteConfirm": "Delete schedule \"{{title}}\"? Existing task instances will not be deleted."
+    },
+    "templates": {
+      "title": "Task Templates",
+      "desc": "Define reusable templates to quickly create pre-filled tasks. Templates store default values for title, description, priority, assignee, and labels.",
+      "new": "New Template",
+      "empty": "No templates yet. Create one to speed up task creation.",
+      "titleLine": "Title: {{title}}",
+      "labelsLine": "Labels: {{labels}}",
+      "estimated": "{{hours}}h estimated",
+      "edit": "Edit template",
+      "delete": "Delete template",
+      "deleteConfirm": "Delete template \"{{name}}\"?",
+      "editTitle": "Edit Template",
+      "namePlaceholder": "e.g. Bug Report",
+      "descPlaceholder": "Short description of when to use this template",
+      "defaultTitle": "Default Title",
+      "defaultTitlePlaceholder": "Default task title",
+      "defaultDesc": "Default Description",
+      "defaultDescPlaceholder": "Default task description",
+      "priority": "Priority",
+      "labels": "Labels",
+      "commaSeparated": "Comma-separated",
+      "saveFailed": "Failed to save template",
+      "save": "Save Template"
+    },
+    "danger": {
+      "title": "Danger Zone",
+      "desc": "Irreversible actions for this project",
+      "unarchiveProject": "Unarchive Project",
+      "archiveProject": "Archive Project",
+      "archivedHint": "This project is archived. Unarchive it to bring it back to the sidebar.",
+      "archiveHint": "Archive this project. It moves to the Archived section of the sidebar and can be restored later.",
+      "unarchive": "Unarchive",
+      "archive": "Archive",
+      "deleteProject": "Delete Project",
+      "deleteHint": "Permanently delete this project and all its data. This action cannot be undone.",
+      "unarchiveConfirm": "Unarchive \"{{name}}\"? It will return to the Projects list in the sidebar.",
+      "archiveConfirm": "Are you sure you want to archive \"{{name}}\"? The project will move to the Archived section and can be restored later.",
+      "deleteConfirm": "This will permanently delete \"{{name}}\" and all of its tasks, statuses, and data. This action cannot be undone."
+    }
+  },
+  "recurring": {
+    "history": {
+      "title": "Recurring History",
+      "empty": "No instances created yet.",
+      "openTask": "Click to open task",
+      "current": "current",
+      "status": {
+        "done": "Done",
+        "cancelled": "Cancelled",
+        "in_progress": "In Progress",
+        "review": "In Review",
+        "todo": "To Do",
+        "backlog": "Backlog",
+        "triage": "Triage"
+      }
+    },
+    "dialog": {
+      "titleEdit": "Edit Recurring Schedule",
+      "titleNew": "New Recurring Schedule",
+      "descriptionEdit": "Editing schedule for {{project}}",
+      "descriptionNew": "Automatically create recurring tasks in {{project}}",
+      "thisProject": "this project",
+      "titleTemplatePlaceholder": "Title template *",
+      "variables": "Variables:",
+      "descriptionTemplatePlaceholder": "Description template (Markdown)",
+      "extra": "Extra:",
+      "prevSummaryHint": "— last comment from previous instance",
+      "frequency": {
+        "label": "Frequency",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly",
+        "custom": "Custom (cron)"
+      },
+      "cronPlaceholder": "Cron expression *  (e.g. 0 9 * * 1)",
+      "cronHint": "5-field cron: minute hour day month weekday",
+      "timezone": "Timezone",
+      "priority": {
+        "label": "Priority",
+        "none": "None",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "urgent": "Urgent"
+      },
+      "assignee": "Assignee",
+      "unassigned": "Unassigned",
+      "you": "{{name}} (you)",
+      "maxInstances": "Max Instances",
+      "unlimited": "Unlimited",
+      "startsAt": "Starts At",
+      "setStartDate": "Set start date",
+      "endsAt": "Ends At",
+      "noEndDate": "No end date",
+      "labels": "Labels",
+      "clickToRemove": "Click to remove",
+      "labelPlaceholder": "Label...",
+      "addLabel": "+ Add",
+      "cancel": "Cancel",
+      "saving": "Saving...",
+      "creating": "Creating...",
+      "saveChanges": "Save Changes",
+      "createSchedule": "Create Schedule",
+      "errors": {
+        "titleRequired": "Title template is required",
+        "cronRequired": "Cron expression is required for custom frequency",
+        "saveFailed": "Failed to save recurring schedule"
+      }
+    }
+  },
+  "savedViews": {
+    "title": "Saved Views",
+    "saveCurrent": "Save current view",
+    "myViews": "My views",
+    "sharedViews": "Shared views",
+    "noSavedViews": "No saved views yet",
+    "toast": {
+      "saved": "View saved successfully",
+      "saveFailed": "Failed to save view",
+      "madePrivate": "View made private",
+      "sharedWithTeam": "View shared with team",
+      "updateFailed": "Failed to update view",
+      "deleted": "View deleted",
+      "deleteFailed": "Failed to delete view",
+      "applied": "Applied view: {{name}}"
+    },
+    "dialog": {
+      "title": "Save current view",
+      "viewName": "View name",
+      "placeholder": "e.g. My open tasks",
+      "share": "Share with team members",
+      "cancel": "Cancel",
+      "saving": "Saving...",
+      "save": "Save view"
+    },
+    "row": {
+      "makePrivate": "Make private",
+      "shareWithTeam": "Share with team",
+      "deleteView": "Delete view"
+    }
+  },
+  "secrets": {
+    "title": "Secrets",
+    "subtitle": "Values are stored encrypted and cannot be read back — not here, not through the API. To change one, replace it.",
+    "empty": "No secrets stored yet.",
+    "expired": "expired",
+    "cancel": "Cancel",
+    "error": {
+      "load": "Could not load secrets",
+      "store": "Could not store the secret",
+      "replace": "Could not replace the value",
+      "remove": "Could not remove the secret"
+    },
+    "target": {
+      "unknownAgent": "unknown agent",
+      "unknownProject": "unknown project",
+      "allAgents": "All agents"
+    },
+    "validation": {
+      "name": "Name must look like an environment variable: A-Z, digits and underscores, starting with a letter.",
+      "value": "Paste the value you want to store.",
+      "agent": "Choose which agent this secret is for.",
+      "project": "Choose which project this secret is for.",
+      "newValue": "Paste the new value."
+    },
+    "toast": {
+      "stored": "{{name}} stored",
+      "replaced": "{{name}} replaced",
+      "removed": "{{name}} removed"
+    },
+    "form": {
+      "nameLabel": "Secret name",
+      "valueLabel": "Secret value",
+      "valuePlaceholder": "Paste the value",
+      "expiresLabel": "Expires at (optional)",
+      "storing": "Storing…",
+      "store": "Store",
+      "scopeLabel": "Scope",
+      "scopeWorkspace": "Workspace — every agent",
+      "scopeAgent": "Agent — one lane only",
+      "scopeProject": "Project — one project only",
+      "agentLabel": "Agent",
+      "chooseAgent": "Choose an agent…",
+      "projectLabel": "Project",
+      "chooseProject": "Choose a project…"
+    },
+    "scope": {
+      "workspace": "workspace",
+      "agent": "agent",
+      "project": "project"
+    },
+    "columns": {
+      "name": "Name",
+      "scope": "Scope",
+      "goesTo": "Goes to",
+      "fingerprint": "Fingerprint",
+      "length": "Length",
+      "characters": "Characters",
+      "added": "Added",
+      "expires": "Expires",
+      "actions": "Actions"
+    },
+    "rotate": {
+      "aria": "Replace {{name}}",
+      "title": "Replace {{name}}",
+      "body": "The current value cannot be shown. Storing a new one replaces it and keeps the old entry in the history.",
+      "valueLabel": "New value",
+      "placeholder": "Paste the new value",
+      "replacing": "Replacing…",
+      "replace": "Replace"
+    },
+    "remove": {
+      "aria": "Remove {{name}}",
+      "title": "Remove {{name}}?",
+      "body": "Agents will stop receiving this value on their next start. The entry stays in the history.",
+      "removing": "Removing…",
+      "remove": "Remove"
+    }
+  },
+  "statusDialog": {
+    "title": {
+      "edit": "Edit Status",
+      "create": "Create Status"
+    },
+    "description": {
+      "edit": "Update the task status configuration.",
+      "create": "Add a new task status to your project."
+    },
+    "fields": {
+      "name": "Name",
+      "namePlaceholder": "e.g. In Review",
+      "slug": "Slug",
+      "slugPlaceholder": "e.g. in-review",
+      "slugHint": "Auto-generated from name. You can edit it manually.",
+      "color": "Color",
+      "category": "Category",
+      "default": "Default status",
+      "defaultHint": "(new tasks will be assigned this status)"
+    },
+    "categories": {
+      "backlog": "Backlog",
+      "triage": "Triage",
+      "todo": "To Do",
+      "in_progress": "In Progress",
+      "review": "Review",
+      "done": "Done",
+      "cancelled": "Cancelled"
+    },
+    "errors": {
+      "nameRequired": "Name is required",
+      "slugRequired": "Slug is required",
+      "saveFailed": "Failed to save status"
+    },
+    "cancel": "Cancel",
+    "saving": "Saving...",
+    "saveChanges": "Save Changes",
+    "createStatus": "Create Status"
+  },
+  "taskCreate": {
+    "projectNotFound": "Project \"{{slug}}\" not found"
+  },
+  "timeline": {
+    "priority": {
+      "urgent": "urgent",
+      "high": "high",
+      "medium": "medium",
+      "low": "low",
+      "none": "none"
+    },
+    "node": {
+      "unassigned": "Unassigned",
+      "otherProject": "Other project: {{name}}",
+      "cycleDetected": "Cycle detected",
+      "humanApproval": "Human approval required",
+      "scheduledAfter": "Scheduled after {{time}}",
+      "filterHidden": "Outside the overview search; kept to preserve the chain.",
+      "inFocus": "In focus",
+      "followChain": "Follow chain →",
+      "openTask": "Open task",
+      "unavailableDependency": "Unavailable dependency",
+      "missingDependency": "Missing dependency",
+      "checkIncomplete": "Dependency check is incomplete. Task details cannot be established."
+    },
+    "notice": {
+      "changed": "Dependencies changed. Pagination restarted with the latest data."
+    },
+    "error": {
+      "deleted": "Selected task was deleted or is unavailable.",
+      "load": "Could not load dependencies. Dependency check is incomplete."
+    },
+    "relation": {
+      "parent": "Parent task",
+      "subtask": "Subtask",
+      "related": "Related task"
+    },
+    "branch": {
+      "hidden": "{{n}} hidden by search · reveal",
+      "expandOriginal": "✓ {{n}} completed · expand original links",
+      "noDirect": {
+        "before": "No direct blockers",
+        "after": "No direct dependents",
+        "relations": "No direct relations"
+      },
+      "unknown": "{{n}} unavailable or missing",
+      "showMore": {
+        "before": "Show more blockers · {{n}} remaining",
+        "after": "Show more dependents · {{n}} remaining",
+        "relations": "Show more relations · {{n}} remaining"
+      }
+    },
+    "page": {
+      "notFound": "Project not found",
+      "heading": "Dependencies",
+      "subtitle": "Follow one chain at a time. Blocker → task → dependent.",
+      "refresh": "Refresh",
+      "overview": "Overview",
+      "taskChain": "Task chain",
+      "searchLabel": "Search title or ID",
+      "searchPlaceholder": "Find a task",
+      "showCompleted": "Show completed",
+      "retry": "Retry",
+      "loading": "Loading dependencies…",
+      "previousFocus": "Previous focus"
+    },
+    "summary": {
+      "neighborhood": "{{total}} unique tasks in this neighborhood",
+      "overview": "{{loaded}} of {{total}} matching tasks loaded · Page {{page}}",
+      "completed": "{{n}} completed",
+      "visibilityIncomplete": " · Visibility incomplete",
+      "loadingContinuation": " · Loading continuation",
+      "partial": " · Partial data"
+    },
+    "cycle": {
+      "unavailableTask": "Unavailable task",
+      "detected": "Cycle detected · {{n}} tasks in the cycle. Blocking order cannot be established.",
+      "available": "Available cycle tasks in this view:",
+      "selfLoop": "blocks itself (self-loop)",
+      "blocks": "blocks {{title}}",
+      "edgesNote": "Edges shown for loaded direct neighbors. Inspect a member to continue the cycle.",
+      "inspectMembers": "Inspect cycle members",
+      "membersLabel": "Cycle members",
+      "inspectTask": "Inspect task #{{id}}",
+      "previousMembers": "Previous members",
+      "nextMembers": "Next 10 members",
+      "hideMembers": "Hide members"
+    },
+    "layout": {
+      "before": "What blocks this task",
+      "after": "What waits for this task",
+      "relations": "Parent, subtasks and related tasks",
+      "blockersToSelected": "Blockers → selected task",
+      "selectedToDependents": "Selected task → dependents",
+      "selectedTask": "Selected task",
+      "checkIncomplete": "Dependency check is incomplete",
+      "otherLimits": "Other workflow and scheduling limits still apply."
+    },
+    "overview": {
+      "parentLabel": "Parent {{id}}",
+      "parentTitle": "Parent: {{title}}",
+      "withoutEpic": "Without an epic",
+      "uniqueLoaded": "{{n}} unique loaded tasks",
+      "blockersLine": "{{blockers}} unfinished direct blockers · {{unknown}} unknown · {{dependents}} direct dependents",
+      "noMatching": "No matching tasks",
+      "noOpen": "No open tasks",
+      "completedExpand": "✓ {{n}} completed · expand",
+      "previousPage": "Previous page",
+      "loadNext": "Load next 50 · {{n}} remaining"
+    }
+  },
+  "triage": {
+    "priority": {
+      "urgent": "urgent",
+      "high": "high",
+      "medium": "medium",
+      "low": "low",
+      "none": "none"
+    },
+    "move": {
+      "title": "Move Task",
+      "targetProject": "Target Project",
+      "targetStatus": "Target Status",
+      "noStatuses": "No statuses available",
+      "cancel": "Cancel",
+      "moving": "Moving...",
+      "newStatus": "new status",
+      "movedTo": "Moved to \"{{status}}\"",
+      "failed": "Failed to move task"
+    },
+    "row": {
+      "by": "by {{name}}",
+      "editTask": "Edit task",
+      "move": "Move"
+    },
+    "page": {
+      "awaiting_one": "{{count}} task awaiting triage",
+      "awaiting_other": "{{count}} tasks awaiting triage",
+      "inboxEmpty": "Inbox is empty",
+      "inboxEmptyText": "Tasks assigned to a \"triage\" status category will appear here.",
+      "unknownProject": "Unknown Project"
+    }
+  },
+  "updates": {
+    "status": {
+      "on_track": "On Track",
+      "at_risk": "At Risk",
+      "off_track": "Off Track",
+      "completed": "Completed"
+    },
+    "none": "None",
+    "metrics": {
+      "done": "Done",
+      "inProgress": "In Progress",
+      "total": "Total",
+      "complete": "Complete",
+      "highlights": "Highlights",
+      "blockers": "Blockers",
+      "nextSteps": "Next Steps"
+    },
+    "toast": {
+      "posted": "Update posted",
+      "createFailed": "Failed to create update"
+    },
+    "form": {
+      "heading": "New Status Update",
+      "title": "Title",
+      "titlePlaceholder": "Sprint 5 Update",
+      "status": "Status",
+      "summary": "Summary",
+      "summaryPlaceholder": "Brief overview of project status...",
+      "highlightsLabel": "Highlights (one per line)",
+      "highlightsPlaceholder": "Feature X shipped",
+      "blockersLabel": "Blockers (one per line)",
+      "blockersPlaceholder": "Waiting on API design",
+      "nextStepsLabel": "Next Steps (one per line)",
+      "nextStepsPlaceholder": "Complete auth module",
+      "cancel": "Cancel",
+      "posting": "Posting...",
+      "post": "Post Update"
+    },
+    "page": {
+      "project": "Project",
+      "subtitle": "Status updates and progress reports",
+      "board": "Board",
+      "list": "List",
+      "dependencies": "Dependencies",
+      "updates": "Updates",
+      "newUpdate": "New Update",
+      "emptyTitle": "No updates yet",
+      "emptyText": "Post the first status update to keep your team informed.",
+      "postUpdate": "Post Update"
+    }
+  },
+  "viewTabs": {
+    "tabs": {
+      "board": "Board",
+      "list": "List",
+      "calendar": "Calendar",
+      "docs": "Docs"
+    },
+    "formats": {
+      "timeline": "Dependencies",
+      "updates": "Updates"
+    },
+    "moreViews": "More views",
+    "moreViewsActive": "{{name}} - more views",
+    "formatsLabel": "Formats",
+    "saveCurrent": "Save current view",
+    "resetFilters": "Reset filters",
+    "myViews": "My views",
+    "sharedViews": "Shared views",
+    "noSavedViews": "No saved views yet",
+    "toast": {
+      "applied": "Applied view: {{name}}",
+      "filtersReset": "Filters reset",
+      "madePrivate": "View made private",
+      "sharedWithTeam": "View shared with team",
+      "updateFailed": "Failed to update view",
+      "deleted": "View deleted",
+      "deleteFailed": "Failed to delete view",
+      "saved": "View saved",
+      "saveFailed": "Failed to save view"
+    },
+    "dialog": {
+      "title": "Save current view",
+      "viewName": "View name",
+      "placeholder": "e.g. My open tasks",
+      "share": "Share with team members",
+      "cancel": "Cancel",
+      "saving": "Saving...",
+      "save": "Save view"
+    },
+    "row": {
+      "makePrivate": "Make private",
+      "shareWithTeam": "Share with team",
+      "deleteView": "Delete view"
+    }
+  },
+  "workspace": {
+    "roles": {
+      "admin": "Admin",
+      "member": "Member",
+      "viewer": "Viewer"
+    },
+    "team": {
+      "harnessModelTitle": "Harness · model",
+      "tasksCount": "{{current}}/{{max}} tasks",
+      "harnessModel": "Harness / model",
+      "notReported": "not reported",
+      "responsibilityZone": "Responsibility zone",
+      "workingHours": "Working hours",
+      "acceptsFrom": "Accepts from",
+      "description": "Description",
+      "allCapabilities": "All capabilities",
+      "description2": "All agents and humans in this workspace",
+      "empty": "No team members found. Agents appear here after registering.",
+      "agentsCount": "Agents ({{n}})",
+      "humansCount": "Humans ({{n}})"
+    },
+    "assignment": {
+      "selectAssignee": "Select assignee...",
+      "agents": "Agents",
+      "members": "Members",
+      "saved": "Assignment rules saved.",
+      "saveFailed": "Failed to save rules",
+      "defaultAssignee": "Default Assignee",
+      "none": "None",
+      "byType": "By Task Type",
+      "addRule": "Add Rule",
+      "noTypeRules": "No type-based rules. Add rules to assign tasks automatically by type.",
+      "typePlaceholder": "Task type (e.g. bug)",
+      "byPriority": "By Priority",
+      "noPriorityRules": "No priority-based rules configured.",
+      "fallbackChain": "Fallback Chain",
+      "add": "Add",
+      "fallbackHint": "Ordered list of assignees tried if primary assignment fails.",
+      "noFallback": "No fallback chain configured.",
+      "saving": "Saving...",
+      "saveRules": "Save Rules",
+      "description": "Workspace-level rules for automatically assigning tasks. Project-level rules can override these.",
+      "adminOnly": "Only admins and owners can manage assignment rules."
+    },
+    "priority": {
+      "urgent": "Urgent",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low",
+      "none": "None"
+    },
+    "violations": {
+      "project": "Project: {{id}}",
+      "title": "Rule Violations",
+      "description": "Recent rule violations across this workspace (last 20)",
+      "empty": "No rule violations recorded. This workspace is compliant."
+    },
+    "tabs": {
+      "profile": "Profile",
+      "general": "General",
+      "members": "Members",
+      "team": "Team Directory",
+      "assignment": "Assignment Rules",
+      "violations": "Violations",
+      "workflowTemplates": "Workflow Templates",
+      "config": "Config"
+    },
+    "profile": {
+      "nameRequired": "Display name is required",
+      "nameTooLong": "Display name must be at most 100 characters",
+      "saved": "Profile saved.",
+      "saveFailed": "Failed to save profile",
+      "description": "Your display name shown in comments, activity, and team directory.",
+      "displayName": "Display name",
+      "namePlaceholder": "Your name",
+      "currentEmail": "Current email: {{email}}",
+      "username": "Username",
+      "usernamePlaceholder": "e.g. john-doe",
+      "checking": "Checking availability…",
+      "usernameAvailable": "Username is available",
+      "usernameTaken": "Username is already taken",
+      "usernameInvalid": "2–40 characters: lowercase letters, digits, hyphens; no leading/trailing hyphens",
+      "save": "Save profile"
+    },
+    "general": {
+      "nameRequired": "Name is required",
+      "saved": "Workspace settings saved.",
+      "saveFailed": "Failed to save settings",
+      "iconPngOnly": "Only PNG files are accepted.",
+      "iconTooLarge": "Icon must be ≤ 500 KB.",
+      "iconUpdated": "Icon updated.",
+      "uploadFailed": "Upload failed.",
+      "description": "Basic workspace information",
+      "name": "Workspace name",
+      "namePlaceholder": "My Workspace",
+      "slug": "Slug",
+      "slugHint": "Workspace slug is read-only and used in URLs.",
+      "saveChanges": "Save Changes"
+    },
+    "danger": {
+      "deleteFailed": "Failed to delete workspace.",
+      "title": "Danger Zone",
+      "description": "Irreversible actions for this workspace",
+      "deleteTitle": "Delete Workspace",
+      "deleteDescription": "Permanently delete this workspace, its projects, tasks, and comments for everyone in it. This action cannot be undone.",
+      "delete": "Delete",
+      "deleteConfirm": "This will permanently delete \"{{name}}\" — its projects, tasks, and comments — for everyone in it. This action cannot be undone."
+    },
+    "members": {
+      "renameFailed": "Failed to update name",
+      "removeFailed": "Failed to remove member",
+      "description": "Manage who has access to this workspace",
+      "inviteMember": "Invite Member",
+      "inviteAgent": "Invite Agent",
+      "empty": "No members found.",
+      "you": "(you)",
+      "noName": "No name set",
+      "noNameHint": " — click the pencil to add one",
+      "joined": "Joined {{date}}",
+      "editName": "Edit display name",
+      "remove": "Remove member",
+      "removeTitle": "Remove Member",
+      "removeConfirm": "Are you sure you want to remove {{name}} ({{email}}) from this workspace?",
+      "renameDescription": "How {{email}} appears on tasks, comments and mentions.",
+      "nameLabel": "Name",
+      "namePlaceholder": "Jane Cooper",
+      "renameHint": "They can change it themselves at any time, and once they do this becomes theirs to edit only.",
+      "savingName": "Saving…",
+      "saveName": "Save name"
+    },
+    "agents": {
+      "revokeFailed": "Failed to revoke agent connection",
+      "empty": "No agents connected.",
+      "homeTitle": "Home connection — remove or transfer the agent to change it, not revoke.",
+      "home": "Home",
+      "edit": "Edit agent",
+      "editAria": "Edit agent {{name}}",
+      "revoke": "Revoke connection",
+      "revokeTitle": "Revoke Agent Connection",
+      "revokeConfirm": "{{agent}}'s API key for this workspace will stop working immediately. This does not affect its access to any other workspace.",
+      "revokeConfirmText": "Revoke Connection"
+    },
+    "config": {
+      "exportFailed": "Export failed",
+      "importFailed": "Import failed",
+      "teamImportFailed": "Team import failed",
+      "title": "Config Import / Export",
+      "description": "Export workspace configuration as YAML or import from a YAML file to bulk-update rules and templates.",
+      "exportTitle": "Export Config",
+      "exportDescription": "Download the full workspace configuration (assignment rules, workflow templates) as a YAML file.",
+      "exporting": "Exporting...",
+      "download": "Download mesh-config.yaml",
+      "import": "Import Config",
+      "importDescription": "Upload a YAML config file or paste YAML directly. This will update assignment rules, workflow templates, and optionally team members.",
+      "chooseFile": "Choose YAML file",
+      "fileLoaded": "File loaded ({{n}} chars)",
+      "pasteConfig": "Or paste YAML config here...",
+      "importSuccess": "Import successful",
+      "teamUpdated": "Team: {{agents}} agents, {{humans}} humans updated",
+      "errorsCount": "({{n}} errors)",
+      "assignmentRulesResult": "Assignment rules: {{result}}",
+      "updated": "updated",
+      "noChanges": "no changes",
+      "templatesResult": "Workflow templates: {{created}} created, {{updated}} updated",
+      "warnings": "{{n}} warning(s):",
+      "importing": "Importing...",
+      "importTeam": "Import Team",
+      "importTeamDescription": "Import team directory only (agents and human members) from a YAML file. Does not affect rules or templates.",
+      "pasteTeam": "Or paste team YAML here...",
+      "teamImportSuccess": "Team import successful",
+      "agentsHumansUpdated": "{{agents}} agents, {{humans}} humans updated",
+      "errors": "Errors:"
+    },
+    "templates": {
+      "invalidJson": "Invalid JSON. Please fix the syntax and try again.",
+      "saveFailed": "Failed to save templates",
+      "description": "Named workflow rule templates that can be applied to projects workspace-wide.",
+      "statusesCount": "{{n}} statuses",
+      "transitionsCount": "{{n}} transitions",
+      "statuses": "Statuses",
+      "transitions": "Transitions",
+      "policies": "Policies",
+      "editJson": "Edit Templates (JSON)",
+      "editHint": "Define named workflow templates as a JSON object",
+      "saved": "Templates saved",
+      "save": "Save Templates",
+      "empty": "No workflow templates configured for this workspace."
+    },
+    "title": "Workspace Settings",
+    "notFound": "Workspace \"{{slug}}\" not found",
+    "roleError": {
+      "title": "Could not determine your role in this workspace",
+      "detail": "{{error}} — admin controls are hidden until this is resolved. This does not mean you lack permission, only that we could not check.",
+      "retry": "Retry"
+    },
+    "branding": {
+      "title": "Branding",
+      "description": "Custom workspace icon shown in the sidebar and browser tab",
+      "uploading": "Uploading…",
+      "upload": "Upload PNG icon",
+      "hint": "PNG only · max 500 KB"
+    },
+    "invites": {
+      "title": "Pending Invites",
+      "description": "Invite links sent but not yet accepted",
+      "expires": "Expires {{date}}",
+      "resendFailed": "Resend failed",
+      "resend": "Resend",
+      "revoke": "Revoke invite",
+      "emailSent": "Invite email sent to {{email}}",
+      "notConfigured": "No email server is configured — nothing was sent. Share this link instead:",
+      "sendFailed": "The invitation email could not be sent. Share this link instead:"
+    },
+    "cancel": "Cancel"
+  }
+}

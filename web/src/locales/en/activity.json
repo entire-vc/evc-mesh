@@ -2,5 +2,47 @@
   "section": {
     "new": "New",
     "shown": "Shown"
+  },
+  "page": {
+    "title": "Activity",
+    "tabs": {
+      "mentions": "Mentions",
+      "myComments": "My comments",
+      "allRecent": "All recent"
+    },
+    "toast": {
+      "mentionsPartial": "Some mentions could not be loaded",
+      "mentionsFailed": "Failed to load mentions",
+      "commentsFailed": "Failed to load comments",
+      "recentFailed": "Failed to load recent comments"
+    },
+    "empty": {
+      "myComments": "You haven't commented on anything yet.",
+      "recent": "No comments in this workspace yet.",
+      "mentions": "No mentions yet. When someone tags you with @username, it'll show up here."
+    },
+    "failed": {
+      "all": "Mentions could not be loaded.",
+      "document": "Mentions in documents could not be loaded.",
+      "task": "Mentions on tasks could not be loaded.",
+      "incomplete": "This list is incomplete — reload to try again.",
+      "partial": "Some mentions may be missing from this list."
+    },
+    "loading": "Loading…",
+    "loadMore": "Load more",
+    "source": {
+      "document": "Document",
+      "task": "Task"
+    }
+  },
+  "details": {
+    "label": "Event details",
+    "unchanged": "(unchanged)",
+    "changedTo": "changed to"
+  },
+  "log": {
+    "empty": "No activity recorded yet.",
+    "loading": "Loading...",
+    "loadMore": "Load more"
   }
 }

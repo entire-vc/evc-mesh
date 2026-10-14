@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { formatDate } from "@/i18n/format";
 import { useMemo } from "react";
 import {
   startOfMonth,
@@ -12,8 +14,6 @@ import {
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Task } from "@/types";
-
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 interface CalendarGridProps {
   currentMonth: Date;
@@ -30,6 +30,7 @@ export function CalendarGrid({
   onTaskClick,
   onAddTask,
 }: CalendarGridProps) {
+  const { t } = useTranslation("settings");
   const days = useMemo(() => {
     const monthStart = startOfMonth(currentMonth);
     const monthEnd = endOfMonth(currentMonth);
@@ -38,11 +39,14 @@ export function CalendarGrid({
     return eachDayOfInterval({ start: calStart, end: calEnd });
   }, [currentMonth]);
 
+  // Weekday header labels follow the UI language; week starts on Monday.
+  const weekdays = days.slice(0, 7).map((d) => formatDate(d, { weekday: "short" }));
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden rounded-lg border border-border">
       {/* Weekday header */}
       <div className="grid grid-cols-7 border-b border-border bg-muted/30">
-        {WEEKDAYS.map((day) => (
+        {weekdays.map((day) => (
           <div
             key={day}
             className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground"
@@ -85,7 +89,7 @@ export function CalendarGrid({
                 <button
                   onClick={() => onAddTask(dateKey)}
                   className="hidden h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground group-hover:flex"
-                  title="Add task"
+                  title={t("calendar.grid.addTask")}
                 >
                   <Plus className="h-3 w-3" />
                 </button>
@@ -115,7 +119,7 @@ export function CalendarGrid({
                 })}
                 {dayTasks.length > 4 && (
                   <span className="block px-1.5 text-[10px] text-muted-foreground">
-                    +{dayTasks.length - 4} more
+                    {t("calendar.grid.more", { count: dayTasks.length - 4 })}
                   </span>
                 )}
               </div>

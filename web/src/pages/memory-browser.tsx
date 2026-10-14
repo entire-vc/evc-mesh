@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import {
   Brain,
   ChevronDown,
@@ -46,16 +47,6 @@ function scopeBadgeClass(scope: Memory["scope"]): string {
   }
 }
 
-function sourceLabel(source: Memory["source_type"]): string {
-  switch (source) {
-    case "agent":
-      return "Agent";
-    case "human":
-      return "Human";
-    case "system":
-      return "System";
-  }
-}
 
 function relevanceBarClass(relevance: number): string {
   if (relevance >= 0.7) return "bg-green-500";
@@ -73,6 +64,7 @@ interface MemoryCardProps {
 }
 
 function MemoryCard({ memory, onDelete }: MemoryCardProps) {
+  const { t } = useTranslation("misc");
   const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -98,11 +90,11 @@ function MemoryCard({ memory, onDelete }: MemoryCardProps) {
                 scopeBadgeClass(memory.scope),
               )}
             >
-              {memory.scope}
+              {t(`memory.scopeBadge.${memory.scope}`)}
             </span>
             {memory.score !== undefined && (
               <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                score {memory.score.toFixed(3)}
+                {t("memory.card.score", { score: memory.score.toFixed(3) })}
               </span>
             )}
           </div>
@@ -124,11 +116,11 @@ function MemoryCard({ memory, onDelete }: MemoryCardProps) {
           >
             {expanded ? (
               <>
-                <ChevronUp className="h-3 w-3" /> Show less
+                <ChevronUp className="h-3 w-3" /> {t("memory.card.showLess")}
               </>
             ) : (
               <>
-                <ChevronDown className="h-3 w-3" /> Show more
+                <ChevronDown className="h-3 w-3" /> {t("memory.card.showMore")}
               </>
             )}
           </button>
@@ -147,7 +139,7 @@ function MemoryCard({ memory, onDelete }: MemoryCardProps) {
           {/* Relevance bar + metadata */}
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-muted-foreground">Relevance</span>
+              <span className="text-xs text-muted-foreground">{t("memory.card.relevance")}</span>
               <div className="h-1.5 w-16 rounded-full bg-muted overflow-hidden">
                 <div
                   className={cn("h-full rounded-full", relevanceBarClass(memory.relevance))}
@@ -159,17 +151,17 @@ function MemoryCard({ memory, onDelete }: MemoryCardProps) {
               </span>
             </div>
             <span className="text-xs text-muted-foreground">
-              {sourceLabel(memory.source_type)} &middot; updated{" "}
+              {t(`memory.source.${memory.source_type}`)} &middot; {t("memory.card.updated")}{" "}
               {formatRelative(memory.updated_at)}
             </span>
             {isStale && (
               <Badge variant="warning" className="text-xs">
-                stale
+                {t("memory.card.stale")}
               </Badge>
             )}
             {memory.archived && (
               <Badge variant="secondary" className="text-xs text-muted-foreground">
-                archived
+                {t("memory.card.archived")}
               </Badge>
             )}
           </div>
@@ -184,7 +176,7 @@ function MemoryCard({ memory, onDelete }: MemoryCardProps) {
                 variant="destructive"
                 onClick={() => onDelete(memory.id)}
               >
-                Confirm
+                {t("memory.card.confirm")}
               </Button>
               <Button
                 size="sm"
@@ -220,6 +212,7 @@ interface CreateMemoryFormProps {
 }
 
 function CreateMemoryForm({ onSubmit, workspaceId }: CreateMemoryFormProps) {
+  const { t } = useTranslation("misc");
   const [key, setKey] = useState("");
   const [content, setContent] = useState("");
   const [scope, setScope] = useState<Memory["scope"]>("workspace");
@@ -249,7 +242,7 @@ function CreateMemoryForm({ onSubmit, workspaceId }: CreateMemoryFormProps) {
       setTagsRaw("");
       setScope("workspace");
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to create memory"));
+      setError(apiErrorMessage(err, t("memory.form.createFailed")));
     } finally {
       setSubmitting(false);
     }
@@ -260,38 +253,38 @@ function CreateMemoryForm({ onSubmit, workspaceId }: CreateMemoryFormProps) {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className="text-xs font-medium text-muted-foreground mb-1 block">
-            Key (slug format)
+            {t("memory.form.key")}
           </label>
           <Input
-            placeholder="e.g. project-context"
+            placeholder={t("memory.form.keyPlaceholder")}
             value={key}
             onChange={(e) => setKey(e.target.value)}
             pattern="[a-z0-9_\-]+"
-            title="Lowercase letters, numbers, hyphens and underscores only"
+            title={t("memory.form.keyTitle")}
             required
           />
         </div>
         <div>
           <label className="text-xs font-medium text-muted-foreground mb-1 block">
-            Scope
+            {t("memory.form.scope")}
           </label>
           <Select
             value={scope}
             onChange={(e) => setScope(e.target.value as Memory["scope"])}
           >
-            <option value="workspace">Workspace</option>
-            <option value="project">Project</option>
-            <option value="agent">Agent</option>
+            <option value="workspace">{t("memory.scope.workspace")}</option>
+            <option value="project">{t("memory.scope.project")}</option>
+            <option value="agent">{t("memory.scope.agent")}</option>
           </Select>
         </div>
       </div>
 
       <div>
         <label className="text-xs font-medium text-muted-foreground mb-1 block">
-          Content
+          {t("memory.form.content")}
         </label>
         <Textarea
-          placeholder="Memory content (Markdown supported)"
+          placeholder={t("memory.form.contentPlaceholder")}
           value={content}
           onChange={(e) => setContent(e.target.value)}
           className="min-h-[80px]"
@@ -301,10 +294,10 @@ function CreateMemoryForm({ onSubmit, workspaceId }: CreateMemoryFormProps) {
 
       <div>
         <label className="text-xs font-medium text-muted-foreground mb-1 block">
-          Tags (comma-separated)
+          {t("memory.form.tags")}
         </label>
         <Input
-          placeholder="e.g. context, onboarding, api"
+          placeholder={t("memory.form.tagsPlaceholder")}
           value={tagsRaw}
           onChange={(e) => setTagsRaw(e.target.value)}
         />
@@ -314,7 +307,7 @@ function CreateMemoryForm({ onSubmit, workspaceId }: CreateMemoryFormProps) {
 
       <div className="flex justify-end">
         <Button type="submit" disabled={submitting || !key.trim() || !content.trim()}>
-          {submitting ? "Saving..." : "Save Memory"}
+          {submitting ? t("memory.form.saving") : t("memory.form.save")}
         </Button>
       </div>
     </form>
@@ -370,6 +363,7 @@ function paramsFromFilter(f: MemoryFilter): URLSearchParams {
 // ---------------------------------------------------------------------------
 
 export function MemoryBrowserPage() {
+  const { t } = useTranslation("misc");
   const { currentWorkspace } = useWorkspaceStore();
   const {
     memories,
@@ -461,7 +455,7 @@ export function MemoryBrowserPage() {
           className="gap-1.5"
         >
           <Plus className="h-3.5 w-3.5" />
-          New Memory
+          {t("memory.page.new")}
         </Button>
       </div>
 
@@ -470,7 +464,7 @@ export function MemoryBrowserPage() {
           {/* Create form */}
           {showCreateForm && (
             <Card className="p-4">
-              <h2 className="text-sm font-semibold mb-3">Create Memory</h2>
+              <h2 className="text-sm font-semibold mb-3">{t("memory.page.create")}</h2>
               <CreateMemoryForm
                 onSubmit={handleCreate}
                 workspaceId={workspaceId}
@@ -483,7 +477,7 @@ export function MemoryBrowserPage() {
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search memories..."
+                placeholder={t("memory.page.searchPlaceholder")}
                 value={filter.q ?? ""}
                 onChange={(e) => updateFilter({ ...filter, q: e.target.value })}
                 className="pl-8"
@@ -496,7 +490,7 @@ export function MemoryBrowserPage() {
               className="gap-1.5 shrink-0"
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
-              Filters
+              {t("memory.page.filters")}
               {activeCount > 0 && (
                 <Badge variant="default" className="ml-0.5 px-1.5 py-0">
                   {activeCount}
@@ -520,13 +514,13 @@ export function MemoryBrowserPage() {
           {activeCount > 0 && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span>
-                {activeCount} active filter{activeCount !== 1 ? "s" : ""}
+                {t("memory.page.activeFilters", { count: activeCount })}
               </span>
               <button
                 onClick={resetFilters}
                 className="inline-flex items-center gap-1 text-foreground hover:text-destructive transition-colors"
               >
-                <X className="h-3 w-3" /> Clear
+                <X className="h-3 w-3" /> {t("memory.page.clear")}
               </button>
             </div>
           )}
@@ -534,9 +528,9 @@ export function MemoryBrowserPage() {
           {/* Results info */}
           {!loading && (
             <p className="text-xs text-muted-foreground">
-              {total} result{total !== 1 ? "s" : ""}
+              {t("memory.page.results", { count: total })}
               {isSearching && (
-                <> for &ldquo;{(filter.q ?? "").trim()}&rdquo;</>
+                <>{t("memory.page.resultsFor", { query: (filter.q ?? "").trim() })}</>
               )}
             </p>
           )}
@@ -563,8 +557,8 @@ export function MemoryBrowserPage() {
               <Brain className="h-10 w-10 text-muted-foreground/40 mb-3" />
               <p className="text-sm font-medium text-muted-foreground">
                 {isSearching || activeCount > 0
-                  ? "No memories matched your filters."
-                  : "No memories yet."}
+                  ? t("memory.page.noMatches")
+                  : t("memory.page.empty")}
               </p>
               {(isSearching || activeCount > 0) && (
                 <Button
@@ -573,12 +567,12 @@ export function MemoryBrowserPage() {
                   className="mt-3"
                   onClick={resetFilters}
                 >
-                  Reset filters
+                  {t("memory.page.resetFilters")}
                 </Button>
               )}
               {!isSearching && activeCount === 0 && (
                 <p className="mt-1 text-xs text-muted-foreground/70">
-                  Use the recall/remember MCP tools or create one above.
+                  {t("memory.page.emptyHint")}
                 </p>
               )}
             </div>

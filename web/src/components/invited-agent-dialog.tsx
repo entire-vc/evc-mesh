@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { KeyRound, Trash2 } from "lucide-react";
 import { agentLabel } from "@/lib/agent-label";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -49,6 +50,7 @@ export function InvitedAgentDialog({
   agent,
   canManage,
 }: InvitedAgentDialogProps) {
+  const { t } = useTranslation("integrations");
   const {
     workspaceAgentGrants,
     fetchWorkspaceAgentGrants,
@@ -101,8 +103,9 @@ export function InvitedAgentDialog({
       // role so "Retry" can finish the job.
       setPendingRole(role);
       setError(
-        apiErrorMessage(err, "Failed to issue a new key") +
-          " The previous key is already revoked — retry to issue a new one.",
+        apiErrorMessage(err, t("invitedAgent.issueFailed")) +
+          " " +
+          t("invitedAgent.issueFailedSuffix"),
       );
       setStep("view");
     } finally {
@@ -118,7 +121,7 @@ export function InvitedAgentDialog({
     try {
       await revokeAgentGrant(workspaceId, grant.id);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to revoke the previous key"));
+      setError(apiErrorMessage(err, t("invitedAgent.revokePreviousFailed")));
       setStep("view");
       setIsBusy(false);
       return;
@@ -136,7 +139,7 @@ export function InvitedAgentDialog({
       onClose();
       onChanged();
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to revoke the connection"));
+      setError(apiErrorMessage(err, t("invitedAgent.revokeFailed")));
       setStep("view");
     } finally {
       setIsBusy(false);
@@ -156,10 +159,9 @@ export function InvitedAgentDialog({
         {step === "key" && apiKey ? (
           <div>
             <DialogHeader>
-              <DialogTitle>New key issued</DialogTitle>
+              <DialogTitle>{t("invitedAgent.newKeyTitle")}</DialogTitle>
               <DialogDescription>
-                Copy the API key below — it will only be shown once. The
-                previous key no longer works.
+                {t("invitedAgent.newKeyDescription")}
               </DialogDescription>
             </DialogHeader>
             <ApiKeyRevealPanel apiKey={apiKey} onClose={finish} />
@@ -168,12 +170,14 @@ export function InvitedAgentDialog({
           <div>
             <DialogHeader>
               <DialogTitle>
-                {step === "confirm-revoke" ? "Revoke connection" : "Reissue key"}
+                {step === "confirm-revoke"
+                  ? t("invitedAgent.revokeTitle")
+                  : t("invitedAgent.reissueTitle")}
               </DialogTitle>
               <DialogDescription>
                 {step === "confirm-revoke"
-                  ? `${name}'s API key for this workspace will stop working immediately. This does not affect its access to any other workspace.`
-                  : `${name}'s current key for this workspace will stop working immediately, and a new one will be shown once.`}
+                  ? t("invitedAgent.revokeDescription", { name })
+                  : t("invitedAgent.reissueDescription", { name })}
               </DialogDescription>
             </DialogHeader>
             {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
@@ -183,7 +187,7 @@ export function InvitedAgentDialog({
                 onClick={() => setStep("view")}
                 disabled={isBusy}
               >
-                Cancel
+                {t("invitedAgent.cancel")}
               </Button>
               <Button
                 variant="destructive"
@@ -193,10 +197,10 @@ export function InvitedAgentDialog({
                 }
               >
                 {isBusy
-                  ? "Working..."
+                  ? t("invitedAgent.working")
                   : step === "confirm-revoke"
-                    ? "Revoke Connection"
-                    : "Reissue Key"}
+                    ? t("invitedAgent.revokeConfirm")
+                    : t("invitedAgent.reissueConfirm")}
               </Button>
             </DialogFooter>
           </div>
@@ -206,32 +210,33 @@ export function InvitedAgentDialog({
               <DialogTitle className="flex items-center gap-2">
                 <span className="truncate">{name}</span>
                 <Badge variant="outline" className="text-xs">
-                  Invited
+                  {t("invitedAgent.invited")}
                 </Badge>
               </DialogTitle>
               <DialogDescription>
-                This agent belongs to another workspace and was invited into
-                this one.
+                {t("invitedAgent.description")}
               </DialogDescription>
             </DialogHeader>
 
             <dl className="mt-4 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-2 text-sm">
               {agent.role && (
                 <>
-                  <dt className="text-muted-foreground">Role</dt>
+                  <dt className="text-muted-foreground">{t("invitedAgent.role")}</dt>
                   <dd>{agent.role}</dd>
                 </>
               )}
-              <dt className="text-muted-foreground">Status</dt>
+              <dt className="text-muted-foreground">{t("invitedAgent.status")}</dt>
               <dd className="flex items-center gap-1.5">
                 <span className={`h-2 w-2 rounded-full ${statusCfg.dotColor}`} />
-                {statusCfg.label}
+                {t(`invitedAgent.statuses.${agent.status}`, { defaultValue: statusCfg.label })}
               </dd>
               {grant && (
                 <>
-                  <dt className="text-muted-foreground">Workspace role</dt>
-                  <dd className="capitalize">{grant.role}</dd>
-                  <dt className="text-muted-foreground">Key</dt>
+                  <dt className="text-muted-foreground">{t("invitedAgent.workspaceRole")}</dt>
+                  <dd className="capitalize">
+                    {t(`invitedAgent.roles.${grant.role}`, { defaultValue: grant.role })}
+                  </dd>
+                  <dt className="text-muted-foreground">{t("invitedAgent.key")}</dt>
                   <dd className="font-mono text-xs">{grant.api_key_prefix}…</dd>
                 </>
               )}
@@ -243,7 +248,7 @@ export function InvitedAgentDialog({
               {pendingRole !== null && canManage ? (
                 <Button disabled={isBusy} onClick={() => void reinvite(pendingRole)}>
                   <KeyRound className="h-4 w-4" />
-                  {isBusy ? "Working..." : "Retry"}
+                  {isBusy ? t("invitedAgent.working") : t("invitedAgent.retry")}
                 </Button>
               ) : (
                 canManage &&
@@ -254,20 +259,20 @@ export function InvitedAgentDialog({
                       onClick={() => setStep("confirm-reissue")}
                     >
                       <KeyRound className="h-4 w-4" />
-                      Reissue key
+                      {t("invitedAgent.reissueTitle")}
                     </Button>
                     <Button
                       variant="destructive"
                       onClick={() => setStep("confirm-revoke")}
                     >
                       <Trash2 className="h-4 w-4" />
-                      Revoke
+                      {t("invitedAgent.revoke")}
                     </Button>
                   </>
                 )
               )}
               <Button variant="outline" onClick={finish}>
-                Close
+                {t("invitedAgent.close")}
               </Button>
             </DialogFooter>
           </div>

@@ -1,3 +1,4 @@
+import { miscT } from "@/lib/misc-t";
 import { api } from '@/lib/api';
 
 const PUSH_SUB_KEY_ENDPOINT = '/api/v1/me/push-subscriptions/vapid-key';
@@ -29,7 +30,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
 
 export async function subscribeUser(): Promise<PushSubscription> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    throw new Error('Push notifications not supported');
+    throw new Error(miscT("push.notSupported", "Push notifications not supported"));
   }
   const vapidKey = await fetchVAPIDKey();
   const reg = await navigator.serviceWorker.ready;

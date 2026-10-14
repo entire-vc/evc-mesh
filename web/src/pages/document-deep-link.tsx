@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useParams, useLocation } from "react-router";
+import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { api } from "@/lib/api";
@@ -12,6 +13,7 @@ import type { PaginatedResponse, Project, ProjectDocument } from "@/types";
 // project_id, not the project's or workspace's slug, so this looks them up
 // client-side rather than making the handler join through them (task #14db79fd).
 export function DocumentDeepLinkResolver() {
+  const { t } = useTranslation("docs");
   const { docId } = useParams<{ docId: string }>();
   const { isAuthenticated } = useAuthStore();
   const location = useLocation();
@@ -45,7 +47,7 @@ export function DocumentDeepLinkResolver() {
         }
         if (cancelled) return;
         if (!projectSlug || !wsSlug) {
-          setError("Document is in a workspace or project you don't have access to.");
+          setError(t("deepLink.noAccess"));
           return;
         }
         // Preserve the query string / hash (a paragraph anchor, §D6) across the
@@ -55,13 +57,13 @@ export function DocumentDeepLinkResolver() {
           `/w/${wsSlug}/p/${projectSlug}/docs/${doc.id}${location.search}${location.hash}`,
         );
       } catch {
-        setError("Document not found or you don't have access.");
+        setError(t("deepLink.notFoundOrNoAccess"));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [docId, isAuthenticated, fetchWorkspaces, workspaces.length]);
+  }, [docId, isAuthenticated, fetchWorkspaces, workspaces.length, t]);
 
   if (!isAuthenticated) {
     return (
@@ -74,7 +76,7 @@ export function DocumentDeepLinkResolver() {
   if (error) {
     return (
       <div className="mx-auto max-w-md p-8 text-center">
-        <h1 className="text-lg font-semibold">Document not found</h1>
+        <h1 className="text-lg font-semibold">{t("deepLink.notFound")}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{error}</p>
       </div>
     );

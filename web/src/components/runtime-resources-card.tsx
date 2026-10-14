@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +20,7 @@ import {
 // Read-only inventory of the workspace runtime: controllers, accounts, pools,
 // desired vs applied revision. Credential references are never rendered.
 export function RuntimeResourcesCard({ workspaceId }: { workspaceId: string }) {
+  const { t } = useTranslation("integrations");
   const [load, setLoad] = useState<RuntimeLoad | "loading">("loading");
   const requestId = useRef(0);
 
@@ -41,31 +43,31 @@ export function RuntimeResourcesCard({ workspaceId }: { workspaceId: string }) {
     <Card className="mt-4 max-w-4xl" aria-labelledby="runtime-resources-title">
       <CardHeader>
         <CardTitle id="runtime-resources-title" className="text-base">
-          Controllers and resources
+          {t("runtimeResources.title")}
         </CardTitle>
       </CardHeader>
       <CardContent>
         {load === "loading" && (
-          <div aria-busy="true" aria-label="Loading runtime">
+          <div aria-busy="true" aria-label={t("runtimeResources.loadingRuntime")}>
             <Skeleton className="h-24 w-full" />
           </div>
         )}
         {load !== "loading" && load.kind === "unavailable" && (
           <div role="alert" className="space-y-2">
-            <p className="text-sm text-destructive">Runtime data could not be loaded. Nothing below is assumed.</p>
+            <p className="text-sm text-destructive">{t("runtimeResources.loadError")}</p>
             <Button size="sm" variant="outline" onClick={reload}>
-              Retry
+              {t("runtimeResources.retry")}
             </Button>
           </div>
         )}
         {load !== "loading" && load.kind === "forbidden" && (
           <p role="status" className="text-sm text-muted-foreground">
-            Runtime settings are visible to workspace admins only.
+            {t("runtimeResources.forbidden")}
           </p>
         )}
         {load !== "loading" && load.kind === "not_configured" && (
           <p role="status" className="text-sm text-muted-foreground">
-            No runtime connection in this workspace. Agents run in direct mode; runtime facts are unknown.
+            {t("runtimeResources.notConfigured")}
           </p>
         )}
         {load !== "loading" && load.kind === "ok" && <Inventory state={load.state} workspaceId={workspaceId} />}
@@ -101,6 +103,7 @@ function useQuotaWindows(workspaceId: string, refs: string[]): QuotaLoad | "load
 }
 
 function Inventory({ state, workspaceId }: { state: RuntimeState; workspaceId: string }) {
+  const { t } = useTranslation("integrations");
   const { catalog } = state;
   const quota = useQuotaWindows(workspaceId, Object.keys(catalog.controllers));
   const controllers = Object.entries(catalog.controllers);
@@ -111,17 +114,17 @@ function Inventory({ state, workspaceId }: { state: RuntimeState; workspaceId: s
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span>
-          Desired r{state.revision}
+          {t("runtimeResources.desired", { revision: state.revision })}
           {state.digest && <span className="text-muted-foreground"> · {state.digest.slice(0, 12)}</span>}
         </span>
         <Badge variant={state.enabled ? "secondary" : "outline"} className="text-xs">
-          {state.enabled ? "enabled" : "disabled"}
+          {state.enabled ? t("runtimeResources.enabled") : t("runtimeResources.disabled")}
         </Badge>
-        {state.drainRequested && <Badge variant="outline" className="text-xs">draining</Badge>}
+        {state.drainRequested && <Badge variant="outline" className="text-xs">{t("runtimeResources.draining")}</Badge>}
       </div>
 
       <section>
-        <H>Controllers</H>
+        <H>{t("runtimeResources.controllers")}</H>
         <ControllerList state={state} entries={controllers} />
         {controllers.length > 0 && (
           <ul className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
@@ -136,9 +139,9 @@ function Inventory({ state, workspaceId }: { state: RuntimeState; workspaceId: s
       </section>
 
       <section>
-        <H>Accounts</H>
+        <H>{t("runtimeResources.accounts")}</H>
         {accounts.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No accounts in the catalog.</p>
+          <p className="text-sm text-muted-foreground">{t("runtimeResources.noAccounts")}</p>
         ) : (
           <ul className="space-y-1.5 text-sm">
             {accounts.map(([ref, a]) => (
@@ -156,9 +159,9 @@ function Inventory({ state, workspaceId }: { state: RuntimeState; workspaceId: s
       </section>
 
       <section>
-        <H>Pools</H>
+        <H>{t("runtimeResources.pools")}</H>
         {pools.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No pools in the catalog.</p>
+          <p className="text-sm text-muted-foreground">{t("runtimeResources.noPools")}</p>
         ) : (
           <ul className="grid gap-1.5 text-sm sm:grid-cols-2">
             {pools.map(([ref, p]) => {
@@ -168,9 +171,15 @@ function Inventory({ state, workspaceId }: { state: RuntimeState; workspaceId: s
                   <span className="font-medium">{ref}</span>
                   <span className="text-muted-foreground">
                     {" "}
-                    · {p.provider} · max {p.max_concurrency} · threshold {p.threshold_ref ?? "not set"}
-                    {p.aliases.length > 0 && ` · aliases: ${p.aliases.join(", ")}`}
-                    {o ? ` · ${o.state}${o.verified ? "" : " (unverified)"}` : " · no observation"}
+                    {t("runtimeResources.poolDetail", {
+                      provider: p.provider,
+                      max: p.max_concurrency,
+                      threshold: p.threshold_ref ?? t("runtimeResources.notSet"),
+                    })}
+                    {p.aliases.length > 0 && t("runtimeResources.aliases", { aliases: p.aliases.join(", ") })}
+                    {o
+                      ? ` · ${o.state}${o.verified ? "" : t("runtimeResources.unverified")}`
+                      : t("runtimeResources.noObservation")}
                   </span>
                   <PoolWindows pool={ref} quota={quota} />
                 </li>
@@ -184,15 +193,16 @@ function Inventory({ state, workspaceId }: { state: RuntimeState; workspaceId: s
 }
 
 function PoolWindows({ pool, quota }: { pool: string; quota: QuotaLoad | "loading" }) {
-  if (quota === "loading") return <p className="text-xs text-muted-foreground">Loading usage…</p>;
-  if (quota.kind === "forbidden") return <p className="text-xs text-muted-foreground">Usage is visible to workspace admins only.</p>;
+  const { t } = useTranslation("integrations");
+  if (quota === "loading") return <p className="text-xs text-muted-foreground">{t("runtimeResources.usageLoading")}</p>;
+  if (quota.kind === "forbidden") return <p className="text-xs text-muted-foreground">{t("runtimeResources.usageForbidden")}</p>;
   if (quota.kind === "unavailable") {
-    return <p className="text-xs text-muted-foreground">Usage unavailable. Nothing is assumed.</p>;
+    return <p className="text-xs text-muted-foreground">{t("runtimeResources.usageUnavailable")}</p>;
   }
   const windows: QuotaWindow[] = quota.windows.filter((w) => w.pool === pool);
-  if (windows.length === 0) return <p className="text-xs text-muted-foreground">No usage readings.</p>;
+  if (windows.length === 0) return <p className="text-xs text-muted-foreground">{t("runtimeResources.noUsage")}</p>;
   return (
-    <ul aria-label={`Usage of ${pool}`} className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+    <ul aria-label={t("runtimeResources.usageOf", { pool })} className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
       {windows.map((w) => (
         <li key={w.window}>
           {w.window}: <span className="text-foreground">{formatUsedFraction(w)}</span>
