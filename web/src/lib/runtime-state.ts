@@ -30,9 +30,22 @@ function clock(iso: string | null | undefined): string | null {
   return Number.isNaN(d.getTime()) ? null : format(d, "HH:mm");
 }
 
+/**
+ * Text for the reason: the translation of `reason_code` when the web knows it,
+ * otherwise the free-text `reason` (old records, codes newer than this build).
+ */
+export function runtimeReasonText(rs: Pick<RuntimeState, "reason" | "reason_code" | "reason_params">): string | null {
+  if (rs.reason_code) {
+    const key = `board:runtimeState.reasons.${rs.reason_code}`;
+    if (i18n.exists(key)) return i18n.t(key, { ...(rs.reason_params ?? {}) });
+  }
+  return rs.reason ?? null;
+}
+
 /** Short text for the board badge and the title attribute. Refs are rendered separately (they are links). */
 export function runtimeStateText(rs: RuntimeState): string {
   const t = (key: string, opts?: Record<string, unknown>) => i18n.t(`board:runtimeState.${key}`, opts);
+  const reason = runtimeReasonText(rs);
   switch (rs.kind) {
     case "working": {
       const at = clock(rs.since);
@@ -40,12 +53,12 @@ export function runtimeStateText(rs: RuntimeState): string {
     }
     case "waiting": {
       const until = clock(rs.until);
-      return `${t("waiting")}${rs.ref ? ":" : ""}${!rs.ref && rs.reason ? `: ${rs.reason}` : ""}${until ? ` ${t("until", { time: until })}` : ""}`;
+      return `${t("waiting")}${rs.ref && !rs.reason_code ? ":" : ""}${(!rs.ref || rs.reason_code) && reason ? `: ${reason}` : ""}${until ? ` ${t("until", { time: until })}` : ""}`;
     }
     case "queued":
       return `${rs.lane ? t("queuedLane", { lane: rs.lane }) : t("queued")}${rs.position ? `, ${t("position", { position: rs.position })}` : ""}`;
     case "stopped":
-      return `${t("stopped")}${rs.reason ? `: ${rs.reason}` : ""}`;
+      return `${t("stopped")}${reason ? `: ${reason}` : ""}`;
   }
 }
 

@@ -1,7 +1,9 @@
 package domain
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -109,4 +111,70 @@ func TestResolveRuntimeState_CheckoutFallback(t *testing.T) {
 func TestResolveRuntimeState_CorruptStoredFallsBack(t *testing.T) {
 	assert.Nil(t, ResolveRuntimeState([]byte(`{"kind":"bogus"}`), &Task{}, rsNow))
 	assert.Nil(t, ResolveRuntimeState([]byte(`not json`), &Task{}, rsNow))
+}
+
+func TestRuntimeState_ReasonCode(t *testing.T) {
+	code := "review_cooldown"
+	s := &RuntimeState{Kind: RuntimeKindStopped, ReasonCode: &code, ReasonParams: map[string]string{"minutes": "4"}}
+	require.NoError(t, s.Normalize(rsNow))
+	raw, err := s.Marshal()
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"reason_code":"review_cooldown"`)
+	assert.Contains(t, string(raw), `"reason_params":{"minutes":"4"}`)
+
+	got := ResolveRuntimeState(raw, &Task{}, rsNow)
+	require.NotNil(t, got)
+	assert.Equal(t, "review_cooldown", *got.ReasonCode)
+	assert.Equal(t, "4", got.ReasonParams["minutes"])
+}
+
+func TestRuntimeState_ReasonCode_Rejects(t *testing.T) {
+	unknown, blank := "made_up", "  "
+	for name, tc := range map[string]struct {
+		s     RuntimeState
+		field string
+	}{
+		"unknown code":         {RuntimeState{Kind: RuntimeKindStopped, ReasonCode: &unknown}, "reason_code"},
+		"params without code":  {RuntimeState{Kind: RuntimeKindStopped, ReasonParams: map[string]string{"a": "b"}}, "reason_params"},
+		"blank code+params":    {RuntimeState{Kind: RuntimeKindStopped, ReasonCode: &blank, ReasonParams: map[string]string{"a": "b"}}, "reason_params"},
+		"empty params no code": {RuntimeState{Kind: RuntimeKindStopped, ReasonParams: map[string]string{}}, "reason_params"},
+		"long param":           {RuntimeState{Kind: RuntimeKindStopped, ReasonCode: &[]string{"pause"}[0], ReasonParams: map[string]string{"a": string(make([]byte, 101))}}, "reason_params"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := tc.s.Normalize(rsNow)
+			var vErr *RuntimeStateValidationError
+			require.True(t, errors.As(err, &vErr), "got %v", err)
+			assert.Equal(t, tc.field, vErr.Field)
+		})
+	}
+}
+
+func TestRuntimeState_NoReasonCode_BackwardCompatible(t *testing.T) {
+	reason := "ci"
+	s := &RuntimeState{Kind: RuntimeKindWaiting, Reason: &reason}
+	require.NoError(t, s.Normalize(rsNow))
+	raw, err := s.Marshal()
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "reason_code")
+	assert.NotContains(t, string(raw), "reason_params")
+}
+
+// Every code the API accepts must have a translation in both web locales,
+// otherwise the badge silently falls back to a free-text reason that may be absent.
+func TestRuntimeReasonCodes_HaveWebTranslations(t *testing.T) {
+	for _, lang := range []string{"en", "ru"} {
+		raw, err := os.ReadFile("../../web/src/locales/" + lang + "/board.json")
+		require.NoError(t, err)
+		var board struct {
+			RuntimeState struct {
+				Reasons map[string]string `json:"reasons"`
+			} `json:"runtimeState"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &board))
+		require.NotEmpty(t, board.RuntimeState.Reasons)
+		for code := range validReasonCodes {
+			assert.Contains(t, board.RuntimeState.Reasons, string(code), "%s locale lacks reason code", lang)
+		}
+		assert.Len(t, board.RuntimeState.Reasons, len(validReasonCodes), "%s locale has keys outside the closed list", lang)
+	}
 }

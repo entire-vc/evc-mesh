@@ -21,6 +21,10 @@ type putRuntimeStateRequest struct {
 	Ref    *string    `json:"ref"`
 	Lane   *string    `json:"lane"`
 	Reason *string    `json:"reason"`
+	// ReasonCode is a code from the closed domain.RuntimeReasonCode list; the web
+	// renders it in the viewer's language. ReasonParams fill its placeholders.
+	ReasonCode   *string           `json:"reason_code"`
+	ReasonParams map[string]string `json:"reason_params"`
 }
 
 // PutRuntimeState handles PUT /tasks/:task_id/runtime-state.
@@ -41,7 +45,7 @@ func (h *TaskHandler) PutRuntimeState(c echo.Context) error {
 
 	// An omitted kind next to other fields is a malformed write, not a clear:
 	// silently deleting the stored state would also drop what the caller sent.
-	if req.Kind == nil && (req.Since != nil || req.Until != nil || req.Ref != nil || req.Lane != nil || req.Reason != nil) {
+	if req.Kind == nil && (req.Since != nil || req.Until != nil || req.Ref != nil || req.Lane != nil || req.Reason != nil || req.ReasonCode != nil || req.ReasonParams != nil) {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"error":   "Unprocessable Entity",
 			"message": "invalid runtime_state: kind is required unless the state is being cleared",
@@ -51,7 +55,7 @@ func (h *TaskHandler) PutRuntimeState(c echo.Context) error {
 
 	var state *domain.RuntimeState
 	if req.Kind != nil {
-		state = &domain.RuntimeState{Kind: domain.RuntimeKind(*req.Kind), Until: req.Until, Ref: req.Ref, Lane: req.Lane, Reason: req.Reason}
+		state = &domain.RuntimeState{Kind: domain.RuntimeKind(*req.Kind), Until: req.Until, Ref: req.Ref, Lane: req.Lane, Reason: req.Reason, ReasonCode: req.ReasonCode, ReasonParams: req.ReasonParams}
 		if req.Since != nil {
 			state.Since = *req.Since
 		}

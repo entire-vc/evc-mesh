@@ -341,6 +341,10 @@ export interface RuntimeState {
   lane?: string | null;
   /** Free text; for `queued` may carry the queue position, for `stopped` the cause. */
   reason?: string | null;
+  /** Machine-readable reason from the server's closed list; the badge translates it. Wins over `reason`. */
+  reason_code?: string | null;
+  /** Placeholder values for `reason_code` (e.g. `{ minutes: "4" }`). */
+  reason_params?: Record<string, string> | null;
   /** Queue position (queued only), 1-based. */
   position?: number | null;
   /** The publisher has gone quiet — the value may be out of date. */
