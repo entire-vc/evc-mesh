@@ -3445,3 +3445,94 @@ func TestTaskHandler_Update_KnownFieldsStillAcceptedTogether(t *testing.T) {
 	require.NoError(t, h.Update(c))
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
+
+func patchTaskWithBody(t *testing.T, h *TaskHandler, e *echo.Echo, taskID uuid.UUID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+	require.NoError(t, h.Update(c))
+	return rec
+}
+
+func TestTaskHandler_Update_Preconditions(t *testing.T) {
+	taskID := uuid.New()
+	updatedAt := time.Date(2026, 10, 14, 12, 0, 0, 123456000, time.UTC)
+	stale := updatedAt.Add(-time.Minute)
+
+	cases := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantWrite  bool
+	}{
+		{"no preconditions behaves as before", `{"title":"New"}`, http.StatusOK, true},
+		{"matching updated_at writes", `{"title":"New","expected_updated_at":"` + updatedAt.Format(time.RFC3339Nano) + `"}`, http.StatusOK, true},
+		{"matching updated_at in another zone writes (Equal, not string match)", `{"title":"New","expected_updated_at":"` + updatedAt.In(time.FixedZone("x", 3*3600)).Format(time.RFC3339Nano) + `"}`, http.StatusOK, true},
+		{"matching version writes", `{"title":"New","expected_version":7}`, http.StatusOK, true},
+		{"both matching writes", `{"title":"New","expected_version":7,"expected_updated_at":"` + updatedAt.Format(time.RFC3339Nano) + `"}`, http.StatusOK, true},
+		{"stale updated_at conflicts, no write", `{"title":"New","expected_updated_at":"` + stale.Format(time.RFC3339Nano) + `"}`, http.StatusConflict, false},
+		{"stale version conflicts, no write", `{"title":"New","expected_version":6}`, http.StatusConflict, false},
+		{"updated_at matches but version does not: still conflicts", `{"title":"New","expected_version":6,"expected_updated_at":"` + updatedAt.Format(time.RFC3339Nano) + `"}`, http.StatusConflict, false},
+		{"version matches but updated_at does not: still conflicts", `{"title":"New","expected_version":7,"expected_updated_at":"` + stale.Format(time.RFC3339Nano) + `"}`, http.StatusConflict, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wrote := false
+			mockSvc := &MockTaskService{
+				GetByIDFunc: func(context.Context, uuid.UUID) (*domain.Task, error) {
+					return &domain.Task{ID: taskID, ProjectID: uuid.New(), Title: "Old", UpdatedAt: updatedAt, Version: 7}, nil
+				},
+				UpdateFunc: func(context.Context, *domain.Task) error { wrote = true; return nil },
+			}
+			h, e := setupTaskTest(mockSvc)
+
+			rec := patchTaskWithBody(t, h, e, taskID, tc.body)
+
+			assert.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
+			assert.Equal(t, tc.wantWrite, wrote)
+			if tc.wantStatus == http.StatusConflict {
+				var body map[string]any
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+				assert.Equal(t, "cas_conflict", body["code"])
+				assert.EqualValues(t, 7, body["current_version"])
+				assert.Equal(t, updatedAt.Format(time.RFC3339Nano), body["current_updated_at"])
+			}
+		})
+	}
+}
+
+func TestTaskHandler_AssignTask_PassesPreconditionsThrough(t *testing.T) {
+	taskID := uuid.New()
+	updatedAt := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	var got service.AssignTaskInput
+	mockSvc := &MockTaskService{
+		AssignTaskFunc: func(_ context.Context, _ uuid.UUID, in service.AssignTaskInput) error {
+			got = in
+			return &service.CASConflictError{CurrentVersion: 9, CurrentUpdatedAt: updatedAt}
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	body := `{"assignee_id":"` + uuid.NewString() + `","expected_version":8,"expected_updated_at":"` + updatedAt.Format(time.RFC3339) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/assign")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.AssignTask(c))
+
+	require.NotNil(t, got.ExpectedVersion)
+	assert.EqualValues(t, 8, *got.ExpectedVersion)
+	require.NotNil(t, got.ExpectedUpdatedAt)
+	assert.True(t, got.ExpectedUpdatedAt.Equal(updatedAt))
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contains(t, rec.Body.String(), "cas_conflict")
+}

@@ -1983,6 +1983,21 @@ paths:
                 estimated_hours:
                   type: number
                   nullable: true
+                expected_updated_at:
+                  type: string
+                  format: date-time
+                  description: >-
+                    Optional write precondition. The write happens only if the task's
+                    updated_at still equals this value (compared as an instant); otherwise
+                    409 cas_conflict and nothing is written. If expected_version is also
+                    sent, both must match.
+                expected_version:
+                  type: integer
+                  format: int64
+                  description: >-
+                    Optional write precondition on the task's version. Mismatch is 409
+                    cas_conflict with no write. Omit both fields for the unconditional
+                    behaviour.
       responses:
         "200":
           description: Updated task
@@ -1990,6 +2005,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Task"
+        "409":
+          description: >-
+            cas_conflict - the task changed since the caller read it (expected_updated_at /
+            expected_version did not match). Nothing was written. The body carries
+            current_version, current_status_id and current_updated_at to re-read from.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       tags: [Tasks]
       summary: Delete a task
@@ -2116,6 +2140,21 @@ paths:
                 assignee_type:
                   type: string
                   enum: [user, agent, unassigned]
+                expected_updated_at:
+                  type: string
+                  format: date-time
+                  description: >-
+                    Optional write precondition (same contract as PATCH /tasks/{task_id}). The write happens only if the task's
+                    updated_at still equals this value (compared as an instant); otherwise
+                    409 cas_conflict and nothing is written. If expected_version is also
+                    sent, both must match.
+                expected_version:
+                  type: integer
+                  format: int64
+                  description: >-
+                    Optional write precondition on the task's version. Mismatch is 409
+                    cas_conflict with no write. Omit both fields for the unconditional
+                    behaviour.
       responses:
         "200":
           description: Updated task with new assignee
@@ -2131,6 +2170,15 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            cas_conflict - the task changed since the caller read it (expected_updated_at /
+            expected_version did not match). Nothing was written. The body carries
+            current_version, current_status_id and current_updated_at to re-read from.
           content:
             application/json:
               schema:

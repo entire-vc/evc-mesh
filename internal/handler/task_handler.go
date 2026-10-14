@@ -157,6 +157,12 @@ type updateTaskRequest struct {
 	HumanGate        *bool                   `json:"human_gate"`
 	CompletionSignal *bool                   `json:"completion_signal"`
 
+	// Optional write preconditions, same contract as /move: 409 cas_conflict and
+	// no write when the task changed since the caller read it. Both given must
+	// both match; neither given leaves PATCH as it was.
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+	ExpectedVersion   *int64     `json:"expected_version,omitempty"`
+
 	// #64b74e58: NOT applied to task.Status anywhere below — their only job is
 	// to be seen. Before these fields existed, encoding/json's default
 	// unknown-field tolerance meant Bind() silently dropped status_id/
@@ -724,6 +730,13 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		return handleError(c, err)
 	}
 
+	// Compared against the very snapshot the write below is conditioned on
+	// (WHERE version = task.Version), so a concurrent change cannot slip in
+	// between this check and the write.
+	if err := service.CheckTaskPreconditions(task, req.ExpectedUpdatedAt, req.ExpectedVersion); err != nil {
+		return handleError(c, err)
+	}
+
 	// Apply partial updates
 	if req.Title != nil {
 		task.Title = *req.Title
@@ -1131,6 +1144,9 @@ type assignTaskRequest struct {
 	// ExpectedUpdatedAt makes the assignment conditional: 409 cas_conflict if the
 	// task changed (e.g. was checked out) since the caller read it.
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+	// ExpectedVersion is the same precondition on the task version; both given
+	// must both match.
+	ExpectedVersion *int64 `json:"expected_version,omitempty"`
 }
 
 // AssignTask handles POST /tasks/:task_id/assign
@@ -1160,6 +1176,7 @@ func (h *TaskHandler) AssignTask(c echo.Context) error {
 		Source:       req.Source,
 
 		ExpectedUpdatedAt: req.ExpectedUpdatedAt,
+		ExpectedVersion:   req.ExpectedVersion,
 	}
 
 	if err = h.taskService.AssignTask(c.Request().Context(), taskID, input); err != nil {

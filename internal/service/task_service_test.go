@@ -4739,3 +4739,43 @@ func TestTaskService_Create_SimilarTitleInOtherProject_NoFlag(t *testing.T) {
 
 	assert.Nil(t, newTask.PossibleDuplicate, "a same-titled task in a DIFFERENT project must not trigger the flag")
 }
+
+func TestTaskService_AssignTask_Preconditions(t *testing.T) {
+	agent := uuid.New() // current assignee; every case unassigns it
+	updatedAt := frozenTime.Add(-time.Hour)
+	ver := func(v int64) *int64 { return &v }
+	cases := []struct {
+		name      string
+		expUpdate *time.Time
+		expVer    *int64
+		wantErr   bool
+	}{
+		{"none", nil, nil, false},
+		{"matching version", nil, ver(4), false},
+		{"stale version", nil, ver(3), true},
+		{"matching updated_at", &updatedAt, nil, false},
+		{"both, version stale", &updatedAt, ver(3), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, _ := setupTaskService()
+			id := uuid.New()
+			repo.items[id] = &domain.Task{ID: id, Title: "T", AssigneeID: &agent, AssigneeType: domain.AssigneeTypeAgent, UpdatedAt: updatedAt, Version: 4}
+
+			err := svc.AssignTask(context.Background(), id, AssignTaskInput{
+				AssigneeType:      domain.AssigneeTypeUnassigned,
+				ExpectedUpdatedAt: tc.expUpdate, ExpectedVersion: tc.expVer,
+			})
+
+			if tc.wantErr {
+				var casErr *CASConflictError
+				require.ErrorAs(t, err, &casErr)
+				assert.EqualValues(t, 4, casErr.CurrentVersion)
+				assert.NotNil(t, repo.items[id].AssigneeID, "a refused assignment must not write")
+				return
+			}
+			require.NoError(t, err)
+			assert.Nil(t, repo.items[id].AssigneeID)
+		})
+	}
+}
