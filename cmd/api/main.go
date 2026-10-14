@@ -814,6 +814,10 @@ func main() {
 		}
 		// Start background workers (PG writer + cleanup).
 		eb.Start()
+		// delivery=nats subscriptions of extensions publish through the same bus.
+		if n, ok := webhookService.(service.ExtensionNATSConfigurable); ok {
+			n.SetExtensionNATS(eb, workspaceRepo)
+		}
 	}
 	metrics.SetEventBusEnabled(eb != nil)
 	// Wire memory service into eventBusService for memory extraction on Publish().
