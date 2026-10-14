@@ -27,7 +27,8 @@ type TabId = "profile" | "access" | "execution" | "state";
 const TABS: { id: TabId }[] = [{ id: "profile" }, { id: "access" }, { id: "execution" }, { id: "state" }];
 
 interface AgentRuntimeTabsProps {
-  agent: Agent;
+  /** Only the id is read: a foreign (invited) agent has no home profile here. */
+  agent: Pick<Agent, "id">;
   workspaceId: string | null;
   /** Existing profile editor content, rendered unchanged in the first tab. */
   profile: ReactNode;
@@ -150,7 +151,7 @@ function RuntimeSection({
 }: {
   load: RuntimeLoad | "loading";
   onRetry: () => void;
-  agent: Agent;
+  agent: Pick<Agent, "id">;
   workspaceId: string | null;
   children: (state: RuntimeState, found: { ref: string; binding: RuntimeBinding } | null) => ReactNode;
 }) {

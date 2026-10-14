@@ -107,6 +107,7 @@ function renderPage() {
 async function openGuest() {
   renderPage();
   fireEvent.click(screen.getByText("Kidcash"));
+  fireEvent.click(await screen.findByRole("tab", { name: "Workspace access" }));
   await screen.findByText("agk_ws1_kc…");
 }
 
@@ -185,6 +186,7 @@ describe.each<WorkspaceRole>(["member", "viewer"])("OrgChartPage — invited age
     renderPage();
     expect(screen.getAllByText("Invited")).toHaveLength(1);
     fireEvent.click(screen.getByText("Kidcash"));
+    fireEvent.click(await screen.findByRole("tab", { name: "Workspace access" }));
     await screen.findByText("agk_ws1_kc…");
     expect(screen.queryByRole("button", { name: /Reissue key/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Revoke$/ })).toBeNull();
