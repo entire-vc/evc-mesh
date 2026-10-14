@@ -53,6 +53,8 @@ func actorNameExpr(idCol, typeCol, alias string) string {
 			(SELECT name FROM agents WHERE id = %[1]s AND deleted_at IS NULL)
 		WHEN %[2]s = 'user' THEN
 			(SELECT COALESCE(NULLIF(u.display_name, ''), SPLIT_PART(u.email, '@', 1)) FROM users u WHERE u.id = %[1]s)
+		WHEN %[2]s = 'extension' THEN
+			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = %[1]s)
 		ELSE NULL
 	END AS %[3]s`, idCol, typeCol, alias)
 }

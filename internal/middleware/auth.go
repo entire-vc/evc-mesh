@@ -187,6 +187,12 @@ func AgentKeyAuth(agentService service.AgentService, oauthAuth OAuthTokenAuthent
 func DualAuth(authService *auth.Service, agentService service.AgentService, oauthAuth OAuthTokenAuthenticator) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Already authenticated as an extension actor by ExtensionAuth, which
+			// runs ahead of this middleware on the /api/v1 group.
+			if IsExtension(c) {
+				return next(c)
+			}
+
 			// Try a mot_ OAuth access token first — it lives in the same
 			// Authorization: Bearer header a JWT would, but ValidateAccessToken
 			// will simply fail to parse it as a JWT and fall through, so trying

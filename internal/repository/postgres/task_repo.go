@@ -114,6 +114,8 @@ const taskComputedCols = `
 			(SELECT name FROM agents WHERE id = tasks.created_by AND deleted_at IS NULL)
 		WHEN tasks.created_by_type = 'user' THEN
 			(SELECT COALESCE(NULLIF(display_name,''), SPLIT_PART(email,'@',1)) FROM users WHERE id = tasks.created_by)
+		WHEN tasks.created_by_type = 'extension' THEN
+			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = tasks.created_by)
 		ELSE NULL
 	END AS created_by_name`
 
@@ -173,6 +175,8 @@ const taskComputedColsAliased = `
 			(SELECT name FROM agents WHERE id = t.created_by AND deleted_at IS NULL)
 		WHEN t.created_by_type = 'user' THEN
 			(SELECT COALESCE(NULLIF(display_name,''), SPLIT_PART(email,'@',1)) FROM users WHERE id = t.created_by)
+		WHEN t.created_by_type = 'extension' THEN
+			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = t.created_by)
 		ELSE NULL
 	END AS created_by_name`
 

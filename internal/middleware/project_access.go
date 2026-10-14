@@ -64,6 +64,14 @@ func RequireProjectMember(db *sqlx.DB) echo.MiddlewareFunc {
 				return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
 			}
 
+			// An extension actor is not a project member; its reach is the
+			// workspace it was connected to, already enforced for :proj_id by
+			// WorkspaceRLS + RequireWorkspaceMemberScoped, and the capability
+			// guard decided whether this route is open to it at all.
+			if IsExtension(c) {
+				return next(c)
+			}
+
 			// Workspace owners and admins bypass project membership check.
 			//
 			// Deliberately human-only: since agent-conn-auth-u2, ContextKeyWorkspaceRole

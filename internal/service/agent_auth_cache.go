@@ -213,6 +213,15 @@ func (c *cachedAgentAuth) cachedAuthStillValid(ctx context.Context, agent *domai
 		}
 	}
 
+	if agent.KeyID != nil {
+		if keyChecker, ok := c.AgentService.(AgentKeyRevocationChecker); ok {
+			revoked, err := keyChecker.IsAgentKeyRevoked(ctx, *agent.KeyID)
+			if err != nil || revoked {
+				return false
+			}
+		}
+	}
+
 	if agent.GrantID == nil {
 		return true
 	}
@@ -361,6 +370,14 @@ func (c *cachedAgentAuth) SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExte
 func (c *cachedAgentAuth) SetAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository) {
 	if configurable, ok := c.AgentService.(AgentServiceConfigurable); ok {
 		configurable.SetAgentWorkspaceGrantRepo(repo)
+	}
+}
+
+// SetAgentAPIKeyRepo forwards the optional dependency, same reason as
+// SetAgentWorkspaceGrantRepo above.
+func (c *cachedAgentAuth) SetAgentAPIKeyRepo(repo repository.AgentAPIKeyRepository) {
+	if configurable, ok := c.AgentService.(AgentAPIKeyConfigurable); ok {
+		configurable.SetAgentAPIKeyRepo(repo)
 	}
 }
 

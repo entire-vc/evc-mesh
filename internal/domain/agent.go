@@ -113,6 +113,11 @@ type Agent struct {
 	// agent_auth_cache.go's cachedGrantStillValid) — a grant can be revoked by
 	// a direct SQL UPDATE that no in-process cache invalidation ever sees.
 	GrantID *uuid.UUID `json:"-" db:"-"`
+	// KeyID is the agent_api_keys row that resolved this login, set only when the
+	// request authenticated with an additional key (POST /agents/{id}/keys) rather
+	// than the agent's original one. Request-scoped like GrantID: cachedAgentAuth
+	// re-checks it on a cache hit so a revoked key stops working at once.
+	KeyID *uuid.UUID `json:"-" db:"-"`
 	// OAuthConnectorUserID is set only by oauthService.AuthenticateAccessToken
 	// (MCP-OAuth 1/5), to the user who consented to this connector's grant.
 	// Its presence marks this Agent as authenticated via a mot_ OAuth token

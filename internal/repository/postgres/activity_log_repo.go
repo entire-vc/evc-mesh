@@ -23,6 +23,8 @@ const activityEnrichedSelect = `SELECT a.id, a.workspace_id, a.entity_type, a.en
 			(SELECT name FROM agents WHERE id = a.actor_id AND deleted_at IS NULL)
 		WHEN a.actor_type = 'user' THEN
 			(SELECT display_name FROM users WHERE id = a.actor_id)
+		WHEN a.actor_type = 'extension' THEN
+			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = a.actor_id)
 		ELSE NULL
 	END AS actor_name`
 

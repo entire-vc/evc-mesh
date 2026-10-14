@@ -70,6 +70,10 @@ type agentService struct {
 	// a nil value makes Authenticate skip the connection lookup entirely and
 	// always use the pre-U2 agents-table path (see SetAgentWorkspaceGrantRepo).
 	grantRepo repository.AgentWorkspaceGrantRepository
+	// keyRepo holds the additional keys issued through POST /agents/{id}/keys
+	// (migration 20261014005). Optional: nil means every key is the agent's
+	// original one, which is the behavior before that migration.
+	keyRepo repository.AgentAPIKeyRepository
 }
 
 // Compile-time proof that *agentService still satisfies GrantRevocationChecker
@@ -116,6 +120,21 @@ func (s *agentService) SetCheckoutHeartbeatExtender(ext CheckoutHeartbeatExtende
 // agentService.grantRepo for what a nil value (never called) means.
 func (s *agentService) SetAgentWorkspaceGrantRepo(repo repository.AgentWorkspaceGrantRepository) {
 	s.grantRepo = repo
+}
+
+// SetAgentAPIKeyRepo wires the additional-key repository Authenticate consults.
+func (s *agentService) SetAgentAPIKeyRepo(repo repository.AgentAPIKeyRepository) {
+	s.keyRepo = repo
+}
+
+// IsAgentKeyRevoked implements AgentKeyRevocationChecker: the PK-keyed freshness
+// check cachedAgentAuth runs on a cache hit for a login made with an additional
+// key. keyRepo unwired reports false, like IsGrantRevoked.
+func (s *agentService) IsAgentKeyRevoked(ctx context.Context, keyID uuid.UUID) (bool, error) {
+	if s.keyRepo == nil {
+		return false, nil
+	}
+	return s.keyRepo.IsRevoked(ctx, keyID)
 }
 
 // generateAPIKey creates a raw API key in the format: agk_{workspaceSlug}_{random_hex}.
@@ -449,6 +468,14 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 
 	prefix := extractPrefix(apiKey, workspaceSlug)
 
+	// An additional key (POST /agents/{id}/keys) is looked up first: it has no
+	// connection row, so without this it would fall through to the legacy lookup
+	// and be denied. A prefix that is not one of these, or a digest that does not
+	// match (a prefix collision with an original key), continues below.
+	if agent, err := s.authenticateViaAgentKey(ctx, ws.ID, prefix, apiKey); err != nil || agent != nil {
+		return agent, err
+	}
+
 	if s.grantRepo != nil {
 		grant, err := s.grantRepo.GetByWorkspaceAndPrefix(ctx, ws.ID, prefix)
 		if err != nil {
@@ -467,6 +494,57 @@ func (s *agentService) Authenticate(ctx context.Context, workspaceSlug, apiKey s
 	}
 
 	return s.authenticateLegacy(ctx, ws.ID, prefix, apiKey)
+}
+
+// authenticateViaAgentKey resolves an additional agent key. (nil, nil) means "not
+// one of these, keep looking"; a revoked or expired key that DID match is a
+// denial, never a fall-through — the whole point of DELETE .../keys/{id} is that
+// the key stops working.
+func (s *agentService) authenticateViaAgentKey(ctx context.Context, workspaceID uuid.UUID, prefix, apiKey string) (*domain.Agent, error) {
+	if s.keyRepo == nil {
+		return nil, nil
+	}
+	key, err := s.keyRepo.GetByPrefix(ctx, workspaceID, prefix)
+	if err != nil {
+		return nil, err
+	}
+	if key == nil || !agentKeyDigestMatches(key.KeySHA256, apiKey) {
+		return nil, nil
+	}
+	now := timeNow()
+	if key.RevokedAt != nil || (key.ExpiresAt != nil && !now.Before(*key.ExpiresAt)) {
+		return nil, apierror.Unauthorized("invalid API key")
+	}
+	agent, err := s.agentRepo.GetByID(ctx, key.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	if agent == nil {
+		return nil, apierror.Unauthorized("invalid API key")
+	}
+
+	resolved := *agent
+	resolved.WorkspaceID = key.WorkspaceID
+	resolved.WorkspaceRole = legacyGrantRole
+	// The agent's own ExpiresAt belongs to its ORIGINAL key. Carrying it over
+	// would let revoking or expiring that key kill this one (and the cache's
+	// own expiry re-check reads this field), so the key's expiry replaces it.
+	resolved.ExpiresAt = key.ExpiresAt
+	keyID := key.ID
+	resolved.KeyID = &keyID
+	if s.grantRepo != nil {
+		if grant, gerr := s.grantRepo.GetByAgentAndWorkspace(ctx, agent.ID, key.WorkspaceID); gerr != nil {
+			return nil, gerr
+		} else if grant != nil {
+			if grant.IsRevoked() {
+				return nil, apierror.Unauthorized("invalid API key")
+			}
+			resolved.WorkspaceRole = grant.Role
+			grantID := grant.ID
+			resolved.GrantID = &grantID
+		}
+	}
+	return &resolved, nil
 }
 
 // authenticateViaGrant verifies apiKey against an active connection's own key

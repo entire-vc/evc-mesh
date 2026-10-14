@@ -36,12 +36,15 @@ var agentRowWriters = map[string]bool{
 // allowedAgentRowWriteCallers: (file, enclosing function) that may call an
 // agent-row writer on agentRepo. Register creates an agent that has no
 // callback_url input; RotateAPIKey rewrites the key columns of a loaded row;
+// agentKeyService.revokePrimary does the same to retire the original key (key
+// and expiry columns only, callback_url untouched);
 // Update validates; UpdateAgentProfile carries no callback field.
 var allowedAgentRowWriteCallers = map[string]bool{
-	"internal/service/agent_service.go:agentService.Register":           true,
-	"internal/service/agent_service.go:agentService.Update":             true,
-	"internal/service/agent_service.go:agentService.RotateAPIKey":       true,
-	"internal/service/rules_service.go:rulesService.UpdateAgentProfile": true,
+	"internal/service/agent_service.go:agentService.Register":             true,
+	"internal/service/agent_service.go:agentService.Update":               true,
+	"internal/service/agent_service.go:agentService.RotateAPIKey":         true,
+	"internal/service/agent_key_service.go:agentKeyService.revokePrimary": true,
+	"internal/service/rules_service.go:rulesService.UpdateAgentProfile":   true,
 }
 
 // allowedCallbackURLAssignFiles: non-test files that may assign the
