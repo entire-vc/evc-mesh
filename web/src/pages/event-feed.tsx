@@ -1,8 +1,10 @@
 import * as i18nFmt from "@/i18n/format";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
 import { AgentShortTag } from "@/components/agent-short-tag";
+import type { TFunction } from "i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import {
   Activity,
   AlertTriangle,
@@ -41,30 +43,26 @@ import type {
 
 const EVENT_TYPE_CONFIG: Record<
   EventType,
-  { label: string; color: string; icon: typeof Circle }
+  { color: string; icon: typeof Circle }
 > = {
-  summary: { label: "Summary", color: "text-emerald-500", icon: CheckCircle2 },
+  summary: { color: "text-emerald-500", icon: CheckCircle2 },
   status_change: {
-    label: "Status Change",
     color: "text-blue-500",
     icon: RefreshCw,
   },
   context_update: {
-    label: "Context Update",
     color: "text-violet-500",
     icon: Info,
   },
   error: {
-    label: "Error",
     color: "text-red-500",
     icon: AlertTriangle,
   },
   dependency_resolved: {
-    label: "Dependency Resolved",
     color: "text-amber-500",
     icon: ArrowDownCircle,
   },
-  custom: { label: "Custom", color: "text-gray-500", icon: Zap },
+  custom: { color: "text-gray-500", icon: Zap },
 };
 
 const ALL_EVENT_TYPES = Object.keys(EVENT_TYPE_CONFIG) as EventType[];
@@ -94,25 +92,29 @@ function getStatusDelta(
   return null;
 }
 
-function getActionVerb(eventType: EventType, subject: string): string {
-  if (subject === "task.moved") return "moved";
-  if (subject === "task.assigned") return "assigned";
-  if (subject === "task.created") return "created";
-  if (subject === "task.deleted") return "deleted";
-  if (subject === "task.updated") return "updated";
+function getActionVerb(
+  t: TFunction,
+  eventType: EventType,
+  subject: string,
+): string {
+  if (subject === "task.moved") return t("eventFeed.verb.moved");
+  if (subject === "task.assigned") return t("eventFeed.verb.assigned");
+  if (subject === "task.created") return t("eventFeed.verb.created");
+  if (subject === "task.deleted") return t("eventFeed.verb.deleted");
+  if (subject === "task.updated") return t("eventFeed.verb.updated");
   switch (eventType) {
     case "status_change":
-      return "updated";
+      return t("eventFeed.verb.updated");
     case "summary":
-      return "summarised";
+      return t("eventFeed.verb.summarised");
     case "context_update":
-      return "updated context on";
+      return t("eventFeed.verb.updatedContextOn");
     case "error":
-      return "reported error on";
+      return t("eventFeed.verb.reportedErrorOn");
     case "dependency_resolved":
-      return "resolved dependency on";
+      return t("eventFeed.verb.resolvedDependencyOn");
     default:
-      return "published";
+      return t("eventFeed.verb.published");
   }
 }
 
@@ -125,18 +127,19 @@ interface EventRowProps {
 }
 
 function EventRow({ event }: EventRowProps) {
+  const { t } = useTranslation("integrations");
   const config = EVENT_TYPE_CONFIG[event.event_type] ?? EVENT_TYPE_CONFIG.custom;
   const Icon = config.icon;
 
   const actorName =
     event.actor_name ??
-    (event.agent_id ? event.agent_id.slice(0, 8) : "System");
+    (event.agent_id ? event.agent_id.slice(0, 8) : t("eventFeed.system"));
   const isAgent = !!event.agent_id;
   const taskTitle = event.task_title;
   const taskShort = event.task_id?.slice(0, 8);
   const projectName = event.project_name;
   const delta = getStatusDelta(event.payload);
-  const verb = getActionVerb(event.event_type, event.subject);
+  const verb = getActionVerb(t, event.event_type, event.subject);
 
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-muted/30">
@@ -209,6 +212,7 @@ interface RealtimeEventRowProps {
 }
 
 function RealtimeEventRow({ event }: RealtimeEventRowProps) {
+  const { t } = useTranslation("integrations");
   const eventType = event.type as EventType;
   const config = EVENT_TYPE_CONFIG[eventType] ?? EVENT_TYPE_CONFIG.custom;
   const Icon = config.icon;
@@ -218,7 +222,7 @@ function RealtimeEventRow({ event }: RealtimeEventRowProps) {
   const agentName =
     data.agent_id
       ? (data.agent_name as string) || (data.agent_id as string)?.slice(0, 8)
-      : "System";
+      : t("eventFeed.system");
   const isAgent = !!data.agent_id;
   const tags = (data.tags as string[]) || [];
   const taskTitle = data.task_title as string | undefined;
@@ -324,6 +328,7 @@ function isDefaultFilters(f: FilterState): boolean {
 // ---------------------------------------------------------------------------
 
 export function EventFeedPage() {
+  const { t } = useTranslation("integrations");
   useMentionDirectory();
   const { wsSlug } = useParams();
   const { projects } = useProjectStore();
@@ -466,12 +471,12 @@ export function EventFeedPage() {
           {isConnected ? (
             <Badge variant="success" className="gap-1">
               <Radio className="h-3 w-3 animate-pulse" />
-              Live
+              {t("eventFeed.live")}
             </Badge>
           ) : (
             <Badge variant="secondary" className="gap-1">
               <Circle className="h-3 w-3" />
-              Offline
+              {t("eventFeed.offline")}
             </Badge>
           )}
         </div>
@@ -481,7 +486,7 @@ export function EventFeedPage() {
             size="sm"
             onClick={() => setAutoScroll((prev) => !prev)}
           >
-            Auto-scroll {autoScroll ? "ON" : "OFF"}
+            {autoScroll ? t("eventFeed.autoScrollOn") : t("eventFeed.autoScrollOff")}
           </Button>
           <Button
             variant="outline"
@@ -492,7 +497,7 @@ export function EventFeedPage() {
             <RefreshCw
               className={cn("mr-1 h-3 w-3", isLoading && "animate-spin")}
             />
-            Refresh
+            {t("eventFeed.refresh")}
           </Button>
         </div>
       </div>
@@ -502,7 +507,7 @@ export function EventFeedPage() {
         <div className="flex items-center gap-2">
           <Filter className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Filters
+            {t("eventFeed.filters")}
           </span>
           {hasActiveFilters && (
             <Button
@@ -512,7 +517,7 @@ export function EventFeedPage() {
               onClick={resetFilters}
             >
               <RotateCcw className="mr-1 h-3 w-3" />
-              Reset
+              {t("eventFeed.reset")}
             </Button>
           )}
         </div>
@@ -540,7 +545,7 @@ export function EventFeedPage() {
                     selected ? "text-inherit" : cfg.color,
                   )}
                 />
-                {cfg.label}
+                {t(`eventFeed.types.${type}`)}
               </button>
             );
           })}
@@ -555,7 +560,7 @@ export function EventFeedPage() {
             }
             className="h-8 w-44 text-xs"
           >
-            <option value="all">All Projects</option>
+            <option value="all">{t("eventFeed.allProjects")}</option>
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.name}
@@ -579,10 +584,10 @@ export function EventFeedPage() {
                 )}
               >
                 {a === "all"
-                  ? "All actors"
+                  ? t("eventFeed.actors.all")
                   : a === "agent"
-                    ? "🤖 Agents"
-                    : "System"}
+                    ? t("eventFeed.actors.agent")
+                    : t("eventFeed.actors.system")}
               </button>
             ))}
           </div>
@@ -616,7 +621,7 @@ export function EventFeedPage() {
         {filteredRealtimeEvents.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Real-time
+              {t("eventFeed.realtime")}
             </p>
             {filteredRealtimeEvents.map((event) => (
               <RealtimeEventRow
@@ -638,7 +643,7 @@ export function EventFeedPage() {
           <div className="space-y-2">
             {filteredRealtimeEvents.length > 0 && (
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                History
+                {t("eventFeed.history")}
               </p>
             )}
             {filteredHistoricalEvents.map((event) => (
@@ -651,21 +656,21 @@ export function EventFeedPage() {
             {hasActiveFilters ? (
               <>
                 <h3 className="mb-2 text-lg font-semibold">
-                  No events match your filters
+                  {t("eventFeed.noMatch.title")}
                 </h3>
                 <p className="mb-4 text-sm text-muted-foreground">
-                  Try adjusting or resetting the filters.
+                  {t("eventFeed.noMatch.hint")}
                 </p>
                 <Button variant="outline" size="sm" onClick={resetFilters}>
                   <RotateCcw className="mr-2 h-4 w-4" />
-                  Reset filters
+                  {t("eventFeed.noMatch.reset")}
                 </Button>
               </>
             ) : (
               <>
-                <h3 className="mb-2 text-lg font-semibold">No events yet</h3>
+                <h3 className="mb-2 text-lg font-semibold">{t("eventFeed.empty.title")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Events from agent activity will appear here in real-time.
+                  {t("eventFeed.empty.hint")}
                 </p>
               </>
             )}

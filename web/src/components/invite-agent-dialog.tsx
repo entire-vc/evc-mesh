@@ -1,5 +1,6 @@
 import { agentLabel } from "@/lib/agent-label";
 import { type FormEvent, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { UserPlus } from "lucide-react";
 import {
   Dialog,
@@ -28,11 +29,11 @@ interface InviteAgentDialogProps {
   connectedAgentIds: Set<string>;
 }
 
-const roleOptions: { value: WorkspaceRole; label: string }[] = [
-  { value: "owner", label: "Owner" },
-  { value: "admin", label: "Admin" },
-  { value: "member", label: "Member" },
-  { value: "viewer", label: "Viewer" },
+const roleOptions: { value: WorkspaceRole; labelKey: string }[] = [
+  { value: "owner", labelKey: "inviteAgent.roleOwner" },
+  { value: "admin", labelKey: "inviteAgent.roleAdmin" },
+  { value: "member", labelKey: "inviteAgent.roleMember" },
+  { value: "viewer", labelKey: "inviteAgent.roleViewer" },
 ];
 
 type DialogStep = "form" | "key";
@@ -58,6 +59,7 @@ export function InviteAgentDialog({
   workspaceId,
   connectedAgentIds,
 }: InviteAgentDialogProps) {
+  const { t } = useTranslation("integrations");
   const { workspaces } = useWorkspaceStore();
   const { inviteAgentToWorkspace } = useAgentWorkspaceGrantStore();
 
@@ -131,7 +133,7 @@ export function InviteAgentDialog({
       setApiKey(resp.api_key);
       setStep("key");
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to invite agent"));
+      setError(apiErrorMessage(err, t("inviteAgent.failed")));
     } finally {
       setIsSubmitting(false);
     }
@@ -148,26 +150,24 @@ export function InviteAgentDialog({
         {step === "form" ? (
           <form onSubmit={(e) => void handleSubmit(e)}>
             <DialogHeader>
-              <DialogTitle>Invite Agent</DialogTitle>
+              <DialogTitle>{t("inviteAgent.title")}</DialogTitle>
               <DialogDescription>
-                Connect an agent from a workspace you belong to. It gets a new
-                API key for this workspace — its access elsewhere is
-                unaffected.
+                {t("inviteAgent.description")}
               </DialogDescription>
             </DialogHeader>
 
             <div className="mt-4 space-y-4">
               <div className="space-y-1.5">
                 <label htmlFor="iad-agent" className="text-sm font-medium">
-                  Agent
+                  {t("inviteAgent.agent")}
                 </label>
                 {isLoadingCandidates ? (
                   <p className="text-sm text-muted-foreground">
-                    Loading agents…
+                    {t("inviteAgent.loading")}
                   </p>
                 ) : groups.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    No agents found in any workspace you belong to.
+                    {t("inviteAgent.noAgents")}
                   </p>
                 ) : (
                   <Select
@@ -178,7 +178,7 @@ export function InviteAgentDialog({
                     autoFocus
                   >
                     <option value="" disabled>
-                      Select an agent…
+                      {t("inviteAgent.selectAgent")}
                     </option>
                     {groups.map((group) => (
                       <optgroup
@@ -193,7 +193,7 @@ export function InviteAgentDialog({
                           >
                             {agentLabel(a.name, a.short_tag)}
                             {connectedAgentIds.has(a.id)
-                              ? " (already connected)"
+                              ? t("inviteAgent.alreadyConnected")
                               : ""}
                           </option>
                         ))}
@@ -202,13 +202,13 @@ export function InviteAgentDialog({
                   </Select>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Only agents in workspaces you belong to can be invited.
+                  {t("inviteAgent.hint")}
                 </p>
               </div>
 
               <div className="space-y-1.5">
                 <label htmlFor="iad-role" className="text-sm font-medium">
-                  Role
+                  {t("inviteAgent.role")}
                 </label>
                 <Select
                   id="iad-role"
@@ -217,7 +217,7 @@ export function InviteAgentDialog({
                 >
                   {roleOptions.map((opt) => (
                     <option key={opt.value} value={opt.value}>
-                      {opt.label}
+                      {t(opt.labelKey)}
                     </option>
                   ))}
                 </Select>
@@ -233,18 +233,18 @@ export function InviteAgentDialog({
                 onClick={onClose}
                 disabled={isSubmitting}
               >
-                Cancel
+                {t("inviteAgent.cancel")}
               </Button>
               <Button
                 type="submit"
                 disabled={isSubmitting || !selectedAgentId}
               >
                 {isSubmitting ? (
-                  "Inviting..."
+                  t("inviteAgent.inviting")
                 ) : (
                   <>
                     <UserPlus className="h-4 w-4" />
-                    Invite Agent
+                    {t("inviteAgent.title")}
                   </>
                 )}
               </Button>
@@ -253,9 +253,9 @@ export function InviteAgentDialog({
         ) : (
           <div>
             <DialogHeader>
-              <DialogTitle>Agent Connected</DialogTitle>
+              <DialogTitle>{t("inviteAgent.connectedTitle")}</DialogTitle>
               <DialogDescription>
-                Copy the API key below — it will only be shown once.
+                {t("inviteAgent.connectedDescription")}
               </DialogDescription>
             </DialogHeader>
 

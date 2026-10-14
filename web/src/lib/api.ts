@@ -1,4 +1,5 @@
 import type { ApiError, RefreshResponse } from "@/types";
+import { miscT } from "@/lib/misc-t";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 
@@ -58,7 +59,7 @@ async function refreshOnce(): Promise<string> {
 
   if (!res.ok) {
     accessToken = null;
-    throw new ApiRequestError("Session expired", "UNAUTHORIZED", 401);
+    throw new ApiRequestError(miscT("errors.sessionExpired", "Session expired"), "UNAUTHORIZED", 401);
   }
 
   const data = (await res.json()) as RefreshResponse;
@@ -218,7 +219,7 @@ export async function api<T>(
       if (signal?.aborted) throw err;
       accessToken = null;
       window.location.href = "/login";
-      throw new ApiRequestError("Session expired", "UNAUTHORIZED", 401);
+      throw new ApiRequestError(miscT("errors.sessionExpired", "Session expired"), "UNAUTHORIZED", 401);
     }
   }
 
@@ -235,8 +236,11 @@ export async function api<T>(
   } catch {
     throw new ApiRequestError(
       res.status === 431
-        ? "Your browser is sending a large saved session that was rejected. Please clear this site's cookies and try again."
-        : `Server error (${res.status})`,
+        ? miscT(
+            "errors.sessionTooLarge",
+            "Your browser is sending a large saved session that was rejected. Please clear this site's cookies and try again.",
+          )
+        : miscT("errors.serverError", "Server error ({{status}})", { status: res.status }),
       "SERVER_ERROR",
       res.status,
     );
@@ -245,7 +249,7 @@ export async function api<T>(
   if (!res.ok) {
     const err = data as ApiError;
     throw new ApiRequestError(
-      err.message || err.error || "Request failed",
+      err.message || err.error || miscT("errors.requestFailed", "Request failed"),
       String(err.code || "UNKNOWN"),
       res.status,
       err.validation || err.details,
@@ -300,7 +304,7 @@ export async function apiBlob(
     } catch {
       accessToken = null;
       window.location.href = "/login";
-      throw new ApiRequestError("Session expired", "UNAUTHORIZED", 401);
+      throw new ApiRequestError(miscT("errors.sessionExpired", "Session expired"), "UNAUTHORIZED", 401);
     }
   }
 
@@ -311,11 +315,15 @@ export async function apiBlob(
     try {
       data = await res.json();
     } catch {
-      throw new ApiRequestError(`Server error (${res.status})`, "SERVER_ERROR", res.status);
+      throw new ApiRequestError(
+        miscT("errors.serverError", "Server error ({{status}})", { status: res.status }),
+        "SERVER_ERROR",
+        res.status,
+      );
     }
     const err = data as ApiError;
     throw new ApiRequestError(
-      err.message || err.error || "Request failed",
+      err.message || err.error || miscT("errors.requestFailed", "Request failed"),
       String(err.code || "UNKNOWN"),
       res.status,
       err.validation || err.details,

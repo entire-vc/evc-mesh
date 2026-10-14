@@ -3,6 +3,7 @@ import * as i18nFmt from "@/i18n/format";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useRulesStore } from "@/stores/rules";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 import { AtSign, Bell, Check, CheckCheck, Loader2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -78,7 +79,7 @@ function mentionToRow(m: MentionInboxItem): BellRow {
   return {
     id: m.comment_id,
     kind: "mention",
-    title: `${m.author_name} mentioned you on: ${m.title}`,
+    title: `${m.author_name}${i18n.t("notifications:bell.mentionedYouOn", { title: m.title })}`,
     body: m.comment_body,
     createdAt: m.extracted_at,
     isRead: m.seen_at !== null,
@@ -87,6 +88,7 @@ function mentionToRow(m: MentionInboxItem): BellRow {
 }
 
 export function NotificationBell() {
+  const { t } = useTranslation("notifications");
   const navigate = useNavigate();
   const { user, isAuthenticated } = useAuthStore();
   // Needed by handleOpenSettings (the notification-settings route is
@@ -319,7 +321,7 @@ export function NotificationBell() {
         variant="ghost"
         size="icon"
         onClick={handleToggle}
-        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
+        aria-label={unreadCount > 0 ? t("bell.labelUnread", { count: unreadCount }) : t("bell.label")}
         className="relative"
       >
         <Bell className="h-4 w-4" />
@@ -334,7 +336,7 @@ export function NotificationBell() {
         <div className="absolute right-0 top-full z-50 mt-1 w-80 overflow-hidden rounded-lg border border-border bg-popover shadow-lg">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <span className="text-sm font-medium">Notifications</span>
+            <span className="text-sm font-medium">{t("bell.title")}</span>
             <div className="flex items-center gap-1">
               {isLoading && (
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -345,10 +347,10 @@ export function NotificationBell() {
                   size="sm"
                   className="h-6 gap-1 px-1.5 text-xs text-muted-foreground hover:text-foreground"
                   onClick={handleMarkAll}
-                  title="Mark all as read"
+                  title={t("bell.markAllTitle")}
                 >
                   <CheckCheck className="h-3.5 w-3.5" />
-                  Mark all read
+                  {t("bell.markAll")}
                 </Button>
               )}
               <Button
@@ -356,8 +358,8 @@ export function NotificationBell() {
                 size="icon"
                 className="h-6 w-6 text-muted-foreground hover:text-foreground"
                 onClick={handleOpenSettings}
-                title="Notification settings"
-                aria-label="Notification settings"
+                title={t("bell.settings")}
+                aria-label={t("bell.settings")}
               >
                 <Settings className="h-3.5 w-3.5" />
               </Button>
@@ -368,7 +370,7 @@ export function NotificationBell() {
           <ul className="max-h-96 overflow-y-auto">
             {showEmptyState ? (
               <li className="px-3 py-6 text-center text-sm text-muted-foreground">
-                No notifications
+                {t("bell.empty")}
               </li>
             ) : (
               rows.map((row) => (
@@ -398,7 +400,7 @@ export function NotificationBell() {
             )}
             {mentionsFailed && (
               <li className="px-3 py-2 text-center text-xs text-muted-foreground">
-                Some mentions could not be loaded
+                {t("bell.mentionsFailed")}
               </li>
             )}
           </ul>
@@ -406,7 +408,7 @@ export function NotificationBell() {
           {/* Footer */}
           {unreadItems.length === 0 && rows.length > 0 && (
             <div className="border-t border-border px-3 py-2 text-center text-xs text-muted-foreground">
-              All caught up
+              {t("bell.allCaughtUp")}
             </div>
           )}
         </div>
@@ -427,6 +429,7 @@ interface BellRowItemProps {
 }
 
 function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
+  const { t } = useTranslation("notifications");
   const handleMarkRead = (e: React.MouseEvent) => {
     e.stopPropagation();
     onMarkRead();
@@ -484,7 +487,7 @@ function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium leading-tight">{row.mention ? <>{row.mention.author_name}<AgentShortTag id={row.mention.author_id} /> mentioned you on: {row.mention.title}</> : row.title}</p>
+        <p className="truncate font-medium leading-tight">{row.mention ? <>{row.mention.author_name}<AgentShortTag id={row.mention.author_id} />{t("bell.mentionedYouOn", { title: row.mention.title })}</> : row.title}</p>
         {row.body && (
           <p className={`mt-0.5 line-clamp-2 text-xs ${secondaryText}`}>
             {toPreviewText(row.body)}
@@ -501,7 +504,7 @@ function BellRowItem({ row, onMarkRead, onClick }: BellRowItemProps) {
           // hovered too, so the resting colour follows the row, not the popover.
           className={`ml-auto shrink-0 rounded p-0.5 hover:bg-background hover:text-foreground ${secondaryText}`}
           onClick={handleMarkRead}
-          title="Mark as read"
+          title={t("bell.markRead")}
         >
           <Check className="h-3 w-3" />
         </button>

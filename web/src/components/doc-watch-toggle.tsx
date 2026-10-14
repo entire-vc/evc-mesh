@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, BellOff, BellRing } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
@@ -35,6 +36,7 @@ export function DocWatchToggle({
   documentId: string;
   className?: string;
 }) {
+  const { t } = useTranslation("docs");
   const [state, setState] = useState<DocumentWatchState | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -67,15 +69,15 @@ export function DocWatchToggle({
       setState(next);
       toast.success(
         subscribing
-          ? "Watching this document — you will be told when it changes."
-          : "Stopped watching this document.",
+          ? t("watch.started")
+          : t("watch.stopped"),
       );
     } catch (error) {
-      toast.error(apiErrorMessage(error, "Could not change the subscription"));
+      toast.error(apiErrorMessage(error, t("watch.failed")));
     } finally {
       setBusy(false);
     }
-  }, [busy, documentId, state]);
+  }, [busy, documentId, state, t]);
 
   if (!state) return null;
 
@@ -85,13 +87,13 @@ export function DocWatchToggle({
   // stay one word wide in a row that already holds four controls.
   const why = state.watching
     ? state.source === "author"
-      ? "You are watching this document because you created it. Click to stop."
+      ? t("watch.whyAuthor")
       : state.source === "commenter"
-        ? "You are watching this document because you commented on it. Click to stop."
-        : "You are watching this document. Click to stop."
+        ? t("watch.whyCommenter")
+        : t("watch.whyWatching")
     : state.muted
-      ? "You unsubscribed from this document. Commenting on it will not re-subscribe you. Click to watch again."
-      : "Get notified when this document changes. Edits are grouped, so an editing session is one notification.";
+      ? t("watch.whyMuted")
+      : t("watch.whyNotWatching");
 
   return (
     <Button
@@ -107,11 +109,11 @@ export function DocWatchToggle({
       onClick={() => void toggle()}
     >
       <Icon className="h-3.5 w-3.5" />
-      {state.watching ? "Watching" : "Watch"}
+      {state.watching ? t("watch.watching") : t("watch.watch")}
       {state.watcher_count > 1 && (
         <span
           className="rounded bg-muted px-1 text-[11px] font-medium tabular-nums text-muted-foreground"
-          title={`${state.watcher_count} people and agents are watching this document`}
+          title={t("watch.count", { count: state.watcher_count })}
         >
           {state.watcher_count}
         </span>

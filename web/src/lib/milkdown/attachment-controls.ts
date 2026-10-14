@@ -1,5 +1,6 @@
 import type { EditorView } from "@milkdown/kit/prose/view";
 import type { AttachmentSpan } from "@/lib/milkdown/attachment-spans";
+import i18n from "@/i18n";
 
 /**
  * The small "remove this attachment" button drawn over every image and file
@@ -49,6 +50,7 @@ export function syncAttachmentControls(
   if (spans.length === 0) return;
 
   const containerRect = container.getBoundingClientRect();
+  const removeLabel = i18n.t("misc:editor.removeAttachment");
 
   for (const span of spans) {
     let right: number;
@@ -69,8 +71,8 @@ export function syncAttachmentControls(
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = BUTTON_CLASS;
-    btn.title = "Remove attachment";
-    btn.setAttribute("aria-label", "Remove attachment");
+    btn.title = removeLabel;
+    btn.setAttribute("aria-label", removeLabel);
     btn.textContent = "×";
     btn.style.left = `${right - containerRect.left - 8}px`;
     btn.style.top = `${top - containerRect.top - 8}px`;

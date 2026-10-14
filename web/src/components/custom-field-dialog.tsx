@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Trash2, Plus, Settings2 } from "lucide-react";
 import {
   Dialog,
@@ -24,19 +25,19 @@ interface CustomFieldDialogProps {
   field?: CustomFieldDefinition;
 }
 
-const fieldTypeOptions: { value: FieldType; label: string }[] = [
-  { value: "text", label: "Text" },
-  { value: "number", label: "Number" },
-  { value: "date", label: "Date" },
-  { value: "datetime", label: "Date & Time" },
-  { value: "select", label: "Select" },
-  { value: "multiselect", label: "Multi-Select" },
-  { value: "url", label: "URL" },
-  { value: "email", label: "Email" },
-  { value: "checkbox", label: "Checkbox" },
-  { value: "user_ref", label: "User Reference" },
-  { value: "agent_ref", label: "Agent Reference" },
-  { value: "json", label: "JSON" },
+const fieldTypeValues: FieldType[] = [
+  "text",
+  "number",
+  "date",
+  "datetime",
+  "select",
+  "multiselect",
+  "url",
+  "email",
+  "checkbox",
+  "user_ref",
+  "agent_ref",
+  "json",
 ];
 
 // Represents a single choice with optional label and color.
@@ -84,6 +85,7 @@ export function CustomFieldDialog({
   projectId,
   field,
 }: CustomFieldDialogProps) {
+  const { t } = useTranslation("settings");
   const { createField, updateField } = useCustomFieldStore();
 
   const isEdit = !!field;
@@ -203,12 +205,12 @@ export function CustomFieldDialog({
     e.preventDefault();
 
     if (!name.trim()) {
-      setError("Name is required");
+      setError(t("customField.errors.nameRequired"));
       return;
     }
 
     if (!isEdit && !slug.trim()) {
-      setError("Slug is required");
+      setError(t("customField.errors.slugRequired"));
       return;
     }
 
@@ -216,7 +218,7 @@ export function CustomFieldDialog({
       (fieldType === "select" || fieldType === "multiselect") &&
       choices.filter((c) => c.value.trim() !== "").length === 0
     ) {
-      setError("At least one choice is required for select fields");
+      setError(t("customField.errors.choiceRequired"));
       return;
     }
 
@@ -250,7 +252,7 @@ export function CustomFieldDialog({
       onClose();
     } catch (err) {
       setError(
-        apiErrorMessage(err, "Failed to save custom field"),
+        apiErrorMessage(err, t("customField.errors.saveFailed")),
       );
     } finally {
       setIsSubmitting(false);
@@ -306,23 +308,23 @@ export function CustomFieldDialog({
       <DialogContent onClose={onClose}>
         <DialogHeader>
           <DialogTitle>
-            {isEdit ? "Edit Custom Field" : "Create Custom Field"}
+            {isEdit ? t("customField.title.edit") : t("customField.title.create")}
           </DialogTitle>
           <DialogDescription>
             {isEdit
-              ? "Update the custom field definition."
-              : "Add a new custom field to your project."}
+              ? t("customField.description.edit")
+              : t("customField.description.create")}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="cf-name" className="text-sm font-medium">
-              Name <span className="text-destructive">*</span>
+              {t("customField.fields.name")} <span className="text-destructive">*</span>
             </label>
             <Input
               id="cf-name"
-              placeholder="e.g. Story Points"
+              placeholder={t("customField.fields.namePlaceholder")}
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               autoFocus
@@ -332,7 +334,7 @@ export function CustomFieldDialog({
           {!isEdit && (
             <div className="space-y-1.5">
               <label htmlFor="cf-slug" className="text-sm font-medium">
-                Slug <span className="text-destructive">*</span>
+                {t("customField.fields.slug")} <span className="text-destructive">*</span>
               </label>
               <Input
                 id="cf-slug"
@@ -345,16 +347,16 @@ export function CustomFieldDialog({
 
           <div className="space-y-1.5">
             <label htmlFor="cf-type" className="text-sm font-medium">
-              Field Type <span className="text-destructive">*</span>
+              {t("customField.fields.fieldType")} <span className="text-destructive">*</span>
             </label>
             <Select
               id="cf-type"
               value={fieldType}
               onChange={(e) => setFieldType(e.target.value as FieldType)}
             >
-              {fieldTypeOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
+              {fieldTypeValues.map((value) => (
+                <option key={value} value={value}>
+                  {t(`customField.types.${value}`)}
                 </option>
               ))}
             </Select>
@@ -362,11 +364,11 @@ export function CustomFieldDialog({
 
           <div className="space-y-1.5">
             <label htmlFor="cf-description" className="text-sm font-medium">
-              Description
+              {t("customField.fields.description")}
             </label>
             <Textarea
               id="cf-description"
-              placeholder="Optional description..."
+              placeholder={t("customField.fields.descriptionPlaceholder")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
@@ -378,7 +380,7 @@ export function CustomFieldDialog({
           {showChoicesSection && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">Choices</label>
+                <label className="text-sm font-medium">{t("customField.choices.title")}</label>
                 <Button
                   type="button"
                   variant="ghost"
@@ -387,14 +389,14 @@ export function CustomFieldDialog({
                   onClick={() => setAdvancedMode((m) => !m)}
                 >
                   <Settings2 className="h-3 w-3" />
-                  {advancedMode ? "Simple mode" : "Advanced (label + color)"}
+                  {advancedMode ? t("customField.choices.simpleMode") : t("customField.choices.advancedMode")}
                 </Button>
               </div>
               <div className="space-y-2">
                 {choices.map((choice, index) => (
                   <div key={index} className="flex items-center gap-2">
                     <Input
-                      placeholder={`Value ${index + 1}`}
+                      placeholder={t("customField.choices.valuePlaceholder", { n: index + 1 })}
                       value={choice.value}
                       onChange={(e) => handleChoiceValueChange(index, e.target.value)}
                       className={advancedMode ? "flex-1" : ""}
@@ -402,7 +404,7 @@ export function CustomFieldDialog({
                     {advancedMode && (
                       <>
                         <Input
-                          placeholder="Display label"
+                          placeholder={t("customField.choices.labelPlaceholder")}
                           value={choice.label !== choice.value ? choice.label : ""}
                           onChange={(e) => handleChoiceLabelChange(index, e.target.value || choice.value)}
                           className="flex-1"
@@ -412,7 +414,7 @@ export function CustomFieldDialog({
                           value={choice.color || "#6b7280"}
                           onChange={(e) => handleChoiceColorChange(index, e.target.value)}
                           className="h-8 w-10 shrink-0 cursor-pointer p-0.5"
-                          title="Choice color"
+                          title={t("customField.choices.colorTitle")}
                         />
                       </>
                     )}
@@ -438,7 +440,7 @@ export function CustomFieldDialog({
                 className="mt-1"
               >
                 <Plus className="mr-1 h-3.5 w-3.5" />
-                Add Choice
+                {t("customField.choices.add")}
               </Button>
             </div>
           )}
@@ -446,29 +448,29 @@ export function CustomFieldDialog({
           {showNumberSection && (
             <div className="space-y-1.5">
               <label className="text-sm font-medium">
-                Number Constraints (optional)
+                {t("customField.number.constraints")}
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label htmlFor="cf-min" className="text-xs text-muted-foreground">
-                    Min
+                    {t("customField.number.min")}
                   </label>
                   <Input
                     id="cf-min"
                     type="number"
-                    placeholder="Min"
+                    placeholder={t("customField.number.min")}
                     value={numberMin}
                     onChange={(e) => setNumberMin(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
                   <label htmlFor="cf-max" className="text-xs text-muted-foreground">
-                    Max
+                    {t("customField.number.max")}
                   </label>
                   <Input
                     id="cf-max"
                     type="number"
-                    placeholder="Max"
+                    placeholder={t("customField.number.max")}
                     value={numberMax}
                     onChange={(e) => setNumberMax(e.target.value)}
                   />
@@ -480,7 +482,7 @@ export function CustomFieldDialog({
           {showTextSection && (
             <div className="space-y-1.5">
               <label className="text-sm font-medium">
-                Text Constraints (optional)
+                {t("customField.text.constraints")}
               </label>
               <div className="space-y-3">
                 <div className="space-y-1">
@@ -488,11 +490,11 @@ export function CustomFieldDialog({
                     htmlFor="cf-regex"
                     className="text-xs text-muted-foreground"
                   >
-                    Regex pattern
+                    {t("customField.text.regex")}
                   </label>
                   <Input
                     id="cf-regex"
-                    placeholder="e.g. ^[a-z]+$"
+                    placeholder={t("customField.text.regexPlaceholder")}
                     value={textRegex}
                     onChange={(e) => setTextRegex(e.target.value)}
                     className="font-mono text-sm"
@@ -503,12 +505,12 @@ export function CustomFieldDialog({
                     htmlFor="cf-maxlen"
                     className="text-xs text-muted-foreground"
                   >
-                    Max length
+                    {t("customField.text.maxLength")}
                   </label>
                   <Input
                     id="cf-maxlen"
                     type="number"
-                    placeholder="e.g. 255"
+                    placeholder={t("customField.text.maxLengthPlaceholder")}
                     value={textMaxLength}
                     onChange={(e) => setTextMaxLength(e.target.value)}
                     min={1}
@@ -528,7 +530,7 @@ export function CustomFieldDialog({
                 className="h-4 w-4 rounded border-input"
               />
               <label htmlFor="cf-required" className="text-sm font-medium">
-                Required field
+                {t("customField.required")}
               </label>
             </div>
 
@@ -544,11 +546,11 @@ export function CustomFieldDialog({
                 htmlFor="cf-visible-agents"
                 className="text-sm font-medium"
               >
-                Visible to agents
+                {t("customField.visibleToAgents")}
               </label>
               {isVisibleToAgents && (
                 <span className="text-xs text-muted-foreground">
-                  (agents can read/write this field via MCP)
+                  {t("customField.visibleToAgentsHint")}
                 </span>
               )}
             </div>
@@ -563,14 +565,14 @@ export function CustomFieldDialog({
               onClick={onClose}
               disabled={isSubmitting}
             >
-              Cancel
+              {t("customField.cancel")}
             </Button>
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting
-                ? "Saving..."
+                ? t("customField.saving")
                 : isEdit
-                  ? "Save Changes"
-                  : "Create Field"}
+                  ? t("customField.saveChanges")
+                  : t("customField.createField")}
             </Button>
           </DialogFooter>
         </form>

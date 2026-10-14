@@ -3,6 +3,7 @@ import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { asCapabilityList } from "@/lib/agent-utils";
 import {
   AlertTriangle,
@@ -76,10 +77,10 @@ import type {
   WorkspaceRole,
 } from "@/types";
 
-const roleOptions: { value: WorkspaceRole; label: string }[] = [
-  { value: "admin", label: "Admin" },
-  { value: "member", label: "Member" },
-  { value: "viewer", label: "Viewer" },
+const roleOptions: { value: WorkspaceRole; labelKey: string }[] = [
+  { value: "admin", labelKey: "workspace.roles.admin" },
+  { value: "member", labelKey: "workspace.roles.member" },
+  { value: "viewer", labelKey: "workspace.roles.viewer" },
 ];
 
 function roleBadgeVariant(role: WorkspaceRole): "default" | "secondary" | "outline" {
@@ -122,6 +123,7 @@ function agentStatusColor(status: string): string {
 // ---- Team section sub-components ----
 
 function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
+  const { t } = useTranslation("settings");
   const caps = asCapabilityList(agent.capabilities);
   const [expanded, setExpanded] = useState(false);
   return (
@@ -144,13 +146,13 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
         </Badge>
         <span
           className="hidden max-w-[14rem] truncate font-mono text-xs text-muted-foreground sm:inline"
-          title="Harness · model"
+          title={t("workspace.team.harnessModelTitle")}
         >
           {agent.agent_type}
           {agent.model ? ` · ${agent.model}` : ""}
         </span>
         <span className="text-xs text-muted-foreground shrink-0">
-          {agent.current_tasks}/{agent.max_concurrent_tasks} tasks
+          {t("workspace.team.tasksCount", { current: agent.current_tasks, max: agent.max_concurrent_tasks })}
         </span>
         {caps.slice(0, 2).map((cap) => (
           <Badge key={cap} variant="outline" className="text-xs shrink-0">
@@ -166,20 +168,20 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
       {expanded && (
         <div className="border-t border-border px-4 py-3 space-y-2 text-sm bg-muted/30">
           <div className="flex gap-2">
-            <span className="text-muted-foreground w-36 shrink-0">Harness / model</span>
+            <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.harnessModel")}</span>
             <span className="font-mono">
-              {agent.agent_type} / {agent.model || "not reported"}
+              {agent.agent_type} / {agent.model || t("workspace.team.notReported")}
             </span>
           </div>
           {agent.responsibility_zone && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">Responsibility zone</span>
+              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.responsibilityZone")}</span>
               <span>{agent.responsibility_zone}</span>
             </div>
           )}
           {agent.working_hours && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">Working hours</span>
+              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.workingHours")}</span>
               <span className="flex items-center gap-1">
                 <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                 {agent.working_hours}
@@ -188,19 +190,19 @@ function AgentRow({ agent }: { agent: TeamDirectoryAgent }) {
           )}
           {agent.accepts_from.length > 0 && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">Accepts from</span>
+              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.acceptsFrom")}</span>
               <span>{agent.accepts_from.join(", ")}</span>
             </div>
           )}
           {agent.profile_description && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">Description</span>
+              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.description")}</span>
               <span className="text-muted-foreground">{agent.profile_description}</span>
             </div>
           )}
           {caps.length > 0 && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-36 shrink-0">All capabilities</span>
+              <span className="text-muted-foreground w-36 shrink-0">{t("workspace.team.allCapabilities")}</span>
               <div className="flex flex-wrap gap-1">
                 {caps.map((cap) => (
                   <Badge key={cap} variant="outline" className="text-xs">
@@ -273,7 +275,7 @@ function WsAssigneeSelect({
   onChange,
   agents,
   members,
-  placeholder = "Select assignee...",
+  placeholder,
   className,
 }: {
   value: string;
@@ -283,15 +285,16 @@ function WsAssigneeSelect({
   placeholder?: string;
   className?: string;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <Select
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={className}
     >
-      <option value="">{placeholder}</option>
+      <option value="">{placeholder ?? t("workspace.assignment.selectAssignee")}</option>
       {agents.length > 0 && (
-        <optgroup label="Agents">
+        <optgroup label={t("workspace.assignment.agents")}>
           {agents.map((a) => (
             <option key={a.id} value={`agent:${a.id}`}>
               {agentLabel(a.name, a.short_tag)}
@@ -300,7 +303,7 @@ function WsAssigneeSelect({
         </optgroup>
       )}
       {members.length > 0 && (
-        <optgroup label="Members">
+        <optgroup label={t("workspace.assignment.members")}>
           {members.map((m) => (
             <option key={m.user_id} value={`user:${m.user_id}`}>
               {inlineLabel(m.user)}
@@ -313,6 +316,13 @@ function WsAssigneeSelect({
 }
 
 const PRIORITIES = ["urgent", "high", "medium", "low", "none"];
+const PRIORITY_LABEL_KEYS: Record<string, string> = {
+  urgent: "workspace.priority.urgent",
+  high: "workspace.priority.high",
+  medium: "workspace.priority.medium",
+  low: "workspace.priority.low",
+  none: "workspace.priority.none",
+};
 
 function AssignmentRulesEditor({
   initialConfig,
@@ -321,6 +331,7 @@ function AssignmentRulesEditor({
   agents,
   members,
 }: AssignmentRulesEditorProps) {
+  const { t } = useTranslation("settings");
   const [defaultAssignee, setDefaultAssignee] = useState(
     initialConfig.default_assignee ?? "",
   );
@@ -370,11 +381,11 @@ function AssignmentRulesEditor({
     }
     try {
       await onSave(config);
-      setFeedback({ type: "success", message: "Assignment rules saved." });
+      setFeedback({ type: "success", message: t("workspace.assignment.saved") });
     } catch (err) {
       setFeedback({
         type: "error",
-        message: apiErrorMessage(err, "Failed to save rules"),
+        message: apiErrorMessage(err, t("workspace.assignment.saveFailed")),
       });
     }
   };
@@ -383,20 +394,20 @@ function AssignmentRulesEditor({
     <div className="space-y-5">
       {/* Default assignee */}
       <div className="space-y-1.5">
-        <label className="text-sm font-medium">Default Assignee</label>
+        <label className="text-sm font-medium">{t("workspace.assignment.defaultAssignee")}</label>
         <WsAssigneeSelect
           value={defaultAssignee}
           onChange={setDefaultAssignee}
           agents={agents}
           members={members}
-          placeholder="None"
+          placeholder={t("workspace.assignment.none")}
         />
       </div>
 
       {/* By type rules */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">By Task Type</label>
+          <label className="text-sm font-medium">{t("workspace.assignment.byType")}</label>
           <Button
             type="button"
             variant="outline"
@@ -406,12 +417,12 @@ function AssignmentRulesEditor({
             }
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Rule
+            {t("workspace.assignment.addRule")}
           </Button>
         </div>
         {byType.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            No type-based rules. Add rules to assign tasks automatically by type.
+            {t("workspace.assignment.noTypeRules")}
           </p>
         ) : (
           <div className="space-y-2">
@@ -426,7 +437,7 @@ function AssignmentRulesEditor({
                       ),
                     )
                   }
-                  placeholder="Task type (e.g. bug)"
+                  placeholder={t("workspace.assignment.typePlaceholder")}
                   className="flex-1"
                 />
                 <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -441,7 +452,7 @@ function AssignmentRulesEditor({
                   }
                   agents={agents}
                   members={members}
-                  placeholder="Select assignee..."
+                  placeholder={t("workspace.assignment.selectAssignee")}
                   className="flex-1"
                 />
                 <Button
@@ -464,7 +475,7 @@ function AssignmentRulesEditor({
       {/* By priority rules */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">By Priority</label>
+          <label className="text-sm font-medium">{t("workspace.assignment.byPriority")}</label>
           <Button
             type="button"
             variant="outline"
@@ -477,12 +488,12 @@ function AssignmentRulesEditor({
             }
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Rule
+            {t("workspace.assignment.addRule")}
           </Button>
         </div>
         {byPriority.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            No priority-based rules configured.
+            {t("workspace.assignment.noPriorityRules")}
           </p>
         ) : (
           <div className="space-y-2">
@@ -501,7 +512,7 @@ function AssignmentRulesEditor({
                 >
                   {PRIORITIES.map((p) => (
                     <option key={p} value={p} className="capitalize">
-                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                      {t(PRIORITY_LABEL_KEYS[p]!)}
                     </option>
                   ))}
                 </Select>
@@ -517,7 +528,7 @@ function AssignmentRulesEditor({
                   }
                   agents={agents}
                   members={members}
-                  placeholder="Select assignee..."
+                  placeholder={t("workspace.assignment.selectAssignee")}
                   className="flex-1"
                 />
                 <Button
@@ -540,7 +551,7 @@ function AssignmentRulesEditor({
       {/* Fallback chain */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">Fallback Chain</label>
+          <label className="text-sm font-medium">{t("workspace.assignment.fallbackChain")}</label>
           <Button
             type="button"
             variant="outline"
@@ -548,14 +559,14 @@ function AssignmentRulesEditor({
             onClick={() => setFallbackChain((prev) => [...prev, ""])}
           >
             <Plus className="h-3.5 w-3.5" />
-            Add
+            {t("workspace.assignment.add")}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Ordered list of assignees tried if primary assignment fails.
+          {t("workspace.assignment.fallbackHint")}
         </p>
         {fallbackChain.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No fallback chain configured.</p>
+          <p className="text-xs text-muted-foreground">{t("workspace.assignment.noFallback")}</p>
         ) : (
           <div className="space-y-2">
             {fallbackChain.map((val, i) => (
@@ -572,7 +583,7 @@ function AssignmentRulesEditor({
                   }
                   agents={agents}
                   members={members}
-                  placeholder="Select assignee..."
+                  placeholder={t("workspace.assignment.selectAssignee")}
                   className="flex-1"
                 />
                 <Button
@@ -606,7 +617,7 @@ function AssignmentRulesEditor({
       <div className="flex justify-end">
         <Button type="button" onClick={handleSave} disabled={isSaving}>
           <Save className="h-4 w-4" />
-          {isSaving ? "Saving..." : "Save Rules"}
+          {isSaving ? t("workspace.assignment.saving") : t("workspace.assignment.saveRules")}
         </Button>
       </div>
     </div>
@@ -616,6 +627,7 @@ function AssignmentRulesEditor({
 // ---- Violations list ----
 
 function ViolationRow({ v }: { v: RuleViolation }) {
+  const { t } = useTranslation("settings");
   return (
     <div className="flex items-start gap-3 py-2.5 border-b border-border last:border-0">
       <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
@@ -634,7 +646,7 @@ function ViolationRow({ v }: { v: RuleViolation }) {
         <p className="text-xs text-muted-foreground mt-0.5">
           {formatDate(v.created_at)}
           {v.project_id && (
-            <span className="ml-2">Project: {v.project_id.slice(0, 8)}</span>
+            <span className="ml-2">{t("workspace.violations.project", { id: v.project_id.slice(0, 8) })}</span>
           )}
         </p>
         {v.violation_detail != null && (
@@ -654,6 +666,7 @@ function ViolationRow({ v }: { v: RuleViolation }) {
 export function WorkspaceSettingsPage() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
   const navigate = useNavigate();
+  const { t } = useTranslation("settings");
   const { currentWorkspace, updateWorkspace, uploadIcon, deleteWorkspace } = useWorkspaceStore();
   const { user, updateProfile, checkUsername } = useAuthStore();
   const {
@@ -766,14 +779,14 @@ export function WorkspaceSettingsPage() {
   const [activeTab, setActiveTab] = useState("general");
 
   const WS_TABS = [
-    { id: "profile", label: "Profile" },
-    { id: "general", label: "General" },
-    { id: "members", label: "Members" },
-    { id: "team", label: "Team Directory" },
-    { id: "assignment", label: "Assignment Rules" },
-    { id: "violations", label: "Violations" },
-    { id: "workflow-templates", label: "Workflow Templates" },
-    { id: "config", label: "Config" },
+    { id: "profile", label: t("workspace.tabs.profile") },
+    { id: "general", label: t("workspace.tabs.general") },
+    { id: "members", label: t("workspace.tabs.members") },
+    { id: "team", label: t("workspace.tabs.team") },
+    { id: "assignment", label: t("workspace.tabs.assignment") },
+    { id: "violations", label: t("workspace.tabs.violations") },
+    { id: "workflow-templates", label: t("workspace.tabs.workflowTemplates") },
+    { id: "config", label: t("workspace.tabs.config") },
   ];
 
   // Config Import/Export state
@@ -892,22 +905,22 @@ export function WorkspaceSettingsPage() {
     e.preventDefault();
     const trimmed = profileName.trim();
     if (!trimmed) {
-      setProfileFeedback({ type: "error", message: "Display name is required" });
+      setProfileFeedback({ type: "error", message: t("workspace.profile.nameRequired") });
       return;
     }
     if ([...trimmed].length > 100) {
-      setProfileFeedback({ type: "error", message: "Display name must be at most 100 characters" });
+      setProfileFeedback({ type: "error", message: t("workspace.profile.nameTooLong") });
       return;
     }
     setIsSavingProfile(true);
     setProfileFeedback(null);
     try {
       await updateProfile(trimmed, profileUsername.trim() || undefined);
-      setProfileFeedback({ type: "success", message: "Profile saved." });
+      setProfileFeedback({ type: "success", message: t("workspace.profile.saved") });
     } catch (err) {
       setProfileFeedback({
         type: "error",
-        message: apiErrorMessage(err, "Failed to save profile"),
+        message: apiErrorMessage(err, t("workspace.profile.saveFailed")),
       });
     } finally {
       setIsSavingProfile(false);
@@ -918,18 +931,18 @@ export function WorkspaceSettingsPage() {
     e.preventDefault();
     if (!currentWorkspace) return;
     if (!wsName.trim()) {
-      setGeneralFeedback({ type: "error", message: "Name is required" });
+      setGeneralFeedback({ type: "error", message: t("workspace.general.nameRequired") });
       return;
     }
     setIsSavingGeneral(true);
     setGeneralFeedback(null);
     try {
       await updateWorkspace(currentWorkspace.id, { name: wsName.trim() });
-      setGeneralFeedback({ type: "success", message: "Workspace settings saved." });
+      setGeneralFeedback({ type: "success", message: t("workspace.general.saved") });
     } catch (err) {
       setGeneralFeedback({
         type: "error",
-        message: apiErrorMessage(err, "Failed to save settings"),
+        message: apiErrorMessage(err, t("workspace.general.saveFailed")),
       });
     } finally {
       setIsSavingGeneral(false);
@@ -942,11 +955,11 @@ export function WorkspaceSettingsPage() {
     if (!file) return;
 
     if (file.type !== "image/png") {
-      setIconFeedback({ type: "error", message: "Only PNG files are accepted." });
+      setIconFeedback({ type: "error", message: t("workspace.general.iconPngOnly") });
       return;
     }
     if (file.size > 500 * 1024) {
-      setIconFeedback({ type: "error", message: "Icon must be ≤ 500 KB." });
+      setIconFeedback({ type: "error", message: t("workspace.general.iconTooLarge") });
       return;
     }
 
@@ -954,11 +967,11 @@ export function WorkspaceSettingsPage() {
     setIconFeedback(null);
     try {
       await uploadIcon(currentWorkspace.id, file);
-      setIconFeedback({ type: "success", message: "Icon updated." });
+      setIconFeedback({ type: "success", message: t("workspace.general.iconUpdated") });
     } catch (err) {
       setIconFeedback({
         type: "error",
-        message: apiErrorMessage(err, "Upload failed."),
+        message: apiErrorMessage(err, t("workspace.general.uploadFailed")),
       });
     } finally {
       setIsUploadingIcon(false);
@@ -983,7 +996,7 @@ export function WorkspaceSettingsPage() {
       navigate("/", { replace: true });
     } catch (err) {
       setDeleteWorkspaceError(
-        apiErrorMessage(err, "Failed to delete workspace."),
+        apiErrorMessage(err, t("workspace.danger.deleteFailed")),
       );
       setIsDeletingWorkspace(false);
     }
@@ -1010,7 +1023,7 @@ export function WorkspaceSettingsPage() {
     if (!currentWorkspace || !memberToRename) return;
     const trimmed = renameValue.trim();
     if (!trimmed) {
-      setRenameError("Name is required");
+      setRenameError(t("workspace.general.nameRequired"));
       return;
     }
     setIsRenaming(true);
@@ -1019,7 +1032,7 @@ export function WorkspaceSettingsPage() {
       await updateWorkspaceMemberName(currentWorkspace.id, memberToRename.user_id, trimmed);
       setMemberToRename(null);
     } catch (err) {
-      setRenameError(apiErrorMessage(err, "Failed to update name"));
+      setRenameError(apiErrorMessage(err, t("workspace.members.renameFailed")));
     } finally {
       setIsRenaming(false);
     }
@@ -1038,7 +1051,7 @@ export function WorkspaceSettingsPage() {
       await removeWorkspaceMember(currentWorkspace.id, memberToRemove.user_id);
       setMemberToRemove(null);
     } catch (err) {
-      setRemoveError(apiErrorMessage(err, "Failed to remove member"));
+      setRemoveError(apiErrorMessage(err, t("workspace.members.removeFailed")));
     } finally {
       setIsRemoving(false);
     }
@@ -1064,7 +1077,7 @@ export function WorkspaceSettingsPage() {
       setGrantToRevoke(null);
     } catch (err) {
       setRevokeGrantError(
-        apiErrorMessage(err, "Failed to revoke agent connection"),
+        apiErrorMessage(err, t("workspace.agents.revokeFailed")),
       );
     } finally {
       setIsRevokingGrant(false);
@@ -1095,7 +1108,7 @@ export function WorkspaceSettingsPage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setExportError(apiErrorMessage(err, "Export failed"));
+      setExportError(apiErrorMessage(err, t("workspace.config.exportFailed")));
     } finally {
       setIsExporting(false);
     }
@@ -1123,7 +1136,7 @@ export function WorkspaceSettingsPage() {
       setImportConfigResult(result);
       setConfigYamlText("");
     } catch (err) {
-      setImportConfigError(apiErrorMessage(err, "Import failed"));
+      setImportConfigError(apiErrorMessage(err, t("workspace.config.importFailed")));
     } finally {
       setIsImportingConfig(false);
     }
@@ -1150,7 +1163,7 @@ export function WorkspaceSettingsPage() {
       setImportTeamResult(result);
       setTeamYamlText("");
     } catch (err) {
-      setImportTeamError(apiErrorMessage(err, "Team import failed"));
+      setImportTeamError(apiErrorMessage(err, t("workspace.config.teamImportFailed")));
     } finally {
       setIsImportingTeam(false);
     }
@@ -1163,7 +1176,7 @@ export function WorkspaceSettingsPage() {
     try {
       parsed = JSON.parse(templatesEditorValue) as Record<string, WorkflowRulesConfig>;
     } catch {
-      setTemplatesEditorError("Invalid JSON. Please fix the syntax and try again.");
+      setTemplatesEditorError(t("workspace.templates.invalidJson"));
       return;
     }
     setIsSavingTemplates(true);
@@ -1173,7 +1186,7 @@ export function WorkspaceSettingsPage() {
       setTemplatesSaved(true);
       setTimeout(() => setTemplatesSaved(false), 3000);
     } catch (err) {
-      setTemplatesEditorError(apiErrorMessage(err, "Failed to save templates"));
+      setTemplatesEditorError(apiErrorMessage(err, t("workspace.templates.saveFailed")));
     } finally {
       setIsSavingTemplates(false);
     }
@@ -1184,11 +1197,11 @@ export function WorkspaceSettingsPage() {
       <div className="mx-auto max-w-2xl space-y-6">
         <div className="flex items-center gap-3">
           <Settings className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-2xl font-bold tracking-tight">Workspace Settings</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t("workspace.title")}</h1>
         </div>
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            Workspace &quot;{wsSlug}&quot; not found
+            {t("workspace.notFound", { slug: wsSlug })}
           </CardContent>
         </Card>
       </div>
@@ -1227,12 +1240,10 @@ export function WorkspaceSettingsPage() {
           <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0 space-y-1">
             <p className="text-sm font-medium text-destructive">
-              Could not determine your role in this workspace
+              {t("workspace.roleError.title")}
             </p>
             <p className="text-sm text-muted-foreground">
-              {myRoleError} — admin controls are hidden until this is
-              resolved. This does not mean you lack permission, only that we
-              could not check.
+              {t("workspace.roleError.detail", { error: myRoleError })}
             </p>
           </div>
           <Button
@@ -1241,7 +1252,7 @@ export function WorkspaceSettingsPage() {
             size="sm"
             onClick={() => currentWorkspace && void fetchMyRole(currentWorkspace.id)}
           >
-            Retry
+            {t("workspace.roleError.retry")}
           </Button>
         </div>
       )}
@@ -1249,35 +1260,35 @@ export function WorkspaceSettingsPage() {
       {activeTab === "profile" && (
       <Card>
         <CardHeader>
-          <CardTitle>Profile</CardTitle>
-          <CardDescription>Your display name shown in comments, activity, and team directory.</CardDescription>
+          <CardTitle>{t("workspace.tabs.profile")}</CardTitle>
+          <CardDescription>{t("workspace.profile.description")}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSaveProfile} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="profile-name" className="text-sm font-medium">
-                Display name <span className="text-destructive">*</span>
+                {t("workspace.profile.displayName")} <span className="text-destructive">*</span>
               </label>
               <Input
                 id="profile-name"
                 value={profileName}
                 onChange={(e) => setProfileName(e.target.value)}
-                placeholder="Your name"
+                placeholder={t("workspace.profile.namePlaceholder")}
                 maxLength={100}
               />
               <p className="text-xs text-muted-foreground">
-                Current email: {user?.email}
+                {t("workspace.profile.currentEmail", { email: user?.email })}
               </p>
             </div>
             <div className="space-y-1.5">
               <label htmlFor="profile-username" className="text-sm font-medium">
-                Username
+                {t("workspace.profile.username")}
               </label>
               <Input
                 id="profile-username"
                 value={profileUsername}
                 onChange={(e) => handleUsernameChange(e.target.value.toLowerCase())}
-                placeholder="e.g. john-doe"
+                placeholder={t("workspace.profile.usernamePlaceholder")}
                 maxLength={40}
                 className={
                   usernameStatus === "taken" || usernameStatus === "invalid"
@@ -1288,16 +1299,16 @@ export function WorkspaceSettingsPage() {
                 }
               />
               {usernameStatus === "checking" && (
-                <p className="text-xs text-muted-foreground">Checking availability…</p>
+                <p className="text-xs text-muted-foreground">{t("workspace.profile.checking")}</p>
               )}
               {usernameStatus === "available" && (
-                <p className="text-xs text-green-600">Username is available</p>
+                <p className="text-xs text-green-600">{t("workspace.profile.usernameAvailable")}</p>
               )}
               {usernameStatus === "taken" && (
-                <p className="text-xs text-destructive">Username is already taken</p>
+                <p className="text-xs text-destructive">{t("workspace.profile.usernameTaken")}</p>
               )}
               {usernameStatus === "invalid" && (
-                <p className="text-xs text-destructive">2–40 characters: lowercase letters, digits, hyphens; no leading/trailing hyphens</p>
+                <p className="text-xs text-destructive">{t("workspace.profile.usernameInvalid")}</p>
               )}
             </div>
             <LanguageSelect />
@@ -1320,7 +1331,7 @@ export function WorkspaceSettingsPage() {
             )}
             <Button type="submit" size="sm" disabled={isSavingProfile}>
               <Save className="h-3.5 w-3.5" />
-              {isSavingProfile ? "Saving..." : "Save profile"}
+              {isSavingProfile ? t("workspace.assignment.saving") : t("workspace.profile.save")}
             </Button>
           </form>
         </CardContent>
@@ -1331,25 +1342,25 @@ export function WorkspaceSettingsPage() {
       {activeTab === "general" && (
       <Card>
         <CardHeader>
-          <CardTitle>General</CardTitle>
-          <CardDescription>Basic workspace information</CardDescription>
+          <CardTitle>{t("workspace.tabs.general")}</CardTitle>
+          <CardDescription>{t("workspace.general.description")}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSaveGeneral} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="ws-name" className="text-sm font-medium">
-                Workspace name <span className="text-destructive">*</span>
+                {t("workspace.general.name")} <span className="text-destructive">*</span>
               </label>
               <Input
                 id="ws-name"
                 value={wsName}
                 onChange={(e) => setWsName(e.target.value)}
-                placeholder="My Workspace"
+                placeholder={t("workspace.general.namePlaceholder")}
               />
             </div>
             <div className="space-y-1.5">
               <label htmlFor="ws-slug" className="text-sm font-medium">
-                Slug
+                {t("workspace.general.slug")}
               </label>
               <Input
                 id="ws-slug"
@@ -1358,7 +1369,7 @@ export function WorkspaceSettingsPage() {
                 className="bg-muted text-muted-foreground"
               />
               <p className="text-xs text-muted-foreground">
-                Workspace slug is read-only and used in URLs.
+                {t("workspace.general.slugHint")}
               </p>
             </div>
 
@@ -1376,7 +1387,7 @@ export function WorkspaceSettingsPage() {
 
             <div className="flex justify-end">
               <Button type="submit" disabled={isSavingGeneral}>
-                {isSavingGeneral ? "Saving..." : "Save Changes"}
+                {isSavingGeneral ? t("workspace.assignment.saving") : t("workspace.general.saveChanges")}
               </Button>
             </div>
           </form>
@@ -1388,8 +1399,8 @@ export function WorkspaceSettingsPage() {
       {activeTab === "general" && (
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>Branding</CardTitle>
-          <CardDescription>Custom workspace icon shown in the sidebar and browser tab</CardDescription>
+          <CardTitle>{t("workspace.branding.title")}</CardTitle>
+          <CardDescription>{t("workspace.branding.description")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4">
@@ -1420,9 +1431,9 @@ export function WorkspaceSettingsPage() {
                 onClick={() => iconFileInputRef.current?.click()}
               >
                 <Upload className="mr-2 h-4 w-4" />
-                {isUploadingIcon ? "Uploading…" : "Upload PNG icon"}
+                {isUploadingIcon ? t("workspace.branding.uploading") : t("workspace.branding.upload")}
               </Button>
-              <p className="text-xs text-muted-foreground">PNG only · max 500 KB</p>
+              <p className="text-xs text-muted-foreground">{t("workspace.branding.hint")}</p>
               {iconFeedback && (
                 <p
                   className={
@@ -1446,23 +1457,22 @@ export function WorkspaceSettingsPage() {
       {activeTab === "general" && canDeleteWorkspace && (
       <Card className="mt-4 border-destructive/50">
         <CardHeader>
-          <CardTitle className="text-destructive">Danger Zone</CardTitle>
-          <CardDescription>Irreversible actions for this workspace</CardDescription>
+          <CardTitle className="text-destructive">{t("workspace.danger.title")}</CardTitle>
+          <CardDescription>{t("workspace.danger.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between rounded-lg border border-destructive/30 p-4">
             <div>
-              <p className="text-sm font-medium">Delete Workspace</p>
+              <p className="text-sm font-medium">{t("workspace.danger.deleteTitle")}</p>
               <p className="text-sm text-muted-foreground">
-                Permanently delete this workspace, its projects, tasks, and
-                comments for everyone in it. This action cannot be undone.
+                {t("workspace.danger.deleteDescription")}
               </p>
             </div>
             <Button
               variant="destructive"
               onClick={() => setDeleteWorkspaceDialogOpen(true)}
             >
-              Delete
+              {t("workspace.danger.delete")}
             </Button>
           </div>
           {deleteWorkspaceError && (
@@ -1479,9 +1489,9 @@ export function WorkspaceSettingsPage() {
           <div className="flex items-center gap-2">
             <Users className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1.5">
-              <CardTitle>Team Directory</CardTitle>
+              <CardTitle>{t("workspace.tabs.team")}</CardTitle>
               <CardDescription>
-                All agents and humans in this workspace
+                {t("workspace.team.description2")}
               </CardDescription>
             </div>
           </div>
@@ -1497,7 +1507,7 @@ export function WorkspaceSettingsPage() {
             (teamDirectory.agents.length === 0 &&
               teamDirectory.humans.length === 0) ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No team members found. Agents appear here after registering.
+              {t("workspace.team.empty")}
             </p>
           ) : (
             <div className="space-y-4">
@@ -1506,7 +1516,7 @@ export function WorkspaceSettingsPage() {
                   <div className="flex items-center gap-2">
                     <Bot className="h-4 w-4 text-muted-foreground" />
                     <h3 className="text-sm font-medium text-muted-foreground">
-                      Agents ({teamDirectory.agents.length})
+                      {t("workspace.team.agentsCount", { n: teamDirectory.agents.length })}
                     </h3>
                   </div>
                   <div className="space-y-1.5">
@@ -1521,7 +1531,7 @@ export function WorkspaceSettingsPage() {
                   <div className="flex items-center gap-2">
                     <Users className="h-4 w-4 text-muted-foreground" />
                     <h3 className="text-sm font-medium text-muted-foreground">
-                      Humans ({teamDirectory.humans.length})
+                      {t("workspace.team.humansCount", { n: teamDirectory.humans.length })}
                     </h3>
                   </div>
                   <div className="space-y-1.5">
@@ -1543,16 +1553,16 @@ export function WorkspaceSettingsPage() {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-[200px] space-y-1.5">
-              <CardTitle>Members</CardTitle>
+              <CardTitle>{t("workspace.tabs.members")}</CardTitle>
               <CardDescription>
-                Manage who has access to this workspace
+                {t("workspace.members.description")}
               </CardDescription>
             </div>
             {canManageMembers && (
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={() => setInviteDialogOpen(true)}>
                   <Users className="h-4 w-4" />
-                  Invite Member
+                  {t("workspace.members.inviteMember")}
                 </Button>
                 <Button
                   size="sm"
@@ -1560,7 +1570,7 @@ export function WorkspaceSettingsPage() {
                   onClick={() => setInviteAgentDialogOpen(true)}
                 >
                   <Bot className="h-4 w-4" />
-                  Invite Agent
+                  {t("workspace.members.inviteAgent")}
                 </Button>
               </div>
             )}
@@ -1582,7 +1592,7 @@ export function WorkspaceSettingsPage() {
             </div>
           ) : workspaceMembers.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No members found.
+              {t("workspace.members.empty")}
             </p>
           ) : (
             <div className="divide-y divide-border">
@@ -1618,14 +1628,14 @@ export function WorkspaceSettingsPage() {
                           {displayName(member.user)}
                         </span>
                         {isMe && (
-                          <span className="text-xs text-muted-foreground">(you)</span>
+                          <span className="text-xs text-muted-foreground">{t("workspace.members.you")}</span>
                         )}
                         <RoleIcon role={member.role} />
                       </div>
                       {isNamePlaceholder(member.user) ? (
                         <p className="truncate text-xs text-muted-foreground italic">
-                          No name set
-                          {canManageMembers && !isMe && " — click the pencil to add one"}
+                          {t("workspace.members.noName")}
+                          {canManageMembers && !isMe && t("workspace.members.noNameHint")}
                         </p>
                       ) : (
                         <p className="truncate text-xs text-muted-foreground">
@@ -1633,7 +1643,7 @@ export function WorkspaceSettingsPage() {
                         </p>
                       )}
                       <p className="truncate text-xs text-muted-foreground">
-                        Joined {formatDate(member.created_at)}
+                        {t("workspace.members.joined", { date: formatDate(member.created_at) })}
                       </p>
                     </div>
 
@@ -1654,7 +1664,7 @@ export function WorkspaceSettingsPage() {
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-foreground"
                           onClick={() => handleOpenRename(member)}
-                          title="Edit display name"
+                          title={t("workspace.members.editName")}
                         >
                           <Pencil className="h-4 w-4" />
                         </Button>
@@ -1674,7 +1684,7 @@ export function WorkspaceSettingsPage() {
                         >
                           {roleOptions.map((opt) => (
                             <option key={opt.value} value={opt.value}>
-                              {opt.label}
+                              {t(opt.labelKey)}
                             </option>
                           ))}
                         </Select>
@@ -1694,7 +1704,7 @@ export function WorkspaceSettingsPage() {
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-destructive"
                           onClick={() => handleOpenRemove(member)}
-                          title="Remove member"
+                          title={t("workspace.members.remove")}
                           disabled={isMe && isLastOwner}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1712,7 +1722,7 @@ export function WorkspaceSettingsPage() {
               belongs next to the people it mirrors, not on a separate tab. */}
           <div className="mt-6 border-t border-border pt-4">
             <p className="mb-3 text-sm font-medium">
-              Agents ({workspaceAgentGrants.length})
+              {t("workspace.team.agentsCount", { n: workspaceAgentGrants.length })}
             </p>
             {isLoadingWorkspaceAgentGrants ? (
               <div className="space-y-3">
@@ -1728,7 +1738,7 @@ export function WorkspaceSettingsPage() {
               </div>
             ) : workspaceAgentGrants.length === 0 ? (
               <p className="py-4 text-center text-sm text-muted-foreground">
-                No agents connected.
+                {t("workspace.agents.empty")}
               </p>
             ) : (
               <div className="divide-y divide-border">
@@ -1756,9 +1766,9 @@ export function WorkspaceSettingsPage() {
                         <Badge
                           variant="outline"
                           className="shrink-0 text-xs"
-                          title="Home connection — remove or transfer the agent to change it, not revoke."
+                          title={t("workspace.agents.homeTitle")}
                         >
-                          Home
+                          {t("workspace.agents.home")}
                         </Badge>
                       )}
                       <Badge
@@ -1777,8 +1787,8 @@ export function WorkspaceSettingsPage() {
                           size="icon"
                           className="h-8 w-8 shrink-0 text-muted-foreground"
                           onClick={() => setEditAgentId(grant.agent_id)}
-                          title="Edit agent"
-                          aria-label={`Edit agent ${grant.agent.name}`}
+                          title={t("workspace.agents.edit")}
+                          aria-label={t("workspace.agents.editAria", { name: grant.agent.name })}
                         >
                           <Pencil className="h-4 w-4" />
                         </Button>
@@ -1789,7 +1799,7 @@ export function WorkspaceSettingsPage() {
                           size="icon"
                           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                           onClick={() => handleOpenRevokeGrant(grant)}
-                          title="Revoke connection"
+                          title={t("workspace.agents.revoke")}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -1811,9 +1821,9 @@ export function WorkspaceSettingsPage() {
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1.5">
-              <CardTitle>Pending Invites</CardTitle>
+              <CardTitle>{t("workspace.invites.title")}</CardTitle>
               <CardDescription>
-                Invite links sent but not yet accepted
+                {t("workspace.invites.description")}
               </CardDescription>
             </div>
           </div>
@@ -1826,7 +1836,7 @@ export function WorkspaceSettingsPage() {
                 <div className="flex-1 min-w-0">
                   <p className="truncate text-sm font-medium">{invite.email}</p>
                   <p className="text-xs text-muted-foreground capitalize">
-                    {invite.role} · Expires {i18nFmt.formatDate(invite.expires_at)}
+                    {invite.role} · {t("workspace.invites.expires", { date: i18nFmt.formatDate(invite.expires_at) })}
                   </p>
                 </div>
                 {canManageMembers && (
@@ -1846,18 +1856,18 @@ export function WorkspaceSettingsPage() {
                         } catch (err) {
                           setResendResult({
                             inviteId: invite.id,
-                            error: apiErrorMessage(err, "Resend failed"),
+                            error: apiErrorMessage(err, t("workspace.invites.resendFailed")),
                           });
                         }
                       }}
                     >
-                      Resend
+                      {t("workspace.invites.resend")}
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      title="Revoke invite"
+                      title={t("workspace.invites.revoke")}
                       onClick={async () => {
                         if (currentWorkspace) {
                           try { await revokeInvite(currentWorkspace.id, invite.id); }
@@ -1879,14 +1889,14 @@ export function WorkspaceSettingsPage() {
                       <p className="text-xs text-destructive">{resendResult.error}</p>
                     ) : resendResult.delivery?.email_sent ? (
                       <p className="text-xs text-green-600 dark:text-green-400">
-                        Invite email sent to {invite.email}
+                        {t("workspace.invites.emailSent", { email: invite.email })}
                       </p>
                     ) : (
                       <>
                         <p className="text-xs text-muted-foreground">
                           {resendResult.delivery?.delivery_status === "not_configured"
-                            ? "No email server is configured — nothing was sent. Share this link instead:"
-                            : "The invitation email could not be sent. Share this link instead:"}
+                            ? t("workspace.invites.notConfigured")
+                            : t("workspace.invites.sendFailed")}
                         </p>
                         {resendResult.delivery && (
                           <InviteLinkBox url={resendResult.delivery.invite_url} />
@@ -1909,9 +1919,9 @@ export function WorkspaceSettingsPage() {
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1.5">
-              <CardTitle>Assignment Rules</CardTitle>
+              <CardTitle>{t("workspace.tabs.assignment")}</CardTitle>
               <CardDescription>
-                Workspace-level rules for automatically assigning tasks. Project-level rules can override these.
+                {t("workspace.assignment.description")}
               </CardDescription>
             </div>
           </div>
@@ -1925,7 +1935,7 @@ export function WorkspaceSettingsPage() {
             </div>
           ) : !canManageRules ? (
             <p className="text-sm text-muted-foreground">
-              Only admins and owners can manage assignment rules.
+              {t("workspace.assignment.adminOnly")}
             </p>
           ) : (
             <AssignmentRulesEditor
@@ -1947,9 +1957,9 @@ export function WorkspaceSettingsPage() {
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-500" />
             <div className="space-y-1.5">
-              <CardTitle>Rule Violations</CardTitle>
+              <CardTitle>{t("workspace.violations.title")}</CardTitle>
               <CardDescription>
-                Recent rule violations across this workspace (last 20)
+                {t("workspace.violations.description")}
               </CardDescription>
             </div>
           </div>
@@ -1963,7 +1973,7 @@ export function WorkspaceSettingsPage() {
             </div>
           ) : violations.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No rule violations recorded. This workspace is compliant.
+              {t("workspace.violations.empty")}
             </p>
           ) : (
             <div>
@@ -1983,9 +1993,9 @@ export function WorkspaceSettingsPage() {
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1.5">
-              <CardTitle>Workflow Templates</CardTitle>
+              <CardTitle>{t("workspace.tabs.workflowTemplates")}</CardTitle>
               <CardDescription>
-                Named workflow rule templates that can be applied to projects workspace-wide.
+                {t("workspace.templates.description")}
               </CardDescription>
             </div>
           </div>
@@ -2018,12 +2028,12 @@ export function WorkspaceSettingsPage() {
                         )}
                         {tpl.statuses && (
                           <span className="text-xs text-muted-foreground shrink-0">
-                            {tpl.statuses.length} statuses
+                            {t("workspace.templates.statusesCount", { n: tpl.statuses.length })}
                           </span>
                         )}
                         {tpl.transitions && (
                           <span className="text-xs text-muted-foreground shrink-0">
-                            {Object.keys(tpl.transitions).length} transitions
+                            {t("workspace.templates.transitionsCount", { n: Object.keys(tpl.transitions).length })}
                           </span>
                         )}
                       </button>
@@ -2031,7 +2041,7 @@ export function WorkspaceSettingsPage() {
                         <div className="border-t border-border px-4 py-3 bg-muted/30 space-y-2 text-sm">
                           {tpl.statuses && tpl.statuses.length > 0 && (
                             <div className="flex gap-2 flex-wrap">
-                              <span className="text-muted-foreground w-28 shrink-0 text-xs">Statuses</span>
+                              <span className="text-muted-foreground w-28 shrink-0 text-xs">{t("workspace.templates.statuses")}</span>
                               <div className="flex flex-wrap gap-1">
                                 {tpl.statuses.map((s) => (
                                   <Badge key={s} variant="outline" className="text-xs">
@@ -2043,7 +2053,7 @@ export function WorkspaceSettingsPage() {
                           )}
                           {tpl.transitions && Object.keys(tpl.transitions).length > 0 && (
                             <div className="space-y-1">
-                              <span className="text-muted-foreground text-xs">Transitions</span>
+                              <span className="text-muted-foreground text-xs">{t("workspace.templates.transitions")}</span>
                               {Object.entries(tpl.transitions).map(([from, rule]) => (
                                 <div key={from} className="flex items-center gap-2 text-xs pl-1">
                                   <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">
@@ -2059,7 +2069,7 @@ export function WorkspaceSettingsPage() {
                           )}
                           {tpl.policies && Object.keys(tpl.policies).length > 0 && (
                             <div className="space-y-1">
-                              <span className="text-muted-foreground text-xs">Policies</span>
+                              <span className="text-muted-foreground text-xs">{t("workspace.templates.policies")}</span>
                               {Object.entries(tpl.policies).map(([role, pol]) => (
                                 <div key={role} className="flex items-center gap-2 text-xs pl-1">
                                   <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">
@@ -2085,10 +2095,10 @@ export function WorkspaceSettingsPage() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium">
-                      Edit Templates (JSON)
+                      {t("workspace.templates.editJson")}
                     </label>
                     <span className="text-xs text-muted-foreground">
-                      Define named workflow templates as a JSON object
+                      {t("workspace.templates.editHint")}
                     </span>
                   </div>
                   <textarea
@@ -2113,7 +2123,7 @@ export function WorkspaceSettingsPage() {
                     {templatesSaved && (
                       <span className="text-xs text-green-600 flex items-center gap-1">
                         <Check className="h-3.5 w-3.5" />
-                        Templates saved
+                        {t("workspace.templates.saved")}
                       </span>
                     )}
                     <div className="ml-auto">
@@ -2124,7 +2134,7 @@ export function WorkspaceSettingsPage() {
                         size="sm"
                       >
                         <Save className="h-3.5 w-3.5" />
-                        {isSavingTemplates ? "Saving..." : "Save Templates"}
+                        {isSavingTemplates ? t("workspace.assignment.saving") : t("workspace.templates.save")}
                       </Button>
                     </div>
                   </div>
@@ -2133,7 +2143,7 @@ export function WorkspaceSettingsPage() {
 
               {Object.keys(workflowTemplates).length === 0 && !canManageRules && (
                 <p className="py-4 text-center text-sm text-muted-foreground">
-                  No workflow templates configured for this workspace.
+                  {t("workspace.templates.empty")}
                 </p>
               )}
             </div>
@@ -2149,9 +2159,9 @@ export function WorkspaceSettingsPage() {
           <div className="flex items-center gap-2">
             <FileDown className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1.5">
-              <CardTitle>Config Import / Export</CardTitle>
+              <CardTitle>{t("workspace.config.title")}</CardTitle>
               <CardDescription>
-                Export workspace configuration as YAML or import from a YAML file to bulk-update rules and templates.
+                {t("workspace.config.description")}
               </CardDescription>
             </div>
           </div>
@@ -2161,10 +2171,10 @@ export function WorkspaceSettingsPage() {
           <div className="space-y-2">
             <h3 className="text-sm font-medium flex items-center gap-1.5">
               <Download className="h-3.5 w-3.5 text-muted-foreground" />
-              Export Config
+              {t("workspace.config.exportTitle")}
             </h3>
             <p className="text-xs text-muted-foreground">
-              Download the full workspace configuration (assignment rules, workflow templates) as a YAML file.
+              {t("workspace.config.exportDescription")}
             </p>
             {exportError && (
               <p className="text-xs text-destructive flex items-center gap-1">
@@ -2180,7 +2190,7 @@ export function WorkspaceSettingsPage() {
               disabled={isExporting}
             >
               <FileDown className="h-3.5 w-3.5" />
-              {isExporting ? "Exporting..." : "Download mesh-config.yaml"}
+              {isExporting ? t("workspace.config.exporting") : t("workspace.config.download")}
             </Button>
           </div>
 
@@ -2191,10 +2201,10 @@ export function WorkspaceSettingsPage() {
             <div className="space-y-3">
               <h3 className="text-sm font-medium flex items-center gap-1.5">
                 <Upload className="h-3.5 w-3.5 text-muted-foreground" />
-                Import Config
+                {t("workspace.config.import")}
               </h3>
               <p className="text-xs text-muted-foreground">
-                Upload a YAML config file or paste YAML directly. This will update assignment rules, workflow templates, and optionally team members.
+                {t("workspace.config.importDescription")}
               </p>
 
               {/* File upload */}
@@ -2213,11 +2223,11 @@ export function WorkspaceSettingsPage() {
                   onClick={() => configFileInputRef.current?.click()}
                 >
                   <FileUp className="h-3.5 w-3.5" />
-                  Choose YAML file
+                  {t("workspace.config.chooseFile")}
                 </Button>
                 {configYamlText && (
                   <span className="text-xs text-muted-foreground">
-                    File loaded ({configYamlText.length} chars)
+                    {t("workspace.config.fileLoaded", { n: configYamlText.length })}
                   </span>
                 )}
               </div>
@@ -2230,7 +2240,7 @@ export function WorkspaceSettingsPage() {
                   setImportConfigResult(null);
                   setImportConfigError(null);
                 }}
-                placeholder="Or paste YAML config here..."
+                placeholder={t("workspace.config.pasteConfig")}
                 rows={6}
                 className="w-full rounded-md border border-input bg-muted/30 px-3 py-2 text-xs font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
                 spellCheck={false}
@@ -2247,31 +2257,31 @@ export function WorkspaceSettingsPage() {
                 <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-1.5 text-xs">
                   <p className="font-medium text-green-700 dark:text-green-400 flex items-center gap-1">
                     <Check className="h-3.5 w-3.5" />
-                    Import successful
+                    {t("workspace.config.importSuccess")}
                   </p>
                   {importConfigResult.team && (
                     <p className="text-muted-foreground">
-                      Team: {importConfigResult.team.agents_updated} agents, {importConfigResult.team.humans_updated} humans updated
+                      {t("workspace.config.teamUpdated", { agents: importConfigResult.team.agents_updated, humans: importConfigResult.team.humans_updated })}
                       {importConfigResult.team.errors && importConfigResult.team.errors.length > 0 && (
-                        <span className="text-amber-600"> ({importConfigResult.team.errors.length} errors)</span>
+                        <span className="text-amber-600"> {t("workspace.config.errorsCount", { n: importConfigResult.team.errors.length })}</span>
                       )}
                     </p>
                   )}
                   {importConfigResult.assignment_rules && (
                     <p className="text-muted-foreground">
-                      Assignment rules: {importConfigResult.assignment_rules.updated ? "updated" : "no changes"}
+                      {t("workspace.config.assignmentRulesResult", { result: importConfigResult.assignment_rules.updated ? t("workspace.config.updated") : t("workspace.config.noChanges") })}
                     </p>
                   )}
                   {importConfigResult.workflow_templates && (
                     <p className="text-muted-foreground">
-                      Workflow templates: {importConfigResult.workflow_templates.created} created, {importConfigResult.workflow_templates.updated} updated
+                      {t("workspace.config.templatesResult", { created: importConfigResult.workflow_templates.created, updated: importConfigResult.workflow_templates.updated })}
                     </p>
                   )}
                   {importConfigResult.warnings.length > 0 && (
                     <div className="space-y-0.5">
                       <p className="text-amber-600 flex items-center gap-1">
                         <AlertTriangle className="h-3 w-3 shrink-0" />
-                        {importConfigResult.warnings.length} warning(s):
+                        {t("workspace.config.warnings", { n: importConfigResult.warnings.length })}
                       </p>
                       {importConfigResult.warnings.map((w, i) => (
                         <p key={i} className="pl-4 text-muted-foreground">{w}</p>
@@ -2289,7 +2299,7 @@ export function WorkspaceSettingsPage() {
                   disabled={isImportingConfig || !configYamlText.trim()}
                 >
                   <Upload className="h-3.5 w-3.5" />
-                  {isImportingConfig ? "Importing..." : "Import Config"}
+                  {isImportingConfig ? t("workspace.config.importing") : t("workspace.config.import")}
                 </Button>
               </div>
             </div>
@@ -2316,10 +2326,10 @@ export function WorkspaceSettingsPage() {
             <div className="space-y-3">
               <h3 className="text-sm font-medium flex items-center gap-1.5">
                 <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                Import Team
+                {t("workspace.config.importTeam")}
               </h3>
               <p className="text-xs text-muted-foreground">
-                Import team directory only (agents and human members) from a YAML file. Does not affect rules or templates.
+                {t("workspace.config.importTeamDescription")}
               </p>
 
               <div className="flex items-center gap-2">
@@ -2337,11 +2347,11 @@ export function WorkspaceSettingsPage() {
                   onClick={() => teamFileInputRef.current?.click()}
                 >
                   <FileUp className="h-3.5 w-3.5" />
-                  Choose YAML file
+                  {t("workspace.config.chooseFile")}
                 </Button>
                 {teamYamlText && (
                   <span className="text-xs text-muted-foreground">
-                    File loaded ({teamYamlText.length} chars)
+                    {t("workspace.config.fileLoaded", { n: teamYamlText.length })}
                   </span>
                 )}
               </div>
@@ -2353,7 +2363,7 @@ export function WorkspaceSettingsPage() {
                   setImportTeamResult(null);
                   setImportTeamError(null);
                 }}
-                placeholder="Or paste team YAML here..."
+                placeholder={t("workspace.config.pasteTeam")}
                 rows={5}
                 className="w-full rounded-md border border-input bg-muted/30 px-3 py-2 text-xs font-mono resize-y focus:outline-none focus:ring-2 focus:ring-ring"
                 spellCheck={false}
@@ -2370,14 +2380,14 @@ export function WorkspaceSettingsPage() {
                 <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-1 text-xs">
                   <p className="font-medium text-green-700 dark:text-green-400 flex items-center gap-1">
                     <Check className="h-3.5 w-3.5" />
-                    Team import successful
+                    {t("workspace.config.teamImportSuccess")}
                   </p>
                   <p className="text-muted-foreground">
-                    {importTeamResult.agents_updated} agents, {importTeamResult.humans_updated} humans updated
+                    {t("workspace.config.agentsHumansUpdated", { agents: importTeamResult.agents_updated, humans: importTeamResult.humans_updated })}
                   </p>
                   {importTeamResult.errors && importTeamResult.errors.length > 0 && (
                     <div className="space-y-0.5">
-                      <p className="text-amber-600">Errors:</p>
+                      <p className="text-amber-600">{t("workspace.config.errors")}</p>
                       {importTeamResult.errors.map((e, i) => (
                         <p key={i} className="pl-4 text-muted-foreground">{e}</p>
                       ))}
@@ -2394,7 +2404,7 @@ export function WorkspaceSettingsPage() {
                   disabled={isImportingTeam || !teamYamlText.trim()}
                 >
                   <Users className="h-3.5 w-3.5" />
-                  {isImportingTeam ? "Importing..." : "Import Team"}
+                  {isImportingTeam ? t("workspace.config.importing") : t("workspace.config.importTeam")}
                 </Button>
               </div>
             </div>
@@ -2418,13 +2428,13 @@ export function WorkspaceSettingsPage() {
           setRemoveError(null);
         }}
         onConfirm={handleConfirmRemove}
-        title="Remove Member"
+        title={t("workspace.members.removeTitle")}
         description={
           memberToRemove
-            ? `Are you sure you want to remove ${displayName(memberToRemove.user)} (${memberToRemove.user.email}) from this workspace?`
+            ? t("workspace.members.removeConfirm", { name: displayName(memberToRemove.user), email: memberToRemove.user.email })
             : ""
         }
-        confirmText="Remove Member"
+        confirmText={t("workspace.members.removeTitle")}
         variant="destructive"
         isLoading={isRemoving}
       />
@@ -2453,13 +2463,13 @@ export function WorkspaceSettingsPage() {
           setRevokeGrantError(null);
         }}
         onConfirm={() => void handleConfirmRevokeGrant()}
-        title="Revoke Agent Connection"
+        title={t("workspace.agents.revokeTitle")}
         description={
           grantToRevoke
-            ? `${agentLabel(grantToRevoke.agent.name, grantToRevoke.agent.short_tag)}'s API key for this workspace will stop working immediately. This does not affect its access to any other workspace.`
+            ? t("workspace.agents.revokeConfirm", { agent: agentLabel(grantToRevoke.agent.name, grantToRevoke.agent.short_tag) })
             : ""
         }
-        confirmText="Revoke Connection"
+        confirmText={t("workspace.agents.revokeConfirmText")}
         variant="destructive"
         isLoading={isRevokingGrant}
       />
@@ -2477,10 +2487,10 @@ export function WorkspaceSettingsPage() {
       >
         <DialogContent onClose={() => setMemberToRename(null)}>
           <DialogHeader>
-            <DialogTitle>Edit display name</DialogTitle>
+            <DialogTitle>{t("workspace.members.editName")}</DialogTitle>
             <DialogDescription>
               {memberToRename
-                ? `How ${memberToRename.user.email} appears on tasks, comments and mentions.`
+                ? t("workspace.members.renameDescription", { email: memberToRename.user.email })
                 : ""}
             </DialogDescription>
           </DialogHeader>
@@ -2491,19 +2501,18 @@ export function WorkspaceSettingsPage() {
           >
             <div className="space-y-1.5">
               <label htmlFor="ws-rename" className="text-sm font-medium">
-                Name <span className="text-destructive">*</span>
+                {t("workspace.members.nameLabel")} <span className="text-destructive">*</span>
               </label>
               <Input
                 id="ws-rename"
                 value={renameValue}
                 onChange={(e) => setRenameValue(e.target.value)}
-                placeholder="Jane Cooper"
+                placeholder={t("workspace.members.namePlaceholder")}
                 autoFocus
                 maxLength={100}
               />
               <p className="text-xs text-muted-foreground">
-                They can change it themselves at any time, and once they do this
-                becomes theirs to edit only.
+                {t("workspace.members.renameHint")}
               </p>
             </div>
 
@@ -2516,10 +2525,10 @@ export function WorkspaceSettingsPage() {
                 onClick={() => setMemberToRename(null)}
                 disabled={isRenaming}
               >
-                Cancel
+                {t("workspace.cancel")}
               </Button>
               <Button type="submit" disabled={isRenaming}>
-                {isRenaming ? "Saving…" : "Save name"}
+                {isRenaming ? t("workspace.members.savingName") : t("workspace.members.saveName")}
               </Button>
             </DialogFooter>
           </form>
@@ -2538,9 +2547,9 @@ export function WorkspaceSettingsPage() {
           setDeleteWorkspaceError(null);
         }}
         onConfirm={() => void handleDeleteWorkspace()}
-        title="Delete Workspace"
-        description={`This will permanently delete "${currentWorkspace.name}" — its projects, tasks, and comments — for everyone in it. This action cannot be undone.`}
-        confirmText="Delete Workspace"
+        title={t("workspace.danger.deleteTitle")}
+        description={t("workspace.danger.deleteConfirm", { name: currentWorkspace.name })}
+        confirmText={t("workspace.danger.deleteTitle")}
         variant="destructive"
         requireText={currentWorkspace.name}
         isLoading={isDeletingWorkspace}

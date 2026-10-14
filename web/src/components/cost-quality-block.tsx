@@ -14,20 +14,17 @@ function formatTokens(n: number): string {
 
 const qualityBadge: Record<
   string,
-  { label: string; icon: string; className: string }
+  { icon: string; className: string }
 > = {
   golden: {
-    label: "golden",
     icon: "🏆",
     className: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
   },
   rework: {
-    label: "rework",
     icon: "🔁",
     className: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
   },
   "multi-turn": {
-    label: "multi-turn",
     icon: "⚡",
     className: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
   },
@@ -35,6 +32,7 @@ const qualityBadge: Record<
 
 export function CostQualityBlock({ summary }: { summary: TaskCostSummary }) {
   const { t } = useTranslation("task");
+  const { t: ti } = useTranslation("integrations");
   const badge = qualityBadge[summary.quality_flag];
   const spawns = t("cost.spawns", { count: summary.session_count });
 
@@ -57,7 +55,7 @@ export function CostQualityBlock({ summary }: { summary: TaskCostSummary }) {
             badge.className,
           )}
         >
-          {badge.icon} {badge.label}
+          {badge.icon} {ti(`costQuality.quality.${summary.quality_flag}`)}
         </span>
       )}
     </div>

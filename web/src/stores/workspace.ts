@@ -3,11 +3,12 @@ import { api } from "@/lib/api";
 import { getAccessToken } from "@/lib/api";
 import type { CreateWorkspaceRequest, Workspace } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
+import { miscT } from "@/lib/misc-t";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 function getErrorMessage(error: unknown): string {
-  return apiErrorMessage(error, "Failed to load workspaces");
+  return apiErrorMessage(error, miscT("errors.loadWorkspaces", "Failed to load workspaces"));
 }
 
 interface WorkspaceState {
@@ -115,7 +116,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error((err as { message?: string }).message ?? "Upload failed");
+      throw new Error((err as { message?: string }).message ?? miscT("errors.uploadFailed", "Upload failed"));
     }
 
     const updated = (await res.json()) as Workspace;

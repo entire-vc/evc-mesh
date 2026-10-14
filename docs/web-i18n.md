@@ -48,13 +48,9 @@ screen re-format without a reload.
 
 `pnpm check:i18n` (job `test:web`) looks for Cyrillic in `web/src/**/*.{ts,tsx}`,
 skipping `locales/`, tests, comments and the transliteration table in
-`lib/utils.ts`. Two modes:
-
-- **baseline** (now): only NEW violations fail; known ones are in
-  `web/scripts/cyrillic-baseline.json` (per-file counts). Do not grow it: move the
-  string to `locales/` instead. After a string is moved, lower the count.
-- **strict** (`node scripts/check-cyrillic.mjs --strict`): every hit fails. CI
-  switches to it after L2.3, and the baseline file is deleted.
+`lib/utils.ts`. Strict: every hit fails. There is no baseline file; the only exemption is the
+Cyrillic->Latin table rows in `lib/utils.ts` (`ALLOWLIST` in
+`scripts/cyrillic-gate-lib.mjs`). Move a string to `locales/` instead of exempting it.
 
 Red control: `src/__tests__/cyrillic-gate.test.ts` plants a Russian string and
 expects exit 1.

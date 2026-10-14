@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, Check, Copy } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ interface ApiKeyRevealPanelProps {
  * render has nothing left to show.
  */
 export function ApiKeyRevealPanel({ apiKey, onClose }: ApiKeyRevealPanelProps) {
+  const { t } = useTranslation("integrations");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -53,7 +55,7 @@ export function ApiKeyRevealPanel({ apiKey, onClose }: ApiKeyRevealPanelProps) {
       <div className="mt-4 space-y-4">
         <div className="rounded-lg border border-border bg-muted p-4">
           <p className="mb-2 text-xs font-medium text-muted-foreground">
-            API Key
+            {t("apiKeyReveal.label")}
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 break-all font-mono text-sm">
@@ -83,14 +85,13 @@ export function ApiKeyRevealPanel({ apiKey, onClose }: ApiKeyRevealPanelProps) {
         >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-600" />
           <p className="text-sm text-yellow-800 dark:text-yellow-200">
-            This key will only be shown once. Store it securely. You will not
-            be able to retrieve it later.
+            {t("apiKeyReveal.warning")}
           </p>
         </div>
       </div>
 
       <DialogFooter>
-        <Button onClick={onClose}>{copied ? "Done" : "Close"}</Button>
+        <Button onClick={onClose}>{copied ? t("apiKeyReveal.done") : t("apiKeyReveal.close")}</Button>
       </DialogFooter>
     </>
   );

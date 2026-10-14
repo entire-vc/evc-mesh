@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { agentOptionLabel } from "@/lib/agent-label";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
@@ -66,19 +67,19 @@ function getTimezones(): string[] {
 
 const TIMEZONES = getTimezones();
 
-const PRIORITIES: { value: Priority; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "urgent", label: "Urgent" },
+const PRIORITIES: { value: Priority; labelKey: string }[] = [
+  { value: "none", labelKey: "recurring.dialog.priority.none" },
+  { value: "low", labelKey: "recurring.dialog.priority.low" },
+  { value: "medium", labelKey: "recurring.dialog.priority.medium" },
+  { value: "high", labelKey: "recurring.dialog.priority.high" },
+  { value: "urgent", labelKey: "recurring.dialog.priority.urgent" },
 ];
 
-const FREQUENCIES: { value: RecurringFrequency; label: string; cronHint: string }[] = [
-  { value: "daily", label: "Daily", cronHint: "0 9 * * *" },
-  { value: "weekly", label: "Weekly", cronHint: "0 9 * * 1" },
-  { value: "monthly", label: "Monthly", cronHint: "0 9 1 * *" },
-  { value: "custom", label: "Custom (cron)", cronHint: "" },
+const FREQUENCIES: { value: RecurringFrequency; labelKey: string; cronHint: string }[] = [
+  { value: "daily", labelKey: "recurring.dialog.frequency.daily", cronHint: "0 9 * * *" },
+  { value: "weekly", labelKey: "recurring.dialog.frequency.weekly", cronHint: "0 9 * * 1" },
+  { value: "monthly", labelKey: "recurring.dialog.frequency.monthly", cronHint: "0 9 1 * *" },
+  { value: "custom", labelKey: "recurring.dialog.frequency.custom", cronHint: "" },
 ];
 
 interface CreateRecurringDialogProps {
@@ -95,6 +96,7 @@ export function CreateRecurringDialog({
   projectId,
   editSchedule,
 }: CreateRecurringDialogProps) {
+  const { t } = useTranslation("settings");
   const { createSchedule, updateSchedule } = useRecurringStore();
   const { agents, fetchAgents } = useAgentStore();
   const { user } = useAuthStore();
@@ -201,11 +203,11 @@ export function CreateRecurringDialog({
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!titleTemplate.trim()) {
-      setError("Title template is required");
+      setError(t("recurring.dialog.errors.titleRequired"));
       return;
     }
     if (frequency === "custom" && !cronExpr.trim()) {
-      setError("Cron expression is required for custom frequency");
+      setError(t("recurring.dialog.errors.cronRequired"));
       return;
     }
 
@@ -259,7 +261,7 @@ export function CreateRecurringDialog({
       onOpenChange(false);
     } catch (err) {
       setError(
-        apiErrorMessage(err, "Failed to save recurring schedule"),
+        apiErrorMessage(err, t("recurring.dialog.errors.saveFailed")),
       );
     } finally {
       setIsSubmitting(false);
@@ -271,12 +273,12 @@ export function CreateRecurringDialog({
       <DialogContent onClose={() => onOpenChange(false)}>
         <DialogHeader>
           <DialogTitle>
-            {isEditMode ? "Edit Recurring Schedule" : "New Recurring Schedule"}
+            {isEditMode ? t("recurring.dialog.titleEdit") : t("recurring.dialog.titleNew")}
           </DialogTitle>
           <DialogDescription>
             {isEditMode
-              ? `Editing schedule for ${currentProject?.name ?? "this project"}`
-              : `Automatically create recurring tasks in ${currentProject?.name ?? "this project"}`}
+              ? t("recurring.dialog.descriptionEdit", { project: currentProject?.name ?? t("recurring.dialog.thisProject") })
+              : t("recurring.dialog.descriptionNew", { project: currentProject?.name ?? t("recurring.dialog.thisProject") })}
           </DialogDescription>
         </DialogHeader>
 
@@ -284,14 +286,14 @@ export function CreateRecurringDialog({
           {/* Title template */}
           <div>
             <Input
-              placeholder="Title template *"
+              placeholder={t("recurring.dialog.titleTemplatePlaceholder")}
               value={titleTemplate}
               onChange={(e) => setTitleTemplate(e.target.value)}
               className="text-base font-medium"
               autoFocus
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Variables: <code className="rounded bg-muted px-1">{"{{.Date}}"}</code>{" "}
+              {t("recurring.dialog.variables")}{" "}<code className="rounded bg-muted px-1">{"{{.Date}}"}</code>{" "}
               <code className="rounded bg-muted px-1">{"{{.Number}}"}</code>{" "}
               <code className="rounded bg-muted px-1">{"{{.Week}}"}</code>{" "}
               <code className="rounded bg-muted px-1">{"{{.Month}}"}</code>
@@ -301,21 +303,21 @@ export function CreateRecurringDialog({
           {/* Description template */}
           <div>
             <Textarea
-              placeholder={"Description template (Markdown)"}
+              placeholder={t("recurring.dialog.descriptionTemplatePlaceholder")}
               value={descriptionTemplate}
               onChange={(e) => setDescriptionTemplate(e.target.value)}
               rows={3}
               className="text-sm"
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Extra: <code className="rounded bg-muted px-1">{"{{.PrevSummary}}"}</code>{" "}
-              — last comment from previous instance
+              {t("recurring.dialog.extra")}{" "}<code className="rounded bg-muted px-1">{"{{.PrevSummary}}"}</code>{" "}
+              {t("recurring.dialog.prevSummaryHint")}
             </p>
           </div>
 
           {/* Frequency */}
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Frequency</label>
+            <label className="text-xs text-muted-foreground">{t("recurring.dialog.frequency.label")}</label>
             <div className="flex flex-wrap gap-1.5">
               {FREQUENCIES.map((f) => (
                 <button
@@ -333,7 +335,7 @@ export function CreateRecurringDialog({
                     }
                   }}
                 >
-                  {f.label}
+                  {t(f.labelKey)}
                 </button>
               ))}
             </div>
@@ -343,13 +345,13 @@ export function CreateRecurringDialog({
           {frequency === "custom" && (
             <div>
               <Input
-                placeholder="Cron expression *  (e.g. 0 9 * * 1)"
+                placeholder={t("recurring.dialog.cronPlaceholder")}
                 value={cronExpr}
                 onChange={(e) => setCronExpr(e.target.value)}
                 className="h-7 font-mono text-xs"
               />
               <p className="mt-1 text-[11px] text-muted-foreground">
-                5-field cron: minute hour day month weekday
+                {t("recurring.dialog.cronHint")}
               </p>
             </div>
           )}
@@ -359,7 +361,7 @@ export function CreateRecurringDialog({
           {/* Properties grid — matching CreateTaskDialog compact style */}
           <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2.5">
             {/* Timezone */}
-            <label className="text-xs text-muted-foreground">Timezone</label>
+            <label className="text-xs text-muted-foreground">{t("recurring.dialog.timezone")}</label>
             <Select
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
@@ -373,7 +375,7 @@ export function CreateRecurringDialog({
             </Select>
 
             {/* Priority */}
-            <label className="text-xs text-muted-foreground">Priority</label>
+            <label className="text-xs text-muted-foreground">{t("recurring.dialog.priority.label")}</label>
             <Select
               value={priority}
               onChange={(e) => setPriority(e.target.value as Priority)}
@@ -381,7 +383,7 @@ export function CreateRecurringDialog({
             >
               {PRIORITIES.map((p) => (
                 <option key={p.value} value={p.value}>
-                  {p.label}
+                  {t(p.labelKey)}
                 </option>
               ))}
             </Select>
@@ -393,16 +395,16 @@ export function CreateRecurringDialog({
               ) : (
                 <User className="h-3 w-3" />
               )}
-              Assignee
+              {t("recurring.dialog.assignee")}
             </label>
             <Select
               value={assigneeValue}
               onChange={(e) => setAssigneeValue(e.target.value)}
               className="h-7 text-xs"
             >
-              <option value="unassigned">Unassigned</option>
+              <option value="unassigned">{t("recurring.dialog.unassigned")}</option>
               {user && (
-                <option value={`user:${user.id}`}>{user.name} (you)</option>
+                <option value={`user:${user.id}`}>{t("recurring.dialog.you", { name: user.name })}</option>
               )}
               {agents.map((agent) => (
                 <option key={agent.id} value={`agent:${agent.id}`}>
@@ -412,36 +414,36 @@ export function CreateRecurringDialog({
             </Select>
 
             {/* Max Instances */}
-            <label className="text-xs text-muted-foreground">Max Instances</label>
+            <label className="text-xs text-muted-foreground">{t("recurring.dialog.maxInstances")}</label>
             <Input
               type="number"
               min={1}
-              placeholder="Unlimited"
+              placeholder={t("recurring.dialog.unlimited")}
               value={maxInstances}
               onChange={(e) => setMaxInstances(e.target.value)}
               className="h-7 text-xs"
             />
 
             {/* Starts At */}
-            <label className="text-xs text-muted-foreground">Starts At</label>
+            <label className="text-xs text-muted-foreground">{t("recurring.dialog.startsAt")}</label>
             <DatePickerPopover
               value={startsAt || null}
               onChange={(val) => setStartsAt(val ?? "")}
-              placeholder="Set start date"
+              placeholder={t("recurring.dialog.setStartDate")}
             />
 
             {/* Ends At */}
-            <label className="text-xs text-muted-foreground">Ends At</label>
+            <label className="text-xs text-muted-foreground">{t("recurring.dialog.endsAt")}</label>
             <DatePickerPopover
               value={endsAt || null}
               onChange={(val) => setEndsAt(val ?? "")}
-              placeholder="No end date"
+              placeholder={t("recurring.dialog.noEndDate")}
             />
 
             {/* Labels */}
             <label className="flex items-center gap-1 self-start pt-1 text-xs text-muted-foreground">
               <Tag className="h-3 w-3" />
-              Labels
+              {t("recurring.dialog.labels")}
             </label>
             <div className="flex flex-wrap items-center gap-1">
               {labels.map((label) => (
@@ -450,7 +452,7 @@ export function CreateRecurringDialog({
                   variant="secondary"
                   className="cursor-pointer gap-1 text-[10px] hover:bg-destructive/20"
                   onClick={() => handleRemoveLabel(label)}
-                  title="Click to remove"
+                  title={t("recurring.dialog.clickToRemove")}
                 >
                   {label}
                   <X className="h-2 w-2" />
@@ -464,7 +466,7 @@ export function CreateRecurringDialog({
                   onBlur={handleAddLabel}
                   onKeyDown={handleLabelKeyDown}
                   className="h-6 w-24 px-1.5 text-xs"
-                  placeholder="Label..."
+                  placeholder={t("recurring.dialog.labelPlaceholder")}
                 />
               ) : (
                 <button
@@ -472,7 +474,7 @@ export function CreateRecurringDialog({
                   className="rounded border border-dashed border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-foreground"
                   onClick={() => setAddingLabel(true)}
                 >
-                  + Add
+                  {t("recurring.dialog.addLabel")}
                 </button>
               )}
             </div>
@@ -488,16 +490,16 @@ export function CreateRecurringDialog({
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
             >
-              Cancel
+              {t("recurring.dialog.cancel")}
             </Button>
             <Button type="submit" size="sm" disabled={isSubmitting}>
               {isSubmitting
                 ? isEditMode
-                  ? "Saving..."
-                  : "Creating..."
+                  ? t("recurring.dialog.saving")
+                  : t("recurring.dialog.creating")
                 : isEditMode
-                  ? "Save Changes"
-                  : "Create Schedule"}
+                  ? t("recurring.dialog.saveChanges")
+                  : t("recurring.dialog.createSchedule")}
             </Button>
           </DialogFooter>
         </form>

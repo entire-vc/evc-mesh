@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { miscT } from "@/lib/misc-t";
 import { ApiRequestError } from "@/lib/api";
 
 interface UseApiState<T> {
@@ -34,7 +35,7 @@ export function useApi<T>(
         const message =
           err instanceof ApiRequestError
             ? err.message
-            : "An unexpected error occurred";
+            : miscT("errors.unexpected", "An unexpected error occurred");
         setState((prev) => ({ ...prev, loading: false, error: message }));
         return null;
       }

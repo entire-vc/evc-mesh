@@ -1,5 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import type { MentionEntry } from "@/components/markdown-view";
 
 /**
@@ -35,10 +37,12 @@ export function MentionText({
   wsSlug?: string;
   className?: string;
 }) {
-  return <span className={className}>{splitMentions(text, mentionables, wsSlug)}</span>;
+  const { t } = useTranslation("misc");
+  return <span className={className}>{splitMentions(t, text, mentionables, wsSlug)}</span>;
 }
 
 function splitMentions(
+  t: TFunction<"misc">,
   text: string,
   mentionables?: Map<string, MentionEntry>,
   wsSlug?: string,
@@ -67,7 +71,7 @@ function splitMentions(
         key={`${match.index}-${slug}`}
         to={`/w/${wsSlug}/team/${entry.kind}/${slug}`}
         className="mention-link inline-block whitespace-nowrap rounded bg-blue-50 px-1 py-0.5 text-blue-600 hover:underline dark:bg-blue-900/30 dark:text-blue-400"
-        aria-label={`Open team profile for @${slug}`}
+        aria-label={t("mention.openProfile", { slug })}
       >
         @{slug}
       </Link>,

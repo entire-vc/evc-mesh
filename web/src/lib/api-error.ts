@@ -1,3 +1,5 @@
+import { miscT } from "@/lib/misc-t";
+
 /**
  * The sentence to put in front of the person who caused the error.
  *
@@ -22,7 +24,10 @@
  * components whose tests mock `@/lib/api` wholesale, where the real class is
  * not the one that was thrown.
  */
-export function apiErrorMessage(err: unknown, fallback = "Failed to save"): string {
+export function apiErrorMessage(
+  err: unknown,
+  fallback = miscT("errors.failedToSave", "Failed to save"),
+): string {
   const details = (err as { details?: unknown } | null)?.details;
   if (details && typeof details === "object") {
     const first = Object.values(details as Record<string, unknown>).find(

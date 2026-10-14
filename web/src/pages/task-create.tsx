@@ -15,6 +15,7 @@ import type { Task } from "@/types";
 // than re-resolving the slug itself.
 export function TaskCreatePage() {
   const { t } = useTranslation("task");
+  const { t: tSettings } = useTranslation("settings");
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -54,7 +55,7 @@ export function TaskCreatePage() {
     return (
       <div className="flex items-center justify-center py-12">
         <p className="text-muted-foreground">
-          Project &quot;{projectSlug}&quot; not found
+          {tSettings("taskCreate.projectNotFound", { slug: projectSlug })}
         </p>
       </div>
     );

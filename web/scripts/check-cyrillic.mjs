@@ -1,4 +1,4 @@
-// Usage: node scripts/check-cyrillic.mjs [--strict] [--write-baseline] [--src <dir>] [--baseline <file>]
+// Usage: node scripts/check-cyrillic.mjs [--src <dir>]
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,9 +10,7 @@ const opt = (name, def) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : def;
 };
-const strict = args.includes("--strict");
 const srcRoot = path.resolve(opt("--src", path.join(here, "../src")));
-const baselineFile = path.resolve(opt("--baseline", path.join(here, "cyrillic-baseline.json")));
 
 if (!fs.existsSync(srcRoot)) {
   console.error(`check-cyrillic: ${srcRoot} does not exist`);
@@ -25,23 +23,15 @@ if (filesScanned < 1) {
   process.exit(2);
 }
 
-if (args.includes("--write-baseline")) {
-  const counts = Object.fromEntries(Object.entries(hits).map(([f, l]) => [f, l.length]));
-  fs.writeFileSync(baselineFile, JSON.stringify(counts, null, 2) + "\n");
-  console.log(`baseline written: ${Object.keys(counts).length} files`);
-  process.exit(0);
-}
-
-const baseline = strict || !fs.existsSync(baselineFile) ? {} : JSON.parse(fs.readFileSync(baselineFile, "utf8"));
-const bad = violations(hits, baseline, strict);
+const bad = violations(hits);
 if (bad.length === 0) {
   const total = Object.values(hits).reduce((n, l) => n + l.length, 0);
-  console.log(`check-cyrillic OK (${strict ? "strict" : "baseline"}): ${filesScanned} files, ${total} known line(s)`);
+  console.log(`check-cyrillic OK: ${filesScanned} files, ${total} known line(s)`);
   process.exit(0);
 }
-console.error(`check-cyrillic FAILED (${strict ? "strict" : "baseline"}): Cyrillic in code outside src/locales/ru`);
+console.error(`check-cyrillic FAILED: Cyrillic in code outside src/locales/ru`);
 for (const v of bad) {
-  console.error(`  ${v.file}: ${v.found} line(s), allowed ${v.allowed}`);
+  console.error(`  ${v.file}: ${v.found} line(s)`);
   for (const l of v.lines) console.error(`    ${l.line}: ${l.text.slice(0, 120)}`);
 }
 console.error("Move the text to src/locales/<lang>/<ns>.json and use t(). See docs/web-i18n.md");

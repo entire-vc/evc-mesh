@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -48,13 +49,13 @@ interface ViewTabBarProps {
 const TABS = [
   {
     id: "board" as const,
-    label: "Board",
+    labelKey: "viewTabs.tabs.board",
     Icon: Columns3,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}`,
   },
   {
     id: "list" as const,
-    label: "List",
+    labelKey: "viewTabs.tabs.list",
     Icon: List,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/list`,
   },
@@ -63,14 +64,14 @@ const TABS = [
     // so calendar moves into the kebab there and the strip keeps board,
     // list and docs.
     id: "calendar" as const,
-    label: "Calendar",
+    labelKey: "viewTabs.tabs.calendar",
     Icon: Calendar,
     hideOnMobile: true,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/calendar`,
   },
   {
     id: "docs" as const,
-    label: "Docs",
+    labelKey: "viewTabs.tabs.docs",
     Icon: NotebookText,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/docs`,
   },
@@ -81,13 +82,13 @@ const TABS = [
 const FORMATS = [
   {
     id: "timeline" as const,
-    label: "Dependencies",
+    labelKey: "viewTabs.formats.timeline",
     Icon: GitBranch,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/timeline`,
   },
   {
     id: "updates" as const,
-    label: "Updates",
+    labelKey: "viewTabs.formats.updates",
     Icon: FileText,
     path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/updates`,
   },
@@ -119,6 +120,7 @@ export function ViewTabBar({
   projectId,
   className,
 }: ViewTabBarProps) {
+  const { t } = useTranslation("settings");
   const navigate = useNavigate();
   const {
     views,
@@ -159,12 +161,12 @@ export function ViewTabBar({
       navigate(targetPath(wsSlug, projectSlug));
     }
     applyView(view);
-    toast(`Applied view: ${view.name}`);
+    toast(t("viewTabs.toast.applied", { name: view.name }));
   };
 
   const handleResetFilters = () => {
     requestResetFilters();
-    toast("Filters reset");
+    toast(t("viewTabs.toast.filtersReset"));
   };
 
   // Only meaningful on the board tab — list/timeline/calendar don't feed
@@ -177,18 +179,18 @@ export function ViewTabBar({
   const handleToggleShare = async (view: import("@/types").SavedView) => {
     try {
       await updateView(view.id, { is_shared: !view.is_shared });
-      toast(view.is_shared ? "View made private" : "View shared with team");
+      toast(view.is_shared ? t("viewTabs.toast.madePrivate") : t("viewTabs.toast.sharedWithTeam"));
     } catch {
-      toast("Failed to update view");
+      toast(t("viewTabs.toast.updateFailed"));
     }
   };
 
   const handleDelete = async (view: import("@/types").SavedView) => {
     try {
       await deleteView(view.id);
-      toast("View deleted");
+      toast(t("viewTabs.toast.deleted"));
     } catch {
-      toast("Failed to delete view");
+      toast(t("viewTabs.toast.deleteFailed"));
     }
   };
 
@@ -205,12 +207,12 @@ export function ViewTabBar({
         columns: currentViewState.columns,
         is_shared: saveIsShared,
       });
-      toast("View saved");
+      toast(t("viewTabs.toast.saved"));
       setSaveDialogOpen(false);
       setSaveName("");
       setSaveIsShared(false);
     } catch {
-      toast("Failed to save view");
+      toast(t("viewTabs.toast.saveFailed"));
     } finally {
       setIsSaving(false);
     }
@@ -220,7 +222,7 @@ export function ViewTabBar({
     <>
       <div className={cn("flex items-center gap-0", className)}>
         {TABS.map((tab) => {
-          const { id, label, Icon, path } = tab;
+          const { id, labelKey, Icon, path } = tab;
           const hideOnMobile = "hideOnMobile" in tab && tab.hideOnMobile;
           const isActive = currentView === id;
           return (
@@ -241,7 +243,7 @@ export function ViewTabBar({
               aria-current={isActive ? "page" : undefined}
             >
               <Icon className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{label}</span>
+              <span className="hidden sm:inline">{t(labelKey)}</span>
             </button>
           );
         })}
@@ -259,13 +261,15 @@ export function ViewTabBar({
                 mobileOnlyTabActive && "max-sm:bg-muted max-sm:text-foreground",
               )}
               title={
-                activeFormat ? `${activeFormat.label} - more views` : "More views"
+                activeFormat
+                  ? t("viewTabs.moreViewsActive", { name: t(activeFormat.labelKey) })
+                  : t("viewTabs.moreViews")
               }
             >
               <MoreVertical className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              {MOBILE_ONLY_TABS.map(({ id, label, Icon, path }) => {
+              {MOBILE_ONLY_TABS.map(({ id, labelKey, Icon, path }) => {
                 const isActive = currentView === id;
                 return (
                   <DropdownMenuItem
@@ -279,16 +283,16 @@ export function ViewTabBar({
                     aria-current={isActive ? "page" : undefined}
                   >
                     <Icon className="h-3.5 w-3.5" />
-                    <span className="flex-1">{label}</span>
+                    <span className="flex-1">{t(labelKey)}</span>
                     {isActive && <Check className="h-3.5 w-3.5" />}
                   </DropdownMenuItem>
                 );
               })}
 
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Formats
+                {t("viewTabs.formatsLabel")}
               </DropdownMenuLabel>
-              {FORMATS.map(({ id, label, Icon, path }) => {
+              {FORMATS.map(({ id, labelKey, Icon, path }) => {
                 const isActive = currentView === id;
                 return (
                   <DropdownMenuItem
@@ -302,7 +306,7 @@ export function ViewTabBar({
                     aria-current={isActive ? "page" : undefined}
                   >
                     <Icon className="h-3.5 w-3.5" />
-                    <span className="flex-1">{label}</span>
+                    <span className="flex-1">{t(labelKey)}</span>
                     {isActive && <Check className="h-3.5 w-3.5" />}
                   </DropdownMenuItem>
                 );
@@ -321,7 +325,7 @@ export function ViewTabBar({
                       className="gap-2"
                     >
                       <BookmarkPlus className="h-3.5 w-3.5" />
-                      Save current view
+                      {t("viewTabs.saveCurrent")}
                     </DropdownMenuItem>
                   )}
 
@@ -337,7 +341,7 @@ export function ViewTabBar({
                       )}
                     >
                       <FilterX className="h-3.5 w-3.5" />
-                      Reset filters
+                      {t("viewTabs.resetFilters")}
                     </DropdownMenuItem>
                   )}
 
@@ -346,7 +350,7 @@ export function ViewTabBar({
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                        My views
+                        {t("viewTabs.myViews")}
                       </DropdownMenuLabel>
                       {personalViews.map((view) => (
                         <SavedViewRow
@@ -365,7 +369,7 @@ export function ViewTabBar({
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                        Shared views
+                        {t("viewTabs.sharedViews")}
                       </DropdownMenuLabel>
                       {sharedViews.map((view) => (
                         <SavedViewRow
@@ -381,7 +385,7 @@ export function ViewTabBar({
 
                   {!hasViews && (
                     <div className="px-2 py-2 text-center text-xs text-muted-foreground">
-                      No saved views yet
+                      {t("viewTabs.noSavedViews")}
                     </div>
                   )}
                 </>
@@ -395,15 +399,15 @@ export function ViewTabBar({
       <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Save current view</DialogTitle>
+            <DialogTitle>{t("viewTabs.dialog.title")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 p-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">View name</label>
+              <label className="text-sm font-medium">{t("viewTabs.dialog.viewName")}</label>
               <Input
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                placeholder="e.g. My open tasks"
+                placeholder={t("viewTabs.dialog.placeholder")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && saveName.trim()) {
                     void handleSave();
@@ -420,7 +424,7 @@ export function ViewTabBar({
                 checked={saveIsShared}
                 onChange={(e) => setSaveIsShared(e.target.checked)}
               />
-              <span className="text-sm">Share with team members</span>
+              <span className="text-sm">{t("viewTabs.dialog.share")}</span>
             </label>
 
             <div className="flex justify-end gap-2">
@@ -429,14 +433,14 @@ export function ViewTabBar({
                 size="sm"
                 onClick={() => setSaveDialogOpen(false)}
               >
-                Cancel
+                {t("viewTabs.dialog.cancel")}
               </Button>
               <Button
                 size="sm"
                 onClick={() => void handleSave()}
                 disabled={!saveName.trim() || isSaving}
               >
-                {isSaving ? "Saving..." : "Save view"}
+                {isSaving ? t("viewTabs.dialog.saving") : t("viewTabs.dialog.save")}
               </Button>
             </div>
           </div>
@@ -461,6 +465,7 @@ function SavedViewRow({
   onToggleShare: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <div className="group flex items-center justify-between rounded px-2 py-1.5 hover:bg-accent">
       <button
@@ -474,7 +479,7 @@ function SavedViewRow({
       <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
         <button
           className="rounded p-0.5 hover:bg-muted"
-          title={view.is_shared ? "Make private" : "Share with team"}
+          title={view.is_shared ? t("viewTabs.row.makePrivate") : t("viewTabs.row.shareWithTeam")}
           onClick={(e) => {
             e.stopPropagation();
             onToggleShare();
@@ -489,7 +494,7 @@ function SavedViewRow({
         </button>
         <button
           className="rounded p-0.5 hover:bg-muted"
-          title="Delete view"
+          title={t("viewTabs.row.deleteView")}
           onClick={(e) => {
             e.stopPropagation();
             onDelete();

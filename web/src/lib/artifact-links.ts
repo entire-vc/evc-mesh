@@ -1,5 +1,6 @@
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
+import i18n from "@/i18n";
 
 // Mesh has no cookie auth (see the /workspaces/:ws_id/icon comment in
 // cmd/api/main.go) — the access token lives only in tab memory and is sent as
@@ -106,6 +107,8 @@ const ARTIFACT_RETRY_DELAY_MS = 1500;
 const pendingRetries = new WeakSet<HTMLImageElement>();
 
 async function resolveOne(img: HTMLImageElement, path: string, isRetry = false): Promise<void> {
+  // Resolved per call, not at module load, so the suffix follows the UI language.
+  const failedSuffix = i18n.t("misc:artifactLinks.failedToLoadSuffix");
   try {
     const data = await api<{ url: string }>(path);
     img.src = data.url;
@@ -114,13 +117,13 @@ async function resolveOne(img: HTMLImageElement, path: string, isRetry = false):
     // cleared up front.
     img.removeAttribute("data-artifact-src");
     img.classList.remove("opacity-50");
-    if (img.alt.endsWith(" (failed to load)")) {
-      img.alt = img.alt.slice(0, -" (failed to load)".length);
+    if (img.alt.endsWith(failedSuffix)) {
+      img.alt = img.alt.slice(0, -failedSuffix.length);
     }
   } catch {
     img.classList.add("opacity-50");
-    if (!img.alt.endsWith(" (failed to load)")) {
-      img.alt = `${img.alt} (failed to load)`;
+    if (!img.alt.endsWith(failedSuffix)) {
+      img.alt = `${img.alt}${failedSuffix}`;
     }
     // data-artifact-src is deliberately left in place on failure (unlike the
     // old behavior of stripping it unconditionally before the fetch): a
@@ -199,6 +202,6 @@ export function handleArtifactLinkClick(e: React.MouseEvent): boolean {
   e.preventDefault();
   void api<{ url: string }>(path)
     .then((data) => window.open(data.url, "_blank"))
-    .catch(() => toast("Could not open file"));
+    .catch(() => toast(i18n.t("misc:artifactLinks.openFailed")));
   return true;
 }

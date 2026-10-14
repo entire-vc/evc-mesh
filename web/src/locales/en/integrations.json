@@ -1,0 +1,687 @@
+{
+  "agentDetail": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "notSet": "Not set",
+    "never": "Never",
+    "stale": "(stale)",
+    "harness": "Harness",
+    "error": {
+      "updateShortTag": "Failed to update short tag",
+      "updateAgent": "Failed to update agent",
+      "updateDescription": "Failed to update description",
+      "updateRole": "Failed to update role",
+      "updateModel": "Failed to update model",
+      "updateHarness": "Failed to update harness",
+      "updateCallbackUrl": "Failed to update callback URL",
+      "regenerateKey": "Failed to regenerate key",
+      "deleteAgent": "Failed to delete agent",
+      "updateSupervisor": "Failed to update supervisor"
+    },
+    "delete": {
+      "title": "Delete Agent",
+      "confirmBefore": "Are you sure you want to delete ",
+      "confirmAfter": "? This action cannot be undone.",
+      "deleting": "Deleting..."
+    },
+    "regenerate": {
+      "title": "Regenerate API Key",
+      "confirmBefore": "This will invalidate the current API key for ",
+      "confirmAfter": ". Any integrations using the old key will stop working immediately.",
+      "regenerating": "Regenerating...",
+      "action": "Regenerate Key"
+    },
+    "newKey": {
+      "title": "New API Key Generated",
+      "description": "Copy this key now — it will only be shown once."
+    },
+    "edit": {
+      "name": "Edit name",
+      "role": "Edit role",
+      "model": "Edit model",
+      "description": "Edit description",
+      "callbackUrl": "Edit callback URL",
+      "capabilities": "Edit capabilities",
+      "field": "Edit {{label}}"
+    },
+    "shortTag": {
+      "label": "Short tag",
+      "placeholder": "short tag"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "busy": "Busy",
+      "error": "Error"
+    },
+    "fields": {
+      "status": "Status",
+      "lastHeartbeat": "Last Heartbeat",
+      "activity": "Activity",
+      "registered": "Registered",
+      "supervisor": "Supervisor",
+      "role": "Role",
+      "model": "Model",
+      "responsibilityZone": "Responsibility zone",
+      "workingHours": "Working hours",
+      "acceptsFrom": "Accepts from",
+      "maxConcurrentTasks": "Max concurrent tasks",
+      "escalationContact": "Escalation contact",
+      "description": "Description",
+      "capabilities": "Capabilities"
+    },
+    "statistics": {
+      "title": "Statistics",
+      "tasksCompleted": "Tasks Completed",
+      "totalErrors": "Total Errors"
+    },
+    "supervisor": {
+      "none": "None (root)",
+      "agents": "Agents",
+      "members": "Members"
+    },
+    "role": {
+      "placeholder": "developer, lead, reviewer..."
+    },
+    "model": {
+      "placeholder": "e.g. gpt-6.1-sol",
+      "save": "Save model",
+      "notReported": "Not reported"
+    },
+    "description": {
+      "placeholder": "Describe this agent's purpose, skills, or context...",
+      "empty": "No description"
+    },
+    "push": {
+      "title": "Push Notifications",
+      "empty": "No callback URL configured",
+      "hint": "When set, Mesh will POST task events (assigned, status changed) to this URL."
+    },
+    "workspaces": {
+      "title": "Workspaces",
+      "loading": "Loading…",
+      "home": "Home"
+    }
+  },
+  "eventFeed": {
+    "system": "System",
+    "live": "Live",
+    "offline": "Offline",
+    "autoScrollOn": "Auto-scroll ON",
+    "autoScrollOff": "Auto-scroll OFF",
+    "refresh": "Refresh",
+    "filters": "Filters",
+    "reset": "Reset",
+    "allProjects": "All Projects",
+    "actors": {
+      "all": "All actors",
+      "agent": "🤖 Agents",
+      "system": "System"
+    },
+    "realtime": "Real-time",
+    "history": "History",
+    "noMatch": {
+      "title": "No events match your filters",
+      "hint": "Try adjusting or resetting the filters.",
+      "reset": "Reset filters"
+    },
+    "empty": {
+      "title": "No events yet",
+      "hint": "Events from agent activity will appear here in real-time."
+    },
+    "types": {
+      "summary": "Summary",
+      "status_change": "Status Change",
+      "context_update": "Context Update",
+      "error": "Error",
+      "dependency_resolved": "Dependency Resolved",
+      "custom": "Custom"
+    },
+    "verb": {
+      "moved": "moved",
+      "assigned": "assigned",
+      "created": "created",
+      "deleted": "deleted",
+      "updated": "updated",
+      "summarised": "summarised",
+      "updatedContextOn": "updated context on",
+      "reportedErrorOn": "reported error on",
+      "resolvedDependencyOn": "resolved dependency on",
+      "published": "published"
+    }
+  },
+  "analytics": {
+    "allProjects": "All Projects",
+    "exportFailed": "Export failed: {{statusText}}",
+    "range": {
+      "d7": "Last 7 days",
+      "d30": "Last 30 days",
+      "d90": "Last 90 days"
+    },
+    "export": {
+      "title": "Export data as CSV",
+      "busy": "Exporting...",
+      "label": "Export CSV"
+    },
+    "print": {
+      "title": "Print or save as PDF",
+      "label": "Print / PDF"
+    },
+    "kpi": {
+      "totalTasks": "Total Tasks",
+      "created": "Created (period)",
+      "completed": "Completed (period)",
+      "totalEvents": "Total Events",
+      "retainedSince": "Log only retains data since {{date}}",
+      "noRetained": "No event data retained for this period"
+    },
+    "cards": {
+      "byStatus": "Tasks by Status",
+      "byPriority": "Tasks by Priority",
+      "timeline": "Activity Timeline",
+      "leaderboard": "Agent Leaderboard",
+      "agents": "Agents",
+      "eventsByType": "Events by Type"
+    },
+    "timeline": {
+      "empty": "No data in selected period.",
+      "created": "Created",
+      "completed": "Completed"
+    },
+    "leaderboard": {
+      "agent": "Agent",
+      "completed": "Completed",
+      "empty": "No agent task data yet."
+    },
+    "agents": {
+      "total": "Total",
+      "active": "Active"
+    },
+    "events": {
+      "notRetained": "Event log doesn't retain data this far back — no breakdown available.",
+      "empty": "No events yet."
+    },
+    "labels": {
+      "backlog": "backlog",
+      "todo": "todo",
+      "in_progress": "in progress",
+      "review": "review",
+      "done": "done",
+      "cancelled": "cancelled",
+      "urgent": "urgent",
+      "high": "high",
+      "medium": "medium",
+      "low": "low",
+      "none": "none",
+      "summary": "summary",
+      "status_change": "status change",
+      "context_update": "context update",
+      "error": "error",
+      "dependency_resolved": "dependency resolved",
+      "custom": "custom"
+    }
+  },
+  "artifactView": {
+    "loadFailed": "could not load artifact",
+    "fileLoadFailed": "could not load file",
+    "storageError": "storage returned {{status}}",
+    "loadingArtifact": "Loading artifact...",
+    "loadingPreview": "Loading preview...",
+    "loadingFile": "Loading file...",
+    "notFound": {
+      "title": "Artifact not found",
+      "hint": "The file may have been deleted, or you don't have access to its workspace."
+    },
+    "openTask": "open task",
+    "download": "Download",
+    "notPreviewable": "This file can't be shown in the browser. Download it to open it locally.",
+    "previewError": "Could not load preview",
+    "fileError": "Could not load file",
+    "linkExpired": "The link may have expired.",
+    "tryAgain": "Try again",
+    "truncated": "Showing the first {{size}} of this file — {{omitted}} more characters are not shown. Download it to read the whole thing.",
+    "openFile": "Open file",
+    "csvEmpty": "This CSV file is empty.",
+    "csvTruncated": "Showing the first {{shown}} of {{total}} rows. Download the file for the rest."
+  },
+  "oauthConsent": {
+    "unnamedApp": "Unnamed app",
+    "errorInvalid": "This connection request is not valid.",
+    "errorLoad": "Could not load this request. Check your connection and try again.",
+    "errorBadRedirect": "The app sent an address this page will not open.",
+    "errorForbidden": "Your role in this workspace does not allow connecting apps. Pick another workspace, or ask an admin or owner.",
+    "errorSave": "Could not save your choice. Try again.",
+    "cantConnect": "Can't connect this app",
+    "nothingShared": "Nothing was shared.",
+    "goBack": "Go back to the app and start the connection again.",
+    "tryAgain": "Try again",
+    "returning": "Returning you to the app…",
+    "intro": "An app is asking to connect to Mesh. Mesh has not checked who made it.",
+    "sentTo": "After you decide, you'll be sent to",
+    "loopbackTitle": "This access goes to a program on this computer.",
+    "loopbackBody": "The app gave an address that points at your own machine, not at a website. Continue only if you just started this connection yourself.",
+    "workspace": "Workspace",
+    "noWorkspaces": "You are not a member of any workspace, so there is nothing to connect.",
+    "willBeAbleTo": "{{name}} will be able to, in the selected workspace:",
+    "perm1": "Read its projects, tasks, comments, documents and memory",
+    "perm2": "Create, change and delete tasks; write comments and memory",
+    "perm3": "Attach files and post events",
+    "perm4": "Change workflow rules, only if you are an admin or owner",
+    "agentNote": "It acts as a connector agent, supervised by you. It cannot manage members. Its access follows your role in the workspace and stops if you lose that role. You can revoke it at any time under Connected apps.",
+    "deny": "Deny",
+    "denying": "Denying…",
+    "allow": "Allow",
+    "allowing": "Allowing…",
+    "signedInAs": "Signed in as {{email}}"
+  },
+  "orgChart": {
+    "invited": "Invited",
+    "invitedTitle": "Invited from another workspace",
+    "stale": "(stale)",
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "busy": "Busy",
+      "error": "Error"
+    },
+    "empty": "No team members yet.",
+    "noProject": "No project",
+    "registerAgent": "Register Agent",
+    "inviteMember": "Invite Member"
+  },
+  "spark": {
+    "allTypes": "All Types",
+    "notEnabledTitle": "Spark catalog is not enabled",
+    "notEnabledBody": "Enable the Spark Agent Catalog integration to browse and install AI agents into your workspace.",
+    "goToIntegrations": "Go to Integrations",
+    "searchResults": "Search results",
+    "popularAgents": "Popular agents",
+    "searchPlaceholder": "Search agents...",
+    "search": "Search",
+    "domainExpertise": "Domain expertise",
+    "customTagPlaceholder": "Custom tag...",
+    "addTag": "Add tag",
+    "noAgentsTitle": "No agents found",
+    "noAgentsBody": "Try a different search query or remove some filters.",
+    "unavailableTitle": "Spark catalog unavailable",
+    "unavailableBody": "The Spark catalog could not be reached. Check that MESH_SPARK_ENABLED=true and the service is running.",
+    "by": "by {{author}}",
+    "noDescription": "No description provided.",
+    "open": "Open",
+    "install": "Install",
+    "installing": "Installing...",
+    "installFailed": "Installation failed",
+    "installedTitle": "Agent installed",
+    "installTitle": "Install \"{{name}}\"",
+    "installedDesc": "Save your API key — it will only be shown once.",
+    "installDesc": "This will register \"{{name}}\" as an agent in your workspace.",
+    "apiKeyLabel": "API Key (copy now — shown once)",
+    "copied": "Copied!",
+    "copyKey": "Copy API key",
+    "createInfo": "Agent will be created with type <strong>{{type}}</strong> and capabilities from the Spark manifest.",
+    "done": "Done",
+    "cancel": "Cancel"
+  },
+  "sessions": {
+    "status": {
+      "online": "Online",
+      "busy": "Busy",
+      "offline": "Offline",
+      "error": "Error"
+    },
+    "neverSeen": "Never seen",
+    "lastRun": "last run {{when}}",
+    "agentFallback": "Agent",
+    "lastSeen": "Last seen {{when}}",
+    "neverConnected": "Never connected",
+    "workingOn": "Working on",
+    "openTask": "Open task",
+    "chips": {
+      "online": "online",
+      "busy": "busy",
+      "offlineError": "offline / error"
+    },
+    "noAgents": "No agents registered in this workspace.",
+    "goToTeam": "Go to Team page to register agents",
+    "cost": {
+      "title": "Cost Tracking",
+      "lastDays": "Last {{days}} days",
+      "noData": "No cost data reported yet for this period. Cost data is available when agents use the <code>session_report</code> MCP tool at the end of each session.",
+      "exampleCall": "Example MCP call:",
+      "reportedCost": "Reported cost",
+      "tokensInOut": "Tokens in / out",
+      "sessions": "Sessions",
+      "avgPerSession": "Avg / reported session",
+      "reportedOf": "{{reported}} of {{total}} sessions reported ({{percent}}%)",
+      "spendByAgent": "Spend by agent",
+      "noAgentData": "No agent data.",
+      "expensiveTasks": "Most expensive tasks",
+      "noTaskSessions": "No task-linked sessions.",
+      "viewAnalytics": "View full analytics →"
+    }
+  },
+  "registerAgent": {
+    "title": "Register Agent",
+    "description": "Register a new AI agent to work in this workspace. An API key will be generated for authentication.",
+    "name": "Name",
+    "namePlaceholder": "My Agent",
+    "agentType": "Agent Type",
+    "role": "Role",
+    "rolePlaceholder": "developer, lead, reviewer...",
+    "responsibilityZone": "Responsibility zone",
+    "workingHours": "Working hours",
+    "maxConcurrentTasks": "Max concurrent tasks",
+    "acceptsFrom": "Accepts from",
+    "escalationContact": "Escalation contact",
+    "capabilities": "Capabilities",
+    "capabilitiesPlaceholder": "code-review, docs, deploy",
+    "cancel": "Cancel",
+    "registering": "Registering...",
+    "failed": "Failed to register agent",
+    "successTitle": "Agent Registered Successfully",
+    "successDescription": "Your agent has been registered. Copy the API key below — it will only be shown once."
+  },
+  "inviteAgent": {
+    "title": "Invite Agent",
+    "description": "Connect an agent from a workspace you belong to. It gets a new API key for this workspace — its access elsewhere is unaffected.",
+    "agent": "Agent",
+    "loading": "Loading agents…",
+    "noAgents": "No agents found in any workspace you belong to.",
+    "selectAgent": "Select an agent…",
+    "alreadyConnected": " (already connected)",
+    "hint": "Only agents in workspaces you belong to can be invited.",
+    "role": "Role",
+    "roleOwner": "Owner",
+    "roleAdmin": "Admin",
+    "roleMember": "Member",
+    "roleViewer": "Viewer",
+    "cancel": "Cancel",
+    "inviting": "Inviting...",
+    "failed": "Failed to invite agent",
+    "connectedTitle": "Agent Connected",
+    "connectedDescription": "Copy the API key below — it will only be shown once."
+  },
+  "invitedAgent": {
+    "newKeyTitle": "New key issued",
+    "newKeyDescription": "Copy the API key below — it will only be shown once. The previous key no longer works.",
+    "revokeTitle": "Revoke connection",
+    "reissueTitle": "Reissue key",
+    "revokeDescription": "{{name}}'s API key for this workspace will stop working immediately. This does not affect its access to any other workspace.",
+    "reissueDescription": "{{name}}'s current key for this workspace will stop working immediately, and a new one will be shown once.",
+    "cancel": "Cancel",
+    "working": "Working...",
+    "revokeConfirm": "Revoke Connection",
+    "reissueConfirm": "Reissue Key",
+    "invited": "Invited",
+    "description": "This agent belongs to another workspace and was invited into this one.",
+    "role": "Role",
+    "status": "Status",
+    "workspaceRole": "Workspace role",
+    "key": "Key",
+    "retry": "Retry",
+    "revoke": "Revoke",
+    "close": "Close",
+    "issueFailed": "Failed to issue a new key",
+    "issueFailedSuffix": "The previous key is already revoked — retry to issue a new one.",
+    "revokePreviousFailed": "Failed to revoke the previous key",
+    "revokeFailed": "Failed to revoke the connection",
+    "statuses": {
+      "online": "Online",
+      "offline": "Offline",
+      "busy": "Busy",
+      "error": "Error"
+    },
+    "roles": {
+      "owner": "owner",
+      "admin": "admin",
+      "member": "member",
+      "viewer": "viewer"
+    }
+  },
+  "connectedApps": {
+    "title": "Connected apps",
+    "description": "Apps you have allowed to work in your workspaces. Revoking access stops the app right away; the connector agent it created stays in the workspace.",
+    "loadError": "Could not load connected apps.",
+    "revokeError": "Could not revoke access.",
+    "revokedToast": "Access revoked for {{name}}",
+    "empty": "No apps are connected.",
+    "revokedHeading": "Revoked",
+    "confirmTitle": "Revoke access?",
+    "confirmDescription": "{{name}} will stop working in {{workspace}} immediately. To connect it again, it has to ask for access again.",
+    "revokeAccess": "Revoke access",
+    "revokedBadge": "Revoked",
+    "workspaceActsAs": "Workspace {{workspace}} · acts as {{agent}}",
+    "revokedOn": "Revoked {{date}}",
+    "connectedOn": "Connected {{date}}"
+  },
+  "integrationsPage": {
+    "intro": "Connect Entire VC Mesh with external services to automate workflows and keep your team in sync.",
+    "providers": {
+      "github": "Link pull requests and commits to tasks. Receive webhook events to auto-update task status.",
+      "gitlab": "Link merge requests to tasks on a self-hosted GitLab instance. Receive webhook events to auto-update task status.",
+      "spark": "Browse and install AI agents from the Spark catalog into your workspace.",
+      "mcp": "Connect AI agents (Claude Code, Cline, Aider) via Model Context Protocol. Supports stdio and SSE transports.",
+      "telegram": "Deliver notifications and activity to a Telegram bot. Each member connects their own account from Notification Settings.",
+      "sparkName": "Spark Agent Catalog",
+      "mcpName": "MCP Server"
+    },
+    "sourceInstance": "Instance",
+    "sourceWorkspace": "Workspace",
+    "remove": "Remove",
+    "enabled": "Enabled",
+    "enable": "Enable",
+    "envNote": "Active (configured at the instance level)",
+    "confirmDisable": {
+      "message": "This will turn off an integration configured at the instance level. It stops working for this workspace until it is enabled again.",
+      "turnOff": "Turn off"
+    },
+    "cancel": "Cancel",
+    "connection": "Connection",
+    "change": "Change",
+    "webhookUrl": "Webhook URL",
+    "github": {
+      "usingToken": "Using a workspace-configured token.",
+      "usingTokenAndSecret": "Using a workspace-configured token and webhook secret.",
+      "connectPrompt": "Optional: connect a personal access token for live PR-status checks and to set a workspace-specific webhook secret. Without one, this deployment's instance-wide default is used.",
+      "webhookHelp": "Add this URL to your GitHub repository under <strong>Settings → Webhooks</strong>. Select <em>Pull requests</em> and <em>Pushes</em> events. Include <code/> in commit messages or PR titles to auto-link tasks."
+    },
+    "gitlab": {
+      "connected": "Connected.",
+      "connectedTo": "Connected to <url>{{url}}</url>.",
+      "connectPrompt": "Connect your self-hosted GitLab instance: base URL, an access token for live MR-status checks, and a webhook secret.",
+      "webhookHelp": "Add this URL to your GitLab project under <strong>Settings → Webhooks</strong>. Select <em>Merge request events</em>. Include <code/> in commit messages or MR titles to auto-link tasks."
+    },
+    "spark": {
+      "enabledNote": "Spark catalog is enabled. Go to <link>Spark Catalog</link> to browse and install agents."
+    },
+    "mcp": {
+      "sseEndpoint": "SSE Endpoint (remote agents)",
+      "sseNote": "Requires your deployment to route <code>/mcp</code> to the MCP server. If it does not connect, use the stdio config below.",
+      "registerHelp": "Register an agent in <link>Agents</link> to get an API key, then use it in <code>MESH_AGENT_KEY</code>. MCP provides 34 tools: task management, comments, events, artifacts, and more."
+    },
+    "telegram": {
+      "connectedAs": "Connected as <name>@{{username}}</name>. Members connect from their own Notification Settings.",
+      "changeToken": "Change token",
+      "createBot": "Create a bot with <bot>@BotFather</bot> on Telegram and paste its token here. The token is encrypted at rest and never shown again.",
+      "connect": "Connect",
+      "connecting": "Connecting…"
+    },
+    "vcsForm": {
+      "personalToken": "Personal access token",
+      "accessToken": "Access token",
+      "webhookSecret": "Webhook secret",
+      "save": "Save",
+      "saving": "Saving…"
+    },
+    "enterBotToken": "Enter a bot token",
+    "connectedAsToast": "Connected as @{{username}}",
+    "telegramConnectedToast": "Telegram bot connected",
+    "telegramSaveFailed": "Failed to save the Telegram bot token",
+    "enterOneField": "Enter at least one field to save",
+    "vcsSaved": "{{label}} connection saved",
+    "vcsSaveFailed": "Failed to save the {{label}} connection",
+    "nothingToEnable": "Nothing to enable yet: this integration has no connection settings.",
+    "updateFailed": "Failed to update the integration",
+    "removeFailed": "Failed to remove the integration"
+  },
+  "runtimeTabs": {
+    "sectionsLabel": "Agent sections",
+    "tabs": {
+      "profile": "Profile",
+      "access": "Workspace access",
+      "execution": "Execution & routes",
+      "state": "Observed state"
+    },
+    "loadingRuntime": "Loading runtime",
+    "loadError": "Runtime data could not be loaded. Nothing below is assumed.",
+    "retry": "Retry",
+    "forbidden": "Runtime settings belong to the resource-owner workspace and are visible to its admins only.",
+    "notConfigured": "No runtime connection in this workspace. The agent runs in direct mode; runtime facts are unknown.",
+    "noBinding": "This agent has no runtime binding in this workspace.",
+    "preview": {
+      "heading": "Router decision now",
+      "asking": "Asking the router…",
+      "explain": "Explain routing now",
+      "advisory": "Advisory only: nothing is launched or reserved.",
+      "forbidden": "You are not allowed to see this agent's router decision.",
+      "stale": "The runtime configuration changed meanwhile. Reload and ask again.",
+      "unavailable": "The router decision could not be loaded. Nothing is assumed.",
+      "wouldPick": "Would pick <profile>{{profile}}</profile> on account <account>{{account}}</account>",
+      "preferredAccount": " (preferred account)",
+      "preferredOther": " (preferred: {{account}})",
+      "noRoute": "No route available right now",
+      "reason": " · reason: {{reason}}",
+      "qa": "QA {{mode}}",
+      "qaCompromise": " · compromise, not strict acceptance"
+    },
+    "admission": {
+      "heading": "Runtime admission",
+      "enabled": "Binding enabled",
+      "disabled": "Binding disabled",
+      "permitted": "Permitted profiles: {{profiles}}"
+    },
+    "execution": {
+      "editRoutes": "Edit routes",
+      "allowedRoutes": "Allowed routes, in order",
+      "noPermittedRoute": "No permitted route.",
+      "role": {
+        "primary": "primary",
+        "quota_reserve": "quota reserve",
+        "api_reserve": "api reserve"
+      },
+      "unavailable": "Unavailable: {{reason}}",
+      "preferredVsActual": "Preferred vs actual account",
+      "noPreferred": "No preferred account set.",
+      "none": "none",
+      "wantedProjected": "<prov>{{provider}}</prov> · wanted account: <pref>{{preferred}}</pref> · projected route: <act>{{actual}}</act>",
+      "softPreference": "Soft preference: grants no access, overrides no grant, API opt-in, QA or pool. The projected route is the first usable one by policy and the latest pool observations, not a record of a live launch.",
+      "ownerSide": "Owner-side view: the receiving workspace's own admission is not part of this data, so a route marked usable here is not proof that this workspace admits it.",
+      "qaPolicy": "QA policy",
+      "qaMode": "Mode: <b>{{mode}}</b>",
+      "qaFallback": "Quota-only fallback: <b>{{value}}</b>",
+      "on": "on",
+      "off": "off",
+      "qaTied": "Tied to the exact artifact revision; reviewer differs from every author.",
+      "pools": "Pools",
+      "noPools": "No pools mapped.",
+      "poolDetail": " · max {{max}} · threshold {{threshold}}",
+      "notSet": "not set",
+      "unverified": " (unverified)",
+      "aliases": " · aliases: {{aliases}}",
+      "notInCatalog": " · not in catalog"
+    },
+    "state": {
+      "desiredRevision": "Desired revision",
+      "controllers": "Controllers",
+      "noControllers": "No controllers in the catalog.",
+      "controllerDisabled": "controller disabled",
+      "heartbeat": "heartbeat {{when}}"
+    }
+  },
+  "policyEditor": {
+    "saved": "Saved as revision {{revision}}.",
+    "forbidden": "Only the resource-owner workspace owner or admin can change routes.",
+    "stale": "The runtime configuration changed since you opened this editor. Nothing was saved. Reload and redo the change.",
+    "invalid": "The server rejected these settings.",
+    "invalidWithMessage": "The server rejected these settings: {{message}}",
+    "saveFailed": "Could not save. Nothing was changed.",
+    "formLabel": "Edit routes",
+    "allowedRoutes": "Allowed routes, in order",
+    "allowedHint": "Primary routes run first. This list orders only the reserves of one route; it does not make a route primary.",
+    "primary": "Primary",
+    "up": "Up",
+    "down": "Down",
+    "remove": "Remove",
+    "allow": "Allow",
+    "moveUp": "Move {{ref}} up",
+    "moveDown": "Move {{ref}} down",
+    "removeRef": "Remove {{ref}}",
+    "allowRef": "Allow {{ref}}",
+    "preferredPerProvider": "Preferred account per provider",
+    "preferredFor": "Preferred account for {{provider}}",
+    "noPreference": "No preference",
+    "softPreference": "A soft preference: it grants no access.",
+    "apiReserve": "API reserve (explicit opt-in)",
+    "paidFallback": "Allow paid API fallback for {{provider}}",
+    "qa": "QA",
+    "mode": "Mode",
+    "qaModeLabel": "QA mode",
+    "qaModes": {
+      "off": "off",
+      "prefer": "prefer",
+      "strict": "strict"
+    },
+    "quotaFallback": "Quota-only fallback",
+    "reload": "Reload",
+    "saving": "Saving…",
+    "save": "Save routes",
+    "close": "Close",
+    "cancel": "Cancel"
+  },
+  "runtimeResources": {
+    "title": "Controllers and resources",
+    "loadingRuntime": "Loading runtime",
+    "loadError": "Runtime data could not be loaded. Nothing below is assumed.",
+    "retry": "Retry",
+    "forbidden": "Runtime settings are visible to workspace admins only.",
+    "notConfigured": "No runtime connection in this workspace. Agents run in direct mode; runtime facts are unknown.",
+    "desired": "Desired r{{revision}}",
+    "enabled": "enabled",
+    "disabled": "disabled",
+    "draining": "draining",
+    "controllers": "Controllers",
+    "accounts": "Accounts",
+    "noAccounts": "No accounts in the catalog.",
+    "pools": "Pools",
+    "noPools": "No pools in the catalog.",
+    "poolDetail": " · {{provider}} · max {{max}} · threshold {{threshold}}",
+    "notSet": "not set",
+    "aliases": " · aliases: {{aliases}}",
+    "unverified": " (unverified)",
+    "noObservation": " · no observation",
+    "usageLoading": "Loading usage…",
+    "usageForbidden": "Usage is visible to workspace admins only.",
+    "usageUnavailable": "Usage unavailable. Nothing is assumed.",
+    "noUsage": "No usage readings.",
+    "usageOf": "Usage of {{pool}}"
+  },
+  "costQuality": {
+    "quality": {
+      "golden": "golden",
+      "rework": "rework",
+      "multi-turn": "multi-turn"
+    }
+  },
+  "apiKeyReveal": {
+    "label": "API Key",
+    "warning": "This key will only be shown once. Store it securely. You will not be able to retrieve it later.",
+    "done": "Done",
+    "close": "Close"
+  },
+  "pushPermission": {
+    "question": "Enable browser notifications for @mentions and assignments?",
+    "enabling": "Enabling…",
+    "enable": "Enable",
+    "notNow": "Not now"
+  }
+}

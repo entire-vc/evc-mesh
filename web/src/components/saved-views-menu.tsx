@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState } from "react";
 import { BookmarkCheck, BookmarkPlus, Share2, Trash2, ChevronDown } from "lucide-react";
 import {
@@ -36,6 +37,7 @@ export function SavedViewsMenu({
   currentColumns,
   onApplyView,
 }: SavedViewsMenuProps) {
+  const { t } = useTranslation("settings");
   const { views, isLoading, fetchViews, createView, updateView, deleteView } =
     useSavedViewStore();
 
@@ -68,12 +70,12 @@ export function SavedViewsMenu({
         columns: currentColumns,
         is_shared: saveIsShared,
       });
-      toast("View saved successfully");
+      toast(t("savedViews.toast.saved"));
       setSaveDialogOpen(false);
       setSaveName("");
       setSaveIsShared(false);
     } catch {
-      toast("Failed to save view");
+      toast(t("savedViews.toast.saveFailed"));
     } finally {
       setIsSaving(false);
     }
@@ -87,47 +89,48 @@ export function SavedViewsMenu({
     currentSortOrder,
     currentColumns,
     createView,
+    t,
   ]);
 
   const handleToggleShare = useCallback(
     async (view: SavedView) => {
       try {
         await updateView(view.id, { is_shared: !view.is_shared });
-        toast(view.is_shared ? "View made private" : "View shared with team");
+        toast(view.is_shared ? t("savedViews.toast.madePrivate") : t("savedViews.toast.sharedWithTeam"));
       } catch {
-        toast("Failed to update view");
+        toast(t("savedViews.toast.updateFailed"));
       }
     },
-    [updateView],
+    [updateView, t],
   );
 
   const handleDelete = useCallback(
     async (view: SavedView) => {
       try {
         await deleteView(view.id);
-        toast("View deleted");
+        toast(t("savedViews.toast.deleted"));
       } catch {
-        toast("Failed to delete view");
+        toast(t("savedViews.toast.deleteFailed"));
       }
     },
-    [deleteView],
+    [deleteView, t],
   );
 
   const handleApply = useCallback(
     (view: SavedView) => {
       if (onApplyView) {
         onApplyView(view);
-        toast(`Applied view: ${view.name}`);
+        toast(t("savedViews.toast.applied", { name: view.name }));
       }
     },
-    [onApplyView],
+    [onApplyView, t],
   );
 
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-8 gap-1 px-2.5" title="Saved Views">
+          <Button variant="outline" size="sm" className="h-8 gap-1 px-2.5" title={t("savedViews.title")}>
             <BookmarkCheck className="h-4 w-4" />
             <ChevronDown className="h-3 w-3 opacity-60" />
           </Button>
@@ -138,7 +141,7 @@ export function SavedViewsMenu({
             className="gap-2"
           >
             <BookmarkPlus className="h-4 w-4" />
-            Save current view
+            {t("savedViews.saveCurrent")}
           </DropdownMenuItem>
 
           {(personalViews.length > 0 || sharedViews.length > 0) && (
@@ -148,7 +151,7 @@ export function SavedViewsMenu({
           {personalViews.length > 0 && (
             <>
               <DropdownMenuLabel className="text-xs text-muted-foreground">
-                My views
+                {t("savedViews.myViews")}
               </DropdownMenuLabel>
               {personalViews.map((view) => (
                 <SavedViewItem
@@ -165,7 +168,7 @@ export function SavedViewsMenu({
           {sharedViews.length > 0 && (
             <>
               <DropdownMenuLabel className="text-xs text-muted-foreground">
-                Shared views
+                {t("savedViews.sharedViews")}
               </DropdownMenuLabel>
               {sharedViews.map((view) => (
                 <SavedViewItem
@@ -181,7 +184,7 @@ export function SavedViewsMenu({
 
           {!isLoading && relevantViews.length === 0 && (
             <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-              No saved views yet
+              {t("savedViews.noSavedViews")}
             </div>
           )}
         </DropdownMenuContent>
@@ -190,15 +193,15 @@ export function SavedViewsMenu({
       <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Save current view</DialogTitle>
+            <DialogTitle>{t("savedViews.dialog.title")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 p-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">View name</label>
+              <label className="text-sm font-medium">{t("savedViews.dialog.viewName")}</label>
               <Input
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                placeholder="e.g. My open tasks"
+                placeholder={t("savedViews.dialog.placeholder")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && saveName.trim()) {
                     handleSave();
@@ -215,7 +218,7 @@ export function SavedViewsMenu({
                 checked={saveIsShared}
                 onChange={(e) => setSaveIsShared(e.target.checked)}
               />
-              <span className="text-sm">Share with team members</span>
+              <span className="text-sm">{t("savedViews.dialog.share")}</span>
             </label>
 
             <div className="flex justify-end gap-2">
@@ -224,14 +227,14 @@ export function SavedViewsMenu({
                 size="sm"
                 onClick={() => setSaveDialogOpen(false)}
               >
-                Cancel
+                {t("savedViews.dialog.cancel")}
               </Button>
               <Button
                 size="sm"
                 onClick={handleSave}
                 disabled={!saveName.trim() || isSaving}
               >
-                {isSaving ? "Saving..." : "Save view"}
+                {isSaving ? t("savedViews.dialog.saving") : t("savedViews.dialog.save")}
               </Button>
             </div>
           </div>
@@ -258,6 +261,7 @@ function SavedViewItem({
   onToggleShare,
   onDelete,
 }: SavedViewItemProps) {
+  const { t } = useTranslation("settings");
   return (
     <div className="group flex items-center justify-between rounded px-2 py-1 hover:bg-accent">
       <button
@@ -270,7 +274,7 @@ function SavedViewItem({
       <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
         <button
           className="rounded p-0.5 hover:bg-muted"
-          title={view.is_shared ? "Make private" : "Share with team"}
+          title={view.is_shared ? t("savedViews.row.makePrivate") : t("savedViews.row.shareWithTeam")}
           onClick={(e) => {
             e.stopPropagation();
             onToggleShare();
@@ -285,7 +289,7 @@ function SavedViewItem({
         </button>
         <button
           className="rounded p-0.5 hover:bg-muted"
-          title="Delete view"
+          title={t("savedViews.row.deleteView")}
           onClick={(e) => {
             e.stopPropagation();
             onDelete();

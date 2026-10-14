@@ -29,17 +29,18 @@ import {
 
 const SCOPE_COPY: Record<
   SearchScope,
-  { title: string; icon: typeof BookOpen; placeholder: string }
+  // `attachDoc` locale keys, resolved with t() at render.
+  { titleKey: string; icon: typeof BookOpen; placeholderKey: string }
 > = {
   docs: {
-    title: "Link a document",
+    titleKey: "linkDocument",
     icon: FileText,
-    placeholder: "Search documents...",
+    placeholderKey: "searchDocuments",
   },
   relay: {
-    title: "Attach Obsidian doc",
+    titleKey: "attachObsidian",
     icon: BookOpen,
-    placeholder: "",
+    placeholderKey: "searchObsidian",
   },
 };
 
@@ -112,7 +113,7 @@ export function AttachDocDialog({
         })
         .catch((err) => {
           if (!cancelled && mountedRef.current) {
-            setError(apiErrorMessage(err, "Search failed"));
+            setError(apiErrorMessage(err, t("searchFailed")));
             setResults([]);
           }
         })
@@ -124,7 +125,7 @@ export function AttachDocDialog({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [open, projId, query, scope]);
+  }, [open, projId, query, scope, t]);
 
   function handleSelect(hit: DocumentSearchHit) {
     onSelect(hit);
@@ -140,7 +141,7 @@ export function AttachDocDialog({
         <DialogHeader className="mb-3">
           <DialogTitle className="flex items-center gap-2 text-sm font-medium">
             <Icon className="h-4 w-4" />
-            {copy.title}
+            {t(copy.titleKey)}
           </DialogTitle>
         </DialogHeader>
 
@@ -151,7 +152,7 @@ export function AttachDocDialog({
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={scope === "relay" ? t("searchObsidian") : copy.placeholder}
+            placeholder={t(copy.placeholderKey)}
             className="w-full rounded-md border border-border bg-background py-1.5 pl-8 pr-8 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
           {query && (
@@ -178,7 +179,7 @@ export function AttachDocDialog({
               {query
                 ? t("nothingFound")
                 : scope === "docs"
-                  ? "Start typing to search"
+                  ? t("startTyping")
                   : t("noDocs")}
             </p>
           ) : (

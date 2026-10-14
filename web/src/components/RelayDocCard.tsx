@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, ExternalLink, FileText, FolderOpen } from "lucide-react";
 import { DocEditor } from "@/components/doc-editor";
 import { api } from "@/lib/api";
@@ -67,6 +68,7 @@ function relayToHttps(relayUrl: string): string {
 }
 
 export function RelayDocCard({ relayUrl, label, projId }: RelayDocCardProps) {
+  const { t } = useTranslation("misc");
   const isFolder = isFolderUrl(relayUrl);
   const docName = label || extractDocName(relayUrl);
   const httpsUrl = relayToHttps(relayUrl);
@@ -111,7 +113,7 @@ export function RelayDocCard({ relayUrl, label, projId }: RelayDocCardProps) {
             type="button"
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
-            aria-label={expanded ? "Collapse document" : "Expand document"}
+            aria-label={expanded ? t("relayDoc.collapse") : t("relayDoc.expand")}
             className="shrink-0 text-muted-foreground hover:text-foreground"
           >
             {expanded ? (
@@ -130,10 +132,10 @@ export function RelayDocCard({ relayUrl, label, projId }: RelayDocCardProps) {
           href={httpsUrl}
           target="_blank"
           rel="noopener noreferrer"
-          title={isFolder ? "Open folder in Team Relay" : "Open in Team Relay"}
+          title={isFolder ? t("relayDoc.openFolderInRelay") : t("relayDoc.openInRelay")}
           className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          {isFolder ? "Open folder" : "Open"}
+          {isFolder ? t("relayDoc.openFolder") : t("relayDoc.open")}
           <ExternalLink className="h-3 w-3" />
         </a>
       </div>

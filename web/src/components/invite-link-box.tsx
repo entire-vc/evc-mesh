@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { Check, Copy } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { copyText } from "@/lib/clipboard";
 
@@ -17,6 +18,7 @@ interface InviteLinkBoxProps {
  * without SMTP the only way to invite anyone was to read the container logs.
  */
 export function InviteLinkBox({ url, label }: InviteLinkBoxProps) {
+  const { t } = useTranslation("misc");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -42,12 +44,12 @@ export function InviteLinkBox({ url, label }: InviteLinkBoxProps) {
           {copied ? (
             <>
               <Check className="h-3.5 w-3.5" />
-              Copied
+              {t("invite.link.copied")}
             </>
           ) : (
             <>
               <Copy className="h-3.5 w-3.5" />
-              Copy
+              {t("invite.link.copy")}
             </>
           )}
         </Button>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { CalendarOff, GripVertical } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
@@ -14,11 +15,12 @@ export function CalendarUnscheduled({
   statusMap,
   onTaskClick,
 }: CalendarUnscheduledProps) {
+  const { t } = useTranslation("settings");
   if (tasks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
         <CalendarOff className="mb-2 h-8 w-8" />
-        <p className="text-sm">No unscheduled tasks</p>
+        <p className="text-sm">{t("calendar.unscheduled.empty")}</p>
       </div>
     );
   }
@@ -46,7 +48,7 @@ export function CalendarUnscheduled({
             <span className="min-w-0 flex-1 truncate">{task.title}</span>
             {task.priority !== "none" && (
               <Badge variant="outline" className="shrink-0 text-[10px]">
-                {task.priority}
+                {t(`priorityBadge.${task.priority}`)}
               </Badge>
             )}
           </button>

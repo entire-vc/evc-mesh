@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { subscribeUser, getPermissionState } from '@/lib/push';
 
@@ -23,6 +24,7 @@ function setDismissed() {
 }
 
 export function PushPermissionPrompt() {
+  const { t } = useTranslation('integrations');
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -69,14 +71,14 @@ export function PushPermissionPrompt() {
       <div className="flex items-center gap-3 rounded-xl border border-border bg-background shadow-lg p-4">
         <Bell className="h-5 w-5 text-primary shrink-0" />
         <p className="flex-1 text-sm">
-          Enable browser notifications for @mentions and assignments?
+          {t('pushPermission.question')}
         </p>
         <div className="flex items-center gap-2 shrink-0">
           <Button size="sm" onClick={() => void handleEnable()} disabled={loading}>
-            {loading ? 'Enabling…' : 'Enable'}
+            {loading ? t('pushPermission.enabling') : t('pushPermission.enable')}
           </Button>
           <Button size="sm" variant="ghost" onClick={handleDismiss}>
-            Not now
+            {t('pushPermission.notNow')}
           </Button>
           <button onClick={handleDismiss} className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />

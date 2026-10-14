@@ -1,4 +1,5 @@
 import { FileText, Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import {
   type DocumentSearchHit,
@@ -76,11 +77,12 @@ export function DocLinkMenu({
   onScope: (scope: SearchScope) => void;
   loading?: boolean;
 }) {
+  const { t } = useTranslation("docs");
   const header =
     scopes.length > 1 ? (
       <div
         role="radiogroup"
-        aria-label="Search in"
+        aria-label={t("linkMenu.searchIn")}
         className="mb-1 flex gap-1 border-b border-border px-1 pb-1"
       >
         {scopes.map((s) => (
@@ -116,10 +118,10 @@ export function DocLinkMenu({
           {loading ? (
             <span className="flex items-center gap-1.5">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Searching...
+              {t("search.searching")}
             </span>
           ) : (
-            "No documents match"
+            t("search.noMatch")
           )}
         </p>
       </div>
@@ -129,7 +131,7 @@ export function DocLinkMenu({
   return (
     <div className="absolute z-20 max-h-64 w-80 overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-md">
       {header}
-      <ul role="listbox" aria-label="Link a document">
+      <ul role="listbox" aria-label={t("linkMenu.label")}>
         {suggestions.map((doc, index) => (
           <li key={doc.id}>
             <button

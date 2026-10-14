@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -28,11 +29,12 @@ export function ConfirmDialog({
   onConfirm,
   title,
   description,
-  confirmText = "Confirm",
+  confirmText,
   variant = "default",
   requireText,
   isLoading = false,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation("settings");
   const [typedText, setTypedText] = useState("");
 
   const canConfirm = requireText ? typedText === requireText : true;
@@ -60,11 +62,11 @@ export function ConfirmDialog({
         {requireText && (
           <div className="mt-4 space-y-2">
             <p className="text-sm text-muted-foreground">
-              Type{" "}
+              {t("confirm.typePrefix")}{" "}
               <span className="font-semibold text-foreground">
                 {requireText}
               </span>{" "}
-              to confirm:
+              {t("confirm.typeSuffix")}
             </p>
             <Input
               value={typedText}
@@ -81,7 +83,7 @@ export function ConfirmDialog({
             onClick={onClose}
             disabled={isLoading}
           >
-            Cancel
+            {t("confirm.cancel")}
           </Button>
           <Button
             type="button"
@@ -89,7 +91,7 @@ export function ConfirmDialog({
             onClick={handleConfirm}
             disabled={!canConfirm || isLoading}
           >
-            {isLoading ? "Processing..." : confirmText}
+            {isLoading ? t("confirm.processing") : (confirmText ?? t("confirm.confirm"))}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -7,6 +7,8 @@ import {
   useState,
 } from "react";
 import { useNavigate } from "react-router";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import {
   Bold,
   Code,
@@ -71,8 +73,9 @@ import { DocProperties } from "@/components/doc-properties";
  * indistinguishable from the button being dead.
  */
 function reportUploadFailure(file: File, err: unknown): void {
-  const detail = apiErrorMessage(err, "upload failed");
-  toast.error(`Could not attach ${file.name}`, { description: detail });
+  // Called from upload callbacks, outside render: the module-level i18n instance.
+  const detail = apiErrorMessage(err, i18n.t("docs:editor.uploadFailed"));
+  toast.error(i18n.t("docs:editor.attachFailed", { name: file.name }), { description: detail });
 }
 
 export interface DocEditorProps {
@@ -206,6 +209,7 @@ function ParagraphMenu({
   onCopy: () => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation("docs");
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
 
@@ -261,7 +265,7 @@ function ParagraphMenu({
         className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-foreground hover:bg-secondary hover:text-secondary-foreground"
       >
         <LinkIcon className="h-3.5 w-3.5" />
-        Copy link to this paragraph
+        {t("editor.copyParagraphLink")}
       </button>
     </div>,
     document.body,
@@ -283,6 +287,7 @@ function MilkdownDoc({
   className,
   properties,
 }: MilkdownDocProps) {
+  const { t } = useTranslation("docs");
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -647,55 +652,55 @@ function MilkdownDoc({
         >
           <div className="flex flex-wrap items-center gap-0.5 border-b border-border px-2 py-1">
             <ToolbarButton
-              title="Bold (Ctrl+B)"
+              title={t("editor.bold")}
               onClick={() => runCommand(toggleStrongCommand.key)}
             >
               <Bold className="h-3.5 w-3.5" />
             </ToolbarButton>
             <ToolbarButton
-              title="Italic (Ctrl+I)"
+              title={t("editor.italic")}
               onClick={() => runCommand(toggleEmphasisCommand.key)}
             >
               <Italic className="h-3.5 w-3.5" />
             </ToolbarButton>
             <ToolbarButton
-              title="Inline code"
+              title={t("editor.inlineCode")}
               onClick={() => runCommand(toggleInlineCodeCommand.key)}
             >
               <Code className="h-3.5 w-3.5" />
             </ToolbarButton>
-            <ToolbarButton title="Link" onClick={() => setLinkOpen((v) => !v)}>
+            <ToolbarButton title={t("editor.link")} onClick={() => setLinkOpen((v) => !v)}>
               <LinkIcon className="h-3.5 w-3.5" />
             </ToolbarButton>
   
             <div className="mx-1 h-3.5 w-px bg-border" />
   
             <ToolbarButton
-              title="Bullet list"
+              title={t("editor.bulletList")}
               onClick={() => runCommand(wrapInBulletListCommand.key)}
             >
               <List className="h-3.5 w-3.5" />
             </ToolbarButton>
             <ToolbarButton
-              title="Numbered list"
+              title={t("editor.numberedList")}
               onClick={() => runCommand(wrapInOrderedListCommand.key)}
             >
               <ListOrdered className="h-3.5 w-3.5" />
             </ToolbarButton>
             <ToolbarButton
-              title="Quote"
+              title={t("editor.quote")}
               onClick={() => runCommand(wrapInBlockquoteCommand.key)}
             >
               <Quote className="h-3.5 w-3.5" />
             </ToolbarButton>
             <ToolbarButton
-              title="Code block"
+              title={t("editor.codeBlock")}
               onClick={() => runCommand(createCodeBlockCommand.key)}
             >
               <SquareCode className="h-3.5 w-3.5" />
             </ToolbarButton>
             <ToolbarButton
-              title="Table"
+              title={t("editor.table")}
               onClick={() => runCommand(insertTableCommand.key)}
             >
               <TableIcon className="h-3.5 w-3.5" />
@@ -705,13 +710,13 @@ function MilkdownDoc({
               <>
                 <div className="mx-1 h-3.5 w-px bg-border" />
                 <ToolbarButton
-                  title="Insert image"
+                  title={t("editor.insertImage")}
                   onClick={() => imageInputRef.current?.click()}
                 >
                   <ImageIcon className="h-3.5 w-3.5" />
                 </ToolbarButton>
                 <ToolbarButton
-                  title="Attach file"
+                  title={t("editor.attachFile")}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <Paperclip className="h-3.5 w-3.5" />
@@ -736,7 +741,7 @@ function MilkdownDoc({
   
             <div className="flex-1" />
             {uploading && (
-              <span className="mr-2 text-xs text-muted-foreground">Uploading...</span>
+              <span className="mr-2 text-xs text-muted-foreground">{t("editor.uploading")}</span>
             )}
           </div>
 
@@ -750,14 +755,14 @@ function MilkdownDoc({
                 value={linkHref}
                 onChange={(e) => setLinkHref(e.target.value)}
                 placeholder="https://example.com"
-                aria-label="Link URL"
+                aria-label={t("editor.linkUrl")}
                 className="h-7 flex-1 rounded border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
               />
               <button
                 type="submit"
                 className={cn(TOOLBAR_HOVER, TOOLBAR_PRESSED, "h-7 rounded px-2 text-xs")}
               >
-                Apply
+                {t("editor.apply")}
               </button>
             </form>
           )}
@@ -792,8 +797,8 @@ function MilkdownDoc({
       {!readOnly && (
         <div className="border-t border-border px-3 py-1 text-[11px] text-muted-foreground">
           {uploadTarget
-            ? "Rich text — tables, task lists and footnotes supported. Paste or drop a file to attach it."
-            : "Rich text — tables, task lists and footnotes supported."}
+            ? t("editor.hintWithUploads")
+            : t("editor.hint")}
         </div>
       )}
     </div>
@@ -823,6 +828,7 @@ export function DocEditor({
   onCopyAnchor,
   className,
 }: DocEditorProps) {
+  const { t } = useTranslation("docs");
   // The frontmatter never reaches Milkdown: it would render as one bold
   // setext heading. The engine sees the body only, and every change is
   // re-joined with the frontmatter exactly as it was written.
@@ -837,7 +843,7 @@ export function DocEditor({
   );
 
   if (readOnly && !value.trim()) {
-    return <p className="text-sm text-muted-foreground">This page is empty.</p>;
+    return <p className="text-sm text-muted-foreground">{t("empty.pageEmpty")}</p>;
   }
 
   const properties = split.raw ? (

@@ -1,4 +1,6 @@
 import * as i18nFmt from "@/i18n/format";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { useAgentShortTag } from "@/hooks/use-agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
@@ -87,20 +89,24 @@ import type {
   WorkspaceMemberWithUser,
 } from "@/types";
 
-const fieldTypeLabels: Record<string, string> = {
-  text: "Text",
-  number: "Number",
-  date: "Date",
-  datetime: "Date & Time",
-  select: "Select",
-  multiselect: "Multi-Select",
-  url: "URL",
-  email: "Email",
-  checkbox: "Checkbox",
-  user_ref: "User Ref",
-  agent_ref: "Agent Ref",
-  json: "JSON",
-};
+const FIELD_TYPE_KEYS = [
+  "text",
+  "number",
+  "date",
+  "datetime",
+  "select",
+  "multiselect",
+  "url",
+  "email",
+  "checkbox",
+  "user_ref",
+  "agent_ref",
+  "json",
+] as const;
+const fieldTypeLabel = (type: string): string =>
+  (FIELD_TYPE_KEYS as readonly string[]).includes(type)
+    ? i18n.t(`settings:project.fieldType.${type}`)
+    : type;
 
 const PRIORITIES = ["urgent", "high", "medium", "low", "none"];
 
@@ -158,6 +164,7 @@ function WorkflowRulesSection({
   agents,
   members,
 }: WorkflowRulesSectionProps) {
+  const { t } = useTranslation("settings");
   const [enforcementMode, setEnforcementMode] = useState(
     workflowRules?.enforcement_mode ?? "advisory",
   );
@@ -199,12 +206,12 @@ function WorkflowRulesSection({
   const handleSave = async () => {
     setFeedback(null);
     const transitionsMap: Record<string, TransitionRule> = {};
-    for (const t of transitions) {
-      if (!t.from.trim() || !t.to.trim()) continue;
-      const key = `${t.from.trim()} -> ${t.to.trim()}`;
+    for (const tr of transitions) {
+      if (!tr.from.trim() || !tr.to.trim()) continue;
+      const key = `${tr.from.trim()} -> ${tr.to.trim()}`;
       transitionsMap[key] = {
-        allowed: t.allowed.filter(Boolean),
-        description: t.description.trim() || undefined,
+        allowed: tr.allowed.filter(Boolean),
+        description: tr.description.trim() || undefined,
       };
     }
     const config: WorkflowRulesConfig = {
@@ -213,14 +220,14 @@ function WorkflowRulesSection({
     };
     try {
       await onSave(config);
-      setFeedback({ type: "success", message: "Workflow rules saved." });
-      toast.success("Workflow rules saved.");
+      setFeedback({ type: "success", message: t("project.workflow.saved") });
+      toast.success(t("project.workflow.saved"));
     } catch (err) {
       setFeedback({
         type: "error",
-        message: apiErrorMessage(err, "Failed to save rules"),
+        message: apiErrorMessage(err, t("project.rules.saveFailed")),
       });
-      toast.error(apiErrorMessage(err, "Failed to save rules"));
+      toast.error(apiErrorMessage(err, t("project.rules.saveFailed")));
     }
   };
 
@@ -238,7 +245,7 @@ function WorkflowRulesSection({
     <div className="space-y-5">
       {/* Enforcement mode */}
       <div className="space-y-1.5">
-        <label className="text-sm font-medium">Enforcement Mode</label>
+        <label className="text-sm font-medium">{t("project.workflow.enforcementMode")}</label>
         <div className="flex gap-2">
           <Button
             type="button"
@@ -246,7 +253,7 @@ function WorkflowRulesSection({
             size="sm"
             onClick={() => setEnforcementMode("advisory")}
           >
-            Advisory
+            {t("project.workflow.advisory")}
           </Button>
           <Button
             type="button"
@@ -254,13 +261,13 @@ function WorkflowRulesSection({
             size="sm"
             onClick={() => setConfirmStrictOpen(true)}
           >
-            Strict
+            {t("project.workflow.strict")}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
           {enforcementMode === "strict"
-            ? "Strict mode blocks task actions that violate workflow rules."
-            : "Advisory mode warns on violations but does not block actions."}
+            ? t("project.workflow.strictHint")
+            : t("project.workflow.advisoryHint")}
         </p>
       </div>
 
@@ -271,15 +278,15 @@ function WorkflowRulesSection({
           setEnforcementMode("strict");
           setConfirmStrictOpen(false);
         }}
-        title="Enable Strict Enforcement?"
-        description="Strict mode will block task actions that violate workflow rules. Are you sure you want to enable strict enforcement?"
-        confirmText="Enable Strict"
+        title={t("project.workflow.strictConfirmTitle")}
+        description={t("project.workflow.strictConfirmDesc")}
+        confirmText={t("project.workflow.strictConfirmOk")}
       />
 
       {/* Transitions table */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">Allowed Transitions</label>
+          <label className="text-sm font-medium">{t("project.workflow.allowedTransitions")}</label>
           <Button
             type="button"
             variant="outline"
@@ -292,16 +299,16 @@ function WorkflowRulesSection({
             }
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Transition
+            {t("project.workflow.addTransition")}
           </Button>
         </div>
         {transitions.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            No transitions configured. All transitions are permitted when no rules are set.
+            {t("project.workflow.noTransitions")}
           </p>
         ) : (
           <div className="space-y-3">
-            {transitions.map((t, i) => (
+            {transitions.map((tr, i) => (
               <div
                 key={i}
                 className="rounded-lg border border-border p-3 space-y-2"
@@ -309,7 +316,7 @@ function WorkflowRulesSection({
                 {/* From → To row */}
                 <div className="flex items-center gap-2">
                   <Select
-                    value={t.from}
+                    value={tr.from}
                     onChange={(e) =>
                       setTransitions((prev) =>
                         prev.map((r, idx) =>
@@ -319,7 +326,7 @@ function WorkflowRulesSection({
                     }
                     className="flex-1 text-sm"
                   >
-                    <option value="">Select status...</option>
+                    <option value="">{t("project.workflow.selectStatus")}</option>
                     {statuses.map((s) => (
                       <option key={s.id} value={s.name}>
                         {s.name}
@@ -328,7 +335,7 @@ function WorkflowRulesSection({
                   </Select>
                   <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
                   <Select
-                    value={t.to}
+                    value={tr.to}
                     onChange={(e) =>
                       setTransitions((prev) =>
                         prev.map((r, idx) =>
@@ -338,7 +345,7 @@ function WorkflowRulesSection({
                     }
                     className="flex-1 text-sm"
                   >
-                    <option value="">Select status...</option>
+                    <option value="">{t("project.workflow.selectStatus")}</option>
                     {statuses.map((s) => (
                       <option key={s.id} value={s.name}>
                         {s.name}
@@ -360,16 +367,16 @@ function WorkflowRulesSection({
                 {/* Allowed actors */}
                 <div className="space-y-2">
                   <span className="text-xs text-muted-foreground font-medium">
-                    Allowed actors
+                    {t("project.workflow.allowedActors")}
                   </span>
                   {/* Role pills */}
                   <div className="space-y-1">
                     <span className="text-xs text-muted-foreground">
-                      Roles
+                      {t("project.workflow.roles")}
                     </span>
                     <div className="flex flex-wrap gap-1.5">
                       {ACTOR_ROLES.map((role) => {
-                        const parsed = parseAllowed(t.allowed);
+                        const parsed = parseAllowed(tr.allowed);
                         const selected = parsed.roles.includes(role);
                         return (
                           <Badge
@@ -396,7 +403,7 @@ function WorkflowRulesSection({
                               )
                             }
                           >
-                            {role}
+                            {t(`project.role.${role}`)}
                           </Badge>
                         );
                       })}
@@ -405,10 +412,10 @@ function WorkflowRulesSection({
                   {/* Specific actors */}
                   <div className="space-y-1.5">
                     <span className="text-xs text-muted-foreground">
-                      Specific actors
+                      {t("project.workflow.specificActors")}
                     </span>
                     {(() => {
-                      const parsed = parseAllowed(t.allowed);
+                      const parsed = parseAllowed(tr.allowed);
                       const hasActors =
                         parsed.agents.length > 0 || parsed.users.length > 0;
                       return (
@@ -535,14 +542,14 @@ function WorkflowRulesSection({
                             className="text-sm"
                           >
                             <option value="">
-                              + Add agent or member...
+                              {t("project.workflow.addActor")}
                             </option>
                             {agents.length > 0 && (
-                              <optgroup label="Agents">
+                              <optgroup label={t("project.common.agents")}>
                                 {agents
                                   .filter(
                                     (a) =>
-                                      !parseAllowed(t.allowed).agents.includes(
+                                      !parseAllowed(tr.allowed).agents.includes(
                                         a.id,
                                       ),
                                   )
@@ -557,11 +564,11 @@ function WorkflowRulesSection({
                               </optgroup>
                             )}
                             {members.length > 0 && (
-                              <optgroup label="Members">
+                              <optgroup label={t("project.common.members")}>
                                 {members
                                   .filter(
                                     (m) =>
-                                      !parseAllowed(t.allowed).users.includes(
+                                      !parseAllowed(tr.allowed).users.includes(
                                         m.user_id,
                                       ),
                                   )
@@ -593,18 +600,18 @@ function WorkflowRulesSection({
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm font-medium">
-              My permissions ({workflowRules.my_permissions.my_role})
+              {t("project.workflow.myPermissions", { role: workflowRules.my_permissions.my_role })}
             </span>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             {workflowRules.my_permissions.can_create_tasks && (
-              <Badge variant="outline">Create tasks</Badge>
+              <Badge variant="outline">{t("project.workflow.createTasks")}</Badge>
             )}
             {workflowRules.my_permissions.can_delete_tasks && (
-              <Badge variant="outline">Delete tasks</Badge>
+              <Badge variant="outline">{t("project.workflow.deleteTasks")}</Badge>
             )}
             {workflowRules.my_permissions.can_reassign && (
-              <Badge variant="outline">Reassign</Badge>
+              <Badge variant="outline">{t("project.workflow.reassign")}</Badge>
             )}
             {Object.entries(
               workflowRules.my_permissions.can_transition,
@@ -614,7 +621,7 @@ function WorkflowRulesSection({
                 variant={allowed ? "secondary" : "outline"}
                 className={cn(!allowed && "opacity-50")}
               >
-                {allowed ? "" : "no "}{key.replace("->", "→")}
+                {allowed ? "" : t("project.workflow.no")}{key.replace("->", "→")}
               </Badge>
             ))}
           </div>
@@ -635,7 +642,7 @@ function WorkflowRulesSection({
       <div className="flex justify-end">
         <Button type="button" onClick={handleSave} disabled={isSaving}>
           <Save className="h-4 w-4" />
-          {isSaving ? "Saving..." : "Save Rules"}
+          {isSaving ? t("project.rules.saving") : t("project.rules.save")}
         </Button>
       </div>
     </div>
@@ -651,7 +658,7 @@ function AssigneeSelect({
   onChange,
   agents,
   members,
-  placeholder = "Select assignee...",
+  placeholder,
   className,
 }: {
   value: string;
@@ -661,15 +668,16 @@ function AssigneeSelect({
   placeholder?: string;
   className?: string;
 }) {
+  const { t } = useTranslation("settings");
   return (
     <Select
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={className}
     >
-      <option value="">{placeholder}</option>
+      <option value="">{placeholder ?? t("project.assign.selectAssignee")}</option>
       {agents.length > 0 && (
-        <optgroup label="Agents">
+        <optgroup label={t("project.common.agents")}>
           {agents.map((a) => (
             <option key={a.id} value={`agent:${a.id}`}>
               {agentLabel(a.name, a.short_tag)}
@@ -678,7 +686,7 @@ function AssigneeSelect({
         </optgroup>
       )}
       {members.length > 0 && (
-        <optgroup label="Members">
+        <optgroup label={t("project.common.members")}>
           {members.map((m) => (
             <option key={m.user_id} value={`user:${m.user_id}`}>
               {inlineLabel(m.user)}
@@ -709,6 +717,7 @@ function ProjectAssignmentRulesSection({
   agents,
   members,
 }: ProjectAssignmentRulesSectionProps) {
+  const { t } = useTranslation("settings");
   const [defaultAssignee, setDefaultAssignee] = useState(
     effectiveRules?.default_assignee?.value ?? "",
   );
@@ -775,11 +784,11 @@ function ProjectAssignmentRulesSection({
     }
     try {
       await onSave(config);
-      setFeedback({ type: "success", message: "Project assignment rules saved." });
+      setFeedback({ type: "success", message: t("project.assign.saved") });
     } catch (err) {
       setFeedback({
         type: "error",
-        message: apiErrorMessage(err, "Failed to save rules"),
+        message: apiErrorMessage(err, t("project.rules.saveFailed")),
       });
     }
   };
@@ -798,7 +807,7 @@ function ProjectAssignmentRulesSection({
     if (!source || source === "project") return null;
     return (
       <Badge variant="outline" className="text-xs ml-1.5">
-        Inherited from {source}
+        {t("project.assign.inheritedFrom", { source })}
       </Badge>
     );
   };
@@ -808,7 +817,7 @@ function ProjectAssignmentRulesSection({
       {/* Default assignee */}
       <div className="space-y-1.5">
         <div className="flex items-center">
-          <label className="text-sm font-medium">Default Assignee</label>
+          <label className="text-sm font-medium">{t("project.assign.defaultAssignee")}</label>
           <SourceBadge source={effectiveRules?.default_assignee?.source} />
         </div>
         <AssigneeSelect
@@ -816,17 +825,17 @@ function ProjectAssignmentRulesSection({
           onChange={setDefaultAssignee}
           agents={agents}
           members={members}
-          placeholder="None (inherit from workspace)"
+          placeholder={t("project.assign.noneInherit")}
         />
         <p className="text-xs text-muted-foreground">
-          Overrides workspace-level default assignee for this project.
+          {t("project.assign.overrideHint")}
         </p>
       </div>
 
       {/* By type rules */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">By Task Type</label>
+          <label className="text-sm font-medium">{t("project.assign.byTaskType")}</label>
           <Button
             type="button"
             variant="outline"
@@ -836,12 +845,12 @@ function ProjectAssignmentRulesSection({
             }
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Rule
+            {t("project.assign.addRule")}
           </Button>
         </div>
         {byType.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            No type-based rules for this project.
+            {t("project.assign.noTypeRules")}
           </p>
         ) : (
           <div className="space-y-2">
@@ -856,7 +865,7 @@ function ProjectAssignmentRulesSection({
                       ),
                     )
                   }
-                  placeholder="Task type"
+                  placeholder={t("project.assign.taskType")}
                   className="flex-1"
                 />
                 <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -893,7 +902,7 @@ function ProjectAssignmentRulesSection({
       {/* By priority */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">By Priority</label>
+          <label className="text-sm font-medium">{t("project.assign.byPriority")}</label>
           <Button
             type="button"
             variant="outline"
@@ -906,12 +915,12 @@ function ProjectAssignmentRulesSection({
             }
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Rule
+            {t("project.assign.addRule")}
           </Button>
         </div>
         {byPriority.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            No priority-based rules for this project.
+            {t("project.assign.noPriorityRules")}
           </p>
         ) : (
           <div className="space-y-2">
@@ -930,7 +939,7 @@ function ProjectAssignmentRulesSection({
                 >
                   {PRIORITIES.map((p) => (
                     <option key={p} value={p} className="capitalize">
-                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                      {t(`project.priority.${p}`)}
                     </option>
                   ))}
                 </Select>
@@ -968,7 +977,7 @@ function ProjectAssignmentRulesSection({
       {/* Fallback chain */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">Fallback Chain</label>
+          <label className="text-sm font-medium">{t("project.assign.fallbackChain")}</label>
           <Button
             type="button"
             variant="outline"
@@ -976,11 +985,11 @@ function ProjectAssignmentRulesSection({
             onClick={() => setFallbackChain((prev) => [...prev, ""])}
           >
             <Plus className="h-3.5 w-3.5" />
-            Add
+            {t("project.assign.add")}
           </Button>
         </div>
         {fallbackChain.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No fallback chain for this project.</p>
+          <p className="text-xs text-muted-foreground">{t("project.assign.noFallback")}</p>
         ) : (
           <div className="space-y-2">
             {fallbackChain.map((val, i) => (
@@ -1030,7 +1039,7 @@ function ProjectAssignmentRulesSection({
       <div className="flex justify-end">
         <Button type="button" onClick={handleSave} disabled={isSaving}>
           <Save className="h-4 w-4" />
-          {isSaving ? "Saving..." : "Save Rules"}
+          {isSaving ? t("project.rules.saving") : t("project.rules.save")}
         </Button>
       </div>
     </div>
@@ -1040,6 +1049,7 @@ function ProjectAssignmentRulesSection({
 // ---- Main page ----
 
 export function ProjectSettingsPage() {
+  const { t } = useTranslation("settings");
   const { wsSlug, projectSlug } = useParams();
   const navigate = useNavigate();
   const {
@@ -1203,15 +1213,15 @@ export function ProjectSettingsPage() {
   };
 
   const PROJECT_TABS = [
-    { id: "general", label: "General" },
-    { id: "statuses", label: "Statuses" },
-    { id: "custom-fields", label: "Custom Fields" },
-    { id: "members", label: "Members" },
-    { id: "workflow", label: "Workflow Rules" },
-    { id: "assignment", label: "Assignment Rules" },
-    { id: "recurring", label: "Recurring" },
-    { id: "templates", label: "Templates" },
-    { id: "integrations", label: "Integrations" },
+    { id: "general", label: t("project.tabs.general") },
+    { id: "statuses", label: t("project.tabs.statuses") },
+    { id: "custom-fields", label: t("project.tabs.custom-fields") },
+    { id: "members", label: t("project.tabs.members") },
+    { id: "workflow", label: t("project.tabs.workflow") },
+    { id: "assignment", label: t("project.tabs.assignment") },
+    { id: "recurring", label: t("project.tabs.recurring") },
+    { id: "templates", label: t("project.tabs.templates") },
+    { id: "integrations", label: t("project.tabs.integrations") },
   ];
 
   // --- Recurring state ---
@@ -1388,12 +1398,12 @@ export function ProjectSettingsPage() {
   };
 
   const trSyncIntervalBody = (): number | null => {
-    const t = trSyncIntervalDraft.trim();
-    if (t === (trSyncIntervalRaw === null ? "" : String(trSyncIntervalRaw))) {
+    const trimmed = trSyncIntervalDraft.trim();
+    if (trimmed === (trSyncIntervalRaw === null ? "" : String(trSyncIntervalRaw))) {
       return trSyncIntervalRaw;
     }
-    if (t === "") return null;
-    const n = Number.parseInt(t, 10);
+    if (trimmed === "") return null;
+    const n = Number.parseInt(trimmed, 10);
     return Number.isFinite(n) ? n : trSyncIntervalRaw;
   };
 
@@ -1430,9 +1440,9 @@ export function ProjectSettingsPage() {
         { method: "PATCH", body }
       );
       applyTeamRelayResponse(data);
-      toast("Team Relay settings saved.");
+      toast(t("project.tr.saved"));
     } catch (err: unknown) {
-      const msg = apiErrorMessage(err, "Failed to save settings");
+      const msg = apiErrorMessage(err, t("project.general.saveFailed"));
       setTrError(msg);
     } finally {
       setTrSaving(false);
@@ -1469,9 +1479,9 @@ export function ProjectSettingsPage() {
         }
       );
       applyTeamRelayResponse(data);
-      toast("Mount point saved.");
+      toast(t("project.tr.mountSaved"));
     } catch (err: unknown) {
-      const msg = apiErrorMessage(err, "Failed to save mount point");
+      const msg = apiErrorMessage(err, t("project.tr.mountSaveFailed"));
       setTrMountError(msg);
     } finally {
       setTrMountSaving(false);
@@ -1494,7 +1504,7 @@ export function ProjectSettingsPage() {
     if (!currentProject) return;
 
     if (!name.trim()) {
-      setGeneralFeedback({ type: "error", message: "Name is required" });
+      setGeneralFeedback({ type: "error", message: t("project.general.nameRequired") });
       return;
     }
 
@@ -1510,13 +1520,13 @@ export function ProjectSettingsPage() {
       });
       setGeneralFeedback({
         type: "success",
-        message: "Project settings saved successfully.",
+        message: t("project.general.saved"),
       });
     } catch (err) {
       setGeneralFeedback({
         type: "error",
         message:
-          apiErrorMessage(err, "Failed to save settings"),
+          apiErrorMessage(err, t("project.general.saveFailed")),
       });
     } finally {
       setIsSavingGeneral(false);
@@ -1584,7 +1594,7 @@ export function ProjectSettingsPage() {
       setStatusToDelete(null);
     } catch (err) {
       setStatusError(
-        apiErrorMessage(err, "Failed to delete status. It may still have tasks assigned."),
+        apiErrorMessage(err, t("project.statuses.deleteFailed")),
       );
     } finally {
       setIsDeletingStatus(false);
@@ -1654,7 +1664,7 @@ export function ProjectSettingsPage() {
       setFieldToDelete(null);
     } catch (err) {
       setFieldError(
-        apiErrorMessage(err, "Failed to delete custom field."),
+        apiErrorMessage(err, t("project.fields.deleteFailed")),
       );
     } finally {
       setIsDeletingField(false);
@@ -1716,7 +1726,7 @@ export function ProjectSettingsPage() {
       setMemberToRemove(null);
     } catch (err) {
       setMemberError(
-        apiErrorMessage(err, "Failed to remove member"),
+        apiErrorMessage(err, t("project.members.removeFailed")),
       );
     } finally {
       setIsRemovingMember(false);
@@ -1737,7 +1747,7 @@ export function ProjectSettingsPage() {
       setAddAgentMemberOpen(false);
     } catch (err) {
       setMemberError(
-        apiErrorMessage(err, "Failed to add agent"),
+        apiErrorMessage(err, t("project.members.addAgentFailed")),
       );
     } finally {
       setIsAddingAgent(false);
@@ -1785,12 +1795,12 @@ export function ProjectSettingsPage() {
         <div className="flex items-center gap-3">
           <Settings className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-2xl font-bold tracking-tight">
-            Project Settings
+            {t("project.title")}
           </h1>
         </div>
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            Project &quot;{projectSlug}&quot; not found
+            {t("project.notFound", { slug: projectSlug })}
           </CardContent>
         </Card>
       </div>
@@ -1823,28 +1833,28 @@ export function ProjectSettingsPage() {
       {activeTab === "general" && (
       <Card>
         <CardHeader>
-          <CardTitle>General Information</CardTitle>
+          <CardTitle>{t("project.general.title")}</CardTitle>
           <CardDescription>
-            Basic project information and configuration
+            {t("project.general.desc")}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSaveGeneral} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="ps-name" className="text-sm font-medium">
-                Name <span className="text-destructive">*</span>
+                {t("project.general.name")} <span className="text-destructive">*</span>
               </label>
               <Input
                 id="ps-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Project name"
+                placeholder={t("project.general.namePlaceholder")}
               />
             </div>
 
             <div className="space-y-1.5">
               <label htmlFor="ps-slug" className="text-sm font-medium">
-                Slug
+                {t("project.general.slug")}
               </label>
               <Input
                 id="ps-slug"
@@ -1853,32 +1863,32 @@ export function ProjectSettingsPage() {
                 placeholder="project-slug"
               />
               <p className="text-xs text-muted-foreground">
-                Used in URLs. Changing this will affect existing links.
+                {t("project.general.slugHint")}
               </p>
             </div>
 
             <div className="space-y-1.5">
               <label htmlFor="ps-description" className="text-sm font-medium">
-                Description
+                {t("project.general.description")}
               </label>
               <Textarea
                 id="ps-description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional project description..."
+                placeholder={t("project.general.descriptionPlaceholder")}
                 rows={3}
               />
             </div>
 
             <div className="space-y-1.5">
               <label htmlFor="ps-icon" className="text-sm font-medium">
-                Icon
+                {t("project.general.icon")}
               </label>
               <Input
                 id="ps-icon"
                 value={icon}
                 onChange={(e) => setIcon(e.target.value)}
-                placeholder="Emoji or short text (e.g. \uD83D\uDE80)"
+                placeholder={t("project.general.iconPlaceholder")}
                 maxLength={8}
               />
             </div>
@@ -1898,7 +1908,7 @@ export function ProjectSettingsPage() {
 
             <div className="flex justify-end">
               <Button type="submit" disabled={isSavingGeneral}>
-                {isSavingGeneral ? "Saving..." : "Save Changes"}
+                {isSavingGeneral ? t("project.rules.saving") : t("project.general.saveChanges")}
               </Button>
             </div>
           </form>
@@ -1912,14 +1922,14 @@ export function ProjectSettingsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="space-y-1.5">
-              <CardTitle>Task Statuses</CardTitle>
+              <CardTitle>{t("project.statuses.title")}</CardTitle>
               <CardDescription>
-                Configure status columns for your project board
+                {t("project.statuses.desc")}
               </CardDescription>
             </div>
             <Button size="sm" onClick={handleOpenCreateStatus}>
               <Plus className="h-4 w-4" />
-              Add Status
+              {t("project.statuses.add")}
             </Button>
           </div>
         </CardHeader>
@@ -1927,8 +1937,7 @@ export function ProjectSettingsPage() {
           {sortedStatuses.length === 0 ? (
             <div className="py-8 text-center">
               <p className="text-sm text-muted-foreground">
-                No statuses configured yet. Add your first status to get
-                started.
+                {t("project.statuses.empty")}
               </p>
             </div>
           ) : (
@@ -1964,14 +1973,14 @@ export function ProjectSettingsPage() {
                             categoryConf.color,
                           )}
                         />
-                        {categoryConf.label}
+                        {t(`project.statusCategory.${status.category}`, { defaultValue: categoryConf.label })}
                       </Badge>
                     )}
 
                     {/* Default badge */}
                     {status.is_default && (
                       <Badge variant="outline" className="text-xs">
-                        Default
+                        {t("project.statuses.default")}
                       </Badge>
                     )}
 
@@ -1982,7 +1991,7 @@ export function ProjectSettingsPage() {
                       className="h-7 w-7"
                       disabled={index === 0}
                       onClick={() => handleMoveStatus(index, "up")}
-                      title="Move up"
+                      title={t("project.common.moveUp")}
                     >
                       <ArrowUp className="h-3.5 w-3.5" />
                     </Button>
@@ -1992,7 +2001,7 @@ export function ProjectSettingsPage() {
                       className="h-7 w-7"
                       disabled={index === sortedStatuses.length - 1}
                       onClick={() => handleMoveStatus(index, "down")}
-                      title="Move down"
+                      title={t("project.common.moveDown")}
                     >
                       <ArrowDown className="h-3.5 w-3.5" />
                     </Button>
@@ -2003,7 +2012,7 @@ export function ProjectSettingsPage() {
                       size="icon"
                       className="h-7 w-7"
                       onClick={() => handleOpenEditStatus(status)}
-                      title="Edit status"
+                      title={t("project.statuses.edit")}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
@@ -2014,7 +2023,7 @@ export function ProjectSettingsPage() {
                       size="icon"
                       className="h-7 w-7 text-muted-foreground hover:text-destructive"
                       onClick={() => handleOpenDeleteStatus(status)}
-                      title="Delete status"
+                      title={t("project.statuses.delete")}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -2037,14 +2046,14 @@ export function ProjectSettingsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="space-y-1.5">
-              <CardTitle>Custom Fields</CardTitle>
+              <CardTitle>{t("project.fields.title")}</CardTitle>
               <CardDescription>
-                Define custom data fields for tasks in this project
+                {t("project.fields.desc")}
               </CardDescription>
             </div>
             <Button size="sm" onClick={handleOpenCreateField}>
               <Plus className="h-4 w-4" />
-              Add Field
+              {t("project.fields.add")}
             </Button>
           </div>
         </CardHeader>
@@ -2052,8 +2061,7 @@ export function ProjectSettingsPage() {
           {sortedFields.length === 0 ? (
             <div className="py-8 text-center">
               <p className="text-sm text-muted-foreground">
-                No custom fields configured yet. Add fields to capture
-                additional data on tasks.
+                {t("project.fields.empty")}
               </p>
             </div>
           ) : (
@@ -2078,13 +2086,13 @@ export function ProjectSettingsPage() {
 
                   {/* Field type badge */}
                   <Badge variant="secondary" className="text-xs">
-                    {fieldTypeLabels[field.field_type] || field.field_type}
+                    {fieldTypeLabel(field.field_type)}
                   </Badge>
 
                   {/* Required badge */}
                   {field.is_required && (
                     <Badge variant="outline" className="text-xs">
-                      Required
+                      {t("project.fields.required")}
                     </Badge>
                   )}
 
@@ -2092,7 +2100,7 @@ export function ProjectSettingsPage() {
                   {field.is_visible_to_agents && (
                     <Badge variant="outline" className="text-xs">
                       <Eye className="mr-1 h-3 w-3" />
-                      Agents
+                      {t("project.common.agents")}
                     </Badge>
                   )}
 
@@ -2103,7 +2111,7 @@ export function ProjectSettingsPage() {
                     className="h-7 w-7"
                     disabled={index === 0}
                     onClick={() => handleMoveField(index, "up")}
-                    title="Move up"
+                    title={t("project.common.moveUp")}
                   >
                     <ArrowUp className="h-3.5 w-3.5" />
                   </Button>
@@ -2113,7 +2121,7 @@ export function ProjectSettingsPage() {
                     className="h-7 w-7"
                     disabled={index === sortedFields.length - 1}
                     onClick={() => handleMoveField(index, "down")}
-                    title="Move down"
+                    title={t("project.common.moveDown")}
                   >
                     <ArrowDown className="h-3.5 w-3.5" />
                   </Button>
@@ -2124,7 +2132,7 @@ export function ProjectSettingsPage() {
                     size="icon"
                     className="h-7 w-7"
                     onClick={() => handleOpenEditField(field)}
-                    title="Edit field"
+                    title={t("project.fields.edit")}
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
@@ -2135,7 +2143,7 @@ export function ProjectSettingsPage() {
                     size="icon"
                     className="h-7 w-7 text-muted-foreground hover:text-destructive"
                     onClick={() => handleOpenDeleteField(field)}
-                    title="Delete field"
+                    title={t("project.fields.delete")}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -2158,9 +2166,9 @@ export function ProjectSettingsPage() {
           <div className="flex items-center gap-2">
             <GitBranch className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1.5">
-              <CardTitle>Workflow Rules</CardTitle>
+              <CardTitle>{t("project.tabs.workflow")}</CardTitle>
               <CardDescription>
-                Configure allowed status transitions and enforcement mode for this project
+                {t("project.workflow.desc")}
               </CardDescription>
             </div>
           </div>
@@ -2186,9 +2194,9 @@ export function ProjectSettingsPage() {
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1.5">
-              <CardTitle>Assignment Rules</CardTitle>
+              <CardTitle>{t("project.tabs.assignment")}</CardTitle>
               <CardDescription>
-                Project-level assignment overrides. Rules marked "Inherited from workspace" come from workspace settings.
+                {t("project.assign.desc")}
               </CardDescription>
             </div>
           </div>
@@ -2215,16 +2223,15 @@ export function ProjectSettingsPage() {
             <div className="space-y-1.5">
               <CardTitle>
                 <Users className="inline h-4 w-4 mr-1.5" />
-                User Members
+                {t("project.members.userMembers")}
               </CardTitle>
               <CardDescription>
-                Users with access to this project. Workspace owners and admins
-                (human members) always have access.
+                {t("project.members.userMembersDesc")}
               </CardDescription>
             </div>
             <Button size="sm" onClick={() => setAddMemberDialogOpen(true)}>
               <Plus className="h-4 w-4" />
-              Add User
+              {t("project.members.addUser")}
             </Button>
           </div>
         </CardHeader>
@@ -2246,7 +2253,7 @@ export function ProjectSettingsPage() {
             <div className="py-6 text-center">
               <Users className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                No user members added yet.
+                {t("project.members.noUsers")}
               </p>
             </div>
           ) : (
@@ -2269,12 +2276,12 @@ export function ProjectSettingsPage() {
                           {displayName(member.user)}
                         </span>
                         {isMe && (
-                          <span className="text-xs text-muted-foreground">(you)</span>
+                          <span className="text-xs text-muted-foreground">{t("project.members.you")}</span>
                         )}
                       </div>
                       {isNamePlaceholder(member.user) ? (
                         <p className="truncate text-xs text-muted-foreground italic">
-                          No name set
+                          {t("project.members.noName")}
                         </p>
                       ) : (
                         <p className="truncate text-xs text-muted-foreground">
@@ -2292,16 +2299,16 @@ export function ProjectSettingsPage() {
                       }
                       className="w-28 text-sm"
                     >
-                      <option value="admin">Admin</option>
-                      <option value="member">Member</option>
-                      <option value="viewer">Viewer</option>
+                      <option value="admin">{t("project.members.roleAdmin")}</option>
+                      <option value="member">{t("project.members.roleMember")}</option>
+                      <option value="viewer">{t("project.members.roleViewer")}</option>
                     </Select>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-destructive"
                       onClick={() => handleOpenRemoveMember(member)}
-                      title="Remove from project"
+                      title={t("project.members.removeFromProject")}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -2319,17 +2326,15 @@ export function ProjectSettingsPage() {
             <div className="space-y-1.5">
               <CardTitle>
                 <Bot className="inline h-4 w-4 mr-1.5" />
-                Agent Members
+                {t("project.members.agentMembers")}
               </CardTitle>
               <CardDescription>
-                AI agents with access to this project via API/MCP. Workspace
-                role does not grant access — an agent must be added here
-                explicitly, regardless of its workspace role.
+                {t("project.members.agentMembersDesc")}
               </CardDescription>
             </div>
             <Button size="sm" onClick={() => setAddAgentMemberOpen(true)}>
               <Plus className="h-4 w-4" />
-              Add Agent
+              {t("project.members.addAgent")}
             </Button>
           </div>
         </CardHeader>
@@ -2338,7 +2343,7 @@ export function ProjectSettingsPage() {
             <div className="py-6 text-center">
               <Bot className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                No agent members added yet.
+                {t("project.members.noAgents")}
               </p>
             </div>
           ) : (
@@ -2355,15 +2360,15 @@ export function ProjectSettingsPage() {
                     <span className="truncate text-sm font-medium">
                       {member.agent_name || member.agent_id?.slice(0, 8)}<AgentShortTag id={member.agent_id} />
                     </span>
-                    <p className="text-xs text-muted-foreground">Agent</p>
+                    <p className="text-xs text-muted-foreground">{t("project.members.agent")}</p>
                   </div>
-                  <Badge variant="secondary" className="text-xs">{member.role}</Badge>
+                  <Badge variant="secondary" className="text-xs">{t(`project.role.${member.role}`, { defaultValue: member.role })}</Badge>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 text-muted-foreground hover:text-destructive"
                     onClick={() => handleOpenRemoveMember(member)}
-                    title="Remove agent from project"
+                    title={t("project.members.removeAgent")}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -2375,13 +2380,13 @@ export function ProjectSettingsPage() {
           {/* Add Agent Dialog - inline */}
           {addAgentMemberOpen && (
             <div className="mt-4 rounded-md border border-border p-4 space-y-3">
-              <p className="text-sm font-medium">Add Agent to Project</p>
+              <p className="text-sm font-medium">{t("project.members.addAgentToProject")}</p>
               <Select
                 value={selectedAgentId}
                 onChange={(e) => setSelectedAgentId(e.target.value)}
                 className="w-full text-sm"
               >
-                <option value="">Select agent...</option>
+                <option value="">{t("project.members.selectAgent")}</option>
                 {workspaceAgentGrants
                   .filter(
                     (g) => !agentMembers.some((m) => m.agent_id === g.agent.id),
@@ -2401,14 +2406,14 @@ export function ProjectSettingsPage() {
                     setSelectedAgentId("");
                   }}
                 >
-                  Cancel
+                  {t("project.common.cancel")}
                 </Button>
                 <Button
                   size="sm"
                   disabled={!selectedAgentId || isAddingAgent}
                   onClick={() => void handleAddAgentMember()}
                 >
-                  {isAddingAgent ? "Adding..." : "Add"}
+                  {isAddingAgent ? t("project.members.adding") : t("project.assign.add")}
                 </Button>
               </div>
             </div>
@@ -2428,9 +2433,9 @@ export function ProjectSettingsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="space-y-1.5">
-              <CardTitle>Recurring Schedules</CardTitle>
+              <CardTitle>{t("project.recurring.title")}</CardTitle>
               <CardDescription>
-                Automatically create task instances on a schedule. Recurring tasks can carry context from previous runs.
+                {t("project.recurring.desc")}
               </CardDescription>
             </div>
             <Button
@@ -2441,27 +2446,27 @@ export function ProjectSettingsPage() {
               }}
             >
               <Plus className="h-4 w-4" />
-              New Schedule
+              {t("project.recurring.newSchedule")}
             </Button>
           </div>
         </CardHeader>
         <CardContent>
           {schedulesLoading || schedulesProjectId !== currentProject.id ? (
-            <div role="status" className="py-8 text-sm text-muted-foreground">Loading recurring schedules…</div>
+            <div role="status" className="py-8 text-sm text-muted-foreground">{t("project.recurring.loading")}</div>
           ) : schedulesError ? (
             <div role="alert" className="py-4 text-sm">
-              Could not load recurring schedules.
-              <Button variant="ghost" onClick={() => void fetchRecurringSchedules(currentProject.id, focusScheduleId)}>Retry</Button>
+              {t("project.recurring.loadFailed")}
+              <Button variant="ghost" onClick={() => void fetchRecurringSchedules(currentProject.id, focusScheduleId)}>{t("project.recurring.retry")}</Button>
             </div>
           ) : <>
           {focusScheduleId && !recurringSchedules.some(schedule => schedule.id === focusScheduleId) && (
-            <p role="alert" className="mb-4 text-sm text-muted-foreground">Schedule not found or you don&apos;t have access.</p>
+            <p role="alert" className="mb-4 text-sm text-muted-foreground">{t("project.recurring.notFound")}</p>
           )}
           {recurringSchedules.length === 0 ? (
             <div className="py-10 text-center">
               <RefreshCw className="mx-auto mb-3 h-8 w-8 text-muted-foreground opacity-50" />
               <p className="text-sm text-muted-foreground">
-                No recurring schedules yet. Create one to automatically generate tasks on a schedule.
+                {t("project.recurring.empty")}
               </p>
               <Button
                 size="sm"
@@ -2473,7 +2478,7 @@ export function ProjectSettingsPage() {
                 }}
               >
                 <Plus className="h-4 w-4" />
-                New Schedule
+                {t("project.recurring.newSchedule")}
               </Button>
             </div>
           ) : (
@@ -2500,12 +2505,12 @@ export function ProjectSettingsPage() {
                             variant={schedule.is_active ? "default" : "secondary"}
                             className="text-[10px] shrink-0"
                           >
-                            {schedule.is_active ? "Active" : "Paused"}
+                            {schedule.is_active ? t("project.recurring.active") : t("project.recurring.paused")}
                           </Badge>
                           <Badge variant="outline" className="text-[10px] capitalize shrink-0">
                             {schedule.frequency === "custom"
-                              ? `Custom (${schedule.cron_expr})`
-                              : schedule.frequency}
+                              ? t("project.recurring.customFreq", { cron: schedule.cron_expr })
+                              : t(`project.recurring.frequency.${schedule.frequency}`, { defaultValue: schedule.frequency })}
                           </Badge>
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -2519,11 +2524,11 @@ export function ProjectSettingsPage() {
                               {schedule.assignee_id.slice(0, 8)}...
                             </span>
                           )}
-                          <span className="capitalize">Priority: {schedule.priority}</span>
-                          <span>{schedule.instance_count} instance{schedule.instance_count !== 1 ? "s" : ""}</span>
+                          <span className="capitalize">{t("project.recurring.priority", { priority: t(`project.priorityLc.${schedule.priority}`, { defaultValue: schedule.priority }) })}</span>
+                          <span>{t("project.recurring.instances", { count: schedule.instance_count })}</span>
                           {schedule.next_run_at && schedule.is_active && (
                             <span>
-                              Next:{" "}
+                              {t("project.recurring.next")}{" "}
                               {i18nFmt.formatDate(schedule.next_run_at, {
                                 dateStyle: "short",
                                 timeStyle: "short",
@@ -2536,7 +2541,7 @@ export function ProjectSettingsPage() {
 
                     <div className="flex shrink-0 items-center gap-1">
                       <a href={scheduleHref(wsSlug ?? "", projectSlug ?? "", schedule.id)}
-                        title="Link to schedule" aria-label="Link to schedule"
+                        title={t("project.recurring.link")} aria-label={t("project.recurring.link")}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted">
                         <LinkIcon className="h-4 w-4" />
                       </a>
@@ -2544,7 +2549,7 @@ export function ProjectSettingsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground"
-                        title="View history"
+                        title={t("project.recurring.history")}
                         onClick={() => setHistorySchedule(schedule)}
                       >
                         <History className="h-4 w-4" />
@@ -2553,7 +2558,7 @@ export function ProjectSettingsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground"
-                        title="Edit schedule"
+                        title={t("project.recurring.edit")}
                         onClick={() => {
                           setEditingSchedule(schedule);
                           setRecurringDialogOpen(true);
@@ -2565,7 +2570,7 @@ export function ProjectSettingsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground"
-                        title={schedule.is_active ? "Pause" : "Resume"}
+                        title={schedule.is_active ? t("project.recurring.pause") : t("project.recurring.resume")}
                         disabled={recurringActionLoading === `toggle-${schedule.id}`}
                         onClick={async () => {
                           setRecurringActionLoading(`toggle-${schedule.id}`);
@@ -2588,7 +2593,7 @@ export function ProjectSettingsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground"
-                        title="Trigger now"
+                        title={t("project.recurring.trigger")}
                         disabled={recurringActionLoading === `trigger-${schedule.id}`}
                         onClick={async () => {
                           setRecurringActionLoading(`trigger-${schedule.id}`);
@@ -2605,10 +2610,10 @@ export function ProjectSettingsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        title="Delete schedule"
+                        title={t("project.recurring.delete")}
                         disabled={recurringActionLoading === `delete-${schedule.id}`}
                         onClick={async () => {
-                          if (!confirm(`Delete schedule "${schedule.title_template}"? Existing task instances will not be deleted.`)) return;
+                          if (!confirm(t("project.recurring.deleteConfirm", { title: schedule.title_template }))) return;
                           setRecurringActionLoading(`delete-${schedule.id}`);
                           try {
                             await deleteRecurringSchedule(schedule.id);
@@ -2657,9 +2662,9 @@ export function ProjectSettingsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="space-y-1.5">
-              <CardTitle>Task Templates</CardTitle>
+              <CardTitle>{t("project.templates.title")}</CardTitle>
               <CardDescription>
-                Define reusable templates to quickly create pre-filled tasks. Templates store default values for title, description, priority, assignee, and labels.
+                {t("project.templates.desc")}
               </CardDescription>
             </div>
             <Button
@@ -2672,7 +2677,7 @@ export function ProjectSettingsPage() {
               }}
             >
               <Plus className="h-4 w-4" />
-              New Template
+              {t("project.templates.new")}
             </Button>
           </div>
         </CardHeader>
@@ -2681,7 +2686,7 @@ export function ProjectSettingsPage() {
             <div className="py-10 text-center">
               <Save className="mx-auto mb-3 h-8 w-8 text-muted-foreground opacity-50" />
               <p className="text-sm text-muted-foreground">
-                No templates yet. Create one to speed up task creation.
+                {t("project.templates.empty")}
               </p>
               <Button
                 size="sm"
@@ -2695,7 +2700,7 @@ export function ProjectSettingsPage() {
                 }}
               >
                 <Plus className="h-4 w-4" />
-                New Template
+                {t("project.templates.new")}
               </Button>
             </div>
           ) : (
@@ -2707,7 +2712,7 @@ export function ProjectSettingsPage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-medium truncate">{tmpl.name}</span>
                         <Badge variant="outline" className="text-[10px] capitalize shrink-0">
-                          {tmpl.priority}
+                          {t(`project.priorityLc.${tmpl.priority}`, { defaultValue: tmpl.priority })}
                         </Badge>
                       </div>
                       {tmpl.description && (
@@ -2717,13 +2722,13 @@ export function ProjectSettingsPage() {
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                         {tmpl.title_template && (
-                          <span className="truncate max-w-xs">Title: {tmpl.title_template}</span>
+                          <span className="truncate max-w-xs">{t("project.templates.titleLine", { title: tmpl.title_template })}</span>
                         )}
                         {tmpl.labels && tmpl.labels.length > 0 && (
-                          <span>Labels: {tmpl.labels.join(", ")}</span>
+                          <span>{t("project.templates.labelsLine", { labels: tmpl.labels.join(", ") })}</span>
                         )}
                         {tmpl.estimated_hours != null && (
-                          <span>{tmpl.estimated_hours}h estimated</span>
+                          <span>{t("project.templates.estimated", { hours: tmpl.estimated_hours })}</span>
                         )}
                       </div>
                     </div>
@@ -2732,7 +2737,7 @@ export function ProjectSettingsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground"
-                        title="Edit template"
+                        title={t("project.templates.edit")}
                         onClick={() => {
                           setEditingTemplate(tmpl);
                           setTemplateForm({
@@ -2753,10 +2758,10 @@ export function ProjectSettingsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        title="Delete template"
+                        title={t("project.templates.delete")}
                         disabled={templateActionLoading === `delete-${tmpl.id}`}
                         onClick={async () => {
-                          if (!confirm(`Delete template "${tmpl.name}"?`)) return;
+                          if (!confirm(t("project.templates.deleteConfirm", { name: tmpl.name }))) return;
                           setTemplateActionLoading(`delete-${tmpl.id}`);
                           try {
                             await deleteTemplate(tmpl.id);
@@ -2783,7 +2788,7 @@ export function ProjectSettingsPage() {
           <div className="w-full max-w-lg rounded-lg bg-card border border-border shadow-xl p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
-                {editingTemplate ? "Edit Template" : "New Template"}
+                {editingTemplate ? t("project.templates.editTitle") : t("project.templates.new")}
               </h2>
               <Button
                 variant="ghost"
@@ -2798,10 +2803,10 @@ export function ProjectSettingsPage() {
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">
-                  Name <span className="text-destructive">*</span>
+                  {t("project.general.name")} <span className="text-destructive">*</span>
                 </label>
                 <Input
-                  placeholder="e.g. Bug Report"
+                  placeholder={t("project.templates.namePlaceholder")}
                   value={templateForm.name}
                   onChange={(e) => setTemplateForm((f) => ({ ...f, name: e.target.value }))}
                   autoFocus
@@ -2809,27 +2814,27 @@ export function ProjectSettingsPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Description</label>
+                <label className="text-sm font-medium">{t("project.general.description")}</label>
                 <Input
-                  placeholder="Short description of when to use this template"
+                  placeholder={t("project.templates.descPlaceholder")}
                   value={templateForm.description}
                   onChange={(e) => setTemplateForm((f) => ({ ...f, description: e.target.value }))}
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Default Title</label>
+                <label className="text-sm font-medium">{t("project.templates.defaultTitle")}</label>
                 <Input
-                  placeholder="Default task title"
+                  placeholder={t("project.templates.defaultTitlePlaceholder")}
                   value={templateForm.title_template}
                   onChange={(e) => setTemplateForm((f) => ({ ...f, title_template: e.target.value }))}
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Default Description</label>
+                <label className="text-sm font-medium">{t("project.templates.defaultDesc")}</label>
                 <Textarea
-                  placeholder="Default task description"
+                  placeholder={t("project.templates.defaultDescPlaceholder")}
                   rows={3}
                   value={templateForm.description_template}
                   onChange={(e) => setTemplateForm((f) => ({ ...f, description_template: e.target.value }))}
@@ -2838,20 +2843,20 @@ export function ProjectSettingsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Priority</label>
+                  <label className="text-sm font-medium">{t("project.templates.priority")}</label>
                   <Select
                     value={templateForm.priority}
                     onChange={(e) => setTemplateForm((f) => ({ ...f, priority: e.target.value as Priority }))}
                   >
                     {["none", "low", "medium", "high", "urgent"].map((p) => (
-                      <option key={p} value={p} className="capitalize">{p}</option>
+                      <option key={p} value={p} className="capitalize">{t(`project.priorityLc.${p}`)}</option>
                     ))}
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Labels</label>
+                  <label className="text-sm font-medium">{t("project.templates.labels")}</label>
                   <Input
-                    placeholder="Comma-separated"
+                    placeholder={t("project.templates.commaSeparated")}
                     value={templateForm.labels}
                     onChange={(e) => setTemplateForm((f) => ({ ...f, labels: e.target.value }))}
                   />
@@ -2865,13 +2870,13 @@ export function ProjectSettingsPage() {
 
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setTemplateDialogOpen(false)}>
-                Cancel
+                {t("project.common.cancel")}
               </Button>
               <Button
                 disabled={templateActionLoading === "save"}
                 onClick={async () => {
                   if (!templateForm.name.trim()) {
-                    setTemplateFormError("Name is required");
+                    setTemplateFormError(t("project.general.nameRequired"));
                     return;
                   }
                   setTemplateFormError(null);
@@ -2902,13 +2907,13 @@ export function ProjectSettingsPage() {
                     }
                     setTemplateDialogOpen(false);
                   } catch (err) {
-                    setTemplateFormError(apiErrorMessage(err, "Failed to save template"));
+                    setTemplateFormError(apiErrorMessage(err, t("project.templates.saveFailed")));
                   } finally {
                     setTemplateActionLoading(null);
                   }
                 }}
               >
-                {templateActionLoading === "save" ? "Saving..." : "Save Template"}
+                {templateActionLoading === "save" ? t("project.rules.saving") : t("project.templates.save")}
               </Button>
             </div>
           </div>
@@ -2922,8 +2927,7 @@ export function ProjectSettingsPage() {
           <CardHeader>
             <CardTitle>Team Relay</CardTitle>
             <CardDescription>
-              Publish artifact summaries to an Obsidian share folder so your
-              team can read them outside of Mesh.
+              {t("project.tr.desc")}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -2945,27 +2949,27 @@ export function ProjectSettingsPage() {
                     className="h-4 w-4 rounded border-border"
                   />
                   <label htmlFor="tr-enabled" className="text-sm font-medium">
-                    Enable Team Relay publishing
+                    {t("project.tr.enable")}
                   </label>
                 </div>
 
                 <div className="space-y-4">
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium" htmlFor="tr-share-slug">
-                      Share Slug
+                      {t("project.tr.shareSlug")}
                     </label>
                     <Input
                       id="tr-share-slug"
                       value={trShareSlug}
                       onChange={(e) => setTrShareSlug(e.target.value)}
-                      placeholder="e.g. mesh-dev-share"
+                      placeholder={t("project.tr.shareSlugPlaceholder")}
                       disabled={!trEnabled}
                     />
                   </div>
 
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium" htmlFor="tr-agent-key">
-                      Agent Key
+                      {t("project.tr.agentKey")}
                     </label>
                     <Input
                       id="tr-agent-key"
@@ -2982,19 +2986,19 @@ export function ProjectSettingsPage() {
                         }
                       }}
                       onPaste={() => { trKeyUserEdited.current = true; }}
-                      placeholder={trAgentKeyHint || "Enter agent key (min 20 chars)"}
+                      placeholder={trAgentKeyHint || t("project.tr.agentKeyPlaceholder")}
                       disabled={!trEnabled}
                     />
                     {trAgentKeyHint && !trAgentKey && (
                       <p className="text-xs text-muted-foreground">
-                        Current key: {trAgentKeyHint} — leave blank to keep
+                        {t("project.tr.currentKey", { hint: trAgentKeyHint })}
                       </p>
                     )}
                   </div>
 
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium" htmlFor="tr-subfolder">
-                      Subfolder
+                      {t("project.tr.subfolder")}
                     </label>
                     <Input
                       id="tr-subfolder"
@@ -3015,7 +3019,7 @@ export function ProjectSettingsPage() {
                       className="h-4 w-4 rounded border-border"
                     />
                     <label htmlFor="tr-include-slug" className="text-sm">
-                      Include project slug in path
+                      {t("project.tr.includeSlug")}
                     </label>
                   </div>
                 </div>
@@ -3026,7 +3030,7 @@ export function ProjectSettingsPage() {
 
                 <div className="flex justify-end">
                   <Button onClick={handleSaveTeamRelay} disabled={trSaving}>
-                    {trSaving ? "Saving…" : "Save"}
+                    {trSaving ? t("project.tr.saving") : t("project.common.save")}
                   </Button>
                 </div>
               </>
@@ -3041,11 +3045,10 @@ export function ProjectSettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FolderTree className="h-4 w-4" />
-              Team Relay — Docs mount
+              {t("project.tr.mountTitle")}
             </CardTitle>
             <CardDescription>
-              Where the connected share shows up in this project&apos;s Docs,
-              and whether the connection is healthy.
+              {t("project.tr.mountDesc")}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -3057,17 +3060,16 @@ export function ProjectSettingsPage() {
               </div>
             ) : !trConfigured ? (
               <p className="text-sm text-muted-foreground" data-testid="tr-mount-empty">
-                No Team Relay share connected to this project yet — configure
-                one above first.
+                {t("project.tr.notConnected")}
               </p>
             ) : (
               <>
                 {/* Connected share */}
                 <div className="space-y-1.5">
-                  <span className="text-sm font-medium">Connected share</span>
+                  <span className="text-sm font-medium">{t("project.tr.connectedShare")}</span>
                   <div>
                     <Badge variant="outline" data-testid="tr-mount-share-slug">
-                      {trShareSlug || "(none)"}
+                      {trShareSlug || t("project.tr.none")}
                     </Badge>
                   </div>
                 </div>
@@ -3075,7 +3077,7 @@ export function ProjectSettingsPage() {
                 {/* Mount point — one switch, not two flags */}
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium" htmlFor="tr-mount-mode">
-                    Mount point
+                    {t("project.tr.mountPoint")}
                   </label>
                   <Select
                     id="tr-mount-mode"
@@ -3083,8 +3085,8 @@ export function ProjectSettingsPage() {
                     value={trMountMode}
                     onChange={(e) => setTrMountMode(e.target.value as "root" | "path")}
                   >
-                    <option value="root">At the project&apos;s Docs root</option>
-                    <option value="path">At a path inside Docs</option>
+                    <option value="root">{t("project.tr.atRoot")}</option>
+                    <option value="path">{t("project.tr.atPath")}</option>
                   </Select>
                   {trMountMode === "path" && (
                     <Input
@@ -3092,7 +3094,7 @@ export function ProjectSettingsPage() {
                       data-testid="tr-mount-path"
                       value={trMountPathDraft}
                       onChange={(e) => setTrMountPathDraft(e.target.value)}
-                      placeholder="e.g. External/Notes"
+                      placeholder={t("project.tr.pathPlaceholder")}
                     />
                   )}
 
@@ -3103,7 +3105,7 @@ export function ProjectSettingsPage() {
                       default. */}
                   <div className="space-y-1.5 pt-2">
                     <label className="text-sm font-medium" htmlFor="tr-excluded-paths">
-                      Folders excluded from the mount
+                      {t("project.tr.excluded")}
                     </label>
                     <Input
                       id="tr-excluded-paths"
@@ -3113,15 +3115,13 @@ export function ProjectSettingsPage() {
                       placeholder="artifacts"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Top-level share folders that never appear in Docs,
-                      comma-separated. Clear the field entirely to mount
-                      everything.
+                      {t("project.tr.excludedHint")}
                     </p>
                   </div>
 
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium" htmlFor="tr-sync-interval">
-                      Scheduled sync interval (minutes)
+                      {t("project.tr.syncInterval")}
                     </label>
                     <Input
                       id="tr-sync-interval"
@@ -3132,9 +3132,7 @@ export function ProjectSettingsPage() {
                       placeholder="15"
                     />
                     <p className="text-xs text-muted-foreground">
-                      How often the share re-syncs on its own. Empty = default
-                      15 min; 0 turns the scheduled sync off (sync on open
-                      keeps working).
+                      {t("project.tr.syncIntervalHint")}
                     </p>
                   </div>
 
@@ -3148,7 +3146,7 @@ export function ProjectSettingsPage() {
                       disabled={trMountSaving || !trMountPointDirty}
                       data-testid="tr-mount-save"
                     >
-                      {trMountSaving ? "Saving…" : "Save mount settings"}
+                      {trMountSaving ? t("project.tr.saving") : t("project.tr.saveMount")}
                     </Button>
                   </div>
                 </div>
@@ -3157,13 +3155,13 @@ export function ProjectSettingsPage() {
 
                 {/* Last sync check */}
                 <div className="space-y-1.5">
-                  <span className="text-sm font-medium">Last sync check</span>
+                  <span className="text-sm font-medium">{t("project.tr.lastSync")}</span>
                   <div className="flex items-center gap-2 text-sm" data-testid="tr-mount-sync-state">
                     {trLastSyncStatus === "ok" && (
                       <>
                         <CheckCircle2 className="h-4 w-4 text-success" />
                         <span>
-                          Reachable
+                          {t("project.tr.reachable")}
                           {trLastSyncCheckedAt && (
                             <span className="text-muted-foreground">
                               {" "}
@@ -3177,11 +3175,11 @@ export function ProjectSettingsPage() {
                       <>
                         <XCircle className="h-4 w-4 text-destructive" />
                         <span>
-                          Key expired
+                          {t("project.tr.keyExpired")}
                           {trLastSyncCheckedAt && (
                             <span className="text-muted-foreground">
                               {" "}
-                              — last checked {formatRelative(trLastSyncCheckedAt)}
+                              {t("project.tr.lastChecked", { when: formatRelative(trLastSyncCheckedAt) })}
                             </span>
                           )}
                         </span>
@@ -3191,7 +3189,7 @@ export function ProjectSettingsPage() {
                       <>
                         <XCircle className="h-4 w-4 text-destructive" />
                         <span>
-                          {trLastSyncError || "Sync check failed"}
+                          {trLastSyncError || t("project.tr.syncFailed")}
                           {trLastSyncCheckedAt && (
                             <span className="text-muted-foreground">
                               {" "}
@@ -3202,7 +3200,7 @@ export function ProjectSettingsPage() {
                       </>
                     )}
                     {!trLastSyncStatus && (
-                      <span className="text-muted-foreground">Not checked yet</span>
+                      <span className="text-muted-foreground">{t("project.tr.notChecked")}</span>
                     )}
                   </div>
                 </div>
@@ -3211,7 +3209,7 @@ export function ProjectSettingsPage() {
 
                 {/* Key expiry */}
                 <div className="space-y-1.5">
-                  <span className="text-sm font-medium">Key expiry</span>
+                  <span className="text-sm font-medium">{t("project.tr.keyExpiry")}</span>
                   <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="tr-mount-key-expiry">
                     {trKeyExpiresAt ? (
                       <>
@@ -3219,8 +3217,8 @@ export function ProjectSettingsPage() {
                         {trKeyExpirySource && (
                           <Badge variant="outline">
                             {trKeyExpirySource === "manual"
-                              ? "Set manually"
-                              : "From Team Relay"}
+                              ? t("project.tr.setManually")
+                              : t("project.tr.fromTr")}
                           </Badge>
                         )}
                         {trKeyExpiringSoon && (
@@ -3230,12 +3228,12 @@ export function ProjectSettingsPage() {
                             data-testid="tr-mount-key-expiring-soon"
                           >
                             <AlertTriangle className="h-3 w-3" />
-                            Expiring soon
+                            {t("project.tr.expiringSoon")}
                           </Badge>
                         )}
                       </>
                     ) : (
-                      <span className="text-muted-foreground">Unknown</span>
+                      <span className="text-muted-foreground">{t("project.tr.unknown")}</span>
                     )}
                   </div>
                 </div>
@@ -3250,21 +3248,21 @@ export function ProjectSettingsPage() {
       {activeTab === "general" && (
       <Card className="border-destructive/50">
         <CardHeader>
-          <CardTitle className="text-destructive">Danger Zone</CardTitle>
+          <CardTitle className="text-destructive">{t("project.danger.title")}</CardTitle>
           <CardDescription>
-            Irreversible actions for this project
+            {t("project.danger.desc")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between rounded-lg border border-border p-4">
             <div>
               <p className="text-sm font-medium">
-                {currentProject.is_archived ? "Unarchive Project" : "Archive Project"}
+                {currentProject.is_archived ? t("project.danger.unarchiveProject") : t("project.danger.archiveProject")}
               </p>
               <p className="text-sm text-muted-foreground">
                 {currentProject.is_archived
-                  ? "This project is archived. Unarchive it to bring it back to the sidebar."
-                  : "Archive this project. It moves to the Archived section of the sidebar and can be restored later."}
+                  ? t("project.danger.archivedHint")
+                  : t("project.danger.archiveHint")}
               </p>
             </div>
             <Button
@@ -3272,7 +3270,7 @@ export function ProjectSettingsPage() {
               className="border-destructive/50 text-destructive hover:bg-destructive/10"
               onClick={() => setArchiveDialogOpen(true)}
             >
-              {currentProject.is_archived ? "Unarchive" : "Archive"}
+              {currentProject.is_archived ? t("project.danger.unarchive") : t("project.danger.archive")}
             </Button>
           </div>
 
@@ -3280,17 +3278,16 @@ export function ProjectSettingsPage() {
 
           <div className="flex items-center justify-between rounded-lg border border-destructive/30 p-4">
             <div>
-              <p className="text-sm font-medium">Delete Project</p>
+              <p className="text-sm font-medium">{t("project.danger.deleteProject")}</p>
               <p className="text-sm text-muted-foreground">
-                Permanently delete this project and all its data. This action
-                cannot be undone.
+                {t("project.danger.deleteHint")}
               </p>
             </div>
             <Button
               variant="destructive"
               onClick={() => setDeleteDialogOpen(true)}
             >
-              Delete
+              {t("project.common.delete")}
             </Button>
           </div>
         </CardContent>
@@ -3315,13 +3312,17 @@ export function ProjectSettingsPage() {
           setMemberError(null);
         }}
         onConfirm={handleConfirmRemoveMember}
-        title="Remove Member"
+        title={t("project.members.removeTitle")}
         description={
           memberToRemove
-            ? `Are you sure you want to remove ${memberToRemove.agent_id ? agentLabel(memberToRemove.agent_name || "this agent", removeMemberTag) : (memberToRemove.user?.name || "this member")} from this project?`
+            ? t("project.members.removeConfirm", {
+                who: memberToRemove.agent_id
+                  ? agentLabel(memberToRemove.agent_name || t("project.members.thisAgent"), removeMemberTag)
+                  : (memberToRemove.user?.name || t("project.members.thisMember")),
+              })
             : ""
         }
-        confirmText="Remove Member"
+        confirmText={t("project.members.removeTitle")}
         variant="destructive"
         isLoading={isRemovingMember}
       />
@@ -3350,9 +3351,9 @@ export function ProjectSettingsPage() {
           setStatusToDelete(null);
         }}
         onConfirm={handleConfirmDeleteStatus}
-        title="Delete Status"
-        description={`Are you sure you want to delete the "${statusToDelete?.name ?? ""}" status? This will fail if any tasks are currently using this status.`}
-        confirmText="Delete Status"
+        title={t("project.statuses.deleteTitle")}
+        description={t("project.statuses.deleteConfirm", { name: statusToDelete?.name ?? "" })}
+        confirmText={t("project.statuses.deleteTitle")}
         variant="destructive"
         isLoading={isDeletingStatus}
       />
@@ -3365,9 +3366,9 @@ export function ProjectSettingsPage() {
           setFieldToDelete(null);
         }}
         onConfirm={handleConfirmDeleteField}
-        title="Delete Custom Field"
-        description={`Are you sure you want to delete the "${fieldToDelete?.name ?? ""}" custom field? Any values stored in this field on tasks will be lost.`}
-        confirmText="Delete Field"
+        title={t("project.fields.deleteTitle")}
+        description={t("project.fields.deleteConfirm", { name: fieldToDelete?.name ?? "" })}
+        confirmText={t("project.fields.deleteOk")}
         variant="destructive"
         isLoading={isDeletingField}
       />
@@ -3377,13 +3378,13 @@ export function ProjectSettingsPage() {
         open={archiveDialogOpen}
         onClose={() => setArchiveDialogOpen(false)}
         onConfirm={handleArchiveProject}
-        title={currentProject.is_archived ? "Unarchive Project" : "Archive Project"}
+        title={currentProject.is_archived ? t("project.danger.unarchiveProject") : t("project.danger.archiveProject")}
         description={
           currentProject.is_archived
-            ? `Unarchive "${currentProject.name}"? It will return to the Projects list in the sidebar.`
-            : `Are you sure you want to archive "${currentProject.name}"? The project will move to the Archived section and can be restored later.`
+            ? t("project.danger.unarchiveConfirm", { name: currentProject.name })
+            : t("project.danger.archiveConfirm", { name: currentProject.name })
         }
-        confirmText={currentProject.is_archived ? "Unarchive Project" : "Archive Project"}
+        confirmText={currentProject.is_archived ? t("project.danger.unarchiveProject") : t("project.danger.archiveProject")}
         variant="destructive"
         isLoading={isArchiving}
       />
@@ -3393,9 +3394,9 @@ export function ProjectSettingsPage() {
         open={deleteDialogOpen}
         onClose={() => setDeleteDialogOpen(false)}
         onConfirm={handleDeleteProject}
-        title="Delete Project"
-        description={`This will permanently delete "${currentProject.name}" and all of its tasks, statuses, and data. This action cannot be undone.`}
-        confirmText="Delete Project"
+        title={t("project.danger.deleteProject")}
+        description={t("project.danger.deleteConfirm", { name: currentProject.name })}
+        confirmText={t("project.danger.deleteProject")}
         variant="destructive"
         requireText={currentProject.name}
         isLoading={isDeleting}

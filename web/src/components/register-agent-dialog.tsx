@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowUpCircle, Layers } from "lucide-react";
 import { agentTypeConfig, splitList } from "@/lib/agent-utils";
 import { useAgentStore } from "@/stores/agent";
@@ -37,6 +38,7 @@ export function RegisterAgentDialog({
   onOpenChange,
   workspaceId,
 }: RegisterAgentDialogProps) {
+  const { t } = useTranslation("integrations");
   const { registerAgent } = useAgentStore();
 
   const [step, setStep] = useState<DialogStep>("form");
@@ -110,7 +112,7 @@ export function RegisterAgentDialog({
         setStep("key");
       } catch (err) {
         setError(
-          apiErrorMessage(err, "Failed to register agent"),
+          apiErrorMessage(err, t("registerAgent.failed")),
         );
       } finally {
         setIsSubmitting(false);
@@ -128,6 +130,7 @@ export function RegisterAgentDialog({
       capabilities,
       workspaceId,
       registerAgent,
+      t,
     ],
   );
 
@@ -137,10 +140,9 @@ export function RegisterAgentDialog({
         {step === "form" ? (
           <form onSubmit={handleSubmit}>
             <DialogHeader>
-              <DialogTitle>Register Agent</DialogTitle>
+              <DialogTitle>{t("registerAgent.title")}</DialogTitle>
               <DialogDescription>
-                Register a new AI agent to work in this workspace. An API key
-                will be generated for authentication.
+                {t("registerAgent.description")}
               </DialogDescription>
             </DialogHeader>
 
@@ -150,11 +152,11 @@ export function RegisterAgentDialog({
                   htmlFor="agent-name"
                   className="text-sm font-medium leading-none"
                 >
-                  Name
+                  {t("registerAgent.name")}
                 </label>
                 <Input
                   id="agent-name"
-                  placeholder="My Agent"
+                  placeholder={t("registerAgent.namePlaceholder")}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
@@ -167,7 +169,7 @@ export function RegisterAgentDialog({
                   htmlFor="agent-type"
                   className="text-sm font-medium leading-none"
                 >
-                  Agent Type
+                  {t("registerAgent.agentType")}
                 </label>
                 <Select
                   id="agent-type"
@@ -192,11 +194,11 @@ export function RegisterAgentDialog({
                   htmlFor="agent-role"
                   className="text-sm font-medium leading-none"
                 >
-                  Role
+                  {t("registerAgent.role")}
                 </label>
                 <Input
                   id="agent-role"
-                  placeholder="developer, lead, reviewer..."
+                  placeholder={t("registerAgent.rolePlaceholder")}
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
                 />
@@ -207,7 +209,7 @@ export function RegisterAgentDialog({
                   htmlFor="agent-zone"
                   className="text-sm font-medium leading-none"
                 >
-                  Responsibility zone
+                  {t("registerAgent.responsibilityZone")}
                 </label>
                 <Input
                   id="agent-zone"
@@ -232,7 +234,7 @@ export function RegisterAgentDialog({
                     htmlFor="agent-working-hours"
                     className="text-sm font-medium leading-none"
                   >
-                    Working hours
+                    {t("registerAgent.workingHours")}
                   </label>
                   <Input
                     id="agent-working-hours"
@@ -246,7 +248,7 @@ export function RegisterAgentDialog({
                     className="flex items-center gap-1.5 text-sm font-medium leading-none"
                   >
                     <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    Max concurrent tasks
+                    {t("registerAgent.maxConcurrentTasks")}
                   </label>
                   <Input
                     id="agent-max-concurrent"
@@ -268,7 +270,7 @@ export function RegisterAgentDialog({
                     htmlFor="agent-accepts-from"
                     className="text-sm font-medium leading-none"
                   >
-                    Accepts from
+                    {t("registerAgent.acceptsFrom")}
                   </label>
                   <Input
                     id="agent-accepts-from"
@@ -283,7 +285,7 @@ export function RegisterAgentDialog({
                     className="flex items-center gap-1.5 text-sm font-medium leading-none"
                   >
                     <ArrowUpCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    Escalation contact
+                    {t("registerAgent.escalationContact")}
                   </label>
                   <Input
                     id="agent-escalation-to"
@@ -298,11 +300,11 @@ export function RegisterAgentDialog({
                   htmlFor="agent-capabilities"
                   className="text-sm font-medium leading-none"
                 >
-                  Capabilities
+                  {t("registerAgent.capabilities")}
                 </label>
                 <Input
                   id="agent-capabilities"
-                  placeholder="code-review, docs, deploy"
+                  placeholder={t("registerAgent.capabilitiesPlaceholder")}
                   value={capabilities}
                   onChange={(e) => setCapabilities(e.target.value)}
                 />
@@ -319,20 +321,19 @@ export function RegisterAgentDialog({
                 variant="outline"
                 onClick={handleClose}
               >
-                Cancel
+                {t("registerAgent.cancel")}
               </Button>
               <Button type="submit" disabled={isSubmitting || !name.trim()}>
-                {isSubmitting ? "Registering..." : "Register Agent"}
+                {isSubmitting ? t("registerAgent.registering") : t("registerAgent.title")}
               </Button>
             </DialogFooter>
           </form>
         ) : (
           <div>
             <DialogHeader>
-              <DialogTitle>Agent Registered Successfully</DialogTitle>
+              <DialogTitle>{t("registerAgent.successTitle")}</DialogTitle>
               <DialogDescription>
-                Your agent has been registered. Copy the API key below — it will
-                only be shown once.
+                {t("registerAgent.successDescription")}
               </DialogDescription>
             </DialogHeader>
 

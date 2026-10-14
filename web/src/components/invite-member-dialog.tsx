@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Mail, Search, UserPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -25,11 +26,8 @@ interface InviteMemberDialogProps {
   workspaceId: string;
 }
 
-const roleOptions: { value: WorkspaceRole; label: string }[] = [
-  { value: "member", label: "Member" },
-  { value: "admin", label: "Admin" },
-  { value: "viewer", label: "Viewer" },
-];
+// Labels are misc:invite.member.roles.<value>, resolved at render.
+const roleOptions: WorkspaceRole[] = ["member", "admin", "viewer"];
 
 type InviteMode = "email_link" | "create_now";
 
@@ -38,6 +36,7 @@ export function InviteMemberDialog({
   onClose,
   workspaceId,
 }: InviteMemberDialogProps) {
+  const { t } = useTranslation("misc");
   const {
     addWorkspaceMember,
     createInvite,
@@ -113,18 +112,18 @@ export function InviteMemberDialog({
     e.preventDefault();
     const emailValue = selectedUser?.email ?? email.trim();
     if (!emailValue) {
-      setError("Email is required");
+      setError(t("invite.member.emailRequired"));
       return;
     }
     if (mode === "create_now" && !selectedUser && !password) {
-      setError("Password is required when creating an account now");
+      setError(t("invite.member.passwordRequired"));
       return;
     }
     // Asked for here because this is the only moment anybody knows it. Skipping
     // it stores the address in the name field, which is what makes an existing
     // instance show every member as their own address with no way to correct it.
     if (mode === "create_now" && !selectedUser && !name.trim()) {
-      setError("Name is required — it is what the team sees on tasks and mentions");
+      setError(t("invite.member.nameRequired"));
       return;
     }
 
@@ -141,7 +140,7 @@ export function InviteMemberDialog({
         // inviter had no way to find out.
         const invite = await createInvite(workspaceId, emailValue, role);
         if (invite.email_sent) {
-          setSuccessMsg(`Invite sent to ${emailValue}`);
+          setSuccessMsg(t("invite.member.sent", { email: emailValue }));
           setTimeout(onClose, 1500);
         } else {
           setHandoff(invite);
@@ -155,7 +154,7 @@ export function InviteMemberDialog({
         onClose();
       }
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to add member"));
+      setError(apiErrorMessage(err, t("invite.member.addFailed")));
     } finally {
       setIsSubmitting(false);
     }
@@ -165,10 +164,9 @@ export function InviteMemberDialog({
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent onClose={onClose}>
         <DialogHeader>
-          <DialogTitle>Add Member</DialogTitle>
+          <DialogTitle>{t("invite.member.title")}</DialogTitle>
           <DialogDescription>
-            Type an address. If it already has an account, pick it from the list —
-            the same login joins this workspace, no second account is made.
+            {t("invite.member.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -176,7 +174,7 @@ export function InviteMemberDialog({
           {/* Email */}
           <div className="space-y-1.5">
             <label htmlFor="imd-email" className="text-sm font-medium">
-              Email address <span className="text-destructive">*</span>
+              {t("invite.member.emailLabel")} <span className="text-destructive">*</span>
             </label>
             <div className="relative">
               <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
@@ -189,7 +187,7 @@ export function InviteMemberDialog({
               <Input
                 id="imd-email"
                 type="email"
-                placeholder="user@example.com"
+                placeholder={t("invite.member.emailPlaceholder")}
                 value={email}
                 onChange={(e) => handleEmailChange(e.target.value)}
                 className="pl-9"
@@ -215,7 +213,7 @@ export function InviteMemberDialog({
                         <p className="truncate text-sm font-medium">{displayName(user)}</p>
                         {isNamePlaceholder(user) ? (
                           <p className="truncate text-xs text-muted-foreground italic">
-                            no name set
+                            {t("invite.member.noNameSet")}
                           </p>
                         ) : (
                           <p className="truncate text-xs text-muted-foreground">{user.email}</p>
@@ -223,7 +221,7 @@ export function InviteMemberDialog({
                       </div>
                       {user.is_member && (
                         <Badge variant="secondary" className="text-xs shrink-0">
-                          Already member
+                          {t("invite.member.alreadyMember")}
                         </Badge>
                       )}
                     </button>
@@ -247,7 +245,7 @@ export function InviteMemberDialog({
                   <p className="truncate text-xs text-muted-foreground">{selectedUser.email}</p>
                 )}
                 <p className="truncate text-xs text-muted-foreground">
-                  Existing account — joins this workspace with the same login.
+                  {t("invite.member.existingAccount")}
                 </p>
               </div>
               <button
@@ -255,7 +253,7 @@ export function InviteMemberDialog({
                 className="text-xs text-muted-foreground hover:text-foreground"
                 onClick={() => { setSelectedUser(null); setEmail(""); }}
               >
-                Clear
+                {t("invite.member.clear")}
               </button>
             </div>
           )}
@@ -263,7 +261,7 @@ export function InviteMemberDialog({
           {/* Mode toggle — only relevant when adding an unregistered email */}
           {!selectedUser && (
             <fieldset className="space-y-2">
-              <legend className="text-sm font-medium">How to add</legend>
+              <legend className="text-sm font-medium">{t("invite.member.howToAdd")}</legend>
               <label className="flex cursor-pointer items-start gap-2.5">
                 <input
                   type="radio"
@@ -274,9 +272,9 @@ export function InviteMemberDialog({
                   className="mt-0.5"
                 />
                 <span>
-                  <span className="block text-sm font-medium">Send invite link</span>
+                  <span className="block text-sm font-medium">{t("invite.member.modeLink")}</span>
                   <span className="block text-xs text-muted-foreground">
-                    User receives an email and sets their own password.
+                    {t("invite.member.modeLinkHint")}
                   </span>
                 </span>
               </label>
@@ -290,9 +288,9 @@ export function InviteMemberDialog({
                   className="mt-0.5"
                 />
                 <span>
-                  <span className="block text-sm font-medium">Create now with password</span>
+                  <span className="block text-sm font-medium">{t("invite.member.modeCreate")}</span>
                   <span className="block text-xs text-muted-foreground">
-                    Account is created immediately — share credentials manually.
+                    {t("invite.member.modeCreateHint")}
                   </span>
                 </span>
               </label>
@@ -304,18 +302,18 @@ export function InviteMemberDialog({
           {mode === "create_now" && !selectedUser && (
             <div className="space-y-1.5">
               <label htmlFor="imd-name" className="text-sm font-medium">
-                Name <span className="text-destructive">*</span>
+                {t("invite.member.nameLabel")} <span className="text-destructive">*</span>
               </label>
               <Input
                 id="imd-name"
                 type="text"
-                placeholder="Jane Cooper"
+                placeholder={t("invite.member.namePlaceholder")}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 autoComplete="off"
               />
               <p className="text-xs text-muted-foreground">
-                Shown on tasks, comments and mentions. They can change it later.
+                {t("invite.member.nameHint")}
               </p>
             </div>
           )}
@@ -324,13 +322,13 @@ export function InviteMemberDialog({
           {mode === "create_now" && !selectedUser && (
             <div className="space-y-1.5">
               <label htmlFor="imd-password" className="text-sm font-medium">
-                Password <span className="text-destructive">*</span>
+                {t("invite.member.passwordLabel")} <span className="text-destructive">*</span>
               </label>
               <div className="relative">
                 <Input
                   id="imd-password"
                   type={showPassword ? "text" : "password"}
-                  placeholder="Min 8 characters"
+                  placeholder={t("invite.member.passwordPlaceholder")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="pr-9"
@@ -351,21 +349,21 @@ export function InviteMemberDialog({
           {/* Role */}
           <div className="space-y-1.5">
             <label htmlFor="imd-role" className="text-sm font-medium">
-              Role
+              {t("invite.member.roleLabel")}
             </label>
             <Select
               id="imd-role"
               value={role}
               onChange={(e) => setRole(e.target.value as WorkspaceRole)}
             >
-              {roleOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
+              {roleOptions.map((value) => (
+                <option key={value} value={value}>
+                  {t(`invite.member.roles.${value}`)}
                 </option>
               ))}
             </Select>
             <p className="text-xs text-muted-foreground">
-              Members can view and edit tasks. Admins can manage settings. Viewers have read-only access.
+              {t("invite.member.roleHint")}
             </p>
           </div>
 
@@ -376,17 +374,17 @@ export function InviteMemberDialog({
           {handoff && (
             <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
               <p className="text-sm font-medium">
-                Invite created — no email was sent
+                {t("invite.member.handoffTitle")}
               </p>
               <p className="text-xs text-muted-foreground">
                 {handoff.delivery_status === "not_configured"
-                  ? "This instance has no email server configured. Send this link to the invitee yourself."
-                  : "The invitation email could not be sent. The invite is valid — send this link to the invitee yourself."}
+                  ? t("invite.member.handoffNotConfigured")
+                  : t("invite.member.handoffFailed")}
               </p>
               <InviteLinkBox url={handoff.invite_url} />
               {handoff.delivery_error && (
                 <p className="text-xs text-muted-foreground">
-                  Mail server said: {handoff.delivery_error}
+                  {t("invite.member.mailServerSaid", { error: handoff.delivery_error })}
                 </p>
               )}
             </div>
@@ -394,16 +392,16 @@ export function InviteMemberDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
-              {handoff ? "Done" : "Cancel"}
+              {handoff ? t("invite.member.done") : t("invite.member.cancel")}
             </Button>
             {!handoff && (
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? (
-                  mode === "email_link" && !selectedUser ? "Sending..." : "Adding..."
+                  mode === "email_link" && !selectedUser ? t("invite.member.sending") : t("invite.member.adding")
                 ) : (
                   <>
                     <UserPlus className="h-4 w-4" />
-                    {mode === "email_link" && !selectedUser ? "Send Invite" : "Add Member"}
+                    {mode === "email_link" && !selectedUser ? t("invite.member.sendInvite") : t("invite.member.addMember")}
                   </>
                 )}
               </Button>

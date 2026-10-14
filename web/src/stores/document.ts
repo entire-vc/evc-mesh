@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-error";
+import i18n from "@/i18n";
 import type {
   CreateDocumentRequest,
   PaginatedResponse,
@@ -9,7 +10,7 @@ import type {
 } from "@/types";
 
 function getErrorMessage(error: unknown): string {
-  return apiErrorMessage(error, "Request failed");
+  return apiErrorMessage(error, i18n.t("docs:errors.requestFailed"));
 }
 
 // The list endpoint is paginated and the tree needs every node to be drawable —

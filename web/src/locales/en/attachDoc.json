@@ -1,5 +1,10 @@
 {
-  "searchObsidian": "Search Obsidian docs...",
+  "attachObsidian": "Attach Obsidian doc",
+  "linkDocument": "Link a document",
+  "noDocs": "No documents available",
   "nothingFound": "Nothing found",
-  "noDocs": "No documents available"
+  "searchDocuments": "Search documents...",
+  "searchFailed": "Search failed",
+  "searchObsidian": "Search Obsidian docs...",
+  "startTyping": "Start typing to search"
 }

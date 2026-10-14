@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { miscT } from "@/lib/misc-t";
 import { api } from "@/lib/api";
 import { buildDuplicateRequest } from "@/lib/utils";
 import { apiErrorMessage } from "@/lib/api-error";
@@ -13,7 +14,7 @@ import type {
 } from "@/types";
 
 function getErrorMessage(error: unknown): string {
-  return apiErrorMessage(error, "Request failed");
+  return apiErrorMessage(error, miscT("errors.requestFailed", "Request failed"));
 }
 
 interface TaskState {

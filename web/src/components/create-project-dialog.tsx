@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ export function CreateProjectDialog({
   open,
   onOpenChange,
 }: CreateProjectDialogProps) {
+  const { t } = useTranslation("settings");
   const navigate = useNavigate();
   const { createProject } = useProjectStore();
   const { currentWorkspace } = useWorkspaceStore();
@@ -60,11 +62,11 @@ export function CreateProjectDialog({
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !slug.trim()) {
-      setError("Name and slug are required");
+      setError(t("createProject.nameSlugRequired"));
       return;
     }
     if (!currentWorkspace) {
-      setError("No workspace selected");
+      setError(t("createProject.noWorkspace"));
       return;
     }
 
@@ -81,7 +83,7 @@ export function CreateProjectDialog({
       onOpenChange(false);
       void navigate(`/w/${currentWorkspace.slug}/p/${project.slug}`);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to create project"));
+      setError(apiErrorMessage(err, t("createProject.failed")));
     } finally {
       setIsSubmitting(false);
     }
@@ -91,20 +93,20 @@ export function CreateProjectDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent onClose={() => onOpenChange(false)}>
         <DialogHeader>
-          <DialogTitle>New Project</DialogTitle>
+          <DialogTitle>{t("createProject.title")}</DialogTitle>
           <DialogDescription>
-            Create a new project in {currentWorkspace?.name ?? "your workspace"}.
+            {t("createProject.description", { workspace: currentWorkspace?.name ?? t("createProject.yourWorkspace") })}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="cp-name" className="text-sm font-medium">
-              Name <span className="text-destructive">*</span>
+              {t("createProject.name")} <span className="text-destructive">*</span>
             </label>
             <Input
               id="cp-name"
-              placeholder="My Project"
+              placeholder={t("createProject.namePlaceholder")}
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               autoFocus
@@ -114,7 +116,7 @@ export function CreateProjectDialog({
 
           <div className="space-y-1.5">
             <label htmlFor="cp-slug" className="text-sm font-medium">
-              Slug <span className="text-destructive">*</span>
+              {t("createProject.slug")} <span className="text-destructive">*</span>
             </label>
             <Input
               id="cp-slug"
@@ -127,11 +129,11 @@ export function CreateProjectDialog({
 
           <div className="space-y-1.5">
             <label htmlFor="cp-desc" className="text-sm font-medium">
-              Description
+              {t("createProject.descriptionLabel")}
             </label>
             <Textarea
               id="cp-desc"
-              placeholder="Optional description..."
+              placeholder={t("createProject.descriptionPlaceholder")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
@@ -147,10 +149,10 @@ export function CreateProjectDialog({
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
             >
-              Cancel
+              {t("createProject.cancel")}
             </Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Creating..." : "Create Project"}
+              {isSubmitting ? t("createProject.creating") : t("createProject.create")}
             </Button>
           </DialogFooter>
         </form>

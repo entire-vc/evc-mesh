@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { Eye, EyeOff } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, setAccessToken } from "@/lib/api";
@@ -16,6 +17,7 @@ interface InviteInfo {
 }
 
 export function AcceptInvitePage() {
+  const { t } = useTranslation("misc");
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
   const { fetchMe } = useAuthStore();
@@ -39,10 +41,10 @@ export function AcceptInvitePage() {
         setIsLoading(false);
       })
       .catch(() => {
-        setLoadError("This invite link is invalid or has expired.");
+        setLoadError(t("invite.accept.invalid"));
         setIsLoading(false);
       });
-  }, [token]);
+  }, [token, t]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -51,15 +53,15 @@ export function AcceptInvitePage() {
     // correct it afterwards — which is how an instance ends up showing every
     // member as their own address on every task and comment.
     if (!name.trim()) {
-      setError("Please enter your name — it is what your team sees on tasks and comments");
+      setError(t("invite.accept.nameRequired"));
       return;
     }
     if (!password) {
-      setError("Password is required");
+      setError(t("invite.accept.passwordRequired"));
       return;
     }
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
+      setError(t("invite.accept.passwordMismatch"));
       return;
     }
 
@@ -75,7 +77,7 @@ export function AcceptInvitePage() {
       await fetchMe();
       navigate("/", { replace: true });
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to accept invite"));
+      setError(apiErrorMessage(err, t("invite.accept.failed")));
     } finally {
       setIsSubmitting(false);
     }
@@ -84,7 +86,7 @@ export function AcceptInvitePage() {
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <p className="text-muted-foreground">Loading invite…</p>
+        <p className="text-muted-foreground">{t("invite.accept.loading")}</p>
       </div>
     );
   }
@@ -93,10 +95,10 @@ export function AcceptInvitePage() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <div className="w-full max-w-md text-center space-y-4">
-          <h1 className="text-2xl font-bold">Invite Not Found</h1>
-          <p className="text-muted-foreground">{loadError ?? "This invite link is no longer valid."}</p>
+          <h1 className="text-2xl font-bold">{t("invite.accept.notFoundTitle")}</h1>
+          <p className="text-muted-foreground">{loadError ?? t("invite.accept.noLongerValid")}</p>
           <Button variant="outline" onClick={() => navigate("/login")}>
-            Go to login
+            {t("invite.accept.goToLogin")}
           </Button>
         </div>
       </div>
@@ -107,43 +109,43 @@ export function AcceptInvitePage() {
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-1">
-          <h1 className="text-2xl font-bold">Accept Invitation</h1>
+          <h1 className="text-2xl font-bold">{t("invite.accept.title")}</h1>
           <p className="text-muted-foreground">
-            You've been invited to join as <strong>{invite.role}</strong>.
+            <Trans t={t} i18nKey="invite.accept.invitedAs" values={{ role: invite.role }} components={{ b: <strong /> }} />
           </p>
           <p className="text-sm text-muted-foreground">
-            Signing in as <span className="font-medium text-foreground">{invite.email}</span>
+            <Trans t={t} i18nKey="invite.accept.signingInAs" values={{ email: invite.email }} components={{ b: <span className="font-medium text-foreground" /> }} />
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="ai-name" className="text-sm font-medium">
-              Your name <span className="text-destructive">*</span>
+              {t("invite.accept.nameLabel")} <span className="text-destructive">*</span>
             </label>
             <Input
               id="ai-name"
               type="text"
-              placeholder="Your name"
+              placeholder={t("invite.accept.namePlaceholder")}
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
               maxLength={100}
             />
             <p className="text-xs text-muted-foreground">
-              Shown on tasks, comments and mentions. You can change it later.
+              {t("invite.accept.nameHint")}
             </p>
           </div>
 
           <div className="space-y-1.5">
             <label htmlFor="ai-password" className="text-sm font-medium">
-              Password <span className="text-destructive">*</span>
+              {t("invite.accept.passwordLabel")} <span className="text-destructive">*</span>
             </label>
             <div className="relative">
               <Input
                 id="ai-password"
                 type={showPassword ? "text" : "password"}
-                placeholder="Min 8 characters"
+                placeholder={t("invite.accept.passwordPlaceholder")}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="pr-9"
@@ -162,12 +164,12 @@ export function AcceptInvitePage() {
 
           <div className="space-y-1.5">
             <label htmlFor="ai-confirm" className="text-sm font-medium">
-              Confirm password <span className="text-destructive">*</span>
+              {t("invite.accept.confirmLabel")} <span className="text-destructive">*</span>
             </label>
             <Input
               id="ai-confirm"
               type={showPassword ? "text" : "password"}
-              placeholder="Repeat password"
+              placeholder={t("invite.accept.confirmPlaceholder")}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               autoComplete="new-password"
@@ -177,7 +179,7 @@ export function AcceptInvitePage() {
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <Button type="submit" className="w-full" disabled={isSubmitting}>
-            {isSubmitting ? "Joining…" : "Accept & Join"}
+            {isSubmitting ? t("invite.accept.submitting") : t("invite.accept.submit")}
           </Button>
         </form>
       </div>

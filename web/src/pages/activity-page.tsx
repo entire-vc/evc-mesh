@@ -11,6 +11,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useWebSocketStore } from "@/stores/websocket";
 import { MarkdownView } from "@/components/markdown-view";
 import { Skeleton } from "@/components/ui/skeleton";
+import i18n from "@/i18n";
 import { toast } from "@/components/ui/toast";
 import {
   fetchMentionInbox,
@@ -44,12 +45,14 @@ function saveShownIds(ids: Set<string>): void {
   } catch {}
 }
 
+// Unlike formatRelativeShort this never falls back to a date: "40d ago".
+// Wording comes from common:time.* so it follows the UI language.
 function formatRelative(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime();
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
+  if (diff < 60_000) return i18n.t("common:time.justNow");
+  if (diff < 3_600_000) return i18n.t("common:time.minutesAgo", { count: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return i18n.t("common:time.hoursAgo", { count: Math.floor(diff / 3_600_000) });
+  return i18n.t("common:time.daysAgo", { count: Math.floor(diff / 86_400_000) });
 }
 
 type Tab = "mentions" | "my-comments" | "all-recent";
@@ -68,10 +71,11 @@ function cursorFromPage(page: CommentViewPage | null | undefined): CommentCursor
   return { before: page.next_cursor, beforeId: page.next_cursor_id };
 }
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "mentions", label: "Mentions" },
-  { id: "my-comments", label: "My comments" },
-  { id: "all-recent", label: "All recent" },
+// `labelKey` resolves in the activity namespace at render.
+const TABS: { id: Tab; labelKey: string }[] = [
+  { id: "mentions", labelKey: "page.tabs.mentions" },
+  { id: "my-comments", labelKey: "page.tabs.myComments" },
+  { id: "all-recent", labelKey: "page.tabs.allRecent" },
 ];
 
 // Grace period after Mentions tab opens before last_visit is bumped — gives the
@@ -95,6 +99,7 @@ function getMentionDisplayState(
 }
 
 export function ActivityPage() {
+  const { t } = useTranslation("activity");
   useMentionDirectory();
   const { wsSlug } = useParams();
   const navigate = useNavigate();
@@ -128,17 +133,17 @@ export function ActivityPage() {
       const { items, failed } = await fetchMentionInbox(currentWorkspace.id, 50);
       setMentions(items);
       setMentionsFailed(failed);
-      if (failed.length > 0) toast.error("Some mentions could not be loaded");
+      if (failed.length > 0) toast.error(t("page.toast.mentionsPartial"));
     } catch {
       // fetchMentionInbox reports a failed source rather than throwing, so
       // reaching here means both sources are gone — say so instead of
       // rendering an empty inbox.
       setMentionsFailed(["task", "document"]);
-      toast.error("Failed to load mentions");
+      toast.error(t("page.toast.mentionsFailed"));
     } finally {
       setLoading(false);
     }
-  }, [currentWorkspace]);
+  }, [currentWorkspace, t]);
 
   const fetchMyComments = useCallback(async (cursor?: CommentCursor) => {
     if (cursor) setLoadingMore(true);
@@ -158,12 +163,12 @@ export function ActivityPage() {
       else setMyComments(items);
       setMyCommentsNextCursor(cursorFromPage(data));
     } catch {
-      toast.error("Failed to load comments");
+      toast.error(t("page.toast.commentsFailed"));
     } finally {
       if (cursor) setLoadingMore(false);
       else setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const fetchRecentComments = useCallback(async (cursor?: CommentCursor) => {
     if (!currentWorkspace) return;
@@ -187,12 +192,12 @@ export function ActivityPage() {
       else setRecentComments(items);
       setRecentNextCursor(cursorFromPage(data));
     } catch {
-      toast.error("Failed to load recent comments");
+      toast.error(t("page.toast.recentFailed"));
     } finally {
       if (cursor) setLoadingMore(false);
       else setLoading(false);
     }
-  }, [currentWorkspace]);
+  }, [currentWorkspace, t]);
 
   useEffect(() => {
     if (activeTab === "mentions") void fetchMentions();
@@ -291,7 +296,7 @@ export function ActivityPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Activity</h1>
+      <h1 className="text-xl font-semibold">{t("page.title")}</h1>
 
       <div className="flex gap-1 border-b border-border">
         {TABS.map((tab) => (
@@ -305,7 +310,7 @@ export function ActivityPage() {
                 : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
-            {tab.label}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>
@@ -326,7 +331,7 @@ export function ActivityPage() {
           comments={myComments}
           loading={loading}
           onCommentClick={handleCommentClick}
-          emptyMessage="You haven't commented on anything yet."
+          emptyMessage={t("page.empty.myComments")}
           onLoadMore={handleLoadMoreMyComments}
           hasMore={myCommentsNextCursor !== null}
           loadingMore={loadingMore}
@@ -338,7 +343,7 @@ export function ActivityPage() {
           comments={recentComments}
           loading={loading}
           onCommentClick={handleCommentClick}
-          emptyMessage="No comments in this workspace yet."
+          emptyMessage={t("page.empty.recent")}
           showAuthor
           onLoadMore={handleLoadMoreRecent}
           hasMore={recentNextCursor !== null}
@@ -385,11 +390,11 @@ function MentionsTab({
         <AtSign className="mb-3 h-8 w-8 opacity-30" />
         {failed.length > 0 ? (
           <p className="text-sm" data-testid="mentions-load-failed">
-            {failedSourcesMessage(failed)} This list is incomplete — reload to try again.
+            {failedSourcesMessage(failed, t)} {t("page.failed.incomplete")}
           </p>
         ) : (
           <p className="text-sm">
-            No mentions yet. When someone tags you with @username, it'll show up here.
+            {t("page.empty.mentions")}
           </p>
         )}
       </div>
@@ -403,7 +408,7 @@ function MentionsTab({
           className="rounded-md border border-amber-400/40 bg-amber-50/50 px-3 py-2 text-xs text-muted-foreground dark:bg-amber-950/20"
           data-testid="mentions-load-failed"
         >
-          {failedSourcesMessage(failed)} Some mentions may be missing from this list.
+          {failedSourcesMessage(failed, t)} {t("page.failed.partial")}
         </p>
       )}
       {fresh.length > 0 && (
@@ -446,6 +451,7 @@ function CommentsTab({
   hasMore?: boolean;
   loadingMore?: boolean;
 }) {
+  const { t } = useTranslation("activity");
   if (loading) {
     return (
       <div className="space-y-3">
@@ -481,7 +487,7 @@ function CommentsTab({
           disabled={loadingMore}
           className="mt-2 w-full rounded-md py-2 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
-          {loadingMore ? "Loading…" : "Load more"}
+          {loadingMore ? t("page.loading") : t("page.loadMore")}
         </button>
       )}
     </div>
@@ -526,11 +532,11 @@ function CommentCard({
 }
 
 /** Names the inbox that did not answer, so the reader knows what is missing. */
-function failedSourcesMessage(failed: MentionSource[]): string {
-  if (failed.length > 1) return "Mentions could not be loaded.";
+function failedSourcesMessage(failed: MentionSource[], t: (key: string) => string): string {
+  if (failed.length > 1) return t("page.failed.all");
   return failed[0] === "document"
-    ? "Mentions in documents could not be loaded."
-    : "Mentions on tasks could not be loaded.";
+    ? t("page.failed.document")
+    : t("page.failed.task");
 }
 
 function splitByLastVisit(
@@ -574,6 +580,7 @@ function MentionCard({
   shownIds: Set<string>;
   onClick: (m: MentionInboxItem) => void;
 }) {
+  const { t } = useTranslation("activity");
   const displayState = getMentionDisplayState(mention, shownIds);
   const isNew = displayState === "new";
   const isShown = displayState === "shown";
@@ -607,7 +614,7 @@ function MentionCard({
           <div className="flex flex-wrap items-center gap-2">
             <SourceIcon
               className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-              aria-label={mention.source === "document" ? "Document" : "Task"}
+              aria-label={mention.source === "document" ? t("page.source.document") : t("page.source.task")}
             />
             <span className={cn("truncate text-sm", isNew && "font-medium")}>
               {mention.title}

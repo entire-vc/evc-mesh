@@ -1,0 +1,276 @@
+{
+  "auth": {
+    "email": "Email",
+    "emailPlaceholder": "you@example.com",
+    "password": "Password",
+    "name": "Name",
+    "namePlaceholder": "Your name",
+    "login": {
+      "title": "Welcome back",
+      "subtitle": "Sign in to your EVC Mesh account",
+      "passwordPlaceholder": "Your password",
+      "submitting": "Signing in...",
+      "submit": "Sign in",
+      "noAccount": "Don't have an account?",
+      "register": "Register"
+    },
+    "register": {
+      "closedTitle": "Registration is closed",
+      "closedBody": "This instance is not accepting new signups. Ask an admin for an invite, or sign in if you already have an account.",
+      "backToSignIn": "Back to sign in",
+      "title": "Create an account",
+      "subtitle": "Get started with EVC Mesh",
+      "passwordPlaceholder": "At least 8 characters",
+      "submitting": "Creating account...",
+      "submit": "Create account",
+      "haveAccount": "Already have an account?",
+      "signIn": "Sign in"
+    }
+  },
+  "invite": {
+    "accept": {
+      "invalid": "This invite link is invalid or has expired.",
+      "nameRequired": "Please enter your name — it is what your team sees on tasks and comments",
+      "passwordRequired": "Password is required",
+      "passwordMismatch": "Passwords do not match",
+      "failed": "Failed to accept invite",
+      "loading": "Loading invite…",
+      "notFoundTitle": "Invite Not Found",
+      "noLongerValid": "This invite link is no longer valid.",
+      "goToLogin": "Go to login",
+      "title": "Accept Invitation",
+      "invitedAs": "You've been invited to join as <b>{{role}}</b>.",
+      "signingInAs": "Signing in as <b>{{email}}</b>",
+      "nameLabel": "Your name",
+      "namePlaceholder": "Your name",
+      "nameHint": "Shown on tasks, comments and mentions. You can change it later.",
+      "passwordLabel": "Password",
+      "passwordPlaceholder": "Min 8 characters",
+      "confirmLabel": "Confirm password",
+      "confirmPlaceholder": "Repeat password",
+      "submitting": "Joining…",
+      "submit": "Accept & Join"
+    },
+    "member": {
+      "emailRequired": "Email is required",
+      "passwordRequired": "Password is required when creating an account now",
+      "nameRequired": "Name is required — it is what the team sees on tasks and mentions",
+      "sent": "Invite sent to {{email}}",
+      "addFailed": "Failed to add member",
+      "title": "Add Member",
+      "description": "Type an address. If it already has an account, pick it from the list — the same login joins this workspace, no second account is made.",
+      "emailLabel": "Email address",
+      "emailPlaceholder": "user@example.com",
+      "noNameSet": "no name set",
+      "alreadyMember": "Already member",
+      "existingAccount": "Existing account — joins this workspace with the same login.",
+      "clear": "Clear",
+      "howToAdd": "How to add",
+      "modeLink": "Send invite link",
+      "modeLinkHint": "User receives an email and sets their own password.",
+      "modeCreate": "Create now with password",
+      "modeCreateHint": "Account is created immediately — share credentials manually.",
+      "nameLabel": "Name",
+      "namePlaceholder": "Jane Cooper",
+      "nameHint": "Shown on tasks, comments and mentions. They can change it later.",
+      "passwordLabel": "Password",
+      "passwordPlaceholder": "Min 8 characters",
+      "roleLabel": "Role",
+      "roles": {
+        "member": "Member",
+        "admin": "Admin",
+        "viewer": "Viewer"
+      },
+      "roleHint": "Members can view and edit tasks. Admins can manage settings. Viewers have read-only access.",
+      "handoffTitle": "Invite created — no email was sent",
+      "handoffNotConfigured": "This instance has no email server configured. Send this link to the invitee yourself.",
+      "handoffFailed": "The invitation email could not be sent. The invite is valid — send this link to the invitee yourself.",
+      "mailServerSaid": "Mail server said: {{error}}",
+      "done": "Done",
+      "cancel": "Cancel",
+      "sending": "Sending...",
+      "adding": "Adding...",
+      "sendInvite": "Send Invite",
+      "addMember": "Add Member"
+    },
+    "link": {
+      "copied": "Copied",
+      "copy": "Copy"
+    }
+  },
+  "deepLink": {
+    "projectNotFound": "Project not found",
+    "projectNoAccess": "Project not found or you don't have access.",
+    "loadingProject": "Loading project",
+    "taskNotFound": "Task not found",
+    "taskNoProjectAccess": "Task is in a workspace or project you don't have access to.",
+    "taskNoAccess": "Task not found or you don't have access."
+  },
+  "memory": {
+    "source": {
+      "agent": "Agent",
+      "human": "Human",
+      "system": "System"
+    },
+    "scope": {
+      "workspace": "Workspace",
+      "project": "Project",
+      "agent": "Agent"
+    },
+    "scopeBadge": {
+      "workspace": "workspace",
+      "project": "project",
+      "agent": "agent"
+    },
+    "card": {
+      "score": "score {{score}}",
+      "showLess": "Show less",
+      "showMore": "Show more",
+      "relevance": "Relevance",
+      "updated": "updated",
+      "stale": "stale",
+      "archived": "archived",
+      "confirm": "Confirm"
+    },
+    "form": {
+      "createFailed": "Failed to create memory",
+      "key": "Key (slug format)",
+      "keyPlaceholder": "e.g. project-context",
+      "keyTitle": "Lowercase letters, numbers, hyphens and underscores only",
+      "scope": "Scope",
+      "content": "Content",
+      "contentPlaceholder": "Memory content (Markdown supported)",
+      "tags": "Tags (comma-separated)",
+      "tagsPlaceholder": "e.g. context, onboarding, api",
+      "saving": "Saving...",
+      "save": "Save Memory"
+    },
+    "page": {
+      "new": "New Memory",
+      "create": "Create Memory",
+      "searchPlaceholder": "Search memories...",
+      "filters": "Filters",
+      "activeFilters_one": "{{count}} active filter",
+      "activeFilters_other": "{{count}} active filters",
+      "clear": "Clear",
+      "results_one": "{{count}} result",
+      "results_other": "{{count}} results",
+      "resultsFor": " for “{{query}}”",
+      "noMatches": "No memories matched your filters.",
+      "empty": "No memories yet.",
+      "resetFilters": "Reset filters",
+      "emptyHint": "Use the recall/remember MCP tools or create one above."
+    },
+    "filters": {
+      "addTag": "Add tag and press Enter…",
+      "scope": "Scope",
+      "all": "All",
+      "source": "Source",
+      "sourceAgent": "Source agent",
+      "anyAgent": "Any agent",
+      "tags": "Tags",
+      "matchAll": "Match all",
+      "matchAny": "Match any",
+      "createdBetween": "Created between",
+      "preset24h": "24h",
+      "preset7d": "7d",
+      "preset30d": "30d",
+      "minRelevance": "Minimum relevance — {{pct}}%",
+      "hideStale": "Hide stale",
+      "sortBy": "Sort by",
+      "sortRecent": "Most recent",
+      "sortRelevant": "Most relevant",
+      "sortDecayed": "Decayed relevance",
+      "includeExpired": "Include expired memories",
+      "showArchived": "Show archived memories"
+    }
+  },
+  "errors": {
+    "unexpected": "An unexpected error occurred",
+    "sessionTooLarge": "Your browser is sending a large saved session that was rejected. Please clear this site's cookies and try again.",
+    "serverError": "Server error ({{status}})",
+    "requestFailed": "Request failed",
+    "sessionExpired": "Session expired",
+    "failedToSave": "Failed to save",
+    "malformedTaskList": "Malformed task list. Please try again.",
+    "loadWorkspaces": "Failed to load workspaces",
+    "uploadFailed": "Upload failed",
+    "roleCheckUnreachable": "Could not reach the server to check your role"
+  },
+  "errorBoundary": {
+    "title": "Application Error",
+    "reload": "Reload"
+  },
+  "mention": {
+    "listLabel": "Mention a person or agent",
+    "kind": {
+      "agent": "agent",
+      "user": "user"
+    },
+    "openProfile": "Open team profile for @{{slug}}"
+  },
+  "editor": {
+    "apply": "Apply",
+    "attachFailed": "Could not attach {{name}}",
+    "attachFile": "Attach file",
+    "bold": "Bold (Ctrl+B)",
+    "bulletList": "Bullet list",
+    "codeBlock": "Code block",
+    "deleteFailed": "delete failed",
+    "hint": "Rich text — tables, task lists and footnotes supported.",
+    "inlineCode": "Inline code",
+    "insertImage": "Insert image",
+    "italic": "Italic (Ctrl+I)",
+    "link": "Link",
+    "linkUrl": "Link URL",
+    "numberedList": "Numbered list",
+    "quote": "Quote",
+    "removeAttachment": "Remove attachment",
+    "removeAttachmentFailed": "Could not remove attachment",
+    "saveToAttachFiles": "Save the task to attach files",
+    "saveToAttachImages": "Save the task to attach images",
+    "table": "Table",
+    "uploadFailed": "upload failed",
+    "uploading": "Uploading..."
+  },
+  "relayDoc": {
+    "collapse": "Collapse document",
+    "expand": "Expand document",
+    "open": "Open",
+    "openFolder": "Open folder",
+    "openFolderInRelay": "Open folder in Team Relay",
+    "openInRelay": "Open in Team Relay"
+  },
+  "artifactLinks": {
+    "failedToLoadSuffix": " (failed to load)",
+    "openFailed": "Could not open file"
+  },
+  "activityAction": {
+    "checkoutAcquired": "Checkout acquired",
+    "checkoutRenewed": "Checkout renewed",
+    "checkoutReleased": "Checkout released",
+    "checkoutReleasedAuto": "Checkout released automatically",
+    "checkoutForceReleased": "Checkout released by administrator",
+    "checkoutLeaseExpired": "Checkout expired",
+    "checkoutAutoProgress": "Moved to In Progress after checkout",
+    "checkoutAutoProgressFailed": "Could not move to In Progress after checkout"
+  },
+  "dependencyGraph": {
+    "unavailable": "There is an unavailable dependency",
+    "unfinishedBlockers": "{{count}} unfinished direct blockers",
+    "incomplete": "Dependency check is incomplete",
+    "noBlockers": "No unfinished direct blockers"
+  },
+  "spark": {
+    "searchFailed": "Failed to search Spark catalog",
+    "popularFailed": "Failed to load popular agents",
+    "fetchFailed": "Failed to fetch agent",
+    "installFailed": "Failed to install agent"
+  },
+  "rules": {
+    "exportFailed": "Export failed"
+  },
+  "push": {
+    "notSupported": "Push notifications not supported"
+  }
+}

@@ -1,33 +1,34 @@
+import { useTranslation } from "react-i18next";
 import { AlertTriangle, Flag } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Priority } from "@/types";
 
 const priorityMeta: Record<
   Priority,
-  { label: string; colorClass: string; iconSize: Record<"sm" | "md", number> }
+  { labelKey: string; colorClass: string; iconSize: Record<"sm" | "md", number> }
 > = {
   urgent: {
-    label: "Urgent",
+    labelKey: "priority.urgent",
     colorClass: "text-red-500",
     iconSize: { sm: 14, md: 16 },
   },
   high: {
-    label: "High",
+    labelKey: "priority.high",
     colorClass: "text-orange-500",
     iconSize: { sm: 14, md: 16 },
   },
   medium: {
-    label: "Medium",
+    labelKey: "priority.medium",
     colorClass: "text-yellow-500",
     iconSize: { sm: 14, md: 16 },
   },
   low: {
-    label: "Low",
+    labelKey: "priority.low",
     colorClass: "text-blue-400",
     iconSize: { sm: 14, md: 16 },
   },
   none: {
-    label: "No priority",
+    labelKey: "priority.noPriority",
     colorClass: "text-gray-300 dark:text-gray-600",
     iconSize: { sm: 14, md: 16 },
   },
@@ -46,7 +47,9 @@ export function PriorityFlag({
   size = "md",
   className,
 }: PriorityFlagProps) {
+  const { t } = useTranslation("settings");
   const meta = priorityMeta[priority];
+  const label = t(meta.labelKey);
   const px = meta.iconSize[size];
 
   const Icon = priority === "urgent" ? AlertTriangle : Flag;
@@ -54,13 +57,13 @@ export function PriorityFlag({
   return (
     <span
       className={cn("inline-flex items-center gap-1", meta.colorClass, className)}
-      title={meta.label}
-      aria-label={meta.label}
+      title={label}
+      aria-label={label}
     >
       <Icon width={px} height={px} aria-hidden="true" />
       {showLabel && (
         <span className={cn("font-medium", size === "sm" ? "text-xs" : "text-sm")}>
-          {meta.label}
+          {label}
         </span>
       )}
     </span>

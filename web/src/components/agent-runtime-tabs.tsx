@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,12 +24,7 @@ import type { Agent } from "@/types";
 
 type TabId = "profile" | "access" | "execution" | "state";
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: "profile", label: "Profile" },
-  { id: "access", label: "Workspace access" },
-  { id: "execution", label: "Execution & routes" },
-  { id: "state", label: "Observed state" },
-];
+const TABS: { id: TabId }[] = [{ id: "profile" }, { id: "access" }, { id: "execution" }, { id: "state" }];
 
 interface AgentRuntimeTabsProps {
   agent: Agent;
@@ -40,6 +36,7 @@ interface AgentRuntimeTabsProps {
 }
 
 export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentRuntimeTabsProps) {
+  const { t } = useTranslation("integrations");
   const [tab, setTab] = useState<TabId>("profile");
   const [load, setLoad] = useState<RuntimeLoad | "loading">("loading");
   const requestId = useRef(0);
@@ -67,7 +64,7 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentR
   }, [reload, agent.id]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const i = TABS.findIndex((t) => t.id === tab);
+    const i = TABS.findIndex((x) => x.id === tab);
     let next = i;
     if (e.key === "ArrowRight") next = (i + 1) % TABS.length;
     else if (e.key === "ArrowLeft") next = (i - 1 + TABS.length) % TABS.length;
@@ -83,30 +80,30 @@ export function AgentRuntimeTabs({ agent, workspaceId, profile, access }: AgentR
     <div className="mt-4">
       <div
         role="tablist"
-        aria-label="Agent sections"
+        aria-label={t("runtimeTabs.sectionsLabel")}
         onKeyDown={onKeyDown}
         className="flex flex-wrap gap-x-1 border-b border-border"
       >
-        {TABS.map((t) => (
+        {TABS.map((tb) => (
           <button
-            key={t.id}
+            key={tb.id}
             ref={(el) => {
-              tabRefs.current[t.id] = el;
+              tabRefs.current[tb.id] = el;
             }}
             role="tab"
-            id={`agent-tab-${t.id}`}
-            aria-selected={tab === t.id}
-            aria-controls={`agent-panel-${t.id}`}
-            tabIndex={tab === t.id ? 0 : -1}
-            onClick={() => setTab(t.id)}
+            id={`agent-tab-${tb.id}`}
+            aria-selected={tab === tb.id}
+            aria-controls={`agent-panel-${tb.id}`}
+            tabIndex={tab === tb.id ? 0 : -1}
+            onClick={() => setTab(tb.id)}
             className={cn(
               "border-b-2 px-3 py-2 text-sm font-medium",
-              tab === t.id
+              tab === tb.id
                 ? "border-primary text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
-            {t.label}
+            {t(`runtimeTabs.tabs.${tb.id}`)}
           </button>
         ))}
       </div>
@@ -157,9 +154,10 @@ function RuntimeSection({
   workspaceId: string | null;
   children: (state: RuntimeState, found: { ref: string; binding: RuntimeBinding } | null) => ReactNode;
 }) {
+  const { t } = useTranslation("integrations");
   if (load === "loading") {
     return (
-      <div aria-busy="true" aria-label="Loading runtime" className="space-y-2">
+      <div aria-busy="true" aria-label={t("runtimeTabs.loadingRuntime")} className="space-y-2">
         <Skeleton className="h-20 w-full" />
       </div>
     );
@@ -167,18 +165,18 @@ function RuntimeSection({
   if (load.kind === "unavailable") {
     return (
       <div role="alert" className="space-y-2 rounded-md border border-destructive/40 p-3">
-        <p className="text-sm text-destructive">Runtime data could not be loaded. Nothing below is assumed.</p>
+        <p className="text-sm text-destructive">{t("runtimeTabs.loadError")}</p>
         <Button size="sm" variant="outline" onClick={onRetry}>
-          Retry
+          {t("runtimeTabs.retry")}
         </Button>
       </div>
     );
   }
   if (load.kind === "forbidden") {
-    return <Note>Runtime settings belong to the resource-owner workspace and are visible to its admins only.</Note>;
+    return <Note>{t("runtimeTabs.forbidden")}</Note>;
   }
   if (load.kind === "not_configured") {
-    return <Note>No runtime connection in this workspace. The agent runs in direct mode; runtime facts are unknown.</Note>;
+    return <Note>{t("runtimeTabs.notConfigured")}</Note>;
   }
   const found = workspaceId ? findAgentBinding(load.state.catalog, agent.id, workspaceId) : null;
   return <>{children(load.state, found)}</>;
@@ -199,6 +197,7 @@ function Heading({ children }: { children: ReactNode }) {
 }
 
 function PreviewPanel({ workspaceId, bindingRef }: { workspaceId: string | null; bindingRef: string }) {
+  const { t } = useTranslation("integrations");
   const [result, setResult] = useState<PreviewResult | "loading" | null>(null);
   const run = () => {
     if (!workspaceId) return;
@@ -207,52 +206,57 @@ function PreviewPanel({ workspaceId, bindingRef }: { workspaceId: string | null;
   };
   return (
     <div>
-      <Heading>Router decision now</Heading>
+      <Heading>{t("runtimeTabs.preview.heading")}</Heading>
       <Button size="sm" variant="outline" onClick={run} disabled={!workspaceId || result === "loading"}>
-        {result === "loading" ? "Asking the router…" : "Explain routing now"}
+        {result === "loading" ? t("runtimeTabs.preview.asking") : t("runtimeTabs.preview.explain")}
       </Button>
-      <p className="mt-1 text-xs text-muted-foreground">Advisory only: nothing is launched or reserved.</p>
+      <p className="mt-1 text-xs text-muted-foreground">{t("runtimeTabs.preview.advisory")}</p>
       {result && result !== "loading" && <PreviewResultView result={result} />}
     </div>
   );
 }
 
 function PreviewResultView({ result }: { result: PreviewResult }) {
-  if (result.kind === "forbidden") return <Note>You are not allowed to see this agent&apos;s router decision.</Note>;
-  if (result.kind === "stale") return <Note>The runtime configuration changed meanwhile. Reload and ask again.</Note>;
-  if (result.kind === "unavailable") return <Note>The router decision could not be loaded. Nothing is assumed.</Note>;
+  const { t } = useTranslation("integrations");
+  if (result.kind === "forbidden") return <Note>{t("runtimeTabs.preview.forbidden")}</Note>;
+  if (result.kind === "stale") return <Note>{t("runtimeTabs.preview.stale")}</Note>;
+  if (result.kind === "unavailable") return <Note>{t("runtimeTabs.preview.unavailable")}</Note>;
   const p = result.preview;
   return (
     <div className="mt-2 space-y-1.5 text-sm" data-testid="runtime-preview">
       <p>
         {p.selectedProfileId ? (
           <>
-            Would pick <span className="font-medium">{p.selectedProfileId}</span> on account{" "}
-            <span className="font-medium">{p.selectedAccountRef || "?"}</span>
+            <Trans
+              i18nKey="runtimeTabs.preview.wouldPick"
+              ns="integrations"
+              values={{ profile: p.selectedProfileId, account: p.selectedAccountRef || "?" }}
+              components={{ profile: <span className="font-medium" />, account: <span className="font-medium" /> }}
+            />
             {p.preferredAccountRef && (
               <span className="text-muted-foreground" data-testid="runtime-preview-preferred">
                 {p.preferredAccountRef === p.selectedAccountRef
-                  ? " (preferred account)"
-                  : ` (preferred: ${p.preferredAccountRef})`}
+                  ? t("runtimeTabs.preview.preferredAccount")
+                  : t("runtimeTabs.preview.preferredOther", { account: p.preferredAccountRef })}
               </span>
             )}
           </>
         ) : (
-          <>No route available right now</>
+          <>{t("runtimeTabs.preview.noRoute")}</>
         )}
-        <span className="text-muted-foreground"> · reason: {p.reason}</span>
+        <span className="text-muted-foreground">{t("runtimeTabs.preview.reason", { reason: p.reason })}</span>
       </p>
       {p.qaMode && (
         <p className="text-xs text-muted-foreground">
-          QA {p.qaMode}
-          {p.qaCompromise ? " · compromise, not strict acceptance" : ""}
+          {t("runtimeTabs.preview.qa", { mode: t(`policyEditor.qaModes.${p.qaMode}`, { defaultValue: p.qaMode }) })}
+          {p.qaCompromise ? t("runtimeTabs.preview.qaCompromise") : ""}
         </p>
       )}
       {p.trace.length > 0 && (
         <ul className="space-y-0.5 text-xs text-muted-foreground">
-          {p.trace.map((t, i) => (
-            <li key={`${t.profileId}-${i}`}>
-              {t.profileId}: {t.reason}
+          {p.trace.map((tr, i) => (
+            <li key={`${tr.profileId}-${i}`}>
+              {tr.profileId}: {tr.reason}
             </li>
           ))}
         </ul>
@@ -261,16 +265,20 @@ function PreviewResultView({ result }: { result: PreviewResult }) {
   );
 }
 
-const NoBinding = () => <Note>This agent has no runtime binding in this workspace.</Note>;
+const NoBinding = () => {
+  const { t } = useTranslation("integrations");
+  return <Note>{t("runtimeTabs.noBinding")}</Note>;
+};
 
 function AdmissionBlock({ binding }: { binding: RuntimeBinding | null; state: RuntimeState }) {
+  const { t } = useTranslation("integrations");
   if (!binding) return <NoBinding />;
   return (
     <div>
-      <Heading>Runtime admission</Heading>
+      <Heading>{t("runtimeTabs.admission.heading")}</Heading>
       <div className="space-y-1.5 text-sm">
-        <p>{binding.enabled ? "Binding enabled" : "Binding disabled"}</p>
-        <p>Permitted profiles: {binding.permitted_profiles.join(", ")}</p>
+        <p>{binding.enabled ? t("runtimeTabs.admission.enabled") : t("runtimeTabs.admission.disabled")}</p>
+        <p>{t("runtimeTabs.admission.permitted", { profiles: binding.permitted_profiles.join(", ") })}</p>
       </div>
     </div>
   );
@@ -289,6 +297,7 @@ function ExecutionBlock({
   workspaceId: string | null;
   onReload: (quiet?: boolean) => void;
 }) {
+  const { t } = useTranslation("integrations");
   const [editing, setEditing] = useState(false);
   if (!binding) return <NoBinding />;
   const { catalog } = state;
@@ -321,15 +330,15 @@ function ExecutionBlock({
             />
           ) : (
             <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-              Edit routes
+              {t("runtimeTabs.execution.editRoutes")}
             </Button>
           )}
         </section>
       )}
       <section className="lg:col-span-2">
-        <Heading>Allowed routes, in order</Heading>
+        <Heading>{t("runtimeTabs.execution.allowedRoutes")}</Heading>
         {routes.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No permitted route.</p>
+          <p className="text-sm text-muted-foreground">{t("runtimeTabs.execution.noPermittedRoute")}</p>
         ) : (
           <ol className="space-y-1.5">
             {routes.map((r) => (
@@ -339,14 +348,14 @@ function ExecutionBlock({
               >
                 <span className="w-5 text-muted-foreground">{r.rank}.</span>
                 <Badge variant={r.role === "primary" ? "secondary" : "outline"} className="text-xs capitalize">
-                  {r.role.replace("_", " ")}
+                  {t(`runtimeTabs.execution.role.${r.role}`)}
                 </Badge>
                 <span className="font-medium">{r.profileRef}</span>
                 <span className="text-muted-foreground">
                   {catalog.accounts[r.profile.account_ref]?.provider ?? "?"} · {r.profile.account_ref} · {r.profile.model} ·{" "}
                   {r.profile.execution_mode}
                 </span>
-                {r.unavailable && <span className="text-xs text-yellow-600">Unavailable: {r.unavailable}</span>}
+                {r.unavailable && <span className="text-xs text-yellow-600">{t("runtimeTabs.execution.unavailable", { reason: r.unavailable })}</span>}
               </li>
             ))}
           </ol>
@@ -354,49 +363,60 @@ function ExecutionBlock({
       </section>
 
       <section>
-        <Heading>Preferred vs actual account</Heading>
+        <Heading>{t("runtimeTabs.execution.preferredVsActual")}</Heading>
         {prefs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No preferred account set.</p>
+          <p className="text-sm text-muted-foreground">{t("runtimeTabs.execution.noPreferred")}</p>
         ) : (
           <ul className="space-y-1.5 text-sm">
             {prefs.map((p) => (
               <li key={p.provider} className="rounded-md border border-border px-2.5 py-1.5">
-                <span className="font-medium">{p.provider}</span> · wanted account: <b>{p.preferredAccount}</b> · projected route:{" "}
-                <b>{p.actualAccount ?? "none"}</b>
+                <Trans
+                  i18nKey="runtimeTabs.execution.wantedProjected"
+                  ns="integrations"
+                  values={{
+                    provider: p.provider,
+                    preferred: p.preferredAccount,
+                    actual: p.actualAccount ?? t("runtimeTabs.execution.none"),
+                  }}
+                  components={{ prov: <span className="font-medium" />, pref: <b />, act: <b /> }}
+                />
                 <div className="text-xs text-muted-foreground">{p.reason}</div>
               </li>
             ))}
           </ul>
         )}
         <p className="mt-1 text-xs text-muted-foreground">
-          Soft preference: grants no access, overrides no grant, API opt-in, QA or pool. The projected route is the
-          first usable one by policy and the latest pool observations, not a record of a live launch.
+          {t("runtimeTabs.execution.softPreference")}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Owner-side view: the receiving workspace&apos;s own admission is not part of this data, so a route marked
-          usable here is not proof that this workspace admits it.
+          {t("runtimeTabs.execution.ownerSide")}
         </p>
       </section>
 
       <section>
-        <Heading>QA policy</Heading>
+        <Heading>{t("runtimeTabs.execution.qaPolicy")}</Heading>
         <div className="space-y-1 text-sm">
           <p>
-            Mode: <b>{qa.mode}</b>
+            <Trans i18nKey="runtimeTabs.execution.qaMode" ns="integrations" values={{ mode: t(`policyEditor.qaModes.${qa.mode}`, { defaultValue: qa.mode }) }} components={{ b: <b /> }} />
           </p>
           <p>
-            Quota-only fallback: <b>{qa.quota_fallback ? "on" : "off"}</b>
+            <Trans
+              i18nKey="runtimeTabs.execution.qaFallback"
+              ns="integrations"
+              values={{ value: qa.quota_fallback ? t("runtimeTabs.execution.on") : t("runtimeTabs.execution.off") }}
+              components={{ b: <b /> }}
+            />
           </p>
           <p className="text-xs text-muted-foreground">
-            Tied to the exact artifact revision; reviewer differs from every author.
+            {t("runtimeTabs.execution.qaTied")}
           </p>
         </div>
       </section>
 
       <section className="lg:col-span-2">
-        <Heading>Pools</Heading>
+        <Heading>{t("runtimeTabs.execution.pools")}</Heading>
         {poolRefs.size === 0 ? (
-          <p className="text-sm text-muted-foreground">No pools mapped.</p>
+          <p className="text-sm text-muted-foreground">{t("runtimeTabs.execution.noPools")}</p>
         ) : (
           <ul className="grid gap-1.5 text-sm sm:grid-cols-2">
             {[...poolRefs].map((ref) => {
@@ -406,13 +426,16 @@ function ExecutionBlock({
                   <span className="font-medium">{ref}</span>
                   {pool ? (
                     <span className="text-muted-foreground">
-                      {" "}
-                      · max {pool.max_concurrency} · threshold {pool.threshold_ref ?? "not set"}
-                      {observed[ref] && ` · ${observed[ref].state}${observed[ref].verified ? "" : " (unverified)"}`}
-                      {pool.aliases.length > 0 && ` · aliases: ${pool.aliases.join(", ")}`}
+                      {t("runtimeTabs.execution.poolDetail", {
+                        max: pool.max_concurrency,
+                        threshold: pool.threshold_ref ?? t("runtimeTabs.execution.notSet"),
+                      })}
+                      {observed[ref] &&
+                        ` · ${observed[ref].state}${observed[ref].verified ? "" : t("runtimeTabs.execution.unverified")}`}
+                      {pool.aliases.length > 0 && t("runtimeTabs.execution.aliases", { aliases: pool.aliases.join(", ") })}
                     </span>
                   ) : (
-                    <span className="text-xs text-yellow-600"> · not in catalog</span>
+                    <span className="text-xs text-yellow-600">{t("runtimeTabs.execution.notInCatalog")}</span>
                   )}
                 </li>
               );
@@ -425,22 +448,24 @@ function ExecutionBlock({
 }
 
 function StateBlock({ state }: { state: RuntimeState }) {
+  const { t } = useTranslation("integrations");
   const entries = Object.entries(state.catalog.controllers);
   return (
     <div>
-      <Heading>Desired revision</Heading>
+      <Heading>{t("runtimeTabs.state.desiredRevision")}</Heading>
       <p className="mb-4 text-sm">
         r{state.revision}
         {state.digest && <span className="text-muted-foreground"> · {state.digest.slice(0, 12)}</span>}
       </p>
-      <Heading>Controllers</Heading>
+      <Heading>{t("runtimeTabs.state.controllers")}</Heading>
       <ControllerList state={state} entries={entries} />
     </div>
   );
 }
 
 export function ControllerList({ state, entries }: { state: RuntimeState; entries: [string, RuntimeController][] }) {
-  if (entries.length === 0) return <p className="text-sm text-muted-foreground">No controllers in the catalog.</p>;
+  const { t } = useTranslation("integrations");
+  if (entries.length === 0) return <p className="text-sm text-muted-foreground">{t("runtimeTabs.state.noControllers")}</p>;
   return (
     <ul className="space-y-1.5">
       {entries.map(([ref, ctl]) => {
@@ -456,9 +481,9 @@ export function ControllerList({ state, entries }: { state: RuntimeState; entrie
               {sync.label}
             </Badge>
             <span className="text-muted-foreground">{sync.detail}</span>
-            {!ctl.enabled && <span className="text-xs text-yellow-600">controller disabled</span>}
+            {!ctl.enabled && <span className="text-xs text-yellow-600">{t("runtimeTabs.state.controllerDisabled")}</span>}
             {status?.received_at && (
-              <span className="text-xs text-muted-foreground">heartbeat {formatRelative(status.received_at)}</span>
+              <span className="text-xs text-muted-foreground">{t("runtimeTabs.state.heartbeat", { when: formatRelative(status.received_at) })}</span>
             )}
           </li>
         );

@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { UserPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -23,10 +24,10 @@ interface AddProjectMemberDialogProps {
   workspaceMembers: WorkspaceMemberWithUser[];
 }
 
-const roleOptions: { value: ProjectRole; label: string }[] = [
-  { value: "member", label: "Member" },
-  { value: "admin", label: "Admin" },
-  { value: "viewer", label: "Viewer" },
+const roleOptions: { value: ProjectRole; labelKey: string }[] = [
+  { value: "member", labelKey: "addMember.roles.member" },
+  { value: "admin", labelKey: "addMember.roles.admin" },
+  { value: "viewer", labelKey: "addMember.roles.viewer" },
 ];
 
 export function AddProjectMemberDialog({
@@ -35,6 +36,7 @@ export function AddProjectMemberDialog({
   projectId,
   workspaceMembers,
 }: AddProjectMemberDialogProps) {
+  const { t } = useTranslation("settings");
   const { addProjectMember, projectMembers } = useMemberStore();
 
   const [selectedUserId, setSelectedUserId] = useState("");
@@ -60,7 +62,7 @@ export function AddProjectMemberDialog({
     e.preventDefault();
 
     if (!selectedUserId) {
-      setError("Please select a member");
+      setError(t("addMember.selectMember"));
       return;
     }
 
@@ -71,7 +73,7 @@ export function AddProjectMemberDialog({
       await addProjectMember(projectId, selectedUserId, role);
       onClose();
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to add member"));
+      setError(apiErrorMessage(err, t("addMember.failed")));
     } finally {
       setIsSubmitting(false);
     }
@@ -91,23 +93,23 @@ export function AddProjectMemberDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent onClose={onClose}>
         <DialogHeader>
-          <DialogTitle>Add Project Member</DialogTitle>
+          <DialogTitle>{t("addMember.title")}</DialogTitle>
           <DialogDescription>
-            Add a workspace member to this project with a specific role.
+            {t("addMember.description")}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           {availableMembers.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
-              All workspace members are already added to this project.
+              {t("addMember.allAdded")}
             </p>
           ) : (
             <>
               {/* Member selector */}
               <div className="space-y-1.5">
                 <label htmlFor="apmd-member" className="text-sm font-medium">
-                  Member <span className="text-destructive">*</span>
+                  {t("addMember.member")} <span className="text-destructive">*</span>
                 </label>
                 <Select
                   id="apmd-member"
@@ -144,7 +146,7 @@ export function AddProjectMemberDialog({
               {/* Role selector */}
               <div className="space-y-1.5">
                 <label htmlFor="apmd-role" className="text-sm font-medium">
-                  Role
+                  {t("addMember.role")}
                 </label>
                 <Select
                   id="apmd-role"
@@ -153,7 +155,7 @@ export function AddProjectMemberDialog({
                 >
                   {roleOptions.map((opt) => (
                     <option key={opt.value} value={opt.value}>
-                      {opt.label}
+                      {t(opt.labelKey)}
                     </option>
                   ))}
                 </Select>
@@ -170,16 +172,16 @@ export function AddProjectMemberDialog({
               onClick={onClose}
               disabled={isSubmitting}
             >
-              Cancel
+              {t("addMember.cancel")}
             </Button>
             {availableMembers.length > 0 && (
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? (
-                  "Adding..."
+                  t("addMember.adding")
                 ) : (
                   <>
                     <UserPlus className="h-4 w-4" />
-                    Add Member
+                    {t("addMember.add")}
                   </>
                 )}
               </Button>

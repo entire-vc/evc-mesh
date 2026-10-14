@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { TelegramBotInfo } from "@/types";
+import { Trans, useTranslation } from "react-i18next";
 import { NOTIFICATION_EVENTS } from "./constants";
 
 interface TelegramTabProps {
@@ -44,16 +45,16 @@ export function TelegramTab({
   onSave,
   onDisconnect,
 }: TelegramTabProps) {
+  const { t } = useTranslation("notifications");
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <Send className="h-4 w-4" />
-          Telegram Notifications
+          {t("settings.telegram.title")}
         </CardTitle>
         <CardDescription>
-          Receive notifications from a Telegram bot connected to this
-          workspace.
+          {t("settings.telegram.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -63,10 +64,13 @@ export function TelegramTab({
           <div className="flex items-start gap-3 rounded-lg border border-border p-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
             <div>
-              <p className="font-medium">Telegram is not connected</p>
+              <p className="font-medium">{t("settings.telegram.notConnectedTitle")}</p>
               <p className="text-sm text-muted-foreground">
-                Ask a workspace owner or admin to connect a bot from the{" "}
-                <span className="font-medium">Integrations</span> page.
+                <Trans
+                  t={t}
+                  i18nKey="settings.telegram.notConnectedHint"
+                  components={{ b: <span className="font-medium" /> }}
+                />
               </p>
             </div>
           </div>
@@ -86,11 +90,11 @@ export function TelegramTab({
                 <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
                 <div>
                   <p className="font-medium">
-                    Telegram notifications cannot be delivered right now
+                    {t("settings.telegram.unreachableTitle")}
                   </p>
                   <p className="text-sm text-muted-foreground">
                     {telegramBotInfo.unavailable_reason ||
-                      "This server could not reach the Telegram Bot API."}
+                      t("settings.telegram.unreachableFallback")}
                   </p>
                 </div>
               </div>
@@ -99,9 +103,9 @@ export function TelegramTab({
             {/* Master toggle */}
             <div className="flex items-center justify-between rounded-lg border border-border p-3">
               <div>
-                <p className="font-medium">Enable Telegram notifications</p>
+                <p className="font-medium">{t("settings.telegram.enable")}</p>
                 <p className="text-sm text-muted-foreground">
-                  Receive a message for the events selected below
+                  {t("settings.telegram.enableHint")}
                 </p>
               </div>
               <button
@@ -123,11 +127,10 @@ export function TelegramTab({
             {/* Username + connection status */}
             <div className="space-y-1.5 rounded-lg border border-border p-3">
               <label htmlFor="telegram-username" className="font-medium">
-                Telegram username
+                {t("settings.telegram.username")}
               </label>
               <p className="text-sm text-muted-foreground">
-                Save your username, then open the bot below to finish
-                connecting.
+                {t("settings.telegram.usernameHint")}
               </p>
               <input
                 id="telegram-username"
@@ -141,7 +144,7 @@ export function TelegramTab({
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                   <p className="flex items-center gap-1.5 text-sm text-teal-600">
                     <Check className="h-4 w-4" />
-                    Connected — @{telegramBotInfo.bot_username} can message you
+                    {t("settings.telegram.connected", { bot: telegramBotInfo.bot_username })}
                   </p>
                   <Button
                     variant="outline"
@@ -149,7 +152,7 @@ export function TelegramTab({
                     onClick={onDisconnect}
                     disabled={telegramUnbinding}
                   >
-                    {telegramUnbinding ? "Disconnecting..." : "Disconnect"}
+                    {telegramUnbinding ? t("settings.telegram.disconnecting") : t("settings.telegram.disconnect")}
                   </Button>
                 </div>
               ) : telegramBindLink ? (
@@ -159,12 +162,12 @@ export function TelegramTab({
                   rel="noreferrer"
                   className="inline-flex items-center gap-1.5 pt-1 text-sm font-medium text-primary hover:underline"
                 >
-                  Open @{telegramBotInfo.bot_username} to finish connecting
+                  {t("settings.telegram.openBot", { bot: telegramBotInfo.bot_username })}
                   <ExternalLink className="h-3.5 w-3.5" />
                 </a>
               ) : (
                 <p className="pt-1 text-sm text-muted-foreground">
-                  Save with the toggle above enabled to get a connection link.
+                  {t("settings.telegram.noLink")}
                 </p>
               )}
             </div>
@@ -179,9 +182,9 @@ export function TelegramTab({
                   className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-accent/30"
                 >
                   <div>
-                    <p className="font-medium">{evt.label}</p>
+                    <p className="font-medium">{t(`settings.events.${evt.id}.label`)}</p>
                     <p className="text-sm text-muted-foreground">
-                      {evt.description}
+                      {t(`settings.events.${evt.id}.description`)}
                     </p>
                   </div>
                   <button
@@ -210,9 +213,9 @@ export function TelegramTab({
             <div className="flex justify-end pt-2">
               <Button onClick={onSave} disabled={telegramSaving} className="gap-2">
                 {telegramSaved ? (
-                  <><Check className="h-4 w-4" />Saved</>
+                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
                 ) : (
-                  <><Save className="h-4 w-4" />{telegramSaving ? "Saving..." : "Save preferences"}</>
+                  <><Save className="h-4 w-4" />{telegramSaving ? t("settings.actions.saving") : t("settings.actions.save")}</>
                 )}
               </Button>
             </div>

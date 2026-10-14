@@ -1,0 +1,188 @@
+{
+  "actions": {
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "done": "Done",
+    "edit": "Edit",
+    "more": "More actions",
+    "move": "Move",
+    "rename": "Rename"
+  },
+  "anchor": {
+    "copied": "Link to paragraph copied",
+    "copyFailed": "Could not copy the link",
+    "edited": "This paragraph has been edited since the link was created. You are at its place in the document, but the text is not what was linked.",
+    "lost": "The linked paragraph is no longer in this document. It was edited or removed after the link was created."
+  },
+  "breadcrumbs": {
+    "label": "Breadcrumb"
+  },
+  "comments": {
+    "actor": {
+      "agent": "Agent",
+      "system": "System",
+      "user": "User"
+    },
+    "addPlaceholder": "Add a comment… @ to mention",
+    "allResolved": "All {{total}} resolved",
+    "deleteConfirm": "Delete?",
+    "editPlaceholder": "Edit your comment",
+    "edited": " · edited",
+    "empty": "No comments yet.",
+    "loading": "Loading comments...",
+    "no": "No",
+    "noOpen": "No open comments. Turn on “Show resolved” to see the rest.",
+    "onWholeDocument": "Comment on the whole document",
+    "openOf": "{{open}} open of {{total}}",
+    "placement": {
+      "detached": "No longer attached — this text is not in the page any more",
+      "orphaned": "No longer attached — the position was lost",
+      "page": "On the page as a whole"
+    },
+    "readOnly": "Comments are read-only while you are editing. A comment is pinned to a position in the saved page, and the page in front of you is not saved yet. Choose Done to comment again.",
+    "reply": "Reply",
+    "replyPlaceholder": "Reply… @ to mention",
+    "resolve": "Resolve",
+    "resolved": "Resolved",
+    "resolvedBy": " by {{name}}",
+    "showResolved": "Show resolved ({{count}})",
+    "submit": "Comment",
+    "title": "Comments",
+    "unplaceable": "This selection could not be pinned to a position in the page source. The comment will be saved with the quote only, and will show as no longer attached.",
+    "unresolve": "Unresolve",
+    "yes": "Yes"
+  },
+  "deepLink": {
+    "noAccess": "Document is in a workspace or project you don't have access to.",
+    "notFound": "Document not found",
+    "notFoundOrNoAccess": "Document not found or you don't have access."
+  },
+  "delete": {
+    "confirm": "Delete \"{{title}}\"?",
+    "confirmWithChildren_one": "Delete \"{{title}}\" and its {{count}} nested page?",
+    "confirmWithChildren_other": "Delete \"{{title}}\" and its {{count}} nested pages?",
+    "title": "Delete page"
+  },
+  "dialog": {
+    "create": "Create",
+    "newPageIn": "New page in \"{{title}}\"",
+    "renameTitle": "Rename page",
+    "save": "Save",
+    "titleLabel": "Title",
+    "untitled": "Untitled",
+    "working": "Working..."
+  },
+  "editor": {
+    "apply": "Apply",
+    "attachFailed": "Could not attach {{name}}",
+    "attachFile": "Attach file",
+    "bold": "Bold (Ctrl+B)",
+    "bulletList": "Bullet list",
+    "codeBlock": "Code block",
+    "copyParagraphLink": "Copy link to this paragraph",
+    "hint": "Rich text — tables, task lists and footnotes supported.",
+    "hintWithUploads": "Rich text — tables, task lists and footnotes supported. Paste or drop a file to attach it.",
+    "inlineCode": "Inline code",
+    "insertImage": "Insert image",
+    "italic": "Italic (Ctrl+I)",
+    "link": "Link",
+    "linkUrl": "Link URL",
+    "numberedList": "Numbered list",
+    "quote": "Quote",
+    "table": "Table",
+    "uploadFailed": "upload failed",
+    "uploading": "Uploading..."
+  },
+  "empty": {
+    "noDocuments": "No documents yet",
+    "noDocumentsHint": "Project documents live here. Create the first page to get started.",
+    "noSelection": "No document selected",
+    "noSelectionHint": "Pick a page from the tree, or create a new one.",
+    "startWriting": "Start writing",
+    "pageEmpty": "This page is empty."
+  },
+  "errors": {
+    "createFailed": "Failed to create page",
+    "deleteFailed": "Failed to delete page",
+    "exportFailed": "Failed to export",
+    "moveFailed": "Failed to move page",
+    "notSavedToast": "\"{{title}}\" was not saved: {{message}}",
+    "openFailed": "Failed to open document",
+    "renameFailed": "Failed to rename page",
+    "requestFailed": "Request failed",
+    "saveFailed": "save failed"
+  },
+  "export": {
+    "asDocx": "Export as DOCX",
+    "asMarkdown": "Export as Markdown",
+    "asPdf": "Export as PDF",
+    "exporting": "Exporting...",
+    "includeChildren": "Include sub-documents ({{count}})",
+    "justThis": "Just this document",
+    "submit": "Export",
+    "title": "Export \"{{title}}\"",
+    "whatToInclude": "What to include"
+  },
+  "linkMenu": {
+    "label": "Link a document",
+    "searchIn": "Search in"
+  },
+  "meta": {
+    "createdBy": "Created by",
+    "lastUpdatedBy": "Last updated by",
+    "unknown": "Unknown",
+    "updated": "Updated {{when}}"
+  },
+  "move": {
+    "current": "current",
+    "moving": "Moving...",
+    "newParent": "New parent",
+    "submit": "Move",
+    "title": "Move \"{{title}}\"",
+    "topLevel": "Top level"
+  },
+  "properties": {
+    "title": "Properties"
+  },
+  "save": {
+    "conflict": "this page changed elsewhere",
+    "notSaved": "Not saved: {{message}}",
+    "retry": "Retry",
+    "saved": "Saved",
+    "saving": "Saving..."
+  },
+  "search": {
+    "clear": "Clear search",
+    "label": "Search documents",
+    "noMatch": "No documents match",
+    "placeholder": "Search documents...",
+    "searching": "Searching..."
+  },
+  "tree": {
+    "actionsFor": "Actions for {{title}}",
+    "collapse": "Collapse {{title}}",
+    "expand": "Expand {{title}}",
+    "heading": "Documents",
+    "moveTo": "Move to...",
+    "new": "New",
+    "newInside": "New page inside",
+    "newInsideOf": "New page inside {{title}}",
+    "newPage": "New page",
+    "pageActions": "Page actions",
+    "resize": "Resize document tree"
+  },
+  "watch": {
+    "count_one": "{{count}} person or agent is watching this document",
+    "count_other": "{{count}} people and agents are watching this document",
+    "failed": "Could not change the subscription",
+    "started": "Watching this document — you will be told when it changes.",
+    "stopped": "Stopped watching this document.",
+    "watch": "Watch",
+    "watching": "Watching",
+    "whyAuthor": "You are watching this document because you created it. Click to stop.",
+    "whyCommenter": "You are watching this document because you commented on it. Click to stop.",
+    "whyMuted": "You unsubscribed from this document. Commenting on it will not re-subscribe you. Click to watch again.",
+    "whyNotWatching": "Get notified when this document changes. Edits are grouped, so an editing session is one notification.",
+    "whyWatching": "You are watching this document. Click to stop."
+  }
+}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/stores/auth";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,6 +9,7 @@ import type { Project, Workspace } from "@/types";
 // Project UUID links remain stable when either slug is renamed. The project
 // already carries workspace_id, so no workspace/project enumeration is needed.
 export function ProjectDeepLinkResolver() {
+  const { t } = useTranslation("misc");
   const { projectId } = useParams<{ projectId: string }>();
   const { isAuthenticated } = useAuthStore();
   const location = useLocation();
@@ -15,7 +17,7 @@ export function ProjectDeepLinkResolver() {
   const [result, setResult] = useState<{
     key: string;
     target?: string;
-    error?: string;
+    error?: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -38,7 +40,7 @@ export function ProjectDeepLinkResolver() {
         if (!cancelled) {
           setResult({
             key: requestKey,
-            error: "Project not found or you don't have access.",
+            error: true,
           });
         }
       }
@@ -55,14 +57,14 @@ export function ProjectDeepLinkResolver() {
   if (current?.error) {
     return (
       <div className="mx-auto max-w-md p-8 text-center">
-        <h1 className="text-lg font-semibold">Project not found</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{current.error}</p>
+        <h1 className="text-lg font-semibold">{t("deepLink.projectNotFound")}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{t("deepLink.projectNoAccess")}</p>
       </div>
     );
   }
   if (current?.target) return <Navigate to={current.target} replace />;
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6" role="status" aria-label="Loading project">
+    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6" role="status" aria-label={t("deepLink.loadingProject")}>
       <Skeleton className="h-8 w-32" />
       <Skeleton className="h-10 w-2/3" />
       <Skeleton className="h-4 w-full" />

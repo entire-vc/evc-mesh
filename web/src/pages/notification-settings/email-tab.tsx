@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { User } from "@/types";
+import { useTranslation } from "react-i18next";
 import { NOTIFICATION_EVENTS } from "./constants";
 
 interface EmailTabProps {
@@ -40,16 +41,16 @@ export function EmailTab({
   emailSaved,
   onSave,
 }: EmailTabProps) {
+  const { t } = useTranslation("notifications");
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <Mail className="h-4 w-4" />
-          Email Notifications
+          {t("settings.email.title")}
         </CardTitle>
         <CardDescription>
-          Receive notifications by email, at the account address or a custom
-          one you set below.
+          {t("settings.email.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -59,10 +60,9 @@ export function EmailTab({
           <div className="flex items-start gap-3 rounded-lg border border-border p-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
             <div>
-              <p className="font-medium">Email notifications are not available</p>
+              <p className="font-medium">{t("settings.email.unavailableTitle")}</p>
               <p className="text-sm text-muted-foreground">
-                This Mesh instance has no outbound email server configured. Ask
-                your administrator to set one up to enable this channel.
+                {t("settings.email.unavailableHint")}
               </p>
             </div>
           </div>
@@ -71,9 +71,9 @@ export function EmailTab({
             {/* Master toggle */}
             <div className="flex items-center justify-between rounded-lg border border-border p-3">
               <div>
-                <p className="font-medium">Enable email notifications</p>
+                <p className="font-medium">{t("settings.email.enable")}</p>
                 <p className="text-sm text-muted-foreground">
-                  Receive an email for the events selected below
+                  {t("settings.email.enableHint")}
                 </p>
               </div>
               <button
@@ -95,11 +95,10 @@ export function EmailTab({
             {/* Delivery address */}
             <div className="space-y-1.5 rounded-lg border border-border p-3">
               <label htmlFor="email-address" className="font-medium">
-                Email address
+                {t("settings.email.address")}
               </label>
               <p className="text-sm text-muted-foreground">
-                Defaults to your account email. Change it to deliver
-                notifications somewhere else.
+                {t("settings.email.addressHint")}
               </p>
               <input
                 id="email-address"
@@ -121,9 +120,9 @@ export function EmailTab({
                   className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-accent/30"
                 >
                   <div>
-                    <p className="font-medium">{evt.label}</p>
+                    <p className="font-medium">{t(`settings.events.${evt.id}.label`)}</p>
                     <p className="text-sm text-muted-foreground">
-                      {evt.description}
+                      {t(`settings.events.${evt.id}.description`)}
                     </p>
                   </div>
                   <button
@@ -152,9 +151,9 @@ export function EmailTab({
             <div className="flex justify-end pt-2">
               <Button onClick={onSave} disabled={emailSaving} className="gap-2">
                 {emailSaved ? (
-                  <><Check className="h-4 w-4" />Saved</>
+                  <><Check className="h-4 w-4" />{t("settings.actions.saved")}</>
                 ) : (
-                  <><Save className="h-4 w-4" />{emailSaving ? "Saving..." : "Save preferences"}</>
+                  <><Save className="h-4 w-4" />{emailSaving ? t("settings.actions.saving") : t("settings.actions.save")}</>
                 )}
               </Button>
             </div>

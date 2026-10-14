@@ -1,5 +1,6 @@
 import * as i18nFmt from "@/i18n/format";
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Plug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ function formatDate(iso: string): string {
  *  screen, with a way to take each one back. Revoking stops the app's tokens at
  *  once; the connector agent it created stays in the workspace. */
 export function ConnectedAppsPage() {
+  const { t } = useTranslation("integrations");
   const [grants, setGrants] = useState<OAuthGrant[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<OAuthGrant | null>(null);
@@ -33,8 +35,8 @@ export function ConnectedAppsPage() {
     setLoadError(null);
     api<{ grants: OAuthGrant[] | null }>("/api/v1/oauth/grants")
       .then((res) => setGrants(res.grants ?? []))
-      .catch((err) => setLoadError(apiErrorMessage(err, "Could not load connected apps.")));
-  }, []);
+      .catch((err) => setLoadError(apiErrorMessage(err, t("connectedApps.loadError"))));
+  }, [t]);
 
   useEffect(load, [load]);
 
@@ -50,10 +52,10 @@ export function ConnectedAppsPage() {
       setGrants((gs) =>
         (gs ?? []).map((g) => (g.id === pending.id ? { ...g, revoked_at: revokedAt } : g)),
       );
-      toast.success(`Access revoked for ${pending.client_name}`);
+      toast.success(t("connectedApps.revokedToast", { name: pending.client_name }));
       load();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Could not revoke access."));
+      toast.error(apiErrorMessage(err, t("connectedApps.revokeError")));
     } finally {
       setRevoking(false);
     }
@@ -65,10 +67,9 @@ export function ConnectedAppsPage() {
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold">Connected apps</h1>
+        <h1 className="text-xl font-semibold">{t("connectedApps.title")}</h1>
         <p className="text-sm text-muted-foreground">
-          Apps you have allowed to work in your workspaces. Revoking access stops the
-          app right away; the connector agent it created stays in the workspace.
+          {t("connectedApps.description")}
         </p>
       </div>
 
@@ -84,7 +85,7 @@ export function ConnectedAppsPage() {
         <Card>
           <CardContent className="flex items-center gap-3 p-6 text-sm text-muted-foreground">
             <Plug className="h-4 w-4 shrink-0" />
-            No apps are connected.
+            {t("connectedApps.empty")}
           </CardContent>
         </Card>
       )}
@@ -97,7 +98,7 @@ export function ConnectedAppsPage() {
 
       {revoked.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground">Revoked</h2>
+          <h2 className="text-sm font-medium text-muted-foreground">{t("connectedApps.revokedHeading")}</h2>
           {revoked.map((g) => (
             <GrantRow key={g.id} grant={g} />
           ))}
@@ -108,13 +109,16 @@ export function ConnectedAppsPage() {
         open={pending !== null}
         onClose={() => setPending(null)}
         onConfirm={confirmRevoke}
-        title="Revoke access?"
+        title={t("connectedApps.confirmTitle")}
         description={
           pending
-            ? `${pending.client_name} will stop working in ${pending.workspace.name} immediately. To connect it again, it has to ask for access again.`
+            ? t("connectedApps.confirmDescription", {
+                name: pending.client_name,
+                workspace: pending.workspace.name,
+              })
             : ""
         }
-        confirmText="Revoke access"
+        confirmText={t("connectedApps.revokeAccess")}
         variant="destructive"
         isLoading={revoking}
       />
@@ -123,6 +127,7 @@ export function ConnectedAppsPage() {
 }
 
 function GrantRow({ grant, onRevoke }: { grant: OAuthGrant; onRevoke?: () => void }) {
+  const { t } = useTranslation("integrations");
   const isRevoked = Boolean(grant.revoked_at);
   return (
     <Card className={isRevoked ? "opacity-60" : undefined}>
@@ -130,20 +135,23 @@ function GrantRow({ grant, onRevoke }: { grant: OAuthGrant; onRevoke?: () => voi
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="break-words font-medium">{grant.client_name}</p>
-            {isRevoked && <Badge variant="outline">Revoked</Badge>}
+            {isRevoked && <Badge variant="outline">{t("connectedApps.revokedBadge")}</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">
-            Workspace {grant.workspace.name} · acts as {grant.agent_name}<AgentShortTag tag={grant.agent_short_tag} />
+            {t("connectedApps.workspaceActsAs", {
+              workspace: grant.workspace.name,
+              agent: grant.agent_name,
+            })}<AgentShortTag tag={grant.agent_short_tag} />
           </p>
           <p className="text-xs text-muted-foreground">
             {isRevoked
-              ? `Revoked ${formatDate(grant.revoked_at as string)}`
-              : `Connected ${formatDate(grant.created_at)}`}
+              ? t("connectedApps.revokedOn", { date: formatDate(grant.revoked_at as string) })
+              : t("connectedApps.connectedOn", { date: formatDate(grant.created_at) })}
           </p>
         </div>
         {!isRevoked && onRevoke && (
           <Button variant="outline" size="sm" onClick={onRevoke}>
-            Revoke access
+            {t("connectedApps.revokeAccess")}
           </Button>
         )}
       </CardContent>

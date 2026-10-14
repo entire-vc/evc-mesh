@@ -2,6 +2,7 @@ import { useRulesStore } from "@/stores/rules";
 import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Activity,
   Bot,
@@ -42,6 +43,7 @@ function ActorTypeIcon({ type }: { type: ActivityLogEntry["actor_type"] }) {
 }
 
 export function ActivityLog({ taskId }: ActivityLogProps) {
+  const { t } = useTranslation("activity");
   const { agents } = useAgentStore();
   const directoryAgents = useRulesStore((s) => s.teamDirectory?.agents);
   const { workspaceMembers } = useMemberStore();
@@ -122,7 +124,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
     return (
       <div className="flex flex-col items-center py-8 text-muted-foreground">
         <Activity className="mb-2 h-8 w-8" />
-        <p className="text-sm">No activity recorded yet.</p>
+        <p className="text-sm">{t("log.empty")}</p>
       </div>
     );
   }
@@ -173,7 +175,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
             onClick={() => void handleLoadMore()}
             disabled={loadingMore}
           >
-            {loadingMore ? "Loading..." : "Load more"}
+            {loadingMore ? t("log.loading") : t("log.loadMore")}
           </Button>
         </div>
       )}

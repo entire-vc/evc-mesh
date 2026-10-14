@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import type { FrontmatterEntry } from "@/lib/docs/frontmatter";
@@ -67,6 +68,7 @@ function tagsOf(entries: FrontmatterEntry[]): string[] {
  * or closing it must not move every quote below it.
  */
 export function DocProperties({ entries, inner, className }: DocPropertiesProps) {
+  const { t } = useTranslation("docs");
   const [open, setOpen] = useState(false);
   const tags = tagsOf(entries);
   const count = entries.length || inner.split("\n").filter((l) => l.trim()).length;
@@ -88,7 +90,7 @@ export function DocProperties({ entries, inner, className }: DocPropertiesProps)
           aria-hidden="true"
           className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")}
         />
-        <span className="shrink-0 font-medium">Properties</span>
+        <span className="shrink-0 font-medium">{t("properties.title")}</span>
         <span className="shrink-0 opacity-70">{count}</span>
         {!open && tags.length > 0 && (
           <span className="ml-1 min-w-0 overflow-hidden">

@@ -1,4 +1,5 @@
 import * as i18nFmt from "@/i18n/format";
+import { useTranslation } from "react-i18next";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   Calendar,
@@ -43,6 +44,7 @@ const STATUS_COLORS: Record<InitiativeStatus, string> = {
 };
 
 function InitiativeProgress({ initiative }: { initiative: Initiative }) {
+  const { t } = useTranslation("settings");
   const total = initiative.total_tasks ?? 0;
   const completed = initiative.completed_tasks ?? 0;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -56,13 +58,13 @@ function InitiativeProgress({ initiative }: { initiative: Initiative }) {
           </div>
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">100%</span>
         </div>
-        <p className="text-xs text-muted-foreground">Completed</p>
+        <p className="text-xs text-muted-foreground">{t("initiatives.progress.completed")}</p>
       </div>
     );
   }
 
   if (total === 0) {
-    return <span className="text-xs text-muted-foreground">No tasks yet</span>;
+    return <span className="text-xs text-muted-foreground">{t("initiatives.progress.noTasks")}</span>;
   }
 
   return (
@@ -73,7 +75,7 @@ function InitiativeProgress({ initiative }: { initiative: Initiative }) {
         </div>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{pct}%</span>
       </div>
-      <p className="text-xs text-muted-foreground">{completed}/{total} tasks done</p>
+      <p className="text-xs text-muted-foreground">{t("initiatives.progress.tasksDone", { completed, total })}</p>
     </div>
   );
 }
@@ -85,6 +87,7 @@ function InitiativeCard({
   initiative: Initiative;
   onSelect: (ini: Initiative) => void;
 }) {
+  const { t } = useTranslation("settings");
   const statusCfg = STATUS_COLORS[initiative.status] ?? STATUS_COLORS.active;
   const targetDate = initiative.target_date
     ? i18nFmt.formatDate(initiative.target_date, { month: "short", day: "numeric", year: "numeric" })
@@ -102,7 +105,7 @@ function InitiativeCard({
             <CardTitle className="truncate text-base">{initiative.name}</CardTitle>
           </div>
           <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-xs font-medium", statusCfg)}>
-            {initiative.status}
+            {t(`initiatives.statusBadge.${initiative.status}`, { defaultValue: initiative.status })}
           </span>
         </div>
         {initiative.description && (
@@ -114,7 +117,7 @@ function InitiativeCard({
         {targetDate && (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <Calendar className="h-3 w-3" />
-            Target: {targetDate}
+            {t("initiatives.card.target", { date: targetDate })}
           </div>
         )}
       </CardContent>
@@ -131,6 +134,7 @@ function NewInitiativeForm({
   projects: Project[];
   onClose: () => void;
 }) {
+  const { t } = useTranslation("settings");
   const { createInitiative, linkProject } = useInitiativeStore();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -155,28 +159,28 @@ function NewInitiativeForm({
         if (projectId) {
           await linkProject(initiative.id, projectId);
         }
-        toast.success("Initiative created");
+        toast.success(t("initiatives.toast.created"));
         onClose();
       } catch (err) {
-        toast.error(apiErrorMessage(err, "Failed to create initiative"));
+        toast.error(apiErrorMessage(err, t("initiatives.toast.createFailed")));
       } finally {
         setSubmitting(false);
       }
     },
-    [name, description, status, targetDate, projectId, workspaceId, createInitiative, linkProject, onClose],
+    [name, description, status, targetDate, projectId, workspaceId, createInitiative, linkProject, onClose, t],
   );
 
   return (
     <Card className="border-primary/30">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">New Initiative</CardTitle>
+        <CardTitle className="text-base">{t("initiatives.form.heading")}</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
-            <label className="text-sm font-medium">Name</label>
+            <label className="text-sm font-medium">{t("initiatives.form.name")}</label>
             <Input
-              placeholder="Q2 Platform Modernization"
+              placeholder={t("initiatives.form.namePlaceholder")}
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -184,21 +188,21 @@ function NewInitiativeForm({
             />
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-medium">Description</label>
+            <label className="text-sm font-medium">{t("initiatives.form.description")}</label>
             <Textarea
-              placeholder="Strategic objective description..."
+              placeholder={t("initiatives.form.descriptionPlaceholder")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
             />
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-medium">Project</label>
+            <label className="text-sm font-medium">{t("initiatives.form.project")}</label>
             <Select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
             >
-              <option value="">No project</option>
+              <option value="">{t("initiatives.form.noProject")}</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -206,18 +210,18 @@ function NewInitiativeForm({
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1">
-              <label className="text-sm font-medium">Status</label>
+              <label className="text-sm font-medium">{t("initiatives.form.status")}</label>
               <Select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as InitiativeStatus)}
               >
-                <option value="active">Active</option>
-                <option value="completed">Completed</option>
-                <option value="archived">Archived</option>
+                <option value="active">{t("initiatives.status.active")}</option>
+                <option value="completed">{t("initiatives.status.completed")}</option>
+                <option value="archived">{t("initiatives.status.archived")}</option>
               </Select>
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">Target Date</label>
+              <label className="text-sm font-medium">{t("initiatives.form.targetDate")}</label>
               <Input
                 type="date"
                 value={targetDate ?? ""}
@@ -227,10 +231,10 @@ function NewInitiativeForm({
           </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
+              {t("initiatives.form.cancel")}
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? "Creating..." : "Create Initiative"}
+              {submitting ? t("initiatives.form.creating") : t("initiatives.form.create")}
             </Button>
           </div>
         </form>
@@ -246,6 +250,7 @@ function InitiativeDetail({
   initiative: Initiative;
   onBack: () => void;
 }) {
+  const { t } = useTranslation("settings");
   const { getInitiative, linkProject, unlinkProject, deleteInitiative } = useInitiativeStore();
   const { projects } = useProjectStore();
   const [detail, setDetail] = useState<Initiative>(initiative);
@@ -269,13 +274,13 @@ function InitiativeDetail({
       const updated = await getInitiative(detail.id);
       setDetail(updated);
       setSelectedProjectId("");
-      toast.success("Project linked");
+      toast.success(t("initiatives.toast.linked"));
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to link project"));
+      toast.error(apiErrorMessage(err, t("initiatives.toast.linkFailed")));
     } finally {
       setLinking(false);
     }
-  }, [selectedProjectId, detail.id, linkProject, getInitiative]);
+  }, [selectedProjectId, detail.id, linkProject, getInitiative, t]);
 
   const handleUnlink = useCallback(
     async (projectId: string) => {
@@ -283,26 +288,26 @@ function InitiativeDetail({
         await unlinkProject(detail.id, projectId);
         const updated = await getInitiative(detail.id);
         setDetail(updated);
-        toast.success("Project unlinked");
+        toast.success(t("initiatives.toast.unlinked"));
       } catch (err) {
-        toast.error(apiErrorMessage(err, "Failed to unlink project"));
+        toast.error(apiErrorMessage(err, t("initiatives.toast.unlinkFailed")));
       }
     },
-    [detail.id, unlinkProject, getInitiative],
+    [detail.id, unlinkProject, getInitiative, t],
   );
 
   const handleDelete = useCallback(async () => {
-    if (!confirm(`Delete initiative "${detail.name}"? This cannot be undone.`)) return;
+    if (!confirm(t("initiatives.confirmDelete", { name: detail.name }))) return;
     setDeleting(true);
     try {
       await deleteInitiative(detail.id);
-      toast.success("Initiative deleted");
+      toast.success(t("initiatives.toast.deleted"));
       onBack();
     } catch (err) {
-      toast.error(apiErrorMessage(err, "Failed to delete initiative"));
+      toast.error(apiErrorMessage(err, t("initiatives.toast.deleteFailed")));
       setDeleting(false);
     }
-  }, [detail, deleteInitiative, onBack]);
+  }, [detail, deleteInitiative, onBack, t]);
 
   const statusCfg = STATUS_COLORS[detail.status] ?? STATUS_COLORS.active;
   const targetDate = detail.target_date
@@ -314,7 +319,7 @@ function InitiativeDetail({
       <div className="flex items-center justify-between">
         <div>
           <Button variant="ghost" size="sm" onClick={onBack} className="mb-2 -ml-2">
-            ← Back
+            {t("initiatives.detail.back")}
           </Button>
           <div className="flex items-center gap-3">
             <Target className="h-6 w-6 text-muted-foreground" />
@@ -322,7 +327,7 @@ function InitiativeDetail({
               <h1 className="text-2xl font-bold">{detail.name}</h1>
               <div className="flex items-center gap-2 mt-1">
                 <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", statusCfg)}>
-                  {detail.status}
+                  {t(`initiatives.statusBadge.${detail.status}`, { defaultValue: detail.status })}
                 </span>
                 {targetDate && (
                   <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -346,7 +351,7 @@ function InitiativeDetail({
       {availableProjects.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm">Link Project</CardTitle>
+            <CardTitle className="text-sm">{t("initiatives.detail.linkProject")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex gap-2">
@@ -355,14 +360,14 @@ function InitiativeDetail({
                 onChange={(e) => setSelectedProjectId(e.target.value)}
                 className="flex-1"
               >
-                <option value="">Select a project...</option>
+                <option value="">{t("initiatives.detail.selectProject")}</option>
                 {availableProjects.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </Select>
               <Button onClick={handleLink} disabled={!selectedProjectId || linking}>
                 <Link2 className="h-4 w-4" />
-                Link
+                {t("initiatives.detail.link")}
               </Button>
             </div>
           </CardContent>
@@ -372,13 +377,13 @@ function InitiativeDetail({
       {/* Linked projects */}
       <div>
         <h2 className="text-lg font-semibold mb-3">
-          Linked Projects ({detail.linked_projects?.length ?? 0})
+          {t("initiatives.detail.linkedProjects", { n: detail.linked_projects?.length ?? 0 })}
         </h2>
         {(detail.linked_projects ?? []).length === 0 ? (
           <Card>
             <CardContent className="py-8 text-center">
               <FolderKanban className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">No projects linked yet.</p>
+              <p className="text-sm text-muted-foreground">{t("initiatives.detail.noLinked")}</p>
             </CardContent>
           </Card>
         ) : (
@@ -412,6 +417,7 @@ function InitiativeDetail({
 }
 
 export function InitiativesPage() {
+  const { t } = useTranslation("settings");
   const { currentWorkspace } = useWorkspaceStore();
   const { projects, fetchProjects } = useProjectStore();
   const { initiatives, isLoading, fetchInitiatives } = useInitiativeStore();
@@ -441,7 +447,7 @@ export function InitiativesPage() {
       <div className="flex justify-end">
         <Button onClick={() => setShowForm(true)}>
           <Plus className="h-4 w-4" />
-          New Initiative
+          {t("initiatives.page.newInitiative")}
         </Button>
       </div>
 
@@ -471,13 +477,13 @@ export function InitiativesPage() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Target className="mb-4 h-12 w-12 text-muted-foreground" />
-            <h3 className="mb-2 text-lg font-semibold">No initiatives yet</h3>
+            <h3 className="mb-2 text-lg font-semibold">{t("initiatives.page.emptyTitle")}</h3>
             <p className="mb-4 text-sm text-muted-foreground">
-              Create strategic objectives to group and track related projects.
+              {t("initiatives.page.emptyText")}
             </p>
             <Button onClick={() => setShowForm(true)}>
               <Plus className="h-4 w-4" />
-              Create Initiative
+              {t("initiatives.page.createInitiative")}
             </Button>
           </CardContent>
         </Card>

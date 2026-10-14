@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { cn } from "@/lib/cn";
 import { formatDate, formatDateTime } from "@/lib/utils";
@@ -8,14 +10,14 @@ export interface DocMetaProps {
   className?: string;
 }
 
-function actorLabel(name: string | null | undefined): string {
+function actorLabel(name: string | null | undefined, t: TFunction<"docs">): string {
   const named = (name ?? "").trim();
   if (named) return named;
   // Never the raw uuid: it identifies nobody to the reader and is noise in a
   // line whose whole job is to be scannable. The API resolves both actor names
   // on every document read, so a blank one means the actor is gone — not that
   // the name has yet to arrive.
-  return "Unknown";
+  return t("meta.unknown");
 }
 
 /** Never throws on a timestamp the API surprises us with. */
@@ -44,9 +46,10 @@ function Dot() {
  * date rather than guessing that the creator was also the last editor.
  */
 export function DocMeta({ doc, className }: DocMetaProps) {
-  const creator = actorLabel(doc.created_by_name);
+  const { t } = useTranslation("docs");
+  const creator = actorLabel(doc.created_by_name, t);
   const hasEditor = Boolean(doc.updated_by || doc.updated_by_name);
-  const editor = hasEditor ? actorLabel(doc.updated_by_name) : null;
+  const editor = hasEditor ? actorLabel(doc.updated_by_name, t) : null;
 
   const when = safeFormat(doc.updated_at, false);
   const exact = safeFormat(doc.updated_at, true);
@@ -59,14 +62,14 @@ export function DocMeta({ doc, className }: DocMetaProps) {
       )}
     >
       <span>
-        Created by <span className="text-foreground/80">{creator}<AgentShortTag id={doc.created_by} type={doc.created_by_type} /></span>
+        {t("meta.createdBy")} <span className="text-foreground/80">{creator}<AgentShortTag id={doc.created_by} type={doc.created_by_type} /></span>
       </span>
 
       {editor && (
         <>
           <Dot />
           <span>
-            Last updated by <span className="text-foreground/80">{editor}<AgentShortTag id={doc.updated_by} /></span>
+            {t("meta.lastUpdatedBy")} <span className="text-foreground/80">{editor}<AgentShortTag id={doc.updated_by} /></span>
           </span>
         </>
       )}
@@ -77,7 +80,7 @@ export function DocMeta({ doc, className }: DocMetaProps) {
           {/* "Updated <date>" only when there is no editor named, so the two
               halves do not read as "last updated by X ... updated <date>". */}
           <time dateTime={doc.updated_at} title={exact || undefined}>
-            {editor ? when : `Updated ${when}`}
+            {editor ? when : t("meta.updated", { when })}
           </time>
         </>
       )}

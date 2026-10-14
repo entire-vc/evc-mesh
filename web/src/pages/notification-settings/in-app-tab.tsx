@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useTranslation } from "react-i18next";
 import { NOTIFICATION_EVENTS } from "./constants";
 
 interface InAppTabProps {
@@ -31,22 +32,22 @@ export function InAppTab({
   saved,
   onSave,
 }: InAppTabProps) {
+  const { t } = useTranslation("notifications");
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">In-App Notifications</CardTitle>
+        <CardTitle className="text-base">{t("settings.inApp.title")}</CardTitle>
         <CardDescription>
-          Choose which events you want to be notified about. Notifications
-          appear in the bell icon in the header.
+          {t("settings.inApp.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Master toggle */}
         <div className="flex items-center justify-between rounded-lg border border-border p-3">
           <div>
-            <p className="font-medium">Enable notifications</p>
+            <p className="font-medium">{t("settings.inApp.enable")}</p>
             <p className="text-sm text-muted-foreground">
-              Receive in-app notifications for workspace activity
+              {t("settings.inApp.enableHint")}
             </p>
           </div>
           <button
@@ -82,9 +83,9 @@ export function InAppTab({
                 className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-accent/30"
               >
                 <div>
-                  <p className="font-medium">{evt.label}</p>
+                  <p className="font-medium">{t(`settings.events.${evt.id}.label`)}</p>
                   <p className="text-sm text-muted-foreground">
-                    {evt.description}
+                    {t(`settings.events.${evt.id}.description`)}
                   </p>
                 </div>
                 <button
@@ -117,12 +118,12 @@ export function InAppTab({
             {saved ? (
               <>
                 <Check className="h-4 w-4" />
-                Saved
+                {t("settings.actions.saved")}
               </>
             ) : (
               <>
                 <Save className="h-4 w-4" />
-                {isSaving ? "Saving..." : "Save preferences"}
+                {isSaving ? t("settings.actions.saving") : t("settings.actions.save")}
               </>
             )}
           </Button>

@@ -1,6 +1,7 @@
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { agentLabel } from "@/lib/agent-label";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowUpCircle, Check, Clock, Layers, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentStatusConfig, agentTypeConfig, asCapabilityList, getEffectiveStatus, isAgentStale, splitList } from "@/lib/agent-utils";
@@ -41,6 +42,7 @@ export function AgentDetailDialog({
   onOpenChange,
   agent,
 }: AgentDetailDialogProps) {
+  const { t } = useTranslation("integrations");
   const { agents, updateAgent, updateAgentProfile, deleteAgent, regenerateKey } = useAgentStore();
   const { currentWorkspace } = useWorkspaceStore();
   const { workspaceMembers, fetchWorkspaceMembers } = useMemberStore();
@@ -97,12 +99,12 @@ export function AgentDetailDialog({
         setShortTagDraft(shortTagSaved.current);
       }
     } catch (err) {
-      if (editedAgentId.current === id) setError(apiErrorMessage(err, "Failed to update short tag"));
+      if (editedAgentId.current === id) setError(apiErrorMessage(err, t("agentDetail.error.updateShortTag")));
     } finally {
       shortTagPending.current = false;
       setIsSavingShortTag(false);
     }
-  }, [agent, shortTagDraft, updateAgent]);
+  }, [agent, shortTagDraft, updateAgent, t]);
 
   const [mode, setMode] = useState<DialogMode>("detail");
   const [editingName, setEditingName] = useState(false);
@@ -165,11 +167,11 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { name: nameDraft.trim() });
       setEditingName(false);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to update agent"));
+      setError(apiErrorMessage(err, t("agentDetail.error.updateAgent")));
     } finally {
       setIsLoading(false);
     }
-  }, [agent, nameDraft, updateAgent]);
+  }, [agent, nameDraft, updateAgent, t]);
 
   const handleStartEditDescription = useCallback(() => {
     if (!agent) return;
@@ -185,11 +187,11 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { profile_description: descriptionDraft.trim() });
       setEditingDescription(false);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to update description"));
+      setError(apiErrorMessage(err, t("agentDetail.error.updateDescription")));
     } finally {
       setIsLoading(false);
     }
-  }, [agent, descriptionDraft, updateAgent]);
+  }, [agent, descriptionDraft, updateAgent, t]);
 
   const handleStartEditRole = useCallback(() => {
     if (!agent) return;
@@ -205,11 +207,11 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { role: roleDraft.trim() });
       setEditingRole(false);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to update role"));
+      setError(apiErrorMessage(err, t("agentDetail.error.updateRole")));
     } finally {
       setIsLoading(false);
     }
-  }, [agent, roleDraft, updateAgent]);
+  }, [agent, roleDraft, updateAgent, t]);
 
   const handleStartEditModel = useCallback(() => {
     if (!agent) return;
@@ -226,11 +228,11 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { model: modelDraft.trim() });
       setEditingModel(false);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to update model"));
+      setError(apiErrorMessage(err, t("agentDetail.error.updateModel")));
     } finally {
       setIsLoading(false);
     }
-  }, [agent, modelDraft, updateAgent]);
+  }, [agent, modelDraft, updateAgent, t]);
 
   const handleChangeHarness = useCallback(
     async (agentType: AgentType) => {
@@ -241,10 +243,10 @@ export function AgentDetailDialog({
       } catch (err) {
         // The select is controlled by agent.agent_type, which the store did not
         // change, so it snaps back to the previous harness on its own.
-        setError(apiErrorMessage(err, "Failed to update harness"));
+        setError(apiErrorMessage(err, t("agentDetail.error.updateHarness")));
       }
     },
-    [agent, updateAgent],
+    [agent, updateAgent, t],
   );
 
   const handleStartEditCallbackUrl = useCallback(() => {
@@ -261,11 +263,11 @@ export function AgentDetailDialog({
       await updateAgent(agent.id, { callback_url: callbackUrlDraft.trim() });
       setEditingCallbackUrl(false);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to update callback URL"));
+      setError(apiErrorMessage(err, t("agentDetail.error.updateCallbackUrl")));
     } finally {
       setIsLoading(false);
     }
-  }, [agent, callbackUrlDraft, updateAgent]);
+  }, [agent, callbackUrlDraft, updateAgent, t]);
 
   const handleStartEditProfileField = useCallback(
     (field: NonNullable<typeof editingProfileField>, initialValue: string) => {
@@ -322,11 +324,11 @@ export function AgentDetailDialog({
       await updateAgentProfile(agent.id, req);
       setEditingProfileField(null);
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to update agent"));
+      setError(apiErrorMessage(err, t("agentDetail.error.updateAgent")));
     } finally {
       setIsLoading(false);
     }
-  }, [agent, editingProfileField, profileFieldDraft, updateAgentProfile]);
+  }, [agent, editingProfileField, profileFieldDraft, updateAgentProfile, t]);
 
   const handleRegenerateKey = useCallback(async () => {
     if (!agent) return;
@@ -337,12 +339,12 @@ export function AgentDetailDialog({
       setNewApiKey(result.api_key);
       setMode("regenerate-key");
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to regenerate key"));
+      setError(apiErrorMessage(err, t("agentDetail.error.regenerateKey")));
       setMode("detail");
     } finally {
       setIsLoading(false);
     }
-  }, [agent, regenerateKey]);
+  }, [agent, regenerateKey, t]);
 
   const handleDelete = useCallback(async () => {
     if (!agent) return;
@@ -352,12 +354,12 @@ export function AgentDetailDialog({
       await deleteAgent(agent.id);
       handleClose();
     } catch (err) {
-      setError(apiErrorMessage(err, "Failed to delete agent"));
+      setError(apiErrorMessage(err, t("agentDetail.error.deleteAgent")));
       setMode("detail");
     } finally {
       setIsLoading(false);
     }
-  }, [agent, deleteAgent, handleClose]);
+  }, [agent, deleteAgent, handleClose, t]);
 
   // Other agents that can be a parent (exclude self and own children to prevent cycles)
   const parentCandidates = useMemo(
@@ -380,9 +382,9 @@ export function AgentDetailDialog({
       <Dialog open={open} onOpenChange={handleClose}>
         <DialogContent onClose={handleClose}>
           <DialogHeader>
-            <DialogTitle>Delete Agent</DialogTitle>
+            <DialogTitle>{t("agentDetail.delete.title")}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete <strong>{agent.name}<AgentShortTag tag={agent.short_tag} /></strong>? This action cannot be undone.
+              {t("agentDetail.delete.confirmBefore")}<strong>{agent.name}<AgentShortTag tag={agent.short_tag} /></strong>{t("agentDetail.delete.confirmAfter")}
             </DialogDescription>
           </DialogHeader>
           {error && (
@@ -390,10 +392,10 @@ export function AgentDetailDialog({
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setMode("detail")} disabled={isLoading}>
-              Cancel
+              {t("agentDetail.cancel")}
             </Button>
             <Button variant="destructive" onClick={() => void handleDelete()} disabled={isLoading}>
-              {isLoading ? "Deleting..." : "Delete Agent"}
+              {isLoading ? t("agentDetail.delete.deleting") : t("agentDetail.delete.title")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -407,9 +409,9 @@ export function AgentDetailDialog({
       <Dialog open={open} onOpenChange={handleClose}>
         <DialogContent onClose={handleClose}>
           <DialogHeader>
-            <DialogTitle>Regenerate API Key</DialogTitle>
+            <DialogTitle>{t("agentDetail.regenerate.title")}</DialogTitle>
             <DialogDescription>
-              This will invalidate the current API key for <strong>{agent.name}<AgentShortTag tag={agent.short_tag} /></strong>. Any integrations using the old key will stop working immediately.
+              {t("agentDetail.regenerate.confirmBefore")}<strong>{agent.name}<AgentShortTag tag={agent.short_tag} /></strong>{t("agentDetail.regenerate.confirmAfter")}
             </DialogDescription>
           </DialogHeader>
           {error && (
@@ -417,10 +419,10 @@ export function AgentDetailDialog({
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setMode("detail")} disabled={isLoading}>
-              Cancel
+              {t("agentDetail.cancel")}
             </Button>
             <Button onClick={() => void handleRegenerateKey()} disabled={isLoading}>
-              {isLoading ? "Regenerating..." : "Regenerate Key"}
+              {isLoading ? t("agentDetail.regenerate.regenerating") : t("agentDetail.regenerate.action")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -434,9 +436,9 @@ export function AgentDetailDialog({
       <Dialog open={open} onOpenChange={handleClose}>
         <DialogContent onClose={handleClose}>
           <DialogHeader>
-            <DialogTitle>New API Key Generated</DialogTitle>
+            <DialogTitle>{t("agentDetail.newKey.title")}</DialogTitle>
             <DialogDescription>
-              Copy this key now — it will only be shown once.
+              {t("agentDetail.newKey.description")}
             </DialogDescription>
           </DialogHeader>
 
@@ -495,7 +497,7 @@ export function AgentDetailDialog({
                   variant="ghost"
                   className="h-7 w-7 shrink-0"
                   onClick={handleStartEditName}
-                  title="Edit name"
+                  title={t("agentDetail.edit.name")}
                 >
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
@@ -506,16 +508,16 @@ export function AgentDetailDialog({
               value={agent.agent_type}
               onChange={(e) => void handleChangeHarness(e.target.value as AgentType)}
               className="h-6 w-auto min-w-[120px] text-xs"
-              aria-label="Harness"
-              title="Harness"
+              aria-label={t("agentDetail.harness")}
+              title={t("agentDetail.harness")}
             >
               {Object.entries(agentTypeConfig).map(([key, cfg]) => (
                 <option key={key} value={key}>{cfg.label}</option>
               ))}
             </Select>
             <Input
-              aria-label="Short tag"
-              placeholder="short tag"
+              aria-label={t("agentDetail.shortTag.label")}
+              placeholder={t("agentDetail.shortTag.placeholder")}
               maxLength={24}
               value={shortTagDraft}
               disabled={isSavingShortTag}
@@ -543,30 +545,30 @@ export function AgentDetailDialog({
           profile={
         <div className="space-y-5">
           {/* Status */}
-          <DetailRow label="Status">
+          <DetailRow label={t("agentDetail.fields.status")}>
             <div className="flex items-center gap-2">
               <span
                 className={cn("h-2.5 w-2.5 rounded-full", statusConfig.dotColor)}
               />
-              <span className="text-sm">{statusConfig.label}</span>
+              <span className="text-sm">{t(`agentDetail.status.${effectiveStatus}`, { defaultValue: statusConfig.label })}</span>
               {stale && agent.status === "online" && (
-                <span className="text-xs text-yellow-600">(stale)</span>
+                <span className="text-xs text-yellow-600">{t("agentDetail.stale")}</span>
               )}
             </div>
           </DetailRow>
 
           {/* Last Heartbeat */}
-          <DetailRow label="Last Heartbeat">
+          <DetailRow label={t("agentDetail.fields.lastHeartbeat")}>
             <span className={cn("text-sm", stale && "text-yellow-600")}>
               {agent.last_heartbeat
                 ? formatRelative(agent.last_heartbeat)
-                : "Never"}
+                : t("agentDetail.never")}
             </span>
           </DetailRow>
 
           {/* Heartbeat Message */}
           {agent.heartbeat_message && (
-            <DetailRow label="Activity">
+            <DetailRow label={t("agentDetail.fields.activity")}>
               <span className="text-sm italic text-muted-foreground">
                 {agent.heartbeat_message}
               </span>
@@ -577,13 +579,13 @@ export function AgentDetailDialog({
           {(tasksCompleted !== null || totalErrors !== null) && (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Statistics
+                {t("agentDetail.statistics.title")}
               </p>
               <div className="grid grid-cols-2 gap-3">
                 {tasksCompleted !== null && (
                   <div className="rounded-lg border border-border p-3">
                     <p className="text-xs text-muted-foreground">
-                      Tasks Completed
+                      {t("agentDetail.statistics.tasksCompleted")}
                     </p>
                     <p className="text-lg font-semibold">{tasksCompleted}</p>
                   </div>
@@ -591,7 +593,7 @@ export function AgentDetailDialog({
                 {totalErrors !== null && (
                   <div className="rounded-lg border border-border p-3">
                     <p className="text-xs text-muted-foreground">
-                      Total Errors
+                      {t("agentDetail.statistics.totalErrors")}
                     </p>
                     <p className="text-lg font-semibold">{totalErrors}</p>
                   </div>
@@ -601,12 +603,12 @@ export function AgentDetailDialog({
           )}
 
           {/* Registered */}
-          <DetailRow label="Registered">
+          <DetailRow label={t("agentDetail.fields.registered")}>
             <span className="text-sm">{formatDate(agent.created_at)}</span>
           </DetailRow>
 
           {/* Supervisor (agent or human) */}
-          <DetailRow label="Supervisor">
+          <DetailRow label={t("agentDetail.fields.supervisor")}>
             <select
               className="h-8 rounded-md border border-input bg-background px-2 text-sm"
               value={
@@ -629,15 +631,15 @@ export function AgentDetailDialog({
                     await updateAgent(agent.id, { supervisor_user_id: val.slice(5), parent_agent_id: "" });
                   }
                 } catch (err) {
-                  setError(apiErrorMessage(err, "Failed to update supervisor"));
+                  setError(apiErrorMessage(err, t("agentDetail.error.updateSupervisor")));
                 } finally {
                   setIsLoading(false);
                 }
               }}
             >
-              <option value="">None (root)</option>
+              <option value="">{t("agentDetail.supervisor.none")}</option>
               {parentCandidates.length > 0 && (
-                <optgroup label="Agents">
+                <optgroup label={t("agentDetail.supervisor.agents")}>
                   {parentCandidates.map((a) => (
                     <option key={`agent:${a.id}`} value={`agent:${a.id}`}>
                       {agentLabel(a.name, a.short_tag)}
@@ -646,7 +648,7 @@ export function AgentDetailDialog({
                 </optgroup>
               )}
               {workspaceMembers.length > 0 && (
-                <optgroup label="Members">
+                <optgroup label={t("agentDetail.supervisor.members")}>
                   {workspaceMembers.map((m) => (
                     <option key={`user:${m.user_id}`} value={`user:${m.user_id}`}>
                       {inlineLabel(m.user)}
@@ -658,7 +660,7 @@ export function AgentDetailDialog({
           </DetailRow>
 
           {/* Role */}
-          <DetailRow label="Role">
+          <DetailRow label={t("agentDetail.fields.role")}>
             {editingRole ? (
               <div className="flex items-center gap-2">
                 <Input
@@ -668,7 +670,7 @@ export function AgentDetailDialog({
                     if (e.key === "Enter") void handleSaveRole();
                     if (e.key === "Escape") setEditingRole(false);
                   }}
-                  placeholder="developer, lead, reviewer..."
+                  placeholder={t("agentDetail.role.placeholder")}
                   className="h-7 w-48 text-sm"
                   autoFocus
                 />
@@ -692,13 +694,13 @@ export function AgentDetailDialog({
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
-                <span className="text-sm">{agent.role || "Not set"}</span>
+                <span className="text-sm">{agent.role || t("agentDetail.notSet")}</span>
                 <Button
                   size="icon"
                   variant="ghost"
                   className="h-6 w-6 shrink-0"
                   onClick={handleStartEditRole}
-                  title="Edit role"
+                  title={t("agentDetail.edit.role")}
                 >
                   <Pencil className="h-3 w-3" />
                 </Button>
@@ -707,7 +709,7 @@ export function AgentDetailDialog({
           </DetailRow>
 
           {/* Model (the LLM; the select next to the name is the harness) */}
-          <DetailRow label="Model">
+          <DetailRow label={t("agentDetail.fields.model")}>
             {editingModel ? (
               <div className="flex items-center gap-2">
                 <Input
@@ -717,9 +719,9 @@ export function AgentDetailDialog({
                     if (e.key === "Enter") void handleSaveModel();
                     if (e.key === "Escape") setEditingModel(false);
                   }}
-                  placeholder="e.g. gpt-6.1-sol"
+                  placeholder={t("agentDetail.model.placeholder")}
                   maxLength={128}
-                  aria-label="Model"
+                  aria-label={t("agentDetail.fields.model")}
                   className="h-7 w-48 text-sm"
                   autoFocus
                 />
@@ -729,7 +731,7 @@ export function AgentDetailDialog({
                   className="h-6 w-6 shrink-0"
                   onClick={() => void handleSaveModel()}
                   disabled={isLoading}
-                  title="Save model"
+                  title={t("agentDetail.model.save")}
                 >
                   <Check className="h-3 w-3" />
                 </Button>
@@ -744,13 +746,13 @@ export function AgentDetailDialog({
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
-                <span className="text-sm">{agent.model || "Not reported"}</span>
+                <span className="text-sm">{agent.model || t("agentDetail.model.notReported")}</span>
                 <Button
                   size="icon"
                   variant="ghost"
                   className="h-6 w-6 shrink-0"
                   onClick={handleStartEditModel}
-                  title="Edit model"
+                  title={t("agentDetail.edit.model")}
                 >
                   <Pencil className="h-3 w-3" />
                 </Button>
@@ -760,9 +762,9 @@ export function AgentDetailDialog({
 
           {/* Responsibility zone */}
           <ProfileFieldRow
-            label="Responsibility zone"
+            label={t("agentDetail.fields.responsibilityZone")}
             displayValue={
-              <span className="text-sm">{agent.responsibility_zone || "Not set"}</span>
+              <span className="text-sm">{agent.responsibility_zone || t("agentDetail.notSet")}</span>
             }
             editing={editingProfileField === "responsibility_zone"}
             draft={profileFieldDraft}
@@ -777,10 +779,10 @@ export function AgentDetailDialog({
 
           {/* Working hours */}
           <ProfileFieldRow
-            label="Working hours"
+            label={t("agentDetail.fields.workingHours")}
             icon={<Clock className="h-3 w-3" />}
             displayValue={
-              <span className="text-sm">{agent.working_hours || "Not set"}</span>
+              <span className="text-sm">{agent.working_hours || t("agentDetail.notSet")}</span>
             }
             editing={editingProfileField === "working_hours"}
             draft={profileFieldDraft}
@@ -796,12 +798,12 @@ export function AgentDetailDialog({
 
           {/* Accepts from */}
           <ProfileFieldRow
-            label="Accepts from"
+            label={t("agentDetail.fields.acceptsFrom")}
             displayValue={
               <span className="text-sm">
                 {agent.accepts_from && agent.accepts_from.length > 0
                   ? agent.accepts_from.join(", ")
-                  : "Not set"}
+                  : t("agentDetail.notSet")}
               </span>
             }
             editing={editingProfileField === "accepts_from"}
@@ -819,7 +821,7 @@ export function AgentDetailDialog({
           {/* Max concurrent tasks */}
           <ProfileFieldRow
             icon={<Layers className="h-3 w-3" />}
-            label="Max concurrent tasks"
+            label={t("agentDetail.fields.maxConcurrentTasks")}
             displayValue={
               <span className="text-sm">
                 {agent.max_concurrent_tasks ?? 0}
@@ -847,10 +849,10 @@ export function AgentDetailDialog({
           {/* Escalation contact */}
           <ProfileFieldRow
             icon={<ArrowUpCircle className="h-3 w-3" />}
-            label="Escalation contact"
+            label={t("agentDetail.fields.escalationContact")}
             displayValue={
               <span className="text-sm">
-                {agent.escalation_to || "Not set"}
+                {agent.escalation_to || t("agentDetail.notSet")}
               </span>
             }
             editing={editingProfileField === "escalation_to"}
@@ -868,7 +870,7 @@ export function AgentDetailDialog({
           <div>
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Description
+                {t("agentDetail.fields.description")}
               </span>
               {!editingDescription && (
                 <Button
@@ -876,7 +878,7 @@ export function AgentDetailDialog({
                   variant="ghost"
                   className="h-6 w-6"
                   onClick={handleStartEditDescription}
-                  title="Edit description"
+                  title={t("agentDetail.edit.description")}
                 >
                   <Pencil className="h-3 w-3" />
                 </Button>
@@ -893,7 +895,7 @@ export function AgentDetailDialog({
                       void handleSaveDescription();
                     }
                   }}
-                  placeholder="Describe this agent's purpose, skills, or context..."
+                  placeholder={t("agentDetail.description.placeholder")}
                   className="min-h-[80px] resize-none text-sm"
                   autoFocus
                 />
@@ -905,7 +907,7 @@ export function AgentDetailDialog({
                     className="h-7 gap-1.5"
                   >
                     <Check className="h-3 w-3" />
-                    Save
+                    {t("agentDetail.save")}
                   </Button>
                   <Button
                     size="sm"
@@ -915,7 +917,7 @@ export function AgentDetailDialog({
                     className="h-7 gap-1.5"
                   >
                     <X className="h-3 w-3" />
-                    Cancel
+                    {t("agentDetail.cancel")}
                   </Button>
                 </div>
               </div>
@@ -928,7 +930,7 @@ export function AgentDetailDialog({
                     : "italic text-muted-foreground",
                 )}
               >
-                {agent.profile_description || "No description"}
+                {agent.profile_description || t("agentDetail.description.empty")}
               </p>
             )}
           </div>
@@ -937,7 +939,7 @@ export function AgentDetailDialog({
           <div>
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Push Notifications
+                {t("agentDetail.push.title")}
               </span>
               {!editingCallbackUrl && (
                 <Button
@@ -945,7 +947,7 @@ export function AgentDetailDialog({
                   variant="ghost"
                   className="h-6 w-6"
                   onClick={handleStartEditCallbackUrl}
-                  title="Edit callback URL"
+                  title={t("agentDetail.edit.callbackUrl")}
                 >
                   <Pencil className="h-3 w-3" />
                 </Button>
@@ -973,7 +975,7 @@ export function AgentDetailDialog({
                     className="h-7 gap-1.5"
                   >
                     <Check className="h-3 w-3" />
-                    Save
+                    {t("agentDetail.save")}
                   </Button>
                   <Button
                     size="sm"
@@ -983,7 +985,7 @@ export function AgentDetailDialog({
                     className="h-7 gap-1.5"
                   >
                     <X className="h-3 w-3" />
-                    Cancel
+                    {t("agentDetail.cancel")}
                   </Button>
                 </div>
               </div>
@@ -997,10 +999,10 @@ export function AgentDetailDialog({
                       : "italic text-muted-foreground",
                   )}
                 >
-                  {agent.callback_url || "No callback URL configured"}
+                  {agent.callback_url || t("agentDetail.push.empty")}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  When set, Mesh will POST task events (assigned, status changed) to this URL.
+                  {t("agentDetail.push.hint")}
                 </p>
               </div>
             )}
@@ -1010,7 +1012,7 @@ export function AgentDetailDialog({
           <div>
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Capabilities
+                {t("agentDetail.fields.capabilities")}
               </span>
               {editingProfileField !== "capabilities" && (
                 <Button
@@ -1023,7 +1025,7 @@ export function AgentDetailDialog({
                       asCapabilityList(agent.capabilities).join(", "),
                     )
                   }
-                  title="Edit capabilities"
+                  title={t("agentDetail.edit.capabilities")}
                 >
                   <Pencil className="h-3 w-3" />
                 </Button>
@@ -1045,11 +1047,11 @@ export function AgentDetailDialog({
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={() => void handleSaveProfileField()} disabled={isLoading} className="h-7 gap-1.5">
                     <Check className="h-3 w-3" />
-                    Save
+                    {t("agentDetail.save")}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setEditingProfileField(null)} disabled={isLoading} className="h-7 gap-1.5">
                     <X className="h-3 w-3" />
-                    Cancel
+                    {t("agentDetail.cancel")}
                   </Button>
                 </div>
               </div>
@@ -1064,7 +1066,7 @@ export function AgentDetailDialog({
                   ))}
                 </div>
               ) : (
-                <p className="text-sm italic text-muted-foreground">Not set</p>
+                <p className="text-sm italic text-muted-foreground">{t("agentDetail.notSet")}</p>
               );
             })()}
           </div>
@@ -1085,10 +1087,10 @@ export function AgentDetailDialog({
             (isLoadingAgentWorkspaces || agentWorkspaces.length > 0) && (
               <div>
                 <p className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  Workspaces
+                  {t("agentDetail.workspaces.title")}
                 </p>
                 {isLoadingAgentWorkspaces ? (
-                  <p className="text-sm text-muted-foreground">Loading…</p>
+                  <p className="text-sm text-muted-foreground">{t("agentDetail.workspaces.loading")}</p>
                 ) : (
                   <div className="space-y-1.5">
                     {agentWorkspaces.map((grant) => (
@@ -1102,7 +1104,7 @@ export function AgentDetailDialog({
                         <div className="flex shrink-0 items-center gap-1.5">
                           {grant.workspace_id === agent.workspace_id && (
                             <Badge variant="outline" className="text-xs">
-                              Home
+                              {t("agentDetail.workspaces.home")}
                             </Badge>
                           )}
                           <Badge variant="secondary" className="text-xs capitalize">
@@ -1128,7 +1130,7 @@ export function AgentDetailDialog({
             onClick={() => setMode("regenerate-confirm")}
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            Regenerate Key
+            {t("agentDetail.regenerate.action")}
           </Button>
           <Button
             variant="destructive"
@@ -1137,7 +1139,7 @@ export function AgentDetailDialog({
             onClick={() => setMode("delete-confirm")}
           >
             <Trash2 className="h-3.5 w-3.5" />
-            Delete Agent
+            {t("agentDetail.delete.title")}
           </Button>
         </div>
       </DialogContent>
@@ -1203,6 +1205,7 @@ function ProfileFieldRow({
   /** Extra condition (beyond isLoading) that keeps Save disabled — e.g. an invalid numeric draft. */
   saveDisabled?: boolean;
 }) {
+  const { t } = useTranslation("integrations");
   return (
     // flex-wrap (not the plain single-line row this used to be): at a
     // narrow viewport, editing max_concurrent_tasks/escalation_to squeezes
@@ -1233,14 +1236,14 @@ function ProfileFieldRow({
             className="h-7 w-48 text-sm"
             autoFocus
           />
-          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={onSave} disabled={isLoading || saveDisabled} aria-label="Save" title="Save">
+          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={onSave} disabled={isLoading || saveDisabled} aria-label={t("agentDetail.save")} title={t("agentDetail.save")}>
             <Check className="h-3 w-3" />
           </Button>
           {/* Disabled while a save is in flight, not just Save — cancelling
               while isLoading can't actually abort the pending request, and
               switching back to display mode early made the response that
               lands moments later silently overwrite the "cancelled" edit. */}
-          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={onCancel} disabled={isLoading} aria-label="Cancel" title="Cancel">
+          <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={onCancel} disabled={isLoading} aria-label={t("agentDetail.cancel")} title={t("agentDetail.cancel")}>
             <X className="h-3 w-3" />
           </Button>
         </div>
@@ -1252,7 +1255,7 @@ function ProfileFieldRow({
             variant="ghost"
             className="h-6 w-6 shrink-0"
             onClick={onStartEdit}
-            title={ariaLabel ? `Edit ${ariaLabel.toLowerCase()}` : `Edit ${label}`}
+            title={t("agentDetail.edit.field", { label: ariaLabel ? ariaLabel.toLowerCase() : label })}
           >
             <Pencil className="h-3 w-3" />
           </Button>

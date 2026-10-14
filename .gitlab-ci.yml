@@ -1020,8 +1020,8 @@ test:web:
     - corepack enable
     - cd web && pnpm install --frozen-lockfile
   script:
-    # i18n gate (#d807c72f): Cyrillic in .ts/.tsx outside locales/ru. Baseline
-    # mode now (only NEW violations fail); switch to `--strict` after L2.3.
+    # i18n gate (#d807c72f): Cyrillic in .ts/.tsx outside locales/ru. Strict
+    # since L2.3 (#3a2394a4): every hit fails, there is no baseline file.
     # Cheap, so it runs first and a violation is not hidden behind the suite.
     - pnpm check:i18n
     - pnpm test

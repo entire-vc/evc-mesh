@@ -1,6 +1,8 @@
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import {
   ArrowRight,
   AtSign,
@@ -44,10 +46,20 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 function formatShort(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime();
-  if (diff < 60_000) return "now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
-  return `${Math.floor(diff / 86_400_000)}d`;
+  if (diff < 60_000) return i18n.t("notifications:dashboard.short.now");
+  if (diff < 3_600_000) return i18n.t("notifications:dashboard.short.minutes", { count: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return i18n.t("notifications:dashboard.short.hours", { count: Math.floor(diff / 3_600_000) });
+  return i18n.t("notifications:dashboard.short.days", { count: Math.floor(diff / 86_400_000) });
+}
+
+// Priority / heartbeat status are server enums; known values are labelled,
+// anything new falls through as the raw value (same as before).
+function priorityLabel(t: (k: string, o?: Record<string, unknown>) => string, priority: string): string {
+  return t(`dashboard.priority.${priority}`, { defaultValue: priority });
+}
+
+function agentStatusLabel(t: (k: string, o?: Record<string, unknown>) => string, status: string): string {
+  return t(`dashboard.agentStatus.${status}`, { defaultValue: status });
 }
 
 function WidgetSkeleton({ rows = 3 }: { rows?: number }) {
@@ -80,6 +92,7 @@ function WidgetEmpty({
 // ---------------------------------------------------------------------------
 
 function MentionsWidget() {
+  const { t } = useTranslation("notifications");
   const { wsSlug } = useParams<{ wsSlug: string }>();
   const { currentWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
@@ -118,15 +131,15 @@ function MentionsWidget() {
             className="flex items-center gap-1.5 text-sm font-semibold hover:text-primary"
           >
             <AtSign className="h-4 w-4" />
-            Mentions
+            {t("dashboard.mentions.title")}
             <ArrowRight className="h-3 w-3 opacity-50" />
           </Link>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <Link to={activityTo} className="hover:text-foreground">
-              my comments
+              {t("dashboard.mentions.myComments")}
             </Link>
             <Link to={activityTo} className="hover:text-foreground">
-              all recent
+              {t("dashboard.mentions.allRecent")}
             </Link>
           </div>
         </div>
@@ -138,8 +151,8 @@ function MentionsWidget() {
             icon={AtSign}
             message={
               failed.length > 0
-                ? "Mentions could not be loaded"
-                : "No mentions yet"
+                ? t("dashboard.mentions.loadFailed")
+                : t("dashboard.mentions.empty")
             }
           />
         ) : (
@@ -170,7 +183,7 @@ function MentionsWidget() {
                   )}
                   <SourceIcon
                     className="h-3 w-3 shrink-0 text-muted-foreground"
-                    aria-label={m.source === "document" ? "Document" : "Task"}
+                    aria-label={m.source === "document" ? t("dashboard.mentions.document") : t("dashboard.mentions.task")}
                   />
                   <span
                     className={cn(
@@ -199,6 +212,7 @@ function MentionsWidget() {
 // ---------------------------------------------------------------------------
 
 function TriageWidget() {
+  const { t } = useTranslation("notifications");
   const { wsSlug } = useParams<{ wsSlug: string }>();
   const { currentWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
@@ -239,7 +253,7 @@ function TriageWidget() {
             className="flex items-center gap-1.5 text-sm font-semibold hover:text-primary"
           >
             <Inbox className="h-4 w-4" />
-            Triage
+            {t("dashboard.triage.title")}
             <ArrowRight className="h-3 w-3 opacity-50" />
           </Link>
         </div>
@@ -247,7 +261,7 @@ function TriageWidget() {
         {loading ? (
           <WidgetSkeleton rows={3} />
         ) : tasks.length === 0 ? (
-          <WidgetEmpty icon={Inbox} message="Inbox is empty" />
+          <WidgetEmpty icon={Inbox} message={t("dashboard.triage.empty")} />
         ) : (
           <ul className="space-y-0.5">
             {tasks.map((task) => (
@@ -262,7 +276,7 @@ function TriageWidget() {
                       PRIORITY_COLORS[task.priority] ?? PRIORITY_COLORS.none,
                     )}
                   >
-                    {task.priority}
+                    {priorityLabel(t, task.priority)}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-medium">
                     {task.title}
@@ -285,6 +299,7 @@ function TriageWidget() {
 // ---------------------------------------------------------------------------
 
 function MyTasksWidget() {
+  const { t } = useTranslation("notifications");
   const { currentWorkspace } = useWorkspaceStore();
   const { projects } = useProjectStore();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -308,7 +323,7 @@ function MyTasksWidget() {
         <div className="mb-3 flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-sm font-semibold">
             <CheckSquare className="h-4 w-4" />
-            My Tasks
+            {t("dashboard.myTasks.title")}
           </span>
         </div>
 
@@ -317,7 +332,7 @@ function MyTasksWidget() {
         ) : tasks.length === 0 ? (
           <WidgetEmpty
             icon={CheckSquare}
-            message="No active tasks assigned to you"
+            message={t("dashboard.myTasks.empty")}
           />
         ) : (
           <ul className="space-y-0.5">
@@ -333,7 +348,7 @@ function MyTasksWidget() {
                       PRIORITY_COLORS[task.priority] ?? PRIORITY_COLORS.none,
                     )}
                   >
-                    {task.priority}
+                    {priorityLabel(t, task.priority)}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-medium">
                     {task.title}
@@ -368,6 +383,7 @@ function resolveAgentStatus(agent: TeamDirectoryAgent): string {
 }
 
 function SessionsWidget() {
+  const { t } = useTranslation("notifications");
   const { wsSlug } = useParams<{ wsSlug: string }>();
   const { currentWorkspace } = useWorkspaceStore();
   const [agents, setAgents] = useState<TeamDirectoryAgent[]>([]);
@@ -412,7 +428,7 @@ function SessionsWidget() {
             className="flex items-center gap-1.5 text-sm font-semibold hover:text-primary"
           >
             <MonitorDot className="h-4 w-4" />
-            Sessions
+            {t("dashboard.sessions.title")}
             <ArrowRight className="h-3 w-3 opacity-50" />
           </Link>
         </div>
@@ -420,7 +436,7 @@ function SessionsWidget() {
         {loading ? (
           <WidgetSkeleton rows={3} />
         ) : agents.length === 0 ? (
-          <WidgetEmpty icon={MonitorDot} message="No agents online" />
+          <WidgetEmpty icon={MonitorDot} message={t("dashboard.sessions.empty")} />
         ) : (
           <ul className="space-y-0.5">
             {agents.map((agent) => {
@@ -442,7 +458,7 @@ function SessionsWidget() {
                     />
                     <span className="font-medium">{agent.name}<AgentShortTag tag={agent.short_tag} /></span>
                     <span className="text-[10px] capitalize text-muted-foreground">
-                      {status}
+                      {agentStatusLabel(t, status)}
                     </span>
                     {lastSeen && (
                       <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">

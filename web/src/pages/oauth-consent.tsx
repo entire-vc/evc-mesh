@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { Navigate, useLocation, useSearchParams } from "react-router";
 import { AlertTriangle, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -60,7 +62,7 @@ export function isSessionExpired(err: unknown): boolean {
 }
 
 export function displayClientName(name: string): string {
-  return name.replace(INVISIBLE_CHARS, "").trim() || "Unnamed app";
+  return name.replace(INVISIBLE_CHARS, "").trim() || i18n.t("integrations:oauthConsent.unnamedApp");
 }
 
 /** The host the browser will actually be sent to, read from the URL itself.
@@ -95,6 +97,7 @@ type Phase =
   | { kind: "redirecting" };
 
 export function OAuthConsentPage() {
+  const { t } = useTranslation("integrations");
   const { isAuthenticated, isLoading: authLoading, user } = useAuthStore();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -152,8 +155,8 @@ export function OAuthConsentPage() {
           kind: "error",
           retryable: !invalid,
           message: invalid
-            ? "This connection request is not valid."
-            : "Could not load this request. Check your connection and try again.",
+            ? t("oauthConsent.errorInvalid")
+            : t("oauthConsent.errorLoad"),
         });
       });
     return () => {
@@ -190,7 +193,7 @@ export function OAuthConsentPage() {
         },
       });
       if (!isSafeRedirect(res.redirect_uri)) {
-        setActionError("The app sent an address this page will not open.");
+        setActionError(t("oauthConsent.errorBadRedirect"));
         setSubmitting(null);
         return;
       }
@@ -204,8 +207,8 @@ export function OAuthConsentPage() {
       if (isSessionExpired(err)) return toLogin();
       setActionError(
         status === 403
-          ? "Your role in this workspace does not allow connecting apps. Pick another workspace, or ask an admin or owner."
-          : "Could not save your choice. Try again.",
+          ? t("oauthConsent.errorForbidden")
+          : t("oauthConsent.errorSave"),
       );
       setSubmitting(null);
     }
@@ -223,17 +226,15 @@ export function OAuthConsentPage() {
     return (
       <Shell>
         <div className="space-y-2 text-center" role="alert">
-          <h1 className="text-xl font-semibold">Can't connect this app</h1>
+          <h1 className="text-xl font-semibold">{t("oauthConsent.cantConnect")}</h1>
           <p className="text-sm text-muted-foreground">{phase.message}</p>
           <p className="text-sm text-muted-foreground">
-            Nothing was shared.{" "}
-            {phase.retryable
-              ? ""
-              : "Go back to the app and start the connection again."}
+            {t("oauthConsent.nothingShared")}{" "}
+            {phase.retryable ? "" : t("oauthConsent.goBack")}
           </p>
           {phase.retryable && (
             <Button variant="outline" onClick={() => setReloadKey((k) => k + 1)}>
-              Try again
+              {t("oauthConsent.tryAgain")}
             </Button>
           )}
         </div>
@@ -245,7 +246,7 @@ export function OAuthConsentPage() {
     return (
       <Shell>
         <p className="text-center text-sm text-muted-foreground">
-          Returning you to the app…
+          {t("oauthConsent.returning")}
         </p>
       </Shell>
     );
@@ -262,14 +263,14 @@ export function OAuthConsentPage() {
       <div className="space-y-6">
         <div className="space-y-1">
           <p className="text-sm text-muted-foreground">
-            An app is asking to connect to Mesh. Mesh has not checked who made it.
+            {t("oauthConsent.intro")}
           </p>
           <h1 className="break-words text-2xl font-bold">{clientName}</h1>
         </div>
 
         <div className="rounded-lg border border-border bg-muted/40 p-4">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            After you decide, you'll be sent to
+            {t("oauthConsent.sentTo")}
           </p>
           <p
             className="mt-1 break-all font-mono text-lg font-semibold"
@@ -286,16 +287,15 @@ export function OAuthConsentPage() {
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
             <p>
-              <strong>This access goes to a program on this computer.</strong> The app
-              gave an address that points at your own machine, not at a website. Continue
-              only if you just started this connection yourself.
+              <strong>{t("oauthConsent.loopbackTitle")}</strong>{" "}
+              {t("oauthConsent.loopbackBody")}
             </p>
           </div>
         )}
 
         <div className="space-y-1.5">
           <label htmlFor="consent-workspace" className="text-sm font-medium">
-            Workspace
+            {t("oauthConsent.workspace")}
           </label>
           {hasWorkspaces ? (
             <Select
@@ -312,7 +312,7 @@ export function OAuthConsentPage() {
             </Select>
           ) : (
             <p className="text-sm text-muted-foreground">
-              You are not a member of any workspace, so there is nothing to connect.
+              {t("oauthConsent.noWorkspaces")}
             </p>
           )}
         </div>
@@ -320,18 +320,16 @@ export function OAuthConsentPage() {
         <div className="space-y-2">
           <p className="flex items-center gap-1.5 text-sm font-medium">
             <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-            {clientName} will be able to, in the selected workspace:
+            {t("oauthConsent.willBeAbleTo", { name: clientName })}
           </p>
           <ul className="list-disc space-y-1 pl-9 text-sm text-muted-foreground">
-            <li>Read its projects, tasks, comments, documents and memory</li>
-            <li>Create, change and delete tasks; write comments and memory</li>
-            <li>Attach files and post events</li>
-            <li>Change workflow rules, only if you are an admin or owner</li>
+            <li>{t("oauthConsent.perm1")}</li>
+            <li>{t("oauthConsent.perm2")}</li>
+            <li>{t("oauthConsent.perm3")}</li>
+            <li>{t("oauthConsent.perm4")}</li>
           </ul>
           <p className="text-sm text-muted-foreground">
-            It acts as a connector agent, supervised by you. It cannot manage members.
-            Its access follows your role in the workspace and stops if you lose that
-            role. You can revoke it at any time under Connected apps.
+            {t("oauthConsent.agentNote")}
           </p>
         </div>
 
@@ -347,18 +345,18 @@ export function OAuthConsentPage() {
             onClick={() => decide(false)}
             disabled={submitting !== null}
           >
-            {submitting === "deny" ? "Denying…" : "Deny"}
+            {submitting === "deny" ? t("oauthConsent.denying") : t("oauthConsent.deny")}
           </Button>
           <Button
             onClick={() => decide(true)}
             disabled={submitting !== null || !hasWorkspaces || !workspaceId}
           >
-            {submitting === "allow" ? "Allowing…" : "Allow"}
+            {submitting === "allow" ? t("oauthConsent.allowing") : t("oauthConsent.allow")}
           </Button>
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Signed in as {user?.email}
+          {t("oauthConsent.signedInAs", { email: user?.email })}
         </p>
       </div>
     </Shell>
