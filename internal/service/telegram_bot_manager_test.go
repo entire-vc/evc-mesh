@@ -117,7 +117,7 @@ func TestHandleStart_NoProjectsSaysSo(t *testing.T) {
 
 	msgs := client.messages()
 	require.Len(t, msgs, 1)
-	assert.Contains(t, msgs[0].text, "пока нет проектов")
+	assert.Contains(t, msgs[0].text, "no projects yet")
 }
 
 func TestHandleStart_ExpiredTokenDoesNotBind(t *testing.T) {
@@ -271,4 +271,67 @@ func TestHandleUpdate_IgnoresMessagesWithNoSender(t *testing.T) {
 	})
 
 	assert.Empty(t, client.messages())
+}
+
+func TestHandleStart_WelcomeFollowsUserLocale(t *testing.T) {
+	cases := []struct {
+		locale, name, want string
+	}{
+		{"en", "Alice", "Welcome, Alice! Your account is linked.\nYour projects:\n- Acme / Website"},
+		{"ru", "Alice", "Добро пожаловать, Alice, ваша учётная запись успешно привязана.\nВот список ваших проектов:\n- Acme / Website"},
+		{"en", "", "Welcome, there!"},
+		{"ru", "", "Добро пожаловать, коллега,"},
+	}
+	for _, tc := range cases {
+		wsID, userID := uuid.New(), uuid.New()
+		repo := &fakeNotificationRepo{
+			prefs: []domain.NotificationPreference{telegramPrefWithBind(wsID, userID, "", "good-token", 15*time.Minute)},
+		}
+		client := &fakeTelegramClient{}
+		users := &fakeTelegramUserLookup{users: map[uuid.UUID]*domain.User{userID: {ID: userID, Name: tc.name, Locale: tc.locale}}}
+		workspaces := &fakeWorkspaceNameLookup{names: map[uuid.UUID]string{wsID: "Acme"}}
+		projects := &fakeTelegramProjectLookup{byWorkspaceUser: map[uuid.UUID][]domain.Project{userID: {{Name: "Website"}}}}
+		mgr := newTestManager(repo, client, users, projects, workspaces)
+
+		mgr.handleStart(context.Background(), wsID, "bot-token", 999, "whoever", "good-token")
+
+		msgs := client.messages()
+		require.Len(t, msgs, 1, tc.locale)
+		assert.Contains(t, msgs[0].text, tc.want, "locale %s name %q", tc.locale, tc.name)
+	}
+}
+
+func TestHandleStart_NoProjectsInRussian(t *testing.T) {
+	wsID, userID := uuid.New(), uuid.New()
+	repo := &fakeNotificationRepo{
+		prefs: []domain.NotificationPreference{telegramPrefWithBind(wsID, userID, "", "good-token", 15*time.Minute)},
+	}
+	client := &fakeTelegramClient{}
+	users := &fakeTelegramUserLookup{users: map[uuid.UUID]*domain.User{userID: {ID: userID, Name: "Alice", Locale: "ru"}}}
+	mgr := newTestManager(repo, client, users, &fakeTelegramProjectLookup{}, &fakeWorkspaceNameLookup{})
+
+	mgr.handleStart(context.Background(), wsID, "bot-token", 999, "whoever", "good-token")
+
+	require.Len(t, client.messages(), 1)
+	assert.Contains(t, client.messages()[0].text, "пока нет проектов")
+}
+
+// The sender of an unlinked /start is not a user, so the neutral reply speaks
+// the workspace's default language, and English when that is unset.
+func TestHandleStart_NeutralReplyFollowsWorkspaceDefaultLocale(t *testing.T) {
+	for locale, want := range map[string]string{
+		"":   "This bot is for Mesh users only.",
+		"en": "This bot is for Mesh users only.",
+		"ru": "Бот доступен только пользователям Mesh",
+	} {
+		wsID := uuid.New()
+		client := &fakeTelegramClient{}
+		workspaces := &fakeWorkspaceNameLookup{locales: map[uuid.UUID]string{wsID: locale}}
+		mgr := newTestManager(&fakeNotificationRepo{}, client, &fakeTelegramUserLookup{}, &fakeTelegramProjectLookup{}, workspaces)
+
+		mgr.handleStart(context.Background(), wsID, "bot-token", 999, "stranger", "")
+
+		require.Len(t, client.messages(), 1, locale)
+		assert.Contains(t, client.messages()[0].text, want, "workspace locale %q", locale)
+	}
 }

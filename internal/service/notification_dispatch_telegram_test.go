@@ -85,11 +85,12 @@ func telegramIntegration(active bool, token string) *domain.IntegrationConfig {
 }
 
 type fakeWorkspaceNameLookup struct {
-	names map[uuid.UUID]string
+	names   map[uuid.UUID]string
+	locales map[uuid.UUID]string // workspaces.default_locale; absent = ""
 }
 
 func (f *fakeWorkspaceNameLookup) GetByID(_ context.Context, id uuid.UUID) (*domain.Workspace, error) {
-	return &domain.Workspace{ID: id, Name: f.names[id]}, nil
+	return &domain.Workspace{ID: id, Name: f.names[id], DefaultLocale: f.locales[id]}, nil
 }
 
 type fakeProjectNameLookup struct {
