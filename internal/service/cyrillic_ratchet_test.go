@@ -46,6 +46,12 @@ var cyrillicLiteralAllowlist = map[string]string{
 	// Two handler messages still Russian; they belong to the L3.3 error-code work (card 3db5f597, MR !1206).
 	"task_handler.go:handleError":      "mention-handoff error text (L3.3)",
 	"task_handler.go:gateClearRefusal": "lists the Russian withdrawal words the marker accepts (L3.3)",
+	// Audit-trail comments the gate scans match on by exact wording (see the
+	// header of human_gate_audit_text.go); system comments in the fleet's
+	// language, not API responses. Per function, never the whole file.
+	"human_gate_audit_text.go:GateRawArmAuditBody":             "audit comment containing rawArmMarkerSubstring; scans match its wording",
+	"human_gate_audit_text.go:GateClearedByOwnAPIArmAuditBody": "system audit comment in fleet language, not an API response",
+	"human_gate_audit_text.go:GateClearedManuallyAuditBody":    "system audit comment in fleet language, not an API response",
 	// Error hints of the task handler belong to L3.3.
 	// Audit-trail comment bodies: thread scans match on this exact Russian wording (see the file comment), so they change together with the matcher.
 	"human_gate_audit_text.go:GateRawArmAuditBody":             "audit comment body read back by thread scans",

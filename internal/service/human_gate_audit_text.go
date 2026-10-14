@@ -2,6 +2,8 @@ package service
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -36,5 +38,11 @@ func GateClearedManuallyAuditBody(actorID uuid.UUID) string {
 // WithdrawalNegatorExamples is the quoted sample of negator words handed back
 // in a refusal hint; the full vocabulary is triageExitNegators.
 func WithdrawalNegatorExamples() string {
-	return `"не нужен", "не нужно", "не требуется", "снят", "resolved"`
+	// Indexes into triageExitNegators: "не нужен", "не нужно", "не требуется",
+	// "снят", "resolved". The Cyrillic stays in the dictionary, not here.
+	var quoted []string
+	for _, i := range []int{0, 1, 2, 3, 5} {
+		quoted = append(quoted, strconv.Quote(triageExitNegators[i]))
+	}
+	return strings.Join(quoted, ", ")
 }
