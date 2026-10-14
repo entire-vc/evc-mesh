@@ -15,7 +15,7 @@
 -- authored by a human directly, or is hard-classed.
 --
 -- UNLIKE WAVE 1 — no existing `mid_pipeline` merge hazard here. Confirmed via a
--- live snapshot before writing (fleet-ops/rollback/project-rules-workflow-triage-
+-- live snapshot before writing (<ops-repo>/rollback/project-rules-workflow-triage-
 -- entry-wave2-*.json): none of these 5 projects has ANY row in `project_rules`
 -- for rule_type='workflow' at all (config is NULL, not an empty object) — so
 -- the ON CONFLICT branch's nested jsonb_set is defense-in-depth against a race,

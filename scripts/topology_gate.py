@@ -28,7 +28,7 @@ carry a reason after `#`. There is no skip flag and no inline marker.
 Exit codes: 0 clean, 1 findings, 2 configuration error (missing or malformed
 names/allowlist file counts as a failure, never as "nothing to check").
 
-Canonical copy lives in the fleet ops tree; per-repo copies are vendored.
+Canonical copy lives in a private ops tree; per-repo copies are vendored.
 """
 import argparse
 import fnmatch
@@ -44,7 +44,7 @@ ALLOW_DEFAULT = ".topology-gate/allowlist.txt"
 IPV4 = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d]|\.\d)")
 TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 # Split so that this file does not trip its own rule.
-PATHREF = re.compile(r"(?<![A-Za-z0-9_.-])b" r"ob/")
+PATHREF = re.compile(r"(?<![A-Za-z0-9_.-])(?:b" r"ob|fleet" r"-ops)/")
 NAME_TYPES = ("full", "any", "first", "last")
 RULES = ("ip-public", "ip-private", "name", "path")
 
@@ -71,20 +71,29 @@ class ConfigError(Exception):
     pass
 
 
+def read_config(path, what):
+    """Lines of a config file; a read failure is a path-free ConfigError (exit 2), never a traceback."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        raise ConfigError("%s unreadable (fail-closed)" % what) from None
+
+
 def load_names(path):
     if not os.path.isfile(path):
-        raise ConfigError("names file missing: %s (fail-closed)" % path)
+        raise ConfigError("names file missing (fail-closed)")
     out = {t: set() for t in NAME_TYPES}
-    for n, raw in enumerate(open(path), 1):
+    for n, raw in enumerate(read_config(path, "names file"), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
         parts = line.split()
         if len(parts) != 2 or parts[0] not in NAME_TYPES or not re.fullmatch(r"[0-9a-f]{64}", parts[1]):
-            raise ConfigError("%s:%d: expected '<%s> <sha256>'" % (path, n, "|".join(NAME_TYPES)))
+            raise ConfigError("names file line %d: expected '<%s> <sha256>'" % (n, "|".join(NAME_TYPES)))
         out[parts[0]].add(parts[1])
     if not any(out.values()):
-        raise ConfigError("names file %s is empty (fail-closed)" % path)
+        raise ConfigError("names file is empty (fail-closed)")
     return out
 
 
@@ -92,13 +101,13 @@ def load_allow(path):
     paths, values, tokens = [], set(), set()
     if not os.path.isfile(path):
         return paths, values, tokens
-    for n, raw in enumerate(open(path), 1):
+    for n, raw in enumerate(read_config(path, "allowlist"), 1):
         body, _, why = raw.partition("#")
         body = body.strip()
         if not body:
             continue
         if not why.strip():
-            raise ConfigError("%s:%d: allowlist entry without a reason after '#'" % (path, n))
+            raise ConfigError("allowlist line %d: entry without a reason after '#'" % n)
         p = body.split()
         if p[0] == "path" and len(p) == 3 and (p[2] == "*" or p[2] in RULES):
             paths.append((p[1], p[2]))
@@ -107,7 +116,8 @@ def load_allow(path):
         elif p[0] == "tokenhash" and len(p) == 2 and re.fullmatch(r"[0-9a-f]{64}", p[1]):
             tokens.add(p[1])
         else:
-            raise ConfigError("%s:%d: malformed allowlist entry: %r" % (path, n, body))
+            # Never echo the entry: it may hold the very value being allowlisted.
+            raise ConfigError("allowlist line %d: malformed entry" % n)
     return paths, values, tokens
 
 
@@ -164,14 +174,32 @@ def tracked(root, rev):
 def read(root, rev, p):
     if rev:
         r = subprocess.run(["git", "-C", root, "show", "%s:%s" % (rev, p)], capture_output=True)
+        if r.returncode != 0:
+            raise ConfigError("a tracked blob is unreadable (fail-closed)")
         data = r.stdout
     else:
         full = os.path.join(root, p)
-        if not os.path.isfile(full) or os.path.islink(full):
-            return None
-        with open(full, "rb") as f:
-            data = f.read()
-    return None if b"\0" in data[:8192] else data.decode("utf-8", "replace")
+        if os.path.islink(full):
+            # Same text `git show rev:path` yields: the link target, never the file behind it.
+            try:
+                data = os.readlink(full).encode("utf-8", "surrogateescape")
+            except OSError:
+                raise ConfigError("a tracked symlink is unreadable (fail-closed)") from None
+        elif not os.path.isfile(full):
+            # Absent, a directory in place of a file, or not inspectable: skipping would let an
+            # altered checkout pass unscanned. (A submodule would land here too, loudly: none are used.)
+            raise ConfigError("a tracked file is missing or not inspectable (fail-closed)")
+        else:
+            try:
+                with open(full, "rb") as f:
+                    data = f.read()
+            except OSError:
+                raise ConfigError("a tracked file is unreadable (fail-closed)") from None
+    if b"\0" in data:
+        # Binary (or NUL-padded text): never skipped, or a leading NUL would hide a whole file.
+        # Scan the printable runs, so image bytes do not raise false hits.
+        return "\n".join(m.decode("ascii") for m in re.findall(rb"[\x20-\x7e]+", data))
+    return data.decode("utf-8", "replace")
 
 
 def run(root, rev, names_path, allow_path, self_exempt=()):
@@ -181,12 +209,19 @@ def run(root, rev, names_path, allow_path, self_exempt=()):
     findings = []
     for p in files:
         # The path itself is text a stranger sees: scan it as well as the body.
-        findings += scan_text(p, p.replace("/", " "), names, allow)
-        if p in self_exempt:
-            continue
-        text = read(root, rev, p)
-        if text is not None:
-            findings += scan_text(p, text, names, allow)
+        # Slashes kept for the ops-tree reference, blanked so each segment is a name token.
+        by_path = list(dict.fromkeys(scan_text(p, p, names, allow) + scan_text(p, p.replace("/", " "), names, allow)))
+        # Mask on the raw match too: an allowlisted path is still a path that matches a rule.
+        masked = bool(by_path) or bool(
+            scan_text(p, p, names, ([], set(), set())) + scan_text(p, p.replace("/", " "), names, ([], set(), set())))
+        body = []
+        if p not in self_exempt:
+            text = read(root, rev, p)
+            if text is not None:
+                body = scan_text(p, text, names, allow)
+        # A flagged path must not be restated in the log either: label it by hash.
+        label = "<path#%s>" % sha(p)[:8] if masked else p
+        findings += [(label,) + f[1:] for f in by_path + body]
     return files, findings
 
 
@@ -212,8 +247,10 @@ def main(argv=None):
     except ConfigError as e:
         print("topology-gate: CONFIG ERROR: %s" % e, file=sys.stderr)
         return 2
+    # The matched text is the very thing we are keeping out of public view, and the
+    # name dictionary is hashed so it is not restated either: report rule and place.
     for path, ln, rule, what in findings:
-        print("%s:%d: [%s] %s" % (path, ln, rule, what))
+        print("%s:%d: [%s]" % (path, ln, rule))
     print("topology-gate: scanned %d files, %d finding(s)" % (len(files), len(findings)))
     return 1 if findings else 0
 
