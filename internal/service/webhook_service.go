@@ -43,6 +43,12 @@ const (
 type webhookService struct {
 	repo   repository.WebhookRepository
 	client *http.Client
+	// backoffs is the wait before attempt 2, 3, ...; nil means the production
+	// schedule (1s, 5s, 25s). Tests shorten it.
+	backoffs []time.Duration
+	// ext delivers public events to extension subscriptions; nil when the
+	// extensions feature is not wired.
+	ext *extensionDelivery
 }
 
 // WebhookServiceOption configures optional dependencies for webhookService.
@@ -198,18 +204,19 @@ func (s *webhookService) Dispatch(ctx context.Context, workspaceID uuid.UUID, ev
 		log.Printf("[webhook] failed to list active webhooks for event %s: %v", eventType, err)
 	}
 
-	if len(webhooks) > 0 {
-		payloadBytes, err := json.Marshal(payload)
-		if err != nil {
-			log.Printf("[webhook] failed to marshal payload for event %s: %v", eventType, err)
-		} else {
-			for i := range webhooks {
-				wh := webhooks[i]
-				go s.dispatchOne(wh, eventType, payloadBytes)
-			}
-		}
+	if len(webhooks) == 0 && s.ext == nil {
+		return
 	}
-
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[webhook] failed to marshal payload for event %s: %v", eventType, err)
+		return
+	}
+	for i := range webhooks {
+		wh := webhooks[i]
+		go s.dispatchOne(wh, eventType, payloadBytes)
+	}
+	s.dispatchExtensions(context.WithoutCancel(ctx), workspaceID, eventType, payloadBytes)
 }
 
 // TestDelivery fetches the webhook by ID and fires a single test HTTP POST directly
@@ -235,47 +242,64 @@ func (s *webhookService) TestDelivery(ctx context.Context, webhookID uuid.UUID) 
 	go s.dispatchOne(*wh, "webhook.test", payloadBytes)
 }
 
-// dispatchOne sends a single webhook delivery with up to webhookMaxAttempts retries.
-func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, payloadBytes []byte) {
-	deliveryID := uuid.New()
-	backoffs := []time.Duration{1 * time.Second, 5 * time.Second, 25 * time.Second}
+// webhookAttempt is the outcome of one delivery: up to webhookMaxAttempts HTTP
+// POSTs, the last one's answer.
+type webhookAttempt struct {
+	deliveryID uuid.UUID
+	status     *int
+	body       *string
+	durationMs *int
+	success    bool
+	attempts   int
+}
 
-	var (
-		lastStatus   *int
-		lastBody     *string
-		lastDuration *int
-		success      bool
-		lastAttempt  int
-	)
+// deliver POSTs the signed payload to targetURL with the 1s/5s/25s retry schedule.
+// It records nothing: callers own the delivery log and failure bookkeeping.
+// owner names the webhook or subscription in log lines. A wait precedes every
+// attempt after the first, so maxAttempts-1 entries of the schedule are used.
+func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType string, payloadBytes []byte, maxAttempts int) webhookAttempt {
+	res := webhookAttempt{deliveryID: uuid.New()}
+	backoffs := s.backoffs
+	if backoffs == nil {
+		backoffs = []time.Duration{1 * time.Second, 5 * time.Second, 25 * time.Second}
+	}
 
-	for attempt := 1; attempt <= webhookMaxAttempts; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
 			time.Sleep(backoffs[attempt-2])
 		}
 
-		lastAttempt = attempt
-		status, body, duration, err := s.sendHTTP(wh, eventType, deliveryID, payloadBytes, attempt)
-		lastDuration = &duration
+		res.attempts = attempt
+		status, body, duration, err := s.sendSigned(targetURL, secret, eventType, res.deliveryID, payloadBytes)
+		res.durationMs = &duration
 		if err == nil {
-			lastStatus = &status
+			res.status = &status
 			bodyStr := body
-			lastBody = &bodyStr
+			res.body = &bodyStr
 			if status >= 200 && status < 300 {
-				success = true
+				res.success = true
 				break
 			}
 			if status >= 300 && status < 400 {
 				// Not followed, and a retry will not change the answer.
-				log.Printf("[webhook] webhook %s event %s: receiver answered %d, redirects are not followed", wh.ID, eventType, status)
+				log.Printf("[webhook] webhook %s event %s: receiver answered %d, redirects are not followed", owner, eventType, status)
 				break
 			}
 		} else {
-			log.Printf("[webhook] attempt %d/%d for webhook %s event %s: %v", attempt, webhookMaxAttempts, wh.ID, eventType, err)
+			log.Printf("[webhook] attempt %d/%d for webhook %s event %s: %v", attempt, maxAttempts, owner, eventType, err)
 			if isPermanentWebhookError(err) {
 				break
 			}
 		}
 	}
+	return res
+}
+
+// dispatchOne sends a single webhook delivery with up to webhookMaxAttempts retries.
+func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, payloadBytes []byte) {
+	res := s.deliver(wh.ID, wh.URL, wh.Secret, eventType, payloadBytes, webhookMaxAttempts)
+	deliveryID, lastStatus, lastBody, lastDuration, success, lastAttempt :=
+		res.deliveryID, res.status, res.body, res.durationMs, res.success, res.attempts
 
 	// Record delivery.
 	delivery := &domain.WebhookDelivery{
@@ -319,17 +343,18 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 	}
 }
 
-// sendHTTP performs a single HTTP POST to the webhook URL with HMAC-SHA256 signature headers.
-// Returns (status, body, duration_ms, error).
-func (s *webhookService) sendHTTP(wh domain.WebhookConfig, eventType string, deliveryID uuid.UUID, payloadBytes []byte, _ int) (statusCode int, respBody string, durationMS int, err error) {
+// sendSigned performs a single HTTP POST to targetURL with HMAC-SHA256 signature
+// headers. Returns (status, body, duration_ms, error). Webhook configs and
+// extension subscriptions share it, so both get the same signing and guarded client.
+func (s *webhookService) sendSigned(targetURL, secret, eventType string, deliveryID uuid.UUID, payloadBytes []byte) (statusCode int, respBody string, durationMS int, err error) {
 	start := time.Now()
 
 	// Compute HMAC-SHA256 signature.
-	mac := hmac.New(sha256.New, []byte(wh.Secret))
+	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(payloadBytes)
 	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 
-	req, err := http.NewRequest(http.MethodPost, wh.URL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("create request: %w", err)
 	}

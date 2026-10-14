@@ -813,6 +813,17 @@ func (s *taskService) Update(ctx context.Context, task *domain.Task) error {
 	}
 	if len(changes) > 0 {
 		s.logActivity(ctx, task.ProjectID, task.ID, "task.updated", changes)
+		// Public event task.updated for webhook receivers and extension
+		// subscriptions; status moves go out as task.moved from MoveTask.
+		if s.webhookSvc != nil && s.projectRepo != nil {
+			if proj, err := s.projectRepo.GetByID(ctx, task.ProjectID); err == nil && proj != nil {
+				go s.webhookSvc.Dispatch(ctx, proj.WorkspaceID, "task.updated", map[string]interface{}{
+					"task_id":    task.ID,
+					"project_id": task.ProjectID,
+					"changes":    changes,
+				})
+			}
+		}
 	}
 
 	// Dispatch webhook for task.assigned when the assignee changes (agent wakeup pipeline).
