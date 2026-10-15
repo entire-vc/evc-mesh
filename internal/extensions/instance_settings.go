@@ -55,7 +55,7 @@ func BuiltinEnvSources() []EnvSource {
 				if c.Spark.URL == "" {
 					return nil, false, false
 				}
-				return map[string]any{"url": c.Spark.URL}, c.Spark.Enabled, true
+				return map[string]any{"spark_url": c.Spark.URL}, c.Spark.Enabled, true
 			},
 		},
 		{

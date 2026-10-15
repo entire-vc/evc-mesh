@@ -32,6 +32,8 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/embedding"
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/builtin"
+	sparkext "github.com/entire-vc/evc-mesh/internal/extensions/spark"
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
@@ -158,8 +160,8 @@ func main() {
 	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
 	integrationRepo := postgres.NewIntegrationRepo(db)
 
-	// Extension registry. Builtin providers register here (W1.5+); until
-	// then it is empty and the old per-provider path stays in force.
+	// Extension registry. Builtin providers (internal/extensions/builtin)
+	// register here; providers not yet moved keep the old per-provider path.
 	extensionRegistry := extensions.NewRegistry()
 	if syncErr := extensionRegistry.SyncBuiltin(context.Background(), postgres.NewInstalledExtensionRepo(db)); syncErr != nil {
 		log.Printf("[extensions] sync builtin extensions failed (registry stays usable): %v", syncErr)
@@ -173,14 +175,14 @@ func main() {
 		log.Printf("[extensions] instance settings bootstrap failed (env fallback stays in force): %v", bootErr)
 	}
 	// Builtin providers resolve instance-level settings through this store
-	// (table first, env fallback with a warning). BuiltinProviders is empty
-	// until W1.5+ moves providers onto the registry; the wiring is here now.
+	// (table first, env fallback with a warning).
 	extensionInstanceStore := &extensions.DBInstanceStore{Repo: instanceSettingRepo, Cfg: cfg, Sources: extensionEnvSources}
 	extensionDeps := extensions.Deps{
 		Conns: extensions.IntegrationConnections{Repo: integrationRepo},
 		Inst:  extensionInstanceStore,
 	}
-	for _, p := range extensions.BuiltinProviders(extensionDeps) {
+	extensionProviders := builtin.Providers(extensionDeps)
+	for _, p := range extensionProviders {
 		if regErr := extensionRegistry.Register(p); regErr != nil {
 			log.Fatalf("[extensions] register builtin %q: %v", p.Manifest().ID, regErr) //nolint:gocritic // startup: fail fast on a duplicate builtin provider
 		}
@@ -531,14 +533,15 @@ func main() {
 	// request arrived the client (or its absence) had already been baked in.
 	// Routes are now always registered (below); this resolver is consulted fresh
 	// on every request instead.
-	sparkIntegrationResolver := service.NewSparkIntegrationResolver(integrationRepo, service.SparkEnvFallback{
-		URL:     cfg.Spark.URL,
-		Enabled: cfg.Spark.Enabled,
-	})
-	if cfg.Spark.Enabled && cfg.Spark.URL != "" {
-		log.Printf("[config] Spark env fallback: catalog URL available when no workspace has its own spark integration configured (%s)", cfg.Spark.URL)
+	sparkProvider, sparkRegistered := extensionRegistry.Get(sparkext.ID)
+	sparkIntegrationResolver, sparkIsProvider := sparkProvider.(*sparkext.Provider)
+	if !sparkRegistered || !sparkIsProvider {
+		log.Fatalf("[extensions] spark provider is not registered") //nolint:gocritic // startup: Spark routes cannot work without it
+	}
+	if sparkIntegrationResolver.InstanceAvailable(context.Background()) {
+		log.Printf("[config] Spark instance level: catalog URL available when no workspace has its own spark integration configured")
 	} else {
-		log.Printf("[config] MESH_SPARK_ENABLED/MESH_SPARK_URL not fully set — Spark env fallback unavailable; a workspace can still enable one via its own integration")
+		log.Printf("[config] Spark instance level not configured (no instance setting, no MESH_SPARK_URL/MESH_SPARK_ENABLED) — a workspace can still enable one via its own integration")
 	}
 
 	// Append-only record of gate-arming predicate evaluations (task #5d3dc714). The
@@ -1080,12 +1083,12 @@ func main() {
 	// the instance capabilities the frontend needs to know before the user picks a
 	// workspace (the Spark Catalog nav link, and the "View on Spark" links, which must
 	// point at whatever catalog this deployment configured rather than a hardcoded
-	// vendor domain). This reflects the ENV fallback only — it has no workspace
+	// vendor domain). This reflects the instance level only — it has no workspace
 	// context to check a per-workspace override against (that check happens
 	// per-request via sparkIntegrationResolver, once a workspace is known); a
 	// workspace that has disabled Spark still sees this nav link, and gets refused
 	// with a named reason if it actually tries to browse the catalog.
-	versionHandler := newVersionHandler(cfg)
+	versionHandler := newVersionHandler(sparkIntegrationResolver.InstanceURL)
 	e.GET("/api/version", versionHandler)
 	e.GET("/api/v1/version", versionHandler)
 	e.GET("/api/v1/healthz/version", versionHandler)

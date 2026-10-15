@@ -12,12 +12,12 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/builtin"
 )
 
 // notMigrated lists extensions still on the old resolver path. Each moves into
-// BuiltinProviders with its transfer card; the skip is removed then.
+// builtin.Providers with its transfer card; the skip is removed then.
 var notMigrated = map[string]string{
-	"spark":     "перенос Spark — карточка W1.5 #df8ee66a",
 	"gitlab":    "перенос VCS-провайдеров — карточки W1.6–W1.9",
 	"github":    "перенос VCS-провайдеров — карточки W1.6–W1.9",
 	"teamrelay": "перенос Team Relay — карточки W1.6–W1.9",
@@ -80,7 +80,7 @@ func combos() []combo {
 // shared combo stores.
 func providersUnderTest(t *testing.T, st *comboStores) []extensions.Provider {
 	t.Helper()
-	ps := extensions.BuiltinProviders(extensions.Deps{Conns: st, Inst: st})
+	ps := builtin.Providers(extensions.Deps{Conns: st, Inst: st})
 	stub, _ := newStub(t, nil, nil)
 	stub.Conns, stub.Inst = st, st
 	return append(ps, stub)
@@ -114,10 +114,10 @@ func parityMismatches(t *testing.T, status func(reg *extensions.Registry, ws uui
 }
 
 // Extensions not yet on the registry are listed as skipped subtests with the
-// card that moves them. Once an extension is in BuiltinProviders its entry
+// card that moves them. Once an extension is in builtin.Providers its entry
 // here must go, otherwise this test fails.
 func TestResolveStatus_NotMigratedAreSkipped(t *testing.T) {
-	for _, p := range extensions.BuiltinProviders(extensions.Deps{}) {
+	for _, p := range builtin.Providers(extensions.Deps{}) {
 		if why, still := notMigrated[p.Manifest().ID]; still {
 			t.Errorf("%s is registered but still in notMigrated (%s): remove it", p.Manifest().ID, why)
 		}

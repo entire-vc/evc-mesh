@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,9 +19,16 @@ import (
 
 // SparkHandler handles HTTP requests for the Spark agent catalog integration.
 type SparkHandler struct {
-	resolver     *service.SparkIntegrationResolver
+	resolver     SparkURLResolver
 	agentService service.AgentService
 	memberRepo   repository.WorkspaceMemberRepository
+}
+
+// SparkURLResolver answers which Spark catalog URL governs a workspace right
+// now ("workspace" | "instance"), or ok=false when Spark is off for it. The
+// Spark extension provider (internal/extensions/spark) implements it.
+type SparkURLResolver interface {
+	ResolveSparkURL(ctx context.Context, workspaceID uuid.UUID) (url, source string, ok bool)
 }
 
 // NewSparkHandler creates a new SparkHandler.
@@ -31,7 +39,7 @@ type SparkHandler struct {
 // catalog id, not a local agents.id, so no workspace can be resolved from
 // the path — which leaves every method that accepts a workspace_id (in the
 // body for Install, in the query for the read endpoints) to check it itself.
-func NewSparkHandler(resolver *service.SparkIntegrationResolver, agentService service.AgentService, memberRepo repository.WorkspaceMemberRepository) *SparkHandler {
+func NewSparkHandler(resolver SparkURLResolver, agentService service.AgentService, memberRepo repository.WorkspaceMemberRepository) *SparkHandler {
 	return &SparkHandler{
 		resolver:     resolver,
 		agentService: agentService,
@@ -71,7 +79,7 @@ func (h *SparkHandler) clientFor(c echo.Context, workspaceID uuid.UUID) (client 
 	url, _, ok := h.resolver.ResolveSparkURL(c.Request().Context(), workspaceID)
 	if !ok {
 		return nil, true, c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable(
-			"spark URL not configured: no active spark integration for this workspace and no MESH_SPARK_URL fallback"))
+			"spark URL not configured: no active spark integration for this workspace and no instance-level spark setting"))
 	}
 	return spark.NewClient(url), false, nil
 }

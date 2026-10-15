@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -35,11 +36,18 @@ type EffectiveIntegrationStatus struct {
 	Health string `json:"health"`
 }
 
+// SparkResolver is the Spark runtime resolver the status screen reads: the
+// same one the Spark handler calls (internal/extensions/spark).
+type SparkResolver interface {
+	ResolveSparkURL(ctx context.Context, workspaceID uuid.UUID) (url, source string, ok bool)
+	InstanceAvailable(ctx context.Context) bool
+}
+
 // IntegrationStatusResolver computes EffectiveIntegrationStatus.
 type IntegrationStatusResolver struct {
 	repo            repository.IntegrationRepository
 	vcs             *VCSIntegrationResolver
-	spark           *SparkIntegrationResolver
+	spark           SparkResolver
 	relay           *TeamRelayIntegrationResolver
 	telegramEnabled bool
 }
@@ -50,7 +58,7 @@ type IntegrationStatusResolver struct {
 func NewIntegrationStatusResolver(
 	repo repository.IntegrationRepository,
 	vcs *VCSIntegrationResolver,
-	spark *SparkIntegrationResolver,
+	spark SparkResolver,
 	relay *TeamRelayIntegrationResolver,
 	telegramEnabled bool,
 ) *IntegrationStatusResolver {
@@ -65,7 +73,12 @@ func (r *IntegrationStatusResolver) EnvAvailable(provider domain.IntegrationProv
 	case domain.IntegrationProviderGitLab:
 		return r.vcs != nil && r.vcs.env.GitLabBaseURL != "" && r.vcs.env.GitLabToken != ""
 	case domain.IntegrationProviderSpark:
-		return r.spark != nil && r.spark.env.Enabled && r.spark.env.URL != ""
+		if r.spark == nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return r.spark.InstanceAvailable(ctx)
 	case domain.IntegrationProviderTeamRelay:
 		return r.relay != nil && r.relay.env.RelayURL != ""
 	}
@@ -106,6 +119,10 @@ func (r *IntegrationStatusResolver) Effective(ctx context.Context, workspaceID u
 	}
 	if r.spark != nil {
 		_, src, ok := r.spark.ResolveSparkURL(ctx, workspaceID)
+		if src == "instance" {
+			// The Integrations screen still speaks "env" for the instance level.
+			src = IntegrationSourceEnv
+		}
 		add(domain.IntegrationProviderSpark, ok, src)
 	}
 	if r.relay != nil {
