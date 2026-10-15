@@ -73,7 +73,7 @@ type BacklogPromotionDecision struct {
 //     backlog_promotion_advisory_test.go, which exists specifically to catch that
 //     mistake before it ships.
 //
-// Parity with the sweep (#c15c503a): human-gate (cheap path), parent-gate, eval-fixture
+// Parity with the sweep (#c15c503a, #d70b6815): umbrella-with-open-children, human-gate (cheap path), parent-gate, eval-fixture
 // parent, ABSOLUTE_NO_PROMOTE labels and the due_date / wake:<type> overrides live in
 // backlog_promotion_gates.go, ported function-for-function. Still NOT covered:
 //
@@ -182,6 +182,18 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	hold, woke, why := s.evaluateWake(task)
 	if hold {
 		return false, why, nil
+	}
+
+	// 1a. Umbrella with open children (sweep branch 1a-bis, umbrella_with_open_children):
+	// a parent is fed only on closure, when every child is done/cancelled, so it is
+	// never promoted itself while one is open. Sits after the park/wake hold and
+	// before anything that could promote — a woken card is still an umbrella.
+	umbrella, umbErr := s.hasOpenChildren(ctx, task.ID)
+	if umbErr != nil {
+		return false, "", fmt.Errorf("list subtasks: %w", umbErr)
+	}
+	if umbrella {
+		return false, "umbrella with open children", nil
 	}
 
 	// 2. Human-gate (is_human_gated's cheap path — see humanGateReason) and the
@@ -321,4 +333,32 @@ func (s *backlogPromotionAdvisoryService) wasDeliberatelyParked(
 	nameCatCache map[uuid.UUID]map[string]domain.StatusCategory,
 ) (bool, error) {
 	return wasDeliberatelyParkedFromBacklog(ctx, s.activityRepo, s.statusRepo, task, nameCatCache)
+}
+
+// hasOpenChildren reports whether the task has at least one child that is not
+// done/cancelled. A child whose status cannot be resolved counts as open, like the
+// sweep's missing-closure-signal case (fail closed). Children may live in another
+// project; status ids are globally unique, so a lookup by StatusID is enough.
+func (s *backlogPromotionAdvisoryService) hasOpenChildren(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	subtasks, err := s.taskRepo.ListSubtasks(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	if len(subtasks) == 0 {
+		return false, nil
+	}
+	categories := make(map[uuid.UUID]domain.StatusCategory, len(subtasks))
+	for _, sub := range subtasks {
+		if _, ok := categories[sub.StatusID]; ok {
+			continue
+		}
+		st, err := s.statusRepo.GetByID(ctx, sub.StatusID)
+		if err != nil {
+			return false, err
+		}
+		if st != nil {
+			categories[sub.StatusID] = st.Category
+		}
+	}
+	return !allSubtasksTerminal(subtasks, categories), nil
 }

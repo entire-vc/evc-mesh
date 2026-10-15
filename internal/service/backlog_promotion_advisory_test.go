@@ -398,3 +398,72 @@ func TestBacklogPromotionAdvisory_UnresolvableProject_FailsClosedNotPromotable(t
 		t.Fatalf("expected promote=false (project lookup unresolvable, fail-closed), got true, reason=%q", got.Reason)
 	}
 }
+
+// --- Umbrella with open children (#d70b6815): sweep branch 1a-bis ---------------
+
+func (h *backlogHarness) addChild(t *testing.T, parent *domain.Task, statusID uuid.UUID) *domain.Task {
+	t.Helper()
+	child := h.addTask(t, parent.ProjectID, statusID)
+	child.ParentTaskID = &parent.ID
+	return child
+}
+
+func TestBacklogPromotionAdvisory_UmbrellaWithOpenChild_NotPromotable(t *testing.T) {
+	h := newBacklogHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, "Backlog", domain.StatusCategoryBacklog)
+	done := h.addStatus(t, projectID, "Done", domain.StatusCategoryDone)
+	todo := h.addStatus(t, projectID, "Todo", domain.StatusCategoryTodo)
+
+	umbrella := h.addTask(t, projectID, backlog.ID)
+	h.addChild(t, umbrella, done.ID)
+	h.addChild(t, umbrella, todo.ID)
+
+	decisions, err := h.svc.SweepAdvisory(context.Background())
+	if err != nil {
+		t.Fatalf("SweepAdvisory: %v", err)
+	}
+	got := decisionFor(t, decisions, umbrella.ID)
+	if got.Promote || got.Reason != "umbrella with open children" {
+		t.Fatalf("expected promote=false reason=umbrella with open children, got promote=%v reason=%q", got.Promote, got.Reason)
+	}
+}
+
+func TestBacklogPromotionAdvisory_UmbrellaWithAllChildrenClosed_Promotable(t *testing.T) {
+	h := newBacklogHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, "Backlog", domain.StatusCategoryBacklog)
+	done := h.addStatus(t, projectID, "Done", domain.StatusCategoryDone)
+	cancelled := h.addStatus(t, projectID, "Cancelled", domain.StatusCategoryCancelled)
+
+	umbrella := h.addTask(t, projectID, backlog.ID)
+	h.addChild(t, umbrella, done.ID)
+	h.addChild(t, umbrella, cancelled.ID)
+
+	decisions, err := h.svc.SweepAdvisory(context.Background())
+	if err != nil {
+		t.Fatalf("SweepAdvisory: %v", err)
+	}
+	if got := decisionFor(t, decisions, umbrella.ID); !got.Promote {
+		t.Fatalf("expected promote=true (every child closed), got false, reason=%q", got.Reason)
+	}
+}
+
+// A child in ANOTHER project is judged by its own status, and a child whose status
+// cannot be resolved counts as open (fail closed, like the sweep's missing signal).
+func TestBacklogPromotionAdvisory_UmbrellaChildUnknownStatus_NotPromotable(t *testing.T) {
+	h := newBacklogHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, "Backlog", domain.StatusCategoryBacklog)
+
+	umbrella := h.addTask(t, projectID, backlog.ID)
+	h.addChild(t, umbrella, uuid.New()) // status id never seeded
+
+	decisions, err := h.svc.SweepAdvisory(context.Background())
+	if err != nil {
+		t.Fatalf("SweepAdvisory: %v", err)
+	}
+	if got := decisionFor(t, decisions, umbrella.ID); got.Promote {
+		t.Fatalf("expected promote=false (child status unresolvable), got true, reason=%q", got.Reason)
+	}
+}
