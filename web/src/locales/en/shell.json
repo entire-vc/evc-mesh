@@ -18,7 +18,8 @@
     "integrations": "Integrations",
     "connectedApps": "Connected apps",
     "workspaceSettings": "Workspace Settings",
-    "projectSettings": "Project Settings"
+    "projectSettings": "Project Settings",
+    "extensions": "Extensions"
   },
   "sidebar": {
     "workspaceLogoAlt": "Workspace",

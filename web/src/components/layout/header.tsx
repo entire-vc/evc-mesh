@@ -501,7 +501,7 @@ const WORKSPACE_PAGES: Array<{
   { pattern: /\/w\/[^/]+\/spark\/?$/, titleKey: "nav.spark", icon: Sparkles },
   { pattern: /\/w\/[^/]+\/events\/?$/, titleKey: "nav.events", icon: Activity },
   { pattern: /\/w\/[^/]+\/analytics\/?$/, titleKey: "nav.analytics", icon: BarChart2 },
-  { pattern: /\/w\/[^/]+\/integrations\/?$/, titleKey: "nav.integrations", icon: Settings },
+  { pattern: /\/w\/[^/]+\/extensions\/?$/, titleKey: "nav.extensions", icon: Settings },
   { pattern: /\/w\/[^/]+\/initiatives\/?$/, titleKey: "nav.initiatives", icon: Target },
   { pattern: /\/w\/[^/]+\/triage\/?$/, titleKey: "nav.triage", icon: Inbox },
   { pattern: /\/w\/[^/]+\/connected-apps\/?$/, titleKey: "nav.connectedApps", icon: Plug },

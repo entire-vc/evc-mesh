@@ -55,8 +55,11 @@ const EventFeedPage = lazy(() =>
 const AnalyticsPage = lazy(() =>
   import("@/pages/analytics").then((m) => ({ default: m.AnalyticsPage })),
 );
-const IntegrationsPage = lazy(() =>
-  import("@/pages/integrations").then((m) => ({ default: m.IntegrationsPage })),
+const ExtensionsPage = lazy(() =>
+  import("@/pages/extensions").then((m) => ({ default: m.ExtensionsPage })),
+);
+const IntegrationsRedirect = lazy(() =>
+  import("@/pages/extensions").then((m) => ({ default: m.IntegrationsRedirect })),
 );
 const InitiativesPage = lazy(() =>
   import("@/pages/initiatives").then((m) => ({ default: m.InitiativesPage })),
@@ -287,10 +290,18 @@ const router = createBrowserRouter(
           }
         />
         <Route
+          path="w/:wsSlug/extensions"
+          element={
+            <LazyPage>
+              <ExtensionsPage />
+            </LazyPage>
+          }
+        />
+        <Route
           path="w/:wsSlug/integrations"
           element={
             <LazyPage>
-              <IntegrationsPage />
+              <IntegrationsRedirect />
             </LazyPage>
           }
         />
