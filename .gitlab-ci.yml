@@ -379,6 +379,35 @@ topology-gate:
     - python3 scripts/test_topology_gate.py
     - python3 scripts/topology_gate.py
 
+# ── stall-watchdog-controls ─────────────────────────────────────────────────
+# The `test` job runs the stall watchdog's self-check once. This job proves that
+# self-check can fail: the same cases run against three deliberately broken
+# copies of the watchdog (no SIGQUIT, output ignored, CPU ignored), and each must
+# fail for its own reason. It prints `control <name>: failed as expected` per
+# control and fails the job if any control does not. About a minute, so it is
+# kept out of `test` (which runs on every merge request) and runs only when the
+# watchdog, its self-check or this file change, plus on main and schedules.
+stall-watchdog-controls:
+  stage: gate
+  # Light gate -> the `ci-fast` lane, like the other gates. The image is a public
+  # Go image (the controls build and run a tiny Go package); nothing is installed.
+  tags: [ci-fast]
+  image: golang:1.25-alpine
+  allow_failure: false
+  timeout: 10m
+  variables:
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - scripts/ci/go-test-stall-watchdog.sh
+        - scripts/ci/test-go-test-stall-watchdog.sh
+        - .gitlab-ci.yml
+  script:
+    - sh scripts/ci/test-go-test-stall-watchdog.sh --prove-controls
+
 # ── self-host-env ──────────────────────────────────────────────────────────
 # Ported from .github/workflows/ci.yml's "Self-host env (no new required
 # vars)". Guards the class of defect that broke the 2026-07-29 upgrade of an
