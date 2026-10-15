@@ -1390,6 +1390,11 @@ func (s *teamRelayMountService) resolveOrCreateFolderPath(
 	}
 
 	walked := make([]string, 0, len(segments))
+	// Once a segment resolves through a moved placeholder, the rest of the share
+	// path lives under that placeholder's CURRENT path, not under the share's own
+	// path, so deeper lookups walk from realBase instead of from the top level.
+	var realBase []string
+	baseLen := 0
 	for _, raw := range segments {
 		slug := folderSlug(raw)
 		walked = append(walked, slug)
@@ -1397,16 +1402,48 @@ func (s *teamRelayMountService) resolveOrCreateFolderPath(
 
 		if cached, ok := cache[key]; ok {
 			parentID = cached
+			if movedDoc, wasMoved := cache[movedCacheKey(key)]; wasMoved {
+				// A cache hit must not forget that this folder was found through its alias.
+				base, perr := s.livePath(ctx, *movedDoc)
+				if perr != nil {
+					return nil, perr
+				}
+				realBase, baseLen = base, len(walked)
+			}
 			continue
 		}
 
-		doc, depth, err := s.documentRepo.GetByPathInProject(ctx, projectID, walked)
+		lookup := walked
+		if realBase != nil {
+			lookup = append(append([]string{}, realBase...), walked[baseLen:]...)
+		}
+		doc, depth, err := s.documentRepo.GetByPathInProject(ctx, projectID, lookup)
 		if err != nil {
 			return nil, err
 		}
-		if doc != nil && depth == len(walked) {
+		if doc != nil && depth == len(lookup) {
 			cache[key] = &doc.ID
 			parentID = &doc.ID
+			continue
+		}
+
+		// A placeholder someone filed away (the docs layout moves root documents
+		// into canon folders) is no longer at this path, but its old path is
+		// recorded as an alias. It is still this share folder: use it, or every
+		// scheduled sync leaves a new empty duplicate at the top level.
+		moved, aerr := s.documentRepo.GetByPathAlias(ctx, projectID, key)
+		if aerr != nil {
+			return nil, aerr
+		}
+		if moved != nil {
+			base, perr := s.livePath(ctx, moved.ID)
+			if perr != nil {
+				return nil, perr
+			}
+			realBase, baseLen = base, len(walked)
+			cache[key] = &moved.ID
+			cache[movedCacheKey(key)] = &moved.ID
+			parentID = &moved.ID
 			continue
 		}
 
@@ -1418,6 +1455,28 @@ func (s *teamRelayMountService) resolveOrCreateFolderPath(
 		parentID = newID
 	}
 	return parentID, nil
+}
+
+// movedCacheKey marks, in the folder cache, a folder that was found through its
+// alias rather than at its share path.
+func movedCacheKey(key string) string { return "\x00moved\x00" + key }
+
+// livePath returns the current slug path of the document id, walking its
+// parents up to the top level.
+func (s *teamRelayMountService) livePath(ctx context.Context, id uuid.UUID) ([]string, error) {
+	var slugs []string
+	for cur := &id; cur != nil; {
+		doc, err := s.documentRepo.GetByID(ctx, *cur)
+		if err != nil {
+			return nil, err
+		}
+		if doc == nil || len(slugs) > 64 {
+			return nil, fmt.Errorf("teamrelay: cannot resolve the current path of folder %s", id)
+		}
+		slugs = append([]string{doc.Slug}, slugs...)
+		cur = doc.ParentID
+	}
+	return slugs, nil
 }
 
 // createFolderPlaceholder makes an empty 'own' document that exists only to
