@@ -232,14 +232,18 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 				return "already_visited"
 			}
 			visited[ref] = true
+			reason := assess(ref)
+			// not_independent is a filter, not a try: it spends no attempt, so a
+			// run of same-family profiles cannot exhaust max_attempts before an
+			// independent one is reached.
+			if reason == "available" && filtered && accept != nil && !accept(ref) {
+				result.Trace = append(result.Trace, RuntimeTrace{ProfileID: ref, Reason: "not_independent"})
+				return "not_independent"
+			}
 			if attempts >= binding.Policy.MaxAttempts {
 				return "attempt_limit"
 			}
 			attempts++
-			reason := assess(ref)
-			if reason == "available" && filtered && accept != nil && !accept(ref) {
-				reason = "not_independent"
-			}
 			result.Trace = append(result.Trace, RuntimeTrace{ProfileID: ref, Reason: reason})
 			return reason
 		}
@@ -325,7 +329,7 @@ func PreviewRuntime(c *RuntimeCatalog, binding RuntimeBinding, revision int64, e
 		return result
 	}
 	independentPick := selected != "" && qaFilter
-	if selected == "" && qaFilter && result.Reason == "no_available_route" {
+	if selected == "" && qaFilter && (result.Reason == "no_available_route" || result.Reason == "attempt_limit") {
 		switch {
 		case binding.Policy.QA.Mode == "strict" && !relaxable():
 			result.Reason = "strict_independent_review_unavailable"

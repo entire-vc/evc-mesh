@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -265,4 +266,72 @@ func TestRuntimePreviewConfiguredThresholdStillTriggersReserve(t *testing.T) {
 	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, nil, RuntimePreviewInput{Purpose: "new_launch"}, now)
 	require.Equal(t, "reserve", result.SelectedProfileID)
 	require.Equal(t, "threshold_blocked", result.Trace[0].Reason)
+}
+
+// manyFamilyFixture lists n same-family primaries (family-a) and, when
+// independent is set, one extra family-b profile at the end of the list.
+func manyFamilyFixture(t *testing.T, n int, independent bool) (*RuntimeCatalog, RuntimeBinding, map[string]RuntimeCandidateEvidence, time.Time) {
+	t.Helper()
+	c, b, facts, now := runtimeRouteFixture(t)
+	primaries := []string{}
+	add := func(ref, developer, family string) {
+		p := c.Profiles["preferred"]
+		p.ModelDeveloper, p.ModelFamily = developer, family
+		c.Profiles[ref] = p
+		f := facts["preferred"]
+		f.ActualModelDeveloper, f.ActualModelFamily = developer, family
+		facts[ref] = f
+		primaries = append(primaries, ref)
+	}
+	for i := 0; i < n; i++ {
+		add(fmt.Sprintf("same-%d", i), "developer-a", "family-a")
+	}
+	if independent {
+		add("other", "developer-b", "family-b")
+	}
+	b.PermittedProfiles = append(append([]string{}, b.PermittedProfiles...), primaries...)
+	b.Policy.PrimaryProfiles = primaries
+	b.Policy.QuotaEdges = map[string][]string{}
+	b.Policy.MaxAttempts = 2
+	return c, b, facts, now
+}
+
+func TestRuntimePreviewNotIndependentSpendsNoAttempt(t *testing.T) {
+	provenance, request := reviewRequest()
+
+	// same-family only, prefer: falls back to a non-independent profile.
+	c, b, facts, now := manyFamilyFixture(t, 6, false)
+	b.Policy.QA.Mode = "prefer"
+	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.NotEmpty(t, result.SelectedProfileID)
+	require.NotEqual(t, "attempt_limit", result.Reason)
+
+	// an independent profile behind six same-family ones is still found.
+	c, b, facts, now = manyFamilyFixture(t, 6, true)
+	b.Policy.QA.Mode = "prefer"
+	result = PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.Equal(t, "other", result.SelectedProfileID)
+	require.Equal(t, "independent_reviewer_available", result.Reason)
+
+	// strict without any independent profile still refuses.
+	c, b, facts, now = manyFamilyFixture(t, 6, false)
+	b.Policy.QA.Mode = "strict"
+	result = PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, provenance, request, now)
+	require.Empty(t, result.SelectedProfileID)
+}
+
+// max_attempts still bounds the walk over profiles that are actually tried.
+func TestRuntimePreviewAttemptLimitStillBoundsQuotaWalk(t *testing.T) {
+	c, b, facts, now := manyFamilyFixture(t, 5, false)
+	b.Policy.PrimaryProfiles = []string{"same-0"}
+	b.Policy.QuotaEdges = map[string][]string{"same-0": {"same-1", "same-2", "same-3", "same-4"}}
+	request := RuntimePreviewInput{Purpose: "new_launch", RequiredCapabilities: []string{"code"}}
+	for ref := range c.Pools {
+		for _, f := range facts {
+			f.Pools[ref] = RuntimePoolObservation{State: "exhausted", Verified: true, ObservedAt: now.Add(-time.Second)}
+		}
+	}
+	result := PreviewRuntime(c, b, 1, true, b.PermittedProfiles, facts, nil, request, now)
+	require.Empty(t, result.SelectedProfileID)
+	require.LessOrEqual(t, len(result.Trace), b.Policy.MaxAttempts)
 }
