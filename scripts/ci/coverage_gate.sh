@@ -13,7 +13,9 @@ if [ "$#" -gt 1 ]; then
   reuse_profile="$4"
   # This must precede the empty-diff skip: a missing or stale successful test
   # artifact is never equivalent to a confirmed empty set.
-  python3 scripts/ci/coverage_artifact.py verify "$reuse_profile" "$3"
+  # $BASE lets it also prove that a package selection (not `./...`) covers every
+  # package this diff changed.
+  python3 scripts/ci/coverage_artifact.py verify "$reuse_profile" "$3" "$BASE"
 fi
 echo "Diff base: $BASE"
 AFFECTED=$(bash docs/ci-templates/scripts/affected_set_go.sh "$BASE")
