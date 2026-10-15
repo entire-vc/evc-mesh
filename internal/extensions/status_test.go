@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 )
 
@@ -227,4 +228,58 @@ func TestResolveStatus_ConsentStoreAndErrors(t *testing.T) {
 	require.NoError(t, freg.Register(failing))
 	_, err = freg.ResolveStatus(context.Background(), uuid.New(), failing.Manifest().ID)
 	require.ErrorContains(t, err, "conn down")
+}
+
+type recordedConsents struct{ c *domain.ExtensionConsent }
+
+func (r recordedConsents) GetConsent(context.Context, uuid.UUID, string) (*domain.ExtensionConsent, error) {
+	return r.c, nil
+}
+func (r recordedConsents) SetConsent(context.Context, uuid.UUID, domain.ExtensionConsent) error {
+	return nil
+}
+
+// The production registry reads recorded consent; without a recorded row the
+// manifest's declared capabilities still apply.
+func TestWithIntegrationConsents_RecordedWinsOverDeclared(t *testing.T) {
+	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	id := stub.Manifest().ID
+
+	recorded := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{c: &domain.ExtensionConsent{Capabilities: []string{"api:only"}}})
+	require.NoError(t, recorded.Register(stub))
+	s, err := recorded.ResolveStatus(context.Background(), uuid.New(), id)
+	require.NoError(t, err)
+	require.Equal(t, []string{"api:only"}, s.ConsentedCapabilities)
+
+	legacy := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{})
+	require.NoError(t, legacy.Register(stub))
+	s, err = legacy.ResolveStatus(context.Background(), uuid.New(), id)
+	require.NoError(t, err)
+	require.Equal(t, extensions.DeclaredCapabilities(stub.Manifest().Capabilities), s.ConsentedCapabilities)
+}
+
+// An extension with no connection and no instance setting has consented to
+// nothing, even though the store answers (nil, nil) for it exactly as it does for
+// a legacy connection without a record.
+func TestWithIntegrationConsents_UnconnectedHasNoConsent(t *testing.T) {
+	stub, _ := newStub(t, nil, nil)
+	reg := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{})
+	require.NoError(t, reg.Register(stub))
+	s, err := reg.ResolveStatus(context.Background(), uuid.New(), stub.Manifest().ID)
+	require.NoError(t, err)
+	require.False(t, s.Enabled)
+	require.Empty(t, s.ConsentedCapabilities)
+}
+
+// The production store falls back to the manifest's declared capabilities for a
+// connection without a record. With only the instance level on there is no
+// workspace connection, so that fallback must not be reported as workspace consent.
+func TestWithIntegrationConsents_InstanceOnlyHasNoWorkspaceConsent(t *testing.T) {
+	stub, _ := newStub(t, nil, &extensions.InstanceSetting{Enabled: true})
+	reg := extensions.NewRegistry().WithIntegrationConsents(recordedConsents{})
+	require.NoError(t, reg.Register(stub))
+	s, err := reg.ResolveStatus(context.Background(), uuid.New(), stub.Manifest().ID)
+	require.NoError(t, err)
+	require.Equal(t, extensions.SourceInstance, s.Source)
+	require.Empty(t, s.ConsentedCapabilities)
 }

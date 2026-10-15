@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
 // HealthTTL is how long a health report is served from cache.
@@ -74,6 +76,18 @@ func (r *Registry) WithConsentStore(s ConsentStore) *Registry {
 	return r
 }
 
+// WithIntegrationConsents reads the consent recorded at connect time. A
+// connection made before consent was stored keeps what its manifest declares.
+func (r *Registry) WithIntegrationConsents(repo repository.ExtensionConsentRepository) *Registry {
+	return r.WithConsentStore(IntegrationConsents{Repo: repo, Declared: func(id string) []string {
+		p, ok := r.Get(id)
+		if !ok {
+			return nil
+		}
+		return DeclaredCapabilities(p.Manifest().Capabilities)
+	}})
+}
+
 func (r *Registry) status(ctx context.Context, workspaceID uuid.UUID, extensionID string, force bool) (Status, error) {
 	p, ok := r.Get(extensionID)
 	if !ok {
@@ -100,6 +114,13 @@ func (r *Registry) status(ctx context.Context, workspaceID uuid.UUID, extensionI
 			return Status{}, fmt.Errorf("resolve status %q: consents: %w", extensionID, err)
 		}
 		st.ConsentedCapabilities = caps
+		if res.Source == SourceNone || res.Source == SourceInstance {
+			// No workspace connection (no instance setting, or the instance level governs): nothing was consented to.
+			// The store reports (nil, nil) for "no connection" and for "legacy
+			// connection without a record" alike, and only the second keeps the
+			// declared capabilities.
+			st.ConsentedCapabilities = nil
+		}
 	} else {
 		st.ConsentedCapabilities = declaredCapabilities(m.Capabilities)
 	}
@@ -144,3 +165,7 @@ func declaredCapabilities(c Capabilities) []string {
 	sort.Strings(out)
 	return out
 }
+
+// DeclaredCapabilities lists a manifest's capabilities as "kind:value" strings,
+// sorted: the form consent is recorded and compared in.
+func DeclaredCapabilities(c Capabilities) []string { return declaredCapabilities(c) }

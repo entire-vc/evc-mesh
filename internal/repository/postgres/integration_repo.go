@@ -80,6 +80,33 @@ func (r *IntegrationRepo) Upsert(ctx context.Context, cfg *domain.IntegrationCon
 	return err
 }
 
+// InsertIfAbsent creates the row only when the workspace has none for the
+// provider and reports whether it did. Unlike Upsert it never overwrites the
+// config of a connection another request just made.
+func (r *IntegrationRepo) InsertIfAbsent(ctx context.Context, cfg *domain.IntegrationConfig) (bool, error) {
+	if cfg.Provider == domain.IntegrationProviderAgentRuntime {
+		return false, apierror.BadRequest("use the versioned runtime API")
+	}
+	const q = `
+		INSERT INTO integration_configs (
+			id, workspace_id, provider, config, is_active, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (workspace_id, provider) DO NOTHING
+	`
+	config := cfg.Config
+	if config == nil {
+		config = []byte("{}")
+	}
+	res, err := r.db.ExecContext(ctx, q,
+		cfg.ID, cfg.WorkspaceID, string(cfg.Provider), config, cfg.IsActive, cfg.CreatedAt, cfg.UpdatedAt,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // GetByID retrieves an integration config by its ID.
 func (r *IntegrationRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.IntegrationConfig, error) {
 	const q = `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE id = $1`
