@@ -381,6 +381,27 @@ func (c *cachedAgentAuth) SetAgentAPIKeyRepo(repo repository.AgentAPIKeyReposito
 	}
 }
 
+// AgentSponsorConfigurable is implemented by the agent service and its cache
+// wrapper; the wiring code asserts on it to hand over the sponsor recorder.
+type AgentSponsorConfigurable interface {
+	SetAgentSponsorRecorder(AgentSponsorRecorder)
+}
+
+// SetAgentSponsorRecorder forwards the optional dependency, same reason as
+// SetAgentWorkspaceGrantRepo above: without the forward the wiring in cmd/api
+// asserts on the wrapper, succeeds, and records nothing.
+func (c *cachedAgentAuth) SetAgentSponsorRecorder(r AgentSponsorRecorder) {
+	if configurable, ok := c.AgentService.(AgentSponsorConfigurable); ok {
+		configurable.SetAgentSponsorRecorder(r)
+	}
+}
+
+var (
+	_ AgentSponsorConfigurable = (*cachedAgentAuth)(nil)
+	_ AgentSponsorConfigurable = (*agentService)(nil)
+	_ AgentSponsorConfigurable = (*agentKeyService)(nil)
+)
+
 // Compile-time proof that the wrapper still satisfies the optional-dependency
 // interface the wiring code asserts on.
 var _ AgentServiceConfigurable = (*cachedAgentAuth)(nil)

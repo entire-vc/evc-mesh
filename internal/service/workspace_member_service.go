@@ -37,6 +37,20 @@ type workspaceMemberService struct {
 	// — optional, nil in tests that don't exercise it, in which case candidates
 	// are only checked against other usernames, same as before.
 	agentRepo repository.AgentRepository
+	// events receives workspace.member.added / .removed; nil = not dispatched.
+	events PublicEventDispatcher
+}
+
+// SetEventDispatcher wires the dispatcher for the member events.
+func (s *workspaceMemberService) SetEventDispatcher(d PublicEventDispatcher) { s.events = d }
+
+func (s *workspaceMemberService) publish(ctx context.Context, event string, workspaceID, userID uuid.UUID, role string) {
+	if s.events == nil {
+		return
+	}
+	go s.events.Dispatch(context.WithoutCancel(ctx), workspaceID, event, map[string]any{
+		"workspace_id": workspaceID, "user_id": userID, "role": role,
+	})
 }
 
 // NewWorkspaceMemberService returns a new WorkspaceMemberService.
@@ -152,6 +166,7 @@ func (s *workspaceMemberService) AddMember(ctx context.Context, workspaceID uuid
 		"email":   user.Email,
 		"role":    role,
 	})
+	s.publish(ctx, "workspace.member.added", workspaceID, user.ID, role)
 
 	result := &domain.WorkspaceMemberWithUser{
 		WorkspaceMember: *member,
@@ -255,6 +270,7 @@ func (s *workspaceMemberService) AddMemberWithCreate(ctx context.Context, worksp
 		"role":    role,
 		"created": true,
 	})
+	s.publish(ctx, "workspace.member.added", workspaceID, user.ID, role)
 
 	return &domain.WorkspaceMemberWithUser{
 		WorkspaceMember: *member,
@@ -408,6 +424,7 @@ func (s *workspaceMemberService) RemoveMember(ctx context.Context, workspaceID, 
 	s.logMemberActivity(ctx, workspaceID, existing.ID, "member.removed", map[string]interface{}{
 		"user_id": targetUserID.String(),
 	})
+	s.publish(ctx, "workspace.member.removed", workspaceID, targetUserID, existing.Role)
 	return nil
 }
 

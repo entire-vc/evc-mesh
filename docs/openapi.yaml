@@ -3656,6 +3656,61 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/workspaces/{ws_id}/export/hierarchy:
+    parameters:
+      - name: ws_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Members]
+      summary: Export the workspace hierarchy
+      description: >
+        Projects, members with roles and agents with active key metadata (never key
+        values) and sponsor_user_id, in one response, for an extension's periodic
+        reconciliation. cursor is the hash of the data and is also the ETag; send it
+        back in If-None-Match to get 304 when nothing changed. A human needs the
+        member-management right; an extension needs api:workspaces:read,
+        api:projects:read, api:members:read and api:agents:read.
+      operationId: exportWorkspaceHierarchy
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Hierarchy snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workspace: { type: object }
+                  projects: { type: array, items: { type: object } }
+                  members: { type: array, items: { type: object } }
+                  agents: { type: array, items: { type: object } }
+                  cursor: { type: string }
+                  instance_url: { type: string }
+                  counts: { type: object }
+        "304":
+          description: Nothing changed since the ETag
+        "403":
+          description: Missing right or capability
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Workspace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/workspaces/{ws_id}/members/me:
     parameters:
       - name: ws_id

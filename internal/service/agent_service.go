@@ -15,6 +15,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -52,6 +53,8 @@ const (
 )
 
 type agentService struct {
+	// sponsors records agents.sponsor_user_id; nil = not recorded.
+	sponsors        AgentSponsorRecorder
 	agentRepo       repository.AgentRepository
 	activityRepo    repository.ActivityLogRepository
 	agentActLogRepo repository.AgentActivityLogRepository
@@ -103,6 +106,36 @@ func NewAgentService(
 		workspaceRepo: workspaceRepo,
 		userRepo:      userRepo,
 	}
+}
+
+// AgentSponsorRecorder records agents.sponsor_user_id, the user who stands behind
+// an agent (who registered it or issued its latest key).
+type AgentSponsorRecorder interface {
+	SetAgentSponsor(ctx context.Context, agentID, userID uuid.UUID) error
+}
+
+// SetAgentSponsorRecorder wires the optional sponsor recorder; nil (never called)
+// leaves sponsor_user_id as the migration backfilled it.
+func (s *agentService) SetAgentSponsorRecorder(r AgentSponsorRecorder) {
+	s.sponsors = r
+}
+
+// recordSponsor stores who is behind the agent: the human who made the request,
+// or, for a request not made by a human (a bootstrap script, another agent), the
+// supervisor named in the input. Failing to record it never fails the registration.
+func recordSponsor(ctx context.Context, r AgentSponsorRecorder, agentID uuid.UUID, fallback *uuid.UUID) {
+	if r == nil {
+		return
+	}
+	var sponsor uuid.UUID
+	if id, typ := actorctx.FromContext(ctx); typ == domain.ActorTypeUser && id != uuid.Nil {
+		sponsor = id
+	} else if fallback != nil {
+		sponsor = *fallback
+	} else {
+		return
+	}
+	_ = r.SetAgentSponsor(ctx, agentID, sponsor)
 }
 
 // SetAgentActivityLogRepo wires the optional agent activity log repository.
@@ -300,6 +333,8 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 	if err := s.agentRepo.CreateWithHomeGrant(ctx, agent); err != nil {
 		return nil, err
 	}
+
+	recordSponsor(ctx, s.sponsors, agent.ID, input.SupervisorUserID)
 
 	return &RegisterAgentOutput{
 		Agent:  agent,

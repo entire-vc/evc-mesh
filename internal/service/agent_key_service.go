@@ -75,7 +75,12 @@ type agentKeyService struct {
 	activity   repository.ActivityLogRepository
 	webhooks   WebhookService
 	cache      AgentCacheInvalidator
+	sponsors   AgentSponsorRecorder
 }
+
+// SetAgentSponsorRecorder wires the optional sponsor recorder: a key issued by a
+// user makes that user the agent's sponsor.
+func (s *agentKeyService) SetAgentSponsorRecorder(r AgentSponsorRecorder) { s.sponsors = r }
 
 // NewAgentKeyService wires the service. webhooks and cache may be nil (events
 // are then not dispatched / no cache to invalidate).
@@ -158,6 +163,7 @@ func (s *agentKeyService) Issue(ctx context.Context, agentID uuid.UUID, label st
 		return nil, err
 	}
 
+	recordSponsor(ctx, s.sponsors, agentID, nil)
 	s.audit(ctx, agent, "key_issued", row.ID.String(), label)
 	s.dispatch(agent, eventAgentKeyIssued, row.ID.String(), label)
 	return &IssuedAgentKey{KeyID: row.ID, APIKey: raw, AgentID: agentID, Label: label, ExpiresAt: expires}, nil
