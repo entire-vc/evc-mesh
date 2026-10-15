@@ -116,6 +116,10 @@ var extensionRouteCapabilities = map[string]string{
 	"POST /api/v1/workspaces/:ws_id/projects": "projects:write",
 	"PATCH /api/v1/projects/:proj_id":         "projects:write",
 
+	// hierarchy export (the handler additionally requires projects:read,
+	// members:read and agents:read: it carries all of them)
+	"GET /api/v1/workspaces/:ws_id/export/hierarchy": "workspaces:read",
+
 	// members (read only)
 	"GET /api/v1/workspaces/:ws_id/members": "members:read",
 	"GET /api/v1/projects/:proj_id/members": "members:read",

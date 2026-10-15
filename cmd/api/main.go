@@ -328,6 +328,22 @@ func main() {
 	}
 	agentKeyService := service.NewAgentKeyService(agentRepo, workspaceRepo, agentAPIKeyRepo, activityLogRepo, webhookService, agentService.(service.AgentCacheInvalidator))
 	agentKeyHandler := handler.NewAgentKeyHandler(agentKeyService)
+	// Hierarchy export + agents.sponsor_user_id (W3.5), plus the project and member
+	// events extensions subscribe to.
+	workspaceExportRepo := postgres.NewWorkspaceExportRepo(db)
+	workspaceExportHandler := handler.NewWorkspaceExportHandler(workspaceExportRepo)
+	if r, ok := agentService.(service.AgentSponsorConfigurable); ok {
+		r.SetAgentSponsorRecorder(workspaceExportRepo)
+	}
+	if r, ok := agentKeyService.(service.AgentSponsorConfigurable); ok {
+		r.SetAgentSponsorRecorder(workspaceExportRepo)
+	}
+	if r, ok := projectService.(interface {
+		SetEventDispatcher(service.PublicEventDispatcher)
+	}); ok {
+		r.SetEventDispatcher(webhookService)
+	}
+
 	// Service principal of extension connections (ext_ tokens).
 	extensionActorService := service.NewExtensionActorService(postgres.NewExtensionActorRepo(db), integrationRepo, workspaceRepo)
 	extensionActorHandler := handler.NewExtensionActorHandler(extensionActorService)
@@ -600,6 +616,11 @@ func main() {
 
 	// Member services.
 	workspaceMemberService := service.NewWorkspaceMemberService(workspaceMemberRepo, userRepo, projectMemberRepo, activityLogRepo, agentRepo)
+	if r, ok := workspaceMemberService.(interface {
+		SetEventDispatcher(service.PublicEventDispatcher)
+	}); ok {
+		r.SetEventDispatcher(webhookService)
+	}
 	projectMemberService := service.NewProjectMemberService(projectMemberRepo, workspaceMemberRepo, projectRepo,
 		service.WithAgentRepo(agentRepo),
 		service.WithAgentWorkspaceGrantRepo(agentWorkspaceGrantRepo),
@@ -1429,6 +1450,10 @@ func main() {
 	// Workspace member routes.
 	// NOTE: /members/me MUST be registered before /members/:user_id to avoid "me" being parsed as UUID.
 	api.GET("/workspaces/:ws_id/members", workspaceMemberHandler.List)
+	// Full hierarchy for an extension's periodic reconciliation. Humans need the
+	// member-management right (it lists agent key metadata); an extension is
+	// authorized by the capability guard plus the handler's four-capability check.
+	api.GET("/workspaces/:ws_id/export/hierarchy", workspaceExportHandler.Hierarchy, rbac(mw.PermManageMembers))
 	api.GET("/workspaces/:ws_id/members/me", workspaceMemberHandler.Me)
 	api.POST("/workspaces/:ws_id/members", workspaceMemberHandler.Add, rbac(mw.PermManageMembers))
 	api.PATCH("/workspaces/:ws_id/members/:user_id", workspaceMemberHandler.UpdateRole, rbac(mw.PermManageMembers))

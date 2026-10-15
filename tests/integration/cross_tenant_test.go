@@ -65,6 +65,8 @@ var wsScopedRoutes = []wsRoute{
 
 	{http.MethodGet, "/tasks", nil},
 
+	{http.MethodGet, "/export/hierarchy", nil},
+
 	{http.MethodGet, "/agents", nil},
 	{http.MethodPost, "/agents", map[string]string{"name": "intruder-agent"}},
 	{http.MethodGet, "/agents/status", nil},

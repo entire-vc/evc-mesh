@@ -37,6 +37,30 @@ type projectService struct {
 	activityRepo      repository.ActivityLogRepository
 	projectMemberRepo repository.ProjectMemberRepository
 	autoTransRuleRepo repository.AutoTransitionRuleRepository
+	// events receives project.created / project.updated; nil = not dispatched.
+	events PublicEventDispatcher
+}
+
+// PublicEventDispatcher fans a public extension event out to the workspace's
+// webhooks and extension subscriptions. WebhookService satisfies it.
+type PublicEventDispatcher interface {
+	Dispatch(ctx context.Context, workspaceID uuid.UUID, eventType string, payload any)
+}
+
+// SetEventDispatcher wires the dispatcher for project.created and project.updated.
+// It is a setter, not an option, because the webhook service is built after the
+// project service in cmd/api/main.go.
+func (s *projectService) SetEventDispatcher(d PublicEventDispatcher) { s.events = d }
+
+// publish dispatches a project event. The payload carries the ids an extension
+// needs to build its external_ref (mesh:<instance_url>:<id>) without a read-back.
+func (s *projectService) publish(ctx context.Context, event string, p *domain.Project) {
+	if s.events == nil {
+		return
+	}
+	go s.events.Dispatch(context.WithoutCancel(ctx), p.WorkspaceID, event, map[string]any{
+		"workspace_id": p.WorkspaceID, "project_id": p.ID, "slug": p.Slug, "name": p.Name, "is_archived": p.IsArchived,
+	})
 }
 
 // NewProjectService returns a new ProjectService backed by the given repositories.
@@ -183,6 +207,7 @@ func (s *projectService) Create(ctx context.Context, project *domain.Project) er
 		}
 	}
 
+	s.publish(ctx, "project.created", project)
 	return nil
 }
 
@@ -209,7 +234,11 @@ func (s *projectService) Update(ctx context.Context, project *domain.Project) er
 	}
 
 	project.UpdatedAt = timeNow()
-	return s.projectRepo.Update(ctx, project)
+	if err := s.projectRepo.Update(ctx, project); err != nil {
+		return err
+	}
+	s.publish(ctx, "project.updated", project)
+	return nil
 }
 
 // Archive sets is_archived=true on the project.
@@ -224,7 +253,11 @@ func (s *projectService) Archive(ctx context.Context, id uuid.UUID) error {
 
 	project.IsArchived = true
 	project.UpdatedAt = timeNow()
-	return s.projectRepo.Update(ctx, project)
+	if err := s.projectRepo.Update(ctx, project); err != nil {
+		return err
+	}
+	s.publish(ctx, "project.updated", project)
+	return nil
 }
 
 // Unarchive sets is_archived=false on the project.
@@ -239,7 +272,11 @@ func (s *projectService) Unarchive(ctx context.Context, id uuid.UUID) error {
 
 	project.IsArchived = false
 	project.UpdatedAt = timeNow()
-	return s.projectRepo.Update(ctx, project)
+	if err := s.projectRepo.Update(ctx, project); err != nil {
+		return err
+	}
+	s.publish(ctx, "project.updated", project)
+	return nil
 }
 
 // Delete soft-deletes the project together with its tasks and documents.
