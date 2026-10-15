@@ -14,11 +14,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
-	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/spark"
 )
 
 // fakeSparkIntegrationRepo is a minimal repository.IntegrationRepository
-// stub, keyed by (workspace, provider) — enough for SparkIntegrationResolver,
+// stub, keyed by (workspace, provider) — enough for the Spark provider,
 // which only ever calls GetByProvider.
 type fakeSparkIntegrationRepo struct {
 	byWorkspaceProvider map[string]*domain.IntegrationConfig
@@ -57,8 +58,28 @@ func (f *fakeSparkIntegrationRepo) ListByProvider(context.Context, domain.Integr
 }
 
 func sparkHandlerCfg(baseURL string) json.RawMessage {
-	raw, _ := json.Marshal(service.SparkIntegrationConfig{BaseURL: baseURL})
+	raw, _ := json.Marshal(map[string]string{"spark_url": baseURL})
 	return raw
+}
+
+// fixedInstance is an extensions.InstanceStore with one Spark instance setting.
+type fixedInstance struct{ s *extensions.InstanceSetting }
+
+func (f fixedInstance) InstanceSetting(context.Context, string) (*extensions.InstanceSetting, error) {
+	return f.s, nil
+}
+
+// newSparkResolver is the production Spark provider over the fake workspace
+// repo and, when instanceURL is set, an instance-level setting. repo may be nil.
+func newSparkResolver(repo *fakeSparkIntegrationRepo, instanceURL string, instanceEnabled bool) *spark.Provider {
+	d := extensions.Deps{}
+	if repo != nil {
+		d.Conns = extensions.IntegrationConnections{Repo: repo}
+	}
+	if instanceURL != "" {
+		d.Inst = fixedInstance{&extensions.InstanceSetting{Enabled: instanceEnabled, Settings: map[string]any{"spark_url": instanceURL}}}
+	}
+	return spark.New(d)
 }
 
 // fakeSparkCatalogServer answers /api/v1/assets with one item — enough to
@@ -114,7 +135,7 @@ func TestSparkHandler_Search_WorkspaceRowEnabled_ReachesResolvedCatalog(t *testi
 	user := uuid.New()
 	repo := newFakeSparkIntegrationRepo()
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: true, Config: sparkHandlerCfg(catalog.URL)})
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{})
+	resolver := newSparkResolver(repo, "", false)
 	h := NewSparkHandler(resolver, nil, memberOf(ws, user))
 
 	rec := doSparkGET(t, h, h.Search, "/?workspace_id="+ws.String(), func(c echo.Context) { asUser(c, user) })
@@ -150,7 +171,7 @@ func TestSparkHandler_Search_IsActiveFalse_RefusesWithNamedReason_DoesNotCallCat
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: false, Config: sparkHandlerCfg(catalog.URL)})
 	// Env IS configured — the point of this test is that a disabled workspace
 	// row must not fall through to it.
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{URL: catalog.URL, Enabled: true})
+	resolver := newSparkResolver(repo, catalog.URL, true)
 	h := NewSparkHandler(resolver, nil, memberOf(ws, user))
 
 	rec := doSparkGET(t, h, h.Search, "/?workspace_id="+ws.String(), func(c echo.Context) { asUser(c, user) })
@@ -165,7 +186,7 @@ func TestSparkHandler_Search_ReenabledAfterDisable_WorksAgain(t *testing.T) {
 	user := uuid.New()
 	repo := newFakeSparkIntegrationRepo()
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: false, Config: sparkHandlerCfg(catalog.URL)})
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{})
+	resolver := newSparkResolver(repo, "", false)
 	h := NewSparkHandler(resolver, nil, memberOf(ws, user))
 	auth := func(c echo.Context) { asUser(c, user) }
 
@@ -181,7 +202,7 @@ func TestSparkHandler_Search_ReenabledAfterDisable_WorksAgain(t *testing.T) {
 
 func TestSparkHandler_Search_NoWorkspaceID_FallsToEnv(t *testing.T) {
 	catalog := fakeSparkCatalogServer(t)
-	resolver := service.NewSparkIntegrationResolver(nil, service.SparkEnvFallback{URL: catalog.URL, Enabled: true})
+	resolver := newSparkResolver(nil, catalog.URL, true)
 	h := NewSparkHandler(resolver, nil, nil)
 
 	// No workspace_id at all → requireWorkspaceAccess is never consulted
@@ -191,7 +212,7 @@ func TestSparkHandler_Search_NoWorkspaceID_FallsToEnv(t *testing.T) {
 }
 
 func TestSparkHandler_Search_MalformedWorkspaceID_Rejected(t *testing.T) {
-	resolver := service.NewSparkIntegrationResolver(nil, service.SparkEnvFallback{})
+	resolver := newSparkResolver(nil, "", false)
 	h := NewSparkHandler(resolver, nil, nil)
 
 	rec := doSparkGET(t, h, h.Search, "/?workspace_id=not-a-uuid", nil)
@@ -210,7 +231,7 @@ func TestSparkHandler_Search_ForeignWorkspaceID_Refused(t *testing.T) {
 	stranger := uuid.New()
 	repo := newFakeSparkIntegrationRepo()
 	repo.put(victimWS, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: true, Config: sparkHandlerCfg(catalog.URL)})
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{})
+	resolver := newSparkResolver(repo, "", false)
 	// stranger is a member of nothing — memberOf is keyed to a DIFFERENT
 	// workspace than victimWS, so GetRole(victimWS, stranger) misses.
 	h := NewSparkHandler(resolver, nil, memberOf(uuid.New(), stranger))
@@ -228,7 +249,7 @@ func TestSparkHandler_Search_AgentForeignWorkspaceID_Refused(t *testing.T) {
 	agentOwnWS := uuid.New()
 	repo := newFakeSparkIntegrationRepo()
 	repo.put(victimWS, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: true, Config: sparkHandlerCfg(catalog.URL)})
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{})
+	resolver := newSparkResolver(repo, "", false)
 	h := NewSparkHandler(resolver, nil, nil)
 
 	rec := doSparkGET(t, h, h.Search, "/?workspace_id="+victimWS.String(), func(c echo.Context) { asAgent(c, uuid.New(), agentOwnWS) })
@@ -244,7 +265,7 @@ func TestSparkHandler_Search_AgentOwnWorkspaceID_Allowed(t *testing.T) {
 	ws := uuid.New()
 	repo := newFakeSparkIntegrationRepo()
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: true, Config: sparkHandlerCfg(catalog.URL)})
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{})
+	resolver := newSparkResolver(repo, "", false)
 	h := NewSparkHandler(resolver, nil, nil)
 
 	rec := doSparkGET(t, h, h.Search, "/?workspace_id="+ws.String(), func(c echo.Context) { asAgent(c, uuid.New(), ws) })
@@ -257,7 +278,7 @@ func TestSparkHandler_Popular_IsActiveFalse_RefusesWithNamedReason(t *testing.T)
 	user := uuid.New()
 	repo := newFakeSparkIntegrationRepo()
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: false, Config: sparkHandlerCfg(catalog.URL)})
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{URL: catalog.URL, Enabled: true})
+	resolver := newSparkResolver(repo, catalog.URL, true)
 	h := NewSparkHandler(resolver, nil, memberOf(ws, user))
 
 	rec := doSparkGET(t, h, h.Popular, "/?workspace_id="+ws.String(), func(c echo.Context) { asUser(c, user) })
@@ -270,7 +291,7 @@ func TestSparkHandler_GetByID_IsActiveFalse_RefusesWithNamedReason(t *testing.T)
 	user := uuid.New()
 	repo := newFakeSparkIntegrationRepo()
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderSpark, IsActive: false, Config: sparkHandlerCfg(catalog.URL)})
-	resolver := service.NewSparkIntegrationResolver(repo, service.SparkEnvFallback{URL: catalog.URL, Enabled: true})
+	resolver := newSparkResolver(repo, catalog.URL, true)
 	h := NewSparkHandler(resolver, nil, memberOf(ws, user))
 
 	e := echo.New()

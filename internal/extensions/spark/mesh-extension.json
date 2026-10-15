@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "id": "spark",
+  "name": "Spark",
+  "version": "1.0.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Каталог ассетов Spark: поиск, популярное, установка агентов в воркспейс",
+  "category": "development",
+  "tags": [
+    "catalog"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://git.entire.host/entire-vc/evc-mesh",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "settings": {
+    "instance": {
+      "$ref": "#/schemas/connection"
+    },
+    "workspace": {
+      "$ref": "#/schemas/connection"
+    }
+  },
+  "schemas": {
+    "connection": {
+      "type": "object",
+      "properties": {
+        "spark_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Адрес каталога Spark"
+        }
+      },
+      "required": [
+        "spark_url"
+      ]
+    }
+  },
+  "capabilities": {
+    "api": [
+      "agents:write"
+    ],
+    "events": [],
+    "webhooks_in": [],
+    "ui": [],
+    "secrets": []
+  }
+}

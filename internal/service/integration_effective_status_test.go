@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/spark"
 )
 
 func statusOf(t *testing.T, all []EffectiveIntegrationStatus, p domain.IntegrationProvider) EffectiveIntegrationStatus {
@@ -23,12 +25,22 @@ func statusOf(t *testing.T, all []EffectiveIntegrationStatus, p domain.Integrati
 	return EffectiveIntegrationStatus{}
 }
 
+// sparkInstance is an extensions.InstanceStore with one fixed Spark setting.
+type sparkInstance struct{ s *extensions.InstanceSetting }
+
+func (f sparkInstance) InstanceSetting(context.Context, string) (*extensions.InstanceSetting, error) {
+	return f.s, nil
+}
+
 func newStatusResolver(repo *fakeVCSIntegrationRepo, telegram bool) *IntegrationStatusResolver {
 	return NewIntegrationStatusResolver(repo,
 		NewVCSIntegrationResolver(repo, VCSEnvFallback{
 			GitLabBaseURL: "https://git.example", GitLabToken: "t", GitHubToken: "g",
 		}),
-		NewSparkIntegrationResolver(repo, SparkEnvFallback{URL: "https://spark.example", Enabled: true}),
+		spark.New(extensions.Deps{
+			Conns: extensions.IntegrationConnections{Repo: repo},
+			Inst:  sparkInstance{&extensions.InstanceSetting{Enabled: true, Settings: map[string]any{"spark_url": "https://spark.example"}}},
+		}),
 		NewTeamRelayIntegrationResolver(repo, TeamRelayEnvFallback{}),
 		telegram)
 }
