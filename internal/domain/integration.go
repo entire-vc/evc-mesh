@@ -49,3 +49,12 @@ type UpdateIntegrationInput struct {
 	Config   json.RawMessage `json:"config"`
 	IsActive *bool           `json:"is_active"`
 }
+
+// ExtensionConsent is what a workspace admin accepted when connecting an
+// extension (spec 03 §3): the capabilities, when, and by whom. A connection
+// made before consent was recorded has none.
+type ExtensionConsent struct {
+	Capabilities []string   `json:"capabilities"`
+	At           time.Time  `json:"at"`
+	By           *uuid.UUID `json:"by,omitempty"`
+}

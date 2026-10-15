@@ -1384,6 +1384,18 @@ type InstalledExtensionRepository interface {
 	List(ctx context.Context) ([]domain.InstalledExtension, error)
 }
 
+// ExtensionConsentRepository reads and writes the consent recorded on an
+// integration_configs row (consented_capabilities/at/by). Kept apart from
+// IntegrationRepository so the legacy integration paths and their bodies stay
+// as they were.
+type ExtensionConsentRepository interface {
+	// GetConsent returns the consent of a workspace's connection to an
+	// extension; (nil, nil) when there is no connection or no consent recorded.
+	GetConsent(ctx context.Context, workspaceID uuid.UUID, extensionID string) (*domain.ExtensionConsent, error)
+	// SetConsent records consent on a connection (integration_configs.id).
+	SetConsent(ctx context.Context, connectionID uuid.UUID, c domain.ExtensionConsent) error
+}
+
 // ExtensionEventSubscriptionRepository manages extension_event_subscriptions.
 type ExtensionEventSubscriptionRepository interface {
 	// Create inserts a subscription; a duplicate (connection, event, delivery,
