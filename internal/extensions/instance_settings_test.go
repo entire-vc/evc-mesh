@@ -112,6 +112,21 @@ func TestBootstrap_SparkURLWithoutEnabledWritesDisabledRow(t *testing.T) {
 	require.False(t, repo.rows["spark"].Enabled)
 }
 
+// The push transport switch moves from the relay client's os.Getenv into the
+// instance settings together with relay_url.
+func TestBootstrap_TeamRelayCarriesTransportSwitch(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.TeamRelay.RelayURL = "https://relay.example.com"
+	for env, want := range map[string]bool{"true": true, "false": false, "": false} {
+		t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", env)
+		repo := newFakeSettingRepo()
+		require.NoError(t, BootstrapInstanceSettings(context.Background(), repo, cfg, BuiltinEnvSources()))
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(repo.rows["team_relay"].Settings, &got))
+		require.Equal(t, want, got["transport_enabled"], "env=%q", env)
+	}
+}
+
 func TestDBInstanceStore_RowWinsOverEnv_EnvFallbackWarnsOnce(t *testing.T) {
 	buf := captureLog(t)
 	repo := newFakeSettingRepo()
