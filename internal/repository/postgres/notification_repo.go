@@ -167,13 +167,17 @@ func (r *NotificationRepo) CreateNotification(ctx context.Context, n *domain.Not
 
 // ListUnread returns up to limit unread notifications for the given user, newest first.
 //
+// message_params is nullable and rows written before it existed keep NULL;
+// json.RawMessage cannot Scan a NULL, so it is read as bytes of its text with ”
+// standing in for NULL (an empty RawMessage, which the JSON tag omits).
+//
 // notifications rows are written once, at event time, and never touched
 // again by anything that later deletes the workspace they're about — unlike
 // tasks/comments there is no cascade to lean on here, so this joins
 // workspaces directly and checks its own deleted_at.
 func (r *NotificationRepo) ListUnread(ctx context.Context, userID uuid.UUID, limit int) ([]domain.Notification, error) {
 	const q = `
-		SELECT n.id, n.workspace_id, n.user_id, n.event_type, n.title, n.body, n.metadata, n.message_code, n.message_params, n.is_read, n.created_at
+		SELECT n.id, n.workspace_id, n.user_id, n.event_type, n.title, n.body, n.metadata, n.message_code, convert_to(COALESCE(n.message_params::text, ''), 'UTF8') AS message_params, n.is_read, n.created_at
 		FROM notifications n
 		JOIN workspaces w ON w.id = n.workspace_id
 		WHERE n.user_id = $1 AND n.is_read = false AND w.deleted_at IS NULL
