@@ -28,5 +28,12 @@
   "human_gate_frozen": "This task is waiting for a person's decision and cannot be changed now.",
   "task_shipped": "The task is marked as shipped. Reopen it before moving it.",
   "ambiguous_quote": "The quoted text matches several places. Quote a longer fragment.",
-  "export_tree_too_large": "The export is too large."
+  "export_tree_too_large": "The export is too large.",
+  "task_already_checked_out": "This task is checked out by someone else. Try again after the checkout expires.",
+  "key_rejected": "Team Relay rejected the access key. Check the key in the project's Team Relay settings.",
+  "foreign_share": "This share belongs to a different Team Relay account, so it cannot be mounted.",
+  "key_expired": "The Team Relay access key has expired. Issue a new key and try again.",
+  "unreachable": "Team Relay is unreachable. Try again later.",
+  "share_not_found": "The Team Relay share was not found. Check that it still exists.",
+  "error": "Team Relay sync failed. Try again later."
 }

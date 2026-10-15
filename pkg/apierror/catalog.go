@@ -58,6 +58,13 @@ var Catalog = []Entry{
 	{"task_shipped", "The task is marked as shipped. Reopen it before moving it.", "Задача помечена как выпущенная. Сначала откройте её заново."},
 	{"ambiguous_quote", "The quoted text matches several places. Quote a longer fragment.", "Цитата встречается в нескольких местах. Выделите фрагмент подлиннее."},
 	{"export_tree_too_large", "The export is too large.", "Экспорт слишком большой."},
+	{"task_already_checked_out", "This task is checked out by someone else. Try again after the checkout expires.", "Задачу уже взял в работу другой исполнитель. Повторите после окончания его блокировки."},
+	{"key_rejected", "Team Relay rejected the access key. Check the key in the project's Team Relay settings.", "Team Relay отклонил ключ доступа. Проверьте ключ в настройках Team Relay проекта."},
+	{"foreign_share", "This share belongs to a different Team Relay account, so it cannot be mounted.", "Этот общий доступ принадлежит другой учётной записи Team Relay, подключить его нельзя."},
+	{"key_expired", "The Team Relay access key has expired. Issue a new key and try again.", "Срок действия ключа доступа Team Relay истёк. Выпустите новый ключ и повторите."},
+	{"unreachable", "Team Relay is unreachable. Try again later.", "Team Relay недоступен. Повторите позже."},
+	{"share_not_found", "The Team Relay share was not found. Check that it still exists.", "Общий доступ Team Relay не найден. Проверьте, что он ещё существует."},
+	{"error", "Team Relay sync failed. Try again later.", "Синхронизация с Team Relay не удалась. Повторите позже."},
 }
 
 // Lookup returns the text of code in locale ("ru" or anything else for
