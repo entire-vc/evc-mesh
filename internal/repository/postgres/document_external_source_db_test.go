@@ -228,6 +228,12 @@ func TestUqDocumentsSource_IndexServesTheListAllCopiesOfAShareQuery(t *testing.T
 	defer tx.Rollback()
 	_, err = tx.Exec(`SET LOCAL enable_seqscan = off`)
 	require.NoError(t, err)
+	// idx_documents_project also serves this predicate (project_id = $1) and wins on
+	// cost for a three-row table depending on planner statistics at that moment, which
+	// made the assertion flip between runs. Dropping it inside this rolled-back
+	// transaction leaves uq_documents_source as the only index that can be reached.
+	_, err = tx.Exec(`DROP INDEX idx_documents_project`)
+	require.NoError(t, err)
 
 	rows, err := tx.Query(`EXPLAIN (FORMAT TEXT)
 		SELECT id FROM documents
