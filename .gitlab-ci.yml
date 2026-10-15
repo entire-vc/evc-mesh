@@ -654,12 +654,77 @@ lint:
   script:
     - $GOPATH/bin/golangci-lint run ./...
 
+# ── Go test scope ────────────────────────────────────────────────────────────
+# Which merge requests create the Go test jobs (`test`, `repo-integration`,
+# `tenancy-rbac-gate`, `coverage-gate`), and which packages they test.
+#
+# MR pipelines ran the whole suite on every push: 121 pipelines for 37 MRs in the
+# 24 h to 2026-10-15, `test` alone 24.9 runner-hours. Two layers narrow that:
+#
+#   1. HERE, whether the job exists. A merge request that touches nothing in the
+#      list below (web/, docs/, monitoring/, markdown ...) cannot change a Go test
+#      result, so it gets no Go job. Pipelines that are not merge requests (push to
+#      main, schedules, manual runs) always match the second rule and run everything.
+#   2. INSIDE the job, `scripts/ci/go_affected_packages.py` picks the packages: the
+#      ones the diff changed, everything that imports them, and the packages whose
+#      tests read a changed file. It prints `selection: ...` with the reason, and
+#      falls back to the whole suite (`ALL`) on go.mod/go.sum, migrations, CI files,
+#      shared test helpers, anything it cannot place, or any error. See its header.
+#
+# The list is derived: scripts/ci/go_affected_packages.py (BASE_SCOPE_GLOBS plus
+# every glob in scripts/ci/go_test_file_deps.txt) is the source, and
+# scripts/ci/test_go_affected_packages.py fails when the block between the markers
+# differs from `go_affected_packages.py --print-scope-globs`. The job `coverage-gate`
+# runs that test, and `.gitlab-ci.yml` is itself in the list, so editing either side
+# alone starts the job that fails.
+#
+# NOTE: `migration-gate` and `test:web` argue against `changes:` on a gate, and this
+# does it anyway, on purpose: a gate that exists on a guess is only safe when the guess
+# is checked. Here it is, twice: the sync test above, and the second layer, which
+# re-decides inside the job and never narrows on anything it cannot place.
+.go-test-scope:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths: &go-test-scope-paths
+          # BEGIN go-test-scope
+          - "**/*.go"
+          - "go.mod"
+          - "go.sum"
+          - "go.work"
+          - "go.work.sum"
+          - "migrations/**/*"
+          - ".gitlab-ci.yml"
+          - "scripts/ci/**/*"
+          - "docs/ci-templates/**/*"
+          - "docs/api/**/*"
+          - "cmd/**/*"
+          - "internal/**/*"
+          - "pkg/**/*"
+          - "examples/**/*"
+          - "tests/integration/**/*"
+          - "cmd/api/main.go"
+          - "internal/ws/handler.go"
+          - "docs/api/agent-runtime.example.json"
+          - "internal/**/*.go"
+          - "cmd/**/*.go"
+          - "scripts/audit/task-transition.sql"
+          - "**/*.sql"
+          - "web/src/locales/**/board.json"
+          - "internal/extensions/schema/**/*"
+          - "web/src/locales/**/apiErrors.json"
+          # END go-test-scope
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
+
 # ── test ────────────────────────────────────────────────────────────────────
 test:
   stage: test
   # Registry manifest independently verified after main pipeline 9396.
   image: git.entire.host:5050/entire-vc/evc-mesh/ci/goose@sha256:27f60789297d057a06de9636e5e02726c32f29186d3123838be5a756ab6e8155
   timeout: 30m
+  # Not created for a merge request that touches no Go test input, and on the rest
+  # it tests the packages the diff reaches. See `.go-test-scope` above.
+  rules: !reference [.go-test-scope, rules]
   services:
     - name: postgres:16
       alias: postgres
@@ -676,6 +741,9 @@ test:
   variables:
     GOCACHE: $CI_PROJECT_DIR/.gocache
     GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
+    # The selector diffs against $CI_MERGE_REQUEST_DIFF_BASE_SHA, which a shallow
+    # clone may not contain (it then answers ALL, safely but uselessly).
+    GIT_DEPTH: "0"
   before_script:
     # build-base is not optional: `go test -race` needs cgo, and alpine has no
     # C toolchain by default. Without it the race detector fails to link and
@@ -702,6 +770,10 @@ test:
       GOOSE_ACTUAL=$(goose -version 2>&1) || { echo "REFUSING: Goose image version unavailable"; exit 1; }
       [ "$GOOSE_ACTUAL" = "goose version: $GOOSE_VERSION" ] || { echo "REFUSING: Goose image version mismatch"; exit 1; }
   script:
+    # Which packages. `ALL` on main, schedules and whenever the diff cannot be
+    # narrowed; the reason is the `selection:` line. --empty-means-all because this
+    # job must leave a coverage profile, so "nothing" would be a failure.
+    - sh scripts/ci/go_selection.sh --empty-means-all
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" goose -dir migrations up
     # Red/green control for the watchdog below: deadlock -> dump + exit 124, silent
     # CPU-busy slow package -> survives (Mesh #362289cb). A guard nobody has seen
@@ -711,12 +783,14 @@ test:
     # silence, the runner's only slot held, the whole fleet's queue stalled) fails
     # fast with a goroutine dump naming what's blocked, instead of running out the
     # job timeout with nothing to diagnose.
-    # The runner fixes the watchdog's full race/atomic args and only mints the
-    # SHA/toolchain/profile manifest after that invocation succeeds.
-    - python3 scripts/ci/coverage_artifact.py run coverage.out coverage-manifest.json
+    # The runner fixes the watchdog's race/atomic flags and only mints the
+    # SHA/toolchain/profile manifest after that invocation succeeds. The package
+    # list is `./...` for ALL, otherwise the selection, and the manifest records
+    # which; `coverage-gate` refuses a selection that omits a changed package.
+    - python3 scripts/ci/coverage_artifact.py run coverage.out coverage-manifest.json go-selection.txt
   artifacts:
     when: on_success
-    paths: [coverage.out, coverage-manifest.json]
+    paths: [coverage.out, coverage-manifest.json, go-selection.txt]
     expire_in: 1 week
 
 # ── repo-integration ────────────────────────────────────────────────────────
@@ -742,6 +816,11 @@ repo-integration:
   image: git.entire.host:5050/entire-vc/evc-mesh/ci/goose@sha256:27f60789297d057a06de9636e5e02726c32f29186d3123838be5a756ab6e8155
   timeout: 20m
   needs: [lint]
+  # Package-scoped (`go test` of two packages), so it follows the Go selection twice:
+  # it is not created for a merge request that touches no Go test input, and inside it
+  # each of the two commands below runs only if its package is among the affected ones.
+  # See `.go-test-scope`. Main, schedules and manual runs run both, as before.
+  rules: !reference [.go-test-scope, rules]
   services:
     - name: postgres:16
       alias: postgres
@@ -760,8 +839,19 @@ repo-integration:
     # DB tests do — setting it here too means this job doesn't accidentally
     # skip them.
     TEST_DATABASE_URL: "postgres://mesh:mesh@postgres:5432/mesh?sslmode=disable"
+    GIT_DEPTH: "0"   # the selector diffs against $CI_MERGE_REQUEST_DIFF_BASE_SHA
   before_script:
-    - apk add --no-cache git build-base postgresql-client
+    - apk add --no-cache git build-base postgresql-client python3
+    # Selected with the `integration` tag, because that is how these packages are built
+    # here: the tagged files add imports and tests the untagged build does not have.
+    - sh scripts/ci/go_selection.sh --tags integration --only internal/repository/postgres internal/handler
+    # Nothing under either package is affected. Leave before the database wait and
+    # goose: exit 0 here ends the job green, with the reason already in the log above.
+    - |
+      if [ ! -s go-selection.txt ]; then
+        echo "repo-integration: neither internal/repository/postgres nor internal/handler is affected by this diff; not running."
+        exit 0
+      fi
     - for i in $(seq 60); do pg_isready -h postgres -U mesh && break; sleep 1; done
     - pg_isready -h postgres -U mesh
     - |
@@ -769,9 +859,20 @@ repo-integration:
       [ "$GOOSE_ACTUAL" = "goose version: $GOOSE_VERSION" ] || { echo "REFUSING: Goose image version mismatch"; exit 1; }
   script:
     - GOOSE_DRIVER=postgres GOOSE_DBSTRING="$DATABASE_URL" goose -dir migrations up
-    - go test ./internal/repository/postgres/... -v -race -tags=integration
-    # Exercise completion-cycle refusals through the real HTTP handler + PG.
-    - go test ./internal/handler -v -race -tags=integration -run '^TestCompletionGraphHTTP'
+    - |
+      sel=$(cat go-selection.txt)
+      wants() { [ "$sel" = ALL ] || printf '%s\n' "$sel" | grep -Eq "$1"; }
+      if wants '/internal/repository/postgres(/|$)'; then
+        go test ./internal/repository/postgres/... -v -race -tags=integration
+      else
+        echo "repo-integration: internal/repository/postgres is not affected by this diff; skipped."
+      fi
+      # Exercise completion-cycle refusals through the real HTTP handler + PG.
+      if wants '/internal/handler$'; then
+        go test ./internal/handler -v -race -tags=integration -run '^TestCompletionGraphHTTP'
+      else
+        echo "repo-integration: internal/handler is not affected by this diff; skipped."
+      fi
 
 # ── tenancy-rbac-gate ──────────────────────────────────────────────────────
 # Ports `.github/workflows/ci.yml`'s "Tenancy & RBAC gate" (#e64a383f /
@@ -795,6 +896,13 @@ tenancy-rbac-gate:
   image: git.entire.host:5050/entire-vc/evc-mesh/ci/goose@sha256:27f60789297d057a06de9636e5e02726c32f29186d3123838be5a756ab6e8155
   timeout: 20m
   needs: [lint]
+  # A gate over the running API, not over a package: it builds `cmd/api` and drives it
+  # over HTTP. So it is not narrowed by package. It runs when the diff reaches
+  # `cmd/api` (a change in anything the API is built from, or in `cmd/api` itself) or
+  # `tests/integration`, and not otherwise. A test-only edit elsewhere does not change
+  # the binary, so it does not reach `cmd/api`. See `.go-test-scope`. Main, schedules
+  # and manual runs always run it.
+  rules: !reference [.go-test-scope, rules]
   services:
     - name: postgres:16
       alias: postgres
@@ -892,8 +1000,16 @@ tenancy-rbac-gate:
     MESH_INTEGRATION_ENCRYPTION_KEY: "ZXZjLW1lc2gtY2ktaW50ZWdyYXRpb24tdGVzdC1rMzI="
     MESH_INTEGRATION_ENCRYPTION_REQUIRED: "1"
     APP_ENV: test
+    GIT_DEPTH: "0"   # the selector diffs against $CI_MERGE_REQUEST_DIFF_BASE_SHA
   before_script:
-    - apk add --no-cache git build-base curl postgresql-client
+    - apk add --no-cache git build-base curl postgresql-client python3
+    # Selected with the `integration` tag: that is how this gate builds the suite.
+    - sh scripts/ci/go_selection.sh --tags integration --only cmd/api tests/integration
+    - |
+      if [ ! -s go-selection.txt ]; then
+        echo "tenancy-rbac-gate: neither cmd/api nor tests/integration is affected by this diff; not running."
+        exit 0
+      fi
   script:
     # Guard 1 — the selection is not empty. A `-run` regex that matches
     # nothing exits 0 with "testing: warning: no tests to run" and paints the
@@ -984,8 +1100,12 @@ coverage-gate:
     - job: lint
     - job: test
       artifacts: true
+  # Created exactly when `test` is (its artifacts are mandatory), so it takes the same
+  # path list; merge requests only, as before. See `.go-test-scope`.
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths: *go-test-scope-paths
   variables:
     GOCACHE: $CI_PROJECT_DIR/.gocache
     GOMODCACHE: $CI_PROJECT_DIR/.gomodcache
@@ -1002,10 +1122,17 @@ coverage-gate:
   before_script:
     - apk add --no-cache git build-base bash python3
   script:
+    # What `test` selected and why, from the manifest it wrote, so this log explains itself.
+    - python3 scripts/ci/coverage_artifact.py describe coverage-manifest.json
     - python3 scripts/ci/test_diff_coverage.py
     - python3 scripts/ci/test_coverage_gate.py
     - python3 scripts/ci/test_prepush.py
     - python3 scripts/ci/test_flake_report.py
+    # The package selector and the manifest check that trusts it: selection cases,
+    # the red control (a selector that ignores importers must fail), and that the
+    # `rules:changes` list above is the selector's own.
+    - python3 scripts/ci/test_go_affected_packages.py
+    - python3 scripts/ci/test_coverage_artifact_selection.py
     - bash scripts/ci/coverage_gate.sh "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --reuse coverage-manifest.json coverage.out
   artifacts:
     when: always
@@ -1435,6 +1562,20 @@ migration-reversibility-gate:
   stage: test
   image: git.entire.host:5050/entire-vc/evc-mesh/ci/goose@sha256:27f60789297d057a06de9636e5e02726c32f29186d3123838be5a756ab6e8155
   timeout: 10m
+  # Not a Go test: it applies every migration, rolls them all back and applies them
+  # again, with the Goose binary of the image. Its inputs are exactly `migrations/`,
+  # the image recipe and this file (the job itself, the pinned image digest and
+  # GOOSE_VERSION), so a merge request touching none of them cannot change the result.
+  # Main and schedules always run it. This is the whole condition: the job has no
+  # second guard inside, because there is nothing else it reads.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths:
+          - "migrations/**/*"
+          - "scripts/ci/images/**/*"
+          - ".gitlab-ci.yml"
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event"
   services:
     - name: postgres:16
       alias: postgres

@@ -1,0 +1,33 @@
+# Files that Go tests read from OUTSIDE their own package directory.
+#
+# go_affected_packages.py selects test packages from the import graph. Several
+# tests here do not follow an import edge: they parse another package's sources
+# (route and tenancy ratchets), read cmd/api/main.go, or open JSON that lives in
+# docs/ or web/. Without a line below, an MR that edits only such a file would
+# skip the test that guards it.
+#
+#   <package dir> <- <glob> [<glob> ...]
+#
+# A change matching a glob selects the whole package. Globs are repo-relative
+# (`**` crosses directories), and they also become part of the job's
+# `rules:changes` list in .gitlab-ci.yml (test_go_affected_packages.py keeps the two
+# identical). A package's own files (*.go, testdata) need no line, and migrations/
+# never needs one: it already runs every test.
+#
+# This list is a RATCHET, not a trust fall: test_go_affected_packages.py scans
+# every _test.go for the patterns that read files outside the package
+# and fails if a package reads a file through a path that is not a literal inside its own
+# directory (a `..`, a variable, an env-based root, os.Getwd, runtime.Caller...) without
+# a line here. A package that only computes a path inside its own directory is declared
+# with its own directory. When it fails, add the line; do not mute the test.
+# A line that is too broad costs CI minutes, one that is too narrow costs a red main.
+
+internal/handler <- cmd/api/main.go internal/ws/handler.go docs/api/agent-runtime.example.json
+internal/middleware <- cmd/api/main.go internal/**/*.go
+internal/service <- internal/**/*.go cmd/**/*.go scripts/audit/task-transition.sql
+internal/repository/postgres <- **/*.go **/*.sql docs/api/agent-runtime.example.json
+internal/domain <- docs/api/agent-runtime.example.json web/src/locales/**/board.json
+internal/extensions <- internal/extensions/schema/**/*
+internal/extensions/schema <- internal/extensions/schema/**/*
+pkg/apierror <- web/src/locales/**/apiErrors.json
+tests/integration <- cmd/api/main.go
