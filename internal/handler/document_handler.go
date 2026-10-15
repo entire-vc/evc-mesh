@@ -68,6 +68,7 @@ type createDocumentRequest struct {
 // an append cannot destroy an edit it never read.
 type updateDocumentRequest struct {
 	Title       *string    `json:"title"`
+	Slug        *string    `json:"slug"`
 	ParentID    *uuid.UUID `json:"parent_id"`
 	ClearParent bool       `json:"clear_parent"`
 	Position    *int       `json:"position"`
@@ -230,6 +231,7 @@ func (h *DocumentHandler) Update(c echo.Context) error {
 
 	doc, err := h.documentService.Update(c.Request().Context(), docID, wsID, service.UpdateDocumentInput{
 		Title:       req.Title,
+		Slug:        req.Slug,
 		ParentID:    req.ParentID,
 		ClearParent: req.ClearParent,
 		Position:    req.Position,

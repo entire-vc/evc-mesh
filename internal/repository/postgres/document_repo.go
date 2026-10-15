@@ -202,14 +202,14 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expecte
 	q := `
 		UPDATE documents
 		   SET title = $2, parent_id = $3, position = $4, updated_at = $5,
-		       updated_by = $6, updated_by_type = $7, version = ` + versionExpr + `
+		       updated_by = $6, updated_by_type = $7, slug = $9, version = ` + versionExpr + `
 		 WHERE id = $1 AND deleted_at IS NULL
 		   AND ($8::int IS NULL OR version = $8::int)
 		RETURNING version`
 
 	var newVersion int
 	err = tx.GetContext(ctx, &newVersion, q, doc.ID, doc.Title, doc.ParentID, doc.Position,
-		doc.UpdatedAt, doc.UpdatedBy, doc.UpdatedByType, expectedVersion)
+		doc.UpdatedAt, doc.UpdatedBy, doc.UpdatedByType, expectedVersion, doc.Slug)
 	if isDocumentSlugConflict(err) {
 		return 0, apierror.Conflict("a document with this slug already exists in this location")
 	}
@@ -244,21 +244,22 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expecte
 }
 
 // recordPathAliasesOnMove writes the current full slug path of doc and of each
-// of its live descendants into document_path_aliases when doc.ParentID differs
-// from the stored parent_id. It must run inside the move's transaction and
+// of its live descendants into document_path_aliases when doc.ParentID or
+// doc.Slug differs from the stored value. It must run inside the move's transaction and
 // before the UPDATE: the paths it records are computed from the tree as it is
 // now, which after the UPDATE would already be the new one.
 //
 // A path an earlier move left behind is re-pointed (ON CONFLICT DO UPDATE): the
 // most recent document to vacate a path is the one a reference to it most
-// plausibly means. Slugs are not editable, so parent_id is the only change that
-// moves a path.
+// plausibly means. A path moves with parent_id and with the document's own slug
+// (the rename of a folder moves the whole subtree below it).
 func recordPathAliasesOnMove(ctx context.Context, tx *sqlx.Tx, doc *domain.Document) error {
 	var stored struct {
 		ParentID *uuid.UUID `db:"parent_id"`
+		Slug     string     `db:"slug"`
 	}
 	err := tx.GetContext(ctx, &stored,
-		`SELECT parent_id FROM documents WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, doc.ID)
+		`SELECT parent_id, slug FROM documents WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, doc.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Gone or deleted: the UPDATE will match nothing and report it.
 		return nil
@@ -266,7 +267,7 @@ func recordPathAliasesOnMove(ctx context.Context, tx *sqlx.Tx, doc *domain.Docum
 	if err != nil {
 		return err
 	}
-	if sameParent(stored.ParentID, doc.ParentID) {
+	if sameParent(stored.ParentID, doc.ParentID) && stored.Slug == doc.Slug {
 		return nil
 	}
 

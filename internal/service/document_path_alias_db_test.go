@@ -219,3 +219,78 @@ func TestDocumentPathAlias_CreateRefusesSlashInSlug(t *testing.T) {
 	require.NoError(t, e.db.Get(&n, `SELECT count(*) FROM documents WHERE project_id = $1`, e.projectID))
 	assert.Zero(t, n, "nothing is created")
 }
+
+func (e *pathAliasEnv) rename(doc *domain.Document, slug string) error {
+	_, err := e.svc.Update(context.Background(), doc.ID, e.wsID, UpdateDocumentInput{
+		Slug: &slug, UpdatedBy: e.actor, UpdatedByType: domain.ActorTypeUser,
+	})
+	return err
+}
+
+func TestDocumentPathAlias_RenamedSlugStillResolvesByOldPathAndID(t *testing.T) {
+	e := newPathAliasEnv(t)
+	ctx := context.Background()
+	specs := e.create(t, nil, "specs")
+	doc := e.create(t, &specs.ID, "threat-model")
+
+	require.NoError(t, e.rename(doc, "threat-model-v2"))
+
+	byOldPath, err := e.svc.GetByPath(ctx, e.projectID, "specs/threat-model")
+	require.NoError(t, err, "the path before the rename must still resolve")
+	assert.Equal(t, doc.ID, byOldPath.ID)
+	assert.Equal(t, "specs/threat-model-v2", byOldPath.MovedTo)
+
+	byID, err := e.svc.GetByIDInWorkspace(ctx, doc.ID, e.wsID)
+	require.NoError(t, err)
+	assert.Equal(t, doc.ID, byID.ID)
+	assert.Equal(t, "threat-model-v2", byID.Slug)
+
+	current, err := e.svc.GetByPath(ctx, e.projectID, "specs/threat-model-v2")
+	require.NoError(t, err)
+	assert.Equal(t, doc.ID, current.ID)
+	assert.Empty(t, current.MovedTo, "the new path is a live hit, not a redirect")
+}
+
+func TestDocumentPathAlias_RenamingAFolderKeepsDescendantsOldPaths(t *testing.T) {
+	e := newPathAliasEnv(t)
+	ctx := context.Background()
+	notes := e.create(t, nil, "notes")
+	q1 := e.create(t, &notes.ID, "q1")
+	leaf := e.create(t, &q1.ID, "leaf")
+
+	require.NoError(t, e.rename(notes, "journal"))
+
+	for path, want := range map[string]struct {
+		id      uuid.UUID
+		movedTo string
+	}{
+		"notes":         {notes.ID, "journal"},
+		"notes/q1":      {q1.ID, "journal/q1"},
+		"notes/q1/leaf": {leaf.ID, "journal/q1/leaf"},
+	} {
+		got, err := e.svc.GetByPath(ctx, e.projectID, path)
+		require.NoError(t, err, path)
+		assert.Equal(t, want.id, got.ID, path)
+		assert.Equal(t, want.movedTo, got.MovedTo, path)
+	}
+}
+
+func TestDocumentPathAlias_RefusedRenameChangesNothing(t *testing.T) {
+	e := newPathAliasEnv(t)
+	folder := e.create(t, nil, "folder")
+	a := e.create(t, &folder.ID, "alpha")
+	e.create(t, &folder.ID, "beta")
+	before := e.aliasCount(t)
+
+	require.Error(t, e.rename(a, "x/y"), "a slash is refused")
+	err := e.rename(a, "beta")
+	require.Error(t, err, "a sibling with that slug exists")
+	var ae *apierror.Error
+	require.ErrorAs(t, err, &ae)
+	assert.Equal(t, 409, ae.Code)
+
+	got, gerr := e.svc.GetByIDInWorkspace(context.Background(), a.ID, e.wsID)
+	require.NoError(t, gerr)
+	assert.Equal(t, "alpha", got.Slug)
+	assert.Equal(t, before, e.aliasCount(t), "no alias rows written by a refused rename")
+}

@@ -425,7 +425,10 @@ type CreateDocumentInput struct {
 // UpdateDocumentInput holds the fields for partially updating a document. A nil
 // field is left alone.
 type UpdateDocumentInput struct {
-	Title    *string    `json:"title"`
+	Title *string `json:"title"`
+	// Slug renames the document. The old full path of the document and of its
+	// live subtree stays resolvable as an alias (document_path_aliases).
+	Slug     *string    `json:"slug"`
 	ParentID *uuid.UUID `json:"parent_id"`
 	// ClearParent moves the document to the top level. It is a separate flag
 	// because an absent parent_id and a null one are the same nil pointer once

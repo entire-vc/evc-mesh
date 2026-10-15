@@ -319,6 +319,53 @@ func TestDocumentService_Update(t *testing.T) {
 	assert.Equal(t, "new body", string(f.storage.objects[created.StorageKey]))
 }
 
+func TestDocumentService_Update_RenamesSlug(t *testing.T) {
+	f := setupDocumentService(t)
+	created := f.create(t, "ADR", "")
+
+	slug := "adr-001-commit-identity-guard"
+	updated, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Slug: &slug})
+	require.NoError(t, err)
+	assert.Equal(t, slug, updated.Slug)
+	assert.Equal(t, created.Title, updated.Title, "a slug rename leaves the title alone")
+}
+
+func TestDocumentService_Update_RefusesBadSlugRename(t *testing.T) {
+	f := setupDocumentService(t)
+	created := f.create(t, "ADR", "")
+
+	for name, slug := range map[string]string{
+		"slash":           "specs/x",
+		"not slug form":   "Adr 001",
+		"upper case":      "ADR-001",
+		"only hyphens":    "---",
+		"padded":          " new-name ",
+		"empty":           "",
+		"canon taken":     "decisions",
+		"protected taken": "state",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := slug
+			_, err := f.svc.Update(context.Background(), created.ID, f.wsID, UpdateDocumentInput{Slug: &s})
+			require.Error(t, err)
+			got, gerr := f.svc.GetByIDInWorkspace(context.Background(), created.ID, f.wsID)
+			require.NoError(t, gerr)
+			assert.Equal(t, created.Slug, got.Slug, "a refused rename changes nothing")
+		})
+	}
+}
+
+func TestValidateRenamedSlug_ReservedCurrentSlug(t *testing.T) {
+	_, err := validateRenamedSlug("decisions", "my-decisions")
+	require.Error(t, err, "a canon folder is never renamed")
+	got, err := validateRenamedSlug("adrs001-x", "adr-001-x")
+	require.NoError(t, err)
+	assert.Equal(t, "adr-001-x", got)
+	got, err = validateRenamedSlug("раннбук-а", "runbook-a")
+	require.NoError(t, err)
+	assert.Equal(t, "runbook-a", got)
+}
+
 func TestDocumentService_Update_ClearParentMovesToRoot(t *testing.T) {
 	f := setupDocumentService(t)
 	parent := f.create(t, "Parent", "")
