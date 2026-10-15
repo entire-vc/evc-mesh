@@ -15,8 +15,8 @@ import (
 
 // The manifest schema is pinned by digest (the ADR), so the schema's event enum
 // and the public list can only drift apart silently. Every event a manifest may
-// declare must be on the public list; the only list entry a manifest cannot
-// declare yet is task.gate.decided, which needs a schema amendment.
+// declare must be on the public list, and every public event can be declared
+// (task.gate.decided was added to the enum by the 2026-10-15 amendment).
 func TestPublicEventsCoverManifestSchemaEnum(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("schema", "manifest.v1.json"))
 	require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestPublicEventsCoverManifestSchemaEnum(t *testing.T) {
 			extra = append(extra, e)
 		}
 	}
-	assert.Equal(t, []string{extensions.EventTaskGateDecided}, extra)
+	assert.Empty(t, extra, "public events a manifest cannot declare")
 }
 
 func TestPublicEventsAreUniqueAndCopied(t *testing.T) {

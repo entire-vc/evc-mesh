@@ -59,7 +59,7 @@
           "uniqueItems": true,
           "items": {
             "enum": [
-              "task.created", "task.updated", "task.moved", "task.assigned", "task.completed",
+              "task.created", "task.updated", "task.moved", "task.assigned", "task.completed", "task.gate.decided",
               "comment.created", "artifact.uploaded", "doc.updated",
               "project.created", "project.updated",
               "workspace.member.added", "workspace.member.removed",
