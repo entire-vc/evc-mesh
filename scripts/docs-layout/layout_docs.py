@@ -10,7 +10,10 @@ Modes
   --apply --project SLUG  moves documents of ONE project, writes a rollback journal;
                           --prune-merged also soft-deletes emptied legacy folders
   --rollback JOURNAL      puts every moved document back (and removes folders this
-                          run created, if they are empty again)
+                          run created, if they are empty again) or restores renamed slugs
+  --rename-slugs          (with the modes above, no table needed) rename slugs that the
+                          layout generator mangled (adrs001-x -> adr-001-x); the server keeps
+                          the old path as an alias. Dry-run prints "was -> becomes"; see README
 
 Auth comes from the environment only and is never printed:
   MESH_API_URL  + MESH_AGENT_KEY   (X-Agent-Key)   or   MESH_BEARER_TOKEN
@@ -27,6 +30,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -278,6 +282,117 @@ def journal_write(fh, rec):
     os.fsync(fh.fileno())
 
 
+# ---- --rename-slugs --------------------------------------------------------
+# Server refuses these as the old or the new slug of a rename (document_service.go
+# renameProtectedSlugs); a candidate that would hit one is skipped, never sent.
+RENAME_RESERVED = PROTECTED_SLUGS | CANON | set(LEGACY_FOLDERS)
+# canon folder that confirms a merged-prefix slug really is one of that kind
+PREFIX_RULES = [
+    # (regex on the slug, replacement prefix, expected parent canon folder, label)
+    (re.compile(r"^adrs(\d+)(.*)$"), "adr-", "decisions", "adrs<NNN>"),
+    (re.compile(r"^adrs(?!-)(.+)$"), "adr-", "decisions", "adrs<name>"),
+    (re.compile(r"^runbooks(?!-)(.+)$"), "runbook-", "guides", "runbooks<name>"),
+    (re.compile(r"^(?:раннбук|ранбук)-?(.+)$"), "runbook-", "guides", "раннбук"),
+    (re.compile(r"^prd(?!-)(.+)$"), "prd-", "specs", "prd<name>"),
+    (re.compile(r"^rnd(?!-)(.+)$"), "rnd-", "research", "rnd<name>"),
+]
+
+
+def slugify(text):
+    """Python twin of pkg/mdoc.Slugify: the only slug form the server accepts on rename."""
+    out = []
+    for ch in text.lower():
+        cat = unicodedata.category(ch)
+        if cat.startswith("L") or cat == "Nd" or ch in "-_":
+            out.append(ch)
+        elif ch.isspace():
+            out.append("-")
+    return "".join(out).strip("-")
+
+
+def has_letter_or_digit(text):
+    return any(unicodedata.category(c).startswith("L") or unicodedata.category(c) == "Nd" for c in text)
+
+
+def propose_slug(doc, parent_slug):
+    """-> (new_slug | None, rule, note). None = not a candidate or not renamable."""
+    old = doc["slug"]
+    if old in RENAME_RESERVED:
+        return None, "", ""
+    if not has_letter_or_digit(old):
+        new = slugify(doc.get("title") or "")
+        if not new:
+            return None, "only hyphens", "title gives no slug: left as is"
+        return new, "only hyphens", "irreversible"
+    for rx, prefix, folder, label in PREFIX_RULES:
+        m = rx.match(old)
+        if not m:
+            continue
+        if parent_slug != folder:
+            return None, label, f"parent is {parent_slug or 'root'}, not {folder}/: left as is"
+        new = slugify(prefix + (m.group(1) + m.group(2) if label == "adrs<NNN>" else m.group(1)))
+        if slugify(new) != new or not has_letter_or_digit(new) or new in RENAME_RESERVED:
+            return None, label, f"{new!r} is not a valid slug: left as is"
+        return new, label, ""
+    return None, "", ""
+
+
+def plan_renames(slug, docs):
+    """Pure function: -> {"ops": [...], "skipped": [...]}; Abort on any collision."""
+    by_id = {d["id"]: d for d in docs}
+    ops, skipped, errors = [], [], []
+    taken = {}  # parent_id -> {slug: doc id}
+    for d in docs:
+        taken.setdefault(d["parent_id"], {})[d["slug"]] = d["id"]
+    for d in docs:
+        parent = by_id.get(d["parent_id"])
+        new, rule, note = propose_slug(d, parent["slug"] if parent else None)
+        if new is None:
+            if note:
+                skipped.append((d, rule, note))
+            continue
+        if new == d["slug"]:
+            continue
+        bucket = taken[d["parent_id"]]
+        if new in bucket and bucket[new] != d["id"]:
+            errors.append(f"{slug}: {d['slug']!r} -> {new!r} collides with document {bucket[new][:8]} in the same folder")
+            continue
+        del bucket[d["slug"]]
+        bucket[new] = d["id"]
+        ops.append({"op": "rename", "doc_id": d["id"], "title": d["title"], "old_slug": d["slug"],
+                    "new_slug": new, "rule": rule, "irreversible": note == "irreversible",
+                    "parent_slug": parent["slug"] if parent else None})
+    if errors:
+        raise Abort("\n".join(errors))
+    return {"ops": ops, "skipped": skipped}
+
+
+def render_renames(slug, plan):
+    L = [f"### {slug}: кандидатов на переименование {len(plan['ops'])}"]
+    L.append("| doc | было | стало | правило |\n|---|---|---|---|")
+    for o in plan["ops"]:
+        flag = " (необратимо: откат не вернёт слаг)" if o["irreversible"] else ""
+        L.append(f"| {o['doc_id'][:8]} | {o['old_slug']} | {o['new_slug']} | {o['rule']}{flag} |")
+    for d, rule, why in plan["skipped"]:
+        L.append(f"| пропуск {d['id'][:8]} | {d['slug']} | | {rule}: {why} |")
+    return "\n".join(L)
+
+
+def apply_renames(api, project, plan, journal_path, allow_irreversible=False):
+    with open(journal_path, "a", encoding="utf-8") as fh:
+        for o in plan["ops"]:
+            if o["irreversible"] and not allow_irreversible:
+                print(f"skip {o['doc_id'][:8]} {o['old_slug']!r}: rollback could not restore it (use --allow-irreversible)", file=sys.stderr)
+                continue
+            d = api.call("PATCH", f"/documents/{o['doc_id']}", {"slug": o["new_slug"]})
+            if d.get("slug") != o["new_slug"]:  # a server without slug edits answers 200 and ignores the field
+                raise Abort(f"{o['doc_id']}: server answered slug {d.get('slug')!r}, expected {o['new_slug']!r}; "
+                            f"does this server support slug rename? stopped")
+            journal_write(fh, {"op": "rename", "project": project["slug"], "project_id": project["id"], "doc_id": o["doc_id"],
+                               "slug": o["new_slug"], "old_slug": o["old_slug"], "new_slug": o["new_slug"],
+                               "irreversible": o["irreversible"], "ts": now()})
+
+
 def apply_project(api, project, docs, plan, journal_path, prune=False):
     pid = project["id"]
     root_folders = {d["slug"]: d for d in docs if d["parent_id"] is None and d["slug"] in CANON}
@@ -329,7 +444,7 @@ def read_journal(path):
             raise Abort(f"journal line {n}: not JSON")
         if not isinstance(r, dict):
             raise Abort(f"journal line {n}: not a JSON object")
-        if r.get("op") not in ("create_folder", "move", "delete_folder"):
+        if r.get("op") not in ("create_folder", "move", "delete_folder", "rename"):
             raise Abort(f"journal line {n}: unknown op {r.get('op')!r}")
         for k in ("doc_id", "project_id"):
             if not isinstance(r.get(k), str) or not UUID_RE.match(r[k]):
@@ -342,6 +457,18 @@ def read_journal(path):
             raise Abort(f"journal line {n}: delete_folder of {r['slug']!r}, only legacy folders are ever deleted")
         if r["op"] == "create_folder" and r["slug"] not in CANON:
             raise Abort(f"journal line {n}: create_folder of {r['slug']!r}, only canon folders are ever created")
+        if r["op"] == "rename":
+            old, new = r.get("old_slug"), r.get("new_slug")
+            if not (isinstance(old, str) and isinstance(new, str)) or r["slug"] != new:
+                raise Abort(f"journal line {n}: rename needs old_slug/new_slug strings and slug == new_slug")
+            if old in RENAME_RESERVED or new in RENAME_RESERVED:
+                raise Abort(f"journal line {n}: rename touches a reserved slug ({old!r} -> {new!r})")
+            if slugify(new) != new or not has_letter_or_digit(new):
+                raise Abort(f"journal line {n}: new_slug {new!r} is not a slug")
+            if not r.get("irreversible") and (slugify(old) != old or not has_letter_or_digit(old)):
+                raise Abort(f"journal line {n}: old_slug {old!r} is not a slug and the record is not marked irreversible")
+            if r.get("irreversible") and has_letter_or_digit(old):
+                raise Abort(f"journal line {n}: irreversible is only for an old_slug without a letter or digit, got {old!r}")
         if r["op"] == "delete_folder" and len(str(r.get("title") or "")) > 200:
             raise Abort(f"journal line {n}: title too long")
         for k in ("old_parent_id", "new_parent_id"):
@@ -382,6 +509,28 @@ def rollback(api, journal_path):
         if r["op"] == "move" and last_move[r["doc_id"]] is r and doc.get("parent_id") != r["new_parent_id"]:
             raise Abort(f"document {r['doc_id']} was moved after the journal was written "
                         f"(parent {doc.get('parent_id')}, journal says {r['new_parent_id']}); rollback refused")
+    renames = [r for r in recs if r["op"] == "rename"]
+    if renames:
+        by_project = {}
+        for pid in {r["project_id"] for r in renames}:
+            by_project[pid] = api.docs(pid)
+        seen = {}
+        for r in renames:  # the old slug must still be free in the document's folder, else the server answers 409 mid-way
+            live = next((d for d in by_project[r["project_id"]] if d["id"] == r["doc_id"]), None)
+            if live is None:
+                raise Abort(f"document {r['doc_id']} is not in project {r['project']!r}; rollback refused")
+            parent = next((d for d in by_project[r["project_id"]] if d["id"] == live["parent_id"]), None)
+            derived = propose_slug({"slug": r["old_slug"], "title": live.get("title")}, parent["slug"] if parent else None)[0]
+            if derived != r["new_slug"]:  # the journal is untrusted: old_slug must be what the rename rule maps to new_slug
+                raise Abort(f"journal record for {r['doc_id'][:8]}: old_slug {r['old_slug']!r} does not rename to {r['new_slug']!r} by the rule; rollback refused")
+            if r.get("irreversible"):  # rule-checked above; its old slug has no letter, so rollback leaves it as is
+                continue
+            for d in by_project[r["project_id"]]:
+                if d["parent_id"] == live["parent_id"] and d["slug"] == r["old_slug"] and d["id"] != r["doc_id"]:
+                    raise Abort(f"cannot restore {r['old_slug']!r}: document {d['id'][:8]} now has it in the same folder; rollback refused")
+            if (r["project_id"], live["parent_id"], r["old_slug"]) in seen and seen[(r["project_id"], live["parent_id"], r["old_slug"])] != r["doc_id"]:
+                raise Abort(f"journal restores {r['old_slug']!r} to two documents of one folder; rollback refused")
+            seen[(r["project_id"], live["parent_id"], r["old_slug"])] = r["doc_id"]
     pruned = {r["doc_id"]: r["project_id"] for r in recs if r["op"] == "delete_folder"}  # re-created on rollback
     for r in recs:  # the destination must be a real folder of the same project, never an edited-in id
         old = r.get("old_parent_id")
@@ -396,6 +545,13 @@ def rollback(api, journal_path):
         if parent.get("project_id") != r["project_id"]:
             raise Abort(f"journal record for {r['doc_id']}: old_parent_id {old} is not a document of "
                         f"project {r['project']!r}; rollback refused")
+    restored = 0
+    for r in reversed(renames):
+        if r.get("irreversible"):
+            print(f"left {r['doc_id'][:8]} as {r['new_slug']!r}: its old slug {r['old_slug']!r} is not a valid slug", file=sys.stderr)
+            continue
+        api.call("PATCH", f"/documents/{r['doc_id']}", {"slug": r["old_slug"]})
+        restored += 1
     remap = {}  # id of a pruned legacy folder -> id of its re-created twin
     for r in reversed(recs):
         if r["op"] == "delete_folder":
@@ -415,7 +571,7 @@ def rollback(api, journal_path):
                 print(f"keep {r['slug']}/: {len(kids)} documents were added to it after the apply", file=sys.stderr)
             else:
                 api.call("DELETE", f"/documents/{r['doc_id']}")
-    print(f"rolled back {sum(1 for r in recs if r['op']=='move')} moves")
+    print(f"rolled back {sum(1 for r in recs if r['op']=='move')} moves, {restored} renames")
     if remap:
         print(f"re-created {len(remap)} pruned legacy folder(s); their ids are new")
 
@@ -427,6 +583,38 @@ def load_table(args, api):
         d = api.call("GET", f"/documents/{args.table_doc}")
         text = d["body"]
     return parse_table(text)
+
+
+def run_rename(api, a):
+    if a.apply and a.project in EXCLUDED_PROJECTS:
+        raise Abort(f"project {a.project} is excluded and is never touched")
+    projects = {p["slug"]: p for p in api.projects() if p["slug"] not in EXCLUDED_PROJECTS}
+    if a.apply and a.project not in projects:
+        raise Abort(f"project {a.project} is not visible to this key")
+    if a.project and a.project not in projects:
+        raise Abort(f"project {a.project} is not visible to this key")
+    selected = [a.project] if a.project else sorted(projects)
+    plans, errors = {}, []
+    for slug in selected:
+        try:
+            plans[slug] = plan_renames(slug, api.docs(projects[slug]["id"]))
+        except Abort as e:
+            errors.append(str(e))
+    if errors:
+        raise Abort("\n".join(errors))
+    total = sum(len(p["ops"]) for p in plans.values())
+    out = [f"# Dry-run переименования слагов: {len(plans)} проектов, кандидатов {total}\n"]
+    out += [render_renames(slug, p) + "\n" for slug, p in plans.items() if p["ops"] or p["skipped"]]
+    out.append(f"**Итого кандидатов: {total}**")
+    text = "\n".join(out)
+    if a.report:
+        open(a.report, "w", encoding="utf-8").write(text + "\n")
+    print(text)
+    if a.apply:
+        path = a.journal or f"layout-rename-journal-{a.project}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.jsonl"
+        apply_renames(api, projects[a.project], plans[a.project], path, a.allow_irreversible)
+        print(f"applied; journal: {path}")
+    return 0
 
 
 def main(argv=None):
@@ -446,6 +634,10 @@ def main(argv=None):
     ap.add_argument("--allow-invisible", action="store_true",
                     help="dry-run only: a project this key cannot see is reported, not fatal")
     ap.add_argument("--report", help="write the dry-run report (markdown) to this file")
+    ap.add_argument("--rename-slugs", action="store_true",
+                    help="rename slugs mangled by the layout (adrs001-x -> adr-001-x); dry-run by default, --apply needs --project")
+    ap.add_argument("--allow-irreversible", action="store_true",
+                    help="with --rename-slugs --apply: also rename hyphen-only slugs (--rollback cannot restore those)")
     a = ap.parse_args(argv)
     if a.apply and a.rollback:
         ap.error("--apply and --rollback are exclusive")
@@ -456,6 +648,8 @@ def main(argv=None):
         if a.rollback:
             rollback(api, a.rollback)
             return 0
+        if a.rename_slugs:
+            return run_rename(api, a)
         table = load_table(a, api)
         total = sum(len(v) for v in table.values())
         if a.expect_total is not None and total != a.expect_total:
