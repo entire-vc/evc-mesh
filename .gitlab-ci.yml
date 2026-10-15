@@ -634,8 +634,16 @@ lint:
   stage: lint
   image: golang:1.25-alpine
   timeout: 15m
+  # The one Go job that WRITES the module/build cache (`pull-push`); every other
+  # Go job below only pulls it. Keyed by go.sum, not by branch: a new branch used
+  # to start cold and pay a full module download + compile in its first `lint`,
+  # now it starts from whatever the last run with the same go.sum left behind.
+  # GitLab keeps protected (main) and non-protected (MR) caches apart, so main
+  # pipelines refresh their own copy through this same job.
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
   variables:
     GOCACHE: $CI_PROJECT_DIR/.gocache
@@ -660,7 +668,9 @@ test:
     - name: nats:2-alpine
       alias: nats
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
     policy: pull
   variables:
@@ -736,7 +746,9 @@ repo-integration:
     - name: postgres:16
       alias: postgres
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
     policy: pull
   variables:
@@ -809,7 +821,9 @@ tenancy-rbac-gate:
       alias: minio
       command: ["server", "/data"]
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
     policy: pull
   variables:
@@ -980,7 +994,9 @@ coverage-gate:
     # contain (GitLab's default GIT_DEPTH is a truncated clone).
     GIT_DEPTH: "0"
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
     policy: pull
   before_script:
@@ -1092,7 +1108,9 @@ perf-api-bin:
   timeout: 15m
   needs: [lint]
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
     policy: pull
   variables:
@@ -1263,7 +1281,9 @@ build:api:
   image: golang:1.25-alpine
   timeout: 15m
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
     policy: pull
   variables:
@@ -1419,7 +1439,9 @@ migration-reversibility-gate:
     - name: postgres:16
       alias: postgres
   cache:
-    key: go-mod-$CI_COMMIT_REF_SLUG
+    key:
+      prefix: go-mod
+      files: [go.sum]
     paths: [.gocache/, .gomodcache/]
     policy: pull
   variables:
@@ -1655,6 +1677,59 @@ trigger:prod-frontend:
     #     в пределах grace после нового коммита в web/** на канон-main.
 
 # ── memory-gate ─────────────────────────────────────────────────────────────
+# When `recall-gate-branch` is created on a merge request.
+#
+# Without this the job was created on EVERY MR and decided at its very end
+# (`scope_relevant.sh`) that there was nothing to measure — after installing apt
+# packages and running the self-check suite and redproof. 24 h to 2026-10-15:
+# 75 runs, 6.9 runner-hours, almost all of them no-ops.
+#
+# Two guards, on purpose:
+#   1. this list — decides whether the job exists at all;
+#   2. `scope_relevant.sh` inside the job — fail-closed, unchanged.
+# A job that is not created reports nothing, and a required gate reporting
+# nothing is the failure mode `test_gate_blindness.py` exists for (#347). So this
+# list must never be NARROWER than `MEMORY_PATHS`, and it also fires on:
+#   - any file named `*memor*` anywhere: `test_every_memory_source_file_is_gated`
+#     (a self-check that only runs inside this job) walks the tree for exactly
+#     such files, so an MR that adds a new one must start the job even though the
+#     new file is not in `MEMORY_PATHS` yet — that is the case the check catches;
+#   - `.gitlab-ci.yml` itself: the job, `MEMORY_PATHS` and this list live here;
+#   - the blindness-alert action the self-checks assert on.
+# This is MR-only exactly as before: the job never ran on main or schedules and
+# still does not (`MEMORY_PATHS` stays the one place `scope_relevant.sh` reads).
+#
+# `rules:changes` takes globs, `MEMORY_PATHS` holds prefixes: `dir/` here is
+# `dir/**/*`, a file stays a file. The block between the BEGIN/END markers is
+# checked against `MEMORY_PATHS` by `scripts/ci/check_memory_gate_scope_sync.py`,
+# which the job runs first, so editing one list without the other fails the job
+# (and editing either one starts it, because both are in `.gitlab-ci.yml`).
+.memory-gate-scope:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths:
+          # BEGIN derived-from-MEMORY_PATHS
+          - "internal/handler/memory_handler.go"
+          - "internal/domain/memory.go"
+          - "internal/service/memory_service.go"
+          - "internal/service/memory_sanitizer.go"
+          - "internal/repository/postgres/memory_repo.go"
+          - "internal/repository/postgres/memory_edges_repo.go"
+          - "internal/repository/postgres/memory_chunk_rank.go"
+          - "internal/repository/postgres/memory_chunk_repo.go"
+          - "internal/repository/postgres/memory_recall_candidates.go"
+          - "internal/service/memory_final_recall.go"
+          - "internal/domain/memory_final_recall.go"
+          - "internal/reconciler/**/*"
+          - "pkg/sdk/memories.go"
+          - "scripts/memory-bench/**/*"
+          # END derived-from-MEMORY_PATHS
+          - "**/*[Mm]emor*"
+          - "**/*MEMOR*"
+          - ".gitlab-ci.yml"
+          - ".github/actions/blindness-issue/**/*"
+
 # Ports `.github/workflows/memory-bench.yml`'s job `recall-gate-branch`
 # (check name "Memory recall gate") — see the file header above for why this
 # is safe without any GitLab CI/CD variable: the job builds `cmd/api` from
@@ -1729,8 +1804,12 @@ trigger:prod-frontend:
 recall-gate-branch:
   stage: memory-gate
   image: golang:1.25-bookworm
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  # Runs only on merge requests that can change what it measures — see
+  # `.memory-gate-scope` above. Every other MR used to pay ~2.5-5 min of apt,
+  # self-checks and redproof just to reach `scope_relevant.sh` and print "no-op".
+  # `scope_relevant.sh` below stays as the second guard: fail-closed, and the one
+  # that decides once the job has started.
+  rules: !reference [.memory-gate-scope, rules]
   variables:
     # Full history: `scope_relevant.sh` diffs base..head, and a shallow clone
     # may not contain the base commit.
@@ -1778,6 +1857,10 @@ recall-gate-branch:
       # Debian's `python3` package ships without it. Not flaky — every
       # memory-relevant MR hit this every time until fixed.
       apt-get update -qq && apt-get install -y -qq python3 python3-venv jq postgresql-client >/dev/null
+      # The globs that decide whether this job exists (`.memory-gate-scope`) must
+      # still agree with MEMORY_PATHS, the list `scope_relevant.sh` reads below.
+      python3 scripts/ci/check_memory_gate_scope_sync.py --selftest
+      python3 scripts/ci/check_memory_gate_scope_sync.py
       cd scripts/memory-bench
       for f in test_mcp_ref.py test_gate_blindness.py test_gate_modes.py test_gate_arm.py \
                test_gate_dense_arm.py test_gate_scope.py test_check_captured_baseline.py \
