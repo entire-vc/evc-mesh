@@ -33,3 +33,25 @@ func (s IntegrationConnections) Connection(ctx context.Context, workspaceID uuid
 	}
 	return &Connection{Settings: settings, IsActive: row.IsActive}, nil
 }
+
+// IntegrationConsents adapts the consent recorded on integration_configs to
+// ConsentStore. A connection with no recorded consent (made before consent was
+// stored) keeps what the manifest declares, as a registry without a store does.
+type IntegrationConsents struct {
+	Repo     repository.ExtensionConsentRepository
+	Declared func(extensionID string) []string
+}
+
+func (s IntegrationConsents) Consented(ctx context.Context, workspaceID uuid.UUID, extensionID string) ([]string, error) {
+	c, err := s.Repo.GetConsent(ctx, workspaceID, extensionID)
+	if err != nil {
+		return nil, err
+	}
+	if c != nil {
+		return c.Capabilities, nil
+	}
+	if s.Declared != nil {
+		return s.Declared(extensionID), nil
+	}
+	return nil, nil
+}

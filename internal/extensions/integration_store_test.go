@@ -56,3 +56,40 @@ func TestBaseProviderDefaults(t *testing.T) {
 	require.Empty(t, b.Hooks().Routes)
 	require.Empty(t, b.UI().Slots)
 }
+
+type fakeConsentRepo struct {
+	repository.ExtensionConsentRepository
+	c   *domain.ExtensionConsent
+	err error
+}
+
+func (f fakeConsentRepo) GetConsent(context.Context, uuid.UUID, string) (*domain.ExtensionConsent, error) {
+	return f.c, f.err
+}
+
+func TestIntegrationConsents(t *testing.T) {
+	declared := func(id string) []string { return []string{"declared:" + id} }
+	ws := uuid.New()
+
+	recorded := extensions.IntegrationConsents{
+		Repo:     fakeConsentRepo{c: &domain.ExtensionConsent{Capabilities: []string{"api:tasks.read"}}},
+		Declared: declared,
+	}
+	got, err := recorded.Consented(context.Background(), ws, "x")
+	require.NoError(t, err)
+	require.Equal(t, []string{"api:tasks.read"}, got, "recorded consent wins over the manifest")
+
+	legacy := extensions.IntegrationConsents{Repo: fakeConsentRepo{}, Declared: declared}
+	got, err = legacy.Consented(context.Background(), ws, "x")
+	require.NoError(t, err)
+	require.Equal(t, []string{"declared:x"}, got, "no consent recorded: the declared capabilities count")
+
+	none := extensions.IntegrationConsents{Repo: fakeConsentRepo{}}
+	got, err = none.Consented(context.Background(), ws, "x")
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	boom := errors.New("db down")
+	_, err = extensions.IntegrationConsents{Repo: fakeConsentRepo{err: boom}}.Consented(context.Background(), ws, "x")
+	require.ErrorIs(t, err, boom)
+}
