@@ -445,7 +445,15 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // require the exact agent+workspace grant for the presented caller
 // (runtimeBoundCaller), Report and Desired require the owner-workspace key of that
 // controller. A ref from another catalog or another grant answers not found.
+// /extensions/:ext_id/instance-settings is INSTANCE-level, not tenant-owned:
+// :ext_id is an extension's manifest id (a string such as "gitlab"), and the
+// row it names belongs to the whole deployment, so there is no workspace to
+// resolve it from. ExtensionInstanceSettingsHandler refuses agents and
+// connectors and answers 403 unless the caller is an owner/admin of the
+// instance's owner workspace (InstanceAdminChecker), before anything is read
+// or written.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
+	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
 	"/api/v1/memories/:id":                                                                        true,
 	"/api/v1/memories/:id/related":                                                                true,
 	"/api/v1/memories/:id/revisions":                                                              true,

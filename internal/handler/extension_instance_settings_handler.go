@@ -1,0 +1,201 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"slices"
+
+	"github.com/google/uuid"
+	"github.com/labstack/echo/v4"
+
+	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
+)
+
+// secretMask is returned instead of a stored secret and means "keep as is" on PUT.
+const secretMask = "********"
+
+// InstanceAdminChecker decides who may edit instance-level extension settings.
+type InstanceAdminChecker interface {
+	IsInstanceAdmin(ctx context.Context, userID uuid.UUID) (bool, error)
+}
+
+// ExtensionInstanceSettingsHandler serves GET/PUT /extensions/:ext_id/instance-settings.
+type ExtensionInstanceSettingsHandler struct {
+	repo     repository.InstanceExtensionSettingRepository
+	admins   InstanceAdminChecker
+	registry *extensions.Registry
+	sources  []extensions.EnvSource
+}
+
+func NewExtensionInstanceSettingsHandler(repo repository.InstanceExtensionSettingRepository, admins InstanceAdminChecker, registry *extensions.Registry, sources []extensions.EnvSource) *ExtensionInstanceSettingsHandler {
+	return &ExtensionInstanceSettingsHandler{repo: repo, admins: admins, registry: registry, sources: sources}
+}
+
+type instanceSettingsBody struct {
+	Settings map[string]any `json:"settings"`
+	Enabled  bool           `json:"enabled"`
+}
+
+type instanceSettingsResponse struct {
+	ExtensionID string         `json:"extension_id"`
+	Settings    map[string]any `json:"settings"`
+	Enabled     bool           `json:"enabled"`
+	Source      string         `json:"source"`
+	UpdatedBy   *uuid.UUID     `json:"updated_by,omitempty"`
+	UpdatedAt   string         `json:"updated_at,omitempty"`
+}
+
+// known reports whether extID is an extension this instance knows and its
+// secret setting keys.
+func (h *ExtensionInstanceSettingsHandler) known(extID string) (secretKeys []string, ok bool) {
+	for _, s := range h.sources {
+		if s.ExtensionID == extID {
+			secretKeys, ok = s.SecretKeys, true
+		}
+	}
+	if h.registry != nil {
+		if p, reg := h.registry.Get(extID); reg {
+			ok = true
+			for _, k := range p.Manifest().InstanceSecretKeys() {
+				if !slices.Contains(secretKeys, k) {
+					secretKeys = append(secretKeys, k)
+				}
+			}
+		}
+	}
+	return secretKeys, ok
+}
+
+// authorize writes the denial response itself and reports denied=true.
+func (h *ExtensionInstanceSettingsHandler) authorize(c echo.Context) (denied bool, err error) {
+	if middleware.IsAgent(c) {
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("instance settings require a human instance administrator"))
+	}
+	uid, err := middleware.GetUserID(c)
+	if err != nil {
+		return true, c.JSON(http.StatusUnauthorized, apierror.Unauthorized("authentication required"))
+	}
+	ok, err := h.admins.IsInstanceAdmin(c.Request().Context(), uid)
+	if err != nil {
+		return true, c.JSON(http.StatusInternalServerError, apierror.InternalError("admin check failed"))
+	}
+	if !ok {
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("only an instance administrator can change instance extension settings"))
+	}
+	return false, nil
+}
+
+func maskInstanceSecrets(settings map[string]any, secretKeys []string) map[string]any {
+	out := make(map[string]any, len(settings))
+	for k, v := range settings {
+		out[k] = v
+	}
+	for _, k := range secretKeys {
+		if s, ok := out[k].(string); ok && s != "" {
+			out[k] = secretMask
+		}
+	}
+	return out
+}
+
+func (h *ExtensionInstanceSettingsHandler) Get(c echo.Context) error {
+	if denied, err := h.authorize(c); denied {
+		return err
+	}
+	extID := c.Param("ext_id")
+	secretKeys, ok := h.known(extID)
+	if !ok {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("extension not found"))
+	}
+	row, err := h.repo.Get(c.Request().Context(), extID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to read instance settings"))
+	}
+	if row == nil {
+		return c.JSON(http.StatusOK, instanceSettingsResponse{ExtensionID: extID, Settings: map[string]any{}, Source: "none"})
+	}
+	settings := map[string]any{}
+	_ = json.Unmarshal(row.Settings, &settings)
+	return c.JSON(http.StatusOK, instanceSettingsResponse{
+		ExtensionID: extID,
+		Settings:    maskInstanceSecrets(settings, secretKeys),
+		Enabled:     row.Enabled,
+		Source:      string(row.Source),
+		UpdatedBy:   row.UpdatedBy,
+		UpdatedAt:   row.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	})
+}
+
+func (h *ExtensionInstanceSettingsHandler) Put(c echo.Context) error {
+	if denied, err := h.authorize(c); denied {
+		return err
+	}
+	ctx := c.Request().Context()
+	extID := c.Param("ext_id")
+	secretKeys, ok := h.known(extID)
+	if !ok {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("extension not found"))
+	}
+	var body instanceSettingsBody
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	if body.Settings == nil {
+		body.Settings = map[string]any{}
+	}
+
+	// A masked or omitted secret keeps the stored value; with nothing stored
+	// the placeholder is dropped instead of being saved as a credential.
+	prev, err := h.repo.Get(ctx, extID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to read instance settings"))
+	}
+	old := map[string]any{}
+	if prev != nil {
+		_ = json.Unmarshal(prev.Settings, &old)
+	}
+	for _, k := range secretKeys {
+		if v, present := body.Settings[k]; !present || v == secretMask {
+			if ov, had := old[k]; had {
+				body.Settings[k] = ov
+			} else {
+				delete(body.Settings, k)
+			}
+		}
+	}
+
+	if h.registry != nil {
+		if p, reg := h.registry.Get(extID); reg {
+			if verr := p.Validate(extensions.LevelInstance, body.Settings); verr != nil {
+				return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest(verr.Error()))
+			}
+		}
+	}
+
+	blob, err := json.Marshal(body.Settings)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid settings"))
+	}
+	uid, _ := middleware.GetUserID(c)
+	if err := h.repo.Upsert(ctx, &domain.InstanceExtensionSetting{
+		ExtensionID: extID,
+		Settings:    blob,
+		Enabled:     body.Enabled,
+		Source:      domain.InstanceSettingSourceAdmin,
+		UpdatedBy:   &uid,
+	}, secretKeys); err != nil {
+		return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to save instance settings"))
+	}
+	return c.JSON(http.StatusOK, instanceSettingsResponse{
+		ExtensionID: extID,
+		Settings:    maskInstanceSecrets(body.Settings, secretKeys),
+		Enabled:     body.Enabled,
+		Source:      string(domain.InstanceSettingSourceAdmin),
+		UpdatedBy:   &uid,
+	})
+}
