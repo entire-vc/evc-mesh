@@ -9,11 +9,15 @@ import (
 
 // ProjectIntegration represents a project-level integration configuration.
 type ProjectIntegration struct {
-	ID        uuid.UUID       `json:"id" db:"id"`
-	ProjectID uuid.UUID       `json:"project_id" db:"project_id"`
-	Type      string          `json:"type" db:"type"`
-	Enabled   bool            `json:"enabled" db:"enabled"`
-	Settings  json.RawMessage `json:"settings" db:"settings"`
+	ID        uuid.UUID `json:"id" db:"id"`
+	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
+	Type      string    `json:"type" db:"type"`
+	// ExtensionID is the manifest id of the extension this binding belongs to
+	// ("team-relay" for type "team_relay"). Written next to Type until the
+	// contract step retires Type.
+	ExtensionID string          `json:"extension_id,omitempty" db:"extension_id"`
+	Enabled     bool            `json:"enabled" db:"enabled"`
+	Settings    json.RawMessage `json:"settings" db:"settings"`
 	// AgentKey is plaintext in memory and encrypted at rest, but ONLY when it
 	// travels through the repository layer: the encryption lives in
 	// ProjectIntegrationRepo, so a row provisioned with direct SQL bypasses it
@@ -121,4 +125,14 @@ type UpsertProjectIntegrationInput struct {
 	Subfolder          string     `json:"subfolder"`
 	IncludeProjectSlug bool       `json:"include_project_slug"`
 	CreatedBy          *uuid.UUID `json:"-"`
+}
+
+// ProjectIntegrationExtensionID maps a project_integrations.type to the
+// manifest id of its extension. Team Relay is the one type whose manifest id
+// differs (the id pattern has no underscore).
+func ProjectIntegrationExtensionID(intType string) string {
+	if intType == "team_relay" {
+		return "team-relay"
+	}
+	return intType
 }
