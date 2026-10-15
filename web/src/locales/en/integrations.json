@@ -711,5 +711,33 @@
       "errorBody": "Update information is unavailable right now. Try again in a minute.",
       "retry": "Try again"
     }
+  },
+  "schemaForm": {
+    "save": "Save",
+    "saved": "Saved",
+    "saveFailed": "Couldn't save the settings. Try again.",
+    "selectPlaceholder": "Not selected",
+    "secret": {
+      "set": "Set",
+      "change": "Change",
+      "changeNamed": "Change: {{name}}",
+      "cancel": "Cancel"
+    },
+    "list": {
+      "add": "Add",
+      "itemNamed": "{{name}}, item {{n}}",
+      "removeNamed": "Remove {{name}}, item {{n}}"
+    },
+    "errors": {
+      "required": "Fill in this field",
+      "type": "Wrong value type",
+      "format": "Wrong format",
+      "minLength": "At least {{min}} characters",
+      "maxLength": "At most {{max}} characters",
+      "pattern": "Doesn't match the expected pattern",
+      "enum": "Pick one of the options",
+      "minimum": "At least {{min}}",
+      "maximum": "At most {{max}}"
+    }
   }
 }

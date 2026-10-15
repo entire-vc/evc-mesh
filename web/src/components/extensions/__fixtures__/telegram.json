@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "id": "telegram",
+  "name": "Telegram",
+  "version": "1.0.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "settings": {
+    "instance": {
+      "type": "object",
+      "properties": {
+        "bot_token": {
+          "type": "string",
+          "title": "Токен бота",
+          "x-secret": true,
+          "x-help": "Выдаёт @BotFather"
+        }
+      },
+      "required": [
+        "bot_token"
+      ]
+    },
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "own_bot": {
+          "type": "boolean",
+          "title": "Свой бот для воркспейса",
+          "x-widget": "toggle",
+          "default": false
+        },
+        "bot_token": {
+          "type": "string",
+          "title": "Токен бота воркспейса",
+          "x-secret": true,
+          "x-visible-if": {
+            "own_bot": true
+          },
+          "pattern": "^[0-9]+:[A-Za-z0-9_-]+$"
+        },
+        "digest_mode": {
+          "type": "string",
+          "title": "Сводки",
+          "enum": [
+            "off",
+            "daily",
+            "weekly"
+          ],
+          "default": "off"
+        },
+        "digest_hour": {
+          "type": "integer",
+          "title": "Час отправки",
+          "minimum": 0,
+          "maximum": 23,
+          "x-visible-if": {
+            "digest_mode": {
+              "not": "off"
+            }
+          }
+        }
+      },
+      "required": [
+        "own_bot"
+      ]
+    }
+  }
+}
