@@ -36,6 +36,7 @@ type projectIntegrationRow struct {
 	ID                uuid.UUID  `db:"id"`
 	ProjectID         uuid.UUID  `db:"project_id"`
 	Type              string     `db:"type"`
+	ExtensionID       *string    `db:"extension_id"`
 	Enabled           bool       `db:"enabled"`
 	Settings          []byte     `db:"settings"`
 	AgentKey          *string    `db:"agent_key"`
@@ -58,6 +59,7 @@ func (r *projectIntegrationRow) toDomain() (domain.ProjectIntegration, error) {
 		ID:                r.ID,
 		ProjectID:         r.ProjectID,
 		Type:              r.Type,
+		ExtensionID:       derefString(r.ExtensionID),
 		Enabled:           r.Enabled,
 		Settings:          settings,
 		CreatedAt:         r.CreatedAt,
@@ -91,7 +93,7 @@ func NewProjectIntegrationRepo(db *sqlx.DB) *ProjectIntegrationRepo {
 
 // Get retrieves the integration of the given type for the project, or nil if not found.
 func (r *ProjectIntegrationRepo) Get(ctx context.Context, projectID uuid.UUID, intType string) (*domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 AND type = $2`
+	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 AND type = $2`
 	var row projectIntegrationRow
 	if err := r.db.GetContext(ctx, &row, q, projectID, intType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -108,7 +110,7 @@ func (r *ProjectIntegrationRepo) Get(ctx context.Context, projectID uuid.UUID, i
 
 // GetByShareSlug finds the first enabled team_relay integration whose settings->>'share_slug' matches.
 func (r *ProjectIntegrationRepo) GetByShareSlug(ctx context.Context, shareSlug string) (*domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error
+	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error
 	            FROM project_integrations
 	            WHERE type = 'team_relay' AND enabled = true AND settings->>'share_slug' = $1
 	            LIMIT 1`
@@ -131,7 +133,7 @@ func (r *ProjectIntegrationRepo) GetByShareSlug(ctx context.Context, shareSlug s
 // output — callers that care about priority (e.g. never-checked first) sort
 // after fetching.
 func (r *ProjectIntegrationRepo) ListEnabledByType(ctx context.Context, intType string) ([]domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE type = $1 AND enabled = true ORDER BY project_id ASC`
+	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE type = $1 AND enabled = true ORDER BY project_id ASC`
 	var rows []projectIntegrationRow
 	if err := r.db.SelectContext(ctx, &rows, q, intType); err != nil {
 		return nil, err
@@ -188,7 +190,7 @@ func (r *ProjectIntegrationRepo) Upsert(ctx context.Context, pi *domain.ProjectI
 	}
 
 	if _, err := tx.ExecContext(ctx, upsertQuery,
-		pi.ID, pi.ProjectID, pi.Type, pi.Enabled, []byte(settings), encKey,
+		pi.ID, pi.ProjectID, pi.Type, domain.ProjectIntegrationExtensionID(pi.Type), pi.Enabled, []byte(settings), encKey,
 		pi.CreatedAt, pi.UpdatedAt, pi.CreatedBy,
 	); err != nil {
 		return err
@@ -200,10 +202,11 @@ func (r *ProjectIntegrationRepo) Upsert(ctx context.Context, pi *domain.ProjectI
 // SET LOCAL is scoped to the surrounding transaction, which is what keeps the
 // plaintext exemption from leaking to the next user of a pooled connection.
 const upsertQuery = `
-		INSERT INTO project_integrations (id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO project_integrations (id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (project_id, type)
 		DO UPDATE SET
+			extension_id = EXCLUDED.extension_id,
 			enabled    = EXCLUDED.enabled,
 			settings   = EXCLUDED.settings,
 			agent_key  = CASE WHEN EXCLUDED.agent_key IS NOT NULL THEN EXCLUDED.agent_key ELSE project_integrations.agent_key END,
@@ -272,7 +275,7 @@ func (r *ProjectIntegrationRepo) Delete(ctx context.Context, projectID uuid.UUID
 
 // ListByProject returns all integrations for a project, ordered by type.
 func (r *ProjectIntegrationRepo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 ORDER BY type ASC`
+	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 ORDER BY type ASC`
 	var rows []projectIntegrationRow
 	if err := r.db.SelectContext(ctx, &rows, q, projectID); err != nil {
 		return nil, err

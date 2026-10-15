@@ -95,8 +95,8 @@ func TestUpsertSendsCiphertextToTheDatabase(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO project_integrations")).
 		WithArgs(
-			sqlmock.AnyArg(), sqlmock.AnyArg(), "team_relay", true, sqlmock.AnyArg(),
-			// The sixth argument is the credential as it will be stored.
+			sqlmock.AnyArg(), sqlmock.AnyArg(), "team_relay", "team-relay", true, sqlmock.AnyArg(),
+			// The seventh argument is the credential as it will be stored.
 			// Capturing it is the whole point of this test.
 			capture(&captured),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
@@ -125,7 +125,7 @@ func TestUpsertWithEmptyKeySendsNullSoStoredKeyIsKept(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("CASE WHEN EXCLUDED.agent_key IS NOT NULL")).
 		WithArgs(
-			sqlmock.AnyArg(), sqlmock.AnyArg(), "team_relay", false, sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), "team_relay", "team-relay", false, sqlmock.AnyArg(),
 			(*string)(nil),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 		).
@@ -254,7 +254,7 @@ func TestGetFailsRatherThanReturningAnUndecryptableCredential(t *testing.T) {
 
 	projID := uuid.New()
 	now := time.Now().UTC()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "type", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
@@ -278,7 +278,7 @@ func TestGetReadsPreR5ARowWithoutNewColumns(t *testing.T) {
 	projID := uuid.New()
 	now := time.Now().UTC()
 	oldSettings := []byte(`{"share_slug":"old-share","subfolder":"Mesh/Mesh dev","include_project_slug":true}`)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "type", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
@@ -310,7 +310,7 @@ func TestGetReadsNewKeyExpiryAndSyncStatusColumns(t *testing.T) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(90 * 24 * time.Hour)
 	checkedAt := now.Add(-5 * time.Minute)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "type", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
@@ -345,7 +345,7 @@ func TestGetByShareSlugReadsNewColumns(t *testing.T) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(30 * 24 * time.Hour)
 	checkedAt := now.Add(-2 * time.Hour)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
 		WithArgs("probe-slug").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "type", "enabled", "settings", "agent_key",
@@ -379,7 +379,7 @@ func TestListByProjectReadsNewColumns(t *testing.T) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(60 * 24 * time.Hour)
 	checkedAt := now.Add(-10 * time.Minute)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
 		WithArgs(projID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "type", "enabled", "settings", "agent_key",
@@ -530,7 +530,7 @@ func TestGetReadsLegacyPlaintextRow(t *testing.T) {
 	legacy := "tr_agent_written_before_encryption"
 	projID := uuid.New()
 	now := time.Now().UTC()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "project_id", "type", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
@@ -540,4 +540,36 @@ func TestGetReadsLegacyPlaintextRow(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, legacy, got.AgentKey)
+}
+
+func TestListEnabledByTypeReadsExtensionID(t *testing.T) {
+	setEncryptionKey(t, 171)
+	repo, mock := newProjectIntegrationRepoMock(t)
+
+	now := time.Now().UTC()
+	mock.ExpectQuery(regexp.QuoteMeta("FROM project_integrations WHERE type = $1 AND enabled = true")).
+		WithArgs("team_relay").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "project_id", "type", "extension_id", "enabled", "settings", "agent_key",
+			"created_at", "updated_at", "created_by",
+		}).
+			AddRow(uuid.New(), uuid.New(), "team_relay", "team-relay", true, []byte(`{}`), nil, now, now, nil).
+			AddRow(uuid.New(), uuid.New(), "team_relay", nil, true, []byte(`{}`), nil, now, now, nil))
+
+	got, err := repo.ListEnabledByType(context.Background(), "team_relay")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "team-relay", got[0].ExtensionID)
+	assert.Equal(t, "", got[1].ExtensionID, "a NULL extension_id reads as empty, not as a crash")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListEnabledByTypePropagatesQueryError(t *testing.T) {
+	repo, mock := newProjectIntegrationRepoMock(t)
+	mock.ExpectQuery(regexp.QuoteMeta("FROM project_integrations WHERE type = $1")).
+		WithArgs("team_relay").WillReturnError(errors.New("db down"))
+
+	got, err := repo.ListEnabledByType(context.Background(), "team_relay")
+	require.Error(t, err)
+	assert.Nil(t, got)
 }
