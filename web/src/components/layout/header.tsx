@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
@@ -43,6 +43,9 @@ import {
 import { ViewTabBar } from "@/components/view-tab-bar";
 import { NotificationBell } from "@/components/notification-bell";
 import { api } from "@/lib/api";
+
+// Language block of the user menu: lazy, rendered only when the menu opens.
+const HeaderLanguageMenu = lazy(() => import("./header-language-menu"));
 import type { PaginatedResponse, ProjectViewTab, Task } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -699,6 +702,9 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
               {isDark ? t("header.userMenu.themeDark") : t("header.userMenu.themeLight")}
             </span>
           </DropdownMenuItem>
+          <Suspense>
+            <HeaderLanguageMenu />
+          </Suspense>
           {(wsSlug ?? currentWorkspace?.slug) && (
             <DropdownMenuItem
               onClick={() =>

@@ -144,3 +144,21 @@ describe("Header — theme toggle", () => {
     expect(localStorage.getItem("theme")).toBe("dark");
   });
 });
+
+describe("Header — language switch in the user menu", () => {
+  it("lists the languages and switching to Русский calls setLocale('ru')", async () => {
+    const setLocale = vi.fn().mockResolvedValue(undefined);
+    useAuthStore.setState({ user: { ...USER, locale: "en" }, setLocale });
+    renderHeaderAt("/w/acme/p/team-a");
+
+    fireEvent.click(screen.getByRole("button", { name: "P" }));
+    expect(await screen.findByText("Language")).toBeInTheDocument();
+    expect(screen.getByText("English").closest('[role="menuitem"]')).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+
+    fireEvent.click(screen.getByText("Русский"));
+    expect(setLocale).toHaveBeenCalledWith("ru");
+  });
+});
