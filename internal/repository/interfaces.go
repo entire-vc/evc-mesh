@@ -1433,6 +1433,18 @@ type AgentAPIKeyRepository interface {
 	CountActiveByAgent(ctx context.Context, agentID uuid.UUID) (int, error)
 }
 
+// InstanceExtensionSettingRepository manages instance_extension_settings.
+// Values of the named secret keys are encrypted at rest and decrypted on read.
+type InstanceExtensionSettingRepository interface {
+	// Get returns nil, nil when no row exists.
+	Get(ctx context.Context, extensionID string) (*domain.InstanceExtensionSetting, error)
+	// InsertIfAbsent writes the row only when none exists (ON CONFLICT DO
+	// NOTHING) and reports whether it did. Used by the env startup migration.
+	InsertIfAbsent(ctx context.Context, s *domain.InstanceExtensionSetting, secretKeys []string) (bool, error)
+	// Upsert replaces the row (source=admin path).
+	Upsert(ctx context.Context, s *domain.InstanceExtensionSetting, secretKeys []string) error
+}
+
 // IntegrationRepository manages persistence for workspace integration configurations.
 type IntegrationRepository interface {
 	Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error

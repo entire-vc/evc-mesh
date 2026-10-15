@@ -3,6 +3,8 @@ package extensions
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // Manifest is the parsed mesh-extension.json (schema/manifest.v1.json). Only
@@ -68,4 +70,38 @@ func DecodeSettings[T any](settings map[string]any) (T, error) {
 		return out, fmt.Errorf("decode settings: %w", err)
 	}
 	return out, nil
+}
+
+// InstanceSecretKeys returns the instance-level settings fields the manifest
+// marks x-secret. The instance level may be inline or a "#/schemas/<name>" ref.
+func (m Manifest) InstanceSecretKeys() []string {
+	type field struct {
+		Secret bool `json:"x-secret"`
+	}
+	type level struct {
+		Ref        string           `json:"$ref"`
+		Properties map[string]field `json:"properties"`
+	}
+	var settings struct {
+		Instance *level `json:"instance"`
+	}
+	if len(m.Settings) == 0 || json.Unmarshal(m.Settings, &settings) != nil || settings.Instance == nil {
+		return nil
+	}
+	lv := *settings.Instance
+	if name, ok := strings.CutPrefix(lv.Ref, "#/schemas/"); ok {
+		var schemas map[string]level
+		if json.Unmarshal(m.Schemas, &schemas) != nil {
+			return nil
+		}
+		lv = schemas[name]
+	}
+	var keys []string
+	for k, f := range lv.Properties {
+		if f.Secret {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }

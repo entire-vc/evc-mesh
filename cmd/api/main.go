@@ -164,6 +164,28 @@ func main() {
 	if syncErr := extensionRegistry.SyncBuiltin(context.Background(), postgres.NewInstalledExtensionRepo(db)); syncErr != nil {
 		log.Printf("[extensions] sync builtin extensions failed (registry stays usable): %v", syncErr)
 	}
+	// Instance-level extension settings: MESH_* env is copied into the table
+	// once (source=env, idempotent); for one release env stays a fallback
+	// (DBInstanceStore warns when it is used).
+	instanceSettingRepo := postgres.NewInstanceExtensionSettingRepo(db)
+	extensionEnvSources := extensions.BuiltinEnvSources()
+	if bootErr := extensions.BootstrapInstanceSettings(context.Background(), instanceSettingRepo, cfg, extensionEnvSources); bootErr != nil {
+		log.Printf("[extensions] instance settings bootstrap failed (env fallback stays in force): %v", bootErr)
+	}
+	// Builtin providers resolve instance-level settings through this store
+	// (table first, env fallback with a warning). BuiltinProviders is empty
+	// until W1.5+ moves providers onto the registry; the wiring is here now.
+	extensionInstanceStore := &extensions.DBInstanceStore{Repo: instanceSettingRepo, Cfg: cfg, Sources: extensionEnvSources}
+	extensionDeps := extensions.Deps{
+		Conns: extensions.IntegrationConnections{Repo: integrationRepo},
+		Inst:  extensionInstanceStore,
+	}
+	for _, p := range extensions.BuiltinProviders(extensionDeps) {
+		if regErr := extensionRegistry.Register(p); regErr != nil {
+			log.Fatalf("[extensions] register builtin %q: %v", p.Manifest().ID, regErr) //nolint:gocritic // startup: fail fast on a duplicate builtin provider
+		}
+	}
+	extensionInstanceSettingsHandler := handler.NewExtensionInstanceSettingsHandler(instanceSettingRepo, instanceSettingRepo, extensionRegistry, extensionEnvSources)
 	runtimeRepo := postgres.NewRuntimeRepo(db)
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
@@ -1824,6 +1846,11 @@ func main() {
 	api.POST("/oauth/consent", oauthHandler.Decide, mw.RequireUserAuth())
 	api.GET("/oauth/grants", oauthHandler.ListGrants, mw.RequireUserAuth())
 	api.DELETE("/oauth/grants/:oauth_grant_id", oauthHandler.RevokeGrant, mw.RequireUserAuth())
+
+	// Instance-level extension settings: human instance administrators only
+	// (the handler checks the role; RequireUserAuth refuses agents/connectors).
+	api.GET("/extensions/:ext_id/instance-settings", extensionInstanceSettingsHandler.Get, mw.RequireUserAuth())
+	api.PUT("/extensions/:ext_id/instance-settings", extensionInstanceSettingsHandler.Put, mw.RequireUserAuth())
 
 	// Routes contributed by registered extensions (Hooks()).
 	extensionRegistry.RegisterRoutes(e)
