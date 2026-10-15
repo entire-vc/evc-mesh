@@ -35,3 +35,26 @@ rollback, and keep it with the person who ran the apply.
 
 `test_layout_docs.py` runs the whole cycle (dry-run writes nothing, red controls, apply,
 repeat apply, rollback) against a local stand from `scripts/local-stack.sh up`. Never run it on prod.
+
+## `--rename-slugs`
+
+Renames documents whose slug was mangled by an old transliteration (`adrs001-use-nats`,
+`runbooksargus-pulse`, `prdinvoices`, `rndspike`, a hyphen-only `---`). It changes the slug only;
+the server (`PATCH /documents/{id}` with `slug`) records the old path as an alias, so old links keep resolving.
+
+    python3 -I layout_docs.py --rename-slugs                       # dry run, all projects: table "was -> becomes" + count
+    python3 -I layout_docs.py --rename-slugs --project lab         # dry run, one project
+    python3 -I layout_docs.py --rename-slugs --apply --project lab # write; journal layout-rename-journal-<project>-<ts>.jsonl
+    python3 -I layout_docs.py --rollback <journal>                 # restore the old slugs (a forged journal is refused)
+
+Rules: `adrs<NNN>` becomes `adr-NNN` (parent `decisions`), `runbooks<name>` and the misspelt
+`раннбук`/`ранбук` become `runbook-<name>` (parent `guides`), `prd<name>` becomes `prd-<name>` (parent `specs`),
+`rnd<name>` becomes `rnd-<name>` (parent `research`). A mismatched parent is skipped and listed.
+
+- `--apply` needs `--project`; the project `website-relaunch` is never touched.
+- A collision with a sibling slug, or between two candidates, aborts the whole run before the first write (exit 2).
+- A hyphen-only slug is renamed from the title only with `--allow-irreversible`; `--rollback` cannot restore it and says so.
+- Old references resolve by the old FULL path (`decisions/adrs001-use-nats`), by UUID, and for the subtree below it.
+  A bare old slug is not an alias.
+- Tests: `test_rename_slugs.py` (offline); `test_rename_slugs_e2e.py` (local stand, `scripts/local-stack.sh up`).
+- Prod apply is run by the project lead after the server release; rollback is `--rollback <journal>` or reverting the MR.
