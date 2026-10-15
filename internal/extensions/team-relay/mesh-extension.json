@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "id": "team-relay",
+  "name": "Team Relay",
+  "version": "1.0.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Синхронизация Mesh Docs с шарами Team Relay: подключение к релею и привязка проекта к шаре",
+  "category": "documents",
+  "tags": [
+    "sync",
+    "docs"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://git.entire.host/entire-vc/evc-mesh",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": true
+  },
+  "settings": {
+    "instance": {
+      "$ref": "#/schemas/connection"
+    },
+    "workspace": {
+      "$ref": "#/schemas/connection"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "share_id": {
+          "type": "string",
+          "title": "Шара Team Relay (UUID)"
+        },
+        "subfolder": {
+          "type": "string",
+          "title": "Подпапка в шаре"
+        },
+        "agent_key": {
+          "type": "string",
+          "title": "Ключ агента шары",
+          "x-secret": true
+        },
+        "key_expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "title": "Ключ действует до"
+        }
+      },
+      "required": [
+        "share_id"
+      ]
+    }
+  },
+  "schemas": {
+    "connection": {
+      "type": "object",
+      "properties": {
+        "relay_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Адрес Team Relay"
+        },
+        "web_base_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "Адрес веб-интерфейса Team Relay"
+        },
+        "transport_enabled": {
+          "type": "boolean",
+          "title": "Отправлять артефакты в Team Relay",
+          "x-widget": "toggle"
+        }
+      },
+      "required": [
+        "relay_url"
+      ]
+    }
+  },
+  "capabilities": {
+    "api": [
+      "docs:read",
+      "docs:write",
+      "artifacts:read",
+      "artifacts:write"
+    ],
+    "events": [
+      "artifact.uploaded",
+      "doc.updated"
+    ],
+    "webhooks_in": [],
+    "network": {
+      "allowed_domains": [
+        "{settings.relay_url}"
+      ],
+      "reasoning": "синк документов и артефактов с релеем по адресу из настроек"
+    },
+    "ui": [
+      "project.settings",
+      "workspace.settings"
+    ],
+    "secrets": [
+      "agent_key"
+    ]
+  },
+  "external": null
+}

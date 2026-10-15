@@ -64,7 +64,12 @@ func BuiltinEnvSources() []EnvSource {
 				if c.TeamRelay.RelayURL == "" {
 					return nil, false, false
 				}
-				return map[string]any{"relay_url": c.TeamRelay.RelayURL}, true, true
+				// The push transport was only ever switched by this variable,
+				// read straight from the environment by the relay client.
+				return map[string]any{
+					"relay_url":         c.TeamRelay.RelayURL,
+					"transport_enabled": os.Getenv("MESH_TEAMRELAY_TRANSPORT_ENABLED") == "true",
+				}, true, true
 			},
 		},
 		{
