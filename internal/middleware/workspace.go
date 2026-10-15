@@ -452,6 +452,10 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // connectors and answers 403 unless the caller is an owner/admin of the
 // instance's owner workspace (InstanceAdminChecker), before anything is read
 // or written.
+// /workspaces/:ws_id/extensions/:ext_id... name an extension by its registry id (a
+// string from the extension's manifest, not a row). The workspace comes from
+// :ws_id, which this guard checks; every query the handler runs is keyed by
+// that workspace, so there is no child row of another tenant to pair with.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
 	"/api/v1/memories/:id":                                                                        true,
@@ -459,6 +463,12 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/memories/:id/revisions":                                                              true,
 	"/api/v1/notifications/preferences/:pref_id":                                                  true,
 	"/api/v1/oauth/grants/:oauth_grant_id":                                                        true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id":                                                true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id/connect":                                        true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id/settings":                                       true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id/enable":                                         true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id/disable":                                        true,
+	"/api/v1/workspaces/:ws_id/extensions/:ext_id/test":                                           true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id":                                      true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/admission":                            true,
 	"/api/v1/workspaces/:ws_id/runtime/bindings/:binding_id/policy":                               true,

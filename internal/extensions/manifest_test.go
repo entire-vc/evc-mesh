@@ -24,3 +24,14 @@ func TestManifest_InstanceSecretKeys(t *testing.T) {
 		require.Equal(t, tc.want, m.InstanceSecretKeys(), name)
 	}
 }
+
+func TestManifest_SecretKeysPerLevel(t *testing.T) {
+	m, err := ParseManifest([]byte(`{"id":"a","version":"1","runtime":"builtin",
+		"settings":{"instance":{"properties":{"i":{"x-secret":true}}},"workspace":{"$ref":"#/schemas/w"},"project":{"properties":{"p":{"x-secret":true}}}},
+		"schemas":{"w":{"properties":{"w":{"x-secret":true},"n":{}}}}}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"i"}, m.SecretKeys("instance"))
+	require.Equal(t, []string{"w"}, m.SecretKeys("workspace"))
+	require.Equal(t, []string{"p"}, m.SecretKeys("project"))
+	require.Nil(t, m.SecretKeys("nope"))
+}

@@ -74,7 +74,12 @@ func DecodeSettings[T any](settings map[string]any) (T, error) {
 
 // InstanceSecretKeys returns the instance-level settings fields the manifest
 // marks x-secret. The instance level may be inline or a "#/schemas/<name>" ref.
-func (m Manifest) InstanceSecretKeys() []string {
+func (m Manifest) InstanceSecretKeys() []string { return m.SecretKeys("instance") }
+
+// SecretKeys returns the fields of one settings level ("instance",
+// "workspace" or "project") the manifest marks x-secret. The level may be
+// inline or a "#/schemas/<name>" ref.
+func (m Manifest) SecretKeys(levelName string) []string {
 	type field struct {
 		Secret bool `json:"x-secret"`
 	}
@@ -82,13 +87,11 @@ func (m Manifest) InstanceSecretKeys() []string {
 		Ref        string           `json:"$ref"`
 		Properties map[string]field `json:"properties"`
 	}
-	var settings struct {
-		Instance *level `json:"instance"`
-	}
-	if len(m.Settings) == 0 || json.Unmarshal(m.Settings, &settings) != nil || settings.Instance == nil {
+	var settings map[string]*level
+	if len(m.Settings) == 0 || json.Unmarshal(m.Settings, &settings) != nil || settings[levelName] == nil {
 		return nil
 	}
-	lv := *settings.Instance
+	lv := *settings[levelName]
 	if name, ok := strings.CutPrefix(lv.Ref, "#/schemas/"); ok {
 		var schemas map[string]level
 		if json.Unmarshal(m.Schemas, &schemas) != nil {

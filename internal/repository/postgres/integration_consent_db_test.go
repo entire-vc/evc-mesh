@@ -49,3 +49,37 @@ func TestIntegrationConsent_RoundTripDB(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, c, "legacy Upsert keeps recorded consent")
 }
+
+// Two concurrent connects: the loser must not overwrite the winner's config.
+func TestIntegrationInsertIfAbsent_DoesNotOverwriteDB(t *testing.T) {
+	db := agentDigestTestDB(t)
+	ctx := context.Background()
+	suffix := uuid.New().String()[:8]
+	owner := &domain.User{
+		ID: uuid.New(), Email: "insabs-" + suffix + "@example.com", PasswordHash: "x",
+		Name: "Insert Owner", Username: "insabs-" + suffix, IsActive: true,
+	}
+	require.NoError(t, NewUserRepo(db).Create(ctx, owner))
+	w := &domain.Workspace{ID: uuid.New(), Name: "insabs-ws", Slug: "insabs-ws-" + suffix, OwnerID: owner.ID}
+	require.NoError(t, NewWorkspaceRepo(db).Create(ctx, w))
+
+	integ := NewIntegrationRepo(db)
+	mk := func(cfg string) *domain.IntegrationConfig {
+		return &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: w.ID, Provider: "team-relay",
+			Config: []byte(cfg), IsActive: true, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	}
+	first, second := mk(`{"who":"first"}`), mk(`{"who":"second"}`)
+
+	created, err := integ.InsertIfAbsent(ctx, first)
+	require.NoError(t, err)
+	assert.True(t, created)
+	created, err = integ.InsertIfAbsent(ctx, second)
+	require.NoError(t, err)
+	assert.False(t, created, "a second insert reports it lost")
+
+	got, err := integ.GetByProvider(ctx, w.ID, "team-relay")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, first.ID, got.ID)
+	assert.JSONEq(t, `{"who":"first"}`, string(got.Config), "the winner's config is untouched")
+}

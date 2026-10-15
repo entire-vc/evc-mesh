@@ -75,6 +75,14 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/agent-grants", map[string]string{"agent_id": dummyUUID, "role": "member"}},
 	{http.MethodDelete, "/agent-grants/" + dummyUUID, nil},
 
+	{http.MethodGet, "/extensions", nil},
+	{http.MethodPost, "/extensions/" + dummyUUID + "/connect", map[string]string{}},
+	{http.MethodPatch, "/extensions/" + dummyUUID + "/settings", map[string]string{}},
+	{http.MethodPost, "/extensions/" + dummyUUID + "/enable", map[string]string{}},
+	{http.MethodPost, "/extensions/" + dummyUUID + "/disable", map[string]string{}},
+	{http.MethodPost, "/extensions/" + dummyUUID + "/test", map[string]string{}},
+	{http.MethodDelete, "/extensions/" + dummyUUID, nil},
+
 	// Agent runtime catalog: a non-member must be refused before any handler
 	// reads the owner's resource inventory or accepts a controller/consent write.
 	{http.MethodGet, "/runtime", nil},
@@ -284,6 +292,7 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		suffix = strings.ReplaceAll(suffix, "/members/"+dummyUUID, "/members/:user_id")
 		suffix = strings.ReplaceAll(suffix, "/invites/"+dummyUUID, "/invites/:invite_id")
 		suffix = strings.ReplaceAll(suffix, "/agent-grants/"+dummyUUID, "/agent-grants/:grant_id")
+		suffix = strings.ReplaceAll(suffix, "/extensions/"+dummyUUID, "/extensions/:ext_id")
 		suffix = strings.ReplaceAll(suffix, "/runtime/controllers/runner-a/", "/runtime/controllers/:controller_ref/")
 		suffix = strings.ReplaceAll(suffix, "/runtime/bindings/worker-b", "/runtime/bindings/:binding_id")
 		suffix = strings.ReplaceAll(suffix, "/reservations/"+dummyUUID, "/reservations/:reservation_id")
