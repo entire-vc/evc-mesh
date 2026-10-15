@@ -568,6 +568,40 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 	}
 }
 
+// renameProtectedSlugs are never renamed and never taken as a new name: the
+// state pages, the canon folders of the docs layout and the legacy folders it
+// merges, which tooling and agents address by these exact names.
+var renameProtectedSlugs = map[string]bool{
+	"state": true, "product-state": true, "obsidian-share": true,
+	"specs": true, "decisions": true, "plans": true, "research": true, "reports": true,
+	"guides": true, "e2e": true, "registry": true, "archive": true,
+	"adrs": true, "rnd": true, "runbooks": true, "prd": true,
+}
+
+// validateRenamedSlug returns the slug to store for a rename request, or a
+// validation error. The requested slug must already be in slug form: a
+// rename that silently turned "My Doc" into "my-doc" would hide what the
+// caller asked for, so a request that Slugify would change is refused.
+func validateRenamedSlug(current, requested string) (string, error) {
+	switch {
+	case strings.Contains(requested, "/"):
+		return "", apierror.ValidationError(map[string]string{
+			"slug": fmt.Sprintf("slug must not contain \"/\": a document's place in the tree is set with parent_id; got %q", requested),
+		})
+	case mdoc.Slugify(requested) != requested || !hasLetterOrDigit(requested):
+		return "", apierror.ValidationError(map[string]string{
+			"slug": fmt.Sprintf("slug %q is not in slug form (lower-case letters, digits, hyphens) or has no letter or digit", requested),
+		})
+	case requested == current:
+		return current, nil
+	case renameProtectedSlugs[current] || renameProtectedSlugs[requested]:
+		return "", apierror.ValidationError(map[string]string{
+			"slug": fmt.Sprintf("slug %q is reserved (state pages and canon folders are never renamed or taken)", requested),
+		})
+	}
+	return requested, nil
+}
+
 // landedExternalWrite records that this attempt already pushed the edit to the
 // document's external source. Its presence is what makes the attempt
 // non-repeatable: everything else updateOnce does is confined to our own
@@ -613,6 +647,14 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 			})
 		}
 		doc.Title = title
+	}
+
+	if input.Slug != nil {
+		slug, verr := validateRenamedSlug(doc.Slug, *input.Slug)
+		if verr != nil {
+			return nil, nil, verr
+		}
+		doc.Slug = slug
 	}
 
 	switch {
