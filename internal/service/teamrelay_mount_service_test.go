@@ -1163,6 +1163,118 @@ func TestSyncMount_ArchivesCopiesUnderNewlyExcludedFolder(t *testing.T) {
 	require.NotNil(t, stored.DeletedAt)
 }
 
+// A share folder's placeholder that was filed into a canon folder (docs
+// layout) must be found again by its old path: the next sync used to leave a
+// new empty duplicate at the project's top level every time (card 4048ffea).
+func TestSyncMount_FiledAwayFolderPlaceholderIsReusedNotRecreated(t *testing.T) {
+	f := setupMountFixture(t, "")
+	ctx := context.Background()
+	body := func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+	f.client.downloadFn = body
+	f.client.indexResult = []teamrelay.SyncIndexEntry{{Path: "card1/first.md", SHA256: "sha-for-card1/first.md", Size: 10, Type: "doc"}}
+	res, err := f.svc.SyncMount(ctx, f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, res.Status)
+
+	rootSlugs := func() []string {
+		var out []string
+		for _, d := range f.repo.items {
+			if d.ProjectID == f.projectID && d.DeletedAt == nil && d.ParentID == nil {
+				out = append(out, d.Slug)
+			}
+		}
+		return out
+	}
+	require.Equal(t, []string{"card1"}, rootSlugs())
+
+	// The layout tool files the placeholder under reports/.
+	var placeholder *domain.Document
+	for _, d := range f.repo.items {
+		if d.Slug == "card1" {
+			placeholder = d
+		}
+	}
+	require.NotNil(t, placeholder)
+	reports := &domain.Document{ID: uuid.New(), ProjectID: f.projectID, Slug: "reports", Title: "Reports", Version: 1,
+		CreatedBy: systemActorID, CreatedByType: domain.ActorTypeSystem, CreatedAt: frozenTime, UpdatedAt: frozenTime,
+		SourceKind: domain.DocumentSourceOwn}
+	require.NoError(t, f.repo.Create(ctx, reports))
+	moved := *placeholder // the mock stores pointers: edit a copy, as a real caller's re-read would be
+	moved.ParentID = &reports.ID
+	_, err = f.repo.Update(ctx, &moved, nil, false)
+	require.NoError(t, err)
+
+	// A new file in the same share folder arrives on the next sync.
+	f.client.indexResult = append(f.client.indexResult,
+		teamrelay.SyncIndexEntry{Path: "card1/second.md", SHA256: "sha-for-card1/second.md", Size: 10, Type: "doc"})
+	res, err = f.svc.SyncMount(ctx, f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, res.Status)
+
+	assert.Equal(t, []string{"reports"}, rootSlugs(), "no empty card1 duplicate appears at the top level")
+	second, gerr := f.repo.GetBySourceInProject(ctx, f.projectID, testRelayShareID, "card1/second.md")
+	require.NoError(t, gerr)
+	require.NotNil(t, second)
+	require.NotNil(t, second.ParentID)
+	assert.Equal(t, placeholder.ID, *second.ParentID, "the new file lands under the placeholder that was filed away")
+}
+
+// A nested share folder created AFTER its parent placeholder was filed away has
+// no alias of its own (it never lived at the old path), so the deeper segments
+// must be looked up under the parent's current path or every sync would add a
+// duplicate of it.
+func TestSyncMount_NestedFolderUnderFiledAwayPlaceholderIsNotDuplicated(t *testing.T) {
+	f := setupMountFixture(t, "")
+	ctx := context.Background()
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+	entry := func(path string) teamrelay.SyncIndexEntry {
+		return teamrelay.SyncIndexEntry{Path: path, SHA256: "sha-for-" + path, Size: 10, Type: "doc"}
+	}
+	runSync := func() {
+		res, err := f.svc.SyncMount(ctx, f.projectID)
+		require.NoError(t, err)
+		require.Equal(t, MountStatusOK, res.Status)
+	}
+
+	f.client.indexResult = []teamrelay.SyncIndexEntry{entry("card1/first.md")}
+	runSync()
+	var placeholder *domain.Document
+	for _, d := range f.repo.items {
+		if d.Slug == "card1" {
+			placeholder = d
+		}
+	}
+	require.NotNil(t, placeholder)
+	reports := &domain.Document{ID: uuid.New(), ProjectID: f.projectID, Slug: "reports", Title: "Reports", Version: 1,
+		CreatedBy: systemActorID, CreatedByType: domain.ActorTypeSystem, CreatedAt: frozenTime, UpdatedAt: frozenTime,
+		SourceKind: domain.DocumentSourceOwn}
+	require.NoError(t, f.repo.Create(ctx, reports))
+	moved := *placeholder
+	moved.ParentID = &reports.ID
+	_, err := f.repo.Update(ctx, &moved, nil, false)
+	require.NoError(t, err)
+
+	// Sync 2 creates card1/sub under the moved placeholder; sync 3 adds a sibling file.
+	f.client.indexResult = append(f.client.indexResult, entry("card1/sub/x.md"))
+	runSync()
+	f.client.indexResult = append(f.client.indexResult, entry("card1/sub/y.md"))
+	runSync()
+
+	subs := 0
+	for _, d := range f.repo.items {
+		if d.ProjectID == f.projectID && d.DeletedAt == nil && d.Slug == "sub" {
+			subs++
+			require.NotNil(t, d.ParentID)
+			assert.Equal(t, placeholder.ID, *d.ParentID)
+		}
+	}
+	assert.Equal(t, 1, subs, "the nested folder is reused, not recreated on every sync")
+}
+
 // TestSyncMount_VanishedCopyRemountsWhenFileReturns pins the reversibility
 // that made SoftDelete the right archive mechanism: soft-deleting the copy
 // freed its uq_documents_source slot, so the same path returning to the share
