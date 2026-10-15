@@ -114,6 +114,14 @@ export default defineConfig({
           // Pack the tiny icon chunks to share gzip dictionaries, while
           // keeping route-only icons out of the initial login download.
           groups: [
+            // The ru catalogs load only for a Russian session, so one chunk
+            // costs an English user nothing and the 13 small JSON modules
+            // share one gzip dictionary.
+            {
+              name: "locale-ru",
+              test: /src[\\/]locales[\\/]ru[\\/](?!common\.json)/,
+              includeDependenciesRecursively: false,
+            },
             {
               name: "icons-initial",
               test: /node_modules[\\/]lucide-react[\\/]/,
