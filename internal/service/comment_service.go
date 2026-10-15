@@ -831,6 +831,7 @@ type commentService struct {
 	notifySvc      NotificationService
 	statusRepo     repository.TaskStatusRepository
 	projectRepo    repository.ProjectRepository
+	extRefRepo     repository.TaskExternalRefRepository
 	ctxCacheInv    ContextCacheInvalidator
 	userRepo       repository.UserRepository
 	mentionRepo    repository.CommentMentionRepository
@@ -932,6 +933,13 @@ func WithCommentTaskService(ts TaskService) CommentServiceOption {
 // feature existed).
 func WithHumanGateDecisionRepo(repo repository.HumanGateDecisionRepository) CommentServiceOption {
 	return func(s *commentService) { s.hgdRepo = repo }
+}
+
+// WithCommentExternalRefRepo lets task.gate.decided carry the card's external
+// binding (external_ref / external_hash), so the external side can tie the answer
+// to the exact request it pinned.
+func WithCommentExternalRefRepo(repo repository.TaskExternalRefRepository) CommentServiceOption {
+	return func(s *commentService) { s.extRefRepo = repo }
 }
 
 // WithCommentDependencyRepo injects the task-dependency repository, used by the

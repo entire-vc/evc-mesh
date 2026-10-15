@@ -140,6 +140,7 @@ func main() {
 	closedFollowUpRootRepo := postgres.NewClosedFollowUpRootRepo(db)
 	closedFollowUpPendingRepo := postgres.NewClosedFollowUpPendingRepo(db)
 	humanGateDecisionRepo := postgres.NewHumanGateDecisionRepo(db)
+	taskExternalRefRepo := postgres.NewTaskExternalRefRepo(db)
 	artifactRepo := postgres.NewArtifactRepo(db)
 	documentRepo := postgres.NewDocumentRepo(db)
 	documentAttachmentRepo := postgres.NewDocumentAttachmentRepo(db)
@@ -586,6 +587,7 @@ func main() {
 		service.WithCommentNotificationService(notificationService),
 		service.WithCommentTaskService(taskService),
 		service.WithHumanGateDecisionRepo(humanGateDecisionRepo),
+		service.WithCommentExternalRefRepo(taskExternalRefRepo),
 		service.WithCommentDependencyRepo(taskDependencyRepo),
 		service.WithClosedFollowUpRootRepo(closedFollowUpRootRepo),
 		service.WithClosedFollowUpPendingRepo(closedFollowUpPendingRepo),
@@ -1566,6 +1568,10 @@ func main() {
 	// Operational state of a card (working/waiting/queued/stopped), orthogonal to its status.
 	api.PUT("/tasks/:task_id/runtime-state", taskHandler.PutRuntimeState, wsAccess, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id/runtime-state", taskHandler.DeleteRuntimeState, wsAccess, rbac(mw.PermUpdateTask))
+	// Binding of a card to an object in an external system; external_hash is write-once.
+	taskExternalRefHandler := handler.NewTaskExternalRefHandler(service.NewTaskExternalRefService(taskExternalRefRepo), taskService)
+	api.GET("/tasks/:task_id/external-ref", taskExternalRefHandler.Get, wsAccess)
+	api.PUT("/tasks/:task_id/external-ref", taskExternalRefHandler.Put, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/workspaces/:ws_id/tasks", taskHandler.SearchGlobal, wsAccess)
 
 	// Dependency routes.

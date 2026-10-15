@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
@@ -100,6 +101,7 @@ func (s *commentService) RecordHumanGateDecision(ctx context.Context, input doma
 		log.Printf("[human-gate-decision] WARNING: task %s lookup after recording decision %s failed: %v", input.TaskID, d.ID, err)
 		return d, nil
 	}
+	s.dispatchGateDecided(ctx, task, d)
 	if task == nil || !task.HumanGate {
 		return d, nil // recorded, nothing to release
 	}
@@ -538,4 +540,73 @@ func (s *commentService) resolveQuestionRef(ctx context.Context, taskID uuid.UUI
 	}
 	return nil, &HumanGateDecisionValidationError{Msg: fmt.Sprintf(
 		"question_ref is required: the task has %d live blocking markers (%s)", len(live), strings.Join(ids, ", "))}
+}
+
+// gateDecidedActorType is the actor type reported as decided_by_type in the
+// public task.gate.decided event. It states who actually acted, not whom the
+// answer is attributed to: an agent that transcribed a human answer
+// (provenance attested) is reported as "agent", so an extension that only
+// accepts user decisions — Keep does — rejects it without parsing provenance.
+func gateDecidedActorType(d *domain.HumanGateDecision) domain.ActorType {
+	if d.Provenance != nil {
+		switch *d.Provenance {
+		case domain.HumanGateProvenanceDefaultApplied:
+			return domain.ActorTypeSystem
+		case domain.HumanGateProvenanceAttested:
+			return domain.ActorTypeAgent
+		case domain.HumanGateProvenanceDirect, domain.HumanGateProvenanceBridged:
+			// The bridge may be recorded as RecordedBy; the answer is still the person's.
+			return domain.ActorTypeUser
+		}
+	}
+	if d.RecordedBy != nil {
+		return domain.ActorTypeAgent
+	}
+	return domain.ActorTypeUser
+}
+
+// dispatchGateDecided publishes the public task.gate.decided event (spec 03 §8,
+// 06 §4) for a recorded decision. The payload carries the answer as given
+// (decision = the recorded quote) and how it arrived (provenance, channel);
+// it does not judge the decision — the receiver applies its own invariants.
+// A missing webhook or project service just means no one listens.
+func (s *commentService) dispatchGateDecided(ctx context.Context, task *domain.Task, d *domain.HumanGateDecision) {
+	if s.webhookSvc == nil || s.projectRepo == nil || task == nil {
+		return
+	}
+	proj, err := s.projectRepo.GetByID(ctx, task.ProjectID)
+	if err != nil || proj == nil {
+		return
+	}
+	payload := map[string]any{
+		"task_id":         task.ID,
+		"project_id":      task.ProjectID,
+		"decision_id":     d.ID,
+		"decision":        quoteOrEmpty(d.Quote),
+		"decided_by":      d.DecidedBy,
+		"decided_by_type": gateDecidedActorType(d),
+	}
+	if d.Provenance != nil {
+		payload["provenance"] = string(*d.Provenance)
+	}
+	if d.Channel != nil {
+		payload["channel"] = string(*d.Channel)
+	}
+	if d.RecordedBy != nil {
+		payload["recorded_by"] = *d.RecordedBy
+	}
+	if s.extRefRepo != nil {
+		if ref, err := s.extRefRepo.Get(ctx, task.ID); err == nil && ref != nil {
+			payload["external_ref"] = ref.Ref
+			payload["external_hash"] = ref.Hash
+		}
+	}
+	go s.webhookSvc.Dispatch(context.WithoutCancel(ctx), proj.WorkspaceID, extensions.EventTaskGateDecided, payload)
+}
+
+func quoteOrEmpty(q *string) string {
+	if q == nil {
+		return ""
+	}
+	return *q
 }
