@@ -2030,3 +2030,13 @@ type OAuthRepository interface {
 	// than merely failing their next refresh.
 	RevokeTokensByGrant(ctx context.Context, grantID uuid.UUID, now time.Time) error
 }
+
+// TaskExternalRefRepository manages task_external_refs.
+type TaskExternalRefRepository interface {
+	// Get returns the binding of a task, nil when there is none.
+	Get(ctx context.Context, taskID uuid.UUID) (*domain.TaskExternalRef, error)
+	// Put creates the binding. When one exists with the same hash the ref is
+	// updated; with a different hash the stored row is returned unchanged and
+	// changed=false.
+	Put(ctx context.Context, in *domain.TaskExternalRef) (stored *domain.TaskExternalRef, changed bool, err error)
+}
