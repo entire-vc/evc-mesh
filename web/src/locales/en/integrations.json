@@ -683,5 +683,33 @@
     "enabling": "Enabling…",
     "enable": "Enable",
     "notNow": "Not now"
+  },
+  "extensionsPage": {
+    "intro": "Connect and manage extensions for this workspace.",
+    "tabs": {
+      "catalog": "Catalog",
+      "installed": "Installed",
+      "updates": "Updates",
+      "label": "Extensions sections"
+    },
+    "updatesCount": "{{count}} updates available",
+    "installFromRepo": "Install from repository",
+    "instanceSettings": "Instance settings",
+    "catalog": {
+      "emptyTitle": "The catalog is empty",
+      "emptyBody": "No extensions are published yet. Check back later.",
+      "loading": "Loading catalog",
+      "errorTitle": "Couldn't load the catalog",
+      "errorBody": "The extension catalog is unavailable right now. Try again in a minute.",
+      "retry": "Try again"
+    },
+    "updates": {
+      "emptyTitle": "Everything is up to date",
+      "emptyBody": "No installed extension has a newer version.",
+      "loading": "Checking for updates",
+      "errorTitle": "Couldn't check for updates",
+      "errorBody": "Update information is unavailable right now. Try again in a minute.",
+      "retry": "Try again"
+    }
   }
 }

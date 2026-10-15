@@ -18,7 +18,8 @@
     "integrations": "Интеграции",
     "connectedApps": "Подключённые приложения",
     "workspaceSettings": "Настройки пространства",
-    "projectSettings": "Настройки проекта"
+    "projectSettings": "Настройки проекта",
+    "extensions": "Расширения"
   },
   "sidebar": {
     "workspaceLogoAlt": "Рабочее пространство",
