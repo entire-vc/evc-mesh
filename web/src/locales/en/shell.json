@@ -63,6 +63,7 @@
       "userFallback": "User",
       "theme": "Theme",
       "themeDark": "Dark",
+      "language": "Language",
       "themeLight": "Light",
       "logOut": "Log out"
     }

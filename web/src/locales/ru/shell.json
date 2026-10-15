@@ -63,6 +63,7 @@
       "userFallback": "Пользователь",
       "theme": "Тема",
       "themeDark": "Тёмная",
+      "language": "Язык",
       "themeLight": "Светлая",
       "logOut": "Выйти"
     }
