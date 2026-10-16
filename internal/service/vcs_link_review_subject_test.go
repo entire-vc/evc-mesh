@@ -17,7 +17,7 @@ import (
 // no title/body/branch of the MR names it. It is closed by the merge because a
 // link with role=review ties it to the MR's URL.
 
-const reviewSubjectURL = "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/101"
+const reviewSubjectURL = "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/101"
 
 func (h *harness) bindReview(task *domain.Task, url, meta string) {
 	if _, _, err := h.svcCreateLink(task.ID, url, meta); err != nil {
@@ -63,7 +63,7 @@ func TestHandleMR_Merged_LeavesUnboundOrForeignReviewCards(t *testing.T) {
 		{"no link at all (the #863bb5de defect)", func(*harness, *domain.Task) {}},
 		{"link without the review role", func(h *harness, r *domain.Task) { h.bindReview(r, reviewSubjectURL, `{}`) }},
 		{"same iid in another project", func(h *harness, r *domain.Task) {
-			h.bindReview(r, "https://git.entire.host/entire-vc/evc-keep/-/merge_requests/101", `{"role":"review"}`)
+			h.bindReview(r, "https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/101", `{"role":"review"}`)
 		}},
 	}
 	for _, tc := range cases {
@@ -110,7 +110,7 @@ func TestHandlePR_Merged_ClosesBoundReviewCard(t *testing.T) {
 }
 
 func TestExtractChangeRequestRefs(t *testing.T) {
-	refs := domain.ExtractChangeRequestRefs("Ревью MR: https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19, again (https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19/) and https://github.com/o/r/pull/5.")
+	refs := domain.ExtractChangeRequestRefs("Ревью MR: https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/19, again (https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/19/) and https://github.com/o/r/pull/5.")
 	require.Len(t, refs, 2)
 	assert.Equal(t, domain.VCSProviderGitLab, refs[0].Provider)
 	assert.Equal(t, "19", refs[0].ExternalID)
@@ -120,7 +120,7 @@ func TestExtractChangeRequestRefs(t *testing.T) {
 }
 
 func TestBindReviewSubject(t *testing.T) {
-	desc := "Ревью MR Calvin'а: https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19"
+	desc := "Ревью MR Calvin'а: https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/19"
 	cases := []struct {
 		name   string
 		labels []string
@@ -129,7 +129,7 @@ func TestBindReviewSubject(t *testing.T) {
 	}{
 		{"review label, one MR", []string{"keep", "review"}, desc, 1},
 		{"no review label", []string{"keep"}, desc, 0},
-		{"two different MRs is prose, not a subject", []string{"review"}, desc + " и https://git.entire.host/entire-vc/evc-keep/-/merge_requests/20", 0},
+		{"two different MRs is prose, not a subject", []string{"review"}, desc + " и https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/20", 0},
 		{"no URL", []string{"review"}, "посмотри MR !19", 0},
 	}
 	for _, tc := range cases {
@@ -225,7 +225,7 @@ func TestBindReviewSubject_CreateFailureIsSwallowed(t *testing.T) {
 	repo.createErr = fmt.Errorf("db down")
 	svc.vcsLinkRepo = repo
 	task := &domain.Task{ID: uuid.New(), Title: "Ревью", Labels: pq.StringArray{"review"},
-		Description: "https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19"}
+		Description: "https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/19"}
 
 	svc.bindReviewSubject(context.Background(), task)
 

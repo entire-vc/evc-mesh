@@ -8,7 +8,7 @@ export interface RuntimeRef {
   href: string | null;
 }
 
-const GITLAB = "https://git.entire.host";
+const GITLAB = "https://gitlab.com";
 
 /** Turns a WAIT ref (`card:#4807abf9`, `mr:g/p!3`, `pipeline:g/p#9`, `decision:@x`) into a label and a link. */
 export function parseRuntimeRef(ref: string | null | undefined): RuntimeRef | null {

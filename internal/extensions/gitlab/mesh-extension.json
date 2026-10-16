@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "id": "gitlab",
+  "name": "GitLab",
+  "version": "1.0.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Привязка merge request'ов GitLab к задачам: вебхук, статус MR и пайплайнов",
+  "category": "development",
+  "tags": [
+    "vcs"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/entire-vc/evc-mesh",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": true
+  },
+  "settings": {
+    "instance": {
+      "$ref": "#/schemas/connection"
+    },
+    "workspace": {
+      "$ref": "#/schemas/connection"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "repo_path": {
+          "type": "string",
+          "title": "Путь проекта (group/project)"
+        }
+      },
+      "required": [
+        "repo_path"
+      ]
+    }
+  },
+  "schemas": {
+    "connection": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "format": "uri",
+          "title": "URL GitLab"
+        },
+        "token": {
+          "type": "string",
+          "title": "Токен",
+          "x-secret": true
+        },
+        "webhook_secret": {
+          "type": "string",
+          "title": "Секрет вебхука",
+          "x-secret": true
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "api": [
+      "tasks:read",
+      "tasks:write",
+      "vcs_links:write"
+    ],
+    "events": [],
+    "webhooks_in": [
+      "gitlab"
+    ],
+    "network": {
+      "allowed_domains": [
+        "{settings.base_url}"
+      ],
+      "reasoning": "проверка статуса MR и пайплайнов через API GitLab инстанса"
+    },
+    "ui": [],
+    "secrets": [
+      "token",
+      "webhook_secret"
+    ]
+  }
+}

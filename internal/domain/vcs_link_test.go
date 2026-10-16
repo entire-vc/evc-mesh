@@ -113,9 +113,9 @@ func TestNormalizeVCSURL(t *testing.T) {
 	}{
 		{"identical", "https://github.com/entire-vc/evc-mesh/pull/40", "https://github.com/entire-vc/evc-mesh/pull/40"},
 		{"trailing slash", "https://github.com/entire-vc/evc-mesh/pull/40", "https://github.com/entire-vc/evc-mesh/pull/40/"},
-		{"http vs https", "http://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14", "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"},
-		{"host case", "https://GIT.entire.host/entire-vc/team-relay-ops/-/merge_requests/14", "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"},
-		{"scheme case", "HTTPS://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14", "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"},
+		{"http vs https", "http://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14", "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14"},
+		{"host case", "https://GITLAB.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14", "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14"},
+		{"scheme case", "HTTPS://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14", "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestNormalizeVCSURL(t *testing.T) {
 // folding that far is what silently collapsed two distinct objects into one.
 func TestNormalizeVCSURL_DifferentProvidersSameNumberStayDistinct(t *testing.T) {
 	github := NormalizeVCSURL("https://github.com/entire-vc/team-relay-ops/pull/14")
-	gitlab := NormalizeVCSURL("https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14")
+	gitlab := NormalizeVCSURL("https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14")
 	if github == gitlab {
 		t.Fatalf("a GitHub PR and a GitLab MR normalized to the same string: %q", github)
 	}
@@ -180,7 +180,7 @@ func TestVCSLink_IsReviewSubject(t *testing.T) {
 }
 
 func TestExtractChangeRequestRefs(t *testing.T) {
-	refs := ExtractChangeRequestRefs("MR: https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19, again (https://git.entire.host/entire-vc/evc-keep/-/merge_requests/19/) and https://github.com/o/r/pull/5.")
+	refs := ExtractChangeRequestRefs("MR: https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/19, again (https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/19/) and https://github.com/o/r/pull/5.")
 	if len(refs) != 2 {
 		t.Fatalf("got %d refs, want 2 (duplicate URL must collapse): %+v", len(refs), refs)
 	}

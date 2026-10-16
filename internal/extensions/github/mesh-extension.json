@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "id": "github",
+  "name": "GitHub",
+  "version": "1.0.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Привязка pull request'ов GitHub к задачам: вебхук и проверка статуса PR",
+  "category": "development",
+  "tags": [
+    "vcs"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/entire-vc/evc-mesh",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": true
+  },
+  "settings": {
+    "instance": {
+      "$ref": "#/schemas/connection"
+    },
+    "workspace": {
+      "$ref": "#/schemas/connection"
+    },
+    "project": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "title": "Репозиторий (owner/name)"
+        }
+      },
+      "required": [
+        "repo"
+      ]
+    }
+  },
+  "schemas": {
+    "connection": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "title": "Токен",
+          "x-secret": true
+        },
+        "webhook_secret": {
+          "type": "string",
+          "title": "Секрет вебхука",
+          "x-secret": true
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "api": [
+      "tasks:read",
+      "tasks:write",
+      "vcs_links:write"
+    ],
+    "events": [],
+    "webhooks_in": [
+      "github"
+    ],
+    "network": {
+      "allowed_domains": [
+        "api.github.com"
+      ],
+      "reasoning": "проверка статуса PR через API GitHub"
+    },
+    "ui": [],
+    "secrets": [
+      "token",
+      "webhook_secret"
+    ]
+  }
+}

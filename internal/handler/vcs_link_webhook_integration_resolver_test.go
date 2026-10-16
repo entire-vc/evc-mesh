@@ -164,9 +164,9 @@ func TestGitLabWebhook_DynamicResolver_DisabledRow_WithEnvAlsoConfigured_MustRef
 	repo := &fakeResolverIntegrationRepo{row: &domain.IntegrationConfig{
 		Provider: domain.IntegrationProviderGitLab,
 		IsActive: false,
-		Config:   gitlabIntegrationCfgJSON(t, "https://git.entire.host", "", wsSecret),
+		Config:   gitlabIntegrationCfgJSON(t, "https://gitlab.example.invalid", "", wsSecret),
 	}}
-	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok", GitLabWebhookSecret: envSecret})
+	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{GitLabBaseURL: "https://gitlab.example.invalid", GitLabToken: "tok", GitLabWebhookSecret: envSecret})
 
 	svc := &stubVCSLinkService{gitlabHandleResult: service.PRHandleResult{Transitioned: true}}
 	h := NewVCSLinkHandler(svc, WithVCSIntegrationResolver(resolver))
@@ -221,7 +221,7 @@ func TestGitLabWebhook_DynamicResolver_ToggleSequence(t *testing.T) {
 	repo := &fakeResolverIntegrationRepo{row: &domain.IntegrationConfig{
 		Provider: domain.IntegrationProviderGitLab,
 		IsActive: true,
-		Config:   gitlabIntegrationCfgJSON(t, "https://git.entire.host", "", secret),
+		Config:   gitlabIntegrationCfgJSON(t, "https://gitlab.example.invalid", "", secret),
 	}}
 	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{})
 
@@ -322,7 +322,7 @@ func TestGitLabWebhook_DynamicResolver_PropagatesMatchedWorkspaceID(t *testing.T
 		WorkspaceID: ws,
 		Provider:    domain.IntegrationProviderGitLab,
 		IsActive:    true,
-		Config:      gitlabIntegrationCfgJSON(t, "https://git.entire.host", "", secret),
+		Config:      gitlabIntegrationCfgJSON(t, "https://gitlab.example.invalid", "", secret),
 	}}
 	resolver := service.NewVCSIntegrationResolver(repo, service.VCSEnvFallback{})
 

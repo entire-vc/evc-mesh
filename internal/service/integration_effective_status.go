@@ -43,13 +43,27 @@ type SparkResolver interface {
 	InstanceAvailable(ctx context.Context) bool
 }
 
+// TeamRelayURLResolver is what the Team Relay runtime (handlers, mount service)
+// asks for the relay base URL. The team-relay extension provider answers it.
+type TeamRelayURLResolver interface {
+	ResolveRelayURL(ctx context.Context, workspaceID uuid.UUID) (relayURL, source string, ok bool)
+}
+
+// TeamRelayResolver is the Team Relay runtime resolver the status screen reads:
+// the same one the Team Relay handlers call (internal/extensions/team-relay).
+type TeamRelayResolver interface {
+	TeamRelayURLResolver
+	InstanceAvailable(ctx context.Context) bool
+}
+
 // IntegrationStatusResolver computes EffectiveIntegrationStatus.
 type IntegrationStatusResolver struct {
 	repo            repository.IntegrationRepository
 	vcs             *VCSIntegrationResolver
 	spark           SparkResolver
-	relay           *TeamRelayIntegrationResolver
+	relay           TeamRelayResolver
 	telegramEnabled bool
+	telegramGate    TelegramGate
 }
 
 // NewIntegrationStatusResolver wires the status resolver on top of the
@@ -59,7 +73,7 @@ func NewIntegrationStatusResolver(
 	repo repository.IntegrationRepository,
 	vcs *VCSIntegrationResolver,
 	spark SparkResolver,
-	relay *TeamRelayIntegrationResolver,
+	relay TeamRelayResolver,
 	telegramEnabled bool,
 ) *IntegrationStatusResolver {
 	return &IntegrationStatusResolver{repo: repo, vcs: vcs, spark: spark, relay: relay, telegramEnabled: telegramEnabled}
@@ -80,7 +94,12 @@ func (r *IntegrationStatusResolver) EnvAvailable(provider domain.IntegrationProv
 		defer cancel()
 		return r.spark.InstanceAvailable(ctx)
 	case domain.IntegrationProviderTeamRelay:
-		return r.relay != nil && r.relay.env.RelayURL != ""
+		if r.relay == nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return r.relay.InstanceAvailable(ctx)
 	}
 	return false
 }
@@ -127,16 +146,26 @@ func (r *IntegrationStatusResolver) Effective(ctx context.Context, workspaceID u
 	}
 	if r.relay != nil {
 		_, src, ok := r.relay.ResolveRelayURL(ctx, workspaceID)
+		if src == "instance" {
+			src = IntegrationSourceEnv
+		}
 		add(domain.IntegrationProviderTeamRelay, ok, src)
 	}
 	// Telegram: the bot is always a workspace row; env only switches the
 	// whole channel on or off for the instance.
 	tgOn := false
-	if r.telegramEnabled && r.repo != nil {
+	if (r.telegramEnabled || r.telegramGate != nil) && (r.telegramGate == nil || r.telegramGate(ctx)) && r.repo != nil {
 		if row, err := r.repo.GetByProvider(ctx, workspaceID, domain.IntegrationProviderTelegram); err == nil && row != nil && row.IsActive {
 			tgOn = true
 		}
 	}
 	add(domain.IntegrationProviderTelegram, tgOn, IntegrationSourceWorkspace)
 	return out
+}
+
+// WithTelegramGate makes the Telegram instance switch a per-request question
+// instead of the startup boolean given to the constructor.
+func (r *IntegrationStatusResolver) WithTelegramGate(g TelegramGate) *IntegrationStatusResolver {
+	r.telegramGate = g
+	return r
 }

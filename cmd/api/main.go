@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -33,7 +34,12 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/builtin"
+	githubext "github.com/entire-vc/evc-mesh/internal/extensions/github"
+	gitlabext "github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
+	runnerext "github.com/entire-vc/evc-mesh/internal/extensions/runner"
 	sparkext "github.com/entire-vc/evc-mesh/internal/extensions/spark"
+	teamrelayext "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
+	telegramext "github.com/entire-vc/evc-mesh/internal/extensions/telegram"
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
@@ -42,6 +48,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/internal/storage"
 	wsHub "github.com/entire-vc/evc-mesh/internal/ws"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // Injected at build time via -ldflags. See docs/deploy.md.
@@ -163,9 +170,6 @@ func main() {
 	// Extension registry. Builtin providers (internal/extensions/builtin)
 	// register here; providers not yet moved keep the old per-provider path.
 	extensionRegistry := extensions.NewRegistry()
-	if syncErr := extensionRegistry.SyncBuiltin(context.Background(), postgres.NewInstalledExtensionRepo(db)); syncErr != nil {
-		log.Printf("[extensions] sync builtin extensions failed (registry stays usable): %v", syncErr)
-	}
 	// Instance-level extension settings: MESH_* env is copied into the table
 	// once (source=env, idempotent); for one release env stays a fallback
 	// (DBInstanceStore warns when it is used).
@@ -186,6 +190,11 @@ func main() {
 		if regErr := extensionRegistry.Register(p); regErr != nil {
 			log.Fatalf("[extensions] register builtin %q: %v", p.Manifest().ID, regErr) //nolint:gocritic // startup: fail fast on a duplicate builtin provider
 		}
+	}
+	// Sync only after registration: SyncBuiltin walks the registry, so run before
+	// Register it wrote nothing and GET /extensions answered an empty list.
+	if syncErr := extensionRegistry.SyncBuiltin(context.Background(), postgres.NewInstalledExtensionRepo(db)); syncErr != nil {
+		log.Printf("[extensions] sync builtin extensions failed (registry stays usable): %v", syncErr)
 	}
 	extensionInstanceSettingsHandler := handler.NewExtensionInstanceSettingsHandler(instanceSettingRepo, instanceSettingRepo, extensionRegistry, extensionEnvSources)
 	runtimeRepo := postgres.NewRuntimeRepo(db)
@@ -455,15 +464,20 @@ func main() {
 	// reports no bot, and the Integrations handler refuses a bot_token with
 	// "Telegram is not available on this instance". None of that is new code —
 	// the nil case was written for tests, and it says the true thing here too.
-	var telegramClient service.TelegramClient
-	var telegramBotManager *service.TelegramBotManager
-	if cfg.Telegram.Enabled {
-		telegramClient = service.NewTelegramClient()
-		telegramBotManager = service.NewTelegramBotManager(
-			telegramClient, integrationRepo, notificationRepo, userRepo, projectRepo, workspaceRepo,
-		)
-	} else {
-		log.Println("Telegram channel disabled on this instance (MESH_TELEGRAM_ENABLED=false): no bot polling, no Telegram notifications, and the Integrations page will refuse to connect a bot. Existing integration_configs rows are left untouched — unset the variable to turn the channel back on.")
+	telegramProvider, telegramRegistered := extensionRegistry.Get(telegramext.ID)
+	telegramProv, telegramIsProvider := telegramProvider.(*telegramext.Provider)
+	if !telegramRegistered || !telegramIsProvider {
+		log.Fatalf("[extensions] telegram provider is not registered") //nolint:gocritic // startup: the Telegram channel cannot be gated without it
+	}
+	// The instance switch is read at the moment of use (poll iteration,
+	// dispatch, Integrations request), so flipping it needs no restart.
+	telegramGate := service.TelegramGate(telegramProv.InstanceEnabled)
+	telegramClient := service.NewTelegramClient()
+	telegramBotManager := service.NewTelegramBotManager(
+		telegramClient, integrationRepo, notificationRepo, userRepo, projectRepo, workspaceRepo,
+	).WithGate(telegramGate).WithBotResolver(telegramProv.ResolveBot)
+	if !telegramProv.InstanceEnabled(context.Background()) {
+		log.Println("Telegram channel switched off on this instance (instance setting / MESH_TELEGRAM_ENABLED=false): no bot polling, no Telegram notifications, and the Integrations page refuses to connect a bot. Workspace integration_configs rows are left untouched; switch the extension on to resume.")
 	}
 
 	// Notification service for in-app push notifications to workspace users.
@@ -473,10 +487,9 @@ func main() {
 		service.WithEmailService(emailSvc, userRepo, cfg.Email.BaseURL),
 		service.WithLocaleLookups(userRepo, workspaceRepo),
 	}
-	if cfg.Telegram.Enabled {
-		notificationOpts = append(notificationOpts,
-			service.WithTelegramService(telegramClient, integrationRepo, workspaceRepo, projectRepo))
-	}
+	notificationOpts = append(notificationOpts,
+		service.WithTelegramService(telegramClient, integrationRepo, workspaceRepo, projectRepo),
+		service.WithTelegramGate(telegramGate))
 	notificationService := service.NewNotificationService(notificationRepo, notificationOpts...)
 
 	// vcsIntegrationResolver replaces the process-start-only githubClient/
@@ -498,6 +511,22 @@ func main() {
 		GitLabToken:         cfg.Webhook.GitLabToken,
 		GitLabWebhookSecret: cfg.Webhook.GitLabSecret,
 	})
+	// GitHub resolves through its extension: workspace row, then the instance
+	// level (MESH_GITHUB_* is bootstrapped into it), then off.
+	githubProv, ghOK := extensionRegistry.Get("github")
+	if !ghOK {
+		log.Fatal("[extensions] github extension is not registered")
+	}
+	githubExt := githubProv.(*githubext.Provider)
+	vcsIntegrationResolver.WithGitHubExtension(githubExt)
+	// GitLab resolves the same way: workspace row, then the instance level
+	// (MESH_GITLAB_* is bootstrapped into it), then off.
+	gitlabProv, glOK := extensionRegistry.Get("gitlab")
+	if !glOK {
+		log.Fatal("[extensions] gitlab extension is not registered")
+	}
+	gitlabExt := gitlabProv.(*gitlabext.Provider)
+	vcsIntegrationResolver.WithGitLabExtension(gitlabExt)
 	if cfg.Webhook.GitHubToken != "" {
 		log.Printf("[config] GitHub env fallback: live PR-status check available when no workspace has its own GitHub integration configured")
 	} else {
@@ -509,17 +538,13 @@ func main() {
 		log.Printf("[config] MESH_GITLAB_URL/MESH_GITLAB_TOKEN not set — GitLab env fallback has no live MR-status check; a workspace can still enable one via its own integration")
 	}
 
-	// teamRelayIntegrationResolver is the Team Relay CONNECTION layer's
-	// counterpart to vcsIntegrationResolver above: it replaces the
-	// os.Getenv("MESH_TEAMRELAY_RELAY_URL") reads that used to live directly in
-	// tr_search_handler.go and tr_document_handler.go, resolving a workspace's
-	// own active team_relay integration_configs row before falling back to this
-	// env value (§4 of specsintegration-provider-contract). It does not touch
-	// project_integrations — the per-project BINDING (share/subfolder/agent
-	// key) that table already implements correctly.
-	teamRelayIntegrationResolver := service.NewTeamRelayIntegrationResolver(integrationRepo, service.TeamRelayEnvFallback{
-		RelayURL: cfg.TeamRelay.RelayURL,
-	})
+	// The runtime asks the team-relay extension (workspace row, then instance
+	// setting) for the relay URL; the status screen reads the same provider.
+	teamRelayProvider, teamRelayRegistered := extensionRegistry.Get(teamrelayext.ID)
+	teamRelayExt, teamRelayIsProvider := teamRelayProvider.(*teamrelayext.Provider)
+	if !teamRelayRegistered || !teamRelayIsProvider {
+		log.Fatalf("[extensions] team-relay provider is not registered") //nolint:gocritic // startup: Team Relay cannot resolve its relay URL without it
+	}
 	if cfg.TeamRelay.RelayURL != "" {
 		log.Printf("[config] Team Relay env fallback: relay URL available when no workspace has its own team_relay integration configured (%s)", cfg.TeamRelay.RelayURL)
 	} else {
@@ -533,6 +558,11 @@ func main() {
 	// request arrived the client (or its absence) had already been baked in.
 	// Routes are now always registered (below); this resolver is consulted fresh
 	// on every request instead.
+	runnerProvider, runnerRegistered := extensionRegistry.Get(runnerext.ID)
+	runnerProv, runnerIsProvider := runnerProvider.(*runnerext.Provider)
+	if !runnerRegistered || !runnerIsProvider {
+		log.Fatalf("[extensions] runner provider is not registered") //nolint:gocritic // startup: the runtime write guard needs it
+	}
 	sparkProvider, sparkRegistered := extensionRegistry.Get(sparkext.ID)
 	sparkIntegrationResolver, sparkIsProvider := sparkProvider.(*sparkext.Provider)
 	if !sparkRegistered || !sparkIsProvider {
@@ -687,7 +717,21 @@ func main() {
 		service.WithVCSCommentService(commentService),
 		service.WithVCSProjectRepo(projectRepo), // scopes webhook task-ref resolution to the workspace whose secret validated the request (#839b9897)
 	)
-	integrationService := service.NewIntegrationService(integrationRepo)
+	// The runtime catalog is changed only through the versioned runtime API;
+	// the Runner extension's Validate decides what a generic write may do, under
+	// both the extension id and the legacy provider name.
+	runnerGuard := service.ProviderGuard{
+		Write: func(config json.RawMessage) error {
+			var settings map[string]any
+			if len(config) == 0 || json.Unmarshal(config, &settings) != nil {
+				return apierror.BadRequest(runnerext.ErrVersionedAPI.Error())
+			}
+			return apierror.BadRequest(runnerProv.Validate(extensions.LevelWorkspace, settings).Error())
+		},
+		Delete: func() error { return apierror.BadRequest("disable runtime through the versioned runtime API") },
+	}
+	integrationService := service.NewIntegrationService(integrationRepo,
+		service.WithProviderGuard(runnerGuard, domain.IntegrationProviderRunner, domain.IntegrationProviderAgentRuntime))
 	analyticsService := service.NewAnalyticsService(db)
 	projectUpdateService := service.NewProjectUpdateService(projectUpdateRepo, projectRepo, taskRepo, taskStatusRepo)
 	initiativeService := service.NewInitiativeService(initiativeRepo, projectRepo, db)
@@ -778,6 +822,7 @@ func main() {
 	teamRelayMountService := service.NewTeamRelayMountService(
 		documentRepo, documentStore, projectIntegrationService, projectIntegrationRepo,
 		service.WithAttachmentRepository(documentAttachmentRepo),
+		service.WithRelayURLResolver(teamRelayExt, projectRepo),
 	)
 
 	// The comment repository is here because a body write moves the comments
@@ -925,7 +970,8 @@ func main() {
 		handler.WithWebhookDedupStore(handler.NewRedisWebhookDedupStore(agentNotifyRedis)),
 	)
 	integrationHandler := handler.NewIntegrationHandler(integrationService, telegramClient, telegramBotManager).
-		WithStatusResolver(service.NewIntegrationStatusResolver(integrationRepo, vcsIntegrationResolver, sparkIntegrationResolver, teamRelayIntegrationResolver, cfg.Telegram.Enabled))
+		WithTelegramGate(telegramGate).
+		WithStatusResolver(service.NewIntegrationStatusResolver(integrationRepo, vcsIntegrationResolver, sparkIntegrationResolver, teamRelayExt, false).WithTelegramGate(telegramGate))
 	extensionConsentRepo := postgres.NewIntegrationConsentRepo(db)
 	extensionRegistry.WithIntegrationConsents(extensionConsentRepo)
 	extensionWorkspaceHandler := handler.NewExtensionWorkspaceHandler(
@@ -952,8 +998,8 @@ func main() {
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	documentMentionHandler := handler.NewDocumentMentionHandler(documentMentionService)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
-	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService, projectService, teamRelayIntegrationResolver)
-	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService, projectService, teamRelayIntegrationResolver)
+	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService, projectService, teamRelayExt)
+	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService, projectService, teamRelayExt)
 	trMountHandler := handler.NewTrMountHandler(teamRelayMountService)
 	canonicalUpdatesHandler := handler.NewCanonicalUpdatesHandler(memoryService, sessionRepo, agentService)
 	mentionablesService := service.NewMentionablesService(agentRepo, userRepo)
@@ -1859,7 +1905,11 @@ func main() {
 	api.GET("/extensions/:ext_id/instance-settings", extensionInstanceSettingsHandler.Get, mw.RequireUserAuth())
 	api.PUT("/extensions/:ext_id/instance-settings", extensionInstanceSettingsHandler.Put, mw.RequireUserAuth())
 
-	// Routes contributed by registered extensions (Hooks()).
+	// Routes contributed by registered extensions (Hooks()). GitHub's webhook
+	// route is canonical at /webhooks/github/github; the two older paths below
+	// stay registered as aliases of the same handler.
+	githubExt.WebhookHandler = vcsLinkHandler.GitHubWebhook
+	gitlabExt.WebhookHandler = vcsLinkHandler.GitLabWebhook
 	extensionRegistry.RegisterRoutes(e)
 
 	// GitHub webhook receiver (public — no auth, HMAC validated when configured).
@@ -1870,9 +1920,9 @@ func main() {
 	e.POST("/api/v1/integrations/github/webhook", vcsLinkHandler.GitHubWebhook)
 
 	// GitLab webhook receiver (public — no auth, X-Gitlab-Token validated
-	// when configured). Mirrors the GitHub route above (#bc39d781) — no
-	// legacy alias needed since this is a new route with no prior configured
-	// callers to stay compatible with.
+	// when configured). Canonical route is /webhooks/gitlab/gitlab (extension
+	// Hooks); /webhooks/gitlab is what every configured project points at and
+	// stays registered as an alias of the same handler.
 	e.POST("/webhooks/gitlab", vcsLinkHandler.GitLabWebhook)
 
 	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
@@ -1896,11 +1946,19 @@ func main() {
 
 	// Integration config routes.
 	api.GET("/extensions/events", extensionEventHandler.ListEvents)
+	// Instance extension catalog. Install/update/rollback are 501 stubs, human-only
+	// until instance-admin gating arrives with W1.3.
+	extensionHandler := handler.NewExtensionHandler(postgres.NewInstalledExtensionRepo(db), extensionInstanceStore)
+	api.GET("/extensions", extensionHandler.List)
+	api.GET("/extensions/manifest-schema", extensionHandler.ManifestSchema)
+	api.POST("/extensions/install", extensionHandler.NotImplemented, mw.RequireUserAuth())
+	api.POST("/extensions/:ext_id/update", extensionHandler.NotImplemented, mw.RequireUserAuth())
+	api.POST("/extensions/:ext_id/rollback", extensionHandler.NotImplemented, mw.RequireUserAuth())
 	api.GET("/integrations/:int_id/event-subscriptions", extensionEventHandler.List, rbac(mw.PermManageWebhooks))
 	api.POST("/integrations/:int_id/event-subscriptions", extensionEventHandler.Subscribe, rbac(mw.PermManageWebhooks))
 	api.DELETE("/event-subscriptions/:sub_id", extensionEventHandler.Unsubscribe, rbac(mw.PermManageWebhooks))
-	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List)
-	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, rbac(mw.PermManageWebhooks))
+	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions"))
+	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}/connect"), rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/extensions", extensionWorkspaceHandler.List)
 	api.POST("/workspaces/:ws_id/extensions/:ext_id/connect", extensionWorkspaceHandler.Connect, rbac(mw.PermManageWebhooks))
 	api.PATCH("/workspaces/:ws_id/extensions/:ext_id/settings", extensionWorkspaceHandler.PatchSettings, rbac(mw.PermManageWebhooks))
@@ -1910,14 +1968,21 @@ func main() {
 	api.DELETE("/workspaces/:ws_id/extensions/:ext_id", extensionWorkspaceHandler.Disconnect, rbac(mw.PermManageWebhooks))
 	api.POST("/integrations/:int_id/rotate-token", extensionActorHandler.RotateToken, rbac(mw.PermManageWebhooks))
 	api.GET("/ext/me", extensionActorHandler.Me)
-	api.PATCH("/integrations/:int_id", integrationHandler.Update, rbac(mw.PermManageWebhooks))
-	api.DELETE("/integrations/:int_id", integrationHandler.Delete, rbac(mw.PermManageWebhooks))
+	api.PATCH("/integrations/:int_id", integrationHandler.Update, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}/settings"), rbac(mw.PermManageWebhooks))
+	api.DELETE("/integrations/:int_id", integrationHandler.Delete, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}"), rbac(mw.PermManageWebhooks))
 
 	// Project integrations (Team Relay).
 	// NOTE: /integrations/team-relay MUST be registered before /integrations to avoid routing ambiguity.
-	api.GET("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.GetTeamRelay, projAccess)
-	api.PATCH("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.UpsertTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
-	api.DELETE("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.DeleteTeamRelay, projAccess, rbac(mw.PermManageWebhooks))
+	api.GET("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.GetTeamRelay, handler.DeprecatedAlias("/api/v1/projects/{p}/extensions/team-relay"), projAccess)
+	api.PATCH("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.UpsertTeamRelay, handler.DeprecatedAlias("/api/v1/projects/{p}/extensions/team-relay"), projAccess, rbac(mw.PermManageWebhooks))
+	api.DELETE("/projects/:proj_id/integrations/team-relay", projectIntegrationHandler.DeleteTeamRelay, handler.DeprecatedAlias("/api/v1/projects/{p}/extensions/team-relay"), projAccess, rbac(mw.PermManageWebhooks))
+	// Project level of an extension (docs/extensions/api.md, "Project routes"). Team Relay
+	// is the only extension with a project level, so the id is a literal segment: any
+	// other id is a plain 404, and the tenant guard has no manifest-id parameter to skip.
+	extensionProjectHandler := handler.NewExtensionProjectHandler(extensionRegistry, projectIntegrationService)
+	api.GET("/projects/:proj_id/extensions/team-relay", extensionProjectHandler.Get, projAccess)
+	api.PUT("/projects/:proj_id/extensions/team-relay", extensionProjectHandler.Put, projAccess, rbac(mw.PermManageWebhooks))
+	api.DELETE("/projects/:proj_id/extensions/team-relay", extensionProjectHandler.Delete, projAccess, rbac(mw.PermManageWebhooks))
 	api.GET("/projects/:proj_id/integrations", projectIntegrationHandler.List, projAccess)
 	// TR file search — share_id (slug) passed as query param, not project path param.
 	api.GET("/tr/search", projectIntegrationHandler.TrSearch)

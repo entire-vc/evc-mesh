@@ -1,8 +1,7 @@
 # Web i18n: adding strings and languages
 
 Mesh web uses `i18next` + `react-i18next`. `en` is the source and the fallback;
-`ru` is the second language. Spec: Mesh Docs "i18n", section 2.3 (card #d807c72f).
-
+`ru` is the second language. 
 ## Layout
 
 ```

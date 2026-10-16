@@ -19,6 +19,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -2016,4 +2017,38 @@ func TestSyncMount_EmbedReplacementInsertFails_OldAttachmentStaysLive(t *testing
 	require.Len(t, after, 1)
 	assert.Equal(t, before[0].ID, after[0].ID, "the very same old row stays live, not a re-inserted copy")
 	assert.Equal(t, imgSHA, *after[0].SourceSHA256)
+}
+
+// slugConflictRepo refuses the first insert of a copy with the given slug, the
+// way the real repository does when a live sibling already holds it.
+type slugConflictRepo struct {
+	*MockDocumentRepository
+	slug string
+}
+
+func (r *slugConflictRepo) CreateExternalCopy(ctx context.Context, doc *domain.Document) error {
+	if doc.Slug == r.slug {
+		return apierror.DocumentSlugTaken()
+	}
+	return r.MockDocumentRepository.CreateExternalCopy(ctx, doc)
+}
+
+func TestSyncMount_SlugConflict_MountsWithSuffixAndDoesNotAbortShare(t *testing.T) {
+	f := setupMountFixture(t, "")
+	f.svc.documentRepo = &slugConflictRepo{MockDocumentRepository: f.repo, slug: "welcome"}
+	f.client.indexResult = shareFixtureEntries()
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		return &teamrelay.SyncDocument{Content: []byte("body for " + path), SHA256: "sha-for-" + path}, nil
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status, "a slug clash is not a failed sync")
+	assert.Equal(t, 2, result.Mounted, "the file after the clash is still mounted")
+
+	welcome, err := f.repo.GetBySourceInProject(context.Background(), f.projectID, testRelayShareID, "Welcome.md")
+	require.NoError(t, err)
+	require.NotNil(t, welcome)
+	assert.True(t, strings.HasPrefix(welcome.Slug, "welcome-"), "got slug %q", welcome.Slug)
+	assert.NotEqual(t, "welcome", welcome.Slug)
 }

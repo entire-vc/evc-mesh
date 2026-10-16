@@ -543,7 +543,7 @@ func newMergeRequestPayload(t *testing.T, action string, iid int, title, descrip
 		"object_kind": "merge_request",
 		"project": map[string]any{
 			"path_with_namespace": "entire-vc/evc-mesh",
-			"web_url":             "https://git.entire.host/entire-vc/evc-mesh",
+			"web_url":             "https://gitlab.example.invalid/entire-vc/evc-mesh",
 		},
 		"object_attributes": map[string]any{
 			"iid":              iid,
@@ -552,7 +552,7 @@ func newMergeRequestPayload(t *testing.T, action string, iid int, title, descrip
 			"state":            state,
 			"action":           action,
 			"source_branch":    "feature-branch",
-			"url":              "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/" + itoaTest(iid),
+			"url":              "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/" + itoaTest(iid),
 			"merge_commit_sha": mergeSHA,
 		},
 	}

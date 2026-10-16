@@ -127,7 +127,7 @@ func (r *DocumentRepo) Create(ctx context.Context, doc *domain.Document) error {
 		doc.CreatedAt, doc.UpdatedAt, doc.Version,
 	)
 	if isDocumentSlugConflict(err) {
-		return apierror.Conflict("a document with this slug already exists in this location")
+		return apierror.DocumentSlugTaken()
 	}
 	return err
 }
@@ -211,7 +211,7 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expecte
 	err = tx.GetContext(ctx, &newVersion, q, doc.ID, doc.Title, doc.ParentID, doc.Position,
 		doc.UpdatedAt, doc.UpdatedBy, doc.UpdatedByType, expectedVersion, doc.Slug)
 	if isDocumentSlugConflict(err) {
-		return 0, apierror.Conflict("a document with this slug already exists in this location")
+		return 0, apierror.DocumentSlugTaken()
 	}
 	if err == nil {
 		if cerr := tx.Commit(); cerr != nil {
@@ -659,7 +659,7 @@ func (r *DocumentRepo) CreateExternalCopy(ctx context.Context, doc *domain.Docum
 		doc.SourceKind, doc.SourceShare, doc.SourcePath, doc.SourceSHA256, doc.SyncedAt, doc.ExternalAuthor,
 	)
 	if isDocumentSlugConflict(err) {
-		return apierror.Conflict("a document with this slug already exists in this location")
+		return apierror.DocumentSlugTaken()
 	}
 	return err
 }

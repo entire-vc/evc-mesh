@@ -110,7 +110,7 @@ failing `/api/v1/*` calls, resource-timing `responseStatus >= 500`.
 
 Run against a deliberately inverted server-side assertion (`.toBe(sourceStatusId)`
 instead of `targetStatusId`), captured in the closing comment: pipeline
-[#6055, job `authed-e2e` (92675)](https://git.entire.host/entire-vc/evc-mesh/-/jobs/92675),
+[#6055, job `authed-e2e` (92675)](https://gitlab.example.invalid/entire-vc/evc-mesh/-/jobs/92675),
 **failed** for the expected reason:
 
 ```

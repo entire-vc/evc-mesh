@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	teamrelayext "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
@@ -66,13 +68,34 @@ func trProjectService(t *testing.T) *MockProjectService {
 	}
 }
 
-// trRelayResolver builds a TeamRelayIntegrationResolver that resolves straight
-// to relayURL via the env-fallback tier (nil repo — no workspace row in play),
-// the same role t.Setenv("MESH_TEAMRELAY_RELAY_URL", ...) played before the
-// handler was moved off a direct os.Getenv read. An empty relayURL models "not
-// configured at all" (resolver returns ok=false).
-func trRelayResolver(relayURL string) *service.TeamRelayIntegrationResolver {
-	return service.NewTeamRelayIntegrationResolver(nil, service.TeamRelayEnvFallback{RelayURL: relayURL})
+// fixedRelayURL answers every workspace with one relay URL; an empty value
+// models "not configured at all" (ok=false). The real provider is exercised
+// through trExtensionResolver below.
+type fixedRelayURL string
+
+func (u fixedRelayURL) ResolveRelayURL(context.Context, uuid.UUID) (relayURL, source string, ok bool) {
+	return string(u), "workspace", u != ""
+}
+
+func trRelayResolver(relayURL string) service.TeamRelayURLResolver {
+	return fixedRelayURL(relayURL)
+}
+
+// trExtensionResolver is the real team-relay provider over an in-memory
+// workspace row, for any workspace id (trProjectService hands out a random one
+// per project). active=false models an explicit is_active=false row.
+func trExtensionResolver(t *testing.T, relayURL string, active bool) service.TeamRelayURLResolver {
+	t.Helper()
+	return teamrelayext.New(extensions.Deps{Conns: anyWorkspaceConn{active: active, url: relayURL}})
+}
+
+type anyWorkspaceConn struct {
+	active bool
+	url    string
+}
+
+func (c anyWorkspaceConn) Connection(context.Context, uuid.UUID, string) (*extensions.Connection, error) {
+	return &extensions.Connection{IsActive: c.active, Settings: map[string]any{"relay_url": c.url}}, nil
 }
 
 // newTestTrDocumentHandler wires a TrDocumentHandler the way main.go does,

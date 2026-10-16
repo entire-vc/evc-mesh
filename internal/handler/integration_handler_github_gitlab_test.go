@@ -25,7 +25,7 @@ func TestIntegrationConfigure_GitLabProvider_NoLongerUnsupported(t *testing.T) {
 	wsID := uuid.New()
 
 	rec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/integrations",
-		`{"provider":"gitlab","config":{"base_url":"https://git.entire.host","token":"glpat-xxx","webhook_secret":"whsec"},"is_active":true}`)
+		`{"provider":"gitlab","config":{"base_url":"https://gitlab.example.invalid","token":"glpat-xxx","webhook_secret":"whsec"},"is_active":true}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }
 
@@ -66,7 +66,7 @@ func TestIntegrationConfigure_GitLab_ResponseNeverLeaksRawSecretsButKeepsBaseURL
 	wsID := uuid.New()
 
 	rec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/integrations",
-		`{"provider":"gitlab","config":{"base_url":"https://git.entire.host","token":"glpat-secret","webhook_secret":"whsec-secret"},"is_active":true}`)
+		`{"provider":"gitlab","config":{"base_url":"https://gitlab.example.invalid","token":"glpat-secret","webhook_secret":"whsec-secret"},"is_active":true}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	assert.NotContains(t, rec.Body.String(), "glpat-secret")
 	assert.NotContains(t, rec.Body.String(), "whsec-secret")
@@ -75,7 +75,7 @@ func TestIntegrationConfigure_GitLab_ResponseNeverLeaksRawSecretsButKeepsBaseURL
 		Config map[string]any `json:"config"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
-	assert.Equal(t, "https://git.entire.host", created.Config["base_url"], "base_url is not a secret and should pass through unmasked")
+	assert.Equal(t, "https://gitlab.example.invalid", created.Config["base_url"], "base_url is not a secret and should pass through unmasked")
 	assert.Equal(t, true, created.Config["token_set"])
 	assert.Equal(t, true, created.Config["webhook_secret_set"])
 }
@@ -147,7 +147,7 @@ func TestIntegrationUpdate_GitLab_BaseURLOnly_PreservesTokenAndSecret(t *testing
 	wsID := uuid.New()
 
 	createRec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/integrations",
-		`{"provider":"gitlab","config":{"base_url":"https://git.entire.host","token":"tok","webhook_secret":"sec"},"is_active":true}`)
+		`{"provider":"gitlab","config":{"base_url":"https://gitlab.example.invalid","token":"tok","webhook_secret":"sec"},"is_active":true}`)
 	require.Equal(t, http.StatusCreated, createRec.Code)
 	var created struct {
 		ID string `json:"id"`

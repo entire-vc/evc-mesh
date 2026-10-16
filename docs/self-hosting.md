@@ -757,12 +757,9 @@ can still register your first admin normally. The binary's own fallback stays
 registration disappear underneath them. A future release may flip that too, in
 its own CHANGELOG entry.
 
-Why closed is the right starting point: on our own instance, one day of open
-registration produced eight accounts nobody had invited, and one of them used
-the cross-workspace user lookup described in the
-[Security Checklist](#security-checklist) to find an administrator and add them
-to a workspace of their own. Nothing there was a bug — it is what an open
-`/register` on a public address means.
+Keeping registration closed after the first administrator is created limits
+unsolicited account creation on publicly reachable instances. Add users through
+workspace invitations rather than leaving public registration open.
 
 ---
 
@@ -981,8 +978,7 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    regardless of the flag, so this costs you nothing during setup and closes the
    door for everyone after. Add people afterward via workspace invites, not the
    open `/register` endpoint. See
-   [Closing registration](#closing-registration) — including what happened on
-   our own instance when it was left open.
+   [Closing registration](#closing-registration) for the recommended setting.
 
 7. **Workspace isolation** -- Every endpoint that names workspace-owned data
    requires the caller to be a member of that workspace (agents: to belong to
@@ -1043,8 +1039,7 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    stranger from obtaining credentials, but it does **not** protect you from
    accounts that already exist on the instance. **If you host unrelated tenants
    on one instance, do not treat it as a security boundary until this is
-   closed.** Tracked, with reproductions, as the follow-up to the tenancy work
-   in `#416`/`#419`/`#420`.
+   closed.**
 
 8. **TLS** -- Set up a reverse proxy (nginx or Caddy) with TLS termination:
 
@@ -1100,8 +1095,7 @@ docker compose -f docker-compose.prod.yml --env-file .env config | \
    so exposing the port doesn't leak route names, traffic volumes and workspace/task counts to anyone who can
    reach it). Outside Compose both binaries read `MESH_METRICS_TOKEN`
    directly, and leaving it unset keeps the endpoint open for deployments
-   that gate it at the network layer instead (e.g. the internal prod
-   install, fronted by Caddy). The MCP port is published on loopback by
+   that gate it at the network layer instead (for example, a deployment whose reverse proxy applies authentication). The MCP port is published on loopback by
    default (`MCP_BIND`, see [MCP port binding](#mcp-port-binding)), so from
    another machine `/metrics` is reachable only if you opt in.
 
@@ -1443,8 +1437,7 @@ register — so this never locks you out of a fresh install.
 
 Add people with [workspace invites](#add-your-teammates) instead. To reopen
 public registration anyway, set `MESH_ALLOW_REGISTRATION=true` and read
-[Closing registration](#closing-registration) first — it describes what happened
-on our own instance when it was left open.
+[Closing registration](#closing-registration) first.
 
 ### The invitee cannot open their invite link
 

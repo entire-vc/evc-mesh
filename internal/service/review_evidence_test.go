@@ -140,8 +140,8 @@ func TestReviewEvidence_Strict_NoCommentsAtAllRefused(t *testing.T) {
 
 func TestReviewEvidence_Strict_CommentWithURLPasses(t *testing.T) {
 	for _, body := range []string{
-		"MR: https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/12",
-		"пайплайн зелёный, лог http://ci.internal/job/9",
+		"MR: https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/12",
+		"пайплайн зелёный, лог http://example.invalid/job/9",
 		"see HTTPS://EXAMPLE.COM/proof for the run",
 		"multi\nline\nwith https://x.test/y buried in it",
 	} {

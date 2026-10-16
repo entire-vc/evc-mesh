@@ -75,6 +75,18 @@ type WorkflowRulesConfig struct {
 	Policies            map[string]PolicyRule     `json:"policies,omitempty"`
 	EnforceSystemActors bool                      `json:"enforce_system_actors,omitempty"` // if true, system actors are not exempt
 	MidPipeline         *MidPipelineConfig        `json:"mid_pipeline,omitempty"`
+	// OnEnter maps a status name to the actions Mesh performs when a card enters
+	// that status, whoever moves it. Absent (every project until it opts in) means
+	// the transition behaves exactly as before.
+	OnEnter map[string]OnEnterAction `json:"on_enter,omitempty"`
+}
+
+// OnEnterAction is what the server does to a card on entering a status.
+type OnEnterAction struct {
+	// AssignTo is "agent:<slug|uuid>" or "user:<uuid|email|username>". An unknown
+	// name, or one that is not a member of the project's workspace, leaves the
+	// assignee unchanged and records a warning; the transition is never blocked.
+	AssignTo string `json:"assign_to,omitempty"`
 }
 
 // MidPipelineConfig configures the mid-pipeline guard: the two transitions that

@@ -31,7 +31,7 @@ import (
 type TrDocumentHandler struct {
 	piService     service.ProjectIntegrationService
 	projectSvc    service.ProjectService
-	relayResolver *service.TeamRelayIntegrationResolver
+	relayResolver service.TeamRelayURLResolver
 }
 
 // NewTrDocumentHandler creates a new TrDocumentHandler. relayResolver answers
@@ -39,7 +39,7 @@ type TrDocumentHandler struct {
 // §4) — it replaces a raw environment-variable read that used to live inline
 // here. projectSvc resolves the project's workspace_id, which the resolver
 // needs.
-func NewTrDocumentHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver *service.TeamRelayIntegrationResolver) *TrDocumentHandler {
+func NewTrDocumentHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver service.TeamRelayURLResolver) *TrDocumentHandler {
 	return &TrDocumentHandler{piService: piService, projectSvc: projectSvc, relayResolver: relayResolver}
 }
 

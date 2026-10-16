@@ -2173,13 +2173,18 @@ Extend the TTL of an active checkout. Use this when a task takes longer than exp
 
 #### 64. `set_human_gate`
 
-Arm the human gate on a task: freeze it and record **who** is waiting, **what** was asked, and **what happens if nobody answers**. Use this instead of hand-writing a `❓ Blocking @pavel` comment — the marker still works, but this path records the whole ask on the task itself, so no reader has to re-derive it from comment text.
+Arm the human gate on a task: freeze it and record **who** is waiting, **what** was asked, and **what happens if nobody answers**. Use this instead of hand-writing a blocking comment — the marker still works, but this path records the whole ask on the task itself, so no reader has to re-derive it from comment text.
 
 `gate_author` is deliberately **not** a parameter: the server takes it from the authenticated identity, so the answer to "who is waiting" cannot be attributed to somebody else.
 
 The four predicate answers are required, each with one line of justification. The server **refuses the arm** when your own answers say nobody needs to be asked — if you hold the credential, the action is reversible, and nothing a customer sees or pays changes right now, capture a rollback anchor and just do it. If the blocker is another card, the server tells you to use `add_dependency` instead.
 
-`copy_tier` (task 1.17a, §1r.A) is optional in general, but required — and checked before anything else — when `reason` reads like a copy-approval question (a label, a page's prose, a message users read). Answer three questions: (1) is this the company's voice going **out**, or a caption inside the interface? (2) would someone who never opened this screen **notice** the change? (3) does the text carry a **promise** — legal, price, product? Any "yes" → tier `"A"` (external/legal/marketing copy, a promise) and Pavel decides, same as any other ask above. All "no" → tier `"B"` (a field caption, menu item, system/validation message, section name, an existing dictionary string) — the server **refuses the arm outright**: ship it yourself, tag the task `copy:b`, and quote the exact string in your closing comment so Pavel sees it in the weekly digest.
+`copy_tier` is optional in general but required for copy-approval questions.
+Use tier `"A"` for external company communications or text carrying legal,
+pricing or product promises; use tier `"B"` for interface copy. The configured
+approval policy determines whether an authorized reviewer must decide. A request
+that does not require human approval must use the normal task workflow rather
+than arming an unnecessary human gate.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -2203,7 +2208,7 @@ The four predicate answers are required, each with one line of justification. Th
 {
   "error": "Unprocessable Entity",
   "field": "predicate",
-  "message": "cannot arm human_gate: predicate тир B (подписи полей, пункты меню, системные и валидационные сообщения, названия разделов, отдельные строки существующего словаря) шипит лид продукта — отгружай сам, поставь карточке метку `copy:b` и процитируй строку в закрывающем комментарии: Павел увидит правку в недельной сводке и поправит follow-up-карточкой (§1r.A)"
+  "message": "cannot arm human_gate: this interface-copy change does not require a human gate under the configured approval policy."
 }
 ```
 

@@ -21,6 +21,6 @@ event) that do not change existing behaviour do not raise it.
 
 ## Who decides
 
-The Mesh lead, through an ADR (manifest schema ADR: https://mesh.entire.host/d/157637c7-8d63-446d-a0e0-95cb52be3560) that names the breaking change and the migration
-path for existing extensions. The constant is changed in the same MR as the ADR
-reference; the handler test pins the current value, so the bump is deliberate.
+Maintainers document each breaking extension API change and its migration path
+for existing extensions. Update the version constant together with that decision
+and the matching handler test so the change is deliberate and reviewable.

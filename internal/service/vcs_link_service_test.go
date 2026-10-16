@@ -819,7 +819,7 @@ func mergedMREvent(iid int, taskID uuid.UUID, title string) GitLabWebhookEvent {
 		MRIID:       iid,
 		MRTitle:     title,
 		MRBody:      "",
-		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/" + uintToString(iid),
+		MRURL:       "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/" + uintToString(iid),
 		MRState:     "merged",
 		MergeSHA:    "deadbeefcafebabe",
 		ProjectPath: "entire-vc/evc-mesh",
@@ -874,7 +874,7 @@ func TestHandleMR_ClosedWithoutMerge_NoStatusChange(t *testing.T) {
 		MRIID:       303,
 		MRTitle:     "MESH-" + task.ID.String(),
 		MRState:     "closed",
-		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/303",
+		MRURL:       "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/303",
 		ProjectPath: "entire-vc/evc-mesh",
 	}
 
@@ -904,7 +904,7 @@ func TestHandleMR_StillOpen_NoTransition(t *testing.T) {
 		MRIID:       900,
 		MRTitle:     "MESH-" + task.ID.String(),
 		MRState:     "opened",
-		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/900",
+		MRURL:       "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/900",
 		ProjectPath: "entire-vc/evc-mesh",
 	}
 
@@ -930,7 +930,7 @@ func TestHandleMR_MeshRefInBody_Resolves(t *testing.T) {
 		MRBody:      "Refs MESH-" + task.ID.String(),
 		MRState:     "merged",
 		MergeSHA:    "cafebabe",
-		MRURL:       "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/404",
+		MRURL:       "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/404",
 		ProjectPath: "entire-vc/evc-mesh",
 	}
 
@@ -956,7 +956,7 @@ func TestHandleMR_MultiMR_PartialMerge_NoTransition(t *testing.T) {
 		Provider:   domain.VCSProviderGitLab,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "500",
-		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/500",
+		URL:        "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/500",
 		Status:     domain.VCSLinkStatusOpen,
 	}
 	require.NoError(t, h.repo.Create(context.Background(), sibling))
@@ -1263,7 +1263,7 @@ func TestVCSLinkService_Create_ImplicitStatusDifferentProviderSameURLFailsLoudly
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryReview)
 
-	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	mrURL := "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14"
 	wrong, _, err := h.svc.Create(context.Background(), domain.CreateVCSLinkInput{
 		TaskID:     task.ID,
 		Provider:   domain.VCSProviderGitHub, // mis-inferred, mirrors the pre-!72 bug

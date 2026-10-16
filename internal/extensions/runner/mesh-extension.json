@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "id": "runner",
+  "name": "Runner",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Runner: каталог ресурсов запуска агентов — пулы, аккаунты, профили, привязки и контроллеры; допуск и резервирование",
+  "category": "agents",
+  "tags": [
+    "runtime",
+    "agents"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/entire-vc/evc-mesh",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "settings": {
+    "instance": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "workspace": {
+      "$ref": "#/schemas/catalog"
+    }
+  },
+  "schemas": {
+    "catalog": {
+      "type": "object",
+      "title": "Каталог Runner (версионируется через API рантайма)",
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 2
+        },
+        "controllers": {
+          "type": "object",
+          "title": "Контроллеры хостов"
+        },
+        "accounts": {
+          "type": "object",
+          "title": "Аккаунты провайдеров"
+        },
+        "pools": {
+          "type": "object",
+          "title": "Пулы ресурсов"
+        },
+        "profiles": {
+          "type": "object",
+          "title": "Профили запуска"
+        },
+        "bindings": {
+          "type": "object",
+          "title": "Привязки агентов"
+        }
+      },
+      "required": [
+        "schema_version",
+        "controllers",
+        "accounts",
+        "pools",
+        "profiles",
+        "bindings"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "capabilities": {
+    "api": [
+      "agents:read",
+      "agent_keys:read"
+    ],
+    "events": [],
+    "webhooks_in": [],
+    "ui": [],
+    "secrets": []
+  }
+}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -14,18 +15,58 @@ import (
 
 // integrationService implements IntegrationService.
 type integrationService struct {
-	repo repository.IntegrationRepository
+	repo   repository.IntegrationRepository
+	guards map[domain.IntegrationProvider]ProviderGuard
+}
+
+// ProviderGuard is what a provider's extension says about a generic write.
+// Write validates (and may refuse) a settings write; Delete refuses or allows
+// removing the connection. A nil func allows the operation.
+type ProviderGuard struct {
+	Write  func(config json.RawMessage) error
+	Delete func() error
+}
+
+// IntegrationServiceOption configures the integration service.
+type IntegrationServiceOption func(*integrationService)
+
+// WithProviderGuard installs the guard for the given provider names (a
+// renamed provider lists both its names).
+func WithProviderGuard(g ProviderGuard, providers ...domain.IntegrationProvider) IntegrationServiceOption {
+	return func(s *integrationService) {
+		for _, p := range providers {
+			s.guards[p] = g
+		}
+	}
 }
 
 // NewIntegrationService creates a new integrationService.
-func NewIntegrationService(repo repository.IntegrationRepository) IntegrationService {
-	return &integrationService{repo: repo}
+func NewIntegrationService(repo repository.IntegrationRepository, opts ...IntegrationServiceOption) IntegrationService {
+	s := &integrationService{repo: repo, guards: map[domain.IntegrationProvider]ProviderGuard{}}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
+
+func (s *integrationService) guardWrite(provider domain.IntegrationProvider, config json.RawMessage) error {
+	if g, ok := s.guards[provider]; ok && g.Write != nil {
+		return g.Write(config)
+	}
+	return nil
+}
+
+func (s *integrationService) guardDelete(provider domain.IntegrationProvider) error {
+	if g, ok := s.guards[provider]; ok && g.Delete != nil {
+		return g.Delete()
+	}
+	return nil
 }
 
 // Configure creates or updates an integration config (upsert by workspace+provider).
 func (s *integrationService) Configure(ctx context.Context, input domain.CreateIntegrationInput) (*domain.IntegrationConfig, error) {
-	if input.Provider == domain.IntegrationProviderAgentRuntime {
-		return nil, apierror.BadRequest("use the versioned runtime API")
+	if err := s.guardWrite(input.Provider, input.Config); err != nil {
+		return nil, err
 	}
 	if input.WorkspaceID == uuid.Nil {
 		return nil, apierror.BadRequest("workspace_id is required")
@@ -81,8 +122,10 @@ func (s *integrationService) Update(ctx context.Context, id uuid.UUID, input dom
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil && existing.Provider == domain.IntegrationProviderAgentRuntime {
-		return nil, apierror.BadRequest("use the versioned runtime API")
+	if existing != nil {
+		if gerr := s.guardWrite(existing.Provider, input.Config); gerr != nil {
+			return nil, gerr
+		}
 	}
 	cfg, err := s.repo.Update(ctx, id, input)
 	if err != nil {
@@ -97,8 +140,10 @@ func (s *integrationService) Delete(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	if existing != nil && existing.Provider == domain.IntegrationProviderAgentRuntime {
-		return apierror.BadRequest("disable runtime through the versioned runtime API")
+	if existing != nil {
+		if err := s.guardDelete(existing.Provider); err != nil {
+			return err
+		}
 	}
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete integration: %w", err)

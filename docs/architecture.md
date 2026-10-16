@@ -83,11 +83,7 @@ The MCP server is intentionally separate from the API server. This ensures a
 single audit trail (all operations go through the REST API) and allows
 independent scaling.
 
-Until 2026-08 this repository also carried a copy of that server under
-`cmd/mcp` + `internal/mcp`. Go's `internal/` visibility rules mean neither
-module can import the other, so the two were kept in step by hand and did not
-stay in step: the copy here was 12 tools behind when it was removed (Mesh
-#e85e4e05). There is now exactly one implementation.
+The MCP server has a single implementation in its separate repository.
 
 ## Data Layer
 

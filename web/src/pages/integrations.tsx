@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeResourcesCard } from "@/components/runtime-resources-card";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { SECRET_INPUT_PROPS } from "@/lib/credential-manager-ignore";
 import { apiErrorMessage } from "@/lib/api-error";
 import type {
   EffectiveIntegrationStatus,
@@ -747,6 +748,7 @@ export function IntegrationsPage() {
                           <div className="flex gap-2">
                             <Input
                               type="password"
+                              {...SECRET_INPUT_PROPS}
                               placeholder="123456789:AAExampleBotTokenHere"
                               value={telegramTokenInput}
                               onChange={(e) => setTelegramTokenInput(e.target.value)}
@@ -843,6 +845,7 @@ function VcsConnectForm({
       )}
       <Input
         type="password"
+        {...SECRET_INPUT_PROPS}
         placeholder={
           provider === "github"
             ? t("integrationsPage.vcsForm.personalToken")
@@ -855,6 +858,7 @@ function VcsConnectForm({
       />
       <Input
         type="password"
+        {...SECRET_INPUT_PROPS}
         placeholder={t("integrationsPage.vcsForm.webhookSecret")}
         value={values.webhook_secret}
         onChange={(e) => onChange({ ...values, webhook_secret: e.target.value })}

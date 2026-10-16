@@ -3397,7 +3397,7 @@ func TestTaskService_MoveTask_DoneGate_PassesWhenGitLabReportsLiveMerged(t *test
 		Provider:   domain.VCSProviderGitLab,
 		LinkType:   domain.VCSLinkTypePR,
 		Status:     domain.VCSLinkStatusOpen, // stale cached record
-		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/769",
+		URL:        "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/769",
 		Title:      "feat: already merged on GitLab",
 		ExternalID: "769",
 	})
@@ -3443,7 +3443,7 @@ func TestTaskService_MoveTask_DoneGate_FallsBackToCachedStatusWhenGitLabUnreacha
 		Provider:   domain.VCSProviderGitLab,
 		LinkType:   domain.VCSLinkTypePR,
 		Status:     domain.VCSLinkStatusOpen,
-		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/600",
+		URL:        "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/600",
 		Title:      "feat: unknown live state",
 		ExternalID: "600",
 		CreatedAt:  linkedAt,
@@ -3493,7 +3493,7 @@ func TestTaskService_MoveTask_DoneGate_NoGitLabCheckerWired_NamesNoAccessConfigu
 		Provider:   domain.VCSProviderGitLab,
 		LinkType:   domain.VCSLinkTypePR,
 		Status:     domain.VCSLinkStatusOpen,
-		URL:        "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/601",
+		URL:        "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/601",
 		Title:      "feat: nothing configured",
 		ExternalID: "601",
 	})
@@ -3775,7 +3775,7 @@ func TestTaskService_MoveTask_DoneGate_BlockedWhenGitLabPROpen_NamesGitLabNotGit
 		Provider: domain.VCSProviderGitLab,
 		LinkType: domain.VCSLinkTypePR,
 		Status:   domain.VCSLinkStatusOpen,
-		URL:      "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14",
+		URL:      "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14",
 		Title:    "team-relay-ops !14",
 	})
 

@@ -18,7 +18,7 @@ import (
 type TrSearchHandler struct {
 	piService     service.ProjectIntegrationService
 	projectSvc    service.ProjectService
-	relayResolver *service.TeamRelayIntegrationResolver
+	relayResolver service.TeamRelayURLResolver
 }
 
 // NewTrSearchHandler creates a new TrSearchHandler. relayResolver answers
@@ -27,7 +27,7 @@ type TrSearchHandler struct {
 // here, which meant a typo in the variable's name only surfaced at request
 // time. projectSvc resolves the project's workspace_id, which the resolver
 // needs and this handler otherwise has no reason to look up.
-func NewTrSearchHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver *service.TeamRelayIntegrationResolver) *TrSearchHandler {
+func NewTrSearchHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver service.TeamRelayURLResolver) *TrSearchHandler {
 	return &TrSearchHandler{piService: piService, projectSvc: projectSvc, relayResolver: relayResolver}
 }
 

@@ -128,7 +128,7 @@ func (row *runtimeReservationRow) toDomain(owner uuid.UUID) (*domain.RuntimeRese
 // that this transaction checked until it commits.
 func runtimeSharedConnection(ctx context.Context, q sqlx.QueryerContext, ws uuid.UUID) (*domain.IntegrationConfig, error) {
 	var row integrationConfigRow
-	err := sqlx.GetContext(ctx, q, &row, `SELECT `+integrationConfigSelectCols+` FROM integration_configs WHERE workspace_id=$1 AND provider='agent_runtime' FOR SHARE`, ws)
+	err := sqlx.GetContext(ctx, q, &row, `SELECT `+integrationConfigSelectCols+` FROM integration_configs WHERE workspace_id=$1 AND provider IN ('runner','agent_runtime') ORDER BY (provider='runner') DESC LIMIT 1 FOR SHARE`, ws)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apierror.NotFound("Runtime binding")
 	}

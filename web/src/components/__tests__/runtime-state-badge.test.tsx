@@ -49,8 +49,8 @@ describe("RuntimeStateBadge", () => {
   });
 
   it("waiting: mr and pipeline refs link to GitLab, decision stays plain text", () => {
-    expect(parseRuntimeRef("mr:entire-vc/evc-mesh!12")?.href).toBe("https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/12");
-    expect(parseRuntimeRef("pipeline:entire-vc/evc-mesh#9954")?.href).toBe("https://git.entire.host/entire-vc/evc-mesh/-/pipelines/9954");
+    expect(parseRuntimeRef("mr:entire-vc/evc-mesh!12")?.href).toBe("https://gitlab.com/entire-vc/evc-mesh/-/merge_requests/12");
+    expect(parseRuntimeRef("pipeline:entire-vc/evc-mesh#9954")?.href).toBe("https://gitlab.com/entire-vc/evc-mesh/-/pipelines/9954");
     expect(parseRuntimeRef("decision:@garfield")).toEqual({ label: "@garfield", href: null });
     expect(parseRuntimeRef(null)).toBeNull();
   });

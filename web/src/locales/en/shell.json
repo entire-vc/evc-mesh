@@ -16,10 +16,11 @@
     "analytics": "Analytics",
     "events": "Events",
     "integrations": "Integrations",
-    "connectedApps": "Connected apps",
+    "connectedApps": "App access",
     "workspaceSettings": "Workspace Settings",
     "projectSettings": "Project Settings",
-    "extensions": "Extensions"
+    "extensions": "Extensions",
+    "profile": "Profile"
   },
   "sidebar": {
     "workspaceLogoAlt": "Workspace",
@@ -61,11 +62,8 @@
     },
     "userMenu": {
       "userFallback": "User",
-      "theme": "Theme",
-      "themeDark": "Dark",
-      "language": "Language",
-      "themeLight": "Light",
-      "logOut": "Log out"
+      "logOut": "Log out",
+      "profile": "Open profile"
     }
   },
   "workspaceNotFound": {

@@ -136,3 +136,12 @@ func ProjectIntegrationExtensionID(intType string) string {
 	}
 	return intType
 }
+
+// ProjectIntegrationType is the inverse of ProjectIntegrationExtensionID: the
+// API keeps exposing the legacy type string, now derived from the extension id.
+func ProjectIntegrationType(extensionID string) string {
+	if extensionID == "team-relay" {
+		return "team_relay"
+	}
+	return extensionID
+}

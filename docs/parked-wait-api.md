@@ -1,5 +1,7 @@
 # Atomic parked WAIT release v1
 
+Verify that your deployed API supports `required_jobs` before enabling it in consumers; the published contract alone does not prove runtime support.
+
 Two task-scoped writes use the same workspace access and `update_task` permission
 as `POST /api/v1/tasks/:task_id/move`. They keep the project and assignee intact.
 The authenticated request context supplies the actor; JSON cannot override it.
@@ -96,18 +98,6 @@ All independent human/manual/freeze/no-promote gates hold. A future unowned
 canonical `custom_fields.park_reason` must agree with the registered reason.
 
 ### Required jobs in a mixed pipeline
-
-Rollout gate: this additive field is pending deployment until its merge and the
-production API version and required-job validation are verified. The contract was
-published to Khan, the parked-wake consumer owner, on 2026-10-07 in integration
-task `65a9d860-251d-4590-97c1-4cd19319ce3f`, comments
-`5772639b-c232-4260-85f6-b18b9a6376b0` (schema) and
-`9bb8a77d-31c4-4ca4-975e-1b3f18ca9d0c` (implementation and rollout gate).
-The handoff specifies the optional immutable pipeline-only list, exact retry,
-legacy behavior when absent and retained WAIT until live support. Consumer
-activation must follow
-that server verification and its own integration acceptance. A published schema
-alone is not proof that the running API supports it.
 
 For a pipeline that remains `manual` because unrelated products have manual jobs,
 register the specific jobs the wait needs:

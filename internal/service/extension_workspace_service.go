@@ -27,6 +27,13 @@ type ExtensionDataPurger interface {
 	PurgeData(ctx context.Context, workspaceID uuid.UUID) error
 }
 
+// SettingsHider is implemented by a provider whose stored settings are a
+// resource inventory the generic extension view must not disclose (Runner:
+// the scoped runtime API is the only place that returns it).
+type SettingsHider interface {
+	HideConnectionSettings() bool
+}
+
 // ExtensionHealthView is the health part of ExtensionStatusView.
 type ExtensionHealthView struct {
 	OK      bool   `json:"ok"`
@@ -95,6 +102,28 @@ func NewExtensionWorkspaceService(reg *extensions.Registry, integ extensionInteg
 	return &ExtensionWorkspaceService{reg: reg, integ: integ, consents: consents}
 }
 
+// storedRow reads the workspace's connection row under the canonical extension
+// id first, then under the aliases a provider still has rows stored by (the
+// provider data rename is a later contract step), so an existing row is never
+// reported as missing or duplicated.
+func (s *ExtensionWorkspaceService) storedRow(ctx context.Context, ws uuid.UUID, id string) (*domain.IntegrationConfig, error) {
+	id = s.reg.Canonical(id)
+	row, err := s.integ.GetByProvider(ctx, ws, domain.IntegrationProvider(id))
+	if err != nil || row != nil {
+		return row, err
+	}
+	if p, ok := s.reg.Get(id); ok {
+		if a, ok := p.(extensions.Aliased); ok {
+			for _, alias := range a.Aliases() {
+				if row, err = s.integ.GetByProvider(ctx, ws, domain.IntegrationProvider(alias)); err != nil || row != nil {
+					return row, err
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
 func extNotFound(id string) *apierror.Error {
 	return apierror.NotFoundWithDetails("Extension", "extension "+id)
 }
@@ -125,11 +154,12 @@ func (s *ExtensionWorkspaceService) List(ctx context.Context, ws uuid.UUID) ([]W
 
 // Connect creates the workspace connection and records what was consented to.
 func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, id string, by *uuid.UUID, settings map[string]any, consent []string) (*WorkspaceExtensionView, error) {
+	id = s.reg.Canonical(id)
 	p, err := s.provider(id)
 	if err != nil {
 		return nil, err
 	}
-	row, err := s.integ.GetByProvider(ctx, ws, domain.IntegrationProvider(id))
+	row, err := s.storedRow(ctx, ws, id)
 	if err != nil {
 		return nil, err
 	}
@@ -210,11 +240,12 @@ func (s *ExtensionWorkspaceService) PatchSettings(ctx context.Context, ws uuid.U
 // an extension the whole instance has on (status.source = instance) needs
 // confirm=true and creates the workspace row that overrides the instance level.
 func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID, id string, enabled, confirm bool) (*WorkspaceExtensionView, error) {
+	id = s.reg.Canonical(id)
 	p, err := s.provider(id)
 	if err != nil {
 		return nil, err
 	}
-	row, err := s.integ.GetByProvider(ctx, ws, domain.IntegrationProvider(id))
+	row, err := s.storedRow(ctx, ws, id)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +292,7 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 
 // Test forces a fresh health check.
 func (s *ExtensionWorkspaceService) Test(ctx context.Context, ws uuid.UUID, id string) (*ExtensionTestResult, error) {
+	id = s.reg.Canonical(id)
 	if _, err := s.provider(id); err != nil {
 		return nil, err
 	}
@@ -278,6 +310,7 @@ func (s *ExtensionWorkspaceService) Test(ctx context.Context, ws uuid.UUID, id s
 
 // Disconnect removes the connection; purge also removes the extension's data.
 func (s *ExtensionWorkspaceService) Disconnect(ctx context.Context, ws uuid.UUID, id string, purge bool) error {
+	id = s.reg.Canonical(id)
 	p, row, err := s.connection(ctx, ws, id)
 	if err != nil {
 		return err
@@ -299,11 +332,12 @@ func (s *ExtensionWorkspaceService) Disconnect(ctx context.Context, ws uuid.UUID
 }
 
 func (s *ExtensionWorkspaceService) connection(ctx context.Context, ws uuid.UUID, id string) (extensions.Provider, *domain.IntegrationConfig, error) {
+	id = s.reg.Canonical(id)
 	p, err := s.provider(id)
 	if err != nil {
 		return nil, nil, err
 	}
-	row, err := s.integ.GetByProvider(ctx, ws, domain.IntegrationProvider(id))
+	row, err := s.storedRow(ctx, ws, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -331,7 +365,7 @@ func (s *ExtensionWorkspaceService) view(ctx context.Context, ws uuid.UUID, p ex
 		ID: m.ID, Name: m.Name, Version: m.Version, Kind: m.Kind, Category: m.Category,
 		Levels: m.Levels, Manifest: m.Raw, Status: statusView(st),
 	}
-	row, err := s.integ.GetByProvider(ctx, ws, domain.IntegrationProvider(m.ID))
+	row, err := s.storedRow(ctx, ws, m.ID)
 	if err != nil {
 		return WorkspaceExtensionView{}, err
 	}
@@ -343,6 +377,9 @@ func (s *ExtensionWorkspaceService) view(ctx context.Context, ws uuid.UUID, p ex
 		v.Connection, err = connectionView(row, c, secretFields(m))
 		if err != nil {
 			return WorkspaceExtensionView{}, err
+		}
+		if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
+			v.Connection.Settings = map[string]any{}
 		}
 	}
 	return v, nil

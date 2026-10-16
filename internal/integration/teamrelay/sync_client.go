@@ -3,6 +3,8 @@ package teamrelay
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -212,9 +214,31 @@ func SyncDownload(ctx context.Context, relayURL, shareID, path, agentKey string)
 
 	return &SyncDocument{
 		Content:   body,
-		SHA256:    strings.Trim(resp.Header.Get("ETag"), `"`),
+		SHA256:    downloadSHA256(resp.Header.Get("ETag"), body),
 		UpdatedAt: resp.Header.Get("X-Updated-At"),
 	}, nil
+}
+
+// maxSHA256Len is the width of the source_sha256 columns (varchar(64)): a hex
+// SHA-256, nothing longer fits.
+const maxSHA256Len = 64
+
+// downloadSHA256 reads the content hash from the download's ETag. A proxy in
+// front of the relay may weaken the validator (W/"<hash>") or decorate it;
+// that must not reach a varchar(64) column and abort the whole mount sync. The
+// weak prefix and the quotes are not part of the hash; if what is left still
+// does not fit, the hash is computed from the body — the relay hashes the
+// same raw bytes, so the two agree. The body is already capped at
+// maxDocumentBytes, and the hash is what change detection compares against the
+// stored content, so for a capped body it describes exactly the bytes kept.
+func downloadSHA256(etag string, body []byte) string {
+	h := strings.TrimPrefix(strings.TrimSpace(etag), "W/")
+	h = strings.Trim(h, `"`)
+	if len(h) > maxSHA256Len {
+		sum := sha256.Sum256(body)
+		return hex.EncodeToString(sum[:])
+	}
+	return h
 }
 
 // fileTokenRequest is the body of POST /v1/shares/{id}/file-token.

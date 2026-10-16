@@ -221,3 +221,21 @@ func TestManifest_ValidAgainstSchemaV1(t *testing.T) {
 	require.True(t, m.Levels.Instance && m.Levels.Workspace && m.Levels.Project)
 	require.Equal(t, []string{"agent_key"}, m.Capabilities.Secrets)
 }
+
+func TestInstanceAvailable(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		inst extensions.InstanceStore
+		want bool
+	}{
+		{"enabled with relay_url", instance("https://relay.example", true), true},
+		{"switched off", instance("https://relay.example", false), false},
+		{"enabled without relay_url", instance("", true), false},
+		{"no instance entry", inst{}, false},
+	} {
+		if got := newProvider(nil, tc.inst).InstanceAvailable(ctx); got != tc.want {
+			t.Errorf("%s: InstanceAvailable = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

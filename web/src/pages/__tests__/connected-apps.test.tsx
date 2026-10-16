@@ -12,7 +12,7 @@ vi.mock("@/components/ui/toast", () => ({
 
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
-import { ConnectedAppsPage } from "@/pages/connected-apps";
+import { AppAccessSection } from "@/pages/connected-apps";
 import type { OAuthGrant } from "@/types";
 
 const mockApi = api as unknown as ReturnType<typeof vi.fn>;
@@ -38,7 +38,7 @@ const REVOKED: OAuthGrant = {
 const renderPage = () =>
   render(
     <MemoryRouter>
-      <ConnectedAppsPage />
+      <AppAccessSection />
     </MemoryRouter>,
   );
 
@@ -48,7 +48,7 @@ beforeEach(() => {
   vi.mocked(toast.error).mockReset();
 });
 
-describe("ConnectedAppsPage", () => {
+describe("AppAccessSection", () => {
   it("shows the agent short tag after the agent name, and nothing extra when there is none", async () => {
     mockApi.mockResolvedValueOnce({
       grants: [
@@ -82,7 +82,7 @@ describe("ConnectedAppsPage", () => {
   it("shows an empty state when the API returns no grants (null-safe)", async () => {
     mockApi.mockResolvedValueOnce({ grants: null });
     renderPage();
-    expect(await screen.findByText("No apps are connected.")).toBeInTheDocument();
+    expect(await screen.findByText(/No external apps have access yet/)).toBeInTheDocument();
   });
 
   it("revokes only after confirmation, then reloads the list", async () => {
@@ -100,7 +100,7 @@ describe("ConnectedAppsPage", () => {
     await waitFor(() =>
       expect(mockApi).toHaveBeenCalledWith("/api/v1/oauth/grants/g1", { method: "DELETE" }),
     );
-    await waitFor(() => expect(screen.getByText("No apps are connected.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/No external apps have access yet/)).toBeInTheDocument());
     expect(toast.success).toHaveBeenCalled();
   });
 

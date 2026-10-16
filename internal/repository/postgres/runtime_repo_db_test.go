@@ -422,3 +422,75 @@ func TestRuntimeRepoDesiredIsExactReporterOnly(t *testing.T) {
 	require.EqualValues(t, 2, view.Revision)
 	require.True(t, view.DrainRequested)
 }
+
+// The rename agent_runtime -> runner is a later migration; until it runs, and
+// after it, the catalog must be found under either provider name, and a save
+// must not create a second connection row next to a renamed one.
+func TestRuntimeRepoFindsConnectionUnderRunnerName(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	_, err := f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+
+	_, err = f.db.ExecContext(ctx, `UPDATE integration_configs SET provider='runner' WHERE workspace_id=$1 AND provider='agent_runtime'`, f.owner)
+	require.NoError(t, err)
+
+	again := f.input
+	again.IfRevision = 1
+	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, again)
+	require.NoError(t, err, "the renamed row must be the one the compare-and-swap runs against")
+
+	var rows int
+	require.NoError(t, f.db.GetContext(ctx, &rows, `SELECT count(*) FROM integration_configs WHERE workspace_id=$1 AND provider IN ('runner','agent_runtime')`, f.owner))
+	require.Equal(t, 1, rows)
+
+	integrations := NewIntegrationRepo(f.db)
+	connection, err := integrations.GetByProvider(ctx, f.owner, domain.IntegrationProviderRunner)
+	require.NoError(t, err)
+	require.NotNil(t, connection)
+	require.ErrorContains(t, integrations.Delete(ctx, connection.ID), "versioned runtime API")
+}
+
+// The unique index is per provider name, so creators under the two names must
+// be serialized by the shared advisory lock. A held lock makes that observable
+// without relying on a lucky interleaving: both writers wait for it, and once it
+// is released exactly one connection row exists.
+func TestRunnerConnectionCreatorsWaitForSharedLock(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	integrations := NewIntegrationRepo(f.db)
+
+	holder, err := f.db.BeginTxx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = holder.Rollback() }()
+	require.NoError(t, lockRunnerConnection(ctx, holder, f.owner))
+
+	done := make(chan string, 2)
+	go func() {
+		_, _ = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+		done <- "save"
+	}()
+	go func() {
+		now := time.Now()
+		_, _ = integrations.InsertIfAbsent(ctx, &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: f.owner, Provider: domain.IntegrationProviderRunner, Config: []byte(`{}`), IsActive: true, CreatedAt: now, UpdatedAt: now})
+		done <- "insert"
+	}()
+
+	select {
+	case who := <-done:
+		t.Fatalf("%s finished while the Runner connection lock was held", who)
+	case <-time.After(500 * time.Millisecond):
+	}
+	require.NoError(t, holder.Commit())
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("writer did not resume after the lock was released")
+		}
+	}
+
+	var rows int
+	require.NoError(t, f.db.GetContext(ctx, &rows, `SELECT count(*) FROM integration_configs WHERE workspace_id=$1 AND provider IN ('runner','agent_runtime')`, f.owner))
+	require.Equal(t, 1, rows, "one Runner connection per workspace whichever name created it")
+}

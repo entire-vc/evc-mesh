@@ -16,7 +16,19 @@ import (
 	apicontract "github.com/entire-vc/evc-mesh/docs/api"
 )
 
-const IntegrationProviderAgentRuntime IntegrationProvider = "agent_runtime"
+// IntegrationProviderAgentRuntime is the legacy provider name of the runtime
+// catalog row; IntegrationProviderRunner is the extension id it is renamed to.
+// Until the rename migration has run both names are accepted.
+const (
+	IntegrationProviderAgentRuntime IntegrationProvider = "agent_runtime"
+	IntegrationProviderRunner       IntegrationProvider = "runner"
+)
+
+// IsRuntimeProvider reports whether p names the runtime catalog connection
+// under either of its names.
+func IsRuntimeProvider(p IntegrationProvider) bool {
+	return p == IntegrationProviderRunner || p == IntegrationProviderAgentRuntime
+}
 
 type RuntimeIdentity struct {
 	AgentID     uuid.UUID `json:"agent_id"`

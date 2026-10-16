@@ -14,7 +14,7 @@
     "docs"
   ],
   "license": "Apache-2.0",
-  "repository": "https://git.entire.host/entire-vc/evc-mesh",
+  "repository": "https://github.com/entire-vc/evc-team-relay",
   "levels": {
     "instance": true,
     "workspace": true,

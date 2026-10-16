@@ -456,8 +456,15 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // string from the extension's manifest, not a row). The workspace comes from
 // :ws_id, which this guard checks; every query the handler runs is keyed by
 // that workspace, so there is no child row of another tenant to pair with.
+//
+// /extensions/:ext_id/update and /extensions/:ext_id/rollback name an extension by
+// its manifest id in the instance-level catalog (installed_extensions), which no
+// workspace owns, so there is no tenant to resolve. Both are 501 stubs for now;
+// the instance-admin check arrives with the real handlers (W2.9, W4.1).
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
+	"/api/v1/extensions/:ext_id/update":                                                           true,
+	"/api/v1/extensions/:ext_id/rollback":                                                         true,
 	"/api/v1/memories/:id":                                                                        true,
 	"/api/v1/memories/:id/related":                                                                true,
 	"/api/v1/memories/:id/revisions":                                                              true,

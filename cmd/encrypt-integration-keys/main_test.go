@@ -24,12 +24,12 @@ func withKey(t *testing.T, fill byte) {
 	t.Cleanup(encryption.ResetForTest)
 }
 
-const selectPattern = `SELECT id, project_id, type, agent_key FROM project_integrations`
+const selectPattern = `SELECT id, project_id, extension_id, agent_key FROM project_integrations`
 
 func credentialRows(values ...string) *sqlmock.Rows {
-	rows := sqlmock.NewRows([]string{"id", "project_id", "type", "agent_key"})
+	rows := sqlmock.NewRows([]string{"id", "project_id", "extension_id", "agent_key"})
 	for i, v := range values {
-		rows.AddRow("row-"+string(rune('a'+i)), "proj-1", "team_relay", v)
+		rows.AddRow("row-"+string(rune('a'+i)), "proj-1", "team-relay", v)
 	}
 	return rows
 }

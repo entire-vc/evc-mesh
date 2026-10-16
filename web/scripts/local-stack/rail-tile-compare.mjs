@@ -1,8 +1,9 @@
 import { chromium } from "@playwright/test";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const WEB = "/Users/entirevc/DevProjects/evc-mesh-verne/web";
+const WEB = fileURLToPath(new URL("../../", import.meta.url));
 const assets = path.join(WEB, "dist/assets");
 const cssFile = readdirSync(assets).filter(f => f.endsWith(".css")).sort((a,b)=>{
   const sa = readFileSync(path.join(assets,a)).length;
