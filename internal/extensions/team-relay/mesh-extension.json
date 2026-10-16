@@ -7,14 +7,14 @@
   "runtime": "builtin",
   "mesh_api": ">=1 <2",
   "publisher": "entire-vc",
-  "description": "Синхронизация Mesh Docs с шарами Team Relay: подключение к релею и привязка проекта к шаре",
+  "description": "Syncs Mesh Docs with Team Relay shares: connect to a relay and bind a project to a share",
   "category": "documents",
   "tags": [
     "sync",
     "docs"
   ],
   "license": "Apache-2.0",
-  "repository": "https://git.entire.host/entire-vc/evc-mesh",
+  "repository": "https://github.com/entire-vc/evc-team-relay",
   "levels": {
     "instance": true,
     "workspace": true,
@@ -32,21 +32,61 @@
       "properties": {
         "share_id": {
           "type": "string",
-          "title": "Шара Team Relay (UUID)"
+          "title": "Team Relay share (UUID)",
+          "title_i18n": { "ru": "Шара Team Relay (UUID)" }
+        },
+        "share_slug": {
+          "type": "string",
+          "title": "Share slug",
+          "title_i18n": { "ru": "Слаг шары" }
         },
         "subfolder": {
           "type": "string",
-          "title": "Подпапка в шаре"
+          "title": "Subfolder in the share",
+          "title_i18n": { "ru": "Подпапка в шаре" }
         },
         "agent_key": {
           "type": "string",
-          "title": "Ключ агента шары",
+          "title": "Share agent key",
+          "title_i18n": { "ru": "Ключ агента шары" },
           "x-secret": true
+        },
+        "include_project_slug": {
+          "type": "boolean",
+          "title": "Append project slug to the share path",
+          "title_i18n": { "ru": "Добавлять слаг проекта к пути в шаре" },
+          "x-widget": "toggle"
+        },
+        "docs_mount_path": {
+          "type": "string",
+          "title": "Where to mount the share in project Docs",
+          "title_i18n": { "ru": "Куда монтировать шару в Docs проекта" },
+          "x-help": "Slug path, e.g. \"Team Relay\" or \"External/Notes\". Empty — the share becomes the top level of the project Docs.",
+          "x-help_i18n": { "ru": "Путь из слагов, например «Team Relay» или «External/Notes». Пусто — шара становится верхним уровнем Docs проекта." }
+        },
+        "excluded_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "title": "Share folders that are not mounted",
+          "title_i18n": { "ru": "Папки шары, которые не монтируются" },
+          "x-widget": "list",
+          "x-help": "Top-level folder names. Unset — defaults to \"artifacts\"; empty list — everything is mounted.",
+          "x-help_i18n": { "ru": "Имена папок верхнего уровня. Не задано — по умолчанию «artifacts»; пустой список — монтируется всё." }
+        },
+        "sync_interval_minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "title": "Background sync interval, minutes",
+          "title_i18n": { "ru": "Интервал фонового синка, минут" },
+          "x-help": "0 — background sync is off; otherwise at least 5. Unset — 15.",
+          "x-help_i18n": { "ru": "0 — фоновый синк выключен; иначе не меньше 5. Не задано — 15." }
         },
         "key_expires_at": {
           "type": "string",
           "format": "date-time",
-          "title": "Ключ действует до"
+          "title": "Key valid until",
+          "title_i18n": { "ru": "Ключ действует до" },
+          "readOnly": true
         }
       },
       "required": [
@@ -61,16 +101,19 @@
         "relay_url": {
           "type": "string",
           "format": "uri",
-          "title": "Адрес Team Relay"
+          "title": "Team Relay URL",
+          "title_i18n": { "ru": "Адрес Team Relay" }
         },
         "web_base_url": {
           "type": "string",
           "format": "uri",
-          "title": "Адрес веб-интерфейса Team Relay"
+          "title": "Team Relay web UI URL",
+          "title_i18n": { "ru": "Адрес веб-интерфейса Team Relay" }
         },
         "transport_enabled": {
           "type": "boolean",
-          "title": "Отправлять артефакты в Team Relay",
+          "title": "Send artifacts to Team Relay",
+          "title_i18n": { "ru": "Отправлять артефакты в Team Relay" },
           "x-widget": "toggle"
         }
       },
@@ -95,7 +138,7 @@
       "allowed_domains": [
         "{settings.relay_url}"
       ],
-      "reasoning": "синк документов и артефактов с релеем по адресу из настроек"
+      "reasoning": "Syncs documents and artifacts with the relay at the URL from settings"
     },
     "ui": [
       "project.settings",

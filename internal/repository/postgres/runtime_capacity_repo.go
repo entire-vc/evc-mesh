@@ -191,7 +191,7 @@ FROM idle GROUP BY agent_id`, ws, idArray)
 // an agent as ready.
 func runtimeAgentControllers(ctx context.Context, tx *sqlx.Tx, ws uuid.UUID, agents []domain.RuntimeAgentCapacity, index map[uuid.UUID]int) error {
 	var rows []integrationConfigRow
-	err := tx.SelectContext(ctx, &rows, `SELECT `+integrationConfigSelectCols+` FROM integration_configs WHERE provider='agent_runtime' ORDER BY id`)
+	err := tx.SelectContext(ctx, &rows, `SELECT `+integrationConfigSelectCols+` FROM integration_configs WHERE provider IN ('runner','agent_runtime') ORDER BY id`)
 	if err != nil {
 		return err
 	}

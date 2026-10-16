@@ -222,3 +222,10 @@ func (p *Provider) TransportEnabled(ctx context.Context, workspaceID uuid.UUID) 
 	s, err := extensions.DecodeSettings[Settings](res.Settings)
 	return err == nil && s.TransportEnabled
 }
+
+// InstanceAvailable reports whether the instance level alone would run Team
+// Relay, with no workspace row in play.
+func (p *Provider) InstanceAvailable(ctx context.Context) bool {
+	res, err := extensions.ResolveSettings(ctx, nil, p.Inst, uuid.Nil, p.Man.ID)
+	return err == nil && res.Enabled && RelayURL(res) != ""
+}

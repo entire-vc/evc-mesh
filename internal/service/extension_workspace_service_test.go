@@ -258,3 +258,99 @@ func TestExtensionWorkspace_InstanceOnlyReportsNoWorkspaceConsent(t *testing.T) 
 	require.Equal(t, "instance", list[0].Status.Source)
 	require.Empty(t, list[0].Status.ConsentedCapabilities)
 }
+
+type hidingProvider struct{ exttest.DemoProvider }
+
+func (hidingProvider) HideConnectionSettings() bool { return true }
+
+func TestExtensionWorkspace_HidesInventorySettings(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		wrap func(exttest.DemoProvider) extensions.Provider
+		hide bool
+	}{
+		{"hider", func(d exttest.DemoProvider) extensions.Provider { return hidingProvider{d} }, true},
+		{"plain", func(d exttest.DemoProvider) extensions.Provider { return d }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := exttest.NewFixture(nil, false)
+			require.NoError(t, err)
+			man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+			require.NoError(t, err)
+			base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}}
+			reg := extensions.NewRegistry()
+			require.NoError(t, reg.Register(tc.wrap(exttest.DemoProvider{BaseProvider: base, Healthy: true})))
+			reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+			svc := service.NewExtensionWorkspaceService(reg, f.Integ, f.Consents)
+			ws := uuid.New()
+			_, err = svc.Connect(ctx, ws, "demo", nil, map[string]any{"base_url": "https://inventory.example"}, fullConsent)
+			require.NoError(t, err)
+			list, err := svc.List(ctx, ws)
+			require.NoError(t, err)
+			require.NotNil(t, list[0].Connection)
+			if tc.hide {
+				require.Empty(t, list[0].Connection.Settings)
+			} else {
+				require.Equal(t, "https://inventory.example", list[0].Connection.Settings["base_url"])
+			}
+		})
+	}
+}
+
+type aliasedProvider struct{ exttest.DemoProvider }
+
+func (aliasedProvider) Aliases() []string { return []string{"demo_legacy"} }
+
+func TestExtensionWorkspace_LegacyIDResolvesToExtension(t *testing.T) {
+	ctx := context.Background()
+	f, err := exttest.NewFixture(nil, false)
+	require.NoError(t, err)
+	man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+	require.NoError(t, err)
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(aliasedProvider{exttest.DemoProvider{BaseProvider: base, Healthy: true}}))
+	reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+	svc := service.NewExtensionWorkspaceService(reg, f.Integ, f.Consents)
+	ws := uuid.New()
+
+	_, err = svc.Connect(ctx, ws, "demo_legacy", nil, map[string]any{"base_url": "https://x.example"}, fullConsent)
+	require.NoError(t, err)
+	res, err := svc.Test(ctx, ws, "demo_legacy")
+	require.NoError(t, err)
+	require.True(t, res.OK)
+	// The row is stored once, under the canonical id.
+	_, err = svc.Connect(ctx, ws, "demo", nil, map[string]any{"base_url": "https://x.example"}, fullConsent)
+	require.Error(t, err)
+	require.NoError(t, svc.Disconnect(ctx, ws, "demo_legacy", false))
+}
+
+// A row still stored under the legacy provider name is the workspace's
+// connection: listed, managed, and never duplicated by a connect.
+func TestExtensionWorkspace_LegacyStoredRowIsTheConnection(t *testing.T) {
+	ctx := context.Background()
+	f, err := exttest.NewFixture(nil, false)
+	require.NoError(t, err)
+	man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+	require.NoError(t, err)
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(aliasedProvider{exttest.DemoProvider{BaseProvider: base, Healthy: true}}))
+	reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+	svc := service.NewExtensionWorkspaceService(reg, f.Integ, f.Consents)
+	ws := uuid.New()
+	now := time.Now()
+	created, err := f.Integ.InsertIfAbsent(ctx, &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: ws, Provider: domain.IntegrationProvider("demo_legacy"), Config: []byte(`{"base_url":"https://x.example"}`), IsActive: true, CreatedAt: now, UpdatedAt: now})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	list, err := svc.List(ctx, ws)
+	require.NoError(t, err)
+	require.NotNil(t, list[0].Connection, "a legacy-named row must show as the connection")
+
+	_, err = svc.Connect(ctx, ws, "demo", nil, map[string]any{"base_url": "https://x.example"}, fullConsent)
+	require.Error(t, err, "connect must not create a second row beside the legacy one")
+
+	require.NoError(t, svc.Disconnect(ctx, ws, "demo", false))
+}

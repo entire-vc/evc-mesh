@@ -5,6 +5,7 @@ import {
   Navigate,
   Route,
   RouterProvider,
+  useParams,
 } from "react-router";
 import { AppLayout } from "@/components/layout/app-layout";
 import { LoginPage } from "@/pages/login";
@@ -26,8 +27,8 @@ const AcceptInvitePage = lazy(() =>
 const OAuthConsentPage = lazy(() =>
   import("@/pages/oauth-consent").then((m) => ({ default: m.OAuthConsentPage })),
 );
-const ConnectedAppsPage = lazy(() =>
-  import("@/pages/connected-apps").then((m) => ({ default: m.ConnectedAppsPage })),
+const ProfilePage = lazy(() =>
+  import("@/pages/profile").then((m) => ({ default: m.ProfilePage })),
 );
 const DashboardPage = lazy(() =>
   import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage })),
@@ -54,6 +55,12 @@ const EventFeedPage = lazy(() =>
 );
 const AnalyticsPage = lazy(() =>
   import("@/pages/analytics").then((m) => ({ default: m.AnalyticsPage })),
+);
+const ExtensionConnectPage = lazy(() =>
+  import("@/pages/extension-connect").then((m) => ({ default: m.ExtensionConnectPage })),
+);
+const ExtensionDetailPage = lazy(() =>
+  import("@/pages/extension-detail").then((m) => ({ default: m.ExtensionDetailPage })),
 );
 const ExtensionsPage = lazy(() =>
   import("@/pages/extensions").then((m) => ({ default: m.ExtensionsPage })),
@@ -137,6 +144,13 @@ const ProjectDeepLinkResolver = lazy(() =>
  * <Outlet/> sits inside a flex-1 region whose height comes from the flex
  * layout, not from its content, so swapping the skeleton for the real page
  * never changes that region's height — no CLS from the swap itself. */
+// Old /connected-apps links (e.g. from the OAuth consent text) land on the
+// "App access" section of the profile.
+export function ConnectedAppsRedirect() {
+  const { wsSlug } = useParams();
+  return <Navigate to={`/w/${wsSlug}/me#app-access`} replace />;
+}
+
 function LazyPage({ children }: { children: ReactNode }) {
   return <Suspense fallback={<PageSkeleton />}>{children}</Suspense>;
 }
@@ -298,6 +312,22 @@ const router = createBrowserRouter(
           }
         />
         <Route
+          path="w/:wsSlug/extensions/:extId/connect"
+          element={
+            <LazyPage>
+              <ExtensionConnectPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/extensions/:extId"
+          element={
+            <LazyPage>
+              <ExtensionDetailPage />
+            </LazyPage>
+          }
+        />
+        <Route
           path="w/:wsSlug/integrations"
           element={
             <LazyPage>
@@ -421,12 +451,16 @@ const router = createBrowserRouter(
           }
         />
         <Route
-          path="w/:wsSlug/connected-apps"
+          path="w/:wsSlug/me"
           element={
             <LazyPage>
-              <ConnectedAppsPage />
+              <ProfilePage />
             </LazyPage>
           }
+        />
+        <Route
+          path="w/:wsSlug/connected-apps"
+          element={<ConnectedAppsRedirect />}
         />
         <Route
           path="w/:wsSlug/p/:projectSlug/settings"

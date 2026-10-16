@@ -113,13 +113,14 @@ func (p *Provider) Resolve(ctx context.Context, workspaceID uuid.UUID) (extensio
 	return extensions.Resolved{ExtensionID: p.Man.ID, Source: extensions.SourceNone}, nil
 }
 
-// Health is GET {spark_url}/api/v1/health: OK on any 2xx.
+// Health is GET {spark_url}/health: OK on any 2xx. Spark serves no
+// /api/v1/health (404 on prod); /health is its liveness route.
 func (p *Provider) Health(ctx context.Context, r extensions.Resolved) extensions.HealthReport {
 	base := strings.TrimRight(URL(r), "/")
 	if base == "" {
 		return extensions.HealthReport{Message: "spark_url is not set"}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/health", http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health", http.NoBody)
 	if err != nil {
 		return extensions.HealthReport{Message: "bad spark_url"}
 	}

@@ -832,6 +832,34 @@ export function DocsPage() {
     [docId, docsPath, t],
   );
 
+  // Canonical address of the open document, with no anchor: the link a person
+  // pastes elsewhere, not a pointer into a paragraph.
+  const docUrl = docId ? `${window.location.origin}${docsPath}/${docId}` : "";
+
+  const handleCopyDocUrl = useCallback(() => {
+    if (!docUrl) return;
+    void copyText(docUrl).then(
+      () => toast.success(t("share.copied")),
+      () => toast.error(t("share.copyFailed")),
+    );
+  }, [docUrl, t]);
+
+  // The system share sheet exists on phones and some desktops; where it does
+  // not, the item is hidden and Copy URL covers the case.
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+  const handleShareDocUrl = useCallback(
+    (title: string) => {
+      if (!docUrl) return;
+      navigator.share({ title, url: docUrl }).catch((err: unknown) => {
+        // Dismissing the sheet rejects with AbortError — not a failure.
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        toast.error(t("share.failed"));
+      });
+    },
+    [docUrl, t],
+  );
+
   // ---- Comments (D7) -------------------------------------------------------
   // Unrelated to the paragraph links above: those address a fragment for a
   // shareable URL, these address a text range a thread hangs off.
@@ -1346,6 +1374,15 @@ export function DocsPage() {
                       <DropdownMenuItem onClick={() => setMoveTarget(openDoc)}>
                         {t("actions.move")}
                       </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={handleCopyDocUrl}>
+                        {t("share.copyUrl")}
+                      </DropdownMenuItem>
+                      {canShare && (
+                        <DropdownMenuItem onClick={() => handleShareDocUrl(openDoc.title)}>
+                          {t("share.shareUrl")}
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={() => handleExportClick("pdf")}>
                         {t(EXPORT_FORMAT_LABEL.pdf)}

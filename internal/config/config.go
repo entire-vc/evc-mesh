@@ -70,10 +70,9 @@ type HumanGateConfig struct {
 // CONNECTION layer (where the relay lives). As of the fix for the two
 // tr_*_handler.go call sites that used to read MESH_TEAMRELAY_RELAY_URL via
 // os.Getenv directly (§4/§C1 of specsintegration-provider-contract),
-// service.TeamRelayIntegrationResolver (wired in cmd/api/main.go) checks a
-// workspace's own active `team_relay` integration_configs row FIRST on every
-// call, and only falls back to RelayURL below when that workspace has none
-// configured. This is the CONNECTION layer only — the per-project BINDING
+// the team-relay extension provider (wired in cmd/api/main.go) checks a
+// workspace's own active `team_relay` connection FIRST on every call, and only
+// falls back to RelayURL below when that workspace has none configured. This is the CONNECTION layer only — the per-project BINDING
 // (which share, which subfolder, the sync agent key) lives in
 // project_integrations and is untouched by this config.
 type TeamRelayConfig struct {

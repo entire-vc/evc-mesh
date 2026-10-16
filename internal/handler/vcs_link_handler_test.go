@@ -40,6 +40,7 @@ type stubVCSLinkService struct {
 	gitlabHandleCalls  []service.GitLabWebhookEvent
 	gitlabHandleResult service.PRHandleResult
 	gitlabHandleErr    error
+	pipelineCalls      []service.GitLabPipelineEvent
 	createCalls        []domain.CreateVCSLinkInput
 	createReturn       *domain.VCSLink
 	createReturnErr    error
@@ -137,6 +138,13 @@ func (s *stubVCSLinkService) HandleGitLabMergeRequestEvent(_ context.Context, ev
 	defer s.mu.Unlock()
 	s.gitlabHandleCalls = append(s.gitlabHandleCalls, ev)
 	return s.gitlabHandleResult, s.gitlabHandleErr
+}
+
+func (s *stubVCSLinkService) HandleGitLabPipelineEvent(_ context.Context, ev service.GitLabPipelineEvent) (service.PipelineHandleResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pipelineCalls = append(s.pipelineCalls, ev)
+	return service.PipelineHandleResult{Updated: 1}, nil
 }
 
 func (s *stubVCSLinkService) lastGitLabHandleEvent() (service.GitLabWebhookEvent, bool) {
@@ -543,7 +551,7 @@ func newMergeRequestPayload(t *testing.T, action string, iid int, title, descrip
 		"object_kind": "merge_request",
 		"project": map[string]any{
 			"path_with_namespace": "entire-vc/evc-mesh",
-			"web_url":             "https://git.entire.host/entire-vc/evc-mesh",
+			"web_url":             "https://gitlab.example.invalid/entire-vc/evc-mesh",
 		},
 		"object_attributes": map[string]any{
 			"iid":              iid,
@@ -552,7 +560,7 @@ func newMergeRequestPayload(t *testing.T, action string, iid int, title, descrip
 			"state":            state,
 			"action":           action,
 			"source_branch":    "feature-branch",
-			"url":              "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/" + itoaTest(iid),
+			"url":              "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/" + itoaTest(iid),
 			"merge_commit_sha": mergeSHA,
 		},
 	}
@@ -1009,4 +1017,58 @@ func TestReleaseDelivery_NoDedupStoreIsNoop(t *testing.T) {
 	h := NewVCSLinkHandler(&stubVCSLinkService{})
 	c := echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/", http.NoBody), httptest.NewRecorder())
 	assert.NotPanics(t, func() { h.releaseDelivery(c, "d-none") })
+}
+
+const pipelineHookBody = `{"object_kind":"pipeline",
+	"object_attributes":{"id":987,"status":"failed","ref":"linus/ab12cd34"},
+	"merge_request":{"iid":1285,"url":"https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/1285"},
+	"project":{"path_with_namespace":"entire-vc/evc-mesh"}}`
+
+func TestGitLabWebhook_PipelineHook_DelegatesToService(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc)
+
+	req := newMergeRequestRequest(t, []byte(pipelineHookBody), "Pipeline Hook", "")
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, svc.pipelineCalls, 1)
+	ev := svc.pipelineCalls[0]
+	assert.Equal(t, int64(987), ev.PipelineID)
+	assert.Equal(t, "failed", ev.Status)
+	assert.Equal(t, 1285, ev.MRIID)
+	assert.Equal(t, "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/1285", ev.MRURL)
+	assert.Equal(t, "entire-vc/evc-mesh", ev.ProjectPath)
+	assert.Empty(t, svc.gitlabHandleCalls, "a pipeline event must not run the MR transition policy")
+}
+
+// A branch or tag pipeline carries no merge_request: acknowledged, not acted on.
+func TestGitLabWebhook_PipelineHook_WithoutMergeRequest_Ignored(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc)
+
+	body := `{"object_attributes":{"id":5,"status":"success"},"merge_request":null,"project":{"path_with_namespace":"entire-vc/evc-mesh"}}`
+	req := newMergeRequestRequest(t, []byte(body), "Pipeline Hook", "")
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, svc.pipelineCalls)
+}
+
+// The shared-secret check runs before any event is looked at.
+func TestGitLabWebhook_PipelineHook_InvalidToken_401(t *testing.T) {
+	svc := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(svc, WithGitLabWebhookSecret("s3cret"))
+
+	req := newMergeRequestRequest(t, []byte(pipelineHookBody), "Pipeline Hook", "wrong")
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+
+	require.NoError(t, h.GitLabWebhook(c))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Empty(t, svc.pipelineCalls)
 }

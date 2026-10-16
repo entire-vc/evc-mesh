@@ -107,8 +107,16 @@ func runtimeGrant(ctx context.Context, q sqlx.QueryerContext, identity domain.Ru
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// lockRunnerConnection takes a transaction-scoped advisory lock that every
+// creator of a workspace's Runner connection row holds, whichever of the two
+// provider names it writes under.
+func lockRunnerConnection(ctx context.Context, q sqlx.ExecerContext, ws uuid.UUID) error {
+	_, err := q.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('runner-connection:' || $1::text, 0))`, ws.String())
+	return err
+}
+
 func runtimeConnection(ctx context.Context, q sqlx.QueryerContext, ws uuid.UUID, lock bool) (*domain.IntegrationConfig, error) {
-	query := `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE workspace_id=$1 AND provider='agent_runtime'`
+	query := `SELECT ` + integrationConfigSelectCols + ` FROM integration_configs WHERE workspace_id=$1 AND provider IN ('runner','agent_runtime') ORDER BY (provider='runner') DESC LIMIT 1`
 	if lock {
 		query += ` FOR UPDATE`
 	}
@@ -158,9 +166,15 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if err != nil {
 		return nil, err
 	}
-	// The unique connection index serializes concurrent first saves, before
-	// the existing row lock serializes every subsequent compare-and-swap.
-	_, err = tx.ExecContext(ctx, `INSERT INTO integration_configs(id,workspace_id,provider,config,is_active) VALUES($1,$2,'agent_runtime','{}',false) ON CONFLICT(workspace_id,provider) DO NOTHING`, uuid.New(), ws)
+	// The unique index is per provider name, so it cannot keep a save under the
+	// legacy name and an extension toggle under the new one from both creating a
+	// row: the shared advisory lock serializes every creator of the Runner
+	// connection, then the existing row lock serializes each compare-and-swap.
+	err = lockRunnerConnection(ctx, tx, ws)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO integration_configs(id,workspace_id,provider,config,is_active) SELECT $1::uuid,$2::uuid,'agent_runtime','{}'::jsonb,false WHERE NOT EXISTS (SELECT 1 FROM integration_configs WHERE workspace_id=$2::uuid AND provider IN ('runner','agent_runtime')) ON CONFLICT(workspace_id,provider) DO NOTHING`, uuid.New(), ws)
 	if err != nil {
 		return nil, err
 	}

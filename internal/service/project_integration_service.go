@@ -16,12 +16,28 @@ import (
 )
 
 type projectIntegrationService struct {
-	piRepo repository.ProjectIntegrationRepository
+	piRepo        repository.ProjectIntegrationRepository
+	relayResolver teamrelay.ConnectionResolver
+	projects      repository.ProjectRepository
+}
+
+type ProjectIntegrationServiceOption func(*projectIntegrationService)
+
+// WithProjectIntegrationRelayResolver supplies the same provider used by the mount service.
+func WithProjectIntegrationRelayResolver(r teamrelay.ConnectionResolver, projects repository.ProjectRepository) ProjectIntegrationServiceOption {
+	return func(s *projectIntegrationService) {
+		s.relayResolver = r
+		s.projects = projects
+	}
 }
 
 // NewProjectIntegrationService returns a new ProjectIntegrationService.
-func NewProjectIntegrationService(piRepo repository.ProjectIntegrationRepository) ProjectIntegrationService {
-	return &projectIntegrationService{piRepo: piRepo}
+func NewProjectIntegrationService(piRepo repository.ProjectIntegrationRepository, opts ...ProjectIntegrationServiceOption) ProjectIntegrationService {
+	s := &projectIntegrationService{piRepo: piRepo}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // GetTeamRelay returns the Team Relay integration for the given project.
@@ -140,6 +156,60 @@ func (s *projectIntegrationService) List(ctx context.Context, projectID uuid.UUI
 	return s.piRepo.ListByProject(ctx, projectID)
 }
 
+// UpsertProjectBindingInput is a project binding of a generic extension.
+// AgentKey is the one secret column a binding has: empty keeps the stored one.
+type UpsertProjectBindingInput struct {
+	Enabled   bool
+	Settings  map[string]any
+	AgentKey  string
+	CreatedBy *uuid.UUID
+}
+
+// GetBinding returns the project binding of an extension, NotFound when never set.
+func (s *projectIntegrationService) GetBinding(ctx context.Context, projectID uuid.UUID, extensionID string) (*domain.ProjectIntegration, error) {
+	pi, err := s.piRepo.Get(ctx, projectID, domain.ProjectIntegrationType(extensionID))
+	if err != nil {
+		return nil, err
+	}
+	if pi == nil {
+		return nil, apierror.NotFound("ProjectExtension")
+	}
+	return pi, nil
+}
+
+// UpsertBinding creates or replaces the project binding of an extension.
+func (s *projectIntegrationService) UpsertBinding(ctx context.Context, projectID uuid.UUID, extensionID string, input UpsertProjectBindingInput) (*domain.ProjectIntegration, error) {
+	settings := input.Settings
+	if settings == nil {
+		settings = map[string]any{}
+	}
+	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		return nil, apierror.BadRequest("settings are not valid JSON")
+	}
+	now := time.Now()
+	pi := &domain.ProjectIntegration{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		Type:      domain.ProjectIntegrationType(extensionID),
+		Enabled:   input.Enabled,
+		Settings:  settingsJSON,
+		AgentKey:  input.AgentKey,
+		CreatedAt: now,
+		UpdatedAt: now,
+		CreatedBy: input.CreatedBy,
+	}
+	if err := s.piRepo.Upsert(ctx, pi); err != nil {
+		return nil, err
+	}
+	return s.GetBinding(ctx, projectID, extensionID)
+}
+
+// DeleteBinding removes the project binding of an extension.
+func (s *projectIntegrationService) DeleteBinding(ctx context.Context, projectID uuid.UUID, extensionID string) error {
+	return s.piRepo.Delete(ctx, projectID, domain.ProjectIntegrationType(extensionID))
+}
+
 // SearchTR looks up the TR integration by share_slug, proxies the relay file-list API,
 // and returns in-memory filtered results.
 func (s *projectIntegrationService) SearchTR(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error) {
@@ -151,7 +221,27 @@ func (s *projectIntegrationService) SearchTR(ctx context.Context, shareSlug, q s
 		return nil, apierror.NotFound("TeamRelayShare")
 	}
 
-	all, err := teamrelay.ListShareFiles(ctx, shareSlug, pi.AgentKey)
+	if !pi.Enabled {
+		return nil, apierror.NotFound("TeamRelayShare")
+	}
+	if s.projects == nil {
+		return nil, apierror.NotFound("TeamRelayConnection")
+	}
+	project, err := s.projects.GetByID(ctx, pi.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if project == nil {
+		return nil, apierror.NotFound("Project")
+	}
+	connection, enabled, err := teamrelay.ResolveConnection(ctx, s.relayResolver, project.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return nil, apierror.NotFound("TeamRelayConnection")
+	}
+	all, err := teamrelay.ListShareFiles(ctx, connection.RelayURL, shareSlug, pi.AgentKey)
 	if err != nil {
 		return nil, err
 	}

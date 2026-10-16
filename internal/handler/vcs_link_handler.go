@@ -670,6 +670,9 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 		}
 	}
 
+	if event == "Pipeline Hook" {
+		return h.gitlabPipelineHook(c, matchedWorkspaceID)
+	}
 	if event != "Merge Request Hook" {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ignored"})
 	}
@@ -713,6 +716,49 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 		"old_status":   result.OldStatus,
 		"new_status":   result.NewStatus,
 	})
+}
+
+// gitLabPipelinePayload is the part of a "Pipeline Hook" body we read.
+type gitLabPipelinePayload struct {
+	Project          gitLabProjectPayload `json:"project"`
+	ObjectAttributes *struct {
+		ID     int64  `json:"id"`
+		Status string `json:"status"`
+	} `json:"object_attributes"`
+	MergeRequest *struct {
+		IID int    `json:"iid"`
+		URL string `json:"url"`
+	} `json:"merge_request"`
+}
+
+// gitlabPipelineHook stores the pipeline state on the MR's links. A pipeline
+// with no merge request (a plain branch or tag pipeline) is acknowledged and
+// ignored, like any other event Mesh does not act on.
+func (h *VCSLinkHandler) gitlabPipelineHook(c echo.Context, workspaceID uuid.UUID) error {
+	rawBody, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("failed to read request body"))
+	}
+	var payload gitLabPipelinePayload
+	if jsonErr := decodeJSON(rawBody, &payload); jsonErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid payload"))
+	}
+	if payload.ObjectAttributes == nil || payload.MergeRequest == nil {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ignored"})
+	}
+	res, herr := h.vcsService.HandleGitLabPipelineEvent(c.Request().Context(), service.GitLabPipelineEvent{
+		PipelineID:  payload.ObjectAttributes.ID,
+		Status:      payload.ObjectAttributes.Status,
+		MRIID:       payload.MergeRequest.IID,
+		MRURL:       payload.MergeRequest.URL,
+		ProjectPath: payload.Project.PathWithNamespace,
+		WorkspaceID: workspaceID,
+	})
+	if herr != nil {
+		c.Logger().Errorf("gitlab webhook: pipeline handler mr=%s!%d: %v", payload.Project.PathWithNamespace, payload.MergeRequest.IID, herr)
+		return webhookServiceErrorResponse(c, herr)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"status": "ok", "updated": res.Updated, "reason": res.Reason})
 }
 
 // verifyGitHubSignature validates the X-Hub-Signature-256 header value against the

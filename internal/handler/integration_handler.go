@@ -32,6 +32,7 @@ type IntegrationHandler struct {
 	integrationService service.IntegrationService
 	telegramClient     service.TelegramClient
 	telegramBots       *service.TelegramBotManager
+	telegramGate       service.TelegramGate
 	status             *service.IntegrationStatusResolver
 }
 
@@ -60,6 +61,12 @@ func (h *IntegrationHandler) envOverrideRequired(provider domain.IntegrationProv
 // github/spark/mcp) — every telegram-specific code path below checks
 // before using them, and a telegram Configure/Update simply cannot be
 // validated or take effect live without them.
+// WithTelegramGate sets the instance switch checked before a bot token is accepted.
+func (h *IntegrationHandler) WithTelegramGate(g service.TelegramGate) *IntegrationHandler {
+	h.telegramGate = g
+	return h
+}
+
 func NewIntegrationHandler(svc service.IntegrationService, telegramClient service.TelegramClient, telegramBots *service.TelegramBotManager) *IntegrationHandler {
 	return &IntegrationHandler{integrationService: svc, telegramClient: telegramClient, telegramBots: telegramBots}
 }
@@ -369,8 +376,8 @@ func (h *IntegrationHandler) prepareTelegramConfig(ctx context.Context, config i
 	if token == "" {
 		return apierror.BadRequest("bot_token must not be empty")
 	}
-	if h.telegramClient == nil {
-		return apierror.BadRequestWithDetails("Telegram is not available on this instance", "no Telegram client configured")
+	if h.telegramClient == nil || (h.telegramGate != nil && !h.telegramGate(ctx)) {
+		return apierror.BadRequestWithDetails("Telegram is not available on this instance", "the Telegram extension is switched off")
 	}
 
 	getMeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -423,7 +430,7 @@ func maskSecrets(cfg *domain.IntegrationConfig) {
 		return
 	}
 	switch cfg.Provider {
-	case domain.IntegrationProviderAgentRuntime:
+	case domain.IntegrationProviderAgentRuntime, domain.IntegrationProviderRunner:
 		// Generic integration listing is open to workspace members. The scoped
 		// runtime API is the only place allowed to disclose resource inventory.
 		cfg.Config = json.RawMessage(`{"schema_version":2,"versioned_api":true}`)

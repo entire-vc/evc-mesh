@@ -63,56 +63,11 @@ cd web && pnpm lint && pnpm tsc --noEmit
 5. **Run lint** — ensure `cd web && pnpm lint` passes (for frontend changes)
 6. **Submit a PR** against `main` with a clear description
 
-### How your PR actually merges
+### Review and merge
 
-`main` uses a **merge queue**. You do not merge your own pull request directly —
-you add it to the queue, and the queue merges it once it has built and tested the
-result of your change *combined with everything else queued ahead of it*.
-
-What that changes for you:
-
-- **Approving checks on your branch is not the last word.** Your PR's checks run
-  against your branch merged with `main` **as it was when the run started**. If
-  `main` moves on, that green is about a tree that no longer exists. The queue
-  re-tests the real combination before anything lands, which is the whole point
-  of it — two PRs that are each fine alone can still break `main` together.
-- **Your PR may be removed from the queue** if the combined build fails, even
-  when your branch alone was green. That is not a flaky CI run to retry; it
-  means your change conflicts with something else that queued. Rebase on the
-  current `main`, work out the interaction, and re-queue.
-- **Queued entries are batched**, so merging is not instant. A batch waits
-  briefly for company before it builds.
-
-The queue merges with **squash**, so keep your PR's title and description
-meaningful — the squashed commit inherits them.
-
-### Where the queue is configured, and why `branch protection` will not show it
-
-The queue is a **repository ruleset**, not a branch-protection setting. Classic
-branch protection on `main` (`strict`, the six required contexts,
-`enforce_admins`) is still in force and unchanged — rulesets are a parallel
-system that adds to it rather than replacing it.
-
-That split has one consequence worth knowing before you go looking: the
-habitual check reports nothing about the queue, and reports it *successfully*,
-which reads like "no queue" rather than "wrong place to look".
-
-```bash
-# Does NOT mention the queue — no error, just silence:
-gh api repos/entire-vc/evc-mesh/branches/main/protection --jq 'keys'
-
-# Where it actually lives:
-gh api repos/entire-vc/evc-mesh/rulesets --jq '.[] | {id, name, enforcement}'
-
-# Whether a branch has one right now, and its settings:
-gh api graphql -f query='{repository(owner:"entire-vc",name:"evc-mesh"){
-  mergeQueue(branch:"main"){ id configuration{ mergeMethod minimumEntriesToMerge } } }}'
-```
-
-`mergeQueue` returning `null` means the branch has no queue. Note that a failed
-GraphQL request also returns HTTP 200 with nulls plus an `errors` array, so
-"there is no queue" and "the query failed" arrive in the same shape — read
-`errors` before believing the `null`.
+Maintainers review pull requests and require the applicable checks before merging.
+Follow the repository's currently configured review, branch-protection and merge
+requirements; their live settings are authoritative.
 
 ### PR Guidelines
 

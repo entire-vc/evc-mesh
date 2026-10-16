@@ -119,10 +119,44 @@ type TelegramBotManager struct {
 	projects     projectLookup
 	workspaces   workspaceNameLookup
 
+	// gate is the instance-level switch, asked on every poll iteration so an
+	// operator turning the channel off (or back on) needs no restart. nil = on.
+	gate TelegramGate
+
+	// resolveBot is the extension registry's answer for the bot of a workspace
+	// right now; the poller asks it before every getUpdates. nil = read the
+	// integration row directly.
+	resolveBot TelegramBotResolver
+
 	mu      sync.Mutex
 	rootCtx context.Context
 	cancels map[uuid.UUID]context.CancelFunc
 }
+
+// TelegramGate reports whether the Telegram channel is switched on for this
+// instance. It is evaluated at the moment of use, never cached at startup.
+type TelegramGate func(ctx context.Context) bool
+
+// WithGate sets the instance switch the pollers honour.
+func (m *TelegramBotManager) WithGate(g TelegramGate) *TelegramBotManager {
+	m.gate = g
+	return m
+}
+
+// TelegramBotResolver returns the bot token and @username in effect for a
+// workspace, ok=false when the channel is off for it.
+type TelegramBotResolver func(ctx context.Context, workspaceID uuid.UUID) (token, username string, ok bool)
+
+// WithBotResolver routes the pollers' token lookup through the extension
+// registry instead of the raw integration row.
+func (m *TelegramBotManager) WithBotResolver(r TelegramBotResolver) *TelegramBotManager {
+	m.resolveBot = r
+	return m
+}
+
+// telegramGateIdle is how long a poller waits before asking a switched-off
+// gate again. It idles instead of exiting so re-enabling needs no restart.
+var telegramGateIdle = 30 * time.Second
 
 // NewTelegramBotManager creates a TelegramBotManager. Call Start once, in its
 // own goroutine, to begin polling every active Telegram integration; the
@@ -248,6 +282,29 @@ func (m *TelegramBotManager) pollLoop(ctx context.Context, integrationID uuid.UU
 		token, _, ok := decodeTelegramIntegration(cfg)
 		if !ok {
 			return
+		}
+		if m.resolveBot != nil {
+			// The registry decides what is in effect now (instance switch,
+			// workspace row, token); the row decode above only ends pollers
+			// of deleted or cleared integrations.
+			t, _, rok := m.resolveBot(ctx, cfg.WorkspaceID)
+			if !rok {
+				select {
+				case <-time.After(telegramGateIdle):
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
+			token = t
+		}
+		if m.gate != nil && !m.gate(ctx) {
+			select {
+			case <-time.After(telegramGateIdle):
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
 
 		pollCtx, cancel := context.WithTimeout(ctx, time.Duration(longPollSeconds+10)*time.Second)

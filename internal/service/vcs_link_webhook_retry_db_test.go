@@ -55,7 +55,7 @@ func TestHandleMR_ClosedRedeliveryAfterUpsertFailure_OneLinkClosedOneComment(t *
 
 	ev := GitLabWebhookEvent{
 		Action: "open", MRIID: 314, MRTitle: "MESH-" + task.ID.String(),
-		MRURL:   "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/314",
+		MRURL:   "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/314",
 		MRState: "opened", ProjectPath: "entire-vc/evc-mesh",
 	}
 	_, err := svc.HandleGitLabMergeRequestEvent(ctx, ev)

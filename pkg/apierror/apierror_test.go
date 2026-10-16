@@ -456,3 +456,10 @@ func TestAllFactoryFunctions_ReturnCorrectStatusCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestDocumentSlugTaken(t *testing.T) {
+	err := DocumentSlugTaken()
+	assert.Equal(t, http.StatusConflict, err.StatusCode())
+	assert.Equal(t, CodeDocumentSlugTaken, err.ErrorCode)
+	assert.Contains(t, err.Message, "slug")
+}

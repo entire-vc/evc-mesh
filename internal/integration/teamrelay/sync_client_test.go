@@ -3,6 +3,8 @@ package teamrelay
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -210,6 +212,33 @@ func TestSyncDownload_ReadsBodyAndHashFromHeaders(t *testing.T) {
 	// ETag is quoted per HTTP convention — the quotes are not part of the hash.
 	assert.Equal(t, "deadbeef", doc.SHA256)
 	assert.Equal(t, "2026-08-20T10:00:00Z", doc.UpdatedAt)
+}
+
+// A validator the proxy weakened or decorated must not overflow the
+// varchar(64) hash columns: that error aborted the mount sync of every project.
+func TestSyncDownload_HashFitsColumnWhenETagIsWeakOrDecorated(t *testing.T) {
+	body := []byte("# Hello")
+	sum := sha256.Sum256(body)
+	want := hex.EncodeToString(sum[:])
+
+	for name, etag := range map[string]string{
+		"weak":      `W/"` + want + `"`,
+		"decorated": `"` + want + `-gzip-extra-suffix"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("ETag", etag)
+				_, _ = w.Write(body)
+			}))
+			defer srv.Close()
+
+			doc, err := SyncDownload(context.Background(), srv.URL, "share-id", "a.md", "k")
+
+			require.NoError(t, err)
+			assert.Equal(t, want, doc.SHA256)
+			assert.LessOrEqual(t, len(doc.SHA256), 64)
+		})
+	}
 }
 
 func TestSyncDownload_MissingIsErrNotFound(t *testing.T) {

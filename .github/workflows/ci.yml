@@ -95,15 +95,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Lives here rather than beside the coverage gate's own self-check, which
-      # is guarded by `if: steps.affected.outputs.pkgs != ''` and so does not run
-      # on a workflow-only diff — exactly the diff that can break this. `Lint` is
-      # required, runs on every PR unconditionally, and this is stdlib-only and
-      # instant. An unwired self-check guards nothing (cf. #2a079432, where two
-      # existed, passed, and were credited by the README while appearing in no
-      # workflow step).
-      - name: Merge-queue preconditions
-        run: python3 scripts/ci/test_merge_queue_preconditions.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

@@ -21,15 +21,6 @@ If it is Yes and there is no link, do not merge.
 An acceptance criterion that dictates specific visible text is **not** approval — it is a
 proposal by whoever wrote the task. Ship the technical half, route the words.
 
-<!--
-  Why this box exists rather than an automatic check: measured over the last 60 merged PRs in
-  this repo, 23% touch `web/src/**`, and 10 of those 14 add at least one user-visible string.
-  A path- or literal-based gate would therefore hold roughly one PR in five, while still
-  mis-firing on things like a field slug (`story_points`) or a type name (`Promise`). The
-  author already knows the answer in one second; a parser has to guess it and would be wrong
-  in both directions.
--->
-
 ## Verification
 
 <!-- Command output, live URL, or screenshot. "Should work" is not verification. -->

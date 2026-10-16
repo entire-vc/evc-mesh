@@ -200,7 +200,7 @@ func TestVCSLinkRepo_Upsert_ProviderCorrectionUpdatesInPlace(t *testing.T) {
 	repo := NewVCSLinkRepo(db)
 	taskID := vcsLinkTestTask(t, db)
 
-	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	mrURL := "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14"
 	wrong := &domain.VCSLink{
 		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitHub,
 		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
@@ -256,7 +256,7 @@ func TestVCSLinkRepo_Upsert_HealsPreexistingDuplicateSameURL(t *testing.T) {
 	repo := NewVCSLinkRepo(db)
 	taskID := vcsLinkTestTask(t, db)
 
-	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	mrURL := "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14"
 	staleID := uuid.New()
 	freshID := uuid.New()
 	seedVCSLink(t, db, staleID, taskID, domain.VCSProviderGitHub, domain.VCSLinkTypePR, "14", mrURL, domain.VCSLinkStatusOpen, time.Now().Add(-2*time.Hour))
@@ -309,7 +309,7 @@ func TestVCSLinkRepo_Upsert_DifferentProvidersSameExternalIDStayDistinct(t *test
 	gitlabLink := &domain.VCSLink{
 		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
 		LinkType: domain.VCSLinkTypePR, ExternalID: "14",
-		URL:    "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14",
+		URL:    "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14",
 		Status: domain.VCSLinkStatusMerged, CreatedAt: time.Now(),
 	}
 	created, err = repo.Upsert(ctx, gitlabLink)
@@ -338,7 +338,7 @@ func TestVCSLinkRepo_Create_RefusesDuplicateAcrossProviderCorrection(t *testing.
 	repo := NewVCSLinkRepo(db)
 	taskID := vcsLinkTestTask(t, db)
 
-	mrURL := "https://git.entire.host/entire-vc/team-relay-ops/-/merge_requests/14"
+	mrURL := "https://gitlab.example.invalid/entire-vc/team-relay-ops/-/merge_requests/14"
 	wrong := &domain.VCSLink{
 		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitHub,
 		LinkType: domain.VCSLinkTypePR, ExternalID: "14",

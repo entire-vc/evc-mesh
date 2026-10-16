@@ -1208,5 +1208,23 @@
       "sendFailed": "The invitation email could not be sent. Share this link instead:"
     },
     "cancel": "Cancel"
+  },
+  "profilePage": {
+    "title": "Profile",
+    "description": "Personal settings for all workspaces.",
+    "appearance": {
+      "title": "Appearance",
+      "description": "Interface color theme.",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "language": {
+      "title": "Language"
+    },
+    "myAgents": {
+      "title": "My agents",
+      "description": "Agents you created or supervise.",
+      "placeholder": "Coming soon."
+    }
   }
 }

@@ -31,6 +31,10 @@ type vcsLinkRow struct {
 	// StatusSyncedAt is nullable: rows that predate the column, and rows
 	// written by Create (no status stated), read NULL = never confirmed.
 	StatusSyncedAt *time.Time `db:"status_synced_at"`
+	// Pipeline columns are nullable: NULL = no pipeline reported yet.
+	PipelineID        *int64     `db:"pipeline_id"`
+	PipelineStatus    *string    `db:"pipeline_status"`
+	PipelineUpdatedAt *time.Time `db:"pipeline_updated_at"`
 }
 
 func (r *vcsLinkRow) toDomain() domain.VCSLink {
@@ -51,6 +55,10 @@ func (r *vcsLinkRow) toDomain() domain.VCSLink {
 		CreatedAt:  r.CreatedAt,
 
 		StatusSyncedAt: r.StatusSyncedAt,
+
+		PipelineID:        r.PipelineID,
+		PipelineStatus:    r.PipelineStatus,
+		PipelineUpdatedAt: r.PipelineUpdatedAt,
 	}
 }
 
@@ -58,7 +66,7 @@ func (r *vcsLinkRow) toDomain() domain.VCSLink {
 // see agentSelectCols in agent_repo.go for why `SELECT *` is unsafe: sqlx
 // refuses to scan a column with no matching struct field, so an additive
 // migration to this table breaks every read until redeployed.
-const vcsLinkSelectCols = `id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at, status_synced_at`
+const vcsLinkSelectCols = `id, task_id, provider, link_type, external_id, url, title, status, metadata, created_at, status_synced_at, pipeline_id, pipeline_status, pipeline_updated_at`
 
 // VCSLinkRepo implements repository.VCSLinkRepository with PostgreSQL.
 type VCSLinkRepo struct {
@@ -374,6 +382,24 @@ func (r *VCSLinkRepo) ListByExternalID(ctx context.Context, provider domain.VCSP
 		result[i] = rows[i].toDomain()
 	}
 	return result, nil
+}
+
+// SetPipelineStatus records the latest pipeline of the link. A delivery for a
+// pipeline older than the stored one is ignored (webhooks arrive out of
+// order; GitLab pipeline ids only grow), while a later status of the same
+// pipeline overwrites. Returns true when the row was written.
+func (r *VCSLinkRepo) SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status string) (bool, error) {
+	const q = `
+		UPDATE vcs_links
+		SET pipeline_id = $2, pipeline_status = $3, pipeline_updated_at = now()
+		WHERE id = $1 AND (pipeline_id IS NULL OR pipeline_id <= $2)
+	`
+	res, err := r.db.ExecContext(ctx, q, id, pipelineID, status)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // Ensure VCSLinkRepo satisfies the repository.VCSLinkRepository interface.

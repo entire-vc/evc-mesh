@@ -41,7 +41,7 @@ func (h *ExtensionWorkspaceHandler) List(c echo.Context) error {
 	if err != nil {
 		return h.fail(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]any{"extensions": items})
+	return extensionJSON(c, http.StatusOK, map[string]any{"extensions": items})
 }
 
 type extensionConnectRequest struct {
@@ -69,7 +69,7 @@ func (h *ExtensionWorkspaceHandler) Connect(c echo.Context) error {
 	if err != nil {
 		return h.fail(c, err)
 	}
-	return c.JSON(http.StatusCreated, v)
+	return extensionJSON(c, http.StatusCreated, v)
 }
 
 // PatchSettings handles PATCH /workspaces/:ws_id/extensions/:ext_id/settings.
@@ -88,7 +88,7 @@ func (h *ExtensionWorkspaceHandler) PatchSettings(c echo.Context) error {
 	if err != nil {
 		return h.fail(c, err)
 	}
-	return c.JSON(http.StatusOK, v)
+	return extensionJSON(c, http.StatusOK, v)
 }
 
 // Enable handles POST /workspaces/:ws_id/extensions/:ext_id/enable.
@@ -118,7 +118,7 @@ func (h *ExtensionWorkspaceHandler) setEnabled(c echo.Context, enabled bool) err
 	if err != nil {
 		return h.fail(c, err)
 	}
-	return c.JSON(http.StatusOK, v)
+	return extensionJSON(c, http.StatusOK, v)
 }
 
 // Test handles POST /workspaces/:ws_id/extensions/:ext_id/test.

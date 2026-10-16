@@ -15,8 +15,8 @@
   ],
   "icon": "icon.svg",
   "license": "Apache-2.0",
-  "repository": "https://git.entire.host/entire-vc/evc-mesh",
-  "homepage": "https://mesh.entire.host/docs/extensions/gitlab",
+  "repository": "https://gitlab.example.invalid/entire-vc/evc-mesh",
+  "homepage": "https://mesh.example.invalid/docs/extensions/gitlab",
   "levels": {
     "instance": true,
     "workspace": true,

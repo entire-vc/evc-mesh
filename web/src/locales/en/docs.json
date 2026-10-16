@@ -158,6 +158,13 @@
     "placeholder": "Search documents...",
     "searching": "Searching..."
   },
+  "share": {
+    "copied": "Link copied",
+    "copyFailed": "Could not copy the link",
+    "copyUrl": "Copy URL",
+    "failed": "Could not share the link",
+    "shareUrl": "Share URL"
+  },
   "tree": {
     "actionsFor": "Actions for {{title}}",
     "collapse": "Collapse {{title}}",

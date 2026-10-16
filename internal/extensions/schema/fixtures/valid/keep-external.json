@@ -82,6 +82,6 @@
         "icon": "key"
       }
     },
-    "image": "git.entire.host:5050/entire-vc/evc-keep/keep:1.2.0"
+    "image": "gitlab.example.invalid:5050/entire-vc/evc-keep/keep:1.2.0"
   }
 }

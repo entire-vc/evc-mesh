@@ -225,8 +225,8 @@ func TestHasCommentWithURL(t *testing.T) {
 	}{
 		{"plain prose", "сделал, всё работает, тесты прошли", false},
 		{"bare scheme, nothing after it", "see https:// for details", false},
-		{"http url", "лог: http://ci.internal/job/9", true},
-		{"https url", "MR https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/12", true},
+		{"http url", "лог: http://example.invalid/job/9", true},
+		{"https url", "MR https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/12", true},
 		{"uppercase scheme", "proof at HTTPS://EXAMPLE.COM/x", true},
 		{"url on a later line", "готово\n\nпруф: https://x.test/y", true},
 		// The reason the pattern requires a non-word char before the scheme:
@@ -265,7 +265,7 @@ func TestHasCommentWithURL_AnyOneCommentSuffices(t *testing.T) {
 	id := f.insertUnleasedTask(t, time.Minute)
 	f.insertComment(t, id, "начал", 10*time.Minute)
 	f.insertComment(t, id, "разбираюсь", 5*time.Minute)
-	f.insertComment(t, id, "готово: https://git.entire.host/x/-/merge_requests/1", time.Minute)
+	f.insertComment(t, id, "готово: https://gitlab.example.invalid/x/-/merge_requests/1", time.Minute)
 
 	got, err := repo.HasCommentWithURL(context.Background(), id)
 	require.NoError(t, err)

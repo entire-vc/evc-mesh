@@ -3342,6 +3342,24 @@ func (m *MockVCSLinkRepository) Upsert(_ context.Context, link *domain.VCSLink) 
 	return true, nil
 }
 
+func (m *MockVCSLinkRepository) SetPipelineStatus(_ context.Context, id uuid.UUID, pipelineID int64, status string) (bool, error) {
+	if m.errToReturn != nil {
+		return false, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.items {
+		if m.items[i].ID == id {
+			if m.items[i].PipelineID != nil && *m.items[i].PipelineID > pipelineID {
+				return false, nil
+			}
+			m.items[i].PipelineID, m.items[i].PipelineStatus = &pipelineID, &status
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *MockVCSLinkRepository) ListByExternalID(_ context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error) {
 	if m.errToReturn != nil {
 		return nil, m.errToReturn

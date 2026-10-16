@@ -39,6 +39,7 @@ var Catalog = []Entry{
 
 	{"cas_conflict", "The task was changed by someone else. Reload it and try again.", "Задачу уже изменил кто-то другой. Обновите её и повторите."},
 	{"document_version_conflict", "The document was changed since you opened it. Reload it and re-apply your edit.", "Документ изменился с момента открытия. Обновите его и повторите правку."},
+	{CodeDocumentSlugTaken, "A document with this slug already exists in this folder. Rename one of them or choose another slug.", "Документ с таким slug уже есть в этой папке. Переименуйте один из них или выберите другой slug."},
 	{"external_source_conflict", "The original document changed since you opened it. Nothing was saved. Reopen it and re-apply your edit.", "Оригинал документа изменился с момента открытия. Ничего не сохранено. Откройте его заново и повторите правку."},
 	{"external_source_write_landed", "Your edit reached the original document and will appear here at the next sync.", "Правка сохранена в оригинале документа и появится здесь при следующей синхронизации."},
 	{"list_revision_stale", "The list changed while you were paging. Start again from the first page.", "Список изменился, пока вы его листали. Начните с первой страницы."},

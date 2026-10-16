@@ -21,10 +21,11 @@ function formatDate(iso: string): string {
   });
 }
 
-/** Apps the signed-in user has let into a workspace through the OAuth consent
- *  screen, with a way to take each one back. Revoking stops the app's tokens at
- *  once; the connector agent it created stays in the workspace. */
-export function ConnectedAppsPage() {
+/** "App access" section of the profile: apps the signed-in user has let into a
+ *  workspace through the OAuth consent screen, with a way to take each one back.
+ *  Revoking stops the app's tokens at once; the connector agent it created stays
+ *  in the workspace. */
+export function AppAccessSection() {
   const { t } = useTranslation("integrations");
   const [grants, setGrants] = useState<OAuthGrant[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -65,9 +66,9 @@ export function ConnectedAppsPage() {
   const revoked = (grants ?? []).filter((g) => g.revoked_at);
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">
+    <section id="app-access" aria-labelledby="app-access-title" className="scroll-mt-4 space-y-4">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold">{t("connectedApps.title")}</h1>
+        <h2 id="app-access-title" className="text-lg font-semibold">{t("connectedApps.title")}</h2>
         <p className="text-sm text-muted-foreground">
           {t("connectedApps.description")}
         </p>
@@ -122,7 +123,7 @@ export function ConnectedAppsPage() {
         variant="destructive"
         isLoading={revoking}
       />
-    </div>
+    </section>
   );
 }
 

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
@@ -16,13 +16,11 @@ import {
   LogOut,
   Menu,
   MonitorDot,
-  Moon,
   Network,
-  Plug,
   Search,
   Settings,
   Sparkles,
-  Sun,
+  UserRound,
   Target,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -43,9 +41,6 @@ import {
 import { ViewTabBar } from "@/components/view-tab-bar";
 import { NotificationBell } from "@/components/notification-bell";
 import { api } from "@/lib/api";
-
-// Language block of the user menu: lazy, rendered only when the menu opens.
-const HeaderLanguageMenu = lazy(() => import("./header-language-menu"));
 import type { PaginatedResponse, ProjectViewTab, Task } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -328,8 +323,12 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
       {isLoading && (
         <Loader2 className="absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground animate-spin pointer-events-none" />
       )}
+      {/* No type="search": it adds 3 DOM mutations to view.switch (perf budget). */}
       <Input
         ref={inputRef}
+        name="mesh-task-search"
+        data-1p-ignore
+        data-bwignore
         placeholder={t("header.search.placeholder")}
         className="pl-8 pr-8"
         value={query}
@@ -507,7 +506,7 @@ const WORKSPACE_PAGES: Array<{
   { pattern: /\/w\/[^/]+\/extensions\/?$/, titleKey: "nav.extensions", icon: Settings },
   { pattern: /\/w\/[^/]+\/initiatives\/?$/, titleKey: "nav.initiatives", icon: Target },
   { pattern: /\/w\/[^/]+\/triage\/?$/, titleKey: "nav.triage", icon: Inbox },
-  { pattern: /\/w\/[^/]+\/connected-apps\/?$/, titleKey: "nav.connectedApps", icon: Plug },
+  { pattern: /\/w\/[^/]+\/me\/?$/, titleKey: "nav.profile", icon: UserRound },
 ];
 
 function useWorkspacePage(): WorkspacePage | null {
@@ -575,18 +574,8 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
   const currentView = useCurrentView();
   const teamView = useTeamView();
   const workspacePage = useWorkspacePage();
+  const profileSlug = wsSlug ?? currentWorkspace?.slug;
   const openTaskDocsLink = useOpenTaskDocsLink();
-  const [isDark, setIsDark] = useState(
-    document.documentElement.classList.contains("dark"),
-  );
-
-  const toggleTheme = useCallback(() => {
-    const next = !isDark;
-    setIsDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
-  }, [isDark]);
-
   return (
     <header className="mesh-mobile-header flex h-14 items-center gap-2 sm:gap-4 border-b border-border bg-background px-2 sm:px-4">
       <Button
@@ -678,42 +667,30 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
         </Button>
       )}
 
-      {/* User menu — theme toggle lives here (not a header button): it's a
-          personal setting touched rarely, and the item shows which theme is
-          ACTIVE right now, not just an icon that flips after the click. */}
+      {/* User menu — name and email open the profile screen, where theme,
+          language and app access live. */}
       <DropdownMenu>
         <DropdownMenuTrigger>
           <Avatar name={user?.name || t("header.userMenu.userFallback")} src={user?.avatar_url} size="sm" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <div className="px-2 py-1.5">
-            <p className="text-sm font-medium">{user?.name}</p>
-            <p className="text-xs text-muted-foreground">{user?.email}</p>
-          </div>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={toggleTheme}>
-            {isDark ? (
-              <Moon className="mr-2 h-4 w-4" />
-            ) : (
-              <Sun className="mr-2 h-4 w-4" />
-            )}
-            <span className="flex-1">{t("header.userMenu.theme")}</span>
-            <span className="text-xs text-muted-foreground">
-              {isDark ? t("header.userMenu.themeDark") : t("header.userMenu.themeLight")}
-            </span>
-          </DropdownMenuItem>
-          <Suspense>
-            <HeaderLanguageMenu />
-          </Suspense>
-          {(wsSlug ?? currentWorkspace?.slug) && (
+        <DropdownMenuContent align="end" className="min-w-[14rem]">
+          {profileSlug ? (
             <DropdownMenuItem
-              onClick={() =>
-                navigate(`/w/${wsSlug ?? currentWorkspace?.slug}/connected-apps`)
-              }
+              aria-label={t("header.userMenu.profile")}
+              onClick={() => navigate(`/w/${profileSlug}/me`)}
+              className="gap-3 py-1.5"
             >
-              <Plug className="mr-2 h-4 w-4" />
-              {t("nav.connectedApps")}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{user?.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">{user?.email}</span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
             </DropdownMenuItem>
+          ) : (
+            <div className="px-2 py-1.5">
+              <p className="text-sm font-medium">{user?.name}</p>
+              <p className="text-xs text-muted-foreground">{user?.email}</p>
+            </div>
           )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={logout}>

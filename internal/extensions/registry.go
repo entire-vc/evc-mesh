@@ -45,8 +45,34 @@ func (r *Registry) Register(p Provider) error {
 	return nil
 }
 
-// Get returns the provider for an extension id.
+// Aliased is implemented by a provider that stays reachable under older ids.
+type Aliased interface {
+	Aliases() []string
+}
+
+// Canonical maps an alias to the registered extension id; any other id is
+// returned unchanged.
+func (r *Registry) Canonical(id string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.providers[id]; ok {
+		return id
+	}
+	for pid, p := range r.providers {
+		if a, ok := p.(Aliased); ok {
+			for _, alias := range a.Aliases() {
+				if alias == id {
+					return pid
+				}
+			}
+		}
+	}
+	return id
+}
+
+// Get returns the provider for an extension id or one of its aliases.
 func (r *Registry) Get(id string) (Provider, bool) {
+	id = r.Canonical(id)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	p, ok := r.providers[id]

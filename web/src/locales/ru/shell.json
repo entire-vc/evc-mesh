@@ -16,10 +16,11 @@
     "analytics": "Аналитика",
     "events": "События",
     "integrations": "Интеграции",
-    "connectedApps": "Подключённые приложения",
+    "connectedApps": "Доступ внешних приложений",
     "workspaceSettings": "Настройки пространства",
     "projectSettings": "Настройки проекта",
-    "extensions": "Расширения"
+    "extensions": "Расширения",
+    "profile": "Профиль"
   },
   "sidebar": {
     "workspaceLogoAlt": "Рабочее пространство",
@@ -61,11 +62,8 @@
     },
     "userMenu": {
       "userFallback": "Пользователь",
-      "theme": "Тема",
-      "themeDark": "Тёмная",
-      "language": "Язык",
-      "themeLight": "Светлая",
-      "logOut": "Выйти"
+      "logOut": "Выйти",
+      "profile": "Открыть профиль"
     }
   },
   "workspaceNotFound": {

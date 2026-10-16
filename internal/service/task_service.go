@@ -3398,6 +3398,9 @@ func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domai
 	if old == nil {
 		return "", nil
 	}
+	if reason, handled := s.applyOnEnterAssignee(ctx, task, next); handled {
+		return reason, nil
+	}
 	if next.Category == domain.StatusCategoryReview {
 		id, typ, reason := s.resolveReviewTarget(ctx, task, old)
 		if id == nil || sameAssigneeID(task.AssigneeID, id) {
@@ -3429,6 +3432,93 @@ func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domai
 		return "restored pre-review assignee on bounce out of review", nil
 	}
 	return "", nil
+}
+
+// applyOnEnterAssignee applies the project's on_enter[<status>].assign_to rule to
+// a card that just entered next. handled=false means no rule applies (or the
+// rules are unreadable) and the caller proceeds exactly as it did before the
+// field existed. handled=true with an empty reason means the rule matched but
+// nothing changes (already that assignee, or the target is unusable): the rule
+// still owns this status, so set_reviewer does not run over it. A bad target
+// never blocks the move — it is logged to the activity log as a warning.
+func (s *taskService) applyOnEnterAssignee(ctx context.Context, task *domain.Task, next *domain.TaskStatus) (string, bool) {
+	if s.rulesConfigSvc == nil {
+		return "", false
+	}
+	wf, err := s.rulesConfigSvc.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
+	if err != nil || wf == nil {
+		return "", false
+	}
+	rule, ok := wf.OnEnter[next.Name]
+	target := strings.TrimSpace(rule.AssignTo)
+	if !ok || target == "" {
+		return "", false
+	}
+	warn := func(why string, err error) (string, bool) {
+		msg := why
+		if err != nil {
+			msg = why + ": " + err.Error()
+		}
+		log.Printf("[on-enter-assign] WARNING task %s status %q assign_to %q: %s", task.ID, next.Name, target, msg)
+		s.logActivity(ctx, task.ProjectID, task.ID, "task.on_enter_assign_skipped", map[string]interface{}{
+			"status": next.Name, "assign_to": target, "warning": msg,
+		})
+		return "", true
+	}
+	id, typ, err := s.resolveOnEnterTarget(ctx, task.ProjectID, target)
+	if err != nil || id == nil {
+		return warn("target not resolvable", err)
+	}
+	if sameAssigneeID(task.AssigneeID, id) {
+		return "", true
+	}
+	if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, id, typ); err != nil {
+		return warn("target refused", err)
+	}
+	if next.Category == domain.StatusCategoryReview {
+		previousType := task.AssigneeType
+		task.PreReviewAssigneeID, task.PreReviewAssigneeType = task.AssigneeID, &previousType
+	}
+	task.AssigneeID, task.AssigneeType = id, typ
+	return "on_enter assign_to " + target, true
+}
+
+// resolveOnEnterTarget turns "agent:<x>" / "user:<x>" into a principal.
+func (s *taskService) resolveOnEnterTarget(ctx context.Context, projectID uuid.UUID, target string) (*uuid.UUID, domain.AssigneeType, error) {
+	kind, name, found := strings.Cut(target, ":")
+	name = strings.TrimSpace(name)
+	if !found || name == "" {
+		return nil, "", fmt.Errorf("assign_to must be agent:<name> or user:<name>")
+	}
+	switch kind {
+	case "agent":
+		if s.rulesConfigSvc == nil {
+			return nil, "", fmt.Errorf("rules service not wired")
+		}
+		return s.resolveSetReviewer(ctx, projectID, name)
+	case "user":
+		if s.userRepo == nil || s.projectRepo == nil {
+			return nil, "", fmt.Errorf("user or project repo not wired")
+		}
+		proj, err := s.projectRepo.GetByID(ctx, projectID)
+		if err != nil || proj == nil {
+			return nil, "", fmt.Errorf("project %s not found: %v", projectID, err)
+		}
+		var u *domain.User
+		if uid, perr := uuid.Parse(name); perr == nil {
+			u, err = s.userRepo.GetByID(ctx, uid)
+		} else if strings.Contains(name, "@") {
+			u, err = s.userRepo.GetByEmail(ctx, name)
+		} else {
+			u, err = s.userRepo.GetByUsername(ctx, proj.WorkspaceID, name)
+		}
+		if err != nil || u == nil {
+			return nil, "", fmt.Errorf("user %q not found: %v", name, err)
+		}
+		id := u.ID
+		return &id, domain.AssigneeTypeUser, nil
+	}
+	return nil, "", fmt.Errorf("unknown assign_to kind %q", kind)
 }
 
 // resolveReviewTarget picks who a card entering review goes to, or nil to leave it

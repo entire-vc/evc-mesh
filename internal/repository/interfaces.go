@@ -1261,6 +1261,9 @@ type VCSLinkRepository interface {
 	// payload has no MESH-<uuid> ref but the (provider, type, external_id)
 	// tuple was previously linked to a task.
 	ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error)
+	// SetPipelineStatus stores the latest pipeline state of a link. A pipeline
+	// older than the stored one (by id) is ignored; returns true when written.
+	SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status string) (written bool, err error)
 }
 
 // TaskListRevisionRepository reads the per-project task_list_revision counter

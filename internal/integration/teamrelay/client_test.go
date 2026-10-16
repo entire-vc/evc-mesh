@@ -6,18 +6,21 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/google/uuid"
-
 	"github.com/entire-vc/evc-mesh/internal/domain"
-	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	relayext "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
+	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 )
 
 // shortenConfirmBackoff drops the probe retry backoff to ~zero for this test so
@@ -50,11 +53,8 @@ func TestTransport_SyncUploadEndpointAndResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", srv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
 	content := []byte("# hello world")
-	publicURL, err := transport(context.Background(), "share-id", "path/artifact.md", content, "text/markdown", "tr_agent_test")
+	publicURL, err := transport(context.Background(), srv.URL, "share-id", "path/artifact.md", content, "text/markdown", "tr_agent_test")
 
 	require.NoError(t, err)
 	assert.Equal(t, "https://web.example.com/share/path/artifact.md", publicURL)
@@ -67,10 +67,8 @@ func TestTransport_SyncUploadEndpointAndResponse(t *testing.T) {
 }
 
 func TestTransport_MissingRelayURL(t *testing.T) {
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", "")
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
 
-	url, err := transport(context.Background(), "share-id", "file.md", []byte("data"), "text/markdown", "key")
+	url, err := transport(context.Background(), "", "share-id", "file.md", []byte("data"), "text/markdown", "key")
 	assert.NoError(t, err)
 	assert.Empty(t, url)
 }
@@ -85,10 +83,7 @@ func TestTransport_EmptyPathResponse_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", srv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
-	publicURL, err := transport(context.Background(), "share-id", "file.md", []byte("data"), "text/plain", "tr_agent_test")
+	publicURL, err := transport(context.Background(), srv.URL, "share-id", "file.md", []byte("data"), "text/plain", "tr_agent_test")
 	assert.Error(t, err, "expected error when relay returns ok=false body at HTTP 200")
 	assert.Empty(t, publicURL)
 	assert.Contains(t, err.Error(), "empty path")
@@ -102,10 +97,7 @@ func TestTransport_UnparsableResponse_ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", srv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
-	publicURL, err := transport(context.Background(), "share-id", "file.md", []byte("data"), "text/plain", "tr_agent_test")
+	publicURL, err := transport(context.Background(), srv.URL, "share-id", "file.md", []byte("data"), "text/plain", "tr_agent_test")
 	assert.Error(t, err)
 	assert.Empty(t, publicURL)
 }
@@ -116,10 +108,7 @@ func TestTransport_AuthFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", srv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
-	publicURL, err := transport(context.Background(), "share-id", "file.md", []byte("data"), "text/plain", "bad-key")
+	publicURL, err := transport(context.Background(), srv.URL, "share-id", "file.md", []byte("data"), "text/plain", "bad-key")
 	assert.NoError(t, err)
 	assert.Empty(t, publicURL)
 }
@@ -248,54 +237,50 @@ func TestConfirmPublishedWebURL(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Publish — task → integration → transport → confirm probe, wired end to end.
-// Repos are faked by embedding the interface: only the methods Publish calls
-// are overridden; anything else panics loudly instead of returning zero values.
+// Publish exercises real PostgreSQL repositories and the extension provider.
+// Only relay/probe HTTP is simulated at the external boundary.
 // ---------------------------------------------------------------------------
 
-type fakeTaskRepo struct {
-	repository.TaskRepository
-	task *domain.Task
-}
+const publishTestKey = "tr_agent_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-func (f *fakeTaskRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
-	return f.task, nil
-}
-
-type fakePIRepo struct {
-	repository.ProjectIntegrationRepository
-	pi *domain.ProjectIntegration
-}
-
-func (f *fakePIRepo) Get(_ context.Context, _ uuid.UUID, _ string) (*domain.ProjectIntegration, error) {
-	return f.pi, nil
-}
-
-type fakeProjectRepo struct {
-	repository.ProjectRepository
-	proj *domain.Project
-}
-
-func (f *fakeProjectRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Project, error) {
-	return f.proj, nil
-}
-
-// newPublishTestClient wires a client whose task resolves to an enabled
-// team_relay integration on share 1111…. The relay endpoints themselves are
-// pointed at per-test httptest servers via MESH_TEAMRELAY_* env vars.
-func newPublishTestClient() *client {
-	projectID := uuid.New()
-	return NewClient(
-		&fakePIRepo{pi: &domain.ProjectIntegration{
-			ProjectID: projectID,
-			Type:      "team_relay",
-			Enabled:   true,
-			Settings:  json.RawMessage(`{"share_id":"11111111-1111-1111-1111-111111111111"}`),
-			AgentKey:  "tr_agent_key",
-		}},
-		&fakeTaskRepo{task: &domain.Task{ID: uuid.New(), ProjectID: projectID}},
-		&fakeProjectRepo{proj: &domain.Project{ID: projectID, Slug: "proj"}},
-	).(*client)
+func newPublishTestClient(t *testing.T, relayURL string, transportPolicy ...bool) (Publisher, uuid.UUID) {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://mesh:mesh@localhost:5432/mesh?sslmode=disable"
+	}
+	db, err := sqlx.Connect("postgres", dsn)
+	if err != nil {
+		t.Skip("PostgreSQL unavailable")
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+	ws := &domain.Workspace{ID: uuid.New(), Name: "Publish test", Slug: "publish-" + uuid.NewString(), OwnerID: uuid.New()}
+	require.NoError(t, postgres.NewWorkspaceRepo(db).Create(ctx, ws))
+	t.Cleanup(func() {
+		_, cleanupErr := db.Exec(`DELETE FROM workspaces WHERE id=$1`, ws.ID)
+		require.NoError(t, cleanupErr)
+	})
+	projects := postgres.NewProjectRepo(db)
+	project := &domain.Project{ID: uuid.New(), WorkspaceID: ws.ID, Name: "Publish", Slug: "publish", DefaultAssigneeType: domain.DefaultAssigneeNone}
+	require.NoError(t, projects.Create(ctx, project))
+	status := &domain.TaskStatus{ID: uuid.New(), ProjectID: project.ID, Name: "Open", Slug: "open", Color: "#00FF00", Category: domain.StatusCategoryTodo}
+	require.NoError(t, postgres.NewTaskStatusRepo(db).Create(ctx, status))
+	taskID := uuid.New()
+	_, err = db.Exec(`INSERT INTO tasks(id,project_id,status_id,title,task_number,created_by) VALUES($1,$2,$3,'Publish test',1,$4)`, taskID, project.ID, status.ID, uuid.New())
+	require.NoError(t, err)
+	integrations := postgres.NewProjectIntegrationRepo(db)
+	require.NoError(t, integrations.Upsert(ctx, &domain.ProjectIntegration{ID: uuid.New(), ProjectID: project.ID, Type: "team_relay", Enabled: true, Settings: json.RawMessage(`{"share_id":"11111111-1111-1111-1111-111111111111"}`), AgentKey: publishTestKey}))
+	// Workspace settings isolate this fixture from other packages' instance rows.
+	enabled := true
+	if len(transportPolicy) > 0 {
+		enabled = transportPolicy[0]
+	}
+	config, _ := json.Marshal(map[string]any{"relay_url": relayURL, "transport_enabled": enabled})
+	conns := postgres.NewIntegrationRepo(db)
+	require.NoError(t, conns.Upsert(ctx, &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: ws.ID, Provider: domain.IntegrationProviderTeamRelay, IsActive: true, Config: config}))
+	provider := relayext.New(extensions.Deps{Conns: extensions.IntegrationConnections{Repo: conns}})
+	return NewClient(integrations, postgres.NewTaskRepo(db), projects, provider), taskID
 }
 
 func TestPublish_ConfirmedWebURLIsReturned(t *testing.T) {
@@ -316,14 +301,12 @@ func TestPublish_ConfirmedWebURLIsReturned(t *testing.T) {
 	}))
 	defer cpSrv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", cpSrv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
-	url, key, err := newPublishTestClient().Publish(context.Background(), uuid.New(), "doc.md", []byte("# doc"), "text/markdown")
+	publisher, taskID := newPublishTestClient(t, cpSrv.URL)
+	url, key, err := publisher.Publish(context.Background(), taskID, "doc.md", []byte("# doc"), "text/markdown")
 
 	require.NoError(t, err)
 	assert.Equal(t, webURL, url, "an anonymously served web URL must be returned as confirmed")
-	assert.Equal(t, "tr_agent_key", key)
+	assert.Equal(t, publishTestKey, key)
 }
 
 func TestPublish_PrivateShareYieldsNoURL(t *testing.T) {
@@ -343,10 +326,8 @@ func TestPublish_PrivateShareYieldsNoURL(t *testing.T) {
 	}))
 	defer cpSrv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", cpSrv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
-	url, _, err := newPublishTestClient().Publish(context.Background(), uuid.New(), "doc.md", []byte("# doc"), "text/markdown")
+	publisher, taskID := newPublishTestClient(t, cpSrv.URL)
+	url, _, err := publisher.Publish(context.Background(), taskID, "doc.md", []byte("# doc"), "text/markdown")
 
 	require.NoError(t, err, "upload itself succeeded; only publication is unconfirmed")
 	assert.Empty(t, url, "a URL that 401s anonymously must not be returned as published")
@@ -358,10 +339,8 @@ func TestPublish_TransportErrorPropagates(t *testing.T) {
 	}))
 	defer cpSrv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", cpSrv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
-	url, _, err := newPublishTestClient().Publish(context.Background(), uuid.New(), "doc.md", []byte("# doc"), "text/markdown")
+	publisher, taskID := newPublishTestClient(t, cpSrv.URL)
+	url, _, err := publisher.Publish(context.Background(), taskID, "doc.md", []byte("# doc"), "text/markdown")
 
 	require.Error(t, err, "a failed sync-upload must surface as a Publish error so no metadata is written")
 	assert.Empty(t, url)
@@ -379,12 +358,39 @@ func TestPublish_NoWebURLYieldsNone(t *testing.T) {
 	}))
 	defer cpSrv.Close()
 
-	t.Setenv("MESH_TEAMRELAY_RELAY_URL", cpSrv.URL)
-	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
-
-	url, key, err := newPublishTestClient().Publish(context.Background(), uuid.New(), "doc.md", []byte("# doc"), "text/markdown")
+	publisher, taskID := newPublishTestClient(t, cpSrv.URL)
+	url, key, err := publisher.Publish(context.Background(), taskID, "doc.md", []byte("# doc"), "text/markdown")
 
 	require.NoError(t, err)
 	assert.Empty(t, url, "no web_url from the relay means nothing is publicly openable")
-	assert.Equal(t, "tr_agent_key", key)
+	assert.Equal(t, publishTestKey, key)
+}
+
+// A populated legacy env must never bypass the registry's publication policy.
+func TestPublish_TransportPolicyRefusesEnvFallback(t *testing.T) {
+	hits := 0
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.Write([]byte(`{"path":"doc.md"}`))
+	}))
+	defer relay.Close()
+	t.Setenv("MESH_TEAMRELAY_RELAY_URL", relay.URL)
+	t.Setenv("MESH_TEAMRELAY_TRANSPORT_ENABLED", "true")
+	for _, scenario := range []string{"transport off", "missing URL", "missing resolver"} {
+		t.Run(scenario, func(t *testing.T) {
+			relayURL := relay.URL
+			if scenario == "missing URL" {
+				relayURL = ""
+			}
+			publisher, taskID := newPublishTestClient(t, relayURL, scenario != "transport off")
+			if scenario == "missing resolver" {
+				publisher.(*client).resolver = nil
+			}
+			publicURL, key, err := publisher.Publish(context.Background(), taskID, "doc.md", []byte("body"), "text/markdown")
+			require.NoError(t, err)
+			require.Empty(t, publicURL)
+			require.Empty(t, key)
+			require.Zero(t, hits, "disabled publication must not contact the env relay")
+		})
+	}
 }

@@ -19,13 +19,13 @@ func TestParseMergeRequestURL(t *testing.T) {
 		wantIID     int
 		wantOK      bool
 	}{
-		{"plain", "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/123", "entire-vc/evc-mesh", 123, true},
-		{"subgroup", "https://git.entire.host/entire-vc/team/sub/-/merge_requests/7", "entire-vc/team/sub", 7, true},
-		{"trailing slash", "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/123/", "entire-vc/evc-mesh", 123, true},
-		{"diffs suffix", "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/123/diffs", "entire-vc/evc-mesh", 123, true},
+		{"plain", "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/123", "entire-vc/evc-mesh", 123, true},
+		{"subgroup", "https://gitlab.example.invalid/entire-vc/team/sub/-/merge_requests/7", "entire-vc/team/sub", 7, true},
+		{"trailing slash", "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/123/", "entire-vc/evc-mesh", 123, true},
+		{"diffs suffix", "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/123/diffs", "entire-vc/evc-mesh", 123, true},
 		{"different self-hosted host", "https://gitlab.example.org/o/r/-/merge_requests/1", "o/r", 1, true},
-		{"http scheme", "http://git.entire.host/o/r/-/merge_requests/1", "o/r", 1, true},
-		{"not an MR url", "https://git.entire.host/entire-vc/evc-mesh/-/commit/abc123", "", 0, false},
+		{"http scheme", "http://gitlab.example.invalid/o/r/-/merge_requests/1", "o/r", 1, true},
+		{"not an MR url", "https://gitlab.example.invalid/entire-vc/evc-mesh/-/commit/abc123", "", 0, false},
 		{"github pull url", "https://github.com/entire-vc/evc-mesh/pull/123", "", 0, false},
 		{"garbage", "not a url at all", "", 0, false},
 	}

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	teamrelay "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
 	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
@@ -25,7 +28,7 @@ func TestIntegrationConfigure_GitLabProvider_NoLongerUnsupported(t *testing.T) {
 	wsID := uuid.New()
 
 	rec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/integrations",
-		`{"provider":"gitlab","config":{"base_url":"https://git.entire.host","token":"glpat-xxx","webhook_secret":"whsec"},"is_active":true}`)
+		`{"provider":"gitlab","config":{"base_url":"https://gitlab.example.invalid","token":"glpat-xxx","webhook_secret":"whsec"},"is_active":true}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }
 
@@ -66,7 +69,7 @@ func TestIntegrationConfigure_GitLab_ResponseNeverLeaksRawSecretsButKeepsBaseURL
 	wsID := uuid.New()
 
 	rec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/integrations",
-		`{"provider":"gitlab","config":{"base_url":"https://git.entire.host","token":"glpat-secret","webhook_secret":"whsec-secret"},"is_active":true}`)
+		`{"provider":"gitlab","config":{"base_url":"https://gitlab.example.invalid","token":"glpat-secret","webhook_secret":"whsec-secret"},"is_active":true}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	assert.NotContains(t, rec.Body.String(), "glpat-secret")
 	assert.NotContains(t, rec.Body.String(), "whsec-secret")
@@ -75,7 +78,7 @@ func TestIntegrationConfigure_GitLab_ResponseNeverLeaksRawSecretsButKeepsBaseURL
 		Config map[string]any `json:"config"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
-	assert.Equal(t, "https://git.entire.host", created.Config["base_url"], "base_url is not a secret and should pass through unmasked")
+	assert.Equal(t, "https://gitlab.example.invalid", created.Config["base_url"], "base_url is not a secret and should pass through unmasked")
 	assert.Equal(t, true, created.Config["token_set"])
 	assert.Equal(t, true, created.Config["webhook_secret_set"])
 }
@@ -147,7 +150,7 @@ func TestIntegrationUpdate_GitLab_BaseURLOnly_PreservesTokenAndSecret(t *testing
 	wsID := uuid.New()
 
 	createRec := doJSON(t, e, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/integrations",
-		`{"provider":"gitlab","config":{"base_url":"https://git.entire.host","token":"tok","webhook_secret":"sec"},"is_active":true}`)
+		`{"provider":"gitlab","config":{"base_url":"https://gitlab.example.invalid","token":"tok","webhook_secret":"sec"},"is_active":true}`)
 	require.Equal(t, http.StatusCreated, createRec.Code)
 	var created struct {
 		ID string `json:"id"`
@@ -244,6 +247,88 @@ func TestIntegrationList_NoRowEnvSet_ReportsEffectiveEnabledFromEnv(t *testing.T
 		}
 	}
 	assert.True(t, found, "effective[] must contain gitlab: %s", rec.Body.String())
+}
+
+// #25aec021: the endpoint (not just the resolver) reports Team Relay as
+// enabled from env with no workspace row. Telegram has no env credentials —
+// its bot token lives in the workspace row — so without a row the endpoint
+// must report it off, matching what the runtime does.
+// relayInstance is an extensions.InstanceStore with one fixed setting.
+type relayInstance struct{ s *extensions.InstanceSetting }
+
+func (f relayInstance) InstanceSetting(context.Context, string) (*extensions.InstanceSetting, error) {
+	return f.s, nil
+}
+
+func TestIntegrationList_NoRowEnvSet_TeamRelayFromEnv_TelegramNeedsRow(t *testing.T) {
+	svc := newFakeIntegrationService()
+	h := NewIntegrationHandler(svc, nil, nil)
+	repo := newFakeSparkIntegrationRepo()
+	relay := teamrelay.New(extensions.Deps{
+		Conns: extensions.IntegrationConnections{Repo: repo},
+		Inst:  relayInstance{&extensions.InstanceSetting{Enabled: true, Settings: map[string]any{"relay_url": "https://relay.example"}}},
+	})
+	h.WithStatusResolver(service.NewIntegrationStatusResolver(repo, nil, nil, relay, true))
+	e := echo.New()
+	e.GET("/api/v1/workspaces/:ws_id/integrations", h.List)
+	rec := doJSON(t, e, http.MethodGet, "/api/v1/workspaces/"+uuid.New().String()+"/integrations", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var body struct {
+		Effective []struct {
+			Provider         string `json:"provider"`
+			EffectiveEnabled bool   `json:"effective_enabled"`
+			Source           string `json:"source"`
+		} `json:"effective"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	got := map[string]bool{}
+	for _, st := range body.Effective {
+		switch st.Provider {
+		case "team_relay":
+			got[st.Provider] = true
+			assert.True(t, st.EffectiveEnabled)
+			assert.Equal(t, "env", st.Source)
+		case "telegram":
+			got[st.Provider] = true
+			assert.False(t, st.EffectiveEnabled, "telegram has no env token: no row means off")
+			assert.Equal(t, "none", st.Source)
+		}
+	}
+	assert.Len(t, got, 2, "effective[] must contain team_relay and telegram: %s", rec.Body.String())
+}
+
+// #25aec021 AC2 (Telegram, clarified 16.10): with an active workspace row the
+// endpoint reports it enabled from the workspace.
+func TestIntegrationList_TelegramActiveRow_EnabledFromWorkspace(t *testing.T) {
+	svc := newFakeIntegrationService()
+	h := NewIntegrationHandler(svc, nil, nil)
+	ws := uuid.New()
+	repo := newFakeSparkIntegrationRepo()
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderTelegram, IsActive: true, Config: json.RawMessage(`{"bot_token":"x"}`)})
+	h.WithStatusResolver(service.NewIntegrationStatusResolver(repo, nil, nil, nil, true))
+	e := echo.New()
+	e.GET("/api/v1/workspaces/:ws_id/integrations", h.List)
+	rec := doJSON(t, e, http.MethodGet, "/api/v1/workspaces/"+ws.String()+"/integrations", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var body struct {
+		Effective []struct {
+			Provider         string `json:"provider"`
+			EffectiveEnabled bool   `json:"effective_enabled"`
+			Source           string `json:"source"`
+		} `json:"effective"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	var found bool
+	for _, st := range body.Effective {
+		if st.Provider == "telegram" {
+			found = true
+			assert.True(t, st.EffectiveEnabled)
+			assert.Equal(t, "workspace", st.Source)
+		}
+	}
+	assert.True(t, found, "effective[] must contain telegram: %s", rec.Body.String())
 }
 
 func TestIntegrationUpdate_EnableEmptyPlaceholderRow_Rejected(t *testing.T) {

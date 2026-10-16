@@ -22,25 +22,15 @@ between fixing a message and rebasing a branch. It is advisory by construction:
 it lives on whichever machine installed it, and a fresh clone, another machine,
 a web edit or `--no-verify` all walk past it.
 
-**`Vendor trailer gate`** — the CI check, and the layer intended to hold the
-line. Branch protection is the only gate every merge path consults. This
-repository already learned that with the `hold` label, which two of our own
-wrapper scripts honoured while the web merge button, `gh pr merge`, a direct
-REST `PUT` and the merge queue all ignored it — so it looked enforced for six
-weeks while stopping nothing. See [hold-gate.md](hold-gate.md).
+**`Vendor trailer gate`** is the CI check. Verify the repository's current
+branch-protection settings before relying on it to block merges: a reporting
+check is not necessarily a required check, and every enabled merge path must
+enforce the intended requirement.
 
-> **Today this check is NOT in the required-checks list, so it reports without
-> blocking.** It is red on an offending pull request and our merge-train tooling
-> holds on that, but the web merge button, `gh pr merge`, a direct REST `PUT`
-> and the merge queue do not consult a non-required check. Writing "required"
-> here before branch protection says so would repeat the `hold` mistake this
-> file cites — a stated guarantee nothing enforces.
->
-> Adding it to the required list needs one prior observation: this check has
-> never yet reported in a `merge_group` run, and that can only be seen once a
-> pull request actually goes through the queue. A required check that stays
-> silent on `merge_group` wedges the repository permanently. Observe that run
-> first, then arm it.
+Before requiring this check for a merge queue, verify that it reports in the
+`merge_group` context. A required check that never reports can block the queue.
+The live protection settings and observed check results are authoritative;
+this document does not assert the current repository configuration.
 
 ## Why a branch trailer matters under squash merge
 
