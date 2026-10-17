@@ -242,6 +242,25 @@
       "updateTitleFailed": "Не удалось обновить название"
     }
   },
+  "slots": {
+    "actions": {
+      "menu": "Действия расширений"
+    },
+    "gitlab": {
+      "badge": "Merge request'ы GitLab",
+      "showMergeRequests": "Показать merge request'ы GitLab",
+      "pipeline": {
+        "pending": "Пайплайн в очереди",
+        "running": "Пайплайн выполняется",
+        "success": "Пайплайн прошёл",
+        "failed": "Пайплайн упал",
+        "canceled": "Пайплайн отменён",
+        "skipped": "Пайплайн пропущен",
+        "manual": "Пайплайн ждёт ручного запуска"
+      }
+    },
+    "unavailable": "{{name}}: сейчас недоступно."
+  },
   "subtasks": {
     "add": "Добавить подзадачу",
     "addFailed": "Не удалось добавить подзадачу.",

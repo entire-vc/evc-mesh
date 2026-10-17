@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { SlotBadges } from "@/components/extensions/slots/slot-host";
 import {
   useCallback,
   useEffect,
@@ -1714,6 +1715,7 @@ function EnhancedTitleCell({
 
         {/* Visual indicators */}
         <span className="flex items-center gap-1 ml-1 flex-shrink-0">
+          <SlotBadges task={task} />
           {task.human_gate && (
             <span
               className="flex items-center text-amber-600 dark:text-amber-400"

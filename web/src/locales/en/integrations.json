@@ -455,75 +455,15 @@
     "connectedOn": "Connected {{date}}"
   },
   "integrationsPage": {
-    "intro": "Connect Entire VC Mesh with external services to automate workflows and keep your team in sync.",
     "providers": {
-      "github": "Link pull requests and commits to tasks. Receive webhook events to auto-update task status.",
-      "gitlab": "Link merge requests to tasks on a self-hosted GitLab instance. Receive webhook events to auto-update task status.",
-      "spark": "Browse and install AI agents from the Spark catalog into your workspace.",
       "mcp": "Connect AI agents (Claude Code, Cline, Aider) via Model Context Protocol. Supports stdio and SSE transports.",
-      "telegram": "Deliver notifications and activity to a Telegram bot. Each member connects their own account from Notification Settings.",
-      "teamRelay": "Sync project documents with a Team Relay share. The relay URL comes from this workspace or from the instance settings.",
-      "sparkName": "Spark Agent Catalog",
       "mcpName": "MCP Server"
-    },
-    "sourceInstance": "Instance",
-    "sourceWorkspace": "Workspace",
-    "remove": "Remove",
-    "enabled": "Enabled",
-    "enable": "Enable",
-    "envNote": "Active (configured at the instance level)",
-    "confirmDisable": {
-      "message": "This will turn off an integration configured at the instance level. It stops working for this workspace until it is enabled again.",
-      "turnOff": "Turn off"
-    },
-    "cancel": "Cancel",
-    "connection": "Connection",
-    "change": "Change",
-    "webhookUrl": "Webhook URL",
-    "github": {
-      "usingToken": "Using a workspace-configured token.",
-      "usingTokenAndSecret": "Using a workspace-configured token and webhook secret.",
-      "connectPrompt": "Optional: connect a personal access token for live PR-status checks and to set a workspace-specific webhook secret. Without one, this deployment's instance-wide default is used.",
-      "webhookHelp": "Add this URL to your GitHub repository under <strong>Settings → Webhooks</strong>. Select <em>Pull requests</em> and <em>Pushes</em> events. Include <code/> in commit messages or PR titles to auto-link tasks."
-    },
-    "gitlab": {
-      "connected": "Connected.",
-      "connectedTo": "Connected to <url>{{url}}</url>.",
-      "connectPrompt": "Connect your self-hosted GitLab instance: base URL, an access token for live MR-status checks, and a webhook secret.",
-      "webhookHelp": "Add this URL to your GitLab project under <strong>Settings → Webhooks</strong>. Select <em>Merge request events</em>. Include <code/> in commit messages or MR titles to auto-link tasks."
-    },
-    "spark": {
-      "enabledNote": "Spark catalog is enabled. Go to <link>Spark Catalog</link> to browse and install agents."
     },
     "mcp": {
       "sseEndpoint": "SSE Endpoint (remote agents)",
       "sseNote": "Requires your deployment to route <code>/mcp</code> to the MCP server. If it does not connect, use the stdio config below.",
       "registerHelp": "Register an agent in <link>Agents</link> to get an API key, then use it in <code>MESH_AGENT_KEY</code>. MCP provides 34 tools: task management, comments, events, artifacts, and more."
-    },
-    "telegram": {
-      "connectedAs": "Connected as <name>@{{username}}</name>. Members connect from their own Notification Settings.",
-      "changeToken": "Change token",
-      "createBot": "Create a bot with <bot>@BotFather</bot> on Telegram and paste its token here. The token is encrypted at rest and never shown again.",
-      "connect": "Connect",
-      "connecting": "Connecting…"
-    },
-    "vcsForm": {
-      "personalToken": "Personal access token",
-      "accessToken": "Access token",
-      "webhookSecret": "Webhook secret",
-      "save": "Save",
-      "saving": "Saving…"
-    },
-    "enterBotToken": "Enter a bot token",
-    "connectedAsToast": "Connected as @{{username}}",
-    "telegramConnectedToast": "Telegram bot connected",
-    "telegramSaveFailed": "Failed to save the Telegram bot token",
-    "enterOneField": "Enter at least one field to save",
-    "vcsSaved": "{{label}} connection saved",
-    "vcsSaveFailed": "Failed to save the {{label}} connection",
-    "nothingToEnable": "Nothing to enable yet: this integration has no connection settings.",
-    "updateFailed": "Failed to update the integration",
-    "removeFailed": "Failed to remove the integration"
+    }
   },
   "runtimeTabs": {
     "sectionsLabel": "Agent sections",
@@ -1007,5 +947,233 @@
       "digest_mode": "Digests",
       "digest_hour": "Send hour"
     }
+  },
+  "installed": {
+    "status": {
+      "blocked": "Blocked by the catalog: {{reason}}",
+      "error": "Error: {{message}}",
+      "instance": "Active · set up by the instance admin",
+      "workspace": "Connected in this workspace",
+      "off": "Turned off",
+      "none": "Not connected"
+    },
+    "saved": "{{name}}: settings saved",
+    "connected": "{{name}} connected",
+    "settingsTitle": "{{name}} settings",
+    "connectTitle": "Connect {{name}}",
+    "settingsHint": "Workspace-level settings. Secret values are never shown again.",
+    "connectHint": "Review what this extension can do before connecting it.",
+    "consentTitle": "This extension will be able to:",
+    "customWarning": "This is a custom extension that was not reviewed by the catalog. Connect it only if you trust its author.",
+    "consentCheck": "I allow these permissions for this workspace",
+    "save": "Save",
+    "connect": "Connect",
+    "noSettings": "This extension has no workspace settings.",
+    "actionFailed": "Could not complete the action. Try again.",
+    "health": {
+      "ok": "Health check passed",
+      "bad": "Health check failed",
+      "unknown": "Not checked yet"
+    },
+    "lastError": "Last error: {{message}}",
+    "toggle": "{{name}} enabled",
+    "settings": "Settings",
+    "more": "More actions for {{name}}",
+    "test": "Test connection",
+    "rollback": "Roll back version",
+    "rollbackSoon": "Available after version management ships",
+    "remove": "Remove",
+    "loading": "Loading installed extensions",
+    "errorTitle": "Could not load installed extensions",
+    "errorBody": "The list did not load. Check the connection and try again.",
+    "emptyTitle": "Nothing is installed yet",
+    "emptyBody": "Open the catalog and connect an extension to see it here.",
+    "readOnly": "Only workspace owners and admins can change extensions",
+    "disableInstanceTitle": "Turn off {{name}} for this workspace?",
+    "disableInstanceBody": "It is set up by the instance admin. Turning it off affects only this workspace; the instance setting stays as it is.",
+    "disableInstanceConfirm": "Turn off",
+    "removeTitle": "Remove {{name}}",
+    "removeBody": "The connection is removed from this workspace; the instance setting is not touched.",
+    "cancel": "Cancel",
+    "removed": "{{name}} removed",
+    "testOk": "{{name}}: the check passed",
+    "testFailed": "{{name}}: the check failed ({{message}})",
+    "legacyTitle": "Other connections",
+    "managedElsewhere": "Managed through the extension's own page",
+    "data": {
+      "title": "What happens to the extension's data",
+      "keep": "Keep the data",
+      "keepHint": "Only the connection is removed; reconnecting restores the data.",
+      "delete": "Delete the data too",
+      "deleteHint": "The extension's data in this workspace is erased and cannot be restored.",
+      "deleteUnsupported": "This extension has no data deletion yet; the data is kept."
+    }
+  },
+  "projectTab": {
+    "intro": "Extensions bound to this project. Connect an extension to the workspace first; here you choose what it does for this project.",
+    "bindButton": "Bind extension",
+    "bindTitle": "Bind an extension",
+    "pickExtension": "Extension",
+    "bind": "Bind",
+    "bound": "{{name}} bound to the project",
+    "unbound": "{{name}} unbound from the project",
+    "enabled": "On",
+    "disabled": "Off",
+    "enable": "Turn on",
+    "disable": "Turn off",
+    "check": "Check",
+    "checkOk": "Connection works",
+    "checkFailed": "The connection check failed",
+    "unbind": "Unbind",
+    "cancel": "Cancel",
+    "unbindTitle": "Unbind {{name}}?",
+    "unbindDesc": "The project settings of this extension are removed. The connection to the workspace stays, and documents already synced stay as they are.",
+    "actionDone": "{{title}}: done",
+    "actionFailed": "The action failed. Try again.",
+    "search": {
+      "label": "Search documents",
+      "placeholder": "Document title",
+      "button": "Search",
+      "empty": "Nothing found",
+      "failed": "Search failed. Try again."
+    },
+    "sync": {
+      "label": "Sync",
+      "never": "not yet",
+      "checkedAt": "checked {{when}}",
+      "status": {
+        "ok": "OK",
+        "error": "error",
+        "key_expired": "key expired"
+      }
+    },
+    "keyExpires": "Key valid until {{when}}",
+    "noSchema": "This extension has no project settings.",
+    "empty": "No extensions are bound to this project yet.",
+    "emptyNoneConnected": "No extensions with a project level are connected to the workspace. Connect one in the workspace extensions first.",
+    "loadFailed": "Couldn't load the project extensions.",
+    "retry": "Retry"
+  },
+  "instanceAdmin": {
+    "title": "Instance extension settings",
+    "intro": "Settings that apply to the whole instance. Only the instance administrator can change them.",
+    "back": "Back to extensions",
+    "loading": "Loading instance settings",
+    "noAccessTitle": "Instance administrators only",
+    "noAccessBody": "You do not have access to the instance extension settings. Ask the administrator of this instance.",
+    "errorTitle": "Couldn't load the instance settings",
+    "errorBody": "The instance settings are unavailable right now. Try again in a minute.",
+    "retry": "Try again",
+    "autoUpdate": {
+      "title": "Automatic updates",
+      "body": "Install new versions of extensions on this instance without asking.",
+      "label": "Update extensions automatically"
+    },
+    "allow": {
+      "title": "Allowed extensions",
+      "body": "Official and verified extensions are allowed by default. Community and custom ones are connected only after you allow them here.",
+      "allowed": "Allowed",
+      "blocked": "Not allowed",
+      "default": "by default",
+      "explicit": "set by an administrator",
+      "toggle": "Allow {{name}}",
+      "saved": "Saved",
+      "saveFailed": "Couldn't save the change"
+    },
+    "trust": {
+      "builtin": "Official",
+      "official": "Official",
+      "verified": "Verified",
+      "community": "Community",
+      "custom": "Custom"
+    },
+    "settings": {
+      "title": "Extension settings",
+      "body": "Connection values shared by every workspace of this instance.",
+      "pick": "Extension",
+      "enabled": "Enabled on this instance",
+      "noForm": "This extension has no instance-level settings.",
+      "fromEnv": "Moved from environment variables {{date}}",
+      "fromEnvNoDate": "Moved from environment variables",
+      "saved": "Settings saved",
+      "save": "Save settings",
+      "loadFailed": "Couldn't load the settings of this extension"
+    },
+    "journal": {
+      "title": "Journal",
+      "body": "Who changed what on this instance, newest first.",
+      "empty": "Nothing has been changed yet.",
+      "unknownActor": "Unknown user",
+      "enabled_changed_on": "{{ext}} turned on at instance level",
+      "enabled_changed_off": "{{ext}} turned off at instance level",
+      "settings_changed": "Settings of {{ext}} changed: {{keys}}",
+      "allow_changed_on": "{{ext}} allowed",
+      "allow_changed_off": "{{ext}} no longer allowed",
+      "auto_update_changed_on": "Automatic updates turned on",
+      "auto_update_changed_off": "Automatic updates turned off",
+      "other": "{{action}} {{ext}}"
+    }
+  },
+  "repoInstall": {
+    "title": "Install from repository",
+    "hint": "Install an extension straight from a GitHub or GitLab repository, public or private. For debugging and custom installs outside the catalog.",
+    "url": "Repository URL",
+    "private": "Private repository",
+    "token": "Access token",
+    "tokenHint": "Stored encrypted on this instance and never shown again.",
+    "loadRefs": "Load tags and branches",
+    "loadingRefs": "Loading…",
+    "refKind": "Version source",
+    "kind": {
+      "tag": "Tag (release)",
+      "branch": "Branch (beta channel)"
+    },
+    "pick": {
+      "tag": "Tag",
+      "branch": "Branch"
+    },
+    "noRefs": {
+      "tag": "The repository has no tags. Pick a branch instead.",
+      "branch": "The repository has no branches."
+    },
+    "betaHint": "The instance follows the branch head: new commits arrive as updates.",
+    "readManifest": "Read manifest",
+    "reading": "Reading…",
+    "manifest": "Manifest",
+    "compatible": "Compatible with Mesh ({{range}})",
+    "publisher": "Publisher",
+    "commit": "Commit",
+    "permissions": "Permissions",
+    "noPermissions": "The extension asks for no permissions.",
+    "customWarning": "Custom extension: it was not reviewed by the catalog. Install only code you trust.",
+    "cancel": "Cancel",
+    "install": "Install",
+    "installing": "Installing…",
+    "installed": "{{name}} installed",
+    "refsFailed": "Couldn't read the repository.",
+    "previewFailed": "Couldn't read the manifest.",
+    "installFailed": "Couldn't install the extension."
+  },
+  "updatesTab": {
+    "awaitingConsent": "Awaiting consent",
+    "current": "Installed: {{version}} ({{ref}}, {{sha}})",
+    "latest": "Available: {{version}} ({{ref}}, {{sha}})",
+    "newPermissions": "New permissions",
+    "checkFailed": "Couldn't check: {{reason}}",
+    "upToDate": "Up to date.",
+    "rollback": "Roll back to {{version}}",
+    "update": "Update",
+    "consentUpdate": "Agree and update",
+    "updateAll": "Update all",
+    "autoUpdateHint": "With auto-update on, new tags and branch commits are installed within the hour. A version that asks for more permissions still waits for your consent.",
+    "emptyBody": "No extension was installed from a repository. Use “Install from repository”.",
+    "adminOnlyTitle": "Only for instance administrators",
+    "adminOnlyBody": "Updates of repository extensions are managed by the instance administrator.",
+    "actionFailed": "The action failed. Try again.",
+    "updated": "{{name}} updated",
+    "noChange": "{{name}} is waiting for consent",
+    "rolledBack": "{{name}} rolled back",
+    "updatedAll_one": "{{count}} extension updated",
+    "updatedAll_other": "{{count}} extensions updated"
   }
 }

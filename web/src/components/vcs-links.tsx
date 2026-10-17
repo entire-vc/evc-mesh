@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
-import type { VCSLink, VCSLinkType, CreateVCSLinkRequest } from "@/types";
+import type { VCSLink, VCSLinkType, VCSProvider, CreateVCSLinkRequest } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
 import { formatDateTime, formatRelative } from "@/lib/utils";
 
@@ -79,11 +79,27 @@ export function PRSyncHint({ link }: { link: VCSLink }) {
 
 interface VCSLinksProps {
   taskId: string;
+  /** Show (and add) only this provider's links: the body of an extension `task.panel`. */
+  only?: VCSProvider;
+  /** Called once the first links request has settled (ok or failed). */
+  onLoaded?: () => void;
+  /** Hide providers whose links an extension panel owns. Ignored when `only` is set. */
+  exclude?: readonly VCSProvider[];
 }
 
-export function VCSLinks({ taskId }: VCSLinksProps) {
+const ALL_PROVIDERS: { id: VCSProvider; label: string }[] = [
+  { id: "github", label: "GitHub" },
+  { id: "gitlab", label: "GitLab" },
+];
+
+export function VCSLinks({ taskId, only, exclude = [], onLoaded }: VCSLinksProps) {
   const { t } = useTranslation("task");
-  const [links, setLinks] = useState<VCSLink[]>([]);
+  const [allLinks, setLinks] = useState<VCSLink[]>([]);
+  const providerChoices = only
+    ? ALL_PROVIDERS.filter((p) => p.id === only)
+    : ALL_PROVIDERS.filter((p) => !exclude.includes(p.id));
+  const defaultProvider: VCSProvider = providerChoices[0]?.id ?? "github";
+  const links = allLinks.filter((l) => (only ? l.provider === only : !exclude.includes(l.provider)));
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -94,7 +110,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
     external_id: "",
     url: "",
     title: "",
-    provider: "github",
+    provider: defaultProvider,
   });
 
   const fetchLinks = useCallback(async () => {
@@ -107,8 +123,9 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
       // Non-fatal, just show empty state
     } finally {
       setLoading(false);
+      onLoaded?.();
     }
-  }, [taskId]);
+  }, [taskId, onLoaded]);
 
   useEffect(() => {
     void fetchLinks();
@@ -129,7 +146,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
       );
       setLinks((prev) => [...prev, newLink]);
       setShowForm(false);
-      setForm({ link_type: "pr", external_id: "", url: "", title: "", provider: "github" });
+      setForm({ link_type: "pr", external_id: "", url: "", title: "", provider: defaultProvider });
     } catch (err: unknown) {
       setError(apiErrorMessage(err, t("vcs.createFailed")));
     } finally {
@@ -252,12 +269,13 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
               <Select
                 value={form.provider}
                 onChange={(e) =>
-                  setForm((f) => ({ ...f, provider: e.target.value as "github" | "gitlab" }))
+                  setForm((f) => ({ ...f, provider: e.target.value as VCSProvider }))
                 }
                 className="mt-1"
               >
-                <option value="github">GitHub</option>
-                <option value="gitlab">GitLab</option>
+                {providerChoices.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
               </Select>
             </div>
           </div>
@@ -265,7 +283,7 @@ export function VCSLinks({ taskId }: VCSLinksProps) {
             <label className="text-xs text-muted-foreground">URL</label>
             <Input
               className="mt-1"
-              placeholder="https://github.com/org/repo/pull/123"
+              placeholder={form.provider === "gitlab" ? "https://gitlab.example.com/group/repo/-/merge_requests/123" : "https://github.com/org/repo/pull/123"}
               value={form.url}
               onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
             />

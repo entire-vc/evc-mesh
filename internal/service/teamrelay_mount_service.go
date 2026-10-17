@@ -907,6 +907,23 @@ func (s *teamRelayMountService) syncMountLocked(ctx context.Context, projectID u
 			result.Excluded++
 			continue
 		}
+		// An image/PDF entry is never a document body, and its extension says
+		// so before a single byte is fetched. Counted Rejected exactly as the
+		// content-based check inside createCopyDocument would have counted it
+		// — but without the download that check needed, which matters now that
+		// syncs run on a schedule: a share with a hundred screenshots was a
+		// hundred binary rejections re-downloaded every interval, forever. The
+		// bytes still reach Mesh as an embed attachment when a mounted body
+		// references them — the one way an image belongs in Docs at all.
+		// Checked BEFORE folder resolution: a folder holding only images
+		// (an image-only card's artifacts folder) must not get an empty
+		// placeholder at the project root. The folder appears when its first
+		// non-image file is mounted.
+		if teamrelay.IsEmbeddableFile(entry.Path) {
+			result.Rejected++
+			continue
+		}
+
 		dir, name := splitDirAndName(entry.Path)
 		segments := append(append([]string{}, mountPrefix...), dirSegments(dir)...)
 
@@ -918,22 +935,6 @@ func (s *teamRelayMountService) syncMountLocked(ctx context.Context, projectID u
 		existing, gerr := s.documentRepo.GetBySourceInProject(ctx, projectID, rs.settings.ShareID, entry.Path)
 		if gerr != nil {
 			return &MountResult{Status: MountStatusError, Mounted: result.Mounted, Err: gerr}
-		}
-		// An image/PDF entry is never a document body, and its extension says
-		// so before a single byte is fetched. Counted Rejected exactly as the
-		// content-based check inside createCopyDocument would have counted it
-		// — but without the download that check needed, which matters now that
-		// syncs run on a schedule: a share with a hundred screenshots was a
-		// hundred binary rejections re-downloaded every interval, forever. The
-		// bytes still reach Mesh as an embed attachment when a mounted body
-		// references them — the one way an image belongs in Docs at all.
-		// Deliberately placed AFTER folder resolution so a folder holding only
-		// images keeps getting its placeholder: that is the tree shape every
-		// pre-A4 sync produced, and a scheduled sync must not quietly reshape
-		// it.
-		if teamrelay.IsEmbeddableFile(entry.Path) {
-			result.Rejected++
-			continue
 		}
 
 		if existing != nil {

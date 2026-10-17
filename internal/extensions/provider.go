@@ -32,6 +32,9 @@ const (
 // Resolved is the effective configuration of one extension for one workspace.
 type Resolved struct {
 	ExtensionID string
+	// WorkspaceID is set by the registry before a health check, so an external
+	// provider can tell which workspace's connection it is probing.
+	WorkspaceID uuid.UUID
 	Enabled     bool
 	Source      Source
 	Settings    map[string]any

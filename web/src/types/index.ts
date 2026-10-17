@@ -285,6 +285,10 @@ export interface Task {
   subtask_count?: number;
   artifact_count?: number;
   vcs_link_count?: number;
+  /** Distinct providers of the task's VCS links (`github`, `gitlab`); lets a card badge be drawn per provider. */
+  vcs_providers?: string[];
+  /** Latest GitLab pipeline state across the task's MR links (`success`, `failed`, …); null/absent = none reported. */
+  vcs_pipeline_status?: string | null;
   url?: string;
   recurring_schedule_id?: string | null;
   recurring_instance_number?: number | null;
@@ -1282,6 +1286,9 @@ export interface VCSLink {
    * Optional so older API responses without the field still type-check.
    */
   status_synced_at?: string | null;
+  /** Latest GitLab pipeline state of this MR link; null for GitHub links and MRs without a pipeline. */
+  pipeline_status?: string | null;
+  pipeline_updated_at?: string | null;
 }
 
 export interface CreateVCSLinkRequest {

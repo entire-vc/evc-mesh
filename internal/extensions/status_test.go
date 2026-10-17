@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -285,4 +287,99 @@ func TestWithIntegrationConsents_InstanceOnlyHasNoWorkspaceConsent(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, extensions.SourceInstance, s.Source)
 	require.Empty(t, s.ConsentedCapabilities)
+}
+
+func TestResolveStatus_ReplaceAndUnregisterDropCachedHealth(t *testing.T) {
+	reg, calls, id, _ := newHealthReg(t, true)
+	ws := uuid.New()
+	ctx := context.Background()
+	_, err := reg.ResolveStatus(ctx, ws, id)
+	require.NoError(t, err)
+	require.Equal(t, 1, *calls)
+
+	// A new provider must not be answered from the old provider's cached report.
+	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	require.Equal(t, id, stub.Manifest().ID)
+	require.NoError(t, reg.Replace(healthProvider{stubProvider: stub, calls: calls, ok: true}))
+	_, err = reg.ResolveStatus(ctx, ws, id)
+	require.NoError(t, err)
+	require.Equal(t, 2, *calls, "Replace drops the cached health")
+
+	reg.Unregister(id)
+	require.NoError(t, reg.Replace(healthProvider{stubProvider: stub, calls: calls, ok: true}))
+	_, err = reg.ResolveStatus(ctx, ws, id)
+	require.NoError(t, err)
+	require.Equal(t, 3, *calls, "Unregister drops the cached health")
+}
+
+// blockingHealth hangs for the workspace in block until release is closed.
+type blockingHealth struct {
+	stubProvider
+	block   uuid.UUID
+	started chan struct{}
+	release chan struct{}
+	calls   *atomic.Int32
+}
+
+func (p blockingHealth) Health(_ context.Context, r extensions.Resolved) extensions.HealthReport {
+	p.calls.Add(1)
+	if r.WorkspaceID == p.block {
+		close(p.started)
+		<-p.release
+	}
+	return extensions.HealthReport{OK: true}
+}
+
+func TestResolveStatus_SlowHealthDoesNotBlockOthers(t *testing.T) {
+	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	slowWS, fastWS := uuid.New(), uuid.New()
+	bp := blockingHealth{stubProvider: stub, block: slowWS, started: make(chan struct{}),
+		release: make(chan struct{}), calls: &atomic.Int32{}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(bp))
+	id := stub.Manifest().ID
+
+	slowDone := make(chan struct{})
+	go func() {
+		defer close(slowDone)
+		_, _ = reg.ResolveStatus(context.Background(), slowWS, id)
+	}()
+	<-bp.started
+
+	fastDone := make(chan struct{})
+	go func() {
+		defer close(fastDone)
+		_, _ = reg.ResolveStatus(context.Background(), fastWS, id)
+	}()
+	select {
+	case <-fastDone:
+	case <-time.After(2 * time.Second):
+		close(bp.release)
+		t.Fatal("health of another workspace is blocked behind a hung health check")
+	}
+	close(bp.release)
+	<-slowDone
+}
+
+func TestResolveStatus_ConcurrentSameKeyComputesOnce(t *testing.T) {
+	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	ws := uuid.New()
+	bp := blockingHealth{stubProvider: stub, block: ws, started: make(chan struct{}),
+		release: make(chan struct{}), calls: &atomic.Int32{}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(bp))
+	id := stub.Manifest().ID
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); _, _ = reg.ResolveStatus(context.Background(), ws, id) }()
+	<-bp.started
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = reg.ResolveStatus(context.Background(), ws, id) }()
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(bp.release)
+	wg.Wait()
+	require.EqualValues(t, 1, bp.calls.Load(), "single-flight per workspace+extension")
 }

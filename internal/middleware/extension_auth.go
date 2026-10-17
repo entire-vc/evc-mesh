@@ -54,6 +54,16 @@ func extensionBearerToken(c echo.Context) (string, bool) {
 	return token, true
 }
 
+// ExtensionBearerToken returns the raw ext_ token of an authenticated extension
+// request. The self-rotation endpoint needs it to keep the presented token as the
+// previous one; nothing else should.
+func ExtensionBearerToken(c echo.Context) (string, bool) {
+	if GetExtensionPrincipal(c) == nil {
+		return "", false
+	}
+	return extensionBearerToken(c)
+}
+
 // ExtensionAuth authenticates an `Authorization: Bearer ext_…` token as the
 // service actor of an extension connection. It must run BEFORE DualAuth, which
 // skips a request already authenticated here. A request without an ext_ token
@@ -179,10 +189,15 @@ var extensionRouteCapabilities = map[string]string{
 	"GET /api/v1/agents/:agent_id":            "agents:read",
 	"GET /api/v1/agents/:agent_id/sub-agents": "agents:read",
 
-	// agent keys (Keep's rotator)
-	"GET /api/v1/agents/:agent_id/keys":            "agent_keys:read",
-	"POST /api/v1/agents/:agent_id/keys":           "agent_keys:write",
-	"DELETE /api/v1/agents/:agent_id/keys/:key_id": "agent_keys:write",
+	// own token (Keep's service account rotates itself): the actor is the caller,
+	// there is no id in the path to point at anybody else
+	"POST /api/v1/ext/me/token/rotate":     "ext_token:self_rotate",
+	"DELETE /api/v1/ext/me/token/previous": "ext_token:self_rotate",
+
+	// agent keys (Keep's rotator): one narrow right for exactly these three calls
+	"GET /api/v1/agents/:agent_id/keys":            "agent_key:rotate",
+	"POST /api/v1/agents/:agent_id/keys":           "agent_key:rotate",
+	"DELETE /api/v1/agents/:agent_id/keys/:key_id": "agent_key:rotate",
 }
 
 // ExtensionRouteCapabilities returns a copy of the route → capability map, for

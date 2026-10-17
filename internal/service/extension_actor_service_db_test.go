@@ -247,16 +247,21 @@ func TestAgentKeyService_TwoPhase(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, listed[0].RevokedAt, "primary shows as revoked")
 
-	require.NoError(t, f.keys.Revoke(f.ctx, f.agent.ID, issued.KeyID.String()))
-	assert.Error(t, f.auth(issued.APIKey))
+	// The last active key cannot be revoked: 409, and it keeps working.
+	err = f.keys.Revoke(f.ctx, f.agent.ID, issued.KeyID.String())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "409")
+	assert.NoError(t, f.auth(issued.APIKey))
 	listed, err = f.keys.List(f.ctx, f.agent.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, listed[1].RevokedAt)
+	assert.Nil(t, listed[1].RevokedAt)
+	assert.NotEmpty(t, listed[1].Fingerprint)
+	assert.NotNil(t, listed[1].LastUsedAt, "login stamps last_used")
 
 	// Activity trail names both operations and never the key.
 	var n int
 	require.NoError(t, f.db.Get(&n, `SELECT count(*) FROM activity_log WHERE entity_id = $1 AND action IN ('key_issued','key_revoked')`, f.agent.ID))
-	assert.Equal(t, 3, n)
+	assert.Equal(t, 2, n)
 	require.NoError(t, f.db.Get(&n, `SELECT count(*) FROM activity_log WHERE entity_id = $1 AND changes::text LIKE '%' || $2 || '%'`, f.agent.ID, issued.APIKey))
 	assert.Zero(t, n, "raw key must not reach the activity log")
 }
@@ -290,12 +295,12 @@ func TestAgentKeyService_Validation(t *testing.T) {
 	_, err = f.keys.List(f.ctx, uuid.New())
 	assert.Error(t, err)
 
-	for i := 0; i < maxActiveAgentKeys; i++ {
+	for i := 0; i < maxActiveAgentKeys-1; i++ { // the original key counts as one
 		_, err = f.keys.Issue(f.ctx, f.agent.ID, "k", 0)
 		require.NoError(t, err)
 	}
 	_, err = f.keys.Issue(f.ctx, f.agent.ID, "one too many", 0)
-	assert.Error(t, err, "active extra key cap")
+	assert.Error(t, err, "active key cap, original included")
 }
 
 // A key of agent A in workspace W must not authenticate as another agent, and a
@@ -314,4 +319,65 @@ func TestAgentKeyService_ForeignAndGarbageKeys(t *testing.T) {
 	got, err := f.agents.Authenticate(context.Background(), f.ws.Slug, issued.APIKey)
 	require.NoError(t, err)
 	assert.Equal(t, f.agent.ID, got.ID)
+}
+
+func TestExtensionActorService_SelfRotate(t *testing.T) {
+	f := newExtActorFixture(t)
+	ctx := context.Background()
+	issued, err := f.svc.Issue(ctx, f.ws.ID, f.conn.ID, "gitlab", "GitLab", []string{"api:ext_token:self_rotate"})
+	require.NoError(t, err)
+	p, err := f.svc.Authenticate(ctx, issued.Token)
+	require.NoError(t, err)
+
+	// Refusals before anything changes.
+	_, err = f.svc.SelfRotate(ctx, nil, issued.Token, 0)
+	assert.Error(t, err, "no principal")
+	_, err = f.svc.SelfRotate(ctx, p, "agk_notext", 0)
+	assert.Error(t, err, "not an ext_ token")
+	_, err = f.svc.SelfRotate(ctx, p, issued.Token, ExtensionSelfRotateMaxGrace+time.Second)
+	assert.Error(t, err, "grace above the maximum")
+	_, err = f.svc.SelfRotate(ctx, p, "ext_unknown", 0)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 401, apiErr.Code, "token that is neither current nor previous")
+
+	// Default grace; presented token stays valid as previous.
+	rot, err := f.svc.SelfRotate(ctx, p, issued.Token, 0)
+	require.NoError(t, err)
+	assert.True(t, rot.Rotated)
+	assert.Equal(t, ExtensionTokenRotationGrace, rot.Grace)
+	assert.Equal(t, issued.ActorID, rot.ActorID)
+	assert.NotEqual(t, issued.Token, rot.Token)
+	_, err = f.svc.Authenticate(ctx, issued.Token)
+	assert.NoError(t, err, "presented token inside grace")
+	_, err = f.svc.Authenticate(ctx, rot.Token)
+	assert.NoError(t, err)
+
+	// Retry with the old (still valid previous) token keeps it valid.
+	rot2, err := f.svc.SelfRotate(ctx, p, issued.Token, 10*time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, 10*time.Minute, rot2.Grace)
+	_, err = f.svc.Authenticate(ctx, issued.Token)
+	assert.NoError(t, err, "caller's token survives the retry")
+	_, err = f.svc.Authenticate(ctx, rot.Token)
+	assert.Error(t, err, "token the caller never saw is dropped")
+
+	// Previous token cannot end the window; the current one can, twice.
+	err = f.svc.SelfRevokePrevious(ctx, p, issued.Token)
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.Code)
+	require.NoError(t, f.svc.SelfRevokePrevious(ctx, p, rot2.Token))
+	require.NoError(t, f.svc.SelfRevokePrevious(ctx, p, rot2.Token), "idempotent")
+	_, err = f.svc.Authenticate(ctx, issued.Token)
+	assert.Error(t, err, "old token after revoke")
+	_, err = f.svc.Authenticate(ctx, rot2.Token)
+	assert.NoError(t, err)
+
+	assert.Error(t, f.svc.SelfRevokePrevious(ctx, nil, rot2.Token))
+	assert.Error(t, f.svc.SelfRevokePrevious(ctx, p, "agk_notext"))
+
+	// Revoked actor: nothing rotates.
+	require.NoError(t, f.svc.Revoke(ctx, f.conn.ID))
+	_, err = f.svc.SelfRotate(ctx, p, rot2.Token, 0)
+	assert.Error(t, err)
 }

@@ -676,6 +676,9 @@ func (s *rulesService) ListViolations(ctx context.Context, workspaceID uuid.UUID
 
 // LogViolation persists a rule violation log entry.
 func (s *rulesService) LogViolation(ctx context.Context, v *domain.RuleViolationLog) error {
+	if s.violationRepo == nil {
+		return nil // journal not wired (minimal service doubles)
+	}
 	if v.ID == uuid.Nil {
 		v.ID = uuid.New()
 	}
@@ -748,7 +751,9 @@ func isAgentAllowedByActors(allowedActors []string) bool {
 		return true
 	}
 	for _, p := range allowedActors {
-		if p == "*" || p == string(domain.ActorTypeAgent) {
+		// Task-relative patterns depend on the concrete task; report them as
+		// possible (true) rather than a blanket "blocked".
+		if p == "*" || p == string(domain.ActorTypeAgent) || isConditionalActorPattern(p) {
 			return true
 		}
 	}

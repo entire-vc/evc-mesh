@@ -1,8 +1,8 @@
+import type { FieldSchema } from "@/components/extensions/schema-form";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiRequestError } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { ManifestCapabilities } from "@/lib/extension-capabilities";
-import type { FieldSchema } from "@/components/extensions/schema-form";
 
 export type ExtensionKind = "integration" | "plugin";
 export type TrustLevel = "official" | "verified" | "community" | "custom";
@@ -25,7 +25,14 @@ export interface ExtensionManifest {
   screenshots?: string[];
   capabilities?: ManifestCapabilities;
   levels?: { instance?: boolean; workspace?: boolean; project?: boolean };
+  /** Settings schemas per level; a level may be a `$ref` into `schemas`. */
   settings?: { instance?: FieldSchema; workspace?: FieldSchema; project?: FieldSchema };
+  schemas?: Record<string, unknown>;
+}
+
+export interface ConnectionDto {
+  settings?: Record<string, unknown>;
+  consented_capabilities?: string[];
 }
 
 /** One catalog row: instance summary merged with the workspace's own status. */
@@ -53,9 +60,14 @@ export interface CatalogEntry {
   updatedAt: string;
   manifest: ExtensionManifest;
   status?: ExtensionStatusDto;
+  connection?: ConnectionDto | null;
   /** Catalog-supplied extras (absent for built-ins). */
   versions?: VersionEntry[];
   checks?: ChecksCard;
+  /** Removing the connection can also delete the extension's data (`?data=delete`). */
+  canPurgeData: boolean;
+  /** Settings are written only through the extension's own API; generic connect/settings/remove refuse. */
+  managedElsewhere: boolean;
 }
 
 export interface VersionEntry {
@@ -84,7 +96,8 @@ export interface SummaryDto {
 export interface WorkspaceDto {
   id: string; name: string; version: string; kind: string; category: string;
   manifest?: ExtensionManifest & { runtime?: string; publisher?: string; description?: string };
-  status?: ExtensionStatusDto; connection?: unknown | null;
+  status?: ExtensionStatusDto; connection?: ConnectionDto | null;
+  can_purge_data?: boolean; settings_managed_elsewhere?: boolean;
 }
 
 export function trustOf(level: string, source: string): TrustLevel {
@@ -121,7 +134,8 @@ export function mergeCatalog(
       connected: Boolean(w?.connection) || status?.source === "instance",
       enabled: Boolean(status?.enabled),
       createdAt: s.created_at ?? "", updatedAt: s.updated_at ?? "",
-      manifest: s.manifest ?? {}, status, versions: s.versions, checks: s.checks,
+      manifest: s.manifest ?? {}, status, connection: w?.connection, versions: s.versions, checks: s.checks,
+      canPurgeData: Boolean(w?.can_purge_data), managedElsewhere: Boolean(w?.settings_managed_elsewhere),
     };
   };
   for (const w of workspace) {
@@ -149,6 +163,8 @@ export interface CatalogState {
   entries: CatalogEntry[];
   /** The catalog source (Spark proxy) answered with an outage; built-ins still shown. */
   catalogUnavailable: boolean;
+  /** Re-fetch behind the current screen (no skeleton). */
+  refresh: () => void;
   reload: () => void;
 }
 
@@ -193,7 +209,8 @@ export function useExtensionCatalog(): CatalogState {
   }, [wsId, nonce]);
 
   const reload = useCallback(() => { setData(null); setNonce((n) => n + 1); }, []);
-  if (failed) return { state: "error", entries: [], catalogUnavailable: false, reload };
-  if (!data) return { state: "loading", entries: [], catalogUnavailable: false, reload };
-  return { state: "ready", entries: data.entries, catalogUnavailable: data.unavailable, reload };
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  if (failed) return { state: "error", entries: [], catalogUnavailable: false, refresh, reload };
+  if (!data) return { state: "loading", entries: [], catalogUnavailable: false, refresh, reload };
+  return { state: "ready", entries: data.entries, catalogUnavailable: data.unavailable, refresh, reload };
 }

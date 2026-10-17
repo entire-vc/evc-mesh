@@ -25,6 +25,10 @@ type fakeExtActorService struct {
 	row       *domain.ExtensionActor
 	getErr    error
 	rotatedWS uuid.UUID
+
+	selfErr       error
+	selfPresented string
+	selfGrace     time.Duration
 }
 
 func (f *fakeExtActorService) Issue(context.Context, uuid.UUID, uuid.UUID, string, string, []string) (*service.IssuedExtensionToken, error) {
@@ -37,6 +41,17 @@ func (f *fakeExtActorService) Rotate(_ context.Context, ws, conn uuid.UUID) (*se
 		return nil, f.rotateErr
 	}
 	return &service.IssuedExtensionToken{Token: "ext_new", Actor: "ext:gitlab@" + ws.String(), Grace: 5 * time.Minute}, nil
+}
+func (f *fakeExtActorService) SelfRotate(_ context.Context, p *service.ExtensionPrincipal, presented string, grace time.Duration) (*service.IssuedExtensionToken, error) {
+	f.selfPresented, f.selfGrace = presented, grace
+	if f.selfErr != nil {
+		return nil, f.selfErr
+	}
+	return &service.IssuedExtensionToken{Token: "ext_NEWTOKENVALUE", ActorID: p.ActorID, Actor: p.Principal(), Grace: grace, IssuedAt: time.Unix(1_800_000_000, 0)}, nil
+}
+func (f *fakeExtActorService) SelfRevokePrevious(_ context.Context, _ *service.ExtensionPrincipal, presented string) error {
+	f.selfPresented = presented
+	return f.selfErr
 }
 func (f *fakeExtActorService) Revoke(context.Context, uuid.UUID) error { return nil }
 func (f *fakeExtActorService) Authenticate(context.Context, string) (*service.ExtensionPrincipal, error) {
@@ -118,6 +133,73 @@ func TestExtensionActorHandler_RotateToken(t *testing.T) {
 
 	svc.rotateErr = apierror.NotFound("Extension actor")
 	assert.Equal(t, http.StatusNotFound, actorCall(t, h.RotateToken, http.MethodPost, set(conn.String(), true)).Code)
+}
+
+func TestExtensionActorHandler_SelfRotateAndRevokePrevious(t *testing.T) {
+	ws, conn, actor := uuid.New(), uuid.New(), uuid.New()
+	svc := &fakeExtActorService{}
+	h := NewExtensionActorHandler(svc)
+	principal := &service.ExtensionPrincipal{ConnectionID: conn, WorkspaceID: ws, ActorID: actor, ExtensionID: "keep"}
+	call := func(hf echo.HandlerFunc, method, body string, authed bool) *httptest.ResponseRecorder {
+		e := echo.New()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/", strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("Authorization", "Bearer ext_presented")
+		c := e.NewContext(req, rec)
+		if authed {
+			c.Set(middleware.ContextKeyExtensionPrincipal, principal)
+		}
+		require.NoError(t, hf(c))
+		return rec
+	}
+
+	// Not an extension actor: 403, the service is never reached.
+	assert.Equal(t, http.StatusForbidden, call(h.SelfRotate, http.MethodPost, "", false).Code)
+	assert.Equal(t, http.StatusForbidden, call(h.SelfRevokePrevious, http.MethodDelete, "", false).Code)
+	assert.Empty(t, svc.selfPresented)
+
+	// Default grace; the value is in the body once, with prefix/length, never cached.
+	rec := call(h.SelfRotate, http.MethodPost, "", true)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "ext_presented", svc.selfPresented)
+	assert.Zero(t, svc.selfGrace, "service applies its own default")
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+	assert.Equal(t, "ext_NEWTOKENVALUE", out["extension_token"])
+	assert.Equal(t, "ext_NEWT", out["token_prefix"])
+	assert.EqualValues(t, len("ext_NEWTOKENVALUE"), out["token_length"])
+	assert.Equal(t, actor.String(), out["actor_id"])
+	assert.Equal(t, conn.String(), out["connection_id"])
+
+	// Explicit grace is passed on.
+	require.Equal(t, http.StatusOK, call(h.SelfRotate, http.MethodPost, `{"grace_seconds":120}`, true).Code)
+	assert.Equal(t, 120*time.Second, svc.selfGrace)
+
+	// Out of range (including one that would overflow a Duration), negative, malformed: 400, service untouched.
+	svc.selfGrace = -1
+	for _, body := range []string{`{"grace_seconds":3601}`, `{"grace_seconds":9223372037}`, `{"grace_seconds":-5}`, `{"grace_seconds":"x"}`} {
+		assert.Equal(t, http.StatusBadRequest, call(h.SelfRotate, http.MethodPost, body, true).Code, body)
+	}
+	assert.Equal(t, time.Duration(-1), svc.selfGrace)
+
+	// Service errors keep their status.
+	svc.selfErr = apierror.Unauthorized("invalid extension token")
+	assert.Equal(t, http.StatusUnauthorized, call(h.SelfRotate, http.MethodPost, "", true).Code)
+	svc.selfErr = apierror.Conflict("current token required")
+	assert.Equal(t, http.StatusConflict, call(h.SelfRevokePrevious, http.MethodDelete, "", true).Code)
+
+	// Revoke previous: 204 on success.
+	svc.selfErr = nil
+	assert.Equal(t, http.StatusNoContent, call(h.SelfRevokePrevious, http.MethodDelete, "", true).Code)
+}
+
+func TestTokenPrefix(t *testing.T) {
+	assert.Equal(t, "ext_abcd", tokenPrefix("ext_abcdefgh"))
+	assert.Empty(t, tokenPrefix("ext_abcd"))
 }
 
 type fakeAgentKeyService struct {

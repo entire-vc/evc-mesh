@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -68,4 +70,70 @@ func (h *ExtensionActorHandler) RotateToken(c echo.Context) error {
 		"actor":              issued.Actor,
 		"previous_valid_for": int(issued.Grace.Seconds()),
 	})
+}
+
+// SelfRotate handles POST /ext/me/token/rotate: the calling extension actor
+// issues a new ext_ token for itself. The value is in this response once; the
+// presented token keeps working for grace_seconds (default 300, max 3600).
+func (h *ExtensionActorHandler) SelfRotate(c echo.Context) error {
+	p := middleware.GetExtensionPrincipal(c)
+	presented, ok := middleware.ExtensionBearerToken(c)
+	if p == nil || !ok {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("only an extension actor can call this endpoint"))
+	}
+	var body struct {
+		GraceSeconds int `json:"grace_seconds"`
+	}
+	if c.Request().ContentLength != 0 {
+		if err := c.Bind(&body); err != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid body"))
+		}
+	}
+	// Range-check the integer BEFORE it becomes a Duration: a huge value would
+	// overflow the multiplication to a non-positive duration and fall back to the
+	// default instead of being refused.
+	if body.GraceSeconds < 0 || body.GraceSeconds > int(service.ExtensionSelfRotateMaxGrace/time.Second) {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("grace_seconds must be between 0 and 3600"))
+	}
+	issued, err := h.actors.SelfRotate(c.Request().Context(), p, presented, time.Duration(body.GraceSeconds)*time.Second)
+	if err != nil {
+		return handleError(c, err)
+	}
+	// Only non-secret facts are logged: never the token itself.
+	slog.Info("extension actor rotated its own token", "actor", p.Principal(), "connection_id", p.ConnectionID, "token_prefix", tokenPrefix(issued.Token))
+	c.Response().Header().Set("Cache-Control", "no-store")
+	return c.JSON(http.StatusOK, map[string]any{
+		"extension_token":      issued.Token,
+		"token_prefix":         tokenPrefix(issued.Token),
+		"token_length":         len(issued.Token),
+		"actor":                issued.Actor,
+		"actor_id":             issued.ActorID,
+		"connection_id":        p.ConnectionID,
+		"workspace_id":         p.WorkspaceID,
+		"previous_valid_for":   int(issued.Grace.Seconds()),
+		"previous_valid_until": issued.IssuedAt.Add(issued.Grace).UTC().Format(time.RFC3339),
+	})
+}
+
+// SelfRevokePrevious handles DELETE /ext/me/token/previous: ends the transition
+// window early. Only the current token may call it; a repeat is 204 as well.
+func (h *ExtensionActorHandler) SelfRevokePrevious(c echo.Context) error {
+	p := middleware.GetExtensionPrincipal(c)
+	presented, ok := middleware.ExtensionBearerToken(c)
+	if p == nil || !ok {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("only an extension actor can call this endpoint"))
+	}
+	if err := h.actors.SelfRevokePrevious(c.Request().Context(), p, presented); err != nil {
+		return handleError(c, err)
+	}
+	slog.Info("extension actor revoked its previous token", "actor", p.Principal(), "connection_id", p.ConnectionID)
+	return c.NoContent(http.StatusNoContent)
+}
+
+// tokenPrefix is the non-secret head of a token (prefix + 4 random chars).
+func tokenPrefix(token string) string {
+	if len(token) <= 8 {
+		return ""
+	}
+	return token[:8]
 }

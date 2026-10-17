@@ -38,6 +38,8 @@ export interface FieldSchema {
   items?: FieldSchema;
   properties?: Record<string, FieldSchema>;
   required?: string[];
+  /** Derived by the server; shown, never edited or sent back. */
+  readOnly?: boolean;
   "x-secret"?: boolean;
   "x-widget"?: Widget;
   "x-visible-if"?: VisibleIf;

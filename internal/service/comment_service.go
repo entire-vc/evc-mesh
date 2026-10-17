@@ -52,7 +52,13 @@ var mentionRegex = regexp.MustCompile(`(?i)(?:^|[\s(\[{])@([a-z0-9][a-z0-9-]{0,3
 //   - "ℹ️ **FYI @user**" has no "Blocking" keyword → never matches (FYI is a no-op).
 //   - A quoted line ("> ❓ **Blocking @x**") is NOT matched: after `^\s*`, the `>` is
 //     neither whitespace nor one of ❓/`*`/`Blocking`, so the anchor fails.
-var blockingMarkerRegex = regexp.MustCompile(`(?im)^\s*(?:❓\s*)?\*{0,2}\s*Blocking\s+@([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\b`)
+//   - The fleet outcome line "⏳ WAIT decision:@<person>" is the SAME ask (task #805e8d07):
+//     it arms only as the LAST non-empty line of a comment — stripQuotedSpans blanks any
+//     other occurrence — and only when the handle resolves to a user, never an agent.
+var blockingMarkerRegex = regexp.MustCompile(`(?im)^\s*(?:(?:❓\s*)?\*{0,2}\s*Blocking\s+|⏳\s*WAIT\s+decision:\s*)@([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\b`)
+
+// waitDecisionLineRegex finds a "⏳ WAIT decision:@x" line for the tail-only filter.
+var waitDecisionLineRegex = regexp.MustCompile(`(?i)^\s*⏳\s*WAIT\s+decision:`)
 
 // systemActorID is the author_id used for system-generated comments. uuid.Nil is safe:
 // comments.author_id is NOT NULL but carries no foreign key, and the author_name SELECT
@@ -118,6 +124,18 @@ func stripQuotedSpans(body string) string {
 			continue
 		}
 		out = append(out, stripInlineCode(line))
+	}
+
+	// A "⏳ WAIT decision:@x" line is an ask only as the LAST non-empty line (the
+	// fleet's outcome-line position); anywhere earlier it is prose and is blanked.
+	last := len(out) - 1
+	for last >= 0 && strings.TrimSpace(out[last]) == "" {
+		last--
+	}
+	for i := 0; i < last; i++ {
+		if waitDecisionLineRegex.MatchString(out[i]) {
+			out[i] = ""
+		}
 	}
 
 	return strings.Join(out, "\n")

@@ -56,9 +56,9 @@ func TestExtensionWorkspaceHandler_RunnerRefusesInvalidPools(t *testing.T) {
 		code, out := patch(ext, `{"settings":{"pools":"not-an-object"}}`)
 		assert.Equal(t, http.StatusBadRequest, code, ext)
 		assert.Equal(t, "validation_failed", out["error_code"], ext)
-		// not just any refusal: the catalog itself is what is invalid (a well-formed
-		// one is refused for another reason, the versioned API owns the write)
+		// refused before the catalog is even looked at: the versioned runtime API
+		// owns every write to Runner's configuration
 		fields, _ := out["validation"].(map[string]any)
-		assert.Equal(t, "invalid runtime catalog", fields["settings"], ext)
+		assert.Contains(t, fields["extension"], "managed elsewhere", ext)
 	}
 }

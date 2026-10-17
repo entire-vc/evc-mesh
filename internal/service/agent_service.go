@@ -170,6 +170,19 @@ func (s *agentService) IsAgentKeyRevoked(ctx context.Context, keyID uuid.UUID) (
 	return s.keyRepo.IsRevoked(ctx, keyID)
 }
 
+// IsPrimaryKeyStale implements PrimaryKeyStaleChecker. A digest of "" (an agent
+// that predates the keyed digest) or an unwired keyRepo is never stale.
+func (s *agentService) IsPrimaryKeyStale(ctx context.Context, agentID uuid.UUID, digest string) (bool, error) {
+	if s.keyRepo == nil || digest == "" {
+		return false, nil
+	}
+	now, err := s.keyRepo.PrimaryDigest(ctx, agentID)
+	if err != nil {
+		return false, err
+	}
+	return now != digest, nil
+}
+
 // generateAPIKey creates a raw API key in the format: agk_{workspaceSlug}_{random_hex}.
 func generateAPIKey(workspaceSlug string) (string, error) {
 	b := make([]byte, apiKeyRandomBytes)
@@ -579,7 +592,21 @@ func (s *agentService) authenticateViaAgentKey(ctx context.Context, workspaceID 
 			resolved.GrantID = &grantID
 		}
 	}
+	s.touchKeyUsed(ctx, &key.ID, nil)
 	return &resolved, nil
+}
+
+// touchKeyUsed stamps last_used for GET /agents/{id}/keys; best effort, a
+// failure never fails a login. Exactly one of keyID / primaryAgent is set.
+func (s *agentService) touchKeyUsed(ctx context.Context, keyID, primaryAgent *uuid.UUID) {
+	if s.keyRepo == nil {
+		return
+	}
+	if keyID != nil {
+		_ = s.keyRepo.TouchLastUsed(ctx, *keyID)
+	} else if primaryAgent != nil {
+		_ = s.keyRepo.TouchPrimaryLastUsed(ctx, *primaryAgent)
+	}
 }
 
 // authenticateViaGrant verifies apiKey against an active connection's own key
@@ -615,6 +642,9 @@ func (s *agentService) authenticateViaGrant(ctx context.Context, grant *domain.A
 	resolved.WorkspaceRole = grant.Role
 	grantID := grant.ID
 	resolved.GrantID = &grantID
+	if grant.WorkspaceID == agent.WorkspaceID {
+		s.touchKeyUsed(ctx, nil, &agent.ID)
+	}
 	return &resolved, nil
 }
 
@@ -671,6 +701,7 @@ func (s *agentService) authenticateLegacy(ctx context.Context, workspaceID uuid.
 	// Same defensive copy as authenticateViaGrant — see its comment.
 	resolved := *agent
 	resolved.WorkspaceRole = legacyGrantRole
+	s.touchKeyUsed(ctx, nil, &agent.ID)
 	return &resolved, nil
 }
 

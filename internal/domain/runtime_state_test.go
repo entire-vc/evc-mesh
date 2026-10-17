@@ -178,3 +178,14 @@ func TestRuntimeReasonCodes_HaveWebTranslations(t *testing.T) {
 		assert.Len(t, board.RuntimeState.Reasons, len(validReasonCodes), "%s locale has keys outside the closed list", lang)
 	}
 }
+
+func TestValidRuntimeReasonCode_RunnerCodes(t *testing.T) {
+	for _, c := range []RuntimeReasonCode{ReasonBlockerInBacklog, ReasonDependenciesUnreadable} {
+		if !ValidRuntimeReasonCode(c) {
+			t.Fatalf("%s must be accepted", c)
+		}
+	}
+	if ValidRuntimeReasonCode("no_such_code") {
+		t.Fatal("unknown code accepted")
+	}
+}

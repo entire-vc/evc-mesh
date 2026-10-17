@@ -42,6 +42,7 @@ export function buildPayload(schema: FieldSchema, values: Values): Values {
   const out: Values = {};
   for (const [name, f] of Object.entries(schema.properties ?? {})) {
     if (!isVisible(f, values)) continue;
+    if (f.readOnly) continue; // derived by the server (e.g. bot_username): never written back
     const v = values[name];
     if (f.type === "object" && f.properties) {
       out[name] = buildPayload(f, (v && typeof v === "object" ? v : {}) as Values);

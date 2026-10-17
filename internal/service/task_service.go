@@ -1089,6 +1089,7 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		// Workflow-rules transition gate: advisory or strict enforcement from ProjectRuleConfig.
 		if enfMode, vMsg := s.applyTransitionGate(ctx, task, oldStatusID, status); vMsg != "" {
 			if enfMode == domain.RuleConfigEnforcementStrict {
+				s.logTransitionViolation(ctx, task, oldStatusID, status.ID, vMsg, "blocked")
 				return apierror.ForbiddenWithDetails("workflow_transition_blocked", vMsg)
 			}
 			// Advisory: record the permitted violation only after the move commits.
@@ -1293,6 +1294,9 @@ func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input Move
 		if err := s.taskRepo.Update(ctx, task); err != nil {
 			return err
 		}
+	}
+	if transitionViolation != nil {
+		s.logTransitionViolation(ctx, task, oldStatusID, *input.StatusID, transitionViolation["violation"].(string), "allowed")
 	}
 	if transitionViolation != nil && !durable {
 		s.logActivity(ctx, task.ProjectID, taskID, "task.transition_violation", transitionViolation)
@@ -2079,6 +2083,39 @@ func (s *taskService) notifyReviewer(ctx context.Context, task *domain.Task, eve
 
 // logActivity writes an activity log entry and publishes an event bus message.
 // Failures are logged but not propagated.
+// logTransitionViolation records a workflow-transition breach in rule_violation_logs
+// (advisory: action_taken "allowed", strict: "blocked"). Best-effort: a journal
+// failure never fails or changes the move.
+func (s *taskService) logTransitionViolation(ctx context.Context, task *domain.Task, fromStatusID, toStatusID uuid.UUID, msg, action string) {
+	if s.rulesConfigSvc == nil || s.projectRepo == nil {
+		return
+	}
+	proj, err := s.projectRepo.GetByID(ctx, task.ProjectID)
+	if err != nil || proj == nil {
+		log.Printf("[rule-violation] WARNING cannot resolve workspace for project %s: %v", task.ProjectID, err)
+		return
+	}
+	actorID, actorType := actorctx.FromContext(ctx)
+	detail, _ := json.Marshal(map[string]interface{}{
+		"task_id":        task.ID.String(),
+		"violation":      msg,
+		"from_status_id": fromStatusID.String(),
+		"to_status_id":   toStatusID.String(),
+	})
+	projectID := task.ProjectID
+	if err := s.rulesConfigSvc.LogViolation(ctx, &domain.RuleViolationLog{
+		WorkspaceID:     proj.WorkspaceID,
+		ProjectID:       &projectID,
+		ActorID:         actorID,
+		ActorType:       string(actorType),
+		RuleType:        domain.RuleConfigTypeWorkflow,
+		ViolationDetail: detail,
+		ActionTaken:     action,
+	}); err != nil {
+		log.Printf("[rule-violation] WARNING log failed task %s: %v", task.ID, err)
+	}
+}
+
 func (s *taskService) logActivity(ctx context.Context, projectID, entityID uuid.UUID, action string, changes map[string]interface{}) {
 	if s.activityRepo == nil {
 		return

@@ -53,6 +53,14 @@ type statusCache struct {
 	mu      sync.Mutex
 	now     func() time.Time
 	entries map[healthKey]healthEntry
+	// flight holds the check in progress per key: callers of the same key wait
+	// for it, other keys are never blocked by it.
+	flight map[healthKey]*healthCall
+}
+
+type healthCall struct {
+	done  chan struct{}
+	entry healthEntry
 }
 
 // ResolveStatus is the single function behind GET /workspaces/{ws}/extensions
@@ -129,27 +137,71 @@ func (r *Registry) status(ctx context.Context, workspaceID uuid.UUID, extensionI
 		// Nothing to check on a disabled extension; do not cache.
 		return st, nil
 	}
+	res.WorkspaceID = workspaceID
 	e := r.health.get(healthKey{workspaceID, extensionID}, force, func() HealthReport { return p.Health(ctx, res) })
 	st.Health, st.HealthCheckedAt, st.LastError = e.report, e.at, e.lastErr
 	return st, nil
 }
 
-func (c *statusCache) get(k healthKey, force bool, compute func() HealthReport) healthEntry {
+// drop forgets the cached reports of an extension in every workspace, so the
+// next status read computes health against the current provider.
+func (c *statusCache) drop(ext string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for k := range c.entries {
+		if k.ext == ext {
+			delete(c.entries, k)
+		}
+	}
+}
+
+// get returns the cached report or computes one. The check (network I/O for
+// external extensions) runs outside the lock; concurrent callers of the same
+// key share one run.
+func (c *statusCache) get(k healthKey, force bool, compute func() HealthReport) (out healthEntry) {
+	c.mu.Lock()
+	if call, ok := c.flight[k]; ok {
+		c.mu.Unlock()
+		<-call.done
+		return call.entry
+	}
 	now := c.now()
 	if e, ok := c.entries[k]; ok && !force && now.Sub(e.at) < HealthTTL {
+		c.mu.Unlock()
 		return e
 	}
-	rep := compute()
-	e := healthEntry{report: rep, at: now}
-	if !rep.OK {
-		e.lastErr = rep.Message
-	} else if prev, ok := c.entries[k]; ok {
-		e.lastErr = prev.lastErr
+	call := &healthCall{done: make(chan struct{})}
+	if c.flight == nil {
+		c.flight = map[healthKey]*healthCall{}
 	}
-	c.entries[k] = e
-	return e
+	c.flight[k] = call
+	c.mu.Unlock()
+
+	var rep HealthReport
+	finished := false
+	defer func() {
+		// A panicking check still releases the waiters and frees the key.
+		c.mu.Lock()
+		if finished {
+			e := healthEntry{report: rep, at: now}
+			if !rep.OK {
+				e.lastErr = rep.Message
+			} else if prev, ok := c.entries[k]; ok {
+				e.lastErr = prev.lastErr
+			}
+			c.entries[k] = e
+			call.entry = e
+		} else {
+			call.entry = healthEntry{report: HealthReport{Message: "health check failed"}, at: now, lastErr: "health check failed"}
+		}
+		delete(c.flight, k)
+		c.mu.Unlock()
+		out = call.entry
+		close(call.done)
+	}()
+	rep = compute()
+	finished = true
+	return out
 }
 
 func declaredCapabilities(c Capabilities) []string {

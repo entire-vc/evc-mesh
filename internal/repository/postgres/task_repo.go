@@ -95,6 +95,7 @@ const taskComputedCols = `
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = tasks.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = tasks.id) AS vcs_link_count,
 	(SELECT v.pipeline_status FROM vcs_links v WHERE v.task_id = tasks.id AND v.pipeline_status IS NOT NULL ORDER BY v.pipeline_updated_at DESC LIMIT 1) AS vcs_pipeline_status,
+	ARRAY(SELECT DISTINCT v.provider FROM vcs_links v WHERE v.task_id = tasks.id ORDER BY 1) AS vcs_providers,
 	` + falseOpenComputedColsNoAlias + `,
 	CASE
 		WHEN tasks.assignee_type = 'agent' THEN
@@ -157,6 +158,7 @@ const taskComputedColsAliased = `
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = t.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = t.id) AS vcs_link_count,
 	(SELECT v.pipeline_status FROM vcs_links v WHERE v.task_id = t.id AND v.pipeline_status IS NOT NULL ORDER BY v.pipeline_updated_at DESC LIMIT 1) AS vcs_pipeline_status,
+	ARRAY(SELECT DISTINCT v.provider FROM vcs_links v WHERE v.task_id = t.id ORDER BY 1) AS vcs_providers,
 	` + falseOpenComputedColsAliased + `,
 	CASE
 		WHEN t.assignee_type = 'agent' THEN
@@ -260,6 +262,9 @@ type taskRow struct {
 	ArtifactCount     int     `db:"artifact_count"`
 	VCSLinkCount      int     `db:"vcs_link_count"`
 	VCSPipelineStatus *string `db:"vcs_pipeline_status"`
+	// VCSProviders is the distinct providers of the task's links, so a card can
+	// draw a per-provider badge (extension slot task.badge) without a fetch.
+	VCSProviders pq.StringArray `db:"vcs_providers"`
 
 	// False-open raw stats (task #c80fe88f) — see falseOpenComputedCols*
 	// and toDomain's threshold logic below.
@@ -333,6 +338,7 @@ func (r *taskRow) toDomainBase() domain.Task {
 		ArtifactCount:           r.ArtifactCount,
 		VCSLinkCount:            r.VCSLinkCount,
 		VCSPipelineStatus:       r.VCSPipelineStatus,
+		VCSProviders:            []string(r.VCSProviders),
 		FalseOpen:               r.falseOpenSignal(),
 	}
 }

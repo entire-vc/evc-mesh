@@ -466,8 +466,13 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // its manifest id in the instance-level catalog (installed_extensions), which no
 // workspace owns, so there is no tenant to resolve. Both are 501 stubs for now;
 // the instance-admin check arrives with the real handlers (W2.9, W4.1).
+// PUT /extensions/:ext_id/allowed is the same instance-level shape: :ext_id is a
+// manifest id, the allow-list row belongs to the whole deployment, and
+// ExtensionInstanceAdminHandler answers 403 unless the caller is an instance
+// admin before it writes anything.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
+	"/api/v1/extensions/:ext_id/allowed":                                                          true,
 	"/api/v1/extensions/:ext_id/update":                                                           true,
 	"/api/v1/extensions/:ext_id/rollback":                                                         true,
 	"/api/v1/memories/:id":                                                                        true,

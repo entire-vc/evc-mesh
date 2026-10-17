@@ -28,6 +28,33 @@ const documentContentType = "text/markdown"
 // "whatever the client sent".
 const maxDocumentBodyBytes = 5 << 20 // 5 MiB
 
+// Default soft/hard body limits (overridable via WithDocumentBodyLimits, env
+// DOC_BODY_SOFT_LIMIT_BYTES / DOC_BODY_HARD_LIMIT_BYTES). Past soft a write
+// succeeds with a warning; past hard it is refused. Both hint at child
+// documents via parent_id.
+const (
+	defaultDocBodySoftLimit = 30 << 10
+	defaultDocBodyHardLimit = 120 << 10
+)
+
+// WithDocumentBodyLimits sets the soft and hard body size limits in bytes. A
+// non-positive value keeps the default; hard is raised to soft if lower.
+func WithDocumentBodyLimits(soft, hard int) DocumentServiceOption {
+	return func(s *documentService) {
+		if soft > 0 {
+			s.softBodyLimit = soft
+		}
+		if hard > 0 {
+			s.hardBodyLimit = hard
+		}
+		if s.hardBodyLimit < s.softBodyLimit {
+			s.hardBodyLimit = s.softBodyLimit
+		}
+	}
+}
+
+const docSplitHint = "split sections into child documents (create_doc with parent_id) and keep this one as an index"
+
 // binarySignaturePrefixes are magic-byte prefixes of formats a document body
 // must never be — a document is stored and served as text/markdown, and
 // anything else belongs in a task artifact, not here.
@@ -162,6 +189,9 @@ type DocumentStore interface {
 }
 
 type documentService struct {
+	softBodyLimit int
+	hardBodyLimit int
+
 	documentRepo repository.DocumentRepository
 	storage      DocumentStore
 	projectRepo  repository.ProjectRepository
@@ -246,6 +276,9 @@ func NewDocumentService(
 		storage:      store,
 		projectRepo:  projectRepo,
 		commentRepo:  commentRepo,
+
+		softBodyLimit: defaultDocBodySoftLimit,
+		hardBodyLimit: defaultDocBodyHardLimit,
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -296,6 +329,9 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 		return nil, apierror.ValidationError(map[string]string{
 			"body": fmt.Sprintf("body must be at most %d bytes", maxDocumentBodyBytes),
 		})
+	}
+	if lerr := s.checkBodyLimit("body", len(input.Body)); lerr != nil {
+		return nil, lerr
 	}
 	if verr := rejectBinaryBody([]byte(input.Body)); verr != nil {
 		return nil, verr
@@ -399,6 +435,7 @@ func (s *documentService) Create(ctx context.Context, input CreateDocumentInput)
 		s.watch.AutoSubscribe(ctx, doc.ID, createdBy, string(createdByType), domain.WatchSourceAuthor)
 	}
 
+	doc.Warning = s.bodyWarning(len(input.Body))
 	return doc, nil
 }
 
@@ -697,10 +734,12 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	if err != nil {
 		return nil, nil, err
 	}
+	var warning string
 	if newBody != nil {
 		if verr := rejectBinaryBody([]byte(*newBody)); verr != nil {
 			return nil, nil, verr
 		}
+		warning = s.bodyWarning(len(*newBody))
 	}
 
 	// ## Write-back to an external source happens BEFORE the local write
@@ -862,9 +901,11 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// edit was lost when it was not.
 	if enriched, getErr := s.documentRepo.GetByIDInWorkspace(ctx, doc.ID, workspaceID); getErr == nil && enriched != nil {
 		enriched.Body = doc.Body
+		enriched.Warning = warning
 		return enriched, landed, nil
 	}
 
+	doc.Warning = warning
 	return doc, landed, nil
 }
 
@@ -884,6 +925,9 @@ func (s *documentService) resolveBodyWrite(ctx context.Context, doc *domain.Docu
 				"body": fmt.Sprintf("body must be at most %d bytes", maxDocumentBodyBytes),
 			})
 		}
+		if lerr := s.checkBodyLimit("body", len(*input.Body)); lerr != nil {
+			return nil, lerr
+		}
 		return input.Body, nil
 	}
 
@@ -896,6 +940,9 @@ func (s *documentService) resolveBodyWrite(ctx context.Context, doc *domain.Docu
 			"append_body": fmt.Sprintf("body must be at most %d bytes; the document is already %d",
 				maxDocumentBodyBytes, len(current)),
 		})
+	}
+	if lerr := s.checkBodyLimit("append_body", len(current)+len(*input.AppendBody)); lerr != nil {
+		return nil, lerr
 	}
 	appended := current + *input.AppendBody
 	return &appended, nil
@@ -1443,4 +1490,22 @@ func (s *documentService) requireParentInProject(ctx context.Context, parentID, 
 		})
 	}
 	return nil
+}
+
+// checkBodyLimit refuses a body over the hard limit. field names the JSON field.
+func (s *documentService) checkBodyLimit(field string, size int) error {
+	if size > s.hardBodyLimit {
+		return apierror.ValidationError(map[string]string{
+			field: fmt.Sprintf("document body is %d bytes, over the %d byte limit: %s", size, s.hardBodyLimit, docSplitHint),
+		})
+	}
+	return nil
+}
+
+// bodyWarning returns the soft-limit warning for a stored body of size bytes.
+func (s *documentService) bodyWarning(size int) string {
+	if size > s.softBodyLimit {
+		return fmt.Sprintf("document body is %d bytes, over the soft limit of %d: %s", size, s.softBodyLimit, docSplitHint)
+	}
+	return ""
 }

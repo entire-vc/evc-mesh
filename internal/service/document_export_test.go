@@ -160,6 +160,7 @@ func TestExportTreeWalk(t *testing.T) {
 
 	t.Run("a tree past the byte-size ceiling is refused mid-walk, not with a silent truncation", func(t *testing.T) {
 		f := setupDocumentService(t)
+		WithDocumentBodyLimits(maxDocumentBodyBytes, maxDocumentBodyBytes)(f.svc)
 		ctx := context.Background()
 
 		root := f.create(t, "Root", "") // 0 bytes, keeps the arithmetic exact

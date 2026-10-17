@@ -19,6 +19,9 @@ import (
 // these strings, so never rename one — add a new code instead. Each constant
 // notes the params the writer is expected to fill.
 const (
+	// SysCodeVCSWebhook — "🤖 Auto:" comment from the GitHub/GitLab PR/MR webhook
+	// (merge/close notice). params: none; metadata.source names the webhook.
+	SysCodeVCSWebhook = "vcs_webhook"
 	// SysCodeMovedToTriage — task moved to triage because of a "Blocking @user"
 	// marker above. params: {"target": "<handle>"}.
 	SysCodeMovedToTriage = "moved_to_triage"

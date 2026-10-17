@@ -1,72 +1,66 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, useLocation, useParams, useSearchParams } from "react-router";
-import { AlertTriangle, PackageSearch, Plug, RefreshCw } from "lucide-react";
+import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router";
+import { Plug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { useMemberStore } from "@/stores/member";
-import { useExtensionsOverview, type ExtensionsLoadState } from "@/hooks/useExtensionsOverview";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useExtensionCatalog } from "@/hooks/useExtensionCatalog";
+import { getInstanceOverview } from "@/lib/extension-instance";
 import { ExtensionsCatalog } from "@/components/extensions/catalog";
-import { IntegrationsPage } from "@/pages/integrations";
+import { InstalledExtensions } from "@/components/extensions/installed";
+import { RepoInstallDialog } from "@/components/extensions/repo-install-dialog";
+import { UpdatesTab } from "@/components/extensions/updates-tab";
+import { useRepoUpdates } from "@/hooks/useRepoUpdates";
+import { RuntimeResourcesCard } from "@/components/runtime-resources-card";
+import { McpReference } from "@/pages/mcp-reference";
 
 const TABS = ["catalog", "installed", "updates"] as const;
 type ExtensionsTab = (typeof TABS)[number];
-
-// W2.8 / W2.9 are not shipped yet: the admin actions stay hidden until the flag is on.
-const ADMIN_ACTIONS_ENABLED = import.meta.env.VITE_EXTENSIONS_ADMIN_ACTIONS === "true";
 
 export function extensionsTab(search: URLSearchParams): ExtensionsTab {
   const tab = search.get("tab");
   return (TABS as readonly string[]).includes(tab ?? "") ? (tab as ExtensionsTab) : "catalog";
 }
 
-interface TabStateProps {
-  state: ExtensionsLoadState;
-  ns: "catalog" | "updates";
-}
-
-function TabState({ state, ns }: TabStateProps) {
-  const { t } = useTranslation("integrations");
-  const key = `extensionsPage.${ns}`;
-  if (state === "loading") {
-    return (
-      <div role="status" aria-label={t(`${key}.loading`)} className="space-y-3">
-        <Skeleton className="h-24 w-full rounded-xl" />
-        <Skeleton className="h-24 w-full rounded-xl" />
-      </div>
-    );
-  }
-  const isError = state === "error";
-  const Icon = isError ? AlertTriangle : ns === "catalog" ? PackageSearch : RefreshCw;
-  return (
-    <div
-      role={isError ? "alert" : undefined}
-      className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center"
-    >
-      <Icon className="h-8 w-8 text-muted-foreground" aria-hidden />
-      <p className="text-sm font-medium">{t(`${key}.${isError ? "errorTitle" : "emptyTitle"}`)}</p>
-      <p className="max-w-prose text-sm text-muted-foreground">
-        {t(`${key}.${isError ? "errorBody" : "emptyBody"}`)}
-      </p>
-      {isError && (
-        <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
-          {t(`${key}.retry`)}
-        </Button>
-      )}
-    </div>
-  );
-}
-
 export function ExtensionsPage() {
   const { t } = useTranslation("integrations");
   const [search, setSearch] = useSearchParams();
-  const { myRole } = useMemberStore();
-  const overview = useExtensionsOverview();
+  const { wsSlug } = useParams();
+  const { fetchMyRole } = useMemberStore();
+  const currentWorkspace = useWorkspaceStore((st) => st.currentWorkspace);
   const catalog = useExtensionCatalog();
   const tab = extensionsTab(search);
-  const isAdmin = myRole === "owner" || myRole === "admin";
+
+  // The role is not carried over on a direct load or reload; the removed legacy page used to fetch it.
+  const workspaceId = currentWorkspace?.id;
+  useEffect(() => {
+    if (workspaceId) void fetchMyRole(workspaceId);
+  }, [workspaceId, fetchMyRole]);
+
+  // The instance administrator is not the same person as the admin of the current
+  // workspace: only the instance API can say who may open the settings page.
+  const [instanceAdmin, setInstanceAdmin] = useState<boolean | null>(null);
+  const [autoUpdate, setAutoUpdate] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
+  const isInstanceAdmin = instanceAdmin === true;
+  const repoUpdates = useRepoUpdates(instanceAdmin);
+  useEffect(() => {
+    let live = true;
+    getInstanceOverview().then(
+      (ov) => {
+        if (!live) return;
+        setInstanceAdmin(true);
+        setAutoUpdate(ov.auto_update);
+      },
+      () => live && setInstanceAdmin(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const select = (next: ExtensionsTab) => {
     const params = new URLSearchParams(search);
@@ -79,13 +73,12 @@ export function ExtensionsPage() {
     <div className="flex h-full flex-col">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-prose text-sm text-muted-foreground">{t("extensionsPage.intro")}</p>
-        {ADMIN_ACTIONS_ENABLED && isAdmin && (
+        {isInstanceAdmin && (
           <div className="flex items-center gap-3">
-            {/* Route lands with W2.8; until then the entry is inert, not a dead link. */}
-            <span aria-disabled="true" className="cursor-not-allowed text-sm text-muted-foreground/60">
+            <Link to={`/w/${wsSlug}/instance/extensions`} className="text-sm text-primary hover:underline">
               {t("extensionsPage.instanceSettings")}
-            </span>
-            <Button size="sm" disabled>
+            </Link>
+            <Button size="sm" onClick={() => setInstallOpen(true)}>
               <Plug className="mr-1 h-4 w-4" aria-hidden />
               {t("extensionsPage.installFromRepo")}
             </Button>
@@ -117,12 +110,12 @@ export function ExtensionsPage() {
               )}
             >
               {t(`extensionsPage.tabs.${id}`)}
-              {id === "updates" && overview.updatesCount > 0 && (
+              {id === "updates" && repoUpdates.count > 0 && (
                 <Badge
                   variant="default"
-                  aria-label={t("extensionsPage.updatesCount", { count: overview.updatesCount })}
+                  aria-label={t("extensionsPage.updatesCount", { count: repoUpdates.count })}
                 >
-                  {overview.updatesCount}
+                  {repoUpdates.count}
                 </Badge>
               )}
             </button>
@@ -138,12 +131,29 @@ export function ExtensionsPage() {
       >
         {tab === "catalog" && <ExtensionsCatalog catalog={catalog} />}
         {tab === "installed" && (
-          // Built-in connections (GitLab, GitHub, Spark, Team Relay, Telegram) live
-          // here until W2.5 moves them into the extension list.
-          <IntegrationsPage />
+          <div className="space-y-8">
+            <InstalledExtensions catalog={catalog} />
+            {/* MCP is a reference card, not an extension. */}
+            <section aria-labelledby="legacy-connections">
+              <h2 id="legacy-connections" className="mb-3 text-sm font-semibold">
+                {t("installed.legacyTitle")}
+              </h2>
+              <McpReference />
+            </section>
+            {currentWorkspace && <RuntimeResourcesCard workspaceId={currentWorkspace.id} />}
+          </div>
         )}
-        {tab === "updates" && <TabState state={overview.state} ns="updates" />}
+        {tab === "updates" && <UpdatesTab state={repoUpdates} autoUpdate={autoUpdate} onAutoUpdateChange={setAutoUpdate} />}
       </div>
+      {installOpen && (
+        <RepoInstallDialog
+          onClose={() => setInstallOpen(false)}
+          onInstalled={() => {
+            repoUpdates.reload();
+            catalog.refresh();
+          }}
+        />
+      )}
     </div>
   );
 }

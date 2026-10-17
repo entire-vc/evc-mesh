@@ -25,8 +25,18 @@ type Manifest struct {
 	Settings     json.RawMessage `json:"settings,omitempty"`
 	Schemas      json.RawMessage `json:"schemas,omitempty"`
 	Capabilities Capabilities    `json:"capabilities"`
+	External     *External       `json:"external,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
+}
+
+// External is the manifest block of a runtime=external extension: where the
+// service lives (a workspace setting holds its base URL) and its endpoints.
+type External struct {
+	BaseURLSetting string `json:"base_url_setting"`
+	HealthPath     string `json:"health_path"`
+	InstallPath    string `json:"install_path"`
+	EventsPath     string `json:"events_path"`
 }
 
 // Levels says at which scopes the extension has settings.
@@ -75,6 +85,10 @@ func DecodeSettings[T any](settings map[string]any) (T, error) {
 // InstanceSecretKeys returns the instance-level settings fields the manifest
 // marks x-secret. The instance level may be inline or a "#/schemas/<name>" ref.
 func (m Manifest) InstanceSecretKeys() []string { return m.SecretKeys("instance") }
+
+// HasInstanceFields reports whether the instance level declares at least one
+// setting, so an empty schema ({"properties":{}}) gets no form on the admin page.
+func (m Manifest) HasInstanceFields() bool { return len(m.SettingFields("instance")) > 0 }
 
 // SettingField is what the manifest says about one settings field.
 type SettingField struct {

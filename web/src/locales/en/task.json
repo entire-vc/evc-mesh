@@ -242,6 +242,25 @@
       "updateTitleFailed": "Failed to update title"
     }
   },
+  "slots": {
+    "actions": {
+      "menu": "Extension actions"
+    },
+    "gitlab": {
+      "badge": "GitLab merge requests",
+      "showMergeRequests": "Show GitLab merge requests",
+      "pipeline": {
+        "pending": "Pipeline pending",
+        "running": "Pipeline running",
+        "success": "Pipeline passed",
+        "failed": "Pipeline failed",
+        "canceled": "Pipeline canceled",
+        "skipped": "Pipeline skipped",
+        "manual": "Pipeline waiting for manual action"
+      }
+    },
+    "unavailable": "{{name}} is unavailable right now."
+  },
   "subtasks": {
     "add": "Add subtask",
     "addFailed": "Failed to add subtask.",

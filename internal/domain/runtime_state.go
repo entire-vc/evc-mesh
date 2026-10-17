@@ -50,22 +50,24 @@ func ValidRuntimeKind(k RuntimeKind) bool {
 type RuntimeReasonCode string
 
 const (
-	ReasonReviewRefeedHold    RuntimeReasonCode = "review_refeed_hold"    // reviewed already; waits for a new commit or comment
-	ReasonHumanGate           RuntimeReasonCode = "human_gate"            // waits for a human answer
-	ReasonCheckedOutElsewhere RuntimeReasonCode = "checked_out_elsewhere" // another lane holds the checkout
-	ReasonRecentlyDone        RuntimeReasonCode = "recently_done"         // closed recently; not fed again
-	ReasonOutsideLaneScope    RuntimeReasonCode = "outside_lane_scope"    // not in the lane's selection
-	ReasonRescueExhausted     RuntimeReasonCode = "rescue_exhausted"      // lane gave up on the card; the lead decides
-	ReasonTurnQuarantined     RuntimeReasonCode = "turn_quarantined"      // lane turn quarantined; manual check needed
-	ReasonGuardRefused        RuntimeReasonCode = "guard_refused"         // lane refused to take it; paused
-	ReasonCompletionSignal    RuntimeReasonCode = "completion_signal"     // finished; waits for a human to close
-	ReasonSupervisedTodo      RuntimeReasonCode = "supervised_todo"       // supervised; waits for a human to close
-	ReasonHumanDecisionGate   RuntimeReasonCode = "human_decision_gate"   // pavel-gated: waits for a human decision
-	ReasonUmbrella            RuntimeReasonCode = "umbrella"              // epic: waits for child cards
-	ReasonTurnPending         RuntimeReasonCode = "turn_pending"          // lane turn not closed yet
-	ReasonReviewCooldown      RuntimeReasonCode = "review_cooldown"       // just sent to review; params: minutes
-	ReasonPause               RuntimeReasonCode = "pause"                 // operator pause
-	ReasonPark                RuntimeReasonCode = "park"                  // explicitly parked
+	ReasonReviewRefeedHold       RuntimeReasonCode = "review_refeed_hold"      // reviewed already; waits for a new commit or comment
+	ReasonHumanGate              RuntimeReasonCode = "human_gate"              // waits for a human answer
+	ReasonCheckedOutElsewhere    RuntimeReasonCode = "checked_out_elsewhere"   // another lane holds the checkout
+	ReasonRecentlyDone           RuntimeReasonCode = "recently_done"           // closed recently; not fed again
+	ReasonOutsideLaneScope       RuntimeReasonCode = "outside_lane_scope"      // not in the lane's selection
+	ReasonRescueExhausted        RuntimeReasonCode = "rescue_exhausted"        // lane gave up on the card; the lead decides
+	ReasonTurnQuarantined        RuntimeReasonCode = "turn_quarantined"        // lane turn quarantined; manual check needed
+	ReasonGuardRefused           RuntimeReasonCode = "guard_refused"           // lane refused to take it; paused
+	ReasonCompletionSignal       RuntimeReasonCode = "completion_signal"       // finished; waits for a human to close
+	ReasonSupervisedTodo         RuntimeReasonCode = "supervised_todo"         // supervised; waits for a human to close
+	ReasonHumanDecisionGate      RuntimeReasonCode = "human_decision_gate"     // pavel-gated: waits for a human decision
+	ReasonUmbrella               RuntimeReasonCode = "umbrella"                // epic: waits for child cards
+	ReasonTurnPending            RuntimeReasonCode = "turn_pending"            // lane turn not closed yet
+	ReasonReviewCooldown         RuntimeReasonCode = "review_cooldown"         // just sent to review; params: minutes
+	ReasonPause                  RuntimeReasonCode = "pause"                   // operator pause
+	ReasonPark                   RuntimeReasonCode = "park"                    // explicitly parked
+	ReasonBlockerInBacklog       RuntimeReasonCode = "blocker_in_backlog"      // blocker sits in backlog; nobody takes it
+	ReasonDependenciesUnreadable RuntimeReasonCode = "dependencies_unreadable" // no process agent can read the blocker (403)
 )
 
 var validReasonCodes = map[RuntimeReasonCode]struct{}{
@@ -73,7 +75,7 @@ var validReasonCodes = map[RuntimeReasonCode]struct{}{
 	ReasonOutsideLaneScope: {}, ReasonRescueExhausted: {}, ReasonTurnQuarantined: {}, ReasonGuardRefused: {},
 	ReasonCompletionSignal: {}, ReasonSupervisedTodo: {}, ReasonHumanDecisionGate: {},
 	ReasonUmbrella: {}, ReasonTurnPending: {}, ReasonReviewCooldown: {},
-	ReasonPause: {}, ReasonPark: {},
+	ReasonPause: {}, ReasonPark: {}, ReasonBlockerInBacklog: {}, ReasonDependenciesUnreadable: {},
 }
 
 // ValidRuntimeReasonCode reports whether c is in the closed list.

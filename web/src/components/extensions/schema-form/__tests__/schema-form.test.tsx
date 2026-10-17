@@ -111,6 +111,11 @@ describe("resolveSchema / validate", () => {
     expect(validate(bigInput, { x: "b" }, { secretsSet: new Set() })).toEqual({ x: { code: "pattern" } });
   });
 
+  it("never sends a readOnly (server-derived) field", () => {
+    const schema = { type: "object", properties: { name: { type: "string" }, bot_username: { type: "string", readOnly: true } } } as FieldSchema;
+    expect(buildPayload(schema, { name: "x", bot_username: "unrelated_bot" })).toEqual({ name: "x" });
+  });
+
   it("sends false for an untouched required boolean", () => {
     const schema = { type: "object", required: ["on"], properties: { on: { type: "boolean" }, opt: { type: "boolean" } } } as FieldSchema;
     expect(buildPayload(schema, {})).toEqual({ on: false });
@@ -166,6 +171,16 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
     expect((await screen.findAllByText("Fill in this field")).length).toBe(2);
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByLabelText(/GitLab address/).getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("shows a whole-form rejection (details.settings) instead of dropping it", async () => {
+    const onSubmit = vi.fn().mockRejectedValue(
+      new ApiRequestError("Validation failed", "validation_failed", 400, { settings: "bot_token is required" }),
+    );
+    form(gitlab, "workspace", { onSubmit, value: { token: "***" } });
+    fireEvent.change(screen.getByLabelText(/GitLab address/), { target: { value: "https://ok.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("bot_token is required");
   });
 
   it("maps server details to fields, line by line", async () => {

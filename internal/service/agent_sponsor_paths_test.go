@@ -23,7 +23,9 @@ func (k *keyRepoStub) Create(_ context.Context, row *domain.AgentAPIKey) error {
 	k.createdRows++
 	return nil
 }
-func (k *keyRepoStub) CountActiveByAgent(context.Context, uuid.UUID) (int, error) { return 0, nil }
+func (k *keyRepoStub) CountActiveByAgent(context.Context, uuid.UUID, time.Time) (int, error) {
+	return 0, nil
+}
 func (k *keyRepoStub) GetByPrefix(context.Context, uuid.UUID, string) (*domain.AgentAPIKey, error) {
 	panic("unexpected")
 }
@@ -90,4 +92,14 @@ func TestAgentKeyService_Issue_RecordsSponsor(t *testing.T) {
 	_, err = svc.Issue(actorctx.WithActor(context.Background(), uuid.New(), domain.ActorTypeAgent), agent.ID, "ci", time.Hour)
 	require.NoError(t, err)
 	assert.Zero(t, rec2.calls, "a non-human issuer does not become the sponsor")
+}
+
+func (k *keyRepoStub) TouchLastUsed(context.Context, uuid.UUID) error           { return nil }
+func (k *keyRepoStub) TouchPrimaryLastUsed(context.Context, uuid.UUID) error    { return nil }
+func (k *keyRepoStub) PrimaryDigest(context.Context, uuid.UUID) (string, error) { return "", nil }
+func (k *keyRepoStub) WithAgentLock(_ context.Context, _ uuid.UUID, fn func() error) error {
+	return fn()
+}
+func (k *keyRepoStub) PrimaryLastUsed(context.Context, uuid.UUID) (*time.Time, error) {
+	return nil, nil
 }

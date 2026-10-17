@@ -66,6 +66,7 @@ var auditAllowList = map[string]string{
 	"DELETE /documents/:doc_id/watch":        "the caller's own watch subscription; removing it affects nobody else",
 
 	"PATCH /agents/me":                "acts on the caller's own agent record only (route has no id); the handler refuses a callback_url from a connector (server-side request to a caller-chosen address), the rest is cosmetic self-description",
+	"POST /agents/me/controller":      "the caller's own controller lease, keyed by the agent key; route has no id and cannot name another agent",
 	"POST /agents/me/sessions/report": "the caller's own usage telemetry; route has no id and cannot name another agent",
 	"POST /agents/heartbeat":          "the caller's own presence; route has no id and cannot name another agent",
 
@@ -82,6 +83,9 @@ var auditAllowList = map[string]string{
 	"DELETE /me/push-subscriptions":              "keyed on the caller's user_id, which an agent does not have",
 	"POST /me/mentions/:comment_id/seen":         "marks the caller's own mention row as seen; another actor's rows are not addressable",
 	"POST /me/document-mentions/:dcom_id/seen":   "marks the caller's own mention row as seen; another actor's rows are not addressable",
+
+	"POST /ext/me/token/rotate":     "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
+	"DELETE /ext/me/token/previous": "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
 
 	"POST /spark/agents/:agent_id/install": "handler calls requireRegisterAgent for the target workspace; PermRegisterAgent is absent from agentPerms, so no agent identity passes",
 }

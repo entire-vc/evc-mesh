@@ -34,8 +34,10 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/builtin"
+	"github.com/entire-vc/evc-mesh/internal/extensions/external"
 	githubext "github.com/entire-vc/evc-mesh/internal/extensions/github"
 	gitlabext "github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
+	"github.com/entire-vc/evc-mesh/internal/extensions/repoinstall"
 	runnerext "github.com/entire-vc/evc-mesh/internal/extensions/runner"
 	sparkext "github.com/entire-vc/evc-mesh/internal/extensions/spark"
 	teamrelayext "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
@@ -196,7 +198,9 @@ func main() {
 	if syncErr := extensionRegistry.SyncBuiltin(context.Background(), postgres.NewInstalledExtensionRepo(db)); syncErr != nil {
 		log.Printf("[extensions] sync builtin extensions failed (registry stays usable): %v", syncErr)
 	}
-	extensionInstanceSettingsHandler := handler.NewExtensionInstanceSettingsHandler(instanceSettingRepo, instanceSettingRepo, extensionRegistry, extensionEnvSources)
+	extensionPolicyRepo := postgres.NewInstanceExtensionPolicyRepo(db)
+	extensionInstanceSettingsHandler := handler.NewExtensionInstanceSettingsHandler(instanceSettingRepo, instanceSettingRepo, extensionRegistry, extensionEnvSources).WithJournal(extensionPolicyRepo)
+	extensionInstanceAdminHandler := handler.NewExtensionInstanceAdminHandler(extensionPolicyRepo, instanceSettingRepo, postgres.NewInstalledExtensionRepo(db), instanceSettingRepo)
 	runtimeRepo := postgres.NewRuntimeRepo(db)
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
@@ -832,6 +836,7 @@ func main() {
 	documentIndexer := service.NewDocumentIndexer(documentChunkRepo, embedder, documentStore, os.Getenv("DOC_INDEX_WRITE") == "true")
 	documentService := service.NewDocumentService(documentRepo, documentStore, projectRepo, documentCommentRepo,
 		service.WithDocumentIndexer(documentIndexer),
+		service.WithDocumentBodyLimits(cfg.DocBodySoftLimit, cfg.DocBodyHardLimit),
 		service.WithDocumentWatch(documentWatchService),
 		service.WithTeamRelayRefresher(teamRelayMountService),
 		// Same collaborator on both sides of the copy's lifecycle: it refreshes a
@@ -951,6 +956,9 @@ func main() {
 	documentWatchHandler := handler.NewDocumentWatchHandler(documentWatchService)
 	depHandler := handler.NewDependencyHandler(depService, taskService).WithGraphReader(taskDependencyRepo)
 	agentHandler := handler.NewAgentHandlerWithEvents(agentService, taskService, taskStatusService, agentNotifyRedis, agentEventsRepo, sessionRepo)
+	agentControllerRepo := postgres.NewAgentControllerRepo(db)
+	agentHandler.SetControllerRepo(agentControllerRepo)
+	agentControllerHandler := handler.NewAgentControllerHandler(agentControllerRepo)
 	// Closed first thing on SIGTERM so SSE streams and long-polls end before
 	// e.Shutdown, which would otherwise wait on them until its deadline.
 	httpShutdownCh := make(chan struct{})
@@ -974,8 +982,28 @@ func main() {
 		WithStatusResolver(service.NewIntegrationStatusResolver(integrationRepo, vcsIntegrationResolver, sparkIntegrationResolver, teamRelayExt, false).WithTelegramGate(telegramGate))
 	extensionConsentRepo := postgres.NewIntegrationConsentRepo(db)
 	extensionRegistry.WithIntegrationConsents(extensionConsentRepo)
+	// Extensions installed from a repository (runtime=external): registered in
+	// the registry from installed_extensions at start and after install, update
+	// and rollback; the connect hook runs the install handshake with the
+	// service and subscribes it to its manifest events.
+	externalHTTPClient := service.NewExtensionHTTPClient()
+	externalHandshaker := &external.Handshaker{
+		Client: externalHTTPClient, Conns: integrationRepo, Secrets: secretRepo,
+		Reader: secretRepo, Subs: postgres.NewExtensionEventSubscriptionRepo(db),
+	}
+	externalRuntime := &external.Runtime{
+		Reg: extensionRegistry, Installed: postgres.NewInstalledExtensionRepo(db), Deps: extensionDeps,
+		Client: externalHTTPClient, HS: externalHandshaker,
+	}
+	if syncErr := externalRuntime.Sync(context.Background()); syncErr != nil {
+		log.Printf("[extensions] external runtime sync failed (builtin extensions are unaffected): %v", syncErr)
+	}
+	go externalRuntime.Run(context.Background(), time.Minute)
 	extensionWorkspaceHandler := handler.NewExtensionWorkspaceHandler(
-		service.NewExtensionWorkspaceService(extensionRegistry, integrationRepo, extensionConsentRepo))
+		service.NewExtensionWorkspaceService(extensionRegistry, integrationRepo, extensionConsentRepo).
+			WithAllowList(extensionPolicyRepo).
+			WithExternalHook(&external.Hook{Reg: extensionRegistry, Conns: integrationRepo, HS: externalHandshaker}).
+			WithSaveHook("telegram", service.NewTelegramSaveHook(telegramClient, telegramBotManager, telegramGate)))
 	runtimeHandler := handler.NewRuntimeHandler(runtimeRepo)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
@@ -1816,6 +1844,7 @@ func main() {
 	api.GET("/agents/me/events/stream", agentHandler.EventStream)
 	api.GET("/agents/me/tasks/poll", agentHandler.PollTasks)
 	api.POST("/agents/me/sessions/report", agentHandler.ReportSession)
+	api.POST("/agents/me/controller", agentControllerHandler.Announce)
 	// GET /agents/me/workspaces — the calling agent's OWN connections, self
 	// only, no permission check (mirrors the rest of /agents/me/*). Must
 	// stay registered ahead of /agents/:agent_id/workspaces below for the
@@ -1904,6 +1933,10 @@ func main() {
 	// (the handler checks the role; RequireUserAuth refuses agents/connectors).
 	api.GET("/extensions/:ext_id/instance-settings", extensionInstanceSettingsHandler.Get, mw.RequireUserAuth())
 	api.PUT("/extensions/:ext_id/instance-settings", extensionInstanceSettingsHandler.Put, mw.RequireUserAuth())
+	api.GET("/extensions/instance/overview", extensionInstanceAdminHandler.Overview, mw.RequireUserAuth())
+	api.GET("/extensions/instance/journal", extensionInstanceAdminHandler.Journal, mw.RequireUserAuth())
+	api.PUT("/extensions/instance/auto-update", extensionInstanceAdminHandler.SetAutoUpdate, mw.RequireUserAuth())
+	api.PUT("/extensions/:ext_id/allowed", extensionInstanceAdminHandler.SetAllowed, mw.RequireUserAuth())
 
 	// Routes contributed by registered extensions (Hooks()). GitHub's webhook
 	// route is canonical at /webhooks/github/github; the two older paths below
@@ -1948,12 +1981,28 @@ func main() {
 	api.GET("/extensions/events", extensionEventHandler.ListEvents)
 	// Instance extension catalog. Install/update/rollback are 501 stubs, human-only
 	// until instance-admin gating arrives with W1.3.
-	extensionHandler := handler.NewExtensionHandler(postgres.NewInstalledExtensionRepo(db), extensionInstanceStore)
+	extensionHandler := handler.NewExtensionHandler(postgres.NewInstalledExtensionRepo(db), extensionInstanceStore).WithAllowList(extensionPolicyRepo)
 	api.GET("/extensions", extensionHandler.List)
 	api.GET("/extensions/manifest-schema", extensionHandler.ManifestSchema)
-	api.POST("/extensions/install", extensionHandler.NotImplemented, mw.RequireUserAuth())
-	api.POST("/extensions/:ext_id/update", extensionHandler.NotImplemented, mw.RequireUserAuth())
-	api.POST("/extensions/:ext_id/rollback", extensionHandler.NotImplemented, mw.RequireUserAuth())
+	// Install from a repository (BRAT mode), Updates tab, rollback: instance admin only.
+	repoInstallSvc := &repoinstall.Service{
+		Client: repoinstall.NewClient(), Repo: postgres.NewRepoExtensionRepo(db),
+		Installed: postgres.NewInstalledExtensionRepo(db), Policy: extensionPolicyRepo,
+		OnChange: func(ctx context.Context) {
+			if syncErr := externalRuntime.Sync(ctx); syncErr != nil {
+				log.Printf("[extensions] external runtime sync after change: %v", syncErr)
+			}
+		},
+	}
+	go repoInstallSvc.RunAutoUpdate(context.Background(), 30*time.Minute)
+	extensionRepoInstallHandler := handler.NewExtensionRepoInstallHandler(repoInstallSvc, instanceSettingRepo)
+	api.POST("/extensions/install", extensionRepoInstallHandler.Install, mw.RequireUserAuth())
+	api.POST("/extensions/repo/refs", extensionRepoInstallHandler.Refs, mw.RequireUserAuth())
+	api.POST("/extensions/repo/preview", extensionRepoInstallHandler.Preview, mw.RequireUserAuth())
+	api.GET("/extensions/updates", extensionRepoInstallHandler.Updates, mw.RequireUserAuth())
+	api.POST("/extensions/update-all", extensionRepoInstallHandler.UpdateAll, mw.RequireUserAuth())
+	api.POST("/extensions/:ext_id/update", extensionRepoInstallHandler.Update, mw.RequireUserAuth())
+	api.POST("/extensions/:ext_id/rollback", extensionRepoInstallHandler.Rollback, mw.RequireUserAuth())
 	api.GET("/integrations/:int_id/event-subscriptions", extensionEventHandler.List, rbac(mw.PermManageWebhooks))
 	api.POST("/integrations/:int_id/event-subscriptions", extensionEventHandler.Subscribe, rbac(mw.PermManageWebhooks))
 	api.DELETE("/event-subscriptions/:sub_id", extensionEventHandler.Unsubscribe, rbac(mw.PermManageWebhooks))
@@ -1968,6 +2017,8 @@ func main() {
 	api.DELETE("/workspaces/:ws_id/extensions/:ext_id", extensionWorkspaceHandler.Disconnect, rbac(mw.PermManageWebhooks))
 	api.POST("/integrations/:int_id/rotate-token", extensionActorHandler.RotateToken, rbac(mw.PermManageWebhooks))
 	api.GET("/ext/me", extensionActorHandler.Me)
+	api.POST("/ext/me/token/rotate", extensionActorHandler.SelfRotate)
+	api.DELETE("/ext/me/token/previous", extensionActorHandler.SelfRevokePrevious)
 	api.PATCH("/integrations/:int_id", integrationHandler.Update, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}/settings"), rbac(mw.PermManageWebhooks))
 	api.DELETE("/integrations/:int_id", integrationHandler.Delete, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}"), rbac(mw.PermManageWebhooks))
 

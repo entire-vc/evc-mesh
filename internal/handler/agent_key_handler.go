@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -20,6 +22,16 @@ type AgentKeyHandler struct {
 // NewAgentKeyHandler creates a new AgentKeyHandler.
 func NewAgentKeyHandler(keys service.AgentKeyService) *AgentKeyHandler {
 	return &AgentKeyHandler{keys: keys}
+}
+
+// keyCtx is the request context, confined to the token's workspace for an
+// extension actor (its capability says "rotate keys", not "of any workspace").
+func keyCtx(c echo.Context) context.Context {
+	ctx := c.Request().Context()
+	if p := mw.GetExtensionPrincipal(c); p != nil {
+		ctx = service.WithAgentKeyScope(ctx, p.WorkspaceID)
+	}
+	return ctx
 }
 
 type issueAgentKeyRequest struct {
@@ -44,7 +56,7 @@ func (h *AgentKeyHandler) Issue(c echo.Context) error {
 	if req.ExpiresInSeconds < 0 {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("expires_in_seconds must not be negative"))
 	}
-	issued, err := h.keys.Issue(c.Request().Context(), agentID, req.Label, time.Duration(req.ExpiresInSeconds)*time.Second)
+	issued, err := h.keys.Issue(keyCtx(c), agentID, req.Label, time.Duration(req.ExpiresInSeconds)*time.Second)
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -59,7 +71,7 @@ func (h *AgentKeyHandler) Revoke(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
 	}
-	if err = h.keys.Revoke(c.Request().Context(), agentID, c.Param("key_id")); err != nil {
+	if err = h.keys.Revoke(keyCtx(c), agentID, c.Param("key_id")); err != nil {
 		return handleError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -71,7 +83,7 @@ func (h *AgentKeyHandler) List(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid agent_id"))
 	}
-	items, err := h.keys.List(c.Request().Context(), agentID)
+	items, err := h.keys.List(keyCtx(c), agentID)
 	if err != nil {
 		return handleError(c, err)
 	}

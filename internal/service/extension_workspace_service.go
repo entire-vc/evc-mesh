@@ -15,6 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
 // SecretMask is what a secret setting (manifest x-secret) is shown as. Sending
@@ -32,6 +33,20 @@ type ExtensionDataPurger interface {
 // the scoped runtime API is the only place that returns it).
 type SettingsHider interface {
 	HideConnectionSettings() bool
+}
+
+// ExtensionSaveHook is the extension-specific part of saving workspace
+// settings that the legacy integrations handler used to do inline (Telegram:
+// getMe check and bot_username, poller restart).
+type ExtensionSaveHook interface {
+	// Prepare runs after the manifest validation and before secrets are
+	// encrypted; it may reject the settings or fill derived fields. `sent` holds
+	// what the caller submitted: only those values are new, the rest is kept.
+	Prepare(ctx context.Context, settings, sent map[string]any) error
+	// Saved runs after the row was created or changed (also on enable/disable).
+	Saved(ctx context.Context, integrationID uuid.UUID)
+	// Removed runs after the connection was deleted.
+	Removed(ctx context.Context, integrationID uuid.UUID)
 }
 
 // ExtensionHealthView is the health part of ExtensionStatusView.
@@ -74,6 +89,11 @@ type WorkspaceExtensionView struct {
 	Manifest   json.RawMessage          `json:"manifest"`
 	Status     ExtensionStatusView      `json:"status"`
 	Connection *ExtensionConnectionView `json:"connection"`
+	// CanPurgeData: DELETE ...?data=delete is supported for this extension.
+	CanPurgeData bool `json:"can_purge_data"`
+	// SettingsManagedElsewhere: the stored settings are written only through the
+	// extension's own API, so the generic connect/settings/remove calls refuse.
+	SettingsManagedElsewhere bool `json:"settings_managed_elsewhere"`
 }
 
 // ExtensionTestResult is the body of POST .../test.
@@ -89,6 +109,91 @@ type ExtensionWorkspaceService struct {
 	reg      *extensions.Registry
 	integ    extensionIntegrationRepo
 	consents repository.ExtensionConsentRepository
+	allow    ExtensionAllowList
+	hooks    map[string]ExtensionSaveHook
+	// external serves every runtime=external extension (they are registered at
+	// run time, so no id-specific hook can be wired at startup).
+	external ExtensionSaveHook
+}
+
+// ExternalRuntime marks a provider backed by an external service.
+type ExternalRuntime interface {
+	IsExternal() bool
+}
+
+// WithExternalHook registers the save hook shared by external extensions.
+func (s *ExtensionWorkspaceService) WithExternalHook(h ExtensionSaveHook) *ExtensionWorkspaceService {
+	s.external = h
+	return s
+}
+
+// hookFor returns the hook of an extension id: its own, else the shared one
+// when the registered provider is external.
+func (s *ExtensionWorkspaceService) hookFor(id string) ExtensionSaveHook {
+	if h := s.hooks[id]; h != nil {
+		return h
+	}
+	if s.external == nil {
+		return nil
+	}
+	if p, ok := s.reg.Get(id); ok {
+		if e, isExt := p.(ExternalRuntime); isExt && e.IsExternal() {
+			return s.external
+		}
+	}
+	return nil
+}
+
+// ExtensionAllowList answers whether the instance allows connecting an extension.
+type ExtensionAllowList interface {
+	Allowed(ctx context.Context, extensionID string) (bool, error)
+}
+
+// WithAllowList makes Connect refuse extensions outside the instance allow-list.
+func (s *ExtensionWorkspaceService) WithAllowList(a ExtensionAllowList) *ExtensionWorkspaceService {
+	s.allow = a
+	return s
+}
+
+// WithSaveHook registers the save hook of one extension id.
+func (s *ExtensionWorkspaceService) WithSaveHook(extensionID string, h ExtensionSaveHook) *ExtensionWorkspaceService {
+	if s.hooks == nil {
+		s.hooks = map[string]ExtensionSaveHook{}
+	}
+	s.hooks[extensionID] = h
+	return s
+}
+
+// refuseManagedElsewhere rejects a generic connect, settings or remove for an
+// extension whose connection is owned by another flow (Runner).
+func refuseManagedElsewhere(p extensions.Provider) error {
+	if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
+		return apierror.ValidationError(map[string]string{"extension": "this extension's connection is managed elsewhere and cannot be changed here"})
+	}
+	return nil
+}
+
+// prepareStored runs the extension hook and encrypts every secret the caller
+// sent. A submitted value is always plaintext, whatever it starts with; kept
+// secrets are not in `sent` and stay ciphertext.
+func (s *ExtensionWorkspaceService) prepareStored(ctx context.Context, p extensions.Provider, settings, sent map[string]any) error {
+	if h := s.hookFor(p.Manifest().ID); h != nil {
+		if err := h.Prepare(ctx, settings, sent); err != nil {
+			return err
+		}
+	}
+	for k := range secretFields(p.Manifest()) {
+		str, ok := settings[k].(string)
+		if _, fresh := sent[k]; !ok || !fresh || str == "" {
+			continue
+		}
+		enc, err := encryption.Encrypt(str)
+		if err != nil {
+			return apierror.BadRequestWithDetails("failed to store the secret setting", k)
+		}
+		settings[k] = enc
+	}
+	return nil
 }
 
 // extensionIntegrationRepo is the integration repository plus the atomic
@@ -159,6 +264,18 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 	if err != nil {
 		return nil, err
 	}
+	if s.allow != nil {
+		ok, aerr := s.allow.Allowed(ctx, id)
+		if aerr != nil {
+			return nil, fmt.Errorf("connect extension: allow-list: %w", aerr)
+		}
+		if !ok {
+			return nil, &apierror.Error{Code: http.StatusForbidden, ErrorCode: "extension_not_allowed", Message: "This extension is not on the allow-list of this instance. An instance administrator has to allow it first."}
+		}
+	}
+	if merr := refuseManagedElsewhere(p); merr != nil {
+		return nil, merr
+	}
 	row, err := s.storedRow(ctx, ws, id)
 	if err != nil {
 		return nil, err
@@ -175,6 +292,13 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 	}
 	if err = p.Validate(extensions.LevelWorkspace, settings); err != nil {
 		return nil, apierror.ValidationError(map[string]string{"settings": err.Error()})
+	}
+	sent := make(map[string]any, len(settings))
+	for k, v := range settings {
+		sent[k] = v
+	}
+	if perr := s.prepareStored(ctx, p, settings, sent); perr != nil {
+		return nil, perr
 	}
 	raw, err := json.Marshal(settings)
 	if err != nil {
@@ -200,6 +324,7 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 		}
 		return nil, fmt.Errorf("connect extension: record consent: %w", err)
 	}
+	s.saved(ctx, id, stored.ID)
 	return s.viewPtr(ctx, ws, p)
 }
 
@@ -210,6 +335,9 @@ func (s *ExtensionWorkspaceService) PatchSettings(ctx context.Context, ws uuid.U
 	if err != nil {
 		return nil, err
 	}
+	if merr := refuseManagedElsewhere(p); merr != nil {
+		return nil, merr
+	}
 	cur := map[string]any{}
 	if len(row.Config) > 0 {
 		if err = json.Unmarshal(row.Config, &cur); err != nil {
@@ -217,14 +345,19 @@ func (s *ExtensionWorkspaceService) PatchSettings(ctx context.Context, ws uuid.U
 		}
 	}
 	secrets := secretFields(p.Manifest())
+	submitted := make(map[string]any, len(patch))
 	for k, v := range patch {
 		if str, ok := v.(string); ok && str == SecretMask && secrets[k] {
 			continue
 		}
 		cur[k] = v
+		submitted[k] = v
 	}
 	if err = p.Validate(extensions.LevelWorkspace, cur); err != nil {
 		return nil, apierror.ValidationError(map[string]string{"settings": err.Error()})
+	}
+	if perr := s.prepareStored(ctx, p, cur, submitted); perr != nil {
+		return nil, perr
 	}
 	raw, err := json.Marshal(cur)
 	if err != nil {
@@ -233,6 +366,7 @@ func (s *ExtensionWorkspaceService) PatchSettings(ctx context.Context, ws uuid.U
 	if _, err := s.integ.Update(ctx, row.ID, domain.UpdateIntegrationInput{Config: raw}); err != nil {
 		return nil, err
 	}
+	s.saved(ctx, p.Manifest().ID, row.ID)
 	return s.viewPtr(ctx, ws, p)
 }
 
@@ -265,11 +399,14 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 				Message: "The extension is on for the whole instance. Disabling it switches it off for this workspace only; send confirm=true to proceed."}
 		}
 		now := time.Now()
-		created, err := s.integ.InsertIfAbsent(ctx, &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: ws, Provider: domain.IntegrationProvider(id), Config: []byte("{}"), IsActive: false, CreatedAt: now, UpdatedAt: now})
+		rowID := uuid.New()
+		created, err := s.integ.InsertIfAbsent(ctx, &domain.IntegrationConfig{ID: rowID, WorkspaceID: ws, Provider: domain.IntegrationProvider(id), Config: []byte("{}"), IsActive: false, CreatedAt: now, UpdatedAt: now})
 		if err != nil {
 			return nil, err
 		}
-		if !created {
+		if created {
+			s.saved(ctx, id, rowID)
+		} else {
 			// A connect won the race: keep its settings and consent, only switch it off.
 			won, err := s.integ.GetByProvider(ctx, ws, domain.IntegrationProvider(id))
 			if err != nil {
@@ -281,13 +418,21 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 			if _, err = s.integ.Update(ctx, won.ID, domain.UpdateIntegrationInput{IsActive: &enabled}); err != nil {
 				return nil, err
 			}
+			s.saved(ctx, id, won.ID)
 		}
 		return s.viewPtr(ctx, ws, p)
 	}
 	if _, err := s.integ.Update(ctx, row.ID, domain.UpdateIntegrationInput{IsActive: &enabled}); err != nil {
 		return nil, err
 	}
+	s.saved(ctx, id, row.ID)
 	return s.viewPtr(ctx, ws, p)
+}
+
+func (s *ExtensionWorkspaceService) saved(ctx context.Context, id string, integrationID uuid.UUID) {
+	if h := s.hookFor(id); h != nil {
+		h.Saved(ctx, integrationID)
+	}
 }
 
 // Test forces a fresh health check.
@@ -315,6 +460,9 @@ func (s *ExtensionWorkspaceService) Disconnect(ctx context.Context, ws uuid.UUID
 	if err != nil {
 		return err
 	}
+	if merr := refuseManagedElsewhere(p); merr != nil {
+		return merr
+	}
 	var purger ExtensionDataPurger
 	if purge {
 		var ok bool
@@ -328,7 +476,13 @@ func (s *ExtensionWorkspaceService) Disconnect(ctx context.Context, ws uuid.UUID
 			return fmt.Errorf("disconnect extension %s: purge data: %w", id, err)
 		}
 	}
-	return s.integ.Delete(ctx, row.ID)
+	if err := s.integ.Delete(ctx, row.ID); err != nil {
+		return err
+	}
+	if h := s.hookFor(id); h != nil {
+		h.Removed(ctx, row.ID)
+	}
+	return nil
 }
 
 func (s *ExtensionWorkspaceService) connection(ctx context.Context, ws uuid.UUID, id string) (extensions.Provider, *domain.IntegrationConfig, error) {
@@ -364,6 +518,10 @@ func (s *ExtensionWorkspaceService) view(ctx context.Context, ws uuid.UUID, p ex
 	v := WorkspaceExtensionView{
 		ID: m.ID, Name: m.Name, Version: m.Version, Kind: m.Kind, Category: m.Category,
 		Levels: m.Levels, Manifest: m.Raw, Status: statusView(st),
+	}
+	_, v.CanPurgeData = p.(ExtensionDataPurger)
+	if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
+		v.SettingsManagedElsewhere = true
 	}
 	row, err := s.storedRow(ctx, ws, m.ID)
 	if err != nil {

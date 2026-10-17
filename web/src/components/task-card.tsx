@@ -14,7 +14,8 @@ import { PriorityFlag } from "@/components/priority-flag";
 import { RuntimeStateBadge } from "@/components/runtime-state-badge";
 import { readableRuntimeState } from "@/lib/runtime-state";
 import { DelegationLevelBadge } from "@/components/delegation-level-select";
-import type { Task, StatusCategory } from "@/types";
+import { SlotBadges, useSlotOwnedVcsProviders } from "@/components/extensions/slots/slot-host";
+import type { Task, StatusCategory, VCSProvider } from "@/types";
 
 const priorityBorderColors: Record<string, string> = {
   urgent: "border-l-red-600",
@@ -68,6 +69,7 @@ export const TaskCard = memo(
     const { t } = useTranslation("board");
     const shortTag = useAgentShortTag(task.assignee_id, task.assignee_type);
     const holderTag = useAgentShortTag(task.checked_out_by, "agent");
+    const badgeOwnedVcs = useSlotOwnedVcsProviders("task.badge");
     const borderColor =
       priorityBorderColors[task.priority] ?? "border-l-transparent";
 
@@ -76,6 +78,12 @@ export const TaskCard = memo(
     const hasDescription =
       task.has_description ?? Boolean(task.description && task.description.trim().length > 0);
     const hasVcsLinks = (task.vcs_link_count ?? 0) > 0;
+    // Links of a provider whose extension owns a badge are drawn by that badge
+    // (task.badge slot); the generic icon covers the rest. Without provider data
+    // (older API) the generic icon stays, as before.
+    const hasUnownedVcsLinks = task.vcs_providers
+      ? task.vcs_providers.some((p) => !badgeOwnedVcs.includes(p as VCSProvider))
+      : true;
     const hasArtifacts = (task.artifact_count ?? 0) > 0;
     const hasSubtasks = (task.subtask_count ?? 0) > 0;
     const labels = task.labels ?? [];
@@ -127,7 +135,8 @@ export const TaskCard = memo(
             {task.title}
           </p>
           <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-            {hasVcsLinks && (
+            <SlotBadges task={task} />
+            {hasVcsLinks && hasUnownedVcsLinks && (
               <ExternalLink
                 className="h-3.5 w-3.5 text-muted-foreground"
                 aria-label={t("card.hasVcsLinks")}

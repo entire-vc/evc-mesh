@@ -26,6 +26,11 @@ type Config struct {
 	TeamRelay TeamRelayConfig
 	HumanGate HumanGateConfig
 	Telegram  TelegramConfig
+
+	// DocBodySoftLimit / DocBodyHardLimit are Mesh Doc body size limits in bytes:
+	// over soft a write succeeds with a warning, over hard it is refused.
+	DocBodySoftLimit int
+	DocBodyHardLimit int
 }
 
 // TelegramConfig holds the per-INSTANCE switch for the Telegram notification
@@ -378,6 +383,8 @@ func Load() *Config {
 			MaxMsgSize:     getEnvInt32("NATS_MAX_MSG_SIZE", 256*1024),              // 256 KB
 			Replicas:       getEnvInt("NATS_REPLICAS", 1),
 		},
+		DocBodySoftLimit: getEnvInt("DOC_BODY_SOFT_LIMIT_BYTES", 30<<10),
+		DocBodyHardLimit: getEnvInt("DOC_BODY_HARD_LIMIT_BYTES", 120<<10),
 		S3: S3Config{
 			Endpoint:        getEnv("S3_ENDPOINT", "localhost:9002"),
 			AccessKeyID:     getEnv("S3_ACCESS_KEY_ID", "minioadmin"),
