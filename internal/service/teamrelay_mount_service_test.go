@@ -2052,3 +2052,68 @@ func TestSyncMount_SlugConflict_MountsWithSuffixAndDoesNotAbortShare(t *testing.
 	assert.True(t, strings.HasPrefix(welcome.Slug, "welcome-"), "got slug %q", welcome.Slug)
 	assert.NotEqual(t, "welcome", welcome.Slug)
 }
+
+// An image-only card folder (artifacts/<card8>/shot.png) must not leave an
+// empty placeholder folder behind; a sibling folder with a text file still
+// mounts normally.
+func TestSyncMount_ImageOnlyFolder_NoEmptyPlaceholder(t *testing.T) {
+	f := setupMountFixture(t, "")
+	img := pngFixture("image-only")
+	body := "# Note"
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "abcd1234/_assets/shot.png", SHA256: realSHA(img), Size: int64(len(img)), Type: "doc"},
+		{Path: "ef567890/Note.md", SHA256: realSHA([]byte(body)), Size: int64(len(body)), Type: "doc"},
+	}
+	f.client.downloadFn = func(path string) (*teamrelay.SyncDocument, error) {
+		if path == "ef567890/Note.md" {
+			return &teamrelay.SyncDocument{Content: []byte(body), SHA256: realSHA([]byte(body))}, nil
+		}
+		return nil, fmt.Errorf("no fixture for %q", path)
+	}
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	require.Equal(t, MountStatusOK, result.Status)
+	assert.Equal(t, 1, result.Mounted)
+	assert.Equal(t, 1, result.Rejected)
+
+	empty, _, gerr := f.repo.GetByPathInProject(context.Background(), f.projectID, []string{"abcd1234"})
+	require.NoError(t, gerr)
+	assert.Nil(t, empty, "image-only folder must not create a placeholder")
+	kept, _, gerr := f.repo.GetByPathInProject(context.Background(), f.projectID, []string{"ef567890"})
+	require.NoError(t, gerr)
+	assert.NotNil(t, kept, "folder with a text file keeps its placeholder")
+}
+
+// A repository failure while resolving a file's folder aborts the sync with an
+// error status instead of mounting into the wrong place.
+func TestSyncMount_FolderResolutionError_ReturnsError(t *testing.T) {
+	f := setupMountFixture(t, "")
+	body := "# Note"
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "ef567890/Note.md", SHA256: realSHA([]byte(body)), Size: int64(len(body)), Type: "doc"},
+	}
+	f.repo.errToReturn = errors.New("db down")
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Equal(t, MountStatusError, result.Status)
+	require.Error(t, result.Err)
+	assert.Equal(t, 0, result.Mounted)
+}
+
+// A repository failure while looking up an existing copy of a top-level file
+// (no folder to resolve) also aborts with an error status.
+func TestSyncMount_ExistingCopyLookupError_ReturnsError(t *testing.T) {
+	f := setupMountFixture(t, "")
+	body := "# Note"
+	f.client.indexResult = []teamrelay.SyncIndexEntry{
+		{Path: "Note.md", SHA256: realSHA([]byte(body)), Size: int64(len(body)), Type: "doc"},
+	}
+	f.repo.errToReturn = errors.New("db down")
+
+	result, err := f.svc.SyncMount(context.Background(), f.projectID)
+	require.NoError(t, err)
+	assert.Equal(t, MountStatusError, result.Status)
+	require.Error(t, result.Err)
+}

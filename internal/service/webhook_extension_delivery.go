@@ -135,7 +135,7 @@ func (s *webhookService) deliverToSubscription(workspaceID uuid.UUID, sub domain
 
 	// Extension receivers get the full 1s/5s/25s schedule: first try plus three
 	// retries.
-	res := s.deliver(sub.ID, sub.Target, secret, event, payloadBytes, extensionMaxAttempts)
+	res := s.deliver(sub.ID, sub.Target, secret, event, payloadBytes, extensionMaxAttempts, true)
 	d := &domain.WebhookDelivery{
 		ID: res.deliveryID, SubscriptionID: &subID, EventType: event, Payload: payloadBytes,
 		ResponseStatus: res.status, ResponseBody: res.body, DurationMs: res.durationMs,

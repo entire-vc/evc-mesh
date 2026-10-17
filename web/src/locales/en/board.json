@@ -26,7 +26,9 @@
       "turn_pending": "Turn not closed",
       "review_cooldown": "In review in {{minutes}} min",
       "pause": "Paused",
-      "park": "Parked"
+      "park": "Parked",
+      "blocker_in_backlog": "Blocker is in backlog",
+      "dependencies_unreadable": "Blocker is unreadable"
     }
   },
   "filter": {

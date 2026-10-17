@@ -117,20 +117,25 @@ export function DropdownMenuContent({
 
 export function DropdownMenuItem({
   className,
+  disabled,
   ...props
-}: HTMLAttributes<HTMLDivElement>) {
+}: HTMLAttributes<HTMLDivElement> & { disabled?: boolean }) {
   const { setOpen } = useContext(DropdownMenuContext);
   return (
     <div
       role="menuitem"
       {...props}
+      aria-disabled={disabled ? true : props["aria-disabled"]}
       className={cn(
         "relative flex cursor-pointer select-none items-center rounded-md px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground",
+        disabled && "pointer-events-none opacity-50",
         className,
       )}
       // Spread first: with {...props} last, an item's own onClick replaced this
       // one and the menu stayed open after every click.
+      // A disabled item swallows the click: aria-disabled alone does not stop it.
       onClick={(e) => {
+        if (disabled) return;
         props.onClick?.(e);
         setOpen(false);
       }}

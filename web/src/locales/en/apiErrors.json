@@ -36,5 +36,10 @@
   "key_expired": "The Team Relay access key has expired. Issue a new key and try again.",
   "unreachable": "Team Relay is unreachable. Try again later.",
   "share_not_found": "The Team Relay share was not found. Check that it still exists.",
-  "error": "Team Relay sync failed. Try again later."
+  "error": "Team Relay sync failed. Try again later.",
+  "extension_builtin_runtime": "Builtin extensions ship with Mesh and cannot be installed from a repository.",
+  "extension_incompatible": "This extension is incompatible with this version of Mesh.",
+  "extension_manifest_invalid": "The repository's mesh-extension.json is not a valid manifest.",
+  "extension_id_conflict": "An extension with this id is already installed.",
+  "extension_repo_unavailable": "The repository can't be read: check the address, the ref and the token."
 }

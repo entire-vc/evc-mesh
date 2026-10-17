@@ -870,6 +870,14 @@ type GrantRevocationChecker interface {
 	IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (bool, error)
 }
 
+// PrimaryKeyStaleChecker is an optional capability of AgentService: whether the
+// agent's original key was replaced or revoked since the cached login (digest is
+// what that login saw). DELETE .../keys/primary must end a login on every API
+// instance at once, not when its cache entry ages out.
+type PrimaryKeyStaleChecker interface {
+	IsPrimaryKeyStale(ctx context.Context, agentID uuid.UUID, digest string) (bool, error)
+}
+
 // AgentKeyRevocationChecker is an optional capability of AgentService, the
 // additional-key twin of GrantRevocationChecker: a cache hit for a login made
 // with a key from POST /agents/{id}/keys re-checks that row before it is

@@ -96,6 +96,34 @@ func (r *ExtensionActorRepo) Rotate(ctx context.Context, connectionID uuid.UUID,
 	return n > 0, err
 }
 
+func (r *ExtensionActorRepo) RotateSelf(ctx context.Context, connectionID uuid.UUID, presentedHash, newHash string, prevExpiresAt, now time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE extension_actors SET
+			prev_token_hash = $2,
+			prev_token_expires_at = $4,
+			token_hash = $3,
+			rotated_at = now()
+		WHERE connection_id = $1 AND revoked_at IS NULL
+		  AND (token_hash = $2 OR (prev_token_hash = $2 AND prev_token_expires_at > $5))`,
+		connectionID, presentedHash, newHash, prevExpiresAt, now)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (r *ExtensionActorRepo) DropPrevious(ctx context.Context, connectionID uuid.UUID, presentedHash string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE extension_actors SET prev_token_hash = NULL, prev_token_expires_at = NULL
+		WHERE connection_id = $1 AND revoked_at IS NULL AND token_hash = $2`, connectionID, presentedHash)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func (r *ExtensionActorRepo) Revoke(ctx context.Context, connectionID uuid.UUID) (bool, error) {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE extension_actors SET revoked_at = now(), prev_token_hash = NULL, prev_token_expires_at = NULL

@@ -54,6 +54,10 @@ COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 COPY web/patches/ ./patches/
 RUN pnpm install --frozen-lockfile
 COPY web/ .
+# web/src/lib/__tests__/extension-capabilities-i18n.test.ts imports the extension manifest
+# schema from outside web/ (../../../../internal/... from /app/src/lib/__tests__ = /internal/...);
+# tsc -b type-checks tests, so the file has to be visible here.
+COPY internal/extensions/schema/manifest.v1.json /internal/extensions/schema/manifest.v1.json
 RUN pnpm build
 
 # Stage 3: Production image

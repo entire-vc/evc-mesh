@@ -43,7 +43,7 @@ beforeEach(async () => {
   await setLanguage("en");
   useMemberStore.setState({ myRole: "member" } as never);
   state.value = {
-    state: "ready", catalogUnavailable: false, reload: vi.fn(),
+    state: "ready", catalogUnavailable: false, reload: vi.fn(), refresh: vi.fn(),
     entries: mergeCatalog(
       [sum("gitlab"), sum("telegram", { category: "communication", kind: "plugin" }),
        sum("custom-x", { category: "security", source: "repo", trust_level: "custom", runtime: "external", manifest: {} })],

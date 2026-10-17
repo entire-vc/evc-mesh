@@ -114,6 +114,11 @@ type Document struct {
 	// document's workspace and project slugs (task #14db79fd).
 	URL string `json:"url,omitempty" db:"-"`
 
+	// Warning is set on the response of a create/update whose body passed the
+	// soft size limit. The write succeeded; the text says how to split the
+	// document into children. Never stored.
+	Warning string `json:"warning,omitempty" db:"-"`
+
 	// MovedTo is the document's current full slug path ("specs/threat-model"),
 	// set only by a path lookup that did NOT hit the document at the path it
 	// asked for: a former path recorded when the document was moved, or a bare

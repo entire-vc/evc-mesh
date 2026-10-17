@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 
 	"github.com/google/uuid"
@@ -30,6 +31,13 @@ type ExtensionInstanceSettingsHandler struct {
 	admins   InstanceAdminChecker
 	registry *extensions.Registry
 	sources  []extensions.EnvSource
+	journal  repository.InstanceExtensionPolicyRepository
+}
+
+// WithJournal makes Put record who changed which keys (never values).
+func (h *ExtensionInstanceSettingsHandler) WithJournal(j repository.InstanceExtensionPolicyRepository) *ExtensionInstanceSettingsHandler {
+	h.journal = j
+	return h
 }
 
 func NewExtensionInstanceSettingsHandler(repo repository.InstanceExtensionSettingRepository, admins InstanceAdminChecker, registry *extensions.Registry, sources []extensions.EnvSource) *ExtensionInstanceSettingsHandler {
@@ -190,6 +198,31 @@ func (h *ExtensionInstanceSettingsHandler) Put(c echo.Context) error {
 		UpdatedBy:   &uid,
 	}, secretKeys); err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("failed to save instance settings"))
+	}
+	if h.journal != nil {
+		// Only the keys whose value differs from what was stored: a form posts
+		// the whole object, and unchanged fields are not part of the change.
+		keys := make([]string, 0, len(body.Settings))
+		for k, v := range body.Settings {
+			if ov, had := old[k]; !had || !reflect.DeepEqual(ov, v) {
+				keys = append(keys, k)
+			}
+		}
+		for k := range old {
+			if _, still := body.Settings[k]; !still {
+				keys = append(keys, k)
+			}
+		}
+		slices.Sort(keys)
+		enabledChanged := prev != nil && prev.Enabled != body.Enabled || prev == nil && body.Enabled
+		// A save that changes nothing is not an event worth recording.
+		if len(keys) > 0 || enabledChanged {
+			details := map[string]any{"keys": keys}
+			if enabledChanged {
+				details["enabled"] = body.Enabled
+			}
+			appendJournal(c, h.journal, uid, extID, domain.InstanceJournalSettingsChanged, details)
+		}
 	}
 	return c.JSON(http.StatusOK, instanceSettingsResponse{
 		ExtensionID: extID,

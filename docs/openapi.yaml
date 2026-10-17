@@ -361,7 +361,7 @@ components:
         reason_code:
           type: string
           nullable: true
-          enum: [review_refeed_hold, human_gate, checked_out_elsewhere, recently_done, outside_lane_scope, rescue_exhausted, turn_quarantined, guard_refused, completion_signal, supervised_todo, human_decision_gate, umbrella, turn_pending, review_cooldown, pause, park]
+          enum: [review_refeed_hold, human_gate, checked_out_elsewhere, recently_done, outside_lane_scope, rescue_exhausted, turn_quarantined, guard_refused, completion_signal, supervised_todo, human_decision_gate, umbrella, turn_pending, review_cooldown, pause, park, blocker_in_backlog, dependencies_unreadable]
           description: Closed list of machine-readable reasons; the web renders it in the viewer's language.
         reason_params:
           type: object

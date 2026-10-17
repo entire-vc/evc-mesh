@@ -2,6 +2,8 @@ package service_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/extensions/exttest"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
 type fx struct {
@@ -284,7 +287,8 @@ func TestExtensionWorkspace_HidesInventorySettings(t *testing.T) {
 			reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
 			svc := service.NewExtensionWorkspaceService(reg, f.Integ, f.Consents)
 			ws := uuid.New()
-			_, err = svc.Connect(ctx, ws, "demo", nil, map[string]any{"base_url": "https://inventory.example"}, fullConsent)
+			seed := service.NewExtensionWorkspaceService(plainRegistry(t, f), f.Integ, f.Consents)
+			_, err = seed.Connect(ctx, ws, "demo", nil, map[string]any{"base_url": "https://inventory.example"}, fullConsent)
 			require.NoError(t, err)
 			list, err := svc.List(ctx, ws)
 			require.NoError(t, err)
@@ -353,4 +357,230 @@ func TestExtensionWorkspace_LegacyStoredRowIsTheConnection(t *testing.T) {
 	require.Error(t, err, "connect must not create a second row beside the legacy one")
 
 	require.NoError(t, svc.Disconnect(ctx, ws, "demo", false))
+}
+
+type fakeAllow struct {
+	ok  bool
+	err error
+}
+
+func (f fakeAllow) Allowed(context.Context, string) (bool, error) { return f.ok, f.err }
+
+func TestExtensionWorkspace_ConnectRefusedOutsideAllowList(t *testing.T) {
+	ctx := context.Background()
+	f := newFx(t, nil, false)
+
+	svc := f.svc.WithAllowList(fakeAllow{ok: false})
+	_, err := svc.Connect(ctx, f.ws, "demo", nil, map[string]any{"base_url": "https://x", "token": "s"}, fullConsent)
+	requireAPIErr(t, err, http.StatusForbidden, "extension_not_allowed")
+	var ae *apierror.Error
+	require.ErrorAs(t, err, &ae)
+	require.Contains(t, ae.Message, "allow-list")
+	require.Nil(t, f.Integ.Find(f.ws, "demo"), "a refused connect writes nothing")
+
+	// a failing allow-list lookup is an error, never a silent allow
+	boom := errors.New("db down")
+	_, err = f.svc.WithAllowList(fakeAllow{err: boom}).Connect(ctx, f.ws, "demo", nil, nil, fullConsent)
+	require.ErrorIs(t, err, boom)
+
+	// once allowed, the same call connects
+	_, err = f.svc.WithAllowList(fakeAllow{ok: true}).Connect(ctx, f.ws, "demo", nil, map[string]any{"base_url": "https://x", "token": "s"}, fullConsent)
+	require.NoError(t, err)
+	require.NotNil(t, f.Integ.Find(f.ws, "demo"))
+}
+
+func useEncryptionKey(t *testing.T) {
+	t.Helper()
+	encryption.ResetForTest()
+	t.Setenv(encryption.EnvKey, base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	t.Cleanup(encryption.ResetForTest)
+}
+
+func TestExtensionWorkspace_SecretsAreEncryptedAtRest(t *testing.T) {
+	useEncryptionKey(t)
+	ctx := context.Background()
+	f := newFx(t, nil, false)
+	_, err := f.svc.Connect(ctx, f.ws, "demo", nil, map[string]any{"token": "s3cret"}, fullConsent)
+	require.NoError(t, err)
+	stored := tokenOf(t, f.Integ.Find(f.ws, "demo").Config)
+	require.NotContains(t, stored, "s3cret")
+	require.Contains(t, stored, encryption.Prefix)
+
+	// a kept secret stays ciphertext, a replaced one is encrypted again
+	_, err = f.svc.PatchSettings(ctx, f.ws, "demo", map[string]any{"token": "***", "base_url": "https://y"})
+	require.NoError(t, err)
+	require.Equal(t, stored, tokenOf(t, f.Integ.Find(f.ws, "demo").Config), "echoed mask must keep the stored ciphertext byte-for-byte")
+	_, err = f.svc.PatchSettings(ctx, f.ws, "demo", map[string]any{"token": "rotated"})
+	require.NoError(t, err)
+	stored = string(f.Integ.Find(f.ws, "demo").Config)
+	require.NotContains(t, stored, "rotated")
+	require.Contains(t, stored, encryption.Prefix)
+}
+
+func TestExtensionWorkspace_SubmittedSecretWithCiphertextPrefixIsStillEncrypted(t *testing.T) {
+	useEncryptionKey(t)
+	ctx := context.Background()
+	f := newFx(t, nil, false)
+	plain := encryption.Prefix + "not-really-ciphertext"
+	_, err := f.svc.Connect(ctx, f.ws, "demo", nil, map[string]any{"token": plain}, fullConsent)
+	require.NoError(t, err)
+	require.NotContains(t, string(f.Integ.Find(f.ws, "demo").Config), plain)
+
+	_, err = f.svc.PatchSettings(ctx, f.ws, "demo", map[string]any{"token": plain + "-2"})
+	require.NoError(t, err)
+	require.NotContains(t, string(f.Integ.Find(f.ws, "demo").Config), plain+"-2")
+}
+
+type recordingHook struct {
+	prepared, saved, removed int
+	reject                   error
+}
+
+func (h *recordingHook) Prepare(_ context.Context, s, _ map[string]any) error {
+	h.prepared++
+	if h.reject != nil {
+		return h.reject
+	}
+	s["base_url"] = "https://derived"
+	return nil
+}
+func (h *recordingHook) Saved(context.Context, uuid.UUID)   { h.saved++ }
+func (h *recordingHook) Removed(context.Context, uuid.UUID) { h.removed++ }
+
+func TestExtensionWorkspace_SaveHookRunsOnConnectEnableAndRemove(t *testing.T) {
+	ctx := context.Background()
+	f := newFx(t, nil, false)
+	h := &recordingHook{}
+	f.svc.WithSaveHook("demo", h)
+
+	v, err := f.svc.Connect(ctx, f.ws, "demo", nil, map[string]any{"token": "x"}, fullConsent)
+	require.NoError(t, err)
+	require.Equal(t, "https://derived", v.Connection.Settings["base_url"])
+	_, err = f.svc.SetEnabled(ctx, f.ws, "demo", false, false)
+	require.NoError(t, err)
+	_, err = f.svc.PatchSettings(ctx, f.ws, "demo", map[string]any{"token": "y"})
+	require.NoError(t, err)
+	require.NoError(t, f.svc.Disconnect(ctx, f.ws, "demo", false))
+	require.Equal(t, 2, h.prepared)
+	require.Equal(t, 3, h.saved)
+	require.Equal(t, 1, h.removed)
+
+	h.reject = apierror.BadRequest("nope")
+	_, err = f.svc.Connect(ctx, f.ws, "demo", nil, map[string]any{"token": "x"}, fullConsent)
+	requireAPIErr(t, err, http.StatusBadRequest, "")
+	require.Nil(t, f.Integ.Find(f.ws, "demo"), "a rejected save stores nothing")
+}
+
+type fakeTelegram struct {
+	service.TelegramClient
+	err   error
+	token string
+}
+
+func (c *fakeTelegram) GetMe(_ context.Context, token string) (string, error) {
+	c.token = token
+	return "mesh_bot", c.err
+}
+
+func TestTelegramSaveHook_ChecksTokenAndFillsUsername(t *testing.T) {
+	ctx := context.Background()
+	c := &fakeTelegram{}
+	h := service.NewTelegramSaveHook(c, nil, nil)
+
+	s := map[string]any{"bot_token": "123:abc"}
+	require.NoError(t, h.Prepare(ctx, s, map[string]any{"bot_token": "123:abc"}))
+	require.Equal(t, "123:abc", c.token)
+	require.Equal(t, "mesh_bot", s["bot_username"])
+
+	c.token = ""
+	require.NoError(t, h.Prepare(ctx, map[string]any{"bot_token": encryption.Prefix + "kept"}, map[string]any{}))
+	require.Empty(t, c.token, "a kept (not submitted) token is not re-checked")
+
+	prefixed := encryption.Prefix + "submitted"
+	require.NoError(t, h.Prepare(ctx, map[string]any{"bot_token": prefixed}, map[string]any{"bot_token": prefixed}))
+	require.Equal(t, prefixed, c.token, "a submitted token is checked even if it starts with the ciphertext prefix")
+
+	c.err = errors.New("401 unauthorized")
+	requireAPIErr(t, h.Prepare(ctx, map[string]any{"bot_token": "bad"}, map[string]any{"bot_token": "bad"}), http.StatusBadRequest, "")
+
+	off := service.NewTelegramSaveHook(c, nil, func(context.Context) bool { return false })
+	requireAPIErr(t, off.Prepare(ctx, map[string]any{"bot_token": "123:abc"}, map[string]any{"bot_token": "123:abc"}), http.StatusBadRequest, "")
+}
+
+func TestExtensionWorkspace_ViewFlagsPurgeAndManagedSettings(t *testing.T) {
+	ctx := context.Background()
+	f := newFx(t, nil, true)
+	list, err := f.svc.List(ctx, f.ws)
+	require.NoError(t, err)
+	require.True(t, list[0].CanPurgeData)
+	require.False(t, list[0].SettingsManagedElsewhere)
+
+	g := newFx(t, nil, false)
+	list, err = g.svc.List(ctx, g.ws)
+	require.NoError(t, err)
+	require.False(t, list[0].CanPurgeData)
+}
+
+// plainRegistry registers the demo provider without the managed-elsewhere flag,
+// standing in for the other flow that creates such a connection.
+func plainRegistry(t *testing.T, f *exttest.Fixture) *extensions.Registry {
+	t.Helper()
+	man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+	require.NoError(t, err)
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(exttest.DemoProvider{BaseProvider: base, Healthy: true}))
+	reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+	return reg
+}
+
+func TestExtensionWorkspace_GenericWritesRefuseManagedElsewhere(t *testing.T) {
+	ctx := context.Background()
+	f, err := exttest.NewFixture(nil, false)
+	require.NoError(t, err)
+	man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+	require.NoError(t, err)
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(hidingProvider{exttest.DemoProvider{BaseProvider: base, Healthy: true}}))
+	reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+	svc := service.NewExtensionWorkspaceService(reg, f.Integ, f.Consents)
+
+	// no connection yet: generic connect must not create one
+	fresh := uuid.New()
+	_, err = svc.Connect(ctx, fresh, "demo", nil, nil, fullConsent)
+	requireAPIErr(t, err, http.StatusBadRequest, "validation_failed")
+	require.Nil(t, f.Integ.Find(fresh, "demo"), "generic connect must not create a managed-elsewhere connection")
+
+	// connection created by the owning flow: settings and delete are refused, row survives
+	ws := uuid.New()
+	_, err = service.NewExtensionWorkspaceService(plainRegistry(t, f), f.Integ, f.Consents).Connect(ctx, ws, "demo", nil, nil, fullConsent)
+	require.NoError(t, err)
+
+	_, err = svc.PatchSettings(ctx, ws, "demo", map[string]any{"base_url": "https://changed.example"})
+	requireAPIErr(t, err, http.StatusBadRequest, "validation_failed")
+
+	err = svc.Disconnect(ctx, ws, "demo", false)
+	requireAPIErr(t, err, http.StatusBadRequest, "validation_failed")
+	require.NotNil(t, f.Integ.Find(ws, "demo"), "managed-elsewhere connection must survive the generic DELETE")
+}
+
+func TestExtensionWorkspace_ConfirmedInstanceDisableRunsSaveHook(t *testing.T) {
+	ctx := context.Background()
+	f := newFx(t, exttest.InstanceOn{}, false)
+	h := &recordingHook{}
+	f.svc.WithSaveHook("demo", h)
+
+	_, err := f.svc.SetEnabled(ctx, f.ws, "demo", false, true)
+	require.NoError(t, err)
+	require.NotNil(t, f.Integ.Find(f.ws, "demo"))
+	require.Equal(t, 1, h.saved, "the new override row must reach the save hook (Telegram stops its poller there)")
+}
+
+func tokenOf(t *testing.T, raw []byte) string {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	tok, _ := m["token"].(string)
+	return tok
 }

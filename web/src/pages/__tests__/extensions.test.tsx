@@ -1,18 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 
-vi.mock("@/lib/api", () => ({ api: vi.fn().mockResolvedValue({ integrations: [], effective: [] }) }));
-vi.mock("@/pages/integrations", () => ({ IntegrationsPage: () => <div>legacy-integrations</div> }));
+const role = vi.hoisted(() => ({ value: "admin", instanceAdmin: true }));
+vi.mock("@/lib/api", () => ({
+  api: vi.fn(async (path: string) => {
+    if (path.endsWith("/extensions/instance/overview")) {
+      if (!role.instanceAdmin) throw new Error("forbidden");
+      return { auto_update: false, items: [] };
+    }
+    return path.endsWith("/members/me") ? { role: role.value } : { integrations: [], effective: [] };
+  }),
+}));
+vi.mock("@/pages/mcp-reference", () => ({ McpReference: () => <div>mcp-reference</div> }));
 
 const overview = vi.hoisted(() => ({
-  value: { state: "ready", catalogCount: 0, updatesCount: 0 } as {
+  value: { state: "ready", catalogCount: 0 } as {
     state: "loading" | "error" | "ready";
     catalogCount: number;
-    updatesCount: number;
   },
 }));
-vi.mock("@/hooks/useExtensionsOverview", () => ({ useExtensionsOverview: () => overview.value }));
+// Updates of repo-installed extensions: the hook's own behaviour is covered in extension-repo-ui.test.tsx.
+const repoUpdates = vi.hoisted(() => ({
+  reload: vi.fn(),
+  value: { status: "ready", updates: [], count: 0 } as { status: "loading" | "ready" | "forbidden" | "error"; updates: never[]; count: number },
+}));
+vi.mock("@/hooks/useRepoUpdates", () => ({ useRepoUpdates: () => ({ ...repoUpdates.value, reload: repoUpdates.reload }) }));
 // The catalog tab follows the same load state; its own behaviour is covered in extension-catalog.test.tsx.
 vi.mock("@/hooks/useExtensionCatalog", () => ({
   useExtensionCatalog: () => ({
@@ -20,11 +33,18 @@ vi.mock("@/hooks/useExtensionCatalog", () => ({
     entries: [],
     catalogUnavailable: false,
     reload: () => undefined,
+    refresh: () => undefined,
   }),
 }));
 
 import { setLanguage } from "@/i18n";
+import { useMemberStore } from "@/stores/member";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { ExtensionsPage, IntegrationsRedirect, extensionsTab } from "@/pages/extensions";
+
+// An earlier test replaces fetchMyRole with a spy; the role tests below need the real one.
+const realFetchMyRole = useMemberStore.getState().fetchMyRole;
+const useMemberStoreRole = () => useMemberStore.getState().myRole;
 
 function Where() {
   const l = useLocation();
@@ -44,11 +64,22 @@ function renderAt(url: string) {
 }
 
 beforeEach(async () => {
-  overview.value = { state: "ready", catalogCount: 0, updatesCount: 0 };
+  role.instanceAdmin = true;
+  overview.value = { state: "ready", catalogCount: 0 };
+  repoUpdates.value = { status: "ready", updates: [], count: 0 };
+  repoUpdates.reload.mockClear();
   await setLanguage("en");
 });
 
 describe("Extensions section", () => {
+  it("fetches the caller's role itself, so a reload on the page does not leave an admin read-only", () => {
+    const fetchMyRole = vi.fn().mockResolvedValue(undefined);
+    useMemberStore.setState({ myRole: null, fetchMyRole });
+    useWorkspaceStore.setState({ currentWorkspace: { id: "ws-uuid-1", slug: "acme", name: "Acme" } as never });
+    renderAt("/w/acme/extensions?tab=installed");
+    expect(fetchMyRole).toHaveBeenCalledWith("ws-uuid-1");
+  });
+
   it("redirects the old integrations URL, keeping query and hash", () => {
     renderAt("/w/acme/integrations?tab=updates#x");
     expect(screen.getByTestId("where").textContent).toBe("/w/acme/extensions?tab=updates#x");
@@ -61,7 +92,7 @@ describe("Extensions section", () => {
     expect(screen.getByText("The catalog is empty")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "Installed" }));
-    expect(screen.getByText("legacy-integrations")).toBeTruthy();
+    expect(screen.getByText("mcp-reference")).toBeTruthy();
     expect(screen.getByTestId("where").textContent).toContain("tab=installed");
 
     fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
@@ -75,63 +106,44 @@ describe("Extensions section", () => {
     const { unmount } = renderAt("/w/acme/extensions");
     expect(screen.queryByLabelText(/updates available/)).toBeNull();
     unmount();
-    overview.value = { state: "ready", catalogCount: 0, updatesCount: 3 };
+    repoUpdates.value = { status: "ready", updates: [], count: 3 };
     renderAt("/w/acme/extensions");
     expect(screen.getByLabelText("3 updates available").textContent).toBe("3");
   });
 
   it("renders loading and error states without raw server text", () => {
-    overview.value = { state: "loading", catalogCount: 0, updatesCount: 0 };
+    overview.value = { state: "loading", catalogCount: 0 };
     const { unmount } = renderAt("/w/acme/extensions");
     expect(screen.getByRole("status")).toBeTruthy();
     unmount();
-    overview.value = { state: "error", catalogCount: 0, updatesCount: 0 };
+    overview.value = { state: "error", catalogCount: 0 };
     renderAt("/w/acme/extensions");
     expect(screen.getByRole("alert").textContent).toContain("Couldn't load the catalog");
   });
 
   describe("Updates tab states", () => {
     it("shows its own loading state", () => {
-      overview.value = { state: "loading", catalogCount: 0, updatesCount: 0 };
+      repoUpdates.value = { status: "loading", updates: [], count: 0 };
       renderAt("/w/acme/extensions?tab=updates");
-      expect(
-        screen.getByRole("status", { name: "Checking for updates" }),
-      ).toBeTruthy();
+      expect(screen.getByRole("status", { name: "Checking for updates" })).toBeTruthy();
       expect(screen.queryByText("Everything is up to date")).toBeNull();
     });
 
     it("shows its own error state without raw server text", () => {
-      overview.value = { state: "error", catalogCount: 0, updatesCount: 0 };
+      repoUpdates.value = { status: "error", updates: [], count: 0 };
       renderAt("/w/acme/extensions?tab=updates");
       const alert = screen.getByRole("alert");
       expect(alert.textContent).toContain("Couldn't check for updates");
       expect(alert.textContent).not.toContain("Couldn't load the catalog");
-      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(repoUpdates.reload).toHaveBeenCalledTimes(1);
     });
 
-    it("retry reloads the page, and a successful load then shows the content", () => {
-      const reload = vi.fn();
-      const original = window.location;
-      Object.defineProperty(window, "location", {
-        configurable: true,
-        value: { ...original, reload },
-      });
-      try {
-        overview.value = { state: "error", catalogCount: 0, updatesCount: 0 };
-        const { unmount } = renderAt("/w/acme/extensions?tab=updates");
-        fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-        expect(reload).toHaveBeenCalledTimes(1);
-        unmount();
-        overview.value = { state: "ready", catalogCount: 0, updatesCount: 0 };
-        renderAt("/w/acme/extensions?tab=updates");
-        expect(screen.getByText("Everything is up to date")).toBeTruthy();
-        expect(screen.queryByRole("alert")).toBeNull();
-      } finally {
-        Object.defineProperty(window, "location", {
-          configurable: true,
-          value: original,
-        });
-      }
+    it("a non-administrator gets an explanation, not an error", () => {
+      repoUpdates.value = { status: "forbidden", updates: [], count: 0 };
+      renderAt("/w/acme/extensions?tab=updates");
+      expect(screen.getByText("Only for instance administrators")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
     });
   });
 
@@ -139,26 +151,45 @@ describe("Extensions section", () => {
     expect(extensionsTab(new URLSearchParams("tab=nope"))).toBe("catalog");
   });
 
-  it("hides admin actions while the flag is off", () => {
+  it("hides the install button from anyone but the instance administrator (red control)", async () => {
+    role.instanceAdmin = false;
     renderAt("/w/acme/extensions");
-    expect(screen.queryByText("Install from repository")).toBeNull();
+    await screen.findByText("The catalog is empty");
+    await waitFor(() => expect(screen.queryByText("Install from repository")).toBeNull());
   });
 
-  it("renders instance settings as inert text, not a link, while its route does not exist", async () => {
-    vi.stubEnv("VITE_EXTENSIONS_ADMIN_ACTIONS", "true");
-    vi.resetModules();
-    const { useMemberStore } = await import("@/stores/member");
-    useMemberStore.setState({ myRole: "admin" });
-    const mod = await import("@/pages/extensions");
-    render(
-      <MemoryRouter initialEntries={["/w/acme/extensions"]}>
-        <Routes>
-          <Route path="w/:wsSlug/extensions" element={<mod.ExtensionsPage />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(screen.getByText("Instance settings").closest("a")).toBeNull();
-    expect(screen.getByText("Install from repository")).toBeTruthy();
-    vi.unstubAllEnvs();
+  it("offers the instance administrator the settings link and the install button", async () => {
+    renderAt("/w/acme/extensions");
+    expect((await screen.findByText("Instance settings")).closest("a")?.getAttribute("href")).toBe("/w/acme/instance/extensions");
+    fireEvent.click(screen.getByRole("button", { name: /Install from repository/ }));
+    expect(screen.getByRole("dialog", { name: "Install from repository" })).toBeTruthy();
+  });
+
+  describe("instance settings link on the catalog tab", () => {
+    function mountWith(workspaceRole: string, instanceAdmin: boolean) {
+      role.value = workspaceRole;
+      role.instanceAdmin = instanceAdmin;
+      useMemberStore.setState({ myRole: null, fetchMyRole: realFetchMyRole });
+      useWorkspaceStore.setState({ currentWorkspace: { id: "ws-1" } as never });
+      renderAt("/w/acme/extensions");
+    }
+
+    it("an instance admin sees the link without opening the Installed tab", async () => {
+      mountWith("admin", true);
+      const link = await screen.findByText("Instance settings");
+      expect(link.closest("a")?.getAttribute("href")).toBe("/w/acme/instance/extensions");
+    });
+
+    it("an instance admin who is only a member of this workspace still sees the link", async () => {
+      mountWith("member", true);
+      expect(await screen.findByText("Instance settings")).toBeTruthy();
+    });
+
+    it("a workspace admin who is not the instance admin gets no link (red control)", async () => {
+      mountWith("admin", false);
+      await screen.findByText("The catalog is empty");
+      await waitFor(() => expect(useMemberStoreRole()).toBe("admin"));
+      expect(screen.queryByText("Instance settings")).toBeNull();
+    });
   });
 });

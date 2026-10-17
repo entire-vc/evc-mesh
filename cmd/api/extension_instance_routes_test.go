@@ -40,11 +40,8 @@ func (emptyInstalledRepo) List(context.Context) ([]domain.InstalledExtension, er
 func TestInstanceExtensionRoutes_Contract(t *testing.T) {
 	h := handler.NewExtensionHandler(emptyInstalledRepo{}, nil)
 	handlers := map[string]echo.HandlerFunc{
-		"GET /extensions":                   h.List,
-		"GET /extensions/manifest-schema":   h.ManifestSchema,
-		"POST /extensions/install":          h.NotImplemented,
-		"POST /extensions/:ext_id/update":   h.NotImplemented,
-		"POST /extensions/:ext_id/rollback": h.NotImplemented,
+		"GET /extensions":                 h.List,
+		"GET /extensions/manifest-schema": h.ManifestSchema,
 	}
 	registered := map[string]auditRoute{}
 	for _, r := range parseAuditRoutes(t) {
@@ -87,14 +84,6 @@ func TestInstanceExtensionRoutes_Contract(t *testing.T) {
 		var doc map[string]any
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
 	})
-	for _, path := range []string{"/extensions/install", "/extensions/team-relay/update", "/extensions/team-relay/rollback"} {
-		t.Run("POST "+path, func(t *testing.T) {
-			rec := call(http.MethodPost, path)
-			assert.Equal(t, http.StatusNotImplemented, rec.Code)
-			assert.Contains(t, rec.Body.String(), `"error_code":"not_implemented"`)
-			assert.Equal(t, "1", rec.Header().Get("X-Guarded"))
-		})
-	}
 }
 
 type memInstanceSettings struct {

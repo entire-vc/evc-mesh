@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -22,7 +23,7 @@ func NewAgentAPIKeyRepo(db *sqlx.DB) *AgentAPIKeyRepo {
 }
 
 const agentAPIKeyCols = `id, agent_id, workspace_id, key_prefix, key_sha256, label, issued_by_type, issued_by_id,
-	expires_at, created_at, revoked_at`
+	expires_at, created_at, revoked_at, last_used_at`
 
 func (r *AgentAPIKeyRepo) Create(ctx context.Context, k *domain.AgentAPIKey) error {
 	_, err := r.db.ExecContext(ctx, `
@@ -82,8 +83,63 @@ func (r *AgentAPIKeyRepo) ListByAgent(ctx context.Context, agentID uuid.UUID) ([
 	return out, err
 }
 
-func (r *AgentAPIKeyRepo) CountActiveByAgent(ctx context.Context, agentID uuid.UUID) (int, error) {
+func (r *AgentAPIKeyRepo) CountActiveByAgent(ctx context.Context, agentID uuid.UUID, now time.Time) (int, error) {
 	var n int
-	err := r.db.GetContext(ctx, &n, `SELECT count(*) FROM agent_api_keys WHERE agent_id = $1 AND revoked_at IS NULL`, agentID)
+	err := r.db.GetContext(ctx, &n, `SELECT count(*) FROM agent_api_keys WHERE agent_id = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $2)`, agentID, now)
 	return n, err
+}
+
+// TouchLastUsed records a login with key keyID, at most once a minute.
+func (r *AgentAPIKeyRepo) TouchLastUsed(ctx context.Context, keyID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE agent_api_keys SET last_used_at = now()
+		WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`, keyID)
+	return err
+}
+
+// TouchPrimaryLastUsed is TouchLastUsed for the agent's original key.
+func (r *AgentAPIKeyRepo) TouchPrimaryLastUsed(ctx context.Context, agentID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE agents SET api_key_last_used_at = now()
+		WHERE id = $1 AND (api_key_last_used_at IS NULL OR api_key_last_used_at < now() - interval '1 minute')`, agentID)
+	return err
+}
+
+// PrimaryLastUsed returns when the agent's original key last logged in.
+func (r *AgentAPIKeyRepo) PrimaryLastUsed(ctx context.Context, agentID uuid.UUID) (*time.Time, error) {
+	var t *time.Time
+	err := r.db.GetContext(ctx, &t, `SELECT api_key_last_used_at FROM agents WHERE id = $1`, agentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return t, err
+}
+
+// PrimaryDigest returns the keyed digest of the agent's original key as stored
+// now ("" when the agent has none or is gone).
+func (r *AgentAPIKeyRepo) PrimaryDigest(ctx context.Context, agentID uuid.UUID) (string, error) {
+	var d string
+	err := r.db.GetContext(ctx, &d, `SELECT COALESCE(api_key_sha256, '') FROM agents WHERE id = $1`, agentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return d, err
+}
+
+// WithAgentLock runs fn while holding a database-wide lock on the agent's key
+// set, so the count-then-change steps of issue and revoke cannot interleave,
+// across API instances too. The lock lives on a connection of its own; fn uses
+// the pool as usual.
+func (r *AgentAPIKeyRepo) WithAgentLock(ctx context.Context, agentID uuid.UUID, fn func() error) error {
+	conn, err := r.db.Connx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended('agent-keys:' || $1::text, 0))`, agentID.String()); err != nil {
+		return err
+	}
+	defer func() {
+		// Background context: the request may already be cancelled, the lock must still go.
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended('agent-keys:' || $1::text, 0))`, agentID.String())
+	}()
+	return fn()
 }

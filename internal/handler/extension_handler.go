@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,6 +21,17 @@ import (
 type ExtensionHandler struct {
 	installed repository.InstalledExtensionRepository
 	instance  extensions.InstanceStore // optional until instance settings land
+	allow     interface {
+		Allowed(ctx context.Context, extensionID string) (bool, error)
+	}
+}
+
+// WithAllowList adds the instance allow-list verdict to every catalog entry.
+func (h *ExtensionHandler) WithAllowList(a interface {
+	Allowed(ctx context.Context, extensionID string) (bool, error)
+}) *ExtensionHandler {
+	h.allow = a
+	return h
 }
 
 // NewExtensionHandler creates a new ExtensionHandler. instance may be nil;
@@ -51,6 +63,7 @@ type extensionSummaryResponse struct {
 	UpdatedAt     time.Time              `json:"updated_at"`
 	Manifest      json.RawMessage        `json:"manifest"`
 	Instance      instanceStatusResponse `json:"instance"`
+	Allowed       bool                   `json:"allowed"`
 }
 
 // List handles GET /extensions.
@@ -86,7 +99,14 @@ func (h *ExtensionHandler) summary(c echo.Context, row *domain.InstalledExtensio
 		Runtime: m.Runtime, Publisher: m.Publisher, Description: m.Description,
 		Category: m.Category, Levels: m.Levels, Source: string(row.Source),
 		TrustLevel: string(row.TrustLevel), Blocked: row.Blocked,
-		BlockedReason: row.BlockedReason, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Manifest: m.Raw,
+		BlockedReason: row.BlockedReason, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Manifest: m.Raw, Allowed: true,
+	}
+	if h.allow != nil {
+		ok, aerr := h.allow.Allowed(c.Request().Context(), row.ExtensionID)
+		if aerr != nil {
+			return extensionSummaryResponse{}, false, fmt.Errorf("allow-list %q: %w", row.ExtensionID, aerr)
+		}
+		s.Allowed = ok
 	}
 	if h.instance != nil {
 		is, ierr := h.instance.InstanceSetting(c.Request().Context(), row.ExtensionID)

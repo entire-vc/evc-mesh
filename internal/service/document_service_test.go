@@ -826,3 +826,63 @@ func TestDocumentService_NoStorageConfigured_ReadAndUpdate(t *testing.T) {
 		assert.Equal(t, "Renamed", doc.Title)
 	})
 }
+
+func TestDocumentService_BodyLimits(t *testing.T) {
+	f := setupDocumentService(t)
+	ctx := context.Background()
+	in := func(n int) CreateDocumentInput {
+		return CreateDocumentInput{ProjectID: f.projectID, Title: "T", Body: strings.Repeat("x", n)}
+	}
+
+	small, err := f.svc.Create(ctx, in(defaultDocBodySoftLimit))
+	require.NoError(t, err)
+	assert.Empty(t, small.Warning, "at the soft limit there is no warning")
+
+	mid, err := f.svc.Create(ctx, in(defaultDocBodySoftLimit+1))
+	require.NoError(t, err, "over soft still succeeds")
+	assert.Contains(t, mid.Warning, "parent_id")
+
+	_, err = f.svc.Create(ctx, in(defaultDocBodyHardLimit+1))
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 400, apiErr.StatusCode())
+
+	// update: replace over soft warns, over hard refused and body untouched
+	body := strings.Repeat("y", defaultDocBodySoftLimit+10)
+	upd, err := f.svc.Update(ctx, small.ID, f.wsID, UpdateDocumentInput{Body: &body})
+	require.NoError(t, err)
+	assert.Contains(t, upd.Warning, "parent_id")
+
+	huge := strings.Repeat("z", defaultDocBodyHardLimit+1)
+	_, err = f.svc.Update(ctx, small.ID, f.wsID, UpdateDocumentInput{Body: &huge})
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, body, string(f.storage.objects[upd.StorageKey]))
+
+	// append crossing soft succeeds with a warning
+	f2 := setupDocumentService(t)
+	base, err := f2.svc.Create(ctx, CreateDocumentInput{ProjectID: f2.projectID, Title: "A", Body: strings.Repeat("x", defaultDocBodySoftLimit-1)})
+	require.NoError(t, err)
+	assert.Empty(t, base.Warning)
+	more := "yy"
+	appended, err := f2.svc.Update(ctx, base.ID, f2.wsID, UpdateDocumentInput{AppendBody: &more})
+	require.NoError(t, err)
+	assert.Contains(t, appended.Warning, "parent_id")
+
+	// append crossing hard is refused
+	app := strings.Repeat("a", defaultDocBodyHardLimit)
+	_, err = f.svc.Update(ctx, small.ID, f.wsID, UpdateDocumentInput{AppendBody: &app})
+	require.ErrorAs(t, err, &apiErr)
+}
+
+func TestDocumentService_BodyLimits_Configurable(t *testing.T) {
+	f := setupDocumentService(t)
+	WithDocumentBodyLimits(10, 20)(f.svc)
+	mk := func(n int) (*domain.Document, error) {
+		return f.svc.Create(context.Background(), CreateDocumentInput{ProjectID: f.projectID, Title: "T", Body: strings.Repeat("x", n)})
+	}
+	d, err := mk(11)
+	require.NoError(t, err)
+	assert.NotEmpty(t, d.Warning)
+	_, err = mk(21)
+	require.Error(t, err)
+}

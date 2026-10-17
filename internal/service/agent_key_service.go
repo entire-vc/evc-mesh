@@ -25,19 +25,21 @@ const (
 	eventAgentKeyRevoked = "agent.key.revoked"
 )
 
-// maxActiveAgentKeys bounds the additional keys one agent can hold at once. Two
-// are the point (old + new during a change); the rest is slack for a rotator
-// that crashed between phases.
-const maxActiveAgentKeys = 5
+// maxActiveAgentKeys bounds the active keys of one agent, the original one
+// included: the old and the new key during a change, never a third.
+const maxActiveAgentKeys = 2
 
 // AgentKeyInfo is the listing view of a key: never the key itself.
 type AgentKeyInfo struct {
-	ID        string     `json:"id"`
-	Primary   bool       `json:"primary"`
-	Label     string     `json:"label,omitempty"`
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	ID      string `json:"id"`
+	Primary bool   `json:"primary"`
+	Label   string `json:"label,omitempty"`
+	// Fingerprint is the stored key prefix: enough to tell keys apart, not to use one.
+	Fingerprint string     `json:"fingerprint,omitempty"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 }
 
 // IssuedAgentKey is the one response that carries the raw key.
@@ -95,6 +97,15 @@ func NewAgentKeyService(
 	return &agentKeyService{agents: agents, workspaces: workspaces, keys: keys, activity: activity, webhooks: webhooks, cache: cache}
 }
 
+type keyScopeCtxKey struct{}
+
+// WithAgentKeyScope confines the key operations in ctx to agents of one
+// workspace: an agent of any other workspace is then a plain 404. Set for
+// extension tokens, which carry a workspace but no workspace role.
+func WithAgentKeyScope(ctx context.Context, workspaceID uuid.UUID) context.Context {
+	return context.WithValue(ctx, keyScopeCtxKey{}, workspaceID)
+}
+
 func (s *agentKeyService) agent(ctx context.Context, agentID uuid.UUID) (*domain.Agent, error) {
 	a, err := s.agents.GetByID(ctx, agentID)
 	if err != nil {
@@ -103,10 +114,22 @@ func (s *agentKeyService) agent(ctx context.Context, agentID uuid.UUID) (*domain
 	if a == nil {
 		return nil, apierror.NotFound("Agent")
 	}
+	if ws, ok := ctx.Value(keyScopeCtxKey{}).(uuid.UUID); ok && ws != a.WorkspaceID {
+		return nil, apierror.NotFound("Agent")
+	}
 	return a, nil
 }
 
-func (s *agentKeyService) Issue(ctx context.Context, agentID uuid.UUID, label string, ttl time.Duration) (*IssuedAgentKey, error) {
+func (s *agentKeyService) Issue(ctx context.Context, agentID uuid.UUID, label string, ttl time.Duration) (out *IssuedAgentKey, err error) {
+	err = s.keys.WithAgentLock(ctx, agentID, func() error {
+		var ierr error
+		out, ierr = s.issue(ctx, agentID, label, ttl)
+		return ierr
+	})
+	return out, err
+}
+
+func (s *agentKeyService) issue(ctx context.Context, agentID uuid.UUID, label string, ttl time.Duration) (*IssuedAgentKey, error) {
 	agent, err := s.agent(ctx, agentID)
 	if err != nil {
 		return nil, err
@@ -115,12 +138,12 @@ func (s *agentKeyService) Issue(ctx context.Context, agentID uuid.UUID, label st
 	if len(label) > 128 {
 		return nil, apierror.ValidationError(map[string]string{"label": "must be at most 128 characters"})
 	}
-	n, err := s.keys.CountActiveByAgent(ctx, agentID)
+	n, err := s.activeKeys(ctx, agent)
 	if err != nil {
 		return nil, err
 	}
 	if n >= maxActiveAgentKeys {
-		return nil, apierror.Conflict(fmt.Sprintf("agent already has %d active additional keys; revoke one first", n))
+		return nil, apierror.Conflict(fmt.Sprintf("agent already has %d active keys; revoke one first", n))
 	}
 	ws, err := s.workspaces.GetByID(ctx, agent.WorkspaceID)
 	if err != nil {
@@ -170,12 +193,27 @@ func (s *agentKeyService) Issue(ctx context.Context, agentID uuid.UUID, label st
 }
 
 func (s *agentKeyService) Revoke(ctx context.Context, agentID uuid.UUID, keyID string) error {
+	return s.keys.WithAgentLock(ctx, agentID, func() error { return s.revoke(ctx, agentID, keyID) })
+}
+
+func (s *agentKeyService) revoke(ctx context.Context, agentID uuid.UUID, keyID string) error {
 	agent, err := s.agent(ctx, agentID)
 	if err != nil {
 		return err
 	}
 
+	active, err := s.activeKeys(ctx, agent)
+	if err != nil {
+		return err
+	}
+	// The last active key is never revoked: the agent would be locked out and
+	// nothing left to issue a replacement with.
+	lastKey := apierror.Conflict("cannot revoke the last active key of the agent; issue a new key first")
+
 	if keyID == domain.AgentPrimaryKeyID {
+		if agentPrimaryActive(agent) && active <= 1 {
+			return lastKey
+		}
 		if err := s.revokePrimary(ctx, agent); err != nil {
 			return err
 		}
@@ -191,6 +229,9 @@ func (s *agentKeyService) Revoke(ctx context.Context, agentID uuid.UUID, keyID s
 		if row == nil {
 			return apierror.NotFound("Agent key")
 		}
+		if row.RevokedAt == nil && (row.ExpiresAt == nil || timeNow().Before(*row.ExpiresAt)) && active <= 1 {
+			return lastKey
+		}
 		if _, err := s.keys.Revoke(ctx, agentID, id); err != nil {
 			return err
 		}
@@ -204,6 +245,24 @@ func (s *agentKeyService) Revoke(ctx context.Context, agentID uuid.UUID, keyID s
 	s.audit(ctx, agent, "key_revoked", keyID, "")
 	s.dispatch(agent, eventAgentKeyRevoked, keyID, "")
 	return nil
+}
+
+// agentPrimaryActive reports whether the agent's original key still logs in.
+func agentPrimaryActive(a *domain.Agent) bool {
+	return a.APIKeyHash != "" && (a.ExpiresAt == nil || timeNow().Before(*a.ExpiresAt))
+}
+
+// activeKeys counts the keys of the agent that can log in now, the original one
+// included.
+func (s *agentKeyService) activeKeys(ctx context.Context, agent *domain.Agent) (int, error) {
+	n, err := s.keys.CountActiveByAgent(ctx, agent.ID, timeNow())
+	if err != nil {
+		return 0, err
+	}
+	if agentPrimaryActive(agent) {
+		n++
+	}
+	return n, nil
 }
 
 // revokePrimary kills the agent's original key by replacing its key material, on
@@ -245,7 +304,10 @@ func (s *agentKeyService) List(ctx context.Context, agentID uuid.UUID) ([]AgentK
 	if err != nil {
 		return nil, err
 	}
-	primary := AgentKeyInfo{ID: domain.AgentPrimaryKeyID, Primary: true, ExpiresAt: agent.ExpiresAt}
+	primary := AgentKeyInfo{ID: domain.AgentPrimaryKeyID, Primary: true, ExpiresAt: agent.ExpiresAt, Fingerprint: agent.APIKeyPrefix}
+	if t, perr := s.keys.PrimaryLastUsed(ctx, agentID); perr == nil {
+		primary.LastUsedAt = t
+	}
 	if agent.LastRotatedAt != nil {
 		primary.CreatedAt = agent.LastRotatedAt
 	} else {
@@ -259,7 +321,7 @@ func (s *agentKeyService) List(ctx context.Context, agentID uuid.UUID) ([]AgentK
 	for i := range rows {
 		r := rows[i]
 		ca := r.CreatedAt
-		out = append(out, AgentKeyInfo{ID: r.ID.String(), Label: r.Label, CreatedAt: &ca, ExpiresAt: r.ExpiresAt, RevokedAt: r.RevokedAt})
+		out = append(out, AgentKeyInfo{ID: r.ID.String(), Label: r.Label, Fingerprint: r.KeyPrefix, CreatedAt: &ca, LastUsedAt: r.LastUsedAt, ExpiresAt: r.ExpiresAt, RevokedAt: r.RevokedAt})
 	}
 	return out, nil
 }

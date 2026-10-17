@@ -220,6 +220,12 @@ func (c *cachedAgentAuth) cachedAuthStillValid(ctx context.Context, agent *domai
 				return false
 			}
 		}
+	} else if staleChecker, ok := c.AgentService.(PrimaryKeyStaleChecker); ok {
+		// A login with the original key: replaced or revoked on another instance?
+		stale, err := staleChecker.IsPrimaryKeyStale(ctx, agent.ID, agent.APIKeySHA256)
+		if err != nil || stale {
+			return false
+		}
 	}
 
 	if agent.GrantID == nil {

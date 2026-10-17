@@ -45,6 +45,28 @@ func (r *Registry) Register(p Provider) error {
 	return nil
 }
 
+// Replace registers p, overwriting a provider with the same id. External
+// extensions use it: an update or rollback swaps the manifest in place.
+func (r *Registry) Replace(p Provider) error {
+	id := p.Manifest().ID
+	if id == "" {
+		return fmt.Errorf("replace extension: empty manifest id")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.providers[id] = p
+	r.health.drop(id)
+	return nil
+}
+
+// Unregister removes a provider; an unknown id is a no-op.
+func (r *Registry) Unregister(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.providers, id)
+	r.health.drop(id)
+}
+
 // Aliased is implemented by a provider that stays reachable under older ids.
 type Aliased interface {
 	Aliases() []string

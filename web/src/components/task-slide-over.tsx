@@ -44,6 +44,8 @@ import { ActivityLog } from "@/components/activity-log";
 import { SubtaskList } from "@/components/subtask-list";
 import { ArtifactList } from "@/components/artifact-list";
 import { VCSLinks } from "@/components/vcs-links";
+import { SlotActionsMenu, SlotPanelBody, usePanelTabs, useSlotOwnedVcsProviders } from "@/components/extensions/slots/slot-host";
+import { resolveSlotTab } from "@/lib/extension-slots";
 import { DependencyList } from "@/components/dependency-list";
 import { DependencyBadge } from "@/components/dependency-badge";
 import { useTaskDependencies } from "@/hooks/use-task-dependencies";
@@ -71,7 +73,7 @@ import { inlineLabel } from "@/lib/user-display";
 // Types
 // ---------------------------------------------------------------------------
 
-type RightTabId = "comments" | "subtasks" | "dependencies" | "artifacts" | "activity";
+type RightTabId = "comments" | "subtasks" | "dependencies" | "artifacts" | "activity" | `slot:${string}`;
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -124,7 +126,11 @@ export function TaskSlideOver({
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
 
   const [loading, setLoading] = useState(false);
-  const [rightTab, setRightTab] = useState<RightTabId>("comments");
+  const [selectedRightTab, setRightTab] = useState<RightTabId>("comments");
+  const panelTabs = usePanelTabs();
+  // A slot tab that left the registry (extension disabled while open) falls back to comments instead of a blank pane.
+  const rightTab = resolveSlotTab<RightTabId>(selectedRightTab, panelTabs.map((t) => t.extensionId), "comments");
+  const panelOwnedVcs = useSlotOwnedVcsProviders("task.panel");
   const [hideEmpty, setHideEmpty] = useState(true);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
   // Refresh Subtasks for invalidations from either endpoint's open panel.
@@ -605,6 +611,7 @@ export function TaskSlideOver({
                 >
                   <Link className="h-4 w-4" />
                 </button>
+                <SlotActionsMenu task={currentTask} openPanel={(id) => setRightTab(`slot:${id}`)} />
               </>
             )}
             <button
@@ -988,7 +995,7 @@ export function TaskSlideOver({
                           <Separator />
                         </div>
                         <div className="col-span-2">
-                          <VCSLinks taskId={currentTask.id} />
+                          <VCSLinks taskId={currentTask.id} exclude={panelOwnedVcs} />
                         </div>
                       </>
                     )}
@@ -1176,6 +1183,22 @@ export function TaskSlideOver({
                 >
                   {t("panel.tabs.activity")}
                 </button>
+                {panelTabs.map((tab) => (
+                  <button
+                    key={tab.extensionId}
+                    type="button"
+                    className={cn(
+                      "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                      rightTab === `slot:${tab.extensionId}`
+                        ? "border-primary text-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                    )}
+                    onClick={() => setRightTab(`slot:${tab.extensionId}`)}
+                    data-testid={`slot-tab-${tab.extensionId}`}
+                  >
+                    {tab.name}
+                  </button>
+                ))}
               </div>
 
               {/* Content */}
@@ -1224,6 +1247,12 @@ export function TaskSlideOver({
                 <div className="flex-1 overflow-y-auto p-4">
                   <ActivityLog taskId={currentTask.id} />
                 </div>
+              )}
+              {panelTabs.map(
+                (tab) =>
+                  rightTab === `slot:${tab.extensionId}` && (
+                    <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} />
+                  ),
               )}
             </div>
           </div>

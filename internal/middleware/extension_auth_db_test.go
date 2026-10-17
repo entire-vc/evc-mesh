@@ -278,8 +278,8 @@ func TestAgentKeys_TwoPhaseChange(t *testing.T) {
 	assert.Error(t, auth(oldKey), "old key after revoke (cache must not keep it alive)")
 	assert.NoError(t, auth(issued.APIKey), "new key survives")
 
-	// And the additional key can be revoked by id; after that nothing works.
-	require.NoError(t, keys.Revoke(ctx, reg.Agent.ID, issued.KeyID.String()))
-	assert.Error(t, auth(issued.APIKey), "revoked additional key")
+	// The last active key is never revoked (409), and keeps working.
+	assert.Error(t, keys.Revoke(ctx, reg.Agent.ID, issued.KeyID.String()), "last active key")
+	assert.NoError(t, auth(issued.APIKey), "last key survives the refused revoke")
 	assert.Error(t, keys.Revoke(ctx, reg.Agent.ID, uuid.New().String()), "unknown key id")
 }

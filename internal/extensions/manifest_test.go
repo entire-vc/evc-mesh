@@ -35,3 +35,21 @@ func TestManifest_SecretKeysPerLevel(t *testing.T) {
 	require.Equal(t, []string{"p"}, m.SecretKeys("project"))
 	require.Nil(t, m.SecretKeys("nope"))
 }
+
+func TestManifest_HasInstanceFields(t *testing.T) {
+	base := `{"schema":1,"id":"x","name":"X","version":"1.0.0","kind":"integration","runtime":"builtin","publisher":"p","description":"d","category":"sync","levels":{"instance":true,"workspace":true,"project":false},`
+	for name, tc := range map[string]struct {
+		tail string
+		want bool
+	}{
+		"inline fields":  {`"settings":{"instance":{"type":"object","properties":{"a":{"type":"string"}}}}}`, true},
+		"ref with field": {`"settings":{"instance":{"$ref":"#/schemas/c"}},"schemas":{"c":{"type":"object","properties":{"a":{"type":"string"}}}}}`, true},
+		"empty schema":   {`"settings":{"instance":{"type":"object","properties":{},"additionalProperties":false}}}`, false},
+		"ref to empty":   {`"settings":{"instance":{"$ref":"#/schemas/c"}},"schemas":{"c":{"type":"object","properties":{}}}}`, false},
+		"no settings":    {`"settings":{}}`, false},
+	} {
+		m, err := ParseManifest([]byte(base + tc.tail))
+		require.NoError(t, err, name)
+		require.Equal(t, tc.want, m.HasInstanceFields(), name)
+	}
+}

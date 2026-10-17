@@ -584,7 +584,10 @@ func TestHandlePR_MergedFromInProgress_TransitionsToReview(t *testing.T) {
 	require.Len(t, h.commentSvc.created, 1)
 	c := h.commentSvc.created[0]
 	assert.Equal(t, task.ID, c.TaskID)
-	assert.Equal(t, domain.ActorTypeAgent, c.AuthorType)
+	assert.Equal(t, domain.ActorTypeSystem, c.AuthorType)
+	assert.Equal(t, uuid.Nil, c.AuthorID)
+	require.NotNil(t, c.SystemCode)
+	assert.Equal(t, SysCodeVCSWebhook, *c.SystemCode)
 	assert.Contains(t, c.Body, "PR #101 merged")
 	assert.Contains(t, c.Body, "moved to review")
 

@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,6 +80,11 @@ func NewWebhookService(repo repository.WebhookRepository, opts ...WebhookService
 //
 // Proxy is deliberately left nil: an HTTP(S)_PROXY from the environment would
 // make the dial check see the proxy's address, not the receiver's.
+// NewExtensionHTTPClient is the SSRF-guarded client for calls to an external
+// extension's service (health, install handshake): same dial guard and no
+// redirects as webhook deliveries.
+func NewExtensionHTTPClient() *http.Client { return newWebhookHTTPClient(isPubliclyRoutable) }
+
 func newWebhookHTTPClient(allow func(net.IP) bool) *http.Client {
 	return &http.Client{
 		Timeout: webhookRequestTimeout,
@@ -257,7 +263,7 @@ type webhookAttempt struct {
 // It records nothing: callers own the delivery log and failure bookkeeping.
 // owner names the webhook or subscription in log lines. A wait precedes every
 // attempt after the first, so maxAttempts-1 entries of the schedule are used.
-func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType string, payloadBytes []byte, maxAttempts int) webhookAttempt {
+func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType string, payloadBytes []byte, maxAttempts int, documentedSig bool) webhookAttempt {
 	res := webhookAttempt{deliveryID: uuid.New()}
 	backoffs := s.backoffs
 	if backoffs == nil {
@@ -270,7 +276,7 @@ func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType s
 		}
 
 		res.attempts = attempt
-		status, body, duration, err := s.sendSigned(targetURL, secret, eventType, res.deliveryID, payloadBytes)
+		status, body, duration, err := s.sendSignedWith(documentedSig, targetURL, secret, eventType, res.deliveryID, payloadBytes)
 		res.durationMs = &duration
 		if err == nil {
 			res.status = &status
@@ -297,7 +303,7 @@ func (s *webhookService) deliver(owner uuid.UUID, targetURL, secret, eventType s
 
 // dispatchOne sends a single webhook delivery with up to webhookMaxAttempts retries.
 func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, payloadBytes []byte) {
-	res := s.deliver(wh.ID, wh.URL, wh.Secret, eventType, payloadBytes, webhookMaxAttempts)
+	res := s.deliver(wh.ID, wh.URL, wh.Secret, eventType, payloadBytes, webhookMaxAttempts, false)
 	deliveryID, lastStatus, lastBody, lastDuration, success, lastAttempt :=
 		res.deliveryID, res.status, res.body, res.durationMs, res.success, res.attempts
 
@@ -343,23 +349,36 @@ func (s *webhookService) dispatchOne(wh domain.WebhookConfig, eventType string, 
 	}
 }
 
-// sendSigned performs a single HTTP POST to targetURL with HMAC-SHA256 signature
-// headers. Returns (status, body, duration_ms, error). Webhook configs and
-// extension subscriptions share it, so both get the same signing and guarded client.
-func (s *webhookService) sendSigned(targetURL, secret, eventType string, deliveryID uuid.UUID, payloadBytes []byte) (statusCode int, respBody string, durationMS int, err error) {
+// sendSignedWith performs a single HTTP POST to targetURL with HMAC-SHA256
+// signature headers and returns (status, body, duration_ms, error). Webhook
+// configs and extension subscriptions share it, so both get the same guarded
+// client; the signature scheme differs. Webhook
+// configs keep "sha256=" + HMAC(body) and an RFC 3339 timestamp. Extension
+// deliveries (documentedSig) follow docs/webhooks.md: X-Mesh-Timestamp is Unix
+// seconds and X-Mesh-Signature is hex HMAC-SHA256 of "{timestamp}.{body}", so a
+// receiver written from the docs (mesh-ext-hello) verifies them and a replayed
+// body with a stale timestamp is refused.
+func (s *webhookService) sendSignedWith(documentedSig bool, targetURL, secret, eventType string, deliveryID uuid.UUID, payloadBytes []byte) (statusCode int, respBody string, durationMS int, err error) {
 	start := time.Now()
 
-	// Compute HMAC-SHA256 signature.
+	timestamp := time.Now().UTC().Format(time.RFC3339)
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payloadBytes)
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	var sig string
+	if documentedSig {
+		timestamp = strconv.FormatInt(time.Now().Unix(), 10)
+		mac.Write([]byte(timestamp + "."))
+		mac.Write(payloadBytes)
+		sig = hex.EncodeToString(mac.Sum(nil))
+	} else {
+		mac.Write(payloadBytes)
+		sig = "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	}
 
 	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("create request: %w", err)
 	}
 
-	timestamp := time.Now().UTC().Format(time.RFC3339)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Mesh-Signature", sig)
 	req.Header.Set("X-Mesh-Event", eventType)

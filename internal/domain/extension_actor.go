@@ -52,6 +52,7 @@ type AgentAPIKey struct {
 	ExpiresAt    *time.Time `json:"expires_at,omitempty" db:"expires_at"`
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty" db:"revoked_at"`
+	LastUsedAt   *time.Time `json:"last_used_at,omitempty" db:"last_used_at"`
 }
 
 // AgentPrimaryKeyID is the key_id that addresses the agent's original key in

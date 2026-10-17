@@ -96,10 +96,13 @@ func (f *extFixture) waitDeliveries(t *testing.T, n int) []*domain.WebhookDelive
 	return append([]*domain.WebhookDelivery(nil), f.repo.deliveries...)
 }
 
-func validSignature(secret string, body []byte) string {
+// validSignature is the documented scheme (docs/webhooks.md): hex HMAC-SHA256
+// of "{X-Mesh-Timestamp}.{body}" with Unix-seconds timestamp.
+func validSignature(secret, timestamp string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp + "."))
 	mac.Write(body)
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // A receiver that verifies the signature the way an extension would: Mesh's
@@ -112,7 +115,7 @@ func TestExtensionDelivery_SignedTaskUpdated(t *testing.T) {
 	var events []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		if !hmac.Equal([]byte(r.Header.Get("X-Mesh-Signature")), []byte(validSignature(secret, b))) {
+		if !hmac.Equal([]byte(r.Header.Get("X-Mesh-Signature")), []byte(validSignature(secret, r.Header.Get("X-Mesh-Timestamp"), b))) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -125,7 +128,7 @@ func TestExtensionDelivery_SignedTaskUpdated(t *testing.T) {
 
 	// Red control: a corrupted signature is refused by this receiver.
 	body := []byte(`{"task_id":"t1"}`)
-	bad := validSignature(secret, body)
+	bad := validSignature(secret, "1700000000", body)
 	bad = bad[:len(bad)-1] + map[bool]string{true: "1", false: "0"}[bad[len(bad)-1] == '0']
 	req, _ := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
 	req.Header.Set("X-Mesh-Signature", bad)

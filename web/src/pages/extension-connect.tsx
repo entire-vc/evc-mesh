@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router";
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Loader2, Lock, PackageSearch, XCircle } from "lucide-react";
@@ -9,16 +9,13 @@ import { SchemaForm, resolveSchema, type FieldSchema, type Values } from "@/comp
 import { useExtensionCatalog, type CatalogEntry } from "@/hooks/useExtensionCatalog";
 import { allowedDomains, capabilityText, domainText, consentTokens, describeCapabilities } from "@/lib/extension-capabilities";
 import { connectWorkspaceExtension, testWorkspaceExtension } from "@/lib/extension-connect";
+import { getInstanceOverview } from "@/lib/extension-instance";
 import { apiErrorMessage } from "@/lib/api-error";
-import { useMemberStore } from "@/stores/member";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { cn } from "@/lib/cn";
 
 export const WIZARD_STEPS = ["permissions", "settings", "test", "done"] as const;
 export type WizardStep = (typeof WIZARD_STEPS)[number];
-
-// W2.8 (instance settings screen) is not shipped: the admin link stays hidden until the flag is on.
-const ADMIN_ACTIONS_ENABLED = import.meta.env.VITE_EXTENSIONS_ADMIN_ACTIONS === "true";
 
 function Stepper({ step }: { step: WizardStep }) {
   const { t } = useTranslation("integrations");
@@ -127,8 +124,8 @@ function SettingsStep({ entry, fromInstance, isAdmin, wsSlug, onBack, onConnect,
           <div className="space-y-1">
             <p className="font-medium">{t("connect.settings.byInstance")}</p>
             <p className="text-muted-foreground">{t("connect.settings.byInstanceHint")}</p>
-            {isAdmin && ADMIN_ACTIONS_ENABLED && (
-              <Button variant="outline" size="sm" onClick={() => navigate(`/w/${wsSlug}/settings/instance`)}>
+            {isAdmin && (
+              <Button variant="outline" size="sm" onClick={() => navigate(`/w/${wsSlug}/instance/extensions`)}>
                 {t("connect.settings.editInstance")}
               </Button>
             )}
@@ -280,13 +277,23 @@ export function ExtensionConnectPage() {
   const { t } = useTranslation("integrations");
   const { wsSlug = "", extId = "" } = useParams();
   const { currentWorkspace } = useWorkspaceStore();
-  const { myRole } = useMemberStore();
   const catalog = useExtensionCatalog();
   const [step, setStep] = useState<WizardStep>("permissions");
   const [consented, setConsented] = useState(false);
   const [consentError, setConsentError] = useState(false);
   const [visitedSettings, setVisitedSettings] = useState(false);
-  const isAdmin = myRole === "owner" || myRole === "admin";
+  // the instance administrator is not the workspace admin: only the instance API can tell
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getInstanceOverview().then(
+      () => live && setIsAdmin(true),
+      () => live && setIsAdmin(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
   const entry = catalog.entries.find((e) => e.id === extId);
   const wsId = currentWorkspace?.id ?? "";
 
@@ -350,7 +357,9 @@ export function ExtensionConnectPage() {
     try {
       await connectWorkspaceExtension(wsId, entry.id, settings, consentTokens(entry.manifest.capabilities));
     } catch (e) {
-      const details = (e as { details?: Record<string, string> } | null)?.details;
+      // details is an object only for field errors; a 404 ("Extension not found") carries a string or nothing
+      const raw = (e as { details?: unknown } | null)?.details;
+      const details = raw !== null && typeof raw === "object" ? (raw as Record<string, string>) : undefined;
       if (details && "consent" in details) {
         // consent is a step-1 problem: go back there with the checkbox marked
         setConsented(false);

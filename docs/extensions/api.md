@@ -145,9 +145,18 @@ still govern: see `status.source`).
 | `GET /extensions/manifest-schema` | any authenticated | – | `200` JSON Schema (`application/schema+json`), the current manifest schema |
 | `GET /extensions/{id}/instance-settings` | instance admin | – | `200` settings object; secret values are masked |
 | `PUT /extensions/{id}/instance-settings` | instance admin | settings object | `200` settings object; a masked secret value preserves the stored secret |
-| `POST /extensions/install` | instance admin | – | `501` `not_implemented` when installation is unavailable |
-| `POST /extensions/{id}/update` | instance admin | – | `501` `not_implemented` when updates are unavailable |
-| `POST /extensions/{id}/rollback` | instance admin | – | `501` `not_implemented` when rollback is unavailable |
+| `POST /extensions/install` | instance admin | `{ "source": "repo", "repo_url", "ref", "auth_token"? }` | `201 { extension_id, version, source, trust_level: "custom", repo_url, repo_ref, commit_sha }`. `400` `extension_builtin_runtime` / `extension_incompatible` / `extension_manifest_invalid`, `409` `extension_id_conflict`, `403`/`404`/`502` `extension_repo_unavailable`. The token is stored encrypted and never returned |
+| `POST /extensions/repo/refs` | instance admin | `{ repo_url, auth_token? }` | `200 { tags: [{name, sha}], branches: [{name, sha}] }` |
+| `POST /extensions/repo/preview` | instance admin | as install | `200` manifest, `capabilities`, `compatible`, `commit_sha`, `trust_level: "custom"`, `warning`; installs nothing |
+| `GET /extensions/updates` | instance admin | – | `200 { updates: [{extension_id, current_*, latest_*, update_available, new_capabilities, needs_consent, pending, can_rollback, error?}] }` |
+| `POST /extensions/{id}/update` | instance admin | `{ consent_commit_sha? }` | `200 { outcome: updated \| up_to_date \| pending_consent, ... }`. An update that adds permissions stays `pending_consent` until `consent_commit_sha` names that commit |
+| `POST /extensions/update-all` | instance admin | – | `200 { results: [...] }`, same shape per extension |
+| `POST /extensions/{id}/rollback` | instance admin | – | `200` the version before the last update; `409` when there is none |
+
+For a tag `ref` the updates check also offers a newer semver tag; for a branch it
+compares the head with the installed `commit_sha`. With the instance auto-update
+flag on, a background pass every 30 minutes applies updates that add no
+permissions; the others wait for consent.
 
 `GET /extensions/events` returns the extension event catalog.
 
@@ -155,6 +164,13 @@ still govern: see `status.source`).
 
 Read: any workspace member. Write: `manage_webhooks` permission (same as the
 old integrations routes).
+
+Secret settings (`x-secret`) sent in plaintext are stored encrypted (same
+`MESH_INTEGRATION_ENCRYPTION_KEY` as the old routes). Telegram additionally
+checks the token with `getMe` (fills `bot_username`, `400` on a bad token) and
+restarts the bot poller on connect, settings, enable/disable and delete.
+Each `WorkspaceExtension` carries `can_purge_data` (`data=delete` is supported)
+and `settings_managed_elsewhere` (generic connect/settings/remove refuse; Runner).
 
 | Method and path | Request | Response |
 |---|---|---|

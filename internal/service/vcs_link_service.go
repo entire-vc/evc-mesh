@@ -18,11 +18,6 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// garfieldAgentID is the agent UUID under which the webhook orchestrator
-// authors auto-transition system comments. Per subtask 93cb9141 spec we use
-// Garfield rather than introducing a separate "system" agent record.
-var garfieldAgentID = uuid.MustParse("99a835df-fe8c-424b-84c5-949595fb9eb2")
-
 // vcsLinkService implements VCSLinkService.
 type vcsLinkService struct {
 	repo        repository.VCSLinkRepository
@@ -683,8 +678,9 @@ func (s *vcsLinkService) postSystemComment(ctx context.Context, taskID uuid.UUID
 	c := &domain.Comment{
 		ID:         uuid.New(),
 		TaskID:     taskID,
-		AuthorID:   garfieldAgentID,
-		AuthorType: domain.ActorTypeAgent,
+		AuthorID:   uuid.Nil,
+		AuthorType: domain.ActorTypeSystem,
+		SystemCode: SysCodePtr(SysCodeVCSWebhook),
 		Body:       body,
 		Metadata:   metadata,
 		IsInternal: false,

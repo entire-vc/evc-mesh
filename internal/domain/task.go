@@ -192,6 +192,8 @@ type Task struct {
 	// VCSPipelineStatus is the latest GitLab pipeline state across the task's
 	// links (nil when none reported) — the board card badge reads it.
 	VCSPipelineStatus *string `json:"vcs_pipeline_status"`
+	// VCSProviders: distinct providers of the task's VCS links (github, gitlab).
+	VCSProviders []string `json:"vcs_providers,omitempty"`
 	// URL is the canonical short deep-link, e.g. https://mesh.entire.host/t/<id>.
 	// Populated by HTTP handlers from request scheme+host. Empty in non-HTTP contexts.
 	URL string `json:"url,omitempty"`

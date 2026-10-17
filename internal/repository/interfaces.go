@@ -1387,6 +1387,26 @@ type InstalledExtensionRepository interface {
 	List(ctx context.Context) ([]domain.InstalledExtension, error)
 }
 
+// RepoExtensionRepository is the persistence of extensions installed from a
+// repository: install, update, pending consent, rollback and the access token
+// of a private repository (encrypted, write-only toward the API).
+type RepoExtensionRepository interface {
+	// InsertRepo inserts a source=repo row together with its access token (when
+	// not empty) in one transaction; apierror.Conflict when the id is taken. The
+	// token is stored encrypted or not at all.
+	InsertRepo(ctx context.Context, ext *domain.InstalledExtension, token string) error
+	GetState(ctx context.Context, extensionID string) (*domain.ExtensionRepoState, error)
+	// ApplyUpdate moves the current version into previous_* and writes the new
+	// one, clearing any pending update.
+	ApplyUpdate(ctx context.Context, extensionID, version, ref, commitSHA string, manifest []byte) error
+	SetPending(ctx context.Context, extensionID, version, ref, commitSHA string, manifest []byte) error
+	// Rollback swaps the current version with previous_*; apierror.Conflict when
+	// there is nothing to roll back to.
+	Rollback(ctx context.Context, extensionID string) error
+	// GetToken returns "" when none is stored.
+	GetToken(ctx context.Context, extensionID string) (string, error)
+}
+
 // ExtensionConsentRepository reads and writes the consent recorded on an
 // integration_configs row (consented_capabilities/at/by). Kept apart from
 // IntegrationRepository so the legacy integration paths and their bodies stay
@@ -1430,6 +1450,16 @@ type ExtensionActorRepository interface {
 	// Revoke sets revoked_at and drops the previous token. Idempotent; reports
 	// whether this call changed anything.
 	Revoke(ctx context.Context, connectionID uuid.UUID) (bool, error)
+	// RotateSelf is Rotate driven by the actor itself: presentedHash, the token
+	// of the call, becomes the previous token (so a retry after a lost response
+	// never locks the caller out) and newHash the current one. It applies only
+	// when presentedHash is the current token or a still-valid previous one;
+	// reports false otherwise or when the actor is revoked.
+	RotateSelf(ctx context.Context, connectionID uuid.UUID, presentedHash, newHash string, prevExpiresAt, now time.Time) (bool, error)
+	// DropPrevious clears the previous token when presentedHash is the current
+	// one. Idempotent: reports whether the call was allowed (presented token is
+	// current), not whether a previous token was there.
+	DropPrevious(ctx context.Context, connectionID uuid.UUID, presentedHash string) (bool, error)
 	// RecordViolation increments the violation counter shown in the health of
 	// the connection.
 	RecordViolation(ctx context.Context, connectionID uuid.UUID, what string) error
@@ -1445,7 +1475,17 @@ type AgentAPIKeyRepository interface {
 	// Revoke sets revoked_at; reports whether it changed anything.
 	Revoke(ctx context.Context, agentID, keyID uuid.UUID) (bool, error)
 	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]domain.AgentAPIKey, error)
-	CountActiveByAgent(ctx context.Context, agentID uuid.UUID) (int, error)
+	// CountActiveByAgent counts additional keys that are neither revoked nor expired at now.
+	CountActiveByAgent(ctx context.Context, agentID uuid.UUID, now time.Time) (int, error)
+	// TouchLastUsed / TouchPrimaryLastUsed stamp a login (throttled to once a
+	// minute); PrimaryLastUsed reads the stamp of the agent's original key.
+	TouchLastUsed(ctx context.Context, keyID uuid.UUID) error
+	TouchPrimaryLastUsed(ctx context.Context, agentID uuid.UUID) error
+	PrimaryLastUsed(ctx context.Context, agentID uuid.UUID) (*time.Time, error)
+	// PrimaryDigest is the current digest of the agent's original key.
+	PrimaryDigest(ctx context.Context, agentID uuid.UUID) (string, error)
+	// WithAgentLock serializes fn per agent across API instances.
+	WithAgentLock(ctx context.Context, agentID uuid.UUID, fn func() error) error
 }
 
 // InstanceExtensionSettingRepository manages instance_extension_settings.
@@ -1458,6 +1498,22 @@ type InstanceExtensionSettingRepository interface {
 	InsertIfAbsent(ctx context.Context, s *domain.InstanceExtensionSetting, secretKeys []string) (bool, error)
 	// Upsert replaces the row (source=admin path).
 	Upsert(ctx context.Context, s *domain.InstanceExtensionSetting, secretKeys []string) error
+}
+
+// InstanceExtensionPolicyRepository holds the instance allow-list, the
+// instance auto-update flag and the admin journal.
+type InstanceExtensionPolicyRepository interface {
+	// Allowed resolves one extension: an explicit row wins, otherwise the
+	// default of its installed trust level (no installed row: allowed).
+	Allowed(ctx context.Context, extensionID string) (bool, error)
+	// ListPolicies returns the explicit rows keyed by extension id.
+	ListPolicies(ctx context.Context) (map[string]domain.InstanceExtensionPolicy, error)
+	SetAllowed(ctx context.Context, extensionID string, allowed bool, by *uuid.UUID) error
+	GetConfig(ctx context.Context) (*domain.InstanceExtensionConfig, error)
+	SetAutoUpdate(ctx context.Context, on bool, by *uuid.UUID) error
+	AppendJournal(ctx context.Context, e *domain.InstanceExtensionJournalEntry) error
+	// ListJournal returns the newest entries first.
+	ListJournal(ctx context.Context, limit int) ([]domain.InstanceExtensionJournalEntry, error)
 }
 
 // IntegrationRepository manages persistence for workspace integration configurations.

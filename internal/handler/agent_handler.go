@@ -38,14 +38,19 @@ const (
 // AgentHandler handles HTTP requests for agent management.
 type AgentHandler struct {
 	agentService    service.AgentService
-	taskService     service.TaskService               // optional, used for GetMyTasks and PollTasks
-	statusService   service.TaskStatusService         // optional, used for status_category filtering
-	rdb             *redis.Client                     // optional, used for SSE and long-poll
-	agentEventsRepo repository.AgentEventsRepository  // optional, enables Last-Event-ID SSE replay
-	sessionRepo     repository.AgentSessionRepository // optional, enables POST /agents/me/sessions/report
-	shutdown        <-chan struct{}                   // optional, closed on server shutdown to end SSE streams and long-polls
-	workspaceSvc    service.WorkspaceService          // optional, resolves the workspace slug for Agent.URL
+	taskService     service.TaskService                  // optional, used for GetMyTasks and PollTasks
+	statusService   service.TaskStatusService            // optional, used for status_category filtering
+	rdb             *redis.Client                        // optional, used for SSE and long-poll
+	agentEventsRepo repository.AgentEventsRepository     // optional, enables Last-Event-ID SSE replay
+	sessionRepo     repository.AgentSessionRepository    // optional, enables POST /agents/me/sessions/report
+	shutdown        <-chan struct{}                      // optional, closed on server shutdown to end SSE streams and long-polls
+	workspaceSvc    service.WorkspaceService             // optional, resolves the workspace slug for Agent.URL
+	controllers     repository.AgentControllerRepository // optional, heartbeat renews the controller lease
 }
+
+// SetControllerRepo lets Heartbeat renew the agent's controller lease. Without
+// it heartbeats behave exactly as before.
+func (h *AgentHandler) SetControllerRepo(r repository.AgentControllerRepository) { h.controllers = r }
 
 // SetWorkspaceService enables Agent.URL on agent responses. Without it the
 // field is simply absent (omitempty).
@@ -511,6 +516,11 @@ func (h *AgentHandler) Heartbeat(c echo.Context) error {
 
 	if err := h.agentService.Heartbeat(c.Request().Context(), agentID, input); err != nil {
 		return handleError(c, err)
+	}
+
+	// Best-effort: a lease hiccup never fails the heartbeat itself.
+	if h.controllers != nil {
+		_ = h.controllers.Renew(c.Request().Context(), agentID, c.Request().Header.Get(RunnerInstanceHeader), AgentControllerLease)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})

@@ -199,6 +199,7 @@ func TestDocumentSearch_LongBodyIsIndexedWhole(t *testing.T) {
 	// legal lives in the trigger, where it belongs — the column is the record of
 	// what the document says, not of what fits in an index.
 	f := setupDocumentSearch(t)
+	WithDocumentBodyLimits(maxDocumentBodyBytes, maxDocumentBodyBytes)(f.svc)
 	body := strings.Repeat("word ", 100000)
 
 	doc := f.create(t, "Huge", body)

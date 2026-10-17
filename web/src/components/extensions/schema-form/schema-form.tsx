@@ -132,7 +132,7 @@ function Field({
     );
   }
 
-  const common = { id, disabled: ctx.disabled, "aria-invalid": invalid || undefined, "aria-describedby": describedBy } as const;
+  const common = { id, disabled: ctx.disabled || Boolean(field.readOnly), "aria-invalid": invalid || undefined, "aria-describedby": describedBy } as const;
 
   let control: React.ReactNode;
   if (field["x-secret"]) {
@@ -369,8 +369,12 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
           if (typeof msg === "string") mapped[k.replace(/^settings\./, "")] = msg;
         }
       }
+      // `settings` is the whole-form key (the provider's own rejection), not a field.
+      const whole = mapped.settings;
+      delete mapped.settings;
       setServerErrors(mapped);
-      if (Object.keys(mapped).length === 0) setFormError(apiErrorMessage(err, t("schemaForm.saveFailed")));
+      if (whole) setFormError(whole);
+      else if (Object.keys(mapped).length === 0) setFormError(apiErrorMessage(err, t("schemaForm.saveFailed")));
     } finally {
       setSaving(false);
     }

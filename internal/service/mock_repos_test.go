@@ -2621,6 +2621,7 @@ type MockRulesService struct {
 	workflowRules  *domain.WorkflowRulesResponse
 	workflowErr    error
 	errToReturn    error
+	violations     []domain.RuleViolationLog
 }
 
 func NewMockRulesService(rules *domain.EffectiveAssignmentRules) *MockRulesService {
@@ -2670,8 +2671,9 @@ func (m *MockRulesService) SetProjectWorkflowRules(_ context.Context, _ uuid.UUI
 func (m *MockRulesService) ListViolations(_ context.Context, _ uuid.UUID, _ int) ([]domain.RuleViolationLog, error) {
 	panic("MockRulesService.ListViolations not implemented")
 }
-func (m *MockRulesService) LogViolation(_ context.Context, _ *domain.RuleViolationLog) error {
-	panic("MockRulesService.LogViolation not implemented")
+func (m *MockRulesService) LogViolation(_ context.Context, v *domain.RuleViolationLog) error {
+	m.violations = append(m.violations, *v)
+	return nil
 }
 func (m *MockRulesService) ImportConfig(_ context.Context, _ uuid.UUID, _ []byte) (*domain.ImportResult, error) {
 	panic("MockRulesService.ImportConfig not implemented")

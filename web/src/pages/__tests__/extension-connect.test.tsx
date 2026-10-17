@@ -12,6 +12,11 @@ vi.mock("@/hooks/useExtensionCatalog", async (orig) => ({
 }));
 const api = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (orig) => ({ ...(await orig<typeof import("@/lib/api")>()), api }));
+const overview = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/extension-instance", async (orig) => ({
+  ...(await orig<typeof import("@/lib/extension-instance")>()),
+  getInstanceOverview: overview,
+}));
 
 import { setLanguage } from "@/i18n";
 import { ExtensionConnectPage } from "@/pages/extension-connect";
@@ -35,7 +40,7 @@ const ws = (id: string, status: ExtensionStatusDto = { enabled: false, source: "
   ({ id, name: id, version: "1.0.0", kind: "integration", category: "development", connection: null, status });
 
 function mount(entries: CatalogState["entries"]) {
-  state.value = { state: "ready", catalogUnavailable: false, reload: vi.fn(), entries };
+  state.value = { state: "ready", catalogUnavailable: false, reload: vi.fn(), refresh: vi.fn(), entries };
   return render(
     <MemoryRouter initialEntries={["/w/acme/extensions/gitlab/connect"]}>
       <Routes><Route path="w/:wsSlug/extensions/:extId/connect" element={<ExtensionConnectPage />} /></Routes>
@@ -47,6 +52,8 @@ const next = () => screen.getByRole("button", { name: "Next" });
 
 beforeEach(async () => {
   api.mockReset();
+  overview.mockReset();
+  overview.mockRejectedValue(Object.assign(new Error("forbidden"), { status: 403 }));
   await setLanguage("en");
   useWorkspaceStore.setState({ currentWorkspace: { id: "ws-1" } } as never);
   useMemberStore.setState({ myRole: "owner" } as never);
@@ -167,6 +174,16 @@ describe("connect wizard", () => {
     expect(next()).toBeDisabled();
   });
 
+  it("a 404 without a consent field shows the generic connect error instead of crashing on `in`", async () => {
+    api.mockRejectedValue(Object.assign(new Error("Extension not found"), { code: "not_found", status: 404, details: "extension not found" }));
+    mount(mergeCatalog([sum("gitlab", { manifest: { ...manifest, settings: undefined } })], [ws("gitlab")]));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(next());
+    fireEvent.click(next());
+    await waitFor(() => expect(screen.getByText("Couldn't connect the extension.")).toBeTruthy());
+    expect(screen.queryByText(/Cannot use 'in' operator/)).toBeNull();
+  });
+
   it("instance-configured extension: read-only note and no connect call", async () => {
     api.mockResolvedValue({ ok: true, message: "" });
     mount(mergeCatalog([sum("gitlab")], [ws("gitlab", { enabled: true, source: "instance" })]));
@@ -178,6 +195,22 @@ describe("connect wizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await screen.findByRole("button", { name: "Check connection" });
     expect(api).not.toHaveBeenCalled();
+  });
+
+  it("instance admin sees the instance-settings link on the settings step", async () => {
+    overview.mockResolvedValue({});
+    mount(mergeCatalog([sum("gitlab")], [ws("gitlab", { enabled: true, source: "instance" })]));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(next());
+    expect(await screen.findByRole("button", { name: "Change instance settings" })).toBeTruthy();
+  });
+
+  it("non-admin (instance API forbids) gets no instance-settings link", async () => {
+    mount(mergeCatalog([sum("gitlab")], [ws("gitlab", { enabled: true, source: "instance" })]));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(next());
+    await waitFor(() => expect(overview).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Change instance settings" })).toBeNull();
   });
 
   it("instance-configured extension without workspace fields still never calls connect", async () => {

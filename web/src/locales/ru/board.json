@@ -26,7 +26,9 @@
       "turn_pending": "ход не закрыт",
       "review_cooldown": "в ревью через {{minutes}} мин",
       "pause": "пауза",
-      "park": "припаркована"
+      "park": "припаркована",
+      "blocker_in_backlog": "блокер лежит в backlog",
+      "dependencies_unreadable": "блокер недоступен для чтения"
     }
   },
   "filter": {

@@ -385,6 +385,12 @@ func (r *AgentRepo) RotateHomeGrantKey(ctx context.Context, agent *domain.Agent)
 		return err
 	}
 
+	// New key material has never logged in: the old key's last-used stamp
+	// must not be shown against it.
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET api_key_last_used_at = NULL WHERE id = $1`, agent.ID); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 

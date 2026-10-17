@@ -55,6 +55,8 @@ import { ActivityLog } from "@/components/activity-log";
 import { SubtaskList } from "@/components/subtask-list";
 import { ArtifactList } from "@/components/artifact-list";
 import { VCSLinks } from "@/components/vcs-links";
+import { SlotActionsMenu, SlotPanelBody, usePanelTabs, useSlotOwnedVcsProviders } from "@/components/extensions/slots/slot-host";
+import { resolveSlotTab } from "@/lib/extension-slots";
 import { DependencyList } from "@/components/dependency-list";
 import { DependencyBadge } from "@/components/dependency-badge";
 import { useTaskDependencies } from "@/hooks/use-task-dependencies";
@@ -105,8 +107,12 @@ type MobileTabId =
   | "subtasks"
   | "dependencies"
   | "artifacts"
-  | "activity";
-type RightTabId = "comments" | "subtasks" | "dependencies" | "artifacts" | "activity";
+  | "activity"
+  | SlotTabId;
+type RightTabId = "comments" | "subtasks" | "dependencies" | "artifacts" | "activity" | SlotTabId;
+/** A `task.panel` tab contributed by an extension: `slot:<extension id>`. */
+type SlotTabId = `slot:${string}`;
+const slotTabId = (extensionId: string): SlotTabId => `slot:${extensionId}`;
 
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -219,8 +225,17 @@ export function TaskPanel({
   // loading from the render that changes the id, not from the effect after it.
   const [settledTaskId, setSettledTaskId] = useState<string | null>(null);
   const loading = loadingFlag || (Boolean(effectiveTaskId) && settledTaskId !== effectiveTaskId);
-  const [activeMobileTab, setActiveMobileTab] = useState<MobileTabId>("details");
-  const [activeDesktopTab, setActiveDesktopTab] = useState<RightTabId>("comments");
+  const [selectedMobileTab, setActiveMobileTab] = useState<MobileTabId>("details");
+  const [selectedDesktopTab, setActiveDesktopTab] = useState<RightTabId>("comments");
+  const panelTabs = usePanelTabs();
+  // A slot tab that left the registry (extension disabled while open) falls back to comments instead of a blank pane.
+  const activeDesktopTab = resolveSlotTab<RightTabId>(selectedDesktopTab, panelTabs.map((t) => t.extensionId), "comments");
+  const activeMobileTab = resolveSlotTab<MobileTabId>(selectedMobileTab, panelTabs.map((t) => t.extensionId), "details");
+  const panelOwnedVcs = useSlotOwnedVcsProviders("task.panel");
+  const openSlotPanel = (extensionId: string) => {
+    setActiveDesktopTab(slotTabId(extensionId));
+    setActiveMobileTab(slotTabId(extensionId));
+  };
 
   // The mobile layout starts on "details" and only mounts CommentList once
   // the reader taps into the "comments" tab — so a mention arriving on
@@ -1837,7 +1852,7 @@ export function TaskPanel({
               <Separator />
             </div>
             <div className="sm:col-span-2">
-              <VCSLinks taskId={currentTask.id} />
+              <VCSLinks taskId={currentTask.id} exclude={panelOwnedVcs} />
             </div>
           </>
         )}
@@ -2150,6 +2165,7 @@ export function TaskPanel({
               >
                 <Link className="h-4 w-4" />
               </button>
+              <SlotActionsMenu task={currentTask} openPanel={openSlotPanel} />
             </>
           )}
           {onClose && (
@@ -2319,6 +2335,23 @@ export function TaskPanel({
                       )}
                   </button>
                 ))}
+                {panelTabs.map((tab) => (
+                  <button
+                    key={tab.extensionId}
+                    type="button"
+                    className={cn(
+                      "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors [scroll-snap-align:start]",
+                      activeMobileTab === slotTabId(tab.extensionId)
+                        ? "border-primary text-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                    )}
+                    onClick={() => setActiveMobileTab(slotTabId(tab.extensionId))}
+                    aria-pressed={activeMobileTab === slotTabId(tab.extensionId)}
+                    data-testid={`slot-tab-mobile-${tab.extensionId}`}
+                  >
+                    {tab.name}
+                  </button>
+                ))}
               </div>
               {/* Right-edge fade mask */}
               <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent" />
@@ -2390,6 +2423,12 @@ export function TaskPanel({
                   <div className="p-4">
                     <ActivityLog taskId={currentTask.id} />
                   </div>
+                )}
+                {panelTabs.map(
+                  (tab) =>
+                    activeMobileTab === slotTabId(tab.extensionId) && (
+                      <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} />
+                    ),
                 )}
               </div>
             )}
@@ -2487,6 +2526,22 @@ export function TaskPanel({
                 >
                   {t("panel.tabs.activity")}
                 </button>
+                {panelTabs.map((tab) => (
+                  <button
+                    key={tab.extensionId}
+                    type="button"
+                    className={cn(
+                      "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                      activeDesktopTab === slotTabId(tab.extensionId)
+                        ? "border-primary text-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                    )}
+                    onClick={() => setActiveDesktopTab(slotTabId(tab.extensionId))}
+                    data-testid={`slot-tab-${tab.extensionId}`}
+                  >
+                    {tab.name}
+                  </button>
+                ))}
               </div>
 
               {/* Tab content */}
@@ -2539,6 +2594,12 @@ export function TaskPanel({
                 <div className="flex-1 overflow-y-auto p-4">
                   <ActivityLog taskId={currentTask.id} />
                 </div>
+              )}
+              {panelTabs.map(
+                (tab) =>
+                  activeDesktopTab === slotTabId(tab.extensionId) && (
+                    <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} />
+                  ),
               )}
             </div>
           </div>

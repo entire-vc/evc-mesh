@@ -66,6 +66,11 @@ var Catalog = []Entry{
 	{"unreachable", "Team Relay is unreachable. Try again later.", "Team Relay недоступен. Повторите позже."},
 	{"share_not_found", "The Team Relay share was not found. Check that it still exists.", "Общий доступ Team Relay не найден. Проверьте, что он ещё существует."},
 	{"error", "Team Relay sync failed. Try again later.", "Синхронизация с Team Relay не удалась. Повторите позже."},
+	{"extension_builtin_runtime", "Builtin extensions ship with Mesh and cannot be installed from a repository.", "Встроенные расширения поставляются с Mesh и не ставятся из репозитория."},
+	{"extension_incompatible", "This extension is incompatible with this version of Mesh.", "Расширение несовместимо с этой версией Mesh."},
+	{"extension_manifest_invalid", "The repository's mesh-extension.json is not a valid manifest.", "Файл mesh-extension.json в репозитории не является корректным манифестом."},
+	{"extension_id_conflict", "An extension with this id is already installed.", "Расширение с таким id уже установлено."},
+	{"extension_repo_unavailable", "The repository can't be read: check the address, the ref and the token.", "Не удаётся прочитать репозиторий: проверьте адрес, тег или ветку и токен."},
 }
 
 // Lookup returns the text of code in locale ("ru" or anything else for

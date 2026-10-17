@@ -74,6 +74,13 @@ type ExtensionActorService interface {
 	// Rotate installs a new token; the previous one works for
 	// ExtensionTokenRotationGrace more.
 	Rotate(ctx context.Context, workspaceID, connectionID uuid.UUID) (*IssuedExtensionToken, error)
+	// SelfRotate is the actor rotating its own token (capability
+	// ext_token:self_rotate). presented is the raw token of the call: it stays
+	// valid for grace (default ExtensionTokenRotationGrace) as the previous token.
+	SelfRotate(ctx context.Context, p *ExtensionPrincipal, presented string, grace time.Duration) (*IssuedExtensionToken, error)
+	// SelfRevokePrevious ends the transition window early. Only the current
+	// token may call it; a repeat is a no-op.
+	SelfRevokePrevious(ctx context.Context, p *ExtensionPrincipal, presented string) error
 	// Revoke kills every token of the connection. Idempotent.
 	Revoke(ctx context.Context, connectionID uuid.UUID) error
 	// Authenticate resolves a raw token. Every failure is the same 401: unknown,
@@ -183,6 +190,48 @@ func (s *extensionActorService) Rotate(ctx context.Context, workspaceID, connect
 		return nil, apierror.Conflict("extension actor is revoked; reconnect the extension to issue a new token")
 	}
 	return &IssuedExtensionToken{Token: raw, ActorID: row.ActorID, Actor: row.Principal(), Grace: ExtensionTokenRotationGrace, Rotated: true, IssuedAt: s.now()}, nil
+}
+
+// ExtensionSelfRotateMaxGrace bounds the transition window a caller may ask for.
+const ExtensionSelfRotateMaxGrace = time.Hour
+
+func (s *extensionActorService) SelfRotate(ctx context.Context, p *ExtensionPrincipal, presented string, grace time.Duration) (*IssuedExtensionToken, error) {
+	if p == nil || !strings.HasPrefix(presented, ExtensionTokenPrefix) {
+		return nil, apierror.Forbidden("only an extension actor can rotate its own token")
+	}
+	if grace <= 0 {
+		grace = ExtensionTokenRotationGrace
+	}
+	if grace > ExtensionSelfRotateMaxGrace {
+		return nil, apierror.BadRequest("grace_seconds must be at most 3600")
+	}
+	raw, err := newExtensionToken()
+	if err != nil {
+		return nil, apierror.InternalError("failed to generate token")
+	}
+	now := s.now()
+	ok, err := s.actors.RotateSelf(ctx, p.ConnectionID, extensionTokenHash(presented), extensionTokenHash(raw), now.Add(grace), now)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, apierror.Unauthorized("invalid extension token")
+	}
+	return &IssuedExtensionToken{Token: raw, ActorID: p.ActorID, Actor: p.Principal(), Grace: grace, Rotated: true, IssuedAt: now}, nil
+}
+
+func (s *extensionActorService) SelfRevokePrevious(ctx context.Context, p *ExtensionPrincipal, presented string) error {
+	if p == nil || !strings.HasPrefix(presented, ExtensionTokenPrefix) {
+		return apierror.Forbidden("only an extension actor can revoke its own previous token")
+	}
+	ok, err := s.actors.DropPrevious(ctx, p.ConnectionID, extensionTokenHash(presented))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return apierror.Conflict("call this with the current token, not the previous one")
+	}
+	return nil
 }
 
 func (s *extensionActorService) Revoke(ctx context.Context, connectionID uuid.UUID) error {

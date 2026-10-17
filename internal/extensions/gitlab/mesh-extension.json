@@ -77,7 +77,11 @@
       ],
       "reasoning": "проверка статуса MR и пайплайнов через API GitLab инстанса"
     },
-    "ui": [],
+    "ui": [
+      "task.panel",
+      "task.badge",
+      "task.actions"
+    ],
     "secrets": [
       "token",
       "webhook_secret"
