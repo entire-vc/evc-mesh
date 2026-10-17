@@ -26,7 +26,7 @@ func TestVCSLinkRepo_Upsert_StampsStatusSyncedAtOnInsertAndUpdate(t *testing.T) 
 	repo := NewVCSLinkRepo(db)
 	taskID := vcsLinkTestTask(t, db)
 
-	const url = "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/77"
+	const url = "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/77"
 	before := time.Now().Add(-time.Second)
 
 	first := &domain.VCSLink{
@@ -97,8 +97,8 @@ func TestVCSLinkRepo_Upsert_UpdateOntoSiblingIdentityIsConflict(t *testing.T) {
 	repo := NewVCSLinkRepo(db)
 	taskID := vcsLinkTestTask(t, db)
 
-	const urlA = "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/91"
-	const urlB = "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/92"
+	const urlA = "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/91"
+	const urlB = "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/92"
 	a := &domain.VCSLink{
 		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
 		LinkType: domain.VCSLinkTypePR, ExternalID: "91", URL: urlA,

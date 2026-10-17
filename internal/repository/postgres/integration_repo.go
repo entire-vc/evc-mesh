@@ -60,7 +60,7 @@ func NewIntegrationRepo(db *sqlx.DB) *IntegrationRepo {
 
 // Upsert inserts or updates an integration configuration (unique per workspace+provider).
 func (r *IntegrationRepo) Upsert(ctx context.Context, cfg *domain.IntegrationConfig) error {
-	if cfg.Provider == domain.IntegrationProviderAgentRuntime {
+	if domain.IsRuntimeProvider(cfg.Provider) {
 		return apierror.BadRequest("use the versioned runtime API")
 	}
 	const q = `
@@ -97,6 +97,9 @@ func (r *IntegrationRepo) InsertIfAbsent(ctx context.Context, cfg *domain.Integr
 	if config == nil {
 		config = []byte("{}")
 	}
+	if cfg.Provider == domain.IntegrationProviderRunner {
+		return r.insertRunnerIfAbsent(ctx, cfg, config)
+	}
 	res, err := r.db.ExecContext(ctx, q,
 		cfg.ID, cfg.WorkspaceID, string(cfg.Provider), config, cfg.IsActive, cfg.CreatedAt, cfg.UpdatedAt,
 	)
@@ -105,6 +108,36 @@ func (r *IntegrationRepo) InsertIfAbsent(ctx context.Context, cfg *domain.Integr
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+// insertRunnerIfAbsent creates the Runner connection unless the workspace
+// already has one under either of its provider names. The unique index is per
+// name, so the creators are serialized by the advisory lock the runtime save
+// path holds too.
+func (r *IntegrationRepo) insertRunnerIfAbsent(ctx context.Context, cfg *domain.IntegrationConfig, config []byte) (bool, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = lockRunnerConnection(ctx, tx, cfg.WorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO integration_configs (id, workspace_id, provider, config, is_active, created_at, updated_at)
+		SELECT $1::uuid, $2::uuid, $3, $4::jsonb, $5, $6, $7
+		WHERE NOT EXISTS (SELECT 1 FROM integration_configs WHERE workspace_id = $2::uuid AND provider IN ('runner', 'agent_runtime'))
+		ON CONFLICT (workspace_id, provider) DO NOTHING`,
+		cfg.ID, cfg.WorkspaceID, string(cfg.Provider), config, cfg.IsActive, cfg.CreatedAt, cfg.UpdatedAt)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, tx.Commit()
 }
 
 // GetByID retrieves an integration config by its ID.
@@ -144,7 +177,7 @@ func (r *IntegrationRepo) Update(ctx context.Context, id uuid.UUID, input domain
 	if existing == nil {
 		return nil, apierror.NotFound("Integration")
 	}
-	if existing.Provider == domain.IntegrationProviderAgentRuntime {
+	if domain.IsRuntimeProvider(existing.Provider) {
 		return nil, apierror.BadRequest("use the versioned runtime API")
 	}
 
@@ -174,7 +207,7 @@ func (r *IntegrationRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	if existing != nil && existing.Provider == domain.IntegrationProviderAgentRuntime {
+	if existing != nil && domain.IsRuntimeProvider(existing.Provider) {
 		return apierror.BadRequest("disable runtime through the versioned runtime API")
 	}
 	const q = `DELETE FROM integration_configs WHERE id = $1`

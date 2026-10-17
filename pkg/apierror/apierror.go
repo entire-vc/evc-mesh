@@ -131,6 +131,21 @@ func Conflict(message string) *Error {
 	return &Error{Code: http.StatusConflict, ErrorCode: CodeConflict, Message: message}
 }
 
+// CodeDocumentSlugTaken marks a 409 where a live sibling already holds the
+// document's slug. It is not a version race: retrying with another base_version
+// cannot help, the slug has to change or the other document has to go.
+const CodeDocumentSlugTaken = "document_slug_taken"
+
+// DocumentSlugTaken creates the 409 for a slug already used by a live sibling.
+func DocumentSlugTaken() *Error {
+	return &Error{
+		Code:      http.StatusConflict,
+		ErrorCode: CodeDocumentSlugTaken,
+		Message: "slug is already taken in the target folder: a live document with this slug exists in this " +
+			"location. Rename or delete that document, or choose another slug. This is not a version conflict.",
+	}
+}
+
 // TooManyRequests creates a 429 error.
 func TooManyRequests(message string) *Error {
 	if message == "" {

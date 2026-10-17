@@ -18,7 +18,7 @@ import (
 type TrSearchHandler struct {
 	piService     service.ProjectIntegrationService
 	projectSvc    service.ProjectService
-	relayResolver *service.TeamRelayIntegrationResolver
+	relayResolver service.TeamRelayURLResolver
 }
 
 // NewTrSearchHandler creates a new TrSearchHandler. relayResolver answers
@@ -27,7 +27,7 @@ type TrSearchHandler struct {
 // here, which meant a typo in the variable's name only surfaced at request
 // time. projectSvc resolves the project's workspace_id, which the resolver
 // needs and this handler otherwise has no reason to look up.
-func NewTrSearchHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver *service.TeamRelayIntegrationResolver) *TrSearchHandler {
+func NewTrSearchHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver service.TeamRelayURLResolver) *TrSearchHandler {
 	return &TrSearchHandler{piService: piService, projectSvc: projectSvc, relayResolver: relayResolver}
 }
 
@@ -65,7 +65,7 @@ func (h *TrSearchHandler) Search(c echo.Context) error {
 	}
 	relayURL, _, ok := h.relayResolver.ResolveRelayURL(c.Request().Context(), project.WorkspaceID)
 	if !ok {
-		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("relay URL not configured: no active team_relay integration for this workspace and no MESH_TEAMRELAY_RELAY_URL fallback"))
+		return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable("relay URL not configured: no active team_relay integration for this workspace and no instance setting"))
 	}
 
 	docs, err := teamrelay.SearchDocs(c.Request().Context(), relayURL, settings.ShareSlug, pi.AgentKey, q, limit)

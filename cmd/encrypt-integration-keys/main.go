@@ -279,7 +279,7 @@ func verify(db *sql.DB, projectFilter string) error {
 }
 
 func load(db *sql.DB, projectFilter string) ([]row, error) {
-	q := `SELECT id, project_id, type, agent_key FROM project_integrations
+	q := `SELECT id, project_id, extension_id, agent_key FROM project_integrations
 	       WHERE agent_key IS NOT NULL AND agent_key <> ''`
 	args := []any{}
 	if projectFilter != "" {

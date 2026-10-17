@@ -76,12 +76,20 @@ func DecodeSettings[T any](settings map[string]any) (T, error) {
 // marks x-secret. The instance level may be inline or a "#/schemas/<name>" ref.
 func (m Manifest) InstanceSecretKeys() []string { return m.SecretKeys("instance") }
 
-// SecretKeys returns the fields of one settings level ("instance",
-// "workspace" or "project") the manifest marks x-secret. The level may be
-// inline or a "#/schemas/<name>" ref.
-func (m Manifest) SecretKeys(levelName string) []string {
+// SettingField is what the manifest says about one settings field.
+type SettingField struct {
+	Secret   bool
+	ReadOnly bool
+}
+
+// SettingFields returns the fields of one settings level ("instance",
+// "workspace" or "project") the manifest declares, with their x-secret and
+// readOnly flags. The level may be inline or a "#/schemas/<name>" ref. nil when
+// the level is not declared.
+func (m Manifest) SettingFields(levelName string) map[string]SettingField {
 	type field struct {
-		Secret bool `json:"x-secret"`
+		Secret   bool `json:"x-secret"`
+		ReadOnly bool `json:"readOnly"`
 	}
 	type level struct {
 		Ref        string           `json:"$ref"`
@@ -99,8 +107,18 @@ func (m Manifest) SecretKeys(levelName string) []string {
 		}
 		lv = schemas[name]
 	}
-	var keys []string
+	out := make(map[string]SettingField, len(lv.Properties))
 	for k, f := range lv.Properties {
+		out[k] = SettingField(f)
+	}
+	return out
+}
+
+// SecretKeys returns the fields of one settings level the manifest marks
+// x-secret, sorted.
+func (m Manifest) SecretKeys(levelName string) []string {
+	var keys []string
+	for k, f := range m.SettingFields(levelName) {
 		if f.Secret {
 			keys = append(keys, k)
 		}

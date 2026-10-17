@@ -13,7 +13,7 @@
     "catalog"
   ],
   "license": "Apache-2.0",
-  "repository": "https://git.entire.host/entire-vc/evc-mesh",
+  "repository": "https://github.com/entire-vc/evc-spark-mcp",
   "levels": {
     "instance": true,
     "workspace": true,

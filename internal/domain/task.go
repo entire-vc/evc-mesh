@@ -189,6 +189,9 @@ type Task struct {
 	CreatedByName *string `json:"created_by_name,omitempty"`
 	ArtifactCount int     `json:"artifact_count"`
 	VCSLinkCount  int     `json:"vcs_link_count"`
+	// VCSPipelineStatus is the latest GitLab pipeline state across the task's
+	// links (nil when none reported) — the board card badge reads it.
+	VCSPipelineStatus *string `json:"vcs_pipeline_status"`
 	// URL is the canonical short deep-link, e.g. https://mesh.entire.host/t/<id>.
 	// Populated by HTTP handlers from request scheme+host. Empty in non-HTTP contexts.
 	URL string `json:"url,omitempty"`

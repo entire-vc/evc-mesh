@@ -26,7 +26,7 @@ beforeEach(async () => {
 });
 
 const tokenInput = () => document.querySelector<HTMLInputElement>("input[type=password]");
-const tokenField = () => screen.getByText(/^Токен\*?$/, { selector: "label" });
+const tokenField = () => screen.getByText(/^Access token\*?$/, { selector: "label" });
 
 function form(manifest: { settings: Record<string, unknown> }, level: string, props: Partial<React.ComponentProps<typeof SchemaForm>> = {}) {
   const onSubmit = props.onSubmit ?? vi.fn().mockResolvedValue(undefined);
@@ -123,12 +123,12 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
       const { unmount } = render(
         <SchemaForm schema={gitlab.settings[level] as FieldSchema} manifest={gitlab} onSubmit={vi.fn()} />,
       );
-      expect(screen.getByLabelText(/Адрес GitLab/)).toBeTruthy();
+      expect(screen.getByLabelText(/GitLab address/)).toBeTruthy();
       expect(tokenField()).toBeTruthy();
       unmount();
     }
     render(<SchemaForm schema={gitlab.settings.project as FieldSchema} manifest={gitlab} onSubmit={vi.fn()} />);
-    expect(screen.getByLabelText(/Репозиторий/)).toBeTruthy();
+    expect(screen.getByLabelText(/Repository/)).toBeTruthy();
   });
 
   it("shows a stored secret as «Set · Change» and never puts the mask or value in the DOM", async () => {
@@ -145,7 +145,7 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
 
   it("sends a replaced secret once and wipes it from the form after saving", async () => {
     const onSubmit = form(gitlab, "workspace", { value: { base_url: "https://git.example.com", token: "***" } });
-    fireEvent.click(screen.getByRole("button", { name: /Change: Токен$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Change: Access token$/ }));
     const input = tokenInput()!;
     expect(input.type).toBe("password");
     fireEvent.change(input, { target: { value: SECRET_VALUE } });
@@ -165,7 +165,7 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findAllByText("Fill in this field")).length).toBe(2);
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(screen.getByLabelText(/Адрес GitLab/).getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByLabelText(/GitLab address/).getAttribute("aria-invalid")).toBe("true");
   });
 
   it("maps server details to fields, line by line", async () => {
@@ -173,7 +173,7 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
       new ApiRequestError("Validation failed", "validation_failed", 400, { "settings.base_url": "host is not reachable" }),
     );
     form(gitlab, "workspace", { onSubmit, value: { token: "***" } });
-    fireEvent.change(screen.getByLabelText(/Адрес GitLab/), { target: { value: "https://nope.example.com" } });
+    fireEvent.change(screen.getByLabelText(/GitLab address/), { target: { value: "https://nope.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("host is not reachable")).toBeTruthy();
     expect(screen.queryByText("Validation failed")).toBeNull();
@@ -189,22 +189,22 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
 
   it("Telegram: x-visible-if shows the token only while the toggle is on", () => {
     form(telegram, "workspace");
-    expect(screen.queryByLabelText(/Токен бота воркспейса/)).toBeNull();
-    expect(screen.queryByLabelText(/Час отправки/)).toBeNull();
-    const sw = screen.getByRole("switch", { name: /Свой бот/ });
+    expect(screen.queryByLabelText(/Bot token/)).toBeNull();
+    expect(screen.queryByLabelText(/Send hour/)).toBeNull();
+    const sw = screen.getByRole("switch", { name: /Own bot/ });
     expect(sw.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(sw);
     expect(sw.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByLabelText(/Токен бота воркспейса/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Сводки"), { target: { value: "daily" } });
-    expect(screen.getByLabelText(/Час отправки/)).toBeTruthy();
+    expect(screen.getByLabelText(/Bot token/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Digests"), { target: { value: "daily" } });
+    expect(screen.getByLabelText(/Send hour/)).toBeTruthy();
   });
 
   it("Telegram: a hidden field's value is not sent", async () => {
     const onSubmit = form(telegram, "workspace");
-    fireEvent.click(screen.getByRole("switch", { name: /Свой бот/ }));
-    fireEvent.change(screen.getByLabelText(/Токен бота воркспейса/), { target: { value: "123:abc" } });
-    fireEvent.click(screen.getByRole("switch", { name: /Свой бот/ })); // hide again
+    fireEvent.click(screen.getByRole("switch", { name: /Own bot/ }));
+    fireEvent.change(screen.getByLabelText(/Bot token/), { target: { value: "123:abc" } });
+    fireEvent.click(screen.getByRole("switch", { name: /Own bot/ })); // hide again
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit.mock.calls[0]![0]).toEqual({ own_bot: false, digest_mode: "off" });
@@ -212,13 +212,13 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
 
   it("Telegram: a secret hidden by x-visible-if is not shown as stored after save", async () => {
     const onSubmit = form(telegram, "workspace");
-    fireEvent.click(screen.getByRole("switch", { name: /Свой бот/ }));
-    fireEvent.change(screen.getByLabelText(/Токен бота воркспейса/), { target: { value: "123:abc" } });
-    fireEvent.click(screen.getByRole("switch", { name: /Свой бот/ })); // hide again
+    fireEvent.click(screen.getByRole("switch", { name: /Own bot/ }));
+    fireEvent.change(screen.getByLabelText(/Bot token/), { target: { value: "123:abc" } });
+    fireEvent.click(screen.getByRole("switch", { name: /Own bot/ })); // hide again
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     await screen.findByRole("status");
-    fireEvent.click(screen.getByRole("switch", { name: /Свой бот/ })); // show again
+    fireEvent.click(screen.getByRole("switch", { name: /Own bot/ })); // show again
     // red control: the token was never sent, so it must not read «Set»
     expect(screen.queryByText("Set")).toBeNull();
   });
@@ -228,15 +228,15 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
       agentOptions: [{ value: "a1", label: "Verne" }],
       projectOptions: [{ value: "p1", label: "Mesh" }],
     });
-    fireEvent.change(screen.getByLabelText("Агент по умолчанию"), { target: { value: "a1" } });
-    fireEvent.change(screen.getByLabelText("Проект по умолчанию"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByLabelText("Default agent"), { target: { value: "a1" } });
+    fireEvent.change(screen.getByLabelText("Default project"), { target: { value: "p1" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.change(screen.getByLabelText("Разрешённые образы, item 1"), { target: { value: "ab" } });
+    fireEvent.change(screen.getByLabelText("Allowed images, item 1"), { target: { value: "ab" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("At least 3 characters")).toBeTruthy(); // item minLength
-    fireEvent.change(screen.getByLabelText("Разрешённые образы, item 1"), { target: { value: "runner:1" } });
-    fireEvent.change(screen.getByLabelText("Политика запуска"), { target: { value: "only trusted" } });
-    expect(screen.getByRole("group", { name: "Лимиты" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Allowed images, item 1"), { target: { value: "runner:1" } });
+    fireEvent.change(screen.getByLabelText("Run policy"), { target: { value: "only trusted" } });
+    expect(screen.getByRole("group", { name: "Limits" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit.mock.calls[0]![0]).toEqual({

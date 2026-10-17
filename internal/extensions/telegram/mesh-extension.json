@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "id": "telegram",
+  "name": "Telegram",
+  "version": "1.0.0",
+  "kind": "integration",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Telegram-уведомления: бот воркспейса, привязка людей командой /start, доставка событий",
+  "category": "communication",
+  "tags": [
+    "notifications"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/entire-vc/evc-mesh",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "settings": {
+    "instance": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "workspace": {
+      "$ref": "#/schemas/bot"
+    }
+  },
+  "schemas": {
+    "bot": {
+      "type": "object",
+      "properties": {
+        "bot_token": {
+          "type": "string",
+          "title": "Токен бота",
+          "x-secret": true
+        },
+        "bot_username": {
+          "type": "string",
+          "title": "Имя бота",
+          "readOnly": true
+        }
+      },
+      "required": [
+        "bot_token"
+      ]
+    }
+  },
+  "capabilities": {
+    "api": [],
+    "events": [],
+    "webhooks_in": [],
+    "network": {
+      "allowed_domains": [
+        "api.telegram.org"
+      ],
+      "reasoning": "Bot API: getUpdates, sendMessage, getMe"
+    },
+    "ui": [],
+    "secrets": [
+      "bot_token"
+    ]
+  }
+}

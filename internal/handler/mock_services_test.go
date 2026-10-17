@@ -1260,6 +1260,30 @@ type MockProjectIntegrationService struct {
 	DeleteTeamRelayFunc func(ctx context.Context, projectID uuid.UUID) error
 	ListFunc            func(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
 	SearchTRFunc        func(ctx context.Context, shareSlug, q string, limit int) ([]domain.RelayFileItem, error)
+	GetBindingFunc      func(ctx context.Context, projectID uuid.UUID, extensionID string) (*domain.ProjectIntegration, error)
+	UpsertBindingFunc   func(ctx context.Context, projectID uuid.UUID, extensionID string, input service.UpsertProjectBindingInput) (*domain.ProjectIntegration, error)
+	DeleteBindingFunc   func(ctx context.Context, projectID uuid.UUID, extensionID string) error
+}
+
+func (m *MockProjectIntegrationService) GetBinding(ctx context.Context, projectID uuid.UUID, extensionID string) (*domain.ProjectIntegration, error) {
+	if m.GetBindingFunc != nil {
+		return m.GetBindingFunc(ctx, projectID, extensionID)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) UpsertBinding(ctx context.Context, projectID uuid.UUID, extensionID string, input service.UpsertProjectBindingInput) (*domain.ProjectIntegration, error) {
+	if m.UpsertBindingFunc != nil {
+		return m.UpsertBindingFunc(ctx, projectID, extensionID, input)
+	}
+	return nil, nil
+}
+
+func (m *MockProjectIntegrationService) DeleteBinding(ctx context.Context, projectID uuid.UUID, extensionID string) error {
+	if m.DeleteBindingFunc != nil {
+		return m.DeleteBindingFunc(ctx, projectID, extensionID)
+	}
+	return nil
 }
 
 func (m *MockProjectIntegrationService) GetTeamRelay(ctx context.Context, projectID uuid.UUID) (*domain.ProjectIntegration, error) {

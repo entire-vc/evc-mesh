@@ -151,7 +151,7 @@ func TestDecodeGitLabIntegration_ActiveButEmptyConfig_NotUsableNotDisabled(t *te
 }
 
 func TestDecodeGitLabIntegration_InactiveRow_DisabledNotUsable(t *testing.T) {
-	inactive := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://git.entire.host", "tok", "sec")}
+	inactive := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://gitlab.example.invalid", "tok", "sec")}
 	_, usable, disabled := decodeGitLabIntegration(inactive)
 	if usable || !disabled {
 		t.Fatalf("inactive row must be disabled, not usable: usable=%v disabled=%v", usable, disabled)
@@ -159,12 +159,12 @@ func TestDecodeGitLabIntegration_InactiveRow_DisabledNotUsable(t *testing.T) {
 }
 
 func TestDecodeGitLabIntegration_UsableRow(t *testing.T) {
-	cfg := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: gitlabCfg("https://git.entire.host", "glpat-xxx", "whsec")}
+	cfg := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: gitlabCfg("https://gitlab.example.invalid", "glpat-xxx", "whsec")}
 	parsed, usable, disabled := decodeGitLabIntegration(cfg)
 	if !usable || disabled {
 		t.Fatalf("expected usable, not disabled: usable=%v disabled=%v", usable, disabled)
 	}
-	if parsed.BaseURL != "https://git.entire.host" || parsed.Token != "glpat-xxx" || parsed.WebhookSecret != "whsec" {
+	if parsed.BaseURL != "https://gitlab.example.invalid" || parsed.Token != "glpat-xxx" || parsed.WebhookSecret != "whsec" {
 		t.Fatalf("got %+v", parsed)
 	}
 }
@@ -222,8 +222,8 @@ func TestVCSIntegrationResolver_ResolveGitHub_InactiveRow_EnvConfigured_StillDis
 func TestVCSIntegrationResolver_ResolveGitLab_InactiveRow_EnvConfigured_StillDisabled(t *testing.T) {
 	ws := uuid.New()
 	repo := newFakeVCSIntegrationRepo()
-	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://git.entire.host", "workspace-token", "workspace-secret")})
-	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "env-token", GitLabWebhookSecret: "env-secret"})
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://gitlab.example.invalid", "workspace-token", "workspace-secret")})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://gitlab.example.invalid", GitLabToken: "env-token", GitLabWebhookSecret: "env-secret"})
 
 	cfg, source, ok := r.ResolveGitLab(context.Background(), ws)
 	if ok || source != "" {
@@ -266,15 +266,15 @@ func TestVCSIntegrationResolver_ResolveGitLab_RequiresBothURLAndToken_FromEnv(t 
 	repo := newFakeVCSIntegrationRepo()
 	// Only URL set, no token — env fallback must not activate (mirrors the
 	// pre-#33a4bb57 `cfg.Webhook.GitLabURL != "" && cfg.Webhook.GitLabToken != ""` gate).
-	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host"})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://gitlab.example.invalid"})
 	_, _, ok := r.ResolveGitLab(context.Background(), ws)
 	if ok {
 		t.Fatal("env fallback with URL but no token must not resolve")
 	}
 
-	r2 := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok"})
+	r2 := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://gitlab.example.invalid", GitLabToken: "tok"})
 	cfg, source, ok := r2.ResolveGitLab(context.Background(), ws)
-	if !ok || source != "env" || cfg.BaseURL != "https://git.entire.host" || cfg.Token != "tok" {
+	if !ok || source != "env" || cfg.BaseURL != "https://gitlab.example.invalid" || cfg.Token != "tok" {
 		t.Fatalf("got cfg=%+v source=%q ok=%v", cfg, source, ok)
 	}
 }
@@ -364,8 +364,8 @@ func TestVCSIntegrationResolver_GitHubWebhookSecrets_ToggledOff_WithEnvConfigure
 func TestVCSIntegrationResolver_GitLabWebhookSecrets_ToggledOff_WithEnvConfigured_StillDisabled(t *testing.T) {
 	ws := uuid.New()
 	repo := newFakeVCSIntegrationRepo()
-	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://git.entire.host", "", "sec")})
-	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok", GitLabWebhookSecret: "env-secret"})
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: false, Config: gitlabCfg("https://gitlab.example.invalid", "", "sec")})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://gitlab.example.invalid", GitLabToken: "tok", GitLabWebhookSecret: "env-secret"})
 
 	secrets, source := r.GitLabWebhookSecrets(context.Background())
 	if len(secrets) != 0 || source != "" {
@@ -395,7 +395,7 @@ func TestVCSIntegrationResolver_GitLabWebhookSecrets_PlaceholderRowOnly_FallsToE
 	ws := uuid.New()
 	repo := newFakeVCSIntegrationRepo()
 	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: json.RawMessage(`{}`)})
-	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://git.entire.host", GitLabToken: "tok", GitLabWebhookSecret: "env-secret"})
+	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://gitlab.example.invalid", GitLabToken: "tok", GitLabWebhookSecret: "env-secret"})
 
 	secrets, source := r.GitLabWebhookSecrets(context.Background())
 	if source != "env" || len(secrets) != 1 || secrets[0].Secret != "env-secret" {
@@ -422,7 +422,7 @@ func TestVCSIntegrationResolver_GitHubWebhookSecrets_PlaceholderPlusDisabledRow_
 func TestVCSIntegrationResolver_GitLabWebhookSecrets_UnionOfActiveWorkspaces(t *testing.T) {
 	wsA, wsB := uuid.New(), uuid.New()
 	repo := newFakeVCSIntegrationRepo()
-	repo.put(wsA, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: gitlabCfg("https://git.entire.host", "", "secretA")})
+	repo.put(wsA, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: gitlabCfg("https://gitlab.example.invalid", "", "secretA")})
 	repo.put(wsB, domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true, Config: gitlabCfg("https://gitlab.other", "", "secretB")})
 	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{})
 

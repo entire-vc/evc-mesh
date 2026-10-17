@@ -31,7 +31,7 @@ import (
 type TrDocumentHandler struct {
 	piService     service.ProjectIntegrationService
 	projectSvc    service.ProjectService
-	relayResolver *service.TeamRelayIntegrationResolver
+	relayResolver service.TeamRelayURLResolver
 }
 
 // NewTrDocumentHandler creates a new TrDocumentHandler. relayResolver answers
@@ -39,7 +39,7 @@ type TrDocumentHandler struct {
 // §4) — it replaces a raw environment-variable read that used to live inline
 // here. projectSvc resolves the project's workspace_id, which the resolver
 // needs.
-func NewTrDocumentHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver *service.TeamRelayIntegrationResolver) *TrDocumentHandler {
+func NewTrDocumentHandler(piService service.ProjectIntegrationService, projectSvc service.ProjectService, relayResolver service.TeamRelayURLResolver) *TrDocumentHandler {
 	return &TrDocumentHandler{piService: piService, projectSvc: projectSvc, relayResolver: relayResolver}
 }
 
@@ -109,7 +109,7 @@ func (h *TrDocumentHandler) Get(c echo.Context) error {
 		// caller's problem to see as an error: the page still has "Open in Team
 		// Relay" to fall back to. Named and logged so a misconfiguration doesn't
 		// look, from the ops side, like a relay that is simply unreachable.
-		log.Printf("[tr-document] relay URL not configured for workspace %s: no active team_relay integration and no MESH_TEAMRELAY_RELAY_URL fallback", project.WorkspaceID)
+		log.Printf("[tr-document] relay URL not configured for workspace %s: no active team_relay integration and no instance setting", project.WorkspaceID)
 		return c.JSON(http.StatusOK, map[string]any{"available": false})
 	}
 

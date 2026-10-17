@@ -35,7 +35,6 @@ var teamRelayAgentKeyPattern = regexp.MustCompile(`^tr_agent_[0-9a-f]{48}$`)
 type projectIntegrationRow struct {
 	ID                uuid.UUID  `db:"id"`
 	ProjectID         uuid.UUID  `db:"project_id"`
-	Type              string     `db:"type"`
 	ExtensionID       *string    `db:"extension_id"`
 	Enabled           bool       `db:"enabled"`
 	Settings          []byte     `db:"settings"`
@@ -58,7 +57,7 @@ func (r *projectIntegrationRow) toDomain() (domain.ProjectIntegration, error) {
 	pi := domain.ProjectIntegration{
 		ID:                r.ID,
 		ProjectID:         r.ProjectID,
-		Type:              r.Type,
+		Type:              domain.ProjectIntegrationType(derefString(r.ExtensionID)),
 		ExtensionID:       derefString(r.ExtensionID),
 		Enabled:           r.Enabled,
 		Settings:          settings,
@@ -93,9 +92,9 @@ func NewProjectIntegrationRepo(db *sqlx.DB) *ProjectIntegrationRepo {
 
 // Get retrieves the integration of the given type for the project, or nil if not found.
 func (r *ProjectIntegrationRepo) Get(ctx context.Context, projectID uuid.UUID, intType string) (*domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 AND type = $2`
+	const q = `SELECT id, project_id, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 AND extension_id = $2`
 	var row projectIntegrationRow
-	if err := r.db.GetContext(ctx, &row, q, projectID, intType); err != nil {
+	if err := r.db.GetContext(ctx, &row, q, projectID, domain.ProjectIntegrationExtensionID(intType)); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -110,9 +109,9 @@ func (r *ProjectIntegrationRepo) Get(ctx context.Context, projectID uuid.UUID, i
 
 // GetByShareSlug finds the first enabled team_relay integration whose settings->>'share_slug' matches.
 func (r *ProjectIntegrationRepo) GetByShareSlug(ctx context.Context, shareSlug string) (*domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error
+	const q = `SELECT id, project_id, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error
 	            FROM project_integrations
-	            WHERE type = 'team_relay' AND enabled = true AND settings->>'share_slug' = $1
+	            WHERE extension_id = 'team-relay' AND enabled = true AND settings->>'share_slug' = $1
 	            LIMIT 1`
 	var row projectIntegrationRow
 	if err := r.db.GetContext(ctx, &row, q, shareSlug); err != nil {
@@ -133,9 +132,9 @@ func (r *ProjectIntegrationRepo) GetByShareSlug(ctx context.Context, shareSlug s
 // output — callers that care about priority (e.g. never-checked first) sort
 // after fetching.
 func (r *ProjectIntegrationRepo) ListEnabledByType(ctx context.Context, intType string) ([]domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE type = $1 AND enabled = true ORDER BY project_id ASC`
+	const q = `SELECT id, project_id, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE extension_id = $1 AND enabled = true ORDER BY project_id ASC`
 	var rows []projectIntegrationRow
-	if err := r.db.SelectContext(ctx, &rows, q, intType); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, domain.ProjectIntegrationExtensionID(intType)); err != nil {
 		return nil, err
 	}
 	result := make([]domain.ProjectIntegration, 0, len(rows))
@@ -204,7 +203,7 @@ func (r *ProjectIntegrationRepo) Upsert(ctx context.Context, pi *domain.ProjectI
 const upsertQuery = `
 		INSERT INTO project_integrations (id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (project_id, type)
+		ON CONFLICT (project_id, extension_id)
 		DO UPDATE SET
 			extension_id = EXCLUDED.extension_id,
 			enabled    = EXCLUDED.enabled,
@@ -224,8 +223,8 @@ func (r *ProjectIntegrationRepo) SetKeyExpiry(ctx context.Context, projectID uui
 	}
 	const q = `UPDATE project_integrations
 	            SET key_expires_at = $1, key_expiry_source = $2, updated_at = NOW()
-	            WHERE project_id = $3 AND type = $4`
-	res, err := r.db.ExecContext(ctx, q, expiresAt, src, projectID, intType)
+	            WHERE project_id = $3 AND extension_id = $4`
+	res, err := r.db.ExecContext(ctx, q, expiresAt, src, projectID, domain.ProjectIntegrationExtensionID(intType))
 	if err != nil {
 		return err
 	}
@@ -247,8 +246,8 @@ func (r *ProjectIntegrationRepo) RecordSyncCheck(ctx context.Context, projectID 
 	}
 	const q = `UPDATE project_integrations
 	            SET last_sync_checked_at = $1, last_sync_status = $2, last_sync_error = $3, updated_at = NOW()
-	            WHERE project_id = $4 AND type = $5`
-	res, err := r.db.ExecContext(ctx, q, checkedAt, status, errPtr, projectID, intType)
+	            WHERE project_id = $4 AND extension_id = $5`
+	res, err := r.db.ExecContext(ctx, q, checkedAt, status, errPtr, projectID, domain.ProjectIntegrationExtensionID(intType))
 	if err != nil {
 		return err
 	}
@@ -261,8 +260,8 @@ func (r *ProjectIntegrationRepo) RecordSyncCheck(ctx context.Context, projectID 
 
 // Delete removes the integration of the given type for the project.
 func (r *ProjectIntegrationRepo) Delete(ctx context.Context, projectID uuid.UUID, intType string) error {
-	const q = `DELETE FROM project_integrations WHERE project_id = $1 AND type = $2`
-	res, err := r.db.ExecContext(ctx, q, projectID, intType)
+	const q = `DELETE FROM project_integrations WHERE project_id = $1 AND extension_id = $2`
+	res, err := r.db.ExecContext(ctx, q, projectID, domain.ProjectIntegrationExtensionID(intType))
 	if err != nil {
 		return err
 	}
@@ -275,7 +274,7 @@ func (r *ProjectIntegrationRepo) Delete(ctx context.Context, projectID uuid.UUID
 
 // ListByProject returns all integrations for a project, ordered by type.
 func (r *ProjectIntegrationRepo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error) {
-	const q = `SELECT id, project_id, type, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 ORDER BY type ASC`
+	const q = `SELECT id, project_id, extension_id, enabled, settings, agent_key, created_at, updated_at, created_by, key_expires_at, key_expiry_source, last_sync_checked_at, last_sync_status, last_sync_error FROM project_integrations WHERE project_id = $1 ORDER BY extension_id ASC`
 	var rows []projectIntegrationRow
 	if err := r.db.SelectContext(ctx, &rows, q, projectID); err != nil {
 		return nil, err

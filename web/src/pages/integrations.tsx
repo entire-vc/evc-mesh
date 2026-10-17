@@ -6,6 +6,7 @@ import {
   Circle,
   GitBranch,
   GitMerge,
+  Network,
   Send,
   Server,
   Sparkles,
@@ -20,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeResourcesCard } from "@/components/runtime-resources-card";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { SECRET_INPUT_PROPS } from "@/lib/credential-manager-ignore";
 import { apiErrorMessage } from "@/lib/api-error";
 import type {
   EffectiveIntegrationStatus,
@@ -61,6 +63,12 @@ const PROVIDERS: ProviderMeta[] = [
     nameKey: "integrationsPage.providers.sparkName",
     descriptionKey: "integrationsPage.providers.spark",
     icon: Sparkles,
+  },
+  {
+    id: "team_relay",
+    name: "Team Relay",
+    descriptionKey: "integrationsPage.providers.teamRelay",
+    icon: Network,
   },
   {
     id: "mcp",
@@ -378,7 +386,12 @@ export function IntegrationsPage() {
                         {/* Telegram has nothing to toggle until a bot token has
                             been saved — the button here would just enable an
                             integration that can never poll anything. */}
+                        {/* Team Relay is shown read-only: the configure endpoint
+                            does not accept team_relay, so a toggle here would
+                            fail. It is run from the workspace row / instance
+                            settings; this card only reports the effective state. */}
                         {provider.id !== "mcp" &&
+                        provider.id !== "team_relay" &&
                         (provider.id !== "telegram" || telegramTokenSet) ? (
                           <Button
                             size="sm"
@@ -717,7 +730,7 @@ export function IntegrationsPage() {
                   {provider.id === "telegram" && (
                     <CardContent className="pt-0">
                       {telegramTokenSet && !telegramEditingToken ? (
-                        <div className="flex items-center justify-between rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                        <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
                           <p className="text-xs text-muted-foreground">
                             <Trans
                               t={t}
@@ -730,7 +743,7 @@ export function IntegrationsPage() {
                           </p>
                           <button
                             onClick={() => setTelegramEditingToken(true)}
-                            className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                            className="shrink-0 self-start text-xs text-muted-foreground hover:text-foreground transition-colors sm:self-auto"
                           >
                             {t("integrationsPage.telegram.changeToken")}
                           </button>
@@ -747,6 +760,7 @@ export function IntegrationsPage() {
                           <div className="flex gap-2">
                             <Input
                               type="password"
+                              {...SECRET_INPUT_PROPS}
                               placeholder="123456789:AAExampleBotTokenHere"
                               value={telegramTokenInput}
                               onChange={(e) => setTelegramTokenInput(e.target.value)}
@@ -843,6 +857,7 @@ function VcsConnectForm({
       )}
       <Input
         type="password"
+        {...SECRET_INPUT_PROPS}
         placeholder={
           provider === "github"
             ? t("integrationsPage.vcsForm.personalToken")
@@ -855,6 +870,7 @@ function VcsConnectForm({
       />
       <Input
         type="password"
+        {...SECRET_INPUT_PROPS}
         placeholder={t("integrationsPage.vcsForm.webhookSecret")}
         value={values.webhook_secret}
         onChange={(e) => onChange({ ...values, webhook_secret: e.target.value })}

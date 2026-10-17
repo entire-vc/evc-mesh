@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -254,11 +255,11 @@ func TestGetFailsRatherThanReturningAnUndecryptableCredential(t *testing.T) {
 
 	projID := uuid.New()
 	now := time.Now().UTC()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"id", "project_id", "extension_id", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
-		}).AddRow(uuid.New(), projID, "team_relay", true, []byte(`{}`), sealed, now, now, nil))
+		}).AddRow(uuid.New(), projID, "team-relay", true, []byte(`{}`), sealed, now, now, nil))
 
 	got, err := repo.Get(context.Background(), projID, "team_relay")
 	require.ErrorIs(t, err, encryption.ErrUndecryptable)
@@ -278,11 +279,11 @@ func TestGetReadsPreR5ARowWithoutNewColumns(t *testing.T) {
 	projID := uuid.New()
 	now := time.Now().UTC()
 	oldSettings := []byte(`{"share_slug":"old-share","subfolder":"Mesh/Mesh dev","include_project_slug":true}`)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"id", "project_id", "extension_id", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
-		}).AddRow(uuid.New(), projID, "team_relay", true, oldSettings, nil, now, now, nil))
+		}).AddRow(uuid.New(), projID, "team-relay", true, oldSettings, nil, now, now, nil))
 
 	got, err := repo.Get(context.Background(), projID, "team_relay")
 	require.NoError(t, err)
@@ -310,12 +311,12 @@ func TestGetReadsNewKeyExpiryAndSyncStatusColumns(t *testing.T) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(90 * 24 * time.Hour)
 	checkedAt := now.Add(-5 * time.Minute)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"id", "project_id", "extension_id", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
 			"key_expires_at", "key_expiry_source", "last_sync_checked_at", "last_sync_status", "last_sync_error",
-		}).AddRow(uuid.New(), projID, "team_relay", true, []byte(`{}`), nil, now, now, nil,
+		}).AddRow(uuid.New(), projID, "team-relay", true, []byte(`{}`), nil, now, now, nil,
 			expiresAt, "manual", checkedAt, "error", "connection refused"))
 
 	got, err := repo.Get(context.Background(), projID, "team_relay")
@@ -345,13 +346,13 @@ func TestGetByShareSlugReadsNewColumns(t *testing.T) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(30 * 24 * time.Hour)
 	checkedAt := now.Add(-2 * time.Hour)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, extension_id, enabled, settings, agent_key")).
 		WithArgs("probe-slug").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"id", "project_id", "extension_id", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
 			"key_expires_at", "key_expiry_source", "last_sync_checked_at", "last_sync_status", "last_sync_error",
-		}).AddRow(uuid.New(), projID, "team_relay", true, []byte(`{"share_slug":"probe-slug"}`), nil, now, now, nil,
+		}).AddRow(uuid.New(), projID, "team-relay", true, []byte(`{"share_slug":"probe-slug"}`), nil, now, now, nil,
 			expiresAt, "source", checkedAt, "ok", nil))
 
 	got, err := repo.GetByShareSlug(context.Background(), "probe-slug")
@@ -379,13 +380,13 @@ func TestListByProjectReadsNewColumns(t *testing.T) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(60 * 24 * time.Hour)
 	checkedAt := now.Add(-10 * time.Minute)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, extension_id, enabled, settings, agent_key")).
 		WithArgs(projID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"id", "project_id", "extension_id", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
 			"key_expires_at", "key_expiry_source", "last_sync_checked_at", "last_sync_status", "last_sync_error",
-		}).AddRow(uuid.New(), projID, "team_relay", true, []byte(`{}`), nil, now, now, nil,
+		}).AddRow(uuid.New(), projID, "team-relay", true, []byte(`{}`), nil, now, now, nil,
 			expiresAt, "manual", checkedAt, "key_expired", nil))
 
 	got, err := repo.ListByProject(context.Background(), projID)
@@ -411,7 +412,7 @@ func TestSetKeyExpiry(t *testing.T) {
 		expiresAt := time.Now().Add(90 * 24 * time.Hour)
 
 		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
-			WithArgs(expiresAt, "manual", projID, "team_relay").
+			WithArgs(expiresAt, "manual", projID, "team-relay").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		require.NoError(t, repo.SetKeyExpiry(context.Background(), projID, "team_relay", &expiresAt, "manual"))
@@ -423,7 +424,7 @@ func TestSetKeyExpiry(t *testing.T) {
 		projID := uuid.New()
 
 		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
-			WithArgs(sqlmock.AnyArg(), nil, projID, "team_relay").
+			WithArgs(sqlmock.AnyArg(), nil, projID, "team-relay").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		require.NoError(t, repo.SetKeyExpiry(context.Background(), projID, "team_relay", nil, "manual"))
@@ -461,7 +462,7 @@ func TestRecordSyncCheck(t *testing.T) {
 		checkedAt := time.Now()
 
 		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
-			WithArgs(checkedAt, "error", "dial tcp: connection refused", projID, "team_relay").
+			WithArgs(checkedAt, "error", "dial tcp: connection refused", projID, "team-relay").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		require.NoError(t, repo.RecordSyncCheck(context.Background(), projID, "team_relay", checkedAt, "error", "dial tcp: connection refused"))
@@ -474,7 +475,7 @@ func TestRecordSyncCheck(t *testing.T) {
 		checkedAt := time.Now()
 
 		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
-			WithArgs(checkedAt, "ok", nil, projID, "team_relay").
+			WithArgs(checkedAt, "ok", nil, projID, "team-relay").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		// errMsg passed but must be dropped because status isn't "error" —
@@ -489,7 +490,7 @@ func TestRecordSyncCheck(t *testing.T) {
 		checkedAt := time.Now()
 
 		mock.ExpectExec(regexp.QuoteMeta("UPDATE project_integrations")).
-			WithArgs(checkedAt, "key_expired", nil, projID, "team_relay").
+			WithArgs(checkedAt, "key_expired", nil, projID, "team-relay").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		require.NoError(t, repo.RecordSyncCheck(context.Background(), projID, "team_relay", checkedAt, "key_expired", "leftover message"))
@@ -530,11 +531,11 @@ func TestGetReadsLegacyPlaintextRow(t *testing.T) {
 	legacy := "tr_agent_written_before_encryption"
 	projID := uuid.New()
 	now := time.Now().UTC()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, type, extension_id, enabled, settings, agent_key")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, project_id, extension_id, enabled, settings, agent_key")).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "project_id", "type", "enabled", "settings", "agent_key",
+			"id", "project_id", "extension_id", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
-		}).AddRow(uuid.New(), projID, "team_relay", true, []byte(`{}`), legacy, now, now, nil))
+		}).AddRow(uuid.New(), projID, "team-relay", true, []byte(`{}`), legacy, now, now, nil))
 
 	got, err := repo.Get(context.Background(), projID, "team_relay")
 	require.NoError(t, err)
@@ -547,29 +548,66 @@ func TestListEnabledByTypeReadsExtensionID(t *testing.T) {
 	repo, mock := newProjectIntegrationRepoMock(t)
 
 	now := time.Now().UTC()
-	mock.ExpectQuery(regexp.QuoteMeta("FROM project_integrations WHERE type = $1 AND enabled = true")).
-		WithArgs("team_relay").
+	mock.ExpectQuery(regexp.QuoteMeta("FROM project_integrations WHERE extension_id = $1 AND enabled = true")).
+		WithArgs("team-relay").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "project_id", "type", "extension_id", "enabled", "settings", "agent_key",
+			"id", "project_id", "extension_id", "enabled", "settings", "agent_key",
 			"created_at", "updated_at", "created_by",
 		}).
-			AddRow(uuid.New(), uuid.New(), "team_relay", "team-relay", true, []byte(`{}`), nil, now, now, nil).
-			AddRow(uuid.New(), uuid.New(), "team_relay", nil, true, []byte(`{}`), nil, now, now, nil))
+			AddRow(uuid.New(), uuid.New(), "team-relay", true, []byte(`{}`), nil, now, now, nil).
+			AddRow(uuid.New(), uuid.New(), nil, true, []byte(`{}`), nil, now, now, nil))
 
 	got, err := repo.ListEnabledByType(context.Background(), "team_relay")
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, "team-relay", got[0].ExtensionID)
+	assert.Equal(t, "team_relay", got[0].Type, "the legacy type string is derived from extension_id")
 	assert.Equal(t, "", got[1].ExtensionID, "a NULL extension_id reads as empty, not as a crash")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestListEnabledByTypePropagatesQueryError(t *testing.T) {
 	repo, mock := newProjectIntegrationRepoMock(t)
-	mock.ExpectQuery(regexp.QuoteMeta("FROM project_integrations WHERE type = $1")).
-		WithArgs("team_relay").WillReturnError(errors.New("db down"))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM project_integrations WHERE extension_id = $1")).
+		WithArgs("team-relay").WillReturnError(errors.New("db down"))
 
 	got, err := repo.ListEnabledByType(context.Background(), "team_relay")
 	require.Error(t, err)
 	assert.Nil(t, got)
+}
+
+// The legacy type column is derived, not queried: every lookup and the upsert
+// conflict target go through extension_id. Reading `type` again would break the
+// release that drops the column.
+func TestProjectIntegrationRepo_DoesNotQueryLegacyTypeColumn(t *testing.T) {
+	src, err := os.ReadFile("project_integration_repo.go")
+	require.NoError(t, err)
+	for _, banned := range []string{"type = $", "AND type", "WHERE type", "ON CONFLICT (project_id, type)", "ORDER BY type"} {
+		assert.NotContains(t, string(src), banned)
+	}
+	assert.Contains(t, string(src), "ON CONFLICT (project_id, extension_id)")
+}
+
+func TestGetReturnsNilWhenNoRowForExtension(t *testing.T) {
+	repo, mock := newProjectIntegrationRepoMock(t)
+	projID := uuid.New()
+	mock.ExpectQuery(regexp.QuoteMeta("project_id = $1 AND extension_id = $2")).
+		WithArgs(projID, "team-relay").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	got, err := repo.Get(context.Background(), projID, "team_relay")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteMissingRowIsNotFound(t *testing.T) {
+	repo, mock := newProjectIntegrationRepoMock(t)
+	projID := uuid.New()
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM project_integrations WHERE project_id = $1 AND extension_id = $2")).
+		WithArgs(projID, "team-relay").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	require.Error(t, repo.Delete(context.Background(), projID, "team_relay"))
+	require.NoError(t, mock.ExpectationsWereMet())
 }

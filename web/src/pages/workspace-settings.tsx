@@ -1,7 +1,7 @@
 import * as i18nFmt from "@/i18n/format";
 import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { asCapabilityList } from "@/lib/agent-utils";
@@ -44,7 +44,6 @@ import { InviteAgentDialog } from "@/components/invite-agent-dialog";
 import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { InviteLinkBox } from "@/components/invite-link-box";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { LanguageSelect } from "@/components/language-select";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAuthStore } from "@/stores/auth";
 import { useMemberStore } from "@/stores/member";
@@ -668,8 +667,8 @@ export function WorkspaceSettingsPage() {
   const navigate = useNavigate();
   const { t } = useTranslation("settings");
   const { currentWorkspace, updateWorkspace, uploadIcon, deleteWorkspace } = useWorkspaceStore();
-  const { user, updateProfile, checkUsername } = useAuthStore();
-  const {
+  const { user } = useAuthStore();
+    const {
     workspaceMembers,
     myRole,
     myRoleError,
@@ -763,18 +762,6 @@ export function WorkspaceSettingsPage() {
   // Rules saving state
   const [isSavingRules, setIsSavingRules] = useState(false);
 
-  // Profile form state
-  const [profileName, setProfileName] = useState(user?.name ?? "");
-  const [isSavingProfile, setIsSavingProfile] = useState(false);
-  const [profileFeedback, setProfileFeedback] = useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
-
-  const [profileUsername, setProfileUsername] = useState(user?.username ?? "");
-  const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "available" | "taken" | "invalid">("idle");
-  const usernameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // Tab state
   const [activeTab, setActiveTab] = useState("general");
 
@@ -853,36 +840,6 @@ export function WorkspaceSettingsPage() {
     }
   }, [workflowTemplates, templatesEditorValue]);
 
-  useEffect(() => {
-    setProfileUsername(user?.username ?? "");
-  }, [user?.username]);
-
-  const handleUsernameChange = useCallback(
-    (value: string) => {
-      setProfileUsername(value);
-      if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
-      if (value === "") {
-        setUsernameStatus("idle");
-        return;
-      }
-      const validRe = /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$|^[a-z0-9]$/;
-      if (!validRe.test(value)) {
-        setUsernameStatus("invalid");
-        return;
-      }
-      setUsernameStatus("checking");
-      usernameTimerRef.current = setTimeout(async () => {
-        try {
-          const available = await checkUsername(value);
-          setUsernameStatus(available ? "available" : "taken");
-        } catch {
-          setUsernameStatus("idle");
-        }
-      }, 400);
-    },
-    [checkUsername],
-  );
-
   const canManageMembers = myRole === "owner" || myRole === "admin";
   const canManageRules = myRole === "owner" || myRole === "admin";
   const canDeleteWorkspace = myRole === "owner" || myRole === "admin";
@@ -900,32 +857,6 @@ export function WorkspaceSettingsPage() {
   const connectedAgentIds = new Set(
     workspaceAgentGrants.map((g) => g.agent_id),
   );
-
-  const handleSaveProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = profileName.trim();
-    if (!trimmed) {
-      setProfileFeedback({ type: "error", message: t("workspace.profile.nameRequired") });
-      return;
-    }
-    if ([...trimmed].length > 100) {
-      setProfileFeedback({ type: "error", message: t("workspace.profile.nameTooLong") });
-      return;
-    }
-    setIsSavingProfile(true);
-    setProfileFeedback(null);
-    try {
-      await updateProfile(trimmed, profileUsername.trim() || undefined);
-      setProfileFeedback({ type: "success", message: t("workspace.profile.saved") });
-    } catch (err) {
-      setProfileFeedback({
-        type: "error",
-        message: apiErrorMessage(err, t("workspace.profile.saveFailed")),
-      });
-    } finally {
-      setIsSavingProfile(false);
-    }
-  };
 
   const handleSaveGeneral = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1216,7 +1147,7 @@ export function WorkspaceSettingsPage() {
           <button
             key={tab.id}
             type="button"
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => (tab.id === "profile" ? navigate(`/w/${wsSlug}/me`) : setActiveTab(tab.id))}
             className={cn(
               "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap",
               activeTab === tab.id
@@ -1256,88 +1187,6 @@ export function WorkspaceSettingsPage() {
           </Button>
         </div>
       )}
-      {/* Section 0: Profile */}
-      {activeTab === "profile" && (
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("workspace.tabs.profile")}</CardTitle>
-          <CardDescription>{t("workspace.profile.description")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSaveProfile} className="space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor="profile-name" className="text-sm font-medium">
-                {t("workspace.profile.displayName")} <span className="text-destructive">*</span>
-              </label>
-              <Input
-                id="profile-name"
-                value={profileName}
-                onChange={(e) => setProfileName(e.target.value)}
-                placeholder={t("workspace.profile.namePlaceholder")}
-                maxLength={100}
-              />
-              <p className="text-xs text-muted-foreground">
-                {t("workspace.profile.currentEmail", { email: user?.email })}
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="profile-username" className="text-sm font-medium">
-                {t("workspace.profile.username")}
-              </label>
-              <Input
-                id="profile-username"
-                value={profileUsername}
-                onChange={(e) => handleUsernameChange(e.target.value.toLowerCase())}
-                placeholder={t("workspace.profile.usernamePlaceholder")}
-                maxLength={40}
-                className={
-                  usernameStatus === "taken" || usernameStatus === "invalid"
-                    ? "border-destructive"
-                    : usernameStatus === "available"
-                      ? "border-green-500"
-                      : ""
-                }
-              />
-              {usernameStatus === "checking" && (
-                <p className="text-xs text-muted-foreground">{t("workspace.profile.checking")}</p>
-              )}
-              {usernameStatus === "available" && (
-                <p className="text-xs text-green-600">{t("workspace.profile.usernameAvailable")}</p>
-              )}
-              {usernameStatus === "taken" && (
-                <p className="text-xs text-destructive">{t("workspace.profile.usernameTaken")}</p>
-              )}
-              {usernameStatus === "invalid" && (
-                <p className="text-xs text-destructive">{t("workspace.profile.usernameInvalid")}</p>
-              )}
-            </div>
-            <LanguageSelect />
-            {profileFeedback && (
-              <p
-                className={cn(
-                  "text-sm flex items-center gap-1",
-                  profileFeedback.type === "success"
-                    ? "text-green-600"
-                    : "text-destructive",
-                )}
-              >
-                {profileFeedback.type === "success" ? (
-                  <Check className="h-3.5 w-3.5 shrink-0" />
-                ) : (
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                )}
-                {profileFeedback.message}
-              </p>
-            )}
-            <Button type="submit" size="sm" disabled={isSavingProfile}>
-              <Save className="h-3.5 w-3.5" />
-              {isSavingProfile ? t("workspace.assignment.saving") : t("workspace.profile.save")}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-      )}
-
       {/* Section 1: General */}
       {activeTab === "general" && (
       <Card>

@@ -1,5 +1,6 @@
 import type { ApiError, RefreshResponse } from "@/types";
 import { miscT } from "@/lib/misc-t";
+import { currentLanguage } from "@/i18n";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 
@@ -182,7 +183,8 @@ export async function api<T>(
     if (qs) url += `?${qs}`;
   }
 
-  const headers: Record<string, string> = {};
+  // The server localizes manifest text by the UI language, not the browser's.
+  const headers: Record<string, string> = { "Accept-Language": currentLanguage() };
   if (!(body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }

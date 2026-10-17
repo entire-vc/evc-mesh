@@ -12,6 +12,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/spark"
+	teamrelay "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
 )
 
 func statusOf(t *testing.T, all []EffectiveIntegrationStatus, p domain.IntegrationProvider) EffectiveIntegrationStatus {
@@ -41,7 +42,10 @@ func newStatusResolver(repo *fakeVCSIntegrationRepo, telegram bool) *Integration
 			Conns: extensions.IntegrationConnections{Repo: repo},
 			Inst:  sparkInstance{&extensions.InstanceSetting{Enabled: true, Settings: map[string]any{"spark_url": "https://spark.example"}}},
 		}),
-		NewTeamRelayIntegrationResolver(repo, TeamRelayEnvFallback{}),
+		teamrelay.New(extensions.Deps{
+			Conns: extensions.IntegrationConnections{Repo: repo},
+			Inst:  sparkInstance{},
+		}),
 		telegram)
 }
 
@@ -94,4 +98,45 @@ func TestEffectiveStatus_Telegram(t *testing.T) {
 	require.True(t, on.EffectiveEnabled)
 	off := statusOf(t, newStatusResolver(repo, false).Effective(context.Background(), ws), domain.IntegrationProviderTelegram)
 	assert.False(t, off.EffectiveEnabled, "MESH_TELEGRAM_ENABLED=false switches the channel off whatever the row says")
+}
+
+// The instance level alone runs Team Relay: the screen says "env" (its word for
+// the instance level) and env_available, with no workspace row.
+func TestEffectiveStatus_TeamRelayInstanceLevelReadsAsEnv(t *testing.T) {
+	repo := newFakeVCSIntegrationRepo()
+	relay := teamrelay.New(extensions.Deps{
+		Conns: extensions.IntegrationConnections{Repo: repo},
+		Inst:  sparkInstance{&extensions.InstanceSetting{Enabled: true, Settings: map[string]any{"relay_url": "https://relay.example"}}},
+	})
+	r := NewIntegrationStatusResolver(repo, nil, nil, relay, false)
+	got := statusOf(t, r.Effective(context.Background(), uuid.New()), domain.IntegrationProviderTeamRelay)
+	assert.True(t, got.EffectiveEnabled)
+	assert.Equal(t, "env", got.Source)
+	assert.False(t, got.HasWorkspaceRow)
+	assert.True(t, got.EnvAvailable)
+	assert.Equal(t, "ok", got.Health)
+}
+
+// An explicit is_active=false workspace row switches Team Relay off even though
+// the instance level is available.
+func TestEffectiveStatus_TeamRelayDisabledRowBlocksInstance(t *testing.T) {
+	ws := uuid.New()
+	repo := newFakeVCSIntegrationRepo()
+	repo.put(ws, domain.IntegrationConfig{Provider: domain.IntegrationProviderTeamRelay, IsActive: false, Config: json.RawMessage(`{"relay_url":"https://ws.example"}`)})
+	relay := teamrelay.New(extensions.Deps{
+		Conns: extensions.IntegrationConnections{Repo: repo},
+		Inst:  sparkInstance{&extensions.InstanceSetting{Enabled: true, Settings: map[string]any{"relay_url": "https://relay.example"}}},
+	})
+	got := statusOf(t, NewIntegrationStatusResolver(repo, nil, nil, relay, false).Effective(context.Background(), ws), domain.IntegrationProviderTeamRelay)
+	assert.False(t, got.EffectiveEnabled)
+	assert.Equal(t, "none", got.Source)
+	assert.Equal(t, "disabled", got.Health)
+	assert.True(t, got.EnvAvailable)
+}
+
+// Without a Team Relay resolver wired the screen reports no env availability
+// rather than dereferencing nil.
+func TestEffectiveStatus_TeamRelayUnwiredIsNotEnvAvailable(t *testing.T) {
+	r := NewIntegrationStatusResolver(newFakeVCSIntegrationRepo(), nil, nil, nil, false)
+	assert.False(t, r.EnvAvailable(domain.IntegrationProviderTeamRelay))
 }

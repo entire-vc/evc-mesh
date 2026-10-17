@@ -11,7 +11,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path"
 	"sort"
 	"strings"
@@ -26,12 +25,6 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/mdoc"
 )
-
-// teamRelayRelayURLEnvVar is where the relay's base URL comes from — the same
-// variable tr_search_handler.go and tr_document_handler.go already read via
-// os.Getenv, kept here as one named constant instead of a third copy of the
-// literal string.
-const teamRelayRelayURLEnvVar = "MESH_TEAMRELAY_RELAY_URL"
 
 // DefaultTeamRelaySyncTTL is the freshness window used when a project's Team
 // Relay settings don't name one. R5 is what lets a human change it per
@@ -285,6 +278,11 @@ type teamRelayMountService struct {
 	// optional collaborator in exactly the way piRepo is, for the same reason
 	// (existing constructors and tests must keep compiling and behaving).
 	attachmentRepo repository.DocumentAttachmentRepository
+	// relayResolver and projectRepo resolve the relay URL per workspace through
+	// the team-relay extension. Unwired, the URL comes from the process env, as
+	// before the extension existed.
+	relayResolver TeamRelayURLResolver
+	projectRepo   repository.ProjectRepository
 
 	// mountLocks carries one *sync.Mutex per project that has ever been synced.
 	// It is what makes the two sync producers — a human's "Sync now" (SyncMount,
@@ -324,6 +322,35 @@ func WithKeyDescriber(d KeyDescriber) TeamRelayMountServiceOption {
 // unresolved (what every deployment did before A4).
 func WithAttachmentRepository(r repository.DocumentAttachmentRepository) TeamRelayMountServiceOption {
 	return func(s *teamRelayMountService) { s.attachmentRepo = r }
+}
+
+// WithRelayURLResolver resolves the relay base URL per workspace (instance and
+// workspace level settings) instead of reading the env var. projects maps a
+// project to its workspace.
+func WithRelayURLResolver(r TeamRelayURLResolver, projects repository.ProjectRepository) TeamRelayMountServiceOption {
+	return func(s *teamRelayMountService) { s.relayResolver, s.projectRepo = r, projects }
+}
+
+// relayURLFor returns the relay base URL for the project's workspace.
+func (s *teamRelayMountService) relayURLFor(ctx context.Context, projectID uuid.UUID) (string, error) {
+	if s.relayResolver == nil {
+		return "", errors.New("teamrelay: relay URL resolver not configured")
+	}
+	if s.projectRepo == nil {
+		return "", errors.New("teamrelay: relay URL resolver wired without a project repository")
+	}
+	project, err := s.projectRepo.GetByID(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("teamrelay: load project %s: %w", projectID, err)
+	}
+	if project == nil {
+		return "", fmt.Errorf("teamrelay: project %s not found", projectID)
+	}
+	relayURL, _, ok := s.relayResolver.ResolveRelayURL(ctx, project.WorkspaceID)
+	if !ok {
+		return "", fmt.Errorf("teamrelay: relay URL not configured for workspace %s", project.WorkspaceID)
+	}
+	return relayURL, nil
 }
 
 // NewTeamRelayMountService returns a TeamRelayMountService. storage may be nil
@@ -383,9 +410,9 @@ func (s *teamRelayMountService) settingsFor(ctx context.Context, projectID uuid.
 	if settings.ShareID == "" {
 		return nil, apierror.NotFound("TeamRelayIntegration")
 	}
-	relayURL := os.Getenv(teamRelayRelayURLEnvVar)
-	if relayURL == "" {
-		return nil, fmt.Errorf("teamrelay: %s not configured", teamRelayRelayURLEnvVar)
+	relayURL, err := s.relayURLFor(ctx, projectID)
+	if err != nil {
+		return nil, err
 	}
 	return &relaySettings{settings: settings, agentKey: pi.AgentKey, relayURL: relayURL}, nil
 }
@@ -521,10 +548,6 @@ func (s *teamRelayMountService) RefreshSleepingKeyExpiries(ctx context.Context) 
 	if err != nil {
 		return 0, 0, fmt.Errorf("teamrelay: list enabled integrations: %w", err)
 	}
-	relayURL := os.Getenv(teamRelayRelayURLEnvVar)
-	if relayURL == "" {
-		return 0, 0, fmt.Errorf("teamrelay: %s not configured", teamRelayRelayURLEnvVar)
-	}
 	for _, pi := range integrations {
 		checked++
 		var settings domain.TeamRelaySettings
@@ -533,6 +556,11 @@ func (s *teamRelayMountService) RefreshSleepingKeyExpiries(ctx context.Context) 
 			continue
 		}
 		if settings.ShareID == "" || pi.AgentKey == "" {
+			continue
+		}
+		relayURL, urlErr := s.relayURLFor(ctx, pi.ProjectID)
+		if urlErr != nil {
+			log.Printf("teamrelay: refresh key expiry for project %s: %v", pi.ProjectID, urlErr)
 			continue
 		}
 		desc, descErr := s.keyDescriber.DescribeAgentKey(ctx, relayURL, settings.ShareID, pi.AgentKey)
@@ -1552,7 +1580,8 @@ func (s *teamRelayMountService) createCopyDocument(ctx context.Context, projectI
 	}
 
 	storageKey := documentStorageKey(projectID, id)
-	if err := s.storage.Upload(ctx, storageKey, bytes.NewReader(remote.Content), int64(len(remote.Content)), documentContentType); err != nil {
+	err = s.storage.Upload(ctx, storageKey, bytes.NewReader(remote.Content), int64(len(remote.Content)), documentContentType)
+	if err != nil {
 		return fmt.Errorf("teamrelay: upload body for %q: %w", entry.Path, err)
 	}
 
@@ -1582,7 +1611,17 @@ func (s *teamRelayMountService) createCopyDocument(ctx context.Context, projectI
 		SourceSHA256: &sha,
 		SyncedAt:     &now,
 	}
-	if err := s.documentRepo.CreateExternalCopy(ctx, doc); err != nil {
+	err = s.documentRepo.CreateExternalCopy(ctx, doc)
+	if isSlugTaken(err) {
+		// Two share files can slugify alike (ISSUES.md / issues.md, a_b / a-b),
+		// and a live document made by hand can hold the slug too. One such file
+		// must not abort the sweep over the whole share, so the copy takes a
+		// slug made unique by its own id.
+		doc.Slug = slug + "-" + id.String()[:8]
+		log.Printf("teamrelay: slug %q taken for %q, mounting as %q", slug, entry.Path, doc.Slug)
+		err = s.documentRepo.CreateExternalCopy(ctx, doc)
+	}
+	if err != nil {
 		_ = s.storage.Delete(ctx, storageKey)
 		return fmt.Errorf("teamrelay: create copy for %q: %w", entry.Path, err)
 	}
@@ -1593,6 +1632,12 @@ func (s *teamRelayMountService) createCopyDocument(ctx context.Context, projectI
 		log.Printf("teamrelay: import embeds for new copy %q: %v", entry.Path, ierr)
 	}
 	return nil
+}
+
+// isSlugTaken reports the repository's 409 for a slug held by a live sibling.
+func isSlugTaken(err error) bool {
+	var ae *apierror.Error
+	return errors.As(err, &ae) && ae.ErrorCode == apierror.CodeDocumentSlugTaken
 }
 
 // actorTypeSystemPtr is a small allocation helper: domain.ActorTypeSystem is a

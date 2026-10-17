@@ -452,8 +452,12 @@ class RepositoryChecks(unittest.TestCase):
             self.assertIsNotNone(m, f'job {name} not found')
             return m.group(1)
 
-        for name in ('test', 'repo-integration', 'tenancy-rbac-gate'):
-            self.assertIn('rules: !reference [.go-test-scope, rules]', job(name), name)
+        self.assertIn('rules: !reference [.go-test-scope, rules]', job('test'))
+        # The two post-review jobs carry the same path list, but manual on a merge request
+        # (see `post-review` in .gitlab-ci.yml), so they take it by anchor, not by rule set.
+        for name in ('repo-integration', 'tenancy-rbac-gate'):
+            self.assertIn('paths: *go-test-scope-paths', job(name), name)
+            self.assertIn('stage: post-review', job(name), name)
         self.assertIn('paths: *go-test-scope-paths', job('coverage-gate'))
         self.assertIn('go_selection.sh --empty-means-all', job('test'))
         self.assertIn('coverage_artifact.py run coverage.out coverage-manifest.json go-selection.txt', job('test'))

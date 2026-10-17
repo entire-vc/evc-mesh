@@ -106,6 +106,30 @@ type VCSLink struct {
 	// Upsert). Nil means the status has never been confirmed — for an open
 	// PR link that is "we do not know whether it is still open".
 	StatusSyncedAt *time.Time `json:"status_synced_at" db:"status_synced_at"`
+	// PipelineStatus is the state of the latest GitLab pipeline of this MR
+	// link (see NormalizePipelineStatus for the vocabulary); nil when no
+	// pipeline has been reported, which is every GitHub link.
+	PipelineStatus    *string    `json:"pipeline_status" db:"pipeline_status"`
+	PipelineUpdatedAt *time.Time `json:"pipeline_updated_at" db:"pipeline_updated_at"`
+	// PipelineID orders pipeline deliveries; it is storage detail, not API.
+	PipelineID *int64 `json:"-" db:"pipeline_id"`
+}
+
+// pipelineStatuses is the vocabulary a GitLab pipeline webhook can report.
+var pipelineStatuses = map[string]string{
+	"created": "pending", "waiting_for_resource": "pending", "preparing": "pending",
+	"pending": "pending", "scheduled": "pending",
+	"running": "running", "success": "success", "failed": "failed",
+	"canceled": "canceled", "canceling": "canceled", "skipped": "skipped", "manual": "manual",
+}
+
+// NormalizePipelineStatus folds a GitLab pipeline status into the small set
+// the badge renders: pending, running, success, failed, canceled, skipped,
+// manual. Returns false for a status it does not know, so a new GitLab value
+// is dropped rather than stored as something the UI cannot draw.
+func NormalizePipelineStatus(raw string) (string, bool) {
+	s, ok := pipelineStatuses[strings.ToLower(strings.TrimSpace(raw))]
+	return s, ok
 }
 
 // NormalizeVCSURL folds cosmetic differences in a VCS object's URL — scheme

@@ -80,7 +80,7 @@ direct mode and existing agent APIs, with unknown runtime facts.
 
 ## Routing, preferred accounts and shared pools
 
-The generated policy projection matches bob's `runtime-routing-policy-v2`:
+The generated policy projection matches the controller’s `runtime-routing-policy-v2`:
 `schema_version`, exact `binding`, `accounts` with `quota_pools_by_mode`, `profiles`
 with string revision, `primary_profiles`, `quota_edges`, `preferred_accounts`,
 `api_reserve_providers`, `max_attempts`, `evidence_max_age_seconds`. The projection
@@ -317,9 +317,18 @@ revocation, concurrent desired/apply CAS, all-pool aliases, direct mode, disable
 drain and no secret fields. Routing tests cover shared preferred groups,
 fallback/reset/no ping-pong, explicit API modes, unknown/error evidence and QA
 exact-SHA quota-only fallback with positive and negative controls. Test additive
-migration upgrade and downgrade. Full local gate and MR CI precede independent
-review and Garfield acceptance. New launch behavior remains on an isolated canary
-until the cross-controller R4 acceptance; deploying read-only inventory is not
-evidence that controller launch/handoff is enabled.
+migration upgrade and downgrade. Run the applicable local and CI checks and obtain independent review before deployment.
+Verify new launch behavior in an isolated canary against every participating controller;
+deploying read-only inventory does not establish that controller launch/handoff is enabled.
 
 REST responses (`GET`/`PUT /runtime`) return the catalog with every account `credential_ref` blanked: references stay with the controller and are write-only through the API.
+
+## Provider name: `runner`
+
+The runtime catalog is the builtin extension `runner`. Until the rename
+migration of `integration_configs.provider` has run, rows carry the legacy name
+`agent_runtime`; the API and the repository read both names and the legacy name
+stays accepted as a synonym for one release. The generic integrations endpoints
+still refuse to write or delete the runtime connection (`400`, "use the
+versioned runtime API"); the Runner extension reports status through
+`GET /workspaces/{ws}/extensions` without the resource inventory.

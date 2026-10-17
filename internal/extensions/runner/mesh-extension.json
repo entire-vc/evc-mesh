@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "id": "runner",
+  "name": "Runner",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Runner: catalog of agent launch resources — pools, accounts, profiles, bindings and controllers; admission and reservation",
+  "category": "agents",
+  "tags": [
+    "runtime",
+    "agents"
+  ],
+  "license": "Apache-2.0",
+  "repository": "https://github.com/entire-vc/evc-mesh",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "settings": {
+    "instance": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "workspace": {
+      "$ref": "#/schemas/catalog"
+    }
+  },
+  "schemas": {
+    "catalog": {
+      "type": "object",
+      "title": "Runner catalog (versioned through the runtime API)",
+      "title_i18n": { "ru": "Каталог Runner (версионируется через API рантайма)" },
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 2
+        },
+        "controllers": {
+          "type": "object",
+          "title": "Host controllers",
+          "title_i18n": { "ru": "Контроллеры хостов" }
+        },
+        "accounts": {
+          "type": "object",
+          "title": "Provider accounts",
+          "title_i18n": { "ru": "Аккаунты провайдеров" }
+        },
+        "pools": {
+          "type": "object",
+          "title": "Resource pools",
+          "title_i18n": { "ru": "Пулы ресурсов" }
+        },
+        "profiles": {
+          "type": "object",
+          "title": "Launch profiles",
+          "title_i18n": { "ru": "Профили запуска" }
+        },
+        "bindings": {
+          "type": "object",
+          "title": "Agent bindings",
+          "title_i18n": { "ru": "Привязки агентов" }
+        }
+      },
+      "required": [
+        "schema_version",
+        "controllers",
+        "accounts",
+        "pools",
+        "profiles",
+        "bindings"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "capabilities": {
+    "api": [
+      "agents:read",
+      "agent_keys:read"
+    ],
+    "events": [],
+    "webhooks_in": [],
+    "ui": [],
+    "secrets": []
+  }
+}

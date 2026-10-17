@@ -17,11 +17,7 @@ import (
 
 // notMigrated lists extensions still on the old resolver path. Each moves into
 // builtin.Providers with its transfer card; the skip is removed then.
-var notMigrated = map[string]string{
-	"gitlab":    "перенос VCS-провайдеров — карточки W1.6–W1.9",
-	"github":    "перенос VCS-провайдеров — карточки W1.6–W1.9",
-	"teamrelay": "перенос Team Relay — карточки W1.6–W1.9",
-}
+var notMigrated = map[string]string{}
 
 type healthProvider struct {
 	stubProvider
@@ -83,6 +79,13 @@ func providersUnderTest(t *testing.T, st *comboStores) []extensions.Provider {
 	ps := builtin.Providers(extensions.Deps{Conns: st, Inst: st})
 	stub, _ := newStub(t, nil, nil)
 	stub.Conns, stub.Inst = st, st
+	// The stub borrows the gitlab manifest; once the real GitLab provider is
+	// builtin it covers that id itself.
+	for _, p := range ps {
+		if p.Manifest().ID == stub.Manifest().ID {
+			return ps
+		}
+	}
 	return append(ps, stub)
 }
 

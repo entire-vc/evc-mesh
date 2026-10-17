@@ -52,11 +52,11 @@ const defaultTimeout = 8 * time.Second
 type Client struct {
 	httpClient *http.Client
 	token      string
-	baseURL    string // e.g. "https://git.entire.host" — self-hosted, so unlike GitHub there is no fixed default.
+	baseURL    string // e.g. "https://gitlab.example.invalid" — self-hosted, so unlike GitHub there is no fixed default.
 }
 
 // NewClient creates a Client for a self-hosted GitLab instance at baseURL
-// (e.g. "https://git.entire.host", scheme required, no trailing slash
+// (e.g. "https://gitlab.example.invalid", scheme required, no trailing slash
 // needed — one is stripped if present). token authenticates as a GitLab
 // personal/project access token; our self-hosted instance has no public
 // anonymous-read equivalent to GitHub's 60 req/hour (a private project
@@ -158,7 +158,7 @@ func (c *Client) GetMergeRequestState(ctx context.Context, projectPath string, i
 var mrURLPattern = regexp.MustCompile(`^https?://[^/\s]+/(.+?)/-/merge_requests/(\d+)`)
 
 // ParseMergeRequestURL extracts (projectPath, iid) from a GitLab merge
-// request URL such as "https://git.entire.host/entire-vc/evc-mesh/-/merge_requests/123".
+// request URL such as "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/123".
 // Returns ok=false for anything that doesn't match GitLab's "-/merge_requests/"
 // URL grammar — GitHub links, commit/branch links, or a malformed URL all
 // fall through here rather than erroring, since the caller's fallback (use

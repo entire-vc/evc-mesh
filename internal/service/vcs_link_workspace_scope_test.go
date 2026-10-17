@@ -212,7 +212,7 @@ func TestHandleGitLabMergeRequestEvent_CrossWorkspaceSecret_IgnoresStoredLinkFal
 		Provider:   domain.VCSProviderGitLab,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "42",
-		URL:        "https://git.entire.host/throwaway/repo/-/merge_requests/42",
+		URL:        "https://gitlab.example.invalid/throwaway/repo/-/merge_requests/42",
 		Status:     domain.VCSLinkStatusOpen,
 		Metadata:   []byte("{}"),
 	})

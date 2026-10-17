@@ -150,7 +150,7 @@ func TestHealth(t *testing.T) {
 
 	rep := p.Health(context.Background(), r)
 	require.True(t, rep.OK, rep.Message)
-	require.Equal(t, "/api/v1/health", gotPath)
+	require.Equal(t, "/health", gotPath)
 
 	status = http.StatusInternalServerError
 	rep = p.Health(context.Background(), r)

@@ -126,6 +126,7 @@ type notificationService struct {
 	localeWorkspaces workspaceNameLookup
 
 	telegramClient       TelegramClient
+	telegramGate         TelegramGate
 	telegramIntegrations telegramTokenLookup
 	telegramWorkspaces   workspaceNameLookup
 	telegramProjects     telegramProjectNameLookup
@@ -159,6 +160,12 @@ func WithEmailService(svc EmailService, users userEmailLookup, baseURL string) N
 // no-op — preference rows can still be saved and even bound via /start
 // through the bot manager, but dispatch skips them the same way it would if
 // no bot were configured.
+// WithTelegramGate sets the instance switch for the Telegram channel, asked at
+// dispatch time. Without it the channel is on whenever it is wired.
+func WithTelegramGate(g TelegramGate) NotificationServiceOption {
+	return func(s *notificationService) { s.telegramGate = g }
+}
+
 func WithTelegramService(client TelegramClient, integrations telegramTokenLookup, workspaces workspaceNameLookup, projects telegramProjectNameLookup) NotificationServiceOption {
 	return func(s *notificationService) {
 		s.telegramClient = client
@@ -422,6 +429,8 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 	switch {
 	case s.telegramClient == nil || s.telegramIntegrations == nil:
 		s.logTelegramUndeliverable(prefs, event, members, "the Telegram channel is not wired up on this instance")
+	case s.telegramGate != nil && !s.telegramGate(bgCtx):
+		s.logTelegramUndeliverable(prefs, event, members, "the Telegram extension is switched off for this instance")
 	default:
 		integration, err := s.telegramIntegrations.GetByProvider(bgCtx, event.WorkspaceID, domain.IntegrationProviderTelegram)
 		if err != nil {
@@ -762,7 +771,7 @@ func (s *notificationService) EmailAvailable() bool {
 // TelegramBotInfo reports whether workspaceID has an active Telegram bot
 // configured and, if so, its @username.
 func (s *notificationService) TelegramBotInfo(ctx context.Context, workspaceID uuid.UUID) (string, bool) {
-	if s.telegramIntegrations == nil {
+	if s.telegramIntegrations == nil || (s.telegramGate != nil && !s.telegramGate(ctx)) {
 		return "", false
 	}
 	cfg, err := s.telegramIntegrations.GetByProvider(ctx, workspaceID, domain.IntegrationProviderTelegram)
@@ -786,6 +795,9 @@ const telegramProbeTimeout = 3 * time.Second
 // API with workspaceID's bot.
 func (s *notificationService) TelegramReachable(ctx context.Context, workspaceID uuid.UUID) (reachable bool, reason string) {
 	if s.telegramClient == nil || s.telegramIntegrations == nil {
+		return false, "The Telegram channel is not enabled on this instance."
+	}
+	if s.telegramGate != nil && !s.telegramGate(ctx) {
 		return false, "The Telegram channel is not enabled on this instance."
 	}
 	integration, err := s.telegramIntegrations.GetByProvider(ctx, workspaceID, domain.IntegrationProviderTelegram)

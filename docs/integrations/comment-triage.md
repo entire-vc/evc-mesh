@@ -1,7 +1,6 @@
 # Comment Triage Enforcement (`❓ Blocking @user` → triage)
 
-Server-side, defense-in-depth enforcement of the workflow rule in
-`CLAUDE-workflow.md §0b`: when an agent leaves a **blocking question** for a human
+Server-side, defense-in-depth enforcement of the documented blocking-question workflow: when an agent leaves a **blocking question** for a human
 in a task comment, the task is automatically moved into the project's **triage**
 column so the blocker surfaces in the Triage Inbox instead of sitting silently in
 `in_progress`.
@@ -113,18 +112,6 @@ This dispatches:
 The event payload contains `task_id`, `task_title`, `project_id`, and `user_slug`
 (the username that triggered the block).
 
-### Channel decision
-
-| Option | Channels | Status |
-|--------|----------|--------|
-| **A** (selected) | In-app + Web Push | **Live** |
-| B | Telegram | Deferred |
-| C | No notification | Rejected |
-
-Option A was selected by Riker 2026-05-31 as the default after the 8-day review window
-elapsed with no response from the assignee. Telegram (Option B) is deferred — not
-rejected; add it here when the Telegram channel is wired to `NotificationService`.
-
 ### Push preference default
 
 `task.blocking_triage` defaults to **opt-in ON**: the event is included in the
@@ -183,7 +170,5 @@ assign the task to them) and the `delivered` reason `thread_only` (no turn is
 started for the lane). It is absent (not empty-string) on every other outcome.
 
 Full field reference: [`docs/mcp-reference.md`](../mcp-reference.md#13-add_comment).
-See also the `mention-and-wake` skill, which documents that a mention alone
-does not wake a fiddler-fed agent lane — `delivery` is what now lets the
-comment's author *see* that in the response, instead of assuming the handoff
-happened.
+A mention alone does not prove that an agent will act. Inspect the returned
+`delivery` outcome rather than assuming that a handoff happened.

@@ -27,9 +27,13 @@ export interface SchemaFormProps {
   manifest?: unknown;
   /** Value from the server; a stored secret arrives as a mask, never as text. */
   value?: Values;
-  /** Receives the payload; throw an ApiRequestError to show its `details` per field. */
-  onSubmit: (settings: Values) => Promise<void>;
+  /** Receives the payload; throw an ApiRequestError to show its `details` per field.
+   *  Resolve with `false` when the payload was NOT stored and the caller handled it (e.g. sent the
+   *  user elsewhere): the typed secrets then stay as a draft instead of being marked as set. */
+  onSubmit: (settings: Values) => Promise<void | false>;
   submitLabel?: string;
+  /** Read-only display: no submit button (the caller offers its own way forward). */
+  hideSubmit?: boolean;
   disabled?: boolean;
   /** Override the options of the project/agent pickers (defaults: current stores). */
   projectOptions?: PickerOption[];
@@ -56,6 +60,8 @@ interface Ctx {
   agentOptions: PickerOption[];
   onChange: (path: string[], v: unknown) => void;
   idBase: string;
+  /** Manifest id: scopes the per-locale field labels (`schemaFields.<id>.<path>`). */
+  extId?: string;
 }
 
 function FieldMessage({ id, error, server }: { id: string; error?: FieldError; server?: string }) {
@@ -103,7 +109,10 @@ function Field({
   const key = path.join(".");
   const id = `${ctx.idBase}-${key}`;
   const widget = widgetOf(field);
-  const label = field.title ?? name;
+  // the manifest title is one language; a locale entry (when present) wins so the form follows the UI language
+  const label = ctx.extId
+    ? t(`schemaFields.${ctx.extId}.${path.join("_")}`, { defaultValue: field.title ?? name })
+    : (field.title ?? name);
   const error = ctx.errors[key];
   const server = ctx.serverErrors[key];
   const invalid = Boolean(error || server);
@@ -273,7 +282,7 @@ function Field({
   );
 }
 
-export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, disabled = false, projectOptions, agentOptions }: SchemaFormProps) {
+export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hideSubmit = false, disabled = false, projectOptions, agentOptions }: SchemaFormProps) {
   const { t } = useTranslation("integrations");
   const idBase = useId();
   const resolved = useMemo(() => resolveSchema(schema, manifest ?? {}), [schema, manifest]);
@@ -315,6 +324,7 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, dis
       setSaved(false);
     },
     idBase,
+    extId: typeof (manifest as { id?: unknown } | undefined)?.id === "string" ? (manifest as { id: string }).id : undefined,
   };
 
   const submit = async (e: FormEvent) => {
@@ -327,7 +337,7 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, dis
     setSaving(true);
     try {
       const payload = buildPayload(resolved, values);
-      await onSubmit(payload);
+      if ((await onSubmit(payload)) === false) return;
       // typed secrets are stored now: back to "set", draft wiped from the form
       const nextSet = new Set(secretsSet);
       let next = values;
@@ -375,9 +385,11 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, dis
         </p>
       )}
       <div className="flex items-center gap-3">
-        <Button type="submit" disabled={disabled || saving}>
-          {submitLabel ?? t("schemaForm.save")}
-        </Button>
+        {!hideSubmit && (
+          <Button type="submit" disabled={disabled || saving}>
+            {submitLabel ?? t("schemaForm.save")}
+          </Button>
+        )}
         {saved && (
           <span role="status" className="text-sm text-muted-foreground">
             {t("schemaForm.saved")}

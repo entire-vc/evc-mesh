@@ -131,6 +131,7 @@ func TestDocumentRepo_Create_DuplicateSiblingSlugIsAConflict(t *testing.T) {
 			var apiErr *apierror.Error
 			require.ErrorAs(t, err, &apiErr)
 			assert.Equal(t, 409, apiErr.StatusCode())
+			assert.Equal(t, apierror.CodeDocumentSlugTaken, apiErr.ErrorCode)
 		})
 	}
 }
@@ -444,6 +445,29 @@ func TestDocumentRepo_Update_SlugConflictOnReparent(t *testing.T) {
 	var apiErr *apierror.Error
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 409, apiErr.StatusCode())
+	assert.Equal(t, apierror.CodeDocumentSlugTaken, apiErr.ErrorCode)
+}
+
+// A conditional move (base_version set) into a folder that already holds the
+// slug is a slug collision, not a version race: it must not be reported as
+// repository.ErrDocumentVersionMismatch and must carry its own error code.
+func TestDocumentRepo_Update_SlugTakenWithBaseVersionIsNotAVersionConflict(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+	base := 1
+
+	expectUpdateTxStart(mock, doc.ParentID, doc.Slug)
+	mock.ExpectQuery("UPDATE documents").
+		WillReturnError(&pq.Error{Code: "23505", Constraint: "uq_documents_sibling_slug"})
+
+	_, err := repo.Update(context.Background(), &doc, &base, false)
+
+	require.NotErrorIs(t, err, repository.ErrDocumentVersionMismatch)
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.StatusCode())
+	assert.Equal(t, apierror.CodeDocumentSlugTaken, apiErr.ErrorCode)
+	assert.Contains(t, apiErr.Message, "slug is already taken")
 }
 
 // --- path addressing ---
@@ -596,4 +620,19 @@ func TestIsDocumentSlugConflict(t *testing.T) {
 			assert.Equal(t, tt.want, isDocumentSlugConflict(tt.err))
 		})
 	}
+}
+
+func TestDocumentRepo_CreateExternalCopy_DuplicateSiblingSlugIsAConflict(t *testing.T) {
+	repo, mock := newDocumentRepoMock(t)
+	doc := sampleDocument()
+
+	mock.ExpectExec("INSERT INTO documents").
+		WillReturnError(&pq.Error{Code: "23505", Constraint: "uq_documents_sibling_slug"})
+
+	err := repo.CreateExternalCopy(context.Background(), &doc)
+
+	var apiErr *apierror.Error
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, 409, apiErr.StatusCode())
+	assert.Equal(t, apierror.CodeDocumentSlugTaken, apiErr.ErrorCode)
 }

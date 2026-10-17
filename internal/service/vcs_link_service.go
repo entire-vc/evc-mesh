@@ -464,6 +464,43 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	return res, err
 }
 
+// HandleGitLabPipelineEvent records the latest pipeline state on every link
+// that names this MR (same url, same workspace). It only updates existing
+// links: a pipeline for an MR no task refers to is not a reason to create one.
+func (s *vcsLinkService) HandleGitLabPipelineEvent(ctx context.Context, ev GitLabPipelineEvent) (PipelineHandleResult, error) {
+	if ev.MRIID == 0 || ev.MRURL == "" {
+		return PipelineHandleResult{Reason: "no_merge_request"}, nil
+	}
+	status, ok := domain.NormalizePipelineStatus(ev.Status)
+	if !ok {
+		log.Printf("[vcs-webhook] mr=%s!%d pipeline=%d unknown pipeline status %q", ev.ProjectPath, ev.MRIID, ev.PipelineID, ev.Status)
+		return PipelineHandleResult{Reason: "unknown_status"}, nil
+	}
+	links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitLab, domain.VCSLinkTypePR, strconv.Itoa(ev.MRIID))
+	if err != nil {
+		return PipelineHandleResult{}, fmt.Errorf("list vcs links by external_id: %w", err)
+	}
+	// The iid is project-scoped, so the url is what tells two projects' !12 apart.
+	want := domain.NormalizeVCSURL(ev.MRURL)
+	updated := 0
+	for _, l := range s.filterLinksInWorkspace(ctx, ev.WorkspaceID, links) {
+		if domain.NormalizeVCSURL(l.URL) != want {
+			continue
+		}
+		written, werr := s.repo.SetPipelineStatus(ctx, l.ID, ev.PipelineID, status)
+		if werr != nil {
+			return PipelineHandleResult{Updated: updated}, fmt.Errorf("set pipeline status: %w", werr)
+		}
+		if written {
+			updated++
+		}
+	}
+	if updated == 0 {
+		return PipelineHandleResult{Reason: "no_link"}, nil
+	}
+	return PipelineHandleResult{Updated: updated}, nil
+}
+
 // closeReviewSubjects settles the review cards bound to this PR/MR (links
 // carrying role=review, see taskService.bindReviewSubject) once it reaches a
 // terminal state. The task the payload names is the work; a review of it is a

@@ -1110,6 +1110,11 @@ type VCSLinkService interface {
 	// two providers' MRs/PRs are policy-equivalent once reduced to (task
 	// ref, terminal state), see #bc39d781.
 	HandleGitLabMergeRequestEvent(ctx context.Context, ev GitLabWebhookEvent) (PRHandleResult, error)
+	// HandleGitLabPipelineEvent stores the pipeline state of an MR on the
+	// links that already name that MR, so the task badge can show it. It
+	// never creates a link and never moves a task: an MR nobody linked is
+	// ignored (Updated == 0).
+	HandleGitLabPipelineEvent(ctx context.Context, ev GitLabPipelineEvent) (PipelineHandleResult, error)
 	// ResolveTaskRef finds the first task actually named by any recognised
 	// reference spelling in the given texts — MESH-<uuid>, a /t/<id> link, a
 	// Refs/Closes keyword, a #<short id>, or a branch segment — and verifies it
@@ -1165,6 +1170,26 @@ type GitLabWebhookEvent struct {
 	// the workspace whose webhook_secret validated this delivery (uuid.Nil
 	// for the env fallback). See that field's doc comment (#839b9897).
 	WorkspaceID uuid.UUID
+}
+
+// GitLabPipelineEvent is the projection of a GitLab "Pipeline Hook" payload
+// the service reads: the pipeline and the merge request it ran for.
+type GitLabPipelineEvent struct {
+	PipelineID  int64
+	Status      string // object_attributes.status
+	MRIID       int    // merge_request.iid; 0 for a branch pipeline with no MR
+	MRURL       string // merge_request.url
+	ProjectPath string // project.path_with_namespace
+	// WorkspaceID is the workspace whose webhook secret validated the
+	// delivery (uuid.Nil for the env fallback), as in GitLabWebhookEvent.
+	WorkspaceID uuid.UUID
+}
+
+// PipelineHandleResult reports what a pipeline event did. Reason is a stable
+// identifier: "no_merge_request", "unknown_status", "no_link".
+type PipelineHandleResult struct {
+	Updated int
+	Reason  string
 }
 
 // PRHandleResult describes what happened when processing a pull_request event.
@@ -1678,6 +1703,13 @@ type ProjectIntegrationService interface {
 	UpsertTeamRelay(ctx context.Context, projectID uuid.UUID, input UpsertProjectIntegrationInput) (*domain.ProjectIntegration, error)
 	DeleteTeamRelay(ctx context.Context, projectID uuid.UUID) error
 	List(ctx context.Context, projectID uuid.UUID) ([]domain.ProjectIntegration, error)
+	// GetBinding, UpsertBinding and DeleteBinding are the project level of any
+	// extension, keyed by its manifest id (docs/extensions/api.md, "Project
+	// routes"). Settings are stored as given: the caller has already checked them
+	// against the manifest. GetBinding returns apierror.NotFound when none is set.
+	GetBinding(ctx context.Context, projectID uuid.UUID, extensionID string) (*domain.ProjectIntegration, error)
+	UpsertBinding(ctx context.Context, projectID uuid.UUID, extensionID string, input UpsertProjectBindingInput) (*domain.ProjectIntegration, error)
+	DeleteBinding(ctx context.Context, projectID uuid.UUID, extensionID string) error
 	// SearchTR looks up the TR integration by share_slug, calls the relay file-list API,
 	// filters in-memory by q (case-insensitive contains on name+path), and returns up to limit results.
 	// Returns apierror.NotFound when the share_slug is not configured in any project.

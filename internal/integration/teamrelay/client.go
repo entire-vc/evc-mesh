@@ -9,12 +9,14 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	teamrelayext "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 )
 
@@ -51,19 +53,35 @@ type Publisher interface {
 	Publish(ctx context.Context, taskID uuid.UUID, artifactName string, content []byte, contentType string) (publicURL, agentKey string, err error)
 }
 
+// ConnectionResolver resolves the effective workspace/instance connection.
+type ConnectionResolver interface {
+	Resolve(context.Context, uuid.UUID) (extensions.Resolved, error)
+}
+
+// ResolveConnection shares the provider decision between publication and search.
+func ResolveConnection(ctx context.Context, r ConnectionResolver, workspaceID uuid.UUID) (teamrelayext.Settings, bool, error) {
+	if r == nil {
+		return teamrelayext.Settings{}, false, nil
+	}
+	res, err := r.Resolve(ctx, workspaceID)
+	if err != nil || !res.Enabled {
+		return teamrelayext.Settings{}, false, err
+	}
+	settings, err := extensions.DecodeSettings[teamrelayext.Settings](res.Settings)
+	settings.RelayURL = strings.TrimRight(strings.TrimSpace(settings.RelayURL), "/")
+	return settings, err == nil && settings.RelayURL != "", err
+}
+
 type client struct {
+	resolver ConnectionResolver
 	piRepo   repository.ProjectIntegrationRepository
 	taskRepo repository.TaskRepository
 	projRepo repository.ProjectRepository
 }
 
 // NewClient creates a new Team Relay publisher client.
-func NewClient(piRepo repository.ProjectIntegrationRepository, taskRepo repository.TaskRepository, projRepo repository.ProjectRepository) Publisher {
-	return &client{piRepo: piRepo, taskRepo: taskRepo, projRepo: projRepo}
-}
-
-func transportEnabled() bool {
-	return os.Getenv("MESH_TEAMRELAY_TRANSPORT_ENABLED") == "true"
+func NewClient(piRepo repository.ProjectIntegrationRepository, taskRepo repository.TaskRepository, projRepo repository.ProjectRepository, resolver ConnectionResolver) Publisher {
+	return &client{piRepo: piRepo, taskRepo: taskRepo, projRepo: projRepo, resolver: resolver}
 }
 
 // Publish pushes an artifact to the Team Relay share for the project the task belongs to.
@@ -106,7 +124,11 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 		time.Now(),
 	)
 
-	if !transportEnabled() {
+	connection, enabled, resolveErr := ResolveConnection(ctx, c.resolver, proj.WorkspaceID)
+	if resolveErr != nil {
+		return "", "", fmt.Errorf("teamrelay: resolve connection: %w", resolveErr)
+	}
+	if !enabled || !connection.TransportEnabled {
 		log.Printf("teamrelay: would publish to relay: %s (transport disabled)", filePath)
 		return "", "", nil
 	}
@@ -119,7 +141,7 @@ func (c *client) Publish(ctx context.Context, taskID uuid.UUID, artifactName str
 		shareIdentifier = settings.ShareSlug
 	}
 
-	webURL, tErr := transport(ctx, shareIdentifier, filePath, content, contentType, pi.AgentKey)
+	webURL, tErr := transport(ctx, connection.RelayURL, shareIdentifier, filePath, content, contentType, pi.AgentKey)
 	if tErr != nil {
 		return "", "", tErr
 	}
@@ -212,10 +234,9 @@ type webShareResponse struct {
 
 // ListShareFiles calls GET /v1/web/shares/{shareSlug} and returns the file list.
 // Returns nil slice (not error) when the share is not found (caller maps to 404).
-func ListShareFiles(ctx context.Context, shareSlug, agentKey string) ([]domain.RelayFileItem, error) {
-	baseURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
+func ListShareFiles(ctx context.Context, baseURL, shareSlug, agentKey string) ([]domain.RelayFileItem, error) {
 	if baseURL == "" {
-		return nil, fmt.Errorf("teamrelay: MESH_TEAMRELAY_RELAY_URL not set")
+		return nil, fmt.Errorf("teamrelay: relay_url is not configured")
 	}
 
 	endpoint := fmt.Sprintf("%s/v1/web/shares/%s", baseURL, url.PathEscape(shareSlug))
@@ -262,10 +283,9 @@ func ListShareFiles(ctx context.Context, shareSlug, agentKey string) ([]domain.R
 //	Body: raw bytes
 //	200 → {sync_url, web_url, path}  — relay writes source=sync-artifact + bumps web_content_updated_at
 //	401/403 → key revoked; log + return nil (no retry — key is static)
-func transport(ctx context.Context, shareIdentifier, filePath string, content []byte, contentType, agentKey string) (string, error) {
-	baseURL := os.Getenv("MESH_TEAMRELAY_RELAY_URL")
+func transport(ctx context.Context, baseURL, shareIdentifier, filePath string, content []byte, contentType, agentKey string) (string, error) {
 	if baseURL == "" {
-		log.Printf("teamrelay: MESH_TEAMRELAY_RELAY_URL not set — cannot upload %s", filePath)
+		log.Printf("teamrelay: relay_url is not configured — cannot upload %s", filePath)
 		return "", nil
 	}
 

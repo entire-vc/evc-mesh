@@ -192,9 +192,10 @@ describe("IntegrationsPage — mcp is reference-only (#4a3195a5)", () => {
     await waitFor(() => expect(screen.getByText("MCP Server")).toBeInTheDocument());
     // With no stored config for anyone, every provider that DOES show a
     // toggle renders it as "Enable" (isActive=false). Of the 5 providers on
-    // this page (github, gitlab, spark, mcp, telegram), telegram is excluded
+    // this page (github, gitlab, spark, team_relay, mcp, telegram), telegram is excluded
     // pre-existing (no bot token set) and mcp is excluded by #4a3195a5 —
-    // leaving exactly 3. This count has stepped down twice: 5 -> 4 when mcp
+    // leaving exactly 3 (team_relay is shown read-only, #25aec021: the configure
+    // endpoint rejects it). This count has stepped down twice: 5 -> 4 when mcp
     // stopped rendering a switch that switched nothing, 4 -> 3 when slack
     // left the page (#84599ead; its backend was removed in #c9f9834f). A change here must name which provider moved and why.
     expect(screen.getAllByRole("button", { name: "Enable" })).toHaveLength(3);
@@ -247,6 +248,19 @@ describe("IntegrationsPage — effective status (#a4d108eb)", () => {
       "Active (configured at the instance level)",
     );
     expect(screen.getByTestId("source-gitlab")).toHaveTextContent("Instance");
+  });
+
+  it("shows Team Relay and Telegram with the effective source badge", async () => {
+    useMemberStore.setState({ myRole: "admin" });
+    mockWithEffective([
+      eff({ provider: "team_relay" }),
+      eff({ provider: "telegram", source: "workspace", has_workspace_row: true }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("Team Relay")).toBeInTheDocument();
+    expect(screen.getByTestId("source-team_relay")).toHaveTextContent("Instance");
+    expect(screen.getByTestId("env-note-team_relay")).toBeInTheDocument();
+    expect(screen.getByTestId("source-telegram")).toHaveTextContent("Workspace");
   });
 
   it("asks for confirmation before turning off an env-backed integration, and writes nothing until confirmed", async () => {

@@ -13,6 +13,15 @@ const overview = vi.hoisted(() => ({
   },
 }));
 vi.mock("@/hooks/useExtensionsOverview", () => ({ useExtensionsOverview: () => overview.value }));
+// The catalog tab follows the same load state; its own behaviour is covered in extension-catalog.test.tsx.
+vi.mock("@/hooks/useExtensionCatalog", () => ({
+  useExtensionCatalog: () => ({
+    state: overview.value.state,
+    entries: [],
+    catalogUnavailable: false,
+    reload: () => undefined,
+  }),
+}));
 
 import { setLanguage } from "@/i18n";
 import { ExtensionsPage, IntegrationsRedirect, extensionsTab } from "@/pages/extensions";

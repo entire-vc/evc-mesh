@@ -1825,3 +1825,77 @@ describe("DocsPage — search", () => {
     await new Promise((r) => setTimeout(r, 250));
   });
 });
+
+// Copy URL / Share URL in the "..." menu. navigator.share is a browser API, so
+// it is the one thing stubbed here; copyText is mocked at module level above.
+describe("DocsPage — copy and share the document URL", () => {
+  const doc = makeDoc({ id: "doc-1", title: "Runbook" });
+
+  function openMenu() {
+    mockRoutes([doc], (path, opts) => {
+      if (path === "/api/v1/documents/doc-1" && !opts?.method) {
+        return Promise.resolve({ ...doc, body: "text" });
+      }
+      return undefined;
+    });
+    renderDocs("doc-1", "#p=stale-anchor");
+    return screen.findByLabelText("More actions").then((btn) => fireEvent.click(btn));
+  }
+
+  beforeEach(() => {
+    vi.mocked(copyText).mockClear();
+    vi.mocked(toast.success).mockReset();
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "share");
+  });
+
+  it("Copy URL puts the canonical document URL, without any anchor, on the clipboard", async () => {
+    await openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy URL" }));
+
+    await waitFor(() => expect(copyText).toHaveBeenCalledTimes(1));
+    expect(copyText).toHaveBeenCalledWith(`${window.location.origin}/w/acme/p/demo/docs/doc-1`);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Link copied"));
+  });
+
+  it("Share URL calls navigator.share with the title and the same URL", async () => {
+    const share = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "share", { value: share, configurable: true });
+    await openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Share URL" }));
+
+    expect(share).toHaveBeenCalledWith({
+      title: "Runbook",
+      url: `${window.location.origin}/w/acme/p/demo/docs/doc-1`,
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("dismissing the share sheet is not an error, a real failure is", async () => {
+    const share = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("dismissed", "AbortError"))
+      .mockRejectedValueOnce(new Error("boom"));
+    Object.defineProperty(navigator, "share", { value: share, configurable: true });
+    await openMenu();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Share URL" }));
+    await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(toast.error).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByLabelText("More actions"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Share URL" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not share the link"));
+  });
+
+  it("Share URL is hidden where the browser has no Web Share API; Copy URL stays", async () => {
+    expect("share" in navigator).toBe(false);
+    await openMenu();
+
+    expect(screen.getByRole("menuitem", { name: "Copy URL" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Share URL" })).toBeNull();
+  });
+});

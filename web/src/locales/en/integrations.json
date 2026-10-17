@@ -267,7 +267,7 @@
     "perm2": "Create, change and delete tasks; write comments and memory",
     "perm3": "Attach files and post events",
     "perm4": "Change workflow rules, only if you are an admin or owner",
-    "agentNote": "It acts as a connector agent, supervised by you. It cannot manage members. Its access follows your role in the workspace and stops if you lose that role. You can revoke it at any time under Connected apps.",
+    "agentNote": "It acts as a connector agent, supervised by you. It cannot manage members. Its access follows your role in the workspace and stops if you lose that role. You can revoke it at any time in your profile under App access.",
     "deny": "Deny",
     "denying": "Denying…",
     "allow": "Allow",
@@ -439,12 +439,12 @@
     }
   },
   "connectedApps": {
-    "title": "Connected apps",
-    "description": "Apps you have allowed to work in your workspaces. Revoking access stops the app right away; the connector agent it created stays in the workspace.",
-    "loadError": "Could not load connected apps.",
+    "title": "App access",
+    "description": "External apps you allowed to work in your workspaces, for example the claude.ai connector. Revoking access stops the app right away; the connector agent it created stays in the workspace.",
+    "loadError": "Could not load app access.",
     "revokeError": "Could not revoke access.",
     "revokedToast": "Access revoked for {{name}}",
-    "empty": "No apps are connected.",
+    "empty": "No external apps have access yet. One appears here after you allow it to connect to Mesh, e.g. the Mesh connector in claude.ai.",
     "revokedHeading": "Revoked",
     "confirmTitle": "Revoke access?",
     "confirmDescription": "{{name}} will stop working in {{workspace}} immediately. To connect it again, it has to ask for access again.",
@@ -462,6 +462,7 @@
       "spark": "Browse and install AI agents from the Spark catalog into your workspace.",
       "mcp": "Connect AI agents (Claude Code, Cline, Aider) via Model Context Protocol. Supports stdio and SSE transports.",
       "telegram": "Deliver notifications and activity to a Telegram bot. Each member connects their own account from Notification Settings.",
+      "teamRelay": "Sync project documents with a Team Relay share. The relay URL comes from this workspace or from the instance settings.",
       "sparkName": "Spark Agent Catalog",
       "mcpName": "MCP Server"
     },
@@ -738,6 +739,273 @@
       "enum": "Pick one of the options",
       "minimum": "At least {{min}}",
       "maximum": "At most {{max}}"
+    }
+  },
+  "catalog": {
+    "kind": {
+      "integration": "Integration",
+      "plugin": "Plugin"
+    },
+    "trust": {
+      "official": "Official",
+      "verified": "Verified",
+      "community": "Community",
+      "custom": "Custom"
+    },
+    "category": {
+      "development": "Development",
+      "communication": "Communication",
+      "documents": "Documents",
+      "agents": "Agents and automation",
+      "security": "Security",
+      "analytics": "Analytics",
+      "entire-vc": "Entire VC products"
+    },
+    "filters": {
+      "label": "Filters",
+      "kind": "Type",
+      "category": "Category",
+      "trust": "Trust"
+    },
+    "sort": {
+      "label": "Sort",
+      "popular": "Popular",
+      "new": "Newest",
+      "updated": "Recently updated"
+    },
+    "state": {
+      "installed": "Installed",
+      "connected": "Connected",
+      "blocked": "Blocked by catalog",
+      "notAllowed": "Not allowed by the instance administrator"
+    },
+    "search": "Search extensions",
+    "results": "Extensions",
+    "count_one": "{{count}} extension",
+    "count_other": "{{count}} extensions",
+    "noMatchTitle": "Nothing matches these filters",
+    "noMatchBody": "Change the filters or clear the search.",
+    "reset": "Reset filters",
+    "unavailableBanner": "The catalog is unavailable. Showing built-in and installed extensions."
+  },
+  "detail": {
+    "back": "All extensions",
+    "loading": "Loading extension",
+    "byVersion": "{{publisher}} · version {{version}}",
+    "notFoundTitle": "Extension not found",
+    "notFoundBody": "This extension doesn't exist or was removed from the catalog.",
+    "errorTitle": "Couldn't load the extension",
+    "errorBody": "The extension data is unavailable right now. Try again in a minute.",
+    "blockedNote": "Blocked by the catalog: {{reason}}",
+    "blockedNoReason": "no reason given",
+    "customNote": "Not checked by the catalog. Connect only if you trust the source.",
+    "tabs": {
+      "label": "Extension sections",
+      "description": "Description",
+      "permissions": "Permissions",
+      "versions": "Versions",
+      "checks": "Checks",
+      "support": "Support"
+    },
+    "action": {
+      "connect": "Connect",
+      "openSettings": "Open settings",
+      "install": "Install to instance",
+      "allow": "Allow",
+      "blocked": "Blocked",
+      "askAdmin": "Not installed on this instance. Ask the instance administrator to install it.",
+      "notAllowed": "Not allowed by the instance administrator."
+    },
+    "permissions": {
+      "none": "This extension asks for no special permissions.",
+      "domains": "External addresses it may contact"
+    },
+    "versions": {
+      "current": "Installed",
+      "meshApi": "Compatible with Mesh API {{range}}",
+      "added": "New permissions",
+      "removed": "Permissions removed",
+      "noHistory": "The release history is published by the catalog and isn't available for this extension."
+    },
+    "checks": {
+      "builtin": "Official. Ships with Mesh.",
+      "custom": "Not checked by the catalog.",
+      "none": "No check results yet.",
+      "result": {
+        "passed": "Passed",
+        "warnings": "Passed with remarks",
+        "failed": "Failed"
+      },
+      "date": "Checked on {{date}}",
+      "reviewer": "First release reviewed by {{name}}"
+    },
+    "support": {
+      "publisher": "Publisher",
+      "repository": "Repository",
+      "docs": "Documentation",
+      "license": "License",
+      "report": "Report a problem",
+      "reportLink": "Open an issue"
+    }
+  },
+  "connect": {
+    "stepsLabel": "Connection steps",
+    "steps": {
+      "permissions": "Permissions",
+      "settings": "Settings",
+      "test": "Check",
+      "done": "Done"
+    },
+    "heading": "Connect {{name}}",
+    "backToExtension": "Back to the extension",
+    "next": "Next",
+    "back": "Back",
+    "unavailable": "This extension can't be connected: it is blocked, not installed or not allowed on this instance.",
+    "alreadyConnected": "This extension is already connected in this workspace.",
+    "permissions": {
+      "title": "{{name}} will get these permissions",
+      "unchecked": "Not checked by the catalog. Connect only if you trust the source.",
+      "consent": "I understand that the extension will get these permissions.",
+      "consentError": "Confirm the permissions to continue."
+    },
+    "settings": {
+      "title": "Settings",
+      "byInstance": "Configured by the instance administrator",
+      "byInstanceHint": "This workspace uses the instance settings. The fields can't be changed here.",
+      "editInstance": "Change instance settings",
+      "none": "This extension needs no settings.",
+      "failed": "Couldn't connect the extension."
+    },
+    "test": {
+      "title": "Check the connection",
+      "hint": "Mesh will contact the service with the saved settings.",
+      "run": "Check connection",
+      "retry": "Check again",
+      "running": "Checking…",
+      "ok": "Connection works.",
+      "failed": "The check failed. Look at the settings and the service address, then check again.",
+      "requestFailed": "Couldn't run the check.",
+      "skip": "Finish anyway"
+    },
+    "done": {
+      "title": "{{name}} is connected",
+      "appeared": "What appeared",
+      "noSlots": "The extension works in the background; it adds nothing to the screens.",
+      "bindProjects": "Bind it to projects",
+      "toInstalled": "Go to installed extensions"
+    }
+  },
+  "capabilities": {
+    "api": {
+      "tasks": {
+        "read": "Read tasks",
+        "write": "Create and change tasks"
+      },
+      "comments": {
+        "read": "Read comments",
+        "write": "Create and change comments"
+      },
+      "artifacts": {
+        "read": "Read artifacts",
+        "write": "Create and change artifacts"
+      },
+      "docs": {
+        "read": "Read documents",
+        "write": "Create and change documents"
+      },
+      "projects": {
+        "read": "Read projects",
+        "write": "Create and change projects"
+      },
+      "workspaces": {
+        "read": "Read workspace data",
+        "write": "Create and change workspace data"
+      },
+      "members": {
+        "read": "Read members",
+        "write": "Create and change members"
+      },
+      "agents": {
+        "read": "Read agents",
+        "write": "Create and change agents"
+      },
+      "agent_keys": {
+        "read": "Read agent keys",
+        "write": "Create and change agent keys"
+      },
+      "vcs_links": {
+        "read": "Read MR and branch links",
+        "write": "Create and change MR and branch links"
+      },
+      "events": {
+        "read": "Read the event feed",
+        "write": "Create and change the event feed"
+      },
+      "secrets": {
+        "read": "Read secrets",
+        "write": "Create and change secrets"
+      },
+      "unknown": "Access: {{name}}"
+    },
+    "events": {
+      "listen": "Receive the event {{event}}"
+    },
+    "webhooks": {
+      "receive": "Accept the {{name}} webhook"
+    },
+    "ui": {
+      "workspace_settings": "Show a section in workspace settings",
+      "project_settings": "Show a section in project settings",
+      "task_panel": "Show a panel in the task card",
+      "task_badge": "Show a badge on task cards",
+      "task_actions": "Add items to the task menu",
+      "sidebar_item": "Add an item to the sidebar",
+      "command": "Add a command to the command palette",
+      "doc_panel": "Show a panel in documents"
+    },
+    "secrets": {
+      "store": "Keep the secret {{name}}"
+    },
+    "names": {
+      "token": "Access token",
+      "webhook_secret": "Webhook secret",
+      "gitlab": "GitLab",
+      "bot_token": "Bot token",
+      "install_secret": "Install secret",
+      "run_token": "Run token",
+      "limits_run_token": "Run token",
+      "telegram": "Telegram",
+      "keep": "Keep",
+      "runner": "Runner"
+    },
+    "domainFromSettings": "The address you enter in the settings (for example, your GitLab)"
+  },
+  "schemaFields": {
+    "gitlab": {
+      "base_url": "GitLab address",
+      "token": "Access token",
+      "webhook_secret": "Webhook secret",
+      "repo_path": "Repository (group/project)"
+    },
+    "keep": {
+      "keep_url": "Keep address",
+      "install_secret": "Install secret"
+    },
+    "runner": {
+      "image_registry": "Image registry",
+      "default_agent": "Default agent",
+      "default_project": "Default project",
+      "allowed_images": "Allowed images",
+      "policy": "Run policy",
+      "limits": "Limits",
+      "limits_max_parallel": "Parallel runs",
+      "limits_run_token": "Run token"
+    },
+    "telegram": {
+      "bot_token": "Bot token",
+      "own_bot": "Own bot for the workspace",
+      "digest_mode": "Digests",
+      "digest_hour": "Send hour"
     }
   }
 }

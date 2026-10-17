@@ -486,7 +486,10 @@ func TestHandlerCheckedRoutesDoNotUseResolverParams(t *testing.T) {
 	require.NotEmpty(t, workspaceScopeHandlerCheckedRoutes)
 	for path := range workspaceScopeHandlerCheckedRoutes {
 		for _, p := range pathParams(strings.TrimPrefix(path, "/api/v1")) {
-			if p == "ws_id" {
+			// :ws_id and :proj_id are the tenant parent of the route: a real
+			// workspace / project id the guard resolves and the handler relies on.
+			// The rule is about the OTHER id, the one no table can resolve.
+			if p == "ws_id" || p == "proj_id" {
 				continue
 			}
 			assert.False(t, scoped[p], "%s: :%s is a resolver param, rename it", path, p)

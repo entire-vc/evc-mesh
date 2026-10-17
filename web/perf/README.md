@@ -1,4 +1,4 @@
-# Perf budget — the храповик for Mesh web
+# Perf budget — the ratchet for Mesh web
 
 `budget.json` sets a ceiling per metric. CI fails the build when a metric goes
 over its ceiling. It never fails when a metric goes *under* — going under is
@@ -11,7 +11,7 @@ the whole point.
 today". A ceiling left above the real value stops protecting anything.
 
 **Raising a ceiling needs a stated reason in the MR description and lead
-sign-off (Garfield).** "Tests were red so I bumped the number" is not a
+sign-off.** "Tests were red so I bumped the number" is not a
 reason — find out why the metric grew, then decide whether that growth is
 worth it before landing it.
 
@@ -62,7 +62,7 @@ check.
 
 ## `login.initial_js_kb_gz` vs `total_js_kb_gz` after route splitting
 
-Routes are `React.lazy` since !1006, so the two numbers diverged: on
+Routes use `React.lazy`, so the two numbers diverged: on
 `9514eba3` `login.initial_js_kb_gz` is 148.96 (was 432.07) and
 `total_js_kb_gz` is 488.75 (was 432.07). Ceilings are 150 and 490.
 
@@ -82,7 +82,7 @@ always-loaded code; stated here so the number isn't mistaken for drift.
 
 ## Proving the gate actually gates (do this again after touching the script)
 
-A budget check that can't go red isn't a check (see the fleet's `§0x`). Two
+A budget check that can't go red isn't a check (a deliberate failure proves enforcement). Two
 ways to redden it on purpose, both already run once for this ratchet's own
 MR:
 
@@ -189,7 +189,7 @@ defends at this `PERF_REPEAT`** (lowest observed value whose false-red bound
 is ≤ `--alpha`), and the smallest `PERF_REPEAT` at which some ceiling both
 keeps false red ≤ `--alpha` and catches `+shift` ≥ 95%. `none up to N=25`
 means no repeat count rescues that metric: its spread has to shrink first
-(`board.drag` on `main`, fixed by #8ecdfc89).
+(`board.drag` before the stable-sensor fix described below).
 
 **The first run is pooled separately.** On some paths it is systematically
 different from the later ones — `board.open`'s first run is 43 DOM
@@ -205,7 +205,7 @@ headroom the gate cannot use; below it, the false red is no longer bounded.
 `node perf/gate-power.mjs --selftest` (run by `perf-bundle`) proves the
 arithmetic, including the median and maximum mistakes above.
 
-First application (#dc8427af, 56 CI reports from 24–26.09): `view.switch`
+First application (56 CI reports from 24–26.09): `view.switch`
 `react_commits` 8 → 7 and `board_card_commits` 150 → 0. Both were constant
 over all 183 recorded runs (the local 0 ↔ 150 race above never showed on
 CI); both went from catching a `+1` never to always, with a false-red bound
@@ -239,14 +239,14 @@ still exceeds these ceilings even from the observed floors:
 `ceil(25 × 1.2) = 30 > 25`. Recalibrate again if the scenario or UI changes;
 neither this empirical p95 nor ten green jobs guarantees a zero future tail.
 
-Since !1006 the board is a lazy chunk. The first `import()` of it makes Vite
+The board is a lazy chunk. The first `import()` of it makes Vite
 insert one `<link rel="modulepreload">` (or stylesheet) into `<head>` per
 dependency the entry chunk does not already carry — 30 JS + 2 CSS for the
 board — and the observer watches the whole `document`, `<head>` included.
 74 − 43 = 31 ≈ those 32 insertions. It happens once per session, adds no
 layout (`layout_count` unchanged at 3) and no React work. Measured on
 pipeline 5163 (runs 74 / 76 / 76, minimum gated); the ceiling was raised to 74
-with Garfield's sign-off.
+with lead sign-off.
 
 It is back at **43** because the chunk is now warmed *before* the click:
 `AppLayout` calls `prefetchNextRouteOnIdle()` once the signed-in shell is on
@@ -302,9 +302,9 @@ whole spec: with `board.open` red, Playwright reports the other three paths as
 mechanism as `board.open`: the first `import()` of `task-detail` inserts 4
 `<link rel="modulepreload">` into `<head>` (`task-detail`, `_task-panel`,
 `_template`, `_circle`; the rest of its closure is already loaded by the
-board). Lead sign-off: Garfield.
+board). This change received lead sign-off.
 
-### `board.drag` — added perf·Б3, and why `board_card_commits` barely moved
+### `board.drag` — drag coverage, and why `board_card_commits` barely moved
 
 Baseline (`main` before this MR, min of 3, 4x CPU): `react_commits` 36,
 `board_card_commits` 1374, `layout_count` 15, `recalc_style_count` 84,
@@ -354,7 +354,7 @@ drop in `layout_count` (15 → 13), and essentially no change in
 numbers in `budget.json` again.** Two earlier attempts were wrong in two
 different ways, and both mistakes are cheap to repeat by "simplifying":
 
-1. **Pipeline 5865, min-of-3 (original, !1037):** `layout_count` 16,
+1. **Pipeline 5865, original min-of-3 sample:** `layout_count` 16,
    `dom_mutations` 448 — a single 3-run CI sample. Flaked `main` twice and
    was reverted, because these two metrics have no deterministic floor for
    this path (see the `InternalContext` explanation below): min-of-3 on a
@@ -384,15 +384,11 @@ fall, while still reddening on an actual regression, which shifts the whole
 distribution (including its max) upward.
 
 Data source: pipeline
-[6026](https://git.entire.host/entire-vc/evc-mesh/-/pipelines/6026), job
+6026 (historical internal pipeline; link unavailable in this public snapshot), job
 `perf-counters` (92000), 25 repeats via `PERF_REPEAT=25 PERF_RECORD=1` on
-commit `0ebe26ad` — run on a throwaway branch (`verne/board-drag-calibration`,
-no open MR) rather than on this MR's own branch, specifically so the
-calibration pipeline runs as a plain push (bypassing `hold-gate`, which is
-`merge_request_event`-only) without lifting this MR's `hold` label. That
-branch and its temporary `.gitlab-ci.yml` `PERF_REPEAT`/`PERF_RECORD`/`-g`
-overrides are throwaway — this MR's own `perf-counters` job runs unmodified,
-`PERF_REPEAT` still defaults to 3, `PERF_RECORD` is never set.
+commit `0ebe26ad` in an isolated calibration run. These recording overrides
+are diagnostic only: the normal `perf-counters` job remains unmodified,
+`PERF_REPEAT` still defaults to 3, and `PERF_RECORD` is never set.
 
 Range observed across the 25 runs (min–max): `react_commits` 35–36,
 `board_card_commits` 1332–1410, `layout_count` 14–18, `recalc_style_count`
@@ -403,7 +399,7 @@ a second regression. `budget.json` gates on the **max** of each column:
 `react_commits: 36`, `board_card_commits: 1410`, `layout_count: 18`,
 `recalc_style_count: 99`, `dom_mutations: 837`.
 
-**Superseded in part by "Choosing a ceiling" above (#dc8427af):** the
+**Superseded in part by "Choosing a ceiling" above:** the
 maximum is safe against false red but, measured with `perf/gate-power.mjs`,
 it leaves this path blind to any regression smaller than its spread. Keep
 the warning against the median; replace "use the max" with the script's
@@ -438,11 +434,10 @@ successive rounds of memoization work that each measurably cut
 
 The one lever that would cut it further is fewer *mounted* `useSortable`
 consumers at once — i.e. virtualizing each column's card list
-(`@tanstack/react-virtual`, named as the conditional third option in this
-card's own brief). Not done here: it needs each column to become an
+(`@tanstack/react-virtual`). Not done here: it needs each column to become an
 independently-scrolled fixed-height viewport, which is a visible layout
-change gated by `§1k` (screenshot sign-off against a reference this card
-does not have), plus real integration work reconciling dnd-kit's
+change requiring screenshot review against an agreed reference, plus
+integration work reconciling dnd-kit's
 `SortableContext` `items` with a virtualized index range and the drag
 overlay. Flagged as an explicit follow-up, not silently dropped.
 
@@ -452,7 +447,7 @@ column via a direct API call before every repeat (`perf/seed-fixture.mjs`'s
 that repeat's baseline with the previous repeat's own cleanup, the same
 reasoning `comment.send` uses for `wipeComments()`.
 
-### `board_card_commits` and `dom_mutations` DO have a floor after all (#8ecdfc89)
+### `board_card_commits` and `dom_mutations` DO have a floor after all
 
 The round-3 write-up above concluded `board_card_commits`/`dom_mutations` had
 no deterministic floor because every `useSortable`/`useDraggable`/
@@ -497,9 +492,8 @@ vary run to run (12–16 and 56–98 over 15 CI runs) for that reason, and still
 need the max-of-N ceiling methodology below. But `board_card_commits` and
 `dom_mutations` were not actually hostage to that mechanism the way round 3
 assumed: measured over 15 repeats in CI (pipeline
-[6073](https://git.entire.host/entire-vc/evc-mesh/-/pipelines/6073) on a
-throwaway `verne/board-drag-stable-sensor-calibration` push, same reasoning
-as round 3's calibration branch — a dedicated, uncontended runner),
+6073 (historical internal pipeline; link unavailable in this public snapshot) on a
+a dedicated, uncontended runner during isolated calibration),
 `board_card_commits` is **exactly 1282 on all 15/15 CI runs** (was
 1332–1410) and `dom_mutations` is **447 on 13/15 runs, 448 on 2/15** (was
 447–837) — a spread of 0 and 1 respectively, against this card's acceptance
@@ -524,7 +518,7 @@ fix regressed — check CI first.
 15-run CI sample: `react_commits: 36`, `board_card_commits: 1282`,
 `layout_count: 16`, `recalc_style_count: 98` — except `dom_mutations`, which
 is set to **447**, not the sample max of 448. Fault-injection on pipeline
-[6130](https://git.entire.host/entire-vc/evc-mesh/-/pipelines/6130) (16
+6130 (historical internal pipeline; link unavailable in this public snapshot) (16
 parallel runs: 8 clean, 8 with one extra DOM mutation injected) showed a
 ceiling of 448 catches that injected +1 regression 0/8 times (the injected
 run also lands on 448 or 449, indistinguishable from clean noise), while 447
@@ -537,7 +531,7 @@ over two counters that are now (near-)constant, so a future regression on
 either one will redden on the very next PR rather than needing another
 25-run calibration pass to notice.
 
-### Runs of one job are not independent; `board.drag` followed the API (#da03cd09)
+### Runs of one job are not independent; `board.drag` followed the API
 
 `gate-power.mjs` treats runs as independent draws. On CI they are not: the
 three runs of one job share the runner's load and the ephemeral API's
@@ -624,7 +618,7 @@ PERF_API_URL=http://localhost:8095 npx playwright test -c perf/playwright.perf.c
 `PERF_RECORD=1` measures and writes `web/perf-counters-report.json` without
 gating — use it to take new ceilings. The CI job never sets it.
 
-### Proving this fix's own ceiling gates (#8ecdfc89)
+### Proving this fix's own ceiling gates
 
 Reproducible on demand — not just prose in a Mesh comment. With the stack up
 and the fixture seeded per "Running it locally" above:

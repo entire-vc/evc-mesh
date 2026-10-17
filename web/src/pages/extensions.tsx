@@ -7,6 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { useMemberStore } from "@/stores/member";
 import { useExtensionsOverview, type ExtensionsLoadState } from "@/hooks/useExtensionsOverview";
+import { useExtensionCatalog } from "@/hooks/useExtensionCatalog";
+import { ExtensionsCatalog } from "@/components/extensions/catalog";
 import { IntegrationsPage } from "@/pages/integrations";
 
 const TABS = ["catalog", "installed", "updates"] as const;
@@ -62,6 +64,7 @@ export function ExtensionsPage() {
   const [search, setSearch] = useSearchParams();
   const { myRole } = useMemberStore();
   const overview = useExtensionsOverview();
+  const catalog = useExtensionCatalog();
   const tab = extensionsTab(search);
   const isAdmin = myRole === "owner" || myRole === "admin";
 
@@ -133,7 +136,7 @@ export function ExtensionsPage() {
         aria-labelledby={`extensions-tab-${tab}`}
         className="flex-1 overflow-y-auto"
       >
-        {tab === "catalog" && <TabState state={overview.state} ns="catalog" />}
+        {tab === "catalog" && <ExtensionsCatalog catalog={catalog} />}
         {tab === "installed" && (
           // Built-in connections (GitLab, GitHub, Spark, Team Relay, Telegram) live
           // here until W2.5 moves them into the extension list.

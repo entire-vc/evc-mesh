@@ -25,7 +25,7 @@ type GitHubIntegrationConfig struct {
 
 // GitLabIntegrationConfig is the shape stored in IntegrationConfig.Config
 // for provider="gitlab". BaseURL is plaintext (it is not a secret — it is
-// the self-hosted instance's URL, e.g. "https://git.entire.host"); Token and
+// the self-hosted instance's URL, e.g. "https://gitlab.example.invalid"); Token and
 // WebhookSecret are encrypted the same way GitHubIntegrationConfig's are.
 type GitLabIntegrationConfig struct {
 	BaseURL       string `json:"base_url,omitempty"`
@@ -160,6 +160,41 @@ type VCSEnvFallback struct {
 type VCSIntegrationResolver struct {
 	repo repository.IntegrationRepository
 	env  VCSEnvFallback
+	gh   GitHubExtension
+	gl   GitLabExtension
+}
+
+// GitHubExtension is the GitHub extension's view of its own configuration. When
+// set, it decides what governs GitHub (workspace row, instance level, off) and
+// the env fallback stops being read here.
+type GitHubExtension interface {
+	// ResolveConfig returns the decrypted token and webhook secret governing
+	// workspaceID and their source ("workspace" | "instance").
+	ResolveConfig(ctx context.Context, workspaceID uuid.UUID) (token, webhookSecret, source string, ok bool)
+	// InstanceWebhookSecret is the instance level's webhook secret alone.
+	InstanceWebhookSecret(ctx context.Context) string
+}
+
+// GitLabExtension is the GitLab extension's view of its own configuration; the
+// GitLab counterpart of GitHubExtension.
+type GitLabExtension interface {
+	// ResolveConfig returns the decrypted base URL, token and webhook secret
+	// governing workspaceID and their source ("workspace" | "instance").
+	ResolveConfig(ctx context.Context, workspaceID uuid.UUID) (baseURL, token, webhookSecret, source string, ok bool)
+	// InstanceWebhookSecret is the instance level's webhook secret alone.
+	InstanceWebhookSecret(ctx context.Context) string
+}
+
+// WithGitLabExtension routes GitLab resolution through the extension registry.
+func (r *VCSIntegrationResolver) WithGitLabExtension(e GitLabExtension) *VCSIntegrationResolver {
+	r.gl = e
+	return r
+}
+
+// WithGitHubExtension routes GitHub resolution through the extension registry.
+func (r *VCSIntegrationResolver) WithGitHubExtension(e GitHubExtension) *VCSIntegrationResolver {
+	r.gh = e
+	return r
 }
 
 // NewVCSIntegrationResolver creates a VCSIntegrationResolver. repo may be
@@ -174,6 +209,18 @@ func NewVCSIntegrationResolver(repo repository.IntegrationRepository, env VCSEnv
 // workspace row nor env supplies anything usable — the provider is
 // disabled for this workspace.
 func (r *VCSIntegrationResolver) ResolveGitHub(ctx context.Context, workspaceID uuid.UUID) (cfg GitHubIntegrationConfig, source string, ok bool) {
+	if r.gh != nil {
+		token, secret, src, found := r.gh.ResolveConfig(ctx, workspaceID)
+		if !found {
+			return GitHubIntegrationConfig{}, "", false
+		}
+		if src == "instance" {
+			// The Integrations screen and the gate still speak "env" for the
+			// instance level.
+			src = "env"
+		}
+		return GitHubIntegrationConfig{Token: token, WebhookSecret: secret}, src, true
+	}
 	if r.repo != nil {
 		row, err := r.repo.GetByProvider(ctx, workspaceID, domain.IntegrationProviderGitHub)
 		if err != nil {
@@ -195,6 +242,18 @@ func (r *VCSIntegrationResolver) ResolveGitHub(ctx context.Context, workspaceID 
 
 // ResolveGitLab is ResolveGitHub's GitLab counterpart.
 func (r *VCSIntegrationResolver) ResolveGitLab(ctx context.Context, workspaceID uuid.UUID) (cfg GitLabIntegrationConfig, source string, ok bool) {
+	if r.gl != nil {
+		baseURL, token, secret, src, found := r.gl.ResolveConfig(ctx, workspaceID)
+		if !found {
+			return GitLabIntegrationConfig{}, "", false
+		}
+		if src == "instance" {
+			// The Integrations screen and the gate still speak "env" for the
+			// instance level.
+			src = "env"
+		}
+		return GitLabIntegrationConfig{BaseURL: baseURL, Token: token, WebhookSecret: secret}, src, true
+	}
 	if r.repo != nil {
 		row, err := r.repo.GetByProvider(ctx, workspaceID, domain.IntegrationProviderGitLab)
 		if err != nil {
@@ -271,6 +330,12 @@ func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secr
 			}
 		}
 	}
+	if r.gh != nil {
+		if secret := r.gh.InstanceWebhookSecret(ctx); secret != "" {
+			return []WebhookSecret{{Secret: secret, WorkspaceID: uuid.Nil}}, "env"
+		}
+		return nil, ""
+	}
 	if r.env.GitHubWebhookSecret != "" {
 		return []WebhookSecret{{Secret: r.env.GitHubWebhookSecret, WorkspaceID: uuid.Nil}}, "env"
 	}
@@ -304,6 +369,12 @@ func (r *VCSIntegrationResolver) GitLabWebhookSecrets(ctx context.Context) (secr
 				return nil, ""
 			}
 		}
+	}
+	if r.gl != nil {
+		if secret := r.gl.InstanceWebhookSecret(ctx); secret != "" {
+			return []WebhookSecret{{Secret: secret, WorkspaceID: uuid.Nil}}, "env"
+		}
+		return nil, ""
 	}
 	if r.env.GitLabWebhookSecret != "" {
 		return []WebhookSecret{{Secret: r.env.GitLabWebhookSecret, WorkspaceID: uuid.Nil}}, "env"

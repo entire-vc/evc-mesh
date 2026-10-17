@@ -143,7 +143,7 @@ Cline and other MCP clients):
 {
   "mcpServers": {
     "evc-mesh": {
-      "command": "/home/you/bin/evc-mesh-mcp",
+      "command": "${HOME}/bin/evc-mesh-mcp",
       "env": {
         "MESH_API_URL": "https://mesh.example.com",
         "MESH_AGENT_KEY": "agk_ws-68fcb656_…"
