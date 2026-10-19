@@ -218,6 +218,41 @@ func (s *vcsLinkService) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// PatchMetadata validates the agent patch against the whitelist and merges it.
+func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error) {
+	if len(patch) == 0 {
+		return nil, apierror.BadRequest("metadata patch is empty")
+	}
+	// Keys come from the whitelist and values are validated lowercase hex, so
+	// concatenating them cannot produce invalid JSON.
+	var raw strings.Builder
+	raw.WriteByte('{')
+	first := true
+	for k, v := range patch {
+		if !domain.AgentWritableVCSMetadataKeys[k] {
+			return nil, apierror.BadRequest("metadata key " + strconv.Quote(k) + " is not writable; allowed: ship_sha")
+		}
+		str, ok := v.(string)
+		if !ok || !domain.IsFullCommitSHA(str) {
+			return nil, apierror.BadRequest(k + " must be a 40-character lowercase hex string")
+		}
+		if !first {
+			raw.WriteByte(',')
+		}
+		first = false
+		raw.WriteString(strconv.Quote(k) + ":" + strconv.Quote(str))
+	}
+	raw.WriteByte('}')
+	link, err := s.repo.MergeMetadata(ctx, taskID, linkID, json.RawMessage(raw.String()))
+	if err != nil {
+		return nil, fmt.Errorf("patch vcs link metadata: %w", err)
+	}
+	if link == nil {
+		return nil, apierror.NotFound("VCSLink")
+	}
+	return link, nil
+}
+
 // ListByTask returns all VCS links for a given task.
 func (s *vcsLinkService) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error) {
 	links, err := s.repo.ListByTask(ctx, taskID)
@@ -437,7 +472,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		URL:        ev.MRURL,
 		Title:      ev.MRTitle,
 		Status:     linkStatus,
-		Metadata:   []byte("{}"),
+		Metadata:   gitLabLinkMetadata(ev.HeadSHA),
 		CreatedAt:  time.Now(),
 	}
 	if _, err := s.repo.Upsert(ctx, link); err != nil {
@@ -482,7 +517,7 @@ func (s *vcsLinkService) HandleGitLabPipelineEvent(ctx context.Context, ev GitLa
 		if domain.NormalizeVCSURL(l.URL) != want {
 			continue
 		}
-		written, werr := s.repo.SetPipelineStatus(ctx, l.ID, ev.PipelineID, status)
+		written, werr := s.repo.SetPipelineStatus(ctx, l.ID, ev.PipelineID, status, ev.SHA)
 		if werr != nil {
 			return PipelineHandleResult{Updated: updated}, fmt.Errorf("set pipeline status: %w", werr)
 		}
@@ -965,4 +1000,15 @@ func shortSHA(s string) string {
 		return s[:7]
 	}
 	return s
+}
+
+// gitLabLinkMetadata is the metadata patch a MR webhook writes: always a
+// head_sha key. A payload without a head commit writes "" so a previously
+// stored head can never be mistaken for the current one (the gate treats an
+// empty head as unproven). Upsert merges the patch into the stored metadata,
+// so ship_sha and other keys survive every sync.
+func gitLabLinkMetadata(headSHA string) []byte {
+	headSHA = strings.TrimSpace(headSHA)
+	b, _ := json.Marshal(map[string]string{domain.VCSLinkMetaHeadSHA: headSHA}) // a string map cannot fail to marshal
+	return b
 }

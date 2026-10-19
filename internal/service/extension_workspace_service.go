@@ -201,6 +201,9 @@ func (s *ExtensionWorkspaceService) prepareStored(ctx context.Context, p extensi
 type extensionIntegrationRepo interface {
 	repository.IntegrationRepository
 	InsertIfAbsent(ctx context.Context, cfg *domain.IntegrationConfig) (bool, error)
+	// SetActive switches one connection on or off and nothing else; it is the
+	// only write the repository allows on a Runner row outside the runtime API.
+	SetActive(ctx context.Context, id uuid.UUID, active bool) error
 }
 
 func NewExtensionWorkspaceService(reg *extensions.Registry, integ extensionIntegrationRepo, consents repository.ExtensionConsentRepository) *ExtensionWorkspaceService {
@@ -385,7 +388,35 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 	}
 	if row == nil {
 		if enabled {
-			return nil, apierror.NotFoundWithDetails("Connection", "connect the extension first")
+			// A managed-elsewhere extension (Runner) cannot be connected through
+			// the generic flow, so enabling creates its empty row.
+			if h, ok := p.(SettingsHider); !ok || !h.HideConnectionSettings() {
+				return nil, apierror.NotFoundWithDetails("Connection", "connect the extension first")
+			}
+			now := time.Now()
+			rowID := uuid.New()
+			created, err := s.integ.InsertIfAbsent(ctx, &domain.IntegrationConfig{ID: rowID, WorkspaceID: ws, Provider: domain.IntegrationProvider(id), Config: []byte("{}"), IsActive: true, CreatedAt: now, UpdatedAt: now})
+			if err != nil {
+				return nil, err
+			}
+			if created {
+				s.saved(ctx, id, rowID)
+				return s.viewPtr(ctx, ws, p)
+			}
+			// A concurrent enable or the runtime flow (possibly under a legacy
+			// alias) won the race: just make sure its row is on.
+			won, err := s.storedRow(ctx, ws, id)
+			if err != nil {
+				return nil, err
+			}
+			if won == nil {
+				return nil, &apierror.Error{Code: http.StatusConflict, ErrorCode: "conflict", Message: "The connection changed while enabling; retry."}
+			}
+			if err := s.setActive(ctx, p, won.ID, enabled); err != nil {
+				return nil, err
+			}
+			s.saved(ctx, id, won.ID)
+			return s.viewPtr(ctx, ws, p)
 		}
 		st, err := s.reg.ResolveStatus(ctx, ws, id)
 		if err != nil {
@@ -422,11 +453,21 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 		}
 		return s.viewPtr(ctx, ws, p)
 	}
-	if _, err := s.integ.Update(ctx, row.ID, domain.UpdateIntegrationInput{IsActive: &enabled}); err != nil {
+	if err := s.setActive(ctx, p, row.ID, enabled); err != nil {
 		return nil, err
 	}
 	s.saved(ctx, id, row.ID)
 	return s.viewPtr(ctx, ws, p)
+}
+
+// setActive flips a connection. A managed-elsewhere row (Runner) is refused by
+// the repository's generic Update, so it goes through SetActive.
+func (s *ExtensionWorkspaceService) setActive(ctx context.Context, p extensions.Provider, rowID uuid.UUID, enabled bool) error {
+	if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
+		return s.integ.SetActive(ctx, rowID, enabled)
+	}
+	_, err := s.integ.Update(ctx, rowID, domain.UpdateIntegrationInput{IsActive: &enabled})
+	return err
 }
 
 func (s *ExtensionWorkspaceService) saved(ctx context.Context, id string, integrationID uuid.UUID) {

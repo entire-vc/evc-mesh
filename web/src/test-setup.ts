@@ -1,5 +1,13 @@
 import "@/i18n"; // components call useTranslation(); initialise i18next once for every test file
 import "@testing-library/jest-dom";
+import { configure } from "@testing-library/react";
+
+// findBy*/waitFor default to 1 s. On a loaded dev machine (many lanes share one host) a lazy
+// import or a render under CPU contention misses that and a different test goes red on every
+// run. A passing test returns as soon as its element appears, so a longer ceiling costs nothing;
+// only a genuinely failing assertion waits the full 10 s before reporting (10 s stays under the
+// 20 s vitest testTimeout (vitest.config.ts), so the assertion error surfaces, not a bare timeout).
+configure({ asyncUtilTimeout: 10_000 });
 
 // jsdom does not implement matchMedia at all — any component that reads a
 // breakpoint via `window.matchMedia` (e.g. `useIsMobile`) throws on mount

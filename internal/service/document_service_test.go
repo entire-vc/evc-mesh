@@ -315,8 +315,8 @@ func TestDocumentService_Update(t *testing.T) {
 	assert.Equal(t, "Final", updated.Title)
 	assert.Equal(t, 7, updated.Position)
 	assert.Equal(t, created.Slug, updated.Slug, "the slug is not rewritten by a rename")
-	assert.Equal(t, created.StorageKey, updated.StorageKey, "the body stays at the same key")
-	assert.Equal(t, "new body", string(f.storage.objects[created.StorageKey]))
+	assert.NotEqual(t, created.StorageKey, updated.StorageKey, "a body write lands under a fresh key")
+	assert.Equal(t, "new body", string(f.storage.objects[updated.StorageKey]))
 }
 
 func TestDocumentService_Update_RenamesSlug(t *testing.T) {

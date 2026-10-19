@@ -55,16 +55,17 @@ import (
 // whose payload arrives later through a different code path (the notify service
 // posts the task to the assignee's callback_url).
 var assigneeWriteVerdict = map[string]string{
-	"taskService.Create":                    "funnel: ensureAssigneeProjectMember before taskRepo.Create",
-	"taskService.Update":                    "funnel: ensureAssigneeProjectMember when the assignee changes",
-	"taskService.MoveTask":                  "funnel: assertAssigneeInProjectWorkspace up front, ensureAssigneeProjectMember at the write",
-	"taskService.AssignTask":                "funnel: ensureAssigneeProjectMember before taskRepo.Update",
-	"taskService.CreateSubtask":             "funnel: ensureAssigneeProjectMember before taskRepo.Create",
-	"taskService.prepareTransitionAssignee": "funnel: assertAssigneeInProjectWorkspace before reviewer rotation or restore, ensureAssigneeProjectMember before the atomic write",
-	"taskService.applyOnEnterAssignee":      "funnel: ensureAssigneeProjectMember before the in-memory assignee write; a refusal leaves the assignee unchanged",
-	"taskService.handBackToGateAuthor":      "delegated: taskService.AssignTask performs the write and the funnel",
-	"taskService.applyAutoAssign":           "delegated: taskService.Create and taskService.CreateSubtask both funnel after calling it",
-	"taskService.bulkUpdateOne":             "delegated: taskService.Update performs the write and the funnel",
+	"taskService.Create":                         "funnel: ensureAssigneeProjectMember before taskRepo.Create",
+	"taskService.Update":                         "funnel: ensureAssigneeProjectMember when the assignee changes",
+	"taskService.moveTaskOnce":                   "funnel: assertAssigneeInProjectWorkspace up front, ensureAssigneeProjectMember at the write",
+	"taskService.AssignTask":                     "funnel: ensureAssigneeProjectMember before taskRepo.Update",
+	"taskService.CreateSubtask":                  "funnel: ensureAssigneeProjectMember before taskRepo.Create",
+	"taskService.prepareTransitionAssigneeRoute": "funnel: assertAssigneeInProjectWorkspace before reviewer rotation or restore, ensureAssigneeProjectMember before the atomic write",
+	"taskService.applyOnEnterAssignee":           "funnel: ensureAssigneeProjectMember before the in-memory assignee write; a refusal leaves the assignee unchanged",
+	"taskService.prepareTransitionAssignee":      "delegated: taskService.prepareTransitionAssigneeRoute funnels; this only copies the task's own current assignee into the review stash",
+	"taskService.handBackToGateAuthor":           "delegated: taskService.AssignTask performs the write and the funnel",
+	"taskService.applyAutoAssign":                "delegated: taskService.Create and taskService.CreateSubtask both funnel after calling it",
+	"taskService.bulkUpdateOne":                  "delegated: taskService.Update performs the write and the funnel",
 
 	// These three write an assignee onto a TEMPLATE or SCHEDULE row, not onto a
 	// task. Nothing reads those rows as an authorization; they are materialised

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { DocMeta } from "@/components/doc-meta";
+import { formatTime } from "@/i18n/format";
 import type { ProjectDocument } from "@/types";
 
 function makeDoc(overrides: Partial<ProjectDocument> = {}): ProjectDocument {
@@ -32,7 +33,7 @@ describe("DocMeta", () => {
   it("names the creator and says when the page last changed", () => {
     render(<DocMeta doc={makeDoc({ created_by_name: "Pavel Rogozhin" })} />);
     expect(line()).toContain("Created by Pavel Rogozhin");
-    expect(line()).toContain("Updated Aug 14, 2026");
+    expect(line()).toMatch(/Updated Aug 1[34], 2026 \d{2}:\d{2}/);
   });
 
   it("does not claim the creator was the last editor on a legacy row", () => {
@@ -50,14 +51,20 @@ describe("DocMeta", () => {
   it("says Unknown when there is no name to be had, and still shows the date", () => {
     render(<DocMeta doc={makeDoc()} />);
     expect(line()).toContain("Created by Unknown");
-    expect(line()).toContain("Updated Aug 14, 2026");
+    expect(line()).toMatch(/Updated Aug 1[34], 2026 \d{2}:\d{2}/);
   });
 
   it("renders a machine-readable timestamp with the exact time on hover", () => {
     render(<DocMeta doc={makeDoc({ created_by_name: "Pavel" })} />);
-    const stamp = screen.getByText(/Updated Aug 14, 2026/);
+    const stamp = screen.getByText(/Updated Aug 1[34], 2026/);
     expect(stamp).toHaveAttribute("datetime", "2026-08-14T09:30:00Z");
-    expect(stamp.getAttribute("title")).toMatch(/Aug 14, 2026/);
+  });
+
+  it("shows hh:mm next to the date, in the viewer's time zone", () => {
+    render(<DocMeta doc={makeDoc({ created_by_name: "Pavel" })} />);
+    const hhmm = formatTime("2026-08-14T09:30:00Z");
+    expect(hhmm).toMatch(/^\d{2}:\d{2}$/);
+    expect(line()).toMatch(new RegExp(`Updated Aug 1[34], 2026 ${hhmm}$`));
   });
 });
 
@@ -75,7 +82,7 @@ describe("DocMeta — the editor the API resolves", () => {
     expect(line()).toContain("Created by Pavel Rogozhin");
     expect(line()).toContain("Last updated by Daedalus");
     // The date stops repeating the word "Updated" once an editor is named.
-    expect(line()).toContain("Aug 14, 2026");
+    expect(line()).toMatch(/Aug 1[34], 2026 \d{2}:\d{2}/);
     expect(line()).not.toContain("Updated Aug 14");
   });
 

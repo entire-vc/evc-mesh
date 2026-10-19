@@ -67,7 +67,11 @@ func taskParticipants(task *domain.Task, exclude uuid.UUID, extra ...*uuid.UUID)
 	if task.ReviewerID != nil && task.ReviewerType != nil && *task.ReviewerType == domain.AssigneeTypeUser {
 		add(*task.ReviewerID)
 	}
-	if task.CreatedByType == domain.ActorTypeUser {
+	// A recurring instance is stamped CreatedByType=system, but its CreatedBy is
+	// the schedule's owner — the person the card was set up for. Without this
+	// such a card has no human recipient at all.
+	if task.CreatedByType == domain.ActorTypeUser ||
+		(task.RecurringScheduleID != nil && task.CreatedByType == domain.ActorTypeSystem) {
 		add(task.CreatedBy)
 	}
 	for _, id := range extra {

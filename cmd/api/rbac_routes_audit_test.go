@@ -57,6 +57,8 @@ var auditAllowList = map[string]string{
 	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume": "RuntimeRepo refuses OAuth connectors and every caller except the bound agent key that owns the reservation",
 	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/renew":   "RuntimeRepo refuses OAuth connectors and every caller except the bound agent key that owns the reservation, with the exact writer fence and a live checkout",
 	"POST /workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release": "RuntimeRepo refuses OAuth connectors; only the reservation's own agent key or a receiving-workspace owner/admin with the exact writer fence and a stop proof",
+	"PUT /agents/me/operator-runtime":                                                           "UserRuntimeRepo.SaveAsManager refuses OAuth connectors and users, and requires the presented agent key to hold a live runtime_manager assignment from its own operator; it edits only that operator's runtime document",
+	"PUT /agents/me/operator-runtime/agents/:agent_id/limits":                                   "UserRuntimeRepo.SetLimitsAsManager refuses OAuth connectors and users, requires a live runtime_manager assignment, and touches only agents whose operator is the assigning user",
 	"PATCH /auth/me":    "handler resolves the caller with GetUserID; an agent has no user identity and gets 401",
 	"POST /auth/logout": "handler resolves the caller with GetUserID; an agent has no user identity",
 	"POST /workspaces":  "handler refuses agents outright (403 \"agents cannot create workspaces\")",
@@ -83,6 +85,7 @@ var auditAllowList = map[string]string{
 	"DELETE /me/push-subscriptions":              "keyed on the caller's user_id, which an agent does not have",
 	"POST /me/mentions/:comment_id/seen":         "marks the caller's own mention row as seen; another actor's rows are not addressable",
 	"POST /me/document-mentions/:dcom_id/seen":   "marks the caller's own mention row as seen; another actor's rows are not addressable",
+	"PUT /me/ui-state/:scope":                    "keyed on the session user's own id; handler refuses every non-user principal and checks project membership for the scope",
 
 	"POST /ext/me/token/rotate":     "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
 	"DELETE /ext/me/token/previous": "handler refuses every principal except an extension actor (403) and acts on that actor's own connection only; route has no id, and the capability guard requires api:ext_token:self_rotate",
@@ -423,5 +426,60 @@ func TestRBACRouteAudit_NoUnreviewedWriteOutsideTheAuthenticatedGroup(t *testing
 		if !found[key] {
 			t.Errorf("auditPublicWrites lists %q but main.go no longer registers it — remove it", key)
 		}
+	}
+}
+
+// auditReadRoutes are the read routes that the "reads are out of scope" rule above
+// does NOT leave to the group-wide tenant boundary: they carry no role guard and
+// are safe only because the handler/repository refuses everything but a signed-in
+// user and filters to that user's own rows. Each entry is a claim a reviewer can
+// check against UserRuntimeRepo.OperatorAgents / OperatorRunners.
+var auditReadRoutes = map[string]string{
+	"GET /me/runtime/agents":  "UserRuntimeRepo.OperatorAgents refuses agent keys and OAuth connectors (403) and selects only agents whose operator_user_id is the caller",
+	"GET /me/runtime/runners": "UserRuntimeRepo.OperatorRunners refuses agent keys and OAuth connectors (403) and groups only the caller's own operated agents",
+}
+
+// missingAuditedReadRoutes returns the keys in want that routes does not register
+// as a GET, or registers with a guard (then the entry here is redundant).
+func missingAuditedReadRoutes(routes []auditRoute, want map[string]string) []string {
+	byKey := map[string]auditRoute{}
+	for _, r := range routes {
+		byKey[r.key()] = r
+	}
+	var bad []string
+	for key := range want {
+		if r, ok := byKey[key]; !ok || r.method != "GET" || r.guard != "" {
+			bad = append(bad, key)
+		}
+	}
+	sort.Strings(bad)
+	return bad
+}
+
+// TestRBACRouteAudit_OperatorReadRoutesAreAudited pins the two operator read
+// routes of «Мой Runner»: both are registered in main.go as unguarded GETs and
+// each has a reviewed reason above.
+func TestRBACRouteAudit_OperatorReadRoutesAreAudited(t *testing.T) {
+	if bad := missingAuditedReadRoutes(parseAuditRoutes(t), auditReadRoutes); len(bad) > 0 {
+		t.Fatalf("audited read routes not registered as unguarded GET in main.go: %v", bad)
+	}
+	for key, reason := range auditReadRoutes {
+		if len(strings.TrimSpace(reason)) < 30 {
+			t.Errorf("%s has no real reason (%q)", key, reason)
+		}
+	}
+}
+
+// Negative control: a route that is missing, guarded or not a GET must be reported,
+// otherwise the test above could pass on an empty walk.
+func TestRBACRouteAudit_OperatorReadRoutesCheckFailsOnBrokenInput(t *testing.T) {
+	want := map[string]string{"GET /me/runtime/agents": "x", "GET /me/runtime/runners": "x"}
+	routes := []auditRoute{
+		{method: "GET", path: "/me/runtime/agents", guard: "human-only"},
+		{method: "POST", path: "/me/runtime/runners"},
+	}
+	bad := missingAuditedReadRoutes(routes, want)
+	if len(bad) != 2 {
+		t.Fatalf("broken input must report both routes, got %v", bad)
 	}
 }

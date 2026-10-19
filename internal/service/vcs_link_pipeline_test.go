@@ -55,6 +55,35 @@ func TestHandlePipeline_StoresStatusOnTheMRLink(t *testing.T) {
 	assert.Equal(t, "success", *pipelineStatusOf(t, h, link.ID), "a later status of the same pipeline overwrites")
 }
 
+// The status is bound to the commit it ran on: a later pipeline for a new head
+// replaces pipeline_sha, so a green run of an older head cannot prove the new one.
+func TestHandlePipeline_StoresPipelineSHA(t *testing.T) {
+	h := newHarness(t)
+	link := seedMRLink(h, uuid.New(), pipelineMRURL)
+
+	ev := pipelineEvent(10, "success")
+	ev.SHA = " aaa "
+	_, err := h.svc.HandleGitLabPipelineEvent(context.Background(), ev)
+	require.NoError(t, err)
+	got, err := h.repo.GetByID(context.Background(), link.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "aaa", got.PipelineSHA())
+
+	ev = pipelineEvent(11, "running")
+	ev.SHA = "bbb"
+	_, err = h.svc.HandleGitLabPipelineEvent(context.Background(), ev)
+	require.NoError(t, err)
+	got, _ = h.repo.GetByID(context.Background(), link.ID)
+	assert.Equal(t, "bbb", got.PipelineSHA())
+
+	ev = pipelineEvent(10, "failed") // out-of-order older pipeline: ignored, sha untouched
+	ev.SHA = "aaa"
+	_, err = h.svc.HandleGitLabPipelineEvent(context.Background(), ev)
+	require.NoError(t, err)
+	got, _ = h.repo.GetByID(context.Background(), link.ID)
+	assert.Equal(t, "bbb", got.PipelineSHA())
+}
+
 // Red control: without the url comparison, a pipeline of another project's !1285
 // would paint this link.
 func TestHandlePipeline_OtherProjectsSameIIDIsNotTouched(t *testing.T) {

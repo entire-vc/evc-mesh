@@ -130,7 +130,7 @@ func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, er
 	return true, nil
 }
 
-func (r *fakeVCSLinkRepo) SetPipelineStatus(_ context.Context, id uuid.UUID, pipelineID int64, status string) (bool, error) {
+func (r *fakeVCSLinkRepo) SetPipelineStatus(_ context.Context, id uuid.UUID, pipelineID int64, status, sha string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	l, ok := r.links[id]
@@ -138,6 +138,13 @@ func (r *fakeVCSLinkRepo) SetPipelineStatus(_ context.Context, id uuid.UUID, pip
 		return false, nil
 	}
 	l.PipelineID, l.PipelineStatus = &pipelineID, &status
+	var meta map[string]interface{}
+	_ = json.Unmarshal(l.Metadata, &meta)
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	meta[domain.VCSLinkMetaPipelineSHA] = strings.TrimSpace(sha)
+	l.Metadata, _ = json.Marshal(meta)
 	return true, nil
 }
 
@@ -385,6 +392,10 @@ func (t *fakeTaskService) ReleaseCheckout(context.Context, uuid.UUID, uuid.UUID)
 func (t *fakeTaskService) ExtendCheckout(context.Context, uuid.UUID, uuid.UUID, int, ...domain.CheckoutExpectation) (*CheckoutResult, error) {
 	return nil, nil
 }
+func (t *fakeTaskService) MoveToProjectBatch(context.Context, domain.MoveBatchInput) (*domain.MoveBatchResult, error) {
+	return nil, nil
+}
+
 func (t *fakeTaskService) MoveToProject(context.Context, uuid.UUID, uuid.UUID) (*domain.Task, error) {
 	return nil, nil
 }
@@ -458,6 +469,10 @@ func (c *fakeCommentService) RecordHumanGateDecision(context.Context, domain.Rec
 func (c *fakeCommentService) RevokeHumanGateDecision(context.Context, domain.RevokeHumanGateDecisionInput) error {
 	return nil
 }
+func (c *fakeCommentService) CheckAgentGateArm(context.Context, uuid.UUID, string, string, string) error {
+	return nil
+}
+
 func (c *fakeCommentService) ListHumanGateDecisions(context.Context, uuid.UUID) ([]domain.HumanGateDecision, error) {
 	return nil, nil
 }

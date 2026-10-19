@@ -9,6 +9,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
+	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // applyTransitionGate checks WorkflowRulesConfig.Transitions for the status move.
@@ -29,13 +30,21 @@ func (s *taskService) applyTransitionGate(ctx context.Context, task *domain.Task
 	}
 
 	actorID, actorType := actorctx.FromContext(ctx)
-	return checkTransitionGate(oldStatus.Slug, newStatus.Slug, transitionActor{ID: actorID, Type: actorType}, task, wfResp.WorkflowRulesConfig)
+	var links []domain.VCSLink
+	// Links are read only when the rule for this move names the pattern, so
+	// projects that do not use it pay nothing and see no change.
+	if tr, ok := wfResp.Transitions[oldStatus.Slug]; ok && hasActorPattern(tr.ActorsFor(newStatus.Slug), actorPatternAuthorIfMergedShipped) && s.vcsLinkRepo != nil {
+		if ls, lerr := s.vcsLinkRepo.ListByTask(ctx, task.ID); lerr == nil {
+			links = ls
+		}
+	}
+	return checkTransitionGate(oldStatus.Slug, newStatus.Slug, transitionActor{ID: actorID, Type: actorType}, task, links, wfResp.WorkflowRulesConfig)
 }
 
 // checkTransitionGate is the pure-function core of the transition gate.
 // Returns enforcement mode and violation message; empty violation = allowed.
 // Empty Transitions map → allow-all (backward-compatible).
-func checkTransitionGate(fromStatus, toStatus string, actor transitionActor, task *domain.Task, cfg domain.WorkflowRulesConfig) (enfMode, violation string) {
+func checkTransitionGate(fromStatus, toStatus string, actor transitionActor, task *domain.Task, links []domain.VCSLink, cfg domain.WorkflowRulesConfig) (enfMode, violation string) {
 	enfMode = cfg.EnforcementMode
 	if enfMode == "" {
 		enfMode = domain.RuleConfigEnforcementAdvisory
@@ -76,8 +85,9 @@ func checkTransitionGate(fromStatus, toStatus string, actor transitionActor, tas
 	}
 
 	// (b) Actor restriction via AllowedActors patterns.
-	if len(tr.AllowedActors) > 0 {
-		if !isTransitionActorAllowed(actor, task, tr.AllowedActors) {
+	// A per-target entry replaces AllowedActors for this move (an empty list = any).
+	if actors := tr.ActorsFor(toStatus); len(actors) > 0 {
+		if !isTransitionActorAllowed(actor, task, links, actors) {
 			return enfMode, fmt.Sprintf(
 				"actor type %q not permitted for transition %q→%q",
 				actorType, fromStatus, toStatus,
@@ -100,12 +110,45 @@ const (
 	actorPatternNotAuthor = "not_author" // anyone except the author
 	actorPatternAssignee  = "assignee"   // current assignee
 	actorPatternReviewer  = "reviewer"   // task.reviewer_id
+
+	// actorPatternAuthorIfMergedShipped lets the author through only with proof
+	// of delivery on the card's MR links: merged, SHIP bound to the current
+	// head (metadata ship_sha == head_sha), green pipeline. Money/UI/security
+	// sign-offs stay separate gates and are not part of this pattern.
+	actorPatternAuthorIfMergedShipped = "author_if_merged_shipped"
 )
+
+func hasActorPattern(allowed []string, p string) bool {
+	for _, a := range allowed {
+		if a == p {
+			return true
+		}
+	}
+	return false
+}
+
+// mergedShippedEvidence: at least one delivery MR link and every one proves
+// delivery. Review-subject links point at someone else's MR and are skipped; a
+// MR closed without merge is NOT skipped — it is unproven delivery, so the
+// author must unlink an abandoned MR before the pattern lets them through.
+func mergedShippedEvidence(links []domain.VCSLink) bool {
+	n := 0
+	for _, l := range links {
+		if l.LinkType != domain.VCSLinkTypePR || l.IsReviewSubject() {
+			continue
+		}
+		n++
+		if !l.IsMergedShippedGreen() {
+			return false
+		}
+	}
+	return n > 0
+}
 
 // isConditionalActorPattern reports whether p depends on the task (not just actor type).
 func isConditionalActorPattern(p string) bool {
 	switch p {
-	case actorPatternAuthor, actorPatternNotAuthor, actorPatternAssignee, actorPatternReviewer:
+	case actorPatternAuthor, actorPatternNotAuthor, actorPatternAssignee, actorPatternReviewer, actorPatternAuthorIfMergedShipped:
 		return true
 	}
 	return false
@@ -125,10 +168,11 @@ func taskAuthorID(task *domain.Task) *uuid.UUID {
 
 // isTransitionActorAllowed checks if the actor matches any allowed actor pattern.
 // Type patterns: "*" (any), "user", "agent", "system".
-// Task-relative patterns: "author", "not_author", "assignee", "reviewer".
+// Task-relative patterns: "author", "not_author", "assignee", "reviewer",
+// "author_if_merged_shipped" (author + delivery proof in links).
 // A task-relative pattern never matches without a task or an actor id; not_author
 // matches when the author is unknown (nobody to exclude).
-func isTransitionActorAllowed(actor transitionActor, task *domain.Task, allowed []string) bool {
+func isTransitionActorAllowed(actor transitionActor, task *domain.Task, links []domain.VCSLink, allowed []string) bool {
 	s := string(actor.Type)
 	same := func(id *uuid.UUID) bool {
 		return id != nil && actor.ID != uuid.Nil && *id == actor.ID
@@ -139,6 +183,10 @@ func isTransitionActorAllowed(actor transitionActor, task *domain.Task, allowed 
 			return true
 		case actorPatternAuthor:
 			if same(taskAuthorID(task)) {
+				return true
+			}
+		case actorPatternAuthorIfMergedShipped:
+			if same(taskAuthorID(task)) && mergedShippedEvidence(links) {
 				return true
 			}
 		case actorPatternNotAuthor:
@@ -156,4 +204,31 @@ func isTransitionActorAllowed(actor transitionActor, task *domain.Task, allowed 
 		}
 	}
 	return false
+}
+
+// validActorPattern reports whether p is a pattern isTransitionActorAllowed knows.
+func validActorPattern(p string) bool {
+	switch p {
+	case "*", string(domain.ActorTypeUser), string(domain.ActorTypeAgent), string(domain.ActorTypeSystem):
+		return true
+	}
+	return isConditionalActorPattern(p)
+}
+
+// validateAllowedActorsByTarget rejects unknown patterns and, when knownStatuses
+// is non-nil, target statuses that do not exist in the project.
+func validateAllowedActorsByTarget(cfg domain.WorkflowRulesConfig, knownStatuses map[string]bool) error {
+	for from, tr := range cfg.Transitions {
+		for target, actors := range tr.AllowedActorsByTarget {
+			if knownStatuses != nil && !knownStatuses[target] {
+				return apierror.BadRequest(fmt.Sprintf("transitions.%s.allowed_actors_by_target: unknown target status %q", from, target))
+			}
+			for _, p := range actors {
+				if !validActorPattern(p) {
+					return apierror.BadRequest(fmt.Sprintf("transitions.%s.allowed_actors_by_target.%s: unknown actor pattern %q", from, target, p))
+				}
+			}
+		}
+	}
+	return nil
 }

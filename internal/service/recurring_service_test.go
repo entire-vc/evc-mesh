@@ -310,6 +310,10 @@ func (s *StubTaskService) ExtendCheckout(_ context.Context, _, _ uuid.UUID, _ in
 func (s *StubTaskService) ForceReleaseCheckout(_ context.Context, _ uuid.UUID, expected ...domain.CheckoutExpectation) error {
 	panic("StubTaskService.ForceReleaseCheckout not implemented")
 }
+func (s *StubTaskService) MoveToProjectBatch(context.Context, domain.MoveBatchInput) (*domain.MoveBatchResult, error) {
+	return nil, nil
+}
+
 func (s *StubTaskService) MoveToProject(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {
 	panic("StubTaskService.MoveToProject not implemented")
 }

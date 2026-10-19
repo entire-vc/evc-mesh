@@ -303,6 +303,16 @@ func documentStorageKey(projectID, documentID uuid.UUID) string {
 	return fmt.Sprintf("documents/%s/%s.md", projectID, documentID)
 }
 
+// documentBodyVersionKey is the object key for one revision of a body:
+// documents/<project>/<doc>/<token>.md. The token is random, not the version
+// number: two writers that read the same version would otherwise compute the
+// same key, and the loser's upload would overwrite the winner's body — the very
+// race the versioned key exists to close. Nothing ever overwrites it, and the
+// row's storage_key says which one is current.
+func documentBodyVersionKey(projectID, documentID uuid.UUID) string {
+	return fmt.Sprintf("documents/%s/%s/%s.md", projectID, documentID, uuid.New())
+}
+
 // hasLetterOrDigit reports whether a mdoc.Slugify result is actually useful as a
 // slug rather than a degenerate leftover. Slugify trims leading/trailing hyphens
 // but keeps underscores verbatim, so a title made only of punctuation/emoji with
@@ -542,20 +552,24 @@ const maxAppendRetries = 3
 // read as base_version and reload on 409 — which is small precisely because
 // version is now on every document the API returns.
 //
-// ## Why the row is written before the body
+// ## Why the body is written before the row, under a key of its own
 //
-// Create uploads the body first, so that the row never advertises content that is
-// not there. This path reverses that, on purpose. The conditional UPDATE is the
-// compare-and-swap: it has to be the thing that decides whether the write happens
-// at all, and anything written before it is written by a caller who might still
-// lose. Uploading first would mean a refused write had already overwritten the
-// body it was refused for — which is exactly the data loss the version exists to
-// prevent, now with a 409 on top of it.
+// The conditional UPDATE is the compare-and-swap, and it must decide whether the
+// write happens at all. What it swaps is storage_key: the body is uploaded first
+// to a fresh, never-reused key, and the UPDATE moves the pointer and bumps the
+// version in one statement.
 //
-// The failure this ordering leaves is a body upload that fails after the row was
-// written: the version has moved but the stored markdown has not. That is a 500
-// the caller sees and retries, and every conditional writer is forced to re-read
-// — the safe direction. The other ordering's failure is silent and permanent.
+// The earlier ordering was row first, body second, into the one key every
+// version shared. Between the two a concurrent section-writer could read the new
+// version with the old body, append its own change to that, and overwrite the
+// first writer's edit — a lost update the version number was meant to prevent.
+// With a pointer, there is no window: a reader holds (version, key) from one row
+// read and the object behind the key never changes.
+//
+// A refused write is still harmless to the previous markdown, because it only
+// ever wrote its own key. The failure this leaves is an orphaned object when the
+// CAS loses (removed best-effort); superseded bodies are left in place. Rows that
+// predate this keep their old key, which keeps resolving until their next edit.
 func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID, input UpdateDocumentInput) (*domain.Document, error) {
 	if input.Body != nil && input.AppendBody != nil {
 		return nil, apierror.ValidationError(map[string]string{
@@ -824,21 +838,43 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 		expected = &seen
 	}
 
+	// The body goes up under a key of its own BEFORE the row is touched, and the
+	// conditional UPDATE then switches storage_key to it together with the
+	// version. A reader therefore never sees a row whose version is new and whose
+	// body is old (or the reverse): the pair changes in one statement, and the key
+	// it points at is immutable. See "Why the row is written before the body"
+	// above for what the old ordering protected; the loser of the CAS now costs an
+	// orphaned object instead of a clobbered one.
+	var newKey string
+	if newBody != nil {
+		newKey = documentBodyVersionKey(doc.ProjectID, doc.ID)
+		if err = s.storage.Upload(ctx, newKey, strings.NewReader(*newBody), int64(len(*newBody)), documentContentType); err != nil {
+			return nil, landed, apierror.InternalError("failed to upload document body to storage")
+		}
+		doc.NewStorageKey = newKey
+	}
+	dropOrphan := func() {
+		if newKey == "" {
+			return
+		}
+		if delErr := s.storage.Delete(ctx, newKey); delErr != nil {
+			log.Printf("documents: could not remove unreferenced body %s: %v", newKey, delErr)
+		}
+	}
+
 	newVersion, upErr := s.documentRepo.Update(ctx, doc, expected, contentChanged)
 	if errors.Is(upErr, repository.ErrDocumentVersionMismatch) {
+		dropOrphan()
 		return nil, landed, &DocumentVersionConflictError{CurrentVersion: newVersion}
 	}
 	if upErr != nil {
+		dropOrphan()
 		return nil, landed, upErr
 	}
 	doc.Version = newVersion
-
-	// The row is written, so this write has won. Only now is it safe to overwrite
-	// the body: a refused write must leave the previous markdown intact.
 	if newBody != nil {
-		if err = s.storage.Upload(ctx, doc.StorageKey, strings.NewReader(*newBody), int64(len(*newBody)), documentContentType); err != nil {
-			return nil, landed, apierror.InternalError("failed to upload document body to storage")
-		}
+		doc.StorageKey = newKey
+		doc.NewStorageKey = ""
 		doc.Body = *newBody
 	}
 

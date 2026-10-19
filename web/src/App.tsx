@@ -30,6 +30,9 @@ const OAuthConsentPage = lazy(() =>
 const ProfilePage = lazy(() =>
   import("@/pages/profile").then((m) => ({ default: m.ProfilePage })),
 );
+const MyRunnerPage = lazy(() =>
+  import("@/pages/my-runner").then((m) => ({ default: m.MyRunnerPage })),
+);
 const DashboardPage = lazy(() =>
   import("@/pages/dashboard").then((m) => ({ default: m.DashboardPage })),
 );
@@ -61,6 +64,9 @@ const ExtensionConnectPage = lazy(() =>
 );
 const ExtensionDetailPage = lazy(() =>
   import("@/pages/extension-detail").then((m) => ({ default: m.ExtensionDetailPage })),
+);
+const ExtensionScreenPage = lazy(() =>
+  import("@/pages/extension-screen").then((m) => ({ default: m.ExtensionScreenPage })),
 );
 const ExtensionsPage = lazy(() =>
   import("@/pages/extensions").then((m) => ({ default: m.ExtensionsPage })),
@@ -315,6 +321,14 @@ const router = createBrowserRouter(
           }
         />
         <Route
+          path="w/:wsSlug/x/:extId"
+          element={
+            <LazyPage>
+              <ExtensionScreenPage />
+            </LazyPage>
+          }
+        />
+        <Route
           path="w/:wsSlug/extensions/:extId/connect"
           element={
             <LazyPage>
@@ -466,6 +480,14 @@ const router = createBrowserRouter(
           element={
             <LazyPage>
               <ProfilePage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/runner"
+          element={
+            <LazyPage>
+              <MyRunnerPage />
             </LazyPage>
           }
         />

@@ -362,3 +362,48 @@ func TestVCSLinkRepo_Create_RefusesDuplicateAcrossProviderCorrection(t *testing.
 	require.Len(t, all, 1, "the refused Create must not have inserted a second row")
 	assert.Equal(t, wrong.ID, all[0].ID)
 }
+
+// A webhook re-delivery upserts the same MR with only head_sha; keys written
+// by other tools (ship_sha) must survive, and head_sha must be refreshed.
+func TestVCSLinkRepo_Upsert_MergesMetadata(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+	taskID := vcsLinkTestTask(t, db)
+
+	mk := func(meta string) *domain.VCSLink {
+		return &domain.VCSLink{
+			ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR,
+			ExternalID: "77", URL: "https://git.example.com/g/p/-/merge_requests/77", Title: "mr",
+			Status: domain.VCSLinkStatusOpen, Metadata: []byte(meta), CreatedAt: time.Now(),
+		}
+	}
+	_, err := repo.Upsert(ctx, mk(`{"head_sha":"aaa","ship_sha":"aaa"}`))
+	require.NoError(t, err)
+	l := mk(`{"head_sha":"bbb"}`)
+	_, err = repo.Upsert(ctx, l)
+	require.NoError(t, err)
+
+	got, err := repo.GetByID(ctx, l.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "bbb", got.HeadSHA())
+	assert.Equal(t, "aaa", got.ShipSHA())
+
+	// An empty-object patch leaves stored keys alone.
+	l = mk(`{}`)
+	_, err = repo.Upsert(ctx, l)
+	require.NoError(t, err)
+	got, err = repo.GetByID(ctx, l.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "bbb", got.HeadSHA())
+
+	// A delivery without a head commit clears head_sha (fail-closed); ship_sha stays.
+	l = mk(`{"head_sha":""}`)
+	_, err = repo.Upsert(ctx, l)
+	require.NoError(t, err)
+	got, err = repo.GetByID(ctx, l.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "", got.HeadSHA())
+	assert.Equal(t, "aaa", got.ShipSHA())
+	assert.False(t, got.IsMergedShippedGreen())
+}

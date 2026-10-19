@@ -136,6 +136,33 @@ func recordSponsor(ctx context.Context, r AgentSponsorRecorder, agentID uuid.UUI
 		return
 	}
 	_ = r.SetAgentSponsor(ctx, agentID, sponsor)
+	// An explicit operator (named when the key was issued) overrides the default,
+	// which SetAgentSponsor already set to the issuer.
+	if op := OperatorUserFromContext(ctx); op != uuid.Nil {
+		if setter, ok := r.(AgentOperatorRecorder); ok {
+			_ = setter.SetAgentOperator(ctx, agentID, op)
+		}
+	}
+}
+
+// AgentOperatorRecorder is the optional operator side of the sponsor recorder.
+type AgentOperatorRecorder interface {
+	SetAgentOperator(ctx context.Context, agentID, userID uuid.UUID) error
+	UserCanOperate(ctx context.Context, workspaceID, userID uuid.UUID) (bool, error)
+}
+
+type operatorCtxKey struct{}
+
+// OperatorUserFromContext returns the operator named by WithOperatorUser, or
+// uuid.Nil when none was named.
+func OperatorUserFromContext(ctx context.Context) uuid.UUID {
+	op, _ := ctx.Value(operatorCtxKey{}).(uuid.UUID)
+	return op
+}
+
+// WithOperatorUser names the operator of the agent whose key is being issued.
+func WithOperatorUser(ctx context.Context, userID uuid.UUID) context.Context {
+	return context.WithValue(ctx, operatorCtxKey{}, userID)
 }
 
 // SetAgentActivityLogRepo wires the optional agent activity log repository.

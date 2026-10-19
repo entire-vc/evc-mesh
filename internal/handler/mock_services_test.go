@@ -193,6 +193,7 @@ type MockCommentService struct {
 	ListByTaskFunc              func(ctx context.Context, taskID uuid.UUID, filter repository.CommentFilter, pg pagination.Params) (*pagination.Page[domain.Comment], error)
 	ListByAuthorFunc            func(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 	ListRecentByWorkspaceFunc   func(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
+	CheckAgentGateArmFunc       func(ctx context.Context, taskID uuid.UUID, addressee, supersedes, canonicalKey string) error
 	GetHumanGateOwnerFunc       func(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
 	RecordHumanGateDecisionFunc func(ctx context.Context, input domain.RecordHumanGateDecisionInput) (*domain.HumanGateDecision, error)
 	RevokeHumanGateDecisionFunc func(ctx context.Context, input domain.RevokeHumanGateDecisionInput) error
@@ -239,6 +240,13 @@ func (m *MockCommentService) ListRecentByWorkspace(ctx context.Context, wsID uui
 		return m.ListRecentByWorkspaceFunc(ctx, wsID, filter)
 	}
 	return &domain.CommentViewPage{Items: []domain.CommentView{}}, nil
+}
+
+func (m *MockCommentService) CheckAgentGateArm(ctx context.Context, taskID uuid.UUID, addressee, supersedes, canonicalKey string) error {
+	if m.CheckAgentGateArmFunc != nil {
+		return m.CheckAgentGateArmFunc(ctx, taskID, addressee, supersedes, canonicalKey)
+	}
+	return nil
 }
 
 func (m *MockCommentService) GetHumanGateOwner(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error) {
@@ -399,6 +407,7 @@ func (m *MockActivityLogService) Export(ctx context.Context, workspaceID uuid.UU
 
 // MockTaskService implements service.TaskService for testing.
 type MockTaskService struct {
+	MoveToProjectBatchFunc   func(context.Context, domain.MoveBatchInput) (*domain.MoveBatchResult, error)
 	SetRuntimeStateFunc      func(state *domain.RuntimeState) (*domain.RuntimeState, error)
 	ArmHumanGateFunc         func(ctx context.Context, in domain.ArmHumanGateInput) error
 	ClearHumanGateFunc       func(ctx context.Context, id uuid.UUID) error
@@ -558,6 +567,13 @@ func (m *MockTaskService) ForceReleaseCheckout(ctx context.Context, taskID uuid.
 		return m.ForceReleaseCheckoutFunc(ctx, taskID)
 	}
 	return nil
+}
+
+func (m *MockTaskService) MoveToProjectBatch(ctx context.Context, in domain.MoveBatchInput) (*domain.MoveBatchResult, error) {
+	if m.MoveToProjectBatchFunc != nil {
+		return m.MoveToProjectBatchFunc(ctx, in)
+	}
+	return &domain.MoveBatchResult{}, nil
 }
 
 func (m *MockTaskService) MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error) {

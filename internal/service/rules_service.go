@@ -646,6 +646,25 @@ func (s *rulesService) GetProjectWorkflowRules(ctx context.Context, projectID uu
 
 // SetProjectWorkflowRules upserts the project workflow rules config.
 func (s *rulesService) SetProjectWorkflowRules(ctx context.Context, projectID uuid.UUID, config domain.WorkflowRulesConfig) error {
+	var known map[string]bool
+	if s.statusRepo == nil {
+		// Without a status source targets cannot be checked; refuse them
+		// rather than persist unchecked keys.
+		known = map[string]bool{}
+	} else {
+		sts, err := s.statusRepo.ListByProject(ctx, projectID)
+		if err != nil {
+			return fmt.Errorf("list project statuses: %w", err)
+		}
+		known = make(map[string]bool, len(sts))
+		for _, st := range sts {
+			known[st.Slug] = true
+		}
+	}
+	if err := validateAllowedActorsByTarget(config, known); err != nil {
+		return err
+	}
+
 	enforcementMode := config.EnforcementMode
 	if enforcementMode == "" {
 		enforcementMode = domain.RuleConfigEnforcementAdvisory
@@ -717,7 +736,14 @@ func computeAgentPermissions(agent *domain.Agent, cfg domain.WorkflowRulesConfig
 		// AllowedActors restricts by actor type ("agent", "user", "system", "*").
 		// Empty AllowedActors = allow-all, consistent with the enforcement gate.
 		for status, transition := range cfg.Transitions {
-			perms.CanTransition[status] = isAgentAllowedByActors(transition.AllowedActors)
+			ok := isAgentAllowedByActors(transition.AllowedActors)
+			// A per-target entry may open a move the base list closes.
+			for _, a := range transition.AllowedActorsByTarget {
+				if isAgentAllowedByActors(a) {
+					ok = true
+				}
+			}
+			perms.CanTransition[status] = ok
 		}
 	}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
@@ -77,7 +78,7 @@ func TestArmHumanGateEndpoint_AuthorComesFromIdentityNotBody(t *testing.T) {
 		},
 	}
 
-	rec, err := armRequest(t, NewTaskHandler(mockSvc), taskID, actorID, domain.ActorTypeAgent,
+	rec, err := armRequest(t, NewTaskHandler(mockSvc).WithCommentService(&MockCommentService{}), taskID, actorID, domain.ActorTypeAgent,
 		map[string]any{
 			"reason":              "мёржим сейчас или ждём?",
 			"recommended_default": "жду ответа до дедлайна",
@@ -85,6 +86,7 @@ func TestArmHumanGateEndpoint_AuthorComesFromIdentityNotBody(t *testing.T) {
 			// in ArmHumanGateRequest at all, so it must be inert.
 			"gate_author": bodyClaimedAuthor.String(),
 			"predicate":   allowingPredicateBody(),
+			"addressee":   "pavel",
 		})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -114,8 +116,8 @@ func TestArmHumanGateEndpoint_IncompleteAskIs422NamingTheField(t *testing.T) {
 		},
 	}
 
-	rec, err := armRequest(t, NewTaskHandler(mockSvc), taskID, actorID, domain.ActorTypeAgent,
-		map[string]any{"reason": "мёржим?", "predicate": allowingPredicateBody()}) // no recommended_default
+	rec, err := armRequest(t, NewTaskHandler(mockSvc).WithCommentService(&MockCommentService{}), taskID, actorID, domain.ActorTypeAgent,
+		map[string]any{"reason": "мёржим?", "addressee": "pavel", "predicate": allowingPredicateBody()}) // no recommended_default
 	require.NoError(t, err)
 	require.True(t, armCalled, "the request must reach validation, not be dropped earlier")
 
@@ -130,9 +132,9 @@ func TestArmHumanGateEndpoint_IncompleteAskIs422NamingTheField(t *testing.T) {
 	// POSITIVE CONTROL on the same handler and the same validator: adding the one
 	// missing field turns the 422 into a 200. Without this, a handler that returned 422
 	// unconditionally would pass the assertions above.
-	rec2, err := armRequest(t, NewTaskHandler(mockSvc), taskID, actorID, domain.ActorTypeAgent,
+	rec2, err := armRequest(t, NewTaskHandler(mockSvc).WithCommentService(&MockCommentService{}), taskID, actorID, domain.ActorTypeAgent,
 		map[string]any{"reason": "мёржим?", "recommended_default": "жду",
-			"predicate": allowingPredicateBody()})
+			"addressee": "pavel", "predicate": allowingPredicateBody()})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec2.Code, "the same request WITH a default must be accepted")
 }
@@ -180,4 +182,59 @@ func TestClearHumanGateEndpoint_AgentRefusedWithNamedExit(t *testing.T) {
 	require.NoError(t, h.ClearHumanGate(c2))
 	assert.Equal(t, http.StatusOK, rec2.Code)
 	assert.True(t, clearCalled, "a human on the same route does clear it")
+}
+
+// Task #40a24454: an agent key reached an armed gate through set_human_gate without the
+// two checks the marker path runs (human addressee, no repeat of an answered ask). Each
+// refusal below has a positive control on the same handler: the identical request from a
+// user, or with the check passing, is accepted.
+func TestArmHumanGateEndpoint_AgentRefusals(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     map[string]any
+		check    error
+		wantCode string
+	}{
+		{"no addressee", map[string]any{}, &service.GateArmRefusedError{Code: service.GateRefusalAddresseeMissing, Message: "addressee is required"}, "gate_addressee_required"},
+		{"addressee is an agent", map[string]any{"addressee": "bill"}, &service.GateArmRefusedError{Code: service.GateRefusalAddresseeNotUser, Message: "not a person"}, "gate_addressee_not_human"},
+		{"already answered", map[string]any{"addressee": "pavel"}, &service.GateArmRefusedError{Code: service.GateRefusalRepeatAsk, Message: "already answered"}, "repeat_ask_refused"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := uuid.New()
+			armed := false
+			mockSvc := &MockTaskService{
+				ArmHumanGateFunc: func(context.Context, domain.ArmHumanGateInput) error { armed = true; return nil },
+				GetByIDFunc: func(_ context.Context, id uuid.UUID) (*domain.Task, error) {
+					return &domain.Task{ID: id}, nil
+				},
+			}
+			cs := &MockCommentService{CheckAgentGateArmFunc: func(_ context.Context, _ uuid.UUID, addressee, _, _ string) error {
+				if addressee != "" && tc.check != nil && tc.wantCode == "gate_addressee_required" {
+					return nil
+				}
+				return tc.check
+			}}
+			h := NewTaskHandler(mockSvc).WithCommentService(cs)
+			body := map[string]any{"reason": "q", "recommended_default": "wait", "predicate": allowingPredicateBody()}
+			for k, v := range tc.body {
+				body[k] = v
+			}
+			rec, err := armRequest(t, h, taskID, uuid.New(), domain.ActorTypeAgent, body)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			assert.Equal(t, tc.wantCode, resp["error_code"])
+			assert.NotEmpty(t, resp["message"])
+			assert.False(t, armed, "a refused ask must not arm the gate")
+
+			// POSITIVE CONTROL: a user on the same request is not subject to the check.
+			armed = false
+			rec2, err := armRequest(t, h, taskID, uuid.New(), domain.ActorTypeUser, body)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec2.Code)
+			assert.True(t, armed)
+		})
+	}
 }

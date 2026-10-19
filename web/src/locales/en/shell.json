@@ -20,6 +20,7 @@
     "workspaceSettings": "Workspace Settings",
     "projectSettings": "Project Settings",
     "extensions": "Extensions",
+    "myRunner": "My Runner",
     "profile": "Profile"
   },
   "sidebar": {
@@ -54,7 +55,6 @@
       "searching": "Searching...",
       "noResults": "No results found"
     },
-    "projectDocs": "Project docs",
     "installApp": "Install Mesh as app",
     "teamTabs": {
       "tree": "Tree",

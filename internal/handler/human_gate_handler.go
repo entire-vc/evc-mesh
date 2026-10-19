@@ -37,6 +37,25 @@ type ArmHumanGateRequest struct {
 	// already written down; making the caller state the four answers, with reasons, is
 	// what turns "I felt unsure" into something a reviewer can check afterwards.
 	Predicate *domain.GateArmPredicate `json:"predicate"`
+	// Addressee is the @name of the person being asked. Required from an agent key
+	// (task #40a24454): it must resolve to a human, the same rule the marker path has.
+	Addressee string `json:"addressee"`
+	// Supersedes names what the previous, already answered, ask did not cover — the
+	// same opt-out `supersedes:` gives a marker comment.
+	Supersedes string `json:"supersedes"`
+	// CanonicalKey names the question, as on a marker comment's metadata: a live
+	// recorded decision under the same key refuses the arm.
+	CanonicalKey string `json:"canonical_key"`
+}
+
+// gateRefusal is the 422 body for an agent-key arm that the marker path would have refused.
+func gateRefusal(c echo.Context, code, message string) error {
+	return c.JSON(http.StatusUnprocessableEntity, map[string]any{
+		"error":      "Unprocessable Entity",
+		"code":       code,
+		"error_code": code,
+		"message":    message,
+	})
 }
 
 // ArmHumanGate handles POST /tasks/:task_id/human-gate.
@@ -59,6 +78,23 @@ func (h *TaskHandler) ArmHumanGate(c echo.Context) error {
 	}
 
 	actorID, actorType := actorctx.FromContext(c.Request().Context())
+
+	if actorType == domain.ActorTypeAgent {
+		var checkErr error
+		if h.commentService == nil {
+			checkErr = &service.GateArmRefusedError{Code: service.GateRefusalMarkerRequired,
+				Message: "the gate check is unavailable. " + service.GateMarkerHint}
+		} else {
+			checkErr = h.commentService.CheckAgentGateArm(c.Request().Context(), taskID, req.Addressee, req.Supersedes, req.CanonicalKey)
+		}
+		var refused *service.GateArmRefusedError
+		if errors.As(checkErr, &refused) {
+			return gateRefusal(c, refused.Code, refused.Message)
+		}
+		if checkErr != nil {
+			return handleError(c, checkErr)
+		}
+	}
 
 	class := domain.HumanGateClassHard
 	if req.Class == string(domain.HumanGateClassSoft) {

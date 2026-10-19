@@ -200,12 +200,15 @@ func TestMemoryRepoDB_UpdateEmbeddingKeepUpdatedAt_HoldsTimestampAndStillWritesV
 	}
 	require.NoError(t, repo.Upsert(ctx, mem, domain.MemoryWriteIntent{}))
 
+	// Upsert stamps updated_at from the Go clock, while the statements under test use the
+	// database's NOW(). Under load the Docker VM clock can lag the host, so a bumped value
+	// could land before the Go-stamped one. Re-anchor the row on the database clock, well in
+	// the past, so every comparison below is DB-clock vs DB-clock and the gap is guaranteed.
+	_, err := repo.db.ExecContext(ctx, `UPDATE memories SET updated_at = NOW() - interval '1 hour' WHERE id = $1`, mem.ID)
+	require.NoError(t, err)
 	var before time.Time
 	require.NoError(t, repo.db.GetContext(ctx, &before, `SELECT updated_at FROM memories WHERE id = $1`, mem.ID))
 
-	// Postgres resolves NOW() to microseconds; without a gap a bumped timestamp could
-	// compare equal to the original and the assertion would pass on a broken statement.
-	time.Sleep(10 * time.Millisecond)
 	require.NoError(t, repo.UpdateEmbeddingKeepUpdatedAt(ctx, mem.ID, []float32{0.1, 0.2}, "e5-small", 2))
 
 	var after time.Time
@@ -221,7 +224,6 @@ func TestMemoryRepoDB_UpdateEmbeddingKeepUpdatedAt_HoldsTimestampAndStillWritesV
 
 	// Positive control: the ordinary variant on the same row DOES move it, so the assertion
 	// above is discriminating rather than a statement about the clock.
-	time.Sleep(10 * time.Millisecond)
 	require.NoError(t, repo.UpdateEmbedding(ctx, mem.ID, []float32{0.3, 0.4}, "e5-small", 2))
 	var bumped time.Time
 	require.NoError(t, repo.db.GetContext(ctx, &bumped, `SELECT updated_at FROM memories WHERE id = $1`, mem.ID))

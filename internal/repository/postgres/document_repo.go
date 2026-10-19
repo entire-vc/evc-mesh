@@ -202,14 +202,15 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *domain.Document, expecte
 	q := `
 		UPDATE documents
 		   SET title = $2, parent_id = $3, position = $4, updated_at = $5,
-		       updated_by = $6, updated_by_type = $7, slug = $9, version = ` + versionExpr + `
+		       updated_by = $6, updated_by_type = $7, slug = $9,
+		       storage_key = COALESCE(NULLIF($10, ''), storage_key), version = ` + versionExpr + `
 		 WHERE id = $1 AND deleted_at IS NULL
 		   AND ($8::int IS NULL OR version = $8::int)
 		RETURNING version`
 
 	var newVersion int
 	err = tx.GetContext(ctx, &newVersion, q, doc.ID, doc.Title, doc.ParentID, doc.Position,
-		doc.UpdatedAt, doc.UpdatedBy, doc.UpdatedByType, expectedVersion, doc.Slug)
+		doc.UpdatedAt, doc.UpdatedBy, doc.UpdatedByType, expectedVersion, doc.Slug, doc.NewStorageKey)
 	if isDocumentSlugConflict(err) {
 		return 0, apierror.DocumentSlugTaken()
 	}

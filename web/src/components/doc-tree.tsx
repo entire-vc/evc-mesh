@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cn";
+import { loadServerExpanded, saveServerExpanded } from "@/lib/docs-tree-sync";
 import type { ProjectDocument } from "@/types";
 
 export interface DocTreeNode {
@@ -152,6 +153,13 @@ export function buildDocPath(
 
 interface DocTreeProps {
   documents: ProjectDocument[];
+  /** localStorage key for the expanded set (per user and project). Without it
+   *  the expansion is not remembered. */
+  storageKey?: string | null;
+  /** Project the tree is shown for. The document store keeps the previous
+   *  project's list until the next fetch lands, so nothing is read against,
+   *  expanded from or persisted with `documents` until they belong to it. */
+  projectId?: string | null;
   selectedId?: string | null;
   onSelect: (doc: ProjectDocument) => void;
   onCreateChild: (parent: ProjectDocument) => void;
@@ -160,8 +168,31 @@ interface DocTreeProps {
   onDelete: (doc: ProjectDocument) => void;
 }
 
+function readExpanded(key: string | null | undefined): Set<string> {
+  if (!key) return new Set();
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeExpanded(key: string | null | undefined, expanded: Set<string>) {
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify([...expanded]));
+  } catch {
+    // storage unavailable: the tree still works, just forgets.
+  }
+}
+
 export function DocTree({
   documents,
+  storageKey,
+  projectId,
   selectedId,
   onSelect,
   onCreateChild,
@@ -169,13 +200,60 @@ export function DocTree({
   onMove,
   onDelete,
 }: DocTreeProps) {
-  // Collapsed rather than expanded: a document created under a node is visible
-  // the moment it appears, without the tree having to be told about it.
+  // Expanded, not collapsed: everything is closed by default except the branch
+  // down to the open document. Anything that makes a node's content appear (a
+  // new child, a move) expands that node explicitly, see the effects below.
   const { t } = useTranslation("docs");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    readExpanded(storageKey),
+  );
+
+  // The expansion belongs to a storage key. Should the key change without a
+  // remount (the page does remount, this keeps the component safe on its own),
+  // the old key's set must neither leak into the new key nor survive in memory.
+  const revealed = useRef<string | null>(null);
+  const parents = useRef<Map<string, string | null>>(new Map());
+  const [stateKey, setStateKey] = useState(storageKey);
+  if (stateKey !== storageKey) {
+    setStateKey(storageKey);
+    setExpanded(readExpanded(storageKey));
+    revealed.current = null;
+    parents.current = new Map();
+  }
+
+  const synced =
+    !projectId || (documents.length > 0 && documents.every((d) => d.project_id === projectId));
+
+  const add = (ids: string[]) => {
+    setExpanded((prev) => {
+      if (ids.every((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
+  // Server sync (user_ui_state). localStorage above is the instant cache; the
+  // server copy is what makes the tree the same on another device.
+  //  - serverReady: the GET came back (a stored state or a clean "nothing yet").
+  //    Until then nothing is pushed, so a device that cannot reach the server
+  //    never overwrites the other device's state with its own cache.
+  //  - userTouched: the person toggled something. That is a newer intent than
+  //    whatever the GET returns, so a late response must not undo it (last
+  //    write wins), and it also licenses pushing after a failed GET.
+  //  - lastSynced: what the server is known to hold, to skip no-op writes. Only
+  //    a successful PUT moves it, so a failed one is retried by the next change.
+  const serverReady = useRef(false);
+  const userTouched = useRef(false);
+  const applyingServer = useRef(false);
+  const lastSynced = useRef<string | null>(null);
+  const pending = useRef<{ projectId: string; ids: string[] } | null>(null);
+  const latest = useRef({ documents, selectedId });
+  latest.current = { documents, selectedId };
 
   const toggle = (id: string) => {
-    setCollapsed((prev) => {
+    userTouched.current = true;
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -183,7 +261,111 @@ export function DocTree({
     });
   };
 
-  const nodes = buildDocTree(documents);
+  // Reveal the branch of the open document once per selection (documents may
+  // arrive after selectedId on a direct /d/<id> visit).
+  useEffect(() => {
+    if (!selectedId) {
+      revealed.current = null;
+      return;
+    }
+    if (!synced || revealed.current === selectedId) return;
+    const path = buildDocPath(documents, selectedId);
+    if (path.length === 0) return;
+    revealed.current = selectedId;
+    add(path.slice(0, -1).map((d) => d.id));
+  }, [selectedId, documents, synced]);
+
+  // A document that appeared under, or moved to, a node expands that node.
+  useEffect(() => {
+    if (!synced) return;
+    const prev = parents.current;
+    const next = new Map(documents.map((d) => [d.id, d.parent_id] as const));
+    if (prev.size > 0) {
+      // The whole chain, so the new node is actually visible, not just its parent.
+      const toOpen = documents
+        .filter((d) => d.parent_id && prev.get(d.id) !== d.parent_id)
+        .flatMap((d) => buildDocPath(documents, d.id).slice(0, -1).map((a) => a.id));
+      if (toOpen.length > 0) add(toOpen);
+    }
+    parents.current = next;
+  }, [documents, synced]);
+
+  // Persist without ids of deleted documents, and only once the list is the
+  // project's own — against a stale one every valid id would look deleted.
+  // The last document of a project being deleted leaves an empty list: that is
+  // authoritative only because this mount has already seen the project's own list.
+  useEffect(() => {
+    const emptied = documents.length === 0 && parents.current.size > 0;
+    if (!synced && !emptied) return;
+    const known = new Set(documents.map((d) => d.id));
+    writeExpanded(storageKey, new Set([...expanded].filter((id) => known.has(id))));
+  }, [storageKey, expanded, documents, synced]);
+
+  useEffect(() => {
+    if (!projectId || !storageKey) return;
+    let cancelled = false;
+    serverReady.current = false;
+    userTouched.current = false;
+    lastSynced.current = null;
+    void loadServerExpanded(projectId).then((res) => {
+      if (cancelled || res.kind === "error") return;
+      serverReady.current = true;
+      if (res.kind !== "ok") return;
+      lastSynced.current = [...res.expanded].sort().join(",");
+      if (userTouched.current) return;
+      // Server state plus the branch of the open document, which is always shown.
+      const { documents: docs, selectedId: sel } = latest.current;
+      const path = sel ? buildDocPath(docs, sel) : [];
+      revealed.current = path.length > 0 ? sel! : null;
+      applyingServer.current = true;
+      setExpanded(
+        new Set([...res.expanded, ...path.slice(0, -1).map((d) => d.id)]),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, storageKey]);
+
+  // Debounced push, ~1 s after the last change.
+  useEffect(() => {
+    if (applyingServer.current) {
+      applyingServer.current = false;
+      return;
+    }
+    if (!projectId || !storageKey || !synced) return;
+    if (!serverReady.current && !userTouched.current) return;
+    const known = new Set(documents.map((d) => d.id));
+    const ids = [...expanded].filter((id) => known.has(id));
+    if (ids.slice().sort().join(",") === lastSynced.current) {
+      pending.current = null;
+      return;
+    }
+    pending.current = { projectId, ids };
+    const timer = setTimeout(() => {
+      const job = pending.current;
+      pending.current = null;
+      if (!job) return;
+      void saveServerExpanded(job.projectId, job.ids).then((ok) => {
+        if (ok) lastSynced.current = job.ids.slice().sort().join(",");
+      });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [projectId, storageKey, expanded, documents, synced]);
+
+  // Leaving the page inside the debounce window must not drop the last change.
+  useEffect(
+    () => () => {
+      const job = pending.current;
+      pending.current = null;
+      if (job) void saveServerExpanded(job.projectId, job.ids);
+    },
+    [],
+  );
+
+  // Another project's list is not drawn at all, so it cannot be shown against this
+  // project's saved expansion.
+  const nodes = synced ? buildDocTree(documents) : [];
 
   return (
     <ul role="tree" aria-label={t("tree.heading")} className="space-y-0.5">
@@ -192,7 +374,7 @@ export function DocTree({
           key={node.doc.id}
           node={node}
           depth={0}
-          collapsed={collapsed}
+          expanded={expanded}
           onToggle={toggle}
           selectedId={selectedId}
           onSelect={onSelect}
@@ -206,17 +388,17 @@ export function DocTree({
   );
 }
 
-interface DocTreeItemProps extends Omit<DocTreeProps, "documents"> {
+interface DocTreeItemProps extends Omit<DocTreeProps, "documents" | "storageKey"> {
   node: DocTreeNode;
   depth: number;
-  collapsed: Set<string>;
+  expanded: Set<string>;
   onToggle: (id: string) => void;
 }
 
 function DocTreeItem({
   node,
   depth,
-  collapsed,
+  expanded,
   onToggle,
   selectedId,
   onSelect,
@@ -228,7 +410,7 @@ function DocTreeItem({
   const { t } = useTranslation("docs");
   const { doc, children } = node;
   const hasChildren = children.length > 0;
-  const isOpen = hasChildren && !collapsed.has(doc.id);
+  const isOpen = hasChildren && expanded.has(doc.id);
   const isSelected = selectedId === doc.id;
 
   return (
@@ -338,7 +520,7 @@ function DocTreeItem({
               key={child.doc.id}
               node={child}
               depth={depth + 1}
-              collapsed={collapsed}
+              expanded={expanded}
               onToggle={onToggle}
               selectedId={selectedId}
               onSelect={onSelect}

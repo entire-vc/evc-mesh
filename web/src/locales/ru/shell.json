@@ -20,6 +20,7 @@
     "workspaceSettings": "Настройки пространства",
     "projectSettings": "Настройки проекта",
     "extensions": "Расширения",
+    "myRunner": "Мой Runner",
     "profile": "Профиль"
   },
   "sidebar": {
@@ -54,7 +55,6 @@
       "searching": "Поиск...",
       "noResults": "Ничего не найдено"
     },
-    "projectDocs": "Документы проекта",
     "installApp": "Установить Mesh как приложение",
     "teamTabs": {
       "tree": "Дерево",

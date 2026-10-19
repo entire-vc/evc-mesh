@@ -79,3 +79,39 @@ func TestWaitDecision_HumanReplyReleasesGate(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.False(t, calls[0].value, "a human reply must clear the gate")
 }
+
+// Task #39c746ed: a slug shared by a workspace agent and a same-named human login
+// (hugh, ralph) addresses the agent — the marker must not arm a human gate. The
+// control (no agent registered under that slug) still arms, so the test is not vacuous.
+func TestWaitDecision_AgentSlugSharedWithUser_DoesNotArmGate(t *testing.T) {
+	for name, body := range map[string]string{
+		"wait decision": "Итог.\n⏳ WAIT decision:@hugh: нужна приёмка",
+		"blocking":      "❓ **Blocking @hugh**: нужна приёмка",
+	} {
+		for _, agentExists := range []bool{true, false} {
+			t.Run(name, func(t *testing.T) {
+				agentSvc := NewMockAgentService()
+				env := setupTriageEnvWithOptions(t, true, WithCommentAgentService(agentSvc))
+				env.userRepo.AddUser(env.wsID, &domain.User{ID: uuid.New(), Username: "hugh", Name: "Hugh (QA)"})
+				if agentExists {
+					agentSvc.AddAgent(env.wsID, &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "hugh"})
+				}
+				assigneeID := uuid.New()
+				taskID := uuid.New()
+				env.taskRepo.items[taskID] = &domain.Task{
+					ID: taskID, ProjectID: env.projID, StatusID: env.inProgressID, Title: "T",
+					AssigneeID: &assigneeID, AssigneeType: domain.AssigneeTypeAgent,
+					DelegationLevel: domain.DelegationLevelAuto,
+				}
+				require.NoError(t, env.svc.Create(context.Background(), &domain.Comment{
+					TaskID: taskID, AuthorID: assigneeID, AuthorType: domain.ActorTypeAgent, Body: body,
+				}))
+				if agentExists {
+					assert.Empty(t, env.taskMover.humanGateCalls(), "agent slug must not arm human_gate")
+				} else {
+					assert.NotEmpty(t, env.taskMover.humanGateCalls(), "control: user-only slug arms")
+				}
+			})
+		}
+	}
+}

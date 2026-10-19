@@ -15,6 +15,8 @@ const related = { ...task, id: relatedId, title: "Cross project blocker", projec
 let edges: unknown[];
 let requests: string[];
 let mutationWait: Promise<void> | undefined;
+// Async waits (debounced picker search, hydrated rows, shared count) get a generous budget so CPU load cannot flip them red.
+const WAIT = { timeout: 10_000 };
 
 beforeEach(() => {
   useWorkspaceStore.setState({ currentWorkspace: { id: "workspace" } as Workspace });
@@ -56,14 +58,14 @@ describe.each(["full", "slide"] as const)("%s task dependencies tab", (view) => 
     mutationWait = new Promise<void>(resolve => { finish = resolve; });
     const router = createMemoryRouter([{ path: "/", element: view === "full" ? <TaskPanel taskId={id} /> : <TaskSlideOver taskId={id} onClose={() => {}} /> }]);
     render(<RouterProvider router={router} />);
-    const tabs = await screen.findAllByRole("button", { name: /Dependencies/ });
-    await waitFor(() => expect(tabs[0]).toHaveTextContent("1 · 1 open"));
+    const tabs = await screen.findAllByRole("button", { name: /Dependencies/ }, WAIT);
+    await waitFor(() => expect(tabs[0]).toHaveTextContent("1 · 1 open"), WAIT);
     fireEvent.click(tabs[0]!);
-    await screen.findByRole("button", { name: /#11111111 Cross project blocker/ });
+    await screen.findByRole("button", { name: /#11111111 Cross project blocker/ }, WAIT);
     if (action === "add") {
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
       fireEvent.change(screen.getByRole("combobox", { name: "Find task" }), { target: { value: relatedId } });
-      fireEvent.click(await screen.findByRole("option", { name: /Cross project blocker/ }));
+      fireEvent.click(await screen.findByRole("option", { name: /Cross project blocker/ }, WAIT));
       fireEvent.change(screen.getByRole("combobox", { name: "Relationship type" }), { target: { value: "related" } });
       fireEvent.click(screen.getByRole("button", { name: "Add Dependency" }));
     } else {
@@ -72,30 +74,30 @@ describe.each(["full", "slide"] as const)("%s task dependencies tab", (view) => 
     }
     fireEvent.click(screen.getAllByRole("button", { name: "Subtasks" })[0]!);
     finish();
-    await waitFor(() => expect(tabs[0]).toHaveTextContent(action === "add" ? "2 · 1 open" : "0 · 0 open"));
+    await waitFor(() => expect(tabs[0]).toHaveTextContent(action === "add" ? "2 · 1 open" : "0 · 0 open"), WAIT);
     fireEvent.click(tabs[0]!);
-    if (action === "add") expect(await screen.findAllByRole("button", { name: /#11111111 Cross project blocker/ })).toHaveLength(2);
-    else expect(await screen.findByText(/No dependencies/)).toBeInTheDocument();
+    if (action === "add") expect(await screen.findAllByRole("button", { name: /#11111111 Cross project blocker/ }, WAIT)).toHaveLength(2);
+    else expect(await screen.findByText(/No dependencies/, undefined, WAIT)).toBeInTheDocument();
   });
 
   it("fetches on open, shows the same count and blocker row, and refreshes after add", async () => {
     const router = createMemoryRouter([{ path: "/", element: view === "full" ? <TaskPanel taskId={id} /> : <TaskSlideOver taskId={id} onClose={() => {}} /> }]);
     render(<RouterProvider router={router} />);
-    await screen.findAllByText("Current task");
-    const tabs = await screen.findAllByRole("button", { name: /Dependencies/ });
-    await waitFor(() => expect(tabs[0]).toHaveTextContent("1 · 1 open"));
+    await screen.findAllByText("Current task", undefined, WAIT);
+    const tabs = await screen.findAllByRole("button", { name: /Dependencies/ }, WAIT);
+    await waitFor(() => expect(tabs[0]).toHaveTextContent("1 · 1 open"), WAIT);
     expect(requests.filter(p => p === `/api/v1/tasks/${id}/dependencies`)).toHaveLength(1);
     fireEvent.click(tabs[0]!);
-    expect(await screen.findByRole("button", { name: /#11111111 Cross project blocker/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /#11111111 Cross project blocker/ }, WAIT)).toBeInTheDocument();
     expect(screen.getByText("Doing elsewhere")).toBeInTheDocument();
     expect(screen.getByText("Alex")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Find task" }), { target: { value: relatedId } });
-      fireEvent.click(await screen.findByRole("option", { name: /Cross project blocker/ }));
+      fireEvent.click(await screen.findByRole("option", { name: /Cross project blocker/ }, WAIT));
     fireEvent.change(screen.getByRole("combobox", { name: "Relationship type" }), { target: { value: "related" } });
     fireEvent.click(screen.getByRole("button", { name: "Add Dependency" }));
-    await waitFor(() => expect(tabs[0]).toHaveTextContent("2 · 1 open"));
+    await waitFor(() => expect(tabs[0]).toHaveTextContent("2 · 1 open"), WAIT);
     fireEvent.click(screen.getAllByRole("button", { name: "Subtasks" })[0]!);
-    await waitFor(() => expect(requests.some(p => p.endsWith("/subtasks"))).toBe(true));
+    await waitFor(() => expect(requests.some(p => p.endsWith("/subtasks"))).toBe(true), WAIT);
   });
 });

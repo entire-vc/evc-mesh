@@ -1,4 +1,4 @@
-import { Component, Suspense, createContext, useCallback, useContext, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, Suspense, lazy, createContext, useCallback, useContext, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Task, VCSProvider } from "@/types";
@@ -12,13 +12,24 @@ export const SLOT_TIMEOUT_MS = 2000;
 export interface PanelTab {
   extensionId: string;
   name: string;
+  /** The tab is an iframe screen of an external extension, not a built-in component. */
+  external?: boolean;
 }
 
 /** `task.panel` tabs to append after the system tabs, ordered by extension name. */
 export function usePanelTabs(): PanelTab[] {
   const exts = useSlotExtensions("task.panel");
   return useMemo(
-    () => exts.filter((e) => BUILTIN_SLOTS[e.id]?.["task.panel"]).map((e) => ({ extensionId: e.id, name: e.name })),
+    () =>
+      exts
+        .filter((e) => BUILTIN_SLOTS[e.id]?.["task.panel"] || e.external?.["task.panel"])
+        .map((e) => {
+          const screen = e.external?.["task.panel"];
+          // A built-in contribution wins over a manifest screen of the same id (ids are unique per instance).
+          return screen && !BUILTIN_SLOTS[e.id]?.["task.panel"]
+            ? { extensionId: e.id, name: screen.title || e.name, external: true }
+            : { extensionId: e.id, name: e.name };
+        }),
     [exts],
   );
 }
@@ -90,6 +101,10 @@ function Pending() {
 }
 
 /** A panel calls this when its own data has arrived; until then the host's 2 s clock is running. */
+const ExternalFrame = lazy(() =>
+  import("../external-frame").then((m) => ({ default: m.ExternalFrame })),
+);
+
 const ReadyContext = createContext<() => void>(() => {});
 export function useSlotReady(): () => void {
   return useContext(ReadyContext);
@@ -113,14 +128,15 @@ class SlotErrorBoundary extends Component<{ name: string; children: ReactNode },
  * load and the panel's own first data request (it reports via `useSlotReady`), isolated
  * from the card on failure. A panel that becomes ready after the timeout replaces the placeholder.
  */
-export function SlotPanelBody(props: { extensionId: string; name: string; task: Task }) {
+export function SlotPanelBody(props: { extensionId: string; name: string; task: Task; external?: boolean }) {
   // Keyed per task: readiness and the 2 s timeout belong to one task's panel, a card
   // switched in place must start both over.
   return <SlotPanelBodyInner key={`${props.extensionId}:${props.task.id}`} {...props} />;
 }
 
-function SlotPanelBodyInner({ extensionId, name, task }: { extensionId: string; name: string; task: Task }) {
+function SlotPanelBodyInner({ extensionId, name, task, external }: { extensionId: string; name: string; task: Task; external?: boolean }) {
   const Panel = BUILTIN_SLOTS[extensionId]?.["task.panel"];
+  const framed = !Panel && Boolean(external);
   const [ready, setReady] = useState(false);
   const [late, setLate] = useState(false);
   const markReady = useCallback(() => setReady(true), []);
@@ -128,6 +144,16 @@ function SlotPanelBodyInner({ extensionId, name, task }: { extensionId: string; 
     const id = setTimeout(() => setLate(true), SLOT_TIMEOUT_MS);
     return () => clearTimeout(id);
   }, []);
+  if (framed) {
+    // The frame owns its loading and failure states (and its own, longer, clock).
+    return (
+      <SlotErrorBoundary name={name} key={`${extensionId}:${task.id}`}>
+        <Suspense fallback={<Pending />}>
+        <ExternalFrame extensionId={extensionId} name={name} slot="task.panel" taskId={task.id} projectId={task.project_id} layout="panel" />
+        </Suspense>
+      </SlotErrorBoundary>
+    );
+  }
   if (!Panel) return <Unavailable name={name} />;
   return (
     <SlotErrorBoundary name={name} key={`${extensionId}:${task.id}`}>

@@ -16,6 +16,8 @@ import {
   LayoutDashboard,
   MonitorDot,
   Plug,
+  Server,
+  Puzzle,
   Plus,
   Settings,
   Sparkles,
@@ -59,6 +61,7 @@ import {
 } from "@/components/ui/dialog";
 import { CreateProjectDialog } from "@/components/create-project-dialog";
 import { apiErrorMessage } from "@/lib/api-error";
+import { useSidebarItems } from "@/lib/extension-slots";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -227,6 +230,8 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const isEventsRoute = location.pathname.endsWith("/events");
   const isAnalyticsRoute = location.pathname.endsWith("/analytics");
   const isExtensionsRoute = location.pathname.endsWith("/extensions");
+  const isRunnerRoute = location.pathname.endsWith("/runner");
+  const extensionItems = useSidebarItems();
   const isInitiativesRoute = location.pathname.endsWith("/initiatives");
   const isTriageRoute = location.pathname.endsWith("/triage");
   const isMemoriesRoute = location.pathname.endsWith("/memories");
@@ -444,6 +449,21 @@ export function Sidebar({ collapsed }: SidebarProps) {
           >
             <Plug className="h-4 w-4" />
           </Link>
+          {wsSlug &&
+            extensionItems.map((item) => (
+              <Link
+                key={item.extensionId}
+                to={`/w/${wsSlug}/x/${item.extensionId}`}
+                aria-label={item.title}
+                title={item.title}
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
+                  location.pathname === `/w/${wsSlug}/x/${item.extensionId}` && "bg-sidebar-accent text-sidebar-primary",
+                )}
+              >
+                <Puzzle className="h-4 w-4" />
+              </Link>
+            ))}
         </nav>
       </aside>
     );
@@ -751,6 +771,30 @@ export function Sidebar({ collapsed }: SidebarProps) {
           <Plug className="h-4 w-4" />
           {t("nav.extensions")}
         </Link>
+        <Link
+          to={wsSlug ? `/w/${wsSlug}/runner` : "/"}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+            isRunnerRoute && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Server className="h-4 w-4" />
+          {t("nav.myRunner")}
+        </Link>
+        {wsSlug &&
+          extensionItems.map((item) => (
+            <Link
+              key={item.extensionId}
+              to={`/w/${wsSlug}/x/${item.extensionId}`}
+              className={cn(
+                "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
+                location.pathname === `/w/${wsSlug}/x/${item.extensionId}` && "bg-sidebar-accent font-medium",
+              )}
+            >
+              <Puzzle className="h-4 w-4" />
+              <span className="truncate">{item.title}</span>
+            </Link>
+          ))}
       </nav>
 
       {/* Footer */}

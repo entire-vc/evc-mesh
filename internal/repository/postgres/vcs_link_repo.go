@@ -3,8 +3,10 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -338,7 +340,7 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 
 	const updateQ = `
 		UPDATE vcs_links
-		SET provider = $1, external_id = $2, status = $3, title = $4, metadata = $5, url = $6,
+		SET provider = $1, external_id = $2, status = $3, title = $4, metadata = metadata || $5::jsonb, url = $6,
 		    status_synced_at = now()
 		WHERE id = $7
 		RETURNING status_synced_at
@@ -387,19 +389,41 @@ func (r *VCSLinkRepo) ListByExternalID(ctx context.Context, provider domain.VCSP
 // SetPipelineStatus records the latest pipeline of the link. A delivery for a
 // pipeline older than the stored one is ignored (webhooks arrive out of
 // order; GitLab pipeline ids only grow), while a later status of the same
-// pipeline overwrites. Returns true when the row was written.
-func (r *VCSLinkRepo) SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status string) (bool, error) {
+// pipeline overwrites. The commit sha is stored with the status in one UPDATE,
+// so the two can never describe different pipelines. Returns true when the row
+// was written.
+func (r *VCSLinkRepo) SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status, sha string) (bool, error) {
 	const q = `
 		UPDATE vcs_links
-		SET pipeline_id = $2, pipeline_status = $3, pipeline_updated_at = now()
+		SET pipeline_id = $2, pipeline_status = $3, pipeline_updated_at = now(),
+		    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('pipeline_sha', $4::text)
 		WHERE id = $1 AND (pipeline_id IS NULL OR pipeline_id <= $2)
 	`
-	res, err := r.db.ExecContext(ctx, q, id, pipelineID, status)
+	res, err := r.db.ExecContext(ctx, q, id, pipelineID, status, strings.TrimSpace(sha))
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// MergeMetadata merges patch into metadata with jsonb ||, so keys the patch
+// does not name (head_sha, role, manual_status_declaration) survive.
+func (r *VCSLinkRepo) MergeMetadata(ctx context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error) {
+	const q = `
+		UPDATE vcs_links
+		SET metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+		WHERE id = $1 AND task_id = $2 AND link_type = 'pr'
+		RETURNING ` + vcsLinkSelectCols
+	var row vcsLinkRow
+	if err := r.db.GetContext(ctx, &row, q, id, taskID, []byte(patch)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	link := row.toDomain()
+	return &link, nil
 }
 
 // Ensure VCSLinkRepo satisfies the repository.VCSLinkRepository interface.

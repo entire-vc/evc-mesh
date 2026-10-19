@@ -226,7 +226,11 @@ func TestBodyTenantFieldsAreDeclared(t *testing.T) {
 // declaredBodyTenantFields is the reviewed verdict on every tenant-identifying id
 // that arrives in a request body. The key is "<file>:<struct>.<json field>".
 var declaredBodyTenantFields = map[string]string{
+	"user_runtime_handler.go:managerBody.agent_id": "UserRuntimeRepo.managerChange checks in the transaction that the agent's operator_user_id is the signed-in user (a human, never a connector); another tenant's agent is a plain 404",
 	// Guarded by middleware.RequireBodyWorkspace on the route.
+	"extension_ui_handler.go:uiContextRequest.workspace_id":         "guarded: bodyWS on POST /ext/:ext_id/ui-context",
+	"extension_ui_handler.go:uiContextRequest.project_id":           "checked: ExtensionUIHandler.UIContext requires the project to belong to workspace_id (404 otherwise)",
+	"extension_ui_handler.go:uiContextRequest.task_id":              "checked: ExtensionUIHandler.UIContext requires the task to belong to workspace_id (404 otherwise)",
 	"rule_handler.go:evaluateRuleRequest.workspace_id":              "guarded: bodyWS on POST /rules/evaluate",
 	"notification_handler.go:updatePreferencesRequest.workspace_id": "guarded: bodyWS on PUT /notifications/preferences",
 	"rule_handler.go:evaluateRuleRequest.project_id":                "guarded: bodyWS resolves it and requires it to agree with workspace_id",
@@ -239,6 +243,7 @@ var declaredBodyTenantFields = map[string]string{
 	"dependency_handler.go:createDependencyRequest.depends_on_task_id": "checked: taskDependencyService.Create requires the same project as :task_id",
 	"initiative_handler.go:linkProjectRequest.project_id":              "checked: initiativeService.LinkProject requires the initiative's own workspace",
 	"task_handler.go:moveToProjectRequest.project_id":                  "checked: taskService.MoveToProject requires the task's own workspace",
+	"task_handler.go:moveToProjectBatchRequest.project_id":             "checked: TaskRepo.MoveBatchToProject requires the destination project and every task to be in the caller's authenticated workspace (403 otherwise)",
 	"project_member_handler.go:addAgentMemberRequest.agent_id":         "checked: projectMemberService.AddAgentMember requires the project's own workspace",
 	"secret_handler.go:createSecretRequest.project_id":                 "checked: secretService.Create -> repo.AssertScopeRefInWorkspace, the FK does not carry a workspace predicate",
 	"secret_handler.go:createSecretRequest.agent_id":                   "checked: same call — an agent id from another tenant is refused with the same message as a nonexistent one",

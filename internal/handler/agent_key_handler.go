@@ -38,6 +38,8 @@ type issueAgentKeyRequest struct {
 	Label string `json:"label"`
 	// ExpiresInSeconds optionally bounds the key; 0 or absent means no expiry.
 	ExpiresInSeconds int64 `json:"expires_in_seconds"`
+	// OperatorUserID names the user who runs the agent; absent means the issuer.
+	OperatorUserID *uuid.UUID `json:"operator_user_id"`
 }
 
 // Issue handles POST /agents/:agent_id/keys. The raw key is in the response once
@@ -56,7 +58,11 @@ func (h *AgentKeyHandler) Issue(c echo.Context) error {
 	if req.ExpiresInSeconds < 0 {
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest("expires_in_seconds must not be negative"))
 	}
-	issued, err := h.keys.Issue(keyCtx(c), agentID, req.Label, time.Duration(req.ExpiresInSeconds)*time.Second)
+	ctx := keyCtx(c)
+	if req.OperatorUserID != nil {
+		ctx = service.WithOperatorUser(ctx, *req.OperatorUserID)
+	}
+	issued, err := h.keys.Issue(ctx, agentID, req.Label, time.Duration(req.ExpiresInSeconds)*time.Second)
 	if err != nil {
 		return handleError(c, err)
 	}

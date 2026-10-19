@@ -100,19 +100,35 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Header — docs shortcut", () => {
-  it("is absent when no task is open", () => {
-    renderHeaderAt("/w/acme/p/team-a");
+describe("Header — Docs tab on an open task", () => {
+  it("has no standalone docs icon link on a task", () => {
+    renderHeaderAt("/w/acme/p/team-a/t/task-1");
     expect(screen.queryByRole("link", { name: /project docs/i })).toBeNull();
   });
 
-  it("links to the OPEN TASK's own project docs, not the sidebar's current project", () => {
-    // URL literally names team-a, but the task loaded into the store belongs
-    // to team-b — the same shape as a direct link into a foreign project.
+  it("shows Docs as a tab in the view strip with no tab active", () => {
     renderHeaderAt("/w/acme/p/team-a/t/task-1");
+    for (const name of ["Board", "List", "Docs"]) {
+      const tab = screen.getByRole("button", { name });
+      expect(tab).not.toHaveAttribute("aria-current");
+    }
+  });
 
-    const link = screen.getByRole("link", { name: /project docs/i });
-    expect(link).toHaveAttribute("href", "/w/acme/p/team-b/docs");
+  it("clicking Docs goes to the OPEN TASK's project docs, not the URL's project", () => {
+    render(
+      <MemoryRouter initialEntries={["/w/acme/p/team-a/t/task-1"]}>
+        <Routes>
+          <Route
+            path="w/:wsSlug/p/:projectSlug/t/:taskId"
+            element={<Header onToggleSidebar={() => {}} />}
+          />
+          <Route path="w/:wsSlug/p/team-b/docs" element={<div>DOCS-OF-B</div>} />
+          <Route path="w/:wsSlug/p/team-a/docs" element={<div>DOCS-OF-A</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Docs" }));
+    expect(screen.getByText("DOCS-OF-B")).toBeInTheDocument();
   });
 });
 

@@ -96,6 +96,9 @@ type Task struct {
 	// explicit assignee_id, then clears the stash.
 	PreReviewAssigneeID   *uuid.UUID    `json:"pre_review_assignee_id,omitempty" db:"pre_review_assignee_id"`
 	PreReviewAssigneeType *AssigneeType `json:"pre_review_assignee_type,omitempty" db:"pre_review_assignee_type"`
+	// PreReviewRestore is true only when a reviewer rotation put the stash there; the
+	// bounce-out restore keys on it. The stash alone records the author on every review entry.
+	PreReviewRestore bool `json:"-" db:"pre_review_restore"`
 	// ReviewerID/ReviewerType hold the person or agent responsible for checking the
 	// work — independent of AssigneeID, which is who does it. Nil means no reviewer
 	// is set. Unlike AssigneeType, there's no "unassigned" sentinel: absence is nil.

@@ -201,6 +201,20 @@ func (r *IntegrationRepo) Update(ctx context.Context, id uuid.UUID, input domain
 	return existing, nil
 }
 
+// SetActive switches a connection on or off without touching its config. Unlike
+// Update it is allowed on a Runner row: the runtime API's own save flips the
+// same column, and nothing here reaches the versioned catalog.
+func (r *IntegrationRepo) SetActive(ctx context.Context, id uuid.UUID, active bool) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE integration_configs SET is_active = $2, updated_at = now() WHERE id = $1`, id, active)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apierror.NotFound("Integration")
+	}
+	return nil
+}
+
 // Delete removes an integration config by its ID.
 func (r *IntegrationRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	existing, err := r.GetByID(ctx, id)

@@ -39,7 +39,8 @@ import { toast } from "@/components/ui/toast";
 import type { ProjectViewTab, ViewType } from "@/types";
 
 interface ViewTabBarProps {
-  currentView: ProjectViewTab;
+  // null on an open task: the strip is navigation only, no tab is active.
+  currentView: ProjectViewTab | null;
   wsSlug: string;
   projectSlug: string;
   projectId?: string;
@@ -109,8 +110,8 @@ const VIEW_TYPE_PATH: Record<ViewType, (ws: string, proj: string) => string> = {
 };
 
 // Docs has no server-side saved-view type, so it must not reach createView().
-function isSavedViewType(view: ProjectViewTab): view is ViewType {
-  return view !== "docs";
+function isSavedViewType(view: ProjectViewTab | null): view is ViewType {
+  return view !== null && view !== "docs";
 }
 
 export function ViewTabBar({
@@ -241,6 +242,7 @@ export function ViewTabBar({
                   : "border-transparent font-normal text-muted-foreground hover:text-foreground",
               )}
               aria-current={isActive ? "page" : undefined}
+              aria-label={t(labelKey)}
             >
               <Icon className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">{t(labelKey)}</span>

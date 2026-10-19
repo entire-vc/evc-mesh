@@ -153,6 +153,20 @@ func (s *agentKeyService) issue(ctx context.Context, agentID uuid.UUID, label st
 		return nil, apierror.NotFound("Workspace")
 	}
 
+	if op := OperatorUserFromContext(ctx); op != uuid.Nil {
+		checker, isChecker := s.sponsors.(AgentOperatorRecorder)
+		if !isChecker {
+			return nil, apierror.BadRequest("operator_user_id is not supported here")
+		}
+		can, cerr := checker.UserCanOperate(ctx, agent.WorkspaceID, op)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if !can {
+			return nil, apierror.ValidationError(map[string]string{"operator_user_id": "must be an active member of the agent's workspace"})
+		}
+	}
+
 	by, byType := actorctx.FromContext(ctx)
 	var expires *time.Time
 	if ttl > 0 {

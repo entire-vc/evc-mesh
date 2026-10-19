@@ -31,6 +31,11 @@ import (
 // Test doubles.
 // ---------------------------------------------------------------------------
 
+type patchCall struct {
+	taskID, linkID uuid.UUID
+	patch          map[string]any
+}
+
 // stubVCSLinkService captures the GitHubWebhookEvent passed by the handler.
 type stubVCSLinkService struct {
 	mu                 sync.Mutex
@@ -52,6 +57,8 @@ type stubVCSLinkService struct {
 	listReturn            []domain.VCSLink
 	listReturnErr         error
 	deleteReturnErr       error
+	patchCalls            []patchCall
+	patchReturnErr        error
 	resolveCalls          [][]service.TaskRefSource
 	resolveWorkspaceCalls []uuid.UUID
 	resolveTaskID         uuid.UUID
@@ -71,6 +78,16 @@ func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLin
 	}
 	link := &domain.VCSLink{ID: uuid.New(), TaskID: input.TaskID}
 	return link, created, s.createReturnErr
+}
+
+func (s *stubVCSLinkService) PatchMetadata(_ context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.patchCalls = append(s.patchCalls, patchCall{taskID: taskID, linkID: linkID, patch: patch})
+	if s.patchReturnErr != nil {
+		return nil, s.patchReturnErr
+	}
+	return &domain.VCSLink{ID: linkID, TaskID: taskID, Metadata: json.RawMessage(`{"ship_sha":"merged"}`)}, nil
 }
 
 func (s *stubVCSLinkService) GetByID(_ context.Context, _ uuid.UUID) (*domain.VCSLink, error) {

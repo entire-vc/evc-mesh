@@ -37,6 +37,16 @@ type External struct {
 	HealthPath     string `json:"health_path"`
 	InstallPath    string `json:"install_path"`
 	EventsPath     string `json:"events_path"`
+	// UI maps a slot (sidebar.item, task.panel) to the screen the service serves
+	// for it; the screen is shown in an iframe on the service's own origin.
+	UI map[string]ExternalUI `json:"ui,omitempty"`
+}
+
+// ExternalUI is one iframe screen of an external extension.
+type ExternalUI struct {
+	Path  string `json:"path"`
+	Title string `json:"title"`
+	Icon  string `json:"icon,omitempty"`
 }
 
 // Levels says at which scopes the extension has settings.
@@ -53,6 +63,13 @@ type Capabilities struct {
 	WebhooksIn []string `json:"webhooks_in"`
 	UI         []string `json:"ui"`
 	Secrets    []string `json:"secrets"`
+	Network    *Network `json:"network,omitempty"`
+}
+
+// Network is the set of hosts the extension may talk to; iframe screens may
+// only be served from these.
+type Network struct {
+	AllowedDomains []string `json:"allowed_domains"`
 }
 
 // ParseManifest decodes a manifest and checks the fields the registry relies

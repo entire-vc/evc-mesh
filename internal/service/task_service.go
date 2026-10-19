@@ -82,6 +82,7 @@ type taskService struct {
 	wsMembership      WorkspaceMembershipReader
 	agentGrantRepo    repository.AgentWorkspaceGrantRepository
 	listRevisionRepo  repository.TaskListRevisionRepository
+	batchMover        repository.TaskBatchMover
 }
 
 // NewTaskService returns a new TaskService backed by the given repositories.
@@ -112,6 +113,13 @@ type TaskServiceOption func(*taskService)
 func WithCustomFieldService(cfs CustomFieldService) TaskServiceOption {
 	return func(s *taskService) {
 		s.customFieldSvc = cfs
+	}
+}
+
+// WithTaskBatchMover sets the repository that performs the atomic batch project move.
+func WithTaskBatchMover(m repository.TaskBatchMover) TaskServiceOption {
+	return func(s *taskService) {
+		s.batchMover = m
 	}
 }
 
@@ -946,6 +954,33 @@ func (s *taskService) Search(ctx context.Context, workspaceID uuid.UUID, filter 
 // It validates that the status exists and belongs to the same project as the task.
 // If the target status category is "done", it sets CompletedAt.
 func (s *taskService) MoveTask(ctx context.Context, taskID uuid.UUID, input MoveTaskInput) error {
+	// The write is guarded by the row version read at the start of moveTaskOnce,
+	// and any committed write to the task (a trailing release/gate write, a
+	// comment, an artifact) advances that version. A caller that supplied no
+	// precondition did not ask to be rejected by such a write, so re-read and
+	// recompute on the fresh state instead of surfacing a spurious 409. Callers
+	// with their own CAS and the reaper/auto-transition keep fail-fast semantics.
+	attempts := 1
+	if input.ExpectedVersion == nil && input.ExpectedStatusID == nil && input.ExpectedUpdatedAt == nil &&
+		input.Reaper == nil && input.Source != "auto_transition" {
+		attempts = moveTaskImplicitCASAttempts
+	}
+	var err error
+	for i := 0; i < attempts; i++ {
+		err = s.moveTaskOnce(ctx, taskID, input)
+		var conflict *CASConflictError
+		if err == nil || !errors.As(err, &conflict) {
+			return err
+		}
+	}
+	return err
+}
+
+// moveTaskImplicitCASAttempts bounds the internal retry for moves without
+// caller-supplied preconditions.
+const moveTaskImplicitCASAttempts = 3
+
+func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input MoveTaskInput) error {
 	task, err := s.taskRepo.GetByID(ctx, taskID)
 	if err != nil {
 		return err
@@ -2077,6 +2112,10 @@ func (s *taskService) notifyReviewer(ctx context.Context, task *domain.Task, eve
 	case domain.AssigneeTypeAgent:
 		s.notifyReviewerAgent(ctx, task, eventType, nil)
 	case domain.AssigneeTypeUser:
+		// Nobody needs a notification about what they themselves just did.
+		if actorID, _ := actorctx.FromContext(ctx); actorID != uuid.Nil && actorID == *task.ReviewerID {
+			return
+		}
 		s.dispatchTargetedUserNotification(ctx, task, eventType, "notif."+eventType, title, "", *task.ReviewerID, nil)
 	}
 }
@@ -3099,6 +3138,51 @@ func (s *taskService) MoveToProject(ctx context.Context, taskID, targetProjectID
 	return updated, nil
 }
 
+// MoveToProjectBatch moves the given tasks into one project atomically: all or
+// nothing, with the connected-task guard opened only inside the repository's
+// transaction. workspaceID is the caller's authenticated workspace; both the
+// destination project and every source task must belong to it.
+func (s *taskService) MoveToProjectBatch(ctx context.Context, in domain.MoveBatchInput) (*domain.MoveBatchResult, error) {
+	if s.batchMover == nil {
+		return nil, apierror.InternalError("batch move unavailable")
+	}
+	if len(in.TaskIDs) == 0 || len(in.TaskIDs) > 50 {
+		return nil, apierror.BadRequest("task_ids must contain 1..50 ids")
+	}
+	if len(in.StatusMapping) == 0 {
+		return nil, apierror.ValidationError(map[string]string{"status_mapping": "required"})
+	}
+	switch in.LeafMode {
+	case "":
+		in.LeafMode = domain.MoveLeafRefuse
+	case domain.MoveLeafRefuse, domain.MoveLeafDetachKeepBlocks:
+	default:
+		return nil, apierror.ValidationError(map[string]string{"leaf_mode": "must be detach_parent_keep_blocks or refuse"})
+	}
+	res, err := s.batchMover.MoveBatchToProject(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if res.DryRun {
+		return res, nil
+	}
+	for _, snap := range res.After {
+		if s.ctxCacheInv != nil {
+			s.ctxCacheInv.Invalidate(ctx, snap.TaskID)
+		}
+		for _, d := range res.Detached {
+			if d.OldParentID != uuid.Nil && s.ctxCacheInv != nil {
+				s.ctxCacheInv.Invalidate(ctx, d.OldParentID)
+			}
+		}
+		s.logActivity(ctx, in.ProjectID, snap.TaskID, "task.moved_to_project", map[string]interface{}{
+			"from_project_id": map[string]interface{}{"old": res.SourceProjects[snap.TaskID].String(), "new": in.ProjectID.String()},
+			"atomic_batch":    true,
+		})
+	}
+	return res, nil
+}
+
 // moveSubtasksToProject recursively moves all subtasks of parentID to targetProjectID,
 // remapping each subtask's status by semantic category. Falls back to fallbackStatusID
 // when the target project has no status with the matching category.
@@ -3410,6 +3494,30 @@ func (s *taskService) ForceReleaseCheckout(ctx context.Context, id uuid.UUID, in
 // prepareTransitionAssignee computes assignment and the review stash before the
 // atomic status update. Notifications and comments are emitted only after commit.
 func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID, input MoveTaskInput, changed bool) (string, error) {
+	authorID, authorType := task.AssigneeID, task.AssigneeType
+	entering := false
+	if changed {
+		next, nerr := s.statusRepo.GetByID(ctx, task.StatusID)
+		old, oerr := s.statusRepo.GetByID(ctx, oldStatusID)
+		entering = nerr == nil && oerr == nil && next != nil && old != nil &&
+			next.Category == domain.StatusCategoryReview && old.Category != domain.StatusCategoryReview
+	}
+	if entering {
+		task.PreReviewRestore = false // a stale flag from an earlier cycle must not survive
+	}
+	reason, err := s.prepareTransitionAssigneeRoute(ctx, task, oldStatusID, input, changed)
+	if err != nil || !entering || task.PreReviewRestore || authorID == nil {
+		return reason, err
+	}
+	// Entering review without a reviewer rotation: still record who did the work, so
+	// author/not_author rules have it. PreReviewRestore stays false, so bouncing out of
+	// review does not move the assignee (only a rotation is ever undone).
+	typ := authorType
+	task.PreReviewAssigneeID, task.PreReviewAssigneeType = authorID, &typ
+	return reason, err
+}
+
+func (s *taskService) prepareTransitionAssigneeRoute(ctx context.Context, task *domain.Task, oldStatusID uuid.UUID, input MoveTaskInput, changed bool) (string, error) {
 	if input.AssigneeID != nil {
 		typ := s.resolveAssigneeType(ctx, input.AssigneeID, input.AssigneeType)
 		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, input.AssigneeID, typ); err != nil {
@@ -3451,11 +3559,11 @@ func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domai
 			return "", err
 		}
 		previousType := task.AssigneeType
-		task.PreReviewAssigneeID, task.PreReviewAssigneeType = task.AssigneeID, &previousType
+		task.PreReviewAssigneeID, task.PreReviewAssigneeType, task.PreReviewRestore = task.AssigneeID, &previousType, true
 		task.AssigneeID, task.AssigneeType = id, typ
 		return reason, nil
 	}
-	if old.Category == domain.StatusCategoryReview && (next.Category == domain.StatusCategoryTodo || next.Category == domain.StatusCategoryInProgress) && task.PreReviewAssigneeType != nil {
+	if old.Category == domain.StatusCategoryReview && (next.Category == domain.StatusCategoryTodo || next.Category == domain.StatusCategoryInProgress) && task.PreReviewRestore && task.PreReviewAssigneeType != nil {
 		id, typ := task.PreReviewAssigneeID, *task.PreReviewAssigneeType
 		if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, id, typ); err != nil {
 			log.Printf("[review-assign] REFUSED restore task %s: %v", task.ID, err)
@@ -3465,7 +3573,7 @@ func (s *taskService) prepareTransitionAssignee(ctx context.Context, task *domai
 			return "", err
 		}
 		task.AssigneeID, task.AssigneeType = id, typ
-		task.PreReviewAssigneeID, task.PreReviewAssigneeType = nil, nil
+		task.PreReviewAssigneeID, task.PreReviewAssigneeType, task.PreReviewRestore = nil, nil, false
 		return "restored pre-review assignee on bounce out of review", nil
 	}
 	return "", nil
@@ -3514,7 +3622,7 @@ func (s *taskService) applyOnEnterAssignee(ctx context.Context, task *domain.Tas
 	}
 	if next.Category == domain.StatusCategoryReview {
 		previousType := task.AssigneeType
-		task.PreReviewAssigneeID, task.PreReviewAssigneeType = task.AssigneeID, &previousType
+		task.PreReviewAssigneeID, task.PreReviewAssigneeType, task.PreReviewRestore = task.AssigneeID, &previousType, true
 	}
 	task.AssigneeID, task.AssigneeType = id, typ
 	return "on_enter assign_to " + target, true

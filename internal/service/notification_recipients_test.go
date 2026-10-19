@@ -157,3 +157,21 @@ func TestRelevantToUser_EmptySetMeansNobodyUnlessBroadcast(t *testing.T) {
 	assert.True(t, relevantToUser(event, named))
 	assert.False(t, relevantToUser(event, anyone), "Broadcast never widens a named set")
 }
+
+// A recurring instance is created with CreatedByType=system; its CreatedBy is
+// the schedule owner and must still be told.
+func TestTaskParticipants_RecurringInstanceKeepsScheduleOwner(t *testing.T) {
+	owner, agent := uuid.New(), uuid.New()
+	sched := uuid.New()
+	task := &domain.Task{
+		AssigneeID:          userPtr(agent),
+		AssigneeType:        domain.AssigneeTypeAgent,
+		CreatedBy:           owner,
+		CreatedByType:       domain.ActorTypeSystem,
+		RecurringScheduleID: &sched,
+	}
+	assert.Equal(t, []uuid.UUID{owner}, taskParticipants(task, uuid.New()))
+
+	task.RecurringScheduleID = nil
+	assert.Empty(t, taskParticipants(task, uuid.New()), "a non-recurring system-created card has no human recipient")
+}

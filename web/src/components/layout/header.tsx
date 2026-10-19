@@ -4,7 +4,6 @@ import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Activity,
   BarChart2,
-  BookOpen,
   Bot,
   Brain,
   ChevronRight,
@@ -409,16 +408,20 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
 }
 
 // ---------------------------------------------------------------------------
-// useOpenTaskDocsLink — Docs link for the task's OWN project
+// useOpenTaskProjectLink — view-strip target for the task's OWN project
 // ---------------------------------------------------------------------------
 
 // A task can be opened while a *different* project is selected in the
 // sidebar (direct link into someone else's project, cross-project search
 // result, etc.) — currentProject/:projectSlug lag or disagree in that case.
 // Resolve the docs target from the open task's own project_id instead of
-// trusting the URL or the sidebar selection, so the icon always points at
+// trusting the URL or the sidebar selection, so the Docs tab always points at
 // the docs that actually belong to what's on screen.
-function useOpenTaskDocsLink(): { wsSlug: string; projectSlug: string } | null {
+function useOpenTaskProjectLink(): {
+  wsSlug: string;
+  projectSlug: string;
+  projectId: string;
+} | null {
   const { wsSlug, taskId } = useParams();
   const { projects } = useProjectStore();
   const openTask = useTaskStore((state) =>
@@ -428,27 +431,7 @@ function useOpenTaskDocsLink(): { wsSlug: string; projectSlug: string } | null {
   if (!wsSlug || !taskId || !openTask) return null;
   const project = projects.find((p) => p.id === openTask.project_id);
   if (!project) return null;
-  return { wsSlug, projectSlug: project.slug };
-}
-
-function DocsShortcutLink({
-  wsSlug,
-  projectSlug,
-}: {
-  wsSlug: string;
-  projectSlug: string;
-}) {
-  const { t } = useTranslation("shell");
-  return (
-    <Link
-      to={`/w/${wsSlug}/p/${projectSlug}/docs`}
-      title={t("header.projectDocs")}
-      aria-label={t("header.projectDocs")}
-      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-    >
-      <BookOpen className="h-4 w-4" />
-    </Link>
-  );
+  return { wsSlug, projectSlug: project.slug, projectId: project.id };
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +558,7 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
   const teamView = useTeamView();
   const workspacePage = useWorkspacePage();
   const profileSlug = wsSlug ?? currentWorkspace?.slug;
-  const openTaskDocsLink = useOpenTaskDocsLink();
+  const openTaskProject = useOpenTaskProjectLink();
   return (
     <header className="mesh-mobile-header flex h-14 items-center gap-2 sm:gap-4 border-b border-border bg-background px-2 sm:px-4">
       <Button
@@ -621,8 +604,10 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
         )}
       </nav>
 
-      {/* View tabs — shown when inside a project */}
-      {currentView && wsSlug && projectSlug && (
+      {/* View tabs — shown when inside a project. On an open task the same
+          strip stays (no tab active) so Docs is a tab, not a separate icon;
+          it targets the task's own project (see useOpenTaskProjectLink). */}
+      {currentView && wsSlug && projectSlug ? (
         <ViewTabBar
           currentView={currentView}
           wsSlug={wsSlug}
@@ -630,6 +615,16 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
           projectId={currentProject?.id}
           className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
         />
+      ) : (
+        openTaskProject && (
+          <ViewTabBar
+            currentView={null}
+            wsSlug={openTaskProject.wsSlug}
+            projectSlug={openTaskProject.projectSlug}
+            projectId={openTaskProject.projectId}
+            className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
+          />
+        )
       )}
 
       {/* Team view tabs — shown on org-chart page */}
@@ -638,15 +633,6 @@ export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps)
       )}
 
       <div className="flex-1" />
-
-      {/* Docs shortcut — only while a task is open, and only for the project
-          that task actually belongs to (see useOpenTaskDocsLink above). */}
-      {openTaskDocsLink && (
-        <DocsShortcutLink
-          wsSlug={openTaskDocsLink.wsSlug}
-          projectSlug={openTaskDocsLink.projectSlug}
-        />
-      )}
 
       {/* Search */}
       <TaskSearchBox wsSlug={wsSlug} />
