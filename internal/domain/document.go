@@ -98,6 +98,14 @@ type Document struct {
 	CreatedByName *string `json:"created_by_name,omitempty" db:"created_by_name"`
 	UpdatedByName *string `json:"updated_by_name,omitempty" db:"updated_by_name"`
 
+	// NewStorageKey is the key of a body already uploaded for the write being
+	// made. The repository's conditional UPDATE swaps storage_key to it together
+	// with the version bump, so the row and the body it points at change in one
+	// step. Empty means "leave storage_key alone" — a rename or a move must not
+	// put back the pointer it happened to read before a concurrent body write.
+	// Never stored as a column of its own, never serialised.
+	NewStorageKey string `json:"-" db:"-"`
+
 	// Body is the markdown fetched from object storage. There is no such column:
 	// it is populated only by the reads that ask for it (a single document), so a
 	// list of 200 documents is not 200 round-trips to S3. Same arrangement as

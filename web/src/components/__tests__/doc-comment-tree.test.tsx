@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { DocCommentTree, inDocumentOrder } from "@/components/doc-comment-tree";
 import type {
@@ -91,6 +91,10 @@ function makeController(
     readOnly: false,
     activeThreadId: null,
     focusThread: vi.fn(),
+    activeSource: "mark",
+    getMarkRect: () => null,
+    scrollToMark: () => false,
+    layoutTick: 0,
     pendingSelection: null,
     startDraft: vi.fn(),
     startPageDraft: vi.fn(),
@@ -324,5 +328,56 @@ describe("DocCommentTree — the composer that lives at the bottom (#744ae979)",
     expect(
       screen.queryByPlaceholderText("Add a comment… @ to mention"),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("DocCommentTree — reveal of the active card", () => {
+  const original = Element.prototype.scrollIntoView;
+  afterEach(() => {
+    Element.prototype.scrollIntoView = original;
+  });
+
+  it("scrolls the active card into view after a mark click", () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy;
+    renderTree(
+      makeController({
+        threads: [makeThread("t1", { start: 1, end: 5 })],
+        activeThreadId: "t1",
+        activeSource: "mark",
+      }),
+    );
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("does not scroll after a mark click when the rail is beside the document (it would scroll away from the mark)", () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy;
+    render(
+      <DocCommentTree
+        controller={makeController({
+          threads: [makeThread("t1", { start: 1, end: 5 })],
+          activeThreadId: "t1",
+          activeSource: "mark",
+        })}
+        showResolved={false}
+        onShowResolvedChange={() => {}}
+        revealWhenActive={false}
+      />,
+    );
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("does not scroll when the focus came from a card click in the rail (it would fight the mark scroll)", () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy;
+    renderTree(
+      makeController({
+        threads: [makeThread("t1", { start: 1, end: 5 })],
+        activeThreadId: "t1",
+        activeSource: "card",
+      }),
+    );
+    expect(spy).not.toHaveBeenCalled();
   });
 });

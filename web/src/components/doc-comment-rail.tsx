@@ -1,5 +1,13 @@
 import { AgentShortTag } from "@/components/agent-short-tag";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Bot,
   Check,
@@ -22,6 +30,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { apiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
+import { DRAFT_MARK_ID } from "@/lib/doc-comments/use-doc-comments";
 import type {
   DocCommentsController,
   PlacedThread,
@@ -114,6 +123,8 @@ function PlacementNotice({ placement }: { placement: ThreadPlacement }) {
 // Composer
 // ---------------------------------------------------------------------------
 
+const REVEAL_DELAY_MS = 250;
+
 export function Composer({
   placeholder,
   initialValue = "",
@@ -134,6 +145,7 @@ export function Composer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Wired here rather than at each of the three call sites, because all three —
   // a new thread, a reply and an edit — go through this one component.
@@ -141,7 +153,18 @@ export function Composer({
   const mentions = useMentionPicker(currentWorkspace?.id, value, setValue, ref);
 
   useEffect(() => {
-    if (autoFocus) ref.current?.focus();
+    // preventScroll: a new draft card is laid out at top 0 until the rail has
+    // measured its mark, and a plain focus() would scroll the document to it.
+    if (!autoFocus) return;
+    ref.current?.focus({ preventScroll: true });
+    // Once the rail has placed the card, bring the whole form — buttons
+    // included — into view; "nearest" is a no-op when it already is. Rail cards
+    // animate `top` for 150ms (AlignedItems), and until that ends the card is
+    // still near the top of the rail, so "nearest" would scroll up to it.
+    const timer = window.setTimeout(() => {
+      rootRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    }, REVEAL_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [autoFocus]);
 
   const submit = async () => {
@@ -180,7 +203,7 @@ export function Composer({
   };
 
   return (
-    <div className="relative space-y-2">
+    <div ref={rootRef} className="relative space-y-2">
       <MentionPickerMenu picker={mentions} />
       <Textarea
         ref={ref}
@@ -343,10 +366,13 @@ export function Thread({
   thread,
   controller,
   directory,
+  revealWhenActive = true,
 }: {
   thread: PlacedThread;
   controller: DocCommentsController;
   directory: MentionDirectory;
+  /** The rail aligns cards to their marks itself; revealing would fight that scroll. */
+  revealWhenActive?: boolean;
 }) {
   const { t } = useTranslation("docs");
   const [replying, setReplying] = useState(false);
@@ -354,8 +380,12 @@ export function Thread({
   const active = controller.activeThreadId === thread.root.id;
 
   useEffect(() => {
-    if (active) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [active]);
+    // Not when the click came from a card: the duplicate in the other surface
+    // would scroll itself and fight the document's scroll to the mark.
+    if (active && revealWhenActive && controller.activeSource !== "card") {
+      ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [active, revealWhenActive, controller.activeSource]);
 
   return (
     <article
@@ -364,7 +394,13 @@ export function Thread({
       data-thread-id={thread.root.id}
       data-placement={thread.placement}
       data-resolved={thread.resolved ? "true" : "false"}
-      onClick={() => controller.focusThread(thread.root.id)}
+      onClick={(e) => {
+        controller.focusThread(thread.root.id, "card");
+        // Reply / edit / resolve / delete act on the card; they must not also
+        // move the document away from where the reader is working.
+        if ((e.target as HTMLElement).closest("button, a, input, textarea")) return;
+        controller.scrollToMark(thread.root.id);
+      }}
       className={cn(
         "cursor-default rounded-lg border p-3 transition-colors",
         active ? "border-yellow-400 bg-yellow-50/60 dark:bg-yellow-400/10" : "border-border",
@@ -453,6 +489,174 @@ export function Thread({
 }
 
 // ---------------------------------------------------------------------------
+// The unsaved draft
+// ---------------------------------------------------------------------------
+
+/** The quote and composer for a comment that has been started but not saved. */
+export function DraftCard({
+  controller,
+  draft,
+}: {
+  controller: DocCommentsController;
+  draft: NonNullable<DocCommentsController["draft"]>;
+}) {
+  const { t } = useTranslation("docs");
+  return (
+    <div className="rounded-lg border border-yellow-400 bg-yellow-50/60 p-3 dark:bg-yellow-400/10">
+      {draft.anchor ? (
+        <>
+          <Quote
+            text={draft.anchor.exact}
+            placement={draft.unplaceable ? "orphaned" : "anchored"}
+          />
+          {draft.unplaceable && (
+            <p className="mb-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
+              <Link2Off className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                {t("comments.unplaceable")}
+              </span>
+            </p>
+          )}
+        </>
+      ) : (
+        // No quote to show — this draft has no anchor at all. Reuses the
+        // same wording a page-placed thread already carries once saved
+        // (see PlacementNotice), so the composer doesn't introduce new
+        // copy of its own.
+        <PlacementNotice placement="page" />
+      )}
+      <Composer
+        placeholder={t("comments.addPlaceholder")}
+        submitLabel={t("comments.submit")}
+        autoFocus
+        onSubmit={controller.submitDraft}
+        onCancel={controller.cancelDraft}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Alignment: each card sits level with its mark
+// ---------------------------------------------------------------------------
+
+interface AlignedItem {
+  /** A thread root id, or DRAFT_MARK_ID. */
+  id: string;
+  node: ReactNode;
+}
+
+const ITEM_GAP = 8;
+
+/**
+ * Lays the cards out in one absolutely-positioned column, each at the height of
+ * its mark in the text.
+ *
+ * The document and the rail live in the same scroller, so a card that is level
+ * with its mark stays level while the page scrolls — there is nothing to sync.
+ * Marks that sit close together would overlap their cards; those are pushed down
+ * in document order. Cards with no mark (page-level, orphaned) follow the last
+ * placed one. Heights are measured, so an opened composer or a long reply moves
+ * the cards below it.
+ */
+function AlignedItems({
+  controller,
+  items,
+}: {
+  controller: DocCommentsController;
+  items: AlignedItem[];
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const [layout, setLayout] = useState<{ tops: Record<string, number>; height: number }>({
+    tops: {},
+    height: 0,
+  });
+  const { getMarkRect, layoutTick, activeThreadId } = controller;
+
+  const measure = useCallback(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const hostTop = host.getBoundingClientRect().top;
+    const entries = items.map((item, order) => {
+      const rect = getMarkRect(item.id);
+      return {
+        id: item.id,
+        order,
+        desired: rect ? rect.top - hostTop : null,
+        height: cardRefs.current.get(item.id)?.offsetHeight ?? 0,
+      };
+    });
+    const marked = entries
+      .filter((e) => e.desired !== null)
+      .sort((a, b) => (a.desired as number) - (b.desired as number) || a.order - b.order);
+    const unmarked = entries.filter((e) => e.desired === null);
+    const tops: Record<string, number> = {};
+    let cursor = 0;
+    for (const e of [...marked, ...unmarked]) {
+      const top = Math.max(e.desired ?? cursor, cursor);
+      tops[e.id] = top;
+      cursor = top + e.height + ITEM_GAP;
+    }
+    const height = Math.max(0, cursor - ITEM_GAP);
+    setLayout((prev) => {
+      const same =
+        prev.height === height &&
+        Object.keys(tops).length === Object.keys(prev.tops).length &&
+        Object.keys(tops).every((k) => prev.tops[k] === tops[k]);
+      return same ? prev : { tops, height };
+    });
+  }, [items, getMarkRect]);
+
+  // Every render: items are rebuilt each time, and measure() bails out when
+  // nothing moved, so this settles after one pass.
+  useLayoutEffect(() => {
+    measure();
+  }, [measure, layoutTick, activeThreadId]);
+
+  useEffect(() => {
+    const onResize = () => measure();
+    window.addEventListener("resize", onResize);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(onResize);
+      cardRefs.current.forEach((el) => ro?.observe(el));
+      const article = hostRef.current?.closest("[data-testid='doc-comment-rail']")
+        ?.parentElement?.querySelector("article");
+      if (article) ro.observe(article);
+    }
+    return () => {
+      window.removeEventListener("resize", onResize);
+      ro?.disconnect();
+    };
+  }, [measure, items.length]);
+
+  return (
+    <div
+      ref={hostRef}
+      data-testid="doc-comment-aligned"
+      className="relative pb-8"
+      style={{ height: layout.height + 32 }}
+    >
+      {items.map((item) => (
+        <div
+          key={item.id}
+          ref={(el) => {
+            if (el) cardRefs.current.set(item.id, el);
+            else cardRefs.current.delete(item.id);
+          }}
+          data-aligned-id={item.id}
+          className="absolute inset-x-0 transition-[top] duration-150"
+          style={{ top: layout.tops[item.id] ?? 0 }}
+        >
+          {item.node}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The rail
 // ---------------------------------------------------------------------------
 
@@ -475,6 +679,24 @@ export function DocCommentRail({
   const directory = useMentionDirectory();
   const visible = showResolved ? threads : threads.filter((t) => !t.resolved);
   const resolvedCount = threads.length - threads.filter((t) => !t.resolved).length;
+
+  const items: AlignedItem[] = [];
+  if (draft) {
+    items.push({ id: DRAFT_MARK_ID, node: <DraftCard controller={controller} draft={draft} /> });
+  }
+  for (const thread of visible) {
+    items.push({
+      id: thread.root.id,
+      node: (
+        <Thread
+          thread={thread}
+          controller={controller}
+          directory={directory}
+          revealWhenActive={false}
+        />
+      ),
+    });
+  }
 
   return (
     <aside
@@ -505,43 +727,8 @@ export function DocCommentRail({
         </p>
       )}
 
-      {draft && (
-        <div className="mb-3 rounded-lg border border-yellow-400 bg-yellow-50/60 p-3 dark:bg-yellow-400/10">
-          {draft.anchor ? (
-            <>
-              <Quote
-                text={draft.anchor.exact}
-                placement={draft.unplaceable ? "orphaned" : "anchored"}
-              />
-              {draft.unplaceable && (
-                <p className="mb-2 flex items-start gap-1.5 text-[11px] text-muted-foreground">
-                  <Link2Off className="mt-0.5 h-3 w-3 shrink-0" />
-                  <span>
-                    {t("comments.unplaceable")}
-                  </span>
-                </p>
-              )}
-            </>
-          ) : (
-            // No quote to show — this draft has no anchor at all. Reuses the
-            // same wording a page-placed thread already carries once saved
-            // (see PlacementNotice), so the composer doesn't introduce new
-            // copy of its own.
-            <PlacementNotice placement="page" />
-          )}
-          <Composer
-            placeholder={t("comments.addPlaceholder")}
-            submitLabel={t("comments.submit")}
-            autoFocus
-            onSubmit={controller.submitDraft}
-            onCancel={controller.cancelDraft}
-          />
-        </div>
-      )}
-
-      {error ? (
-        <p className="text-xs text-destructive">{error}</p>
-      ) : isLoading && threads.length === 0 ? (
+      {error && <p className="mb-2 text-xs text-destructive">{error}</p>}
+      {error && !draft && threads.length === 0 ? null : isLoading && threads.length === 0 && !draft ? (
         <p className="text-xs text-muted-foreground">{t("comments.loading")}</p>
       ) : visible.length === 0 && !draft ? (
         <div className="flex flex-col items-start gap-1 text-xs text-muted-foreground">
@@ -553,16 +740,7 @@ export function DocCommentRail({
           </p>
         </div>
       ) : (
-        <div className="space-y-2 pb-8">
-          {visible.map((thread) => (
-            <Thread
-              key={thread.root.id}
-              thread={thread}
-              controller={controller}
-              directory={directory}
-            />
-          ))}
-        </div>
+        <AlignedItems controller={controller} items={items} />
       )}
     </aside>
   );

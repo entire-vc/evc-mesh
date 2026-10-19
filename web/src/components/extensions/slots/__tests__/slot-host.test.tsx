@@ -93,9 +93,12 @@ describe("task.panel", () => {
 
   it("renders the lazy GitLab panel body", async () => {
     mockApi(workspaceExtensions({ enabled: true }));
+    // Warm the panel's module graph (vcs-links and its imports) first: the cold vite
+    // transform of that graph, not the component, is what exceeds a findBy timeout.
+    await import("../gitlab-panel");
     render(<SlotPanelBody extensionId="gitlab" name="GitLab" task={TASK} />);
-    expect(await screen.findByTestId("slot-panel-gitlab", {}, { timeout: 8000 })).toBeInTheDocument();
-  });
+    expect(await screen.findByTestId("slot-panel-gitlab")).toBeInTheDocument();
+  }, 60_000);
 
   it("shows 'unavailable' for an extension with no component, without waiting", () => {
     render(<SlotPanelBody extensionId="ghost" name="Ghost" task={TASK} />);
@@ -261,5 +264,39 @@ describe("registry follows enable/disable without a reload", () => {
     await act(async () => { release(); });
     await waitFor(() => expect(calls).toBe(2));
     expect(screen.queryAllByTestId(/badge/i)).toHaveLength(0);
+  });
+});
+
+describe("external iframe screens", () => {
+  const ext = (over: Record<string, unknown> = {}) => ({
+    id: "hello",
+    name: "Hello",
+    status: { enabled: true },
+    manifest: {
+      runtime: "external",
+      capabilities: { ui: ["sidebar.item", "task.panel"] },
+      external: { ui: { "sidebar.item": { path: "/mesh/ui/hello", title: "Привет" }, "task.panel": { path: "/mesh/ui/task", title: "Hello task" } } },
+      ...over,
+    },
+  });
+
+  it("reads screens only for slots that the manifest lists and gives a path", () => {
+    const [e] = parseSlotExtensions([ext() as never]);
+    expect(e?.slots).toEqual(["sidebar.item", "task.panel"]);
+    expect(e?.external).toEqual({ "sidebar.item": { title: "Привет" }, "task.panel": { title: "Hello task" } });
+
+    const [only] = parseSlotExtensions([ext({ capabilities: { ui: ["task.panel"] } }) as never]);
+    expect(only?.external).toEqual({ "task.panel": { title: "Hello task" } });
+  });
+
+  it("red control: a built-in or a manifest without external.ui gets no iframe screen", () => {
+    expect(parseSlotExtensions([ext({ runtime: "builtin" }) as never])[0]?.external).toBeUndefined();
+    expect(parseSlotExtensions([ext({ external: null }) as never])[0]?.external).toBeUndefined();
+  });
+
+  it("adds a task.panel tab named after the screen", async () => {
+    mockApi({ extensions: [ext()] } as never);
+    render(<Tabs />);
+    expect(await screen.findByText("Hello task")).toBeTruthy();
   });
 });

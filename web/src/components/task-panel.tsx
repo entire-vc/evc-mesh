@@ -2427,7 +2427,7 @@ export function TaskPanel({
                 {panelTabs.map(
                   (tab) =>
                     activeMobileTab === slotTabId(tab.extensionId) && (
-                      <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} />
+                      <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} external={tab.external} />
                     ),
                 )}
               </div>
@@ -2598,7 +2598,7 @@ export function TaskPanel({
               {panelTabs.map(
                 (tab) =>
                   activeDesktopTab === slotTabId(tab.extensionId) && (
-                    <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} />
+                    <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} external={tab.external} />
                   ),
               )}
             </div>

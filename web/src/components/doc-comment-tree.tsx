@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { MessageSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useMentionDirectory } from "@/hooks/use-mention-directory";
-import { Composer, Thread } from "@/components/doc-comment-rail";
+import { Composer, DraftCard, Thread } from "@/components/doc-comment-rail";
 import type {
   DocCommentsController,
   PlacedThread,
@@ -84,12 +84,20 @@ export interface DocCommentTreeProps {
   controller: DocCommentsController;
   showResolved: boolean;
   onShowResolvedChange: (next: boolean) => void;
+  /**
+   * Scroll the active card into view after a click on its mark. Only right when
+   * this tree is the one surface the reader can see; beside the rail, the rail
+   * card is already level with the mark and this one, below the document, would
+   * scroll the document away from it.
+   */
+  revealWhenActive?: boolean;
 }
 
 export function DocCommentTree({
   controller,
   showResolved,
   onShowResolvedChange,
+  revealWhenActive = true,
 }: DocCommentTreeProps) {
   const { t } = useTranslation("docs");
   const { threads, readOnly } = controller;
@@ -129,6 +137,14 @@ export function DocCommentTree({
         )}
       </div>
 
+      {/* The rail is what shows a draft beside its mark; without the rail
+          (narrow screens, rail closed) this is the only place it can appear. */}
+      {controller.draft && revealWhenActive && (
+        <div className="pb-3">
+          <DraftCard controller={controller} draft={controller.draft} />
+        </div>
+      )}
+
       {ordered.length === 0 ? (
         <div className="flex flex-col items-start gap-1 pb-4 text-xs text-muted-foreground">
           <MessageSquare className="h-5 w-5" />
@@ -142,6 +158,7 @@ export function DocCommentTree({
               thread={thread}
               controller={controller}
               directory={directory}
+              revealWhenActive={revealWhenActive}
             />
           ))}
         </div>

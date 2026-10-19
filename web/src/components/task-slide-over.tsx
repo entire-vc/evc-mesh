@@ -1251,7 +1251,7 @@ export function TaskSlideOver({
               {panelTabs.map(
                 (tab) =>
                   rightTab === `slot:${tab.extensionId}` && (
-                    <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} />
+                    <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} external={tab.external} />
                   ),
               )}
             </div>

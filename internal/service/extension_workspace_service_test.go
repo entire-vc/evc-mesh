@@ -584,3 +584,147 @@ func tokenOf(t *testing.T, raw []byte) string {
 	tok, _ := m["token"].(string)
 	return tok
 }
+
+// guardedIntegrations stands in for the repository: it refuses the generic Update
+// on every row, like Runner rows in Postgres, while the provider hides its settings.
+// The fault fields make the enable path's error branches reachable.
+type guardedIntegrations struct {
+	*exttest.MemIntegrations
+	insertErr  error // InsertIfAbsent fails
+	insertLost bool  // InsertIfAbsent reports a lost race but leaves no row
+	lostGetErr error // after a lost insert the follow-up read fails
+	setErr     error // SetActive fails
+	lost       bool
+}
+
+func (g *guardedIntegrations) Update(context.Context, uuid.UUID, domain.UpdateIntegrationInput) (*domain.IntegrationConfig, error) {
+	return nil, apierror.BadRequest("use the versioned runtime API")
+}
+
+func (g *guardedIntegrations) InsertIfAbsent(ctx context.Context, c *domain.IntegrationConfig) (bool, error) {
+	if g.insertErr != nil {
+		return false, g.insertErr
+	}
+	if g.insertLost {
+		g.lost = true
+		return false, nil
+	}
+	created, err := g.MemIntegrations.InsertIfAbsent(ctx, c)
+	g.lost = !created
+	return created, err
+}
+
+func (g *guardedIntegrations) GetByProvider(ctx context.Context, ws uuid.UUID, p domain.IntegrationProvider) (*domain.IntegrationConfig, error) {
+	if g.lost && g.lostGetErr != nil {
+		return nil, g.lostGetErr
+	}
+	return g.MemIntegrations.GetByProvider(ctx, ws, p)
+}
+
+func (g *guardedIntegrations) SetActive(ctx context.Context, id uuid.UUID, active bool) error {
+	if g.setErr != nil {
+		return g.setErr
+	}
+	return g.MemIntegrations.SetActive(ctx, id, active)
+}
+
+func hidingService(t *testing.T, g *guardedIntegrations) (*service.ExtensionWorkspaceService, *exttest.Fixture) {
+	t.Helper()
+	f, err := exttest.NewFixture(nil, false)
+	require.NoError(t, err)
+	man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+	require.NoError(t, err)
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(hidingProvider{exttest.DemoProvider{BaseProvider: base, Healthy: true}}))
+	reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+	if g == nil {
+		g = &guardedIntegrations{}
+	}
+	g.MemIntegrations = f.Integ
+	return service.NewExtensionWorkspaceService(reg, g, f.Consents), f
+}
+
+func TestExtensionWorkspace_EnableManagedElsewhereCreatesMissingRow(t *testing.T) {
+	ctx := context.Background()
+	svc, f := hidingService(t, nil)
+	ws := uuid.New()
+
+	v, err := svc.SetEnabled(ctx, ws, "demo", true, false)
+	require.NoError(t, err)
+	require.True(t, v.Status.Enabled)
+	row := f.Integ.Find(ws, "demo")
+	require.NotNil(t, row)
+	require.True(t, row.IsActive)
+	require.JSONEq(t, `{}`, string(row.Config))
+
+	// repeating it keeps the single row
+	_, err = svc.SetEnabled(ctx, ws, "demo", true, false)
+	require.NoError(t, err)
+	require.Len(t, f.Integ.Rows, 1)
+}
+
+func TestExtensionWorkspace_EnableManagedElsewhereSwitchesInactiveRowOn(t *testing.T) {
+	ctx := context.Background()
+	svc, f := hidingService(t, nil)
+	ws := uuid.New()
+	require.NoError(t, f.Integ.Upsert(ctx, &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: ws, Provider: "demo", Config: []byte(`{}`), IsActive: false}))
+
+	_, err := svc.SetEnabled(ctx, ws, "demo", true, false)
+	require.NoError(t, err)
+	require.True(t, f.Integ.Find(ws, "demo").IsActive)
+}
+
+func TestExtensionWorkspace_EnableManagedElsewhereLosingRaceSwitchesWinnerOn(t *testing.T) {
+	ctx := context.Background()
+	svc, f := hidingService(t, nil)
+	ws := uuid.New()
+	f.Integ.RaceRow = &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: ws, Provider: "demo", Config: []byte(`{}`), IsActive: false}
+
+	_, err := svc.SetEnabled(ctx, ws, "demo", true, false)
+	require.NoError(t, err)
+	require.Len(t, f.Integ.Rows, 1)
+	require.True(t, f.Integ.Find(ws, "demo").IsActive)
+}
+
+func TestExtensionWorkspace_EnablePlainExtensionStillNeedsConnect(t *testing.T) {
+	f := newFx(t, nil, false)
+	_, err := f.svc.SetEnabled(context.Background(), uuid.New(), "demo", true, false)
+	requireAPIErr(t, err, http.StatusNotFound, "")
+}
+
+func TestExtensionWorkspace_EnableManagedElsewhereReportsStoreFailures(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("store down")
+	for _, tc := range []struct {
+		name string
+		g    *guardedIntegrations
+		seed bool // an inactive row already exists
+		race bool // an inactive row appears between the read and the insert
+		code int
+	}{
+		{"insert fails", &guardedIntegrations{insertErr: boom}, false, false, 0},
+		{"read after lost insert fails", &guardedIntegrations{insertLost: true, lostGetErr: boom}, false, false, 0},
+		{"lost insert leaves no row", &guardedIntegrations{insertLost: true}, false, false, http.StatusConflict},
+		{"switch on after lost insert fails", &guardedIntegrations{setErr: boom}, false, true, 0},
+		{"switch on existing row fails", &guardedIntegrations{setErr: boom}, true, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, f := hidingService(t, tc.g)
+			ws := uuid.New()
+			if tc.seed {
+				require.NoError(t, f.Integ.Upsert(ctx, &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: ws, Provider: "demo", Config: []byte(`{}`)}))
+			}
+			if tc.race {
+				f.Integ.RaceRow = &domain.IntegrationConfig{ID: uuid.New(), WorkspaceID: ws, Provider: "demo", Config: []byte(`{}`)}
+			}
+			_, err := svc.SetEnabled(ctx, ws, "demo", true, false)
+			require.Error(t, err)
+			if tc.code != 0 {
+				requireAPIErr(t, err, tc.code, "conflict")
+			} else {
+				require.ErrorIs(t, err, boom)
+			}
+		})
+	}
+}

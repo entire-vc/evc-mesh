@@ -892,7 +892,7 @@ describe("DocsPage — move", () => {
       }
       return undefined;
     });
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Child");
     openMoveDialogFor("Child");
@@ -911,7 +911,7 @@ describe("DocsPage — move", () => {
       }
       return undefined;
     });
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Child");
     openMoveDialogFor("Child");
@@ -926,7 +926,7 @@ describe("DocsPage — move", () => {
 
   it("does not offer the document itself or its descendants as a destination", async () => {
     mockRoutes([parent, child, other]);
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Parent");
     openMoveDialogFor("Parent");
@@ -939,7 +939,7 @@ describe("DocsPage — move", () => {
 
   it("keeps Move disabled until a different parent is picked", async () => {
     mockRoutes([parent, child, other]);
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Child");
     openMoveDialogFor("Child");
@@ -960,7 +960,7 @@ describe("DocsPage — move", () => {
       }
       return undefined;
     });
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Child");
     openMoveDialogFor("Child");
@@ -983,7 +983,7 @@ describe("DocsPage — move", () => {
       }
       return undefined;
     });
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Child");
     openMoveDialogFor("Child");
@@ -1004,7 +1004,7 @@ describe("DocsPage — move", () => {
     // block under the inherited near-black text — and that is what was reported
     // as "the highlight is dark, it was supposed to be the light green one".
     mockRoutes([parent, child, other]);
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Child");
     openMoveDialogFor("Child");
@@ -1024,7 +1024,7 @@ describe("DocsPage — move", () => {
     // --secondary and --muted are close in lightness by design, so the pick
     // cannot rest on the fill alone — same reasoning as the tree row.
     mockRoutes([parent, child, other]);
-    renderDocs();
+    renderDocs("c");
 
     await screen.findByText("Child");
     openMoveDialogFor("Child");

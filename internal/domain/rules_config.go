@@ -266,11 +266,23 @@ func (c *MidPipelineConfig) HeartbeatExtendMinutes() int {
 
 // TransitionRule defines allowed transitions from a given status.
 type TransitionRule struct {
-	Allowed       []string          `json:"allowed"`                  // allowed target status names (empty = any)
-	AllowedActors []string          `json:"allowed_actors,omitempty"` // actor patterns (empty = any)
-	Description   string            `json:"description,omitempty"`
-	OnTransition  *TransitionAction `json:"on_transition,omitempty"`
-	Requires      *TransitionReq    `json:"requires,omitempty"`
+	Allowed       []string `json:"allowed"`                  // allowed target status names (empty = any)
+	AllowedActors []string `json:"allowed_actors,omitempty"` // actor patterns (empty = any); see workflow_transition_gate.go
+	// AllowedActorsByTarget overrides AllowedActors for a move to the given target
+	// status (key = status slug). A target without an entry keeps AllowedActors.
+	AllowedActorsByTarget map[string][]string `json:"allowed_actors_by_target,omitempty"`
+	Description           string              `json:"description,omitempty"`
+	OnTransition          *TransitionAction   `json:"on_transition,omitempty"`
+	Requires              *TransitionReq      `json:"requires,omitempty"`
+}
+
+// ActorsFor returns the actor patterns that govern a move to toStatus: the
+// per-target override when present, else AllowedActors.
+func (r TransitionRule) ActorsFor(toStatus string) []string {
+	if a, ok := r.AllowedActorsByTarget[toStatus]; ok {
+		return a
+	}
+	return r.AllowedActors
 }
 
 // TransitionAction defines automatic actions when a transition occurs.

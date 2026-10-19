@@ -28,8 +28,26 @@ func NewWorkspaceExportRepo(db *sqlx.DB) *WorkspaceExportRepo {
 // SetAgentSponsor records the user who stands behind the agent. It overwrites:
 // the sponsor is whoever issued the agent's latest key.
 func (r *WorkspaceExportRepo) SetAgentSponsor(ctx context.Context, agentID, userID uuid.UUID) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE agents SET sponsor_user_id = $2 WHERE id = $1`, agentID, userID)
+	// The operator defaults to whoever issued the key, unless one is already set.
+	_, err := r.db.ExecContext(ctx, `UPDATE agents SET sponsor_user_id = $2, operator_user_id = COALESCE(operator_user_id, $2) WHERE id = $1`, agentID, userID)
 	return err
+}
+
+// SetAgentOperator records agents.operator_user_id, the user who runs the agent.
+func (r *WorkspaceExportRepo) SetAgentOperator(ctx context.Context, agentID, userID uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE agents SET operator_user_id = $2 WHERE id = $1`, agentID, userID)
+	return err
+}
+
+// UserCanOperate reports whether the user may be named operator of an agent of
+// the workspace: an active owner or member of it.
+func (r *WorkspaceExportRepo) UserCanOperate(ctx context.Context, workspaceID, userID uuid.UUID) (bool, error) {
+	var ok bool
+	err := r.db.GetContext(ctx, &ok, `SELECT EXISTS (
+		SELECT 1 FROM users u WHERE u.id=$2 AND u.is_active
+		AND (EXISTS (SELECT 1 FROM workspaces w WHERE w.id=$1 AND w.deleted_at IS NULL AND w.owner_id=u.id)
+		  OR EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id=$1 AND m.user_id=u.id)))`, workspaceID, userID)
+	return ok, err
 }
 
 // Hierarchy reads the whole snapshot. ok is false when the workspace does not

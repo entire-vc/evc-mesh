@@ -85,7 +85,7 @@ const taskBaseColsNoAlias = `
 	recurring_schedule_id, recurring_instance_number,
 	checked_out_by, checkout_token, checkout_expires, checkout_acquired_at, checkout_session_id, checkout_request_id, checkout_generation,
 	delegation_level, thread_id, human_gate, is_shipped, assigned_by, dod_checks,
-	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type,
+	completion_signal, status_changed_at, pre_review_assignee_id, pre_review_assignee_type, pre_review_restore,
 	reviewer_id, reviewer_type, human_gate_class, human_gate_armed_at,
 	gate_author, gate_author_type, gate_reason, recommended_default, gate_deadline,
 	runtime_state`
@@ -237,6 +237,7 @@ type taskRow struct {
 	// Pre-review assignee stash — see domain.Task doc comment.
 	PreReviewAssigneeID   *uuid.UUID           `db:"pre_review_assignee_id"`
 	PreReviewAssigneeType *domain.AssigneeType `db:"pre_review_assignee_type"`
+	PreReviewRestore      bool                 `db:"pre_review_restore"`
 
 	// Reviewer — see domain.Task doc comment.
 	ReviewerID   *uuid.UUID           `db:"reviewer_id"`
@@ -322,6 +323,7 @@ func (r *taskRow) toDomainBase() domain.Task {
 		StatusChangedAt:         r.StatusChangedAt,
 		PreReviewAssigneeID:     r.PreReviewAssigneeID,
 		PreReviewAssigneeType:   r.PreReviewAssigneeType,
+		PreReviewRestore:        r.PreReviewRestore,
 		ReviewerID:              r.ReviewerID,
 		ReviewerType:            r.ReviewerType,
 		CheckedOutBy:            r.CheckedOutBy,
@@ -712,7 +714,8 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		    human_gate = $20, is_shipped = $21, assigned_by = $22,
 		    completion_signal = $23, status_changed_at = $24,
 		    pre_review_assignee_id = $25, pre_review_assignee_type = $26,
-		    reviewer_id = $27, reviewer_type = $28, start_after = $29
+		    reviewer_id = $27, reviewer_type = $28, start_after = $29,
+		    pre_review_restore = $31
 		WHERE id = $1 AND deleted_at IS NULL AND version = $30
 		RETURNING version,checked_out_by,checkout_token,checkout_expires,checkout_acquired_at,checkout_session_id,checkout_request_id,checkout_generation,false AS changed
 	`
@@ -760,6 +763,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 		task.HumanGate, task.IsShipped, task.AssignedBy, task.CompletionSignal, task.StatusChangedAt,
 		task.PreReviewAssigneeID, task.PreReviewAssigneeType,
 		task.ReviewerID, task.ReviewerType, task.StartAfter, task.Version,
+		task.PreReviewRestore,
 	)
 	pkgmetrics.RecordDBQuery("task.update", time.Since(dbStart))
 	if errors.Is(err, sql.ErrNoRows) {

@@ -92,6 +92,13 @@ type AssigneeTaskFilter struct {
 }
 
 // TaskRepository manages persistence for tasks.
+// TaskBatchMover moves a set of connected tasks into another project in one
+// transaction, under the completion graph lock, with the guard's atomic-move
+// flag set only for the duration of the project UPDATE.
+type TaskBatchMover interface {
+	MoveBatchToProject(ctx context.Context, in domain.MoveBatchInput) (*domain.MoveBatchResult, error)
+}
+
 type TaskRepository interface {
 	// Create inserts task and — atomically, in the same DB transaction — the
 	// task.created activity log entry describing it, when activity is non-nil.
@@ -1263,7 +1270,12 @@ type VCSLinkRepository interface {
 	ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error)
 	// SetPipelineStatus stores the latest pipeline state of a link. A pipeline
 	// older than the stored one (by id) is ignored; returns true when written.
-	SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status string) (written bool, err error)
+	SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status, sha string) (written bool, err error)
+	// MergeMetadata shallow-merges patch (a JSON object) into the link's
+	// metadata (jsonb ||): keys in patch are set, every other existing key is
+	// kept. Scoped to taskID and link_type=pr in the same statement. Returns
+	// the updated link, or nil when no pr link with that id exists on that task.
+	MergeMetadata(ctx context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error)
 }
 
 // TaskListRevisionRepository reads the per-project task_list_revision counter

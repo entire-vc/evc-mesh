@@ -304,7 +304,7 @@ func TestRestorePreReviewAssignee_RefusesAStaleStashEndToEnd(t *testing.T) {
 	env.tasks.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: env.projectID, StatusID: reviewID, Title: "in review",
 		AssigneeID: &env.nativeAgent, AssigneeType: domain.AssigneeTypeAgent,
-		PreReviewAssigneeID: &ghostBuilder, PreReviewAssigneeType: &ghostType,
+		PreReviewAssigneeID: &ghostBuilder, PreReviewAssigneeType: &ghostType, PreReviewRestore: true,
 	}
 
 	require.NoError(t, env.svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &todoID}),
@@ -343,7 +343,7 @@ func TestApplyReviewAssignee_EnrolmentRefusalLeavesTheAssigneeAlone(t *testing.T
 	env.tasks.items[taskID] = &domain.Task{
 		ID: taskID, ProjectID: env.projectID, StatusID: reviewID, Title: "in review",
 		AssigneeID: &env.nativeAgent, AssigneeType: domain.AssigneeTypeAgent,
-		PreReviewAssigneeID: &env.foreignAgent, PreReviewAssigneeType: &foreignType,
+		PreReviewAssigneeID: &env.foreignAgent, PreReviewAssigneeType: &foreignType, PreReviewRestore: true,
 	}
 
 	require.NoError(t, env.svc.MoveTask(ctx, taskID, MoveTaskInput{StatusID: &todoID}))

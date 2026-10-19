@@ -332,6 +332,31 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 	return c.JSON(status, link)
 }
 
+// PatchMetadata handles PATCH /tasks/:task_id/vcs-links/:link_id/metadata.
+// Body: {"ship_sha":"<40 hex lowercase>"}. Merges into the link's metadata;
+// responds with the updated link.
+func (h *VCSLinkHandler) PatchMetadata(c echo.Context) error {
+	taskID, err := uuid.Parse(c.Param("task_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+	linkID, err := uuid.Parse(c.Param("link_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid link_id"))
+	}
+
+	var patch map[string]any
+	if err = json.NewDecoder(c.Request().Body).Decode(&patch); err != nil || patch == nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("body must be a JSON object"))
+	}
+
+	link, err := h.vcsService.PatchMetadata(c.Request().Context(), taskID, linkID, patch)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, link)
+}
+
 // List handles GET /tasks/:task_id/vcs-links
 func (h *VCSLinkHandler) List(c echo.Context) error {
 	taskID, err := uuid.Parse(c.Param("task_id"))
@@ -621,6 +646,9 @@ type gitLabMRAttrPayload struct {
 	SourceBranch   string `json:"source_branch"`
 	URL            string `json:"url"`
 	MergeCommitSHA string `json:"merge_commit_sha"`
+	LastCommit     struct {
+		ID string `json:"id"`
+	} `json:"last_commit"`
 }
 
 // GitLabWebhook handles POST /webhooks/gitlab. It receives GitLab webhook
@@ -699,6 +727,7 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 		MRURL:       attrs.URL,
 		MRState:     attrs.State,
 		MergeSHA:    attrs.MergeCommitSHA,
+		HeadSHA:     attrs.LastCommit.ID,
 		MRBranch:    attrs.SourceBranch,
 		ProjectPath: payload.Project.PathWithNamespace,
 		WorkspaceID: matchedWorkspaceID,
@@ -724,6 +753,7 @@ type gitLabPipelinePayload struct {
 	ObjectAttributes *struct {
 		ID     int64  `json:"id"`
 		Status string `json:"status"`
+		SHA    string `json:"sha"`
 	} `json:"object_attributes"`
 	MergeRequest *struct {
 		IID int    `json:"iid"`
@@ -749,6 +779,7 @@ func (h *VCSLinkHandler) gitlabPipelineHook(c echo.Context, workspaceID uuid.UUI
 	res, herr := h.vcsService.HandleGitLabPipelineEvent(c.Request().Context(), service.GitLabPipelineEvent{
 		PipelineID:  payload.ObjectAttributes.ID,
 		Status:      payload.ObjectAttributes.Status,
+		SHA:         payload.ObjectAttributes.SHA,
 		MRIID:       payload.MergeRequest.IID,
 		MRURL:       payload.MergeRequest.URL,
 		ProjectPath: payload.Project.PathWithNamespace,

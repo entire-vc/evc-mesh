@@ -34,3 +34,11 @@ func TestExtensionRouteCapabilities_AreRegisteredRoutes(t *testing.T) {
 	}
 	assert.Empty(t, missing, "capability map names routes that are not registered: %s", strings.Join(missing, ", "))
 }
+
+// GET /extensions/catalog answered 404 on prod once; the UI treats 404 as "not
+// deployed" and silently drops the catalog source. The route must stay registered.
+func TestExtensionCatalogRoute_IsRegistered(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	require.NoError(t, err)
+	assert.Regexp(t, `api\.GET\("/extensions/catalog",\s*extensionHandler\.Catalog\)`, string(src))
+}

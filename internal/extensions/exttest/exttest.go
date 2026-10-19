@@ -96,6 +96,13 @@ func (m *MemIntegrations) Update(_ context.Context, id uuid.UUID, in domain.Upda
 	return r, nil
 }
 
+func (m *MemIntegrations) SetActive(_ context.Context, id uuid.UUID, active bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Rows[id].IsActive = active
+	return nil
+}
+
 func (m *MemIntegrations) Delete(_ context.Context, id uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocTree } from "@/components/doc-tree";
 import { DocMeta } from "@/components/doc-meta";
@@ -50,6 +50,9 @@ describe("L2.3 docs: en by default, ru translated, no raw keys", () => {
   it("renders the document tree and meta line in en, then ru", async () => {
     const en = renderDocs();
     expect(screen.getByRole("tree", { name: "Documents" })).toBeTruthy();
+    // The tree starts collapsed, so the toggle offers "Expand"; once opened it
+    // offers "Collapse" — both labels are translated keys.
+    fireEvent.click(screen.getByLabelText("Expand Runbook"));
     expect(screen.getByLabelText("Collapse Runbook")).toBeTruthy();
     expect(screen.getByLabelText("New page inside Runbook")).toBeTruthy();
     expect(document.body.textContent).toContain("Created by Pavel");
@@ -61,6 +64,8 @@ describe("L2.3 docs: en by default, ru translated, no raw keys", () => {
     });
     renderDocs();
     expect(screen.getByRole("tree", { name: "Документы" })).toBeTruthy();
+    expect(screen.getByLabelText("Развернуть «Runbook»")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Развернуть «Runbook»"));
     expect(screen.getByLabelText("Свернуть «Runbook»")).toBeTruthy();
     expect(screen.getByLabelText("Новая страница внутри «Runbook»")).toBeTruthy();
     expect(document.body.textContent).toContain("Автор: Pavel");

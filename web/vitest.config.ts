@@ -9,8 +9,9 @@ export default defineConfig({
     // settings pages on a shared CI runner: task-panel-dependencies,
     // project-settings-deep-link and others timed out once and passed on
     // retry of the same SHA. A genuinely hung test still fails, at 20s.
-    testTimeout: 20_000,
-    hookTimeout: 20_000,
+    // VITEST_TIMEOUT_MS: scripts/ci/prepush.py raises it for loaded dev machines.
+    testTimeout: Number(process.env.VITEST_TIMEOUT_MS ?? 20_000),
+    hookTimeout: Number(process.env.VITEST_TIMEOUT_MS ?? 20_000),
     setupFiles: ["./src/test-setup.ts"],
     // Browser and perf specs run through Playwright, outside the unit suite.
     exclude: ["e2e/**", "e2e-local/**", "board-e2e/**", "perf/**", "node_modules/**"],

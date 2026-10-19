@@ -122,6 +122,12 @@ NATS_MONITOR_PORT    ?= $(shell echo $$(( 8223 + $(PORT_OFFSET) )))
 # Local CI service DSNs — ports follow the per-checkout derivation above, not
 # the old hardcoded 5437/6383/4223 (which is still each variable's value for
 # the FIRST checkout to claim offset 0, so nothing changes there).
+# go's default -timeout is 10m per package binary; under a loaded host (Mini load
+# average 20-30) -race tests starve and panic at 10m. Explicit, overridable.
+# GO_TEST_P (empty = go default) caps how many packages run at once.
+GO_TEST_TIMEOUT ?= 30m
+GO_TEST_P       ?=
+GO_TEST_P_FLAG  := $(if $(GO_TEST_P),-p $(GO_TEST_P),)
 CI_DB_DSN       ?= postgres://mesh:mesh@localhost:$(DB_PORT)/mesh?sslmode=disable
 CI_DATABASE_URL ?= postgres://mesh:mesh@localhost:$(DB_PORT)/mesh?sslmode=disable
 CI_REDIS_URL    ?= redis://localhost:$(REDIS_PORT)
@@ -238,7 +244,7 @@ ci-test: ci-services-up
 	DATABASE_URL="$(CI_DATABASE_URL)" \
 	REDIS_URL="$(CI_REDIS_URL)" \
 	NATS_URL="$(CI_NATS_URL)" \
-		go test ./... -v -race -coverprofile=coverage.out -covermode=atomic && \
+		go test ./... -v -race -timeout $(GO_TEST_TIMEOUT) $(GO_TEST_P_FLAG) -coverprofile=coverage.out -covermode=atomic && \
 	echo "── Tests OK ✓"
 
 ## ci-test-web: Run the frontend test suite (vitest). Until this target

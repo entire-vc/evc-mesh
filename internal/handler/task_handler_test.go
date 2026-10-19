@@ -1442,40 +1442,43 @@ func TestUpdate_HumanGate_UserAllowed(t *testing.T) {
 
 func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
 	taskID := uuid.New()
-	existingTask := &domain.Task{ID: taskID, HumanGate: false}
-
 	updateCalled := false
 	mockSvc := &MockTaskService{
 		GetByIDFunc: func(_ context.Context, _ uuid.UUID) (*domain.Task, error) {
-			return existingTask, nil
+			return &domain.Task{ID: taskID, HumanGate: false}, nil
 		},
 		UpdateFunc: func(_ context.Context, task *domain.Task) error {
 			updateCalled = true
-			assert.True(t, task.HumanGate)
 			return nil
 		},
 	}
-	mockComment := &MockCommentService{}
+	h := NewTaskHandler(mockSvc).WithCommentService(&MockCommentService{})
 
-	e := echo.New()
-	h := NewTaskHandler(mockSvc).WithCommentService(mockComment)
+	patch := func(actorType domain.ActorType) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]interface{}{"human_gate": true})
+		req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		req = req.WithContext(actorctx.WithActor(req.Context(), uuid.New(), actorType))
+		rec := httptest.NewRecorder()
+		c := echo.New().NewContext(req, rec)
+		c.SetPath("/tasks/:task_id")
+		c.SetParamNames("task_id")
+		c.SetParamValues(taskID.String())
+		require.NoError(t, h.Update(c))
+		return rec
+	}
 
-	trueVal := true
-	body, _ := json.Marshal(map[string]interface{}{"human_gate": trueVal})
-	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	agentID := uuid.New()
-	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
-	req = req.WithContext(ctx)
+	// Task #40a24454: an agent key cannot arm the gate with PATCH.
+	rec := patch(domain.ActorTypeAgent)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "gate_marker_required", resp["error_code"])
+	assert.Contains(t, resp["message"], "Blocking @")
+	assert.False(t, updateCalled, "the refused PATCH must not persist anything")
 
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	c.SetPath("/tasks/:task_id")
-	c.SetParamNames("task_id")
-	c.SetParamValues(taskID.String())
-
-	err := h.Update(c)
-	require.NoError(t, err)
+	// POSITIVE CONTROL: the same PATCH from a user (UI) is unchanged.
+	rec = patch(domain.ActorTypeUser)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.True(t, updateCalled)
 }
@@ -1519,7 +1522,7 @@ func TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(string(body)))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	agentID := uuid.New()
-	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeAgent)
+	ctx := actorctx.WithActor(req.Context(), agentID, domain.ActorTypeUser)
 	req = req.WithContext(ctx)
 
 	rec := httptest.NewRecorder()

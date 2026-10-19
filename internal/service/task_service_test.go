@@ -4779,3 +4779,39 @@ func TestTaskService_AssignTask_Preconditions(t *testing.T) {
 		})
 	}
 }
+
+// Entering review without a reviewer rotation still records the author (rules
+// author/not_author need it) but must not make bounce-out move the assignee.
+func TestTaskService_MoveTask_ReviewStampsAuthorWithoutRotation(t *testing.T) {
+	projectID := uuid.New()
+	builderID := uuid.New()
+	otherID := uuid.New()
+	wfResp := &domain.WorkflowRulesResponse{
+		WorkflowRulesConfig: domain.WorkflowRulesConfig{
+			Transitions: map[string]domain.TransitionRule{"in_progress": {Allowed: []string{"review"}}},
+		},
+	}
+	svc, taskRepo, statusRepo, _, projRepo := setupTaskServiceWithWorkflow(wfResp, nil)
+	inProg, review, todo := uuid.New(), uuid.New(), uuid.New()
+	statusRepo.items[inProg] = &domain.TaskStatus{ID: inProg, ProjectID: projectID, Category: domain.StatusCategoryInProgress, Name: "in_progress"}
+	statusRepo.items[review] = &domain.TaskStatus{ID: review, ProjectID: projectID, Category: domain.StatusCategoryReview, Name: "review"}
+	statusRepo.items[todo] = &domain.TaskStatus{ID: todo, ProjectID: projectID, Category: domain.StatusCategoryTodo, Name: "todo"}
+	projRepo.items[projectID] = &domain.Project{ID: projectID, WorkspaceID: testDefaultWorkspaceID}
+	taskID := uuid.New()
+	taskRepo.items[taskID] = &domain.Task{
+		ID: taskID, ProjectID: projectID, StatusID: inProg,
+		AssigneeID: &builderID, AssigneeType: domain.AssigneeTypeAgent,
+		CreatedBy: otherID, CreatedByType: domain.ActorTypeAgent,
+	}
+
+	require.NoError(t, svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &review}))
+	task := taskRepo.items[taskID]
+	require.NotNil(t, task.PreReviewAssigneeID, "author must be stamped on review entry")
+	assert.Equal(t, builderID, *task.PreReviewAssigneeID)
+	assert.False(t, task.PreReviewRestore, "no rotation: nothing to restore")
+
+	// someone reassigns during review; bounce-out must not override that
+	task.AssigneeID = &otherID
+	require.NoError(t, svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &todo}))
+	assert.Equal(t, otherID, *taskRepo.items[taskID].AssigneeID, "bounce-out without rotation must not restore the author")
+}

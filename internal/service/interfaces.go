@@ -212,6 +212,8 @@ type TaskService interface {
 	// target project's default and recalculating task_number atomically.
 	// Returns an error if the task is already in the target project.
 	MoveToProject(ctx context.Context, taskID, targetProjectID uuid.UUID) (*domain.Task, error)
+	// MoveToProjectBatch atomically moves connected tasks into a project (all or nothing).
+	MoveToProjectBatch(ctx context.Context, in domain.MoveBatchInput) (*domain.MoveBatchResult, error)
 	// SupersedeRecurringInstances closes all non-terminal instances of the given
 	// recurring schedule (except newTaskID). An instance that received real work
 	// (an artifact, a VCS link, or a comment that isn't a duplicate of the
@@ -359,6 +361,10 @@ type CommentService interface {
 	// ask (task #040cddcf), read-only — see the domain.HumanGateInfo and
 	// commentService.scanHumanGateOwnership doc comments for the full rule.
 	GetHumanGateOwner(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
+	// CheckAgentGateArm gives an agent-key POST /human-gate the checks the marker path
+	// has (task #40a24454): human addressee, no repeat of an answered ask. Returns a
+	// *GateArmRefusedError on refusal.
+	CheckAgentGateArm(ctx context.Context, taskID uuid.UUID, addressee, supersedes, canonicalKey string) error
 	// RecordHumanGateDecision appends a decision record (task #c56339b1, the
 	// third human_gate exit) and, if the task's gate is currently live,
 	// releases it as a CONSEQUENCE of the record — never independently. See
@@ -1104,6 +1110,12 @@ type VCSLinkService interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error)
+	// PatchMetadata merges fleet-writable keys into a pr link's metadata
+	// without replacing the keys it does not name. Only domain.AgentWritableVCSMetadataKeys
+	// (ship_sha, 40 lowercase hex) are accepted; anything else — head_sha
+	// included — is apierror.BadRequest. A link that is missing, on another
+	// task, or not link_type=pr is NotFound.
+	PatchMetadata(ctx context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error)
 	// HandleGitHubPullRequestEvent resolves a GitHub PR webhook payload to a
 	// task, upserts the corresponding vcs_link, and on action=closed applies
 	// the auto transition policy: in_progress → review, review → done. When
@@ -1172,6 +1184,7 @@ type GitLabWebhookEvent struct {
 	MRURL       string // object_attributes.url
 	MRState     string // object_attributes.state: "opened" | "closed" | "merged" | "locked"
 	MergeSHA    string // object_attributes.merge_commit_sha (empty for non-merge close)
+	HeadSHA     string // object_attributes.last_commit.id — the MR's current head
 	MRBranch    string // object_attributes.source_branch — branches cut from a task often carry its id
 	ProjectPath string // project.path_with_namespace, e.g. "entire-vc/evc-mesh"
 	// WorkspaceID is GitHubWebhookEvent.WorkspaceID's GitLab counterpart —
@@ -1185,6 +1198,7 @@ type GitLabWebhookEvent struct {
 type GitLabPipelineEvent struct {
 	PipelineID  int64
 	Status      string // object_attributes.status
+	SHA         string // object_attributes.sha: the commit the pipeline ran on
 	MRIID       int    // merge_request.iid; 0 for a branch pipeline with no MR
 	MRURL       string // merge_request.url
 	ProjectPath string // project.path_with_namespace

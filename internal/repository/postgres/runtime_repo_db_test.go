@@ -375,6 +375,13 @@ func TestIntegrationRepoRefusesAgentRuntimeBypass(t *testing.T) {
 	_, err = integrations.Update(ctx, connection.ID, domain.UpdateIntegrationInput{IsActive: &off})
 	require.ErrorContains(t, err, "versioned runtime API")
 	require.ErrorContains(t, integrations.Delete(ctx, connection.ID), "versioned runtime API")
+	// the extension enable path flips only the active flag, never the catalog
+	require.NoError(t, integrations.SetActive(ctx, connection.ID, !connection.IsActive))
+	flipped, err := integrations.GetByID(ctx, connection.ID)
+	require.NoError(t, err)
+	require.Equal(t, !connection.IsActive, flipped.IsActive)
+	require.JSONEq(t, string(connection.Config), string(flipped.Config))
+	require.NoError(t, integrations.SetActive(ctx, connection.ID, connection.IsActive))
 	still, err := integrations.GetByID(ctx, connection.ID)
 	require.NoError(t, err)
 	require.True(t, still.IsActive)

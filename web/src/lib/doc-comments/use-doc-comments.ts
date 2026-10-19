@@ -102,6 +102,9 @@ export interface PendingSelection {
   rect: { top: number; left: number };
 }
 
+/** `getMarkRect` id of the unsaved draft's selection. */
+export const DRAFT_MARK_ID = "__draft__";
+
 export interface DraftThread {
   /** Null for a comment on the document as a whole — no quote, no span. */
   anchor: NonNullable<import("@/types").CreateDocumentCommentRequest["anchor"]> | null;
@@ -124,7 +127,20 @@ export interface DocCommentsController {
   readOnly: boolean;
 
   activeThreadId: string | null;
-  focusThread: (id: string | null) => void;
+  /**
+   * `source` says who asked: a click on a card (`"card"`) must not make the
+   * duplicate card in the other surface scroll itself into view; a click on a
+   * mark or a link (default) should.
+   */
+  focusThread: (id: string | null, source?: "card" | "mark") => void;
+  /** Who set `activeThreadId` last. */
+  activeSource: "card" | "mark";
+  /** Viewport rect of a thread's mark in the text; null for page/orphaned/resolved threads. */
+  getMarkRect: (id: string) => DOMRect | null;
+  /** Scroll the document so the thread's mark is in view. Returns false when it has none. */
+  scrollToMark: (id: string) => boolean;
+  /** Bumped when the rendered body is re-measured; the rail re-aligns on it. */
+  layoutTick: number;
 
   pendingSelection: PendingSelection | null;
   /** Turn the current selection into a draft thread. */
@@ -206,7 +222,15 @@ export function useDocComments({
 
   const user = useAuthStore((s) => s.user);
 
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeThreadId, setActiveThreadIdRaw] = useState<string | null>(null);
+  const [activeSource, setActiveSource] = useState<"card" | "mark">("mark");
+  const setActiveThreadId = useCallback(
+    (id: string | null, source: "card" | "mark" = "mark") => {
+      setActiveSource(source);
+      setActiveThreadIdRaw(id);
+    },
+    [],
+  );
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
   const [draft, setDraft] = useState<DraftThread | null>(null);
 
@@ -387,6 +411,37 @@ export function useDocComments({
     return () => container.removeEventListener("click", onClick);
   }, [threads, enabled]);
 
+  // ---- Mark geometry (for aligning the rail) -------------------------------
+  const getMarkRect = useCallback(
+    (id: string): DOMRect | null => {
+      const currentFlat = flatRef.current;
+      const thread = threads.find((t) => t.root.id === id);
+      const span = id === DRAFT_MARK_ID ? draft?.span : thread && !thread.resolved ? thread.span : null;
+      if (!currentFlat || !span) return null;
+      const range = rangeFromSpan(currentFlat, span);
+      if (!range) return null;
+      // jsdom has no layout, and no Range.getClientRects with it.
+      if (typeof range.getClientRects !== "function") return null;
+      const rects = range.getClientRects();
+      return rects[0] ?? range.getBoundingClientRect();
+    },
+    [threads, draft],
+  );
+
+  const scrollToMark = useCallback(
+    (id: string): boolean => {
+      const currentFlat = flatRef.current;
+      const thread = threads.find((t) => t.root.id === id);
+      if (!currentFlat || !thread?.span || thread.resolved) return false;
+      const range = rangeFromSpan(currentFlat, thread.span);
+      const el = range?.startContainer.parentElement;
+      if (!el) return false;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      return true;
+    },
+    [threads],
+  );
+
   // ---- Actions -------------------------------------------------------------
   const startDraft = useCallback(() => {
     const currentFlat = flatRef.current;
@@ -478,7 +533,7 @@ export function useDocComments({
   const remove = useCallback(
     async (id: string) => {
       await deleteComment(id);
-      setActiveThreadId((current) => (current === id ? null : current));
+      setActiveThreadIdRaw((current) => (current === id ? null : current));
     },
     [deleteComment],
   );
@@ -504,6 +559,10 @@ export function useDocComments({
     readOnly: !enabled,
     activeThreadId,
     focusThread: setActiveThreadId,
+    activeSource,
+    getMarkRect,
+    scrollToMark,
+    layoutTick: renderTick,
     pendingSelection,
     startDraft,
     startPageDraft,

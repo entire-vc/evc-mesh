@@ -113,3 +113,17 @@ func TestExtensionList_InstanceStoreErrorIsNotAFalseStatus(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.NotContains(t, rec.Body.String(), `"enabled":false`)
 }
+
+func TestExtensionCatalog_ServesRegistryRows(t *testing.T) {
+	h := NewExtensionHandler(&fakeInstalledRepo{rows: []domain.InstalledExtension{
+		{ExtensionID: "team-relay", Version: "1.2.0", Source: domain.ExtensionSourceBuiltin, Manifest: json.RawMessage(testManifest)},
+	}}, nil)
+	rec := doExt(t, h.Catalog, http.MethodGet)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Extensions []map[string]any `json:"extensions"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Extensions, 1)
+	assert.Equal(t, "team-relay", body.Extensions[0]["id"])
+}

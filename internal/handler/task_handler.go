@@ -810,6 +810,15 @@ func (h *TaskHandler) Update(c echo.Context) error {
 					apierror.Forbidden(h.gateClearRefusal(c.Request().Context(), task, actorID)))
 			}
 		}
+		// Arming is not an agent's to do here (task #40a24454): PATCH skips the
+		// answered-already and human-addressee checks the marker path runs, and an
+		// agent cannot lift the gate it armed by mistake.
+		if !task.HumanGate && *req.HumanGate {
+			if _, actorType := actorctx.FromContext(c.Request().Context()); actorType == domain.ActorTypeAgent {
+				return gateRefusal(c, service.GateRefusalMarkerRequired,
+					"An agent cannot arm human_gate with PATCH. "+service.GateMarkerHint)
+			}
+		}
 		task.HumanGate = *req.HumanGate
 	}
 	if req.CompletionSignal != nil {
@@ -1520,6 +1529,56 @@ func (h *TaskHandler) MoveToProject(c echo.Context) error {
 
 	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
+}
+
+// moveToProjectBatchRequest is the body of POST /tasks/move-to-project-batch.
+type moveToProjectBatchRequest struct {
+	ProjectID     string            `json:"project_id"`
+	TaskIDs       []string          `json:"task_ids"`
+	StatusMapping map[string]string `json:"status_mapping"`
+	LeafMode      string            `json:"leaf_mode"`
+	DryRun        bool              `json:"dry_run"`
+}
+
+// MoveToProjectBatch handles POST /tasks/move-to-project-batch: an all-or-nothing
+// move of connected tasks into one project of the caller's workspace.
+func (h *TaskHandler) MoveToProjectBatch(c echo.Context) error {
+	var req moveToProjectBatchRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	wsID, err := mw.GetWorkspaceID(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+	projectID, err := uuid.Parse(req.ProjectID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"project_id": "required UUID"}))
+	}
+	in := domain.MoveBatchInput{
+		WorkspaceID: wsID, ProjectID: projectID, LeafMode: req.LeafMode, DryRun: req.DryRun,
+		StatusMapping: make(map[uuid.UUID]uuid.UUID, len(req.StatusMapping)),
+	}
+	for _, raw := range req.TaskIDs {
+		id, perr := uuid.Parse(raw)
+		if perr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"task_ids": "full UUIDs required: " + raw}))
+		}
+		in.TaskIDs = append(in.TaskIDs, id)
+	}
+	for k, v := range req.StatusMapping {
+		src, e1 := uuid.Parse(k)
+		dst, e2 := uuid.Parse(v)
+		if e1 != nil || e2 != nil {
+			return c.JSON(http.StatusBadRequest, apierror.ValidationError(map[string]string{"status_mapping": "keys and values must be status UUIDs"}))
+		}
+		in.StatusMapping[src] = dst
+	}
+	res, err := h.taskService.MoveToProjectBatch(c.Request().Context(), in)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, res)
 }
 
 // GetCurrentUserTasks handles GET /me/tasks

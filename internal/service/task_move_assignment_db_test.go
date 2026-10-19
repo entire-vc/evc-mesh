@@ -302,3 +302,59 @@ func TestHandBackToGateAuthor_PostgresCheckoutAfterSnapshotKeepsAssignee(t *test
 		})
 	}
 }
+
+// A write that commits between MoveTask's read and its guarded write (what a
+// trailing release_task / gate clear / comment looks like to the next move) must
+// not surface as a 409 to a caller that supplied no precondition: the move is
+// recomputed on the fresh row. Looped to catch the intermittent case.
+func TestMoveTask_ImplicitCASRetriesOverInterleavedWrite(t *testing.T) {
+	f, repo, _, id, _ := newCheckoutM1Fixture(t)
+	ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
+	statusRepo := postgres.NewTaskStatusRepo(f.db)
+	var targets [2]*domain.TaskStatus
+	for i := range targets {
+		targets[i] = &domain.TaskStatus{ID: uuid.New(), ProjectID: f.projectID, Name: fmt.Sprintf("S%d", i), Slug: fmt.Sprintf("s%d", i), Category: domain.StatusCategoryTodo, Color: "#ffffff", Position: i + 1}
+		require.NoError(t, statusRepo.Create(ctx, targets[i]))
+	}
+	writer := &moveInterleavingRepo{TaskRepo: repo}
+	svc := NewTaskService(writer, statusRepo, nil, postgres.NewActivityLogRepo(f.db), WithProjectRepo(postgres.NewProjectRepo(f.db)))
+	for i := 0; i < 50; i++ {
+		fired := false
+		writer.beforeWrite = func(ctx context.Context, task *domain.Task) error {
+			if fired {
+				return nil
+			}
+			fired = true
+			edit, err := repo.GetByID(ctx, task.ID)
+			if err != nil {
+				return err
+			}
+			edit.Title = fmt.Sprintf("interleaved %d", i)
+			return repo.Update(ctx, edit)
+		}
+		target := targets[i%2]
+		require.NoError(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &target.ID}), "iteration %d", i)
+		fresh, err := repo.GetByID(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, target.ID, fresh.StatusID)
+		require.Equal(t, fmt.Sprintf("interleaved %d", i), fresh.Title, "positive control: the interleaved write landed")
+	}
+
+	// Explicit precondition keeps fail-fast semantics.
+	cur, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	writer.beforeWrite = func(ctx context.Context, task *domain.Task) error {
+		edit, err := repo.GetByID(ctx, task.ID)
+		if err != nil {
+			return err
+		}
+		edit.Title = "late"
+		return repo.Update(ctx, edit)
+	}
+	other := targets[0].ID
+	if cur.StatusID == other {
+		other = targets[1].ID
+	}
+	var conflict *domain.TaskConflict
+	require.ErrorAs(t, svc.MoveTask(ctx, id, MoveTaskInput{StatusID: &other, ExpectedStatusID: &cur.StatusID}), &conflict)
+}

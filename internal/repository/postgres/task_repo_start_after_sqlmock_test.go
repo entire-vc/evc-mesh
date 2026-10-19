@@ -42,8 +42,9 @@ func TestTaskRepo_Update_SendsStartAfterColumn(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			startAfter, // $29 — the field this test exists to pin
-			int64(1),   // $30 — the snapshot version predicate
+			startAfter,       // $29 — the field this test exists to pin
+			int64(1),         // $30 — the snapshot version predicate
+			sqlmock.AnyArg(), // $31 — pre_review_restore
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"version", "checked_out_by", "checkout_token", "checkout_expires", "checkout_acquired_at", "checkout_session_id", "checkout_request_id", "checkout_generation", "changed"}).AddRow(2, nil, nil, nil, nil, nil, nil, 0, false))
 

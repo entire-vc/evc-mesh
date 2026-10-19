@@ -42,6 +42,7 @@ import (
 	sparkext "github.com/entire-vc/evc-mesh/internal/extensions/spark"
 	teamrelayext "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
 	telegramext "github.com/entire-vc/evc-mesh/internal/extensions/telegram"
+	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
 	"github.com/entire-vc/evc-mesh/internal/handler"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
@@ -587,6 +588,7 @@ func main() {
 		service.WithGatePredicateLog(gatePredicateLogRepo),
 		service.WithCustomFieldService(customFieldService),
 		service.WithProjectRepo(projectRepo),
+		service.WithTaskBatchMover(taskRepo),
 		service.WithRuleService(ruleService),
 		service.WithEventBusService(eventBusService),
 		service.WithWebhookService(webhookService),
@@ -1004,7 +1006,13 @@ func main() {
 			WithAllowList(extensionPolicyRepo).
 			WithExternalHook(&external.Hook{Reg: extensionRegistry, Conns: integrationRepo, HS: externalHandshaker}).
 			WithSaveHook("telegram", service.NewTelegramSaveHook(telegramClient, telegramBotManager, telegramGate)))
+	// Mesh as the identity provider of external-extension iframe screens: instance
+	// signing key (rotates with an overlap), JWKS and the context token.
+	uiContextService := uictx.New(postgres.NewSigningKeyRepo(db), cfg.Email.BaseURL)
+	extensionUIHandler := handler.NewExtensionUIHandler(extensionRegistry, uiContextService, workspaceMemberRepo, userRepo, taskRepo, projectRepo).
+		WithSelfOrigins(append([]string{cfg.Email.BaseURL}, cfg.CORS.AllowOrigins...)...)
 	runtimeHandler := handler.NewRuntimeHandler(runtimeRepo)
+	userRuntimeHandler := handler.NewUserRuntimeHandler(postgres.NewUserRuntimeRepo(db))
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
@@ -1025,6 +1033,7 @@ func main() {
 	memoryHandler.SetDocumentIndexer(documentIndexer)
 	mentionHandler := handler.NewMentionHandler(mentionService)
 	documentMentionHandler := handler.NewDocumentMentionHandler(documentMentionService)
+	userUIStateHandler := handler.NewUserUIStateHandler(db)
 	projectIntegrationHandler := handler.NewProjectIntegrationHandler(projectIntegrationService)
 	trSearchHandler := handler.NewTrSearchHandler(projectIntegrationService, projectService, teamRelayExt)
 	trDocumentHandler := handler.NewTrDocumentHandler(projectIntegrationService, projectService, teamRelayExt)
@@ -1361,6 +1370,10 @@ func main() {
 	// 9. Register all routes.
 	v1 := e.Group("/api/v1")
 
+	// JWKS of the instance signing key: public keys only, fetched by external
+	// extensions to verify the context token of their iframe screens.
+	v1.GET("/.well-known/jwks.json", extensionUIHandler.JWKS)
+
 	// --- Public routes (no auth required) ---
 
 	// register: tight per-IP brute-force/spam protection (5 RPM default).
@@ -1670,6 +1683,9 @@ func main() {
 	api.POST("/tasks/:task_id/parked-waits", taskHandler.RegisterParkedWait, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/parked-waits/release", taskHandler.ReleaseParkedWait, wsAccess, rbac(mw.PermUpdateTask))
 	api.POST("/tasks/:task_id/move-to-project", taskHandler.MoveToProject, wsAccess, rbac(mw.PermUpdateTask))
+	// Workspace comes from the caller's auth; the service refuses any task or
+	// destination project outside it (source and destination are both checked).
+	api.POST("/tasks/move-to-project-batch", taskHandler.MoveToProjectBatch, wsAccess, rbac(mw.PermUpdateTask))
 	// Statuses of the task's project, under the SAME gate as /tasks/:task_id/move.
 	// Resolving a status slug is a precondition of the move; gating the lookup more
 	// strictly than the move itself makes the move unreachable and reports the refusal
@@ -1852,6 +1868,11 @@ func main() {
 	// #80dfb336 — this route was missing entirely; a guest agent's own key
 	// got a 403 asking where it's connected).
 	api.GET("/agents/me/workspaces", agentWorkspaceGrantHandler.ListMyWorkspaces)
+	// Operator-level runtime ("My Runner"): the agent reads its settings by key; an
+	// agent holding the runtime_manager assignment edits its operator's document.
+	api.GET("/agents/me/runtime", userRuntimeHandler.AgentRuntime)
+	api.PUT("/agents/me/operator-runtime", userRuntimeHandler.SaveAsManager)
+	api.PUT("/agents/me/operator-runtime/agents/:agent_id/limits", userRuntimeHandler.SetLimitsAsManager)
 	api.POST("/agents/heartbeat", agentHandler.Heartbeat)
 	api.GET("/agents/:agent_id", agentHandler.GetByID)
 	api.PATCH("/agents/:agent_id", agentHandler.Update, rbac(mw.PermDeleteAgent))
@@ -1904,6 +1925,7 @@ func main() {
 	api.GET("/tasks/:task_id/vcs-links", vcsLinkHandler.List)
 	api.POST("/tasks/:task_id/vcs-links", vcsLinkHandler.Create, rbac(mw.PermUpdateTask))
 	api.DELETE("/vcs-links/:link_id", vcsLinkHandler.Delete, rbac(mw.PermUpdateTask))
+	api.PATCH("/tasks/:task_id/vcs-links/:link_id/metadata", vcsLinkHandler.PatchMetadata, rbac(mw.PermUpdateTask))
 
 	// OAuth 2.0 Authorization Server (task MCP-OAuth 1/5). Public — no auth:
 	// these are the spec-mandated RFC 8414/7591/6749 endpoints an anonymous
@@ -1983,6 +2005,7 @@ func main() {
 	// until instance-admin gating arrives with W1.3.
 	extensionHandler := handler.NewExtensionHandler(postgres.NewInstalledExtensionRepo(db), extensionInstanceStore).WithAllowList(extensionPolicyRepo)
 	api.GET("/extensions", extensionHandler.List)
+	api.GET("/extensions/catalog", extensionHandler.Catalog)
 	api.GET("/extensions/manifest-schema", extensionHandler.ManifestSchema)
 	// Install from a repository (BRAT mode), Updates tab, rollback: instance admin only.
 	repoInstallSvc := &repoinstall.Service{
@@ -2009,6 +2032,8 @@ func main() {
 	api.GET("/workspaces/:ws_id/integrations", integrationHandler.List, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions"))
 	api.POST("/workspaces/:ws_id/integrations", integrationHandler.Configure, handler.DeprecatedAlias("/api/v1/workspaces/{ws}/extensions/{id}/connect"), rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/extensions", extensionWorkspaceHandler.List)
+	// The workspace is named in the body, not the path: bodyWS checks the caller against it.
+	api.POST("/ext/:ext_id/ui-context", extensionUIHandler.UIContext, mw.RequireUserAuth(), bodyWS)
 	api.POST("/workspaces/:ws_id/extensions/:ext_id/connect", extensionWorkspaceHandler.Connect, rbac(mw.PermManageWebhooks))
 	api.PATCH("/workspaces/:ws_id/extensions/:ext_id/settings", extensionWorkspaceHandler.PatchSettings, rbac(mw.PermManageWebhooks))
 	api.POST("/workspaces/:ws_id/extensions/:ext_id/enable", extensionWorkspaceHandler.Enable, rbac(mw.PermManageWebhooks))
@@ -2187,10 +2212,28 @@ func main() {
 	// :dcom_id is resolved to a workspace by workspaceParamResolvers, so
 	// RequireWorkspaceMemberScoped (group-level, above) refuses another tenant's
 	// comment id here exactly as it does on /document-comments/:dcom_id.
+	// Per-user remembered UI state (Docs tree expansion). Human sessions only —
+	// the handler refuses agent keys itself.
+	api.GET("/me/ui-state/:scope", userUIStateHandler.Get)
+	api.PUT("/me/ui-state/:scope", userUIStateHandler.Put)
 	api.GET("/me/document-mentions", documentMentionHandler.List)
 	api.GET("/me/document-mentions/unseen_count", documentMentionHandler.UnseenCount)
 	api.POST("/me/document-mentions/:dcom_id/seen", documentMentionHandler.MarkSeen)
 	api.GET("/workspaces/:ws_id/mentionables", mentionablesHandler.Search)
+
+	// Operator's own runtime document, history, limits and runtime_manager assignments.
+	api.GET("/me/runtime", userRuntimeHandler.Get, mw.RequireUserAuth())
+	api.PUT("/me/runtime", userRuntimeHandler.Save, mw.RequireUserAuth())
+	api.GET("/me/runtime/history", userRuntimeHandler.History, mw.RequireUserAuth())
+	// No RequireUserAuth here: it answers 401 to agent keys, while these two must
+	// answer 403 to them (UserRuntimeRepo.operatorOnly refuses agents and OAuth
+	// connectors); unauthenticated requests still get 401 from DualAuth.
+	api.GET("/me/runtime/agents", userRuntimeHandler.OperatorAgents)
+	api.GET("/me/runtime/runners", userRuntimeHandler.OperatorRunners)
+	api.PUT("/me/runtime/agents/:agent_id/limits", userRuntimeHandler.SetLimits, mw.RequireUserAuth())
+	api.GET("/me/runtime/managers", userRuntimeHandler.Managers, mw.RequireUserAuth())
+	api.POST("/me/runtime/managers", userRuntimeHandler.GrantManager, mw.RequireUserAuth())
+	api.POST("/me/runtime/managers/revoke", userRuntimeHandler.RevokeManager, mw.RequireUserAuth())
 
 	// Current user's active tasks (excludes done/cancelled).
 	api.GET("/me/tasks", taskHandler.GetCurrentUserTasks)

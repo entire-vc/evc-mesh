@@ -86,6 +86,13 @@ func (h *ExtensionHandler) List(c echo.Context) error {
 	return extensionJSON(c, http.StatusOK, map[string]any{"extensions": out})
 }
 
+// Catalog handles GET /extensions/catalog. Until the Spark-backed source joins
+// (W4.1) it answers with the registry itself (built-in + installed), in the
+// item shape of List; the UI merges it by id, so the overlap is harmless.
+func (h *ExtensionHandler) Catalog(c echo.Context) error {
+	return h.List(c)
+}
+
 // summary builds one catalog entry. A failing instance store fails the whole
 // listing: an unknown status must not look like "disabled, not configured".
 func (h *ExtensionHandler) summary(c echo.Context, row *domain.InstalledExtension) (extensionSummaryResponse, bool, error) {

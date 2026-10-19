@@ -197,6 +197,53 @@ func (l VCSLink) IsReviewSubject() bool {
 	return m.Role == VCSLinkRoleReview
 }
 
+// Metadata keys the transition gate reads for the author_if_merged_shipped
+// pattern. head_sha is written by Mesh when it syncs the MR; ship_sha by the
+// fleet tool that signs an independent SHIP (codex-review / glab-merge).
+const (
+	VCSLinkMetaHeadSHA = "head_sha"
+	VCSLinkMetaShipSHA = "ship_sha"
+	// pipeline_sha is the commit the stored pipeline_status ran on, written by
+	// the pipeline webhook.
+	VCSLinkMetaPipelineSHA = "pipeline_sha"
+)
+
+func (l VCSLink) metaString(key string) string {
+	var m map[string]interface{}
+	if len(l.Metadata) == 0 || json.Unmarshal(l.Metadata, &m) != nil {
+		return ""
+	}
+	v, _ := m[key].(string)
+	return strings.TrimSpace(v)
+}
+
+// HeadSHA is the MR's current head commit as last synced, "" when unknown.
+func (l VCSLink) HeadSHA() string { return l.metaString(VCSLinkMetaHeadSHA) }
+
+// PipelineSHA is the commit the stored pipeline status ran on, "" when unknown.
+func (l VCSLink) PipelineSHA() string { return l.metaString(VCSLinkMetaPipelineSHA) }
+
+// ShipSHA is the head commit an independent SHIP was given for, "" when none.
+func (l VCSLink) ShipSHA() string { return l.metaString(VCSLinkMetaShipSHA) }
+
+// IsMergedShippedGreen reports whether this MR link proves delivery: merged,
+// an independent SHIP bound to the current head, and a green pipeline on that head. Any
+// missing fact is a "no" (fail-closed); comment text is never consulted.
+func (l VCSLink) IsMergedShippedGreen() bool {
+	if l.LinkType != VCSLinkTypePR || l.Status != VCSLinkStatusMerged {
+		return false
+	}
+	head, ship := l.HeadSHA(), l.ShipSHA()
+	if head == "" || ship == "" || head != ship {
+		return false
+	}
+	// The green pipeline must have run on that same head, not on an earlier one.
+	if l.PipelineSHA() != head {
+		return false
+	}
+	return l.PipelineStatus != nil && *l.PipelineStatus == "success"
+}
+
 var changeRequestURLRe = regexp.MustCompile(`https?://[^\s)>\]"'<]+?/(?:-/merge_requests|pull)/\d+`)
 
 // ChangeRequestRef is a PR/MR named by a URL.
@@ -228,4 +275,23 @@ func ExtractChangeRequestRefs(text string) []ChangeRequestRef {
 		refs = append(refs, ref)
 	}
 	return refs
+}
+
+// AgentWritableVCSMetadataKeys is the whitelist of vcs_links.metadata keys
+// fleet tools may write through the metadata PATCH. head_sha is deliberately
+// absent: only the MR sync owns it.
+var AgentWritableVCSMetadataKeys = map[string]bool{"ship_sha": true}
+
+// IsFullCommitSHA reports whether s is a 40-character lowercase hex git SHA.
+func IsFullCommitSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

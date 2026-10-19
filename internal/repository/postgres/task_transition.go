@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,7 +64,7 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 	}
 	q := `UPDATE tasks t SET status_id=$2, position=$3, completed_at=$4,
  status_changed_at=$5, assignee_id=$6, assignee_type=$7,
- pre_review_assignee_id=$8, pre_review_assignee_type=$9, updated_at=$10,
+ pre_review_assignee_id=$8, pre_review_assignee_type=$9, pre_review_restore=` + strconv.FormatBool(task.PreReviewRestore) + `, updated_at=$10,
  due_date=CASE WHEN $14::timestamptz IS NULL THEN due_date ELSE $14 END,
  labels=CASE WHEN $14::timestamptz IS NULL THEN labels ELSE $15 END`
 	args := []any{task.ID, task.StatusID, task.Position, task.CompletedAt, task.StatusChangedAt,

@@ -2,3 +2,4 @@
 # allow-add: may be added with a version <= max(base).  allow-remove: may be deleted/renamed away.
 allow-add 20261013001_i18n_locale.sql
 allow-remove 20261013002_i18n_locale.sql
+allow-remove 20261017004_agent_operator_runtime.sql

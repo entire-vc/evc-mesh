@@ -259,7 +259,8 @@
         "manual": "Pipeline waiting for manual action"
       }
     },
-    "unavailable": "{{name}} is unavailable right now."
+    "unavailable": "{{name}} is unavailable right now.",
+    "retry": "Retry"
   },
   "subtasks": {
     "add": "Add subtask",

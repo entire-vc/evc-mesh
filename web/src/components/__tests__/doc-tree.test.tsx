@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { DocTree, buildDocTree, moveTargets } from "@/components/doc-tree";
 import {
@@ -36,6 +36,18 @@ const DOCS: ProjectDocument[] = [
   makeDoc({ id: "root", title: "Root", position: 0 }),
   makeDoc({ id: "child-a", title: "Child A", parent_id: "root", position: 0 }),
 ];
+
+function baseProps(): Parameters<typeof DocTree>[0] {
+  return {
+    documents: DOCS,
+    selectedId: null,
+    onSelect: vi.fn(),
+    onCreateChild: vi.fn(),
+    onRename: vi.fn(),
+    onMove: vi.fn(),
+    onDelete: vi.fn(),
+  };
+}
 
 function renderTree(overrides: Partial<Parameters<typeof DocTree>[0]> = {}) {
   const props = {
@@ -132,16 +144,41 @@ describe("moveTargets", () => {
 });
 
 describe("DocTree", () => {
-  it("renders the hierarchy with children visible by default", () => {
+  it("starts collapsed: roots only, no children rendered", () => {
     renderTree();
 
     expect(screen.getByText("Root")).toBeInTheDocument();
+    expect(screen.queryByText("Child A")).not.toBeInTheDocument();
+    expect(screen.queryByText("Grandchild")).not.toBeInTheDocument();
+  });
+
+  it("expands exactly the ancestors of the selected document", () => {
+    renderTree({ selectedId: "grandchild" });
+
     expect(screen.getByText("Child A")).toBeInTheDocument();
     expect(screen.getByText("Grandchild")).toBeInTheDocument();
+    // sibling branch stays closed, and so does the selected leaf's own subtree
+    expect(screen.getByText("Child B")).toBeInTheDocument();
+    for (const title of ["Root", "Child A"]) {
+      const item = screen.getByLabelText(`Collapse ${title}`).closest('[role="treeitem"]');
+      expect(item).toHaveAttribute("aria-expanded", "true");
+    }
+  });
+
+  it("keeps sibling branches collapsed when a deep document is selected", () => {
+    const docs = [
+      ...DOCS,
+      makeDoc({ id: "other", title: "Other", position: 1 }),
+      makeDoc({ id: "other-kid", title: "Other Kid", parent_id: "other" }),
+    ];
+    renderTree({ documents: docs, selectedId: "grandchild" });
+
+    expect(screen.getByText("Other")).toBeInTheDocument();
+    expect(screen.queryByText("Other Kid")).not.toBeInTheDocument();
   });
 
   it("collapses and expands a node", () => {
-    renderTree();
+    renderTree({ selectedId: "child-a" });
 
     fireEvent.click(screen.getByLabelText("Collapse Root"));
     expect(screen.queryByText("Child A")).not.toBeInTheDocument();
@@ -150,8 +187,117 @@ describe("DocTree", () => {
     expect(screen.getByText("Child A")).toBeInTheDocument();
   });
 
+  describe("remembering the expansion", () => {
+    const KEY = "mesh.docs.tree.expanded.u1.p1";
+    beforeEach(() => window.localStorage.clear());
+
+    it("survives a remount", () => {
+      const first = render(
+        <DocTree {...baseProps()} storageKey={KEY} />,
+      );
+      fireEvent.click(screen.getByLabelText("Expand Root"));
+      expect(screen.getByText("Child A")).toBeInTheDocument();
+      first.unmount();
+
+      render(<DocTree {...baseProps()} storageKey={KEY} />);
+      expect(screen.getByText("Child A")).toBeInTheDocument();
+      expect(screen.queryByText("Grandchild")).not.toBeInTheDocument();
+    });
+
+    it("drops ids of deleted documents on read", () => {
+      window.localStorage.setItem(KEY, JSON.stringify(["root", "gone"]));
+      render(<DocTree {...baseProps()} storageKey={KEY} />);
+      expect(screen.getByText("Child A")).toBeInTheDocument();
+      const saved = JSON.parse(window.localStorage.getItem(KEY) ?? "[]") as string[];
+      expect(saved).toEqual(["root"]);
+    });
+
+    it("does not touch saved state or expand anything while the list is another project's", () => {
+      window.localStorage.setItem(KEY, JSON.stringify(["p2-root"]));
+      const props = baseProps(); // documents belong to project p1
+      const { rerender } = render(
+        <DocTree {...props} storageKey={KEY} projectId="p2" />,
+      );
+      expect(JSON.parse(window.localStorage.getItem(KEY) ?? "[]")).toEqual(["p2-root"]);
+      // the other project's list is not drawn while it is the stale one
+      expect(screen.queryByText("Root")).not.toBeInTheDocument();
+
+      const own = [
+        makeDoc({ id: "p2-root", project_id: "p2", title: "P2 Root" }),
+        makeDoc({ id: "p2-kid", project_id: "p2", title: "P2 Kid", parent_id: "p2-root" }),
+        makeDoc({ id: "p2-other", project_id: "p2", title: "P2 Other", position: 1 }),
+        makeDoc({ id: "p2-other-kid", project_id: "p2", title: "P2 Other Kid", parent_id: "p2-other" }),
+      ];
+      rerender(<DocTree {...props} documents={own} storageKey={KEY} projectId="p2" />);
+
+      // the saved branch is open, the other one is not (nothing was auto-expanded)
+      expect(screen.getByText("P2 Kid")).toBeInTheDocument();
+      expect(screen.queryByText("P2 Other Kid")).not.toBeInTheDocument();
+      expect(JSON.parse(window.localStorage.getItem(KEY) ?? "[]")).toEqual(["p2-root"]);
+    });
+
+    it("clears the saved ids when the last document of the project is deleted", () => {
+      const props = baseProps();
+      const { rerender } = render(
+        <DocTree {...props} storageKey={KEY} projectId="p1" selectedId="child-a" />,
+      );
+      expect(JSON.parse(window.localStorage.getItem(KEY) ?? "[]")).toEqual(["root"]);
+      rerender(<DocTree {...props} documents={[]} storageKey={KEY} projectId="p1" />);
+      expect(JSON.parse(window.localStorage.getItem(KEY) ?? "[]")).toEqual([]);
+    });
+
+    it("does not carry one project's expansion into another's key when not remounted", () => {
+      const K2 = "mesh.docs.tree.expanded.u1.p2";
+      const props = baseProps();
+      const { rerender } = render(
+        <DocTree {...props} storageKey={KEY} projectId="p1" selectedId="child-a" />,
+      );
+      expect(JSON.parse(window.localStorage.getItem(KEY) ?? "[]")).toEqual(["root"]);
+      const own = [makeDoc({ id: "root", project_id: "p2", title: "Root" })];
+      rerender(<DocTree {...props} documents={own} storageKey={K2} projectId="p2" />);
+      expect(JSON.parse(window.localStorage.getItem(K2) ?? "[]")).toEqual([]);
+      expect(JSON.parse(window.localStorage.getItem(KEY) ?? "[]")).toEqual(["root"]);
+    });
+
+    it("works without storage", () => {
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+        throw new Error("denied");
+      });
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new Error("denied");
+      });
+      render(<DocTree {...baseProps()} storageKey={KEY} />);
+      expect(screen.queryByText("Child A")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText("Expand Root"));
+      expect(screen.getByText("Child A")).toBeInTheDocument();
+      vi.restoreAllMocks();
+    });
+  });
+
+  it("expands a collapsed parent when a child appears under it", () => {
+    const props = baseProps();
+    const { rerender } = render(<DocTree {...props} />);
+    expect(screen.queryByText("Child A")).not.toBeInTheDocument();
+
+    const created = makeDoc({ id: "fresh", title: "Fresh", parent_id: "root", position: 5 });
+    rerender(<DocTree {...props} documents={[...DOCS, created]} />);
+
+    expect(screen.getByText("Fresh")).toBeInTheDocument();
+  });
+
+  it("expands the new parent when a document is moved", () => {
+    const props = baseProps();
+    const { rerender } = render(<DocTree {...props} />);
+
+    const moved = DOCS.map((d) => (d.id === "child-b" ? { ...d, parent_id: "child-a" } : d));
+    rerender(<DocTree {...props} documents={moved} />);
+
+    expect(screen.getByText("Child A")).toBeInTheDocument();
+    expect(screen.getByText("Child B")).toBeInTheDocument();
+  });
+
   it("selects a document when its title is clicked", () => {
-    const props = renderTree();
+    const props = renderTree({ selectedId: "child-b" });
 
     fireEvent.click(screen.getByText("Child B"));
 
@@ -262,7 +408,7 @@ describe("selected-row contrast", () => {
   });
 
   it("exposes rename, move and delete in the per-node menu", () => {
-    const props = renderTree();
+    const props = renderTree({ selectedId: "child-b" });
 
     fireEvent.click(screen.getByLabelText("Actions for Child B"));
     fireEvent.click(screen.getByText("Rename"));

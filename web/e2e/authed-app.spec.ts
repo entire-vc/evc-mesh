@@ -133,6 +133,17 @@ test.beforeAll(async ({ browser }) => {
     // The app deliberately probes /auth/refresh before it knows whether the
     // visitor is logged in; a 401 there is the documented "not logged in"
     // answer, not a defect.
+    // GET /me/ui-state/<scope> answers 404 until the user has stored state for
+    // that scope (a project they never expanded a Docs tree in): the documented
+    // "nothing saved yet" contract, which the tree treats as an empty state
+    // (internal/handler/user_ui_state_handler.go Get, TestUserUIState_GetBeforeAnyWrite_404).
+    if (
+      resp.status() === 404 &&
+      resp.request().method() === "GET" &&
+      url.pathname.startsWith("/api/v1/me/ui-state/")
+    ) {
+      return;
+    }
     if (resp.status() >= 400 && !url.pathname.endsWith("/auth/refresh")) {
       failedApiCalls.push(`${resp.status()} ${resp.request().method()} ${url.pathname}`);
     }

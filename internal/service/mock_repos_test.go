@@ -3344,20 +3344,53 @@ func (m *MockVCSLinkRepository) Upsert(_ context.Context, link *domain.VCSLink) 
 	return true, nil
 }
 
-func (m *MockVCSLinkRepository) SetPipelineStatus(_ context.Context, id uuid.UUID, pipelineID int64, status string) (bool, error) {
+func (m *MockVCSLinkRepository) MergeMetadata(_ context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.items {
+		l := &m.items[i]
+		if l.ID != id || l.TaskID != taskID || l.LinkType != domain.VCSLinkTypePR {
+			continue
+		}
+		merged := map[string]json.RawMessage{}
+		_ = json.Unmarshal(l.Metadata, &merged)
+		var p map[string]json.RawMessage
+		_ = json.Unmarshal(patch, &p)
+		for k, v := range p {
+			merged[k] = v
+		}
+		l.Metadata, _ = json.Marshal(merged)
+		cp := *l
+		return &cp, nil
+	}
+	return nil, nil
+}
+
+func (m *MockVCSLinkRepository) SetPipelineStatus(_ context.Context, id uuid.UUID, pipelineID int64, status, sha string) (bool, error) {
 	if m.errToReturn != nil {
 		return false, m.errToReturn
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range m.items {
-		if m.items[i].ID == id {
-			if m.items[i].PipelineID != nil && *m.items[i].PipelineID > pipelineID {
-				return false, nil
-			}
-			m.items[i].PipelineID, m.items[i].PipelineStatus = &pipelineID, &status
-			return true, nil
+		if m.items[i].ID != id {
+			continue
 		}
+		if m.items[i].PipelineID != nil && *m.items[i].PipelineID > pipelineID {
+			return false, nil
+		}
+		m.items[i].PipelineID, m.items[i].PipelineStatus = &pipelineID, &status
+		var meta map[string]interface{}
+		_ = json.Unmarshal(m.items[i].Metadata, &meta)
+		if meta == nil {
+			meta = map[string]interface{}{}
+		}
+		meta[domain.VCSLinkMetaPipelineSHA] = strings.TrimSpace(sha)
+		m.items[i].Metadata, _ = json.Marshal(meta)
+		return true, nil
 	}
 	return false, nil
 }
@@ -3667,6 +3700,13 @@ func (m *MockDocumentRepository) Update(_ context.Context, doc *domain.Document,
 	}
 	copied := *doc
 	copied.Version = newVersion
+	// Mirrors COALESCE(NULLIF($10, ''), storage_key): the pointer moves only when
+	// this write brought a body, never back to whatever the caller had read.
+	copied.StorageKey = existing.StorageKey
+	if doc.NewStorageKey != "" {
+		copied.StorageKey = doc.NewStorageKey
+	}
+	copied.NewStorageKey = ""
 	m.items[doc.ID] = &copied
 	return newVersion, nil
 }

@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { cn } from "@/lib/cn";
-import { formatDate, formatDateTime } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import type { ProjectDocument } from "@/types";
 
 export interface DocMetaProps {
@@ -21,10 +21,10 @@ function actorLabel(name: string | null | undefined, t: TFunction<"docs">): stri
 }
 
 /** Never throws on a timestamp the API surprises us with. */
-function safeFormat(value: string | null | undefined, long: boolean): string {
+function safeFormat(value: string | null | undefined): string {
   if (!value) return "";
   try {
-    return long ? formatDateTime(value) : formatDate(value);
+    return formatDateTime(value);
   } catch {
     return "";
   }
@@ -51,8 +51,7 @@ export function DocMeta({ doc, className }: DocMetaProps) {
   const hasEditor = Boolean(doc.updated_by || doc.updated_by_name);
   const editor = hasEditor ? actorLabel(doc.updated_by_name, t) : null;
 
-  const when = safeFormat(doc.updated_at, false);
-  const exact = safeFormat(doc.updated_at, true);
+  const when = safeFormat(doc.updated_at);
 
   return (
     <p
@@ -79,7 +78,7 @@ export function DocMeta({ doc, className }: DocMetaProps) {
           <Dot />
           {/* "Updated <date>" only when there is no editor named, so the two
               halves do not read as "last updated by X ... updated <date>". */}
-          <time dateTime={doc.updated_at} title={exact || undefined}>
+          <time dateTime={doc.updated_at}>
             {editor ? when : t("meta.updated", { when })}
           </time>
         </>

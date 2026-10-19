@@ -68,6 +68,10 @@ function makeController(
     readOnly: false,
     activeThreadId: null,
     focusThread: vi.fn(),
+    activeSource: "mark",
+    getMarkRect: () => null,
+    scrollToMark: () => false,
+    layoutTick: 0,
     pendingSelection: null,
     startDraft: vi.fn(),
     startPageDraft: vi.fn(),
@@ -342,5 +346,100 @@ describe("DocCommentToggle", () => {
       <DocCommentToggle controller={makeController()} open={false} onToggle={vi.fn()} />,
     );
     expect(screen.getByTestId("doc-comment-toggle")).toHaveTextContent(/^Comments$/);
+  });
+});
+
+describe("DocCommentRail alignment", () => {
+  it("places each thread at its mark and pushes overlapping ones down", () => {
+    const mk = (id: string) =>
+      ({ root: { id, body: id, anchor: { exact: id }, resolved_at: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", author_type: "user" }, replies: [], placement: "anchored", resolved: false }) as unknown as DocCommentsController["threads"][number];
+    const tops: Record<string, number> = { a: 100, b: 110, c: 600 };
+    const controller = makeController({
+      threads: [mk("a"), mk("b"), mk("c")],
+      getMarkRect: (id) => ({ top: tops[id] } as DOMRect),
+    });
+    const spy = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(50);
+    render(<DocCommentRail controller={controller} showResolved={false} onShowResolvedChange={() => {}} />);
+    const top = (id: string) =>
+      Number(
+        (document.querySelector(`[data-aligned-id="${id}"]`) as HTMLElement).style.top.replace("px", ""),
+      );
+    const host = document.querySelector("[data-testid='doc-comment-aligned']") as HTMLElement;
+    const base = host.getBoundingClientRect().top; // 0 in jsdom
+    expect(top("a")).toBe(100 - base);
+    expect(top("b")).toBe(top("a") + 50 + 8); // pushed below a, not overlapping
+    expect(top("c")).toBe(600 - base); // far mark keeps its own level
+    spy.mockRestore();
+  });
+});
+
+describe("DocCommentRail — card to mark", () => {
+  const thread = {
+    root: { id: "t1", body: "hello", anchor: { exact: "q" }, resolved_at: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", author_type: "user" },
+    replies: [],
+    placement: "anchored",
+    resolved: false,
+  } as unknown as DocCommentsController["threads"][number];
+
+  it("clicking the card focuses it and scrolls the document to its mark", () => {
+    const scrollToMark = vi.fn(() => true);
+    const focusThread = vi.fn();
+    render(<DocCommentRail controller={makeController({ threads: [thread], scrollToMark, focusThread })} showResolved={false} onShowResolvedChange={() => {}} />);
+    fireEvent.click(screen.getByTestId("doc-comment-thread"));
+    expect(focusThread).toHaveBeenCalledWith("t1", "card");
+    expect(scrollToMark).toHaveBeenCalledWith("t1");
+  });
+
+  it("clicking a control inside the card does not scroll the document", () => {
+    const scrollToMark = vi.fn(() => true);
+    render(<DocCommentRail controller={makeController({ threads: [thread], scrollToMark })} showResolved={false} onShowResolvedChange={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /reply/i }));
+    expect(scrollToMark).not.toHaveBeenCalled();
+  });
+});
+
+describe("DocCommentRail — focus and errors", () => {
+  const thread = {
+    root: { id: "t1", body: "hello", anchor: { exact: "q" }, resolved_at: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", author_type: "user" },
+    replies: [],
+    placement: "anchored",
+    resolved: false,
+  } as unknown as DocCommentsController["threads"][number];
+
+  it("the active card is not scrolled into view by the rail (the mark scroll owns the viewport)", () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy;
+    render(<DocCommentRail controller={makeController({ threads: [thread], activeThreadId: "t1" })} showResolved={false} onShowResolvedChange={() => {}} />);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("a load error does not hide an open draft composer", () => {
+    render(
+      <DocCommentRail
+        controller={makeController({
+          error: "boom",
+          draft: { anchor: { exact: "quote" }, span: null, unplaceable: false } as unknown as DocCommentsController["draft"],
+        })}
+        showResolved={false}
+        onShowResolvedChange={() => {}}
+      />,
+    );
+    expect(screen.getByText("boom")).toBeTruthy();
+    expect(screen.getByRole("textbox")).toBeTruthy();
+  });
+});
+
+describe("DocCommentRail — duplicate surfaces", () => {
+  it("a card click focuses with source 'card' so the tree's twin does not scroll", () => {
+    const focusThread = vi.fn();
+    const t = {
+      root: { id: "t9", body: "x", anchor: { exact: "q" }, resolved_at: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", author_type: "user" },
+      replies: [], placement: "anchored", resolved: false,
+    } as unknown as DocCommentsController["threads"][number];
+    render(<DocCommentRail controller={makeController({ threads: [t], focusThread })} showResolved={false} onShowResolvedChange={() => {}} />);
+    fireEvent.click(screen.getByTestId("doc-comment-thread"));
+    expect(focusThread).toHaveBeenCalledWith("t9", "card");
   });
 });

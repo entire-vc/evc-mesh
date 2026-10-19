@@ -328,7 +328,7 @@ func TestDocumentRepo_Update(t *testing.T) {
 
 	mock.ExpectQuery("UPDATE documents").
 		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
-			doc.UpdatedBy, doc.UpdatedByType, nil, doc.Slug).
+			doc.UpdatedBy, doc.UpdatedByType, nil, doc.Slug, doc.NewStorageKey).
 		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(4))
 	mock.ExpectCommit()
 
@@ -365,7 +365,7 @@ func TestDocumentRepo_Update_ConditionalPredicateIsInTheWrite(t *testing.T) {
 
 	mock.ExpectQuery("AND \\(\\$8::int IS NULL OR version = \\$8::int\\)").
 		WithArgs(doc.ID, doc.Title, doc.ParentID, doc.Position, doc.UpdatedAt,
-			doc.UpdatedBy, doc.UpdatedByType, expected, doc.Slug).
+			doc.UpdatedBy, doc.UpdatedByType, expected, doc.Slug, doc.NewStorageKey).
 		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(5))
 	mock.ExpectCommit()
 

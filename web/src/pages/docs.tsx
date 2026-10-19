@@ -34,6 +34,7 @@ import { DocEditor } from "@/components/doc-editor";
 import { DocWatchToggle } from "@/components/doc-watch-toggle";
 import { DocMeta } from "@/components/doc-meta";
 import { DocCommentTree } from "@/components/doc-comment-tree";
+import { useAuthStore } from "@/stores/auth";
 import { DocTree, moveTargets } from "@/components/doc-tree";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ResizableDivider } from "@/components/resizable-divider";
@@ -546,6 +547,9 @@ export function DocsPage() {
   } = useDocumentStore();
 
   const projectId = currentProject?.id;
+  const authUserId = useAuthStore((s) => s.user?.id);
+  const docTreeStorageKey =
+    authUserId && projectId ? `mesh.docs.tree.expanded.${authUserId}.${projectId}` : null;
   const docsPath = `/w/${wsSlug}/p/${projectSlug}/docs`;
 
   const [openDoc, setOpenDoc] = useState<ProjectDocument | null>(null);
@@ -1210,6 +1214,9 @@ export function DocsPage() {
             </div>
           ) : (
             <DocTree
+              key={docTreeStorageKey ?? "no-storage"}
+              storageKey={docTreeStorageKey}
+              projectId={projectId}
               documents={documents}
               selectedId={docId ?? null}
               onSelect={(doc) => navigate(`${docsPath}/${doc.id}`)}
@@ -1483,6 +1490,7 @@ export function DocsPage() {
                     controller={comments}
                     showResolved={showResolved}
                     onShowResolvedChange={setShowResolved}
+                    revealWhenActive={!(railOpen && !isMobile)}
                   />
                 </article>
 

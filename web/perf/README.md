@@ -80,6 +80,26 @@ shell loads eagerly — 148.96 → 149.13 KB gz (**+0.17 KB gz**). Not a route-s
 chunk, so it counts against the initial-load ceiling like any other
 always-loaded code; stated here so the number isn't mistaken for drift.
 
+`total_js_kb_gz` 644.5 → 644.6 (**+0.1 KB gz**): the collapsed doc tree
+ added the expand / remember / reveal logic to the lazy docs chunk. The
+build measured 644.53 after removing a duplicated key-change reset in
+`doc-tree.tsx`, so the ceiling moved by the smallest step above that. Lead
+sign-off: the product lead, on the card.
+
+`total_js_kb_gz` 644.6 → 645.1 (**+0.5 KB gz**): cross-device sync of the
+doc tree expansion (`docs-tree-sync.ts` plus the load / debounced write / flush
+wiring in `doc-tree.tsx`) lands in the lazy docs chunk. CI measured 645.06 on
+the previous base, 0.51 above main, so the ceiling moved by the smallest step
+above that. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 649.4 → 656.0 (**+6.6 KB gz**): the new "My Runner" page
+(`React.lazy` route chunk with its sections, API client and `runner` locale
+namespace). Main already measured 649.3 against the 649.4 ceiling, so there was
+no headroom; `login.initial_js_kb_gz` is unchanged (172.07). The last
+0.4 KB is the client-side no-secrets check, the enable-404 message and the
+per-workspace role guard added after review; the build measured 655.98. Lead
+sign-off: the product lead, on the card (655.6 signed, 656.0 requested).
+
 ## Proving the gate actually gates (do this again after touching the script)
 
 A budget check that can't go red isn't a check (a deliberate failure proves enforcement). Two

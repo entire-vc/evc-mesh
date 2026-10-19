@@ -30,7 +30,11 @@ func (f *documentFixture) storedBody(t *testing.T, doc *domain.Document) string 
 	t.Helper()
 	f.storage.mu.RLock()
 	defer f.storage.mu.RUnlock()
-	body, ok := f.storage.objects[doc.StorageKey]
+	// The row's pointer, not the key the document was created with: a body write
+	// moves storage_key to a fresh object.
+	current, err := f.repo.GetByID(context.Background(), doc.ID)
+	require.NoError(t, err)
+	body, ok := f.storage.objects[current.StorageKey]
 	require.True(t, ok, "the document has no body in storage")
 	return string(body)
 }
@@ -354,19 +358,13 @@ func TestDocumentService_Update_RepositoryErrorIsNotAConflict(t *testing.T) {
 	assert.Equal(t, "original\n", f.storedBody(t, doc), "the body write never ran")
 }
 
-// The failure the write order deliberately chooses to have.
-//
-// The row is written first so that a refused write cannot already have
-// overwritten the markdown. The cost is this: an upload that fails afterwards
-// leaves the version bumped with the old body. That is a 500 the caller sees and
-// retries, and every conditional writer is forced to re-read — the safe
-// direction. The other ordering's failure is a silently lost paragraph.
-func TestDocumentService_Update_UploadFailingAfterTheRowLeavesTheOldBody(t *testing.T) {
+// The body is uploaded before the row, so an upload that fails leaves nothing
+// behind: the version has not moved and the pointer still names the old body.
+func TestDocumentService_Update_UploadFailingBeforeTheRowChangesNothing(t *testing.T) {
 	f := setupDocumentService(t)
 	doc := f.create(t, "Runbook", "original\n")
 
-	f.repo.beforeUpdate = func() { f.storage.errToReturn = errors.New("s3 is down") }
-
+	f.storage.errToReturn = errors.New("s3 is down")
 	_, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("edited\n"), BaseVersion: ptr(1)})
 
 	var apiErr *apierror.Error
@@ -375,18 +373,109 @@ func TestDocumentService_Update_UploadFailingAfterTheRowLeavesTheOldBody(t *test
 
 	f.storage.errToReturn = nil
 	assert.Equal(t, "original\n", f.storedBody(t, doc), "the markdown is untouched")
-
 	stored, err := f.repo.GetByID(context.Background(), doc.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, stored.Version,
-		"the version moved without the body — which forces every conditional writer to re-read, "+
-			"and is why this ordering is the safe one")
+	assert.Equal(t, 1, stored.Version, "the row was never written")
 
-	// And the caller's retry, from the version it was told about, works.
-	retried, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("edited\n"), BaseVersion: ptr(2)})
+	retried, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("edited\n"), BaseVersion: ptr(1)})
 	require.NoError(t, err)
 	assert.Equal(t, "edited\n", f.storedBody(t, doc))
-	assert.Equal(t, 3, retried.Version)
+	assert.Equal(t, 2, retried.Version)
+}
+
+// The race this card closes. A competing write lands between our read and our
+// compare-and-swap; the loser's body must not become what the row points at, and
+// the object it uploaded must not outlive the refusal.
+func TestDocumentService_Update_LoserBodyIsNeverReferencedAndIsRemoved(t *testing.T) {
+	f := setupDocumentService(t)
+	doc := f.create(t, "Runbook", "original\n")
+
+	f.repo.beforeUpdate = func() {
+		_, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("winner\n")})
+		require.NoError(t, err)
+	}
+	_, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("loser\n"), BaseVersion: ptr(1)})
+	var conflict *DocumentVersionConflictError
+	require.ErrorAs(t, err, &conflict)
+
+	assert.Equal(t, "winner\n", f.storedBody(t, doc))
+	for key, body := range f.storage.objects {
+		assert.NotEqual(t, "loser\n", string(body), "orphan left behind at %s", key)
+	}
+}
+
+// Section-writer vs section-writer, and section-writer vs append, on one
+// document, with the rival landing inside the window the old ordering left open
+// (after the row, before the body). Whichever order they land, neither edit may
+// vanish: the unconditional replace is the one allowed to overwrite, so the
+// conditional writers are the ones asserted on.
+func TestDocumentService_Update_ConcurrentSectionWritersLoseNothing(t *testing.T) {
+	cases := map[string]func(t *testing.T, f *documentFixture, doc *domain.Document){
+		"section then section": func(t *testing.T, f *documentFixture, doc *domain.Document) {
+			f.repo.beforeUpdate = func() {
+				_, err := f.update(t, doc.ID, UpdateDocumentInput{AppendBody: ptr("B\n")})
+				require.NoError(t, err)
+			}
+			_, err := f.update(t, doc.ID, UpdateDocumentInput{AppendBody: ptr("A\n")})
+			require.NoError(t, err)
+		},
+		"section then append, with a conditional body": func(t *testing.T, f *documentFixture, doc *domain.Document) {
+			f.repo.beforeUpdate = func() {
+				_, err := f.update(t, doc.ID, UpdateDocumentInput{AppendBody: ptr("B\n")})
+				require.NoError(t, err)
+			}
+			_, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("start\nA\n"), BaseVersion: ptr(1)})
+			var conflict *DocumentVersionConflictError
+			require.ErrorAs(t, err, &conflict, "a stale replace is refused, never merged over the append")
+			_, err = f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("start\nB\nA\n"), BaseVersion: ptr(conflict.CurrentVersion)})
+			require.NoError(t, err)
+		},
+	}
+	for name, run := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := setupDocumentService(t)
+			doc := f.create(t, "Log", "start\n")
+			run(t, f, doc)
+			got := f.storedBody(t, doc)
+			assert.Contains(t, got, "A\n")
+			assert.Contains(t, got, "B\n")
+		})
+	}
+}
+
+// A document written before body keys were versioned still points at the
+// original documents/<project>/<id>.md and must read, append and then migrate
+// lazily on its first edit.
+func TestDocumentService_Update_LegacyKeyReadsAndMigratesOnFirstWrite(t *testing.T) {
+	f := setupDocumentService(t)
+	doc := f.create(t, "Old", "legacy\n")
+	legacyKey := documentStorageKey(f.projectID, doc.ID)
+	require.Equal(t, legacyKey, doc.StorageKey, "Create keeps the plain key")
+
+	read, err := f.svc.GetByIDInWorkspace(context.Background(), doc.ID, f.wsID)
+	require.NoError(t, err)
+	assert.Equal(t, "legacy\n", read.Body)
+
+	updated, err := f.update(t, doc.ID, UpdateDocumentInput{AppendBody: ptr("more\n")})
+	require.NoError(t, err)
+	assert.Equal(t, "legacy\nmore\n", updated.Body)
+	assert.NotEqual(t, legacyKey, updated.StorageKey, "the first write moved the pointer to a versioned key")
+	assert.Equal(t, "legacy\n", string(f.storage.objects[legacyKey]), "the old object is left for rollback")
+}
+
+// A rename carries no body, so it must not drag the pointer back to the key it
+// read before a body write landed in between.
+func TestDocumentService_Update_RenameDoesNotRevertBodyPointer(t *testing.T) {
+	f := setupDocumentService(t)
+	doc := f.create(t, "Name", "v1\n")
+
+	f.repo.beforeUpdate = func() {
+		_, err := f.update(t, doc.ID, UpdateDocumentInput{Body: ptr("v2\n")})
+		require.NoError(t, err)
+	}
+	_, err := f.update(t, doc.ID, UpdateDocumentInput{Title: ptr("Renamed")})
+	require.NoError(t, err)
+	assert.Equal(t, "v2\n", f.storedBody(t, doc))
 }
 
 func TestDocumentVersionConflictError_Message(t *testing.T) {

@@ -1,0 +1,89 @@
+{
+  "title": "My Runner",
+  "subtitle": "Your agents, the resources they run on and the runner leading each. Changes affect only you.",
+  "loadFailed": "Could not load this section.",
+  "retry": "Retry",
+  "admin": {
+    "title": "Runner for this workspace",
+    "offHint": "Runner is off. Turn it on once; each person then configures their own agents under My Runner.",
+    "onHint": "Runner is on for this workspace. Nothing else to set up here.",
+    "enable": "Turn on Runner",
+    "enabling": "Turning on...",
+    "enabled": "Runner is on",
+    "failed": "Could not turn Runner on",
+    "notConnected": "Runner has never been connected in this workspace, so it cannot be turned on from here yet",
+    "off": "Off"
+  },
+  "agents": {
+    "title": "Agents",
+    "empty": "No agents yet. Agents appear here when you issue them a key or add one with a key you hold.",
+    "limit": "Parallel tasks",
+    "limitInvalid": "Whole number from 0 to 1000",
+    "save": "Save",
+    "saved": "Limit saved",
+    "saveFailed": "Could not save the limit",
+    "manager": "Can manage My Runner",
+    "managerHint": "The agent edits your resources and limits with its own key. You can take this back at any time.",
+    "managerGranted": "{{name}} can now manage My Runner",
+    "managerRevoked": "{{name}} can no longer manage My Runner",
+    "managerFailed": "Could not change the assignment",
+    "noRunner": "No runner leads this agent",
+    "runnerLive": "live",
+    "runnerLapsed": "no heartbeat"
+  },
+  "runners": {
+    "title": "Runners",
+    "empty": "No runner has announced itself for your agents yet.",
+    "host": "Host",
+    "version": "Version",
+    "heartbeat": "Lease",
+    "agents": "Agents",
+    "live": "live",
+    "lapsed": "no heartbeat",
+    "unknownVersion": "unknown",
+    "leaseLive": "expires {{when}}",
+    "leaseLapsed": "expired {{when}}"
+  },
+  "resources": {
+    "title": "Resources",
+    "hint": "Provider accounts (cred: references only, never secrets), pools, profiles and per-agent settings.",
+    "sections": {
+      "accounts": "Accounts",
+      "pools": "Pools",
+      "profiles": "Profiles",
+      "agents": "Agent settings"
+    },
+    "empty": "Nothing here yet.",
+    "name": "Name",
+    "value": "Settings (JSON object)",
+    "add": "Add",
+    "edit": "Edit",
+    "remove": "Remove",
+    "apply": "Apply",
+    "cancel": "Cancel",
+    "nameRequired": "Enter a name",
+    "nameTaken": "This name is already used",
+    "valueInvalid": "Enter a valid JSON object",
+    "secretRejected": "Secrets are not allowed: \"{{path}}\". Store a cred: reference instead",
+    "unsaved": "Unsaved changes",
+    "save": "Save resources",
+    "saving": "Saving...",
+    "discard": "Discard",
+    "saved": "Resources saved",
+    "saveFailed": "Could not save resources",
+    "conflict": "Someone changed this while you were editing. Reloaded the latest version; apply your change again."
+  },
+  "history": {
+    "title": "Revision history",
+    "empty": "No changes yet.",
+    "revision": "Revision {{n}}",
+    "you": "You",
+    "agent": "Agent {{name}}",
+    "kind": {
+      "config": "Resources changed",
+      "limits": "Limit changed",
+      "manager_granted": "Management assigned",
+      "manager_revoked": "Management taken back"
+    }
+  }
+}

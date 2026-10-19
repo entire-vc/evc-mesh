@@ -445,6 +445,12 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // require the exact agent+workspace grant for the presented caller
 // (runtimeBoundCaller), Report and Desired require the owner-workspace key of that
 // controller. A ref from another catalog or another grant answers not found.
+// /me/ui-state/:scope names a row by a scope string ("docs.tree:<project_id>"),
+// not by a database id, and the row belongs to a person: it is keyed on the
+// session's own user_id, so there is no other user's row to pair with. The
+// tenant-owned part (the project inside the scope) is checked by
+// UserUIStateHandler against project_members / workspace owner-admin before
+// anything is read or written, and the handler refuses every non-user principal.
 // /extensions/:ext_id/instance-settings is INSTANCE-level, not tenant-owned:
 // :ext_id is an extension's manifest id (a string such as "gitlab"), and the
 // row it names belongs to the whole deployment, so there is no workspace to
@@ -471,11 +477,13 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // ExtensionInstanceAdminHandler answers 403 unless the caller is an instance
 // admin before it writes anything.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
+	"/api/v1/ext/:ext_id/ui-context":                                                              true, // :ext_id is a registry id, not tenant data; the workspace is in the body (bodyWS) and the handler checks membership, task and project against it
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
 	"/api/v1/extensions/:ext_id/allowed":                                                          true,
 	"/api/v1/extensions/:ext_id/update":                                                           true,
 	"/api/v1/extensions/:ext_id/rollback":                                                         true,
 	"/api/v1/memories/:id":                                                                        true,
+	"/api/v1/me/ui-state/:scope":                                                                  true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id":                                                true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id/actions":                                        true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id/actions/:action":                                true,

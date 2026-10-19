@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { api } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { ManifestCapabilities } from "@/lib/extension-capabilities";
@@ -8,29 +8,44 @@ import type { ManifestCapabilities } from "@/lib/extension-capabilities";
  * extension may fill. The set of extensions that fill it comes from
  * `GET /workspaces/{ws}/extensions`: a connected, enabled extension whose
  * manifest `capabilities.ui` names the slot. Which component fills it is
- * decided by `components/extensions/slots/builtin-slots.ts` (built-ins only;
- * iframe slots for external extensions are W3.3).
+ * decided by `components/extensions/slots/builtin-slots.ts` for built-ins; an
+ * external extension fills `sidebar.item` and `task.panel` with an iframe screen
+ * (`components/extensions/external-frame.tsx`, W3.3).
  *
  * One request serves every card on the board: the registry is a module-level
  * store, so opening a task or rendering a column never waits on it and never
  * issues a second fetch.
  */
-export type SlotId = "task.panel" | "task.badge" | "task.actions";
+export type SlotId = "task.panel" | "task.badge" | "task.actions" | "sidebar.item";
+
+/** An iframe screen an external extension serves for a slot (manifest `external.ui`). */
+export interface ExternalScreen {
+  title: string;
+  icon?: string;
+}
 
 export interface SlotExtension {
   id: string;
   name: string;
   slots: SlotId[];
+  /** Iframe screens by slot; present only for external extensions that declare them. */
+  external?: Partial<Record<SlotId, ExternalScreen>>;
 }
 
 interface WorkspaceExtensionDto {
   id: string;
   name: string;
-  manifest?: { capabilities?: ManifestCapabilities };
+  manifest?: {
+    runtime?: string;
+    capabilities?: ManifestCapabilities;
+    external?: { ui?: Record<string, { path?: string; title?: string; icon?: string }> } | null;
+  };
   status?: { enabled?: boolean };
 }
 
-const SLOT_IDS: readonly SlotId[] = ["task.panel", "task.badge", "task.actions"];
+const SLOT_IDS: readonly SlotId[] = ["task.panel", "task.badge", "task.actions", "sidebar.item"];
+/** Slots an external extension fills with an iframe screen. */
+export const FRAME_SLOTS: readonly SlotId[] = ["sidebar.item", "task.panel"];
 const SLOTS: ReadonlySet<string> = new Set<string>(SLOT_IDS);
 const TTL_MS = 60_000;
 
@@ -38,7 +53,7 @@ const TTL_MS = 60_000;
 const EMPTY: SlotExtension[] = [];
 
 type BySlot = Record<SlotId, SlotExtension[]>;
-const NONE: BySlot = { "task.panel": EMPTY, "task.badge": EMPTY, "task.actions": EMPTY };
+const NONE: BySlot = { "task.panel": EMPTY, "task.badge": EMPTY, "task.actions": EMPTY, "sidebar.item": EMPTY };
 
 interface Entry {
   bySlot: BySlot;
@@ -67,13 +82,24 @@ export function parseSlotExtensions(list: WorkspaceExtensionDto[]): SlotExtensio
       const slot = typeof u === "string" ? u : u?.slot;
       if (slot && SLOTS.has(slot) && !slots.includes(slot as SlotId)) slots.push(slot as SlotId);
     }
-    if (slots.length > 0) out.push({ id: ext.id, name: ext.name, slots });
+    if (slots.length === 0) continue;
+    const entry: SlotExtension = { id: ext.id, name: ext.name, slots };
+    if (ext.manifest?.runtime === "external") {
+      // A screen exists only where the manifest both lists the slot and gives it a path.
+      for (const slot of FRAME_SLOTS) {
+        const screen = ext.manifest.external?.ui?.[slot];
+        if (slots.includes(slot) && screen?.path) {
+          (entry.external ??= {})[slot] = { title: screen.title || ext.name, ...(screen.icon ? { icon: screen.icon } : {}) };
+        }
+      }
+    }
+    out.push(entry);
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function groupBySlot(exts: SlotExtension[]): BySlot {
-  const out: BySlot = { "task.panel": [], "task.badge": [], "task.actions": [] };
+  const out: BySlot = { "task.panel": [], "task.badge": [], "task.actions": [], "sidebar.item": [] };
   for (const e of exts) for (const s of e.slots) out[s].push(e);
   for (const s of SLOT_IDS) if (out[s].length === 0) out[s] = EMPTY;
   return out;
@@ -82,7 +108,9 @@ function groupBySlot(exts: SlotExtension[]): BySlot {
 /** True when two groupings hold the same extensions per slot (so subscribers can keep their snapshot). */
 function sameGrouping(a: BySlot, b: BySlot): boolean {
   return SLOT_IDS.every(
-    (s) => a[s].length === b[s].length && a[s].every((e, i) => e.id === b[s][i]?.id && e.name === b[s][i]?.name),
+    (s) =>
+      a[s].length === b[s].length &&
+      a[s].every((e, i) => e.id === b[s][i]?.id && e.name === b[s][i]?.name && e.external?.[s]?.title === b[s][i]?.external?.[s]?.title),
   );
 }
 
@@ -178,4 +206,17 @@ export function useSlotExtensions(slot: SlotId): SlotExtension[] {
 export function resolveSlotTab<T extends string>(selected: T, extensionIds: string[], fallback: T): T {
   if (!selected.startsWith("slot:")) return selected;
   return extensionIds.some((id) => `slot:${id}` === selected) ? selected : fallback;
+}
+
+/** `sidebar.item` screens of external extensions, for the navigation. */
+export function useSidebarItems(): Array<{ extensionId: string; title: string; icon?: string }> {
+  const exts = useSlotExtensions("sidebar.item");
+  return useMemo(
+    () =>
+      exts.flatMap((e) => {
+        const screen = e.external?.["sidebar.item"];
+        return screen ? [{ extensionId: e.id, title: screen.title || e.name, icon: screen.icon }] : [];
+      }),
+    [exts],
+  );
 }

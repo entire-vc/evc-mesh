@@ -126,6 +126,12 @@ func NotFoundWithDetails(resource, details string) *Error {
 	}
 }
 
+// Unprocessable creates a 422 error: the request is well formed but the
+// operation is refused for a reason the caller can fix. Details names it.
+func Unprocessable(message, details string) *Error {
+	return &Error{Code: http.StatusUnprocessableEntity, ErrorCode: CodeBadRequest, Message: message, Details: details}
+}
+
 // Conflict creates a 409 error.
 func Conflict(message string) *Error {
 	return &Error{Code: http.StatusConflict, ErrorCode: CodeConflict, Message: message}
