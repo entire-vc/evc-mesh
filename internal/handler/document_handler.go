@@ -74,6 +74,8 @@ type updateDocumentRequest struct {
 	Position    *int       `json:"position"`
 	Body        *string    `json:"body"`
 	AppendBody  *string    `json:"append_body"`
+	Section     *string    `json:"section"`
+	AllowShrink bool       `json:"allow_shrink"`
 	BaseVersion *int       `json:"base_version"`
 }
 
@@ -237,6 +239,8 @@ func (h *DocumentHandler) Update(c echo.Context) error {
 		Position:    req.Position,
 		Body:        req.Body,
 		AppendBody:  req.AppendBody,
+		Section:     req.Section,
+		AllowShrink: req.AllowShrink,
 		// Passed straight through. The compare is the service's, not the handler's:
 		// the same conditional write has to protect every future caller, MCP
 		// included, and a check that lived up here would only guard HTTP.

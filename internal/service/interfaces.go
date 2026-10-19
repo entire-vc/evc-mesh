@@ -457,6 +457,18 @@ type UpdateDocumentInput struct {
 	// meaning, and picking an order for the caller would silently drop one.
 	AppendBody *string `json:"append_body"`
 
+	// Section, with Body, replaces ONE heading's section (the heading line through
+	// to the next heading of the same or higher level — exactly what the section
+	// read returns) and leaves the rest of the document untouched. Without it,
+	// Body is the whole document. This is the write that matches the section
+	// read: an agent that read one section and wrote it back as the whole body
+	// erased the other sections (2026-10-18/19, two product canons).
+	Section *string `json:"section"`
+
+	// AllowShrink lifts the guard that refuses a whole-body replacement which
+	// halves the document and drops headings it had.
+	AllowShrink bool `json:"allow_shrink"`
+
 	// BaseVersion is the document version the caller believes it is editing. When
 	// set, the write lands only if the stored version still matches; a mismatch is
 	// DocumentVersionConflictError carrying the version now stored, and nothing is
