@@ -577,6 +577,12 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 		})
 	}
 
+	if input.Section != nil && input.AppendBody != nil {
+		return nil, apierror.ValidationError(map[string]string{
+			"section": "section replaces a section and cannot be combined with append_body",
+		})
+	}
+
 	for attempt := 0; ; attempt++ {
 		doc, landed, err := s.updateOnce(ctx, id, workspaceID, input)
 		if err == nil {
@@ -604,12 +610,12 @@ func (s *documentService) Update(ctx context.Context, id, workspaceID uuid.UUID,
 			}
 			return nil, err
 		}
-		// An append is a read-modify-write, so a version it loses is not a conflict
+		// An append or section write is a read-modify-write, so a version it loses is not a conflict
 		// to report — it is a stale read to redo. Re-running it re-downloads the
 		// body the winner wrote and appends to that instead, which is what the
 		// caller asked for. A caller who sent BaseVersion asked to be told instead,
 		// and updateOnce has already refused before reaching here.
-		if input.AppendBody == nil || input.BaseVersion != nil || attempt >= maxAppendRetries {
+		if (input.AppendBody == nil && input.Section == nil) || input.BaseVersion != nil || attempt >= maxAppendRetries {
 			return nil, err
 		}
 		var conflict *DocumentVersionConflictError
@@ -833,7 +839,9 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 	// into a retry instead of one of them disappearing. A replacement is
 	// conditional only when the caller asked for it — see the doc comment.
 	expected := input.BaseVersion
-	if input.AppendBody != nil {
+	// A section write is the same read-modify-write as an append: it spliced the
+	// body it downloaded, so it must lose to a write that landed since.
+	if input.AppendBody != nil || input.Section != nil {
 		seen := doc.Version
 		expected = &seen
 	}
@@ -948,11 +956,15 @@ func (s *documentService) updateOnce(ctx context.Context, id, workspaceID uuid.U
 // resolveBodyWrite returns the markdown this update should store, or nil when it
 // does not touch the body. It performs no writes.
 func (s *documentService) resolveBodyWrite(ctx context.Context, doc *domain.Document, input UpdateDocumentInput) (*string, error) {
-	if input.Body == nil && input.AppendBody == nil {
+	if input.Body == nil && input.AppendBody == nil && input.Section == nil {
 		return nil, nil
 	}
 	if s.storage == nil {
 		return nil, apierror.ServiceUnavailable("storage backend not configured")
+	}
+
+	if input.Section != nil {
+		return s.resolveSectionWrite(ctx, doc, input)
 	}
 
 	if input.Body != nil {
@@ -963,6 +975,15 @@ func (s *documentService) resolveBodyWrite(ctx context.Context, doc *domain.Docu
 		}
 		if lerr := s.checkBodyLimit("body", len(*input.Body)); lerr != nil {
 			return nil, lerr
+		}
+		if !input.AllowShrink {
+			current, derr := s.downloadBody(ctx, doc.StorageKey)
+			if derr != nil {
+				return nil, derr
+			}
+			if gerr := shrinkGuard(current, *input.Body); gerr != nil {
+				return nil, gerr
+			}
 		}
 		return input.Body, nil
 	}
@@ -982,6 +1003,68 @@ func (s *documentService) resolveBodyWrite(ctx context.Context, doc *domain.Docu
 	}
 	appended := current + *input.AppendBody
 	return &appended, nil
+}
+
+// resolveSectionWrite splices input.Body over the one section input.Section
+// names and returns the whole new document.
+func (s *documentService) resolveSectionWrite(ctx context.Context, doc *domain.Document, input UpdateDocumentInput) (*string, error) {
+	if input.Body == nil {
+		return nil, apierror.ValidationError(map[string]string{
+			"section": "section needs body: the new text of that section",
+		})
+	}
+	current, err := s.downloadBody(ctx, doc.StorageKey)
+	if err != nil {
+		return nil, err
+	}
+	found, ferr := mdoc.FindSection(current, *input.Section)
+	if ferr != nil {
+		return nil, sectionLookupError(ferr)
+	}
+	replacement := *input.Body
+	// Keep the boundary the next heading expects: a section ends before the next
+	// heading, and a replacement without a trailing newline would glue onto it.
+	if found.Heading.End < len(current) && !strings.HasSuffix(replacement, "\n") {
+		replacement += "\n"
+	}
+	spliced := current[:found.Heading.Start] + replacement + current[found.Heading.End:]
+	if len(spliced) > maxDocumentBodyBytes {
+		return nil, apierror.ValidationError(map[string]string{
+			"body": fmt.Sprintf("document must be at most %d bytes after the section is replaced", maxDocumentBodyBytes),
+		})
+	}
+	if lerr := s.checkBodyLimit("body", len(spliced)); lerr != nil {
+		return nil, lerr
+	}
+	return &spliced, nil
+}
+
+// shrinkGuard refuses a whole-body replacement that is less than half the size
+// of the stored body AND drops headings the stored body had. Either alone is a
+// legitimate edit (a trimmed page, a rewritten section); both together is what a
+// section written back as the whole document looks like. allow_shrink=true
+// bypasses it.
+func shrinkGuard(current, next string) error {
+	if len(current) < 1024 || len(next)*2 >= len(current) {
+		return nil
+	}
+	kept := map[string]bool{}
+	for _, h := range mdoc.Outline(next) {
+		kept[strings.ToLower(strings.TrimSpace(h.Text))] = true
+	}
+	var lost []string
+	for _, h := range mdoc.Outline(current) {
+		if !kept[strings.ToLower(strings.TrimSpace(h.Text))] {
+			lost = append(lost, h.Text)
+		}
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	return apierror.Conflict(fmt.Sprintf(
+		"body shrinks from %d to %d bytes and drops %d section(s): %s. body replaces the WHOLE document; "+
+			"to change one section send section=\"<heading>\" with body, or pass allow_shrink=true if the cut is intended",
+		len(current), len(next), len(lost), strings.Join(lost, " | ")))
 }
 
 // downloadBody fetches a document's markdown from object storage.
