@@ -751,6 +751,7 @@
       "connect": "Connect",
       "openSettings": "Open settings",
       "install": "Install to instance",
+      "installed": "{{name}} installed to this instance.",
       "allow": "Allow",
       "blocked": "Blocked",
       "askAdmin": "Not installed on this instance. Ask the instance administrator to install it.",

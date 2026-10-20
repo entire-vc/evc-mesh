@@ -479,6 +479,7 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/ext/:ext_id/ui-context":                                                              true, // :ext_id is a registry id, not tenant data; the workspace is in the body (bodyWS) and the handler checks membership, task and project against it
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
+	"/api/v1/extensions/:ext_id/catalog-card":                                                     true,
 	"/api/v1/extensions/:ext_id/allowed":                                                          true,
 	"/api/v1/extensions/:ext_id/update":                                                           true,
 	"/api/v1/extensions/:ext_id/rollback":                                                         true,

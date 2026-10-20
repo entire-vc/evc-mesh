@@ -52,7 +52,7 @@
         "api": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^(tasks|comments|artifacts|docs|projects|workspaces|members|agents|agent_keys|vcs_links|events|secrets):(read|write)$" }
+          "items": { "type": "string", "pattern": "^((tasks|comments|artifacts|docs|projects|workspaces|members|agents|agent_keys|vcs_links|events|secrets):(read|write)|agent_key:rotate|ext_token:self_rotate)$" }
         },
         "events": {
           "type": "array",

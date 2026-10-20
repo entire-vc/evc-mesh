@@ -1,4 +1,4 @@
-import { format, parseISO } from "date-fns";
+import { parseISO } from "date-fns";
 import * as i18nFormat from "@/i18n/format";
 import type { Priority, DelegationLevel, StatusCategory, Task, CreateTaskRequest } from "@/types";
 
@@ -52,10 +52,22 @@ export function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+// Local-time "yyyy-MM-dd" / "HH:mm". Hand-rolled: date-fns format() pulls ~2 KB gz of
+// token parsing into the start chunk for these two fixed patterns (perf-bundle budget).
+export function localDateKey(d: Date): string {
+  return `${String(d.getFullYear()).padStart(4, "0")}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+export function localClock(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
 // Convert ISO/RFC3339 string to datetime-local input format (YYYY-MM-DDTHH:mm)
 export function toDateTimeLocal(dateString: string): string {
   const date = parseISO(dateString);
-  return format(date, "yyyy-MM-dd'T'HH:mm");
+  return `${localDateKey(date)}T${localClock(date)}`;
 }
 
 // Convert datetime-local input value to RFC3339 for backend

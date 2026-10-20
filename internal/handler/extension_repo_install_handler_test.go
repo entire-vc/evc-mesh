@@ -221,7 +221,7 @@ func TestRepoInstallHandlerBadBodies(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, repoCall(t, h, `{"repo_url":"  "}`, "", false).Code, "blank repo_url")
 		})
 	}
-	rec := repoCall(t, f.h.Install, `{"source":"catalog","repo_url":"`+f.url+`"}`, "", false)
+	rec := repoCall(t, f.h.Install, `{"source":"ftp","repo_url":"`+f.url+`"}`, "", false)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "source")
 }
@@ -270,4 +270,78 @@ func TestRepoInstallHandlerServiceErrorsMapToStatus(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, repoCall(t, f.h.Install, `{"source":"repo","repo_url":"`+f.url+`","ref":"nope"}`, "", false).Code)
 	assert.GreaterOrEqual(t, repoCall(t, f.h.Update, `{}`, "missing", false).Code, 400)
 	assert.GreaterOrEqual(t, repoCall(t, f.h.Rollback, ``, "missing", false).Code, 400)
+}
+
+type fakeCatalogInstaller struct {
+	id      string
+	consent string
+	err     error
+}
+
+func (f *fakeCatalogInstaller) Install(_ context.Context, _ uuid.UUID, id string) (*domain.InstalledExtension, error) {
+	f.id = id
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.InstalledExtension{ExtensionID: id, Version: "1.0.0", Source: domain.ExtensionSourceCatalog,
+		TrustLevel: "verified", CommitSHA: "abc", ArtifactSHA256: "dead"}, nil
+}
+
+func (f *fakeCatalogInstaller) Updates(context.Context) ([]repoinstall.UpdateInfo, error) {
+	return []repoinstall.UpdateInfo{{ExtensionID: "cat-ext", CurrentVersion: "1.0.0", LatestVersion: "1.1.0", UpdateAvailable: true, NewCapabilities: []string{}}}, nil
+}
+
+func (f *fakeCatalogInstaller) Update(_ context.Context, _ *uuid.UUID, id, consent string) (*repoinstall.UpdateResult, error) {
+	f.id, f.consent = id, consent
+	return &repoinstall.UpdateResult{ExtensionID: id, Outcome: repoinstall.OutcomeUpdated, NewCapabilities: []string{}}, nil
+}
+
+func (f *fakeCatalogInstaller) UpdateAll(context.Context, *uuid.UUID) ([]repoinstall.UpdateResult, error) {
+	return []repoinstall.UpdateResult{{ExtensionID: "cat-ext", Outcome: repoinstall.OutcomeUpdated, NewCapabilities: []string{}}}, nil
+}
+
+func TestRepoInstallHandlerCatalogUpdates(t *testing.T) {
+	f := newRepoFixture(t, true)
+	fake := &fakeCatalogInstaller{}
+	f.h.WithCatalogInstall(fake)
+
+	rec := repoCall(t, f.h.Updates, ``, "", false)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"cat-ext"`, "catalog rows join the Updates tab")
+
+	// an id the repo service does not know falls through to the catalog installer
+	rec = repoCall(t, f.h.Update, `{"consent_commit_sha":" abc "}`, "cat-ext", false)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "cat-ext", fake.id)
+	assert.Equal(t, "abc", fake.consent)
+
+	rec = repoCall(t, f.h.UpdateAll, ``, "", false)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"cat-ext"`)
+}
+
+func TestRepoInstallHandlerCatalogSource(t *testing.T) {
+	f := newRepoFixture(t, true)
+	body := `{"source":"catalog","id":" mesh-ext-hello "}`
+
+	assert.Equal(t, http.StatusNotImplemented, repoCall(t, f.h.Install, body, "", false).Code, "no installer wired")
+
+	fake := &fakeCatalogInstaller{}
+	f.h.WithCatalogInstall(fake)
+	rec := repoCall(t, f.h.Install, body, "", false)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, "mesh-ext-hello", fake.id, "id is trimmed")
+	assert.Contains(t, rec.Body.String(), `"source":"catalog"`)
+	assert.Contains(t, rec.Body.String(), `"artifact_sha256":"dead"`)
+
+	assert.Equal(t, http.StatusBadRequest, repoCall(t, f.h.Install, `{"source":"catalog"}`, "", false).Code, "id required")
+
+	fake.err = apierror.Conflict("blocked by the catalog: malware")
+	rec = repoCall(t, f.h.Install, body, "", false)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contains(t, rec.Body.String(), "malware")
+
+	denied := newRepoFixture(t, false)
+	denied.h.WithCatalogInstall(&fakeCatalogInstaller{})
+	assert.Equal(t, http.StatusForbidden, repoCall(t, denied.h.Install, body, "", false).Code)
 }

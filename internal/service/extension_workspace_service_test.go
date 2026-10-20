@@ -167,6 +167,55 @@ func TestExtensionWorkspace_DisableUnderInstanceNeedsConfirm(t *testing.T) {
 	requireAPIErr(t, err, http.StatusNotFound, "not_found")
 }
 
+// placeholderProvider resolves like GitLab: an active row without settings
+// governs nothing and falls through to the instance level.
+type placeholderProvider struct{ exttest.DemoProvider }
+
+func (p placeholderProvider) Resolve(ctx context.Context, ws uuid.UUID) (extensions.Resolved, error) {
+	res, err := p.BaseProvider.Resolve(ctx, ws)
+	if err != nil || !res.Enabled || res.Source != extensions.SourceWorkspace || len(res.Settings) > 0 {
+		return res, err
+	}
+	return extensions.ResolveSettings(ctx, nil, p.Inst, ws, p.Man.ID)
+}
+
+func TestExtensionWorkspace_DisableAfterReenableUnderInstanceNeedsConfirm(t *testing.T) {
+	ctx := context.Background()
+	f, err := exttest.NewFixture(exttest.InstanceOn{}, false)
+	require.NoError(t, err)
+	man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+	require.NoError(t, err)
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}, Inst: exttest.InstanceOn{}}
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(placeholderProvider{exttest.DemoProvider{BaseProvider: base, Healthy: true}}))
+	reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+	svc := service.NewExtensionWorkspaceService(reg, f.Integ, f.Consents)
+	ws := uuid.New()
+
+	_, err = svc.SetEnabled(ctx, ws, "demo", false, true)
+	require.NoError(t, err)
+	v, err := svc.SetEnabled(ctx, ws, "demo", true, false)
+	require.NoError(t, err)
+	require.True(t, v.Status.Enabled)
+	require.Equal(t, "instance", v.Status.Source, "an empty active row still resolves to the instance")
+
+	_, err = svc.SetEnabled(ctx, ws, "demo", false, false)
+	requireAPIErr(t, err, http.StatusConflict, "confirmation_required")
+	list, err := svc.List(ctx, ws)
+	require.NoError(t, err)
+	require.True(t, list[0].Status.Enabled, "nothing changes without confirm")
+	require.Equal(t, "instance", list[0].Status.Source)
+
+	v, err = svc.SetEnabled(ctx, ws, "demo", false, true)
+	require.NoError(t, err)
+	require.False(t, v.Status.Enabled)
+	require.Equal(t, "workspace", v.Status.Source)
+
+	other, err := svc.List(ctx, uuid.New())
+	require.NoError(t, err)
+	require.True(t, other[0].Status.Enabled, "another workspace stays on")
+}
+
 func TestExtensionWorkspace_DeleteData(t *testing.T) {
 	ctx := context.Background()
 

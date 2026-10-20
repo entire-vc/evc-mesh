@@ -122,6 +122,13 @@ export default defineConfig({
               test: /src[\\/]locales[\\/]ru[\\/](?!common\.json)/,
               includeDependenciesRecursively: false,
             },
+            // The small extension api/lib modules each shipped as a chunk of a
+            // few hundred bytes; one chunk saves the per-file gzip overhead.
+            {
+              name: "extension-libs",
+              test: /src[\\/]lib[\\/]extension-(?:repo|instance|settings|connect|admin)\./,
+              includeDependenciesRecursively: false,
+            },
             {
               name: "icons-initial",
               test: /node_modules[\\/]lucide-react[\\/]/,

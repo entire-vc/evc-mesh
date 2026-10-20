@@ -24,6 +24,7 @@ type ExtensionHandler struct {
 	allow     interface {
 		Allowed(ctx context.Context, extensionID string) (bool, error)
 	}
+	catalog CatalogSource // optional: the signed Spark catalog
 }
 
 // WithAllowList adds the instance allow-list verdict to every catalog entry.
@@ -56,6 +57,8 @@ type extensionSummaryResponse struct {
 	Category      string                 `json:"category"`
 	Levels        extensions.Levels      `json:"levels"`
 	Source        string                 `json:"source"`
+	Installed     bool                   `json:"installed"`
+	PageURL       string                 `json:"page_url,omitempty"`
 	TrustLevel    string                 `json:"trust_level"`
 	Blocked       bool                   `json:"blocked"`
 	BlockedReason string                 `json:"blocked_reason"`
@@ -86,13 +89,6 @@ func (h *ExtensionHandler) List(c echo.Context) error {
 	return extensionJSON(c, http.StatusOK, map[string]any{"extensions": out})
 }
 
-// Catalog handles GET /extensions/catalog. Until the Spark-backed source joins
-// (W4.1) it answers with the registry itself (built-in + installed), in the
-// item shape of List; the UI merges it by id, so the overlap is harmless.
-func (h *ExtensionHandler) Catalog(c echo.Context) error {
-	return h.List(c)
-}
-
 // summary builds one catalog entry. A failing instance store fails the whole
 // listing: an unknown status must not look like "disabled, not configured".
 func (h *ExtensionHandler) summary(c echo.Context, row *domain.InstalledExtension) (extensionSummaryResponse, bool, error) {
@@ -104,7 +100,7 @@ func (h *ExtensionHandler) summary(c echo.Context, row *domain.InstalledExtensio
 	s := extensionSummaryResponse{
 		ID: row.ExtensionID, Name: m.Name, Version: row.Version, Kind: m.Kind,
 		Runtime: m.Runtime, Publisher: m.Publisher, Description: m.Description,
-		Category: m.Category, Levels: m.Levels, Source: string(row.Source),
+		Category: m.Category, Levels: m.Levels, Source: string(row.Source), Installed: true,
 		TrustLevel: string(row.TrustLevel), Blocked: row.Blocked,
 		BlockedReason: row.BlockedReason, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Manifest: m.Raw, Allowed: true,
 	}

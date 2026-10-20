@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -467,14 +469,17 @@ func TestRuntime_SyncAndRun(t *testing.T) {
 		row("bad", `{`, false, domain.ExtensionSourceRepo),
 		row("builtinish", `{"id":"b","version":"1","runtime":"builtin"}`, false, domain.ExtensionSourceRepo),
 		row("noext", `{"id":"noext","version":"1","runtime":"external"}`, false, domain.ExtensionSourceRepo),
-		row("cat", manifestJSON, false, domain.ExtensionSourceCatalog),
+		row("catext", strings.Replace(manifestJSON, `"id":"hello"`, `"id":"catext"`, 1), false, domain.ExtensionSourceCatalog),
+		row("catblocked", strings.Replace(manifestJSON, `"id":"hello"`, `"id":"catblocked"`, 1), true, domain.ExtensionSourceCatalog),
+		row("builtin", manifestJSON, false, domain.ExtensionSourceBuiltin),
 	}
 	require.NoError(t, rt.Sync(ctx))
 	ids := []string{}
 	for _, p := range reg.List() {
 		ids = append(ids, p.Manifest().ID)
 	}
-	assert.Equal(t, []string{"hello"}, ids, "only a valid external repo row is registered")
+	sort.Strings(ids)
+	assert.Equal(t, []string{"catext", "hello"}, ids, "valid external repo and catalog rows are registered; blocked, builtin and broken ones are not")
 
 	require.NoError(t, rt.Sync(ctx), "unchanged manifest: nothing re-registered")
 	inst.rows[0].Manifest = json.RawMessage(`{"schema":1,"id":"hello","name":"Hello","version":"0.2.0","kind":"plugin","runtime":"external","mesh_api":">=1","publisher":"e","category":"development","levels":{"workspace":true},"capabilities":{"events":["task.updated"]},"external":{"base_url_setting":"hello_url","health_path":"/healthz"}}`)

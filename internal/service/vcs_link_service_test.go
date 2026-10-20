@@ -31,7 +31,7 @@ import (
 type fakeVCSLinkRepo struct {
 	mu    sync.Mutex
 	links map[uuid.UUID]*domain.VCSLink
-	// upsertKey: (task_id|provider|link_type|external_id) → link.ID
+	// upsertKey: (task_id|provider|link_type|external_id|url) → link.ID
 	upsertKey map[string]uuid.UUID
 	// createErr/upsertErr, when set, are returned by Create/Upsert instead of
 	// succeeding — used to exercise vcsLinkService.Create's and
@@ -50,8 +50,10 @@ func newFakeVCSLinkRepo() *fakeVCSLinkRepo {
 	}
 }
 
-func conflictKey(taskID uuid.UUID, p domain.VCSProvider, lt domain.VCSLinkType, eid string) string {
-	return taskID.String() + "|" + string(p) + "|" + string(lt) + "|" + eid
+// The url is part of the key, as md5(url) is part of idx_vcs_links_unique: the
+// same number in two projects is two links (#16c1dd76).
+func conflictKey(taskID uuid.UUID, p domain.VCSProvider, lt domain.VCSLinkType, eid, url string) string {
+	return taskID.String() + "|" + string(p) + "|" + string(lt) + "|" + eid + "|" + domain.NormalizeVCSURL(url)
 }
 
 func (r *fakeVCSLinkRepo) Create(_ context.Context, l *domain.VCSLink) error {
@@ -73,7 +75,7 @@ func (r *fakeVCSLinkRepo) Create(_ context.Context, l *domain.VCSLink) error {
 		}
 	}
 	r.links[l.ID] = l
-	r.upsertKey[conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID)] = l.ID
+	r.upsertKey[conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID, l.URL)] = l.ID
 	return nil
 }
 
@@ -111,7 +113,7 @@ func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, er
 	if r.upsertErrFor != uuid.Nil && l.TaskID == r.upsertErrFor {
 		return false, errors.New("upsert failed for task")
 	}
-	key := conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID)
+	key := conflictKey(l.TaskID, l.Provider, l.LinkType, l.ExternalID, l.URL)
 	if existingID, ok := r.upsertKey[key]; ok {
 		existing := r.links[existingID]
 		existing.Status = l.Status
@@ -783,6 +785,7 @@ func TestHandlePR_NoMeshRef_FallsBackToExternalID(t *testing.T) {
 		Provider:   domain.VCSProviderGitHub,
 		LinkType:   domain.VCSLinkTypePR,
 		ExternalID: "800",
+		URL:        "https://github.com/example/repo/pull/800",
 		Status:     domain.VCSLinkStatusOpen,
 		CreatedAt:  time.Now().Add(-time.Hour),
 	})

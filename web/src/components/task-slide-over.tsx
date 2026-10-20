@@ -44,7 +44,7 @@ import { ActivityLog } from "@/components/activity-log";
 import { SubtaskList } from "@/components/subtask-list";
 import { ArtifactList } from "@/components/artifact-list";
 import { VCSLinks } from "@/components/vcs-links";
-import { SlotActionsMenu, SlotPanelBody, usePanelTabs, useSlotOwnedVcsProviders } from "@/components/extensions/slots/slot-host";
+import { SlotActionsMenu, SlotPanelBody, usePanelTabs } from "@/components/extensions/slots/slot-host";
 import { resolveSlotTab } from "@/lib/extension-slots";
 import { DependencyList } from "@/components/dependency-list";
 import { DependencyBadge } from "@/components/dependency-badge";
@@ -130,7 +130,6 @@ export function TaskSlideOver({
   const panelTabs = usePanelTabs();
   // A slot tab that left the registry (extension disabled while open) falls back to comments instead of a blank pane.
   const rightTab = resolveSlotTab<RightTabId>(selectedRightTab, panelTabs.map((t) => t.extensionId), "comments");
-  const panelOwnedVcs = useSlotOwnedVcsProviders("task.panel");
   const [hideEmpty, setHideEmpty] = useState(true);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
   // Refresh Subtasks for invalidations from either endpoint's open panel.
@@ -995,7 +994,7 @@ export function TaskSlideOver({
                           <Separator />
                         </div>
                         <div className="col-span-2">
-                          <VCSLinks taskId={currentTask.id} exclude={panelOwnedVcs} />
+                          <VCSLinks taskId={currentTask.id} />
                         </div>
                       </>
                     )}

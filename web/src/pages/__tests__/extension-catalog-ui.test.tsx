@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import type { CatalogState } from "@/hooks/useExtensionCatalog";
 import { mergeCatalog } from "@/hooks/useExtensionCatalog";
@@ -9,6 +9,8 @@ vi.mock("@/hooks/useExtensionCatalog", async (orig) => ({
   ...(await orig<typeof import("@/hooks/useExtensionCatalog")>()),
   useExtensionCatalog: () => state.value,
 }));
+const apiMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/api", async (orig) => ({ ...(await orig<typeof import("@/lib/api")>()), api: apiMock }));
 vi.mock("@/lib/use-is-mobile", () => ({ useIsMobile: () => false }));
 vi.mock("@/components/markdown-view", () => ({ MarkdownView: ({ content }: { content: string }) => <div data-testid="md">{content}</div> }));
 
@@ -41,6 +43,8 @@ function mount(url: string, ui: "catalog" | "detail") {
 
 beforeEach(async () => {
   await setLanguage("en");
+  apiMock.mockReset();
+  apiMock.mockRejectedValue(new Error("no card"));
   useMemberStore.setState({ myRole: "member" } as never);
   state.value = {
     state: "ready", catalogUnavailable: false, reload: vi.fn(), refresh: vi.fn(),
@@ -137,5 +141,48 @@ describe("extension page", () => {
     mount("/w/acme/extensions/b", "detail");
     expect((screen.getByRole("button", { name: "Blocked" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole("alert").textContent).toContain("CVE");
+  });
+});
+
+describe("Spark-listed extension", () => {
+  const hello = () => sum("mesh-ext-hello", { runtime: "external", source: "catalog", trust_level: "verified", manifest: {} });
+
+  it("sits in the same grid as built-ins and not marked installed", () => {
+    state.value = { ...state.value, entries: mergeCatalog([sum("gitlab")], [], [hello()]) };
+    mount("/w/acme/extensions", "catalog");
+    const hrefs = within(screen.getByRole("list")).getAllByRole("link").map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("/w/acme/extensions/mesh-ext-hello");
+    expect(screen.getByTestId("catalog-count").textContent).toBe("2 extensions");
+  });
+
+  it("takes README and checks from the Spark card", async () => {
+    apiMock.mockResolvedValue({ readme: "# From Spark card", versions: [{ version: "1.0.0" }], checks: { result: "passed" } });
+    state.value = { ...state.value, entries: mergeCatalog([], [], [hello()]) };
+    mount("/w/acme/extensions/mesh-ext-hello", "detail");
+    await waitFor(() => expect(screen.getByTestId("md").textContent).toBe("# From Spark card"));
+    expect(apiMock).toHaveBeenCalledWith("/api/v1/extensions/mesh-ext-hello/catalog-card");
+  });
+
+  it("offers catalog install by instance-admin status, not by the workspace role", async () => {
+    state.value = { ...state.value, entries: mergeCatalog([], [], [hello()]) };
+    // workspace admin who is not an instance admin: overview is refused
+    useMemberStore.setState({ myRole: "admin" } as never);
+    mount("/w/acme/extensions/mesh-ext-hello", "detail");
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/api/v1/extensions/instance/overview"));
+    expect(screen.queryByRole("button", { name: "Install to instance" })).toBeNull();
+    cleanup();
+
+    // instance admin who is only a member of this workspace
+    useMemberStore.setState({ myRole: "member" } as never);
+    apiMock.mockImplementation((url: string) =>
+      url === "/api/v1/extensions/install" ? Promise.resolve({ extension_id: "mesh-ext-hello", version: "1.0.0" })
+        : url === "/api/v1/extensions/instance/overview" ? Promise.resolve({ auto_update: false, items: [] })
+        : Promise.reject(new Error("no card")));
+    mount("/w/acme/extensions/mesh-ext-hello", "detail");
+    const btn = (await screen.findByRole("button", { name: "Install to instance" })) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/api/v1/extensions/install", { method: "POST", body: { source: "catalog", id: "mesh-ext-hello" } }));
+    await waitFor(() => expect(state.value.reload).toHaveBeenCalled());
   });
 });

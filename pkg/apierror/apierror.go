@@ -17,6 +17,9 @@ type Error struct {
 	Message    string            `json:"message"`
 	Details    string            `json:"details,omitempty"`
 	Validation map[string]string `json:"validation,omitempty"`
+	// Context carries machine-readable facts about the refusal (for example
+	// who holds a contended resource); clients may ignore it.
+	Context map[string]any `json:"context,omitempty"`
 }
 
 // MarshalJSON guarantees every response carries a stable error_code: an error

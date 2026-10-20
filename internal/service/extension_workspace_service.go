@@ -453,6 +453,19 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 		}
 		return s.viewPtr(ctx, ws, p)
 	}
+	if !enabled && !confirm {
+		// A placeholder row (no settings of its own) can still resolve to the
+		// instance level, so switching it off is the same instance-wide step
+		// as disabling without a row.
+		st, err := s.reg.ResolveStatus(ctx, ws, id)
+		if err != nil {
+			return nil, err
+		}
+		if st.Enabled && st.Source == extensions.SourceInstance {
+			return nil, &apierror.Error{Code: http.StatusConflict, ErrorCode: "confirmation_required",
+				Message: "The extension is on for the whole instance. Disabling it switches it off for this workspace only; send confirm=true to proceed."}
+		}
+	}
 	if err := s.setActive(ctx, p, row.ID, enabled); err != nil {
 		return nil, err
 	}

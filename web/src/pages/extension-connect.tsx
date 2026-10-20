@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router";
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Loader2, Lock, PackageSearch, XCircle } from "lucide-react";
@@ -9,7 +9,7 @@ import { SchemaForm, resolveSchema, type FieldSchema, type Values } from "@/comp
 import { useExtensionCatalog, type CatalogEntry } from "@/hooks/useExtensionCatalog";
 import { allowedDomains, capabilityText, domainText, consentTokens, describeCapabilities } from "@/lib/extension-capabilities";
 import { connectWorkspaceExtension, testWorkspaceExtension } from "@/lib/extension-connect";
-import { getInstanceOverview } from "@/lib/extension-instance";
+import { useIsInstanceAdmin } from "@/lib/extension-admin";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { cn } from "@/lib/cn";
@@ -283,17 +283,7 @@ export function ExtensionConnectPage() {
   const [consentError, setConsentError] = useState(false);
   const [visitedSettings, setVisitedSettings] = useState(false);
   // the instance administrator is not the workspace admin: only the instance API can tell
-  const [isAdmin, setIsAdmin] = useState(false);
-  useEffect(() => {
-    let live = true;
-    getInstanceOverview().then(
-      () => live && setIsAdmin(true),
-      () => live && setIsAdmin(false),
-    );
-    return () => {
-      live = false;
-    };
-  }, []);
+  const isAdmin = useIsInstanceAdmin();
   const entry = catalog.entries.find((e) => e.id === extId);
   const wsId = currentWorkspace?.id ?? "";
 

@@ -1,4 +1,5 @@
-import { format, parseISO } from "date-fns";
+import { parseISO } from "date-fns";
+import { localClock } from "@/lib/utils";
 import i18n from "@/i18n";
 import type { RuntimeState, RuntimeStateKind, Task } from "@/types";
 
@@ -27,7 +28,7 @@ export function parseRuntimeRef(ref: string | null | undefined): RuntimeRef | nu
 function clock(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = parseISO(iso);
-  return Number.isNaN(d.getTime()) ? null : format(d, "HH:mm");
+  return Number.isNaN(d.getTime()) ? null : localClock(d);
 }
 
 /**

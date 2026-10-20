@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
-	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 // #b593c566: an open PR link carried no signal of how recently anything
@@ -88,10 +87,10 @@ func TestVCSLinkRepo_Create_LeavesStatusSyncedAtNull(t *testing.T) {
 	assert.Nil(t, stored.StatusSyncedAt, "a link created without a confirmed status reads NULL = never verified")
 }
 
-// An Upsert that would rewrite a link's identity onto one a sibling link on
-// the same task already holds must surface a 409, not a raw unique-index
-// error, and must leave both rows untouched.
-func TestVCSLinkRepo_Upsert_UpdateOntoSiblingIdentityIsConflict(t *testing.T) {
+// Identity includes the url (#16c1dd76), so an Upsert carrying A's url but the
+// external_id of sibling B can no longer clash with B: B's url differs. The
+// url names A, so A is corrected in place and B is left untouched.
+func TestVCSLinkRepo_Upsert_UpdateOntoSiblingExternalIDKeepsBothRows(t *testing.T) {
 	db := vcsLinkUpsertTestDB(t)
 	ctx := context.Background()
 	repo := NewVCSLinkRepo(db)
@@ -99,30 +98,29 @@ func TestVCSLinkRepo_Upsert_UpdateOntoSiblingIdentityIsConflict(t *testing.T) {
 
 	const urlA = "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/91"
 	const urlB = "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/92"
-	a := &domain.VCSLink{
-		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
-		LinkType: domain.VCSLinkTypePR, ExternalID: "91", URL: urlA,
-		Status: domain.VCSLinkStatusOpen, CreatedAt: time.Now(),
+	mk := func(eid, url string, st domain.VCSLinkStatus) *domain.VCSLink {
+		return &domain.VCSLink{
+			ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+			LinkType: domain.VCSLinkTypePR, ExternalID: eid, URL: url,
+			Status: st, CreatedAt: time.Now(),
+		}
 	}
-	b := &domain.VCSLink{
-		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
-		LinkType: domain.VCSLinkTypePR, ExternalID: "92", URL: urlB,
-		Status: domain.VCSLinkStatusOpen, CreatedAt: time.Now(),
-	}
-	_, err := repo.Upsert(ctx, a)
+	_, err := repo.Upsert(ctx, mk("91", urlA, domain.VCSLinkStatusOpen))
 	require.NoError(t, err)
-	_, err = repo.Upsert(ctx, b)
+	_, err = repo.Upsert(ctx, mk("92", urlB, domain.VCSLinkStatusOpen))
 	require.NoError(t, err)
 
-	// Same url as A, but the identity of B.
-	clash := &domain.VCSLink{
-		ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
-		LinkType: domain.VCSLinkTypePR, ExternalID: "92", URL: urlA,
-		Status: domain.VCSLinkStatusClosed, CreatedAt: time.Now(),
+	_, err = repo.Upsert(ctx, mk("92", urlA, domain.VCSLinkStatusClosed))
+	require.NoError(t, err)
+
+	links, err := repo.ListByTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+	for _, l := range links {
+		if l.URL == urlA {
+			assert.Equal(t, domain.VCSLinkStatusClosed, l.Status)
+		} else {
+			assert.Equal(t, domain.VCSLinkStatusOpen, l.Status, "B untouched")
+		}
 	}
-	_, err = repo.Upsert(ctx, clash)
-	require.Error(t, err)
-	var apiErr *apierror.Error
-	require.ErrorAs(t, err, &apiErr)
-	assert.Equal(t, 409, apiErr.StatusCode())
 }

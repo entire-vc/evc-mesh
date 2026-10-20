@@ -136,3 +136,38 @@ func (r *InstanceExtensionSettingRepo) IsInstanceAdmin(ctx context.Context, user
 		)`, userID)
 	return ok, err
 }
+
+// InstanceAdminTargets returns the instance's owner workspace and the users who
+// administer it (its owner plus members with the owner/admin role): the people
+// an instance-level notice is addressed to. Empty when no workspace exists.
+func (r *InstanceExtensionSettingRepo) InstanceAdminTargets(ctx context.Context) (workspaceID uuid.UUID, adminIDs []uuid.UUID, err error) {
+	var ws struct {
+		ID      uuid.UUID  `db:"id"`
+		OwnerID *uuid.UUID `db:"owner_id"`
+	}
+	err = r.db.GetContext(ctx, &ws, `SELECT id, owner_id FROM workspaces WHERE deleted_at IS NULL ORDER BY created_at ASC, id ASC LIMIT 1`)
+	if errors.Is(err, sql.ErrNoRows) {
+		return uuid.Nil, nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+	var ids []uuid.UUID
+	if serr := r.db.SelectContext(ctx, &ids, `
+		SELECT user_id FROM workspace_members
+		WHERE workspace_id = $1 AND role IN ('owner', 'admin') AND user_id IS NOT NULL`, ws.ID); serr != nil {
+		return uuid.Nil, nil, serr
+	}
+	if ws.OwnerID != nil {
+		found := false
+		for _, id := range ids {
+			if id == *ws.OwnerID {
+				found = true
+			}
+		}
+		if !found {
+			ids = append(ids, *ws.OwnerID)
+		}
+	}
+	return ws.ID, ids, nil
+}

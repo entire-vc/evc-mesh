@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "id": "keep-rotation",
+  "name": "Keep",
+  "version": "0.1.0",
+  "kind": "plugin",
+  "runtime": "external",
+  "mesh_api": ">=1",
+  "publisher": "entire-vc",
+  "description": "Ротация ключей агентов и собственного токена расширения",
+  "category": "development",
+  "levels": {
+    "instance": false,
+    "workspace": true,
+    "project": false
+  },
+  "capabilities": {
+    "api": [
+      "agent_keys:read",
+      "agent_key:destroy",
+      "ext_token:self_rotate"
+    ]
+  },
+  "external": {
+    "base_url_setting": "keep_url",
+    "health_path": "/healthz",
+    "install_path": "/mesh/install",
+    "events_path": "/mesh/events"
+  },
+  "settings": {
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "keep_url": { "type": "string", "format": "uri" }
+      }
+    }
+  }
+}
