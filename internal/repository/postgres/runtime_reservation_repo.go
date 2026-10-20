@@ -202,6 +202,42 @@ func runtimeTaskWriter(ctx context.Context, tx *sqlx.Tx, task, receiver, agent u
 	return nil
 }
 
+// runtimeTaskWriterActive builds the task_writer_active refusal and names the
+// live reservation that causes it, so the caller can log who holds the task and
+// until when instead of only the reason.
+func runtimeTaskWriterActive(ctx context.Context, q sqlx.QueryerContext, task uuid.UUID) error {
+	refusal := runtimeReservationErr(http.StatusConflict, "task_writer_active")
+	var holder struct {
+		ReservationID uuid.UUID `db:"id"`
+		AgentID       uuid.UUID `db:"agent_id"`
+		AgentName     string    `db:"agent_name"`
+		State         string    `db:"state"`
+		ExpiresAt     time.Time `db:"expires_at"`
+	}
+	err := sqlx.GetContext(ctx, q, &holder, `SELECT r.id,r.agent_id,COALESCE(a.name,'') AS agent_name,r.state,r.expires_at
+ FROM runtime_reservations r LEFT JOIN agents a ON a.id=r.agent_id
+ WHERE r.task_id=$1 AND r.state IN ('reserved','consumed') ORDER BY r.created_at DESC LIMIT 1`, task)
+	if err != nil {
+		return refusal // the refusal stands even when the holder cannot be read
+	}
+	refusal.Context = map[string]any{
+		"holder": map[string]any{
+			"reservation_id": holder.ReservationID,
+			"agent_id":       holder.AgentID,
+			"agent_name":     holder.AgentName,
+			"state":          holder.State,
+		},
+	}
+	// A consumed reservation blocks until it is released, even past expires_at,
+	// so its stored expiry would misstate when the task frees up.
+	if holder.State == string(domain.RuntimeReservationReserved) {
+		refusal.Context["expires_at"] = holder.ExpiresAt.UTC().Format(time.RFC3339)
+	} else {
+		refusal.Context["blocks_until"] = "release"
+	}
+	return refusal
+}
+
 func runtimeScopeDigest(integration uuid.UUID, ref string, in domain.RuntimeAcquireInput) (string, error) {
 	in.IdempotencyKey = ""
 	data, err := json.Marshal(struct {
@@ -216,14 +252,17 @@ func runtimeScopeDigest(integration uuid.UUID, ref string, in domain.RuntimeAcqu
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func runtimeUniqueConflict(err error) error {
+// runtimeUniqueConflict maps a unique-index violation to its refusal. The
+// transaction is aborted by then, so the holder is read through q (a pool
+// connection), which sees the competing reservation once it has committed.
+func runtimeUniqueConflict(ctx context.Context, q sqlx.QueryerContext, task uuid.UUID, err error) error {
 	var pqErr *pq.Error
 	if !errors.As(err, &pqErr) || pqErr.Code != "23505" {
 		return err
 	}
 	switch pqErr.Constraint {
 	case "runtime_reservations_active_task":
-		return runtimeReservationErr(http.StatusConflict, "task_writer_active")
+		return runtimeTaskWriterActive(ctx, q, task)
 	case "runtime_reservations_active_worker":
 		return runtimeReservationErr(http.StatusConflict, "worker_active")
 	case "runtime_reservation_pool_claims_pool_id_slot_key":
@@ -393,7 +432,7 @@ func (r *RuntimeRepo) AcquireReservation(ctx context.Context, owner, receiver uu
 		return nil, false, err
 	}
 	if busy.Task {
-		return nil, false, runtimeReservationErr(http.StatusConflict, "task_writer_active")
+		return nil, false, runtimeTaskWriterActive(ctx, tx, in.TaskID)
 	}
 	if busy.Worker {
 		return nil, false, runtimeReservationErr(http.StatusConflict, "worker_active")
@@ -436,12 +475,12 @@ func (r *RuntimeRepo) AcquireReservation(ctx context.Context, owner, receiver uu
 		in.TaskID, in.CheckoutGeneration, in.CheckoutRequestID, controller, in.WorkerRef, in.ProfileID, target.revision, target.digest,
 		target.admission.Revision, profileRevision, poolsJSON, poolDigest, in.TTLSeconds)
 	if err != nil {
-		return nil, false, runtimeUniqueConflict(err)
+		return nil, false, runtimeUniqueConflict(ctx, r.db, in.TaskID, err)
 	}
 	for _, pool := range pools {
 		_, err = tx.ExecContext(ctx, `INSERT INTO runtime_reservation_pool_claims(reservation_id,pool_id,slot) VALUES($1,$2,$3)`, row.ID, pool, slots[pool])
 		if err != nil {
-			return nil, false, runtimeUniqueConflict(err)
+			return nil, false, runtimeUniqueConflict(ctx, r.db, in.TaskID, err)
 		}
 	}
 	err = tx.Commit()

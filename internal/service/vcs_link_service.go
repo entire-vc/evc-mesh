@@ -287,7 +287,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		// mention it. Say so — the previous version of this bug was invisible
 		// precisely because the wrong row was silent.
 		if stale, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitHub, domain.VCSLinkTypePR, strconv.Itoa(ev.PRNumber)); err == nil {
-			for _, l := range stale {
+			for _, l := range filterLinksByURL(stale, ev.PRHTMLURL) {
 				if l.TaskID != taskID {
 					log.Printf("[vcs-webhook] pr=%s#%d stored link points at task=%s but payload names task=%s; leaving the stale row for review (link_id=%s)",
 						ev.Repository, ev.PRNumber, l.TaskID, taskID, l.ID)
@@ -320,7 +320,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		// silently reuse a stored link belonging to a task in workspace A
 		// just by naming the right number (#839b9897, same class the
 		// title/body/branch path is scoped against in lookupRef).
-		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, links)
+		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, filterLinksByURL(links, ev.PRHTMLURL))
 		switch {
 		case len(links) == 0:
 			// Say what was looked at, not just that nothing was found: for six
@@ -406,7 +406,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		log.Printf("[vcs-webhook] mr=%s!%d resolved task=%s via=%s src=%s raw=%q",
 			ev.ProjectPath, ev.MRIID, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
 		if stale, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitLab, domain.VCSLinkTypePR, strconv.Itoa(ev.MRIID)); err == nil {
-			for _, l := range stale {
+			for _, l := range filterLinksByURL(stale, ev.MRURL) {
 				if l.TaskID != taskID {
 					log.Printf("[vcs-webhook] mr=%s!%d stored link points at task=%s but payload names task=%s; leaving the stale row for review (link_id=%s)",
 						ev.ProjectPath, ev.MRIID, l.TaskID, taskID, l.ID)
@@ -431,7 +431,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		// See the identical comment in HandleGitHubPullRequestEvent: an MR
 		// iid is just as guessable as a PR number, so the same workspace
 		// filter applies here (#839b9897).
-		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, links)
+		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, filterLinksByURL(links, ev.MRURL))
 		switch {
 		case len(links) == 0:
 			log.Printf("[vcs-webhook] mr=%s!%d no_task_ref: candidates=%d title=%q body=%q branch=%q",
@@ -940,6 +940,23 @@ func (s *vcsLinkService) taskInWorkspace(ctx context.Context, taskID, workspaceI
 		return false
 	}
 	return s.projectInWorkspace(ctx, t.ProjectID, workspaceID)
+}
+
+// filterLinksByURL keeps the links naming the same PR/MR as rawURL. The
+// stored external_id is only the number, which is unique per project, so the
+// url is what tells two projects' !88 apart. An empty rawURL filters nothing.
+func filterLinksByURL(links []domain.VCSLink, rawURL string) []domain.VCSLink {
+	if rawURL == "" {
+		return links
+	}
+	want := domain.NormalizeVCSURL(rawURL)
+	out := make([]domain.VCSLink, 0, len(links))
+	for _, l := range links {
+		if domain.NormalizeVCSURL(l.URL) == want {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // filterLinksInWorkspace drops every link whose task does not belong to

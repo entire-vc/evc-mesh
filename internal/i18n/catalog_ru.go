@@ -13,6 +13,9 @@ var catalogRU = map[string]string{
 	"notif.task.blocking_triage.title": "Блокирующий вопрос: {task}",
 	"notif.task.blocking_triage.body":  "@{user} задал(а) блокирующий вопрос по этой задаче.",
 
+	"notif.extension.blocked.title": "Расширение выключено: {extension}",
+	"notif.extension.blocked.body":  "Блок-лист Spark выключил «{extension}» на этом инстансе. Причина: {reason}",
+
 	"notif.task.human_gate_default_applied.title": "Применено значение по умолчанию: {task}",
 	"notif.task.human_gate_default_applied.body":  "Срок гейта истёк без ответа — применено рекомендованное значение: {default}",
 

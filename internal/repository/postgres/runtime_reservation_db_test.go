@@ -237,6 +237,15 @@ func TestRuntimeReservationIdempotentReplayAndWriterUniqueness(t *testing.T) {
 	other.IdempotencyKey = "attempt-2"
 	_, _, err = f.acquire(other)
 	requireReason(t, err, http.StatusConflict, "task_writer_active")
+	var refusal *apierror.Error
+	require.True(t, errors.As(err, &refusal))
+	holder, ok := refusal.Context["holder"].(map[string]any)
+	require.True(t, ok, "refusal names the holder: %v", refusal.Context)
+	require.Equal(t, first.ReservationID, holder["reservation_id"])
+	require.Equal(t, f.worker.AgentID, holder["agent_id"])
+	expires, perr := time.Parse(time.RFC3339, refusal.Context["expires_at"].(string))
+	require.NoError(t, perr)
+	require.True(t, expires.After(time.Now()), "expires_at is the holder's live lease")
 	task2, request2 := f.checkedOutTask(t)
 	_, _, err = f.acquire(f.acquireInput(t, "preferred", task2, request2, "worker-1", "attempt-3"))
 	requireReason(t, err, http.StatusConflict, "worker_active")
@@ -343,6 +352,13 @@ func TestRuntimeReservationTTLExpiresOnlyUnconsumed(t *testing.T) {
 	f.setCap(t, 5)
 	_, _, err = f.acquire(f.acquireInput(t, "preferred", task2, request2, "w4", "k5"))
 	requireReason(t, err, http.StatusConflict, "task_writer_active")
+	var refusal *apierror.Error
+	require.True(t, errors.As(err, &refusal))
+	holder := refusal.Context["holder"].(map[string]any)
+	require.Equal(t, running.ReservationID, holder["reservation_id"])
+	require.Equal(t, "consumed", holder["state"])
+	require.Equal(t, "release", refusal.Context["blocks_until"], "a consumed holder blocks until release, not until a stored expiry")
+	require.NotContains(t, refusal.Context, "expires_at")
 	require.Equal(t, 2, f.claimCount(t, running.ReservationID))
 	require.Zero(t, f.claimCount(t, unconsumed.ReservationID))
 }

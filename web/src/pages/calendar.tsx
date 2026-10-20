@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { formatDate } from "@/i18n/format";
+import { localDateKey } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router";
-import { addMonths, format, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isToday } from "date-fns";
+import { addMonths, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isToday } from "date-fns";
 import {
   DndContext,
   DragOverlay,
@@ -214,7 +215,7 @@ function DroppableDayCell({
                 : "text-foreground",
           )}
         >
-          {format(day, "d")}
+          {day.getDate()}
         </span>
         <button
           onClick={() => onAddTask(dateKey)}
@@ -301,7 +302,7 @@ function DndCalendarGrid({
       {/* Day cells */}
       <div className="grid flex-1 auto-rows-fr grid-cols-7">
         {days.map((day) => {
-          const dateKey = format(day, "yyyy-MM-dd");
+          const dateKey = localDateKey(day);
           const dayTasks = tasksByDate.get(dateKey) ?? [];
           const inMonth = isSameMonth(day, currentMonth);
           const todayDay = isToday(day);
@@ -506,7 +507,7 @@ export function CalendarPage() {
   const tasksByDate = useMemo(() => {
     const map = new Map<string, Task[]>();
     for (const task of scheduled) {
-      const dateKey = format(new Date(task.due_date!), "yyyy-MM-dd");
+      const dateKey = localDateKey(new Date(task.due_date!));
       const arr = map.get(dateKey) ?? [];
       arr.push(task);
       map.set(dateKey, arr);
@@ -597,7 +598,7 @@ export function CalendarPage() {
       if (targetId.startsWith("date:")) {
         const newDate = targetId.slice(5); // "YYYY-MM-DD"
         const currentDate = draggedTask.due_date
-          ? format(new Date(draggedTask.due_date), "yyyy-MM-dd")
+          ? localDateKey(new Date(draggedTask.due_date))
           : null;
 
         if (currentDate === newDate) return; // same date — no-op

@@ -7,12 +7,12 @@ import {
   startOfWeek,
   endOfWeek,
   eachDayOfInterval,
-  format,
   isSameMonth,
   isToday,
 } from "date-fns";
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { localDateKey } from "@/lib/utils";
 import type { Task } from "@/types";
 
 interface CalendarGridProps {
@@ -59,7 +59,7 @@ export function CalendarGrid({
       {/* Day cells */}
       <div className="grid flex-1 grid-cols-7 auto-rows-fr">
         {days.map((day) => {
-          const dateKey = format(day, "yyyy-MM-dd");
+          const dateKey = localDateKey(day);
           const dayTasks = tasksByDate.get(dateKey) ?? [];
           const inMonth = isSameMonth(day, currentMonth);
           const today = isToday(day);
@@ -84,7 +84,7 @@ export function CalendarGrid({
                         : "text-foreground",
                   )}
                 >
-                  {format(day, "d")}
+                  {day.getDate()}
                 </span>
                 <button
                   onClick={() => onAddTask(dateKey)}

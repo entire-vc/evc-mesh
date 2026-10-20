@@ -72,8 +72,9 @@ export interface UpdateResult {
 export const listRepoRefs = (body: RepoRequest) => api<RepoRefs>("/api/v1/extensions/repo/refs", { method: "POST", body });
 export const previewRepoExtension = (body: RepoRequest) =>
   api<RepoPreview>("/api/v1/extensions/repo/preview", { method: "POST", body });
-export const installRepoExtension = (body: RepoRequest) =>
-  api<{ extension_id: string; version: string }>("/api/v1/extensions/install", { method: "POST", body: { source: "repo", ...body } });
+const installExtension = (body: { source: "repo" | "catalog" } & Partial<RepoRequest> & { id?: string }) =>
+  api<{ extension_id: string; version: string }>("/api/v1/extensions/install", { method: "POST", body });
+export const installRepoExtension = (body: RepoRequest) => installExtension({ source: "repo", ...body });
 
 export const listRepoUpdates = () => api<{ updates: RepoUpdate[] }>("/api/v1/extensions/updates");
 export const updateRepoExtension = (id: string, consentCommitSha?: string) =>
@@ -82,3 +83,15 @@ export const updateAllRepoExtensions = () => api<{ results: UpdateResult[] }>("/
 export const rollbackRepoExtension = (id: string) => api(`/api/v1/extensions/${id}/rollback`, { method: "POST", body: {} });
 
 export const shortSha = (sha: string | undefined) => (sha ?? "").slice(0, 8);
+
+/** Install a Spark-catalog extension at its latest compatible version (instance admin only). */
+export const installCatalogExtension = (id: string) => installExtension({ source: "catalog", id });
+
+export interface CatalogCard {
+  readme?: string;
+  description?: string;
+  versions?: { version: string; mesh_api?: string; capabilities_added?: string[]; capabilities_removed?: string[] }[];
+  checks?: { result: "passed" | "warnings" | "failed" };
+}
+
+export const getCatalogCard = (id: string) => api<CatalogCard>(`/api/v1/extensions/${encodeURIComponent(id)}/catalog-card`);

@@ -16,6 +16,9 @@ var catalogEN = map[string]string{
 	"notif.task.blocking_triage.title": "Blocking question: {task}",
 	"notif.task.blocking_triage.body":  "@{user} asked a blocking question on this task.",
 
+	"notif.extension.blocked.title": "Extension switched off: {extension}",
+	"notif.extension.blocked.body":  "The Spark blocklist switched «{extension}» off on this instance. Reason: {reason}",
+
 	"notif.task.human_gate_default_applied.title": "Default applied: {task}",
 	"notif.task.human_gate_default_applied.body":  "Gate deadline passed with no answer — recommended default applied: {default}",
 

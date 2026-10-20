@@ -407,3 +407,44 @@ func TestVCSLinkRepo_Upsert_MergesMetadata(t *testing.T) {
 	assert.Equal(t, "aaa", got.ShipSHA())
 	assert.False(t, got.IsMergedShippedGreen())
 }
+
+// #16c1dd76: an MR iid is unique only inside its project, so group/a!88 and
+// group/b!88 must coexist on one task and each be updated on its own. Before
+// the unique index included the url, the second Upsert answered 409.
+func TestVCSLinkRepo_Upsert_SameIIDDifferentProjectCoexist(t *testing.T) {
+	db := vcsLinkUpsertTestDB(t)
+	ctx := context.Background()
+	repo := NewVCSLinkRepo(db)
+	taskID := vcsLinkTestTask(t, db)
+
+	mk := func(url string, status domain.VCSLinkStatus) *domain.VCSLink {
+		return &domain.VCSLink{
+			ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+			LinkType: domain.VCSLinkTypePR, ExternalID: "88", URL: url,
+			Status: status, CreatedAt: time.Now(),
+		}
+	}
+	const urlA = "https://gitlab.example.invalid/group/a/-/merge_requests/88"
+	const urlB = "https://gitlab.example.invalid/group/b/-/merge_requests/88"
+
+	_, err := repo.Upsert(ctx, mk(urlA, domain.VCSLinkStatusOpen))
+	require.NoError(t, err)
+	created, err := repo.Upsert(ctx, mk(urlB, domain.VCSLinkStatusOpen))
+	require.NoError(t, err, "same iid in another project must not collide")
+	assert.True(t, created)
+
+	created, err = repo.Upsert(ctx, mk(urlB, domain.VCSLinkStatusMerged))
+	require.NoError(t, err)
+	assert.False(t, created, "a repeat for b!88 updates its own row")
+
+	links, err := repo.ListByTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+	for _, l := range links {
+		if l.URL == urlA {
+			assert.Equal(t, domain.VCSLinkStatusOpen, l.Status, "a!88 untouched")
+		} else {
+			assert.Equal(t, domain.VCSLinkStatusMerged, l.Status)
+		}
+	}
+}

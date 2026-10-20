@@ -20,6 +20,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -531,7 +532,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			Repository:  payload.Repository.FullName,
 			WorkspaceID: matchedWorkspaceID,
 		}
-		result, herr := h.vcsService.HandleGitHubPullRequestEvent(ctx, ev)
+		result, herr := h.vcsService.HandleGitHubPullRequestEvent(webhookActorCtx(ctx, required), ev)
 		if herr != nil {
 			c.Logger().Errorf("github webhook: pull_request handler delivery=%s: %v", deliveryID, herr)
 			if webhookRetryable(herr) {
@@ -732,7 +733,7 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 		ProjectPath: payload.Project.PathWithNamespace,
 		WorkspaceID: matchedWorkspaceID,
 	}
-	result, herr := h.vcsService.HandleGitLabMergeRequestEvent(c.Request().Context(), ev)
+	result, herr := h.vcsService.HandleGitLabMergeRequestEvent(webhookActorCtx(c.Request().Context(), required), ev)
 	if herr != nil {
 		c.Logger().Errorf("gitlab webhook: merge_request handler mr=%s!%d: %v", ev.ProjectPath, ev.MRIID, herr)
 		return webhookServiceErrorResponse(c, herr)
@@ -829,4 +830,17 @@ func firstLine(s string) string {
 		return s[:idx]
 	}
 	return s
+}
+
+// webhookActorCtx marks a webhook delivery as made by the system, so the
+// auto-transitions it triggers reach the transition gate with a real actor
+// instead of actor_type "". Only a delivery whose signature/token was verified
+// qualifies: when validation is off (required == false) the request is
+// unauthenticated and keeps the empty actor, so it cannot ride the system
+// exemption past workflow restrictions.
+func webhookActorCtx(ctx context.Context, verified bool) context.Context {
+	if !verified {
+		return ctx
+	}
+	return actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
 }

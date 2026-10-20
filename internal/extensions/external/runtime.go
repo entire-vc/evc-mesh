@@ -48,7 +48,7 @@ func (r *Runtime) Sync(ctx context.Context) error {
 	want := map[string]bool{}
 	for i := range rows {
 		row := rows[i]
-		if row.Source != domain.ExtensionSourceRepo || row.Blocked {
+		if (row.Source != domain.ExtensionSourceRepo && row.Source != domain.ExtensionSourceCatalog) || row.Blocked {
 			continue
 		}
 		m, perr := extensions.ParseManifest(row.Manifest)

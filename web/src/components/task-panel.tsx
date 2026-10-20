@@ -55,7 +55,7 @@ import { ActivityLog } from "@/components/activity-log";
 import { SubtaskList } from "@/components/subtask-list";
 import { ArtifactList } from "@/components/artifact-list";
 import { VCSLinks } from "@/components/vcs-links";
-import { SlotActionsMenu, SlotPanelBody, usePanelTabs, useSlotOwnedVcsProviders } from "@/components/extensions/slots/slot-host";
+import { SlotActionsMenu, SlotPanelBody, usePanelTabs } from "@/components/extensions/slots/slot-host";
 import { resolveSlotTab } from "@/lib/extension-slots";
 import { DependencyList } from "@/components/dependency-list";
 import { DependencyBadge } from "@/components/dependency-badge";
@@ -231,7 +231,6 @@ export function TaskPanel({
   // A slot tab that left the registry (extension disabled while open) falls back to comments instead of a blank pane.
   const activeDesktopTab = resolveSlotTab<RightTabId>(selectedDesktopTab, panelTabs.map((t) => t.extensionId), "comments");
   const activeMobileTab = resolveSlotTab<MobileTabId>(selectedMobileTab, panelTabs.map((t) => t.extensionId), "details");
-  const panelOwnedVcs = useSlotOwnedVcsProviders("task.panel");
   const openSlotPanel = (extensionId: string) => {
     setActiveDesktopTab(slotTabId(extensionId));
     setActiveMobileTab(slotTabId(extensionId));
@@ -1852,7 +1851,7 @@ export function TaskPanel({
               <Separator />
             </div>
             <div className="sm:col-span-2">
-              <VCSLinks taskId={currentTask.id} exclude={panelOwnedVcs} />
+              <VCSLinks taskId={currentTask.id} />
             </div>
           </>
         )}

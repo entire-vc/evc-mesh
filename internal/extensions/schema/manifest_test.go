@@ -14,7 +14,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "7eab08c841b6fe18a468a8c187337502edee0b970de34511544b9629d2cfa4ba"
+const manifestV1SHA256 = "b4c2c6dd95c70b4b72d419fd093759fb927011395ab4ebe0c0ae05a66ee2a8b8"
 
 const schemaFile = "manifest.v1.json"
 
@@ -53,7 +53,7 @@ func validate(t *testing.T, sch *jsonschema.Schema, file string) error {
 func TestManifestV1_ValidFixturesPass(t *testing.T) {
 	sch := compileSchema(t)
 	files := fixtures(t, "valid")
-	require.Len(t, files, 4, "expected 4 valid fixtures")
+	require.Len(t, files, 5, "expected 5 valid fixtures")
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			require.NoError(t, validate(t, sch, f))
@@ -64,7 +64,7 @@ func TestManifestV1_ValidFixturesPass(t *testing.T) {
 func TestManifestV1_InvalidFixturesRejected(t *testing.T) {
 	sch := compileSchema(t)
 	files := fixtures(t, "invalid")
-	require.Len(t, files, 6, "expected 6 invalid fixtures")
+	require.Len(t, files, 7, "expected 7 invalid fixtures")
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			require.Error(t, validate(t, sch, f))
@@ -77,4 +77,28 @@ func TestManifestV1_SchemaSHA256(t *testing.T) {
 	require.NoError(t, err)
 	sum := sha256.Sum256(raw)
 	require.Equal(t, manifestV1SHA256, hex.EncodeToString(sum[:]))
+}
+
+// TestManifestV1_ActionCapabilities pins the two non-read/write API rights that
+// extension_auth.go maps routes to: each must be declarable on its own, and
+// near-misses must not slip through the pattern.
+func TestManifestV1_ActionCapabilities(t *testing.T) {
+	sch := compileSchema(t)
+	base, err := os.ReadFile(filepath.Join("fixtures", "valid", "keep-rotation.json"))
+	require.NoError(t, err)
+
+	with := func(cap string) error {
+		// Keep only the capability under test next to a plain read right.
+		raw := bytes.Replace(base, []byte(`"agent_key:rotate",`), nil, 1)
+		raw = bytes.Replace(raw, []byte(`"ext_token:self_rotate"`), []byte(`"`+cap+`"`), 1)
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+		require.NoError(t, err)
+		return sch.Validate(doc)
+	}
+	for _, ok := range []string{"agent_key:rotate", "ext_token:self_rotate"} {
+		require.NoError(t, with(ok), ok)
+	}
+	for _, bad := range []string{"agent_key:read", "agent_keys:rotate", "ext_token:rotate", "ext_token:self_rotate:x", "agent_key:rotate "} {
+		require.Error(t, with(bad), bad)
+	}
 }

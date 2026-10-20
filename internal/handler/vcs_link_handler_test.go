@@ -24,6 +24,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -38,6 +39,9 @@ type patchCall struct {
 
 // stubVCSLinkService captures the GitHubWebhookEvent passed by the handler.
 type stubVCSLinkService struct {
+	// actor types seen on the ctx of each webhook handler call.
+	handleActors       []domain.ActorType
+	gitlabHandleActors []domain.ActorType
 	mu                 sync.Mutex
 	handleCalls        []service.GitHubWebhookEvent
 	handleResult       service.PRHandleResult
@@ -134,9 +138,11 @@ func (s *stubVCSLinkService) lastResolveSources() ([]service.TaskRefSource, bool
 	return s.resolveCalls[len(s.resolveCalls)-1], true
 }
 
-func (s *stubVCSLinkService) HandleGitHubPullRequestEvent(_ context.Context, ev service.GitHubWebhookEvent) (service.PRHandleResult, error) {
+func (s *stubVCSLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev service.GitHubWebhookEvent) (service.PRHandleResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_, at := actorctx.FromContext(ctx)
+	s.handleActors = append(s.handleActors, at)
 	s.handleCalls = append(s.handleCalls, ev)
 	return s.handleResult, s.handleErr
 }
@@ -150,9 +156,11 @@ func (s *stubVCSLinkService) lastHandleEvent() (service.GitHubWebhookEvent, bool
 	return s.handleCalls[len(s.handleCalls)-1], true
 }
 
-func (s *stubVCSLinkService) HandleGitLabMergeRequestEvent(_ context.Context, ev service.GitLabWebhookEvent) (service.PRHandleResult, error) {
+func (s *stubVCSLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev service.GitLabWebhookEvent) (service.PRHandleResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_, at := actorctx.FromContext(ctx)
+	s.gitlabHandleActors = append(s.gitlabHandleActors, at)
 	s.gitlabHandleCalls = append(s.gitlabHandleCalls, ev)
 	return s.gitlabHandleResult, s.gitlabHandleErr
 }
@@ -1088,4 +1096,53 @@ func TestGitLabWebhook_PipelineHook_InvalidToken_401(t *testing.T) {
 	require.NoError(t, h.GitLabWebhook(c))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Empty(t, svc.pipelineCalls)
+}
+
+// #3c907442: a verified delivery reaches the service as the system actor (the
+// transition gate must not see actor_type ""); an unverified one — validation
+// off — keeps the empty actor so it cannot use the system exemption.
+func TestGitLabWebhook_ActorOnCtx(t *testing.T) {
+	for _, tc := range []struct {
+		name, secret, token string
+		want                domain.ActorType
+	}{
+		{"verified token", "s3cret", "s3cret", domain.ActorTypeSystem},
+		{"validation off", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &stubVCSLinkService{}
+			var opts []VCSLinkHandlerOption
+			if tc.secret != "" {
+				opts = append(opts, WithGitLabWebhookSecret(tc.secret))
+			}
+			h := NewVCSLinkHandler(svc, opts...)
+			body := newMergeRequestPayload(t, "merge", 3, "MESH-"+uuid.New().String(), "", "merged", "abc")
+			c := echo.New().NewContext(newMergeRequestRequest(t, body, "Merge Request Hook", tc.token), httptest.NewRecorder())
+			require.NoError(t, h.GitLabWebhook(c))
+			assert.Equal(t, []domain.ActorType{tc.want}, svc.gitlabHandleActors)
+		})
+	}
+}
+
+func TestGitHubWebhook_ActorOnCtx(t *testing.T) {
+	for _, tc := range []struct {
+		name, secret string
+		want         domain.ActorType
+	}{
+		{"verified signature", "s3cret", domain.ActorTypeSystem},
+		{"validation off", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &stubVCSLinkService{}
+			var opts []VCSLinkHandlerOption
+			if tc.secret != "" {
+				opts = append(opts, WithGitHubWebhookSecret(tc.secret))
+			}
+			h := NewVCSLinkHandler(svc, opts...)
+			body := newPullRequestPayload(t, "closed", 1, "MESH-"+uuid.New().String(), "", true, "abc")
+			c := echo.New().NewContext(newPullRequestRequest(t, body, "d-"+tc.name, tc.secret), httptest.NewRecorder())
+			require.NoError(t, h.GitHubWebhook(c))
+			assert.Equal(t, []domain.ActorType{tc.want}, svc.handleActors)
+		})
+	}
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/eventbus"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/builtin"
+	"github.com/entire-vc/evc-mesh/internal/extensions/catalog"
 	"github.com/entire-vc/evc-mesh/internal/extensions/external"
 	githubext "github.com/entire-vc/evc-mesh/internal/extensions/github"
 	gitlabext "github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
@@ -2003,9 +2004,61 @@ func main() {
 	api.GET("/extensions/events", extensionEventHandler.ListEvents)
 	// Instance extension catalog. Install/update/rollback are 501 stubs, human-only
 	// until instance-admin gating arrives with W1.3.
-	extensionHandler := handler.NewExtensionHandler(postgres.NewInstalledExtensionRepo(db), extensionInstanceStore).WithAllowList(extensionPolicyRepo)
+	installedExtRepo := postgres.NewInstalledExtensionRepo(db)
+	// Signed Spark catalog: hourly refresh, ed25519-verified, last good copy kept.
+	// The pinned key can be replaced by the Spark instance setting catalog_public_key.
+	extensionCatalog := catalog.NewClient(
+		func() string {
+			u, _ := sparkIntegrationResolver.InstanceURL(context.Background())
+			return u
+		},
+		func() string {
+			is, ierr := extensionInstanceStore.InstanceSetting(context.Background(), sparkext.ID)
+			if ierr != nil || is == nil {
+				return ""
+			}
+			k, _ := is.Settings["catalog_public_key"].(string)
+			return k
+		},
+	)
+	extensionCatalog.OnRefresh = (&catalog.Enforcer{
+		Store: installedExtRepo, Journal: extensionPolicyRepo,
+		Notify: func(ctx context.Context, id, reason string, blocked bool) {
+			log.Printf("[extensions] catalog blocklist: %s blocked=%t reason=%q", id, blocked, reason)
+			if !blocked {
+				return
+			}
+			wsID, admins, aerr := instanceSettingRepo.InstanceAdminTargets(ctx)
+			if aerr != nil {
+				log.Printf("[extensions] blocklist notice: resolve admins: %v", aerr)
+				return
+			}
+			code := "notif.extension.blocked"
+			params, _ := json.Marshal(map[string]any{"extension": id, "reason": reason})
+			meta, _ := json.Marshal(map[string]any{"extension_id": id})
+			for i := range admins {
+				uid := admins[i]
+				n := &domain.Notification{
+					WorkspaceID: wsID, UserID: &uid, EventType: "extension.blocked",
+					Title: "Extension switched off: " + id, Body: "The Spark blocklist switched \u00ab" + id + "\u00bb off on this instance. Reason: " + reason,
+					Metadata: meta, MessageCode: &code, MessageParams: params,
+				}
+				if nerr := notificationRepo.CreateNotification(ctx, n); nerr != nil {
+					log.Printf("[extensions] blocklist notice for %s: %v", uid, nerr)
+				}
+			}
+		},
+		OnChange: func(ctx context.Context) {
+			if syncErr := externalRuntime.Sync(ctx); syncErr != nil {
+				log.Printf("[extensions] external runtime sync after blocklist: %v", syncErr)
+			}
+		},
+	}).Apply
+	go extensionCatalog.Run(context.Background(), extensions.ExtensionsAPIVersion)
+	extensionHandler := handler.NewExtensionHandler(installedExtRepo, extensionInstanceStore).WithAllowList(extensionPolicyRepo).WithCatalog(extensionCatalog)
 	api.GET("/extensions", extensionHandler.List)
 	api.GET("/extensions/catalog", extensionHandler.Catalog)
+	api.GET("/extensions/:ext_id/catalog-card", extensionHandler.CatalogCard)
 	api.GET("/extensions/manifest-schema", extensionHandler.ManifestSchema)
 	// Install from a repository (BRAT mode), Updates tab, rollback: instance admin only.
 	repoInstallSvc := &repoinstall.Service{
@@ -2018,7 +2071,28 @@ func main() {
 		},
 	}
 	go repoInstallSvc.RunAutoUpdate(context.Background(), 30*time.Minute)
-	extensionRepoInstallHandler := handler.NewExtensionRepoInstallHandler(repoInstallSvc, instanceSettingRepo)
+	catalogInstaller := &catalog.Installer{
+		Catalog: extensionCatalog,
+		SparkURL: func() string {
+			u, _ := sparkIntegrationResolver.InstanceURL(context.Background())
+			return u
+		},
+		CounterOn: func() bool {
+			is, ierr := extensionInstanceStore.InstanceSetting(context.Background(), sparkext.ID)
+			if ierr != nil || is == nil {
+				return true
+			}
+			on, set := is.Settings["catalog_install_counter"].(bool)
+			return !set || on
+		},
+		Store: installedExtRepo, Journal: extensionPolicyRepo,
+		OnChange: func(ctx context.Context) {
+			if syncErr := externalRuntime.Sync(ctx); syncErr != nil {
+				log.Printf("[extensions] external runtime sync after catalog install: %v", syncErr)
+			}
+		},
+	}
+	extensionRepoInstallHandler := handler.NewExtensionRepoInstallHandler(repoInstallSvc, instanceSettingRepo).WithCatalogInstall(catalogInstaller)
 	api.POST("/extensions/install", extensionRepoInstallHandler.Install, mw.RequireUserAuth())
 	api.POST("/extensions/repo/refs", extensionRepoInstallHandler.Refs, mw.RequireUserAuth())
 	api.POST("/extensions/repo/preview", extensionRepoInstallHandler.Preview, mw.RequireUserAuth())

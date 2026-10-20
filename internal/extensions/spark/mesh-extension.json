@@ -35,6 +35,16 @@
           "type": "string",
           "format": "uri",
           "title": "Адрес каталога Spark"
+        },
+        "catalog_public_key": {
+          "type": "string",
+          "title": "Публичный ключ каталога расширений (ed25519, base64)",
+          "description": "Пусто — используется зашитый ключ Spark. Заменить, если ключ каталога сменили."
+        },
+        "catalog_install_counter": {
+          "type": "boolean",
+          "default": true,
+          "title": "Сообщать Spark об установках расширений (анонимный счётчик)"
         }
       },
       "required": [

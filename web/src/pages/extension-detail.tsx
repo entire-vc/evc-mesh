@@ -1,3 +1,4 @@
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { AlertTriangle, ArrowLeft, ExternalLink, PackageSearch } from "lucide-react";
@@ -9,6 +10,10 @@ import { ExtensionIcon, KindTrustBadges } from "@/components/extensions/catalog"
 import { useExtensionCatalog, type CatalogEntry } from "@/hooks/useExtensionCatalog";
 import { allowedDomains, capabilityText, domainText, describeCapabilities } from "@/lib/extension-capabilities";
 import { useMemberStore } from "@/stores/member";
+import { apiErrorMessage } from "@/lib/api-error";
+import { useIsInstanceAdmin } from "@/lib/extension-admin";
+import { installCatalogExtension, getCatalogCard, type CatalogCard } from "@/lib/extension-repo";
+import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 
 export const DETAIL_TABS = ["description", "permissions", "versions", "checks", "support"] as const;
@@ -120,25 +125,37 @@ function Support({ entry }: { entry: CatalogEntry }) {
       {label}<ExternalLink className="h-3 w-3" aria-hidden />
     </a>
   );
-  const canReport = entry.runtime !== "builtin" && m.repository;
+  const rows: [string, ReactNode, string?][] = [
+    ["publisher", entry.publisher],
+    ["repository", m.repository && link(m.repository, m.repository), "break-all"],
+    ["docs", m.homepage && link(m.homepage, m.homepage), "break-all"],
+    ["license", m.license],
+    ["report", entry.runtime !== "builtin" && m.repository && link(`${m.repository}/issues`, t("detail.support.reportLink"))],
+  ];
   return (
     <dl className="grid max-w-xl grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
-      <dt className="text-muted-foreground">{t("detail.support.publisher")}</dt>
-      <dd>{entry.publisher}</dd>
-      {m.repository && (<><dt className="text-muted-foreground">{t("detail.support.repository")}</dt><dd className="break-all">{link(m.repository, m.repository)}</dd></>)}
-      {m.homepage && (<><dt className="text-muted-foreground">{t("detail.support.docs")}</dt><dd className="break-all">{link(m.homepage, m.homepage)}</dd></>)}
-      {m.license && (<><dt className="text-muted-foreground">{t("detail.support.license")}</dt><dd>{m.license}</dd></>)}
-      {canReport && (<><dt className="text-muted-foreground">{t("detail.support.report")}</dt><dd>{link(`${m.repository}/issues`, t("detail.support.reportLink"))}</dd></>)}
+      {rows.map(([k, v, cls]) => v && (<Fragment key={k}><dt className="text-muted-foreground">{t(`detail.support.${k}`)}</dt><dd className={cls}>{v}</dd></Fragment>))}
     </dl>
   );
 }
 
-function PrimaryAction({ entry, wsSlug, isAdmin }: { entry: CatalogEntry; wsSlug: string; isAdmin: boolean }) {
+function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }: { entry: CatalogEntry; wsSlug: string; isAdmin: boolean; isInstanceAdmin: boolean; onInstalled: () => void }) {
   const { t } = useTranslation("integrations");
+  const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
   // Until the installed list (W2.5) lands, settings live on the legacy Installed tab.
   const installed = `/w/${wsSlug}/extensions?tab=installed`;
   if (entry.blocked) return <Button disabled>{t("detail.action.blocked")}</Button>;
+  if (!entry.installed && entry.source === "catalog" && isInstanceAdmin) {
+    const install = () => {
+      setBusy(true);
+      installCatalogExtension(entry.id)
+        .then(() => (toast.success(t("detail.action.installed", { name: entry.name })), onInstalled()))
+        .catch((e) => toast.error(apiErrorMessage(e, t("installed.actionFailed"))))
+        .finally(() => setBusy(false));
+    };
+    return <Button disabled={busy} onClick={install}>{t("detail.action.install")}</Button>;
+  }
   if (!entry.installed) {
     return ADMIN_ACTIONS_ENABLED && isAdmin
       ? <Button disabled>{t("detail.action.install")}</Button>
@@ -155,6 +172,18 @@ function PrimaryAction({ entry, wsSlug, isAdmin }: { entry: CatalogEntry; wsSlug
   return <Button onClick={() => navigate(`/w/${wsSlug}/extensions/${entry.id}/connect`)}>{t("detail.action.connect")}</Button>;
 }
 
+/** README, versions and checks come from Spark's card for the extension; a failure keeps what the catalog already gave. */
+function useSparkCard(id: string, enabled: boolean): CatalogCard | null {
+  const [card, setCard] = useState<CatalogCard | null>(null);
+  useEffect(() => {
+    if (!enabled || !id) return;
+    let cancelled = false;
+    getCatalogCard(id).then((c) => !cancelled && setCard(c), () => {});
+    return () => { cancelled = true; };
+  }, [id, enabled]);
+  return card;
+}
+
 export function ExtensionDetailPage() {
   const { t } = useTranslation("integrations");
   const { wsSlug = "", extId = "" } = useParams();
@@ -163,7 +192,19 @@ export function ExtensionDetailPage() {
   const catalog = useExtensionCatalog();
   const tab = detailTab(search);
   const isAdmin = myRole === "owner" || myRole === "admin";
-  const entry = catalog.entries.find((e) => e.id === extId);
+  // Catalog install is an instance-level action: only the instance API can say who may do it.
+  const isInstanceAdmin = useIsInstanceAdmin();
+  const base = catalog.entries.find((e) => e.id === extId);
+  const card = useSparkCard(extId, Boolean(base) && base?.runtime !== "builtin");
+  const entry = base && card
+    ? {
+        ...base,
+        description: card.description || base.description,
+        manifest: { ...base.manifest, readme: card.readme || base.manifest.readme },
+        versions: card.versions?.length ? card.versions : base.versions,
+        checks: card.checks ?? base.checks,
+      }
+    : base;
 
   const back = (
     <Link to={`/w/${wsSlug}/extensions`} className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
@@ -220,7 +261,7 @@ export function ExtensionDetailPage() {
             </div>
           </div>
         </div>
-        <PrimaryAction entry={entry} wsSlug={wsSlug} isAdmin={isAdmin} />
+        <PrimaryAction entry={entry} wsSlug={wsSlug} isAdmin={isAdmin} isInstanceAdmin={isInstanceAdmin} onInstalled={catalog.reload} />
       </header>
 
       {entry.blocked && (

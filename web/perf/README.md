@@ -100,6 +100,13 @@ no headroom; `login.initial_js_kb_gz` is unchanged (172.07). The last
 per-workspace role guard added after review; the build measured 655.98. Lead
 sign-off: the product lead, on the card (655.6 signed, 656.0 requested).
 
+`total_js_kb_gz` 656.0 → 656.4 (**+0.4 KB gz**, main `a07e0fa2`): main measured
+656.39 against the 656.0 ceiling after the signed Spark catalog client
+(`bd7b56e2`, lazy extensions chunk) landed; the MR that surfaced it is
+backend-only and does not touch the web bundle. The ceiling moved by the
+smallest step above the measurement. `login.initial_js_kb_gz` unchanged. Lead
+sign-off: the product lead.
+
 ## Proving the gate actually gates (do this again after touching the script)
 
 A budget check that can't go red isn't a check (a deliberate failure proves enforcement). Two

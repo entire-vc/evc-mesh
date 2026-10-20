@@ -131,19 +131,19 @@ func (r *VCSLinkRepo) Create(ctx context.Context, link *domain.VCSLink) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort rollback on error or panic
 
-	// Filtered on external_id as a cheap prefilter, not as the identity
-	// itself — every known corruption case (#0fbed572) shares external_id
-	// across the mis-provider'd rows, so this narrows the lock to the rows
-	// that can possibly match, and the url comparison below is what actually
-	// decides identity.
+	// Every link of the task is locked and compared by url: external_id is
+	// only the number, unique per project, so it cannot decide identity (and
+	// no longer narrows the lock — the unique index used to be the only thing
+	// stopping a second row for the same url under another external_id). A
+	// task carries a handful of links, so the scan is cheap.
 	const lockQ = `
 		SELECT id, created_at, url FROM vcs_links
-		WHERE task_id = $1 AND link_type = $2 AND external_id = $3
+		WHERE task_id = $1 AND link_type = $2
 		ORDER BY created_at ASC
 		FOR UPDATE
 	`
 	var candidates []vcsLinkURLCandidate
-	if err := tx.SelectContext(ctx, &candidates, lockQ, link.TaskID, string(link.LinkType), link.ExternalID); err != nil {
+	if err := tx.SelectContext(ctx, &candidates, lockQ, link.TaskID, string(link.LinkType)); err != nil {
 		return err
 	}
 	for _, c := range candidates {
@@ -236,12 +236,10 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 // Matching by url, not by (task_id, link_type, external_id), is deliberate:
 // external_id is not a stable identity across a provider correction (a
 // GitHub PR #14 and a GitLab MR !14 share the string "14" but are different
-// objects — #0fbed572 defect 2), while the url is. Locking is still
-// prefiltered by external_id (see the lockQ comment below) for the same
-// reason Create's is — it is cheap and, in every case that matters here,
-// external_id is what the mis-provider'd duplicate rows already share.
+// objects — #0fbed572 defect 2), while the url is. Every link of the
+// task is locked and compared by url, with no external_id prefilter.
 //
-// The DB unique index is still (task_id, provider, link_type, external_id),
+// The DB unique index is (task_id, provider, link_type, external_id, md5(url)),
 // so a caller-visible identity collision can still occur (racing with a
 // concurrent insert, or a genuinely different link already owning the
 // target (provider, external_id) pair) — that surfaces as a clear
@@ -281,12 +279,12 @@ func (r *VCSLinkRepo) Upsert(ctx context.Context, link *domain.VCSLink) (bool, e
 
 	const lockQ = `
 		SELECT id, created_at, url FROM vcs_links
-		WHERE task_id = $1 AND link_type = $2 AND external_id = $3
+		WHERE task_id = $1 AND link_type = $2
 		ORDER BY created_at ASC
 		FOR UPDATE
 	`
 	var candidates []vcsLinkURLCandidate
-	if err := tx.SelectContext(ctx, &candidates, lockQ, link.TaskID, string(link.LinkType), link.ExternalID); err != nil {
+	if err := tx.SelectContext(ctx, &candidates, lockQ, link.TaskID, string(link.LinkType)); err != nil {
 		return false, err
 	}
 
