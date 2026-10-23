@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { SlotBadges } from "@/components/extensions/slots/slot-host";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -9,21 +10,15 @@ import {
 } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router";
 import {
-  AlignLeft,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   ChevronDown,
   ChevronRight,
-  CircleCheck,
-  GitBranch,
   List,
   Loader2,
   Lock,
-  Paperclip,
-  Pencil,
   Plus,
-  Snowflake,
   Trash2,
   X,
 } from "lucide-react";
@@ -42,9 +37,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AssigneeAvatar } from "@/components/assignee-avatar";
-import { PriorityFlag } from "@/components/priority-flag";
-import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { ColumnPicker, type ColumnDef } from "@/components/column-picker";
@@ -55,11 +47,20 @@ import {
   type CFFilters,
 } from "@/components/view-filters";
 import { toast } from "@/components/ui/toast";
+import { CoreActionsProvider, useCan } from "@/core/primitives";
+import { quickEditRequest, taskPath } from "@/core/primitives/actions";
+import type { QuickEditField } from "@/core/primitives";
+import { buildRowColumns } from "@/core/slots/task-row-data";
+import { toStatusData, toTaskData } from "@/core/slots/board-data";
+import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
+import type { QuickEditPatch, SlotContext, StatusData, TaskRowColumn, TaskRowData, TaskRowSettings, TaskRowView } from "@/core/slots/types";
+import { registerMeshDefaultTheme } from "@/themes/mesh-default";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import i18n from "@/i18n";
 import { cn } from "@/lib/cn";
-import { formatDate } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type {
-  CustomFieldDefinition,
   Priority,
   Task,
   TaskStatus,
@@ -84,16 +85,18 @@ const PRIORITY_ORDER: Record<Priority, number> = {
 // Labels resolve at render: t(`priority.${value}`) in the "list" namespace.
 const PRIORITY_OPTIONS: Priority[] = ["urgent", "high", "medium", "low", "none"];
 
+registerMeshDefaultTheme();
+
 const DEFAULT_PER_PAGE = 50;
 
-// ---------------------------------------------------------------------------
-// Editing cell identifier
-// ---------------------------------------------------------------------------
-
-interface EditingCell {
-  taskId: string;
-  field: string;
-}
+// Sortable columns of the header and their min width; the others get a plain header.
+const SORTABLE_CLASS: Record<string, string> = {
+  title: "min-w-[240px]",
+  status: "min-w-[120px]",
+  priority: "min-w-[100px]",
+  assignee: "min-w-[100px]",
+  due_date: "min-w-[110px]",
+};
 
 // ---------------------------------------------------------------------------
 // Status group
@@ -127,9 +130,6 @@ export function ListViewPage() {
 
   // Selection state
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
-
-  // Editing cell state
-  const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
 
   // Bulk action state
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(
@@ -257,6 +257,39 @@ export function ListViewPage() {
     () => [...customFieldDefs].sort((a, b) => a.position - b.position),
     [customFieldDefs],
   );
+
+  // task.row slot: the active theme's row view and settings; the core builds the columns it draws.
+  const registryVersion = useSlotRegistryVersion();
+  const themeSettings = useThemeSettings() as TaskRowSettings;
+  const RowView = useMemo(
+    () => withSlotFallback("task.row", resolveSlotView("task.row")) as TaskRowView,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [registryVersion],
+  );
+  const isMobile = useIsMobile();
+  const currentWorkspace = useWorkspaceStore((s) => s.currentWorkspace);
+  const mode = document.documentElement.classList.contains("dark") ? "dark" : "light";
+  const locale = i18n.language;
+  const slotCtx = useMemo<SlotContext>(
+    () => ({
+      slot: "task.row",
+      contractVersion: "1.0.0",
+      locale,
+      mode,
+      isMobile,
+      workspace: currentWorkspace
+        ? { id: currentWorkspace.id, slug: currentWorkspace.slug, name: currentWorkspace.name }
+        : null,
+    }),
+    [locale, mode, isMobile, currentWorkspace],
+  );
+  const canEdit = useCan("task.edit");
+  const canMove = useCan("task.move");
+  const rowColumns = useMemo(
+    () => buildRowColumns(visibleColumns, sortedFieldDefs, (k) => t(k), themeSettings.row_fields),
+    [visibleColumns, sortedFieldDefs, t, themeSettings.row_fields],
+  );
+  const statusDataList = useMemo(() => statuses.map(toStatusData), [statuses]);
 
   // Build allColumns from static defs + dynamic custom fields
   const allColumns = useMemo((): ColumnDef[] => {
@@ -424,7 +457,7 @@ export function ListViewPage() {
           project_id: "",
           name: t("status.unknown"),
           slug: "unknown",
-          color: "#9ca3af",
+          color: "var(--fallback-gray-400)",
           position: 9999,
           category: "backlog",
           is_default: false,
@@ -564,20 +597,8 @@ export function ListViewPage() {
   // Inline editing helpers
   // ---------------------------------------------------------------------------
 
-  const startEdit = useCallback(
-    (taskId: string, field: string) => {
-      setEditingCell({ taskId, field });
-    },
-    [],
-  );
-
-  const cancelEdit = useCallback(() => {
-    setEditingCell(null);
-  }, []);
-
   const saveCell = useCallback(
     async (taskId: string, req: UpdateTaskRequest) => {
-      setEditingCell(null);
       try {
         await updateTask(taskId, req);
         toast.success(t("toast.taskUpdated"));
@@ -666,20 +687,34 @@ export function ListViewPage() {
   // Navigation
   // ---------------------------------------------------------------------------
 
-  const handleTaskClick = useCallback(
-    (task: Task) => {
-      if (editingCell?.taskId === task.id) return;
+  const openTaskById = useCallback(
+    (taskId: string) => {
     // Full-screen task page on every viewport. Was gated to isMobile in #70,
-    // leaving desktop on the slide-over (Pavel 2026-07-07 — fullscreen only).
+    // leaving desktop on the slide-over (Alex 2026-07-07 — fullscreen only).
       if (wsSlug && currentProject) {
-        navigate(`/w/${wsSlug}/p/${currentProject.slug}/t/${task.id}`);
+        navigate(`/w/${wsSlug}/p/${currentProject.slug}/t/${taskId}`);
       } else {
-        setSlideOverTaskId(task.id);
+        setSlideOverTaskId(taskId);
       }
     },
-    [editingCell, wsSlug, currentProject, navigate],
+    [wsSlug, currentProject, navigate],
   );
 
+  // What the TaskLink/InlineEdit primitives call: open the task, save one field.
+  const taskHref = useCallback(
+    (taskId: string) => taskPath(wsSlug, currentProject?.slug, taskId),
+    [wsSlug, currentProject?.slug],
+  );
+  const coreActions = useMemo(
+    () => ({
+      openTask: openTaskById,
+      taskHref,
+      quickEdit: async (taskId: string, field: QuickEditField, value: unknown) => {
+        await saveCell(taskId, quickEditRequest(field, value));
+      },
+    }),
+    [openTaskById, taskHref, saveCell],
+  );
   // Sync current state to saved-view store
   const { pendingView, clearPendingView, setCurrentViewState } = useSavedViewStore();
   useEffect(() => {
@@ -729,17 +764,7 @@ export function ListViewPage() {
   );
 
   // Column count for colSpan calculations (checkbox + visible columns)
-  const columnCount =
-    1 + // checkbox (always visible)
-    (visibleColumns.has("name") ? 1 : 0) +
-    (visibleColumns.has("status") ? 1 : 0) +
-    (visibleColumns.has("priority") ? 1 : 0) +
-    (visibleColumns.has("assignee") ? 1 : 0) +
-    (visibleColumns.has("due_date") ? 1 : 0) +
-    (visibleColumns.has("labels") ? 1 : 0) +
-    (visibleColumns.has("estimated_hours") ? 1 : 0) +
-    (visibleColumns.has("created_at") ? 1 : 0) +
-    sortedFieldDefs.filter((f) => visibleColumns.has(`cf:${f.slug}`)).length;
+  const columnCount = 1 + rowColumns.length;
 
   if (!currentProject) {
     return (
@@ -833,6 +858,7 @@ export function ListViewPage() {
         </div>
       ) : (
         <>
+          <CoreActionsProvider actions={coreActions}>
           <div className="overflow-x-auto rounded-lg border border-border">
             <table className="w-full text-left text-sm">
               <thead>
@@ -853,83 +879,24 @@ export function ListViewPage() {
                       aria-label={t("table.selectAll")}
                     />
                   </th>
-                  <SortableHeader
-                    label={t("columns.title")}
-                    field="title"
-                    currentField={sortField}
-                    dir={sortDir}
-                    onSort={handleSort}
-                    className="min-w-[240px]"
-                  />
-                  {visibleColumns.has("status") && (
-                    <SortableHeader
-                      label={t("columns.status")}
-                      field="status"
-                      currentField={sortField}
-                      dir={sortDir}
-                      onSort={handleSort}
-                      className="min-w-[120px]"
-                    />
-                  )}
-                  {visibleColumns.has("priority") && (
-                    <SortableHeader
-                      label={t("columns.priority")}
-                      field="priority"
-                      currentField={sortField}
-                      dir={sortDir}
-                      onSort={handleSort}
-                      className="min-w-[100px]"
-                    />
-                  )}
-                  {visibleColumns.has("assignee") && (
-                    <SortableHeader
-                      label={t("columns.assignee")}
-                      field="assignee"
-                      currentField={sortField}
-                      dir={sortDir}
-                      onSort={handleSort}
-                      className="min-w-[100px]"
-                    />
-                  )}
-                  {visibleColumns.has("due_date") && (
-                    <SortableHeader
-                      label={t("columns.dueDate")}
-                      field="due_date"
-                      currentField={sortField}
-                      dir={sortDir}
-                      onSort={handleSort}
-                      className="min-w-[110px]"
-                    />
-                  )}
-                  {visibleColumns.has("labels") && (
-                    <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
-                      {t("columns.labels")}
-                    </th>
-                  )}
-                  {visibleColumns.has("estimated_hours") && (
-                    <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
-                      {t("columns.estimate")}
-                    </th>
-                  )}
-                  {visibleColumns.has("created_at") && (
-                    <th className="px-3 py-2 text-xs font-medium text-muted-foreground">
-                      {t("columns.created")}
-                    </th>
-                  )}
-                  {/* Dynamic custom field columns */}
-                  {sortedFieldDefs
-                    .filter((f) => visibleColumns.has(`cf:${f.slug}`))
-                    .map((field) => (
+                  {rowColumns.map((column) => {
+                    const sortable = SORTABLE_CLASS[column.key] ?? (column.customField ? "min-w-[100px]" : undefined);
+                    return sortable ? (
                       <SortableHeader
-                        key={field.id}
-                        label={field.name}
-                        field={field.slug}
+                        key={column.key}
+                        label={column.label}
+                        field={column.customField ? column.customField.slug : column.key}
                         currentField={sortField}
                         dir={sortDir}
                         onSort={handleSort}
-                        className="min-w-[100px]"
+                        className={sortable}
                       />
-                    ))}
+                    ) : (
+                      <th key={column.key} className="px-3 py-2 text-xs font-medium text-muted-foreground">
+                        {column.label}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -982,178 +949,36 @@ export function ListViewPage() {
 
                       {/* Task rows for this group */}
                       {!isCollapsed && group.tasks.map((task) => {
-                        const isSelected = selectedTaskIds.has(task.id);
                         const isExpanded = expandedTasks.has(task.id);
                         const isLoadingSubtask = loadingSubtasks.has(task.id);
                         const subtasks = subtaskMap[task.id] ?? [];
+                        const rowProps = {
+                          View: RowView,
+                          columns: rowColumns,
+                          statuses: statusDataList,
+                          fallbackStatus: group.status,
+                          statusMap,
+                          themeSettings,
+                          ctx: slotCtx,
+                          canEdit,
+                          canMove,
+                          onOpen: openTaskById,
+                          onSave: saveCell,
+                        };
 
                         return (
-                          <>
-                            <tr
-                              key={task.id}
-                              className={cn(
-                                "border-b border-border transition-colors last:border-b-0",
-                                isSelected
-                                  ? "bg-primary/5"
-                                  : "hover:bg-muted/30",
-                              )}
-                            >
-                              {/* Checkbox */}
-                              <td
-                                className="w-10 px-3 py-2"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  onChange={() => toggleSelectTask(task.id)}
-                                  className="h-4 w-4 rounded border-input cursor-pointer"
-                                  aria-label={t("table.selectTask", { title: task.title })}
-                                />
-                              </td>
-
-                              {/* Title */}
-                              <EnhancedTitleCell
-                                task={task}
-                                statusColor={statusMap.get(task.status_id)?.color}
-                                isEditing={
-                                  editingCell?.taskId === task.id &&
-                                  editingCell.field === "title"
-                                }
-                                isExpanded={isExpanded}
-                                isLoadingSubtask={isLoadingSubtask}
-                                onToggleSubtasks={() => toggleSubtasks(task.id)}
-                                onStartEdit={() => startEdit(task.id, "title")}
-                                onSave={(title) => saveCell(task.id, { title })}
-                                onCancel={cancelEdit}
-                                onNavigate={() => handleTaskClick(task)}
-                              />
-
-                              {/* Status */}
-                              {visibleColumns.has("status") && (
-                                <StatusCell
-                                  task={task}
-                                  statusMap={statusMap}
-                                  statuses={statuses}
-                                  isEditing={
-                                    editingCell?.taskId === task.id &&
-                                    editingCell.field === "status"
-                                  }
-                                  onStartEdit={() => startEdit(task.id, "status")}
-                                  onSave={(statusId) =>
-                                    saveCell(task.id, { status_id: statusId })
-                                  }
-                                  onCancel={cancelEdit}
-                                />
-                              )}
-
-                              {/* Priority */}
-                              {visibleColumns.has("priority") && (
-                                <EnhancedPriorityCell
-                                  task={task}
-                                  isEditing={
-                                    editingCell?.taskId === task.id &&
-                                    editingCell.field === "priority"
-                                  }
-                                  onStartEdit={() => startEdit(task.id, "priority")}
-                                  onSave={(priority) =>
-                                    saveCell(task.id, { priority: priority as Priority })
-                                  }
-                                  onCancel={cancelEdit}
-                                />
-                              )}
-
-                              {/* Assignee */}
-                              {visibleColumns.has("assignee") && (
-                                <td className="px-3 py-2">
-                                  <AssigneeAvatar
-                                    id={task.assignee_id}
-                                    name={task.assignee_name ?? undefined}
-                                    type={task.assignee_type as "user" | "agent" | "unassigned"}
-                                    size="sm"
-                                  />
-                                </td>
-                              )}
-
-                              {/* Due Date */}
-                              {visibleColumns.has("due_date") && (
-                                <DueDateCell
-                                  task={task}
-                                  statusCategory={statusMap.get(task.status_id)?.category}
-                                  isEditing={
-                                    editingCell?.taskId === task.id &&
-                                    editingCell.field === "due_date"
-                                  }
-                                  onStartEdit={() => startEdit(task.id, "due_date")}
-                                  onSave={(due_date) => saveCell(task.id, { due_date })}
-                                  onCancel={cancelEdit}
-                                />
-                              )}
-
-                              {/* Labels */}
-                              {visibleColumns.has("labels") && (
-                                <td className="px-3 py-2">
-                                  <div className="flex flex-wrap gap-1">
-                                    {(task.labels ?? []).slice(0, 3).map((label) => (
-                                      <span
-                                        key={label}
-                                        className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                      >
-                                        {label}
-                                      </span>
-                                    ))}
-                                    {(task.labels ?? []).length > 3 && (
-                                      <span className="text-[10px] text-muted-foreground">
-                                        +{(task.labels ?? []).length - 3}
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                              )}
-
-                              {/* Estimated hours */}
-                              {visibleColumns.has("estimated_hours") && (
-                                <td className="px-3 py-2 text-xs text-muted-foreground">
-                                  {task.estimated_hours != null
-                                    ? t("table.estimateHours", { hours: task.estimated_hours })
-                                    : "--"}
-                                </td>
-                              )}
-
-                              {/* Created at */}
-                              {visibleColumns.has("created_at") && (
-                                <td className="px-3 py-2 text-xs text-muted-foreground">
-                                  {formatDate(task.created_at)}
-                                </td>
-                              )}
-
-                              {/* Custom field columns */}
-                              {sortedFieldDefs
-                                .filter((f) => visibleColumns.has(`cf:${f.slug}`))
-                                .map((field) => (
-                                  <CustomFieldCell
-                                    key={field.id}
-                                    task={task}
-                                    field={field}
-                                    isEditing={
-                                      editingCell?.taskId === task.id &&
-                                      editingCell.field === field.slug
-                                    }
-                                    onStartEdit={() =>
-                                      startEdit(task.id, field.slug)
-                                    }
-                                    onSave={(value) =>
-                                      saveCell(task.id, {
-                                        custom_fields: {
-                                          ...(task.custom_fields ?? {}),
-                                          [field.slug]: value,
-                                        },
-                                      })
-                                    }
-                                    onCancel={cancelEdit}
-                                  />
-                                ))}
-                            </tr>
+                          <Fragment key={task.id}>
+                            <ListTaskRow
+                              {...rowProps}
+                              task={task}
+                              depth={0}
+                              selected={selectedTaskIds.has(task.id)}
+                              expandable={(task.subtask_count ?? 0) > 0}
+                              expanded={isExpanded}
+                              expanding={isLoadingSubtask}
+                              onToggleSelected={toggleSelectTask}
+                              onToggleExpanded={toggleSubtasks}
+                            />
 
                             {/* Subtask rows */}
                             {isExpanded && (
@@ -1172,127 +997,22 @@ export function ListViewPage() {
                                     <span className="text-xs text-muted-foreground">{t("subtasks.empty")}</span>
                                   </td>
                                 </tr>
-                              ) : subtasks.map((subtask) => {
-                                const subtaskStatus = statusMap.get(subtask.status_id);
-                                return (
-                                  <tr
-                                    key={`subtask-${subtask.id}`}
-                                    className="border-b border-border transition-colors hover:bg-muted/20 opacity-90"
-                                  >
-                                    {/* Checkbox (subtask) */}
-                                    <td className="w-10 px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
-                                      {/* No checkbox for subtasks */}
-                                    </td>
-
-                                    {/* Subtask title */}
-                                    <td
-                                      className="cursor-pointer px-3 py-1.5 pl-10"
-                                      onClick={() => handleTaskClick(subtask)}
-                                    >
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-muted-foreground/50 text-xs mr-0.5">└</span>
-                                        {subtaskStatus && (
-                                          <span
-                                            className="inline-block h-1.5 w-1.5 rounded-full flex-shrink-0"
-                                            style={{ backgroundColor: subtaskStatus.color }}
-                                          />
-                                        )}
-                                        <span className="text-xs text-muted-foreground hover:text-foreground transition-colors">
-                                          {subtask.title}
-                                        </span>
-                                        {subtask.human_gate && (
-                                          <span
-                                            className="flex-shrink-0"
-                                            title={t("row.humanGate")}
-                                          >
-                                            <Lock
-                                              className="h-3 w-3 text-amber-600 dark:text-amber-400"
-                                              aria-label={t("row.humanGate")}
-                                            />
-                                          </span>
-                                        )}
-                                      </div>
-                                    </td>
-
-                                    {/* Subtask status */}
-                                    {visibleColumns.has("status") && (
-                                      <td className="px-3 py-1.5">
-                                        {subtaskStatus && (
-                                          <div className="flex items-center gap-1.5">
-                                            <span
-                                              className="inline-block h-2 w-2 rounded-full"
-                                              style={{ backgroundColor: subtaskStatus.color }}
-                                            />
-                                            <span className="text-xs text-muted-foreground">{subtaskStatus.name}</span>
-                                          </div>
-                                        )}
-                                      </td>
-                                    )}
-
-                                    {/* Subtask priority */}
-                                    {visibleColumns.has("priority") && (
-                                      <td className="px-3 py-1.5">
-                                        <PriorityFlag priority={subtask.priority} size="sm" />
-                                      </td>
-                                    )}
-
-                                    {/* Subtask assignee */}
-                                    {visibleColumns.has("assignee") && (
-                                      <td className="px-3 py-1.5">
-                                        <AssigneeAvatar
-                                          id={subtask.assignee_id}
-                                          name={subtask.assignee_name ?? undefined}
-                                          type={subtask.assignee_type as "user" | "agent" | "unassigned"}
-                                          size="sm"
-                                        />
-                                      </td>
-                                    )}
-
-                                    {/* Subtask due date */}
-                                    {visibleColumns.has("due_date") && (
-                                      <td className="px-3 py-1.5">
-                                        <span className={cn("text-xs", getDateClass(subtask.due_date, subtaskStatus?.category))}>
-                                          {subtask.due_date ? formatDate(subtask.due_date) : "--"}
-                                        </span>
-                                      </td>
-                                    )}
-
-                                    {/* Subtask labels */}
-                                    {visibleColumns.has("labels") && (
-                                      <td className="px-3 py-1.5">
-                                        <span className="text-xs text-muted-foreground/50">--</span>
-                                      </td>
-                                    )}
-
-                                    {/* Subtask estimated_hours */}
-                                    {visibleColumns.has("estimated_hours") && (
-                                      <td className="px-3 py-1.5">
-                                        <span className="text-xs text-muted-foreground/50">--</span>
-                                      </td>
-                                    )}
-
-                                    {/* Subtask created_at */}
-                                    {visibleColumns.has("created_at") && (
-                                      <td className="px-3 py-1.5">
-                                        <span className="text-xs text-muted-foreground/50">
-                                          {formatDate(subtask.created_at)}
-                                        </span>
-                                      </td>
-                                    )}
-
-                                    {/* Custom field placeholders for subtasks */}
-                                    {sortedFieldDefs
-                                      .filter((f) => visibleColumns.has(`cf:${f.slug}`))
-                                      .map((field) => (
-                                        <td key={field.id} className="px-3 py-1.5">
-                                          <span className="text-xs text-muted-foreground/50">--</span>
-                                        </td>
-                                      ))}
-                                  </tr>
-                                );
-                              })
+                              ) : subtasks.map((subtask) => (
+                                <ListTaskRow
+                                  key={`subtask-${subtask.id}`}
+                                  {...rowProps}
+                                  task={subtask}
+                                  depth={1}
+                                  selected={false}
+                                  expandable={false}
+                                  expanded={false}
+                                  expanding={false}
+                                  onToggleSelected={toggleSelectTask}
+                                  onToggleExpanded={toggleSubtasks}
+                                />
+                              ))
                             )}
-                          </>
+                          </Fragment>
                         );
                       })}
 
@@ -1365,6 +1085,7 @@ export function ListViewPage() {
               </tbody>
             </table>
           </div>
+          </CoreActionsProvider>
 
           {/* Pagination footer */}
           {total > 0 && (
@@ -1468,18 +1189,6 @@ export function ListViewPage() {
 // ---------------------------------------------------------------------------
 // Helper: compute due date CSS class
 // ---------------------------------------------------------------------------
-
-function getDateClass(
-  dueDate: string | null | undefined,
-  statusCategory: string | undefined,
-): string {
-  if (!dueDate) return "text-muted-foreground";
-  const isTerminal = statusCategory === "done" || statusCategory === "cancelled";
-  if (!isTerminal && new Date(dueDate) < new Date()) {
-    return "text-red-500 font-medium";
-  }
-  return "text-muted-foreground";
-}
 
 // ---------------------------------------------------------------------------
 // Bulk action bar
@@ -1594,476 +1303,6 @@ function BulkActionBar({
 // Inline editing cell components
 // ---------------------------------------------------------------------------
 
-// Enhanced title cell with visual indicators and subtask expansion
-function EnhancedTitleCell({
-  task,
-  statusColor,
-  isEditing,
-  isExpanded,
-  isLoadingSubtask,
-  onToggleSubtasks,
-  onStartEdit,
-  onSave,
-  onCancel,
-  onNavigate,
-}: {
-  task: Task;
-  statusColor?: string;
-  isEditing: boolean;
-  isExpanded: boolean;
-  isLoadingSubtask: boolean;
-  onToggleSubtasks: () => void;
-  onStartEdit: () => void;
-  onSave: (title: string) => void;
-  onCancel: () => void;
-  onNavigate: () => void;
-}) {
-  const { t } = useTranslation("list");
-  const [draft, setDraft] = useState(task.title);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (isEditing) {
-      setDraft(task.title);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-  }, [isEditing, task.title]);
-
-  if (isEditing) {
-    return (
-      <td
-        className="px-3 py-2"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Input
-          ref={inputRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          className="h-7 text-xs font-medium"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              if (draft.trim()) onSave(draft.trim());
-              else onCancel();
-            }
-            if (e.key === "Escape") {
-              onCancel();
-            }
-          }}
-          onBlur={() => {
-            if (draft.trim() && draft.trim() !== task.title) {
-              onSave(draft.trim());
-            } else {
-              onCancel();
-            }
-          }}
-        />
-      </td>
-    );
-  }
-
-  const hasSubtasks = (task.subtask_count ?? 0) > 0;
-  const hasDescription = task.has_description ?? !!task.description;
-  const artifactCount = task.artifact_count ?? 0;
-  const subtaskCount = task.subtask_count ?? 0;
-
-  return (
-    <td
-      className="group cursor-pointer px-3 py-2"
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        onStartEdit();
-      }}
-      onClick={onNavigate}
-    >
-      <div className="flex items-center gap-1.5">
-        {/* Subtask expand toggle */}
-        {hasSubtasks ? (
-          <button
-            type="button"
-            className="flex-shrink-0 p-0.5 rounded hover:bg-muted transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleSubtasks();
-            }}
-            aria-label={isExpanded ? t("subtasks.collapse") : t("subtasks.expand")}
-          >
-            {isLoadingSubtask ? (
-              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-            ) : isExpanded ? (
-              <ChevronDown className="h-3 w-3 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-3 w-3 text-muted-foreground" />
-            )}
-          </button>
-        ) : (
-          <span className="w-4 flex-shrink-0" />
-        )}
-
-        {/* Status color dot */}
-        {statusColor && (
-          <span
-            className="inline-block h-2 w-2 rounded-full flex-shrink-0"
-            style={{ backgroundColor: statusColor }}
-          />
-        )}
-
-        {/* Title */}
-        <span className="font-medium hover:text-primary truncate">
-          {task.title}
-        </span>
-
-        {/* Visual indicators */}
-        <span className="flex items-center gap-1 ml-1 flex-shrink-0">
-          <SlotBadges task={task} />
-          {task.human_gate && (
-            <span
-              className="flex items-center text-amber-600 dark:text-amber-400"
-              title={
-                task.human_gate_class === "soft"
-                  ? t("row.humanGateSoft")
-                  : t("row.humanGate")
-              }
-            >
-              <Lock
-                className="h-3 w-3"
-                aria-label={t("row.humanGate")}
-              />
-            </span>
-          )}
-          {hasDescription && (
-            <AlignLeft
-              className="h-3 w-3 text-muted-foreground/60"
-              aria-label={t("row.hasDescription")}
-            />
-          )}
-          {artifactCount > 0 && (
-            <span className="flex items-center gap-0.5 text-muted-foreground/60">
-              <Paperclip className="h-3 w-3" aria-hidden="true" />
-              <span className="text-[10px]">{artifactCount}</span>
-            </span>
-          )}
-          {subtaskCount > 0 && (
-            <span className="flex items-center gap-0.5 text-muted-foreground/60">
-              <GitBranch className="h-3 w-3" aria-hidden="true" />
-              <span className="text-[10px]">{subtaskCount}</span>
-            </span>
-          )}
-          {task.false_open?.all_children_closed && (
-            <span
-              className="flex items-center text-emerald-600 dark:text-emerald-400"
-              title={t("board:falseOpen.allChildrenClosed", { days: task.false_open.stale_days })}
-            >
-              <CircleCheck
-                className="h-3 w-3"
-                aria-label={t("row.falseOpenAllClosed")}
-              />
-            </span>
-          )}
-          {task.false_open?.only_parked_children_left && (
-            <span
-              className="flex items-center text-sky-600 dark:text-sky-400"
-              title={t("board:falseOpen.onlyParkedChildrenLeft", { count: task.false_open.open_children_count, days: task.false_open.stale_days })}
-            >
-              <Snowflake
-                className="h-3 w-3"
-                aria-label={t("row.falseOpenParked")}
-              />
-            </span>
-          )}
-        </span>
-
-        {/* Edit icon — visible on row hover */}
-        <button
-          type="button"
-          className="ml-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-          onClick={(e) => { e.stopPropagation(); onNavigate(); }}
-          aria-label={t("row.editTask")}
-          title={t("row.editTask")}
-        >
-          <Pencil className="h-3 w-3" />
-        </button>
-      </div>
-    </td>
-  );
-}
-
-// Status cell
-function StatusCell({
-  task,
-  statusMap,
-  statuses,
-  isEditing,
-  onStartEdit,
-  onSave,
-  onCancel,
-}: {
-  task: Task;
-  statusMap: Map<string, TaskStatus>;
-  statuses: TaskStatus[];
-  isEditing: boolean;
-  onStartEdit: () => void;
-  onSave: (statusId: string) => void;
-  onCancel: () => void;
-}) {
-  const status = statusMap.get(task.status_id);
-
-  if (isEditing) {
-    return (
-      <td
-        className="px-3 py-2"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Select
-          className="h-7 text-xs"
-          value={task.status_id}
-          onChange={(e) => {
-            if (e.target.value) onSave(e.target.value);
-            else onCancel();
-          }}
-          autoFocus
-          onBlur={onCancel}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") onCancel();
-          }}
-        >
-          {statuses.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </Select>
-      </td>
-    );
-  }
-
-  return (
-    <td
-      className="cursor-pointer px-3 py-2"
-      onClick={(e) => {
-        e.stopPropagation();
-        onStartEdit();
-      }}
-    >
-      {status && (
-        <div className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ backgroundColor: status.color }}
-          />
-          <span className="text-xs">{status.name}</span>
-        </div>
-      )}
-    </td>
-  );
-}
-
-// Enhanced priority cell using PriorityFlag
-function EnhancedPriorityCell({
-  task,
-  isEditing,
-  onStartEdit,
-  onSave,
-  onCancel,
-}: {
-  task: Task;
-  isEditing: boolean;
-  onStartEdit: () => void;
-  onSave: (priority: string) => void;
-  onCancel: () => void;
-}) {
-  const { t } = useTranslation("list");
-  if (isEditing) {
-    return (
-      <td
-        className="px-3 py-2"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Select
-          className="h-7 text-xs"
-          value={task.priority}
-          onChange={(e) => {
-            if (e.target.value) onSave(e.target.value);
-            else onCancel();
-          }}
-          autoFocus
-          onBlur={onCancel}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") onCancel();
-          }}
-        >
-          {PRIORITY_OPTIONS.map((p) => (
-            <option key={p} value={p}>
-              {t(`priority.${p}`)}
-            </option>
-          ))}
-        </Select>
-      </td>
-    );
-  }
-
-  return (
-    <td
-      className="cursor-pointer px-3 py-2"
-      onClick={(e) => {
-        e.stopPropagation();
-        onStartEdit();
-      }}
-    >
-      <PriorityFlag priority={task.priority} size="sm" />
-    </td>
-  );
-}
-
-// Due date cell with overdue styling
-function DueDateCell({
-  task,
-  statusCategory,
-  isEditing,
-  onStartEdit,
-  onSave,
-  onCancel,
-}: {
-  task: Task;
-  statusCategory?: string;
-  isEditing: boolean;
-  onStartEdit: () => void;
-  onSave: (due_date: string | null) => void;
-  onCancel: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Normalize due_date to YYYY-MM-DD for the date input
-  const dateValue = task.due_date
-    ? task.due_date.slice(0, 10)
-    : "";
-
-  useEffect(() => {
-    if (isEditing) {
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-  }, [isEditing]);
-
-  if (isEditing) {
-    return (
-      <td
-        className="px-3 py-2"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Input
-          ref={inputRef}
-          type="date"
-          className="h-7 text-xs"
-          defaultValue={dateValue}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") onCancel();
-            if (e.key === "Enter") {
-              const v = (e.target as HTMLInputElement).value;
-              onSave(v || null);
-            }
-          }}
-          onBlur={(e) => {
-            const v = e.target.value;
-            onSave(v || null);
-          }}
-        />
-      </td>
-    );
-  }
-
-  const dateClass = getDateClass(task.due_date, statusCategory);
-
-  return (
-    <td
-      className="cursor-pointer px-3 py-2"
-      onClick={(e) => {
-        e.stopPropagation();
-        onStartEdit();
-      }}
-    >
-      <span className={cn("text-xs", dateClass)}>
-        {task.due_date ? formatDate(task.due_date) : "--"}
-      </span>
-    </td>
-  );
-}
-
-// Custom field cell
-function CustomFieldCell({
-  task,
-  field,
-  isEditing,
-  onStartEdit,
-  onSave,
-  onCancel,
-}: {
-  task: Task;
-  field: CustomFieldDefinition;
-  isEditing: boolean;
-  onStartEdit: () => void;
-  onSave: (value: unknown) => void;
-  onCancel: () => void;
-}) {
-  const currentValue = task.custom_fields?.[field.slug];
-  const [draft, setDraft] = useState<unknown>(currentValue);
-
-  useEffect(() => {
-    if (isEditing) {
-      setDraft(currentValue);
-    }
-  }, [isEditing, currentValue]);
-
-  if (isEditing) {
-    return (
-      <td
-        className="px-3 py-2"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onCancel();
-          if (e.key === "Enter" && field.field_type !== "json") {
-            e.preventDefault();
-            onSave(draft);
-          }
-        }}
-      >
-        <CustomFieldRenderer
-          field={field}
-          value={draft}
-          onChange={(v) => {
-            setDraft(v);
-            // For checkbox and select types, save immediately on change
-            if (
-              field.field_type === "checkbox" ||
-              field.field_type === "select"
-            ) {
-              onSave(v);
-            }
-          }}
-          compact
-        />
-      </td>
-    );
-  }
-
-  return (
-    <td
-      className="cursor-pointer px-3 py-2"
-      onClick={(e) => {
-        e.stopPropagation();
-        onStartEdit();
-      }}
-    >
-      <CustomFieldRenderer
-        field={field}
-        value={currentValue}
-        onChange={() => {}}
-        readOnly
-        compact
-      />
-    </td>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Sortable table header
 // ---------------------------------------------------------------------------
@@ -2107,4 +1346,98 @@ function SortableHeader({
       </div>
     </th>
   );
+}
+
+// ---------------------------------------------------------------------------
+// task.row container: one task -> the slot view's data and actions
+// ---------------------------------------------------------------------------
+
+interface ListTaskRowProps {
+  View: TaskRowView;
+  task: Task;
+  columns: TaskRowColumn[];
+  statuses: StatusData[];
+  statusMap: Map<string, TaskStatus>;
+  fallbackStatus: TaskStatus;
+  themeSettings: TaskRowSettings;
+  ctx: SlotContext;
+  canEdit: boolean;
+  canMove: boolean;
+  depth: number;
+  selected: boolean;
+  expandable: boolean;
+  expanded: boolean;
+  expanding: boolean;
+  onOpen: (taskId: string) => void;
+  onSave: (taskId: string, req: UpdateTaskRequest) => Promise<void>;
+  onToggleSelected: (taskId: string) => void;
+  onToggleExpanded: (taskId: string) => void;
+}
+
+function ListTaskRow({
+  View,
+  task,
+  columns,
+  statuses,
+  statusMap,
+  fallbackStatus,
+  themeSettings,
+  ctx,
+  canEdit,
+  canMove,
+  depth,
+  selected,
+  expandable,
+  expanded,
+  expanding,
+  onOpen,
+  onSave,
+  onToggleSelected,
+  onToggleExpanded,
+}: ListTaskRowProps) {
+  const Badges = useMemo(() => {
+    const B = () => <SlotBadges task={task} />;
+    return B;
+  }, [task]);
+  const statusRow = statusMap.get(task.status_id) ?? fallbackStatus;
+  const data = useMemo<TaskRowData>(
+    () => ({
+      task: toTaskData(task, statusRow.category),
+      status: toStatusData(statusRow),
+      columns,
+      selected,
+      focused: false,
+      depth,
+      expandable,
+      expanded,
+      statuses,
+      expanding,
+      createdAt: task.created_at,
+      components: { Badges },
+    }),
+    [task, statusRow, columns, selected, depth, expandable, expanded, statuses, expanding, Badges],
+  );
+  const actions = useMemo(
+    () => ({
+      openTask: (opts?: { newTab?: boolean }) => {
+        if (opts?.newTab) window.open(taskPath(undefined, undefined, task.id), "_blank", "noopener");
+        else onOpen(task.id);
+      },
+      toggleSelected: () => onToggleSelected(task.id),
+      toggleExpanded: expandable ? () => onToggleExpanded(task.id) : undefined,
+      quickEdit: canEdit
+        ? async (patch: QuickEditPatch) => {
+            const req = quickEditRequest(patch.field, patch.value);
+            // A custom-field patch carries the whole map, as the list always sent it.
+            if (patch.field.startsWith("cf:")) {
+              req.custom_fields = { ...(task.custom_fields ?? {}), [patch.field.slice(3)]: patch.value };
+            }
+            await onSave(task.id, req);
+          }
+        : undefined,
+      changeStatus: canMove ? (statusId: string) => onSave(task.id, { status_id: statusId }) : undefined,
+    }),
+    [task, expandable, canEdit, canMove, onOpen, onSave, onToggleSelected, onToggleExpanded],
+  );
+  return <View data={data} actions={actions} themeSettings={themeSettings} ctx={ctx} />;
 }

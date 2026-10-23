@@ -23,11 +23,11 @@ import type { PaginatedResponse, Task, TaskStatus } from "@/types";
 import { apiErrorMessage } from "@/lib/api-error";
 
 const PRIORITY_COLORS = {
-  urgent: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  high: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
-  medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  low: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  none: "bg-gray-100 text-gray-600 dark:bg-gray-800/50 dark:text-gray-400",
+  urgent: "bg-tone-danger-100 text-tone-danger-700 dark:bg-tone-danger-900/30 dark:text-tone-danger-400",
+  high: "bg-tone-high-100 text-tone-high-700 dark:bg-tone-high-900/30 dark:text-tone-high-400",
+  medium: "bg-tone-warning-100 text-tone-warning-700 dark:bg-tone-warning-900/30 dark:text-tone-warning-400",
+  low: "bg-tone-info-100 text-tone-info-700 dark:bg-tone-info-900/30 dark:text-tone-info-400",
+  none: "bg-tone-neutral-100 text-tone-neutral-600 dark:bg-tone-neutral-800/50 dark:text-tone-neutral-400",
 };
 
 // MoveDialog lets the user pick a target project + status to move a triage task into.

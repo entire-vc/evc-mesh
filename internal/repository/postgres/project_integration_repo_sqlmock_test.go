@@ -268,7 +268,7 @@ func TestGetFailsRatherThanReturningAnUndecryptableCredential(t *testing.T) {
 
 // R5-A backward compatibility: a row written before this migration (only the
 // pre-existing 9 columns — subfolder/include_project_slug live inside
-// `settings`, unaffected by this change; see task #002d6ad6 for why those two
+// `settings`, unaffected by this change; see an internal ticket for why those two
 // fields are NOT what this migration's key/sync columns replace) must keep
 // reading exactly as it did, with the new columns coming back nil rather than
 // erroring or defaulting to something misleading.
@@ -301,7 +301,7 @@ func TestGetReadsPreR5ARowWithoutNewColumns(t *testing.T) {
 // New-format row: all five new columns populated, must round-trip exactly.
 // Mutation control: swapping any of the five assignments in toDomain (or
 // dropping a column from the SELECT list) makes this test fail — verified by
-// hand (see task #002d6ad6 comment) by transposing KeyExpiresAt/LastSyncCheckedAt
+// hand (see an internal ticket comment) by transposing KeyExpiresAt/LastSyncCheckedAt
 // and re-running: this test goes red on the mismatched pointer values.
 func TestGetReadsNewKeyExpiryAndSyncStatusColumns(t *testing.T) {
 	setEncryptionKey(t, 157)

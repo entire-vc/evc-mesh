@@ -19,6 +19,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -175,7 +176,7 @@ func WithWebhookDedupStore(store WebhookDedupStore) VCSLinkHandlerOption {
 // static WithGitHubWebhookSecret/WithGitLabWebhookSecret values (resolved
 // once, at process start) to a fresh per-request lookup against the
 // workspace integration store, falling back to env exactly as those static
-// options did (§C1/§C2 of specsintegration-provider-contract, #33a4bb57).
+// options did (§C1/§C2 of specsintegration-provider-contract).
 // Takes priority over the static options when both are set. Unlike the
 // static path — where an empty secret means "validation off" — once this
 // resolver is wired, resolving NO secret at all (neither any active
@@ -192,12 +193,12 @@ func WithVCSIntegrationResolver(r *service.VCSIntegrationResolver) VCSLinkHandle
 // at all. When vcsIntegrations is wired, validation is ALWAYS mandatory —
 // an empty secret set means the provider is disabled and the caller must
 // refuse, never fall through to "no secret = allow". When vcsIntegrations
-// is nil, this reproduces the pre-#33a4bb57 static behavior exactly:
+// is nil, this reproduces the pre static behavior exactly:
 // validation is mandatory only when a secret was configured at
 // construction.
 // Both return service.WebhookSecret rather than a bare string so the caller
 // can find out WHICH workspace the secret that actually matched belongs to
-// (see WebhookSecret's doc comment, #839b9897) — a bare string threw that
+// (see WebhookSecret's doc comment) — a bare string threw that
 // away and let a validated request touch any workspace's tasks, not just
 // its own. The legacy static-secret path (h.githubWebhookSecret /
 // h.gitlabWebhookSecret, used when vcsIntegrations is nil) has no workspace
@@ -325,7 +326,7 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 	// The upsert path (explicit status on an existing link) updates a row
 	// rather than creating one — 201 there would claim a fresh row exists
 	// when it doesn't, reading as a duplicate to any caller that trusts the
-	// echo instead of re-fetching (#b73171fa).
+	// echo instead of re-fetching.
 	status := http.StatusCreated
 	if !created {
 		status = http.StatusOK
@@ -356,6 +357,28 @@ func (h *VCSLinkHandler) PatchMetadata(c echo.Context) error {
 		return handleError(c, err)
 	}
 	return c.JSON(http.StatusOK, link)
+}
+
+// PatchShipSHAByURL handles PATCH /vcs-links/ship-sha.
+// Body: {"url":"<MR/PR url>","ship_sha":"<40 hex lowercase>"}. For callers
+// that know the MR but not the card (MR text carries no card id).
+func (h *VCSLinkHandler) PatchShipSHAByURL(c echo.Context) error {
+	wsID, err := mw.GetWorkspaceID(c)
+	if err != nil {
+		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace access denied"))
+	}
+	var req struct {
+		URL     string `json:"url"`
+		ShipSHA string `json:"ship_sha"`
+	}
+	if err = json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("body must be a JSON object"))
+	}
+	links, err := h.vcsService.PatchShipSHAByURL(c.Request().Context(), wsID, req.URL, req.ShipSHA)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"vcs_links": links})
 }
 
 // List handles GET /tasks/:task_id/vcs-links
@@ -483,7 +506,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	// entirely (required==false) or the matching secret was the unscoped
 	// env fallback. Threaded into GitHubWebhookEvent/ResolveTaskRef below so
 	// task-ref resolution can't touch a task outside this workspace
-	// (#839b9897).
+	//.
 	var matchedWorkspaceID uuid.UUID
 	if required {
 		if len(secrets) == 0 {
@@ -560,7 +583,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 		commit := payload.HeadCommit
 		// Same recognition as the pull_request path: a commit message carries
 		// "Refs #<short id>" far more often than MESH-<uuid>, and the branch
-		// (payload.Ref, e.g. refs/heads/linus/<id>-slug) is another free signal.
+		// (payload.Ref, e.g. refs/heads/liam/<id>-slug) is another free signal.
 		taskID, matched := h.vcsService.ResolveTaskRef(ctx, matchedWorkspaceID,
 			service.TaskRefSource{Name: "body", Text: commit.Message},
 			service.TaskRefSource{Name: "branch", Text: strings.TrimPrefix(payload.Ref, "refs/heads/")},
@@ -676,7 +699,7 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 	secrets, required := h.gitlabWebhookSecrets(c.Request().Context())
 	// See the identical comment in GitHubWebhook: this is the workspace
 	// whose secret actually matched, threaded into GitLabWebhookEvent below
-	// so task-ref resolution is scoped to it (#839b9897).
+	// so task-ref resolution is scoped to it.
 	var matchedWorkspaceID uuid.UUID
 	if required {
 		if len(secrets) == 0 {

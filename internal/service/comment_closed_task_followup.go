@@ -22,7 +22,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// This file closes the gap measured in audit item 1.14 (task #754173eb), from
+// This file closes the gap measured in audit item 1.14, from
 // the precedent of 2026-09-06: an agent closed a card on 05.09; a colleague
 // wrote five concrete corrections into that ALREADY-CLOSED card the next
 // morning, twice; nothing happened, and the work only moved when a human
@@ -32,7 +32,7 @@ import (
 // hole between the layers:
 //
 //   - commentService.Create deliberately suppresses task.commented on a
-//     done/cancelled task (incident #56a6d5b2 — the notification used to spawn
+//     done/cancelled task (incident an internal ticket — the notification used to spawn
 //     a session whose prompt reopened shipped work);
 //   - a fiddler-driven lane is woken ONLY by a card assigned to it and sitting
 //     in a todo-category status (CLAUDE-communication.md "How @-mentions
@@ -55,7 +55,7 @@ import (
 // deserved a card is the assignee's judgement to make with the card in front
 // of them, not this code's to make from the prose.
 
-// followUpLabel marks a card this mechanism opened. Since #5194afd4 the dedup
+// followUpLabel marks a card this mechanism opened. Since an internal ticket the dedup
 // keys on the persistent (source card, finding) identity in
 // closed_followup_roots, not on a label scan — but the label stays: it is what
 // makes these cards recognisable in a queue to the human reading it.
@@ -141,7 +141,7 @@ func commentMetadataSource(raw json.RawMessage) string {
 
 // commentInformationalFlag is the cooperative field an author sets on their OWN
 // comment (metadata.informational) to say "this is a pure acknowledgement, no
-// action needed — don't route it" (task #df22e695, follow-up to #754173eb).
+// action needed — don't route it" (an internal ticket, follow-up to an internal ticket).
 //
 // Deliberately NOT a phrase filter over the body. The audit that raised this
 // card (class B1, 2026-09-07) named the exact reason: this fleet's other
@@ -265,7 +265,7 @@ func findingIdentityFromMetadata(raw json.RawMessage) (ns, id string, ok bool) {
 	// Whitespace-only carries no identity (fall back to the text key), but a
 	// surrounding-space value is NOT normalized away: the contract defines the
 	// identity by the metadata values as written, and " x" vs "x" are
-	// different findings (codex-review P1, MR !1078, round 9) — trimming here
+	// different findings (code review P1, a review, round 9) — trimming here
 	// would merge them exactly the way the raw-':' join merged (ns, id) pairs
 	// in round 7.
 	if strings.TrimSpace(id) == "" || len([]rune(id)) > findingIdentityMaxRunes {
@@ -287,7 +287,7 @@ func normalizeFindingText(body string) string {
 // escapeFindingKeyComponent keeps the "id:<ns>:<id>" join injective: ':' is
 // the join's delimiter, so a raw colon inside a component would let two
 // DIFFERENT (ns, id) pairs serialize to one key and merge distinct findings
-// (codex-review P1, MR !1078, round 7) — the exact "only ever merges comments
+// (code review P1, a review, round 7) — the exact "only ever merges comments
 // carrying the SAME id" promise findingIdentityFromMetadata's doc makes.
 // Backslash escapes itself first, so the mapping stays one-to-one;
 // components without ':' or '\' serialize byte-identically to the plain
@@ -332,7 +332,7 @@ const (
 // This window is the whole precision of the guard, and it was measured, not
 // guessed. `move_task` with a comment is two separate API calls from the client
 // (MoveTaskInput carries no comment field), so the pairing this window has to
-// span is one client round-trip. Measured on prod: the move landed at
+// span is one client round-trip. Measured: the move landed at
 // 17:44:13.735 and its own closing note at 17:44:13.875 — **139 milliseconds**.
 //
 // It was 60s for one deploy, on the reasoning that a minute is "the same
@@ -361,8 +361,8 @@ const closingReportWindow = 10 * time.Second
 // reaching an agent's queue would have become the fleet's largest single source
 // of it.
 //
-// Measured live on prod 2026-09-06 (`#754173eb`): `move_task(done, comment=…)`
-// produced follow-up card `#0da96e03` from the closer's own closing note within
+// Measured live on prod 2026-09-06: `move_task(done, comment=…)`
+// produced follow-up an internal ticket from the closer's own closing note within
 // the same second.
 //
 // The signal is deliberately about WHO and WHEN, never about what the text
@@ -434,7 +434,7 @@ func (s *commentService) commentIsOwnClosingReport(
 // terminalTask is passed in rather than re-derived: Create has already resolved
 // the task's status category to decide whether to suppress task.commented, and
 // that is the SAME fact this mechanism turns on. Two lookups would be two
-// notions of "is this card closed" free to disagree — the defect #4545660b
+// notions of "is this card closed" free to disagree — the defect an internal ticket
 // removed from this same file one gate over.
 //
 // Every step is best-effort: a failure is logged and the comment still stands.
@@ -469,8 +469,8 @@ func (s *commentService) createClosedTaskFollowUp(
 		return
 	}
 	// Branch: the author marked this comment metadata.informational — a pure
-	// acknowledgement, nothing to act on (task #df22e695). Overridden by a live
-	// "❓ Blocking @pavel" marker in the SAME body: a gate marker means a human
+	// acknowledgement, nothing to act on. Overridden by a live
+	// "❓ Blocking @alex" marker in the SAME body: a gate marker means a human
 	// still needs to see this, and no self-declared flag is allowed to make a
 	// real ask disappear. Checked with hasBlockingMarker, not by re-deriving
 	// whether the gate actually armed — the marker's presence is the thing that
@@ -503,7 +503,7 @@ func (s *commentService) createClosedTaskFollowUp(
 		return
 	}
 
-	// Identity and dedup (#5194afd4, contract approved on #9b712414). A
+	// Identity and dedup (an internal ticket, contract approved on an internal ticket). A
 	// finding is the pair (source card, finding_key): an explicit
 	// metadata.finding_id when a detector stamps one, else the normalized
 	// text. One pair → one root for the pair's WHOLE life: an open root
@@ -521,7 +521,7 @@ func (s *commentService) createClosedTaskFollowUp(
 	if s.followUpRoots == nil {
 		return
 	}
-	// P2 (#db1c6c7a): the delivery runs on the inline retry ladder, and a
+	// P2: the delivery runs on the inline retry ladder, and a
 	// finding that survives the whole ladder undelivered is parked in the
 	// pending queue with a visible notice — a read error is never "dedup
 	// clean", and it is never silence either.
@@ -561,7 +561,7 @@ func followUpOp(err error) string {
 	return "unknown"
 }
 
-// followUpDeliveryRetryBackoff paces the inline retry ladder (#db1c6c7a):
+// followUpDeliveryRetryBackoff paces the inline retry ladder:
 // one initial attempt plus up to three retries, 100/300/900 ms apart — the
 // contract's exact ladder. The whole ladder lives inside the SAME comment
 // request, so its ceiling bounds what a failing database can add to a
@@ -605,7 +605,7 @@ func (s *commentService) deliverClosedFollowUpWithRetry(
 }
 
 // enqueueClosedFollowUpPending parks a finding that survived the whole inline
-// ladder undelivered (#db1c6c7a): the closed_followup_error signal fires, a
+// ladder undelivered: the closed_followup_error signal fires, a
 // pending row goes to the reconcile queue, and the commenter is told on the
 // source card — delivery unconfirmed, retry automatic. When even the pending
 // row cannot be written, the database is wholly down: that is the ONE
@@ -621,7 +621,7 @@ func (s *commentService) enqueueClosedFollowUpPending(
 	// The requester may be GONE — a cancelled request context is one of the
 	// ways the ladder ends — but the comment is already saved, so the park
 	// must complete without them: the queue write runs detached from the
-	// request's cancellation while keeping its values (codex-review P2).
+	// request's cancellation while keeping its values (code review P2).
 	// Without this, a healthy pending store would reject the row on the dead
 	// context and the finding would ride on the source comment alone.
 	ctx = context.WithoutCancel(ctx)
@@ -657,12 +657,12 @@ func (s *commentService) enqueueClosedFollowUpPending(
 // notice write is not swallowed into a log line — the row keeps noticed_at
 // NULL and every reconcile pass that works it retries the notice, the same
 // durability the escalation notice got in round 3. A queued finding its own
-// commenter cannot see is a queue, not a delivery (codex-review P1, round 4).
+// commenter cannot see is a queue, not a delivery (code review P1, round 4).
 //
 // Reports whether the notice is UP — posted by this call, or already on the
 // card with only the stamp write lagging. The caller needs the answer because
 // its row copy predates the stamp: a pass that lands the notice mid-loop must
-// not go on reading the copy's NULL (codex-review P1, round 6).
+// not go on reading the copy's NULL (code review P1, round 6).
 func (s *commentService) ensurePendingNotice(ctx context.Context, stage string, sourceTaskID, commentID uuid.UUID) bool {
 	if err := s.postPendingNotice(ctx, sourceTaskID, commentID); err != nil {
 		metrics.RecordClosedFollowUpError(stage, "pending_notice")
@@ -713,7 +713,7 @@ func (s *commentService) postPendingNotice(ctx context.Context, sourceTaskID, co
 	return nil
 }
 
-// The reconcile half of P2 (#db1c6c7a): the pending queue is drained by a
+// The reconcile half of P2: the pending queue is drained by a
 // periodic pass over closed_followup_pending. Interval is the scheduler's
 // cadence; MaxAttempts is where automation stops and a human is asked —
 // reached long after the inline ladder (4 attempts in one request), so a
@@ -724,7 +724,7 @@ const (
 	ClosedFollowUpReconcileMaxAttempts = 10
 	closedFollowUpReconcileBatch       = 50
 	// ClosedFollowUpClaimTTL is how long a reconcile pass's lease on a row
-	// outlives the pass itself (#a2368528). It must cover one whole pass —
+	// outlives the pass itself. It must cover one whole pass —
 	// the scheduler grants the pass a context with the reconcile interval's
 	// own timeout — with margin for a slow batch, so a pass that dies
 	// mid-row loses its rows by expiry rather than by hand. The loop hands
@@ -749,7 +749,7 @@ const (
 // claimAndCreateRoot may create cards through taskSvc.Create, which writes
 // the actor into activity_log.
 //
-// Concurrency (codex-review round 7 named the window, #a2368528 closed it):
+// Concurrency (code review round 7 named the window, an internal ticket closed it):
 // passes were single-flight by construction — the scheduler runs the pass
 // inline in its ticker loop and the deployment runs one api container — but
 // that is a deployment fact, not a mechanism. Every row is now CLAIMED
@@ -757,7 +757,7 @@ const (
 // work on it, so a second pass over the same row — another replica's, or an
 // overlapping inline delivery of the same comment — reads the lease and
 // skips. The lease covers the whole row unit (no progress write releases it
-// mid-row — codex-review round 2 on !1085); the loop hands it back at the
+// mid-row — a review); the loop hands it back at the
 // unit's end, which keeps a surviving row's retry cadence at the pass
 // interval, and only a pass that dies mid-row holds its rows to the TTL.
 func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (delivered, retried, escalated int, err error) {
@@ -780,7 +780,7 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 		}
 		row := &due[i]
 
-		// The lease before the work (#a2368528): ListDue selects without a
+		// The lease before the work: ListDue selects without a
 		// lock, so the row is taken atomically here — a second pass reading
 		// this row mid-delivery (another replica's pass, or an overlapping
 		// inline window) gets false and skips. Claiming BEFORE every branch,
@@ -800,8 +800,8 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 		}
 
 		// The row's work runs as one unit and the lease covers the WHOLE
-		// unit — no write inside it releases the row (#a2368528, codex-review
-		// round 2 on !1085: MarkNoticed clearing the lease mid-row let a
+		// unit — no write inside it releases the row (an internal ticket, code review
+		// round 2 on a review: MarkNoticed clearing the lease mid-row let a
 		// second pass claim the row while the first was still delivering).
 		// The release below therefore runs on EVERY exit: a progress write
 		// kept the lease to here, a delete makes the release a no-op, and
@@ -816,7 +816,7 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 			// not a resurrection — but visibility is TWO stamps, and the row
 			// leaves the due set only when both have landed: retiring it on the
 			// escalation alone would strand a park notice that never landed
-			// (codex-review P1, round 5 — round 3 made the escalation durable,
+			// (code review P1, round 5 — round 3 made the escalation durable,
 			// round 4 the park notice; this is their intersection).
 			if row.Attempts >= ClosedFollowUpReconcileMaxAttempts {
 				if row.NoticedAt == nil {
@@ -868,7 +868,7 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 			// The park must be visible to its commenter before more delivery
 			// work: a notice that failed to write at enqueue time is retried
 			// here, on every pass that works the row, until it lands — a queued
-			// finding nobody can see is a queue, not a delivery (codex-review
+			// finding nobody can see is a queue, not a delivery (code review
 			// P1, round 4). noticed_at makes it once-ever per row. The answer is
 			// carried in a local, not re-read from row: the copy predates the
 			// stamp this call may write (round 6).
@@ -887,7 +887,7 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 			// Delivered: the finding has its root (or its permanent terminal
 			// outcome — wedged winner, no todo column — which is equally done).
 			// But the delete must not discard an unlanded park notice
-			// (codex-review P1, round 6): postFollowUpNotice inside the
+			// (code review P1, round 6): postFollowUpNotice inside the
 			// delivery is best-effort, so a row whose «не подтверждена» write
 			// failed at enqueue AND this pass keeps its retry path — it stays
 			// due, the next pass re-posts the notice and re-delivers
@@ -916,7 +916,7 @@ func (s *commentService) ReconcileClosedFollowUpPending(ctx context.Context) (de
 }
 
 // releaseReconcileClaim hands a row's lease back when the pass is done with
-// it (#a2368528). Quiet and best-effort by design: a failed release costs
+// it. Quiet and best-effort by design: a failed release costs
 // the row one TTL of retry cadence, never correctness — the lease expires on
 // its own — and on a deleted row the UPDATE is a harmless no-op.
 func (s *commentService) releaseReconcileClaim(ctx context.Context, commentID uuid.UUID) {
@@ -959,7 +959,7 @@ func (s *commentService) markPendingAttempt(
 		// — atomic — handed each a unique post-increment value, 10 and 11.
 		// Only the pass that drew exactly the limit is the transition to
 		// "needs a human"; the one going past it must not post a second
-		// «нужен человек» notice (codex-review P2). The row is not re-listed
+		// «нужен человек» notice (code review P2). The row is not re-listed
 		// past the limit either way, so nothing is lost by the refusal.
 		log.Printf("[closed-followup-reconcile] comment=%s already past the budget (attempts=%d) — escalation already posted, not repeating",
 			row.CommentID, attempts)
@@ -979,7 +979,7 @@ func (s *commentService) markPendingAttempt(
 // Called from the budget's transition and again by every later pass while
 // the notice has not landed — the escalation's delivery is as durable as the
 // finding's was, because a decision a human never reads is the silent loss
-// this whole mechanism exists to remove (codex-review P1, round 3).
+// this whole mechanism exists to remove (code review P1, round 3).
 func (s *commentService) deliverEscalationNotice(
 	ctx context.Context,
 	row *domain.ClosedFollowUpPending,
@@ -1032,7 +1032,7 @@ func (s *commentService) postEscalationNotice(ctx context.Context, row *domain.C
 		SystemCode:   SysCodePtr(SysCodeClosedTaskFollowupEscalated),
 		SystemParams: SysParamsJSON(map[string]any{"comment_id": row.CommentID.String(), "attempts": ClosedFollowUpReconcileMaxAttempts, "cause": followUpCauseExcerpt(cause.Error())}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: delivery of the follow-up (comment `%s`) failed after %d automatic retries — a human is needed. Cause of the last error: %s",
+			"🤖 Auto: delivery of the follow-up (comment %#q) failed after %d automatic retries — a human is needed. Cause of the last error: %s",
 			row.CommentID, ClosedFollowUpReconcileMaxAttempts, followUpCauseExcerpt(cause.Error()),
 		),
 		CreatedAt: now,
@@ -1056,7 +1056,7 @@ func (s *commentService) postEscalationNotice(ctx context.Context, row *domain.C
 // a pathological release loop would otherwise recurse for as long as
 // contention kept reproducing it.
 //
-// The error contract (#db1c6c7a): nil means delivered OR permanently skipped
+// The error contract: nil means delivered OR permanently skipped
 // (no todo column, storm-limited, wedged winner — outcomes the retry ladder
 // cannot improve and the pending queue must not re-offer); a non-nil
 // followUpRetryError means TRANSIENT — today the caller retries it inline,
@@ -1144,7 +1144,7 @@ func (s *commentService) claimAndCreateRoot(
 	}
 
 	// relates_to, deliberately NOT blocks. A blocks edge onto a still-open
-	// blocker freezes the feed (CLAUDE-workflow.md §ROUTE-gate) — which is the
+	// blocker freezes the feed (the team workflow guide §ROUTE-gate) — which is the
 	// exact opposite of what this card is for. The edge is here so the two
 	// cards are navigable from each other, not to gate anything.
 	if s.depRepo != nil {
@@ -1245,7 +1245,7 @@ func (s *commentService) postFollowUpNotice(
 		verb, shortTaskID(followUp.ID),
 	)
 	if outcome == followUpReopened || outcome == followUpStormLimited {
-		body += fmt.Sprintf(" Source: #%s, comment `%s`.", shortTaskID(task.ID), comment.ID)
+		body += fmt.Sprintf(" Source: #%s, comment %#q.", shortTaskID(task.ID), comment.ID)
 	}
 	now := timeNow()
 	sys := &domain.Comment{
@@ -1285,7 +1285,7 @@ func (s *commentService) postFollowUpNotice(
 // — a wedged winner — and the repeat is deferred visibly rather than
 // swallowed.
 //
-// Error contract as in claimAndCreateRoot (#db1c6c7a): transient failures
+// Error contract as in claimAndCreateRoot: transient failures
 // (the store unreadable, the reopen unwritable) return a followUpRetryError
 // for the ladder and the pending queue; delivered and permanent outcomes
 // return nil. On a retryable exit nothing has been posted yet — the retry
@@ -1317,7 +1317,7 @@ func (s *commentService) deliverRepeatFinding(
 		// The root card could not be READ (or the caller went away): reads
 		// never succeeded, so this is not the wedged-winner branch below —
 		// it is a transient outage, and the honest route is the ladder and,
-		// failing that, the pending queue (codex-review P1 on this MR).
+		// failing that, the pending queue (code review P1 on this MR).
 		return &followUpRetryError{op: "root_card_read", err: err}
 	}
 	if root == nil {
@@ -1362,12 +1362,12 @@ func (s *commentService) deliverRepeatFinding(
 	// first, and ATOMICALLY with the count it reads: a read-check-record
 	// split let N concurrent repeats of this finding all pass the check and
 	// all record a reopen — a count above the number of repeats actually
-	// delivered, suppressing a later one prematurely (codex-review P1, MR
-	// !1078). TryReopen refuses the limit+1-th increment in the same UPDATE
+	// delivered, suppressing a later one prematurely (code review P1, MR
+	// a review). TryReopen refuses the limit+1-th increment in the same UPDATE
 	// that records the reopen, so the count can never exceed the limit
 	// inside a window. The slot is held BEFORE the steps below that can
 	// fail; every failure exit returns it (compensateFailedReopen) — the
-	// budget counts delivered reopens, never attempts (codex-review P2).
+	// budget counts delivered reopens, never attempts (code review P2).
 	reopenAt := timeNow()
 	reopened, claim, err := s.followUpRoots.TryReopen(ctx, task.ID, findingKey, reopenAt)
 	if err != nil {
@@ -1433,7 +1433,7 @@ func (s *commentService) deliverRepeatFinding(
 // never delivered: TryReopen holds it atomically, but the todo lookup, the
 // shipped-flag clear and the move can still fail after the slot is taken,
 // and slots burned by failures would let the window exhaust on attempts
-// rather than reopens (codex-review P2, MR !1078). The restore puts back the
+// rather than reopens (code review P2, a review). The restore puts back the
 // claim's whole pre-claim state — count and window anchor both: a count-only
 // return leaves the window stretched over a reopen that never happened and
 // storm-limits the next healthy one (round 5). The repeat body still lands
@@ -1463,7 +1463,7 @@ var followUpRootRetryBackoff = []time.Duration{
 var followUpRootRetrySleep = time.Sleep
 
 // waitForRootCard reads the root card, retrying while the winner's claim is
-// ahead of its card. Three exits, three meanings (#db1c6c7a, codex-review
+// ahead of its card. Three exits, three meanings (an internal ticket, code review
 // P1): the card → (card, nil); the budget spent where the LAST read
 // succeeded and found nothing → (nil, nil), the honest absent/wedged case
 // the caller resolves by takeover or deferral; and anything else →
@@ -1559,7 +1559,7 @@ func (s *commentService) postRepeatOnRoot(
 		SystemCode:   SysCodePtr(SysCodeRepeatComment),
 		SystemParams: SysParamsJSON(map[string]any{"root": shortTaskID(root.ID), "reopened": reopened, "source": shortTaskID(task.ID), "comment_id": comment.ID.String()}),
 		Body: fmt.Sprintf(
-			"🤖 Auto: repeat of the same follow-up on closed card #%s — %s.\n\n---\n\n%s\n\n---\n\nSource: #%s, comment `%s`.",
+			"🤖 Auto: repeat of the same follow-up on closed card #%s — %s.\n\n---\n\n%s\n\n---\n\nSource: #%s, comment %#q.",
 			shortTaskID(task.ID), verb, comment.Body, shortTaskID(task.ID), comment.ID,
 		),
 		CreatedAt: now,
@@ -1586,6 +1586,6 @@ func (s *commentService) releaseClaim(ctx context.Context, sourceID uuid.UUID, f
 	}
 }
 
-// hasLabel moved to task_service.go as hasDupCandidateLabel (#5194afd4): its
+// hasLabel moved to task_service.go as hasDupCandidateLabel: its
 // last generic caller here died with the label-scan dedup, and every remaining
 // call site passes dupCandidateLabel.

@@ -69,7 +69,7 @@ export function ApiKeyRevealPanel({ apiKey, onClose }: ApiKeyRevealPanelProps) {
               className="shrink-0"
             >
               {copied ? (
-                <Check className="h-4 w-4 text-green-500" />
+                <Check className="h-4 w-4 text-tone-success-500" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}
@@ -79,12 +79,12 @@ export function ApiKeyRevealPanel({ apiKey, onClose }: ApiKeyRevealPanelProps) {
 
         <div
           className={cn(
-            "flex items-start gap-2 rounded-lg border border-yellow-200 bg-yellow-50 p-3",
-            "dark:border-yellow-900 dark:bg-yellow-950",
+            "flex items-start gap-2 rounded-lg border border-tone-attention-200 bg-tone-attention-50 p-3",
+            "dark:border-tone-attention-900 dark:bg-tone-attention-950",
           )}
         >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-600" />
-          <p className="text-sm text-yellow-800 dark:text-yellow-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-tone-attention-600" />
+          <p className="text-sm text-tone-attention-800 dark:text-tone-attention-200">
             {t("apiKeyReveal.warning")}
           </p>
         </div>

@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// These tests are the acceptance criteria of #839b9897: the GitHub/GitLab
+// These tests are the acceptance criteria of an internal ticket: the GitHub/GitLab
 // webhook receiver authenticates an inbound delivery against the UNION of
 // every workspace's configured secret (deliberate — see
 // VCSIntegrationResolver's doc comment, no single workspace is known until
@@ -194,7 +194,7 @@ func TestHandleGitLabMergeRequestEvent_UnscopedEnvFallback_PreservesLegacyBehavi
 }
 
 // TestHandleGitLabMergeRequestEvent_CrossWorkspaceSecret_IgnoresStoredLinkFallback
-// covers the second exposure Garfield's triage plan didn't name explicitly:
+// covers the second exposure Gary's triage plan didn't name explicitly:
 // when the payload's title/body/branch name nothing, HandleGitLabMergeRequestEvent
 // falls back to whatever vcs_link is already stored for this (provider,
 // link_type, external_id) — and an MR iid is just as guessable as a task id.
@@ -204,7 +204,7 @@ func TestHandleGitLabMergeRequestEvent_CrossWorkspaceSecret_IgnoresStoredLinkFal
 	h := newWorkspaceScopeHarness(t)
 	ctx := context.Background()
 
-	// Seed a pre-existing link for MR !42 pointing at taskA (workspace A) —
+	// Seed a pre-existing link for a review pointing at taskA (workspace A) —
 	// as if an earlier, correctly-scoped delivery created it.
 	_, err := h.repo.Upsert(ctx, &domain.VCSLink{
 		ID:         uuid.New(),
@@ -226,4 +226,35 @@ func TestHandleGitLabMergeRequestEvent_CrossWorkspaceSecret_IgnoresStoredLinkFal
 	assert.Equal(t, "no_task_ref", result.Reason)
 	assert.Equal(t, uuid.Nil, result.TaskID)
 	assert.Equal(t, h.statusRepo.byProject[h.projA][0].ID, h.taskA.StatusID, "task status must not move")
+}
+
+// ship_sha by MR url must stay inside the caller's workspace: a link on a
+// task of another workspace naming the same url is neither written nor
+// reported.
+func TestPatchShipSHAByURL_WorkspaceIsolation(t *testing.T) {
+	h := newWorkspaceScopeHarness(t)
+	ctx := context.Background()
+	mrURL := "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/77"
+	ship := "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+
+	taskB := &domain.Task{ID: fixedTaskID(202), ProjectID: h.projB}
+	h.taskRepo.tasks[taskB.ID] = taskB
+	mk := func(taskID uuid.UUID) *domain.VCSLink {
+		l := &domain.VCSLink{ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab,
+			LinkType: domain.VCSLinkTypePR, ExternalID: "77", URL: mrURL}
+		h.repo.links[l.ID] = l
+		return l
+	}
+	linkA, linkB := mk(h.taskA.ID), mk(taskB.ID)
+
+	got, err := h.svc.PatchShipSHAByURL(ctx, h.wsA, mrURL, ship)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, linkA.ID, got[0].ID)
+	assert.Contains(t, string(h.repo.links[linkA.ID].Metadata), ship)
+	assert.NotContains(t, string(h.repo.links[linkB.ID].Metadata), ship, "other workspace's link must stay untouched")
+
+	// A workspace with no link on this url gets NotFound, not a silent write.
+	_, err = h.svc.PatchShipSHAByURL(ctx, uuid.New(), mrURL, ship)
+	require.Error(t, err)
 }

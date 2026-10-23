@@ -15,7 +15,7 @@ export function EntityAnchor({ id, kind, focused, className, children }: {
   }, [focused]);
   return <div ref={ref} data-artifact-id={kind === "artifact" ? id : undefined}
     data-schedule-id={kind === "schedule" ? id : undefined} data-focused={focused ? "true" : undefined}
-    className={cn(className, focused && "rounded-lg ring-2 ring-yellow-400 bg-yellow-50/60 dark:bg-yellow-400/10")}>
+    className={cn(className, focused && "rounded-lg ring-2 ring-tone-attention-400 bg-tone-attention-50/60 dark:bg-tone-attention-400/10")}>
     {children}
   </div>;
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
@@ -368,7 +369,7 @@ func (r *SecretRepo) AssertScopeRefInWorkspace(ctx context.Context, workspaceID 
 // the variable.
 func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error) {
 	const q = `
-		SELECT id, name, encrypted_value, value_sha256_prefix, expires_at FROM secrets
+		SELECT id, name, encrypted_value, value_sha256_prefix, expires_at, keep_ref FROM secrets
 		WHERE rotated_at IS NULL AND (
 			(scope = 'workspace' AND workspace_id = $1) OR
 			(scope = 'project' AND workspace_id = $1 AND project_id = $2) OR
@@ -380,6 +381,7 @@ func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.
 		EncryptedValue    string     `db:"encrypted_value"`
 		ValueSHA256Prefix string     `db:"value_sha256_prefix"`
 		ExpiresAt         *time.Time `db:"expires_at"`
+		KeepRef           *string    `db:"keep_ref"`
 	}
 	var rows []row
 	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, projectID, agentID); err != nil {
@@ -389,7 +391,15 @@ func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.
 	for _, rr := range rows {
 		expired := rr.ExpiresAt != nil && rr.ExpiresAt.Before(time.Now())
 		m := domain.MaterializedSecret{ID: rr.ID, Name: rr.Name, ValueSHA256Prefix: rr.ValueSHA256Prefix, Expired: expired}
-		if !expired {
+		if !expired && rr.KeepRef != nil && *rr.KeepRef != "" {
+			// Migrated row: Keep owns the value. Degraded is an error, never
+			// an empty Value — an empty variable would read as "no secret".
+			plain, reason := secretstore.Open(ctx, *rr.KeepRef)
+			if reason != "" {
+				return nil, &domain.SecretDegradedError{Name: rr.Name, Reason: reason}
+			}
+			m.Value = plain
+		} else if !expired {
 			plain, err := encryption.Decrypt(rr.EncryptedValue)
 			if err != nil {
 				return nil, fmt.Errorf("secret %s: %w", rr.Name, err)

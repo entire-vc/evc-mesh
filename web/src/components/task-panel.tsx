@@ -49,14 +49,20 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import { CommentList } from "@/components/comment-list";
 import { ActivityLog } from "@/components/activity-log";
 import { SubtaskList } from "@/components/subtask-list";
 import { ArtifactList } from "@/components/artifact-list";
 import { VCSLinks } from "@/components/vcs-links";
-import { SlotActionsMenu, SlotPanelBody, usePanelTabs } from "@/components/extensions/slots/slot-host";
-import { resolveSlotTab } from "@/lib/extension-slots";
+import { SlotActionsMenu, SlotPanelBody } from "@/components/extensions/slots/slot-host";
+import { PanelBlocksContext, TASK_VIEW_COMPONENTS, type PanelBlocks } from "@/components/task-panel-blocks";
+import { useCan } from "@/core/primitives";
+import { quickEditRequest } from "@/core/primitives/actions";
+import { toStatusData, toTaskData } from "@/core/slots/board-data";
+import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
+import type { QuickEditPatch, SlotContext, TaskViewBlockId, TaskViewData, TaskViewSettings, TaskViewView } from "@/core/slots/types";
+import { registerMeshDefaultTheme } from "@/themes/mesh-default";
+import i18n from "@/i18n";
 import { DependencyList } from "@/components/dependency-list";
 import { DependencyBadge } from "@/components/dependency-badge";
 import { useTaskDependencies } from "@/hooks/use-task-dependencies";
@@ -100,33 +106,10 @@ import { uploadPendingImages } from "@/lib/pending-images";
 // Types
 // ---------------------------------------------------------------------------
 
-type MobileTabId =
-  | "details"
-  | "description"
-  | "comments"
-  | "subtasks"
-  | "dependencies"
-  | "artifacts"
-  | "activity"
-  | SlotTabId;
-type RightTabId = "comments" | "subtasks" | "dependencies" | "artifacts" | "activity" | SlotTabId;
-/** A `task.panel` tab contributed by an extension: `slot:<extension id>`. */
-type SlotTabId = `slot:${string}`;
-const slotTabId = (extensionId: string): SlotTabId => `slot:${extensionId}`;
-
 const priorities: Priority[] = ["urgent", "high", "medium", "low", "none"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Labels resolve at render: t(`panel.tabs.${id}`).
-const MOBILE_TABS: { id: MobileTabId }[] = [
-  { id: "details" },
-  { id: "description" },
-  { id: "comments" },
-  { id: "subtasks" },
-  { id: "dependencies" },
-  { id: "artifacts" },
-  { id: "activity" },
-];
+registerMeshDefaultTheme();
 
 // ---------------------------------------------------------------------------
 // Props
@@ -146,6 +129,8 @@ export interface TaskPanelProps {
   backLabel?: string;
   onTaskUpdated?: () => void;
   className?: string;
+  /** Where the panel is shown; a `task.view` view may change density. */
+  presentation?: "page" | "slide-over";
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +148,7 @@ export function TaskPanel({
   backLabel,
   onTaskUpdated,
   className,
+  presentation = "page",
 }: TaskPanelProps) {
   const { t } = useTranslation("task");
   const navigate = useNavigate();
@@ -172,7 +158,7 @@ export function TaskPanel({
 
   // Arriving from a mention: `?comment=<id>` names the comment somebody was
   // tagged in — mirrors docs.tsx's read of the same param for document
-  // threads (D6/#8d097e67). TaskPanel is only ever mounted at the real task
+  // threads (D6/an internal ticket). TaskPanel is only ever mounted at the real task
   // route (task-detail.tsx) or in create mode (task-create.tsx, where this is
   // simply absent), so reading the page's own location here is safe — there
   // is no other caller whose unrelated query string this could pick up.
@@ -225,36 +211,33 @@ export function TaskPanel({
   // loading from the render that changes the id, not from the effect after it.
   const [settledTaskId, setSettledTaskId] = useState<string | null>(null);
   const loading = loadingFlag || (Boolean(effectiveTaskId) && settledTaskId !== effectiveTaskId);
-  const [selectedMobileTab, setActiveMobileTab] = useState<MobileTabId>("details");
-  const [selectedDesktopTab, setActiveDesktopTab] = useState<RightTabId>("comments");
-  const panelTabs = usePanelTabs();
-  // A slot tab that left the registry (extension disabled while open) falls back to comments instead of a blank pane.
-  const activeDesktopTab = resolveSlotTab<RightTabId>(selectedDesktopTab, panelTabs.map((t) => t.extensionId), "comments");
-  const activeMobileTab = resolveSlotTab<MobileTabId>(selectedMobileTab, panelTabs.map((t) => t.extensionId), "details");
-  const openSlotPanel = (extensionId: string) => {
-    setActiveDesktopTab(slotTabId(extensionId));
-    setActiveMobileTab(slotTabId(extensionId));
-  };
+  // Which tab is in front is the `task.view` view's own state. The core asks it to bring a block forward:
+  // a mention (`?comment=`) or an artifact link lands on its tab, an opened subtask shows the subtask list,
+  // a document inserted into the description shows the description.
+  const [requestedBlock, setRequestedBlock] = useState<TaskViewData["requestedBlock"]>(null);
+  const requestBlock = useCallback(
+    (block: TaskViewBlockId) => setRequestedBlock((r) => ({ block, nonce: (r?.nonce ?? 0) + 1 })),
+    [],
+  );
 
   // The mobile layout starts on "details" and only mounts CommentList once
-  // the reader taps into the "comments" tab — so a mention arriving on
-  // mobile would otherwise have nothing in the DOM to scroll to at all.
-  // Desktop already defaults activeDesktopTab to "comments" above, which is
-  // exactly why a passing "the rail is visible" check proves nothing here:
-  // it would pass on desktop even with no focus/scroll logic implemented.
+  // the reader taps into the "comments" tab, so a mention arriving on mobile
+  // would otherwise have nothing in the DOM to scroll to at all. Desktop
+  // already defaults to "comments", which is exactly why a passing "the rail
+  // is visible" check proves nothing here: it would pass on desktop even
+  // with no focus/scroll logic implemented.
   useEffect(() => {
     if (!isCreateMode && focusArtifactId) {
-      setActiveMobileTab("artifacts");
-      setActiveDesktopTab("artifacts");
+      requestBlock("artifacts");
       return;
     }
-    if (focusCommentId) setActiveMobileTab("comments");
-  }, [focusCommentId, focusArtifactId, isCreateMode]);
+    if (focusCommentId) requestBlock("comments");
+  }, [focusCommentId, focusArtifactId, isCreateMode, requestBlock]);
   // Existing tasks open collapsed (most properties are empty on a typical card);
   // a create draft opens expanded, because every row there is an input the author
   // may want to fill and a hidden input is an input that does not exist. The
   // control itself is present in BOTH modes — it is what keeps the two Properties
-  // panels the same panel rather than two look-alikes (#88087321).
+  // panels the same panel rather than two look-alikes.
   const [hideEmpty, setHideEmpty] = useState(!isCreateMode);
   const [recurringHistoryOpen, setRecurringHistoryOpen] = useState(false);
   const [costSummary, setCostSummary] = useState<TaskCostSummary | null>(null);
@@ -363,7 +346,7 @@ export function TaskPanel({
 
   // Single mechanism for every in-app way to leave a dirty draft — sidebar
   // links, the browser back button, the Cancel button below, anywhere else
-  // in the app (task #7893ab16). Requires the data router mounted in
+  // in the app. Requires the data router mounted in
   // App.tsx; throws under a plain <BrowserRouter>.
   const blocker = useBlocker(
     useCallback(
@@ -394,7 +377,7 @@ export function TaskPanel({
   // never navigate, so useBlocker above never fires for them by
   // construction — they call onClose directly, which discards a dirty
   // draft silently. One helper, wired into all three, instead of a guard
-  // per call site (task #4eb72e3e). Same confirm text as the useBlocker
+  // per call site. Same confirm text as the useBlocker
   // branch above — this is a reuse of an already-shipped string, not a new
   // one, so §1r.A does not apply.
   const requestClose = useCallback(() => {
@@ -558,9 +541,8 @@ export function TaskPanel({
 
   const pushTask = useCallback((id: string) => {
     setTaskIdStack((s) => [...s, id]);
-    setActiveMobileTab("subtasks");
-    setActiveDesktopTab("subtasks");
-  }, []);
+    requestBlock("subtasks");
+  }, [requestBlock]);
 
   const popTask = useCallback(() => {
     setTaskIdStack((s) => s.slice(0, -1));
@@ -634,7 +616,7 @@ export function TaskPanel({
   };
 
   // Clears human_gate the only legitimate way: records a decision via
-  // POST /tasks/:id/human-gate-decisions (task #c56339b1), never a raw
+  // POST /tasks/:id/human-gate-decisions, never a raw
   // PATCH {human_gate:false} — that 403s for every caller by design (task
   // #295). Only rendered for an authenticated human user (see JSX below);
   // the handler independently re-enforces this — provenance="direct"
@@ -1341,7 +1323,7 @@ export function TaskPanel({
                     {gate.required && (
                       <Badge
                         variant="outline"
-                        className="border-orange-300 px-1 py-0 text-[9px] text-orange-600"
+                        className="border-tone-high-300 px-1 py-0 text-[9px] text-tone-high-600"
                       >
                         {t("panel.props.required")}
                       </Badge>
@@ -1419,13 +1401,13 @@ export function TaskPanel({
         {currentTask.human_gate && (
           <>
             <label className="flex items-center gap-1 pt-1 text-xs text-muted-foreground">
-              <Lock className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+              <Lock className="h-3 w-3 text-tone-warning-600 dark:text-tone-warning-400" />
               {t("panel.humanGate.label")}
             </label>
             <div className="flex flex-col items-start gap-1 pt-0.5">
               <Badge
                 variant="secondary"
-                className="gap-1 border-amber-300 bg-amber-100 text-[10px] font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                className="gap-1 border-tone-warning-300 bg-tone-warning-100 text-[10px] font-medium text-tone-warning-800 dark:border-tone-warning-900 dark:bg-tone-warning-950/40 dark:text-tone-warning-300"
                 data-testid="human-gate-badge"
                 data-human-gate-class={currentTask.human_gate_class ?? "hard"}
               >
@@ -1889,9 +1871,9 @@ export function TaskPanel({
                     return (
                       <div key={gate.name} className="flex items-center gap-2 text-xs">
                         {status === "pass" ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-tone-success-500" />
                         ) : status === "fail" ? (
-                          <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                          <XCircle className="h-3.5 w-3.5 shrink-0 text-tone-danger-500" />
                         ) : (
                           <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         )}
@@ -1899,7 +1881,7 @@ export function TaskPanel({
                           {gate.name}
                         </span>
                         {gate.required && status !== "pass" && (
-                          <Badge variant="outline" className="text-[9px] px-1 py-0 text-orange-600 border-orange-300">
+                          <Badge variant="outline" className="text-[9px] px-1 py-0 text-tone-high-600 border-tone-high-300">
                             {t("panel.props.required")}
                           </Badge>
                         )}
@@ -1947,7 +1929,7 @@ export function TaskPanel({
                 </span>
               )}
               {descSaved && !descSaving && (
-                <span className="flex items-center gap-1 text-[11px] text-green-600">
+                <span className="flex items-center gap-1 text-[11px] text-tone-success-600">
                   <Check className="h-3 w-3" />
                   {t("panel.description.saved")}
                 </span>
@@ -2018,7 +2000,7 @@ export function TaskPanel({
   // Task templates are a per-project feature that stayed editable in Project
   // Settings the whole time but lost its only consumer when the create modal was
   // replaced by this route: create-task-dialog.tsx had the picker, the /new page
-  // shipped without it, and the dialog was later deleted (3b6108fa). Restored
+  // shipped without it, and the dialog was later deleted. Restored
   // here, and it now applies every field the template carries, not just four.
   const templateSelector = templates.length > 0 && (
     <Select
@@ -2084,533 +2066,397 @@ export function TaskPanel({
     </div>
   );
 
+  // ---- Blocks and the `task.view` slot --------------------------------------
+
+  const renderTopBar = (openPanel: (extensionId: string) => void) => (
+    <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b border-border bg-background px-4 py-2.5 lg:static lg:top-auto">
+      <div className="flex items-center gap-2 min-w-0">
+        {taskIdStack.length > 0 ? (
+          <button
+            type="button"
+            onClick={popTask}
+            className="flex shrink-0 items-center gap-1 rounded p-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={t("panel.header.backToParent")}
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span className="max-w-[180px] truncate">
+              {backTask?.title ?? t("panel.header.back")}
+            </span>
+          </button>
+        ) : (
+          <>
+            {/* Back arrow — shown when onBack is provided and not in sub-task stack */}
+            {onBack && (
+              <button
+                type="button"
+                onClick={handleBackClick}
+                className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label={backText}
+                title={backText}
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            )}
+            {isCreateMode ? (
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                {t("form.newTask")}{createProject ? ` · ${createProject.name}` : ""}
+              </span>
+            ) : (
+              currentTask && (
+                <>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                    {currentTask.id.slice(0, 8).toUpperCase()}
+                  </span>
+                  {currentProject && (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {currentProject.name}
+                    </span>
+                  )}
+                </>
+              )
+            )}
+          </>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {!isCreateMode && currentTask && (
+          <>
+            <a
+              href={`/t/${currentTask.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              title={t("panel.header.openInNewTab")}
+            >
+              <ExternalLink className="h-4 w-4" />
+            </a>
+            <button
+              type="button"
+              onClick={async () => {
+                const url = `${window.location.origin}/t/${currentTask.id}`;
+                await navigator.clipboard.writeText(url);
+                toast.success(t("panel.header.linkCopied"));
+              }}
+              className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              title={t("panel.header.copyLink")}
+            >
+              <Link className="h-4 w-4" />
+            </button>
+            <SlotActionsMenu task={currentTask} openPanel={openPanel} />
+          </>
+        )}
+        {onClose && (
+          <button
+            type="button"
+            onClick={requestClose}
+            className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label={t("panel.header.close")}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const registryVersion = useSlotRegistryVersion();
+  const themeSettings = useThemeSettings() as TaskViewSettings;
+  const View = useMemo(
+    () => withSlotFallback("task.view", resolveSlotView("task.view")) as TaskViewView,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [registryVersion],
+  );
+  // Read once per render, no subscription: the views lay themselves out with CSS (`lg:`), `ctx.isMobile` is a hint.
+  const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches;
+  const colorMode = document.documentElement.classList.contains("dark") ? "dark" : "light";
+  const slotCtx = useMemo<SlotContext>(
+    () => ({
+      slot: "task.view",
+      contractVersion: "1.0.0",
+      locale: i18n.language,
+      mode: colorMode,
+      isMobile,
+      workspace: currentWorkspace
+        ? { id: currentWorkspace.id, slug: currentWorkspace.slug, name: currentWorkspace.name }
+        : null,
+    }),
+    [colorMode, isMobile, currentWorkspace],
+  );
+  const canEdit = useCan("task.edit");
+  const canMove = useCan("task.move");
+  const statusCategory = currentStatus?.category;
+  const taskData = useMemo(
+    () => (currentTask ? { ...toTaskData(currentTask, statusCategory), descriptionMarkdown: currentTask.description ?? "" } : null),
+    [currentTask, statusCategory],
+  );
+  const statusesData = useMemo(() => sortedStatuses.map(toStatusData), [sortedStatuses]);
+
+  // Ready elements bound to the open task; the view places them and builds none.
+  const panelBlocks: PanelBlocks = {
+    elements: currentTask
+      ? {
+          header: titleBlock,
+          properties: propertiesGrid,
+          description: descriptionPanel,
+          comments: (
+            <CommentList taskId={currentTask.id} projId={currentTask.project_id} focusCommentId={focusCommentId} />
+          ),
+          subtasks: <SubtaskList taskId={currentTask.id} onOpenSubtask={pushTask} refreshKey={depRefreshKey} />,
+          dependencies: (
+            <DependencyList key={currentTask.id} taskId={currentTask.id} source={dependencies} onOpenTask={pushTask} />
+          ),
+          artifacts: (
+            <ArtifactList
+              taskId={currentTask.id}
+              focusArtifactId={focusArtifactId}
+              projId={currentTask.project_id}
+              projectSettings={(projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings}
+              onDocInsert={(markdown) => {
+                setDescDraft((prev) => {
+                  const sep = prev && !prev.endsWith("\n") ? "\n" : "";
+                  return prev + sep + markdown + "\n";
+                });
+                setEditingDescription(true);
+                requestBlock("description");
+              }}
+            />
+          ),
+          activity: <ActivityLog taskId={currentTask.id} />,
+        }
+      : {},
+    topBar: renderTopBar,
+    dependencyBadge: <DependencyBadge source={dependencies} />,
+    extensionPanel: ({ extensionId, name, external }) =>
+      currentTask ? (
+        <SlotPanelBody extensionId={extensionId} name={name} task={currentTask} external={external} />
+      ) : null,
+  };
+
+  const viewData: TaskViewData = {
+    task: loading
+      ? { state: "loading" }
+      : taskData
+        ? { state: "ready", value: taskData }
+        : {
+            state: "error",
+            error: { code: "not_found", message: taskId ? t("panel.notFound") : "" },
+            retry: () => {
+              if (effectiveTaskId) void fetchTask(effectiveTaskId);
+            },
+          },
+    status: currentStatus ? toStatusData(currentStatus) : null,
+    statuses: statusesData,
+    presentation,
+    blocks: ["header", "properties", "description", "comments", "subtasks", "dependencies", "artifacts", "activity"],
+    components: TASK_VIEW_COMPONENTS,
+    requestedBlock,
+  };
+  const viewActions = {
+    close: onClose ? requestClose : undefined,
+    back: taskIdStack.length > 0 ? popTask : onBack ? handleBackClick : undefined,
+    quickEdit:
+      canEdit && currentTask
+        ? async (patch: QuickEditPatch) => {
+            await updateTask(currentTask.id, quickEditRequest(patch.field, patch.value));
+            onTaskUpdated?.();
+          }
+        : undefined,
+    changeStatus:
+      canMove && currentTask
+        ? async (statusId: string) => {
+            await moveTask(currentTask.id, { status_id: statusId });
+            onTaskUpdated?.();
+          }
+        : undefined,
+    assign:
+      canEdit && currentTask
+        ? async (assignee: { id: string; type: "user" | "agent" } | null) => {
+            await updateTask(currentTask.id, assignee ? { assignee_id: assignee.id, assignee_type: assignee.type } : { assignee_id: null });
+            onTaskUpdated?.();
+          }
+        : undefined,
+    openTask: (id: string) => pushTask(id),
+    retry: () => {
+      if (effectiveTaskId) void fetchTask(effectiveTaskId);
+    },
+  };
+
   // ---- Render ---------------------------------------------------------------
 
   return (
     <div className={cn("flex flex-col", className)}>
-      {/* ------------------------------------------------------------------ */}
-      {/* Header                                                              */}
-      {/* ------------------------------------------------------------------ */}
-      <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b border-border bg-background px-4 py-2.5 lg:static lg:top-auto">
-        <div className="flex items-center gap-2 min-w-0">
-          {taskIdStack.length > 0 ? (
-            <button
-              type="button"
-              onClick={popTask}
-              className="flex shrink-0 items-center gap-1 rounded p-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              title={t("panel.header.backToParent")}
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              <span className="max-w-[180px] truncate">
-                {backTask?.title ?? t("panel.header.back")}
-              </span>
-            </button>
-          ) : (
-            <>
-              {/* Back arrow — shown when onBack is provided and not in sub-task stack */}
-              {onBack && (
-                <button
-                  type="button"
-                  onClick={handleBackClick}
-                  className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  aria-label={backText}
-                  title={backText}
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                </button>
-              )}
-              {isCreateMode ? (
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                  {t("form.newTask")}{createProject ? ` · ${createProject.name}` : ""}
-                </span>
-              ) : (
-                currentTask && (
-                  <>
-                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                      {currentTask.id.slice(0, 8).toUpperCase()}
-                    </span>
-                    {currentProject && (
-                      <span className="truncate text-xs text-muted-foreground">
-                        {currentProject.name}
-                      </span>
-                    )}
-                  </>
-                )
-              )}
-            </>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {!isCreateMode && currentTask && (
-            <>
-              <a
-                href={`/t/${currentTask.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title={t("panel.header.openInNewTab")}
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
+      {isCreateMode ? (
+        <>
+        <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b border-border bg-background px-4 py-2.5 lg:static lg:top-auto">
+          <div className="flex items-center gap-2 min-w-0">
+            {taskIdStack.length > 0 ? (
               <button
                 type="button"
-                onClick={async () => {
-                  const url = `${window.location.origin}/t/${currentTask.id}`;
-                  await navigator.clipboard.writeText(url);
-                  toast.success(t("panel.header.linkCopied"));
-                }}
-                className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title={t("panel.header.copyLink")}
+                onClick={popTask}
+                className="flex shrink-0 items-center gap-1 rounded p-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title={t("panel.header.backToParent")}
               >
-                <Link className="h-4 w-4" />
-              </button>
-              <SlotActionsMenu task={currentTask} openPanel={openSlotPanel} />
-            </>
-          )}
-          {onClose && (
-            <button
-              type="button"
-              onClick={requestClose}
-              className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              aria-label={t("panel.header.close")}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Loading state                                                       */}
-      {/* ------------------------------------------------------------------ */}
-      {loading && (
-        <div className="flex-1 overflow-auto p-5">
-          <Skeleton className="mb-4 h-8 w-3/4" />
-          <div className="grid grid-cols-5 gap-4">
-            <div className="col-span-3 space-y-4">
-              <Skeleton className="h-4 w-1/3" />
-              <Skeleton className="h-24 w-full" />
-              <Skeleton className="h-4 w-1/4" />
-              <Skeleton className="h-32 w-full" />
-            </div>
-            <div className="col-span-2 space-y-3">
-              <Skeleton className="h-48 w-full" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Create-mode content — single-column draft form, no task yet so no   */}
-      {/* comments/subtasks/artifacts/activity tabs to show.                  */}
-      {/* ------------------------------------------------------------------ */}
-      {!loading && isCreateMode && (
-        <div className="flex min-h-0 flex-1 overflow-hidden lg:flex-row">
-          {/* LEFT PANEL — identical geometry to the edit layout's left panel:
-              same flex-1 scroll column, same px-5 py-4 / space-y-5 rhythm, same
-              lg:border-r. It used to be `mx-auto max-w-2xl`, which is why the
-              create screen read as a narrow card floating in empty gutters next
-              to a full-width edit screen (#88087321). */}
-          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto lg:border-r lg:border-border">
-          <div className="flex-1 space-y-5 px-5 py-4">
-            {templateSelector}
-            {titleBlock}
-            {propertiesGrid}
-            {descriptionPanel}
-            {draftError && <p className="text-sm text-destructive">{draftError}</p>}
-            {/* Below `lg` the submit is pinned to the bottom of the scrollport.
-                The draft runs ~1100px (title + properties + description), so an
-                inline submit sits below the fold on a 393x852 screen and costs a
-                scroll — while the way OUT (`Cancel`, sticky in the header) is
-                always one tap. Making the primary action harder to reach than the
-                escape hatch is backwards, and the modal this route replaced kept
-                its submit visible via `DialogFooter`. Desktop is unchanged: it
-                has no fold problem, so the row stays in the scroll flow. */}
-            <div className="sticky bottom-0 -mx-5 flex items-center justify-end gap-2 border-t border-border bg-background px-5 py-3 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0 lg:py-0 lg:pt-2">
-              {onClose && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={requestClose}
-                  disabled={draftSubmitting}
-                >
-                  {t("actions.cancel")}
-                </Button>
-              )}
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void handleCreateSubmit()}
-                disabled={draftSubmitting}
-              >
-                {draftSubmitting ? t("form.creating") : t("form.submit")}
-              </Button>
-            </div>
-          </div>
-          </div>
-
-          {/* RIGHT PANEL — same 2/5 column and same tab bar as the edit layout,
-              shown inert. Comments, subtasks, artifacts and the activity log are
-              all keyed on a task id, so there is nothing to put in them before
-              the card exists; the panel says so in one line instead of vanishing
-              and leaving the create screen a different shape. */}
-          <div className="hidden w-2/5 shrink-0 flex-col overflow-hidden lg:flex">
-            <div className="flex shrink-0 overflow-x-auto border-b border-border">
-              {(["comments", "subtasks", "artifacts", "activity"] as const).map((id) => (
-                <span
-                  key={id}
-                  className="flex shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 py-2.5 text-xs font-medium text-muted-foreground/50"
-                >
-                  {id === "subtasks" && <ListTree className="h-3.5 w-3.5" />}
-                  {id === "artifacts" && <Package className="h-3.5 w-3.5" />}
-                  {t(`panel.tabs.${id}`)}
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span className="max-w-[180px] truncate">
+                  {backTask?.title ?? t("panel.header.back")}
                 </span>
-              ))}
-            </div>
-            <div className="flex flex-1 items-center justify-center p-6">
-              <p className="max-w-[16rem] text-center text-xs text-muted-foreground">
-                {t("form.rightPanelHint")}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Content                                                             */}
-      {/* ------------------------------------------------------------------ */}
-      {!loading && !isCreateMode && currentTask && (
-        <>
-          {/* ============================================================= */}
-          {/* MOBILE LAYOUT (<1024px): title + 6-tab bar                     */}
-          {/* ============================================================= */}
-          <div className="flex min-h-0 flex-1 flex-col [overflow:clip] lg:hidden">
-            {/* Title */}
-            <div className="shrink-0 px-5 pt-4 pb-2">
-              {titleBlock}
-            </div>
-
-            {/* Mobile tabs with horizontal scroll */}
-            <div className="sticky top-[44px] z-10 shrink-0 bg-background">
-              <div
-                className="flex overflow-x-auto border-b border-border [scrollbar-width:none] [scroll-snap-type:x_mandatory] [-webkit-overflow-scrolling:touch]"
-              >
-                {MOBILE_TABS.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    className={cn(
-                      "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors [scroll-snap-align:start]",
-                      activeMobileTab === tab.id
-                        ? "border-primary text-foreground"
-                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                    )}
-                    onClick={(event) => {
-                      setActiveMobileTab(tab.id);
-                      if (tab.id === "dependencies") {
-                        event.currentTarget.scrollIntoView?.({ block: "nearest", inline: "start" });
-                      }
-                    }}
-                    aria-pressed={activeMobileTab === tab.id}
-                  >
-                    {tab.id === "subtasks" && <ListTree className="h-3.5 w-3.5" />}
-                    {tab.id === "artifacts" && <Package className="h-3.5 w-3.5" />}
-                    {t(`panel.tabs.${tab.id}`)}
-                    {tab.id === "dependencies" && <DependencyBadge source={dependencies} />}
-                    {tab.id === "subtasks" &&
-                      currentTask.subtask_count != null &&
-                      currentTask.subtask_count > 0 && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {currentTask.subtask_count}
-                        </Badge>
-                      )}
-                    {tab.id === "artifacts" &&
-                      currentTask.artifact_count != null &&
-                      currentTask.artifact_count > 0 && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {currentTask.artifact_count}
-                        </Badge>
-                      )}
-                  </button>
-                ))}
-                {panelTabs.map((tab) => (
-                  <button
-                    key={tab.extensionId}
-                    type="button"
-                    className={cn(
-                      "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors [scroll-snap-align:start]",
-                      activeMobileTab === slotTabId(tab.extensionId)
-                        ? "border-primary text-foreground"
-                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                    )}
-                    onClick={() => setActiveMobileTab(slotTabId(tab.extensionId))}
-                    aria-pressed={activeMobileTab === slotTabId(tab.extensionId)}
-                    data-testid={`slot-tab-mobile-${tab.extensionId}`}
-                  >
-                    {tab.name}
-                  </button>
-                ))}
-              </div>
-              {/* Right-edge fade mask */}
-              <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent" />
-            </div>
-
-            {/* Mobile tab content — comments gets its own bounded flex container so
-                the reply form stays pinned at the bottom; all other tabs share a
-                single scrollable wrapper. */}
-            {activeMobileTab === "comments" ? (
-              <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-                <CommentList
-                  taskId={currentTask.id}
-                  projId={currentTask.project_id}
-                  focusCommentId={focusCommentId}
-                />
-              </div>
+              </button>
             ) : (
-              <div className="flex-1 overflow-y-auto">
-                {activeMobileTab === "details" && (
-                  <div className="space-y-5 px-5 py-4">
-                    {propertiesGrid}
-                  </div>
+              <>
+                {/* Back arrow — shown when onBack is provided and not in sub-task stack */}
+                {onBack && (
+                  <button
+                    type="button"
+                    onClick={handleBackClick}
+                    className="flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label={backText}
+                    title={backText}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </button>
                 )}
-                {activeMobileTab === "description" && (
-                  <div className="px-5 py-4">
-                    {descriptionPanel}
-                  </div>
+                {isCreateMode ? (
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    {t("form.newTask")}{createProject ? ` · ${createProject.name}` : ""}
+                  </span>
+                ) : (
+                  currentTask && (
+                    <>
+                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                        {currentTask.id.slice(0, 8).toUpperCase()}
+                      </span>
+                      {currentProject && (
+                        <span className="truncate text-xs text-muted-foreground">
+                          {currentProject.name}
+                        </span>
+                      )}
+                    </>
+                  )
                 )}
-                {activeMobileTab === "subtasks" && (
-                  <div className="p-3">
-                    <SubtaskList
-                      taskId={currentTask.id}
-                      onOpenSubtask={pushTask}
-                      refreshKey={depRefreshKey}
-                    />
-                  </div>
-                )}
-                {activeMobileTab === "dependencies" && (
-                  <div className="p-3">
-                    <DependencyList
-                      key={currentTask.id}
-                      taskId={currentTask.id}
-                      source={dependencies}
-                      onOpenTask={pushTask}
-                    />
-                  </div>
-                )}
-                {activeMobileTab === "artifacts" && (
-                  <div className="p-3">
-                    <ArtifactList
-                      taskId={currentTask.id}
-                      focusArtifactId={focusArtifactId}
-                      projId={currentTask.project_id}
-                      projectSettings={
-                        (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
-                      }
-                      onDocInsert={(markdown) => {
-                        setDescDraft((prev) => {
-                          const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                          return prev + sep + markdown + "\n";
-                        });
-                        setEditingDescription(true);
-                        setActiveMobileTab("description");
-                      }}
-                    />
-                  </div>
-                )}
-                {activeMobileTab === "activity" && (
-                  <div className="p-4">
-                    <ActivityLog taskId={currentTask.id} />
-                  </div>
-                )}
-                {panelTabs.map(
-                  (tab) =>
-                    activeMobileTab === slotTabId(tab.extensionId) && (
-                      <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} external={tab.external} />
-                    ),
-                )}
-              </div>
+              </>
             )}
           </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {!isCreateMode && currentTask && (
+              <>
+                <a
+                  href={`/t/${currentTask.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title={t("panel.header.openInNewTab")}
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const url = `${window.location.origin}/t/${currentTask.id}`;
+                    await navigator.clipboard.writeText(url);
+                    toast.success(t("panel.header.linkCopied"));
+                  }}
+                  className="flex items-center gap-1 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title={t("panel.header.copyLink")}
+                >
+                  <Link className="h-4 w-4" />
+                </button>
+                <SlotActionsMenu task={currentTask} openPanel={() => {}} />
+              </>
+            )}
+            {onClose && (
+              <button
+                type="button"
+                onClick={requestClose}
+                className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label={t("panel.header.close")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
 
-          {/* ============================================================= */}
-          {/* DESKTOP LAYOUT (>=1024px): two-column                          */}
-          {/* ============================================================= */}
-          <div className="hidden min-h-0 flex-1 overflow-hidden lg:flex lg:flex-row">
-            {/* LEFT PANEL */}
+        {/* ------------------------------------------------------------------ */}
+        {/* Create-mode content — single-column draft form, no task yet so no   */}
+        {/* comments/subtasks/artifacts/activity tabs to show.                  */}
+        {/* ------------------------------------------------------------------ */}
+        {!loading && isCreateMode && (
+          <div className="flex min-h-0 flex-1 overflow-hidden lg:flex-row">
+            {/* LEFT PANEL — identical geometry to the edit layout's left panel:
+                same flex-1 scroll column, same px-5 py-4 / space-y-5 rhythm, same
+                lg:border-r. It used to be `mx-auto max-w-2xl`, which is why the
+                create screen read as a narrow card floating in empty gutters next
+                to a full-width edit screen. */}
             <div className="flex min-w-0 flex-1 flex-col overflow-y-auto lg:border-r lg:border-border">
-              <div className="flex-1 space-y-5 px-5 py-4">
-                {titleBlock}
-                {propertiesGrid}
-                {descriptionPanel}
+            <div className="flex-1 space-y-5 px-5 py-4">
+              {templateSelector}
+              {titleBlock}
+              {propertiesGrid}
+              {descriptionPanel}
+              {draftError && <p className="text-sm text-destructive">{draftError}</p>}
+              {/* Below `lg` the submit is pinned to the bottom of the scrollport.
+                  The draft runs ~1100px (title + properties + description), so an
+                  inline submit sits below the fold on a 393x852 screen and costs a
+                  scroll — while the way OUT (`Cancel`, sticky in the header) is
+                  always one tap. Making the primary action harder to reach than the
+                  escape hatch is backwards, and the modal this route replaced kept
+                  its submit visible via `DialogFooter`. Desktop is unchanged: it
+                  has no fold problem, so the row stays in the scroll flow. */}
+              <div className="sticky bottom-0 -mx-5 flex items-center justify-end gap-2 border-t border-border bg-background px-5 py-3 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:px-0 lg:py-0 lg:pt-2">
+                {onClose && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={requestClose}
+                    disabled={draftSubmitting}
+                  >
+                    {t("actions.cancel")}
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleCreateSubmit()}
+                  disabled={draftSubmitting}
+                >
+                  {draftSubmitting ? t("form.creating") : t("form.submit")}
+                </Button>
               </div>
             </div>
+            </div>
 
-            {/* RIGHT PANEL — Comments / Subtasks / Dependencies / Artifacts / Activity */}
-            <div className="flex w-full shrink-0 flex-col overflow-hidden border-t border-border lg:w-2/5 lg:border-t-0">
-              {/* Tab bar */}
+            {/* RIGHT PANEL — same 2/5 column and same tab bar as the edit layout,
+                shown inert. Comments, subtasks, artifacts and the activity log are
+                all keyed on a task id, so there is nothing to put in them before
+                the card exists; the panel says so in one line instead of vanishing
+                and leaving the create screen a different shape. */}
+            <div className="hidden w-2/5 shrink-0 flex-col overflow-hidden lg:flex">
               <div className="flex shrink-0 overflow-x-auto border-b border-border">
-                <button
-                  type="button"
-                  className={cn(
-                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                    activeDesktopTab === "comments"
-                      ? "border-primary text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                  )}
-                  onClick={() => setActiveDesktopTab("comments")}
-                >
-                  {t("panel.tabs.comments")}
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                    activeDesktopTab === "subtasks"
-                      ? "border-primary text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                  )}
-                  onClick={() => setActiveDesktopTab("subtasks")}
-                >
-                  <ListTree className="h-3.5 w-3.5" />
-                  {t("panel.tabs.subtasks")}
-                  {currentTask.subtask_count != null &&
-                    currentTask.subtask_count > 0 && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {currentTask.subtask_count}
-                      </Badge>
-                    )}
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                    activeDesktopTab === "dependencies"
-                      ? "border-primary text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                  )}
-                  onClick={() => setActiveDesktopTab("dependencies")}
-                  aria-pressed={activeDesktopTab === "dependencies"}
-                >
-                  {t("panel.tabs.dependencies")} <DependencyBadge source={dependencies} />
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                    activeDesktopTab === "artifacts"
-                      ? "border-primary text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                  )}
-                  onClick={() => setActiveDesktopTab("artifacts")}
-                >
-                  <Package className="h-3.5 w-3.5" />
-                  {t("panel.tabs.artifacts")}
-                  {currentTask.artifact_count != null &&
-                    currentTask.artifact_count > 0 && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {currentTask.artifact_count}
-                      </Badge>
-                    )}
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                    activeDesktopTab === "activity"
-                      ? "border-primary text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                  )}
-                  onClick={() => setActiveDesktopTab("activity")}
-                >
-                  {t("panel.tabs.activity")}
-                </button>
-                {panelTabs.map((tab) => (
-                  <button
-                    key={tab.extensionId}
-                    type="button"
-                    className={cn(
-                      "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                      activeDesktopTab === slotTabId(tab.extensionId)
-                        ? "border-primary text-foreground"
-                        : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                    )}
-                    onClick={() => setActiveDesktopTab(slotTabId(tab.extensionId))}
-                    data-testid={`slot-tab-${tab.extensionId}`}
+                {(["comments", "subtasks", "artifacts", "activity"] as const).map((id) => (
+                  <span
+                    key={id}
+                    className="flex shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 py-2.5 text-xs font-medium text-muted-foreground/50"
                   >
-                    {tab.name}
-                  </button>
+                    {id === "subtasks" && <ListTree className="h-3.5 w-3.5" />}
+                    {id === "artifacts" && <Package className="h-3.5 w-3.5" />}
+                    {t(`panel.tabs.${id}`)}
+                  </span>
                 ))}
               </div>
-
-              {/* Tab content */}
-              {activeDesktopTab === "comments" && (
-                <CommentList
-                  taskId={currentTask.id}
-                  projId={currentTask.project_id}
-                  focusCommentId={focusCommentId}
-                />
-              )}
-              {activeDesktopTab === "subtasks" && (
-                <div className="flex-1 overflow-y-auto p-3">
-                  <SubtaskList
-                    taskId={currentTask.id}
-                    onOpenSubtask={pushTask}
-                    refreshKey={depRefreshKey}
-                  />
-                </div>
-              )}
-              {activeDesktopTab === "dependencies" && (
-                <div className="flex-1 overflow-y-auto p-3">
-                  <DependencyList
-                    key={currentTask.id}
-                    taskId={currentTask.id}
-                    source={dependencies}
-                    onOpenTask={pushTask}
-                  />
-                </div>
-              )}
-              {activeDesktopTab === "artifacts" && (
-                <div className="flex-1 overflow-y-auto p-3">
-                  <ArtifactList
-                    taskId={currentTask.id}
-                    focusArtifactId={focusArtifactId}
-                    projId={currentTask.project_id}
-                    projectSettings={
-                      (projects.find((p) => p.id === currentTask.project_id) ?? currentProject)?.settings
-                    }
-                    onDocInsert={(markdown) => {
-                      setDescDraft((prev) => {
-                        const sep = prev && !prev.endsWith("\n") ? "\n" : "";
-                        return prev + sep + markdown + "\n";
-                      });
-                      setEditingDescription(true);
-                    }}
-                  />
-                </div>
-              )}
-              {activeDesktopTab === "activity" && (
-                <div className="flex-1 overflow-y-auto p-4">
-                  <ActivityLog taskId={currentTask.id} />
-                </div>
-              )}
-              {panelTabs.map(
-                (tab) =>
-                  activeDesktopTab === slotTabId(tab.extensionId) && (
-                    <SlotPanelBody key={tab.extensionId} extensionId={tab.extensionId} name={tab.name} task={currentTask} external={tab.external} />
-                  ),
-              )}
+              <div className="flex flex-1 items-center justify-center p-6">
+                <p className="max-w-[16rem] text-center text-xs text-muted-foreground">
+                  {t("form.rightPanelHint")}
+                </p>
+              </div>
             </div>
           </div>
+        )}
         </>
-
-      )}
-
-      {/* No task loaded */}
-      {!isCreateMode && !loading && !currentTask && taskId && (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          <p className="text-sm">{t("panel.notFound")}</p>
-        </div>
+      ) : (
+        <PanelBlocksContext.Provider value={panelBlocks}>
+          <View data={viewData} actions={viewActions} themeSettings={themeSettings} ctx={slotCtx} />
+        </PanelBlocksContext.Provider>
       )}
 
       {/* Recurring history panel */}

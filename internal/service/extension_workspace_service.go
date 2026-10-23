@@ -13,9 +13,9 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
-	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
 // SecretMask is what a secret setting (manifest x-secret) is shown as. Sending
@@ -176,7 +176,7 @@ func refuseManagedElsewhere(p extensions.Provider) error {
 // prepareStored runs the extension hook and encrypts every secret the caller
 // sent. A submitted value is always plaintext, whatever it starts with; kept
 // secrets are not in `sent` and stay ciphertext.
-func (s *ExtensionWorkspaceService) prepareStored(ctx context.Context, p extensions.Provider, settings, sent map[string]any) error {
+func (s *ExtensionWorkspaceService) prepareStored(ctx context.Context, ws uuid.UUID, p extensions.Provider, settings, sent map[string]any) error {
 	if h := s.hookFor(p.Manifest().ID); h != nil {
 		if err := h.Prepare(ctx, settings, sent); err != nil {
 			return err
@@ -187,7 +187,7 @@ func (s *ExtensionWorkspaceService) prepareStored(ctx context.Context, p extensi
 		if _, fresh := sent[k]; !ok || !fresh || str == "" {
 			continue
 		}
-		enc, err := encryption.Encrypt(str)
+		enc, err := secretstore.Default().Put(ctx, secretstore.Ref{WorkspaceID: ws, ExtensionID: p.Manifest().ID, Field: k}, str)
 		if err != nil {
 			return apierror.BadRequestWithDetails("failed to store the secret setting", k)
 		}
@@ -300,7 +300,7 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 	for k, v := range settings {
 		sent[k] = v
 	}
-	if perr := s.prepareStored(ctx, p, settings, sent); perr != nil {
+	if perr := s.prepareStored(ctx, ws, p, settings, sent); perr != nil {
 		return nil, perr
 	}
 	raw, err := json.Marshal(settings)
@@ -359,7 +359,7 @@ func (s *ExtensionWorkspaceService) PatchSettings(ctx context.Context, ws uuid.U
 	if err = p.Validate(extensions.LevelWorkspace, cur); err != nil {
 		return nil, apierror.ValidationError(map[string]string{"settings": err.Error()})
 	}
-	if perr := s.prepareStored(ctx, p, cur, submitted); perr != nil {
+	if perr := s.prepareStored(ctx, ws, p, cur, submitted); perr != nil {
 		return nil, perr
 	}
 	raw, err := json.Marshal(cur)

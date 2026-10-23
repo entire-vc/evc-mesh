@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -396,7 +399,7 @@ func TestTaskHandler_GetByID_Found(t *testing.T) {
 	assert.Equal(t, "Found Task", result.Title)
 }
 
-// TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo is task #040cddcf:
+// TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo is an internal ticket:
 // a gated task's GET response must carry human_gate_info populated from
 // commentService.GetHumanGateOwner, not just the bare human_gate boolean.
 func TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo(t *testing.T) {
@@ -418,7 +421,7 @@ func TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo(t *testing.T) {
 			return &domain.HumanGateInfo{
 				Gated:            true,
 				OwnerAgentID:     &ownerID,
-				OwnerName:        "Howard",
+				OwnerName:        "Harper",
 				MarkerCommentID:  &markerID,
 				MarkerCreatedAt:  &markerAt,
 				ClearableByOwner: true,
@@ -446,13 +449,13 @@ func TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo(t *testing.T) {
 	assert.True(t, result.HumanGateInfo.Gated)
 	require.NotNil(t, result.HumanGateInfo.OwnerAgentID)
 	assert.Equal(t, ownerID, *result.HumanGateInfo.OwnerAgentID)
-	assert.Equal(t, "Howard", result.HumanGateInfo.OwnerName)
+	assert.Equal(t, "Harper", result.HumanGateInfo.OwnerName)
 	assert.True(t, result.HumanGateInfo.ClearableByOwner)
 }
 
 // TestTaskHandler_GetByID_UngatedTask_NoHumanGateInfoLookup ensures the
 // lookup is skipped entirely (no wasted comment-thread scan) when the task
-// isn't gated — the common case, and the one #040cddcf's live measurement
+// isn't gated — the common case, and the one an internal ticket's live measurement
 // says applies to nearly every task in the workspace.
 func TestTaskHandler_GetByID_UngatedTask_NoHumanGateInfoLookup(t *testing.T) {
 	taskID := uuid.New()
@@ -554,7 +557,7 @@ func TestTaskHandler_GetByID_InternalError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
-// --- has_description on every task DTO (#fc032545) ---
+// --- has_description on every task DTO ---
 //
 // decorateTaskList computes has_description for the list-shaped endpoints; the
 // one-object endpoints used to serialize the field at its Go zero value, so
@@ -996,13 +999,13 @@ func TestTaskHandler_Update_PartialLabels(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// --- TestTaskHandler_Update_ParentTaskID (#204c0311) ---
+// --- TestTaskHandler_Update_ParentTaskID ---
 //
 // Before this fix, updateTaskRequest had no parent_task_id field at all: Bind()
 // silently dropped the JSON key, task.ParentTaskID kept whatever GetByID fetched,
 // and the handler still answered 200 with the field unchanged. This is the
 // "detach a subtask from a cancelled-blocked parent" workaround from task
-// #815f703b that got a false-success response.
+// an internal ticket that got a false-success response.
 
 // TestTaskHandler_Update_ParentTaskID_Reparent verifies PATCH with a new
 // parent_task_id actually reaches the service layer with the new value applied —
@@ -1058,7 +1061,7 @@ func TestTaskHandler_Update_ParentTaskID_Reparent(t *testing.T) {
 
 // TestTaskHandler_Update_ParentTaskID_DetachViaExplicitNull verifies that sending
 // parent_task_id:null actually detaches (clears) the parent — the exact workaround
-// attempted, and silently no-op'd, in the live incident #815f703b.
+// attempted, and silently no-op'd, in the live incident an internal ticket.
 func TestTaskHandler_Update_ParentTaskID_DetachViaExplicitNull(t *testing.T) {
 	taskID := uuid.New()
 	oldParentID := uuid.New()
@@ -1097,7 +1100,7 @@ func TestTaskHandler_Update_ParentTaskID_DetachViaExplicitNull(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	require.NotNil(t, applied, "service Update must have been called")
-	assert.Nil(t, applied.ParentTaskID, "explicit null must detach — this is the false-success case from #815f703b")
+	assert.Nil(t, applied.ParentTaskID, "explicit null must detach — this is the false-success case from an internal ticket")
 }
 
 // TestTaskHandler_Update_ParentTaskID_OmittedLeavesUnchanged verifies the other
@@ -1186,7 +1189,7 @@ func TestTaskHandler_Update_ParentTaskID_SelfParentRejected(t *testing.T) {
 }
 
 // TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors verifies the
-// negative-2 case from #204c0311's acceptance criteria: PATCH parent_task_id
+// negative-2 case from an internal ticket's acceptance criteria: PATCH parent_task_id
 // to a well-formed but nonexistent task id must fail, not silently succeed
 // with 200. flexUUID applies any syntactically valid UUID unconditionally —
 // existence is enforced by the DB's `parent_task_id REFERENCES tasks(id)` FK
@@ -1232,14 +1235,14 @@ func TestTaskHandler_Update_ParentTaskID_NonexistentParentErrors(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// --- start_after (#246b8fcc, sub1 of #e9ce6b91) -------------------------------
+// --- start_after (an internal ticket, sub1 of an internal ticket) -------------------------------
 //
 // start_after mirrors due_date's read/write contract on the same three write
 // paths (Create, Update via flexTime, CreateSubtask) — same wasSet semantics,
 // same RFC3339-or-date-only parsing. due_date itself keeps its own separate
 // meaning (backlog wake-alarm) and must not be affected by writes to
 // start_after or vice versa — that independence is the whole point of the
-// split (#e9ce6b91), so it is asserted explicitly below rather than assumed.
+// split, so it is asserted explicitly below rather than assumed.
 
 func TestTaskHandler_Create_WithStartAfter(t *testing.T) {
 	projectID := uuid.New()
@@ -1295,7 +1298,7 @@ func TestTaskHandler_Update_StartAfter_SetAndClear(t *testing.T) {
 
 // TestTaskHandler_Update_StartAfter_OmittedLeavesUnchanged is the other half
 // of the wasSet contract: a PATCH that never mentions start_after must not
-// clear it (the same failure class §204c0311 fixed for parent_task_id).
+// clear it (the same failure class §an internal ticket fixed for parent_task_id).
 func TestTaskHandler_Update_StartAfter_OmittedLeavesUnchanged(t *testing.T) {
 	existingStart := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 	existing := &domain.Task{ID: uuid.New(), Title: "Existing", StartAfter: &existingStart}
@@ -1468,7 +1471,7 @@ func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
 		return rec
 	}
 
-	// Task #40a24454: an agent key cannot arm the gate with PATCH.
+	// an internal ticket: an agent key cannot arm the gate with PATCH.
 	rec := patch(domain.ActorTypeAgent)
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	var resp map[string]any
@@ -1483,10 +1486,10 @@ func TestUpdate_HumanGate_AgentSetTrue(t *testing.T) {
 	assert.True(t, updateCalled)
 }
 
-// TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment is task #a2e2ac72: a raw
+// TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment is an internal ticket: a raw
 // false→true PATCH (agent or user, either way — arming itself stays
 // unrestricted) must leave a trace, or releaseHumanGateOnWithdrawal's
-// soleMarkerAuthor fast path (comment_service.go, task #9959f201) cannot tell
+// soleMarkerAuthor fast path (comment_service.go, an internal ticket) cannot tell
 // a genuine first marker apart from one fabricated onto an already-armed
 // gate. See hasRawArmMarker for the read side this comment feeds.
 func TestUpdate_HumanGate_AgentSetTrue_PostsRawArmComment(t *testing.T) {
@@ -1866,7 +1869,7 @@ func TestTaskHandler_List_StatusIDFilter(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// TestTaskHandler_List_HumanGateFilter (#098468fa subtask): human_gate=true and
+// TestTaskHandler_List_HumanGateFilter (an internal ticket subtask): human_gate=true and
 // human_gate=false are each forwarded as the matching TaskFilter.HumanGate value;
 // an absent or unparseable value must NOT silently constrain the query (nil).
 func TestTaskHandler_List_HumanGateFilter(t *testing.T) {
@@ -2119,9 +2122,9 @@ func TestTaskHandler_MoveTask_ServiceError(t *testing.T) {
 
 // TestTaskHandler_MoveTask_HumanGateFrozen_DoneMessageDoesNotMentionBacklog is the
 // HTTP-layer counterpart of the service-level control in task_human_gate_test.go
-// (#854b7b8d): the wire message a caller actually sees for a refused done/cancelled
+//: the wire message a caller actually sees for a refused done/cancelled
 // move must not claim backlog is human-only too, since the gate's own author IS
-// allowed to park there (#e1b4cffd) — the handler used to hardcode a single string
+// allowed to park there — the handler used to hardcode a single string
 // for every category and this pinned the stale one.
 func TestTaskHandler_MoveTask_HumanGateFrozen_DoneMessageDoesNotMentionBacklog(t *testing.T) {
 	taskID := uuid.New()
@@ -2156,7 +2159,7 @@ func TestTaskHandler_MoveTask_HumanGateFrozen_DoneMessageDoesNotMentionBacklog(t
 
 // TestTaskHandler_MoveTask_HumanGateFrozen_BacklogMessageNamesAuthorship is the
 // mirror control: a refused backlog move must say the reason is authorship, not
-// "only a human" — a human is never the only door to backlog since #e1b4cffd.
+// "only a human" — a human is never the only door to backlog since an internal ticket.
 func TestTaskHandler_MoveTask_HumanGateFrozen_BacklogMessageNamesAuthorship(t *testing.T) {
 	taskID := uuid.New()
 	statusID := uuid.New()
@@ -2295,7 +2298,7 @@ func TestTaskHandler_ListSubtasks_ServiceError(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-// --- CreateSubtask field parity with Create (regression for #d13fe920) ---
+// --- CreateSubtask field parity with Create (regression for an internal ticket) ---
 
 // TestTaskHandler_CreateSubtask_WithAssignee mirrors
 // TestTaskHandler_Create_WithAssignee: assignee_id/assignee_type must reach
@@ -2411,7 +2414,7 @@ func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {
 		CheckoutTaskFunc: func(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*service.CheckoutResult, error) {
 			return nil, &service.CheckoutConflictError{
 				CheckedOutBy:     holderID,
-				CheckedOutByName: "Linus",
+				CheckedOutByName: "Liam",
 				CheckedOutByKind: "agent",
 				ExpiresAt:        expiresAt,
 				AcquiredAt:       &acquiredAt,
@@ -2437,7 +2440,7 @@ func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {
 	assert.Equal(t, "task_already_checked_out", body["error_code"], "the conflict carries a stable machine code")
 	details, ok := body["details"].(map[string]interface{})
 	require.True(t, ok, "response must have a 'details' object")
-	assert.Equal(t, "Linus", details["checked_out_by_name"], "checked_out_by_name must always be present")
+	assert.Equal(t, "Liam", details["checked_out_by_name"], "checked_out_by_name must always be present")
 	assert.NotNil(t, details["expires_in_seconds"], "expires_in_seconds must always be present")
 	assert.NotNil(t, details["acquired_at"], "acquired_at must be present when AcquiredAt is set")
 }
@@ -2553,8 +2556,8 @@ func TestTaskHandler_AssignTask_ShortID(t *testing.T) {
 }
 
 // AssignTask re-reads and returns the task after a successful assignment —
-// the one single-object path the first sweep of #fc032545 missed (caught by
-// independent review, MR !1061): it serialized has_description at the zero
+// the one single-object path the first sweep of an internal ticket missed (caught by
+// independent review, a review): it serialized has_description at the zero
 // value exactly like the paths fixed before it.
 func TestTaskHandler_AssignTask_HasDescriptionConsistentWithBody(t *testing.T) {
 	for _, tc := range hasDescriptionCases {
@@ -2639,9 +2642,9 @@ func TestTaskHandler_MoveTask_InvalidID_Returns400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// --- delegation_level default regression tests (fix #0a46e636 / #a9dc1a42) ---
+// --- delegation_level default regression tests (fix an internal ticket / an internal ticket) ---
 // The default must be "auto" so agents close tasks as done, not pile them
-// into review (which 72h auto-moves to triage → lands on Pavel).
+// into review (which 72h auto-moves to triage → lands on Alex).
 
 func TestTaskHandler_Create_DelegationLevel_DefaultsToAuto(t *testing.T) {
 	projectID := uuid.New()
@@ -2875,7 +2878,7 @@ func TestTaskHandler_Update_OmittedReviewerLeavesItUntouched(t *testing.T) {
 	assert.Equal(t, domain.AssigneeTypeAgent, *got.ReviewerType)
 }
 
-// --- status change via PATCH is rejected, not silently ignored (#64b74e58) --
+// --- status change via PATCH is rejected, not silently ignored --
 //
 // updateTaskRequest has no status field at all, so Bind() used to drop
 // status_id/status_slug/status on the floor and still answer 200 — the caller
@@ -2903,7 +2906,7 @@ func TestTaskHandler_Update_StatusSlugRejected(t *testing.T) {
 
 	require.NoError(t, h.Update(c))
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code,
-		"PATCH must refuse a status change attempt, not silently no-op with 200 (#64b74e58)")
+		"PATCH must refuse a status change attempt, not silently no-op with 200")
 	assert.False(t, updateCalled, "status_slug must never reach taskService.Update")
 
 	var body map[string]any
@@ -2967,7 +2970,7 @@ func TestTaskHandler_Update_UnrelatedFieldsStillWork(t *testing.T) {
 	assert.Equal(t, "New Title", got.Title)
 }
 
-// --- include_description projection (#32f4c087) ------------------------------
+// --- include_description projection ------------------------------
 //
 // The board's task list was 77% description bytes for cards that never render a
 // description. These tests pin the three things that made the obvious fix unsafe:
@@ -3128,7 +3131,7 @@ func TestTaskHandler_SearchGlobal_DecoratesLikeList(t *testing.T) {
 }
 
 // TestTaskHandler_List_SizeCeiling_TruncatesTailDescriptions reproduces the
-// live incident (Riker, 2026-08-20): a 200-item project list with full
+// live incident (Robin, 2026-08-20): a 200-item project list with full
 // descriptions serialized to 494,772 bytes in one line and blew the caller's
 // tool-output limit. Root cause and fix both live in enforceListSizeCeiling.
 func TestTaskHandler_List_SizeCeiling_TruncatesTailDescriptions(t *testing.T) {
@@ -3290,7 +3293,7 @@ func TestTaskHandler_List_FreshRevision_EchoesListRevisionOnPage(t *testing.T) {
 // subtask row — a subtask with real description text reported
 // has_description:false and the card silently lost its glyph, even though this
 // endpoint never truncates the text itself. Caught auditing consumers of the
-// #32f4c087 projection.
+// an internal ticket projection.
 func TestTaskHandler_ListSubtasks_HasDescriptionAndURLAreDecorated(t *testing.T) {
 	parentID := uuid.New()
 	now := time.Now()
@@ -3326,9 +3329,9 @@ func TestTaskHandler_ListSubtasks_HasDescriptionAndURLAreDecorated(t *testing.T)
 	assert.Equal(t, false, items[1]["has_description"])
 }
 
-// --- TestTaskHandler_UnknownField (#3e4c9f80) ---
+// --- TestTaskHandler_UnknownField ---
 //
-// Generalizes the #64b74e58 fix (status_id/status_slug/status hand-rejected
+// Generalizes the an internal ticket fix (status_id/status_slug/status hand-rejected
 // on Update) to any field name none of the three handlers declare: a
 // caller's typo or invented field must be a 400 naming it, never a 200/201
 // that quietly changed nothing it claimed to.
@@ -3373,7 +3376,7 @@ func TestTaskHandler_Update_UnknownFieldRejected(t *testing.T) {
 
 	require.NoError(t, h.Update(c))
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
-		"a made-up field name must be refused, not silently dropped behind a 200 that changed nothing (#3e4c9f80)")
+		"a made-up field name must be refused, not silently dropped behind a 200 that changed nothing")
 	assert.False(t, updateCalled, "an unknown field must never reach taskService.Update")
 
 	var body map[string]any
@@ -3539,4 +3542,39 @@ func TestTaskHandler_AssignTask_PassesPreconditionsThrough(t *testing.T) {
 	assert.True(t, got.ExpectedUpdatedAt.Equal(updatedAt))
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Contains(t, rec.Body.String(), "cas_conflict")
+}
+
+func TestTaskHandler_Checkout_409_LogsHolderAndEscapesName(t *testing.T) {
+	taskID := uuid.New()
+	holderID := uuid.New()
+	expiresAt := time.Now().Add(50 * time.Minute)
+
+	mockSvc := &MockTaskService{
+		CheckoutTaskFunc: func(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*service.CheckoutResult, error) {
+			return nil, &service.CheckoutConflictError{
+				CheckedOutBy:     holderID,
+				CheckedOutByName: "Evil\nWARN forged",
+				ExpiresAt:        expiresAt,
+			}
+		},
+	}
+
+	h, e := setupTaskTest(mockSvc)
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ttl_minutes":30}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	c := e.NewContext(req, httptest.NewRecorder())
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.Checkout(c))
+
+	out := logBuf.String()
+	assert.Contains(t, out, "checkout 409")
+	assert.Contains(t, out, taskID.String())
+	assert.Contains(t, out, holderID.String())
+	assert.Contains(t, out, expiresAt.Format(time.RFC3339))
+	assert.Equal(t, 1, strings.Count(strings.TrimSpace(out), "\n")+1, "a newline in the holder name must not split the log entry")
 }

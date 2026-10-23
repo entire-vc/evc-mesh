@@ -1,0 +1,7 @@
+{"schema":1,"id":"graphite","name":"Graphite","version":"1.0.0","kind":"theme","runtime":"builtin","mesh_api":">=1 <2","publisher":"example","description":"Dark dense theme","category":"appearance","tags":["dark","dense"],"levels":{"instance":true,"workspace":true,"project":false},"capabilities":{},
+ "theme":{"tokens_contract":"1","modes":["light","dark"],
+  "tokens":{"light":{"primary":"222 47% 20%","chart-1":"12 76% 61%"},"dark":{"primary":"210 40% 96%","chart-1":"220 70% 50%"}},
+  "css":{"path":"theme.css","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "views":{"bundle":"views.js","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "slots":{"board.card":"^1","board.layout":"^1"},
+  "contract_report":{"sdk_version":"1.0.0","bundle_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","passed":{"board.card":"1.0.0","board.layout":"1.0.0"}}}}

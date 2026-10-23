@@ -14,6 +14,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
+	"github.com/entire-vc/evc-mesh/internal/themes"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -119,6 +120,7 @@ type notificationService struct {
 	repo         notificationRepository
 	pushService  PushService
 	emailSvc     EmailService
+	brands       BrandSource
 	userRepo     userEmailLookup
 	emailBaseURL string
 
@@ -152,6 +154,19 @@ func WithEmailService(svc EmailService, users userEmailLookup, baseURL string) N
 		s.userRepo = users
 		s.emailBaseURL = baseURL
 	}
+}
+
+// WithEmailBrand themes the notification emails with the instance theme.
+// Without it they use mesh-default.
+func WithEmailBrand(src BrandSource) NotificationServiceOption {
+	return func(s *notificationService) { s.brands = src }
+}
+
+func (s *notificationService) emailBrand(ctx context.Context) themes.Brand {
+	if s.brands == nil {
+		return themes.DefaultBrand()
+	}
+	return s.brands.BrandFor(ctx, nil)
 }
 
 // WithTelegramService injects the Telegram channel's dependencies: the bot
@@ -397,7 +412,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 				}
 				locale := s.recipientLocale(context.Background(), event.WorkspaceID, userID)
 				title, text := renderEventText(locale, event)
-				body := buildNotificationEmail(locale, title, text, taskURL)
+				body := buildNotificationEmail(locale, title, text, taskURL, s.emailBrand(context.Background()))
 				if err := s.emailSvc.SendNotification(context.Background(), addr, title, body); err != nil {
 					// The address is logged deliberately: the failures this line
 					// exists to diagnose (a rejected sender, a typo'd custom
@@ -406,7 +421,7 @@ func (s *notificationService) dispatch(event domain.NotificationEvent) {
 					log.Printf("[notification][email] NOT DELIVERED: send to %s failed for user %s (event %s, workspace %s): %v",
 						addr, userID, event.EventType, event.WorkspaceID, err)
 				} else {
-					// The success side had no line at all until now (#4e1d249f,
+					// The success side had no line at all until now (an internal ticket,
 					// 2026-09-06): "no error was logged" and "this code path never
 					// ran" produced byte-identical silence, which an independent
 					// verifier correctly refused to accept as proof of delivery.

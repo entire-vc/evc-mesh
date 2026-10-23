@@ -60,7 +60,7 @@ const (
 	ReasonGuardRefused           RuntimeReasonCode = "guard_refused"           // lane refused to take it; paused
 	ReasonCompletionSignal       RuntimeReasonCode = "completion_signal"       // finished; waits for a human to close
 	ReasonSupervisedTodo         RuntimeReasonCode = "supervised_todo"         // supervised; waits for a human to close
-	ReasonHumanDecisionGate      RuntimeReasonCode = "human_decision_gate"     // pavel-gated: waits for a human decision
+	ReasonHumanDecisionGate      RuntimeReasonCode = "human_decision_gate"     // alex-gated: waits for a human decision
 	ReasonUmbrella               RuntimeReasonCode = "umbrella"                // epic: waits for child cards
 	ReasonTurnPending            RuntimeReasonCode = "turn_pending"            // lane turn not closed yet
 	ReasonReviewCooldown         RuntimeReasonCode = "review_cooldown"         // just sent to review; params: minutes

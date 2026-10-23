@@ -36,7 +36,7 @@ type ProjectIntegration struct {
 	// credential is reissued) or "source" (fetched from the integration's own
 	// introspection endpoint — a fact, not yet wired up for any integration type).
 	// A UI showing a date without this label would be showing an indicator that
-	// cannot be trusted, per the decision recorded on #218d5847.
+	// cannot be trusted, per the decision recorded on an internal ticket.
 	KeyExpiresAt    *time.Time `json:"key_expires_at,omitempty" db:"key_expires_at"`
 	KeyExpirySource *string    `json:"key_expiry_source,omitempty" db:"key_expiry_source"`
 
@@ -44,7 +44,7 @@ type ProjectIntegration struct {
 	// most recent attempt to reach the integration's source. LastSyncStatus
 	// distinguishes "key_expired" from a generic "error" so a stale credential
 	// shows up as exactly that in the UI, not as an unexplained empty tree
-	// (the failure mode named in spec doc 55cf5d7e §3.9).
+	// (the failure mode named in spec doc an internal ticket §3.9).
 	LastSyncCheckedAt *time.Time `json:"last_sync_checked_at,omitempty" db:"last_sync_checked_at"`
 	LastSyncStatus    *string    `json:"last_sync_status,omitempty" db:"last_sync_status"`
 	LastSyncError     *string    `json:"last_sync_error,omitempty" db:"last_sync_error"`
@@ -63,7 +63,7 @@ type TeamRelaySettings struct {
 	// DocsMountPath is where the share's subtree is grafted into this project's
 	// Docs tree, as a slug path ("Team Relay" or "External/Notes") — the SAME
 	// syntax GetByPathInProject already walks. Empty means the subtree IS the
-	// project's top level (Pavel's second mount mode): there is deliberately no
+	// project's top level (Alex's second mount mode): there is deliberately no
 	// separate flag for that case, because "no path segments to walk" and "walk
 	// these segments" are the same operation with a different (possibly empty)
 	// segment list, not two behaviours. See

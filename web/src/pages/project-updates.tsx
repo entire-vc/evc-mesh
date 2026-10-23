@@ -33,19 +33,19 @@ import { apiErrorMessage } from "@/lib/api-error";
 
 const STATUS_CONFIG: Record<UpdateStatus, { color: string; icon: React.ReactNode }> = {
   on_track: {
-    color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    color: "bg-tone-positive-100 text-tone-positive-800 dark:bg-tone-positive-900 dark:text-tone-positive-200",
     icon: <TrendingUp className="h-3 w-3" />,
   },
   at_risk: {
-    color: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    color: "bg-tone-warning-100 text-tone-warning-800 dark:bg-tone-warning-900 dark:text-tone-warning-200",
     icon: <Minus className="h-3 w-3" />,
   },
   off_track: {
-    color: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+    color: "bg-tone-danger-100 text-tone-danger-800 dark:bg-tone-danger-900 dark:text-tone-danger-200",
     icon: <TrendingDown className="h-3 w-3" />,
   },
   completed: {
-    color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    color: "bg-tone-info-100 text-tone-info-800 dark:bg-tone-info-900 dark:text-tone-info-200",
     icon: <CheckCircle className="h-3 w-3" />,
   },
 };
@@ -133,15 +133,15 @@ function UpdateCard({ update }: { update: ProjectUpdate }) {
           )}
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
-              <h4 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 mb-2">{t("updates.metrics.highlights")}</h4>
+              <h4 className="text-sm font-semibold text-tone-positive-700 dark:text-tone-positive-400 mb-2">{t("updates.metrics.highlights")}</h4>
               <BulletList items={update.highlights ?? []} />
             </div>
             <div>
-              <h4 className="text-sm font-semibold text-red-700 dark:text-red-400 mb-2">{t("updates.metrics.blockers")}</h4>
+              <h4 className="text-sm font-semibold text-tone-danger-700 dark:text-tone-danger-400 mb-2">{t("updates.metrics.blockers")}</h4>
               <BulletList items={update.blockers ?? []} />
             </div>
             <div>
-              <h4 className="text-sm font-semibold text-blue-700 dark:text-blue-400 mb-2">{t("updates.metrics.nextSteps")}</h4>
+              <h4 className="text-sm font-semibold text-tone-info-700 dark:text-tone-info-400 mb-2">{t("updates.metrics.nextSteps")}</h4>
               <BulletList items={update.next_steps ?? []} />
             </div>
           </div>
@@ -243,7 +243,7 @@ function NewUpdateForm({
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
+              <label className="text-sm font-medium text-tone-positive-700 dark:text-tone-positive-400">
                 {t("updates.form.highlightsLabel")}
               </label>
               <Textarea
@@ -254,7 +254,7 @@ function NewUpdateForm({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium text-red-700 dark:text-red-400">
+              <label className="text-sm font-medium text-tone-danger-700 dark:text-tone-danger-400">
                 {t("updates.form.blockersLabel")}
               </label>
               <Textarea
@@ -265,7 +265,7 @@ function NewUpdateForm({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium text-blue-700 dark:text-blue-400">
+              <label className="text-sm font-medium text-tone-info-700 dark:text-tone-info-400">
                 {t("updates.form.nextStepsLabel")}
               </label>
               <Textarea

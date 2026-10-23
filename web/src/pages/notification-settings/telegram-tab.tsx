@@ -142,7 +142,7 @@ export function TelegramTab({
               />
               {telegramChatID ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                  <p className="flex items-center gap-1.5 text-sm text-teal-600">
+                  <p className="flex items-center gap-1.5 text-sm text-tone-teal-600">
                     <Check className="h-4 w-4" />
                     {t("settings.telegram.connected", { bot: telegramBotInfo.bot_username })}
                   </p>

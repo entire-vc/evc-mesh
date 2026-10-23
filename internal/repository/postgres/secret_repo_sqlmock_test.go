@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
@@ -389,7 +390,7 @@ func TestResolveCurrentValues_DecryptsLiveAndFlagsExpiredWithoutDecrypting(t *te
 	assert.Equal(t, "live-plaintext", byName["LIVE"].Value)
 	assert.True(t, byName["EXPIRED"].Expired)
 	assert.Empty(t, byName["EXPIRED"].Value)
-	// The version identity rides along for the issuance audit (#1c9f527d),
+	// The version identity rides along for the issuance audit,
 	// for expired rows too — "who was handed a dead key" is also a question.
 	assert.Equal(t, liveID, byName["LIVE"].ID)
 	assert.Equal(t, "1a2b3c4d", byName["LIVE"].ValueSHA256Prefix)
@@ -423,6 +424,65 @@ func TestResolveCurrentValues_QueryErrorPropagates(t *testing.T) {
 	_, err := repo.ResolveCurrentValues(context.Background(), wsID, nil, nil)
 	require.Error(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- keep: references ---
+
+type fakeKeepClient struct {
+	val string
+	err error
+}
+
+func (f fakeKeepClient) PutValue(context.Context, secretstore.Ref, string) (string, error) {
+	return "", errors.New("unused")
+}
+func (f fakeKeepClient) GetValue(context.Context, string) (string, error) { return f.val, f.err }
+
+func installKeepStore(t *testing.T, c secretstore.KeepClient) {
+	t.Helper()
+	prev := secretstore.SetDefault(&secretstore.Router{Builtin: secretstore.Builtin{}, Keep: secretstore.Keep{Client: c}})
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+}
+
+const keepRefA = "keep:6f1c1f0e-3a55-4d0c-9d5e-1b3f6c0a7a11"
+
+func TestResolveCurrentValues_KeepRefServedThroughSecretstore(t *testing.T) {
+	setEncryptionKey(t, 15)
+	installKeepStore(t, fakeKeepClient{val: "from-keep"})
+	repo, mock := newSecretRepoMock(t)
+	builtin, err := encryption.Encrypt("stale-builtin")
+	require.NoError(t, err)
+	rows := sqlmock.NewRows([]string{"id", "name", "encrypted_value", "value_sha256_prefix", "expires_at", "keep_ref"}).
+		AddRow(uuid.New(), "MIGRATED", builtin, "aaaaaaaa", nil, keepRefA).
+		AddRow(uuid.New(), "PLAIN", builtin, "bbbbbbbb", nil, nil)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, encrypted_value, value_sha256_prefix, expires_at, keep_ref")).WillReturnRows(rows)
+
+	got, err := repo.ResolveCurrentValues(context.Background(), uuid.New(), nil, nil)
+	require.NoError(t, err)
+	byName := map[string]string{}
+	for _, m := range got {
+		byName[m.Name] = m.Value
+	}
+	assert.Equal(t, "from-keep", byName["MIGRATED"])
+	assert.Equal(t, "stale-builtin", byName["PLAIN"], "builtin rows are materialized unchanged")
+}
+
+func TestResolveCurrentValues_KeepUnavailableIsDegradedErrorNotEmptyValue(t *testing.T) {
+	setEncryptionKey(t, 16)
+	installKeepStore(t, fakeKeepClient{err: errors.New("status 503")})
+	repo, mock := newSecretRepoMock(t)
+	rows := sqlmock.NewRows([]string{"id", "name", "encrypted_value", "value_sha256_prefix", "expires_at", "keep_ref"}).
+		AddRow(uuid.New(), "MIGRATED", "enc:v1:x", "aaaaaaaa", nil, keepRefA)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, encrypted_value")).WillReturnRows(rows)
+
+	got, err := repo.ResolveCurrentValues(context.Background(), uuid.New(), nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	var degraded *domain.SecretDegradedError
+	require.ErrorAs(t, err, &degraded)
+	assert.Equal(t, "MIGRATED", degraded.Name)
+	assert.Contains(t, degraded.Reason, "keep unavailable")
+	assert.Contains(t, degraded.Reason, "503")
 }
 
 // --- isSecretsUniqueViolation ---

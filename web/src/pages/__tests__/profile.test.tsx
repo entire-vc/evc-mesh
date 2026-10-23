@@ -13,8 +13,8 @@ import type { User } from "@/types";
 
 const USER: User = {
   id: "u1",
-  email: "pavel@example.com",
-  name: "Pavel",
+  email: "alex@example.com",
+  name: "Alex",
   avatar_url: "",
   is_active: true,
   created_at: "2026-01-01T00:00:00Z",

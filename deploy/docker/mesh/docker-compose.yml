@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: ${DB_NAME:-mesh}
     ports:
       - "${DB_PORT:-5437}:5432"
+    # Slow-statement log: anything over 1s lands in the postgres log.
+    command: ["postgres", "-c", "log_min_duration_statement=1000"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -33,7 +35,7 @@ services:
     image: nats:2-alpine
     restart: unless-stopped
     # No host bind-mount for the config (see nats-server.conf's own header for
-    # why a file is needed at all, and #21e7808a for why it can't come from a
+    # why a file is needed at all, and an internal ticket for why it can't come from a
     # host path): Docker Desktop's file sharing on this fleet's Mac Mini
     # silently resolves ANY bind mount rooted under /tmp to an empty phantom
     # location -- proven directly (`docker run -v /tmp/x:/mnt alpine ls /mnt`

@@ -22,18 +22,18 @@ import type { AnalyticsMetrics } from "@/types";
 // based values are safe in both light and dark mode.
 const STATUS_COLORS: Record<string, string> = {
   backlog: "hsl(var(--muted-foreground))",
-  todo: "hsl(var(--chart-1, 210 100% 66%))",
-  in_progress: "hsl(var(--chart-2, 38 92% 50%))",
-  review: "hsl(var(--chart-3, 265 83% 73%))",
-  done: "hsl(var(--chart-4, 158 64% 52%))",
+  todo: "hsl(var(--chart-1))",
+  in_progress: "hsl(var(--chart-2))",
+  review: "hsl(var(--chart-3))",
+  done: "hsl(var(--chart-4))",
   cancelled: "hsl(var(--destructive))",
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
   urgent: "hsl(var(--destructive))",
-  high: "hsl(var(--chart-2, 24 95% 53%))",
-  medium: "hsl(var(--chart-5, 45 93% 47%))",
-  low: "hsl(var(--chart-4, 142 71% 45%))",
+  high: "hsl(var(--chart-priority-high))",
+  medium: "hsl(var(--chart-5))",
+  low: "hsl(var(--chart-priority-low))",
   none: "hsl(var(--muted-foreground))",
 };
 
@@ -151,7 +151,7 @@ function TimelineChart({ data }: TimelineChartProps) {
 
         {/* Area fills */}
         <path d={toArea("created")} fill="hsl(var(--primary))" fillOpacity={0.15} />
-        <path d={toArea("completed")} fill="hsl(var(--chart-3, 265 83% 73%))" fillOpacity={0.15} />
+        <path d={toArea("completed")} fill="hsl(var(--chart-3))" fillOpacity={0.15} />
 
         {/* Lines */}
         <path
@@ -165,7 +165,7 @@ function TimelineChart({ data }: TimelineChartProps) {
         <path
           d={toPath("completed")}
           fill="none"
-          stroke="hsl(var(--chart-3, 265 83% 73%))"
+          stroke="hsl(var(--chart-3))"
           strokeWidth={1.5}
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -200,11 +200,11 @@ function TimelineChart({ data }: TimelineChartProps) {
       {/* Legend */}
       <div className="mt-1 flex gap-4 justify-center">
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <span className="inline-block h-2 w-4 rounded-sm bg-teal-400" />
+          <span className="inline-block h-2 w-4 rounded-sm bg-tone-teal-400" />
           {t("analytics.timeline.created")}
         </div>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <span className="inline-block h-2 w-4 rounded-sm bg-violet-400" />
+          <span className="inline-block h-2 w-4 rounded-sm bg-tone-violet-400" />
           {t("analytics.timeline.completed")}
         </div>
       </div>
@@ -403,22 +403,22 @@ export function AnalyticsPage() {
         ) : metrics ? (
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <KPICard
-              icon={<TrendingUp className="h-5 w-5 text-teal-500" />}
+              icon={<TrendingUp className="h-5 w-5 text-tone-teal-500" />}
               label={t("analytics.kpi.totalTasks")}
               value={metrics.task_metrics.total}
             />
             <KPICard
-              icon={<CalendarDays className="h-5 w-5 text-blue-500" />}
+              icon={<CalendarDays className="h-5 w-5 text-tone-info-500" />}
               label={t("analytics.kpi.created")}
               value={metrics.task_metrics.created_this_period}
             />
             <KPICard
-              icon={<TrendingUp className="h-5 w-5 text-emerald-500" />}
+              icon={<TrendingUp className="h-5 w-5 text-tone-positive-500" />}
               label={t("analytics.kpi.completed")}
               value={metrics.task_metrics.completed_this_period}
             />
             <KPICard
-              icon={<Zap className="h-5 w-5 text-amber-500" />}
+              icon={<Zap className="h-5 w-5 text-tone-warning-500" />}
               label={t("analytics.kpi.totalEvents")}
               value={
                 metrics.event_metrics.period_fully_covered

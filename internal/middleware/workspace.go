@@ -186,7 +186,7 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	                              WHERE c.id = $1`)},
 	// A human_gate_decision names its tenant through its task, same shape as
 	// comment_id above. POST /human-gate-decisions/:decision_id/revoke is the
-	// only route naming this object directly (task #c56339b1) — without this
+	// only route naming this object directly — without this
 	// resolver a caller could revoke another tenant's decision by guessing or
 	// enumerating its id, re-freezing a task they have no access to.
 	{param: "decision_id", resolve: uuidResolver(`SELECT p.workspace_id
@@ -477,6 +477,9 @@ func resolveProjectWorkspace(ctx context.Context, _ *sqlx.DB, projectRepo reposi
 // ExtensionInstanceAdminHandler answers 403 unless the caller is an instance
 // admin before it writes anything.
 var workspaceScopeHandlerCheckedRoutes = map[string]bool{
+	// :thread_id belongs to one user, not to a workspace: every AgentChatRepo query carries workspace_id, project_id and user_id = caller, so another user's, a deleted and a missing thread are the same 404 thread_not_found
+	"/api/v1/projects/:proj_id/chat/threads/:thread_id/messages":                                  true,
+	"/api/v1/projects/:proj_id/chat/threads/:thread_id/stop":                                      true,
 	"/api/v1/ext/:ext_id/ui-context":                                                              true, // :ext_id is a registry id, not tenant data; the workspace is in the body (bodyWS) and the handler checks membership, task and project against it
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
 	"/api/v1/extensions/:ext_id/catalog-card":                                                     true,
@@ -484,10 +487,12 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/extensions/:ext_id/update":                                                           true,
 	"/api/v1/extensions/:ext_id/rollback":                                                         true,
 	"/api/v1/memories/:id":                                                                        true,
+	"/api/v1/projects/:proj_id/chat/threads/:thread_id":                                           true, // ChatThreadDeleteRepo selects the thread by id AND project_id AND the caller's user_id; anything else is a 404 thread_not_found
 	"/api/v1/me/ui-state/:scope":                                                                  true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id":                                                true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id/actions":                                        true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id/actions/:action":                                true,
+	"/api/v1/projects/:proj_id/chat/attachments/:attachment_id/download":                          true, // the repo resolves the attachment through its thread with project_id = :proj_id and user_id = caller; anyone else gets 404
 	"/api/v1/memories/:id/related":                                                                true,
 	"/api/v1/memories/:id/revisions":                                                              true,
 	"/api/v1/notifications/preferences/:pref_id":                                                  true,
@@ -677,7 +682,7 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 // scoped to it, or a guest key issued for workspace A authenticates the
 // caller into A and then, on any route naming a DIFFERENT workspace B the
 // same agent happens to also hold a grant in, reads B's directory too
-// (#7661fc5d — measured live: a guest-workspace key returned the home
+// (an internal ticket — measured live: a guest-workspace key returned the home
 // workspace's full agent roster with key prefixes). No DB query needed: the
 // equality check IS the proof — agentService.Authenticate already read
 // agent_workspace_grants (or the legacy home row) to produce that value, and
@@ -687,7 +692,7 @@ func WorkspaceRLS(db *sqlx.DB, projectRepo repository.ProjectRepository) echo.Mi
 // for THIS request — which cachedAgentAuth's cache hit path does not do by
 // itself. See cachedAuthStillValid (agent_auth_cache.go) for the freshness
 // re-check that keeps this guard's zero-DB-query design honest without
-// reintroducing a query here (#315d9a52: a soft-deleted workspace's guest key
+// reintroducing a query here (an internal ticket: a soft-deleted workspace's guest key
 // kept passing this equality check for the rest of the cache TTL before that
 // existed).
 //
@@ -924,7 +929,7 @@ func AgentIsInWorkspace(ctx context.Context, db *sqlx.DB, wsID, agentID uuid.UUI
 //     makes them indistinguishable is correct and untouched, only the status
 //     code changed. Until 2026-07 this case fell through to case 4 (a 403
 //     that told a caller nothing except "denied", conflating "does not exist"
-//     with "exists but is not yours" — see #a49500c5 for the investigations
+//     with "exists but is not yours" — see an internal ticket for the investigations
 //     that cost).
 //  4. A parameter is present and WorkspaceRLS resolved a workspace *from it*:
 //     require membership of that workspace, then require every containment

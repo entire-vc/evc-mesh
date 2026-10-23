@@ -225,9 +225,9 @@ func WithTaskAgentRepo(ar repository.AgentRepository) TaskServiceOption {
 // (see assertAssigneeInProjectWorkspace) for the multi-workspace case: an
 // agent whose HOME workspace (agents.workspace_id) differs from the task's
 // workspace is still a legitimate assignee if it holds an active
-// agent_workspace_grants connection into that workspace (task U3/#71627c5a).
+// agent_workspace_grants connection into that workspace (task U3/an internal ticket).
 // Without it, the agent branch can only ever see the home row — the same
-// gap #7661fc5d closed for authentication, not yet closed here for
+// gap an internal ticket closed for authentication, not yet closed here for
 // assignment — and every guest-workspace assignment refuses with
 // "agent belongs to a different workspace" even for a correctly invited,
 // actively-granted agent. Optional in the sense that a nil value keeps
@@ -242,7 +242,7 @@ func WithTaskAgentGrantRepo(r repository.AgentWorkspaceGrantRepository) TaskServ
 }
 
 // WithGatePredicateLog wires the append-only log of gate-arming predicate evaluations
-// (task #5d3dc714). Optional: when unset, arming still enforces the predicate — the
+//. Optional: when unset, arming still enforces the predicate — the
 // guard must not depend on the recorder being present, or "the log was not wired" would
 // silently become "the guard is off", which is the disarm-by-omission shape this fleet
 // keeps paying for.
@@ -277,7 +277,7 @@ func WithVCSLinkRepoTask(vr repository.VCSLinkRepository) TaskServiceOption {
 // WithGitHubPRChecker enables a LIVE GitHub check in the done-evidence gate:
 // when a linked PR's cached status says "not merged", the gate asks GitHub
 // directly before blocking, instead of trusting a status that is only ever
-// as fresh as the last webhook delivery (#5f7f8c6e — a PR merged 9.5h
+// as fresh as the last webhook delivery (an internal ticket — a PR merged 9.5h
 // earlier still blocked move_task→done because the webhook that would have
 // updated the cached record never fired for this particular link).
 // Optional: if unset, the gate falls back to the cached status exactly as
@@ -288,14 +288,14 @@ func WithGitHubPRChecker(c githubapi.PullRequestChecker) TaskServiceOption {
 
 // WithGitLabMRChecker enables a LIVE GitLab check in the done-evidence gate,
 // mirroring WithGitHubPRChecker for a linked merge request instead of a pull
-// request (#bc39d781). Optional: if unset, the gate falls back to the
+// request. Optional: if unset, the gate falls back to the
 // cached status exactly as before.
 func WithGitLabMRChecker(c gitlabapi.MergeRequestChecker) TaskServiceOption {
 	return func(s *taskService) { s.gitlabMRChecker = c }
 }
 
 // WithVCSIntegrationResolver enables PER-WORKSPACE GitHub/GitLab checkers
-// (#33a4bb57, §C1 of specsintegration-provider-contract): instead of the one
+// (an internal ticket, §C1 of specsintegration-provider-contract): instead of the one
 // process-wide client WithGitHubPRChecker/WithGitLabMRChecker wire at
 // construction, the done-evidence gate resolves a fresh client for the
 // link's own workspace on every call, honoring that workspace's active
@@ -322,7 +322,7 @@ const dupCandidateLabel = "dup-candidate"
 // hasDupCandidateLabel reports whether labels already carries the dup hint,
 // case-insensitively. Was the generic hasLabel in
 // comment_closed_task_followup.go; renamed when the follow-up's label-scan
-// dedup died (#5194afd4) and this became its only caller shape.
+// dedup died and this became its only caller shape.
 func hasDupCandidateLabel(labels []string) bool {
 	for _, l := range labels {
 		if strings.EqualFold(strings.TrimSpace(l), dupCandidateLabel) {
@@ -533,7 +533,7 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 	// see TaskRepo.Create. A task must never exist without the event that records
 	// its creation: the previous fire-and-forget, post-commit, non-retried write
 	// here silently dropped 8.47% of system-created tasks' task.created rows under
-	// concurrent recurring-tick load, with no error surfaced anywhere (#819e7b29).
+	// concurrent recurring-tick load, with no error surfaced anywhere.
 	// project_id is NOT NULL REFERENCES projects(id), so a missing project was
 	// already fatal to task creation (a raw FK violation from taskRepo.Create) —
 	// this just surfaces that earlier, with a clean error.
@@ -551,7 +551,7 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 
 	// actorID/actorType were already resolved above (auto-enroll block).
 	//
-	// Defense in depth for #fd8a3e43: activity_log.actor_type is a NOT NULL enum
+	// Defense in depth for an internal ticket: activity_log.actor_type is a NOT NULL enum
 	// with no DEFAULT, so an empty actorType (any caller on a bare
 	// context.Background() — the recurring ticker being the one that actually
 	// hit this, cmd/api/main.go now wraps that one explicitly too) makes this
@@ -621,8 +621,8 @@ func (s *taskService) Create(ctx context.Context, task *domain.Task) error {
 
 // bindReviewSubject links a freshly created review card to the one PR/MR its
 // description names, so the merge webhook can find the card and close it
-// (#fecda06c; before this a self-filed review card was never linked and sat
-// open after its subject merged, e.g. #863bb5de). Exactly one distinct URL is
+// (an internal ticket; before this a self-filed review card was never linked and sat
+// open after its subject merged, e.g. an internal ticket). Exactly one distinct URL is
 // required: several are prose about other changes, and a wrong binding would
 // close a card for the wrong merge. Best-effort — a failure is logged, never
 // fails the create.
@@ -1061,7 +1061,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 		// may move it to backlog/done/cancelled. Prevents SupersedeRecurringInstances,
 		// auto_transition, and other system actors from silently closing gated tasks.
 		//
-		// Narrow exception (#e1b4cffd): the AGENT who raised THIS gate may park it
+		// Narrow exception: the AGENT who raised THIS gate may park it
 		// in backlog — never done/cancelled, and never any other agent — while the
 		// ask is still open and unanswered. Without it the gate author has no way
 		// to say "still waiting, nothing changed" short of lying (withdrawing a
@@ -1098,7 +1098,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 		// under a passive-wait label with no future due_date — a park with no exit.
 		// Backlog is polled by no agent feed, so the ONLY thing that can bring such a
 		// card back is MonitorPromotionService firing on due_date; without one it
-		// sleeps until a human happens to find it (audit #559270cf: 34 such cards, 11
+		// sleeps until a human happens to find it (an internal ticket: 34 such cards, 11
 		// already in the "parked with no exit" bucket).
 		//
 		// Not exempted for system actors, on the same reasoning as the triage-entry
@@ -1193,7 +1193,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 								continue
 							}
 							// A review card's deliverable is the verdict, not the
-							// merge of the MR it reviews (#fecda06c).
+							// merge of the MR it reviews.
 							if l.IsReviewSubject() {
 								continue
 							}
@@ -1338,6 +1338,14 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, taskID)
+	}
+
+	// Shadow review route: journaled only now that the move is committed, with the
+	// author as it was before any reassignment (explicit or rotated).
+	if statusChanged {
+		if entered, gerr := s.statusRepo.GetByID(ctx, task.StatusID); gerr == nil && entered != nil {
+			s.shadowRecordReviewRoute(ctx, task, oldAssigneeID, oldAssigneeType, entered)
+		}
 	}
 
 	// Auto-release checkout when the task transitions to a terminal category
@@ -1672,7 +1680,7 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		return nil, err
 	}
 
-	// Same atomicity contract as Create (see the comment there / #819e7b29): the
+	// Same atomicity contract as Create (see the comment there / an internal ticket): the
 	// task.created audit entry is written in the SAME transaction as the subtask
 	// insert, so a subtask can never exist without its creation event.
 	if s.projectRepo == nil {
@@ -1700,7 +1708,7 @@ func (s *taskService) CreateSubtask(ctx context.Context, parentTaskID uuid.UUID,
 		// "" -> ActorTypeUser fallback applied above, so this can never write
 		// activity_log's NOT NULL, no-DEFAULT enum column an empty value on a
 		// background/unauthenticated ctx — same class of bug as Create's own
-		// fallback (#fd8a3e43).
+		// fallback.
 		ActorType: child.CreatedByType,
 		Changes:   changesJSON,
 		CreatedAt: now,
@@ -2365,10 +2373,10 @@ func (e *AssignmentPinnedError) Error() string {
 // TargetCategory names the destination status category that was actually refused, so
 // callers (the HTTP handler) can render an accurate message instead of always naming
 // the full backlog/done/cancelled trio. That matters because backlog has its own,
-// narrower rule since #e1b4cffd: the gate's own author MAY park it there — a refusal
+// narrower rule since an internal ticket: the gate's own author MAY park it there — a refusal
 // hitting this branch always means "you are not that author", never "only a human",
 // and the old one-size-fits-all text told the gate author the one door they'd just
-// been given was still locked (#854b7b8d).
+// been given was still locked.
 type HumanGateFrozenError struct {
 	TargetCategory domain.StatusCategory
 }
@@ -2412,7 +2420,7 @@ func (s *taskService) isPRMergedLive(ctx context.Context, l domain.VCSLink, work
 // the given provider and workspace, independent of whether any particular
 // call to it would succeed. Used to distinguish, in the done-evidence
 // gate's refusal message, "we never even tried — no access is configured"
-// from "we tried and it failed" (#bc39d781: the former needs a message that
+// from "we tried and it failed" (an internal ticket: the former needs a message that
 // says how to fix it — configure the token — not one implying a merge
 // attempt is being waited on).
 func (s *taskService) hasLiveChecker(ctx context.Context, provider domain.VCSProvider, workspaceID uuid.UUID) bool {
@@ -2436,7 +2444,7 @@ func (s *taskService) hasLiveChecker(ctx context.Context, provider domain.VCSPro
 // of baked in at boot. When vcsIntegrations is nil (tests, and any caller
 // that still only wires WithGitHubPRChecker), the legacy static client is
 // used unconditionally — workspaceID is ignored in that path, matching the
-// pre-#33a4bb57 behavior exactly.
+// pre behavior exactly.
 func (s *taskService) resolveGitHubChecker(ctx context.Context, workspaceID uuid.UUID) (githubapi.PullRequestChecker, bool) {
 	if s.vcsIntegrations == nil {
 		return s.githubPRChecker, s.githubPRChecker != nil
@@ -2451,7 +2459,7 @@ func (s *taskService) resolveGitHubChecker(ctx context.Context, workspaceID uuid
 // resolveGitLabChecker is resolveGitHubChecker's GitLab counterpart. GitLab
 // needs BOTH a base URL and a token before a live check can even be
 // attempted (self-hosted, no fixed API host like GitHub's) — same gate the
-// pre-#33a4bb57 env-only wiring used.
+// pre env-only wiring used.
 func (s *taskService) resolveGitLabChecker(ctx context.Context, workspaceID uuid.UUID) (gitlabapi.MergeRequestChecker, bool) {
 	if s.vcsIntegrations == nil {
 		return s.gitlabMRChecker, s.gitlabMRChecker != nil
@@ -2563,7 +2571,7 @@ type DoneEvidenceError struct {
 	// verification (or never got a checker wired at all) need to name their
 	// own system, not each other's — saying "against GitHub" for a GitLab
 	// link names the wrong reason and sends the reader looking in the wrong
-	// place (#0fbed572).
+	// place.
 	PRProvider string
 	// PRStatusCheckedLive is true when this block reflects a provider API
 	// call made just now (the gate asked GitHub/GitLab directly and it said
@@ -2583,7 +2591,7 @@ type DoneEvidenceError struct {
 	// to the service. Decides
 	// which fallback wording unverifiableLiveCheckReason uses: "no access is
 	// configured, state the status explicitly" reads very differently from
-	// "we asked and couldn't verify" (#bc39d781) — the first tells the
+	// "we asked and couldn't verify" — the first tells the
 	// reader how to unblock themselves right now, the second implies a
 	// transient failure worth retrying.
 	PRProviderAccessConfigured bool
@@ -2602,7 +2610,7 @@ func (e *DoneEvidenceError) Error() string {
 	// PR link, comments are only consulted when there is NO VCS link at
 	// all. A message promising one taught agents to write a comment,
 	// hit the same 422 again, and conclude the gate itself was broken
-	// (#df734dd9).
+	//.
 	if e.PRStatusCheckedLive {
 		// The gate just asked the provider and got a definitive "not
 		// merged" — don't suggest "if that's stale", there is no cache
@@ -2654,7 +2662,7 @@ func liveCheckProviderName(provider string) string {
 // unverifiableLiveCheckReason explains, per provider, why the done-evidence
 // gate fell back to the cached vcs_links.status instead of a fresh check.
 // checkerConfigured distinguishes two different facts that both fall back
-// to the cache but call for different reader action (#bc39d781): "no live
+// to the cache but call for different reader action: "no live
 // check client is wired for this provider at all" (the reader's actual next
 // step is to configure access, or state the status explicitly right now —
 // nothing will ever get better on its own) versus "a checker IS wired but
@@ -3669,8 +3677,8 @@ func (s *taskService) resolveOnEnterTarget(ctx context.Context, projectID uuid.U
 // resolveReviewTarget picks who a card entering review goes to, or nil to leave it
 // where it is. The project's workflow set_reviewer wins. Without one, a card the
 // executor created for itself (alert cards, self-filed chores) would sit in review
-// on the very agent who did the work, and no review path feeds it (#994e02f4,
-// #d81f8b30; task #8f191cf7): that case falls back to the project lead
+// on the very agent who did the work, and no review path feeds it (an internal ticket,
+// an internal ticket; an internal ticket): that case falls back to the project lead
 // (default_assignee). Cards created by somebody else keep the builder — the
 // existing contract, no creator bounce.
 func (s *taskService) resolveReviewTarget(ctx context.Context, task *domain.Task, old *domain.TaskStatus) (*uuid.UUID, domain.AssigneeType, string) {
@@ -3712,7 +3720,7 @@ func sameAssigneeID(a, b *uuid.UUID) bool {
 // without the caller asking for it, and both were
 // previously silent: the activity log recorded "old": nil, and no comment was
 // posted at all, so an agent reading the thread had no way to tell the card had
-// moved out from under them (source: task f06ebeb7). A comment-post failure must
+// moved out from under them (source: an internal ticket). A comment-post failure must
 // not unwind the assignee change itself — it is logged loudly and the change stands.
 func (s *taskService) postAssigneeChangeComment(ctx context.Context, task *domain.Task, oldID, newID *uuid.UUID, reason string) {
 	if s.commentRepo == nil {
@@ -3769,7 +3777,7 @@ func (s *taskService) resolveSetReviewer(ctx context.Context, projectID uuid.UUI
 	}
 	// default_assignee is stored either as a slug or as "agent:<uuid>" (the form
 	// the rules API writes); a slug lookup of the latter always misses and the
-	// lead fallback silently never fires (task #8f191cf7 live check).
+	// lead fallback silently never fires (an internal ticket live check).
 	if raw := strings.TrimPrefix(slug, "agent:"); raw != slug || uuid.Validate(raw) == nil {
 		if agentID, perr := uuid.Parse(raw); perr == nil {
 			agent, gerr := s.agentRepo.GetByID(ctx, agentID)
@@ -3935,11 +3943,11 @@ func (s *taskService) instanceHadRealWork(ctx context.Context, task domain.Task)
 	return s.commentRepo.HasSubstantiveComment(ctx, task.ID)
 }
 
-// ArmHumanGate is the ONE arming path (task #4545660b). Everything a reader needs in
+// ArmHumanGate is the ONE arming path. Everything a reader needs in
 // order to know the card is waiting on a human — and on whom, for what, and what happens
 // if nobody answers — is written here, on the task, so no client has to re-derive it by
 // grepping comment text. That re-derivation existed in 21 places across the fleet and was
-// the direct cause of the phantom-gate class (#84ab54fd), where one driver read another
+// the direct cause of the phantom-gate class, where one driver read another
 // driver's instructional boilerplate back as a raised blocker.
 //
 // Returns *domain.ArmHumanGateValidationError (mapped to 422 by the handler) when
@@ -3947,7 +3955,7 @@ func (s *taskService) instanceHadRealWork(ctx context.Context, task domain.Task)
 // A marker-sourced arm with no stated default is allowed through — see
 // domain.ArmHumanGateSourceMarker for why refusing it there would be worse than the
 // bug — but no longer arms with the field left NULL: it is auto-filled with
-// domain.DefaultMarkerRecommendedDefault (task 1.4b, #4d61d877) so the gate still gets
+// domain.DefaultMarkerRecommendedDefault (task 1.4b) so the gate still gets
 // a computed gate_deadline and can be resolved by a clock, not only by a human finding
 // it. The fill is reported twice — the pre-existing log line, and (new) a task comment
 // via postMarkerDefaultAppliedComment, addressed to the gate's own author, once the arm
@@ -3965,7 +3973,7 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 		in.RecommendedDefault = domain.DefaultMarkerRecommendedDefault
 	}
 
-	// Ownership-takeover guard (task #f933dc05). This SQL overwrites gate_author
+	// Ownership-takeover guard. This SQL overwrites gate_author
 	// unconditionally, re-arm included — which was harmless while gate_author decided
 	// nothing, and stops being harmless the moment the recorded author may clear the
 	// gate with its own key. Without this, "take over someone else's gate" is two calls:
@@ -3975,7 +3983,7 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 	//
 	// Scoped to API arms only. A marker arm must never be refused: it is a live ask
 	// arriving through a channel we do not control, refusing it is SILENT to its author
-	// (#58a6f4ff, #f421ad57), and it needs no guard anyway — a marker-armed gate is
+	// (an internal ticket), and it needs no guard anyway — a marker-armed gate is
 	// released by the marker scan, which reads the thread, not gate_author.
 	//
 	// Fail-closed on a read error, unlike the disposable guard just below: an API arm is
@@ -3999,7 +4007,7 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 		}
 	}
 
-	// Disposable-task guard (task #318de303). A HARD gate on a throwaway/probe card
+	// Disposable-task guard. A HARD gate on a throwaway/probe card
 	// waits forever for a human who is never coming back to it — soft is fine (it
 	// self-releases on the default-on-timeout sweep instead of sitting in the queue).
 	//
@@ -4007,7 +4015,7 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 	// API-sourced arm is a program we can fix, so it is refused loudly (422) and the
 	// caller can retry with class=soft. A marker-sourced arm is a live human ask
 	// arriving through a channel we do not control — refusing it would drop the ask
-	// silently for its author (the exact failure class #58a6f4ff/#f421ad57 exist to
+	// silently for its author (the exact failure class an internal ticket/an internal ticket exist to
 	// prevent), so it is downgraded to soft instead of refused.
 	if in.Class == domain.HumanGateClassHard {
 		if task, err := s.taskRepo.GetByID(ctx, in.TaskID); err == nil && task != nil {
@@ -4027,8 +4035,8 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 		}
 	}
 
-	// Predicate gate (task #5d3dc714). Evaluated BEFORE the write, and its refusal is
-	// returned instead of arming — the audit found 40-45% of asks to Pavel were
+	// Predicate gate. Evaluated BEFORE the write, and its refusal is
+	// returned instead of arming — the audit found 40-45% of asks to Alex were
 	// decidable from a rule already written down.
 	outcome := domain.GatePredicateAllowed
 	if in.Predicate != nil {
@@ -4063,7 +4071,7 @@ func (s *taskService) ArmHumanGate(ctx context.Context, in domain.ArmHumanGateIn
 
 // postAPIArmHintComment tells the human, at the moment the gate goes up, which door
 // lifts it. An API/button-armed gate leaves no "❓ Blocking" comment, so a reply in
-// the thread does not release it (task #fc63d720); the person reading the card has
+// the thread does not release it; the person reading the card has
 // to hear that BEFORE replying, not discover it from silence. Best-effort.
 func (s *taskService) postAPIArmHintComment(ctx context.Context, taskID uuid.UUID) {
 	if s.commentRepo == nil {
@@ -4089,7 +4097,7 @@ func (s *taskService) postAPIArmHintComment(ctx context.Context, taskID uuid.UUI
 // postMarkerDefaultAppliedComment tells the gate's own author, on the task itself, that
 // their marker armed the gate with no stated recommended_default and the system default
 // (domain.DefaultMarkerRecommendedDefault) was applied in its place (task 1.4b,
-// #4d61d877) — the log line ArmHumanGate already writes reaches nobody in practice.
+// an internal ticket) — the log line ArmHumanGate already writes reaches nobody in practice.
 // Best-effort like postAssigneeChangeComment: a comment-post failure must never unwind
 // the arm that already happened, only be logged loudly.
 //
@@ -4120,7 +4128,7 @@ func (s *taskService) postMarkerDefaultAppliedComment(ctx context.Context, in do
 		domain.DefaultMarkerRecommendedDefault, deadlineText,
 	)
 	if task.HumanGateClass == domain.HumanGateClassHard {
-		// Task #a36fa51d: a hard gate never auto-applies, so quoting the default
+		// an internal ticket: a hard gate never auto-applies, so quoting the default
 		// reads as an automatic decision and a human believed the question closed.
 		body = fmt.Sprintf(
 			"⏸ Gate armed, hard class: nothing is applied automatically, the question waits for a human answer (the %s deadline is only for escalation).\n"+
@@ -4208,7 +4216,7 @@ func (s *taskService) ClearHumanGate(ctx context.Context, taskID uuid.UUID) erro
 // SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
 //
 // Deprecated for ARMING: it leaves the gate authorless, with no reason and no default,
-// which is the state task #4545660b exists to eliminate. Use ArmHumanGate to arm and
+// which is the state an internal ticket exists to eliminate. Use ArmHumanGate to arm and
 // ClearHumanGate to release. Kept because the release paths (releaseHumanGate, the
 // withdrawal path, the soft-timeout sweep, PATCH {human_gate:false}) legitimately pass
 // false, and because the raw PATCH/UI arm has no author to attribute by construction.

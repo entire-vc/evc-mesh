@@ -111,6 +111,8 @@ import { MATCH_END, MATCH_START } from "@/lib/docs/document-search";
 import { DocsPage } from "@/pages/docs";
 import { useDocumentStore } from "@/stores/document";
 import { useProjectStore } from "@/stores/project";
+import { registerSlotViewOverride } from "@/core/slots/registry";
+import type { DocViewView } from "@/core/slots/types";
 import type { Project, ProjectDocument } from "@/types";
 
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
@@ -305,7 +307,7 @@ describe("DocsPage — open, view and edit", () => {
     renderDocs("doc-1");
 
     expect(await screen.findByTestId("doc-view")).toHaveTextContent("Run the thing.");
-    // Scoped to the measured body, not the whole page: since #744ae979 the
+    // Scoped to the measured body, not the whole page: since an internal ticket the
     // page legitimately carries one textbox outside it — the always-mounted
     // comment composer under the document — and that one is not what this
     // test is about.
@@ -621,12 +623,12 @@ describe("DocsPage — the page's own header", () => {
   });
 });
 
-// Export 6/7 (#015491ee). What "download actually happened in a real
+// Export 6/7. What "download actually happened in a real
 // browser" means is not something jsdom can observe — that half of the AC is
 // the mandatory authed Playwright scenario (§1n), not this file. What these
 // tests own: the three menu items exist with the pre-approved labels, the
 // dialog appears only when there ARE children to choose from (and not
-// otherwise — the point of #2a467980 §2's "лишний шаг... раздражение без
+// otherwise — the point of an internal ticket §2's "лишний шаг... раздражение без
 // пользы"), and the chosen scope reaches apiBlob correctly either way.
 describe("DocsPage — export", () => {
   const parent = makeDoc({ id: "p", title: "Engineering" });
@@ -1168,7 +1170,7 @@ describe("DocsPage — the discussion under the page", () => {
       parent_comment_id: null,
       author_id: "u1",
       author_type: "user",
-      author_name: "Pavel",
+      author_name: "Alex",
       body: "Say why the order matters.",
       anchor: {
         exact: "Run the migration first",
@@ -1222,7 +1224,7 @@ describe("DocsPage — the discussion under the page", () => {
   });
 
   it("still renders the section — with its composer — on a page with no comments", async () => {
-    // #744ae979: the tree used to unmount entirely here. It can't any more —
+    // an internal ticket: the tree used to unmount entirely here. It can't any more —
     // it carries the bottom composer, which needs somewhere to render before
     // the first comment exists.
     mockWithComments([]);
@@ -1238,8 +1240,8 @@ describe("DocsPage — the discussion under the page", () => {
   /**
    * AC1 — the bottom form is available with NO selection and NO prior click,
    * in both rail states. This is the load-bearing test for the card's whole
-   * premise: `#a9df0f4a`'s fix hid this exact composer whenever the rail was
-   * open, and Pavel's decision is specifically that the hiding was wrong.
+   * premise: an internal ticket's fix hid this exact composer whenever the rail was
+   * open, and Alex's decision is specifically that the hiding was wrong.
    */
   it.each([
     ["closed", "0"],
@@ -1257,7 +1259,7 @@ describe("DocsPage — the discussion under the page", () => {
     ).toBeInTheDocument();
   });
 
-  describe("the rail and the tree render together, once per surface (#744ae979)", () => {
+  describe("the rail and the tree render together, once per surface", () => {
     /** Never resolves in BODY — the server's placement, not ours. */
     function pageComment() {
       return {
@@ -1266,7 +1268,7 @@ describe("DocsPage — the discussion under the page", () => {
         parent_comment_id: null,
         author_id: "u1",
         author_type: "user",
-        author_name: "Pavel",
+        author_name: "Alex",
         body: "A note on the document as a whole.",
         anchor: null,
         resolved_at: null,
@@ -1285,7 +1287,7 @@ describe("DocsPage — the discussion under the page", () => {
         parent_comment_id: null,
         author_id: "u1",
         author_type: "user",
-        author_name: "Pavel",
+        author_name: "Alex",
         body: "This text isn't here any more.",
         anchor: {
           exact: "a sentence that got deleted",
@@ -1304,12 +1306,12 @@ describe("DocsPage — the discussion under the page", () => {
     }
 
     /**
-     * Pavel's reversal of `#a9df0f4a` (2026-08-23, `#744ae979`): the rail and
+     * Alex's reversal of an internal ticket (2026-08-23, an internal ticket): the rail and
      * the tree are supposed to show the discussion at the same time, not take
      * turns. So with the rail open, each of the three threads legitimately
      * appears TWICE on screen — once per surface — which is why the count
      * that matters is per-surface, not per-document. Counting unscoped here
-     * would make a correct implementation look like the `#a9df0f4a` bug; that
+     * would make a correct implementation look like the an internal ticket bug; that
      * trap is exactly why the card's AC4 asked for this reformulation before
      * any test got written.
      */
@@ -1417,7 +1419,7 @@ describe("DocsPage — the discussion under the page", () => {
     });
   });
 
-  describe("below `lg`, one COMMENTS surface, not two (#fd898a58)", () => {
+  describe("below `lg`, one COMMENTS surface, not two", () => {
     // jsdom does not evaluate media queries (see the "narrow screens" describe
     // above), and this fix genuinely needs JS to decide whether to mount the
     // rail at all — a CSS-only `hidden` would still leave it in the DOM (and
@@ -1495,7 +1497,7 @@ describe("DocsPage — the discussion under the page", () => {
     });
   });
 
-  describe("comment on the page as a whole, no selection required (#41d01325)", () => {
+  describe("comment on the page as a whole, no selection required", () => {
     // jsdom has no layout, so it has no scrollIntoView — the rail calls it on
     // the thread it focuses, and submitting a draft focuses the new thread.
     beforeAll(() => {
@@ -1532,7 +1534,7 @@ describe("DocsPage — the discussion under the page", () => {
         parent_comment_id: null,
         author_id: "u1",
         author_type: "user",
-        author_name: "Pavel",
+        author_name: "Alex",
         body: (body as { body: string }).body,
         anchor: null,
         resolved_at: null,
@@ -1543,9 +1545,9 @@ describe("DocsPage — the discussion under the page", () => {
       };
     }
 
-    // Scoped to the rail throughout: since #744ae979 the tree carries its own
+    // Scoped to the rail throughout: since an internal ticket the tree carries its own
     // permanently-mounted composer with the identical placeholder and submit
-    // label (reused copy, not a coincidence — see #744ae979's instruction not
+    // label (reused copy, not a coincidence — see an internal ticket's instruction not
     // to invent new strings), so an unscoped query now matches two composers
     // whenever the rail is open.
 
@@ -1897,5 +1899,50 @@ describe("DocsPage — copy and share the document URL", () => {
 
     expect(screen.getByRole("menuitem", { name: "Copy URL" })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Share URL" })).toBeNull();
+  });
+});
+
+describe("DocsPage — a stub doc.view through the same container", () => {
+  // Acceptance (c): the page frame is the view's, the saving is the container's. A view that draws a
+  // different frame (no h1, its own edit button) still gets the editor, the autosave and the save state.
+  it("edits and autosaves through a view with another layout", async () => {
+    const StubView: DocViewView = ({ data, actions }) => {
+      const { Editor } = data.components;
+      return (
+        <div data-testid="stub-doc-view">
+          <h2>{data.doc.state === "ready" ? data.doc.value.title : ""}</h2>
+          <button type="button" onClick={actions.startEditing}>
+            stub edit
+          </button>
+          <span data-testid="stub-save">{data.save.state}</span>
+          <Editor />
+        </div>
+      );
+    };
+    const unregister = registerSlotViewOverride("doc.view", StubView);
+    try {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const doc = makeDoc({ id: "doc-1", title: "Runbook" });
+      const patched: unknown[] = [];
+      mockRoutes([doc], (path, opts) => {
+        if (path === "/api/v1/documents/doc-1" && !opts?.method) return Promise.resolve({ ...doc, body: "hello" });
+        if (path === "/api/v1/documents/doc-1" && opts?.method === "PATCH") {
+          patched.push(opts.body);
+          return Promise.resolve({ ...doc, version: 2, body: "hello world" });
+        }
+        return undefined;
+      });
+      renderDocs("doc-1");
+
+      fireEvent.click(await screen.findByRole("button", { name: "stub edit" }));
+      expect(screen.queryByRole("heading", { level: 1 })).toBeNull(); // not the mesh-default frame
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "hello world" } });
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(patched).toEqual([{ body: "hello world", base_version: 1 }]);
+      await waitFor(() => expect(screen.getByTestId("stub-save")).toHaveTextContent("saved"));
+    } finally {
+      unregister();
+    }
   });
 });

@@ -9,43 +9,24 @@ import {
 } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { useTranslation } from "react-i18next";
-import {
-  AlertCircle,
-  Check,
-  FilePlus2,
-  FileText,
-  Loader2,
-  MoreHorizontal,
-  NotebookText,
-  Pencil,
-  Plus,
-  Search,
-  Unlink,
-  X,
-} from "lucide-react";
-import { DocBreadcrumbs } from "@/components/doc-breadcrumbs";
-import {
-  DocCommentAffordance,
-  DocCommentPageEntry,
-  DocCommentRail,
-  DocCommentToggle,
-} from "@/components/doc-comment-rail";
-import { DocEditor } from "@/components/doc-editor";
-import { DocWatchToggle } from "@/components/doc-watch-toggle";
-import { DocMeta } from "@/components/doc-meta";
-import { DocCommentTree } from "@/components/doc-comment-tree";
+import { FilePlus2, FileText, NotebookText, Plus, Search, X } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
-import { DocTree, moveTargets } from "@/components/doc-tree";
+import { DocTree, buildDocPath, moveTargets } from "@/components/doc-tree";
+import { DOC_VIEW_BLOCKS, DocPageProvider, type DocPageState } from "@/core/slots/doc-blocks";
+import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
+import { useSlotContext } from "@/core/slots/use-slot-context";
+import type {
+  Async,
+  DocViewActions,
+  DocViewData,
+  DocViewDoc,
+  DocViewSettings,
+  DocViewView,
+} from "@/core/slots/types";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ResizableDivider } from "@/components/resizable-divider";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -104,16 +85,6 @@ const AUTOSAVE_DEBOUNCE_MS = 2000;
 const DOC_SEARCH_DEBOUNCE_MS = 200;
 
 type ExportFormat = "pdf" | "md" | "docx";
-
-// Labels are a direct translation of Pavel's own directive (2026-09-02) —
-// not gated by the visible-copy approval this feature's dialog text is
-// still waiting on (§1r.A, Mesh task #6a0c7ae3).
-// Values are `docs` locale keys, resolved with t() at render.
-const EXPORT_FORMAT_LABEL: Record<ExportFormat, string> = {
-  pdf: "export.asPdf",
-  md: "export.asMarkdown",
-  docx: "export.asDocx",
-};
 
 type SaveState =
   | { status: "idle" }
@@ -365,10 +336,10 @@ function MoveDialog({
 
 // ---------------------------------------------------------------------------
 // Export dialog — only shown when the document has children (see
-// handleExportClick). The choice text below is DRAFT copy pending Pavel's
-// approval on Mesh task #6a0c7ae3 (§1r.A copy gate) — the epic that
+// handleExportClick). The choice text below is DRAFT copy pending Alex's
+// approval on an internal ticket (§1r.A copy gate) — the epic that
 // decomposed this feature explicitly authorizes shipping with draft strings
-// rather than blocking the feature on that answer (#2a467980, Garfield,
+// rather than blocking the feature on that answer (an internal ticket, Gary,
 // 2026-09-02): "если ответа не будет — катим с черновыми строками".
 // ---------------------------------------------------------------------------
 
@@ -435,97 +406,6 @@ function ExportDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Save indicator — says what actually happened, including when it failed
-// ---------------------------------------------------------------------------
-
-function SaveIndicator({
-  state,
-  onRetry,
-}: {
-  state: SaveState;
-  onRetry: () => void;
-}) {
-  const { t } = useTranslation("docs");
-  if (state.status === "saving") {
-    return (
-      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        {t("save.saving")}
-      </span>
-    );
-  }
-  if (state.status === "saved") {
-    return (
-      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-        <Check className="h-3 w-3" />
-        {t("save.saved")}
-      </span>
-    );
-  }
-  if (state.status === "error") {
-    return (
-      <span className="flex items-center gap-1 text-xs text-destructive">
-        <AlertCircle className="h-3 w-3" />
-        {t("save.notSaved", { message: state.message })}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-xs"
-          onClick={onRetry}
-        >
-          {t("save.retry")}
-        </Button>
-      </span>
-    );
-  }
-  if (state.status === "conflict") {
-    // Approved copy (#c8a9bbce), verbatim — no Retry button and no added
-    // hint about what to do next. Typing further re-arms the debounce on its
-    // own; a button here would be a second, unapproved sentence.
-    return (
-      <span className="flex items-center gap-1 text-xs text-destructive">
-        <AlertCircle className="h-3 w-3" />
-        {t("save.conflict")}
-      </span>
-    );
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// What a paragraph link found when it arrived
-// ---------------------------------------------------------------------------
-
-/**
- * Said out loud only when the answer is not "here it is".
- *
- * A link to a paragraph has two ways of going wrong and they need different
- * sentences. `edited` means the place is known but the words are not the ones
- * the link was made from — the reader is looking at the right spot and must not
- * assume it is the quoted text. `lost` means nothing could be located at all,
- * and the page stays where it is rather than scrolling somewhere arbitrary. The
- * two statuses this does not render — `exact` and `moved` — are the cases where
- * the paragraph itself is on screen, and a banner would only be noise.
- */
-function AnchorNotice({ match }: { match: AnchorMatch }) {
-  const { t } = useTranslation("docs");
-  if (match.status === "exact" || match.status === "moved") return null;
-
-  const text =
-    match.status === "edited"
-      ? t("anchor.edited")
-      : t("anchor.lost");
-
-  return (
-    <div className="flex items-start gap-2 border-b border-border bg-muted/60 px-4 py-2 text-xs text-muted-foreground">
-      <Unlink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <p>{text}</p>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -555,6 +435,7 @@ export function DocsPage() {
   const [openDoc, setOpenDoc] = useState<ProjectDocument | null>(null);
   const [docLoading, setDocLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
   const [draft, setDraft] = useState("");
   // Attachments of the open Team Relay document, for the serve-time embed
   // rewrite below. Own documents never fetch these.
@@ -594,7 +475,7 @@ export function DocsPage() {
   // Below `lg` a 320px rail and a readable column do not both fit (see the
   // layout comment further down), so the rail is dropped entirely on this
   // width rather than stacking under `DocCommentTree` — that stack is what
-  // produced two "COMMENTS" headers in a row on 393px (`#fd898a58`; Pavel's
+  // produced two "COMMENTS" headers in a row on 393px (an internal ticket; Alex's
   // choice among three options, canonical-decision-2026-08-23-docs-ui-393-lg).
   // `railOpen` itself is left untouched here: it is what the toggle persists
   // to localStorage, and it must still read back correctly once the viewport
@@ -723,7 +604,7 @@ export function DocsPage() {
     return () => {
       cancelled = true;
     };
-  }, [docId, getDocument]);
+  }, [docId, getDocument, reloadTick]);
 
   // The value the READ-ONLY renderer sees: a Team Relay copy's body with its
   // share-relative embeds rewritten to the imported attachments' download
@@ -1041,7 +922,7 @@ export function DocsPage() {
   // The dialog only earns its place when there is an actual choice to make —
   // a document with no children has nothing to include or exclude, so this
   // downloads immediately rather than making the reader click through a
-  // dialog offering one option (per #2a467980 §2: "лишний шаг там, где выбора
+  // dialog offering one option (per an internal ticket §2: "лишний шаг там, где выбора
   // не существует, — раздражение без пользы").
   const handleExportClick = (format: ExportFormat) => {
     if (!openDoc) return;
@@ -1060,6 +941,99 @@ export function DocsPage() {
         (d) => d.id !== deleteTarget.id && isSelfOrDescendant(documents, d.id, deleteTarget.id),
       ).length
     : 0;
+
+  // ---- doc.view ------------------------------------------------------------
+  const workspace = useWorkspaceStore((s) => s.currentWorkspace);
+  const themeSettings = useThemeSettings();
+  const registryVersion = useSlotRegistryVersion();
+  const DocView = useMemo(
+    () => withSlotFallback("doc.view", resolveSlotView("doc.view")) as DocViewView,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [registryVersion],
+  );
+  const viewCtx = useSlotContext(
+    "doc.view",
+    workspace ? { id: workspace.id, slug: workspace.slug, name: workspace.name } : null,
+  );
+
+  const pageState: DocPageState = {
+    docId: docId ?? "",
+    docsPath,
+    openDoc: openDoc as ProjectDocument,
+    documents,
+    comments,
+    editing,
+    draft,
+    renderedDraft,
+    setDraft,
+    startEditing: () => setEditing(true),
+    anchor,
+    onAnchorResolved: setAnchorMatch,
+    onCopyAnchor: handleCopyAnchor,
+    railOpen,
+    isMobile,
+    showResolved,
+    setShowResolved,
+    openRail: () => setRailOpen(true),
+    toggleRail,
+    navigate,
+  };
+
+  const viewDoc: Async<DocViewDoc> = docLoading
+    ? { state: "loading" }
+    : loadError
+      ? {
+          state: "error",
+          error: { code: "document_failed", message: loadError },
+          retry: () => setReloadTick((n) => n + 1),
+        }
+      : {
+          state: "ready",
+          value: {
+            id: openDoc?.id ?? "",
+            title: openDoc?.title ?? "",
+            slug: openDoc?.slug ?? "",
+            path: openDoc
+              ? buildDocPath(documents, openDoc.id).map((d) => ({ label: d.title, href: `${docsPath}/${d.id}` }))
+              : [],
+            updatedAt: openDoc?.updated_at ?? "",
+            updatedBy: openDoc?.updated_by
+              ? { id: openDoc.updated_by, type: "user", name: openDoc.updated_by_name ?? "" }
+              : null,
+            version: openDoc?.version ?? 0,
+          },
+        };
+
+  const viewData: DocViewData = {
+    doc: viewDoc,
+    save: {
+      state: saveState.status === "idle" ? "idle" : saveState.status,
+      message: saveState.status === "error" ? saveState.message : undefined,
+    },
+    components: DOC_VIEW_BLOCKS,
+    layout: { commentsOpen: railOpen && !isMobile },
+    rootHref: docsPath,
+    editing,
+    anchorNotice:
+      anchorMatch && (anchorMatch.status === "edited" || anchorMatch.status === "lost")
+        ? anchorMatch.status
+        : null,
+  };
+
+  const viewActions: DocViewActions = {
+    toggleComments: toggleRail,
+    retry: () => void flushBody(),
+    exportDoc: (format) => handleExportClick(format ?? "pdf"),
+    startEditing: () => setEditing(true),
+    finishEditing: handleDone,
+    rename: () => openDoc && setRenameTarget(openDoc),
+    move: () => openDoc && setMoveTarget(openDoc),
+    remove: () => openDoc && setDeleteTarget(openDoc),
+    copyUrl: handleCopyDocUrl,
+    share: canShare ? () => openDoc && handleShareDocUrl(openDoc.title) : undefined,
+    navigate,
+  };
+  const viewSettings = themeSettings as DocViewSettings;
 
   // ---- Render --------------------------------------------------------------
   // One surface split by a thin line, not two floating cards: the tree, the
@@ -1189,15 +1163,7 @@ export function DocsPage() {
                 ))}
               </ul>
             )
-          ) : isLoading ? (
-            <div className="space-y-2 p-1">
-              <Skeleton className="h-5 w-full" />
-              <Skeleton className="h-5 w-4/5" />
-              <Skeleton className="h-5 w-3/5" />
-            </div>
-          ) : error ? (
-            <p className="p-2 text-xs text-destructive">{error}</p>
-          ) : documents.length === 0 ? (
+          ) : !isLoading && !error && documents.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 p-4 text-center">
               <NotebookText className="h-6 w-6 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">{t("empty.noDocuments")}</p>
@@ -1224,6 +1190,10 @@ export function DocsPage() {
               onRename={(doc) => setRenameTarget(doc)}
               onMove={(doc) => setMoveTarget(doc)}
               onDelete={(doc) => setDeleteTarget(doc)}
+              hrefFor={(doc) => `${docsPath}/${doc.id}`}
+              loading={isLoading}
+              error={error}
+              onRetry={() => projectId && void fetchDocuments(projectId)}
             />
           )}
         </div>
@@ -1251,267 +1221,10 @@ export function DocsPage() {
           docId ? "flex" : "hidden",
         )}
       >
-        {docLoading ? (
-          <div className="space-y-3 pt-1">
-            <Skeleton className="h-4 w-48" />
-            <Skeleton className="h-9 w-80" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-5/6" />
-          </div>
-        ) : loadError ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-            <AlertCircle className="h-8 w-8 text-destructive" />
-            <p className="text-sm text-destructive">{loadError}</p>
-            {/* The only state on this page that renders no breadcrumbs, so on a
-                phone — where the tree has yielded the screen to the page — a
-                dead link would otherwise be a dead end. `md:hidden` because on
-                desktop the tree is right there and this would be clutter. */}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-1 md:hidden"
-              onClick={() => navigate(docsPath)}
-            >
-              {t("tree.heading")}
-            </Button>
-          </div>
-        ) : openDoc ? (
-          <>
-            {/* Breadcrumbs, title and actions stay put while the body scrolls:
-                Edit must not be something you have to scroll back up to find. */}
-            <div className="shrink-0 pb-4">
-              <DocBreadcrumbs
-                documents={documents}
-                current={openDoc}
-                onNavigateRoot={() => navigate(docsPath)}
-                onNavigate={(doc) => navigate(`${docsPath}/${doc.id}`)}
-              />
-
-              {/* Title and actions share one row. They used to be two: the
-                  actions owned a full-width line of their own above the title,
-                  which cost a row of vertical space and bought nothing. */}
-              {/* One row from `md` up. On a phone the four actions leave the
-                  title about three characters, so there it takes a line of its
-                  own and the actions sit under it — the desktop row is
-                  unchanged. The split is driven by the `w-full md:flex-1` on
-                  the title below rather than by `flex-col` on this row, so the
-                  row keeps the `flex-wrap` that stops a long SaveIndicator
-                  message (the 409 conflict notice) from overflowing on desktop
-                  too. */}
-              <div className="mt-2 flex flex-wrap items-center gap-y-2 gap-x-3">
-                {/* Mobile titles wrap so touch users can read the full name.
-                    Desktop truncation needs min-w-0 to leave room for actions;
-                    the title attribute preserves the full name on hover. */}
-                <h1
-                  title={openDoc.title}
-                  className="w-full min-w-0 break-words text-2xl font-semibold tracking-tight md:flex-1 md:truncate md:text-3xl"
-                >
-                  {openDoc.title}
-                </h1>
-
-                {/* The actions themselves wrap onto a second line once the
-                    row can't fit them next to the title (narrow viewports,
-                    or a long SaveIndicator message like the conflict
-                    notice) — `min-w-0` lets this group shrink at all, and
-                    `flex-wrap` is what turns "shrink" into "wrap" instead of
-                    silently overflowing the row's `overflow-hidden`
-                    ancestor. `shrink-0` here used to pin the actions at
-                    their full unwrapped width regardless of available
-                    space, which is exactly what pushed them off-screen. */}
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  {/* How many conversations are open on this page, and the
-                      switch for the rail that holds them — hidden below `lg`,
-                      where the rail itself never renders (see `isMobile`
-                      above): a visible control for a surface that cannot
-                      open is worse than no control at all (`#fd898a58` AC2). */}
-                  {!isMobile && (
-                    <DocCommentToggle
-                      controller={comments}
-                      open={railOpen}
-                      onToggle={toggleRail}
-                    />
-                  )}
-                  {/* Not gated on railOpen: this entry point must work whether
-                      or not the rail is open — see DocCommentTree's header
-                      note (`#744ae979`) on why the two surfaces are no longer
-                      mutually exclusive. */}
-                  <DocCommentPageEntry
-                    controller={comments}
-                    onOpenRail={() => setRailOpen(true)}
-                  />
-                  <DocWatchToggle documentId={openDoc.id} />
-                  <SaveIndicator state={saveState} onRetry={() => void flushBody()} />
-                  {editing ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs"
-                      onClick={handleDone}
-                    >
-                      {t("actions.done")}
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 gap-1 px-2 text-xs"
-                      onClick={() => setEditing(true)}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      {t("actions.edit")}
-                    </Button>
-                  )}
-                  {/* Rare and destructive live behind the overflow, so the one
-                      thing you came to do stays the one obvious button. */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      title={t("actions.more")}
-                      aria-label={t("actions.more")}
-                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent className="min-w-[9rem]">
-                      <DropdownMenuItem onClick={() => setRenameTarget(openDoc)}>
-                        {t("actions.rename")}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setMoveTarget(openDoc)}>
-                        {t("actions.move")}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={handleCopyDocUrl}>
-                        {t("share.copyUrl")}
-                      </DropdownMenuItem>
-                      {canShare && (
-                        <DropdownMenuItem onClick={() => handleShareDocUrl(openDoc.title)}>
-                          {t("share.shareUrl")}
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => handleExportClick("pdf")}>
-                        {t(EXPORT_FORMAT_LABEL.pdf)}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleExportClick("md")}>
-                        {t(EXPORT_FORMAT_LABEL.md)}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleExportClick("docx")}>
-                        {t(EXPORT_FORMAT_LABEL.docx)}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={() => setDeleteTarget(openDoc)}
-                        className="text-destructive"
-                      >
-                        {t("actions.delete")}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-
-              <DocMeta doc={openDoc} className="mt-1" />
-            </div>
-            {/* Outside the scroll container, as before: the notice explains why
-                the page did not jump where the link promised, and scrolling it
-                out of sight would take the explanation away with it. */}
-            {!editing && anchorMatch && <AnchorNotice match={anchorMatch} />}
-
-            {/* The one scroller for the document area. Everything below grows
-                rather than scrolling on its own, so a long page moves this box
-                and nothing else — no scrollbar inside a scrollbar. */}
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {/* Beside the article on a wide screen, under it on a narrow one:
-                  a 320px rail and a readable column do not both fit below lg.
-                  `min-h-full` is what lets the editor below reach the bottom of
-                  the viewport on a short document: it gives the column a height
-                  to fill, while leaving it free to grow past that on a long one. */}
-              <div className="flex min-h-full flex-col gap-8 lg:flex-row">
-                <article className="flex min-w-0 flex-1 flex-col pb-16 xl:max-w-4xl">
-                  {/* `relative` so the selection affordance can be placed inside
-                      it; the ref is what the comment layer measures and reads
-                      selections from. Neither touches the DOM ProseMirror owns.
-                      `flex-1` with the default `min-height: auto` fills the
-                      space that is there and grows when the body needs more. */}
-                  <div
-                    ref={comments.containerRef}
-                    data-testid="doc-measured-body"
-                    className="relative flex flex-1 flex-col"
-                  >
-                    {editing ? (
-                      <DocEditor
-                        className="flex-1"
-                        value={draft}
-                        onChange={setDraft}
-                        documentId={docId}
-                      />
-                    ) : draft.trim() ? (
-                      <DocEditor
-                        className="flex-1"
-                        value={renderedDraft}
-                        onChange={setDraft}
-                        readOnly
-                        anchor={anchor}
-                        onAnchorResolved={setAnchorMatch}
-                        onCopyAnchor={handleCopyAnchor}
-                      />
-                    ) : (
-                      <div className="flex flex-col items-start gap-2">
-                        <DocEditor value={renderedDraft} onChange={setDraft} readOnly />
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="h-7 gap-1 px-2 text-xs"
-                          onClick={() => setEditing(true)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                          {t("empty.startWriting")}
-                        </Button>
-                      </div>
-                    )}
-                    <DocCommentAffordance controller={comments} />
-                  </div>
-                  {/* Outside `comments.containerRef` on purpose: that element is
-                      flattened into "the text of this document" to locate each
-                      quote, so a discussion rendered inside it would become part
-                      of the haystack and anchors would start matching comment
-                      bodies. See doc-comment-tree.tsx.
-
-                      Always mounted, rail open or closed (Pavel, 2026-08-23,
-                      `#744ae979`) — it carries the comment composer that lives
-                      permanently under the document, not only the read view of
-                      the discussion. Rendering both this and the rail at once
-                      does paint each thread twice on screen, once per surface;
-                      that is the intended "both, always" layout, not the
-                      `#a9df0f4a` bug — see doc-comment-tree.tsx's header note. */}
-                  <DocCommentTree
-                    controller={comments}
-                    showResolved={showResolved}
-                    onShowResolvedChange={setShowResolved}
-                    revealWhenActive={!(railOpen && !isMobile)}
-                  />
-                </article>
-
-                {/* `!isMobile` on top of `railOpen`: below `lg` this flex
-                    container stacks instead of running side-by-side (see the
-                    `lg:flex-row` note above `<article>`), and the rail would
-                    land directly under `DocCommentTree` — same threads,
-                    second "COMMENTS" header, right where a user is already
-                    reading (`#fd898a58`). `DocCommentTree` alone carries the
-                    full thread list and the composer at every width, so
-                    nothing is lost by not mounting the rail here. */}
-                {railOpen && !isMobile && (
-                  <DocCommentRail
-                    controller={comments}
-                    showResolved={showResolved}
-                    onShowResolvedChange={setShowResolved}
-                  />
-                )}
-              </div>
-            </div>
-          </>
+        {docId && (docLoading || loadError || openDoc) ? (
+          <DocPageProvider value={pageState}>
+            <DocView data={viewData} actions={viewActions} themeSettings={viewSettings} ctx={viewCtx} />
+          </DocPageProvider>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 overflow-y-auto p-6 text-center">
             <FilePlus2 className="h-10 w-10 text-muted-foreground" />

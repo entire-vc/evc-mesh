@@ -45,24 +45,24 @@ const EVENT_TYPE_CONFIG: Record<
   EventType,
   { color: string; icon: typeof Circle }
 > = {
-  summary: { color: "text-emerald-500", icon: CheckCircle2 },
+  summary: { color: "text-tone-positive-500", icon: CheckCircle2 },
   status_change: {
-    color: "text-blue-500",
+    color: "text-tone-info-500",
     icon: RefreshCw,
   },
   context_update: {
-    color: "text-violet-500",
+    color: "text-tone-violet-500",
     icon: Info,
   },
   error: {
-    color: "text-red-500",
+    color: "text-tone-danger-500",
     icon: AlertTriangle,
   },
   dependency_resolved: {
-    color: "text-amber-500",
+    color: "text-tone-warning-500",
     icon: ArrowDownCircle,
   },
-  custom: { color: "text-gray-500", icon: Zap },
+  custom: { color: "text-tone-neutral-500", icon: Zap },
 };
 
 const ALL_EVENT_TYPES = Object.keys(EVENT_TYPE_CONFIG) as EventType[];

@@ -136,7 +136,7 @@ func NormalizePipelineStatus(raw string) (string, bool) {
 // case, http vs https, and a trailing slash — into one comparable string, so
 // two calls that name the SAME PR/MR/commit are recognised as the same
 // object even when they spell its URL slightly differently. This is what
-// lets a re-link with a corrected provider (#0fbed572: a self-hosted GitLab
+// lets a re-link with a corrected provider (an internal ticket: a self-hosted GitLab
 // URL first mis-recorded as provider=github) find the existing row by what
 // the URL actually names, instead of by (provider, external_id) — the pair
 // that changes across exactly the correction being made, which is why
@@ -144,7 +144,7 @@ func NormalizePipelineStatus(raw string) (string, bool) {
 //
 // It deliberately does NOT touch path casing, query strings, or anything
 // else that could be semantically meaningful: folding too aggressively is
-// the inverse failure (#0fbed572 defect 2) — a GitHub PR and a GitLab MR
+// the inverse failure (an internal ticket defect 2) — a GitHub PR and a GitLab MR
 // that happen to share a number must NOT normalize to the same string, or
 // re-linking one silently erases the other.
 func NormalizeVCSURL(raw string) string {
@@ -182,7 +182,7 @@ type CreateVCSLinkInput struct {
 // than the work that produced it. The review card is closed by the merge of
 // its subject and is not held back by that merge not having happened yet
 // (the verdict is the deliverable), so both the webhook fan-out and the
-// done-evidence gate read this marker (#fecda06c).
+// done-evidence gate read this marker.
 const VCSLinkRoleReview = "review"
 
 // IsReviewSubject reports whether the link was recorded as the subject of a
@@ -199,7 +199,7 @@ func (l VCSLink) IsReviewSubject() bool {
 
 // Metadata keys the transition gate reads for the author_if_merged_shipped
 // pattern. head_sha is written by Mesh when it syncs the MR; ship_sha by the
-// fleet tool that signs an independent SHIP (codex-review / glab-merge).
+// fleet tool that signs an independent SHIP (code review / glab-merge).
 const (
 	VCSLinkMetaHeadSHA = "head_sha"
 	VCSLinkMetaShipSHA = "ship_sha"

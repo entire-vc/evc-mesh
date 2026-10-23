@@ -25,10 +25,13 @@ type User struct {
 	// Locale is the interface language ("en"|"ru"). LocaleSetExplicitly is false
 	// until the person picks a language themselves; the web client uses it to
 	// offer (not force) a switch when the browser language differs.
-	Locale              string    `json:"locale" db:"locale"`
-	LocaleSetExplicitly bool      `json:"locale_set_explicitly" db:"locale_set_explicitly"`
-	CreatedAt           time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at" db:"updated_at"`
+	Locale              string `json:"locale" db:"locale"`
+	LocaleSetExplicitly bool   `json:"locale_set_explicitly" db:"locale_set_explicitly"`
+	// ServiceAgentID is set when this account is a service user acting on behalf
+	// of an agent (e.g. "Hana (QA Mesh)"); nil for people.
+	ServiceAgentID *uuid.UUID `json:"service_agent_id,omitempty" db:"service_agent_id"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // NameIsPlaceholder reports whether the account has no real display name — the

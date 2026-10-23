@@ -28,25 +28,25 @@ const GROUP_CONFIG: Record<
 > = {
   blocked_by: {
     icon: ArrowLeft,
-    badgeClass: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+    badgeClass: "bg-tone-danger-100 text-tone-danger-700 dark:bg-tone-danger-900/40 dark:text-tone-danger-300",
   },
   blocks: {
     icon: ArrowRight,
-    badgeClass: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+    badgeClass: "bg-tone-danger-100 text-tone-danger-700 dark:bg-tone-danger-900/40 dark:text-tone-danger-300",
   },
   relates_to: {
     icon: Link2,
-    badgeClass: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+    badgeClass: "bg-tone-info-100 text-tone-info-700 dark:bg-tone-info-900/40 dark:text-tone-info-300",
   },
   child_of: {
     icon: GitMerge,
     badgeClass:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+      "bg-tone-warning-100 text-tone-warning-700 dark:bg-tone-warning-900/40 dark:text-tone-warning-300",
   },
   parent_of: {
     icon: GitMerge,
     badgeClass:
-      "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+      "bg-tone-warning-100 text-tone-warning-700 dark:bg-tone-warning-900/40 dark:text-tone-warning-300",
   },
 };
 
@@ -263,7 +263,7 @@ export function DependencyList({
                     return (
                       <div
                         key={row.dep.id}
-                        className={cn("group flex items-start gap-2 rounded-md border border-border bg-card px-2.5 py-2", open && "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/30", unknown && "border-amber-300 dark:border-amber-900")}
+                        className={cn("group flex items-start gap-2 rounded-md border border-border bg-card px-2.5 py-2", open && "border-tone-danger-300 bg-tone-danger-50 dark:border-tone-danger-900 dark:bg-tone-danger-950/30", unknown && "border-tone-warning-300 dark:border-tone-warning-900")}
                       >
                         <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         <div className="min-w-0 flex-1 space-y-1">

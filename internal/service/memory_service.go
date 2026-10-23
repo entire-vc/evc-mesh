@@ -51,7 +51,7 @@ var keySlugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 // prompts carried a literal `min_importance=0.3` with the note "REQUIRED:
 // prior-session handoffs sit at 0.3", and the memory-eval harness passed the
 // same 0.3 — i.e. the contract was documented in three prompt strings instead
-// of in the code. Task #a9752575 (audit §4.6, the "episodic 17%" trap).
+// of in the code. an internal ticket (audit §4.6, the "episodic 17%" trap).
 //
 // Aligning the THRESHOLD rather than raising the checkpoint SCORE is deliberate:
 // importance_score still has to rank a 7-day hand-off below a durable decision,
@@ -66,9 +66,9 @@ const defaultMinImportance float32 = 0.3
 // reservedMemoryTags is the single source of truth for tags a normal write may
 // not carry — each is gated to a specific, DB-flagged workspace via
 // enforceReservedTags. A second copy (e.g. in a test asserting the set) would
-// be exactly the drift class described in CLAUDE-workflow §1q (the `hold`
+// be exactly the drift class described in the team workflow guide §1q (the `hold`
 // merge-label incident): the set and the enforcement point must never
-// disagree about what is reserved. Task #0104878c.
+// disagree about what is reserved. an internal ticket.
 var reservedMemoryTags = map[string]struct{}{
 	"lme-bench": {},
 }
@@ -87,7 +87,7 @@ var shortIDRegex = regexp.MustCompile(`\b([0-9a-f]{6,12})\b`)
 // and looks up the project in the DB. Only one distinct canonical slug may be present;
 // cross-project writes (multiple distinct slugs) stay workspace-scoped (project_id = NULL).
 //
-// Source: backfill from Lab task #41cde334 — reusing the same alias map.
+// Source: backfill from an internal ticket — reusing the same alias map.
 var projectSlugAliases = map[string]string{
 	"argus":             "argus",
 	"evc-argus":         "argus",
@@ -286,7 +286,7 @@ const rrfK = 60
 //
 // Overridable at runtime via MEMORY_RECALL_RRF_VECTOR_WEIGHT / MEMORY_RECALL_RRF_TEXT_WEIGHT
 // so the weights can be swept against the recall gate WITHOUT a rebuild — the sweep is
-// tracked in task #acb84eaa, and re-weighting is deliberately NOT done here: changing
+// tracked in an internal ticket, and re-weighting is deliberately NOT done here: changing
 // these numbers without a measurement would repeat the mistake that produced them.
 // Defaults therefore stay at the current production values until that sweep runs.
 const (
@@ -373,7 +373,7 @@ func MemoryWithDepRepo(dr repository.TaskDependencyRepository) MemoryServiceOpti
 	}
 }
 
-// MemoryWithDocIndex lets Recall also search chunks of Mesh Docs (#154450b1).
+// MemoryWithDocIndex lets Recall also search chunks of Mesh Docs.
 // recall=false (the default, DOC_INDEX_RECALL unset) leaves Recall byte-for-byte
 // as it was: the doc arms never run.
 func MemoryWithDocIndex(repo repository.DocumentChunkRepository, recall bool) MemoryServiceOption {
@@ -405,7 +405,7 @@ func docMaxSlots(limit int) int { return int(math.Ceil(float64(limit)*docMaxShar
 // the legacy single-vector memories.embedding column to per-chunk storage in
 // memory_chunks (ADR-0002). Without this option, a memory longer than the embedder's
 // input window (~2000 chars / 512 tokens for the prod TEI endpoint) only ever gets
-// embedded from its first ~15% — see #e8063a65. Omit only in tests exercising the
+// embedded from its first ~15% — see an internal ticket. Omit only in tests exercising the
 // legacy path directly; production wiring always sets this.
 func MemoryWithChunkRepo(cr repository.MemoryChunkRepository) MemoryServiceOption {
 	return func(s *memoryService) {
@@ -502,10 +502,10 @@ func resolveProjectSlug(tags []string) (string, bool) {
 
 // ResolveProjectSlugForTags exposes resolveProjectSlug to callers outside this
 // package — specifically the one-off cmd/backfill-memory-project-id batch tool
-// (audit #1b010be6, plan:1.11). The alternative is a second copy of
+// (an internal ticket, plan:1.11). The alternative is a second copy of
 // projectSlugAliases in the batch tool; that is exactly the "one source of
 // truth split into two, drifting silently" failure class called out in
-// CLAUDE-workflow.md §1q (the `hold`-label incident) — a batch job resolving
+// the team workflow guide §1q (the `hold`-label incident) — a batch job resolving
 // slugs differently than the live write path would backfill some rows to the
 // wrong project without anyone noticing until a recall query landed strangely.
 func ResolveProjectSlugForTags(tags []string) (string, bool) {
@@ -536,13 +536,13 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	// most expensive thing to read later: the next agent gets an assertion with
 	// no way to judge why it was made or whether it still holds.
 	//
-	// Two measurements three weeks apart (#620bd93a, 2026-08-21 and 2026-09-14)
+	// Two measurements three weeks apart (an internal ticket, 2026-08-21 and 2026-09-14)
 	// found fleet-wide compliance plateaued at 38-64% with no upward trend — the
 	// tool-schema hint alone ("optional today, about to become required") does
 	// not move agent behaviour. Flipping straight to enforce at that compliance
 	// would reject the majority of fleet remember() calls the moment the flag
 	// changed, so enforce stays reserved for a later, separately-decided task
-	// (#40cc098e). warn is the intermediate step: the write still succeeds, but
+	//. warn is the intermediate step: the write still succeeds, but
 	// the caller is told, and the omission is logged so per-agent compliance can
 	// be tracked (see requireMemoryReasonMode's doc and memory_revisions.reason).
 	reasonMode := requireMemoryReasonMode()
@@ -636,7 +636,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	// gated to scope==project — but neither gate stops a caller from passing
 	// project_id EXPLICITLY alongside scope=workspace/agent. Measured live
 	// 2026-07-30: 4 new such rows landed within ~1h of both auto-stamp fixes
-	// being deployed (#4edf3fb5 cleanup regressing again, task #2c0154db/F3).
+	// being deployed (an internal ticket cleanup regressing again, an internal ticket/F3).
 	// Normalize unconditionally, before identity lookup, so no future caller
 	// or code path can reintroduce the drift the cleanup already paid for once.
 	if mem.Scope != domain.ScopeProject {
@@ -672,7 +672,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 
 	// ── source_task_id fallback: if the tag resolution above didn't resolve a
 	// project_id, but the write carries a source_task_id, inherit the task's
-	// project. Audit #1b010be6 (plan:1.11): 87% of memories were missing
+	// project. an internal ticket (plan:1.11): 87% of memories were missing
 	// project_id, and the dominant write shape is the MCP client's active-task
 	// auto-populate (evc-mesh-mcp#44), which stamps source_task_id — not a
 	// project:<slug> tag. Tag resolution alone only ever covered writes an
@@ -724,7 +724,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	mem.ContentSimhash = &hash
 
 	// Write-time near-duplicate reporting was REMOVED here on 2026-08-20 (Mesh
-	// #0ba5e66a) after measuring it against 100 live memories: at the shipped
+	// an internal ticket) after measuring it against 100 live memories: at the shipped
 	// threshold of 10 bits it fired on 19.7% of unrelated prose pairs, gave 91%
 	// of memories at least one "near-duplicate" partner, and carried 7.6%
 	// precision. No threshold fixes it — real duplicates span 1..12 bits and
@@ -889,15 +889,15 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 // tool's own handler is itself an HTTP client of this same endpoint, so
 // that's one server-side path, not two), ExtractFromEvent (an event-bus hint
 // can carry caller-set tags), and ImportMemories (a wholly caller-supplied
-// YAML blob). See task #0104878c (original guard, Remember only) and
-// #d378586f (the other two write paths + the case-sensitivity fix below).
+// YAML blob). See an internal ticket (original guard, Remember only) and
+// an internal ticket (the other two write paths + the case-sensitivity fix below).
 //
 // Fails CLOSED in every ambiguous case, deliberately mirroring
 // enforceReservedTags's own name: a lookup error, a missing workspace repo, or
 // a workspace whose is_bench flag was never set are all treated identically
 // to "not privileged" — never as "skip the check". A silent pass-through here
 // is exactly the regression this function exists to prevent (the July leak,
-// #4045f449, was a value silently failing open, not a code path with no
+// an internal ticket, was a value silently failing open, not a code path with no
 // guard at all).
 //
 // Rejects with a named error rather than stripping the tag: a stripped tag
@@ -916,7 +916,7 @@ func (s *memoryService) enforceReservedTags(ctx context.Context, mem *domain.Mem
 		// error message). A caller writing `LME-Bench` gets caught exactly like
 		// `lme-bench`; every other tag convention in this file (project:,
 		// kind:, etc.) stays exact-match, untouched by this one entry's
-		// comparison. Task #d378586f — found by the #0104878c acceptance pass,
+		// comparison. an internal ticket — found by the an internal ticket acceptance pass,
 		// not by the original write.
 		if _, ok := reservedMemoryTags[strings.ToLower(tag)]; ok {
 			hit = tag
@@ -937,7 +937,7 @@ func (s *memoryService) enforceReservedTags(ctx context.Context, mem *domain.Mem
 	}
 	if !privileged {
 		return apierror.ValidationError(map[string]string{
-			"tags": fmt.Sprintf("tag `%s` is reserved for the benchmark workspace", hit),
+			"tags": fmt.Sprintf("tag %#q is reserved for the benchmark workspace", hit),
 		})
 	}
 	return nil
@@ -983,12 +983,12 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 // When embedSem is configured (MemoryWithEmbedConcurrency), it caps how many embed calls
 // run concurrently; otherwise embedding remains unbounded. embedSem is shared with the
 // query-embed call in RecallWithStats and with BatchEmbed (see acquireEmbedSem) — it is
-// a bound on the whole memoryService's embedder client, not just this write path (#3d10774e:
+// a bound on the whole memoryService's embedder client, not just this write path (an internal ticket:
 // EMBEDDING_CONCURRENCY looked like a global bound but originally only gated this one call
 // site, leaving the recall query embed to stampede the embedder unbounded).
 //
 // When chunkRepo is configured (MemoryWithChunkRepo), text is split into chunks (see
-// #e8063a65: the prod embedder silently truncates past ~2000 chars, so a memory longer
+// an internal ticket: the prod embedder silently truncates past ~2000 chars, so a memory longer
 // than that needs more than one vector to be fully searchable) and each chunk's vector is
 // stored in memory_chunks — memories.embedding is left untouched for that memory. Without
 // chunkRepo, the legacy single-vector path applies unchanged.
@@ -997,7 +997,7 @@ func defaultExpiresAt(scope domain.MemoryScope, tags []string) *time.Time {
 // unit — the whole content in the single-vector path below, and every chunk in
 // embedChunked — but is never itself chunked and never shifts chunk_start/
 // chunk_end, which stay byte offsets into content alone (see embedChunked's doc
-// and #38bb958c: prefixing only chunk 0 of a composite pre-chunked string left
+// and an internal ticket: prefixing only chunk 0 of a composite pre-chunked string left
 // ~94% of a multi-chunk memory's chunks searchable without its own key).
 // acquireEmbedSem blocks until an embedSem slot is free, or ctx is done — in which
 // case it returns ctx.Err() and holds no slot. A nil embedSem (the default,
@@ -1039,7 +1039,7 @@ func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
 		// with the memory itself. A flat 30s per memory was a hidden "no longer than
 		// ~12 chunks under load" limit: chunking multiplied the calls by N while the
 		// budget stayed constant, so long documents died mid-document (538 deadline
-		// failures at chunk 12-15 of 18-24 in one loaded window, #67f4e0d9) — silently,
+		// failures at chunk 12-15 of 18-24 in one loaded window) — silently,
 		// since the goroutine only logs. Batching makes it one round trip for almost
 		// every memory; this scaling is the insurance for when it isn't.
 		pieces := chunkText(content, defaultChunkSize, defaultChunkOverlap)
@@ -1086,14 +1086,14 @@ func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
 // chunk_end. Before this, the composite key+content+tags string was chunked as a
 // whole, so the key landed only in chunk 0 and tags only in the last chunk — ~94% of
 // a multi-chunk memory's chunks were searchable without the memory's own key
-// (#38bb958c). Measured fix (variant B2, not the naive "prefix the existing composite
+//. Measured fix (variant B2, not the naive "prefix the existing composite
 // chunks" B1, which failed its own single-chunk control): +0.058 MRR on the live query
 // distribution, +0.112 on multi-chunk memories specifically, and a genuine ~0 on the
 // single-chunk control where the mechanism cannot apply.
 //
 // embedding_dim is taken from len(vec) — the actual returned vector — never from
 // s.embedder.Dimensions() (the configured value). Trusting the config is exactly the bug
-// that left embedding_dim=0 on every row before EMBEDDING_DIMENSIONS was set (see #b052cdda
+// that left embedding_dim=0 on every row before EMBEDDING_DIMENSIONS was set (see an internal ticket
 // subtask 4): a misconfigured or zero-value config would propagate through every chunk
 // instead of surfacing as a mismatch.
 //
@@ -1128,7 +1128,7 @@ func (s *memoryService) embedChunkedStoring(
 	// ONE batched call (per 32 chunks) instead of one call per chunk. Sequential
 	// per-chunk calls put ~20x the load on a shared embedder instance and made the
 	// failure probability grow with document length — i.e. chunking failed hardest on
-	// exactly the long documents it exists to serve (#67f4e0d9).
+	// exactly the long documents it exists to serve.
 	vecs, err := embedWithRetry(ctx, s.embedder, texts)
 	if err != nil {
 		return fmt.Errorf("embed %d chunks: %w", len(pieces), err)
@@ -1166,7 +1166,7 @@ func (s *memoryService) embedChunkedStoring(
 	if err := s.chunkRepo.ReplaceChunks(ctx, id, chunks); err != nil {
 		return err
 	}
-	// STOPGAP (#b052cdda, live regression caught in #84b0694d verify): VectorSearch's
+	// STOPGAP (an internal ticket, live regression caught in an internal ticket verify): VectorSearch's
 	// read path has not been rewired onto memory_chunks yet (that's subtask 6/8,
 	// still open) — it still requires memories.embedding IS NOT NULL. Writing only
 	// the chunks, as the original design intended once read-path lands, made every
@@ -1273,7 +1273,7 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 	// Each arm truncates to poolSize; a row this filter would keep but which ranked below
 	// an arm's cut is unrecoverable downstream, so post-filtering both narrows the result
 	// AND leaves the pool sized by ineligible rows. Pre-filtering makes poolSize a budget
-	// over the eligible set instead. See task #2c087b2a.
+	// over the eligible set instead. See an internal ticket.
 	searchFilter := opts.SearchFilter()
 	if !feedback {
 		searchFilter.IncludeExpired = opts.IncludeExpired
@@ -1326,7 +1326,7 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 			pkgmetrics.StartMemoryEmbedInFlight()
 			defer pkgmetrics.FinishMemoryEmbedInFlight()
 
-			// Query embed shares embedAndStore's embedSem (#3d10774e) — without this,
+			// Query embed shares embedAndStore's embedSem — without this,
 			// EMBEDDING_CONCURRENCY bounded only the write path, and every concurrent
 			// recall fired its own unbounded embed call straight at the embedder. Wait
 			// on the caller's own ctx (not context.Background()): a recall stuck behind
@@ -1468,7 +1468,7 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 	}
 	lambda := math.Log(2) / halfLife
 	// Was `opts.OrderBy == "decayed_relevance"` — a strict compare against a form
-	// nothing produces (#655c6d12). Every caller sends the suffixed
+	// nothing produces. Every caller sends the suffixed
 	// "decayed_relevance:desc": the REST handler substitutes it, the MCP temporal
 	// profile hard-codes it, and the SQL switch matches only it. So the right-hand
 	// side never fired, and decay on this path came exclusively from ApplyDecay.
@@ -1518,7 +1518,7 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 	// Nor do they bypass `limit`. Injection happens BEFORE the trim below, so a
 	// pinned row DISPLACES the weakest retrieval hit rather than being handed to
 	// the caller on top of a full page. Prepending after the trim (as this did
-	// until #4c65d3e2) returned limit+len(pinned) rows: `limit` stopped being a
+	// until an internal ticket) returned limit+len(pinned) rows: `limit` stopped being a
 	// bound the caller could rely on, and the overflow was invisible because the
 	// response still echoed the requested limit.
 	var pinnedProjID *uuid.UUID
@@ -1561,7 +1561,7 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 	// a perfect top score. Displacement counts too: when eligible pinned rows
 	// fill the limit and the trim discards every retrieval row, the served page
 	// is pinned-only and the pre-injection retrieval score must NOT be observed
-	// (review P1, #2c44a087) — that would be the same non-empty-but-useless
+	// (review P1) — that would be the same non-empty-but-useless
 	// blindness the metric exists to remove. merged is sorted descending and
 	// pinned rows sort first, so the first non-sentinel row IS the top retrieval
 	// score; 0.0 when the page holds none, which is what an empty or pinned-only
@@ -1581,7 +1581,7 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 	// arm's own repo method, over its own oversized pre-fusion candidate pool
 	// (poolSize = limit*candidateMultiplier); that counted "was a candidate before
 	// RRF/filters/trim" as "accessed", which is why runReviewTriage's 60-day stale
-	// branch (task #c5b5fb48) never fired in production — almost any review_needed
+	// branch never fired in production — almost any review_needed
 	// row surfaces in SOME recall's candidate pool sooner or later. Moved here to
 	// match BoostRelevance's existing, correct scope.
 	if feedback && len(merged) > 0 {
@@ -1615,7 +1615,7 @@ func (s *memoryService) recallCandidates(ctx context.Context, opts domain.Recall
 // enforcement point, because only they can keep an eligible row from being cut. This pass
 // is the second lock — it catches any row reaching the client through a path that did not
 // pre-filter, and it makes scope isolation hold even if an arm is later changed to ignore
-// the filter. Before #2c087b2a there was no scope branch here at all and the BM25 arm was
+// the filter. Before an internal ticket there was no scope branch here at all and the BM25 arm was
 // never given scope, so scope was unenforced on every BM25 row and unenforced entirely in
 // bm25-only mode — the fail-open path taken whenever the embedder is down.
 func applyExtendedFilters(items []domain.ScoredMemory, opts domain.RecallOpts) []domain.ScoredMemory {
@@ -2270,7 +2270,7 @@ func (s *memoryService) ImportMemories(ctx context.Context, workspaceID uuid.UUI
 // this selects is an EXISTING memory nobody edited — only its embedding representation is
 // catching up (to the current model, or, via the chunked branch, to the current chunking
 // scheme). Bumping updated_at here would be the same defect RechunkStale was built to avoid
-// (see its doc and #f96b6670): MarkStaleByAge and DecayRelevance key off that column, and a
+// (see its doc and an internal ticket): MarkStaleByAge and DecayRelevance key off that column, and a
 // provider switch selects the WHOLE corpus into this loop, silently resetting both clocks in
 // one run with the original timestamps recoverable from nowhere.
 func (s *memoryService) BatchEmbed(ctx context.Context, workspaceID uuid.UUID) (int, error) {
@@ -2372,7 +2372,7 @@ func (s *memoryService) BackfillChunks(ctx context.Context, workspaceID uuid.UUI
 // `remaining` is re-counted from the database AFTER the batch, never derived from
 // `processed`. The two are independent on purpose: a repair job that reports how many rows it
 // touched cannot tell "healed them all" from "never selected the sick ones", and the second
-// is what actually happened in #b052cdda. When rows fail to re-embed, `processed` falls
+// is what actually happened in an internal ticket. When rows fail to re-embed, `processed` falls
 // behind the batch size while `remaining` stops dropping — visible, instead of a confident
 // count and a corpus that never converges.
 func (s *memoryService) RechunkStale(ctx context.Context, workspaceID uuid.UUID, limit int) (processed, remaining int, err error) {
@@ -2773,7 +2773,7 @@ func (s *memoryService) RecallGraph(ctx context.Context, opts domain.RecallGraph
 
 // embedBudgetPerCall is the wall-clock budget for a single embedder round trip. It was
 // previously the budget for an entire memory, which silently became a cap on document
-// length once chunking multiplied the calls per memory (#67f4e0d9).
+// length once chunking multiplied the calls per memory.
 const embedBudgetPerCall = 30 * time.Second
 
 // embedBudgetCap bounds the scaled budget so a pathologically long document cannot pin
@@ -2845,7 +2845,7 @@ func embedWithRetry(ctx context.Context, embedder embedding.Embedder, texts []st
 // For the chunked embed path this means the memory row was deleted while its embedding
 // goroutine was still running — a normal race with sweeps/deletes, not an embedder fault.
 // Counting it as an embedding failure masks the real ones (34 of these appeared alongside
-// the 538 genuine timeouts in the #67f4e0d9 window).
+// the 538 genuine timeouts in the an internal ticket window).
 func isForeignKeyViolation(err error) bool {
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {

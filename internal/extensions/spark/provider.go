@@ -114,7 +114,7 @@ func (p *Provider) Resolve(ctx context.Context, workspaceID uuid.UUID) (extensio
 }
 
 // Health is GET {spark_url}/health: OK on any 2xx. Spark serves no
-// /api/v1/health (404 on prod); /health is its liveness route.
+// /api/v1/health (404); /health is its liveness route.
 func (p *Provider) Health(ctx context.Context, r extensions.Resolved) extensions.HealthReport {
 	base := strings.TrimRight(URL(r), "/")
 	if base == "" {

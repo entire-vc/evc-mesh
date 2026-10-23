@@ -19,13 +19,15 @@ type Config struct {
 	CORS      CORSConfig
 	RateLimit RateLimitConfig
 	Spark     SparkConfig
-	Webhook   WebhookConfig
-	Embedding EmbeddingConfig
-	VAPID     VAPIDConfig
-	Email     EmailConfig
-	TeamRelay TeamRelayConfig
-	HumanGate HumanGateConfig
-	Telegram  TelegramConfig
+	// ExtensionRetention configures purging of removed extensions' ext_<id>_* data.
+	ExtensionRetention ExtensionRetentionConfig
+	Webhook            WebhookConfig
+	Embedding          EmbeddingConfig
+	VAPID              VAPIDConfig
+	Email              EmailConfig
+	TeamRelay          TeamRelayConfig
+	HumanGate          HumanGateConfig
+	Telegram           TelegramConfig
 
 	// DocBodySoftLimit / DocBodyHardLimit are Mesh Doc body size limits in bytes:
 	// over soft a write succeeds with a warning, over hard it is refused.
@@ -39,7 +41,7 @@ type Config struct {
 // that stays the mechanism. This flag answers a different question — whether
 // this DEPLOYMENT offers the channel at all.
 //
-// Why it exists (task #4c642bd7, Pavel 2026-09-06): the fleet runs two
+// Why it exists (an internal ticket, Alex 2026-09-06): the fleet runs two
 // instances off this one binary. `mesh.prototypes.ventures` has the channel
 // configured and in use; our other production instance does not use it, and
 // the decision there was verbatim "не выпиливать, а просто выключить" — turn it off, keep
@@ -59,7 +61,7 @@ type TelegramConfig struct {
 }
 
 // HumanGateConfig holds the server-side default-on-timeout policy for
-// non-hard human gates (task #060ccaae, Pavel decision 2026-09-06: 24h, not
+// non-hard human gates (an internal ticket, Alex decision 2026-09-06: 24h, not
 // the original 72h spec — kept configurable exactly so the NEXT change to
 // this number is a config edit, not a code change).
 type HumanGateConfig struct {
@@ -124,7 +126,7 @@ type EmbeddingConfig struct {
 	// see memoryService.acquireEmbedSem) may run against the embedder at once.
 	// Default: 4. A CPU-bound self-hosted embedder (TEI, e5-small on 8 cores) gets
 	// SLOWER past its core count — an unbounded stampede thrashes it into timeouts
-	// rather than serving more throughput (measured live 2026-08-19, #9fe5bb71:
+	// rather than serving more throughput (measured live 2026-08-19, an internal ticket:
 	// throughput +60% after capping in-flight requests from ~40 to 4). 0 restores
 	// the old unbounded behavior; only use that against a horizontally-scaled or
 	// hosted embedding API that can actually absorb unbounded concurrency.
@@ -139,6 +141,17 @@ type SparkConfig struct {
 	URL string
 	// Enabled controls whether Spark catalog routes are registered.
 	Enabled bool
+}
+
+// ExtensionRetentionConfig controls the job that deletes the rows of a removed
+// extension's ext_<id>_* tables once its retention period has passed.
+type ExtensionRetentionConfig struct {
+	// PurgeEnabled turns the job on (default: false, rollback = set it back to false).
+	PurgeEnabled bool
+	// Retention is how long a removed extension's data is kept (default: 30 days).
+	Retention time.Duration
+	// Interval is how often the job looks for expired extensions (default: 1h).
+	Interval time.Duration
 }
 
 // CORSConfig holds cross-origin resource sharing settings.
@@ -299,13 +312,13 @@ type AuthConfig struct {
 	// as a client that never saw the rotation response (dropped mobile
 	// connection, closed tab, proxy timeout) rather than theft — see
 	// auth.Service.WithRefreshReuseGraceWindow. Default 10s; 0 disables the
-	// grace window (every such replay is theft, the pre-#cfb14ad6 behavior).
+	// grace window (every such replay is theft, the pre behavior).
 	RefreshReuseGraceWindow time.Duration
 }
 
 // WebhookConfig holds the INSTANCE-WIDE fallback for GitHub/GitLab —
 // webhook validation secrets, plus the token used for the done-evidence
-// gate's live PR/MR-status re-check. As of #33a4bb57 (§C1/§4 of
+// gate's live PR/MR-status re-check. As of an internal ticket (§C1/§4 of
 // specsintegration-provider-contract) these fields are no longer the sole
 // source of truth: service.VCSIntegrationResolver (wired in cmd/api/main.go)
 // checks a workspace's own active `github`/`gitlab` integration_configs row
@@ -334,7 +347,7 @@ type WebhookConfig struct {
 	// against the GitLab REST API (a read-only PAT/project token) — see the
 	// type doc comment. Our self-hosted GitLab has no public-anonymous-read
 	// equivalent to GitHub's rate-limited path — every project here is
-	// private, so an empty token isn't a usable degraded mode (#bc39d781).
+	// private, so an empty token isn't a usable degraded mode.
 	GitLabToken string
 	// GitLabSecret is the env-fallback shared secret GitLab sends verbatim
 	// in the X-Gitlab-Token header on webhook deliveries (GitLab's webhook
@@ -418,6 +431,11 @@ func Load() *Config {
 		Spark: SparkConfig{
 			URL:     getEnv("MESH_SPARK_URL", ""),
 			Enabled: getEnvBool("MESH_SPARK_ENABLED", false),
+		},
+		ExtensionRetention: ExtensionRetentionConfig{
+			PurgeEnabled: getEnvBool("MESH_EXTENSION_DATA_PURGE_ENABLED", false),
+			Retention:    getEnvDuration("MESH_EXTENSION_DATA_RETENTION", 30*24*time.Hour),
+			Interval:     getEnvDuration("MESH_EXTENSION_DATA_PURGE_INTERVAL", time.Hour),
 		},
 		Telegram: TelegramConfig{
 			Enabled: getEnvBool("MESH_TELEGRAM_ENABLED", true),

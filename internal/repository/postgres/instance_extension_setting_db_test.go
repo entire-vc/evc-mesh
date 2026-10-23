@@ -6,12 +6,14 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
@@ -72,7 +74,7 @@ func TestInstanceExtensionSettingRepo_IsInstanceAdminFalseForStranger(t *testing
 }
 
 func TestInstanceExtensionSettingRepo_SettingsMustBeAnObject(t *testing.T) {
-	_, err := encryptSettings(json.RawMessage(`[1,2]`), []string{"token"})
+	_, err := encryptSettings(context.Background(), "gitlab", json.RawMessage(`[1,2]`), []string{"token"})
 	require.ErrorContains(t, err, "JSON object")
 
 	_, err = decryptSettings(json.RawMessage(`[1,2]`))
@@ -82,9 +84,9 @@ func TestInstanceExtensionSettingRepo_SettingsMustBeAnObject(t *testing.T) {
 	t.Setenv(encryption.EnvKey, "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
 	encryption.ResetForTest()
 	t.Cleanup(encryption.ResetForTest)
-	once, err := encryptSettings(json.RawMessage(`{"token":"s3cret"}`), []string{"token"})
+	once, err := encryptSettings(context.Background(), "gitlab", json.RawMessage(`{"token":"s3cret"}`), []string{"token"})
 	require.NoError(t, err)
-	twice, err := encryptSettings(once, []string{"token"})
+	twice, err := encryptSettings(context.Background(), "gitlab", once, []string{"token"})
 	require.NoError(t, err)
 	require.JSONEq(t, string(once), string(twice))
 }
@@ -154,4 +156,50 @@ func TestInstanceExtensionSettingRepo_IsInstanceAdminOldestWorkspace(t *testing.
 	require.False(t, is(oldAdmin), "admin of a deleted workspace")
 	require.True(t, is(nextAdmin), "owner of the next non-deleted workspace")
 	require.False(t, is(youngAdmin), "still younger than the next one")
+}
+
+type refRecorder struct{ refs []secretstore.Ref }
+
+func (r *refRecorder) Put(_ context.Context, ref secretstore.Ref, plain string) (string, error) {
+	r.refs = append(r.refs, ref)
+	return secretstore.KeepPrefix + plain, nil
+}
+
+func (r *refRecorder) Resolve(context.Context, string) secretstore.Result {
+	return secretstore.Result{Degraded: true, Reason: "not used"}
+}
+
+// Two extensions with a same-named secret field must not share a Keep name.
+func TestEncryptSettings_RefCarriesExtensionID(t *testing.T) {
+	rec := &refRecorder{}
+	prev := secretstore.SetDefault(rec)
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+
+	_, err := encryptSettings(context.Background(), "gitlab", json.RawMessage(`{"token":"a"}`), []string{"token"})
+	require.NoError(t, err)
+	require.Equal(t, []secretstore.Ref{{ExtensionID: "gitlab", Field: "token"}}, rec.refs)
+}
+
+type failingStore struct{}
+
+func (failingStore) Put(context.Context, secretstore.Ref, string) (string, error) {
+	return "", errors.New("keep down")
+}
+
+func (failingStore) Resolve(context.Context, string) secretstore.Result {
+	return secretstore.Result{Degraded: true, Reason: "keep down"}
+}
+
+func TestEncryptSettings_StoreFailureIsReported(t *testing.T) {
+	prev := secretstore.SetDefault(failingStore{})
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+	_, err := encryptSettings(context.Background(), "gitlab", json.RawMessage(`{"token":"a"}`), []string{"token"})
+	require.ErrorContains(t, err, `seal "token"`)
+}
+
+func TestDecryptSettings_DegradedStoreRefusesRow(t *testing.T) {
+	prev := secretstore.SetDefault(failingStore{})
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+	_, err := decryptSettings(json.RawMessage(`{"token":"keep:0a1b2c3d-0000-4000-8000-000000000001"}`))
+	require.ErrorContains(t, err, "secret store degraded")
 }

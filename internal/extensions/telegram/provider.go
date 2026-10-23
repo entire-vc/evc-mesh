@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/extensions"
-	"github.com/entire-vc/evc-mesh/pkg/encryption"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 )
 
 //go:embed mesh-extension.json
@@ -127,8 +127,12 @@ func BotToken(r extensions.Resolved) (token, username string, ok bool) {
 	if err != nil || s.BotToken == "" {
 		return "", "", false
 	}
-	plain, err := encryption.Decrypt(s.BotToken)
-	if err != nil || plain == "" {
+	plain, reason := secretstore.Open(context.Background(), s.BotToken)
+	if reason != "" {
+		log.Printf("[telegram] bot token unavailable: %s", reason)
+		return "", "", false
+	}
+	if plain == "" {
 		return "", "", false
 	}
 	return plain, s.BotUsername, true

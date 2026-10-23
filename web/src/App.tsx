@@ -18,7 +18,7 @@ import { miscT } from "@/lib/misc-t";
 
 // Everything below is route-split: none of it should ship in the JS that
 // /login or /register load before first paint (perf·Б1, fleet-epic
-// #3e9f036e — see web/perf/budget.json for the gated ceiling). Named
+// an internal ticket — see web/perf/budget.json for the gated ceiling). Named
 // exports need the `.then(m => ({ default: m.X }))` wrapper because
 // React.lazy only resolves a default export.
 const AcceptInvitePage = lazy(() =>
@@ -187,7 +187,7 @@ class ErrorBoundary extends Component<
             {this.state.error.message}
           </pre>
           <pre
-            style={{ whiteSpace: "pre-wrap", marginTop: 8, color: "#666" }}
+            style={{ whiteSpace: "pre-wrap", marginTop: 8, color: "var(--fallback-text-muted)" }}
           >
             {this.state.error.stack}
           </pre>
@@ -208,7 +208,7 @@ class ErrorBoundary extends Component<
 }
 
 // Data router: required so useBlocker (react-router) can intercept in-app
-// navigation away from a dirty draft (task #7893ab16) — useBlocker throws
+// navigation away from a dirty draft — useBlocker throws
 // outside a data router context. Built once at module scope, not inside
 // App(), so remounts don't tear down router state/history.
 const router = createBrowserRouter(

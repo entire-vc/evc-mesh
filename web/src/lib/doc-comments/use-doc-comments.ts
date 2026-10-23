@@ -152,7 +152,7 @@ export interface DocCommentsController {
   submitDraft: (body: string) => Promise<void>;
   /**
    * Creates a page-level comment straight away — no draft, no anchor, no span.
-   * For the composer that sits permanently under the document (`#744ae979`):
+   * For the composer that sits permanently under the document:
    * that composer has no "start" step to click, so it cannot go through
    * `startPageDraft`/`submitDraft`'s two-step state (setting `draft` there
    * would also pop the rail's OWN draft box open, since the two composers

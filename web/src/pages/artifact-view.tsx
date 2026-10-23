@@ -23,7 +23,7 @@ import { apiErrorMessage } from "@/lib/api-error";
  * An artifact's own page: `/a/<artifact_id>`.
  *
  * This is where "Open in new tab" and "Preview" land since the Team Relay
- * detour was removed (#eb6fde4e): `metadata.tr_public_url` used to win over
+ * detour was removed: `metadata.tr_public_url` used to win over
  * everything and sent the reader to docs.entire.vc, where a private share
  * answers 401 and a public one shows Team Relay's chrome instead of ours.
  * The bytes are ours — the artifact lives in our storage — so Mesh renders
@@ -428,10 +428,10 @@ const JSON_TOKEN =
   /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
 
 const JSON_TOKEN_CLASSES = {
-  key: "text-sky-700 dark:text-sky-300",
-  string: "text-emerald-700 dark:text-emerald-300",
-  number: "text-amber-700 dark:text-amber-300",
-  literal: "text-violet-700 dark:text-violet-300",
+  key: "text-tone-sky-700 dark:text-tone-sky-300",
+  string: "text-tone-positive-700 dark:text-tone-positive-300",
+  number: "text-tone-warning-700 dark:text-tone-warning-300",
+  literal: "text-tone-violet-700 dark:text-tone-violet-300",
 } as const;
 
 function JsonHighlighted({ text }: { text: string }) {

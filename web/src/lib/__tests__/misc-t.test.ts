@@ -8,8 +8,8 @@ import en from "@/locales/en/misc.json";
 // key. That default is what the user sees until the chunk arrives, so it must
 // equal locales/en/misc.json — otherwise the text would change on load.
 const FILES = [
-  "src/pages/login.tsx",
-  "src/pages/register.tsx",
+  "src/core/slots/auth-screen/login-container.tsx",
+  "src/core/slots/auth-screen/register-container.tsx",
   "src/App.tsx",
   "src/lib/api.ts",
   "src/lib/api-error.ts",
@@ -28,7 +28,7 @@ function lookup(key: string): unknown {
 
 describe("English defaults next to misc keys", () => {
   const calls = FILES.flatMap((f) => {
-    const src = fs.readFileSync(path.resolve(__dirname, "../../..", f), "utf8");
+    const src = fs.readFileSync(path.resolve(__dirname, "../../..", f), "utf8"); // scope-ok: FILES are web/src paths
     return [...src.matchAll(CALL)].map((m) => ({ file: f, key: m[1]!, text: JSON.parse(`"${m[2]}"`) as string }));
   });
 

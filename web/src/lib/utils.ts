@@ -96,10 +96,10 @@ export const priorityConfig: Record<
   Priority,
   { label: string; color: string }
 > = {
-  urgent: { label: "Urgent", color: "text-red-600" },
-  high: { label: "High", color: "text-orange-500" },
-  medium: { label: "Medium", color: "text-yellow-500" },
-  low: { label: "Low", color: "text-blue-500" },
+  urgent: { label: "Urgent", color: "text-priority-urgent" },
+  high: { label: "High", color: "text-priority-high" },
+  medium: { label: "Medium", color: "text-priority-medium" },
+  low: { label: "Low", color: "text-priority-low" },
   none: { label: "None", color: "text-muted-foreground" },
 };
 
@@ -110,17 +110,17 @@ export const delegationLevelConfig: Record<
   review: {
     label: "Review required",
     description: "Agent prepares artifact, waits for approval before executing.",
-    color: "text-purple-500",
+    color: "text-tone-purple-500",
   },
   auto: {
     label: "Auto-execute",
     description: "Agent completes task autonomously, notifies only.",
-    color: "text-green-500",
+    color: "text-tone-success-500",
   },
   supervised: {
     label: "Supervised",
     description: "Agent proposes a plan; human triggers execution.",
-    color: "text-blue-500",
+    color: "text-tone-info-500",
   },
 };
 
@@ -128,11 +128,11 @@ export const statusCategoryConfig: Record<
   StatusCategory,
   { label: string; color: string }
 > = {
-  backlog: { label: "Backlog", color: "bg-gray-400" },
-  triage: { label: "Triage", color: "bg-amber-400" },
-  todo: { label: "To Do", color: "bg-blue-400" },
-  in_progress: { label: "In Progress", color: "bg-yellow-400" },
-  review: { label: "Review", color: "bg-purple-400" },
-  done: { label: "Done", color: "bg-green-400" },
-  cancelled: { label: "Cancelled", color: "bg-red-400" },
+  backlog: { label: "Backlog", color: "bg-status-backlog" },
+  triage: { label: "Triage", color: "bg-status-triage" },
+  todo: { label: "To Do", color: "bg-status-todo" },
+  in_progress: { label: "In Progress", color: "bg-status-in-progress" },
+  review: { label: "Review", color: "bg-status-review" },
+  done: { label: "Done", color: "bg-status-done" },
+  cancelled: { label: "Cancelled", color: "bg-status-cancelled" },
 };

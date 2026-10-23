@@ -70,7 +70,7 @@ function splitMentions(
       <Link
         key={`${match.index}-${slug}`}
         to={`/w/${wsSlug}/team/${entry.kind}/${slug}`}
-        className="mention-link inline-block whitespace-nowrap rounded bg-blue-50 px-1 py-0.5 text-blue-600 hover:underline dark:bg-blue-900/30 dark:text-blue-400"
+        className="mention-link inline-block whitespace-nowrap rounded bg-tone-info-50 px-1 py-0.5 text-tone-info-600 hover:underline dark:bg-tone-info-900/30 dark:text-tone-info-400"
         aria-label={t("mention.openProfile", { slug })}
       >
         @{slug}

@@ -193,12 +193,25 @@ describe("updateWorkspaceMemberName", () => {
   });
 });
 
-// Task #a935ce0f: workspace-settings.tsx hides EVERY admin control (invite,
+// an internal ticket: workspace-settings.tsx hides EVERY admin control (invite,
 // delete workspace, manage rules/secrets) off myRole alone, and the old
 // fetchMyRole swallowed any failure — network, 401/403/500 — into the exact
 // same myRole: null a genuine non-admin gets. A denied/unknown role must be
 // distinguishable from "we checked and you have none".
 describe("fetchMyRole", () => {
+  it("a slow answer for the workspace the user already left does not overwrite the current role", async () => {
+    let resolveOld!: (v: unknown) => void;
+    mockedApi.mockImplementationOnce(() => new Promise((r) => { resolveOld = r; }));
+    mockedApi.mockResolvedValueOnce({ workspace_id: "ws-new", user_id: USER, role: "viewer" });
+
+    const old = useMemberStore.getState().fetchMyRole("ws-old");
+    await useMemberStore.getState().fetchMyRole("ws-new");
+    resolveOld({ workspace_id: "ws-old", user_id: USER, role: "owner" });
+    await old;
+
+    expect(useMemberStore.getState().myRole).toBe("viewer");
+  });
+
   it("sets myRole on success and clears any previous error", async () => {
     useMemberStore.setState({ myRoleError: "stale error from a previous attempt" });
     mockedApi.mockResolvedValueOnce({

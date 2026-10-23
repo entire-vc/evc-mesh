@@ -26,7 +26,7 @@ import type { Workspace } from "@/types";
 const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
 const ME = "user-1";
 const CONTROLLER = { runner_id: "r1", name: "mini-main", host: "mini.local", version: "1.4.0", lease_expires_at: new Date(Date.now() + 60_000).toISOString(), live: true };
-const AGENT = { agent_id: "a1", name: "Riker", operator_user_id: ME, max_concurrent_tasks: 3, runtime_manager: false, controller: CONTROLLER };
+const AGENT = { agent_id: "a1", name: "Robin", operator_user_id: ME, max_concurrent_tasks: 3, runtime_manager: false, controller: CONTROLLER };
 
 interface World {
   agents: unknown[] | Error; runners: unknown[] | Error; history: unknown[] | Error; runtime: unknown | Error; extensionOn: boolean; role: string; enableError?: Error; slowOwner?: Promise<{ role: string }>; roleWs2?: string; slowCatalogWs2?: Promise<unknown>;
@@ -60,7 +60,7 @@ function renderPage(role: "owner" | "member") {
 
 beforeEach(async () => {
   await setLanguage("en");
-  world = { agents: [AGENT], runners: [{ ...CONTROLLER, agents: [{ agent_id: "a1", name: "Riker" }] }], history: [], runtime: { user_id: ME, revision: 4, config: { pools: { main: { size: 2 } } }, updated_at: "" }, extensionOn: false, role: "member" };
+  world = { agents: [AGENT], runners: [{ ...CONTROLLER, agents: [{ agent_id: "a1", name: "Robin" }] }], history: [], runtime: { user_id: ME, revision: 4, config: { pools: { main: { size: 2 } } }, updated_at: "" }, extensionOn: false, role: "member" };
   mockedApi.mockReset();
   mockedApi.mockImplementation(route);
 });
@@ -83,7 +83,7 @@ async function openPoolsEditor() {
 describe("MyRunnerPage", () => {
   it("shows agents, runners and resources", async () => {
     renderPage("member");
-    expect(await screen.findByTestId("my-runner-agent-a1")).toHaveTextContent("Riker");
+    expect(await screen.findByTestId("my-runner-agent-a1")).toHaveTextContent("Robin");
     expect(await screen.findByTestId("my-runner-runner-r1")).toHaveTextContent("mini.local");
     expect(await screen.findByTestId("my-runner-resources-pools")).toHaveTextContent("main");
   });
@@ -178,7 +178,7 @@ describe("MyRunnerPage", () => {
     ];
     renderPage("member");
     const history = await screen.findByTestId("my-runner-history");
-    await waitFor(() => expect(history).toHaveTextContent("Agent Riker"));
+    await waitFor(() => expect(history).toHaveTextContent("Agent Robin"));
     expect(history).toHaveTextContent("You");
   });
 

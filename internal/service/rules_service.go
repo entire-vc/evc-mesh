@@ -26,7 +26,7 @@ type rulesService struct {
 	projectRepo    repository.ProjectRepository
 	ruleRepo       repository.RuleRepository                // optional; used for task count queries in team directory
 	statusRepo     repository.TaskStatusRepository          // optional; used to expand my_permissions.can_transition for empty configs
-	agentGrantRepo repository.AgentWorkspaceGrantRepository // optional; adds guest agents (task U3/#71627c5a) to GetTeamDirectory
+	agentGrantRepo repository.AgentWorkspaceGrantRepository // optional; adds guest agents (task U3/an internal ticket) to GetTeamDirectory
 }
 
 // NewRulesService creates a new rulesService.
@@ -66,7 +66,7 @@ func WithRulesStatusRepo(sr repository.TaskStatusRepository) func(*rulesService)
 // WithRulesAgentGrantRepo sets the AgentWorkspaceGrantRepository on the
 // rulesService, enabling GetTeamDirectory to list GUEST agents — those whose
 // home workspace is elsewhere but hold an active agent_workspace_grants
-// connection into this one (task U3/#71627c5a). Without it, GetTeamDirectory
+// connection into this one (task U3/an internal ticket). Without it, GetTeamDirectory
 // falls back to its pre-U3 behavior: home agents only, via agentRepo.List's
 // agents.workspace_id filter, which is exactly the gap this option closes.
 func WithRulesAgentGrantRepo(r repository.AgentWorkspaceGrantRepository) func(*rulesService) {
@@ -179,10 +179,10 @@ func (s *rulesService) GetTeamDirectory(ctx context.Context, workspaceID uuid.UU
 
 // listGuestDirectoryAgents returns the GUEST agents of a workspace: home
 // workspace is elsewhere, but an active agent_workspace_grants connection
-// reaches into THIS workspace (task U3/#71627c5a). agentRepo.List and
+// reaches into THIS workspace (task U3/an internal ticket). agentRepo.List and
 // ListWithProjects filter on agents.workspace_id and can never see these —
 // agent_workspace_grants is the only place that does, same asymmetry
-// #7661fc5d found on the authentication side. seen holds the ids already
+// an internal ticket found on the authentication side. seen holds the ids already
 // listed as home agents and is extended with the guests returned.
 func (s *rulesService) listGuestDirectoryAgents(ctx context.Context, workspaceID uuid.UUID, seen map[uuid.UUID]bool, activeCategories []string) ([]domain.TeamDirectoryAgent, error) {
 	if s.agentGrantRepo == nil {
@@ -220,7 +220,7 @@ func (s *rulesService) listGuestDirectoryAgents(ctx context.Context, workspaceID
 
 // buildTeamDirectoryAgent turns a domain.Agent into its team-directory
 // representation for workspaceID, tagging IsHome so a guest (task
-// U3/#71627c5a — home workspace is elsewhere, reached here via an active
+// U3/an internal ticket — home workspace is elsewhere, reached here via an active
 // agent_workspace_grants connection) reads as distinguishable from a native
 // member rather than silently identical to one, per that task's AC3.
 func (s *rulesService) buildTeamDirectoryAgent(ctx context.Context, workspaceID uuid.UUID, a *domain.Agent, isHome bool, activeCategories []string) domain.TeamDirectoryAgent {

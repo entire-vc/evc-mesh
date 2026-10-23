@@ -15,6 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/exttest"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
@@ -776,4 +777,51 @@ func TestExtensionWorkspace_EnableManagedElsewhereReportsStoreFailures(t *testin
 			}
 		})
 	}
+}
+
+type recordingStore struct{ refs []secretstore.Ref }
+
+func (r *recordingStore) Put(_ context.Context, ref secretstore.Ref, plain string) (string, error) {
+	r.refs = append(r.refs, ref)
+	return secretstore.KeepPrefix + "id-" + plain, nil
+}
+
+func (r *recordingStore) Resolve(context.Context, string) secretstore.Result {
+	return secretstore.Result{Degraded: true, Reason: "not used"}
+}
+
+// A workspace secret must reach the store with its workspace and extension, or
+// Keep registers it at organization scope under a colliding name.
+func TestExtensionWorkspace_SecretRefCarriesWorkspaceAndExtension(t *testing.T) {
+	ctx := context.Background()
+	rec := &recordingStore{}
+	prev := secretstore.SetDefault(rec)
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+	f := newFx(t, nil, false)
+
+	by := uuid.New()
+	_, err := f.svc.Connect(ctx, f.ws, "demo", &by, map[string]any{"base_url": "https://x", "token": "s3cret"}, fullConsent)
+	require.NoError(t, err)
+	require.Equal(t, []secretstore.Ref{{WorkspaceID: f.ws, ExtensionID: "demo", Field: "token"}}, rec.refs)
+}
+
+type failingStore struct{}
+
+func (failingStore) Put(context.Context, secretstore.Ref, string) (string, error) {
+	return "", errors.New("keep down")
+}
+
+func (failingStore) Resolve(context.Context, string) secretstore.Result {
+	return secretstore.Result{Degraded: true, Reason: "keep down"}
+}
+
+// A store that refuses the secret fails the save; the plaintext is not kept.
+func TestExtensionWorkspace_SecretStoreFailureRejectsSave(t *testing.T) {
+	prev := secretstore.SetDefault(failingStore{})
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+	f := newFx(t, nil, false)
+
+	by := uuid.New()
+	_, err := f.svc.Connect(context.Background(), f.ws, "demo", &by, map[string]any{"base_url": "https://x", "token": "s3cret"}, fullConsent)
+	requireAPIErr(t, err, http.StatusBadRequest, "")
 }

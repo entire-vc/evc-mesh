@@ -29,7 +29,7 @@ const legacyGrantRole = "member"
 
 // bcryptCost is the bcrypt work factor for hashing API keys. A var, not a
 // const, so tests can override it — see its doc in main_test.go's TestMain.
-// #6ae6f813: at cost 12 under -race, a single GenerateFromPassword
+// an internal ticket: at cost 12 under -race, a single GenerateFromPassword
 // or CompareHashAndPassword call measured ~2.2s (isolated: one Register +
 // one Authenticate = 4.4s for TestAuthenticate_LegacyRowRejectsAWrongKeyAnd-
 // BackfillsNothing, -race -count=3, ~4.4s every run). The package has ~91
@@ -47,7 +47,7 @@ const (
 	agentKeyDefaultTTL = 365 * 24 * time.Hour
 	// defaultMaxConcurrentTasks is applied when registration omits the field.
 	// 0 reads as "takes no tasks" even though dispatch does not actually
-	// enforce it yet (#8b39a38e) — a freshly registered agent should not
+	// enforce it yet — a freshly registered agent should not
 	// start out looking parked.
 	defaultMaxConcurrentTasks = 5
 )
@@ -61,7 +61,7 @@ type agentService struct {
 	// workspaceRepo is used to resolve workspace slugs during authentication.
 	workspaceRepo repository.WorkspaceRepository
 	// userRepo backs the username↔slug collision guard in Register (task
-	// fee35355) — optional, nil in tests that don't exercise it, in which case
+	// an internal ticket) — optional, nil in tests that don't exercise it, in which case
 	// the guard is a no-op (see the nil check in Register).
 	userRepo repository.UserRepository
 	// checkoutExtender is optional (nil until SetCheckoutHeartbeatExtender is
@@ -87,7 +87,7 @@ var _ GrantRevocationChecker = (*agentService)(nil)
 
 // Compile-time proof that *agentService still satisfies WorkspaceDeletionChecker
 // — same silent-no-op risk as above, for the workspace-soft-delete freshness
-// re-check (#315d9a52).
+// re-check.
 var _ WorkspaceDeletionChecker = (*agentService)(nil)
 
 // NewAgentService returns a new AgentService backed by the given repositories.
@@ -264,11 +264,11 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 
 	slug := slugify(input.Name)
 
-	// Task fee35355: agents.slug and users.username live in separate namespaces
+	// an internal ticket: agents.slug and users.username live in separate namespaces
 	// that nothing else keeps disjoint. If a member of this workspace already
 	// answers to this handle, a new agent taking the same slug would make
 	// @<slug> in a comment here ambiguous between the two — the exact class of
-	// collision task f4f47938 stopped from being a SILENT loss (both branches
+	// collision an internal ticket stopped from being a SILENT loss (both branches
 	// now resolve and get their own delivery) without stopping it from being
 	// created. Fail before spending a bcrypt hash on a request we're about to
 	// reject. userRepo is nil in tests that don't care about this.
@@ -332,7 +332,7 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 	// value here would silently override the schema default instead of
 	// falling back to it. This is what produced agents with an empty
 	// responsibility_zone and max_concurrent_tasks=0 straight out of
-	// registration (task #85714565).
+	// registration.
 	if input.Role != nil && strings.TrimSpace(*input.Role) != "" {
 		agent.Role = strings.TrimSpace(*input.Role)
 	} else {
@@ -369,7 +369,7 @@ func (s *agentService) Register(ctx context.Context, input RegisterAgentInput) (
 	// CreateWithHomeGrant (not plain Create) — it also creates the agent's
 	// home agent_workspace_grants row, atomically, so a newly registered
 	// agent is visible through agent_workspace_grants immediately instead of
-	// living on the legacy agents-table path indefinitely (task #44f461a9).
+	// living on the legacy agents-table path indefinitely.
 	if err := s.agentRepo.CreateWithHomeGrant(ctx, agent); err != nil {
 		return nil, err
 	}
@@ -508,7 +508,7 @@ func (s *agentService) ListActivityLog(ctx context.Context, agentID uuid.UUID, f
 // it is a mutable string re-parsed from the presented key's own plaintext
 // (agk_{slug}_{random}, fixed at issue time, never updated if the workspace
 // is later renamed) and, since migration 20260911002 + WorkspaceRepo.Delete's
-// rename-on-delete (task #c164a5df), a slug a deleted workspace once held can
+// rename-on-delete, a slug a deleted workspace once held can
 // be reused by a completely unrelated new workspace. GetBySlug below always
 // resolves to whichever workspace is LIVE under that slug right now — which,
 // for a key issued before a deletion+reuse, is NOT the workspace the key was
@@ -519,7 +519,7 @@ func (s *agentService) ListActivityLog(ctx context.Context, agentID uuid.UUID, f
 // forever and can never match a query scoped to some other workspace's id,
 // no matter what slug either of them answers to. Do not "simplify" either
 // lookup to filter by slug instead of workspace_id — that would resurrect
-// exactly the hole task #2045c890 audited this function for. Regression
+// exactly the hole an internal ticket audited this function for. Regression
 // coverage against real Postgres (not mocks — the thing being proven is SQL
 // scoping): agent_key_workspace_reuse_db_test.go.
 //
@@ -692,7 +692,7 @@ func (s *agentService) IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (b
 // workspaceID no longer resolves — soft-deleted or never existed, same
 // question workspaceRepo.GetByID already answers for every other caller.
 // See the interface doc for why cachedAgentAuth needs this on a cache hit
-// (#315d9a52): Authenticate itself always gets this right via
+//: Authenticate itself always gets this right via
 // GetBySlug/GetByID's own deleted_at filter, but a hit never reaches
 // Authenticate at all.
 func (s *agentService) IsWorkspaceDeleted(ctx context.Context, workspaceID uuid.UUID) (bool, error) {
@@ -838,7 +838,7 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 	// forever: Authenticate looks a presented key up by its OWN prefix
 	// through the grant table first, and a stale grant row still matches on
 	// the old prefix even after agents.api_key_prefix has moved on (task
-	// #44f461a9's rotation half).
+	// an internal ticket's rotation half).
 	if err := s.agentRepo.RotateHomeGrantKey(ctx, agent); err != nil {
 		return "", err
 	}

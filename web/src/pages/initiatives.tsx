@@ -36,11 +36,11 @@ import type {
 
 const STATUS_COLORS: Record<InitiativeStatus, string> = {
   active:
-    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    "bg-tone-positive-100 text-tone-positive-800 dark:bg-tone-positive-900 dark:text-tone-positive-200",
   completed:
-    "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+    "bg-tone-info-100 text-tone-info-800 dark:bg-tone-info-900 dark:text-tone-info-200",
   archived:
-    "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+    "bg-tone-neutral-100 text-tone-neutral-600 dark:bg-tone-neutral-800 dark:text-tone-neutral-400",
 };
 
 function InitiativeProgress({ initiative }: { initiative: Initiative }) {

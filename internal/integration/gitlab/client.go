@@ -175,3 +175,48 @@ func ParseMergeRequestURL(rawURL string) (projectPath string, iid int, ok bool) 
 	}
 	return m[1], n, true
 }
+
+// HeadPipeline is the newest pipeline GitLab attached to a merge request.
+type HeadPipeline struct {
+	ID     int64
+	Status string
+	SHA    string // the commit the pipeline ran on
+}
+
+// GetMergeRequestHeadPipeline reads head_pipeline from
+// GET /api/v4/projects/:id/merge_requests/:iid. ok=false (nil error) means the
+// MR has no pipeline, e.g. a project without CI. Only the configured host is
+// contacted, so the result can be stored as the link's pipeline state.
+func (c *Client) GetMergeRequestHeadPipeline(ctx context.Context, projectPath string, iid int) (HeadPipeline, bool, error) {
+	endpoint := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%d", c.baseURL, urlpkg.PathEscape(projectPath), iid)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return HeadPipeline{}, false, fmt.Errorf("build gitlab mr request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		req.Header.Set("PRIVATE-TOKEN", c.token)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return HeadPipeline{}, false, fmt.Errorf("gitlab mr request %s!%d: %w", projectPath, iid, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return HeadPipeline{}, false, fmt.Errorf("gitlab mr request %s!%d: unexpected status %d", projectPath, iid, resp.StatusCode)
+	}
+	var body struct {
+		HeadPipeline *struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+			SHA    string `json:"sha"`
+		} `json:"head_pipeline"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return HeadPipeline{}, false, fmt.Errorf("decode gitlab mr response %s!%d: %w", projectPath, iid, err)
+	}
+	if body.HeadPipeline == nil || body.HeadPipeline.ID == 0 || body.HeadPipeline.Status == "" {
+		return HeadPipeline{}, false, nil
+	}
+	return HeadPipeline{ID: body.HeadPipeline.ID, Status: body.HeadPipeline.Status, SHA: body.HeadPipeline.SHA}, true, nil
+}

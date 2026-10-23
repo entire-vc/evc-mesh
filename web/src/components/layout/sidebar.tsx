@@ -71,7 +71,7 @@ interface SidebarProps {
 // — an import-free module so the contrast guard
 // (`scripts/assert-rail-icon-contrast.mjs`) can measure the SAME definitions
 // rather than restating them and drifting out of sync. The reasoning behind
-// each rule is documented there. See `#bb8f1092`.
+// each rule is documented there. See an internal ticket.
 
 type ImageStatus = "pending" | "loaded" | "error";
 
@@ -81,7 +81,7 @@ interface WorkspaceLogoProps {
   variant: WorkspaceLogoVariant;
   /**
    * What to show in the tinted box while there is no loaded image
-   * (`#bb8f1092`). Defaults to the generic `MeshIcon` mark used by the
+   *. Defaults to the generic `MeshIcon` mark used by the
    * workspace header. A caller with its own glyph (e.g. a project's
    * single-character `icon` in the collapsed rail) passes it here instead
    * of duplicating the container/sizing/tint logic in a second component.
@@ -99,10 +99,10 @@ interface WorkspaceLogoProps {
 
 /**
  * Renders an icon tile in the sidebar — the workspace mark in the header
- * (collapsed and expanded), and, since `#bb8f1092`, a project's rail icon in
+ * (collapsed and expanded), and, since an internal ticket, a project's rail icon in
  * the collapsed rail — off one shared sizing/tint rule (see the table above)
  * so the two states/callers cannot drift apart again the way header vs.
- * project-list once did (`#eeabc2dc`: header got a proper container, the
+ * project-list once did (an internal ticket: header got a proper container, the
  * project list next to it did not).
  *
  * Placeholder policy for the two states that are NOT "logo present and
@@ -118,7 +118,7 @@ interface WorkspaceLogoProps {
  * A caller that never has an `iconUrl` (e.g. projects — they only ever have
  * a plain-text/emoji `icon`, no uploaded-image field exists for them) always
  * takes the fallback branch, which is exactly the "always show the tile"
- * behavior `#bb8f1092` asks for.
+ * behavior an internal ticket asks for.
  */
 function WorkspaceLogo({
   iconUrl,
@@ -177,7 +177,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const navigationPending = workspacesLoading || projectsLoading;
   // The store keeps archived projects so ids still resolve to names elsewhere;
   // the sidebar lists only live ones and tucks the rest under "Archived"
-  // (#ddd219f4 — an archived project used to stay in the list as if nothing
+  // (an internal ticket — an archived project used to stay in the list as if nothing
   // had happened).
   const projects = allProjects.filter((p) => !p.is_archived);
   const archivedProjects = allProjects.filter((p) => p.is_archived);
@@ -246,7 +246,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   // Re-runs on workspace change (keyed by id, not just "once on mount"): the
   // badge exists on this same sidebar next to a workspace-scoped mention
   // list, and a stale cross-workspace count left over from wherever the user
-  // was before is exactly the bug this scoping fixes (#fe3ae257).
+  // was before is exactly the bug this scoping fixes.
   useEffect(() => {
     const workspaceId = currentWorkspace?.id;
     if (!workspaceId || unseenFetchedRef.current === workspaceId) return;
@@ -326,7 +326,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
               key={project.id}
               to={`/w/${wsSlug}/p/${project.slug}`}
               data-testid="project-icon"
-              /* `#119078b0`: a project's own muted chip, deliberately NOT
+              /* an internal ticket: a project's own muted chip, deliberately NOT
                  `WorkspaceLogo` — that component's "no image" branch is the
                  workspace's brand-teal tint, and reusing it here is what
                  made every project tile in a 13-project workspace look like
@@ -369,7 +369,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           >
             <Bell className="h-4 w-4" />
             {unseenCount > 0 && (
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-tone-danger-500 text-[10px] font-bold text-white">
                 {unseenCount > 9 ? "9+" : unseenCount}
               </span>
             )}
@@ -684,7 +684,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           <Bell className="h-4 w-4" />
           {t("nav.activity")}
           {unseenCount > 0 && (
-            <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+            <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-tone-danger-500 px-1 text-[10px] font-bold text-white">
               {unseenCount > 99 ? "99+" : unseenCount}
             </span>
           )}

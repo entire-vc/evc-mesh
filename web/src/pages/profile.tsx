@@ -115,7 +115,7 @@ function AccountCard() {
                 status === "taken" || status === "invalid"
                   ? "border-destructive"
                   : status === "available"
-                    ? "border-green-500"
+                    ? "border-tone-success-500"
                     : ""
               }
             />
@@ -123,7 +123,7 @@ function AccountCard() {
               <p className="text-xs text-muted-foreground">{t("workspace.profile.checking")}</p>
             )}
             {status === "available" && (
-              <p className="text-xs text-green-600">{t("workspace.profile.usernameAvailable")}</p>
+              <p className="text-xs text-tone-success-600">{t("workspace.profile.usernameAvailable")}</p>
             )}
             {status === "taken" && (
               <p className="text-xs text-destructive">{t("workspace.profile.usernameTaken")}</p>
@@ -137,7 +137,7 @@ function AccountCard() {
               role={feedback.type === "error" ? "alert" : "status"}
               className={cn(
                 "flex items-center gap-1 text-sm",
-                feedback.type === "success" ? "text-green-600" : "text-destructive",
+                feedback.type === "success" ? "text-tone-success-600" : "text-destructive",
               )}
             >
               {feedback.type === "success" ? (

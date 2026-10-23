@@ -88,7 +88,7 @@ function DraggableTaskChip({
         (isDragging || isBeingDragged) && "opacity-30",
       )}
       style={{
-        borderLeft: `2px solid ${status?.color ?? "#9ca3af"}`,
+        borderLeft: `2px solid ${status?.color ?? "var(--fallback-gray-400)"}`,
         touchAction: "none",
       }}
       onClick={(e) => {
@@ -392,7 +392,7 @@ function DragOverlayCard({ task, statusMap }: { task: Task; statusMap: Map<strin
     <div
       className="flex w-48 cursor-grabbing items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium shadow-lg ring-2 ring-primary/30"
       style={{
-        borderLeft: `3px solid ${status?.color ?? "#9ca3af"}`,
+        borderLeft: `3px solid ${status?.color ?? "var(--fallback-gray-400)"}`,
         backgroundColor: "var(--background)",
         color: "var(--foreground)",
       }}
@@ -528,7 +528,7 @@ export function CalendarPage() {
 
   const handleTaskClick = useCallback((task: Task) => {
     // Full-screen task page on every viewport. Was gated to isMobile in #70,
-    // leaving desktop on the slide-over (Pavel 2026-07-07 — fullscreen only).
+    // leaving desktop on the slide-over (Alex 2026-07-07 — fullscreen only).
     if (wsSlug && currentProject) {
       navigate(`/w/${wsSlug}/p/${currentProject.slug}/t/${task.id}`);
     } else {

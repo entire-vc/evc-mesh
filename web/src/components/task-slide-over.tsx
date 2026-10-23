@@ -1029,7 +1029,7 @@ export function TaskSlideOver({
                             </span>
                           )}
                           {descSaved && !descSaving && (
-                            <span className="flex items-center gap-1 text-[11px] text-green-600">
+                            <span className="flex items-center gap-1 text-[11px] text-tone-success-600">
                               <Check className="h-3 w-3" />
                               {t("panel.description.saved")}
                             </span>

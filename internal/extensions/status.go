@@ -17,7 +17,7 @@ const HealthTTL = 60 * time.Second
 
 // Status is what the API shows and the runtime acts on for one extension in
 // one workspace. Enabled and Source always come from the provider's Resolve,
-// so the two can never disagree (lesson #a4d108eb: UI decided by the row,
+// so the two can never disagree (lesson an internal ticket: UI decided by the row,
 // runtime by env).
 type Status struct {
 	ExtensionID           string

@@ -60,6 +60,11 @@ committed tree). `node perf/check-bundle-budget.mjs --selftest` proves the five
 refusal/accept cases without a build; `perf-bundle` runs it before the real
 check.
 
+In CI, `perf-bundle` does not build: it measures the `web/dist/` artifact that
+`build:web` produced in the same pipeline (`needs: [build:web]`). The stamp is
+what makes that safe: an artifact whose `.build-sha` is not the pipeline's
+commit is refused like any other stale `dist/`.
+
 ## `login.initial_js_kb_gz` vs `total_js_kb_gz` after route splitting
 
 Routes use `React.lazy`, so the two numbers diverged: on
@@ -106,6 +111,46 @@ sign-off: the product lead, on the card (655.6 signed, 656.0 requested).
 backend-only and does not touch the web bundle. The ceiling moved by the
 smallest step above the measurement. `login.initial_js_kb_gz` unchanged. Lead
 sign-off: the product lead.
+
+`total_js_kb_gz` 657.5 → 658.6 (**+1.1 KB gz**): the dashboard widget layer
+(`core/dashboard`: registry, data hooks, `dashboard.layout` / `dashboard.widget.*`
+slot hosts with error boundary, mesh-default views) in the lazy dashboard route
+chunk. It is the shared contract every theme draws the dashboard through, so the
+code has to exist once in core. The build on the MR head (rebased on main
+`ef00ed99`) measures 658.5; the ceiling moved by the smallest step above that.
+`login.initial_js_kb_gz` unchanged. Lead sign-off: the product lead.
+
+`total_js_kb_gz` 656.4 → 658.5 (**+2.1 KB gz**): the T4c slot contract for
+`auth.screen` (slot boundary, context, registry, container and default view)
+costs +1.83 KB gz; the build measured 658.34. Main (`c4860b7e`) already measured
+656.5 against the 656.4 ceiling. Lazy loading and container dedup were tried and
+do not help: the metric sums every chunk. `login.initial_js_kb_gz` unchanged.
+Revert: revert the MR. Lead sign-off: the product lead, on the card (658.4 proposed,
+658.5 signed for flake headroom).
+After the previous change raised the ceiling to 658.6 on main, this MR was rebased onto it and
+the combined build measures 660.26; the same +1.83 KB gz moved onto the new base
+gives 660.4 (same headroom as signed).
+
+`total_js_kb_gz` 660.4 → 665.1 (**+4.7 KB gz**) and `login.initial_js_kb_gz`
+172.15 → 172.3 (**+0.15 KB gz**), (T4a): the kanban board split into a
+container and the `board.layout` / `board.column` / `board.card` slot views
+(slot types, board data module, three mesh-default views, slot fallback boundary
+and registry version counter). The views are the shared contract every theme draws
+the board through, so the code exists once in core; the sum covers every chunk, so
+lazy loading does not help. CI measured 665.02 / 172.26 (local build 664.98) (the title primitives now take the container's stable actions and href, which keeps board cards out of router context); each ceiling moved
+by the smallest step above that. The registry additions (`withSlotFallback`,
+registry version) are in the eager chunk, hence the small login move. Revert: revert
+the MR. Lead sign-off: the product lead, on the card.
+
+`total_js_kb_gz` 668.0 → 671.8 (**+3.7 KB gz**), T4c-3: the docs tree and the document
+page split into a container and the `doc.tree` / `doc.view` slot views (slot contract
+types, two mesh-default views, the core blocks the doc.view draws the editor and
+comments through). The views are the shared contract every theme draws the docs page
+through, so the code exists once in core; the sum covers every chunk, so lazy loading
+does not help. `login.initial_js_kb_gz` measured 172.22, under the existing 172.3
+ceiling, so it does not move. CI measured 671.70 on the rebased base; the ceiling
+moved by the smallest step above that. Revert: revert the MR. Lead sign-off: the product lead,
+on the card.
 
 ## Proving the gate actually gates (do this again after touching the script)
 
@@ -329,7 +374,7 @@ whole spec: with `board.open` red, Playwright reports the other three paths as
 mechanism as `board.open`: the first `import()` of `task-detail` inserts 4
 `<link rel="modulepreload">` into `<head>` (`task-detail`, `_task-panel`,
 `_template`, `_circle`; the rest of its closure is already loaded by the
-board). This change received lead sign-off.
+board). Lead sign-off: the product lead.
 
 ### `board.drag` — drag coverage, and why `board_card_commits` barely moved
 

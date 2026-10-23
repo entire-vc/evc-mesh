@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"math/big"
 	"sort"
 	"sync"
 	"testing"
@@ -99,7 +98,8 @@ func verify(t *testing.T, jwks []byte, token, aud string, now time.Time) (jwt.Ma
 			}
 			x, _ := base64.RawURLEncoding.DecodeString(k.X)
 			y, _ := base64.RawURLEncoding.DecodeString(k.Y)
-			return &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}, nil
+			raw := append(append([]byte{0x04}, x...), y...)
+			return ecdsa.ParseUncompressedPublicKey(elliptic.P256(), raw)
 		}
 		return nil, errors.New("unknown kid")
 	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithIssuer("https://mesh.example"), jwt.WithAudience(aud),

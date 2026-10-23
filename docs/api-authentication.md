@@ -193,6 +193,32 @@ curl -X PATCH http://localhost:8005/api/v1/agents/me \
   }'
 ```
 
+## Chat-session tokens (`cst_`)
+
+A chat-session token lets an agent act on behalf of one user, in one project, for one chat. It is minted
+only by the chat runner (never by the model) and is accepted as `Authorization: Bearer cst_...`.
+
+- **Rights = agent ∩ user.** The request authenticates as the agent, and the delegating user's *current*
+  workspace role is applied on every call (same clamp as OAuth connectors). A viewer working through an
+  admin-capable agent still gets `403` on a write; a strong agent never widens a viewer.
+- **Live checks, no cache.** Every request re-reads the user's workspace/project membership and the agent's
+  connection and project membership. Anything missing is a `401` (the code is pinned by tests).
+- **Project-confined.** The token reaches only its own project. A resource of another project, or a route
+  that names no project (except `GET /agents/me`), is `403` (`chat_scope_denied`).
+- **Short-lived.** TTL 5 minutes (server time). Renewal is a runner call, not a model call; the previous
+  token stays valid for at most 10 s after a renewal. Stop revokes the whole session at once and a stopped
+  session cannot be renewed or issued again under the same `chat_session_id` whatever the epoch (`409`); a restart is a new session id. Within a live session a newer `execution_epoch` takes it over (the previous runner's tokens end at once), an older or equal one from another runner is refused (`409`).
+- **Attribution.** History rows written under a chat token carry `changes.initiated_by_user_id`,
+  `chat_thread_id`, `chat_session_id`, `execution_epoch`, and the activity list returns `initiated_by_name`,
+  so a client can render "Agent X on behalf of Y (chat)". No chat text and no token value is stored.
+
+Control routes (runner only: `MESH_CHAT_CONTROLLER_TOKEN` in `X-Chat-Controller-Token`, loopback/direct, fail
+closed when unset): `POST /internal/chat-sessions/tokens`, `POST /internal/chat-sessions/:session_id/renew`,
+`POST /internal/chat-sessions/:session_id/revoke`.
+
+Not covered here (E5): the MCP token file and isolation of other credentials, active-turn binding, and
+project scoping of workspace-level list/search routes (those are refused for a chat token for now).
+
 ## Role-Based Access Control (RBAC)
 
 ### Roles

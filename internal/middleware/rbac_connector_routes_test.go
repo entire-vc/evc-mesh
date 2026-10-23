@@ -12,9 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/service"
 )
 
-// MCP-OAuth sec (#266eae6a): RequireConnectorPermission is the role bar for
+// MCP-OAuth sec: RequireConnectorPermission is the role bar for
 // routes that have no rbac(). It must bind an OAuth connector to its user's
 // CURRENT role and change nothing for humans or X-Agent-Key agents.
 
@@ -99,7 +100,7 @@ func TestRequireConnectorPermission_DoesNotTouchAgentKeyAgentsOrHumans(t *testin
 	// A human viewer: holds no PermManageProject / PermWriteMemory.
 	repo.addMember(wsID, userID, domain.RoleViewer)
 
-	// PermMemoryIndex is deliberately excluded from this loop (task 440358b6):
+	// PermMemoryIndex is deliberately excluded from this loop:
 	// it moved into agentPerms once its routes moved to rbac(), so the
 	// "precondition: not in agentPerms" assertion below no longer holds for
 	// it — see TestRBAC_MemoryMaintenance_TrustedAgentCanRebuildIndex for its
@@ -178,6 +179,37 @@ func TestRequireConnectorSelfOrPermission(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, rec.Code == http.StatusOK, reached, "the handler must run if and only if the guard let the request through")
 	})
+	t.Run("a cst_ chat session gets no self shortcut: agentPerms still applies", func(t *testing.T) {
+		repo := newRBACMockMemberRepo()
+		wsID, agentID, userID := uuid.New(), uuid.New(), uuid.New()
+		repo.addMember(wsID, userID, domain.RoleOwner)
+		require.False(t, agentPerms[PermDeleteAgent], "precondition: perm is outside the agent ceiling")
+
+		c, rec := connectorWithParam(agentID, wsID, userID, agentID.String())
+		c.Set(ContextKeyChatSession, &service.ChatSessionPrincipal{})
+		reached := runGuard(t, RequireConnectorSelfOrPermission("agent_id", PermDeleteAgent, repo, nil), c)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.False(t, reached, "the handler must not run")
+	})
+	t.Run("a cst_ chat session on self is still clamped by the user's role", func(t *testing.T) {
+		repo := newRBACMockMemberRepo()
+		wsID, agentID, userID := uuid.New(), uuid.New(), uuid.New()
+		repo.addMember(wsID, userID, domain.RoleViewer)
+		perm := PermManageProject
+		for p := range agentPerms {
+			if !hasPermission(domain.RoleViewer, p) {
+				perm = p
+				break
+			}
+		}
+		require.True(t, agentPerms[perm])
+
+		c, rec := connectorWithParam(agentID, wsID, userID, agentID.String())
+		c.Set(ContextKeyChatSession, &service.ChatSessionPrincipal{})
+		reached := runGuard(t, RequireConnectorSelfOrPermission("agent_id", perm, repo, nil), c)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.False(t, reached)
+	})
 	t.Run("a member connector cannot write to another agent's record", func(t *testing.T) {
 		repo := newRBACMockMemberRepo()
 		wsID, agentID, userID := uuid.New(), uuid.New(), uuid.New()
@@ -221,7 +253,7 @@ func TestRequireConnectorSelfOrPermission(t *testing.T) {
 // The new permissions must live in the role matrix, and (with one deliberate
 // exception) nowhere else: not in agentPerms (nothing reads them for an agk_
 // agent, and adding one would make RequirePermission start admitting agk_
-// agents to it). PermMemoryIndex is that exception (task 440358b6): its
+// agents to it). PermMemoryIndex is that exception: its
 // routes moved to rbac(), and mesh-embed-backfill.sh / rechunk-prod-corpus.sh
 // reach them via a plain X-Agent-Key, not a workspace role — so it must be
 // in agentPerms, unlike its two siblings.
@@ -308,4 +340,33 @@ func TestRequireConnectorPermission_OwnerWithoutMembershipRow(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 		assert.False(t, reached)
 	})
+}
+
+// A cst_ chat-session token is agent ∩ user. On a connector-only route the user's
+// role holds the permission here (owner) yet the agent's agentPerms do not, so the
+// token must be refused; the same owner as a mot_ connector is the unchanged control.
+func TestRequireConnectorPermission_ChatSessionAlsoNeedsAgentPerms(t *testing.T) {
+	for _, perm := range []Permission{PermManageProject, PermWriteMemory} {
+		require.False(t, agentPerms[perm], "precondition: the agent half does not hold this permission")
+
+		t.Run("cst_ owner / "+string(perm), func(t *testing.T) {
+			repo := newRBACMockMemberRepo()
+			wsID, agentID, userID := uuid.New(), uuid.New(), uuid.New()
+			repo.addMember(wsID, userID, domain.RoleOwner)
+			c, rec := newRBACOAuthConnectorContext(agentID, wsID, userID)
+			c.Set(ContextKeyChatSession, &service.ChatSessionPrincipal{})
+			reached := runGuard(t, RequireConnectorPermission(perm, repo, nil), c)
+			assert.Equal(t, http.StatusForbidden, rec.Code)
+			assert.False(t, reached, "the handler must not run for a chat token the agent half denies")
+		})
+		t.Run("mot_ owner control / "+string(perm), func(t *testing.T) {
+			repo := newRBACMockMemberRepo()
+			wsID, agentID, userID := uuid.New(), uuid.New(), uuid.New()
+			repo.addMember(wsID, userID, domain.RoleOwner)
+			c, rec := newRBACOAuthConnectorContext(agentID, wsID, userID)
+			reached := runGuard(t, RequireConnectorPermission(perm, repo, nil), c)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.True(t, reached)
+		})
+	}
 }

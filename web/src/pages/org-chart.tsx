@@ -141,10 +141,10 @@ function buildUnifiedTree(
 // ---------------------------------------------------------------------------
 
 const statusBorderColors: Record<string, string> = {
-  online: "border-l-green-500",
-  busy: "border-l-yellow-500",
-  offline: "border-l-gray-400",
-  error: "border-l-red-500",
+  online: "border-l-tone-success-500",
+  busy: "border-l-tone-attention-500",
+  offline: "border-l-tone-neutral-400",
+  error: "border-l-tone-danger-500",
 };
 
 const STATUS_KEYS: Record<string, string> = {
@@ -165,16 +165,16 @@ function AgentCard({
   const stale = agent.is_stale ?? isAgentStale(agent);
   const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
     label: agent.status,
-    dotColor: "bg-gray-400",
+    dotColor: "bg-tone-neutral-400",
   };
-  const borderColor = statusBorderColors[agent.status] ?? "border-l-gray-400";
+  const borderColor = statusBorderColors[agent.status] ?? "border-l-tone-neutral-400";
 
   return (
     <Card
       className={cn(
         "w-52 shrink-0 border-l-4 select-none hover:shadow-md transition-shadow",
         borderColor,
-        stale && agent.status === "online" && "border-l-yellow-500",
+        stale && agent.status === "online" && "border-l-tone-attention-500",
         onClick ? "cursor-pointer" : "cursor-default",
       )}
       onClick={onClick}
@@ -241,10 +241,10 @@ function AgentCard({
 
 function HumanCard({ human }: { human: TeamDirectoryHuman }) {
   return (
-    <Card className="w-52 shrink-0 border-l-4 border-l-blue-400 hover:shadow-md transition-shadow cursor-default">
+    <Card className="w-52 shrink-0 border-l-4 border-l-tone-info-400 hover:shadow-md transition-shadow cursor-default">
       <CardContent className="p-3 space-y-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
-          <User className="h-3.5 w-3.5 shrink-0 text-blue-400" />
+          <User className="h-3.5 w-3.5 shrink-0 text-tone-info-400" />
           <span className="font-medium text-sm truncate" title={human.name}>
             {human.name}
           </span>

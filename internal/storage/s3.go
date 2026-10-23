@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -189,6 +190,35 @@ func (s *S3Client) GetPresignedURL(ctx context.Context, key string, expiry time.
 	}
 
 	return u.String(), nil
+}
+
+// PresignPutURL generates a time-limited upload URL for the given key. The
+// headers are part of the signature: the uploader must send them verbatim, so
+// the object stored has the declared type and exactly the declared length.
+func (s *S3Client) PresignPutURL(ctx context.Context, key string, expiry time.Duration, headers http.Header) (string, error) {
+	if !s.bucketReady.Load() {
+		if err := s.EnsureBucket(ctx); err != nil {
+			return "", err
+		}
+	}
+	u, err := s.client.PresignHeader(ctx, http.MethodPut, s.bucket, key, expiry, nil, headers)
+	if err != nil {
+		return "", classify(err)
+	}
+	if s.publicURL != "" {
+		return s.rewriteURL(u), nil
+	}
+	return u.String(), nil
+}
+
+// StatObject reports the size of a stored object. A missing object is
+// ErrNotFound.
+func (s *S3Client) StatObject(ctx context.Context, key string) (int64, error) {
+	st, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, classify(err)
+	}
+	return st.Size, nil
 }
 
 // addCharset appends "; charset=utf-8" to text/* and application/json types

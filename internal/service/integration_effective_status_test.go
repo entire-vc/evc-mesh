@@ -49,7 +49,7 @@ func newStatusResolver(repo *fakeVCSIntegrationRepo, telegram bool) *Integration
 		telegram)
 }
 
-// Prod trap (#a4d108eb): no gitlab row, env configured -> the runtime works,
+// Trap: no gitlab row, env configured -> the runtime works,
 // so the screen must say enabled via env.
 func TestEffectiveStatus_NoRowEnvSet_EnabledViaEnv(t *testing.T) {
 	ws := uuid.New()

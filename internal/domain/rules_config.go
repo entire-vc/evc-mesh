@@ -79,6 +79,10 @@ type WorkflowRulesConfig struct {
 	// that status, whoever moves it. Absent (every project until it opts in) means
 	// the transition behaves exactly as before.
 	OnEnter map[string]OnEnterAction `json:"on_enter,omitempty"`
+	// Handoff is the cap-driven handoff policy (see HandoffConfig). Nil — every
+	// project until it opts in — means the server decides nothing and the runner's
+	// own behaviour is unchanged.
+	Handoff *HandoffConfig `json:"handoff,omitempty"`
 }
 
 // OnEnterAction is what the server does to a card on entering a status.
@@ -87,6 +91,27 @@ type OnEnterAction struct {
 	// name, or one that is not a member of the project's workspace, leaves the
 	// assignee unchanged and records a warning; the transition is never blocked.
 	AssignTo string `json:"assign_to,omitempty"`
+
+	// Reviewer, AcceptorLabel, MergeBy and Mode describe the review route a card
+	// takes on entering a review status: who checks it, which label marks the
+	// acceptance step, and who merges. They are SHADOW-ONLY: with Mode empty or
+	// "shadow" the server records the decision it would take in the activity log
+	// (action workflow.shadow_review_route) and changes nothing. Any other Mode
+	// value is treated as shadow too, so a typo cannot switch enforcement on.
+	Reviewer      string `json:"reviewer,omitempty"`       // "by_repo": agents that cover the card's repository
+	ReviewerPick  string `json:"reviewer_pick,omitempty"`  // "other_family": a model family other than the author's
+	AcceptorLabel string `json:"acceptor_label,omitempty"` // e.g. "verify"
+	MergeBy       string `json:"merge_by,omitempty"`       // "author"
+	Mode          string `json:"mode,omitempty"`
+}
+
+// IsShadow reports whether the route rule only records decisions. Always true
+// today: enforcement does not exist yet, see the field comment above.
+func (a OnEnterAction) IsShadow() bool { return true }
+
+// HasReviewRoute reports whether the action carries a review route to evaluate.
+func (a OnEnterAction) HasReviewRoute() bool {
+	return a.Reviewer != "" || a.AcceptorLabel != "" || a.MergeBy != ""
 }
 
 // MidPipelineConfig configures the mid-pipeline guard: the two transitions that
@@ -105,6 +130,14 @@ type OnEnterAction struct {
 // unconditional, not flagged. A flag guards a change of policy; it must not
 // guard a change from wrong to right.
 type MidPipelineConfig struct {
+	// CloseOnMerge and LiftBacklogBlockers are the server-side counterparts of
+	// board-services' "close what is merged" and "lift blockers from backlog".
+	// SHADOW-ONLY for now: when set, the server logs the close/lift it would do
+	// (workflow.shadow_close_on_merge / workflow.shadow_lift_blocker) and does not
+	// perform it.
+	CloseOnMerge        bool `json:"close_on_merge,omitempty"`
+	LiftBacklogBlockers bool `json:"lift_backlog_blockers,omitempty"`
+
 	// ReviewEvidenceStrict tightens the existing review-evidence gate from
 	// "has any comment" to "has evidence": an artifact, a VCS link, a passing
 	// dod_check, or a comment that actually carries a URL.
@@ -172,7 +205,7 @@ type MidPipelineConfig struct {
 	// (kind:monitor / phase:verify) without a future due_date. Such a park has no
 	// wake-up path at all: no feed polls backlog, and the promotion sweeper fires on
 	// due_date, so a labelled, dateless backlog card sleeps until a human finds it.
-	// Audit 2026-09-07 (#559270cf) counted 34 of these live, 11 already classified
+	// Audit 2026-09-07 counted 34 of these live, 11 already classified
 	// "parked with no exit".
 	//
 	// A POINTER, and ON when nil — the opposite default from the other flags on this
@@ -314,10 +347,10 @@ type AgentProfileUpdate struct {
 	Capabilities json.RawMessage `json:"capabilities"`
 	// MentionWakes is a dedicated agents column (see domain.Agent), kept out of
 	// Capabilities so this PATCH can flip it without colliding with the
-	// blind-replace on Capabilities above — see #33b7d4b7.
+	// blind-replace on Capabilities above — see an internal ticket.
 	MentionWakes       *bool   `json:"mention_wakes,omitempty"`
 	ResponsibilityZone *string `json:"responsibility_zone,omitempty"`
-	// EscalationTo is a single name/handle (e.g. "Garfield"), not a list —
+	// EscalationTo is a single name/handle (e.g. "Gary"), not a list —
 	// matches the shape every other write path already assumes: the MCP
 	// tool (mcpsdk.ParseString), and TeamAgentConfig.EscalationTo (plain
 	// string) used by YAML config import/export.
@@ -336,7 +369,7 @@ type TeamDirectoryAgent struct {
 	Status    AgentStatus `json:"status"`
 	AgentType AgentType   `json:"agent_type"`
 	Model     *string     `json:"model"`
-	// ShortTag is the agent's role label (Mesh aa1b4845) — see
+	// ShortTag is the agent's role label (Mesh an internal ticket) — see
 	// domain.Agent.ShortTag.
 	ShortTag           *string         `json:"short_tag"`
 	ParentAgentID      *uuid.UUID      `json:"parent_agent_id,omitempty"`
@@ -361,7 +394,7 @@ type TeamDirectoryAgent struct {
 	LastSeenAt     *time.Time          `json:"last_seen_at,omitempty"`
 	// IsHome reports whether this workspace is the agent's HOME workspace
 	// (agents.workspace_id) rather than one it holds a guest connection into
-	// via agent_workspace_grants (task U3/#71627c5a). Without this the
+	// via agent_workspace_grants (task U3/an internal ticket). Without this the
 	// directory cannot say which is which, and the caller has no way to tell
 	// a native member from an invited guest short of cross-referencing
 	// GET /agents separately.
@@ -375,7 +408,7 @@ type TeamDirectoryHuman struct {
 	// Username is the @-handle, present for the same reason an agent carries
 	// Slug: the directory is what a renderer consults to decide whether an
 	// `@word` in a comment is a mention. Without it agents highlighted and
-	// people did not, so "@pavel — @daedalus" rendered one as a mention and the
+	// people did not, so "@alex — @dana" rendered one as a mention and the
 	// other as prose even though both had been notified.
 	Username           string          `json:"username"`
 	Email              string          `json:"email"`

@@ -141,7 +141,7 @@ const (
 	// MountStatusKeyExpired mirrors teamrelay.ErrKeyExpired: the key was once
 	// valid for this share but its TTL has passed. Distinct from
 	// MountStatusForeignShare — see ErrKeyExpired's own doc comment for why
-	// collapsing the two was the actual defect #218d5847's AC4 exists to close.
+	// collapsing the two was the actual defect an internal ticket's AC4 exists to close.
 	MountStatusKeyExpired MountStatus = "key_expired"
 	// MountStatusUnreachable mirrors teamrelay.ErrUnreachable: the relay could
 	// not be asked at all (DNS/connection/timeout) — distinct from being asked
@@ -260,8 +260,8 @@ type TeamRelayMountService interface {
 	// recordSyncOutcome already covers. Without this, an integration nobody
 	// touches keeps key_expires_at NULL until the moment someone finally opens
 	// it and the key has already died: the same "warning arrives with the
-	// breakage, not before it" failure AC4 (#218d5847) was built to prevent,
-	// just on a trigger that never fires (#bab2e6be). Meant to be called
+	// breakage, not before it" failure AC4 was built to prevent,
+	// just on a trigger that never fires. Meant to be called
 	// periodically by a caller-owned scheduler, not on any request path.
 	RefreshSleepingKeyExpiries(ctx context.Context) (checked, updated int, err error)
 }
@@ -311,7 +311,7 @@ func WithRelaySyncClient(c RelaySyncClient) TeamRelayMountServiceOption {
 }
 
 // WithKeyDescriber overrides the real Team Relay agent-key introspection
-// call — the seam #218d5847's AC4 producer tests need, same reasoning as
+// call — the seam an internal ticket's AC4 producer tests need, same reasoning as
 // WithRelaySyncClient.
 func WithKeyDescriber(d KeyDescriber) TeamRelayMountServiceOption {
 	return func(s *teamRelayMountService) { s.keyDescriber = d }
@@ -429,18 +429,18 @@ func syncTTL(settings domain.TeamRelaySettings) time.Duration {
 
 // recordSyncOutcome stamps R5-A's accounting columns
 // (last_sync_checked_at/status/error, key_expires_at/source) after an actual
-// attempt to reach Team Relay — the two producers #218d5847's AC4 named and
+// attempt to reach Team Relay — the two producers an internal ticket's AC4 named and
 // never wired to anything:
 //
 //  1. (mandatory) the call's own outcome is always recorded, distinguishing
 //     key_expired from a generic error rather than leaving §3.9's empty tree
 //     unexplained.
-//  2. (load-bearing, now that evc-team-relay#230/#bc11d499 is live) a
+//  2. (load-bearing, now that evc-team-relay#230/an internal ticket is live) a
 //     successful call also asks the key's own self-describe endpoint for its
 //     real expires_at, so key_expiry_source="source" is a fact Team Relay
 //     reports — not a date typed into a form ("manual", still supported by
 //     the schema but deliberately NOT given a write path by this change; see
-//     the commit message for why leaving it unbuilt was Bill's own accepted
+//     the commit message for why leaving it unbuilt was Beth's own accepted
 //     minimal bar for this reopening, not a corner cut).
 //
 // Best-effort throughout: a failure to write these columns, or to reach the
@@ -521,7 +521,7 @@ func syncInterval(settings domain.TeamRelaySettings) time.Duration {
 // RefreshSleepingKeyExpiries should be run by its caller. Keys live 90 days;
 // once a day is far more than enough to give AC4's warning window (days, not
 // hours) time to appear before anything breaks, and anything much more
-// frequent is unjustified traffic against a service we don't own (#bab2e6be).
+// frequent is unjustified traffic against a service we don't own.
 const DefaultTeamRelayKeyExpiryRefreshInterval = 24 * time.Hour
 
 // RefreshSleepingKeyExpiries is documented on the TeamRelayMountService
@@ -531,7 +531,7 @@ const DefaultTeamRelayKeyExpiryRefreshInterval = 24 * time.Hour
 // integration is skipped, NEVER written to RecordSyncCheck. "Could not ask"
 // must never read as "asked, and the key is bad" — that would turn every
 // integration this one sweep happens not to reach into a false warning, which
-// is worse than the NULL it already shows (the same lesson #218d5847 decided
+// is worse than the NULL it already shows (the same lesson an internal ticket decided
 // this task is closing a gap in, not repeating). Only a successful describe
 // call writes anything, via SetKeyExpiry — the one column this task's AC
 // needs populated without a user ever touching the integration.
@@ -608,7 +608,7 @@ func (s *teamRelayMountService) RefreshIfStale(ctx context.Context, doc *domain.
 	}
 
 	remote, err := s.client.Download(ctx, rs.relayURL, *doc.SourceShare, *doc.SourcePath, rs.agentKey)
-	// #218d5847 AC4: every actual attempt to reach Team Relay — success or
+	// an internal ticket AC4: every actual attempt to reach Team Relay — success or
 	// failure — stamps the sync-check accounting columns, and a successful
 	// one also refreshes key_expires_at from the relay's own introspection
 	// endpoint. This is the ONLY place that used to make this exact call and

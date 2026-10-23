@@ -96,6 +96,22 @@ type projectExtensionResponse struct {
 	LastSyncCheckedAt *time.Time `json:"last_sync_checked_at,omitempty"`
 	LastSyncStatus    *string    `json:"last_sync_status,omitempty"`
 	LastSyncError     *string    `json:"last_sync_error,omitempty"`
+
+	// ProjectView is the project.view tab of the extension; List sets it only
+	// while the extension is enabled in the project.
+	ProjectView *projectViewResponse `json:"project_view,omitempty"`
+	// UnmetRequires names the extensions from the manifest's requires that are
+	// not enabled in this project. The extension still works; the interface warns.
+	UnmetRequires []string `json:"unmet_requires,omitempty"`
+}
+
+// projectViewResponse is the project.view slot as the interface consumes it.
+type projectViewResponse struct {
+	Icon      string         `json:"icon"`
+	Title     string         `json:"title"`
+	After     string         `json:"after,omitempty"`
+	Route     string         `json:"route"`
+	VisibleIf map[string]any `json:"visible_if,omitempty"`
 }
 
 func toProjectExtensionResponse(extID string, pi *domain.ProjectIntegration) projectExtensionResponse {
@@ -151,16 +167,43 @@ func (h *ExtensionProjectHandler) List(c echo.Context) error {
 		return handleError(c, err)
 	}
 	out := make([]projectExtensionResponse, 0, len(rows))
+	enabled := map[string]bool{}
 	for i := range rows {
-		extID := rows[i].ExtensionID
-		if extID == "" {
-			extID = domain.ProjectIntegrationExtensionID(rows[i].Type)
+		if rows[i].Enabled {
+			enabled[bindingExtensionID(&rows[i])] = true
 		}
+	}
+	for i := range rows {
+		extID := bindingExtensionID(&rows[i])
 		if p, ok := h.registry.Get(extID); ok && p.Manifest().Levels.Project {
-			out = append(out, toProjectExtensionResponse(extID, &rows[i]))
+			resp := toProjectExtensionResponse(extID, &rows[i])
+			if rows[i].Enabled {
+				m := p.Manifest()
+				resp.ProjectView = projectViewOf(extID, m.ProjectView)
+				for _, req := range m.Requires {
+					if !enabled[req] {
+						resp.UnmetRequires = append(resp.UnmetRequires, req)
+					}
+				}
+			}
+			out = append(out, resp)
 		}
 	}
 	return c.JSON(http.StatusOK, map[string]any{"extensions": out})
+}
+
+func bindingExtensionID(pi *domain.ProjectIntegration) string {
+	if pi.ExtensionID != "" {
+		return pi.ExtensionID
+	}
+	return domain.ProjectIntegrationExtensionID(pi.Type)
+}
+
+func projectViewOf(extID string, v *extensions.ProjectView) *projectViewResponse {
+	if v == nil {
+		return nil
+	}
+	return &projectViewResponse{Icon: v.Icon, Title: v.Title, After: v.After, VisibleIf: v.VisibleIf, Route: "/w/:ws/p/:proj/" + extID + "/*"}
 }
 
 // Get handles GET /projects/:proj_id/extensions/:ext_id.

@@ -142,7 +142,7 @@ class TestCoverageGate(unittest.TestCase):
         """Model a successful upstream full-suite race run at this exact commit."""
         sha = self.git('rev-parse', 'HEAD').stdout.strip()
         self.env.update(CI_COMMIT_SHA=sha, CI_PIPELINE_ID='12345')
-        run = subprocess.run([REAL_GO, 'test', './...', '-race',
+        run = subprocess.run([REAL_GO, 'test', './...', '-race', '-timeout=30m',
                               '-coverprofile=coverage.out', '-covermode=atomic'],
                              cwd=self.root, env=self.env, capture_output=True,
                              text=True, timeout=120)

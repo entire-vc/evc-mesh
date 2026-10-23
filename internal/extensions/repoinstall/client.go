@@ -198,12 +198,29 @@ func (c *Client) gitlabProject(src Source) string {
 
 // Manifest reads mesh-extension.json at ref.
 func (c *Client) Manifest(ctx context.Context, src Source, ref, token string) ([]byte, error) {
-	if src.Provider == ProviderGitHub {
-		u := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", c.githubBase(), escapePath(src.Path), ManifestFile, url.QueryEscape(ref))
-		return c.get(ctx, src, token, u, "application/vnd.github.raw+json", maxManifestBytes)
+	return c.File(ctx, src, ref, ManifestFile, token, maxManifestBytes)
+}
+
+// ErrBadPath is returned for a file path that leaves the repository root.
+var ErrBadPath = errors.New("file path must be relative and stay inside the repository")
+
+// File reads one file of the repository at ref, at most limit bytes. It is how
+// the bundle files a manifest points at (a theme's CSS and views) are fetched.
+func (c *Client) File(ctx context.Context, src Source, ref, path, token string, limit int64) ([]byte, error) {
+	if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "\\") {
+		return nil, ErrBadPath
 	}
-	u := fmt.Sprintf("%s/repository/files/%s/raw?ref=%s", c.gitlabProject(src), url.PathEscape(ManifestFile), url.QueryEscape(ref))
-	return c.get(ctx, src, token, u, "text/plain", maxManifestBytes)
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." || seg == "" {
+			return nil, ErrBadPath
+		}
+	}
+	if src.Provider == ProviderGitHub {
+		u := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s", c.githubBase(), escapePath(src.Path), escapePath(path), url.QueryEscape(ref))
+		return c.get(ctx, src, token, u, "application/vnd.github.raw+json", limit)
+	}
+	u := fmt.Sprintf("%s/repository/files/%s/raw?ref=%s", c.gitlabProject(src), url.PathEscape(path), url.QueryEscape(ref))
+	return c.get(ctx, src, token, u, "text/plain", limit)
 }
 
 // Commit resolves ref (tag or branch) to a commit sha.

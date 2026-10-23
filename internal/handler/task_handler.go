@@ -113,7 +113,7 @@ func (f *flexTime) UnmarshalJSON(b []byte) error {
 // field cannot distinguish "field omitted" from "field explicitly set to
 // null" (both unmarshal to a nil pointer), which matters here: omitted means
 // "leave parent_task_id alone", explicit null means "detach this task from
-// its parent" (#204c0311 — detaching a subtask was the only workaround for a
+// its parent" (an internal ticket — detaching a subtask was the only workaround for a
 // parent stuck behind a broken governance rule, and the PATCH silently
 // no-op'd instead of detaching).
 type flexUUID struct {
@@ -163,7 +163,7 @@ type updateTaskRequest struct {
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
 	ExpectedVersion   *int64     `json:"expected_version,omitempty"`
 
-	// #64b74e58: NOT applied to task.Status anywhere below — their only job is
+	// an internal ticket: NOT applied to task.Status anywhere below — their only job is
 	// to be seen. Before these fields existed, encoding/json's default
 	// unknown-field tolerance meant Bind() silently dropped status_id/
 	// status_slug/status here and Update still answered 200: a caller asking
@@ -195,8 +195,8 @@ type moveTaskRequest struct {
 // name out does not declare instead of the silent-drop encoding/json (and
 // therefore c.Bind()) does by default. Without this, a typo'd or invented
 // field name is a 200/201 that changed nothing it claimed to — the exact
-// shape #64b74e58 hand-patched for status_id/status_slug/status on this same
-// endpoint; this generalizes that fix to every field (#3e4c9f80) instead of
+// shape an internal ticket hand-patched for status_id/status_slug/status on this same
+// endpoint; this generalizes that fix to every field instead of
 // requiring a new named reject block per incident.
 //
 // Mirrors echo's own DefaultBinder.BindBody Content-Length==0 special case
@@ -393,7 +393,7 @@ func resolveTaskID(ctx context.Context, s string, svc taskIDResolver) (uuid.UUID
 	return uuid.Nil, apierror.BadRequest("invalid task_id")
 }
 
-// attachHumanGateInfo populates task.HumanGateInfo (task #040cddcf) — a
+// attachHumanGateInfo populates task.HumanGateInfo — a
 // read-only exposure of the ownership commentService already computes
 // internally to gate withdrawal, via GetHumanGateOwner. No-op when the task
 // isn't gated or commentService isn't wired; failures are logged, never
@@ -414,17 +414,17 @@ func (h *TaskHandler) attachHumanGateInfo(ctx context.Context, task *domain.Task
 // human_gate true→false. It NEVER changes the outcome — the refusal stands
 // either way; it only decides what the refusal SAYS.
 //
-// Why this exists (task #4c448e11, P1). The refusal used to be the bare string
+// Why this exists (an internal ticket, P1). The refusal used to be the bare string
 // "clearing human_gate requires user authentication", which names no
 // alternative. An agent that reads human_gate_info.clearable_by_owner=true,
 // tries the obvious endpoint, and is told only that it needs to be a user
 // concludes — reasonably, and wrongly — that the gate has no agent-reachable
-// exit at all. That conclusion was reached and acted on repeatedly: Bill twice
-// told Wally to "clear it yourself" on #b2e6578a (17 days stalled), a third
+// exit at all. That conclusion was reached and acted on repeatedly: Beth twice
+// told Wade to "clear it yourself" on an internal ticket (17 days stalled), a third
 // agent repeated the same instruction, and the escalation that finally landed
-// (#4c448e11) reported to Pavel as fact that "an agent cannot clear the gate
+// reported to Alex as fact that "an agent cannot clear the gate
 // under any circumstances". The prod audit trail says otherwise: withdrawal
-// released 66 gates and Pavel-comment 57, i.e. the agent-reachable exit is the
+// released 66 gates and Alex-comment 57, i.e. the agent-reachable exit is the
 // BUSIER of the two. Every one of those wrong conclusions is consistent with a
 // refusal that names no door.
 //
@@ -457,7 +457,7 @@ func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, a
 	switch {
 	case info.OwnerAgentID != nil && *info.OwnerAgentID == actorID && info.ClearableByOwner &&
 		info.ClearPath == domain.HumanGateClearPathClearEndpoint:
-		// Task #f933dc05: an API-armed gate has no marker comment, so the negator
+		// an internal ticket: an API-armed gate has no marker comment, so the negator
 		// advice below would send its owner to a door that does not open — and
 		// fails silently when they try it. Name the one that does.
 		return base + ". You armed this gate through the API and you still own it, so you " +
@@ -487,7 +487,7 @@ func (h *TaskHandler) gateClearRefusal(ctx context.Context, task *domain.Task, a
 			"Otherwise, " + recordDecision + "."
 
 	case info.ReasonIfNot == "marker_scan_truncated":
-		// Task #f933dc05: not "there is no owner", but "this thread is longer than
+		// an internal ticket: not "there is no owner", but "this thread is longer than
 		// the one page the marker scan reads, so no-marker cannot be trusted".
 		// Saying "no withdrawal path by construction" here would be a false
 		// statement about the world dressed as a statement about the caller.
@@ -617,7 +617,7 @@ func (h *TaskHandler) SearchGlobal(c echo.Context) error {
 // returns a task DTO. The flag used to be computed only by the list decorator,
 // so the one-object endpoints (get_task by UUID and by short ID, create,
 // update, the my-tasks feeds) serialized it at its Go zero value and reported
-// has_description:false for tasks that visibly had a description (#fc032545).
+// has_description:false for tasks that visibly had a description.
 func decorateTask(c echo.Context, task *domain.Task) {
 	task.URL = computeTaskURL(c.Request(), task.ID)
 	task.HasDescription = strings.TrimSpace(task.Description) != ""
@@ -645,7 +645,7 @@ func decorateTaskList(c echo.Context, items []domain.Task) {
 
 // maxListDescriptionBytes bounds how many bytes of description content a
 // single list-shaped response may carry before the handler starts dropping
-// descriptions from the tail of the page. Measured live (Riker, 2026-08-20):
+// descriptions from the tail of the page. Measured live (Robin, 2026-08-20):
 // a full 200-item project list with descriptions serialized to 494,772 bytes
 // in one line and blew the caller's tool-output limit; the same shape hit a
 // workspace-wide search response at 124,847 bytes the same day. Description
@@ -687,7 +687,7 @@ func enforceListSizeCeiling(page *pagination.Page[domain.Task]) {
 // description of every task in a todo feed for phrases like "после merge" /
 // "blocked on #". Serve that list without descriptions and the gate does not
 // error — it silently matches nothing, and tasks that should park in backlog get
-// auto-triaged into Pavel's queue instead. Opt-in keeps the byte win where it is
+// auto-triaged into Alex's queue instead. Opt-in keeps the byte win where it is
 // worth having (one caller, the board) and keeps every reader that has been
 // relying on this field for months working unchanged.
 func includeDescriptionRequested(c echo.Context) bool {
@@ -711,7 +711,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		return c.JSON(apiErr.StatusCode(), apiErr)
 	}
 
-	// #64b74e58: status is not a PATCH field — reject before touching the
+	// an internal ticket: status is not a PATCH field — reject before touching the
 	// service at all, rather than silently dropping it and answering 200.
 	if req.StatusID != nil || req.StatusSlug != nil || req.Status != nil {
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
@@ -719,7 +719,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 			"error_code": "status_change_via_patch_rejected",
 			"message": "status_id/status_slug/status cannot be changed via PATCH /tasks/:id " +
 				"(this endpoint used to silently ignore them and still answer 200 — task " +
-				"#64b74e58). Use POST /tasks/:id/move with status_id instead; resolve a " +
+				"an internal ticket). Use POST /tasks/:id/move with status_id instead; resolve a " +
 				"slug to status_id first via GET /projects/:proj_id/statuses, or use the " +
 				"move_task tool, which resolves slugs for you.",
 		})
@@ -748,7 +748,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	if req.Priority != nil {
 		task.Priority = *req.Priority
 	}
-	// #204c0311: parent_task_id used to be silently dropped here — updateTaskRequest
+	// an internal ticket: parent_task_id used to be silently dropped here — updateTaskRequest
 	// had no field for it at all, so Bind() ignored the JSON key, task.ParentTaskID
 	// kept whatever GetByID fetched, and the PATCH round-tripped it unchanged while
 	// still answering 200. flexUUID's wasSet distinguishes "field omitted" (leave
@@ -810,7 +810,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 					apierror.Forbidden(h.gateClearRefusal(c.Request().Context(), task, actorID)))
 			}
 		}
-		// Arming is not an agent's to do here (task #40a24454): PATCH skips the
+		// Arming is not an agent's to do here: PATCH skips the
 		// answered-already and human-addressee checks the marker path runs, and an
 		// agent cannot lift the gate it armed by mistake.
 		if !task.HumanGate && *req.HumanGate {
@@ -842,10 +842,10 @@ func (h *TaskHandler) Update(c echo.Context) error {
 		})
 	}
 
-	// Task #a2e2ac72: a false→true PATCH (or UI, same endpoint) carries no
+	// an internal ticket: a false→true PATCH (or UI, same endpoint) carries no
 	// "❓ Blocking @user" comment at all — unlike enforceBlockingTriage's arm
 	// path, nothing here records WHO raised this ask or WHY. Without this,
-	// releaseHumanGateOnWithdrawal's soleMarkerAuthor check (task #9959f201)
+	// releaseHumanGateOnWithdrawal's soleMarkerAuthor check
 	// cannot tell "this agent's marker is the one genuine ask on this thread"
 	// apart from "this agent fabricated a marker onto a gate someone else (or
 	// a human via UI) already armed" — the two are byte-identical in the
@@ -853,7 +853,7 @@ func (h *TaskHandler) Update(c echo.Context) error {
 	// that check has something to look for; see hasRawArmMarker in
 	// comment_service.go for the matching read side.
 	//
-	// Fixed 2026-07-31 (task #15694816, found in cross-verification of #486):
+	// Fixed 2026-07-31 (an internal ticket, found in cross-verification of #486):
 	// this MUST be authored as ActorTypeSystem / systemActorID (uuid.Nil), not
 	// the real actor — comment_handler.go's Create always derives AuthorType
 	// from the caller's OWN authenticated identity (agent or user, NEVER
@@ -1129,7 +1129,7 @@ func (h *TaskHandler) ListSubtasks(c echo.Context) error {
 		return handleError(c, err)
 	}
 
-	// Third list-shaped endpoint through the shared decorator (#32f4c087 follow-up).
+	// Third list-shaped endpoint through the shared decorator (an internal ticket follow-up).
 	// ListSubtasks never truncates description text — no caller asked it to, and
 	// this handler does not read include_description — but without this call
 	// HasDescription is left at its Go zero value (false) for every item, because
@@ -1407,6 +1407,9 @@ func (h *TaskHandler) Checkout(c echo.Context) error {
 				holderName = conflict.CheckedOutBy.String()
 			}
 			remaining := time.Until(conflict.ExpiresAt)
+			// %q: the name is stored agent data and may contain newlines.
+			log.Printf("WARN checkout 409: task=%s holder=%s (%q) expires_at=%s",
+				taskID, conflict.CheckedOutBy, holderName, conflict.ExpiresAt.Format(time.RFC3339))
 			expiresInSeconds := int(remaining.Seconds())
 			if expiresInSeconds < 0 {
 				expiresInSeconds = 0
@@ -1717,7 +1720,7 @@ type ruleViolationAPIResponse struct {
 func handleError(c echo.Context, err error) error {
 	var evidenceErr *service.ReviewEvidenceError
 	if errors.As(err, &evidenceErr) {
-		msg := "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review."
+		msg := "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @alex comment first, then retry move→review."
 		if evidenceErr.Strict {
 			// Under strict mode the loose message is actively misleading: it
 			// says "a comment with proof" while the gate is counting URLs, so a
@@ -1727,7 +1730,7 @@ func handleError(c echo.Context, err error) error {
 				"A comment on its own is no longer enough. Add at least one of: a PR/VCS link (add_dependency or the vcs field); " +
 				"an artifact upload; a passing dod_check (PATCH /tasks/:id/dod-check); or a comment containing a URL to the proof " +
 				"— the pipeline, MR, deployed page or log a reviewer can open (see §1c). " +
-				"To flag a human blocker, add a ❓ Blocking @pavel comment first, then retry move→review."
+				"To flag a human blocker, add a ❓ Blocking @alex comment first, then retry move→review."
 		}
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"code":       "review_evidence_required",
@@ -1977,7 +1980,7 @@ func handleError(c echo.Context, err error) error {
 
 	// ADR-0004 Decision 4: 410, not a silent fallback to page 1 or to the
 	// requested offset against the new state — a plausible-looking 200 here
-	// is exactly the defect class ad22bfda exists to close.
+	// is exactly the defect class an internal ticket exists to close.
 	var listRevErr *service.ListRevisionStaleError
 	if errors.As(err, &listRevErr) {
 		return c.JSON(http.StatusGone, map[string]interface{}{

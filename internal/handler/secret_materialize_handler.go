@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -37,7 +38,7 @@ type SecretMaterializeHandler struct {
 }
 
 // NewSecretMaterializeHandler returns the handler. activitySvc is required:
-// every issuance is journaled before a single value leaves (task #1c9f527d),
+// every issuance is journaled before a single value leaves,
 // and there is no configuration in which handing out plaintext unrecorded is
 // the intended behaviour.
 func NewSecretMaterializeHandler(ms service.SecretMaterializationService, activitySvc service.ActivityLogService) *SecretMaterializeHandler {
@@ -82,6 +83,12 @@ func (h *SecretMaterializeHandler) Materialize(c echo.Context) error {
 
 	secrets, err := h.materializationSvc.ResolveForSpawn(c.Request().Context(), req.WorkspaceID, req.ProjectID, req.AgentID)
 	if err != nil {
+		var degraded *domain.SecretDegradedError
+		if errors.As(err, &degraded) {
+			log.Printf("[secrets] materialize for workspace %s: %v", req.WorkspaceID, degraded)
+			return c.JSON(http.StatusServiceUnavailable, apierror.ServiceUnavailable(
+				"secret "+degraded.Name+" is held by Keep and could not be read: "+degraded.Reason+"; no secrets were returned"))
+		}
 		return handleError(c, err)
 	}
 

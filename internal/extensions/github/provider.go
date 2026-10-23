@@ -16,7 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/entire-vc/evc-mesh/internal/extensions"
-	"github.com/entire-vc/evc-mesh/pkg/encryption"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 )
 
 //go:embed mesh-extension.json
@@ -41,6 +41,9 @@ type Settings struct {
 type Config struct {
 	Token         string
 	WebhookSecret string
+	// Degraded is why a stored secret could not be opened (secret store down);
+	// Token and WebhookSecret are then empty and must not be used.
+	Degraded string
 }
 
 // Provider implements extensions.Provider for GitHub.
@@ -133,14 +136,20 @@ func decode(r extensions.Resolved) Config {
 	}
 	var c Config
 	if s.Token != "" {
-		if plain, derr := encryption.Decrypt(s.Token); derr == nil {
-			c.Token = plain
+		plain, reason := secretstore.Open(context.Background(), s.Token)
+		if reason != "" {
+			log.Printf("[github-integration] Token unavailable: %s", reason)
+			c.Degraded = reason
 		}
+		c.Token = plain
 	}
 	if s.WebhookSecret != "" {
-		if plain, derr := encryption.Decrypt(s.WebhookSecret); derr == nil {
-			c.WebhookSecret = plain
+		plain, reason := secretstore.Open(context.Background(), s.WebhookSecret)
+		if reason != "" {
+			log.Printf("[github-integration] WebhookSecret unavailable: %s", reason)
+			c.Degraded = reason
 		}
+		c.WebhookSecret = plain
 	}
 	return c
 }
@@ -163,6 +172,9 @@ func (p *Provider) ResolveConfig(ctx context.Context, workspaceID uuid.UUID) (to
 		return "", "", "", false
 	}
 	c := decode(res)
+	if c.Degraded != "" {
+		return "", "", "", false
+	}
 	if c.Token == "" && c.WebhookSecret == "" {
 		return "", "", "", false
 	}

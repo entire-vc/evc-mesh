@@ -64,7 +64,7 @@ type CreateSecretInput struct {
 // a silently empty variable.
 //
 // ID and ValueSHA256Prefix identify WHICH version was handed out, for the
-// issuance audit entry (task #1c9f527d): every rotation writes a new row, so
+// issuance audit entry: every rotation writes a new row, so
 // the row id is the version, and the fingerprint is the same sha256[:8] the
 // masked list and the mutation audit already show. Neither says anything
 // about the value itself.
@@ -74,4 +74,17 @@ type MaterializedSecret struct {
 	Value             string
 	ValueSHA256Prefix string
 	Expired           bool
+}
+
+// SecretDegradedError is returned by the materializer when a secret whose
+// value lives in Keep cannot be produced. It names the secret and says why;
+// the spawner must fail the spawn on it, never write an empty variable.
+// Reason comes from the provider and carries no value.
+type SecretDegradedError struct {
+	Name   string
+	Reason string
+}
+
+func (e *SecretDegradedError) Error() string {
+	return "secret " + e.Name + " unavailable: " + e.Reason
 }

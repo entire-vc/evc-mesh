@@ -62,10 +62,10 @@ const statusConfig: Record<
 	AgentStatusEntry["status"],
 	{ labelKey: string; dotColor: string }
 > = {
-	online: { labelKey: "integrations:sessions.status.online", dotColor: "bg-green-500" },
-	busy: { labelKey: "integrations:sessions.status.busy", dotColor: "bg-yellow-500" },
-	offline: { labelKey: "integrations:sessions.status.offline", dotColor: "bg-gray-400" },
-	error: { labelKey: "integrations:sessions.status.error", dotColor: "bg-red-500" },
+	online: { labelKey: "integrations:sessions.status.online", dotColor: "bg-tone-success-500" },
+	busy: { labelKey: "integrations:sessions.status.busy", dotColor: "bg-tone-attention-500" },
+	offline: { labelKey: "integrations:sessions.status.offline", dotColor: "bg-tone-neutral-400" },
+	error: { labelKey: "integrations:sessions.status.error", dotColor: "bg-tone-danger-500" },
 };
 
 // ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ function getEphemeralPresenceLabel(agent: AgentStatusEntry): string {
 // AgentSessionCard
 // ---------------------------------------------------------------------------
 
-// #6b322896: the JSX used to slice heartbeat_message at 80 and
+// an internal ticket: the JSX used to slice heartbeat_message at 80 and
 // current_task_title at 60 chars, so the tail of server-provided text never
 // reached the DOM and no CSS or interaction could recover it. Rendering now
 // caps only at an absurd length; visible truncation is CSS line-clamp, and a
@@ -108,7 +108,7 @@ interface AgentSessionCardProps {
 }
 
 // Exported for component tests: the page-level data flow is mocked elsewhere,
-// the card itself is what #6b322896 exercises.
+// the card itself is what an internal ticket exercises.
 export function AgentSessionCard({ agent }: AgentSessionCardProps) {
 	const { t } = useTranslation("integrations");
 	const [statusExpanded, setStatusExpanded] = useState(false);
@@ -118,7 +118,7 @@ export function AgentSessionCard({ agent }: AgentSessionCardProps) {
 		: statusConfig[agent.status] ?? statusConfig.offline;
 	const typeCfg = agentTypeConfig[agent.agent_type as keyof typeof agentTypeConfig] ?? {
 		label: agent.agent_type ?? t("sessions.agentFallback"),
-		color: "bg-gray-100 text-gray-700",
+		color: "bg-tone-neutral-100 text-tone-neutral-700",
 	};
 	const presenceLabel = getEphemeralPresenceLabel(agent);
 	const isEffectivelyOffline = agent.is_stale || agent.status === "offline" || agent.status === "error";
@@ -537,17 +537,17 @@ export function SessionDashboardPage() {
 			{/* Summary chips */}
 			<div className="flex flex-wrap gap-3">
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
-					<span className="h-2 w-2 rounded-full bg-green-500" />
+					<span className="h-2 w-2 rounded-full bg-tone-success-500" />
 					<span className="font-medium">{onlineCount}</span>
 					<span className="text-muted-foreground">{t("sessions.chips.online")}</span>
 				</div>
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
-					<span className="h-2 w-2 rounded-full bg-yellow-500" />
+					<span className="h-2 w-2 rounded-full bg-tone-attention-500" />
 					<span className="font-medium">{busyCount}</span>
 					<span className="text-muted-foreground">{t("sessions.chips.busy")}</span>
 				</div>
 				<div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
-					<span className="h-2 w-2 rounded-full bg-gray-400" />
+					<span className="h-2 w-2 rounded-full bg-tone-neutral-400" />
 					<span className="font-medium">{offlineCount}</span>
 					<span className="text-muted-foreground">{t("sessions.chips.offlineError")}</span>
 				</div>

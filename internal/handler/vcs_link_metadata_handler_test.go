@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -76,4 +77,44 @@ func TestVCSLinkHandler_PatchMetadata_ServiceErrorsKeepTheirStatus(t *testing.T)
 			assert.Equal(t, tc.want, rec.Code)
 		})
 	}
+}
+
+func shipSHAByURLRequest(h *VCSLinkHandler, ws *uuid.UUID, body string) *httptest.ResponseRecorder {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	if ws != nil {
+		c.Set(mw.ContextKeyWorkspaceID, *ws)
+	}
+	_ = h.PatchShipSHAByURL(c)
+	return rec
+}
+
+func TestVCSLinkHandler_PatchShipSHAByURL_PassesWorkspaceURLAndSHA(t *testing.T) {
+	stub := &stubVCSLinkService{}
+	ws := uuid.New()
+
+	rec := shipSHAByURLRequest(NewVCSLinkHandler(stub), &ws, `{"url":"https://h/p/-/merge_requests/5","ship_sha":"abc"}`)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, stub.shipCalls, 1)
+	assert.Equal(t, shipCall{ws: ws, url: "https://h/p/-/merge_requests/5", sha: "abc"}, stub.shipCalls[0])
+	assert.Contains(t, rec.Body.String(), "vcs_links")
+}
+
+func TestVCSLinkHandler_PatchShipSHAByURL_RejectsMissingWorkspaceAndBadBody(t *testing.T) {
+	stub := &stubVCSLinkService{}
+	ws := uuid.New()
+
+	assert.Equal(t, http.StatusForbidden, shipSHAByURLRequest(NewVCSLinkHandler(stub), nil, `{}`).Code)
+	assert.Equal(t, http.StatusBadRequest, shipSHAByURLRequest(NewVCSLinkHandler(stub), &ws, `not json`).Code)
+	assert.Empty(t, stub.shipCalls)
+}
+
+func TestVCSLinkHandler_PatchShipSHAByURL_ServiceErrorsKeepTheirStatus(t *testing.T) {
+	ws := uuid.New()
+	h := NewVCSLinkHandler(&stubVCSLinkService{shipReturnErr: apierror.NotFound("VCSLink")})
+	assert.Equal(t, http.StatusNotFound, shipSHAByURLRequest(h, &ws, `{"url":"u","ship_sha":"x"}`).Code)
 }

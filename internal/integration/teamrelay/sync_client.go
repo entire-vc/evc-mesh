@@ -16,7 +16,7 @@ import (
 )
 
 // Sync-protocol client (GET/POST /v1/shares/...), NOT the web-publish family
-// (/v1/web/shares/...). Pavel's 2026-08-20 decision excludes web-publish from
+// (/v1/web/shares/...). Alex's 2026-08-20 decision excludes web-publish from
 // the Docs↔Team-Relay reintegration entirely — it never carries sha256, and
 // this package's other file, content.go, exists to serve a different, older
 // feature (the relay:// preview) that this file does not touch or replace.
@@ -27,14 +27,14 @@ import (
 // Sentinel errors, distinguishable by the caller via errors.Is without
 // string-matching a log line. Before this, a rejected key and an unrelated 502
 // both surfaced as one opaque error, and diagnosing which had happened cost a
-// live investigation (task #c55556fa) that the client itself could have
+// live investigation that the client itself could have
 // answered in its own log line — see classifySyncError.
 var (
 	// ErrKeyRejected means the request carried no X-Agent-Key, or a value the
 	// relay does not recognize (401 — missing header or unknown key hash).
 	ErrKeyRejected = errors.New("teamrelay: agent key rejected")
 	// ErrForeignShare means the key is real but is not valid for the share ID
-	// requested (403 — measured live on this exact protocol, task #ee1745ce).
+	// requested (403 — measured live on this exact protocol, an internal ticket).
 	ErrForeignShare = errors.New("teamrelay: agent key not valid for this share")
 	// ErrKeyExpired means the key was once valid for this share but its TTL has
 	// passed (403, body detail "Agent key has expired" — verified against the
@@ -42,7 +42,7 @@ var (
 	// apps/control-plane/app/api/routers/web.py and one in
 	// apps/control-plane/app/services/share_service.py raise). Distinguished from
 	// ErrForeignShare by body content, not status code alone: both are 403, and
-	// collapsing them was the actual defect #218d5847's AC4 was built to catch
+	// collapsing them was the actual defect an internal ticket's AC4 was built to catch
 	// and never wired up — a caller told only "forbidden" cannot tell "your key
 	// died of old age, renew it" from "this key was never valid here", and the
 	// spec's whole point is that the first case gets a warning BEFORE the tree
@@ -64,7 +64,7 @@ var (
 // on this exact text, not a substring or a status code alone: 403 is also
 // what a foreign-share key gets (ErrForeignShare), and a caller told only
 // "forbidden" cannot tell "renew your key" from "this key was never valid
-// here" — the distinction #218d5847's AC4 exists to surface.
+// here" — the distinction an internal ticket's AC4 exists to surface.
 const keyExpiredMessage = "Agent key has expired"
 
 // relayErrorEnvelope is Team Relay's actual error response shape
@@ -86,7 +86,7 @@ type relayErrorEnvelope struct {
 // sentinels above and logs the distinguishing detail. This is what was missing
 // on every read call before: transport() (the upload path) already logged a
 // rejected key at client.go:214, but nothing on the read side did, so a log
-// search for "agent key rejected" during a real incident (#c55556fa) surfaced
+// search for "agent key rejected" during a real incident surfaced
 // only the unrelated upload-path failure while the actual read-path failure —
 // a different cause, an unrelated feature — left no trace at all.
 func classifySyncError(op, shareID string, statusCode int, body []byte) error {
@@ -245,7 +245,7 @@ func downloadSHA256(etag string, body []byte) string {
 //
 // SHA256 and ContentLength are required by the request schema but NOT
 // verified server-side on read: _decode_file_token (shares.py:297-327) checks
-// only scope, share_id and path. Measured live, not assumed (task #ee1745ce) —
+// only scope, share_id and path. Measured live, not assumed —
 // this is why RequestFileToken accepts them as optional hints rather than
 // mandatory arguments a caller has to somehow produce for an attachment it has
 // never downloaded before.
@@ -287,7 +287,7 @@ const syncWriteContentType = "text/markdown"
 // target containing '#' at the fragment boundary before the request is even
 // sent, and silently drops anything from '?' onward as a query string the
 // router never forwards (verified live against a real browser, task
-// #836ebffe) — neither happens here, because this call is server-to-server
+// an internal ticket) — neither happens here, because this call is server-to-server
 // JSON, not a URL a browser parses. A malformed '%' escape (not followed by
 // two hex bytes — legal in a filename nobody meant as a URI) would also make
 // net/url.Parse/PathUnescape hard-fail where the browser's own request

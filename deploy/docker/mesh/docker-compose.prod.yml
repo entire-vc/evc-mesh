@@ -39,6 +39,8 @@ services:
       POSTGRES_DB: ${DB_NAME:-mesh}
       POSTGRES_USER: ${DB_USER:-mesh}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # Slow-statement log: anything over 1s lands in the postgres log.
+    command: ["postgres", "-c", "log_min_duration_statement=1000"]
     volumes:
       - ./volumes/postgres/data:/var/lib/postgresql/data
     healthcheck:
@@ -63,7 +65,7 @@ services:
     image: nats:2.10-alpine
     restart: unless-stopped
     # Same mechanism as docker-compose.yml (dev) -- see that file's comment
-    # and #21e7808a. No host bind-mount for the config; the container writes
+    # and an internal ticket. No host bind-mount for the config; the container writes
     # its own conf file at startup from the environment, so nothing depends
     # on the host path this compose file happens to run from.
     entrypoint: ["/bin/sh", "-c"]

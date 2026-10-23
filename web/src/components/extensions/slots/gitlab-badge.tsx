@@ -6,12 +6,12 @@ import type { BadgeProps } from "./builtin-slots";
 /** Pipeline states the backend stores (domain.NormalizePipelineStatus). */
 const PIPELINE: Record<string, { icon: LucideIcon; color: string; spin?: boolean }> = {
   pending: { icon: Clock, color: "text-muted-foreground" },
-  running: { icon: Loader2, color: "text-blue-600 dark:text-blue-400", spin: true },
-  success: { icon: CheckCircle2, color: "text-emerald-600 dark:text-emerald-400" },
-  failed: { icon: XCircle, color: "text-red-600 dark:text-red-400" },
+  running: { icon: Loader2, color: "text-tone-info-600 dark:text-tone-info-400", spin: true },
+  success: { icon: CheckCircle2, color: "text-tone-positive-600 dark:text-tone-positive-400" },
+  failed: { icon: XCircle, color: "text-tone-danger-600 dark:text-tone-danger-400" },
   canceled: { icon: Circle, color: "text-muted-foreground" },
   skipped: { icon: Circle, color: "text-muted-foreground" },
-  manual: { icon: Hand, color: "text-amber-600 dark:text-amber-400" },
+  manual: { icon: Hand, color: "text-tone-warning-600 dark:text-tone-warning-400" },
 };
 
 /**

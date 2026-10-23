@@ -356,7 +356,7 @@ function ExecutionBlock({
                   {catalog.accounts[r.profile.account_ref]?.provider ?? "?"} · {r.profile.account_ref} · {r.profile.model} ·{" "}
                   {r.profile.execution_mode}
                 </span>
-                {r.unavailable && <span className="text-xs text-yellow-600">{t("runtimeTabs.execution.unavailable", { reason: r.unavailable })}</span>}
+                {r.unavailable && <span className="text-xs text-tone-attention-600">{t("runtimeTabs.execution.unavailable", { reason: r.unavailable })}</span>}
               </li>
             ))}
           </ol>
@@ -436,7 +436,7 @@ function ExecutionBlock({
                       {pool.aliases.length > 0 && t("runtimeTabs.execution.aliases", { aliases: pool.aliases.join(", ") })}
                     </span>
                   ) : (
-                    <span className="text-xs text-yellow-600">{t("runtimeTabs.execution.notInCatalog")}</span>
+                    <span className="text-xs text-tone-attention-600">{t("runtimeTabs.execution.notInCatalog")}</span>
                   )}
                 </li>
               );
@@ -482,7 +482,7 @@ export function ControllerList({ state, entries }: { state: RuntimeState; entrie
               {sync.label}
             </Badge>
             <span className="text-muted-foreground">{sync.detail}</span>
-            {!ctl.enabled && <span className="text-xs text-yellow-600">{t("runtimeTabs.state.controllerDisabled")}</span>}
+            {!ctl.enabled && <span className="text-xs text-tone-attention-600">{t("runtimeTabs.state.controllerDisabled")}</span>}
             {status?.received_at && (
               <span className="text-xs text-muted-foreground">{t("runtimeTabs.state.heartbeat", { when: formatRelative(status.received_at) })}</span>
             )}

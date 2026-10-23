@@ -92,7 +92,7 @@ type vcsLinkURLCandidate struct {
 // isVCSLinkUniqueViolation reports whether err is idx_vcs_links_unique
 // (task_id, provider, link_type, external_id) refusing a write — a genuine
 // identity collision worth a clear 409, not a raw driver error leaking to
-// the caller (#0fbed572 defect 1).
+// the caller (an internal ticket defect 1).
 func isVCSLinkUniqueViolation(err error) bool {
 	var pqErr *pq.Error
 	if !errors.As(err, &pqErr) || pqErr.Code != "23505" {
@@ -107,15 +107,15 @@ func isVCSLinkUniqueViolation(err error) bool {
 //
 // This is the path a caller that omits status takes (vcsLinkService.Create's
 // explicitStatus==false branch): its contract is "fail loudly on an
-// accidental duplicate, never silently touch an existing row" (#b73171fa) —
+// accidental duplicate, never silently touch an existing row" —
 // merging record state onto an existing row is Upsert's job, reserved for a
 // caller that states a status and therefore means to correct the record.
 //
 // Before this method checked identity by url, a corrected provider (the
-// exact effect of #0fbed572's own fix in vcs_url.go) slipped straight past
+// exact effect of an internal ticket's own fix in vcs_url.go) slipped straight past
 // the (task_id, provider, link_type, external_id) unique index — different
 // provider, no conflict — and silently inserted a second row for the same
-// PR/MR (#0fbed572 defect 3). The url-identity check below closes that gap
+// PR/MR (an internal ticket defect 3). The url-identity check below closes that gap
 // without changing what an EXACT repeat (same provider too) does: that case
 // still also hits the unique index below as a backstop.
 func (r *VCSLinkRepo) Create(ctx context.Context, link *domain.VCSLink) error {
@@ -228,25 +228,25 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 // the GitHub webhook orchestrator so subsequent deliveries for the same PR
 // (opened → synchronize → closed) update the same row rather than failing
 // the unique index, and by the manual re-link path (add_vcs_link ...
-// status=merged) so correcting a wrongly-inferred provider (#0fbed572: a
+// status=merged) so correcting a wrongly-inferred provider (an internal ticket: a
 // self-hosted GitLab URL that was first recorded as provider=github) fixes
 // the existing row instead of inserting a second one the done-evidence gate
 // never looks at.
 //
 // Matching by url, not by (task_id, link_type, external_id), is deliberate:
 // external_id is not a stable identity across a provider correction (a
-// GitHub PR #14 and a GitLab MR !14 share the string "14" but are different
-// objects — #0fbed572 defect 2), while the url is. Every link of the
+// GitHub a PR and a GitLab a review share the string "14" but are different
+// objects — an internal ticket defect 2), while the url is. Every link of the
 // task is locked and compared by url, with no external_id prefilter.
 //
 // The DB unique index is (task_id, provider, link_type, external_id, md5(url)),
 // so a caller-visible identity collision can still occur (racing with a
 // concurrent insert, or a genuinely different link already owning the
 // target (provider, external_id) pair) — that surfaces as a clear
-// apierror.Conflict, never a raw driver error (#0fbed572 defect 1).
+// apierror.Conflict, never a raw driver error (an internal ticket defect 1).
 //
 // When the lock finds MORE THAN ONE existing row naming the same url — the
-// exact shape of #0fbed572 defect 1's repro, left behind by the old
+// exact shape of an internal ticket defect 1's repro, left behind by the old
 // external_id-only matching — this method heals it: the oldest row (by
 // created_at) survives and is updated, every newer row sharing that same
 // url is deleted. This is a safe merge, not data loss: every deleted row
@@ -256,7 +256,7 @@ func (r *VCSLinkRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domai
 // The UPDATE branch never fabricates id/created_at — the caller always ends
 // up holding the row that is actually on disk, never the id/created_at it
 // happened to generate before finding out the row already existed
-// (#b73171fa: the caller-supplied values used to be echoed back verbatim,
+// (an internal ticket: the caller-supplied values used to be echoed back verbatim,
 // making an update look like a freshly created duplicate).
 //
 // Both branches stamp status_synced_at = now() (database clock, so every
@@ -382,6 +382,60 @@ func (r *VCSLinkRepo) ListByExternalID(ctx context.Context, provider domain.VCSP
 		result[i] = rows[i].toDomain()
 	}
 	return result, nil
+}
+
+// ListOpenTasksWithMergedPR: see repository.VCSLinkRepository. Review-subject
+// links (metadata role=review) name somebody else's work and do not count. The
+// activity_log NOT EXISTS makes the shadow journal one entry per card. The rules
+// EXISTS is a superset prefilter (project or workspace rule row with the flag) so
+// projects without it never occupy the page; the service still reads the
+// effective rules before journaling.
+func (r *VCSLinkRepo) ListOpenTasksWithMergedPR(ctx context.Context, limit, offset int) ([]repository.MergedPROpenTask, error) {
+	const q = `
+		SELECT t.id AS task_id, t.project_id, m.url AS link_url, m.status_synced_at AS merged_at
+		FROM tasks t
+		JOIN task_statuses ts ON ts.id = t.status_id
+		JOIN LATERAL (
+		    SELECT l.url, COALESCE(l.status_synced_at, l.created_at) AS status_synced_at
+		    FROM vcs_links l
+		    WHERE l.task_id = t.id AND l.link_type = 'pr' AND l.status = 'merged'
+		      AND COALESCE(l.metadata->>'role', '') <> 'review'
+		    ORDER BY COALESCE(l.status_synced_at, l.created_at) DESC
+		    LIMIT 1
+		) m ON true
+		WHERE t.deleted_at IS NULL
+		  AND ts.category NOT IN ('done', 'cancelled')
+		  AND NOT EXISTS (
+		      SELECT 1 FROM vcs_links o
+		      WHERE o.task_id = t.id AND o.link_type = 'pr' AND o.status = 'open'
+		        AND COALESCE(o.metadata->>'role', '') <> 'review')
+		  AND (
+		      EXISTS (SELECT 1 FROM project_rules pr
+		              WHERE pr.project_id = t.project_id AND pr.rule_type = 'workflow'
+		                AND pr.config->'mid_pipeline'->>'close_on_merge' = 'true')
+		      OR EXISTS (SELECT 1 FROM projects pj
+		                 JOIN workspace_rules wr ON wr.workspace_id = pj.workspace_id AND wr.rule_type = 'workflow'
+		                 WHERE pj.id = t.project_id
+		                   AND wr.config->'mid_pipeline'->>'close_on_merge' = 'true'))
+		  AND NOT EXISTS (
+		      SELECT 1 FROM activity_log a
+		      WHERE a.entity_id = t.id AND a.action = 'workflow.shadow_close_on_merge')
+		ORDER BY m.status_synced_at ASC, t.id ASC
+		LIMIT $1 OFFSET $2`
+	var rows []struct {
+		TaskID    uuid.UUID `db:"task_id"`
+		ProjectID uuid.UUID `db:"project_id"`
+		LinkURL   string    `db:"link_url"`
+		MergedAt  time.Time `db:"merged_at"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, q, limit, offset); err != nil {
+		return nil, err
+	}
+	out := make([]repository.MergedPROpenTask, len(rows))
+	for i, x := range rows {
+		out[i] = repository.MergedPROpenTask{TaskID: x.TaskID, ProjectID: x.ProjectID, LinkURL: x.LinkURL, MergedAt: x.MergedAt}
+	}
+	return out, nil
 }
 
 // SetPipelineStatus records the latest pipeline of the link. A delivery for a

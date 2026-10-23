@@ -232,6 +232,48 @@ func TestExtensionProjectHandler_ListShowsBindingsWithSyncState(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), `"k"`)
 }
 
+// project.view is served only for the projects where the extension is enabled,
+// and a requires entry that is not enabled in the project becomes unmet_requires.
+func TestExtensionProjectHandler_ListServesProjectViewPerProject(t *testing.T) {
+	man := extensions.Manifest{
+		ID: "chat-agent", Levels: extensions.Levels{Project: true},
+		Requires:    []string{"team-relay"},
+		ProjectView: &extensions.ProjectView{Icon: "message-square", Title: "Chat", After: "board"},
+	}
+	reg := realRegistry()
+	reg["chat-agent"] = projectManifestProvider{man: man}
+	store := newBindingStore()
+	h := NewExtensionProjectHandler(reg, store.service())
+	with, without := uuid.New(), uuid.New()
+	store.rows[store.key(with, "chat-agent")] = &domain.ProjectIntegration{ProjectID: with, ExtensionID: "chat-agent", Enabled: true, Settings: json.RawMessage(`{}`)}
+	store.rows[store.key(without, "chat-agent")] = &domain.ProjectIntegration{ProjectID: without, ExtensionID: "chat-agent", Enabled: false, Settings: json.RawMessage(`{}`)}
+	store.rows[store.key(without, "team-relay")] = &domain.ProjectIntegration{ProjectID: without, ExtensionID: "team-relay", Enabled: true, Settings: json.RawMessage(`{}`)}
+
+	item := func(p uuid.UUID, ext string) map[string]any {
+		_, out := serveExt(h, http.MethodGet, "/projects/"+p.String()+"/extensions", "")
+		for _, it := range out["extensions"].([]any) {
+			if m := it.(map[string]any); m["extension_id"] == ext {
+				return m
+			}
+		}
+		return nil
+	}
+	enabled := item(with, "chat-agent")
+	require.NotNil(t, enabled)
+	view := enabled["project_view"].(map[string]any)
+	assert.Equal(t, "Chat", view["title"])
+	assert.Equal(t, "message-square", view["icon"])
+	assert.Equal(t, "board", view["after"])
+	assert.Equal(t, "/w/:ws/p/:proj/chat-agent/*", view["route"])
+	assert.Equal(t, []any{"team-relay"}, enabled["unmet_requires"], "team-relay is not enabled in this project")
+
+	off := item(without, "chat-agent")
+	require.NotNil(t, off)
+	assert.NotContains(t, off, "project_view", "disabled in this project: no tab")
+	assert.NotContains(t, off, "unmet_requires")
+	assert.NotContains(t, item(without, "team-relay"), "project_view")
+}
+
 // The Team Relay PUT is typed in Go and described in the manifest; they must
 // name the same keys, or a setting the old block had is lost on one side.
 func TestTeamRelayProjectSettings_MatchManifest(t *testing.T) {

@@ -146,7 +146,9 @@
   },
   "save": {
     "conflict": "this page changed elsewhere",
+    "keepMine": "Keep mine",
     "notSaved": "Not saved: {{message}}",
+    "reload": "Reload",
     "retry": "Retry",
     "saved": "Saved",
     "saving": "Saving..."

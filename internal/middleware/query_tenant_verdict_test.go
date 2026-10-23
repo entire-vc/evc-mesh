@@ -110,6 +110,9 @@ var writingMethods = map[string]bool{"POST": true, "PUT": true, "PATCH": true, "
 // pin and which is the narrowing one, and it is not always the one the name
 // suggests — see GetCurrentUserTasks.
 var declaredQueryTenantParams = map[string]string{
+	// GET /projects/:proj_id/chat/threads?agent_id= only adds a conjunct to a query already pinned to the caller's own rows.
+	"agent_chat_handler.go:ListThreads.agent_id": "narrows: t.agent_id = $ — pinned by t.user_id = $3",
+
 	// --- Authorized in the handler -------------------------------------------
 	//
 	// requireWorkspaceID is the only tenant boundary in front of memories: that
@@ -140,7 +143,7 @@ var declaredQueryTenantParams = map[string]string{
 
 	// GET /spark/agents(/popular|/:agent_id) — an optional workspace_id lets a
 	// caller ask "what does MY workspace's spark integration resolve to"
-	// (#4a3195a5: the catalog base URL and on/off state are now workspace-scoped,
+	// (an internal ticket: the catalog base URL and on/off state are now workspace-scoped,
 	// where previously they were a single instance-wide env value nothing could
 	// override per workspace). NOT eligible for narrows: — an authorized
 	// workspace's row can point Mesh's server at a DIFFERENT catalog host than

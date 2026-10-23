@@ -99,7 +99,7 @@ const THREAD_B_ROOT = makeComment({ id: "root-b", body: "second thread" });
 const THREAD_B_REPLY = makeComment({
   id: "reply-b",
   parent_comment_id: "root-b",
-  body: "@pavel here",
+  body: "@alex here",
 });
 
 function mockRoutes(comments: DocumentComment[]) {
@@ -127,7 +127,7 @@ function renderDocs(search = "") {
 
 /** The rail marks the focused thread with the amber border. */
 function isFocused(el: HTMLElement): boolean {
-  return el.className.includes("border-yellow-400");
+  return el.className.includes("border-tone-attention-400");
 }
 
 // jsdom has no layout, so it has no scrollIntoView — the rail calls it on the
@@ -167,7 +167,7 @@ describe("DocsPage — ?comment= deep link", () => {
 
   it("opens a rail the reader had collapsed", async () => {
     // Kept explicit even though the rail now starts closed for everyone
-    // (#a4a8db69 — the thread tree became the reading surface): a stored "0" is
+    // (an internal ticket — the thread tree became the reading surface): a stored "0" is
     // a reader who *chose* to close it, and a deep link has to override that
     // choice, not merely coincide with the default.
     localStorage.setItem("mesh_docs_comments_rail", "0");
@@ -202,7 +202,7 @@ describe("DocsPage — ?comment= deep link", () => {
   });
 
   it("focuses nothing when the link names a comment this document does not have", async () => {
-    // The rail is opened here by the reader, not by the link: since #a4a8db69
+    // The rail is opened here by the reader, not by the link: since an internal ticket
     // it starts closed, and an id that matches no thread never opens it (the
     // effect returns before setRailOpen). Seeding the open state keeps this
     // test about focus — a bogus id must not land the amber border on some

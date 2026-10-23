@@ -50,7 +50,7 @@ function stubMeta(a: Artifact) {
   mockedApi.mockImplementation((path: string) => {
     if (path === "/api/v1/artifacts/a1") return Promise.resolve(a);
     if (path === "/api/v1/artifacts/a1/download?disposition=inline")
-      return Promise.resolve({ url: "https://mesh.entire.host/s3/x?X-Amz-Expires=3600" });
+      return Promise.resolve({ url: "https://mesh.example.invalid/s3/x?X-Amz-Expires=3600" });
     return Promise.reject(new Error(`unexpected path: ${path}`));
   });
 }
@@ -76,7 +76,7 @@ afterEach(() => {
 
 describe("ArtifactViewPage — text kinds", () => {
   /**
-   * AC2 of #eb6fde4e: `json отформатирован`. The assertion is on STRUCTURE:
+   * AC2 of an internal ticket: `json отформатирован`. The assertion is on STRUCTURE:
    * the stored file is one line, the page must show it indented across
    * lines. A raw dump of the body would contain every character this test
    * could match on and still be exactly the defect.
@@ -94,7 +94,7 @@ describe("ArtifactViewPage — text kinds", () => {
     expect(pre.textContent).toContain('\n  "model"');
     expect(pre.textContent).not.toBe('{"model":"x","cost":1.5,"ok":true,"extra":null}');
     // Syntax colouring is present — at least the key class fired.
-    expect(pre.querySelector("span.text-sky-700, span[class*='text-sky']")).not.toBeNull();
+    expect(pre.querySelector("span.text-tone-sky-700, span[class*='text-tone-sky']")).not.toBeNull();
   });
 
   it("falls back to plain text when the JSON does not parse", async () => {
@@ -108,7 +108,7 @@ describe("ArtifactViewPage — text kinds", () => {
     expect(container.querySelector("pre")?.textContent).toContain('{"broken": ');
   });
 
-  /** AC2 of #eb6fde4e: `csv таблицей`, including quoted commas. */
+  /** AC2 of an internal ticket: `csv таблицей`, including quoted commas. */
   it("renders CSV as a table and honours quoted commas", async () => {
     stubMeta(artifact({ name: "costs.csv", mime_type: "text/csv" }));
     stubStorage('item,cost\n"laptop, used",100\nmouse,5');
@@ -189,7 +189,7 @@ describe("ArtifactViewPage — browser-native kinds", () => {
       expect(el).not.toBeNull();
       return el as HTMLImageElement;
     });
-    expect(img.getAttribute("src")).toBe("https://mesh.entire.host/s3/x?X-Amz-Expires=3600");
+    expect(img.getAttribute("src")).toBe("https://mesh.example.invalid/s3/x?X-Amz-Expires=3600");
     expect(img.getAttribute("alt")).toBe("proof.png");
   });
 

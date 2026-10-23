@@ -38,7 +38,7 @@ export function StatusDialog({
 
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [color, setColor] = useState("#6366f1");
+  const [color, setColor] = useState("#6366f1"); // color-ok: stored default for <input type=color>
   const [category, setCategory] = useState<StatusCategory>("todo");
   const [isDefault, setIsDefault] = useState(false);
   const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
@@ -58,7 +58,7 @@ export function StatusDialog({
       } else {
         setName("");
         setSlug("");
-        setColor("#6366f1");
+        setColor("#6366f1"); // color-ok: stored default for <input type=color>
         setCategory("todo");
         setIsDefault(false);
         setSlugManuallyEdited(false);
@@ -183,7 +183,7 @@ export function StatusDialog({
                 onChange={(e) => setColor(e.target.value)}
                 className="w-28 font-mono text-sm"
                 maxLength={7}
-                placeholder="#000000"
+                placeholder="#000000" // color-ok: example text
               />
               <div
                 className="h-6 w-6 rounded-full border border-border"

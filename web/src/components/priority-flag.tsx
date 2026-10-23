@@ -9,27 +9,27 @@ const priorityMeta: Record<
 > = {
   urgent: {
     labelKey: "priority.urgent",
-    colorClass: "text-red-500",
+    colorClass: "text-tone-danger-500",
     iconSize: { sm: 14, md: 16 },
   },
   high: {
     labelKey: "priority.high",
-    colorClass: "text-orange-500",
+    colorClass: "text-tone-high-500",
     iconSize: { sm: 14, md: 16 },
   },
   medium: {
     labelKey: "priority.medium",
-    colorClass: "text-yellow-500",
+    colorClass: "text-tone-attention-500",
     iconSize: { sm: 14, md: 16 },
   },
   low: {
     labelKey: "priority.low",
-    colorClass: "text-blue-400",
+    colorClass: "text-tone-info-400",
     iconSize: { sm: 14, md: 16 },
   },
   none: {
     labelKey: "priority.noPriority",
-    colorClass: "text-gray-300 dark:text-gray-600",
+    colorClass: "text-tone-neutral-300 dark:text-tone-neutral-600",
     iconSize: { sm: 14, md: 16 },
   },
 };

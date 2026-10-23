@@ -240,7 +240,7 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
 
   it("Runner: list, group, textarea and pickers", async () => {
     const onSubmit = form(runner, "workspace", {
-      agentOptions: [{ value: "a1", label: "Verne" }],
+      agentOptions: [{ value: "a1", label: "Vera" }],
       projectOptions: [{ value: "p1", label: "Mesh" }],
     });
     fireEvent.change(screen.getByLabelText("Default agent"), { target: { value: "a1" } });

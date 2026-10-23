@@ -268,7 +268,7 @@ func TestMemoryRepoDB_RechunkQueries_FailureIsAnErrorNotAnEmptyAnswer(t *testing
 }
 
 // Repairing a row must remove it from the population — otherwise the job re-selects the same
-// rows forever and `remaining` never falls, the non-convergence shape of #84b0694d.
+// rows forever and `remaining` never falls, the non-convergence shape of an internal ticket.
 func TestMemoryRepoDB_ListNeedingRechunk_ConvergesOnceOffsetsIndexContent(t *testing.T) {
 	repo, wsID := setupMemoryRepoChunkingDBTest(t)
 	ctx := context.Background()

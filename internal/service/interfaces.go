@@ -234,14 +234,14 @@ type TaskService interface {
 	// "🔁 Repeat N" system comment on the SAME open task (N = 1 + how many such
 	// comments already exist on it) and bumps its updated_at, so one persistent
 	// unresolved check stays one card instead of spawning a new #id every period
-	// (the pattern that produced #52f407e0-style piles of near-identical cards
+	// (the pattern that produced an internal ticket-style piles of near-identical cards
 	// asking the same still-open question). Best-effort: a comment-post failure
 	// is returned to the caller (unlike SupersedeRecurringInstances's per-task
 	// fail-open) since nothing else marks this tick as having happened.
 	RepeatOpenInstance(ctx context.Context, taskID uuid.UUID) error
 	// SetHumanGate arms (value=true) or clears (value=false) the sticky human-gate flag.
 	// When armed, only a human actor may move the task to backlog/done/cancelled.
-	// ArmHumanGate is the single arming path (task #4545660b). Validates the input
+	// ArmHumanGate is the single arming path. Validates the input
 	// and returns a 422 apierror naming the offending field when gate_author is
 	// missing, or when recommended_default is missing on an API-sourced arm.
 	ArmHumanGate(ctx context.Context, in domain.ArmHumanGateInput) error
@@ -358,14 +358,14 @@ type CommentService interface {
 	ListByAuthor(ctx context.Context, authorID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 	ListRecentByWorkspace(ctx context.Context, wsID uuid.UUID, filter repository.CommentViewFilter) (*domain.CommentViewPage, error)
 	// GetHumanGateOwner reports who owns taskID's currently-live human_gate
-	// ask (task #040cddcf), read-only — see the domain.HumanGateInfo and
+	// ask, read-only — see the domain.HumanGateInfo and
 	// commentService.scanHumanGateOwnership doc comments for the full rule.
 	GetHumanGateOwner(ctx context.Context, taskID uuid.UUID) (*domain.HumanGateInfo, error)
 	// CheckAgentGateArm gives an agent-key POST /human-gate the checks the marker path
-	// has (task #40a24454): human addressee, no repeat of an answered ask. Returns a
+	// has: human addressee, no repeat of an answered ask. Returns a
 	// *GateArmRefusedError on refusal.
 	CheckAgentGateArm(ctx context.Context, taskID uuid.UUID, addressee, supersedes, canonicalKey string) error
-	// RecordHumanGateDecision appends a decision record (task #c56339b1, the
+	// RecordHumanGateDecision appends a decision record (an internal ticket, the
 	// third human_gate exit) and, if the task's gate is currently live,
 	// releases it as a CONSEQUENCE of the record — never independently. See
 	// docs/human-gate-decision-recorded.md §3 in the evc-mesh repo.
@@ -380,7 +380,7 @@ type CommentService interface {
 	// on a task, newest first.
 	ListHumanGateDecisions(ctx context.Context, taskID uuid.UUID) ([]domain.HumanGateDecision, error)
 	// ReconcileClosedFollowUpPending drains the closed-card follow-up pending
-	// queue (task #db1c6c7a): one pass re-runs the delivery for every row
+	// queue: one pass re-runs the delivery for every row
 	// still under the attempt budget. Called by the cmd/api scheduler with a
 	// system actor context; see comment_closed_task_followup.go for the
 	// error/outcome contract.
@@ -627,7 +627,7 @@ type TOCEntry struct {
 // A mermaid code fence gets one addition beyond staying untouched: an
 // inserted caption immediately above it. There is no headless-Chrome and no
 // mature Go-native mermaid renderer available to this service (see the
-// parent card #2a467980), so a mermaid block ships as its literal source —
+// parent an internal ticket), so a mermaid block ships as its literal source —
 // captioned, so a reader knows that's deliberate rather than a rendering
 // failure, exactly what the parent card's own §3.7 requires.
 type MergedExportDoc struct {
@@ -921,7 +921,7 @@ type AgentAPIKeyConfigurable interface {
 // already filter deleted_at IS NULL. So a workspace soft-deleted mid-TTL kept
 // answering from a still-warm cache entry as if it still existed, for
 // EVERY agent-scoped route, not just ones a revoked grant would also have
-// caught (#315d9a52 — measured live: a guest key kept reading its own
+// caught (an internal ticket — measured live: a guest key kept reading its own
 // now-deleted, now-empty workspace's member routes for the rest of the
 // cache window). *agentService implements this by delegating to
 // workspaceRepo.GetByID; a nil workspaceRepo (never happens outside a
@@ -1117,7 +1117,7 @@ type VCSLinkService interface {
 	// match. The returned bool is true on insert, false on update; the
 	// returned *domain.VCSLink always reflects the actual persisted row
 	// (id/created_at included), never a caller-generated value that the
-	// database discarded on conflict (#b73171fa).
+	// database discarded on conflict.
 	Create(ctx context.Context, input domain.CreateVCSLinkInput) (link *domain.VCSLink, created bool, err error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.VCSLink, error)
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -1128,6 +1128,11 @@ type VCSLinkService interface {
 	// included — is apierror.BadRequest. A link that is missing, on another
 	// task, or not link_type=pr is NotFound.
 	PatchMetadata(ctx context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error)
+	// PatchShipSHAByURL writes ship_sha onto every pr link of the workspace
+	// that names exactly this MR/PR url, so a caller that knows only the MR
+	// (not the card id, which public MR text must not carry) can publish the
+	// SHIP. Returns the updated links; NotFound when no link names the url.
+	PatchShipSHAByURL(ctx context.Context, workspaceID uuid.UUID, mrURL, shipSHA string) ([]domain.VCSLink, error)
 	// HandleGitHubPullRequestEvent resolves a GitHub PR webhook payload to a
 	// task, upserts the corresponding vcs_link, and on action=closed applies
 	// the auto transition policy: in_progress → review, review → done. When
@@ -1140,7 +1145,7 @@ type VCSLinkService interface {
 	// transition policy as HandleGitHubPullRequestEvent, for a GitLab merge
 	// request webhook payload instead of a GitHub pull_request one — the
 	// two providers' MRs/PRs are policy-equivalent once reduced to (task
-	// ref, terminal state), see #bc39d781.
+	// ref, terminal state), see an internal ticket.
 	HandleGitLabMergeRequestEvent(ctx context.Context, ev GitLabWebhookEvent) (PRHandleResult, error)
 	// HandleGitLabPipelineEvent stores the pipeline state of an MR on the
 	// links that already name that MR, so the task badge can show it. It
@@ -1157,7 +1162,7 @@ type VCSLinkService interface {
 	// request (uuid.Nil for the unscoped env fallback — see WebhookSecret's
 	// doc comment). When non-nil, a candidate naming a task outside that
 	// workspace is treated exactly like a candidate naming no task at all —
-	// #839b9897: a secret must only ever be able to touch its own
+	// an internal ticket: a secret must only ever be able to touch its own
 	// workspace's tasks.
 	ResolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef)
 }
@@ -1180,7 +1185,7 @@ type GitHubWebhookEvent struct {
 	// this delivery (uuid.Nil when it matched the instance-wide env
 	// fallback instead — see WebhookSecret's doc comment). Task-ref
 	// resolution is scoped to this workspace so a workspace B secret cannot
-	// touch a task in workspace A or C (#839b9897).
+	// touch a task in workspace A or C.
 	WorkspaceID uuid.UUID
 }
 
@@ -1201,7 +1206,7 @@ type GitLabWebhookEvent struct {
 	ProjectPath string // project.path_with_namespace, e.g. "entire-vc/evc-mesh"
 	// WorkspaceID is GitHubWebhookEvent.WorkspaceID's GitLab counterpart —
 	// the workspace whose webhook_secret validated this delivery (uuid.Nil
-	// for the env fallback). See that field's doc comment (#839b9897).
+	// for the env fallback). See that field's doc comment.
 	WorkspaceID uuid.UUID
 }
 
@@ -1771,7 +1776,7 @@ type RememberResult struct {
 	// landed yet. A caller that recalls immediately after remembering should treat
 	// EmbeddingPending=true as "expect BM25-only results for this row for a short
 	// window", not as a signal to retry or wait. Always false when no embedder is
-	// configured (embedding.IsNoop) — there is nothing pending in that case. See #a2e00afd.
+	// configured (embedding.IsNoop) — there is nothing pending in that case. See an internal ticket.
 	EmbeddingPending bool
 	// Warning is set when the write succeeded but something about it is worth
 	// flagging to the caller without failing the request — currently only a
@@ -1861,7 +1866,7 @@ type MemoryService interface {
 	RecallGraph(ctx context.Context, opts domain.RecallGraphOpts) ([]domain.RecallGraphResult, error)
 }
 
-// SecretService is the write-only secrets API (task #64e84eb1). Every method
+// SecretService is the write-only secrets API. Every method
 // takes or returns domain.Secret, which has no field that can carry a value
 // — there is no method on this interface a handler could wire to a GET route
 // and accidentally leak plaintext through. Value-bearing operations live on
@@ -2031,7 +2036,7 @@ type OAuthService interface {
 	PurgeExpired(ctx context.Context) (codes, tokens int64, err error)
 	// ResyncConnectorMemberships re-mirrors every active connector agent's
 	// project memberships onto its supervisor's CURRENT ones, correcting both
-	// added-after and removed-after drift (task cf226500: the one-shot mirror
+	// added-after and removed-after drift (an internal ticket: the one-shot mirror
 	// at registration time never re-syncs on its own). Periodic housekeeping,
 	// like PurgeExpired — not on the request or grant-reuse path.
 	ResyncConnectorMemberships(ctx context.Context) (ResyncConnectorMembershipsResult, error)

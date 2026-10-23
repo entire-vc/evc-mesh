@@ -36,7 +36,7 @@ type fakeVCSLinkRepo struct {
 	// createErr/upsertErr, when set, are returned by Create/Upsert instead of
 	// succeeding — used to exercise vcsLinkService.Create's and
 	// HandleGitHubPullRequestEvent's error branches (a DB failure on either
-	// path, e.g. #b73171fa's Upsert).
+	// path, e.g. an internal ticket's Upsert).
 	createErr error
 	upsertErr error
 	// upsertErrFor fails Upsert only for links of this task.
@@ -51,7 +51,7 @@ func newFakeVCSLinkRepo() *fakeVCSLinkRepo {
 }
 
 // The url is part of the key, as md5(url) is part of idx_vcs_links_unique: the
-// same number in two projects is two links (#16c1dd76).
+// same number in two projects is two links.
 func conflictKey(taskID uuid.UUID, p domain.VCSProvider, lt domain.VCSLinkType, eid, url string) string {
 	return taskID.String() + "|" + string(p) + "|" + string(lt) + "|" + eid + "|" + domain.NormalizeVCSURL(url)
 }
@@ -62,7 +62,7 @@ func (r *fakeVCSLinkRepo) Create(_ context.Context, l *domain.VCSLink) error {
 	if r.createErr != nil {
 		return r.createErr
 	}
-	// Mirrors VCSLinkRepo.Create (#0fbed572 defect 3): refuse — rather than
+	// Mirrors VCSLinkRepo.Create (an internal ticket defect 3): refuse — rather than
 	// silently insert a second row — when an existing link on this task
 	// already names the same real-world url, regardless of its provider.
 	targetURL := domain.NormalizeVCSURL(l.URL)
@@ -122,7 +122,7 @@ func (r *fakeVCSLinkRepo) Upsert(_ context.Context, l *domain.VCSLink) (bool, er
 		existing.URL = l.URL
 		// Mirrors real Postgres: id/created_at are never touched by the
 		// update branch — reflect the row's actual values back into l, same
-		// contract as VCSLinkRepo.Upsert (#b73171fa).
+		// contract as VCSLinkRepo.Upsert.
 		l.ID = existing.ID
 		l.CreatedAt = existing.CreatedAt
 		return false, nil
@@ -148,6 +148,10 @@ func (r *fakeVCSLinkRepo) SetPipelineStatus(_ context.Context, id uuid.UUID, pip
 	meta[domain.VCSLinkMetaPipelineSHA] = strings.TrimSpace(sha)
 	l.Metadata, _ = json.Marshal(meta)
 	return true, nil
+}
+
+func (r *fakeVCSLinkRepo) ListOpenTasksWithMergedPR(context.Context, int, int) ([]repository.MergedPROpenTask, error) {
+	return nil, nil
 }
 
 func (r *fakeVCSLinkRepo) ListByExternalID(_ context.Context, p domain.VCSProvider, lt domain.VCSLinkType, eid string) ([]domain.VCSLink, error) {
@@ -695,7 +699,7 @@ func TestHandlePR_MultiPR_PartialMerge_NoTransition(t *testing.T) {
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
 	// Pre-populate a second OPEN PR linked to the same task so the merge of
-	// PR #500 triggers "awaiting other PRs" rather than a transition.
+	// a PR triggers "awaiting other PRs" rather than a transition.
 	pendingLinkID := uuid.New()
 	_, err := h.repo.Upsert(context.Background(), &domain.VCSLink{
 		ID:         pendingLinkID,
@@ -726,7 +730,7 @@ func TestHandlePR_MultiPR_AllMerged_TransitionsOnLast(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
-	// Pre-populate an already-merged PR #600 so the merge of #601 closes the set.
+	// Pre-populate an already-merged a PR so the merge of #601 closes the set.
 	_, err := h.repo.Upsert(context.Background(), &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     task.ID,
@@ -777,7 +781,7 @@ func TestHandlePR_NoMeshRef_FallsBackToExternalID(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
-	// Pre-populate an open link for PR #800 — simulates a prior delivery (e.g.
+	// Pre-populate an open link for a PR — simulates a prior delivery (e.g.
 	// "opened" event that ran when the PR title still had the MESH ref).
 	_, err := h.repo.Upsert(context.Background(), &domain.VCSLink{
 		ID:         uuid.New(),
@@ -837,7 +841,7 @@ func TestHandlePR_ActionOpened_NoTransition(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// HandleGitLabMergeRequestEvent (#bc39d781) — GitLab counterpart of the
+// HandleGitLabMergeRequestEvent — GitLab counterpart of the
 // HandleGitHubPullRequestEvent tests above. Both delegate their terminal-
 // state handling to the same applyPRTransitionPolicy, so these tests exist
 // to prove GitLab payloads actually REACH that shared policy correctly
@@ -1050,12 +1054,12 @@ func TestVCSLinkService_Create_LeavesUnknownLinkTypeAlone(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Create: status defaulting and explicit-status re-link (#df734dd9).
+// Create: status defaulting and explicit-status re-link.
 //
 // Root cause under test: add_vcs_link previously had no way to record a PR's
 // status at link time, so a link created for an already-merged PR sat with
 // status="" forever — no webhook fires for a merge that happened before the
-// link existed — and the done-evidence gate (service.MoveTask, #2697392d)
+// link existed — and the done-evidence gate (service.MoveTask)
 // blocks any non-merged/non-closed PR link unconditionally.
 // ---------------------------------------------------------------------------
 
@@ -1123,7 +1127,7 @@ func TestVCSLinkService_Create_ExplicitMergedStatusIsStored(t *testing.T) {
 
 // An explicit status leaves a visible trail distinguishing "someone declared
 // this" from "this was measured" (webhook delivery, or a live GitHub check —
-// #5f7f8c6e): a gate that a caller can silence by self-declaration only
+// an internal ticket): a gate that a caller can silence by self-declaration only
 // protects until the first agent it inconveniences, unless the declaration
 // itself is attributable.
 func TestVCSLinkService_Create_ExplicitStatusStampsManualDeclarationTrail(t *testing.T) {
@@ -1184,7 +1188,7 @@ func TestVCSLinkService_Create_ImplicitStatusDoesNotStampManualDeclarationTrail(
 
 // Re-linking with an explicit status must succeed even when a link to the
 // same (task, provider, link_type, external_id) already exists — that
-// uniqueness collision is exactly what made a3bdf4ad's rows permanently
+// uniqueness collision is exactly what made an internal ticket's rows permanently
 // uncorrectable before this fix: the only way to record the real status was
 // to add_vcs_link again, and a plain insert 409s/500s on the unique index.
 func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T) {
@@ -1214,7 +1218,7 @@ func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T)
 	})
 	require.NoError(t, err, "re-linking with an explicit status must succeed, not fail on the unique index")
 
-	// The core regression (#b73171fa): the upsert branch used to echo back a
+	// The core regression: the upsert branch used to echo back a
 	// freshly-generated id/created_at instead of the row it actually updated,
 	// making a correctly-applied update look like a newly created duplicate.
 	// Equality, not mere presence — a vacuous "field exists" assert would pass
@@ -1243,7 +1247,7 @@ func TestVCSLinkService_Create_ExplicitStatusUpsertsOnExistingLink(t *testing.T)
 // add_vcs_link call is a distinct case from "I'm correcting the status"
 // (that case is Test_ExplicitStatusUpsertsOnExistingLink above).
 //
-// #0fbed572 defect 3: this used to succeed silently and insert a SECOND row
+// an internal ticket defect 3: this used to succeed silently and insert a SECOND row
 // (repo.Create had no notion of "this url already exists under a different
 // provider"). The correct behavior is a loud refusal, and the original row
 // must be left exactly as it was either way.
@@ -1286,7 +1290,7 @@ func TestVCSLinkService_Create_ImplicitStatusOnExistingLinkFailsLoudlyAndLeavesO
 }
 
 // The same collision, but arriving under a DIFFERENT (corrected) provider —
-// the exact shape of #0fbed572 defect 3's live repro: after the provider
+// the exact shape of an internal ticket defect 3's live repro: after the provider
 // inference fix, a plain add_vcs_link with no status on an already-linked
 // GitLab MR previously slipped past the (task_id, provider, link_type,
 // external_id) unique index (different provider = no conflict there) and
@@ -1430,7 +1434,7 @@ func (r *fakeTaskRepo) ExtendScopedCheckout(context.Context, uuid.UUID, domain.C
 	return nil, nil
 }
 
-// #b593c566 retry-safety: a delivery whose link upsert succeeded but whose
+// an internal ticket retry-safety: a delivery whose link upsert succeeded but whose
 // transition failed transiently now gets a 5xx and is redelivered. The
 // redelivery must complete the transition exactly once and post exactly one
 // comment — the failed attempt returns BEFORE any comment is written (every

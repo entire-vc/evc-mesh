@@ -1,18 +1,15 @@
 import { useTranslation } from "react-i18next";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useNavigate } from "react-router";
 import {
   Bookmark,
   BookmarkPlus,
-  Calendar,
   Check,
-  Columns3,
   FileText,
   FilterX,
   GitBranch,
-  List,
   MoreVertical,
-  NotebookText,
   Share2,
   Trash2,
 } from "lucide-react";
@@ -36,6 +33,11 @@ import { Input } from "@/components/ui/input";
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { isBoardFiltersAtDefault } from "@/lib/board-saved-view";
 import { toast } from "@/components/ui/toast";
+import {
+  BUILTIN_PROJECT_TABS,
+  splitTabsByWidth,
+  type ProjectViewTabDescriptor,
+} from "@/lib/project-view-tabs";
 import type { ProjectViewTab, ViewType } from "@/types";
 
 interface ViewTabBarProps {
@@ -45,38 +47,18 @@ interface ViewTabBarProps {
   projectSlug: string;
   projectId?: string;
   className?: string;
+  // Tab descriptions, in strip order. Defaults to the built-in project tabs.
+  tabs?: readonly ProjectViewTabDescriptor[];
 }
 
-const TABS = [
-  {
-    id: "board" as const,
-    labelKey: "viewTabs.tabs.board",
-    Icon: Columns3,
-    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}`,
-  },
-  {
-    id: "list" as const,
-    labelKey: "viewTabs.tabs.list",
-    Icon: List,
-    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/list`,
-  },
-  {
-    // Four icons plus the kebab do not fit next to the breadcrumbs at 393px,
-    // so calendar moves into the kebab there and the strip keeps board,
-    // list and docs.
-    id: "calendar" as const,
-    labelKey: "viewTabs.tabs.calendar",
-    Icon: Calendar,
-    hideOnMobile: true,
-    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/calendar`,
-  },
-  {
-    id: "docs" as const,
-    labelKey: "viewTabs.tabs.docs",
-    Icon: NotebookText,
-    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/docs`,
-  },
-] as const;
+// Room kept for the "…" trigger and its divider until the real one is measured.
+// On a phone the trigger grows to the 44px touch target (index.css), so the
+// measured width, not this, decides what fits.
+const KEBAB_RESERVE_PX = 44;
+
+// The "…" trigger's left margin (`ml-1`), a constant of the class below, so the
+// measure does not need getComputedStyle (a style recalculation per resize).
+const KEBAB_MARGIN_PX = 4;
 
 // Secondary formats — reachable from the kebab rather than the strip, which is
 // capped at four tabs so it still fits next to the breadcrumbs on a laptop.
@@ -95,13 +77,6 @@ const FORMATS = [
   },
 ] as const;
 
-// Derived from TABS so the strip and the menu cannot disagree about which
-// tabs are hidden on a phone.
-const MOBILE_ONLY_TABS = TABS.filter(
-  (t): t is Extract<(typeof TABS)[number], { hideOnMobile: true }> =>
-    "hideOnMobile" in t && t.hideOnMobile === true,
-);
-
 const VIEW_TYPE_PATH: Record<ViewType, (ws: string, proj: string) => string> = {
   board: (ws, proj) => `/w/${ws}/p/${proj}`,
   list: (ws, proj) => `/w/${ws}/p/${proj}/list`,
@@ -114,12 +89,49 @@ function isSavedViewType(view: ProjectViewTab | null): view is ViewType {
   return view !== null && view !== "docs";
 }
 
+// Hidden full-size copy of every tab. Memoized: the strip re-renders on every
+// saved-view store change and on every route change, and this copy only
+// depends on the tab list and the language.
+const MeasureStrip = memo(function MeasureStrip({
+  measureRef,
+  tabs,
+  t,
+}: {
+  measureRef: React.RefObject<HTMLDivElement | null>;
+  tabs: readonly ProjectViewTabDescriptor[];
+  t: (key: string) => string;
+}) {
+  return (
+    <div
+      ref={measureRef}
+      aria-hidden
+      className="pointer-events-none invisible col-start-1 row-start-1 flex h-0 w-max overflow-hidden"
+    >
+      {tabs.map(({ id, labelKey, Icon }) => (
+        <span
+          key={id}
+          className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-sm font-medium"
+          tabIndex={-1}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          <span>{t(labelKey)}</span>
+        </span>
+      ))}
+      {/* Stands in for the trigger so the basis includes it. */}
+      <span className="ml-1 flex items-center border-l border-border pl-1">
+        <span className="h-7 w-7" />
+      </span>
+    </div>
+  );
+});
+
 export function ViewTabBar({
   currentView,
   wsSlug,
   projectSlug,
   projectId,
   className,
+  tabs = BUILTIN_PROJECT_TABS,
 }: ViewTabBarProps) {
   const { t } = useTranslation("settings");
   const navigate = useNavigate();
@@ -145,10 +157,68 @@ export function ViewTabBar({
     }
   }, [projectId, fetchViews]);
 
+  // The strip shows as many tabs as fit and moves the rest into the "…" menu.
+  // Natural widths come from a hidden copy of every tab, so the decision does
+  // not depend on which tabs are currently shown.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const kebabRef = useRef<HTMLDivElement>(null);
+  // Only the ids that overflow live in state: a strip that fits (the common
+  // case) never re-renders after mount.
+  const [overflowIds, setOverflowIds] = useState<string[]>([]);
+  const shownRef = useRef<{ ids: string[] }>({ ids: [] });
+
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    const measure = measureRef.current;
+    const kebab = kebabRef.current;
+    if (!wrap || !measure || !kebab) return;
+    const update = (inObserver: boolean) => {
+      // The trigger's whole box: its width plus the margin that separates it.
+      const reserve =
+        kebab.offsetWidth + KEBAB_MARGIN_PX || KEBAB_RESERVE_PX;
+      const widths = Array.from(measure.children)
+        .slice(0, tabs.length)
+        .map((el) => (el as HTMLElement).offsetWidth);
+      // 0 means no layout yet (hidden or not measured): show everything and
+      // let the next resize decide.
+      const available = wrap.clientWidth
+        ? wrap.clientWidth - reserve
+        : Infinity;
+      const next = splitTabsByWidth(
+        tabs,
+        widths.length === tabs.length ? widths : tabs.map(() => 0),
+        available,
+      ).overflow.map((t) => t.id);
+      const cur = shownRef.current.ids;
+      // Same split as already rendered: no state update, so no extra commit.
+      if (cur.length === next.length && cur.every((id, i) => id === next[i])) return;
+      shownRef.current.ids = next;
+      // From the observer, apply before paint so the strip never shows a frame
+      // with tabs that do not fit.
+      if (inObserver) flushSync(() => setOverflowIds(next));
+      else setOverflowIds(next);
+    };
+    // The observer's first callback measures after layout (no forced reflow
+    // here); without one (tests) measure once now.
+    if (typeof ResizeObserver === "undefined") {
+      update(false);
+      return;
+    }
+    const ro = new ResizeObserver(() => update(true));
+    ro.observe(wrap);
+    ro.observe(measure);
+    ro.observe(kebab);
+    return () => ro.disconnect();
+  }, [tabs]);
+
+  const visibleTabs = tabs.filter((t) => !overflowIds.includes(t.id));
+  const overflowTabs = tabs.filter((t) => overflowIds.includes(t.id));
+
   const activeFormat = FORMATS.find((f) => f.id === currentView);
-  // Tabs the strip hides below `sm` are reachable only from this menu there,
-  // so the trigger has to show their active state at that width.
-  const mobileOnlyTabActive = MOBILE_ONLY_TABS.some((t) => t.id === currentView);
+  // A tab that moved into the menu cannot show its active state in the strip,
+  // so the trigger carries it.
+  const overflowTabActive = overflowTabs.some((t) => t.id === currentView);
 
   // Filter views for current view type
   const relevantViews = views.filter((v) => v.view_type === currentView);
@@ -221,179 +291,189 @@ export function ViewTabBar({
 
   return (
     <>
-      <div className={cn("flex items-center gap-0", className)}>
-        {TABS.map((tab) => {
-          const { id, labelKey, Icon, path } = tab;
-          const hideOnMobile = "hideOnMobile" in tab && tab.hideOnMobile;
-          const isActive = currentView === id;
-          return (
-            <button
-              key={id}
-              onClick={() => {
-                if (!isActive) {
-                  navigate(path(wsSlug, projectSlug));
+      <div
+        ref={wrapRef}
+        className={cn("relative grid min-w-0", className)}
+        // One grid cell holds the hidden full-size copy and the live strip, so
+        // the strip's basis is the width of every tab (it claims that when
+        // there is room) and it shrinks, rather than wraps, when there is not.
+        // `shrink-0` from a caller's className must not win here.
+        style={{ gridTemplateColumns: "minmax(0, 1fr)", flexShrink: 1 }}
+      >
+        <MeasureStrip measureRef={measureRef} tabs={tabs} t={t} />
+        <div className="col-start-1 row-start-1 flex min-w-0 items-center">
+          {visibleTabs.map(({ id, labelKey, Icon, path }) => {
+            const isActive = currentView === id;
+            return (
+              <button
+                key={id}
+                onClick={() => {
+                  if (!isActive) {
+                    navigate(path(wsSlug, projectSlug));
+                  }
+                }}
+                className={cn(
+                  "flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-sm transition-colors",
+                  isActive
+                    ? "border-primary font-medium text-foreground"
+                    : "border-transparent font-normal text-muted-foreground hover:text-foreground",
+                )}
+                aria-current={isActive ? "page" : undefined}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                <span>{t(labelKey)}</span>
+              </button>
+            );
+          })}
+
+          {/* Formats + saved views */}
+          <div
+            ref={kebabRef}
+            className="ml-1 flex items-center border-l border-border pl-1"
+          >
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={cn(
+                  "flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground",
+                  // The strip cannot show an active state for a format that
+                  // lives inside the menu, so the trigger carries it instead.
+                  activeFormat ? "bg-muted text-foreground" : "text-muted-foreground",
+                  overflowTabActive && "bg-muted text-foreground",
+                )}
+                title={
+                  activeFormat
+                    ? t("viewTabs.moreViewsActive", { name: t(activeFormat.labelKey) })
+                    : t("viewTabs.moreViews")
                 }
-              }}
-              className={cn(
-                hideOnMobile ? "hidden sm:flex" : "flex",
-                "h-9 items-center gap-1.5 border-b-2 px-1.5 sm:px-3 text-sm transition-colors",
-                isActive
-                  ? "border-primary font-medium text-foreground"
-                  : "border-transparent font-normal text-muted-foreground hover:text-foreground",
-              )}
-              aria-current={isActive ? "page" : undefined}
-              aria-label={t(labelKey)}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{t(labelKey)}</span>
-            </button>
-          );
-        })}
-
-        {/* Formats + saved views */}
-        <div className="ml-1 flex items-center border-l border-border pl-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground",
-                // The strip cannot show an active state for a format that
-                // lives inside the menu, so the trigger carries it instead.
-                activeFormat ? "bg-muted text-foreground" : "text-muted-foreground",
-                // Below `sm` the same is true of any tab the strip drops.
-                mobileOnlyTabActive && "max-sm:bg-muted max-sm:text-foreground",
-              )}
-              title={
-                activeFormat
-                  ? t("viewTabs.moreViewsActive", { name: t(activeFormat.labelKey) })
-                  : t("viewTabs.moreViews")
-              }
-            >
-              <MoreVertical className="h-3.5 w-3.5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
-              {MOBILE_ONLY_TABS.map(({ id, labelKey, Icon, path }) => {
-                const isActive = currentView === id;
-                return (
-                  <DropdownMenuItem
-                    key={id}
-                    onClick={() => {
-                      if (!isActive) {
-                        navigate(path(wsSlug, projectSlug));
-                      }
-                    }}
-                    className="gap-2 sm:hidden"
-                    aria-current={isActive ? "page" : undefined}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span className="flex-1">{t(labelKey)}</span>
-                    {isActive && <Check className="h-3.5 w-3.5" />}
-                  </DropdownMenuItem>
-                );
-              })}
-
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                {t("viewTabs.formatsLabel")}
-              </DropdownMenuLabel>
-              {FORMATS.map(({ id, labelKey, Icon, path }) => {
-                const isActive = currentView === id;
-                return (
-                  <DropdownMenuItem
-                    key={id}
-                    onClick={() => {
-                      if (!isActive) {
-                        navigate(path(wsSlug, projectSlug));
-                      }
-                    }}
-                    className="gap-2"
-                    aria-current={isActive ? "page" : undefined}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span className="flex-1">{t(labelKey)}</span>
-                    {isActive && <Check className="h-3.5 w-3.5" />}
-                  </DropdownMenuItem>
-                );
-              })}
-
-              {/* Saved views need a project to scope them to. */}
-              {projectId && (
-                <>
-                  <DropdownMenuSeparator />
-
-                  {/* Docs has no server-side saved-view type, so it can't be
-                      saved as one. */}
-                  {isSavedViewType(currentView) && (
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                {overflowTabs.map(({ id, labelKey, Icon, path }) => {
+                  const isActive = currentView === id;
+                  return (
                     <DropdownMenuItem
-                      onClick={() => setSaveDialogOpen(true)}
+                      key={id}
+                      onClick={() => {
+                        if (!isActive) {
+                          navigate(path(wsSlug, projectSlug));
+                        }
+                      }}
                       className="gap-2"
+                      aria-current={isActive ? "page" : undefined}
                     >
-                      <BookmarkPlus className="h-3.5 w-3.5" />
-                      {t("viewTabs.saveCurrent")}
+                      <Icon className="h-3.5 w-3.5" />
+                      <span className="flex-1">{t(labelKey)}</span>
+                      {isActive && <Check className="h-3.5 w-3.5" />}
                     </DropdownMenuItem>
-                  )}
+                  );
+                })}
 
-                  {/* Reset filters — board only; list/timeline/calendar don't
-                      report their filter state into currentViewState. */}
-                  {currentView === "board" && (
+                {overflowTabs.length > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {t("viewTabs.formatsLabel")}
+                </DropdownMenuLabel>
+                {FORMATS.map(({ id, labelKey, Icon, path }) => {
+                  const isActive = currentView === id;
+                  return (
                     <DropdownMenuItem
-                      onClick={filtersAtDefault ? undefined : handleResetFilters}
-                      aria-disabled={filtersAtDefault}
-                      className={cn(
-                        "gap-2",
-                        filtersAtDefault && "pointer-events-none opacity-50",
-                      )}
+                      key={id}
+                      onClick={() => {
+                        if (!isActive) {
+                          navigate(path(wsSlug, projectSlug));
+                        }
+                      }}
+                      className="gap-2"
+                      aria-current={isActive ? "page" : undefined}
                     >
-                      <FilterX className="h-3.5 w-3.5" />
-                      {t("viewTabs.resetFilters")}
+                      <Icon className="h-3.5 w-3.5" />
+                      <span className="flex-1">{t(labelKey)}</span>
+                      {isActive && <Check className="h-3.5 w-3.5" />}
                     </DropdownMenuItem>
-                  )}
+                  );
+                })}
 
-                  {/* Personal views */}
-                  {personalViews.length > 0 && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {t("viewTabs.myViews")}
-                      </DropdownMenuLabel>
-                      {personalViews.map((view) => (
-                        <SavedViewRow
-                          key={view.id}
-                          view={view}
-                          onApply={() => handleApply(view)}
-                          onToggleShare={() => void handleToggleShare(view)}
-                          onDelete={() => void handleDelete(view)}
-                        />
-                      ))}
-                    </>
-                  )}
+                {/* Saved views need a project to scope them to. */}
+                {projectId && (
+                  <>
+                    <DropdownMenuSeparator />
 
-                  {/* Shared views */}
-                  {sharedViews.length > 0 && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {t("viewTabs.sharedViews")}
-                      </DropdownMenuLabel>
-                      {sharedViews.map((view) => (
-                        <SavedViewRow
-                          key={view.id}
-                          view={view}
-                          onApply={() => handleApply(view)}
-                          onToggleShare={() => void handleToggleShare(view)}
-                          onDelete={() => void handleDelete(view)}
-                        />
-                      ))}
-                    </>
-                  )}
+                    {/* Docs has no server-side saved-view type, so it can't be
+                        saved as one. */}
+                    {isSavedViewType(currentView) && (
+                      <DropdownMenuItem
+                        onClick={() => setSaveDialogOpen(true)}
+                        className="gap-2"
+                      >
+                        <BookmarkPlus className="h-3.5 w-3.5" />
+                        {t("viewTabs.saveCurrent")}
+                      </DropdownMenuItem>
+                    )}
 
-                  {!hasViews && (
-                    <div className="px-2 py-2 text-center text-xs text-muted-foreground">
-                      {t("viewTabs.noSavedViews")}
-                    </div>
-                  )}
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                    {/* Reset filters — board only; list/timeline/calendar don't
+                        report their filter state into currentViewState. */}
+                    {currentView === "board" && (
+                      <DropdownMenuItem
+                        onClick={filtersAtDefault ? undefined : handleResetFilters}
+                        aria-disabled={filtersAtDefault}
+                        className={cn(
+                          "gap-2",
+                          filtersAtDefault && "pointer-events-none opacity-50",
+                        )}
+                      >
+                        <FilterX className="h-3.5 w-3.5" />
+                        {t("viewTabs.resetFilters")}
+                      </DropdownMenuItem>
+                    )}
+
+                    {/* Personal views */}
+                    {personalViews.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          {t("viewTabs.myViews")}
+                        </DropdownMenuLabel>
+                        {personalViews.map((view) => (
+                          <SavedViewRow
+                            key={view.id}
+                            view={view}
+                            onApply={() => handleApply(view)}
+                            onToggleShare={() => void handleToggleShare(view)}
+                            onDelete={() => void handleDelete(view)}
+                          />
+                        ))}
+                      </>
+                    )}
+
+                    {/* Shared views */}
+                    {sharedViews.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          {t("viewTabs.sharedViews")}
+                        </DropdownMenuLabel>
+                        {sharedViews.map((view) => (
+                          <SavedViewRow
+                            key={view.id}
+                            view={view}
+                            onApply={() => handleApply(view)}
+                            onToggleShare={() => void handleToggleShare(view)}
+                            onDelete={() => void handleDelete(view)}
+                          />
+                        ))}
+                      </>
+                    )}
+
+                    {!hasViews && (
+                      <div className="px-2 py-2 text-center text-xs text-muted-foreground">
+                        {t("viewTabs.noSavedViews")}
+                      </div>
+                    )}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </div>
 

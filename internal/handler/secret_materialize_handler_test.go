@@ -142,7 +142,7 @@ func TestSecretMaterializeHandler_EmptyResultIsEmptyArrayNotNull(t *testing.T) {
 	assert.Empty(t, out)
 }
 
-// --- Issuance journal (#1c9f527d) -----------------------------------------
+// --- Issuance journal -----------------------------------------
 
 // Values chosen so that no legitimate audit field can contain them by
 // accident: a hit on either one in the raw journal JSON means a value leaked.
@@ -278,4 +278,20 @@ func TestMaterializeAudit_ResolveErrorWritesNoEntry(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Empty(t, act.entries, "nothing was handed out, so nothing to journal")
+}
+
+func TestSecretMaterializeHandler_KeepDegradedIs503WithReasonAndNoValues(t *testing.T) {
+	svc := &mockMaterializationService{
+		resolve: func(context.Context, uuid.UUID, *uuid.UUID, *uuid.UUID) ([]domain.MaterializedSecret, error) {
+			return nil, &domain.SecretDegradedError{Name: "GITHUB_TOKEN", Reason: "keep unavailable: status 503"}
+		},
+	}
+	log := &recordingActivityLog{}
+	h := NewSecretMaterializeHandler(svc, log)
+
+	rec := postMaterialize(t, h, `{"workspace_id":"`+uuid.New().String()+`"}`)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), "GITHUB_TOKEN")
+	assert.Contains(t, rec.Body.String(), "keep unavailable: status 503")
 }

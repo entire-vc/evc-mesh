@@ -5,16 +5,16 @@ import { cn } from "@/lib/cn";
 
 // 10 deterministic background colors for named assignees
 const AVATAR_COLORS = [
-  "bg-teal-500 text-white",
-  "bg-violet-500 text-white",
-  "bg-sky-500 text-white",
-  "bg-orange-500 text-white",
-  "bg-emerald-500 text-white",
-  "bg-pink-500 text-white",
-  "bg-amber-500 text-white",
-  "bg-indigo-500 text-white",
-  "bg-rose-500 text-white",
-  "bg-cyan-500 text-white",
+  "bg-avatar-1 text-white",
+  "bg-avatar-2 text-white",
+  "bg-avatar-3 text-white",
+  "bg-avatar-4 text-white",
+  "bg-avatar-5 text-white",
+  "bg-avatar-6 text-white",
+  "bg-avatar-7 text-white",
+  "bg-avatar-8 text-white",
+  "bg-avatar-9 text-white",
+  "bg-avatar-10 text-white",
 ] as const;
 
 /**
@@ -44,17 +44,22 @@ export interface AssigneeAvatarProps {
   className?: string;
 }
 
-export function AssigneeAvatar({
-  id,
+/** Looks the short tag up in the agent directory unless `shortTag` is passed. */
+export function AssigneeAvatar({ id, shortTag, type = "unassigned", ...rest }: AssigneeAvatarProps) {
+  const savedTag = useAgentShortTag(shortTag === undefined ? id : undefined, type);
+  return <AssigneeAvatarView {...rest} type={type} shortTag={shortTag === undefined ? savedTag : shortTag} />;
+}
+
+/** Pure variant: draws from props only, never touches a store (slot views use it). */
+export function AssigneeAvatarView({
   name,
   shortTag,
   type = "unassigned",
   size = "md",
   className,
-}: AssigneeAvatarProps) {
+}: Omit<AssigneeAvatarProps, "id">) {
   const { t } = useTranslation("settings");
-  const savedTag = useAgentShortTag(id, type);
-  const tag = shortTag === undefined ? savedTag : shortTag;
+  const tag = shortTag;
   const baseClasses = cn(
     "inline-flex shrink-0 items-center justify-center rounded-full font-medium select-none",
     sizeClasses[size],
@@ -80,7 +85,7 @@ export function AssigneeAvatar({
   if (type === "agent") {
     return (
       <span
-        className={cn(baseClasses, "bg-violet-100 text-violet-600 dark:bg-violet-900 dark:text-violet-300", className)}
+        className={cn(baseClasses, "bg-tone-violet-100 text-tone-violet-600 dark:bg-tone-violet-900 dark:text-tone-violet-300", className)}
         title={t("avatar.aiAgent")}
         aria-label={t("avatar.aiAgent")}
       >
@@ -93,7 +98,7 @@ export function AssigneeAvatar({
   if (type === "user") {
     return (
       <span
-        className={cn(baseClasses, "bg-sky-100 text-sky-600 dark:bg-sky-900 dark:text-sky-300", className)}
+        className={cn(baseClasses, "bg-tone-sky-100 text-tone-sky-600 dark:bg-tone-sky-900 dark:text-tone-sky-300", className)}
         title={t("avatar.user")}
         aria-label={t("avatar.user")}
       >

@@ -247,7 +247,7 @@ type updateAgentRequest struct {
 	Model              *string           `json:"model"` // "" clears (NULL)
 	// ShortTag binds as RawMessage, not *string, because encoding/json
 	// treats a JSON null as a no-op on a pointer — exactly like an absent
-	// field — while the contract (Mesh aa1b4845) distinguishes them: absent
+	// field — while the contract (Mesh an internal ticket) distinguishes them: absent
 	// preserves the stored value, null clears it. RawMessage keeps the two
 	// apart: nil = absent, "null" = explicit clear.
 	ShortTag json.RawMessage `json:"short_tag"`
@@ -267,7 +267,7 @@ func normalizeAgentModel(raw string) (model *string, ok bool) {
 	return &m, true
 }
 
-// normalizeAgentShortTag trims a human-authored role label (Mesh aa1b4845).
+// normalizeAgentShortTag trims a human-authored role label (Mesh an internal ticket).
 // ok=false means it is longer than domain.AgentShortTagMaxLen CHARACTERS —
 // runes, not bytes: the label is human-authored UI text («разработчик» is 12
 // chars but 24 bytes), so a byte budget would reject legal values. The
@@ -720,7 +720,7 @@ func (h *AgentHandler) GetAgentsStatus(c echo.Context) error {
 // meResponse embeds an agent row with WorkspaceID replaced by the workspace
 // the PRESENTED key actually authenticated into, and additionally carries
 // HomeWorkspaceID — the value at rest on the agents row (agent.WorkspaceID
-// before the swap). Shared by Me and UpdateMe (#606c215e).
+// before the swap). Shared by Me and UpdateMe.
 //
 // The swap is what makes "workspace_id" on this response match this
 // handler's own doc comment ("based on the API key used for auth") for a
@@ -857,7 +857,7 @@ func (h *AgentHandler) UpdateMe(c echo.Context) error {
 	// does not include workspace_id today, but the ordering here means this
 	// stays safe even if that ever changes — the row is written from the
 	// unmodified agent first, and only the in-memory copy returned below is
-	// touched. Same fix as Me, see meResponse's doc comment (#606c215e).
+	// touched. Same fix as Me, see meResponse's doc comment.
 	authWsID, err := mw.GetAgentAuthWorkspaceID(c)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, apierror.InternalError("agent auth workspace not resolved"))

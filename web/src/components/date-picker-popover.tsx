@@ -150,13 +150,13 @@ export function DatePickerPopover({
           "hover:bg-accent hover:text-accent-foreground",
           value
             ? past
-              ? "text-red-500"
+              ? "text-tone-danger-500"
               : "text-foreground"
             : "text-muted-foreground",
         )}
       >
         <Calendar
-          className={cn("h-3.5 w-3.5 shrink-0", past && value && "text-red-500")}
+          className={cn("h-3.5 w-3.5 shrink-0", past && value && "text-tone-danger-500")}
         />
         <span>{value ? formatDisplayDate(value, includeTime) : placeholder}</span>
         {showClearButton && value && (

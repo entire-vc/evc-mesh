@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/themes"
 )
 
 // localeUsers resolves users with an explicit or implicit language.
@@ -150,8 +151,8 @@ func TestRenderEventText_UserBodyPreserved(t *testing.T) {
 }
 
 func TestBuildInviteEmail_Localized(t *testing.T) {
-	assert.Contains(t, buildInviteEmail("ru", "a@b.c", "Acme", "https://x/i"), "Принять приглашение")
-	assert.Contains(t, buildInviteEmail("en", "a@b.c", "Acme", "https://x/i"), "Accept Invitation")
+	assert.Contains(t, buildInviteEmail("ru", "a@b.c", "Acme", "https://x/i", themes.DefaultBrand()), "Принять приглашение")
+	assert.Contains(t, buildInviteEmail("en", "a@b.c", "Acme", "https://x/i", themes.DefaultBrand()), "Accept Invitation")
 }
 
 type unreadRepo struct {

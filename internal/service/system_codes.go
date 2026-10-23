@@ -28,7 +28,7 @@ const (
 	// SysCodeSoftGateParked — soft-class gate: task parked in backlog with a
 	// due_date instead of triage. params: {"target": "<handle>", "hours": <int>}.
 	SysCodeSoftGateParked = "soft_gate_parked"
-	// SysCodeSecretRotationSuppressed — gate on Pavel not armed (secret-rotation
+	// SysCodeSecretRotationSuppressed — gate on Alex not armed (secret-rotation
 	// decision). params: {"reason": "<text>"}.
 	SysCodeSecretRotationSuppressed = "secret_rotation_suppressed"
 	// SysCodeEndpointGateHint — hint posted under an API/button-armed gate:

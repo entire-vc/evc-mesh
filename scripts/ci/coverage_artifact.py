@@ -24,7 +24,11 @@ import tempfile
 from diff_coverage import instrumented_blocks, parse_profile
 
 FULL_SUITE = ['./...']
-TEST_FLAGS = ['-race', '-coverprofile=coverage.out', '-covermode=atomic']
+# -timeout is explicit because go test's 10m default is per package binary and
+# internal/repository/postgres under -race sums to ~600s of DB round-trips on a
+# loaded runner (a review: 598s of test bodies in a 600s budget, 219s when idle).
+# The stall watchdog, not this limit, is what catches a wedge.
+TEST_FLAGS = ['-race', '-timeout=30m', '-coverprofile=coverage.out', '-covermode=atomic']
 TEST_ARGS = [*FULL_SUITE, *TEST_FLAGS]
 FULL_SUITE_STALL_SECONDS = '420'
 # Keep the target-feature selectors in step with `go help environment`.
@@ -153,7 +157,7 @@ def run_full_suite(profile: Path, manifest: Path, packages: list[str] | None = N
     # `go test ./...` prints a package's result only when that package finishes,
     # so the watchdog's quiet window is "longest package, started alongside its
     # siblings". internal/repository/postgres and internal/handler run ~85s each
-    # on an idle runner but took 140-184s on a loaded one (main #10371, !1166
+    # on an idle runner but took 140-184s on a loaded one (main #10371, a review
     # #10368: stack showed a live DB call in [IO wait] under a minute, not a
     # wedge), and the default 180s window killed healthy runs. A real wedge is
     # minutes of nothing until the job timeout, so 420s still catches it.

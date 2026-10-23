@@ -21,7 +21,7 @@ function makeComment(overrides: Partial<DocumentComment> = {}): DocumentComment 
     parent_comment_id: null,
     author_id: ME,
     author_type: "user",
-    author_name: "Pavel",
+    author_name: "Alex",
     body: "This paragraph contradicts the one above.",
     anchor: {
       exact: "the deploy is blocked",
@@ -117,12 +117,12 @@ describe("DocCommentRail — a thread", () => {
       id: "c2",
       parent_comment_id: "c1",
       author_id: SOMEBODY_ELSE,
-      author_name: "Howard",
+      author_name: "Harper",
       body: "Agreed, I will fix it.",
     });
     renderRail(makeController({ threads: [makeThread(root, "anchored", [reply])] }));
     expect(screen.getByText("Agreed, I will fix it.")).toBeInTheDocument();
-    expect(screen.getByText("Howard")).toBeInTheDocument();
+    expect(screen.getByText("Harper")).toBeInTheDocument();
   });
 
   it("posts a reply against the thread root", async () => {
@@ -149,14 +149,14 @@ describe("DocCommentRail — who may do what", () => {
   it("does not offer edit or delete on somebody else's", () => {
     // The server refuses both for a non-author, so offering them would be
     // offering a 403.
-    const theirs = makeComment({ author_id: SOMEBODY_ELSE, author_name: "Howard" });
+    const theirs = makeComment({ author_id: SOMEBODY_ELSE, author_name: "Harper" });
     renderRail(makeController({ threads: [makeThread(theirs)] }));
     expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
 
   it("offers resolve on somebody else's thread — resolving is not ownership", () => {
-    const theirs = makeComment({ author_id: SOMEBODY_ELSE, author_name: "Howard" });
+    const theirs = makeComment({ author_id: SOMEBODY_ELSE, author_name: "Harper" });
     renderRail(makeController({ threads: [makeThread(theirs)] }));
     expect(screen.getByRole("button", { name: /resolve/i })).toBeInTheDocument();
   });
@@ -197,7 +197,7 @@ describe("DocCommentRail — resolve and unresolve", () => {
       resolved_at: "2026-08-19T12:00:00Z",
       resolved_by: SOMEBODY_ELSE,
       resolved_by_type: "user",
-      resolved_by_name: "Howard",
+      resolved_by_name: "Harper",
     });
     const onChange = vi.fn();
     const controller = makeController({ threads: [makeThread(resolved)] });
@@ -216,7 +216,7 @@ describe("DocCommentRail — resolve and unresolve", () => {
       />,
     );
     const thread = screen.getByTestId("doc-comment-thread");
-    expect(within(thread).getByText(/Resolved by Howard/)).toBeInTheDocument();
+    expect(within(thread).getByText(/Resolved by Harper/)).toBeInTheDocument();
   });
 
   it("offers unresolve on a resolved thread", async () => {

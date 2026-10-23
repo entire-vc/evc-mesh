@@ -11,7 +11,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// Refusal codes for an agent-key arm of human_gate outside the marker path (task #40a24454).
+// Refusal codes for an agent-key arm of human_gate outside the marker path.
 const (
 	GateRefusalMarkerRequired   = "gate_marker_required"
 	GateRefusalAddresseeMissing = "gate_addressee_required"

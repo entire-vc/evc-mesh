@@ -14,7 +14,7 @@ describe("agentTypeDisplay", () => {
   it("falls back to the raw string as label for an unrecognized type", () => {
     expect(agentTypeDisplay("some-future-harness")).toEqual({
       label: "some-future-harness",
-      color: "bg-gray-100 text-gray-700",
+      color: "bg-tone-neutral-100 text-tone-neutral-700",
     });
   });
 });

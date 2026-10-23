@@ -84,7 +84,7 @@ func TestHandlePipeline_StoresPipelineSHA(t *testing.T) {
 	assert.Equal(t, "bbb", got.PipelineSHA())
 }
 
-// Red control: without the url comparison, a pipeline of another project's !1285
+// Red control: without the url comparison, a pipeline of another a review
 // would paint this link.
 func TestHandlePipeline_OtherProjectsSameIIDIsNotTouched(t *testing.T) {
 	h := newHarness(t)

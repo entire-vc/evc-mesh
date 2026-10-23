@@ -10,8 +10,11 @@ import (
 	"net/smtp"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/entire-vc/evc-mesh/internal/config"
 	"github.com/entire-vc/evc-mesh/internal/i18n"
+	"github.com/entire-vc/evc-mesh/internal/themes"
 )
 
 // ErrEmailNotConfigured is returned by send operations when no SMTP host is
@@ -42,8 +45,39 @@ type EmailService interface {
 	SendNotification(ctx context.Context, toEmail, subject, htmlBody string) error
 }
 
+// BrandSource gives the look of the instance (workspaceID nil) or of a
+// workspace for outgoing mail. It never fails; see themes.Service.BrandFor.
+type BrandSource interface {
+	BrandFor(ctx context.Context, workspaceID *uuid.UUID) themes.Brand
+}
+
+// EmailOption configures NewEmailService.
+type EmailOption func(*smtpEmailService)
+
+// WithBrandSource themes the emails. Without it they use mesh-default.
+func WithBrandSource(src BrandSource) EmailOption {
+	return func(s *smtpEmailService) { s.brands = src }
+}
+
+type emailWorkspaceKey struct{}
+
+// WithEmailWorkspace marks ctx as sending on behalf of a workspace: an
+// invitation is written in the theme of the workspace that invites, every
+// other mail in the theme of the instance.
+func WithEmailWorkspace(ctx context.Context, workspaceID uuid.UUID) context.Context {
+	return context.WithValue(ctx, emailWorkspaceKey{}, workspaceID)
+}
+
 type smtpEmailService struct {
-	cfg config.EmailConfig
+	cfg    config.EmailConfig
+	brands BrandSource
+}
+
+func (s *smtpEmailService) brand(ctx context.Context, ws *uuid.UUID) themes.Brand {
+	if s.brands == nil {
+		return themes.DefaultBrand()
+	}
+	return s.brands.BrandFor(ctx, ws)
 }
 
 // sendMailFunc wraps smtp.SendMail so tests can capture the envelope sender
@@ -53,13 +87,17 @@ var sendMailFunc = smtp.SendMail
 // NewEmailService creates an EmailService backed by SMTP.
 // When cfg.Host is empty, email sending is disabled and send operations report
 // ErrEmailNotConfigured so callers can offer the invite link directly instead.
-func NewEmailService(cfg config.EmailConfig) EmailService {
-	return &smtpEmailService{cfg: cfg}
+func NewEmailService(cfg config.EmailConfig, opts ...EmailOption) EmailService {
+	s := &smtpEmailService{cfg: cfg}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 func (s *smtpEmailService) Enabled() bool { return s.cfg.Host != "" }
 
-func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName, inviteURL, locale string) error {
+func (s *smtpEmailService) SendInvite(ctx context.Context, toEmail, workspaceName, inviteURL, locale string) error {
 	if !s.Enabled() {
 		// The accept URL carries the invite token in its path; anyone holding it
 		// can join the workspace. Logs are routinely shipped to collectors and
@@ -70,7 +108,11 @@ func (s *smtpEmailService) SendInvite(_ context.Context, toEmail, workspaceName,
 	}
 
 	subject := i18n.T(locale, "invite.email.subject", map[string]any{"workspace": workspaceName})
-	body := buildInviteEmail(locale, toEmail, workspaceName, inviteURL)
+	var ws *uuid.UUID
+	if id, ok := ctx.Value(emailWorkspaceKey{}).(uuid.UUID); ok {
+		ws = &id
+	}
+	body := buildInviteEmail(locale, toEmail, workspaceName, inviteURL, s.brand(ctx, ws))
 	if err := s.send(toEmail, subject, body); err != nil {
 		return fmt.Errorf("email_service.SendInvite: %w", err)
 	}
@@ -191,43 +233,62 @@ func (s *smtpEmailService) parseFrom() (envelope, header string, err error) {
 	return addr.Address, s.cfg.From, nil
 }
 
+// emailOpen starts an email body in the colours of the theme: a header with
+// the logo tile (the product mark in the theme's primary colour; the product
+// name is not themed) above the content. Brand colours are #rrggbb strings
+// produced by themes.BrandOf, so they are safe to embed in a style attribute.
+func emailOpen(b *strings.Builder, br themes.Brand) {
+	fmt.Fprintf(b, `<!DOCTYPE html><html><body style="margin:0;background:%s;font-family:sans-serif;color:%s"><div style="max-width:480px;margin:40px auto;padding:0 16px">`, br.Background, br.Foreground)
+	fmt.Fprintf(b, `<table role="presentation" style="border-collapse:collapse;margin-bottom:24px"><tr><td style="width:32px;height:32px;background:%s;color:%s;text-align:center;font-weight:700;font-size:16px;border-radius:8px">M</td><td style="padding-left:10px;font-weight:600;font-size:16px;color:%s">Mesh</td></tr></table>`, br.Primary, br.PrimaryForeground, br.Foreground)
+}
+
+func emailButton(b *strings.Builder, br themes.Brand, url, label string) {
+	fmt.Fprintf(b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:%s;color:%s;text-decoration:none;border-radius:6px;font-weight:600">%s</a>`, url, br.Primary, br.PrimaryForeground, label)
+}
+
+func emailClose(b *strings.Builder, br themes.Brand, footer string) {
+	fmt.Fprintf(b, `<p style="font-size:12px;color:%s;border-top:1px solid %s;padding-top:12px">%s</p>`, br.MutedForeground, br.Border, footer)
+	b.WriteString(`</div></body></html>`)
+}
+
 // buildNotificationEmail renders the HTML body for a task-event notification
 // email. title and body come from the triggering event (task title, comment
 // text, ...) — user-authored content reaching this template, not markup we
 // wrote — so both are HTML-escaped before being embedded; buildInviteEmail's
 // workspaceName does not carry that risk (workspace names are not rendered
 // verbatim from a comment body) so it is not a precedent to follow here.
-// taskURL is optional: when empty, no link button is rendered.
-func buildNotificationEmail(locale, title, body, taskURL string) string {
+// taskURL is optional: when empty, no link button is rendered. br is the
+// instance theme's brand.
+func buildNotificationEmail(locale, title, body, taskURL string, br themes.Brand) string {
 	var b strings.Builder
-	b.WriteString(`<!DOCTYPE html><html><body style="font-family:sans-serif;color:#111;max-width:480px;margin:40px auto;padding:0 16px">`)
+	emailOpen(&b, br)
 	fmt.Fprintf(&b, `<h2 style="font-size:18px">%s</h2>`, html.EscapeString(title))
 	if body != "" {
 		// Newlines survive html.EscapeString (it only escapes <>&'"), so this
 		// still carries raw \n at this point — send() converts them to <br>
 		// right before the message is built, which is also where CRLF is
 		// stripped from every field reaching the wire.
-		fmt.Fprintf(&b, `<p style="color:#555">%s</p>`, html.EscapeString(body))
+		fmt.Fprintf(&b, `<p style="color:%s">%s</p>`, br.MutedForeground, html.EscapeString(body))
 	}
 	if taskURL != "" {
-		fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">%s</a>`, taskURL, html.EscapeString(i18n.T(locale, "notif.email.view_task", nil)))
+		emailButton(&b, br, taskURL, html.EscapeString(i18n.T(locale, "notif.email.view_task", nil)))
 	}
-	fmt.Fprintf(&b, `<p style="font-size:12px;color:#999">%s</p>`, i18n.T(locale, "notif.email.footer", nil))
-	b.WriteString(`</body></html>`)
+	emailClose(&b, br, i18n.T(locale, "notif.email.footer", nil))
 	return b.String()
 }
 
-func buildInviteEmail(locale, toEmail, workspaceName, inviteURL string) string {
+// buildInviteEmail renders the invitation in br, the brand of the inviting
+// workspace's effective theme.
+func buildInviteEmail(locale, toEmail, workspaceName, inviteURL string, br themes.Brand) string {
 	_ = toEmail
 	var b strings.Builder
-	b.WriteString(`<!DOCTYPE html><html><body style="font-family:sans-serif;color:#111;max-width:480px;margin:40px auto;padding:0 16px">`)
+	emailOpen(&b, br)
 	// The heading template is plain text; the workspace name is the only part
 	// that is not ours, and it keeps its <strong> wrapper as before.
 	heading := i18n.T(locale, "invite.email.heading", map[string]any{"workspace": "<strong>" + workspaceName + "</strong>"})
 	fmt.Fprintf(&b, `<h2 style="font-size:20px">%s</h2>`, heading)
-	fmt.Fprintf(&b, `<p style="color:#555">%s</p>`, i18n.T(locale, "invite.email.body", nil))
-	fmt.Fprintf(&b, `<a href=%q style="display:inline-block;margin:24px 0;padding:12px 24px;background:#18181b;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">%s</a>`, inviteURL, i18n.T(locale, "invite.email.button", nil))
-	fmt.Fprintf(&b, `<p style="font-size:12px;color:#999">%s</p>`, i18n.T(locale, "invite.email.expiry", nil))
-	b.WriteString(`</body></html>`)
+	fmt.Fprintf(&b, `<p style="color:%s">%s</p>`, br.MutedForeground, i18n.T(locale, "invite.email.body", nil))
+	emailButton(&b, br, inviteURL, i18n.T(locale, "invite.email.button", nil))
+	emailClose(&b, br, i18n.T(locale, "invite.email.expiry", nil))
 	return b.String()
 }

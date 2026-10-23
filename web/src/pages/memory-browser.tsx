@@ -39,19 +39,19 @@ import { apiErrorMessage } from "@/lib/api-error";
 function scopeBadgeClass(scope: Memory["scope"]): string {
   switch (scope) {
     case "workspace":
-      return "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300";
+      return "bg-tone-info-100 text-tone-info-700 dark:bg-tone-info-900 dark:text-tone-info-300";
     case "project":
-      return "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300";
+      return "bg-tone-success-100 text-tone-success-700 dark:bg-tone-success-900 dark:text-tone-success-300";
     case "agent":
-      return "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300";
+      return "bg-tone-purple-100 text-tone-purple-700 dark:bg-tone-purple-900 dark:text-tone-purple-300";
   }
 }
 
 
 function relevanceBarClass(relevance: number): string {
-  if (relevance >= 0.7) return "bg-green-500";
-  if (relevance >= 0.3) return "bg-yellow-500";
-  return "bg-red-400";
+  if (relevance >= 0.7) return "bg-tone-success-500";
+  if (relevance >= 0.3) return "bg-tone-attention-500";
+  return "bg-tone-danger-400";
 }
 
 // ---------------------------------------------------------------------------

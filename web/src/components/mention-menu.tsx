@@ -71,9 +71,9 @@ export function MentionMenu({
           }}
         >
           {m.kind === "agent" ? (
-            <Bot className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+            <Bot className="h-3.5 w-3.5 shrink-0 text-tone-violet-500" />
           ) : (
-            <User className="h-3.5 w-3.5 shrink-0 text-sky-500" />
+            <User className="h-3.5 w-3.5 shrink-0 text-tone-sky-500" />
           )}
           <span className="font-mono text-xs text-muted-foreground">@{m.slug}</span>
           <span className="truncate">{m.display_name}<AgentShortTag tag={m.kind === "agent" ? m.short_tag : null} /></span>

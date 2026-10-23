@@ -314,7 +314,7 @@ export interface Task {
   /** Populated only by GET /tasks/:id when human_gate is true — not on list rows. */
   human_gate_info?: HumanGateInfo | null;
   /**
-   * The "false-open" graph signal (task #c80fe88f): sent on both list and
+   * The "false-open" graph signal: sent on both list and
    * detail responses for any parent task (subtask_count > 0) whose own
    * status is still open, regardless of whether either flag has actually
    * fired yet — the board decides what to render, the server always reports
@@ -323,7 +323,7 @@ export interface Task {
    */
   false_open?: FalseOpenSignal | null;
   /**
-   * Live state of the work behind the card (task #813725af, parent #4d9b9828).
+   * Live state of the work behind the card (an internal ticket, parent an internal ticket).
    * Separate from the Mesh status on purpose: a todo card can be worked on right
    * now and an in_progress card can be waiting. Absent/null until the server
    * (or fiddler) has a value.
@@ -379,7 +379,7 @@ export interface HumanGateInfo {
 
 /**
  * See internal/domain/task.go FalseOpenSignal. Two mutually exclusive flags
- * on purpose, not one merged bool — #65dc5949 (one open BACKLOG child) must
+ * on purpose, not one merged bool — an internal ticket (one open BACKLOG child) must
  * light up only_parked_children_left, never all_children_closed, or the
  * signal equally mislabels umbrellas correctly blocked on a live parked
  * dependency.
@@ -455,7 +455,7 @@ export interface CommentViewPage {
   next_cursor: string | null;
   // Tie-breaker paired with next_cursor: created_at alone is not unique (a
   // page boundary landing inside a group of same-timestamp comments would
-  // otherwise silently drop the rest of the group — #c6dc694e). Echo both
+  // otherwise silently drop the rest of the group — an internal ticket). Echo both
   // back as before/before_id on the next "Load more" request.
   next_cursor_id: string | null;
 }
@@ -490,7 +490,7 @@ export interface Agent {
   // TeamDirectoryAgent.capabilities below, normalize with asStringArray.
   capabilities: Record<string, unknown> | string[];
   responsibility_zone?: string;
-  // A single name/handle (e.g. "Garfield"), not a list — matches the MCP
+  // A single name/handle (e.g. "Gary"), not a list — matches the MCP
   // tool and the YAML team-config contract (TeamAgentConfig.EscalationTo).
   escalation_to?: string | null;
   accepts_from?: string[];

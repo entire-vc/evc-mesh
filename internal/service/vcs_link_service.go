@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -26,6 +29,22 @@ type vcsLinkService struct {
 	taskSvc     TaskService
 	commentSvc  CommentService
 	projectRepo repository.ProjectRepository
+	// pipelineSource resolves a per-workspace GitLab client to read an MR's
+	// head pipeline when the MR merges; nil disables that sync.
+	pipelineSource func(ctx context.Context, workspaceID uuid.UUID) (MRHeadPipelineSource, bool)
+}
+
+// MRHeadPipelineSource reads the head pipeline of a GitLab merge request.
+// ok=false with a nil error means the MR has no pipeline.
+type MRHeadPipelineSource interface {
+	GetMergeRequestHeadPipeline(ctx context.Context, projectPath string, iid int) (gitlabapi.HeadPipeline, bool, error)
+}
+
+// WithVCSMRPipelineSource lets the merge webhook pull the MR's head pipeline,
+// so pipeline_status does not depend on a Pipeline Hook that may never have
+// reached a link (the link is created by the merge event itself).
+func WithVCSMRPipelineSource(f func(ctx context.Context, workspaceID uuid.UUID) (MRHeadPipelineSource, bool)) VCSLinkServiceOption {
+	return func(s *vcsLinkService) { s.pipelineSource = f }
 }
 
 // VCSLinkServiceOption configures optional dependencies on vcsLinkService.
@@ -51,14 +70,14 @@ func WithVCSTaskService(svc TaskService) VCSLinkServiceOption {
 }
 
 // WithVCSCommentService injects the comment service used to post system
-// auto-transition comments authored as Garfield.
+// auto-transition comments authored as Gary.
 func WithVCSCommentService(svc CommentService) VCSLinkServiceOption {
 	return func(s *vcsLinkService) { s.commentSvc = svc }
 }
 
 // WithVCSProjectRepo injects the project repository used to look up a
 // resolved task's workspace, so webhook task-ref resolution can be scoped to
-// the workspace whose secret validated the request (#839b9897). Optional in
+// the workspace whose secret validated the request. Optional in
 // the same sense the others are documented to be: without it, workspace
 // scoping fails closed (taskInWorkspace refuses rather than guesses) for any
 // caller that actually passes a non-nil workspaceID; a caller that always
@@ -113,7 +132,7 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 	}
 
 	// PR links carry a status the done-evidence gate reads (service.MoveTask,
-	// #2697392d). A caller that omits it leaves the column "" — which is not
+	// an internal ticket). A caller that omits it leaves the column "" — which is not
 	// "open", it's "unknown", but the gate's inequality check
 	// (Status != merged && Status != closed) treats "" exactly like "open"
 	// and blocks anyway. Make that implicit behavior explicit so the stored
@@ -133,7 +152,7 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		// documented way to correct a stale/missing record — but the same
 		// call is indistinguishable in shape from declaring something merged
 		// that isn't. A gate removable by self-declaration only protects
-		// until the first agent it inconveniences (#5f7f8c6e), so record WHO
+		// until the first agent it inconveniences, so record WHO
 		// declared it and WHEN, distinguishable from a status the done-
 		// evidence gate measured itself (webhook delivery or a live GitHub
 		// check) — those never go through this branch. Merges into whatever
@@ -158,12 +177,12 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 	if explicitStatus {
 		// A caller who explicitly states the status knows something the
 		// stored row might not — most commonly, linking a PR that was
-		// already merged before the link existed (#df734dd9: no webhook
+		// already merged before the link existed (an internal ticket: no webhook
 		// will ever arrive for that after the fact) or correcting a link
 		// created before status tracking existed. Upsert so this succeeds
 		// whether or not the link already exists, instead of failing on
 		// (task_id, provider, link_type, external_id) uniqueness — the
-		// exact wall that made a3bdf4ad's rows permanently uncorrectable.
+		// exact wall that made an internal ticket's rows permanently uncorrectable.
 		// A caller that does NOT pass status keeps the plain-Create path
 		// below unchanged: an accidental duplicate add still fails loudly
 		// instead of silently resetting an existing 'merged' row to 'open'.
@@ -185,7 +204,7 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 }
 
 // wrapVCSLinkRepoErr wraps a repository error for logging context, EXCEPT
-// when it is already an *apierror.Error — the repo (#0fbed572) returns
+// when it is already an *apierror.Error — the repo returns
 // apierror.Conflict directly for a caller-actionable identity collision, and
 // the HTTP layer's error mapping type-asserts on *apierror.Error rather than
 // unwrapping (handleError in task_handler.go), so wrapping it here would
@@ -253,6 +272,49 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 	return link, nil
 }
 
+// PatchShipSHAByURL resolves the pr links naming mrURL (number from the last
+// path segment, url compared after normalisation, so another project's same
+// number never matches) inside workspaceID and merges ship_sha into each.
+func (s *vcsLinkService) PatchShipSHAByURL(ctx context.Context, workspaceID uuid.UUID, mrURL, shipSHA string) ([]domain.VCSLink, error) {
+	if !domain.IsFullCommitSHA(shipSHA) {
+		return nil, apierror.BadRequest("ship_sha must be a 40-character lowercase hex string")
+	}
+	u, err := url.Parse(strings.TrimSpace(mrURL))
+	if err != nil || u.Host == "" {
+		return nil, apierror.BadRequest("url must be an absolute MR/PR url")
+	}
+	iid := path.Base(strings.TrimRight(u.Path, "/"))
+	if n, convErr := strconv.Atoi(iid); convErr != nil || n <= 0 {
+		return nil, apierror.BadRequest("url must end with the MR/PR number")
+	}
+	var links []domain.VCSLink
+	for _, provider := range []domain.VCSProvider{domain.VCSProviderGitLab, domain.VCSProviderGitHub} {
+		found, listErr := s.repo.ListByExternalID(ctx, provider, domain.VCSLinkTypePR, iid)
+		if listErr != nil {
+			return nil, fmt.Errorf("list vcs links: %w", listErr)
+		}
+		links = append(links, filterLinksByURL(found, mrURL)...)
+	}
+	links = s.filterLinksInWorkspace(ctx, workspaceID, links)
+	if len(links) == 0 {
+		return nil, apierror.NotFound("VCSLink")
+	}
+	out := make([]domain.VCSLink, 0, len(links))
+	for _, l := range links {
+		if l.ShipSHA() == shipSHA {
+			// Retried publish (glab-merge after code review): nothing to write.
+			out = append(out, l)
+			continue
+		}
+		patched, patchErr := s.PatchMetadata(ctx, l.TaskID, l.ID, map[string]any{domain.VCSLinkMetaShipSHA: shipSHA})
+		if patchErr != nil {
+			return nil, patchErr
+		}
+		out = append(out, *patched)
+	}
+	return out, nil
+}
+
 // ListByTask returns all VCS links for a given task.
 func (s *vcsLinkService) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.VCSLink, error) {
 	links, err := s.repo.ListByTask(ctx, taskID)
@@ -301,7 +363,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		// later deliveries should keep updating that link. An AMBIGUOUS payload
 		// is the opposite situation: the fresh read disagreed with itself, and
 		// reusing history would make every redelivery re-confirm whatever was
-		// stored first. That is not hypothetical — PR #433 attached itself to
+		// stored first. That is not hypothetical — a PR attached itself to
 		// the task its body quoted as an example, and because each subsequent
 		// delivery took this fallback, the refusal added one commit earlier
 		// could never undo it. A link that can only be corrected by hand is a
@@ -318,7 +380,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		// A PR number is a small, guessable integer with no workspace
 		// component — without this filter, a workspace B secret could
 		// silently reuse a stored link belonging to a task in workspace A
-		// just by naming the right number (#839b9897, same class the
+		// just by naming the right number (an internal ticket, same class the
 		// title/body/branch path is scoped against in lookupRef).
 		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, filterLinksByURL(links, ev.PRHTMLURL))
 		switch {
@@ -384,7 +446,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 }
 
 // HandleGitLabMergeRequestEvent applies the same webhook → task transition
-// policy as HandleGitHubPullRequestEvent (#bc39d781) — task-ref resolution,
+// policy as HandleGitHubPullRequestEvent — task-ref resolution,
 // link upsert, and the in_progress→review→done transition are identical
 // once GitHub's "PR" and GitLab's "MR" are reduced to (task ref, terminal
 // state); only the wire-level field names and vocabulary differ.
@@ -417,7 +479,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	if taskID == uuid.Nil && outcome == refAmbiguous {
 		// See the identical guard in HandleGitHubPullRequestEvent: an
 		// ambiguous payload must not fall back to whatever was stored for a
-		// prior delivery of the same MR — that reuse is what let PR #433
+		// prior delivery of the same MR — that reuse is what let a PR
 		// stick to the wrong task irreversibly.
 		log.Printf("[vcs-webhook] mr=%s!%d ambiguous_task_ref: refusing to reuse any stored link for this MR",
 			ev.ProjectPath, ev.MRIID)
@@ -430,7 +492,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		}
 		// See the identical comment in HandleGitHubPullRequestEvent: an MR
 		// iid is just as guessable as a PR number, so the same workspace
-		// filter applies here (#839b9897).
+		// filter applies here.
 		links = s.filterLinksInWorkspace(ctx, ev.WorkspaceID, filterLinksByURL(links, ev.MRURL))
 		switch {
 		case len(links) == 0:
@@ -487,11 +549,41 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	}
 
 	merged := linkStatus == domain.VCSLinkStatusMerged
+	if merged {
+		s.syncMergedPipeline(ctx, ev)
+	}
 	res, err := s.applyPRTransitionPolicy(ctx, taskID, merged,
 		fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
 	s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitLab, strconv.Itoa(ev.MRIID), ev.MRURL, taskID,
 		merged, fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
 	return res, err
+}
+
+// syncMergedPipeline stores the MR's head pipeline on its links at merge time.
+// Best effort: a GitLab failure is logged and leaves pipeline_status as it was,
+// so the delivery-proof gate stays closed rather than guessing.
+func (s *vcsLinkService) syncMergedPipeline(ctx context.Context, ev GitLabWebhookEvent) {
+	if s.pipelineSource == nil || ev.ProjectPath == "" {
+		return
+	}
+	src, ok := s.pipelineSource(ctx, ev.WorkspaceID)
+	if !ok {
+		return
+	}
+	hp, found, err := src.GetMergeRequestHeadPipeline(ctx, ev.ProjectPath, ev.MRIID)
+	if err != nil {
+		log.Printf("[vcs-webhook] mr=%s!%d head pipeline sync failed: %v", ev.ProjectPath, ev.MRIID, err)
+		return
+	}
+	if !found {
+		return
+	}
+	if _, err := s.HandleGitLabPipelineEvent(ctx, GitLabPipelineEvent{
+		PipelineID: hp.ID, Status: hp.Status, SHA: hp.SHA, MRIID: ev.MRIID,
+		MRURL: ev.MRURL, ProjectPath: ev.ProjectPath, WorkspaceID: ev.WorkspaceID,
+	}); err != nil {
+		log.Printf("[vcs-webhook] mr=%s!%d store head pipeline: %v", ev.ProjectPath, ev.MRIID, err)
+	}
 }
 
 // HandleGitLabPipelineEvent records the latest pipeline state on every link
@@ -535,7 +627,7 @@ func (s *vcsLinkService) HandleGitLabPipelineEvent(ctx context.Context, ev GitLa
 // carrying role=review, see taskService.bindReviewSubject) once it reaches a
 // terminal state. The task the payload names is the work; a review of it is a
 // different card that no title, body or branch mentions, so without this the
-// webhook never reaches it (#fecda06c, #863bb5de).
+// webhook never reaches it (an internal ticket).
 //
 // Matching is by the normalised URL, not by external_id: an MR iid is only
 // unique within its project, so !19 of one repository must not settle a
@@ -592,7 +684,7 @@ func (s *vcsLinkService) closeReviewSubjects(ctx context.Context, workspaceID uu
 			log.Printf("[vcs-webhook] review-subject move task=%s: %v", l.TaskID, err)
 			continue
 		}
-		body := fmt.Sprintf("🤖 Auto: %s merged (commit `%s`) — the reviewed change is in, review card closed.", refLabel, mergeRefLabel)
+		body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q) — the reviewed change is in, review card closed.", refLabel, mergeRefLabel)
 		if cerr := s.postSystemComment(ctx, l.TaskID, body, source); cerr != nil {
 			log.Printf("[vcs-webhook] post comment failed task=%s: %v", l.TaskID, cerr)
 		}
@@ -604,7 +696,7 @@ func (s *vcsLinkService) closeReviewSubjects(ctx context.Context, workspaceID uu
 // has resolved a task and upserted its link: post a comment and stop for a
 // close-without-merge; wait for sibling PR/MR links to also go terminal;
 // otherwise move the task in_progress→review or review→done. refLabel
-// (e.g. "PR #42" / "MR !17") and mergeRefLabel (a short commit label) are
+// (e.g. "a PR" / "a review") and mergeRefLabel (a short commit label) are
 // already formatted for the auto-comment text — this function does not
 // know or care which provider it's being called for. source tags the
 // posted comment's metadata ("github-webhook" / "gitlab-webhook") so a
@@ -667,7 +759,7 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 	case domain.StatusCategoryReview:
 		targetSlug = "done"
 	default:
-		body := fmt.Sprintf("🤖 Auto: %s merged. Task in `%s`; no auto-transition.", refLabel, currentStatus.Slug)
+		body := fmt.Sprintf("🤖 Auto: %s merged. Task in %#q; no auto-transition.", refLabel, currentStatus.Slug)
 		if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
 			log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
 		}
@@ -686,7 +778,7 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 		return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug}, fmt.Errorf("move task %s to %s: %w", taskID, targetSlug, err)
 	}
 
-	body := fmt.Sprintf("🤖 Auto: %s merged (commit `%s`) → moved to %s.", refLabel, mergeRefLabel, targetSlug)
+	body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q) → moved to %s.", refLabel, mergeRefLabel, targetSlug)
 	if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
 		log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
 	}
@@ -700,7 +792,7 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 	}, nil
 }
 
-// postSystemComment writes a non-internal comment authored as Garfield.
+// postSystemComment writes a non-internal comment authored as Gary.
 // source tags which webhook triggered it ("github-webhook" /
 // "gitlab-webhook") in the comment's metadata for provenance.
 func (s *vcsLinkService) postSystemComment(ctx context.Context, taskID uuid.UUID, body, source string) error {
@@ -840,7 +932,7 @@ func (s *vcsLinkService) resolveTaskRef(ctx context.Context, workspaceID uuid.UU
 // lookupRef turns one candidate into a task id, reporting whether it named a
 // task that exists AND belongs to workspaceID (uuid.Nil skips the workspace
 // check entirely — see WebhookSecret's doc comment for when that's the
-// deliberate unscoped case vs. §839b9897's bug). A task that exists but
+// deliberate unscoped case vs. §an internal ticket's bug). A task that exists but
 // belongs to a different workspace is reported exactly like a task that
 // doesn't exist at all — the caller (resolveTaskRef) must not be able to
 // tell "wrong workspace" apart from "no such task", the same way it already
@@ -899,8 +991,8 @@ func (s *vcsLinkService) lookupRef(ctx context.Context, workspaceID uuid.UUID, r
 // For any other workspaceID this fails CLOSED: no projectRepo wired, a
 // lookup error, or a missing project all return false, never true.
 // "Couldn't verify ownership" must never be silently treated as "verified"
-// — that is exactly how #839b9897 stayed open, and the same fail-open vs.
-// fail-closed distinction CLAUDE-workflow.md §1q Правило 3 draws for the
+// — that is exactly how an internal ticket stayed open, and the same fail-open vs.
+// fail-closed distinction the team workflow guide §1q Правило 3 draws for the
 // merge train applies here.
 func (s *vcsLinkService) projectInWorkspace(ctx context.Context, projectID, workspaceID uuid.UUID) bool {
 	if workspaceID == uuid.Nil {

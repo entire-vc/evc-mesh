@@ -130,7 +130,7 @@ function useTaskSearch() {
                 task,
                 projectName: proj?.name ?? "—",
                 projectSlug: proj?.slug ?? "",
-                statusColor: colorMap.get(task.status_id) ?? "#6b7280",
+                statusColor: colorMap.get(task.status_id) ?? "var(--fallback-gray-500)",
               };
             });
           setResults(enriched);
@@ -179,7 +179,7 @@ function useTaskSearch() {
               projectName: proj.name,
               projectSlug: proj.slug,
               // Use cached status color when available; fall back to neutral gray.
-              statusColor: colorMap.get(task.status_id) ?? "#6b7280",
+              statusColor: colorMap.get(task.status_id) ?? "var(--fallback-gray-500)",
             });
           }
 

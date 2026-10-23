@@ -19,7 +19,7 @@ interface MemberState {
   // failure, 401/403/500, ...) — distinct from myRole legitimately being
   // null because the server said "not a member" (404). A denied/unknown
   // role must never look identical to "we checked and you have none":
-  // task #a935ce0f, a silent catch here hid every admin control with no
+  // an internal ticket, a silent catch here hid every admin control with no
   // explanation on a genuine transient failure.
   myRoleError: string | null;
   projectMembers: ProjectMemberWithUser[];
@@ -87,6 +87,9 @@ interface MemberState {
   removeProjectAgentMember: (projectId: string, agentId: string) => Promise<void>;
 }
 
+// Id of the newest fetchMyRole call; see the guard inside it.
+let latestMyRoleFetch = 0;
+
 export const useMemberStore = create<MemberState>((set) => ({
   workspaceMembers: [],
   myRole: null,
@@ -112,12 +115,17 @@ export const useMemberStore = create<MemberState>((set) => ({
   },
 
   fetchMyRole: async (workspaceId: string) => {
+    // Only the newest call may write: a slow answer for the workspace the user
+    // already left must not overwrite the current workspace's role.
+    const mine = ++latestMyRoleFetch;
     try {
       const me = await api<{ role: string }>(
         `/api/v1/workspaces/${workspaceId}/members/me`,
       );
+      if (mine !== latestMyRoleFetch) return;
       set({ myRole: (me?.role as WorkspaceRole) ?? null, myRoleError: null });
     } catch (err) {
+      if (mine !== latestMyRoleFetch) return;
       // 404 from this endpoint means "you have no membership row here" —
       // GetMyRole (workspace_member_service.go) maps a missing row straight
       // to NotFound. That is a genuine, known answer (no role), not a
@@ -128,7 +136,7 @@ export const useMemberStore = create<MemberState>((set) => ({
       // Anything else — a network failure (not an ApiRequestError at all),
       // 401/403/500, a malformed response — means the role is genuinely
       // unknown. Collapsing that into myRole: null with no signal is the
-      // defect task #a935ce0f reports: every admin control (invite, delete
+      // defect an internal ticket reports: every admin control (invite, delete
       // workspace, manage rules/secrets) disappears with no explanation,
       // indistinguishable from "you were never an admin".
       if (err instanceof ApiRequestError && err.status === 404) {

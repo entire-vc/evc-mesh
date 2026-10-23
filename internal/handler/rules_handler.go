@@ -171,6 +171,36 @@ func (h *RulesHandler) GetProjectWorkflowRules(c echo.Context) error {
 	return c.JSON(http.StatusOK, resp)
 }
 
+// DecideHandoff handles POST /projects/:proj_id/rules/handoff/decide.
+// The runner reports per-card facts (starts, turns, compactions, current
+// assignee, visited assignees); the server answers whether a cap is hit and who
+// gets the card next, from the project's handoff policy and assignment rules.
+// A project without the policy enabled always gets outcome "none".
+func (h *RulesHandler) DecideHandoff(c echo.Context) error {
+	projID, err := uuid.Parse(c.Param("proj_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid project_id"))
+	}
+	var facts domain.HandoffFacts
+	if err = c.Bind(&facts); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+
+	ctx := c.Request().Context()
+	wf, err := h.rulesSvc.GetProjectWorkflowRules(ctx, projID, nil)
+	if err != nil {
+		return handleError(c, err)
+	}
+	if wf == nil || wf.Handoff == nil || !wf.Handoff.Enabled {
+		return c.JSON(http.StatusOK, domain.HandoffDecision{Outcome: domain.HandoffOutcomeNone})
+	}
+	rules, err := h.rulesSvc.GetEffectiveAssignmentRules(ctx, projID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, domain.DecideHandoff(wf.Handoff, rules, facts))
+}
+
 // SetProjectWorkflowRules handles PUT /projects/:proj_id/rules/workflow
 func (h *RulesHandler) SetProjectWorkflowRules(c echo.Context) error {
 	projID, err := uuid.Parse(c.Param("proj_id"))

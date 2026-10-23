@@ -18,7 +18,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// Task #4545660b, AC "API-тест на арм/снятие".
+// an internal ticket, AC "API-тест на арм/снятие".
 //
 // Two properties are load-bearing here and are asserted separately on purpose:
 //
@@ -32,7 +32,7 @@ import (
 
 // allowingPredicateBody is the four-answer set as it arrives over JSON: a genuine stop
 // (not reversible), so these tests keep testing what they were written for rather than
-// silently turning into predicate tests (task #5d3dc714 added the requirement).
+// silently turning into predicate tests (an internal ticket added the requirement).
 func allowingPredicateBody() map[string]any {
 	return map[string]any{
 		"credential_exists":     true,
@@ -86,7 +86,7 @@ func TestArmHumanGateEndpoint_AuthorComesFromIdentityNotBody(t *testing.T) {
 			// in ArmHumanGateRequest at all, so it must be inert.
 			"gate_author": bodyClaimedAuthor.String(),
 			"predicate":   allowingPredicateBody(),
-			"addressee":   "pavel",
+			"addressee":   "alex",
 		})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -117,7 +117,7 @@ func TestArmHumanGateEndpoint_IncompleteAskIs422NamingTheField(t *testing.T) {
 	}
 
 	rec, err := armRequest(t, NewTaskHandler(mockSvc).WithCommentService(&MockCommentService{}), taskID, actorID, domain.ActorTypeAgent,
-		map[string]any{"reason": "мёржим?", "addressee": "pavel", "predicate": allowingPredicateBody()}) // no recommended_default
+		map[string]any{"reason": "мёржим?", "addressee": "alex", "predicate": allowingPredicateBody()}) // no recommended_default
 	require.NoError(t, err)
 	require.True(t, armCalled, "the request must reach validation, not be dropped earlier")
 
@@ -134,7 +134,7 @@ func TestArmHumanGateEndpoint_IncompleteAskIs422NamingTheField(t *testing.T) {
 	// unconditionally would pass the assertions above.
 	rec2, err := armRequest(t, NewTaskHandler(mockSvc).WithCommentService(&MockCommentService{}), taskID, actorID, domain.ActorTypeAgent,
 		map[string]any{"reason": "мёржим?", "recommended_default": "жду",
-			"addressee": "pavel", "predicate": allowingPredicateBody()})
+			"addressee": "alex", "predicate": allowingPredicateBody()})
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec2.Code, "the same request WITH a default must be accepted")
 }
@@ -184,7 +184,7 @@ func TestClearHumanGateEndpoint_AgentRefusedWithNamedExit(t *testing.T) {
 	assert.True(t, clearCalled, "a human on the same route does clear it")
 }
 
-// Task #40a24454: an agent key reached an armed gate through set_human_gate without the
+// an internal ticket: an agent key reached an armed gate through set_human_gate without the
 // two checks the marker path runs (human addressee, no repeat of an answered ask). Each
 // refusal below has a positive control on the same handler: the identical request from a
 // user, or with the check passing, is accepted.
@@ -196,8 +196,8 @@ func TestArmHumanGateEndpoint_AgentRefusals(t *testing.T) {
 		wantCode string
 	}{
 		{"no addressee", map[string]any{}, &service.GateArmRefusedError{Code: service.GateRefusalAddresseeMissing, Message: "addressee is required"}, "gate_addressee_required"},
-		{"addressee is an agent", map[string]any{"addressee": "bill"}, &service.GateArmRefusedError{Code: service.GateRefusalAddresseeNotUser, Message: "not a person"}, "gate_addressee_not_human"},
-		{"already answered", map[string]any{"addressee": "pavel"}, &service.GateArmRefusedError{Code: service.GateRefusalRepeatAsk, Message: "already answered"}, "repeat_ask_refused"},
+		{"addressee is an agent", map[string]any{"addressee": "beth"}, &service.GateArmRefusedError{Code: service.GateRefusalAddresseeNotUser, Message: "not a person"}, "gate_addressee_not_human"},
+		{"already answered", map[string]any{"addressee": "alex"}, &service.GateArmRefusedError{Code: service.GateRefusalRepeatAsk, Message: "already answered"}, "repeat_ask_refused"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

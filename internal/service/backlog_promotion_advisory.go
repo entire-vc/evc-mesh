@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 // backlogPassiveWaitLabels mirrors PASSIVE_WAIT_LABELS in <ops-repo>/scripts/mesh-intake-sweep.py
-// (task #00327dc6, this subtask #9f3f4064) — the label vocabulary that means "this
+// (an internal ticket, this suban internal ticket) — the label vocabulary that means "this
 // backlog card is deliberately parked, do not auto-promote it". Kept as ONE flat set,
 // unlike the Python script's ABSOLUTE_NO_PROMOTE_LABELS ⊂ PASSIVE_WAIT_LABELS split:
 // that split exists to let a passed due_date override the non-absolute half
@@ -22,7 +23,7 @@ import (
 // the full list of known gaps) — so every label below parks unconditionally here.
 var backlogPassiveWaitLabels = map[string]struct{}{
 	"kind:monitor": {}, "kind:verify": {}, "awaiting-window": {},
-	"no-pavel-triage": {}, "backlog-candidate": {},
+	"no-alex-triage": {}, "backlog-candidate": {},
 	"freeze": {}, "no-intake-promote": {}, "no-promote": {},
 	"golden": {}, "eval-harness": {},
 }
@@ -47,24 +48,24 @@ type BacklogPromotionDecision struct {
 }
 
 // BacklogPromotionAdvisoryService is the server-side, advisory-only mirror of
-// <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo promotion decision (task #00327dc6,
-// subtask #9f3f4064 — unit 1 of 4: ship advisory here, THEN a 7-day parallel-run diff
-// against the live Python sweep (#f928e5af), THEN a go/no-go on that log (#e96abbff),
-// THEN cutover + sweep retirement (#56ec28e8)).
+// <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo promotion decision (an internal ticket,
+// suban internal ticket — unit 1 of 4: ship advisory here, THEN a 7-day parallel-run diff
+// against the live Python sweep, THEN a go/no-go on that log,
+// THEN cutover + sweep retirement).
 //
 // SweepAdvisory NEVER calls MoveTask and NEVER posts a comment — counts+logs only, per
-// #9f3f4064's own description ("deployed in advisory mode only ... never moves a
+// an internal ticket's own description ("deployed in advisory mode only ... never moves a
 // task"). It reproduces the sweep's two central, previously-incident-causing
 // distinctions:
 //
 //   - a task DEMOTED into backlog from a working status, with NO dependencies, is a
 //     deliberate park and must not be promoted just because all-deps-cleared is
-//     vacuously true for an empty dependency set (#b832d451: the sweep once undid such
+//     vacuously true for an empty dependency set (an internal ticket: the sweep once undid such
 //     a park in 26 minutes);
 //   - that demotion-park guard must NOT fire on a task that HAS dependencies — with
 //     real deps, "promote once they clear" is itself the informative event, and
 //     mesh-intake-sweep.py's was_deliberately_parked() deliberately returns false the
-//     moment dep_ids is non-empty, before ever looking at the activity log (#bbf3db92:
+//     moment dep_ids is non-empty, before ever looking at the activity log (an internal ticket:
 //     a demoted, parented, dependency-bearing card was re-promoted twice over 7.5h by
 //     the live sweep — the label route is what protects that class, not the
 //     demotion-detector). A naive port that checks "last transition = demotion" WITHOUT
@@ -73,18 +74,18 @@ type BacklogPromotionDecision struct {
 //     backlog_promotion_advisory_test.go, which exists specifically to catch that
 //     mistake before it ships.
 //
-// Parity with the sweep (#c15c503a, #d70b6815): umbrella-with-open-children, human-gate (cheap path), parent-gate, eval-fixture
+// Parity with the sweep (an internal ticket): umbrella-with-open-children, human-gate (cheap path), parent-gate, eval-fixture
 // parent, ABSOLUTE_NO_PROMOTE labels and the due_date / wake:<type> overrides live in
 // backlog_promotion_gates.go, ported function-for-function. Still NOT covered:
 //
 // server holds where the sweep promotes (safe direction, costs a delay):
-//   - the comment-aware release tiers of is_human_gated (Pavel answered → un-freeze);
+//   - the comment-aware release tiers of is_human_gated (Alex answered → un-freeze);
 //   - the QUEUE-BEHIND lift of a passive-wait label; wake-condition comment types.
 //
 // server would PROMOTE where the sweep holds (UNSAFE — enforcing must not flip until
 // each is ported or measured at 0 in the divergence journal):
 //   - epic-candidate-assigned-to-a-user skip (is_epic_candidate);
-//   - Pavel backlog-freeze-via-comment-phrase (has_user_backlog_freeze) — this rule
+//   - Alex backlog-freeze-via-comment-phrase (has_user_backlog_freeze) — this rule
 //     reads no comments;
 //   - the per-assignee promotion cap within one sweep tick.
 type BacklogPromotionAdvisoryService interface {
@@ -98,6 +99,19 @@ type backlogPromotionAdvisoryService struct {
 	activityRepo repository.ActivityLogRepository
 	projectRepo  repository.ProjectRepository
 	now          func() time.Time
+	// liftRules, when set, makes the sweep journal workflow.shadow_lift_blocker for
+	// promotable cards of projects with mid_pipeline.lift_backlog_blockers.
+	liftRules midPipelineSource
+}
+
+// BacklogAdvisoryOption tunes NewBacklogPromotionAdvisoryService.
+type BacklogAdvisoryOption func(*backlogPromotionAdvisoryService)
+
+// WithLiftBlockersShadow turns on the lift_backlog_blockers shadow journal: for a
+// project that sets the flag, each card the advisory would promote also gets a
+// workflow.shadow_lift_blocker activity entry. Nothing is moved either way.
+func WithLiftBlockersShadow(rules midPipelineSource) BacklogAdvisoryOption {
+	return func(s *backlogPromotionAdvisoryService) { s.liftRules = rules }
 }
 
 // NewBacklogPromotionAdvisoryService constructs a BacklogPromotionAdvisoryService.
@@ -107,8 +121,9 @@ func NewBacklogPromotionAdvisoryService(
 	depRepo repository.TaskDependencyRepository,
 	activityRepo repository.ActivityLogRepository,
 	projectRepo repository.ProjectRepository,
+	opts ...BacklogAdvisoryOption,
 ) BacklogPromotionAdvisoryService {
-	return &backlogPromotionAdvisoryService{
+	svc := &backlogPromotionAdvisoryService{
 		taskRepo:     taskRepo,
 		statusRepo:   statusRepo,
 		depRepo:      depRepo,
@@ -116,6 +131,10 @@ func NewBacklogPromotionAdvisoryService(
 		projectRepo:  projectRepo,
 		now:          time.Now,
 	}
+	for _, o := range opts {
+		o(svc)
+	}
+	return svc
 }
 
 // SweepAdvisory evaluates every backlog task once and logs a decision for each. It
@@ -135,6 +154,7 @@ func (s *backlogPromotionAdvisoryService) SweepAdvisory(ctx context.Context) ([]
 	// project_id -> workspace_id, one fetch per project per tick (§workspace scope guard).
 	projectWSCache := make(map[uuid.UUID]uuid.UUID)
 
+	liftEnabled := make(map[uuid.UUID]bool) // project -> mid_pipeline.lift_backlog_blockers
 	decisions := make([]BacklogPromotionDecision, 0, len(tasks))
 	for i := range tasks {
 		task := &tasks[i]
@@ -145,6 +165,9 @@ func (s *backlogPromotionAdvisoryService) SweepAdvisory(ctx context.Context) ([]
 		}
 		decisions = append(decisions, BacklogPromotionDecision{TaskID: task.ID, Promote: promote, Reason: reason})
 		log.Printf("[backlog-promotion-advisory] task=%s promote=%v reason=%q", task.ID, promote, reason)
+		if promote {
+			s.journalLift(ctx, task, reason, liftEnabled, projectWSCache)
+		}
 	}
 	return decisions, nil
 }
@@ -162,10 +185,10 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 ) (promote bool, reason string, err error) {
 	// 0. Workspace scope. mesh-intake-sweep.py only ever polls ONE workspace
 	// (WORKSPACE_ID in <ops-repo>/scripts/mesh-intake-sweep.py) — a task whose project belongs
-	// to any OTHER workspace (KidCash, Pavel's personal workspace under Codex;
+	// to any OTHER workspace (Sandbox, Alex's personal workspace under Codex;
 	// Editorial) is invisible to the sweep, which never promotes it because it never
 	// sees it. Promoting such a card server-side would be NEW behaviour, not parity
-	// (Riker, #f42fe0a8, 2026-09-21T16:16Z: "enforcing только на workspace EVC ...
+	// (Robin, an internal ticket, 2026-09-21T16:16Z: "enforcing только на workspace EVC ...
 	// паритет, а не новое поведение"). Checked first: it decides which rule set even
 	// applies, and a task outside scope should never accrue an in-scope reason string.
 	ws, wsErr := s.projectWorkspaceOf(ctx, task.ProjectID, projectWSCache)
@@ -234,7 +257,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	// 4. Deliberate-park guard. Gated on depIDs being EMPTY, exactly like
 	// was_deliberately_parked()'s own `if dep_ids: return False` short-circuit — a
 	// task WITH dependencies is judged by whether those dependencies are cleared
-	// (step 6), never by its move history alone. This is the #bbf3db92 trap: a naive
+	// (step 6), never by its move history alone. This is the an internal ticket trap: a naive
 	// "last transition = demotion ⇒ parked" check WITHOUT this gate would wrongly
 	// protect a demoted, dependency-bearing card that the live sweep actually
 	// promotes once its deps clear.
@@ -325,7 +348,7 @@ func (s *backlogPromotionAdvisoryService) projectWorkspaceOf(
 // wasDeliberatelyParked mirrors mesh-intake-sweep.py's was_deliberately_parked(),
 // called ONLY when the task has no dependencies (see the caller). Delegates to the
 // shared implementation in deliberate_park_guard.go — also used by
-// MonitorPromotionService (#1eb4fd7d) — so the activity-log read and its
+// MonitorPromotionService — so the activity-log read and its
 // interpretation live in exactly one place.
 func (s *backlogPromotionAdvisoryService) wasDeliberatelyParked(
 	ctx context.Context,
@@ -361,4 +384,39 @@ func (s *backlogPromotionAdvisoryService) hasOpenChildren(ctx context.Context, t
 		}
 	}
 	return !allSubtasksTerminal(subtasks, categories), nil
+}
+
+// journalLift writes workflow.shadow_lift_blocker for a card the advisory would
+// promote, when its project opted in. It never moves the card; a rules or
+// journal failure is logged and skipped so the advisory sweep is unaffected.
+func (s *backlogPromotionAdvisoryService) journalLift(
+	ctx context.Context, task *domain.Task, reason string,
+	enabled map[uuid.UUID]bool, wsCache map[uuid.UUID]uuid.UUID,
+) {
+	if s.liftRules == nil || s.activityRepo == nil {
+		return
+	}
+	on, seen := enabled[task.ProjectID]
+	if !seen {
+		wf, err := s.liftRules.GetProjectWorkflowRules(ctx, task.ProjectID, nil)
+		on = err == nil && wf != nil && wf.MidPipeline != nil && wf.MidPipeline.LiftBacklogBlockers
+		enabled[task.ProjectID] = on
+	}
+	if !on {
+		return
+	}
+	ws, err := s.projectWorkspaceOf(ctx, task.ProjectID, wsCache)
+	if err != nil {
+		log.Printf("[lift-blockers-shadow] task %s: %v", task.ID, err)
+		return
+	}
+	changes, _ := json.Marshal(map[string]interface{}{"mode": "shadow", "would": "promote_to_todo", "reason": reason})
+	entry := &domain.ActivityLog{
+		ID: uuid.New(), WorkspaceID: ws, EntityType: "task", EntityID: task.ID,
+		Action: "workflow.shadow_lift_blocker", ActorID: uuid.Nil, ActorType: domain.ActorTypeSystem,
+		Changes: changes, CreatedAt: timeNow(),
+	}
+	if err := s.activityRepo.Create(ctx, entry); err != nil {
+		log.Printf("[lift-blockers-shadow] task %s: %v", task.ID, err)
+	}
 }

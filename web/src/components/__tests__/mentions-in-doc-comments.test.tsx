@@ -34,11 +34,11 @@ import type { DocumentComment, Workspace } from "@/types";
 const ME = "11111111-1111-1111-1111-111111111111";
 const WORKSPACE = { id: "ws-1", name: "Acme", slug: "acme" } as unknown as Workspace;
 
-const PAVEL = { id: "u1", slug: "pavel", display_name: "Pavel", kind: "user" };
-const DAEDALUS = {
+const ALEX = { id: "u1", slug: "alex", display_name: "Alex", kind: "user" };
+const DANA = {
   id: "a1",
-  slug: "daedalus",
-  display_name: "Daedalus",
+  slug: "dana",
+  display_name: "Dana",
   kind: "agent",
 };
 
@@ -129,90 +129,90 @@ beforeEach(() => {
   useWorkspaceStore.setState({ currentWorkspace: WORKSPACE });
   useRulesStore.setState({
     teamDirectory: {
-      agents: [{ slug: "daedalus" }],
-      humans: [{ username: "pavel" }],
+      agents: [{ slug: "dana" }],
+      humans: [{ username: "alex" }],
     } as never,
   });
 });
 
 describe("document comments — the @ picker", () => {
   it("opens on @ and offers a person", async () => {
-    mockedMentionables.mockResolvedValue([PAVEL]);
+    mockedMentionables.mockResolvedValue([ALEX]);
     renderRail(makeController());
 
     fireEvent.change(composer(), {
       target: { value: "ping @pav", selectionStart: 9 },
     });
 
-    expect(await screen.findByRole("option", { name: /Pavel/ })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /Alex/ })).toBeInTheDocument();
     expect(mockedMentionables).toHaveBeenCalledWith("ws-1", "pav");
   });
 
   it("offers an agent as well as a person — both actor types, one menu", async () => {
-    mockedMentionables.mockResolvedValue([DAEDALUS, PAVEL]);
+    mockedMentionables.mockResolvedValue([DANA, ALEX]);
     renderRail(makeController());
 
     fireEvent.change(composer(), { target: { value: "@", selectionStart: 1 } });
 
-    expect(await screen.findByRole("option", { name: /Daedalus/ })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /Pavel/ })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /Dana/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Alex/ })).toBeInTheDocument();
   });
 
   it("inserts the slug the server will resolve, with a trailing space", async () => {
-    mockedMentionables.mockResolvedValue([DAEDALUS]);
+    mockedMentionables.mockResolvedValue([DANA]);
     renderRail(makeController());
     const el = composer();
     fireEvent.change(el, { target: { value: "ping @dae", selectionStart: 9 } });
 
-    fireEvent.mouseDown(await screen.findByRole("option", { name: /Daedalus/ }));
+    fireEvent.mouseDown(await screen.findByRole("option", { name: /Dana/ }));
 
-    await waitFor(() => expect(el.value).toBe("ping @daedalus "));
+    await waitFor(() => expect(el.value).toBe("ping @dana "));
   });
 
   it("picks with Enter rather than submitting the comment", async () => {
-    mockedMentionables.mockResolvedValue([PAVEL]);
+    mockedMentionables.mockResolvedValue([ALEX]);
     const controller = makeController();
     renderRail(controller);
     const el = composer();
     fireEvent.change(el, { target: { value: "@pav", selectionStart: 4 } });
-    await screen.findByRole("option", { name: /Pavel/ });
+    await screen.findByRole("option", { name: /Alex/ });
 
     fireEvent.keyDown(el, { key: "Enter" });
 
-    await waitFor(() => expect(el.value).toBe("@pavel "));
+    await waitFor(() => expect(el.value).toBe("@alex "));
     expect(controller.submitDraft).not.toHaveBeenCalled();
   });
 
   it("moves the selection with the arrow keys", async () => {
-    mockedMentionables.mockResolvedValue([DAEDALUS, PAVEL]);
+    mockedMentionables.mockResolvedValue([DANA, ALEX]);
     renderRail(makeController());
     const el = composer();
     fireEvent.change(el, { target: { value: "@", selectionStart: 1 } });
-    await screen.findByRole("option", { name: /Daedalus/ });
+    await screen.findByRole("option", { name: /Dana/ });
 
     fireEvent.keyDown(el, { key: "ArrowDown" });
     fireEvent.keyDown(el, { key: "Enter" });
 
-    await waitFor(() => expect(el.value).toBe("@pavel "));
+    await waitFor(() => expect(el.value).toBe("@alex "));
   });
 
   it("closes on Escape without discarding the draft", async () => {
-    mockedMentionables.mockResolvedValue([PAVEL]);
+    mockedMentionables.mockResolvedValue([ALEX]);
     renderRail(makeController());
     const el = composer();
     fireEvent.change(el, { target: { value: "ping @pav", selectionStart: 9 } });
-    await screen.findByRole("option", { name: /Pavel/ });
+    await screen.findByRole("option", { name: /Alex/ });
 
     fireEvent.keyDown(el, { key: "Escape" });
 
     await waitFor(() =>
-      expect(screen.queryByRole("option", { name: /Pavel/ })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("option", { name: /Alex/ })).not.toBeInTheDocument(),
     );
     expect(el.value).toBe("ping @pav");
   });
 
   it("does not open inside an email address", async () => {
-    mockedMentionables.mockResolvedValue([PAVEL]);
+    mockedMentionables.mockResolvedValue([ALEX]);
     renderRail(makeController());
 
     fireEvent.change(composer(), {
@@ -224,25 +224,25 @@ describe("document comments — the @ picker", () => {
   });
 
   it("is available on a reply, not only on a new thread", async () => {
-    mockedMentionables.mockResolvedValue([PAVEL]);
+    mockedMentionables.mockResolvedValue([ALEX]);
     renderRail(makeController({ threads: [makeThread(makeComment())] }));
 
     fireEvent.click(screen.getByRole("button", { name: /reply/i }));
     const reply = screen.getByPlaceholderText(/Reply/i) as HTMLTextAreaElement;
     fireEvent.change(reply, { target: { value: "@pav", selectionStart: 4 } });
 
-    expect(await screen.findByRole("option", { name: /Pavel/ })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /Alex/ })).toBeInTheDocument();
   });
 
   it("is available when editing an existing comment", async () => {
-    mockedMentionables.mockResolvedValue([PAVEL]);
+    mockedMentionables.mockResolvedValue([ALEX]);
     renderRail(makeController({ threads: [makeThread(makeComment())] }));
 
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
     const box = screen.getByPlaceholderText("Edit your comment") as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: "@pav", selectionStart: 4 } });
 
-    expect(await screen.findByRole("option", { name: /Pavel/ })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /Alex/ })).toBeInTheDocument();
   });
 });
 
@@ -250,24 +250,24 @@ describe("document comments — how a mention reads afterwards", () => {
   it("links a mention that names somebody", () => {
     renderRail(
       makeController({
-        threads: [makeThread(makeComment({ body: "over to you @daedalus" }))],
+        threads: [makeThread(makeComment({ body: "over to you @dana" }))],
       }),
     );
 
-    const link = screen.getByRole("link", { name: /@daedalus/ });
-    expect(link).toHaveAttribute("href", "/w/acme/team/agent/daedalus");
+    const link = screen.getByRole("link", { name: /@dana/ });
+    expect(link).toHaveAttribute("href", "/w/acme/team/agent/dana");
   });
 
   it("links a mentioned person as a person, not as an agent", () => {
     renderRail(
       makeController({
-        threads: [makeThread(makeComment({ body: "@pavel does this hold?" }))],
+        threads: [makeThread(makeComment({ body: "@alex does this hold?" }))],
       }),
     );
 
-    expect(screen.getByRole("link", { name: /@pavel/ })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /@alex/ })).toHaveAttribute(
       "href",
-      "/w/acme/team/user/pavel",
+      "/w/acme/team/user/alex",
     );
   });
 
@@ -290,11 +290,11 @@ describe("document comments — how a mention reads afterwards", () => {
   it("keeps the rest of the sentence around a mention", () => {
     renderRail(
       makeController({
-        threads: [makeThread(makeComment({ body: "before @pavel after" }))],
+        threads: [makeThread(makeComment({ body: "before @alex after" }))],
       }),
     );
 
-    expect(screen.getByRole("link", { name: /@pavel/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /@alex/ })).toBeInTheDocument();
     expect(screen.getByText(/before/)).toBeInTheDocument();
     expect(screen.getByText(/after/)).toBeInTheDocument();
   });

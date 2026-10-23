@@ -59,7 +59,7 @@ const docSplitHint = "split sections into child documents (create_doc with paren
 // must never be — a document is stored and served as text/markdown, and
 // anything else belongs in a task artifact, not here.
 //
-// This exists because task 3e6f8029-88e2-41b4-8dfc-e60a19ca78dc found 140
+// This exists because an internal ticket-88e2-41b4-8dfc-e60a19ca78dc found 140
 // documents whose "body" was a raw PNG's bytes: SyncMount/RefreshIfStale
 // (teamrelay_mount_service.go) walk a Team Relay share's files-index and
 // upload whatever bytes come back with no check that they are text at all —
@@ -103,7 +103,7 @@ func rejectBinaryBody(body []byte) error {
 // careless about UTF-8 validity) is going to write that tail as \r\n\x1a\n,
 // never as four raw bytes. A bytes.Contains for the full 8-byte signature
 // against the raw payload would miss that, which is not a hypothetical —
-// verified live in the fix for AC1 of task 3e6f8029-88e2-41b4-8dfc-e60a19ca78dc:
+// verified live in the fix for AC1 of an internal ticket-88e2-41b4-8dfc-e60a19ca78dc:
 // a payload with the control-char tail escaped and only the leading \x89
 // left raw parses successfully, decodes to a body starting with U+FFFD, and
 // slipped past the very first version of this raw check because it searched
@@ -228,7 +228,7 @@ type documentService struct {
 	// it was saved.
 	trWriter TeamRelayWriter
 
-	// indexer feeds the recall index over documents (#154450b1). Nil, or a
+	// indexer feeds the recall index over documents. Nil, or a
 	// DOC_INDEX_WRITE-off indexer, makes every hook a no-op.
 	indexer *DocumentIndexer
 }
@@ -1256,7 +1256,7 @@ func (s *documentService) Search(
 // that object and touched nothing else, so inserting one paragraph above a
 // comment left its offsets addressing the paragraph above instead — and
 // `orphaned`, which is computed as "were offsets ever written" rather than "is
-// the text still there", went on answering false. Measured on prod (#90dd31f9):
+// the text still there", went on answering false. Measured:
 // three consecutive edits, three times the stored anchor pointed at somebody
 // else's sentence, three times the API said it was fine.
 //

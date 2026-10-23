@@ -22,7 +22,7 @@ const (
 	PermDeleteProject   Permission = "delete_project"
 	// PermRegisterAgent gates POST /workspaces/:ws_id/agents. It is
 	// deliberately absent from agentPerms — checked six independent ways on
-	// 21.08 (#85fd1ef2), no agent self-registration path has ever existed on
+	// 21.08, no agent self-registration path has ever existed on
 	// prod, and workspace role does not change that: RequirePermission's
 	// agent branch checks agentPerms by ACTOR TYPE (IsAgent(c)), never by the
 	// role a grant carries, so an admin-role grant is irrelevant to this
@@ -41,7 +41,7 @@ const (
 	PermExportAuditLog Permission = "export_audit_log"
 	PermManageWebhooks Permission = "manage_webhooks"
 	PermManageRules    Permission = "manage_rules"
-	// PermManageSecrets gates the write-only secret store (task #64e84eb1).
+	// PermManageSecrets gates the write-only secret store.
 	// It is deliberately absent from agentPerms: the whole point of the store
 	// is that a human hands over a credential and no agent identity can read
 	// it back, and an agent able to rotate or delete a secret could replace a
@@ -140,10 +140,10 @@ var permissionMatrix = map[string]map[Permission]bool{
 
 // agentPerms defines which permissions agents (authenticated via X-Agent-Key) hold.
 // Agents can perform task/comment/artifact/event operations and manage workspace rules.
-// PermManageRules is included so that designated lead agents (e.g. Garfield) can apply
+// PermManageRules is included so that designated lead agents (e.g. Gary) can apply
 // gate rules (capacity_limit, transition_gate) without requiring a human JWT.
 //
-// PermMemoryIndex is included deliberately (task 440358b6): the fleet's
+// PermMemoryIndex is included deliberately: the fleet's
 // mesh-embed-backfill.sh and rechunk-prod-corpus.sh scripts call the
 // memory-maintenance routes (reindex, backfill-chunks, rechunk-stale,
 // backfill-doc-index) under X-Agent-Key, and those routes moved from
@@ -314,11 +314,25 @@ func clampConnector(c echo.Context, perm Permission, memberRepo repository.Works
 	if !ok {
 		return false, nil
 	}
+	// A chat-session token (cst_) is "agent ∩ user": it rides the connector
+	// plumbing for the user-role half, but unlike a mot_ connector it also
+	// carries the agent's own ceiling. Routes behind the connector-only
+	// middlewares have no rbac(), so nothing else applies agentPerms to them.
+	if IsChatSession(c) && !agentPerms[perm] {
+		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
+	}
 	wsID, wsErr := GetAgentAuthWorkspaceID(c)
 	if wsErr != nil {
 		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("workspace context required"))
 	}
-	role, roleErr := memberRepo.GetRole(c.Request().Context(), wsID, connectorUserID)
+	var role string
+	var roleErr error
+	if cs := GetChatSession(c); cs != nil {
+		// Read live in this request by the chat-session service, owner rule included.
+		role = cs.UserRole
+	} else {
+		role, roleErr = memberRepo.GetRole(c.Request().Context(), wsID, connectorUserID)
+	}
 	if roleErr != nil && ownsWorkspace != nil && ownsWorkspace(c.Request().Context(), wsID, connectorUserID) {
 		// The owner of a workspace whose own membership row was never written.
 		// The OAuth service admits such an owner at consent (resolveMemberRole)
@@ -363,12 +377,16 @@ func RequireConnectorPermission(perm Permission, memberRepo repository.Workspace
 // whose :agentIDParam names an agent: a connector may always act on its own
 // identity, and on another agent's only if its user's role holds perm.
 // A malformed id falls through to the permission check (never to "self").
+//
+// The self shortcut is for mot_ connectors only. A chat-session token (cst_) is
+// "agent ∩ user": admitting it on its own id would skip agentPerms and the
+// user's role, so it always goes through clampConnector.
 func RequireConnectorSelfOrPermission(agentIDParam string, perm Permission, memberRepo repository.WorkspaceMemberRepository, ownsWorkspace WorkspaceOwnerCheck) echo.MiddlewareFunc {
 	bar := RequireConnectorPermission(perm, memberRepo, ownsWorkspace)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		guarded := bar(next)
 		return func(c echo.Context) error {
-			if _, isConnector := GetOAuthConnectorUserID(c); isConnector {
+			if _, isConnector := GetOAuthConnectorUserID(c); isConnector && !IsChatSession(c) {
 				if callerID, err := GetAgentID(c); err == nil {
 					if targetID, perr := uuid.Parse(c.Param(agentIDParam)); perr == nil && targetID == callerID {
 						return next(c)
