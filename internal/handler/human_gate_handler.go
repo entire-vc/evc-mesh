@@ -18,11 +18,11 @@ import (
 )
 
 // ArmHumanGateRequest is the body of POST /tasks/:task_id/human-gate — the explicit
-// set_human_gate entry point (task #4545660b).
+// set_human_gate entry point.
 //
 // gate_author is deliberately NOT a request field. It is taken from the caller's
 // authenticated identity, the same way comment_handler.go derives author_type, so the
-// answer to "who is waiting on Pavel here" cannot be forged by a caller filling in
+// answer to "who is waiting on Alex here" cannot be forged by a caller filling in
 // somebody else's id. That is the whole difference between this and the 21 text-grepping
 // implementations it replaces: those read a claim, this records an identity.
 type ArmHumanGateRequest struct {
@@ -32,13 +32,13 @@ type ArmHumanGateRequest struct {
 	// Class is "hard" (default, never timed out) or "soft". Omitted means hard —
 	// fail-closed, matching the column default: a gate is never softened by omission.
 	Class string `json:"class"`
-	// Predicate is the four-question check (task #5d3dc714) and is REQUIRED on this
-	// route. The audit measured that 40-45% of asks to Pavel were decidable from a rule
+	// Predicate is the four-question check and is REQUIRED on this
+	// route. The audit measured that 40-45% of asks to Alex were decidable from a rule
 	// already written down; making the caller state the four answers, with reasons, is
 	// what turns "I felt unsure" into something a reviewer can check afterwards.
 	Predicate *domain.GateArmPredicate `json:"predicate"`
 	// Addressee is the @name of the person being asked. Required from an agent key
-	// (task #40a24454): it must resolve to a human, the same rule the marker path has.
+	//: it must resolve to a human, the same rule the marker path has.
 	Addressee string `json:"addressee"`
 	// Supersedes names what the previous, already answered, ask did not cover — the
 	// same opt-out `supersedes:` gives a marker comment.
@@ -143,12 +143,12 @@ func (h *TaskHandler) ArmHumanGate(c echo.Context) error {
 // ClearHumanGate handles DELETE /tasks/:task_id/human-gate.
 //
 // Users may always clear. Agents may clear exactly ONE shape — a gate they themselves
-// armed through the API, which carries no marker comment (task #f933dc05) — and are
+// armed through the API, which carries no marker comment — and are
 // otherwise refused with gateClearRefusal, the message that names the exits actually
 // open to them rather than a bare 403 they would read as "I'm not allowed" and escalate.
 //
 // Why that one shape is not a weakening of the wall. An agent that raises an ask with a
-// "❓ Blocking @pavel" marker has ALWAYS been able to take it back down by withdrawing
+// "❓ Blocking @alex" marker has ALWAYS been able to take it back down by withdrawing
 // it; withdrawing your own ask is a sanctioned exit, not a bypass. An agent that raises
 // the same ask through POST /human-gate could not, for one reason only: ownership was
 // read out of the comment thread, where an API arm leaves nothing, while the author sat
@@ -206,7 +206,7 @@ func (h *TaskHandler) ClearHumanGate(c echo.Context) error {
 
 // agentOwnsAPIArmedGate reports whether actorID is the recorded author of an
 // API-armed, marker-less gate on task — the one shape an agent may clear with its
-// own key (task #f933dc05).
+// own key.
 //
 // Deliberately delegates the whole judgement to commentService.GetHumanGateOwner
 // instead of reading task.GateAuthor directly: that method is where the marker scan

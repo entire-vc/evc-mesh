@@ -119,7 +119,7 @@ type Document struct {
 	// Without this a caller has no way to hand a human a working link to a
 	// document it just wrote: create_doc/get_doc/list_docs returned id, slug
 	// and project_id, none of which resolve to a URL without also knowing the
-	// document's workspace and project slugs (task #14db79fd).
+	// document's workspace and project slugs.
 	URL string `json:"url,omitempty" db:"-"`
 
 	// Warning is set on the response of a create/update whose body passed the

@@ -192,6 +192,10 @@ func DualAuth(authService *auth.Service, agentService service.AgentService, oaut
 			if IsExtension(c) {
 				return next(c)
 			}
+			// Likewise a cst_ chat-session token, resolved by ChatSessionAuth.
+			if IsChatSession(c) {
+				return next(c)
+			}
 
 			// Try a mot_ OAuth access token first — it lives in the same
 			// Authorization: Bearer header a JWT would, but ValidateAccessToken

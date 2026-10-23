@@ -8,8 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/repository"
-	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
 // GitHubIntegrationConfig is the shape stored in IntegrationConfig.Config
@@ -40,12 +40,12 @@ type GitLabIntegrationConfig struct {
 //   - usable=false, disabled=true: the row EXISTS and says `is_active=false`
 //     — the provider is explicitly turned off for this row's scope. The
 //     caller MUST NOT fall through to env; doing so is the exact bug
-//     #33a4bb57's AC2 exists to close (a workspace turning its GitHub/GitLab
+//     an internal ticket's AC2 exists to close (a workspace turning its GitHub/GitLab
 //     integration off must actually turn it off, not silently keep working
 //     off the instance-wide fallback).
 //   - usable=false, disabled=false: nil row, wrong provider, unparseable
 //     config, or an ACTIVE row with neither a token nor a webhook secret
-//     (a placeholder row — e.g. the pre-#33a4bb57 prod row, active=true,
+//     (a placeholder row — e.g. the earlier row, active=true,
 //     config={} — carries no information, so treating it as "governs, with
 //     empty values" would let it silently shadow a working env secret). The
 //     caller falls through to env for all of these.
@@ -65,18 +65,25 @@ func decodeGitHubIntegration(cfg *domain.IntegrationConfig) (parsed GitHubIntegr
 		return GitHubIntegrationConfig{}, false, false
 	}
 	if parsed.Token != "" {
-		if plain, err := encryption.Decrypt(parsed.Token); err == nil {
-			parsed.Token = plain
-		} else {
-			parsed.Token = ""
+		plain, reason := secretstore.Open(context.Background(), parsed.Token)
+		if reason != "" {
+			// A degraded store is not "no secret": refuse the row instead of
+			// handing out an empty credential as a usable config. disabled=true
+			// makes callers refuse rather than fall through to env.
+			log.Printf("[vcs-integration] Token unavailable: %s", reason)
+			return GitHubIntegrationConfig{}, false, true
 		}
+		parsed.Token = plain
 	}
 	if parsed.WebhookSecret != "" {
-		if plain, err := encryption.Decrypt(parsed.WebhookSecret); err == nil {
-			parsed.WebhookSecret = plain
-		} else {
-			parsed.WebhookSecret = ""
+		plain, reason := secretstore.Open(context.Background(), parsed.WebhookSecret)
+		if reason != "" {
+			// A degraded store is not "no secret": refuse the row instead of
+			// handing out an empty credential as a usable config.
+			log.Printf("[vcs-integration] WebhookSecret unavailable: %s", reason)
+			return GitHubIntegrationConfig{}, false, true
 		}
+		parsed.WebhookSecret = plain
 	}
 	return parsed, true, false
 }
@@ -101,18 +108,24 @@ func decodeGitLabIntegration(cfg *domain.IntegrationConfig) (parsed GitLabIntegr
 		return GitLabIntegrationConfig{}, false, false
 	}
 	if parsed.Token != "" {
-		if plain, err := encryption.Decrypt(parsed.Token); err == nil {
-			parsed.Token = plain
-		} else {
-			parsed.Token = ""
+		plain, reason := secretstore.Open(context.Background(), parsed.Token)
+		if reason != "" {
+			// A degraded store is not "no secret": refuse the row instead of
+			// handing out an empty credential as a usable config.
+			log.Printf("[vcs-integration] Token unavailable: %s", reason)
+			return GitLabIntegrationConfig{}, false, true
 		}
+		parsed.Token = plain
 	}
 	if parsed.WebhookSecret != "" {
-		if plain, err := encryption.Decrypt(parsed.WebhookSecret); err == nil {
-			parsed.WebhookSecret = plain
-		} else {
-			parsed.WebhookSecret = ""
+		plain, reason := secretstore.Open(context.Background(), parsed.WebhookSecret)
+		if reason != "" {
+			// A degraded store is not "no secret": refuse the row instead of
+			// handing out an empty credential as a usable config.
+			log.Printf("[vcs-integration] WebhookSecret unavailable: %s", reason)
+			return GitLabIntegrationConfig{}, false, true
 		}
+		parsed.WebhookSecret = plain
 	}
 	return parsed, true, false
 }
@@ -275,7 +288,7 @@ func (r *VCSIntegrationResolver) ResolveGitLab(ctx context.Context, workspaceID 
 // env fallback (source="env") — an instance-wide secret is not owned by any
 // one workspace, so a match against it deliberately does NOT scope task
 // resolution (see lookupRef's workspaceID==uuid.Nil branch). This carries
-// the fix for #839b9897: before this type existed, the webhook receiver
+// the fix for an internal ticket: before this type existed, the webhook receiver
 // authenticated a request against the UNION of every workspace's secret but
 // then threw away which one actually matched, so a validated request could
 // resolve and mutate a task in ANY workspace, not just the one whose secret
@@ -304,7 +317,7 @@ func (r *VCSIntegrationResolver) GitHubWebhookSecrets(ctx context.Context) (secr
 			// explicitly disabled (governs it, contributes nothing, on
 			// purpose: env acting as a fallback here is exactly what let a
 			// disabled row keep validating webhooks via the instance-wide
-			// secret, #33a4bb57 AC2). A row that is neither — the
+			// secret, an internal ticket AC2). A row that is neither — the
 			// active=true/config={} placeholder shape ResolveGitHub itself
 			// falls through to env for — does not claim ownership: existing,
 			// uninformative rows must not be able to permanently blind every

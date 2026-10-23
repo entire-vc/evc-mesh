@@ -26,8 +26,25 @@ type Manifest struct {
 	Schemas      json.RawMessage `json:"schemas,omitempty"`
 	Capabilities Capabilities    `json:"capabilities"`
 	External     *External       `json:"external,omitempty"`
+	// Requires lists the ids of extensions this one needs enabled in the same project.
+	Requires []string `json:"requires,omitempty"`
+	// ProjectView describes the project tab of the project.view slot.
+	ProjectView *ProjectView `json:"project_view,omitempty"`
+	// Theme is the block of a kind=theme extension, decoded by internal/themes.
+	Theme json.RawMessage `json:"theme,omitempty"`
 
 	Raw json.RawMessage `json:"-"`
+}
+
+// ProjectView is the manifest block of the project.view slot: a tab in the
+// project, served under /w/:ws/p/:proj/<ext>/*.
+type ProjectView struct {
+	Icon  string `json:"icon"`
+	Title string `json:"title"`
+	// After is the id of the tab this one follows.
+	After string `json:"after,omitempty"`
+	// VisibleIf is the visibility condition, in the x-visible-if form.
+	VisibleIf map[string]any `json:"visible_if,omitempty"`
 }
 
 // External is the manifest block of a runtime=external extension: where the

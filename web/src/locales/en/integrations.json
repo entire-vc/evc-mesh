@@ -902,7 +902,8 @@
       "task_actions": "Add items to the task menu",
       "sidebar_item": "Add an item to the sidebar",
       "command": "Add a command to the command palette",
-      "doc_panel": "Show a panel in documents"
+      "doc_panel": "Show a panel in documents",
+      "project_view": "Show a tab in the project"
     },
     "secrets": {
       "store": "Keep the secret {{name}}"

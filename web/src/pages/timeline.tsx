@@ -14,8 +14,8 @@ import { Input } from "@/components/ui/input";
 import { TaskSlideOver } from "@/components/task-slide-over";
 
 const statusColor: Record<string, string> = {
-  backlog: "bg-gray-400", triage: "bg-amber-500", todo: "bg-blue-500", in_progress: "bg-amber-500",
-  review: "bg-violet-500", done: "bg-green-600", cancelled: "bg-gray-400",
+  backlog: "bg-tone-neutral-400", triage: "bg-tone-warning-500", todo: "bg-tone-info-500", in_progress: "bg-tone-warning-500",
+  review: "bg-tone-violet-500", done: "bg-tone-success-600", cancelled: "bg-tone-neutral-400",
 };
 
 function savedPosition(key: string): number | undefined {
@@ -50,7 +50,7 @@ function NodeCard({ node, selected, currentProjectId, focus, open, filterHidden 
       </button>
       <p className="mt-2 text-xs text-muted-foreground">#{node.id.slice(0, 8)} · {t(`timeline.priority.${node.priority || "none"}`, { defaultValue: node.priority || "none" })}</p>
       {node.project_id !== currentProjectId && <p className="mt-2 break-words text-xs">{t("timeline.node.otherProject", { name: node.project_name || node.project_slug })}</p>}
-      {node.cycle && <p className="mt-2 text-amber-700 dark:text-amber-400">{t("timeline.node.cycleDetected")}</p>}
+      {node.cycle && <p className="mt-2 text-tone-warning-700 dark:text-tone-warning-400">{t("timeline.node.cycleDetected")}</p>}
       {node.human_gate && <p className="mt-2">{t("timeline.node.humanApproval")}</p>}
       {node.start_after && <p className="mt-2 break-words">{t("timeline.node.scheduledAfter", { time: i18nFmt.formatDateTime(node.start_after) })}</p>}
       {filterHidden && <p className="mt-2 text-xs text-muted-foreground">{t("timeline.node.filterHidden")}</p>}
@@ -182,7 +182,7 @@ export function TimelinePage() {
       {!completed && name !== "relations" && data.completed_count > 0 && <Button variant="outline" className="min-h-11 w-full whitespace-normal" onClick={() => update({ completed: "true", before: null, after: null, relations: null })}>
         {t("timeline.branch.expandOriginal", { n: data.completed_count })}</Button>}
       {data.total_count === 0 && <p className="rounded-lg border border-border border-dashed p-4 text-sm text-muted-foreground">{t(`timeline.branch.noDirect.${name}`)}</p>}
-      {data.unknown_count > 0 && <p className="text-sm text-amber-700 dark:text-amber-400">{t("timeline.branch.unknown", { n: data.unknown_count })}</p>}
+      {data.unknown_count > 0 && <p className="text-sm text-tone-warning-700 dark:text-tone-warning-400">{t("timeline.branch.unknown", { n: data.unknown_count })}</p>}
       {(data.has_more || (name === "relations" && scope.relations === 0 && data.total_count > 0)) && <Button variant="outline"
         disabled={loading} className="min-h-11 w-full whitespace-normal" onClick={() => update({ [name]: String((name === "relations" ? scope.relations : data.page) + 1) })}>
         {t(`timeline.branch.showMore.${name}`, { n: Math.max(0, data.total_count - list.length - (!completed ? data.completed_count : 0)) })}</Button>}
@@ -217,7 +217,7 @@ export function TimelinePage() {
     {graph && <>
       <p className="text-sm text-muted-foreground" aria-live="polite">{focus ? t("timeline.summary.neighborhood", { total: graph.total_count }) : t("timeline.summary.overview", { loaded: graph.tasks.length, total: graph.total_count, page: graph.page })} · {t("timeline.summary.completed", { n: graph.completed_count })}
         {!graph.visibility_complete && t("timeline.summary.visibilityIncomplete")}{loading && t("timeline.summary.loadingContinuation")}{error && t("timeline.summary.partial")}</p>
-      {graph.cycle_count > 0 && <div role="status" className="space-y-2 rounded-lg border border-amber-500 p-3 text-sm">
+      {graph.cycle_count > 0 && <div role="status" className="space-y-2 rounded-lg border border-tone-warning-500 p-3 text-sm">
         <p>{t("timeline.cycle.detected", { n: graph.cycle_count })}</p>
         <p className="text-muted-foreground">{t("timeline.cycle.available")}</p>
         {graph.cycle_ids.map(id => nodes.get(id)).filter((n): n is DependencyNode => Boolean(n && n.availability === "available")).map(n =>

@@ -106,7 +106,7 @@ type TaskRepository interface {
 	// entry: a task created without its audit event silently understated every
 	// journal-coverage guarantee the product makes (measured: 314/3709 system-
 	// created tasks over 30 days lost their event to a post-commit, unguarded,
-	// non-retried write — #819e7b29). If the activity insert fails, the whole
+	// non-retried write — an internal ticket). If the activity insert fails, the whole
 	// transaction rolls back — the task and its creation event commit together
 	// or not at all. activity == nil is only for callers (test fixtures) that
 	// have no workspace context to build a real entry from and don't care about
@@ -141,7 +141,7 @@ type TaskRepository interface {
 	// ListAllBacklogTasks returns every non-deleted task currently in a backlog-category
 	// status, across ALL workspaces — global by design, mirroring FindDueBacklogTasks
 	// rather than the workspace-scoped ListByStatusCategory. Used by
-	// BacklogPromotionAdvisoryService (task #9f3f4064), which must see every backlog card
+	// BacklogPromotionAdvisoryService, which must see every backlog card
 	// the way <ops-repo>/scripts/mesh-intake-sweep.py does (full visibility under its own agent
 	// key), not one caller's workspace.
 	ListAllBacklogTasks(ctx context.Context) ([]domain.Task, error)
@@ -190,7 +190,7 @@ type TaskRepository interface {
 	// FindDueBacklogTasks returns every task in a "backlog" category status whose
 	// due_date has passed, whatever its labels. These are CANDIDATES for
 	// auto-promotion back to "todo"; the promotion sweeper applies the guards that
-	// decide which of them actually move (#559270cf).
+	// decide which of them actually move.
 	FindDueBacklogTasks(ctx context.Context) ([]domain.Task, error)
 	// MoveToProject atomically reassigns a task to a different project, assigning it
 	// the given target status and a new task_number within that project.
@@ -229,12 +229,12 @@ type TaskRepository interface {
 	// the human_gate_class predicate itself, never by cutoff — passing an arbitrarily
 	// far-future cutoff still cannot select one (see task_repo_human_gate_class_db_test.go).
 	// A gate with a gate_deadline set is EXCLUDED here regardless of class or age — it
-	// is owned end to end by FindExpiredDefaultGates instead (task #060ccaae); see that
+	// is owned end to end by FindExpiredDefaultGates instead; see that
 	// method's doc for why the two must not both act on the same row.
 	FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) ([]domain.HumanGateSoftTimeoutCandidate, error)
 	// FindExpiredDefaultGates returns armed, non-hard gates whose gate_deadline is at or
 	// before now AND which carry a non-empty recommended_default — the default-on-timeout
-	// sweep (task #060ccaae) applies each one's own stated fallback and records it as a
+	// sweep applies each one's own stated fallback and records it as a
 	// decision. A hard-classified gate is excluded by the class predicate itself, and a
 	// gate with no stated default never reaches here because it never had a gate_deadline
 	// computed for it in the first place (see ArmHumanGate).
@@ -297,8 +297,8 @@ const ClosedFollowUpReopenLimit = 3
 // and recomputes the window from the survivors — the count and the anchor
 // both (a count-only giveback leaves the window anchored at the failed
 // attempt's instant and stretches it over reopens that never delivered, and a
-// healthy repeat a day later inherits a half-burned budget, codex-review P2,
-// MR !1078, round 5).
+// healthy repeat a day later inherits a half-burned budget, code review P2,
+// a review, round 5).
 //
 // The id is a fresh uuid per claim, never a timestamp: two claims inside one
 // timestamptz microsecond are still two claims, and a compensation must never
@@ -311,7 +311,7 @@ type ReopenClaim struct {
 }
 
 // ClosedFollowUpRootRepository persists the identity of a finding the
-// closed-card follow-up mechanism routes (#5194afd4). The PK on
+// closed-card follow-up mechanism routes. The PK on
 // (source_task_id, finding_key) is the whole concurrency story: Claim is an
 // INSERT ... ON CONFLICT DO NOTHING, so exactly one of N racing claims wins
 // and the losers read the winner's root task via Get.
@@ -330,7 +330,7 @@ type ClosedFollowUpRootRepository interface {
 	// racing repeats of one finding at most limit slots exist, so the stored
 	// count can never exceed the repeats actually delivered — a
 	// read-check-record split let every racer pass the check and inflate the
-	// counter (codex-review P1, MR !1078). Taking a slot also records the
+	// counter (code review P1, a review). Taking a slot also records the
 	// claim's row in the reopen-claim ledger. Returns true with the slot held
 	// and its claim id; false with a zero claim when the window is exhausted
 	// (or the row is gone).
@@ -352,7 +352,7 @@ type ClosedFollowUpRootRepository interface {
 }
 
 // ClosedFollowUpPendingRepository is the visible-failure half of the
-// closed-card follow-up mechanism (#db1c6c7a, P2 of #9b712414): when a
+// closed-card follow-up mechanism (an internal ticket, P2 of an internal ticket): when a
 // finding's delivery cannot complete — the identity store or the root card
 // could not be read, the claim written, the card created — the finding is
 // parked here for the reconcile job instead of being dropped. The contract's
@@ -378,19 +378,19 @@ type ClosedFollowUpPendingRepository interface {
 	// human reads it; only after this does the row leave the due set. A
 	// notice that failed to write must stay listed so a later pass retries
 	// it — the counter alone must never freeze an untold human out of the
-	// queue (codex-review P1, round 3).
+	// queue (code review P1, round 3).
 	MarkEscalated(ctx context.Context, commentID uuid.UUID, at time.Time) error
 	// MarkNoticed records that the park's «не подтверждена» notice has
 	// landed on the source card. While it is unset, every reconcile pass
 	// that works the row retries the notice — a queued finding its
-	// commenter cannot see is a queue, not a delivery (codex-review P1,
+	// commenter cannot see is a queue, not a delivery (code review P1,
 	// round 4).
 	MarkNoticed(ctx context.Context, commentID uuid.UUID, at time.Time) error
 	// ClaimForReconcile atomically leases one row to the calling pass:
 	// true when the row was unleased (or its lease expired) and is now
 	// held until leaseUntil, false when another pass holds it. The lease
 	// is what keeps one finding delivered exactly once across concurrent
-	// passes — ListDue carries no lock (#a2368528).
+	// passes — ListDue carries no lock.
 	ClaimForReconcile(ctx context.Context, commentID uuid.UUID, leaseUntil time.Time) (bool, error)
 	// ReleaseClaim drops the lease at the end of a pass's row unit — the
 	// ONLY release besides the row's delete (progress writes hold the lease
@@ -426,7 +426,7 @@ type CommentViewFilter struct {
 	WorkspaceID *uuid.UUID // optional workspace scope (used by ListByAuthor)
 	ProjectID   *uuid.UUID // optional project scope (used by ListByAuthor)
 	// IncludeInternal, when true, drops the default `is_internal = false`
-	// predicate on ListRecentByWorkspace — see #a7ae4c76. Not honored by
+	// predicate on ListRecentByWorkspace — see an internal ticket. Not honored by
 	// ListByAuthor (a caller's own comments aren't the internal-mentions
 	// corpus this exists for). Defaults to false: excluded, same as before
 	// this field existed.
@@ -460,7 +460,7 @@ type CommentRepository interface {
 
 // HumanGateDecisionRepository persists the append-only ledger backing the
 // third human_gate exit — "the question was answered, the answer arrived
-// through another channel" (task #c56339b1, docs/human-gate-decision-recorded.md).
+// through another channel" (an internal ticket, docs/human-gate-decision-recorded.md).
 type HumanGateDecisionRepository interface {
 	// Create inserts a new decision row (RevokesID nil) or revocation row
 	// (RevokesID set). The append-only DB trigger rejects any UPDATE, so
@@ -748,6 +748,14 @@ type AgentFilter struct {
 	ParentAgentID *uuid.UUID
 }
 
+// MergedPROpenTask is one card still open although its PR/MR is merged.
+type MergedPROpenTask struct {
+	TaskID    uuid.UUID
+	ProjectID uuid.UUID
+	LinkURL   string
+	MergedAt  time.Time
+}
+
 // AgentWithProjects pairs an agent with its project affiliation names.
 type AgentWithProjects struct {
 	domain.Agent
@@ -799,7 +807,7 @@ type AgentRepository interface {
 	// exactly what U1's backfill would have produced had this agent existed
 	// before the migration). Atomicity matters here specifically: Register
 	// calling AgentWorkspaceGrantRepository.Create as a second, separate
-	// write would leave a live-but-grantless agent (task #44f461a9) on ANY
+	// write would leave a live-but-grantless agent on ANY
 	// crash between the two — including a plain request timeout — not just
 	// on a rare double failure.
 	CreateWithHomeGrant(ctx context.Context, agent *domain.Agent) error
@@ -812,7 +820,7 @@ type AgentRepository interface {
 	// workspace has none yet, and that is the pre-existing legacy state, not
 	// a fault this call introduces. Without the atomic grant-side update, the
 	// grant row keeps the KEY MATERIAL that was just rotated away and
-	// continues to authenticate under it forever (task #44f461a9's second
+	// continues to authenticate under it forever (an internal ticket's second
 	// half — the more dangerous one, since rotation is what you reach for
 	// after a suspected leak).
 	RotateHomeGrantKey(ctx context.Context, agent *domain.Agent) error
@@ -1173,12 +1181,12 @@ type ProjectMemberRepository interface {
 	// ListByWorkspaceAndUser returns every project membership row userID holds
 	// across projects in workspaceID. Used to mirror a human's own project
 	// access onto a newly registered identity acting on their behalf (task
-	// ec0bc566: a fresh OAuth connector agent).
+	// an internal ticket: a fresh OAuth connector agent).
 	ListByWorkspaceAndUser(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.ProjectMember, error)
 	// ListByWorkspaceAndAgent is ListByWorkspaceAndUser's connector-agent
 	// counterpart: every project membership row agentID holds across projects
 	// in workspaceID. Used to diff a connector agent's mirrored access
-	// against its supervisor's CURRENT access (task cf226500).
+	// against its supervisor's CURRENT access.
 	ListByWorkspaceAndAgent(ctx context.Context, workspaceID, agentID uuid.UUID) ([]domain.ProjectMember, error)
 	// UpdateRoleAgent is UpdateRole's connector-agent counterpart: changes the
 	// role for a given project + agent.
@@ -1235,7 +1243,7 @@ type VCSLinkRepository interface {
 	// Create inserts a new link, but returns apierror.Conflict (never a raw
 	// driver error) instead of inserting when a row already exists on this
 	// task whose url names the same real-world object — regardless of that
-	// row's provider (#0fbed572 defect 3: provider alone is not a stable
+	// row's provider (an internal ticket defect 3: provider alone is not a stable
 	// identity across a provider correction, so matching only the unique
 	// index let a corrected re-add slip past as a silent duplicate).
 	Create(ctx context.Context, link *domain.VCSLink) error
@@ -1248,7 +1256,7 @@ type VCSLinkRepository interface {
 	// orchestrator so repeated deliveries (opened → synchronize → closed)
 	// update the same row rather than failing the unique index, and by the
 	// manual re-link path so correcting a wrongly-inferred provider
-	// (#0fbed572) fixes the existing row instead of inserting a second one.
+	// fixes the existing row instead of inserting a second one.
 	// If more than one existing row already names that same url — leftover
 	// corruption from matching by (task_id, provider, link_type,
 	// external_id) alone — the oldest survives and the rest are deleted as
@@ -1260,7 +1268,7 @@ type VCSLinkRepository interface {
 	// existing row's values, never the caller-supplied link's. Upsert mutates
 	// *link in place to those actual persisted values so callers never echo a
 	// freshly-generated id/created_at that the database silently discarded
-	// (see #b73171fa). Returns true when this call inserted a new row, false
+	// (see an internal ticket). Returns true when this call inserted a new row, false
 	// when it updated an existing one.
 	Upsert(ctx context.Context, link *domain.VCSLink) (created bool, err error)
 	// ListByExternalID returns all links matching (provider, link_type,
@@ -1268,6 +1276,12 @@ type VCSLinkRepository interface {
 	// payload has no MESH-<uuid> ref but the (provider, type, external_id)
 	// tuple was previously linked to a task.
 	ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error)
+	// ListOpenTasksWithMergedPR returns tasks that are not done/cancelled and whose
+	// PR/MR links (review-subject links excluded) include a merged one and no open
+	// one, and that have no workflow.shadow_close_on_merge entry yet. Feeds the
+	// close_on_merge shadow sweep; at most limit rows from offset, oldest merge first
+	// (callers page: projects without the flag are skipped, not journaled).
+	ListOpenTasksWithMergedPR(ctx context.Context, limit, offset int) ([]MergedPROpenTask, error)
 	// SetPipelineStatus stores the latest pipeline state of a link. A pipeline
 	// older than the stored one (by id) is ignored; returns true when written.
 	SetPipelineStatus(ctx context.Context, id uuid.UUID, pipelineID int64, status, sha string) (written bool, err error)
@@ -1544,7 +1558,7 @@ type IntegrationRepository interface {
 	// ListByProvider returns EVERY integration for one provider across all
 	// workspaces, active or not — unlike ListActiveByProvider, an explicitly
 	// disabled row still shows up. VCSIntegrationResolver's webhook-secret
-	// resolution (#33a4bb57) needs this to tell "no workspace has ever
+	// resolution needs this to tell "no workspace has ever
 	// configured this provider" (env fallback applies) apart from "a
 	// workspace configured it and then turned it off" (workspace governance
 	// owns the provider from then on, full stop — env is not consulted even
@@ -1617,7 +1631,7 @@ type MemoryRepository interface {
 	// setting embedding_model while leaving embedding NULL clears one disjunct and leaves the
 	// other true forever — the row is re-selected on every reindex run, and meanwhile it is
 	// invisible to VectorSearch, which requires embedding IS NOT NULL. That was a live
-	// regression (#84b0694d / #7cf0f3be). Kept as a general repo primitive; a future caller
+	// regression (an internal ticket / an internal ticket). Kept as a general repo primitive; a future caller
 	// must not repeat the embedding_model-only watermark against that predicate.
 	MarkEmbeddingModel(ctx context.Context, id uuid.UUID, model string) error
 	// DecayRelevance reduces relevance by 0.05 for agent-scope memories not updated in 30+ days,
@@ -1641,7 +1655,7 @@ type MemoryRepository interface {
 	// semantic recall forever because nothing re-embeds them).
 	ListNeedingEmbedding(ctx context.Context, workspaceID uuid.UUID, model string, limit int) ([]domain.Memory, error)
 	// ListNotYetChunked returns up to limit memories in workspaceID that have no memory_chunks
-	// rows (ADR-0002 backfill, #b052cdda). Deliberately independent of embedding_model: a memory
+	// rows (ADR-0002 backfill). Deliberately independent of embedding_model: a memory
 	// embedded through the pre-chunking single-vector path already carries the current model's
 	// name in embedding_model, so ListNeedingEmbedding's filter would never select it — this
 	// query selects on chunk existence instead, which is also what makes repeated calls
@@ -1680,7 +1694,7 @@ type MemoryRepository interface {
 	FindBySourceTaskIDs(ctx context.Context, workspaceID uuid.UUID, sourceTaskIDs []uuid.UUID) ([]domain.Memory, error)
 	// ArchiveStaleWorkspaceCheckpoints sets archived=true for workspace-scoped session-checkpoint
 	// memories older than olderThan with importance_score < maxImportance.
-	// Never archives entries tagged canonical/pavel-decision/kind:decision/kind:incident.
+	// Never archives entries tagged canonical/alex-decision/kind:decision/kind:incident.
 	// Called from the 6h memory cleanup scheduler.
 	ArchiveStaleWorkspaceCheckpoints(ctx context.Context, olderThan time.Duration, maxImportance float64) (int64, error)
 	// FindPinned returns all non-archived memories tagged kind:pinned in the workspace.
@@ -1710,7 +1724,7 @@ type MemoryRepository interface {
 	FullTextSearchRanked(ctx context.Context, wsID uuid.UUID, projID *uuid.UUID, query string, filter domain.MemorySearchFilter, limit int) ([]domain.ScoredMemory, error)
 	// ListReviewNeeded returns up to limit memories with status='review_needed', across all
 	// workspaces, ordered by created_at ASC (oldest-waiting first). Used by the reconciler's
-	// nightly review-triage phase (audit #1b010be6, plan:1.11) to finally act on the backlog
+	// nightly review-triage phase (an internal ticket, plan:1.11) to finally act on the backlog
 	// nothing else revisits: runLinker's decision engine only ever looks at memories created
 	// in the last 24h, so a memory it once parked at review_needed is never looked at again by
 	// that phase, no matter how much newer evidence accumulates later.
@@ -1730,7 +1744,7 @@ type MemoryRepository interface {
 	//
 	// Callers MUST pass only rows that were actually delivered to whoever asked, not an
 	// arm's own oversized candidate pool: last_accessed_at is the "no обращений" signal
-	// runReviewTriage's stale branch keys off (task #c5b5fb48), and a row that was fetched
+	// runReviewTriage's stale branch keys off, and a row that was fetched
 	// as a candidate but never made it into a response was never "accessed" in any sense
 	// that should keep it out of stale — see memoryService.RecallWithStats, the sole caller,
 	// which calls this alongside BoostRelevance on the final trimmed `merged` set.
@@ -1740,7 +1754,7 @@ type MemoryRepository interface {
 // SchedulerStateRepository persists a durable last-run watermark for background jobs whose
 // cadence must survive process restarts. A bare time.Ticker resets its wait to the full
 // interval on every restart; on a service that restarts often, a long interval (nightly+)
-// then almost never elapses (task #c5b5fb48: 70 restarts / 6 days → 2 real runs against a
+// then almost never elapses (an internal ticket: 70 restarts / 6 days → 2 real runs against a
 // 24h target). Deliberately generic across job_name rather than one column per job — any
 // future long-interval job on this service has the identical failure shape.
 type SchedulerStateRepository interface {
@@ -1815,7 +1829,7 @@ type AgentSessionRepository interface {
 	// a task-scoped active session, however recently that one started, or
 	// agent-wide activity (e.g. a periodic fiddler flush with no task_id)
 	// silently piles onto whichever task happens to be active instead of
-	// getting its own row (see task ea1b9fb6).
+	// getting its own row (see an internal ticket).
 	GetActiveAgentWide(ctx context.Context, agentID uuid.UUID) (*domain.AgentSession, error)
 	// GetActiveForTask returns the agent's active session for a specific task, or nil.
 	// Scopes spend per-task so a busy agent completing multiple tasks within one
@@ -1834,7 +1848,7 @@ type AgentSessionRepository interface {
 	// construction) when taskID is non-nil, else agent-wide (task_id IS NULL),
 	// mirroring the precedence a session_report with a task_id already
 	// resolves by (GetActiveForTask, falling back to GetActiveAgentWide) — see
-	// task 33af0928 for the fix that brought this method's own agent-wide SQL
+	// an internal ticket for the fix that brought this method's own agent-wide SQL
 	// in line with GetActiveAgentWide's task_id IS NULL filter. When no
 	// matching active session exists yet, one is created seeded with these counts and
 	// workspaceID — this is deliberately allowed to be the FIRST thing that creates
@@ -1867,7 +1881,7 @@ type ProjectIntegrationRepository interface {
 	// across ALL projects — unlike ListByProject, which only ever sees the one
 	// project a caller already knows about. This is what a background
 	// refresher needs: it has no request to hang a project ID off of, and its
-	// whole job is to reach integrations nobody's request has touched (#bab2e6be).
+	// whole job is to reach integrations nobody's request has touched.
 	ListEnabledByType(ctx context.Context, intType string) ([]domain.ProjectIntegration, error)
 	// SetKeyExpiry records the credential's expiry and how the value was
 	// obtained. expiresAt nil clears both fields back to "unknown". Deliberately
@@ -1881,7 +1895,7 @@ type ProjectIntegrationRepository interface {
 	RecordSyncCheck(ctx context.Context, projectID uuid.UUID, intType string, checkedAt time.Time, status, errMsg string) error
 }
 
-// SecretRepository manages the write-only secrets store (task #64e84eb1).
+// SecretRepository manages the write-only secrets store.
 // Every method here returns or accepts domain.Secret, which has no field
 // capable of carrying a value — that is what makes "no read path returns
 // plaintext or ciphertext" a property the compiler can help enforce, not
@@ -1928,7 +1942,7 @@ type SecretRepository interface {
 }
 
 // SecretMaterializer decrypts current secret values for spawn-time env-file
-// materialization (task #64e84eb1, S4). This is a SEPARATE interface from
+// materialization (an internal ticket, S4). This is a SEPARATE interface from
 // SecretRepository on purpose: SecretRepository is what the public secrets
 // API (S3) is built on, and it has no method that can return a value at all.
 // Wire this interface into exactly one caller — the spawn-hook endpoint —
@@ -1944,7 +1958,7 @@ type SecretMaterializer interface {
 }
 
 // GatePredicateLogRepository is the append-only record of gate-arming predicate
-// evaluations (task #5d3dc714). No Update, no Delete: a refusal must not be editable
+// evaluations. No Update, no Delete: a refusal must not be editable
 // into an allow after the fact.
 type GatePredicateLogRepository interface {
 	Record(ctx context.Context, entry *domain.GatePredicateLogEntry) error
@@ -1952,7 +1966,7 @@ type GatePredicateLogRepository interface {
 }
 
 // DocumentChunkRepository is the recall index over Mesh Docs (table
-// document_chunks, #154450b1). Search methods return doc chunks shaped as
+// document_chunks). Search methods return doc chunks shaped as
 // ScoredMemory with SourceType=doc so they can join the recall pipeline.
 type DocumentChunkRepository interface {
 	// ReplaceChunks swaps a document's chunk set in one transaction. A write
@@ -2075,7 +2089,7 @@ type OAuthRepository interface {
 	// /api/v1/oauth/grants listing ("your connected apps").
 	ListGrantsByUser(ctx context.Context, userID uuid.UUID) ([]domain.OAuthGrantWithDetails, error)
 	// ListActiveGrants returns every non-revoked grant system-wide. Used by
-	// the periodic connector-membership resync job (task cf226500) to find
+	// the periodic connector-membership resync job to find
 	// every connector agent whose mirrored project access might have drifted
 	// from its supervisor's current one — housekeeping-scale (one sweep),
 	// never per-request.
@@ -2134,4 +2148,46 @@ type TaskExternalRefRepository interface {
 	// updated; with a different hash the stored row is returned unchanged and
 	// changed=false.
 	Put(ctx context.Context, in *domain.TaskExternalRef) (stored *domain.TaskExternalRef, changed bool, err error)
+}
+
+// ThemeRepository is the persistence of theme choices: the instance default
+// and one optional row per workspace. Reads return (nil, nil) when nothing was
+// ever chosen.
+type ThemeRepository interface {
+	GetInstance(ctx context.Context) (*domain.ThemeSelection, error)
+	// SetInstance stores the choice and bumps its version.
+	SetInstance(ctx context.Context, themeID *string, settings json.RawMessage, by uuid.UUID) (*domain.ThemeSelection, error)
+	GetWorkspace(ctx context.Context, workspaceID uuid.UUID) (*domain.ThemeSelection, error)
+	SetWorkspace(ctx context.Context, workspaceID uuid.UUID, themeID *string, settings json.RawMessage, by uuid.UUID) (*domain.ThemeSelection, error)
+}
+
+// ErrChatEpochStale is returned by ChatSessionTokenRepository.Issue when the
+// session already holds a newer execution epoch, or when it was ended (stop):
+// a stop is final for the session id.
+var ErrChatEpochStale = errors.New("chat session execution epoch is stale")
+
+// ChatSessionTokenRepository persists cst_ chat-session tokens (table
+// chat_session_tokens, migration 20261022003).
+type ChatSessionTokenRepository interface {
+	// Issue inserts t in one transaction that also serialises on the session:
+	// it rejects an epoch below the session's newest (ErrChatEpochStale), rejects
+	// any issue for a session a stop ended (whatever the epoch), rejects another runner at
+	// the epoch the session already holds (fencing), then supersedes every
+	// still-usable older token of the session — revoked_at = supersedeAt (a
+	// bounded overlap, not "never") with reason 'superseded'.
+	Issue(ctx context.Context, t *domain.ChatSessionToken, supersedeAt time.Time) error
+
+	// GetByHash returns the token row, or (nil, nil) when none matches.
+	GetByHash(ctx context.Context, tokenHash string) (*domain.ChatSessionToken, error)
+
+	// LatestForSession returns the most recently issued token of the session,
+	// or (nil, nil) when the session never had one.
+	LatestForSession(ctx context.Context, sessionID uuid.UUID) (*domain.ChatSessionToken, error)
+
+	// RevokeSession ends the session: every token not yet revoked is revoked at
+	// now with reason. Returns how many rows changed.
+	RevokeSession(ctx context.Context, sessionID uuid.UUID, reason string, now time.Time) (int64, error)
+
+	// PurgeExpired deletes rows that expired before cutoff.
+	PurgeExpired(ctx context.Context, cutoff time.Time) (int64, error)
 }

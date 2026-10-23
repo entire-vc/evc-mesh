@@ -368,7 +368,7 @@ export function InviteMemberDialog({
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
-          {successMsg && <p className="text-sm text-green-600 dark:text-green-400">{successMsg}</p>}
+          {successMsg && <p className="text-sm text-tone-success-600 dark:text-tone-success-400">{successMsg}</p>}
 
           {/* Invite created, but no email went out — hand the link over. */}
           {handoff && (

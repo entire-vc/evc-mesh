@@ -14,7 +14,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "b4c2c6dd95c70b4b72d419fd093759fb927011395ab4ebe0c0ae05a66ee2a8b8"
+const manifestV1SHA256 = "f243313cae6043ae6e3b18fa1c3b636fb82333911fe9f0febc788e9aaa970564"
 
 const schemaFile = "manifest.v1.json"
 
@@ -53,7 +53,7 @@ func validate(t *testing.T, sch *jsonschema.Schema, file string) error {
 func TestManifestV1_ValidFixturesPass(t *testing.T) {
 	sch := compileSchema(t)
 	files := fixtures(t, "valid")
-	require.Len(t, files, 5, "expected 5 valid fixtures")
+	require.Len(t, files, 8, "expected 8 valid fixtures")
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			require.NoError(t, validate(t, sch, f))
@@ -64,7 +64,7 @@ func TestManifestV1_ValidFixturesPass(t *testing.T) {
 func TestManifestV1_InvalidFixturesRejected(t *testing.T) {
 	sch := compileSchema(t)
 	files := fixtures(t, "invalid")
-	require.Len(t, files, 7, "expected 7 invalid fixtures")
+	require.Len(t, files, 15, "expected 15 invalid fixtures")
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			require.Error(t, validate(t, sch, f))

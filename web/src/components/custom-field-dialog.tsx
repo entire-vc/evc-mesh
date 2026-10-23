@@ -411,7 +411,7 @@ export function CustomFieldDialog({
                         />
                         <Input
                           type="color"
-                          value={choice.color || "#6b7280"}
+                          value={choice.color || "#6b7280" /* color-ok: <input type=color> needs hex */}
                           onChange={(e) => handleChoiceColorChange(index, e.target.value)}
                           className="h-8 w-10 shrink-0 cursor-pointer p-0.5"
                           title={t("customField.choices.colorTitle")}

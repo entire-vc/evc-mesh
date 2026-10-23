@@ -1,0 +1,2 @@
+{"schema":1,"id":"graphite","name":"Graphite","version":"1.0.0","kind":"theme","runtime":"builtin","mesh_api":">=1 <2","publisher":"example","description":"Dark dense theme","category":"appearance","levels":{"instance":true,"workspace":true,"project":false},"capabilities":{"api":["tasks:read"]},
+ "theme":{"tokens_contract":"1","modes":["light"]}}

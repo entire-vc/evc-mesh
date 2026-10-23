@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -168,6 +169,31 @@ class SelectionManifest(unittest.TestCase):
                 refused = self.artifact('run', 'coverage.out', 'manifest.json', 'sel.txt')
                 self.assertNotEqual(refused.returncode, 0)
                 self.assertIn('package selection', refused.stderr)
+
+
+class ToolchainPin(unittest.TestCase):
+    """The manifest records `go version`; `verify` compares it. Both jobs must run one image."""
+
+    CI = HERE.parents[1] / '.gitlab-ci.yml'
+
+    @staticmethod
+    def job_image(text: str, job: str) -> str | None:
+        block = re.search(rf'^{re.escape(job)}:\n(.*?)(?=^\S)', text, re.M | re.S)
+        image = re.search(r'^  image: (\S+)', block.group(1), re.M) if block else None
+        return image.group(1) if image else None
+
+    def test_test_and_coverage_gate_share_a_digest_pinned_image(self):
+        text = self.CI.read_text(encoding='utf-8')
+        test, gate = self.job_image(text, 'test'), self.job_image(text, 'coverage-gate')
+        self.assertIsNotNone(test)
+        self.assertEqual(gate, test)
+        self.assertRegex(test, r'@sha256:[0-9a-f]{64}$')
+
+    def test_a_floating_gate_image_is_detected(self):
+        text = self.CI.read_text(encoding='utf-8')
+        gate = self.job_image(text, 'coverage-gate')
+        broken = text.replace(f'  image: {gate}', '  image: golang:1.26-alpine', 1)
+        self.assertNotEqual(self.job_image(broken, 'coverage-gate'), self.job_image(broken, 'test'))
 
 
 if __name__ == '__main__':

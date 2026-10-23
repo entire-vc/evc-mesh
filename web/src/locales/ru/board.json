@@ -174,5 +174,28 @@
   },
   "fallback": {
     "agent": "Агент"
+  },
+  "dnd": {
+    "instructions": "Пробел или Enter — взять карточку. Стрелки перемещают, пробел или Enter — положить, Escape — отмена.",
+    "pickedUp": "Карточка {{name}} взята",
+    "over": "{{name}} над: {{where}}",
+    "dropped": "{{name}} положена: {{where}}",
+    "cancelled": "Перемещение {{name}} отменено",
+    "outside": "вне списков",
+    "position": "позиция {{position}} из {{total}}"
+  },
+  "fields": {
+    "labels": "Метки",
+    "runtime": "Состояние работы",
+    "assignee": "Исполнитель",
+    "gate": "Ждёт человека",
+    "reviewer": "Ревьюер",
+    "priority": "Приоритет",
+    "delegation": "Уровень делегирования",
+    "checkout": "Захват",
+    "artifacts": "Артефакты",
+    "dueDate": "Срок",
+    "subtasks": "Подзадачи",
+    "estimate": "Оценка"
   }
 }

@@ -40,17 +40,20 @@ import (
 	gitlabext "github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/extensions/repoinstall"
 	runnerext "github.com/entire-vc/evc-mesh/internal/extensions/runner"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	sparkext "github.com/entire-vc/evc-mesh/internal/extensions/spark"
 	teamrelayext "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
 	telegramext "github.com/entire-vc/evc-mesh/internal/extensions/telegram"
 	"github.com/entire-vc/evc-mesh/internal/extensions/uictx"
 	"github.com/entire-vc/evc-mesh/internal/handler"
+	gitlabapi "github.com/entire-vc/evc-mesh/internal/integration/gitlab"
 	"github.com/entire-vc/evc-mesh/internal/integration/teamrelay"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/reconciler"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/internal/storage"
+	"github.com/entire-vc/evc-mesh/internal/themes"
 	wsHub "github.com/entire-vc/evc-mesh/internal/ws"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -65,7 +68,7 @@ var (
 
 // reviewTriageInitialWait computes how long a freshly-started process should wait before its
 // FIRST review-triage run, given the persisted last-run watermark (nil if the job has never
-// run on this workspace) and the current time. This is the fix for task #c5b5fb48: a bare
+// run on this workspace) and the current time. This is the fix for an internal ticket: a bare
 // time.NewTicker(interval) always waits a fresh full interval from process start, so a service
 // that restarts more often than the interval elapses almost never reaches a tick. Here, a
 // restart occurring after lastRun+interval has already passed waits ~0 (catches up on the
@@ -143,7 +146,7 @@ func main() {
 	workspaceRepo := postgres.NewWorkspaceRepo(db)
 	projectRepo := postgres.NewProjectRepo(db)
 	taskRepo := postgres.NewTaskRepo(db)
-	// HUMAN_GATE_DEFAULT_TIMEOUT_H (task #060ccaae, Pavel decision 2026-09-06: 24h
+	// HUMAN_GATE_DEFAULT_TIMEOUT_H (an internal ticket, Alex decision 2026-09-06: 24h
 	// default) — wired here rather than a NewTaskRepo parameter to avoid touching
 	// its 60+ existing call sites for one optional knob.
 	taskRepo.SetDefaultGateTimeoutHours(cfg.HumanGate.DefaultTimeoutHours)
@@ -170,6 +173,16 @@ func main() {
 	savedViewRepo := postgres.NewSavedViewRepo(db)
 	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
 	integrationRepo := postgres.NewIntegrationRepo(db)
+
+	// Keep-backed secret store: only when MESH_KEEP_URL/ORG_ID/TOKEN are set.
+	// Without it the default stays builtin-only and a keep: reference is
+	// answered as degraded, never as an empty value.
+	if keepStore, keepErr := secretstore.NewKeepRouterFromEnv(os.Getenv); keepErr != nil {
+		log.Fatalf("[secrets] %v", keepErr) //nolint:gocritic // startup: a half-set Keep config must not start silently on builtin
+	} else if keepStore != nil {
+		secretstore.SetDefault(keepStore)
+		log.Printf("[secrets] Keep secret store enabled for keep: references")
+	}
 
 	// Extension registry. Builtin providers (internal/extensions/builtin)
 	// register here; providers not yet moved keep the old per-provider path.
@@ -199,6 +212,30 @@ func main() {
 	// Register it wrote nothing and GET /extensions answered an empty list.
 	if syncErr := extensionRegistry.SyncBuiltin(context.Background(), postgres.NewInstalledExtensionRepo(db)); syncErr != nil {
 		log.Printf("[extensions] sync builtin extensions failed (registry stays usable): %v", syncErr)
+	}
+	if cfg.ExtensionRetention.PurgeEnabled && (cfg.ExtensionRetention.Interval <= 0 || cfg.ExtensionRetention.Retention <= 0) {
+		log.Printf("[extensions] retention purge NOT started: interval (%s) and retention (%s) must be positive", cfg.ExtensionRetention.Interval, cfg.ExtensionRetention.Retention)
+	} else if cfg.ExtensionRetention.PurgeEnabled {
+		purgeCtx, purgeCancel := context.WithCancel(context.Background())
+		defer purgeCancel()
+		go func() {
+			ticker := time.NewTicker(cfg.ExtensionRetention.Interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					res, purgeErr := postgres.PurgeExpiredExtensionData(purgeCtx, db, time.Now(), cfg.ExtensionRetention.Retention)
+					if purgeErr != nil {
+						log.Printf("[extensions] retention purge: %v", purgeErr)
+					}
+					for _, r := range res {
+						log.Printf("[extensions] purged data of removed extension %q: %d table(s)", r.ExtensionID, len(r.Tables))
+					}
+				case <-purgeCtx.Done():
+					return
+				}
+			}
+		}()
 	}
 	extensionPolicyRepo := postgres.NewInstanceExtensionPolicyRepo(db)
 	extensionInstanceSettingsHandler := handler.NewExtensionInstanceSettingsHandler(instanceSettingRepo, instanceSettingRepo, extensionRegistry, extensionEnvSources).WithJournal(extensionPolicyRepo)
@@ -265,7 +302,7 @@ func main() {
 	// allow_cancelled option: without it, evalRequireSubtasksDone silently skips the
 	// cancelled-subtask check (deps.taskStatusRepo == nil), so a parent with even one
 	// legitimately-cancelled subtask can never reach done/review no matter how the
-	// rule is configured (#204c0311, live incident #815f703b).
+	// rule is configured (an internal ticket, live incident an internal ticket).
 	ruleService := service.NewRuleService(ruleRepo, activityLogRepo,
 		service.WithRuleCommentRepo(commentRepo),
 		service.WithRuleTaskRepo(taskRepo),
@@ -303,8 +340,8 @@ func main() {
 	// Memory service is wired into eventBusService so Publish() can extract memories.
 	// MemoryWithProjectRepo enables automatic project:<slug> tag → project_id resolution on write.
 	// MemoryWithChunkRepo switches the embed write path to per-chunk storage (ADR-0002,
-	// #b052cdda) — without it a memory longer than the embedder's input window only ever
-	// gets embedded from its first ~15% (#e8063a65).
+	// an internal ticket) — without it a memory longer than the embedder's input window only ever
+	// gets embedded from its first ~15%.
 	memoryService := service.NewMemoryService(memoryRepo, memoryEdgesRepo, embedder,
 		service.MemoryWithProjectRepo(projectRepo),
 		service.MemoryWithWorkspaceRepo(workspaceRepo),
@@ -312,7 +349,7 @@ func main() {
 		service.MemoryWithDepRepo(taskDependencyRepo),
 		service.MemoryWithEmbedConcurrency(cfg.Embedding.Concurrency),
 		service.MemoryWithChunkRepo(memoryChunkRepo),
-		// Recall over Mesh Docs (#154450b1): both flags default OFF. WRITE builds the
+		// Recall over Mesh Docs: both flags default OFF. WRITE builds the
 		// index; RECALL exposes it to recall. Separate so an index can be built and
 		// checked before any recall sees it.
 		service.MemoryWithDocIndex(documentChunkRepo, os.Getenv("DOC_INDEX_RECALL") == "true"),
@@ -399,6 +436,7 @@ func main() {
 	// of AgentService gets.
 	oauthRepo := postgres.NewOAuthRepo(db)
 	oauthService := service.NewOAuthService(oauthRepo, agentService, userRepo, workspaceRepo, workspaceMemberRepo, agentWorkspaceGrantRepo, projectMemberRepo)
+	chatSessionService := service.NewChatSessionService(postgres.NewChatSessionTokenRepo(db), agentService, workspaceRepo, workspaceMemberRepo, projectRepo, projectMemberRepo, agentWorkspaceGrantRepo)
 
 	// Agent notification service for push mechanisms (callback_url, SSE, long-poll).
 	// Reuses the same Redis connection as the WebSocket hub (created below in step 8a).
@@ -435,7 +473,7 @@ func main() {
 		service.WithRulesRuleRepo(ruleRepo),
 		service.WithRulesStatusRepo(taskStatusRepo),
 		// Enables GET /workspaces/:ws_id/team to list guest agents (task
-		// U3/#71627c5a) alongside home ones, each tagged is_home. Without
+		// U3/an internal ticket) alongside home ones, each tagged is_home. Without
 		// this, the endpoint reverts to home-only — see GetTeamDirectory.
 		service.WithRulesAgentGrantRepo(agentWorkspaceGrantRepo),
 	)
@@ -451,7 +489,13 @@ func main() {
 	// notification channel. Created here, ahead of both, so notificationService
 	// can be wired with it; the invite-specific base-URL/SMTP_FROM warnings stay
 	// down by inviteService since they are about invite links specifically.
-	emailSvc := service.NewEmailService(cfg.Email)
+	// Brand source for outgoing mail: the instance/workspace theme. Only the
+	// choice and the installed row are read, so no object store is needed.
+	mailThemes := &themes.Service{
+		Installed: postgres.NewInstalledExtensionRepo(db),
+		Themes:    postgres.NewThemeRepo(db),
+	}
+	emailSvc := service.NewEmailService(cfg.Email, service.WithBrandSource(mailThemes))
 	if emailSvc.Enabled() {
 		log.Printf("Email ready: sending via %s:%d as %q", cfg.Email.Host, cfg.Email.Port, cfg.Email.From)
 	} else {
@@ -491,6 +535,7 @@ func main() {
 	notificationOpts := []service.NotificationServiceOption{
 		service.WithPushService(pushService),
 		service.WithEmailService(emailSvc, userRepo, cfg.Email.BaseURL),
+		service.WithEmailBrand(mailThemes),
 		service.WithLocaleLookups(userRepo, workspaceRepo),
 	}
 	notificationOpts = append(notificationOpts,
@@ -499,13 +544,13 @@ func main() {
 	notificationService := service.NewNotificationService(notificationRepo, notificationOpts...)
 
 	// vcsIntegrationResolver replaces the process-start-only githubClient/
-	// gitlabClient construction that used to live here (#33a4bb57, §C1 of
+	// gitlabClient construction that used to live here (an internal ticket, §C1 of
 	// specsintegration-provider-contract): it resolves a GitHub/GitLab
 	// connection fresh on EVERY call — the done-evidence gate's live
 	// re-check, and the webhook receiver's signature validation — honoring
 	// a workspace's own active integration row over these env values, per
 	// §4's resolution order. The env values below are what governs when no
-	// workspace has configured its own connection (the pre-#33a4bb57
+	// workspace has configured its own connection (the pre
 	// single-instance behavior, unchanged) — logged explicitly here because
 	// that is the one thing genuinely fixed at process start; a workspace
 	// row can flip the effective state on the next request without a
@@ -559,7 +604,7 @@ func main() {
 
 	// sparkIntegrationResolver replaces the process-start-only cfg.Spark.Enabled
 	// gate that used to decide, once and for all, whether /spark/* routes existed
-	// at all — the exact C1/C2 violation #4a3195a5 exists to close: is_active on a
+	// at all — the exact C1/C2 violation an internal ticket exists to close: is_active on a
 	// workspace's own spark row could never gate anything, because by the time a
 	// request arrived the client (or its absence) had already been baked in.
 	// Routes are now always registered (below); this resolver is consulted fresh
@@ -580,7 +625,7 @@ func main() {
 		log.Printf("[config] Spark instance level not configured (no instance setting, no MESH_SPARK_URL/MESH_SPARK_ENABLED) — a workspace can still enable one via its own integration")
 	}
 
-	// Append-only record of gate-arming predicate evaluations (task #5d3dc714). The
+	// Append-only record of gate-arming predicate evaluations. The
 	// guard enforces with or without it; this only makes the two-week refusals-vs-arms
 	// ratio the card asks for answerable.
 	gatePredicateLogRepo := postgres.NewGatePredicateLogRepo(db)
@@ -609,7 +654,7 @@ func main() {
 		// TestTaskServiceWiresTheAssigneeTenancyGuard reads it back out of this file.
 		service.WithWorkspaceMembershipReader(postgres.NewWorkspaceMembershipReader(db)),
 		// Agent half of the same guard for the multi-workspace case (task
-		// U3/#71627c5a): without it, a guest agent (home workspace is
+		// U3/an internal ticket): without it, a guest agent (home workspace is
 		// elsewhere, reached here via an active agent_workspace_grants
 		// connection) can never pass assertAssigneeInProjectWorkspace's agent
 		// branch, and every guest-workspace assignment refuses.
@@ -673,7 +718,7 @@ func main() {
 	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 	// Built here, not beside secretMaterializationService above: every
-	// issuance is journaled (#1c9f527d), so it needs the activity service.
+	// issuance is journaled, so it needs the activity service.
 	secretMaterializeHandler := handler.NewSecretMaterializeHandler(secretMaterializationService, activityLogService)
 
 	// Member services.
@@ -692,7 +737,7 @@ func main() {
 	//
 	// MESH_BASE_URL decides what every invite link points at. Left unset it
 	// falls back to the Vite dev-server URL, and a deployed instance hands out
-	// http://localhost:5173/accept-invite/<token> links that resolve to the
+	// <dev-server-url>/accept-invite/<token> links that resolve to the
 	// invitee's own laptop. Nothing downstream can detect that, and the operator
 	// finds out only when the person they invited says the link is dead — so say
 	// it here, once, at boot.
@@ -722,7 +767,14 @@ func main() {
 		service.WithVCSStatusRepo(taskStatusRepo),
 		service.WithVCSTaskService(taskService),
 		service.WithVCSCommentService(commentService),
-		service.WithVCSProjectRepo(projectRepo), // scopes webhook task-ref resolution to the workspace whose secret validated the request (#839b9897)
+		service.WithVCSMRPipelineSource(func(ctx context.Context, ws uuid.UUID) (service.MRHeadPipelineSource, bool) {
+			cfg, _, ok := vcsIntegrationResolver.ResolveGitLab(ctx, ws)
+			if !ok || cfg.BaseURL == "" || cfg.Token == "" {
+				return nil, false
+			}
+			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
+		}), // stores the head pipeline when an MR merges, for the delivery-proof gate
+		service.WithVCSProjectRepo(projectRepo), // scopes webhook task-ref resolution to the workspace whose secret validated the request
 	)
 	// The runtime catalog is changed only through the versioned runtime API;
 	// the Runner extension's Validate decides what a generic write may do, under
@@ -760,6 +812,8 @@ func main() {
 	// configured" branch tests exactly that.
 	var documentStore service.DocumentStore
 	var attachmentStore service.StorageClient
+	// Same typed-nil care as documentStore: the chat handler tests it against nil.
+	var chatAttachmentStore handler.ChatAttachmentStore
 	s3Client, s3Err := storage.NewS3Client(
 		cfg.S3.Endpoint,
 		cfg.S3.AccessKeyID,
@@ -805,6 +859,7 @@ func main() {
 		artifactService = service.NewArtifactService(artifactRepo, s3Client, activityLogRepo)
 		documentStore = s3Client
 		attachmentStore = s3Client
+		chatAttachmentStore = s3Client
 	}
 	// Document subscriptions. Built before the document service because that
 	// service takes it: every write path folds an edit into a pending notice, and
@@ -984,6 +1039,7 @@ func main() {
 		WithTelegramGate(telegramGate).
 		WithStatusResolver(service.NewIntegrationStatusResolver(integrationRepo, vcsIntegrationResolver, sparkIntegrationResolver, teamRelayExt, false).WithTelegramGate(telegramGate))
 	extensionConsentRepo := postgres.NewIntegrationConsentRepo(db)
+	service.WithConsents(extensionActorService, extensionConsentRepo)
 	extensionRegistry.WithIntegrationConsents(extensionConsentRepo)
 	// Extensions installed from a repository (runtime=external): registered in
 	// the registry from installed_extensions at start and after install, update
@@ -1014,6 +1070,16 @@ func main() {
 		WithSelfOrigins(append([]string{cfg.Email.BaseURL}, cfg.CORS.AllowOrigins...)...)
 	runtimeHandler := handler.NewRuntimeHandler(runtimeRepo)
 	userRuntimeHandler := handler.NewUserRuntimeHandler(postgres.NewUserRuntimeRepo(db))
+	chatAgentPickerHandler := handler.NewChatAgentPickerHandler(postgres.NewChatAgentPickerRepo(db))
+	chatAttachmentHandler := handler.NewChatAttachmentHandler(postgres.NewChatAttachmentRepo(db), chatAttachmentStore)
+	// A nil *S3Client must not become a non-nil interface: the purge checks for nil.
+	var chatObjects postgres.ChatObjectStore
+	if s3Client != nil {
+		chatObjects = s3Client
+	}
+	chatThreadDeleteRepo := postgres.NewChatThreadDeleteRepo(db, chatObjects)
+	chatThreadDeleteHandler := handler.NewChatThreadDeleteHandler(chatThreadDeleteRepo)
+	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
@@ -1061,11 +1127,11 @@ func main() {
 	// upstream overwrites X-Forwarded-For with its own peer address, so
 	// EVERY external client resolves to the SAME IP and a per-IP limiter
 	// becomes one shared bucket for the whole internet — the opposite of
-	// its purpose, and a built-in DoS (#5d759aad).
+	// its purpose, and a built-in DoS.
 	//
 	// Configuring this does NOT fix a misconfigured upstream proxy — our own
 	// Caddy config on prod-host is deploy/caddy/mesh.Caddyfile, tracked
-	// separately (PR #677). It only tells mesh-api which additional network
+	// separately (a PR). It only tells mesh-api which additional network
 	// ranges, beyond the loopback/link-local/private-net Echo trusts by
 	// default, are allowed to relay a client IP via X-Forwarded-For.
 	//
@@ -1112,10 +1178,13 @@ func main() {
 	e.Use(mw.Metrics())
 
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
-		LogURI:    true,
-		LogStatus: true,
+		LogURI:     true,
+		LogStatus:  true,
+		LogLatency: true,
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
-			log.Printf("%s %s -> %d", c.Request().Method, redactInviteToken(v.URI), v.Status)
+			for _, line := range accessLogLines(c.Request().Method, redactInviteToken(v.URI), v.Status, v.Latency) {
+				log.Print(line)
+			}
 			return nil
 		},
 	}))
@@ -1250,11 +1319,11 @@ func main() {
 	}()
 	defer watchSweepCancel()
 
-	// Team Relay key-expiry sweep (#bab2e6be): recordSyncOutcome only ever
+	// Team Relay key-expiry sweep: recordSyncOutcome only ever
 	// runs as a REACTION to a document open or an explicit "Sync now" — an
 	// integration nobody touches keeps key_expires_at NULL until the moment
 	// someone finally opens it and the key has already died, the exact
-	// "warning arrives with the breakage" failure AC4 (#218d5847) was built
+	// "warning arrives with the breakage" failure AC4 was built
 	// to prevent, just on a trigger that never fires for a sleeping project.
 	// This sweep is the third, PASSIVE producer: it asks every enabled
 	// integration's own describe-key endpoint on a schedule, independent of
@@ -1315,6 +1384,9 @@ func main() {
 	// the capacity slot (max_in_progress) is freed for other agents.
 	leaseReaper := service.NewCheckoutLeaseReaper(taskRepo, taskStatusRepo, commentRepo, taskService, agentNotifySvc, rulesService, activityLogRepo, projectRepo, taskDependencyRepo)
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
+	// Chat history retention + 30-day physical purge. The purge half skips itself
+	// without object storage; the retention soft delete runs either way.
+	go service.NewChatRetentionJob(chatThreadDeleteRepo, time.Hour).Run(reaperCtx)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -1385,7 +1457,7 @@ func main() {
 	// topology this keeps register's existing (imperfect: shared-bucket)
 	// protection rather than leaving it with none at all — a call this
 	// card does not need to make, since register brute-forcing isn't the
-	// credential-stuffing threat #5d759aad is about.
+	// credential-stuffing threat an internal ticket is about.
 	registerGroup := v1.Group("/auth")
 	registerGroup.Use(mw.RateLimit(mw.RateLimitConfig{
 		Enabled:     cfg.RateLimit.Enabled,
@@ -1403,7 +1475,7 @@ func main() {
 	// authHandler above (mw.LoginLockout) — it works regardless of
 	// reverse-proxy topology, which per-IP limiting fundamentally cannot.
 	// Left enabled with an untrustworthy IP, this middleware reproduces the
-	// exact defect #5d759aad reports: c.RealIP() resolves to ONE address
+	// exact defect an internal ticket reports: c.RealIP() resolves to ONE address
 	// for all external traffic, so this "per-IP" limiter becomes a single
 	// shared 5 RPM bucket for the entire internet — worse than no limiter,
 	// since it also denies real users. Disabling it here is what "IP-ключ
@@ -1487,6 +1559,30 @@ func main() {
 		RedisClient: sharedRedis,
 		Name:        "workspace-icon",
 	})
+	// Themes: what a browser paints, and the bundle files it loads. Both are
+	// public by design — the sign-in screen is themed before anyone is signed
+	// in. GET /theme?workspace=<slug> authenticates itself (OptionalAuth) and
+	// answers only members; the bare form carries the instance theme alone.
+	themeService := &themes.Service{
+		Installed: postgres.NewInstalledExtensionRepo(db),
+		Themes:    postgres.NewThemeRepo(db),
+		Journal:   extensionPolicyRepo,
+	}
+	if s3Client != nil {
+		themeService.Store = s3Client
+	}
+	themeHandler := handler.NewThemeHandler(themeService, instanceSettingRepo, workspaceRepo, workspaceMemberRepo)
+	themeRateLimit := mw.RateLimit(mw.RateLimitConfig{
+		Enabled:     cfg.RateLimit.Enabled,
+		RPM:         cfg.RateLimit.APIRPM,
+		KeyFunc:     mw.RateLimitKeyByIP,
+		RedisClient: sharedRedis,
+		Name:        "theme",
+	})
+	v1.GET("/theme", themeHandler.Get, mw.OptionalAuth(authService, agentService, oauthService), themeRateLimit)
+	v1.GET("/theme/assets/:file", themeHandler.Asset, themeRateLimit)
+	v1.GET("/theme/manifest.json", themeHandler.Manifest, themeRateLimit)
+
 	v1.GET("/workspaces/:ws_id/icon", workspaceHandler.GetIcon, iconRateLimit)
 	// HEAD as well: it is what `curl -I` and cache validators send, and Echo
 	// does not derive it from the GET route. net/http drops the body itself.
@@ -1497,6 +1593,9 @@ func main() {
 	// ExtensionAuth first: an ext_ token is resolved here (invalid one = 401, no
 	// fall-through) and DualAuth then skips the request.
 	api.Use(mw.ExtensionAuth(extensionActorService))
+	// A cst_ chat-session token is resolved here too (invalid = 401, no
+	// fall-through) and DualAuth then skips the request.
+	api.Use(mw.ChatSessionAuth(chatSessionService))
 	api.Use(mw.DualAuth(authService, agentService, oauthService))
 	// Deny-by-default route -> capability check for extension actors; inert for
 	// every other principal.
@@ -1513,6 +1612,9 @@ func main() {
 	// guarded by construction rather than by the author remembering.
 	// Must run after WorkspaceRLS, which resolves and stores the workspace role.
 	api.Use(mw.RequireWorkspaceMemberScoped(db))
+	// A chat token reaches only its own project; refuses what it cannot place.
+	// After the workspace guards: it is a narrowing, never a substitute for them.
+	api.Use(mw.ChatSessionProjectScope(db))
 	// Rate-limit API endpoints by authenticated actor (user/agent ID).
 	// Uses the Redis-backed sliding window limiter for multi-instance deployments.
 	api.Use(mw.RateLimit(mw.RateLimitConfig{
@@ -1563,6 +1665,16 @@ func main() {
 	// GET /workspaces/:ws_id/icon is registered on the public group above —
 	// browsers fetch it as a plain <img>/<link rel=icon> subresource.
 	api.PUT("/workspaces/:ws_id/icon", workspaceHandler.UploadIcon, rbac(mw.PermManageMembers))
+	// Theme choice of a workspace: the same bar as the icon and the slug.
+	api.GET("/workspaces/:ws_id/theme", themeHandler.GetWorkspace, rbac(mw.PermManageMembers))
+	api.PUT("/workspaces/:ws_id/theme", themeHandler.PutWorkspace, rbac(mw.PermManageMembers))
+	// Installed themes with their settings schemas, for the picker form.
+	api.GET("/themes", themeHandler.List)
+	// Instance theme and installing themes: instance administrator only (a theme's
+	// views are code that runs in every member's browser, ADR D11).
+	api.GET("/instance/theme", themeHandler.GetInstance, mw.RequireUserAuth())
+	api.PUT("/instance/theme", themeHandler.PutInstance, mw.RequireUserAuth())
+	api.POST("/instance/themes", themeHandler.Install, mw.RequireUserAuth())
 
 	// Workspace member routes.
 	// NOTE: /members/me MUST be registered before /members/:user_id to avoid "me" being parsed as UUID.
@@ -1646,12 +1758,30 @@ func main() {
 	api.PATCH("/projects/:proj_id", projectHandler.Update, projAccess, connectorRBAC(mw.PermManageProject))
 	api.DELETE("/projects/:proj_id", projectHandler.Delete, projAccess, rbac(mw.PermDeleteProject))
 	// Archive/unarchive carry the same permission DELETE did while it was
-	// (wrongly) an archive — owners/admins, never plain members (#ddd219f4).
+	// (wrongly) an archive — owners/admins, never plain members.
 	api.POST("/projects/:proj_id/archive", projectHandler.Archive, projAccess, rbac(mw.PermDeleteProject))
 	api.POST("/projects/:proj_id/unarchive", projectHandler.Unarchive, projAccess, rbac(mw.PermDeleteProject))
 
 	// Project member routes.
 	api.GET("/projects/:proj_id/members", projectMemberHandler.List, projAccess)
+	api.GET("/projects/:proj_id/chat/agents", chatAgentPickerHandler.List, projAccess)
+	api.POST("/projects/:proj_id/chat/attachments", chatAttachmentHandler.Presign, projAccess)
+	api.GET("/projects/:proj_id/chat/attachments/:attachment_id/download", chatAttachmentHandler.Download, projAccess)
+	api.DELETE("/projects/:proj_id/chat/threads/:thread_id", chatThreadDeleteHandler.Delete, projAccess, mw.RequireUserAuth())
+	// Chat with Agent (agent-chat): threads are private to their author; the
+	// handler resolves every thread by the caller's user id, so there is no
+	// workspace-role bypass here beyond what the gate itself decides.
+	api.GET("/projects/:proj_id/chat/threads", agentChatHandler.ListThreads, projAccess)
+	api.POST("/projects/:proj_id/chat/threads", agentChatHandler.CreateThread, projAccess)
+	api.GET("/projects/:proj_id/chat/threads/:thread_id", agentChatHandler.GetThread, projAccess)
+	api.PATCH("/projects/:proj_id/chat/threads/:thread_id", agentChatHandler.RenameThread, projAccess)
+	api.GET("/projects/:proj_id/chat/threads/:thread_id/messages", agentChatHandler.ListMessages, projAccess)
+	api.POST("/projects/:proj_id/chat/threads/:thread_id/messages", agentChatHandler.SendMessage, projAccess)
+	api.POST("/projects/:proj_id/chat/threads/:thread_id/stop", agentChatHandler.StopTurn, projAccess)
+	api.GET("/projects/:proj_id/chat/settings", agentChatHandler.GetProjectSettings, projAccess, mw.RequireUserAuth())
+	api.PUT("/projects/:proj_id/chat/settings", agentChatHandler.PutProjectSettings, projAccess, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
+	api.GET("/workspaces/:ws_id/chat/settings", agentChatHandler.GetWorkspaceSettings, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
+	api.PUT("/workspaces/:ws_id/chat/settings", agentChatHandler.PutWorkspaceSettings, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
 	api.POST("/projects/:proj_id/members", projectMemberHandler.Add, projAccess, rbac(mw.PermManageMembers))
 	api.POST("/projects/:proj_id/members/agents", projectMemberHandler.AddAgent, projAccess, rbac(mw.PermManageMembers))
 	api.PATCH("/projects/:proj_id/members/:user_id", projectMemberHandler.UpdateRole, projAccess, rbac(mw.PermManageMembers))
@@ -1702,7 +1832,7 @@ func main() {
 	api.GET("/tasks/:task_id/context", taskContextHandler.GetTaskContext, wsAccess)
 	api.GET("/tasks/:task_id/cost-summary", taskHandler.GetCostSummary, wsAccess)
 	api.PATCH("/tasks/:task_id/dod-check", taskHandler.SetDodCheck, wsAccess, rbac(mw.PermUpdateTask))
-	// The single arming path for "this card is waiting on a human" (task #4545660b).
+	// The single arming path for "this card is waiting on a human".
 	// Arm records WHO asked (from the authenticated identity, not the body), WHAT was
 	// asked, WHAT happens by default and BY WHEN, so a client's is_human_gated collapses
 	// to reading task.human_gate instead of re-deriving it from comment text.
@@ -1731,7 +1861,7 @@ func main() {
 	api.PATCH("/comments/:comment_id", commentHandler.Update, rbac(mw.PermAddComment))
 	api.DELETE("/comments/:comment_id", commentHandler.Delete, rbac(mw.PermAddComment))
 
-	// Third human_gate exit — "decision recorded" (task #c56339b1, contract
+	// Third human_gate exit — "decision recorded" (an internal ticket, contract
 	// docs/human-gate-decision-recorded.md). Revoke enforces user-only inside
 	// the handler itself (mirrors task_handler.go's PATCH human_gate 403), not
 	// via rbac, since an agent can legitimately hold PermAddComment.
@@ -1866,7 +1996,7 @@ func main() {
 	// only, no permission check (mirrors the rest of /agents/me/*). Must
 	// stay registered ahead of /agents/:agent_id/workspaces below for the
 	// same "me" != UUID reason as every other /agents/me/* route (task
-	// #80dfb336 — this route was missing entirely; a guest agent's own key
+	// an internal ticket — this route was missing entirely; a guest agent's own key
 	// got a 403 asking where it's connected).
 	api.GET("/agents/me/workspaces", agentWorkspaceGrantHandler.ListMyWorkspaces)
 	// Operator-level runtime ("My Runner"): the agent reads its settings by key; an
@@ -1927,6 +2057,7 @@ func main() {
 	api.POST("/tasks/:task_id/vcs-links", vcsLinkHandler.Create, rbac(mw.PermUpdateTask))
 	api.DELETE("/vcs-links/:link_id", vcsLinkHandler.Delete, rbac(mw.PermUpdateTask))
 	api.PATCH("/tasks/:task_id/vcs-links/:link_id/metadata", vcsLinkHandler.PatchMetadata, rbac(mw.PermUpdateTask))
+	api.PATCH("/vcs-links/ship-sha", vcsLinkHandler.PatchShipSHAByURL, rbac(mw.PermUpdateTask))
 
 	// OAuth 2.0 Authorization Server (task MCP-OAuth 1/5). Public — no auth:
 	// these are the spec-mandated RFC 8414/7591/6749 endpoints an anonymous
@@ -1987,10 +2118,18 @@ func main() {
 	// identity decrypt secrets. Gated by mw.SpawnAuth() — see its doc
 	// comment for the trust model — behind mw.DirectOnly(), which 404s
 	// anything that came through a reverse proxy, so the route's closure no
-	// longer rests on the edge Caddyfile alone (#1c9f527d).
+	// longer rests on the edge Caddyfile alone.
 	e.POST("/internal/secrets/materialize", secretMaterializeHandler.Materialize, mw.DirectOnly(), mw.SpawnAuth())
 
-	// Write-only secrets CRUD (task #64e84eb1, S3). Every route is gated by
+	// Chat-session token control (E4.4): issue, renew, revoke. Runner-only, like
+	// materialization: outside the `api` group so no user JWT or agent key reaches
+	// it, gated by the chat controller credential behind DirectOnly.
+	chatSessionHandler := handler.NewChatSessionHandler(chatSessionService)
+	e.POST("/internal/chat-sessions/tokens", chatSessionHandler.Issue, mw.DirectOnly(), mw.ChatControllerAuth())
+	e.POST("/internal/chat-sessions/:session_id/renew", chatSessionHandler.Renew, mw.DirectOnly(), mw.ChatControllerAuth())
+	e.POST("/internal/chat-sessions/:session_id/revoke", chatSessionHandler.Revoke, mw.DirectOnly(), mw.ChatControllerAuth())
+
+	// Write-only secrets CRUD (an internal ticket, S3). Every route is gated by
 	// PermManageSecrets, which no agent key holds — see its declaration in
 	// rbac.go. That includes the masked LIST: it carries a fingerprint, and
 	// the point of this store is that an agent identity learns nothing about
@@ -2070,6 +2209,8 @@ func main() {
 			}
 		},
 	}
+	repoInstallSvc.Themes = themeService
+	themeHandler.WithRepoInstall(repoInstallSvc)
 	go repoInstallSvc.RunAutoUpdate(context.Background(), 30*time.Minute)
 	catalogInstaller := &catalog.Installer{
 		Catalog: extensionCatalog,
@@ -2217,6 +2358,7 @@ func main() {
 	// Workflow Rules routes (Sprint 20).
 	api.GET("/projects/:proj_id/rules/workflow", rulesHandler.GetProjectWorkflowRules, projAccess)
 	api.PUT("/projects/:proj_id/rules/workflow", rulesHandler.SetProjectWorkflowRules, projAccess, rbac(mw.PermManageMembers))
+	api.POST("/projects/:proj_id/rules/handoff/decide", rulesHandler.DecideHandoff, projAccess)
 
 	// Violation Log routes (Sprint 20).
 	api.GET("/workspaces/:ws_id/violations", rulesHandler.ListViolations)
@@ -2384,7 +2526,7 @@ func main() {
 				// now also falls back to ActorTypeSystem on an empty actor type
 				// (defense in depth for any other background caller), but this
 				// ticker should still identify itself explicitly rather than
-				// rely on that fallback (#fd8a3e43).
+				// rely on that fallback.
 				ctx := actorctx.WithActor(context.Background(), uuid.Nil, domain.ActorTypeSystem)
 				ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 				count, err := recurringService.RunDue(ctx)
@@ -2452,7 +2594,7 @@ func main() {
 	}()
 	log.Println("Memory decay scheduler started (6h interval)")
 
-	// 10a-ter. OAuth housekeeping (#23579e6b): expired authorization codes and
+	// 10a-ter. OAuth housekeeping: expired authorization codes and
 	// tokens are dead weight — the auth path already rejects them — but nothing
 	// deleted them, so oauth_tokens grew by two rows per connector refresh
 	// forever. Hourly, with the first pass a minute after start so a service
@@ -2468,6 +2610,12 @@ func main() {
 			}
 			if codes > 0 || tokens > 0 {
 				log.Printf("[oauth-purge] Removed %d expired authorization codes, %d expired tokens", codes, tokens)
+			}
+			// Chat-session tokens live minutes; rows a day past expiry are only history.
+			if n, cerr := chatSessionService.PurgeExpired(ctx); cerr != nil {
+				log.Printf("[chat-token-purge] ERROR: %v", cerr)
+			} else if n > 0 {
+				log.Printf("[chat-token-purge] Removed %d expired chat session tokens", n)
 			}
 		}
 		first := time.NewTimer(time.Minute)
@@ -2487,8 +2635,8 @@ func main() {
 	}()
 	log.Println("OAuth expired-token purge started (1h interval)")
 
-	// 10a-quater. Connector-membership resync (task cf226500): mirrorProjectMemberships
-	// (MR!1044, #ec0bc566) only ever runs once, at connector-agent registration — an
+	// 10a-quater. Connector-membership resync: mirrorProjectMemberships
+	// only ever runs once, at connector-agent registration — an
 	// existing grant's reuse path never re-mirrors. A human later removed from a
 	// project (or demoted) keeps their connector agent holding the stale access
 	// until something re-syncs it; the OAuth re-consent path can't be relied on for
@@ -2525,14 +2673,14 @@ func main() {
 	}()
 	log.Println("OAuth connector-membership resync started (1h interval)")
 
-	// 10a-bis. Memory review-triage nightly job (audit #1b010be6, plan:1.11):
+	// 10a-bis. Memory review-triage nightly job (an internal ticket, plan:1.11):
 	// disposes of the review_needed backlog that the 6h reconciler's linker phase
 	// above never revisits (it only ever compares memories created in the last 24h
 	// against similar history — once a memory is parked at review_needed, that
 	// phase never looks at it again). Deliberately its own ~24h ticker rather than
 	// folded into the 6h loop above — see RunReviewTriage's doc.
 	//
-	// Task #c5b5fb48: a bare time.NewTicker(24h) is keyed off THIS PROCESS'S OWN
+	// an internal ticket: a bare time.NewTicker(24h) is keyed off THIS PROCESS'S OWN
 	// START, not wall-clock time since the job last actually ran. Measured on
 	// prod-host over 6 days: 70 process restarts, only 2 real triage runs — the
 	// service almost never stays up 24h straight, so the ticker almost never
@@ -2604,11 +2752,11 @@ func main() {
 	log.Println("Agent events sweeper started (5m interval)")
 
 	// 10b-bis. Backlog promotion sweeper — auto-unparks ANY backlog task whose due_date
-	// has passed, moving it back to todo (CLAUDE-workflow-reference.md §0m passive-wait
+	// has passed, moving it back to todo (the team workflow guide §0m passive-wait
 	// pattern; complements the event-driven dependency-unblock auto-transition, which
 	// only fires on task completion, with a time-based trigger).
 	//
-	// Scope widened from backlog+kind:monitor to every dated backlog card by #559270cf:
+	// Scope widened from backlog+kind:monitor to every dated backlog card by an internal ticket:
 	// the label filter meant a due_date only woke cards parked by the lease reaper (the
 	// one thing that writes that label), so 8 cards sat with an already-passed date and
 	// no promotion path. The freeze/human_gate/shipped/open-blocks guards that decide
@@ -2637,15 +2785,16 @@ func main() {
 	}()
 	log.Println("Backlog due-date promotion sweeper started (60s interval)")
 
-	// 10b-quater. Backlog promotion ADVISORY sweeper (task #9f3f4064, parent #00327dc6,
+	// 10b-quater. Backlog promotion ADVISORY sweeper (an internal ticket, parent an internal ticket,
 	// unit 1 of 4). Mirrors <ops-repo>/scripts/mesh-intake-sweep.py's backlog→todo decision
 	// server-side, log-only — it NEVER calls MoveTask. Runs alongside the live Python
-	// sweep for a 7-day parallel comparison (#f928e5af); only after that comparison
-	// shows zero unexplained divergence (#e96abbff) does a LATER task flip this to
-	// enforcing and retire the sweep (#56ec28e8). Same 60s cadence as the monitor
+	// sweep for a 7-day parallel comparison; only after that comparison
+	// shows zero unexplained divergence does a LATER task flip this to
+	// enforcing and retire the sweep. Same 60s cadence as the monitor
 	// sweeper above so a day of logs lines up 1:1 with a day of sweep runs.
 	backlogPromotionAdvisorySvc := service.NewBacklogPromotionAdvisoryService(
 		taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo, projectRepo,
+		service.WithLiftBlockersShadow(rulesService),
 	)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
@@ -2675,7 +2824,30 @@ func main() {
 	}()
 	log.Println("Backlog promotion advisory sweeper started (60s interval, advisory-only)")
 
-	// 10b-ter. human_gate soft-timeout sweeper (task #b1d5c742, contract
+	// 10b-quater-bis. close_on_merge SHADOW sweeper: journals the
+	// close board-services would do for a merged-but-open card; never moves anything.
+	closeOnMergeShadowSvc := service.NewCloseOnMergeShadowService(vcsLinkRepo, activityLogRepo, projectRepo, rulesService)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				n, err := closeOnMergeShadowSvc.Sweep(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("[close-on-merge-shadow] ERROR: %v", err)
+				} else if n > 0 {
+					log.Printf("[close-on-merge-shadow] journaled %d card(s) (shadow, no moves)", n)
+				}
+			case <-schedulerShutdownCh:
+				return
+			}
+		}
+	}()
+
+	// 10b-ter. human_gate soft-timeout sweeper (an internal ticket, contract
 	// docs/human-gate-decision-recorded.md §5). Releases soft-classified gates armed
 	// past DefaultHumanGateSoftTimeout; a hard-classified gate is structurally
 	// unreachable from this sweep (see FindSoftTimedOutGates in task_repo.go) — no
@@ -2708,7 +2880,7 @@ func main() {
 	}()
 	log.Println("human_gate soft-timeout sweeper started (15m interval)")
 
-	// 10b-quater. human_gate default-on-timeout sweeper (task #060ccaae). Applies each
+	// 10b-quater. human_gate default-on-timeout sweeper. Applies each
 	// expired gate's own stated recommended_default, records it as a decision, releases
 	// the gate, and returns the task to todo. Deliberately a separate sweep from the one
 	// above rather than a parameter on it — see FindSoftTimedOutGates' doc for why the
@@ -2760,7 +2932,7 @@ func main() {
 	}()
 	log.Println("Stale session sweeper started (1h interval)")
 
-	// 10z. Closed-card follow-up pending reconciler (task #db1c6c7a): drains
+	// 10z. Closed-card follow-up pending reconciler: drains
 	// closed_followup_pending — findings whose delivery survived the inline
 	// ladder undelivered. Same delivery function as the live path, idempotent
 	// on the finding's P1 identity. The pass line logs on EVERY tick, empty
@@ -2937,7 +3109,7 @@ func documentWatchQuietWindow() time.Duration {
 
 // humanGateSoftTimeoutWindow reads HUMAN_GATE_SOFT_TIMEOUT, the arm-age past which a
 // soft-classified human_gate is eligible for the 15-minute sweeper's release (contract
-// docs/human-gate-decision-recorded.md §5, task #4dc9467b).
+// docs/human-gate-decision-recorded.md §5, an internal ticket).
 //
 // It exists as a knob for the same reason DefaultHumanGateSoftTimeout (24h) was a
 // hardcoded constant until now: proving the sweeper actually releases a gate at prod
@@ -2965,4 +3137,21 @@ func humanGateSoftTimeoutWindow() time.Duration {
 		return 0
 	}
 	return d
+}
+
+// slowRequestThreshold is the latency above which the access log also emits a
+// WARN line, so slow requests can be grepped without parsing every duration.
+const slowRequestThreshold = 2 * time.Second
+
+// accessLogLines renders the access-log entry for one request: the
+// "METHOD uri -> status Nms" line, plus a WARN line when it ran past
+// slowRequestThreshold.
+func accessLogLines(method, uri string, status int, latency time.Duration) []string {
+	ms := latency.Milliseconds()
+	lines := []string{fmt.Sprintf("%s %s -> %d %dms", method, uri, status, ms)}
+	if latency > slowRequestThreshold {
+		lines = append(lines, fmt.Sprintf("WARN slow request: %s %s -> %d %dms (> %s)",
+			method, uri, status, ms, slowRequestThreshold))
+	}
+	return lines
 }

@@ -14,12 +14,12 @@
     },
     "name": { "type": "string", "minLength": 1, "maxLength": 80 },
     "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
-    "kind": { "enum": ["integration", "plugin"] },
+    "kind": { "enum": ["integration", "plugin", "theme"] },
     "runtime": { "enum": ["builtin", "external"] },
     "mesh_api": { "type": "string", "pattern": "^(>=|<=|>|<|=)?[1-9][0-9]*( (>=|<=|>|<|=)?[1-9][0-9]*)*$" },
     "publisher": { "type": "string", "minLength": 1, "maxLength": 80 },
     "description": { "type": "string", "minLength": 1, "maxLength": 300 },
-    "category": { "enum": ["development", "communication", "documents", "agents", "security", "analytics", "entire-vc"] },
+    "category": { "enum": ["development", "communication", "documents", "agents", "security", "analytics", "entire-vc", "appearance"] },
     "tags": { "type": "array", "maxItems": 10, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,29}$" } },
     "icon": { "type": "string", "minLength": 1 },
     "license": { "type": "string", "minLength": 1 },
@@ -82,6 +82,14 @@
         "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
       }
     },
+    "theme": { "$ref": "#/$defs/theme" },
+    "requires": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/extensionId" }
+    },
+    "project_view": { "$ref": "#/$defs/projectView" },
     "external": {
       "oneOf": [
         { "type": "null" },
@@ -122,11 +130,114 @@
     {
       "if": { "properties": { "runtime": { "const": "external" } } },
       "then": { "required": ["external"], "properties": { "external": { "type": "object" } } }
+    },
+    {
+      "if": { "required": ["capabilities"], "properties": { "capabilities": { "required": ["ui"], "properties": { "ui": { "contains": { "const": "project.view" } } } } } },
+      "then": { "required": ["project_view"], "properties": { "levels": { "properties": { "project": { "const": true } } } } },
+      "else": { "not": { "required": ["project_view"] } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "theme" } } },
+      "then": {
+        "required": ["theme"],
+        "properties": {
+          "runtime": { "const": "builtin" },
+          "category": { "const": "appearance" },
+          "levels": {
+            "properties": { "instance": { "const": true }, "workspace": { "const": true }, "project": { "const": false } }
+          },
+          "capabilities": { "type": "object", "maxProperties": 0 },
+          "external": { "type": "null" }
+        }
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["theme"] },
+            { "required": ["category"], "properties": { "category": { "const": "appearance" } } }
+          ]
+        }
+      }
     }
   ],
   "$defs": {
+    "extensionId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,40}$",
+      "not": { "anyOf": [{ "pattern": "mesh" }, { "pattern": "-(plugin|extension)$" }] }
+    },
+    "projectView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["icon", "title"],
+      "properties": {
+        "icon": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "after": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+        "visible_if": { "type": "object" }
+      }
+    },
+    "themeSlot": {
+      "anyOf": [
+        { "enum": ["board.layout", "board.column", "board.card", "task.row", "task.view", "dashboard.layout", "nav.sidebar", "nav.topbar", "doc.tree", "doc.view", "auth.screen"] },
+        { "type": "string", "pattern": "^dashboard\\.widget\\.[a-z][a-z0-9-]{0,39}$" }
+      ]
+    },
+    "semverMajorRange": { "type": "string", "pattern": "^\\^[1-9][0-9]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "themeTokens": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 200 }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens_contract", "modes"],
+      "properties": {
+        "tokens_contract": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "modes": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["light", "dark"] } },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "light": { "$ref": "#/$defs/themeTokens" }, "dark": { "$ref": "#/$defs/themeTokens" } }
+        },
+        "css": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" } }
+        },
+        "views": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bundle", "sha256"],
+          "properties": { "bundle": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" } }
+        },
+        "slots": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/themeSlot" },
+          "additionalProperties": { "$ref": "#/$defs/semverMajorRange" }
+        },
+        "contract_report": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sdk_version", "bundle_sha256", "passed"],
+          "properties": {
+            "sdk_version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+            "bundle_sha256": { "$ref": "#/$defs/sha256" },
+            "passed": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/themeSlot" },
+              "additionalProperties": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" }
+            }
+          }
+        }
+      },
+      "dependentRequired": { "views": ["slots", "contract_report"], "slots": ["views"] }
+    },
     "slot": {
-      "enum": ["workspace.settings", "project.settings", "task.panel", "task.badge", "task.actions", "sidebar.item", "command", "doc.panel"]
+      "enum": ["workspace.settings", "project.settings", "task.panel", "task.badge", "task.actions", "sidebar.item", "command", "doc.panel", "project.view"]
     },
     "settingsLevel": {
       "type": "object",

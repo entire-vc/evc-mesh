@@ -38,11 +38,11 @@ import type {
  * "the tree at the bottom shows the same thing" is the acceptance criterion, not
  * a nicety.
  *
- * ## The composer at the bottom is always mounted (Pavel, 2026-08-23, `#744ae979`)
+ * ## The composer at the bottom is always mounted (Alex, 2026-08-23, an internal ticket)
  *
- * A prior change (`e2e40de`, `#a9df0f4a`) mounted this section only while the
+ * A prior change (`e2e40de`, an internal ticket) mounted this section only while the
  * rail was closed, to stop the two surfaces painting the same thread twice.
- * Pavel's read: hiding the tree behind the rail was the wrong fix for that —
+ * Alex's read: hiding the tree behind the rail was the wrong fix for that —
  * the tree is where a comment gets *started* as much as where it gets *read*,
  * so it stays on screen with the rail open or closed, and a reader who opens
  * the rail is not supposed to lose the surface they were writing in. The

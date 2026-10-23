@@ -59,8 +59,8 @@ const OPEN_TASK: Task = {
 
 const USER: User = {
   id: "u1",
-  email: "pavel@example.com",
-  name: "Pavel",
+  email: "alex@example.com",
+  name: "Alex",
   avatar_url: "",
   is_active: true,
   created_at: "2026-01-01T00:00:00Z",
@@ -150,8 +150,8 @@ describe("Header — user menu", () => {
     fireEvent.click(screen.getByRole("button", { name: "P" }));
 
     const item = screen.getByRole("menuitem", { name: "Open profile" });
-    expect(item).toHaveTextContent("Pavel");
-    expect(item).toHaveTextContent("pavel@example.com");
+    expect(item).toHaveTextContent("Alex");
+    expect(item).toHaveTextContent("alex@example.com");
     fireEvent.click(item);
 
     expect(screen.getByText("PROFILE-SCREEN")).toBeInTheDocument();

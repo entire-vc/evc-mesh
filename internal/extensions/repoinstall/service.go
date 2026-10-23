@@ -26,7 +26,42 @@ type Service struct {
 	// OnChange runs after an install, update or rollback changed what is
 	// installed, so the runtime can register the new version. May be nil.
 	OnChange func(ctx context.Context)
+	// Themes verifies and stores the bundle files of a kind=theme extension
+	// before its row is written. Without it a theme is refused: its hashes
+	// would otherwise never be checked.
+	Themes ThemeAssets
 }
+
+// FetchFunc reads one file of the repository at the commit being installed.
+type FetchFunc func(ctx context.Context, path string) ([]byte, error)
+
+// ThemeAssets checks a theme's bundle against the hashes in its manifest and
+// stores it; a returned error stops the install.
+type ThemeAssets interface {
+	PrepareInstall(ctx context.Context, m extensions.Manifest, fetch FetchFunc) error
+}
+
+// prepareTheme runs the theme asset check for a fetched manifest; a no-op for
+// every other kind.
+func (s *Service) prepareTheme(ctx context.Context, f *fetched, token string) error {
+	if f.manifest.Kind != "theme" {
+		return nil
+	}
+	if s.Themes == nil {
+		return apiErr(http.StatusServiceUnavailable, CodeManifestInvalid, "themes are not enabled on this instance")
+	}
+	fetch := func(ctx context.Context, path string) ([]byte, error) {
+		b, err := s.Client.File(ctx, f.src, f.sha, path, token, MaxThemeAssetBytes)
+		if errors.Is(err, ErrBadPath) {
+			return nil, apiErr(http.StatusUnprocessableEntity, CodeManifestInvalid, err.Error())
+		}
+		return b, wrapHost(err)
+	}
+	return s.Themes.PrepareInstall(ctx, f.manifest, fetch)
+}
+
+// MaxThemeAssetBytes bounds one file of a theme bundle read from a repository.
+const MaxThemeAssetBytes = 2 << 20
 
 func (s *Service) changed(ctx context.Context) {
 	if s.OnChange != nil {
@@ -147,15 +182,30 @@ func (s *Service) Preview(ctx context.Context, repoURL, ref, token string) (*Pre
 
 // Install installs the extension at ref with trust level custom.
 func (s *Service) Install(ctx context.Context, actor uuid.UUID, repoURL, ref, token string) (*domain.InstalledExtension, error) {
+	return s.install(ctx, actor, repoURL, ref, token, "")
+}
+
+// InstallTheme is Install for a repository that must hold a kind=theme manifest.
+func (s *Service) InstallTheme(ctx context.Context, actor uuid.UUID, repoURL, ref, token string) (*domain.InstalledExtension, error) {
+	return s.install(ctx, actor, repoURL, ref, token, "theme")
+}
+
+func (s *Service) install(ctx context.Context, actor uuid.UUID, repoURL, ref, token, wantKind string) (*domain.InstalledExtension, error) {
 	f, err := s.fetch(ctx, repoURL, ref, token)
 	if err != nil {
 		return nil, err
 	}
 	m := f.manifest
+	if wantKind != "" && m.Kind != wantKind {
+		return nil, apiErr(http.StatusUnprocessableEntity, CodeManifestInvalid, fmt.Sprintf("the repository holds a %q extension, not a %s", m.Kind, wantKind))
+	}
 	if existing, gerr := s.Installed.Get(ctx, m.ID); gerr != nil {
 		return nil, gerr
 	} else if existing != nil {
 		return nil, apiErr(http.StatusConflict, CodeIDConflict, fmt.Sprintf("an extension with id %q is already installed", m.ID))
+	}
+	if err := s.prepareTheme(ctx, f, token); err != nil {
+		return nil, err
 	}
 	row := &domain.InstalledExtension{
 		ExtensionID: m.ID, Version: m.Version, Manifest: m.Raw, Source: domain.ExtensionSourceRepo,
@@ -356,6 +406,9 @@ func (s *Service) update(ctx context.Context, actor *uuid.UUID, id, consentSHA s
 		s.journal(ctx, actor, id, domain.InstanceJournalUpdatePending, map[string]any{"version": cand.f.manifest.Version, "commit_sha": cand.f.sha, "new_capabilities": res.NewCapabilities})
 		res.Outcome = OutcomePendingConsent
 		return res, nil
+	}
+	if err := s.prepareTheme(ctx, cand.f, token); err != nil {
+		return nil, err
 	}
 	if err := s.Repo.ApplyUpdate(ctx, id, cand.f.manifest.Version, cand.ref, cand.f.sha, cand.f.manifest.Raw); err != nil {
 		return nil, err

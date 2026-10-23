@@ -4,16 +4,16 @@ export const agentTypeConfig: Record<
   AgentType,
   { label: string; color: string }
 > = {
-  claude_code: { label: "Claude Code", color: "bg-purple-100 text-purple-700" },
-  openclaw: { label: "OpenClaw", color: "bg-blue-100 text-blue-700" },
-  cline: { label: "Cline", color: "bg-green-100 text-green-700" },
-  aider: { label: "Aider", color: "bg-orange-100 text-orange-700" },
-  custom: { label: "Custom", color: "bg-gray-100 text-gray-700" },
-  hermes: { label: "Hermes", color: "bg-teal-100 text-teal-700" },
-  codex: { label: "Codex", color: "bg-slate-100 text-slate-700" },
-  cursor: { label: "Cursor", color: "bg-indigo-100 text-indigo-700" },
-  copilot: { label: "GitHub Copilot", color: "bg-zinc-100 text-zinc-700" },
-  gemini_cli: { label: "Gemini CLI", color: "bg-sky-100 text-sky-700" },
+  claude_code: { label: "Claude Code", color: "bg-tone-purple-100 text-tone-purple-700" },
+  openclaw: { label: "OpenClaw", color: "bg-tone-info-100 text-tone-info-700" },
+  cline: { label: "Cline", color: "bg-tone-success-100 text-tone-success-700" },
+  aider: { label: "Aider", color: "bg-tone-high-100 text-tone-high-700" },
+  custom: { label: "Custom", color: "bg-tone-neutral-100 text-tone-neutral-700" },
+  hermes: { label: "Hermes", color: "bg-tone-teal-100 text-tone-teal-700" },
+  codex: { label: "Codex", color: "bg-tone-slate-100 text-tone-slate-700" },
+  cursor: { label: "Cursor", color: "bg-tone-indigo-100 text-tone-indigo-700" },
+  copilot: { label: "GitHub Copilot", color: "bg-tone-zinc-100 text-tone-zinc-700" },
+  gemini_cli: { label: "Gemini CLI", color: "bg-tone-sky-100 text-tone-sky-700" },
 };
 
 /**
@@ -26,7 +26,7 @@ export function agentTypeDisplay(agentType: string): { label: string; color: str
   return (
     (agentTypeConfig as Record<string, { label: string; color: string }>)[agentType] ?? {
       label: agentType,
-      color: "bg-gray-100 text-gray-700",
+      color: "bg-tone-neutral-100 text-tone-neutral-700",
     }
   );
 }
@@ -35,10 +35,10 @@ export const agentStatusConfig: Record<
   AgentStatus,
   { label: string; dotColor: string }
 > = {
-  online: { label: "Online", dotColor: "bg-green-500" },
-  offline: { label: "Offline", dotColor: "bg-gray-400" },
-  busy: { label: "Busy", dotColor: "bg-yellow-500" },
-  error: { label: "Error", dotColor: "bg-red-500" },
+  online: { label: "Online", dotColor: "bg-tone-success-500" },
+  offline: { label: "Offline", dotColor: "bg-tone-neutral-400" },
+  busy: { label: "Busy", dotColor: "bg-tone-attention-500" },
+  error: { label: "Error", dotColor: "bg-tone-danger-500" },
 };
 
 const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes

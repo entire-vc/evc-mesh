@@ -117,7 +117,7 @@ export function AgentDetailDialog({
   const [modelDraft, setModelDraft] = useState("");
   const [editingCallbackUrl, setEditingCallbackUrl] = useState(false);
   const [callbackUrlDraft, setCallbackUrlDraft] = useState("");
-  // Five fields new to this form (task #85714565), all routed through
+  // Five fields new to this form, all routed through
   // PUT /agents/:id/profile — one editing slot instead of 5x the
   // editing-boolean/draft-string pairs above, since only one can be open
   // at a time anyway.
@@ -552,14 +552,14 @@ export function AgentDetailDialog({
               />
               <span className="text-sm">{t(`agentDetail.status.${effectiveStatus}`, { defaultValue: statusConfig.label })}</span>
               {stale && agent.status === "online" && (
-                <span className="text-xs text-yellow-600">{t("agentDetail.stale")}</span>
+                <span className="text-xs text-tone-attention-600">{t("agentDetail.stale")}</span>
               )}
             </div>
           </DetailRow>
 
           {/* Last Heartbeat */}
           <DetailRow label={t("agentDetail.fields.lastHeartbeat")}>
-            <span className={cn("text-sm", stale && "text-yellow-600")}>
+            <span className={cn("text-sm", stale && "text-tone-attention-600")}>
               {agent.last_heartbeat
                 ? formatRelative(agent.last_heartbeat)
                 : t("agentDetail.never")}
@@ -1166,10 +1166,10 @@ function DetailRow({
 
 /**
  * Inline-editable row for one of the five profile fields added in task
- * #85714565. `label` renders as visible text when set; when omitted, `icon`
+ * an internal ticket. `label` renders as visible text when set; when omitted, `icon`
  * + `ariaLabel` carry the field's identity instead (input aria-label/title
  * and "Edit …" tooltip). Field-label copy is tier B (§1r.A) — the lead ships
- * it directly, no Pavel approval gate — so all five profile fields now pass
+ * it directly, no Alex approval gate — so all five profile fields now pass
  * `label`; `ariaLabel`-only stays available for a future field that
  * genuinely has no room for visible text.
  */
@@ -1211,7 +1211,7 @@ function ProfileFieldRow({
     // narrow viewport, editing max_concurrent_tasks/escalation_to squeezes
     // the label span down to ~80px, and its uppercase tracking-wider text
     // wrapped to THREE lines with the edit Input floating unanchored beside
-    // it (task #1ffb67b5, second pass — found live at 393px in edit mode).
+    // it (an internal ticket, second pass — found live at 393px in edit mode).
     // Letting the row wrap moves the value/editor to its own line instead
     // of shrinking the label — the label then renders on one line at the
     // row's full width, which is always enough room for these labels.

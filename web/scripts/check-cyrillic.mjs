@@ -10,7 +10,7 @@ const opt = (name, def) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : def;
 };
-const srcRoot = path.resolve(opt("--src", path.join(here, "../src")));
+const srcRoot = path.resolve(opt("--src", path.join(here, "../src"))); // scope-ok: web/src
 
 if (!fs.existsSync(srcRoot)) {
   console.error(`check-cyrillic: ${srcRoot} does not exist`);

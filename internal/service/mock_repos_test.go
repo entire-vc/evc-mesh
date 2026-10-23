@@ -286,13 +286,13 @@ type MockTaskRepository struct {
 	// LastCreateActivity records the activity entry passed to the most recent
 	// Create call, so a test can assert task_service built the right task.created
 	// payload without needing a real Postgres transaction (see TaskRepo.Create's
-	// atomicity contract, #819e7b29).
+	// atomicity contract).
 	LastCreateActivity *domain.ActivityLog
 	mu                 sync.RWMutex
 	items              map[uuid.UUID]*domain.Task
 	errToReturn        error
 	// getByIDErr fails ONLY GetByID, leaving every other method working. Added
-	// 2026-09-09 (#f933dc05) because errToReturn fails them all, so a test that
+	// 2026-09-09 because errToReturn fails them all, so a test that
 	// sets it and then asserts "the write was refused" passes whether the guard
 	// under test exists or not — it was measured passing at origin/main, where
 	// the guard does not exist at all. Same shape as MockCommentRepository's
@@ -306,7 +306,7 @@ type MockTaskRepository struct {
 	getByIDErrFor map[uuid.UUID]error
 	// getByIDMisses makes GetByID answer (nil, nil) for the first N calls on
 	// a given ID, then serve the stored task — the "winner's claim row is
-	// visible but its card is not yet" window of #5194afd4. Set via
+	// visible but its card is not yet" window of an internal ticket. Set via
 	// DeferGetByID; a test that never calls it gets the plain map read.
 	getByIDMisses map[uuid.UUID]int
 	// onGetByID, when set, is consulted on EVERY GetByID with its 1-based
@@ -707,7 +707,7 @@ func (m *MockTaskRepository) FindExpiredInProgressCheckouts(_ context.Context) (
 	return out, nil
 }
 
-// FindDueBacklogTasks mirrors the real query AFTER #559270cf: due_date passed and a
+// FindDueBacklogTasks mirrors the real query AFTER an internal ticket: due_date passed and a
 // backlog-category status, with NO label filter. The label condition the mock used to
 // carry is gone from the SQL too — keeping it here would have made every promotion test
 // pass against a candidate set the database no longer produces.
@@ -845,7 +845,7 @@ func (m *MockTaskRepository) ArmHumanGate(_ context.Context, in domain.ArmHumanG
 		case in.RecommendedDefault == "":
 			t.GateDeadline = nil
 		default:
-			// No class-based exception any more (task 1.4b, #4d61d877) — hard and soft
+			// No class-based exception any more (task 1.4b) — hard and soft
 			// both reach this branch once they have a real default and no explicit
 			// deadline; see task_repo.go's ArmHumanGate for the real SQL this mirrors.
 			computed := armedAt.Add(time.Duration(pgRepo.DefaultGateTimeoutHours) * time.Hour)
@@ -868,7 +868,7 @@ func (m *MockTaskRepository) SetHumanGate(_ context.Context, taskID uuid.UUID, v
 		// resets the class to hard and drops the ask metadata. Modelled here because a
 		// mock that keeps a soft class or a stale recommended_default across a release
 		// would let a test pass on behaviour prod does not have — and the field being
-		// dropped is the one #060ccaae's timeout sweep acts on.
+		// dropped is the one an internal ticket's timeout sweep acts on.
 		if !value {
 			t.HumanGateClass = domain.HumanGateClassHard
 			t.GateAuthor, t.GateAuthorType = nil, nil
@@ -1392,7 +1392,7 @@ func (m *MockCommentRepository) ListByTask(_ context.Context, taskID uuid.UUID, 
 	// not just an inconvenience for one test. Sort here so the mock matches prod.
 	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.Before(all[j].CreatedAt) })
 
-	// Task #3b921ba7: this used to hand back the FULL unsliced set regardless of
+	// an internal ticket: this used to hand back the FULL unsliced set regardless of
 	// pg.Page/pg.PageSize, with only Page.HasMore computed from the arithmetic —
 	// so a caller that (bug) read only "page 1" still silently saw every comment
 	// through this mock, and a caller that (fix) loops until HasMore is false
@@ -3032,7 +3032,7 @@ type fakeTaskMover struct {
 	moves        []moveCall
 	gateSetCalls []humanGateCall
 	// armCalls records the full ArmHumanGateInput of every arm. gateSetCalls above
-	// still gets a value:true entry per arm, so the pre-#4545660b assertions ("the
+	// still gets a value:true entry per arm, so the pre assertions ("the
 	// gate was armed / was not armed") keep asserting exactly what they always did —
 	// the arming CALL changed shape, the delivery it stands for did not.
 	armCalls      []domain.ArmHumanGateInput
@@ -3393,6 +3393,10 @@ func (m *MockVCSLinkRepository) SetPipelineStatus(_ context.Context, id uuid.UUI
 		return true, nil
 	}
 	return false, nil
+}
+
+func (m *MockVCSLinkRepository) ListOpenTasksWithMergedPR(_ context.Context, _, _ int) ([]repository.MergedPROpenTask, error) {
+	return nil, m.errToReturn
 }
 
 func (m *MockVCSLinkRepository) ListByExternalID(_ context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error) {
@@ -4570,7 +4574,7 @@ func (m *MockDocumentRepository) SearchInProject(
 
 // ---------------------------------------------------------------------------
 // MockWorkspaceMemberRepository — human half of GetTeamDirectory (task
-// #71627c5a). Only List/ListWithProjects have real callers today; the rest
+// an internal ticket). Only List/ListWithProjects have real callers today; the rest
 // are stubs so the mock satisfies repository.WorkspaceMemberRepository at
 // compile time without pulling in every path's test fixture up front.
 // ---------------------------------------------------------------------------
@@ -4690,8 +4694,8 @@ func (m *MockWorkspaceMemberRepository) CountOwners(_ context.Context, workspace
 
 // MockEventBusService records Publish calls so tests can assert a mutation
 // reached the Events feed (event_bus_messages), distinct from the audit-only
-// activity_log write. See #42d3daea: CreateSubtask stopped calling
-// publishTaskEvent after the #819e7b29 atomicity fix, and nothing caught it
+// activity_log write. See an internal ticket: CreateSubtask stopped calling
+// publishTaskEvent after the an internal ticket atomicity fix, and nothing caught it
 // because no test in this package ever wired an EventBusService at all.
 type MockEventBusService struct {
 	mu       sync.Mutex
@@ -4805,7 +4809,7 @@ func (m *MockCommentDeliveryOutcomeRepository) ListByCommentIDs(_ context.Contex
 }
 
 // ---------------------------------------------------------------------------
-// MockClosedFollowUpRootRepository (#5194afd4)
+// MockClosedFollowUpRootRepository
 //
 // Mirrors the Postgres repo's semantics exactly where they are load-bearing:
 // Claim is INSERT ... ON CONFLICT DO NOTHING (only the first claim for a key
@@ -4853,13 +4857,13 @@ type MockClosedFollowUpRootRepository struct {
 	getCalls int
 	// onRootsClaim, when set, runs after the call counter of every Claim
 	// call (counted from 1), OUTSIDE the mutex — the overlap point for the
-	// lease test (#a2368528): pass B runs re-entrantly from inside pass A's
+	// lease test: pass B runs re-entrantly from inside pass A's
 	// first Claim, which is exactly the window two concurrent passes would
 	// race in. Runs for B's own Claim too (call 2), so the hook guards on
 	// the call number.
 	onRootsClaim func(call int)
 	// failClaimFirstN models a TRANSIENT outage for the retry ladder
-	// (#db1c6c7a): exactly the first N Claim calls fail, then the store
+	//: exactly the first N Claim calls fail, then the store
 	// recovers. The sticky errToReturn is the database down for the whole
 	// test; the ladder needs the in-between shape: fail once, land on retry.
 	failClaimFirstN int
@@ -5019,7 +5023,7 @@ func (m *MockClosedFollowUpRootRepository) Delete(_ context.Context, sourceTaskI
 	return nil
 }
 
-// MockClosedFollowUpPendingRepository (#db1c6c7a) mirrors
+// MockClosedFollowUpPendingRepository mirrors
 // closed_followup_pending: a map keyed by the comment PK, an atomic attempts
 // counter, and the two error shapes the delivery path needs to rehearse —
 // sticky (errToReturn: the enqueue itself fails, the wholly-down database)
@@ -5046,7 +5050,7 @@ type MockClosedFollowUpPendingRepository struct {
 	// branch.
 	markErr error
 	// claimErr fails ClaimForReconcile ALONE: the lease store is down while
-	// the queue reads fine — the loop's claim-error branch (#a2368528).
+	// the queue reads fine — the loop's claim-error branch.
 	claimErr error
 }
 
@@ -5054,7 +5058,7 @@ func NewMockClosedFollowUpPendingRepository() *MockClosedFollowUpPendingReposito
 	return &MockClosedFollowUpPendingRepository{items: make(map[uuid.UUID]*domain.ClosedFollowUpPending)}
 }
 
-// ClaimForReconcile mirrors the SQL lease (#a2368528): a row is claimable
+// ClaimForReconcile mirrors the SQL lease: a row is claimable
 // only while its lease is NULL or past — timeNow(), not a captured clock, so
 // the TTL arithmetic is the same one production pays. A missing row claims
 // false without an error, exactly like the UPDATE that affects nothing.
@@ -5171,7 +5175,7 @@ func (m *MockClosedFollowUpPendingRepository) MarkAttempt(_ context.Context, com
 	p.LastError = lastErr
 	// The lease survives the progress write: it covers the whole row unit,
 	// and only the unit's end (ReleaseClaim / Delete / TTL) gives the row
-	// back (#a2368528, codex-review round 2 on !1085).
+	// back (an internal ticket, a review).
 	return p.Attempts, nil
 }
 

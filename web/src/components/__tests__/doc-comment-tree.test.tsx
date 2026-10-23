@@ -17,7 +17,7 @@ function makeComment(overrides: Partial<DocumentComment> = {}): DocumentComment 
     parent_comment_id: null,
     author_id: ME,
     author_type: "user",
-    author_name: "Pavel",
+    author_name: "Alex",
     body: "body",
     anchor: {
       exact: "quote",
@@ -249,7 +249,7 @@ describe("DocCommentTree — resolved threads", () => {
 
 describe("DocCommentTree — the surface itself", () => {
   it("still renders the section — with its composer — on a page with no comments", () => {
-    // #744ae979: the section used to return null here. It can't any more —
+    // an internal ticket: the section used to return null here. It can't any more —
     // the composer that lives under the document needs somewhere to render
     // before the first comment exists, not only after.
     renderTree(makeController({ threads: [] }));
@@ -292,7 +292,7 @@ describe("DocCommentTree — the surface itself", () => {
   });
 });
 
-describe("DocCommentTree — the composer that lives at the bottom (#744ae979)", () => {
+describe("DocCommentTree — the composer that lives at the bottom", () => {
   it("is there with a page open, no click and no selection needed first", () => {
     renderTree(makeController({ threads: [makeThread("t1", { start: 10, end: 20 })] }));
     expect(

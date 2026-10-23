@@ -75,6 +75,9 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/agent-grants", map[string]string{"agent_id": dummyUUID, "role": "member"}},
 	{http.MethodDelete, "/agent-grants/" + dummyUUID, nil},
 
+	{http.MethodGet, "/theme", nil},
+	{http.MethodPut, "/theme", map[string]string{}},
+
 	{http.MethodGet, "/extensions", nil},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/connect", map[string]string{}},
 	{http.MethodPatch, "/extensions/" + dummyUUID + "/settings", map[string]string{}},
@@ -82,6 +85,8 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/extensions/" + dummyUUID + "/disable", map[string]string{}},
 	{http.MethodPost, "/extensions/" + dummyUUID + "/test", map[string]string{}},
 	{http.MethodDelete, "/extensions/" + dummyUUID, nil},
+	{http.MethodGet, "/chat/settings", nil},
+	{http.MethodPut, "/chat/settings", map[string]string{}},
 
 	// Agent runtime catalog: a non-member must be refused before any handler
 	// reads the owner's resource inventory or accepts a controller/consent write.

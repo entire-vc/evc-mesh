@@ -133,13 +133,13 @@ func TestOnEnterAssign_UserTargets(t *testing.T) {
 	userID := uuid.New()
 	for _, tc := range []struct{ name, target string }{
 		{"by uuid", "user:" + userID.String()},
-		{"by email", "user:pavel@example.com"},
-		{"by username", "user:pavel"},
+		{"by email", "user:alex@example.com"},
+		{"by username", "user:alex"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupOnEnterAssignEnv(t, map[string]domain.OnEnterAction{"qualified": {AssignTo: tc.target}})
 			users := NewMockUserRepository()
-			users.AddUser(testDefaultWorkspaceID, &domain.User{ID: userID, Username: "pavel", Email: "pavel@example.com"})
+			users.AddUser(testDefaultWorkspaceID, &domain.User{ID: userID, Username: "alex", Email: "alex@example.com"})
 			WithUserRepoTask(users)(env.svc)
 			id := env.seedTask(env.ownerID)
 			env.move(t, id)

@@ -1,10 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  boardColumnPropsEqual,
-  holderMapsEqual,
-  sortableTaskCardPropsEqual,
-  tasksArrayEqual,
-} from "@/pages/board";
+import { holderMapsEqual, tasksArrayEqual } from "@/pages/board";
+import { cardPropsEqual, columnPropsEqual } from "@/core/slots/board-host";
+import { toTaskData, stabilizeColumns } from "@/core/slots/board-data";
+import type { BoardCardView, BoardColumnData } from "@/core/slots/types";
 import type { Task } from "@/types";
 
 // A static top-level import (not per-test `await import(...)`) — board.tsx is
@@ -40,44 +38,54 @@ function task(overrides: Partial<Task> = {}): Task {
   } as Task;
 }
 
-describe("board.tsx memoization comparators (perf·Б3 board.drag)", () => {
-  it("sortableTaskCardPropsEqual: true when every field is the SAME reference", () => {
+const ctx = { slot: "board.layout", contractVersion: "1.0.0", locale: "en", mode: "light" as const, isMobile: false, workspace: null };
+const settings = {};
+const fields: never[] = [];
+const Card: BoardCardView = () => null;
+
+function cardProps(t: Task, over: Record<string, unknown> = {}) {
+  return {
+    data: {
+      task: toTaskData(t, "todo"),
+      column: { id: "c-1", kind: "status" as const, statusCategory: "todo" as const },
+      fields,
+      selected: false,
+      isOverlay: false,
+      ...over,
+    },
+    actions: { openTask: () => {} },
+    themeSettings: settings,
+    ctx,
+  };
+}
+
+describe("board slot memo comparators (perf·Б3 board.drag)", () => {
+  it("toTaskData keeps its result's identity for the same task object, replaces it for a new one", () => {
     const t = task();
-    const onClick = () => {};
-    const onEditClick = () => {};
-    const props = { task: t, columnId: "c-1", statusCategory: "todo" as const, onClick, onEditClick, checkedOutByName: undefined };
-    expect(sortableTaskCardPropsEqual(props, { ...props })).toBe(true);
+    expect(toTaskData(t, "todo")).toBe(toTaskData(t, "todo"));
+    expect(toTaskData(task(), "todo")).not.toBe(toTaskData(t, "todo"));
   });
 
-  it("sortableTaskCardPropsEqual: false when the task object was replaced (the moved card itself)", () => {
-    const onClick = () => {};
-    const onEditClick = () => {};
-    const base = { task: task(), columnId: "c-1", statusCategory: "todo" as const, onClick, onEditClick, checkedOutByName: undefined };
-    const moved = { ...base, task: task({ status_id: "s-2" }) };
-    expect(sortableTaskCardPropsEqual(base, moved)).toBe(false);
-  });
-
-  it("sortableTaskCardPropsEqual: false when onClick/onEditClick are fresh per-render closures", () => {
+  it("cardPropsEqual: fresh data/actions objects around the same task are equal", () => {
     const t = task();
-    const props = { task: t, columnId: "c-1", statusCategory: "todo" as const, checkedOutByName: undefined };
-    // Exactly the bug this props contract exists to prevent: a NEW arrow
-    // function per render (e.g. `onClick={() => onTaskClick(task)}` inlined
-    // in BoardColumn) defeats the memo below even though nothing else moved.
-    expect(
-      sortableTaskCardPropsEqual(
-        { ...props, onClick: () => {}, onEditClick: () => {} },
-        { ...props, onClick: () => {}, onEditClick: () => {} },
-      ),
-    ).toBe(false);
+    expect(cardPropsEqual(cardProps(t), cardProps(t))).toBe(true);
   });
 
-  it("sortableTaskCardPropsEqual: kill switch off always reports unequal", () => {
+  it("cardPropsEqual: false when the task object was replaced (the moved card itself)", () => {
+    expect(cardPropsEqual(cardProps(task()), cardProps(task({ status_id: "s-2" })))).toBe(false);
+  });
+
+  it("cardPropsEqual: false when gate status, fields or overlay flag change", () => {
+    const t = task();
+    expect(cardPropsEqual(cardProps(t), cardProps(t, { gateStatusName: "Review" }))).toBe(false);
+    expect(cardPropsEqual(cardProps(t), cardProps(t, { fields: [] }))).toBe(false);
+    expect(cardPropsEqual(cardProps(t), cardProps(t, { isOverlay: true }))).toBe(false);
+  });
+
+  it("cardPropsEqual: kill switch off always reports unequal", () => {
     window.__MESH_FLAGS__ = { boardCardMemo: false };
     const t = task();
-    const onClick = () => {};
-    const onEditClick = () => {};
-    const props = { task: t, columnId: "c-1", statusCategory: "todo" as const, onClick, onEditClick, checkedOutByName: undefined };
-    expect(sortableTaskCardPropsEqual(props, { ...props })).toBe(false);
+    expect(cardPropsEqual(cardProps(t), cardProps(t))).toBe(false);
   });
 
   it("tasksArrayEqual: true for the same array, and for a different array with the same task references in order", () => {
@@ -105,46 +113,36 @@ describe("board.tsx memoization comparators (perf·Б3 board.drag)", () => {
     expect(holderMapsEqual(m1, new Map([["u-1", "Someone else"], ["u-2", "Bob"]]))).toBe(false);
   });
 
-  it("boardColumnPropsEqual: content-equal tasks array in a fresh array reference still counts as equal", () => {
-    const a = task({ id: "a" });
-    const col = { id: "c-1", title: "Todo", color: "#000" };
-    const onAddTask = () => {};
-    const onTaskClick = () => {};
-    const onTaskEdit = () => {};
-    const holderNameById = new Map<string, string>();
-    const prev = { col, tasks: [a], dndEnabled: true, onAddTask, onTaskClick, onTaskEdit, holderNameById };
-    // tasksByStatus/tasksByColumn is rebuilt with a fresh array on every
-    // moveTask (stores/task.ts groupByStatus) — this is the case an
-    // unrelated column hits on every drag, and it must stay memoized.
-    const next = { ...prev, tasks: [a] };
-    expect(boardColumnPropsEqual(prev, next)).toBe(true);
+  const column = (over: Partial<BoardColumnData> = {}): BoardColumnData => ({
+    id: "c-1", kind: "status", title: "Todo", color: "#000", tasks: [], totalCount: 0, countLabel: "0",
+    wipLimit: null, isClosed: false, hasMore: false, loadingMore: false, ...over,
+  });
+  const colProps = (c: BoardColumnData) => ({
+    data: { column: c, index: 0, total: 1, dnd: { enabled: true, nonDroppableColumnIds: [] }, fields, components: { Card } },
+    actions: { loadMore: async () => {}, openTask: () => {}, moveTask: async () => {} },
+    themeSettings: settings,
+    ctx,
   });
 
-  it("boardColumnPropsEqual: false when the column's own content changed", () => {
-    const a = task({ id: "a" });
-    const col = { id: "c-1", title: "Todo", color: "#000" };
-    const onAddTask = () => {};
-    const onTaskClick = () => {};
-    const onTaskEdit = () => {};
-    const holderNameById = new Map<string, string>();
-    const prev = { col, tasks: [a], dndEnabled: true, onAddTask, onTaskClick, onTaskEdit, holderNameById };
-    expect(boardColumnPropsEqual(prev, { ...prev, tasks: [a, task({ id: "b" })] })).toBe(false);
-    expect(boardColumnPropsEqual(prev, { ...prev, col: { ...col } })).toBe(false);
+  it("stabilizeColumns: a rebuilt column with the same content keeps its object; a changed one does not", () => {
+    const a = toTaskData(task({ id: "a" }), "todo");
+    const first = stabilizeColumns(new Map(), [column({ tasks: [a] })]);
+    const again = stabilizeColumns(first.cache, [column({ tasks: [a] })]);
+    expect(again.columns[0]).toBe(first.columns[0]);
+    const b = toTaskData(task({ id: "b" }), "todo");
+    const changed = stabilizeColumns(first.cache, [column({ tasks: [a, b] })]);
+    expect(changed.columns[0]).not.toBe(first.columns[0]);
   });
 
-  it("boardColumnPropsEqual: kill switch off always reports unequal", () => {
+  it("columnPropsEqual: same column object is equal even with fresh actions; a new column object is not", () => {
+    const c = column();
+    expect(columnPropsEqual(colProps(c), colProps(c))).toBe(true);
+    expect(columnPropsEqual(colProps(c), colProps(column()))).toBe(false);
+  });
+
+  it("columnPropsEqual: kill switch off always reports unequal", () => {
     window.__MESH_FLAGS__ = { boardCardMemo: false };
-    const a = task({ id: "a" });
-    const col = { id: "c-1", title: "Todo", color: "#000" };
-    const prev = {
-      col,
-      tasks: [a],
-      dndEnabled: true,
-      onAddTask: () => {},
-      onTaskClick: () => {},
-      onTaskEdit: () => {},
-      holderNameById: new Map<string, string>(),
-    };
-    expect(boardColumnPropsEqual(prev, { ...prev, tasks: [a] })).toBe(false);
+    const c = column();
+    expect(columnPropsEqual(colProps(c), colProps(c))).toBe(false);
   });
 });

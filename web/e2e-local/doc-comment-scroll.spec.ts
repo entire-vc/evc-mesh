@@ -3,7 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 // This suite writes only to scripts/local-stack.sh's disposable database.
 // Regression for the page jumping to the top when "comment" is pressed on a
 // selection deep in a long document, plus the scroll-to-mark behaviour of
-// #d36b6b97 that the fix must leave alone.
+// an internal ticket that the fix must leave alone.
 const WORDS = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor";
 
 
@@ -67,7 +67,7 @@ for (const vp of [
     expect(after).toBeGreaterThan(before - 150);
     if (vp.width >= 1024) await expectInViewport(page, target);
     await expectInViewport(page, textarea);
-    await page.screenshot({ path: `/tmp/linus-2336-draft-${vp.name}.png` });
+    await page.screenshot({ path: `/tmp/liam-2336-draft-${vp.name}.png` });
   });
 }
 

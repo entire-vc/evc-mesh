@@ -23,10 +23,10 @@ import (
 // (.gitlab-ci.yml coverage-gate script), so the integration-tagged round
 // trip proves start_after works against real Postgres but counts for
 // nothing in that gate. These pin the exact SQL text/arg wiring the mocked
-// driver can express for every write/read path that #246b8fcc touched and
+// driver can express for every write/read path that an internal ticket touched and
 // that had zero non-integration coverage before this change (Update, Search,
 // ListByStatusCategory, ListByUserActive, ListOpenByRecurringScheduleID all
-// measured 0.0% in the coverage-gate run on MR !921, pipeline #2656).
+// measured 0.0% in the coverage-gate run on a review, pipeline #2656).
 
 func TestTaskRepo_Update_SendsStartAfterColumn(t *testing.T) {
 	repo, mock := newTaskRepoMock(t)

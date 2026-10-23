@@ -3,14 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "packageManager": "pnpm@10.20.0",
+  "packageManager": "pnpm@10.34.5",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --force",
     "check:i18n": "node scripts/check-cyrillic.mjs",
-    "test": "vitest run",
+    "check:tokens": "node scripts/check-tokens.mjs",
+    "test": "node scripts/check-tokens.mjs && vitest run",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
@@ -44,7 +45,7 @@
     "jsdom": "^30.0.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~7.0.2",
-    "vite": "^8.2.2",
+    "vite": "^8.2.4",
     "vitest": "^4.1.11"
   }
 }

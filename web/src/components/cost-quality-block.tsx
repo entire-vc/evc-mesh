@@ -18,15 +18,15 @@ const qualityBadge: Record<
 > = {
   golden: {
     icon: "🏆",
-    className: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
+    className: "bg-tone-success-100 text-tone-success-800 dark:bg-tone-success-900/30 dark:text-tone-success-300",
   },
   rework: {
     icon: "🔁",
-    className: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+    className: "bg-tone-warning-100 text-tone-warning-800 dark:bg-tone-warning-900/30 dark:text-tone-warning-300",
   },
   "multi-turn": {
     icon: "⚡",
-    className: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
+    className: "bg-tone-info-100 text-tone-info-800 dark:bg-tone-info-900/30 dark:text-tone-info-300",
   },
 };
 

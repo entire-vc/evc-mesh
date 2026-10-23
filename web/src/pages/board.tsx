@@ -1,56 +1,46 @@
-import { AgentShortTag } from "@/components/agent-short-tag";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useNavigate } from "react-router";
 import { useShallow } from "zustand/react/shallow";
-import {
-  DndContext,
-  DragOverlay,
-  closestCorners,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  useDroppable,
-  type DragStartEvent,
-  type DragEndEvent,
-  type DragOverEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import {
-  AlertTriangle,
-  Columns3,
-  Flag,
-  Plus,
-} from "lucide-react";
+import { CoreActionsProvider, DndProvider, useCan, useCoreActions, useRealtime } from "@/core/primitives";
+import type { MoveRequest, RealtimeEvent } from "@/core/primitives";
+import { planMoveToIndex } from "@/lib/board-move";
+import { registerMeshDefaultTheme } from "@/themes/mesh-default";
+import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
+import { boardCardMemoEnabled, resolveBoardComponents } from "@/core/slots/board-host";
+import { BOARD_CONTRACT_VERSION } from "@/core/slots/types";
+import type {
+  Async,
+  BoardColumnData,
+  BoardLayoutActions,
+  BoardSortBy,
+  BoardLayoutSettings,
+  QuickEditPatch,
+  SlotContext,
+} from "@/core/slots/types";
+import { useAgentShortTagMap } from "@/hooks/use-agent-short-tag";
+import { useSlotOwnedVcsProviders } from "@/components/extensions/slots/slot-host";
+import { buildFieldCatalog, resolveCardFields, stabilizeColumns, toStatusData, toTaskData } from "@/core/slots/board-data";
+import { taskPath } from "@/core/primitives/actions";
+import type { QuickEditField } from "@/core/primitives";
 import { useProjectStore } from "@/stores/project";
 import { cancelBoardRefresh, useTaskStore } from "@/stores/task";
 import { useCustomFieldStore } from "@/stores/custom-field";
 import { useMemberStore } from "@/stores/member";
 import { useDeferredRefetch } from "@/hooks/use-deferred-refetch";
-import { useWebSocket } from "@/hooks/use-websocket";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import { TaskCard } from "@/components/task-card";
 import { TaskSlideOver } from "@/components/task-slide-over";
 import { toast } from "@/components/ui/toast";
 import { BoardToolbar, type GroupBy, type SortBy } from "@/components/board-toolbar";
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { CreateRecurringDialog } from "@/components/create-recurring-dialog";
-import { AssigneeAvatar } from "@/components/assignee-avatar";
-import { dropPeers, passesSubtaskFilter, relocateGatedToTriage } from "@/lib/board-gate-triage";
+import { passesSubtaskFilter, relocateGatedToTriage } from "@/lib/board-gate-triage";
 import { applyViewFilters, type CFFilters } from "@/components/view-filters";
 import { loadBoardFilters, saveBoardFilters } from "@/lib/board-view-storage";
-import { PerfProfiler } from "@/lib/perf-profiler";
 import { isClosedCategory, type ClosedSlice } from "@/lib/board-load";
-import { apiErrorMessage } from "@/lib/api-error";
-import { loadRuntimeFlags } from "@/lib/runtime-flags";
 import { isWorking } from "@/lib/runtime-state";
+import { useIsMobile } from "@/lib/use-is-mobile";
+import { useWorkspaceStore } from "@/stores/workspace";
+import i18n from "@/i18n";
 import {
   BOARD_FILTER_DEFAULTS,
   GROUP_BY_VALUES,
@@ -58,11 +48,13 @@ import {
   buildBoardSavedViewState,
   readBoardSavedViewState,
 } from "@/lib/board-saved-view";
-import type { Task, TaskStatus, WSMessage, Priority, StatusCategory } from "@/types";
+import type { Task, TaskStatus, Priority, StatusCategory } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Priority metadata (for GroupBy=priority columns)
 // ---------------------------------------------------------------------------
+
+registerMeshDefaultTheme();
 
 const PRIORITY_ORDER: Record<Priority, number> = {
   urgent: 0,
@@ -73,11 +65,11 @@ const PRIORITY_ORDER: Record<Priority, number> = {
 };
 
 const PRIORITY_COLORS: Record<Priority, string> = {
-  urgent: "#ef4444",
-  high: "#f97316",
-  medium: "#eab308",
-  low: "#60a5fa",
-  none: "#9ca3af",
+  urgent: "var(--priority-fill-urgent)",
+  high: "var(--priority-fill-high)",
+  medium: "var(--priority-fill-medium)",
+  low: "var(--priority-fill-low)",
+  none: "var(--fallback-gray-400)",
 };
 
 // ---------------------------------------------------------------------------
@@ -99,155 +91,8 @@ interface BoardCol {
 }
 
 // ---------------------------------------------------------------------------
-// Board memoization kill switch (perf·Б3)
+// Closed columns (Board, status grouping): only a slice is loaded
 // ---------------------------------------------------------------------------
-
-// Fires once at module load. By the time a real drag or click can happen the
-// fetch has long since resolved into window.__MESH_FLAGS__, which the
-// (necessarily synchronous) memo comparators below read directly. Before it
-// resolves — and if it never does — both default to enabled, the same
-// "absent means on" contract every flag in runtime-flags.ts uses.
-void loadRuntimeFlags();
-
-export function boardCardMemoEnabled(): boolean {
-  return window.__MESH_FLAGS__?.boardCardMemo ?? true;
-}
-
-// A module-level constant, not an inline object at the useSensor call site:
-// an inline object is a new reference on every BoardPage render, which makes
-// useSensors return a new `sensors` array, which @dnd-kit's DndContext turns
-// into a new `activators` value on its InternalContext — re-rendering every
-// card on the board even when nothing about the sensor actually changed.
-const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 5 } };
-
-// Disables @dnd-kit/sortable's post-drop layout-FLIP animation. That
-// animation depends on an internal `wasDragging` flag cleared via
-// setTimeout(50) — if the post-drop re-render lands inside that window
-// (timing-dependent, not deterministic), every shifted card re-renders an
-// extra time and re-applies its transform style, which is what made
-// dom_mutations vary run to run. Cards still snap to their new position
-// instantly; only the animated slide is removed.
-const DISABLE_LAYOUT_ANIMATION = () => false;
-
-// ---------------------------------------------------------------------------
-// Sortable task card wrapper
-// ---------------------------------------------------------------------------
-
-interface SortableTaskCardProps {
-  task: Task;
-  columnId: string;
-  statusCategory?: StatusCategory;
-  /** Stable across renders (a useCallback in BoardPage) — the id is bound at
-   * the call site, not by wrapping this in a new per-task closure in
-   * BoardColumn, which would defeat the memo below on every column render. */
-  onClick: (task: Task) => void;
-  onEditClick: (task: Task) => void;
-  /** Display name of the card's checkout holder, when it is resolvable. */
-  checkedOutByName?: string;
-  /** Real status name, set only for a gated card shown in the Triage column. */
-  gateStatusName?: string;
-}
-
-export function sortableTaskCardPropsEqual(
-  prev: SortableTaskCardProps,
-  next: SortableTaskCardProps,
-): boolean {
-  if (!boardCardMemoEnabled()) return false;
-  // task/onClick/onEditClick are reference-compared on purpose: the task
-  // store's moveTask + groupByStatus (stores/task.ts) preserve the object
-  // identity of every task they don't touch, and onClick/onEditClick are
-  // BoardPage useCallbacks with stable deps — so an unrelated card's props
-  // are the SAME references across a drag, not just equal-looking ones.
-  return (
-    prev.task === next.task &&
-    prev.columnId === next.columnId &&
-    prev.statusCategory === next.statusCategory &&
-    prev.onClick === next.onClick &&
-    prev.onEditClick === next.onEditClick &&
-    prev.checkedOutByName === next.checkedOutByName &&
-    prev.gateStatusName === next.gateStatusName
-  );
-}
-
-const SortableTaskCard = memo(function SortableTaskCard({
-  task,
-  columnId,
-  statusCategory,
-  onClick,
-  onEditClick,
-  checkedOutByName,
-  gateStatusName,
-}: SortableTaskCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
-    id: task.id,
-    data: { task, columnId },
-    animateLayoutChanges: DISABLE_LAYOUT_ANIMATION,
-  });
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition ?? undefined,
-    opacity: isDragging ? 0.4 : 1,
-  };
-
-  // TaskCard is itself memoized (task-card.tsx) — these need to be stable
-  // too, or a fresh arrow function on every one of THIS component's own
-  // re-renders (most of which, during a drag, come from @dnd-kit's shared
-  // context and touch neither `task` nor `onClick`/`onEditClick`) would
-  // defeat that memo just as surely as the per-task closures in BoardColumn
-  // used to defeat this component's own memo.
-  const handleClick = useCallback(() => onClick(task), [onClick, task]);
-  const handleEditClick = useCallback(() => onEditClick(task), [onEditClick, task]);
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      data-testid="task-card"
-      data-task-id={task.id}
-      {...attributes}
-      {...listeners}
-    >
-      <PerfProfiler id="board-card">
-        <TaskCard
-          task={task}
-          isDragging={isDragging}
-          statusCategory={statusCategory}
-          onClick={handleClick}
-          onEditClick={handleEditClick}
-          checkedOutByName={checkedOutByName}
-          gateStatusName={gateStatusName}
-        />
-      </PerfProfiler>
-    </div>
-  );
-}, sortableTaskCardPropsEqual);
-
-// ---------------------------------------------------------------------------
-// Droppable column
-// ---------------------------------------------------------------------------
-
-interface BoardColumnProps {
-  col: BoardCol;
-  tasks: Task[];
-  dndEnabled: boolean;
-  onAddTask: (statusId?: string) => void;
-  onTaskClick: (task: Task) => void;
-  onTaskEdit: (task: Task) => void;
-  /** Resolves a checkout holder's id to a display name. */
-  holderNameById: Map<string, string>;
-  /** taskId -> real status name for gated cards listed in this (Triage) column. */
-  gateStatusByTask?: Record<string, string>;
-  /** Closed status column (Board, status grouping): only a slice is loaded. */
-  closed?: ClosedColumnInfo;
-}
 
 /** What a closed column knows about the cards it does not hold. */
 export interface ClosedColumnInfo {
@@ -256,33 +101,6 @@ export interface ClosedColumnInfo {
   filtersActive: boolean;
   /** Next page of this status; rejects on failure. */
   onLoadMore: (statusId: string) => Promise<void>;
-}
-
-/** "Showing latest N of TOTAL" + an explicit Load more (never automatic). */
-function ClosedSliceFooter({ statusId, closed }: { statusId: string; closed: ClosedColumnInfo }) {
-  const { t } = useTranslation("board");
-  // null = idle, "" = loading, otherwise the last error.
-  const [state, setState] = useState<string | null>(null);
-  return (
-    <div className="mt-2 space-y-1 text-center text-xs text-muted-foreground" data-testid="closed-slice">
-      <p>
-        {t("column.closedSlice.showing", { loaded: closed.slice.loaded, total: closed.slice.total })}
-        {closed.filtersActive ? t("column.closedSlice.filtersApply") : ""}
-      </p>
-      {state && <p role="alert" className="text-destructive">{state}</p>}
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={state === ""}
-        onClick={() => {
-          setState("");
-          closed.onLoadMore(statusId).then(() => setState(null), (e: unknown) => setState(apiErrorMessage(e, t("column.closedSlice.requestFailed"))));
-        }}
-      >
-        {state === "" ? t("column.closedSlice.loading") : t("column.closedSlice.loadMore")}
-      </Button>
-    </div>
-  );
 }
 
 /**
@@ -311,9 +129,8 @@ export function tasksArrayEqual(a: Task[], b: Task[]): boolean {
 }
 
 /** True when both maps hold the same key → value pairs. holderNameById is
- * rebuilt (new Map, same content) on every board.tsx re-render whose deps
- * include `tasks` — including a drag that changes no one's checkout holder —
- * so a reference comparison here would defeat the column memo on every
+ * rebuilt (new Map, same content) on every re-render whose deps include
+ * `tasks`, so a reference comparison would defeat the column memo on every
  * drag. Member/holder counts are small (tens, not thousands): this is cheap. */
 export function holderMapsEqual(a: Map<string, string>, b: Map<string, string>): boolean {
   if (a === b) return true;
@@ -324,124 +141,7 @@ export function holderMapsEqual(a: Map<string, string>, b: Map<string, string>):
   return true;
 }
 
-function gateStatusEqual(a?: Record<string, string>, b?: Record<string, string>): boolean {
-  if (a === b) return true;
-  const ka = Object.keys(a ?? {});
-  if (ka.length !== Object.keys(b ?? {}).length) return false;
-  return ka.every((k) => a?.[k] === b?.[k]);
-}
-
-export function boardColumnPropsEqual(prev: BoardColumnProps, next: BoardColumnProps): boolean {
-  if (!boardCardMemoEnabled()) return false;
-  return (
-    prev.col === next.col &&
-    tasksArrayEqual(prev.tasks, next.tasks) &&
-    prev.dndEnabled === next.dndEnabled &&
-    prev.onAddTask === next.onAddTask &&
-    prev.onTaskClick === next.onTaskClick &&
-    prev.onTaskEdit === next.onTaskEdit &&
-    holderMapsEqual(prev.holderNameById, next.holderNameById) &&
-    gateStatusEqual(prev.gateStatusByTask, next.gateStatusByTask) &&
-    // closedInfoByStatus (BoardPage) rebuilds these only when an input changes.
-    prev.closed === next.closed
-  );
-}
-
-const BoardColumn = memo(function BoardColumn({ col, tasks, dndEnabled, onAddTask, onTaskClick, onTaskEdit, holderNameById, gateStatusByTask, closed }: BoardColumnProps) {
-  const { t } = useTranslation("board");
-  const { setNodeRef, isOver } = useDroppable({ id: `column-${col.id}` });
-
-  const taskIds = useMemo(() => tasks.map((task) => task.id), [tasks]);
-
-  return (
-    <div className="w-72 shrink-0">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {/* Column header indicator */}
-          {col.priority ? (
-            <PriorityIcon priority={col.priority} />
-          ) : col.assigneeId ? (
-            <AssigneeAvatar
-              id={col.assigneeId}
-              name={col.assigneeName}
-              type={col.assigneeType}
-              size="sm"
-            />
-          ) : (
-            <div
-              className="h-2.5 w-2.5 rounded-full"
-              style={{ backgroundColor: col.color }}
-            />
-          )}
-          <span className="text-sm font-semibold">{col.title}<AgentShortTag id={col.assigneeId} type={col.assigneeType} /></span>
-          <Badge variant="secondary" className="text-xs" data-testid="column-count">
-            {columnCountLabel(tasks.length, closed)}
-          </Badge>
-        </div>
-        {col.status && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-11 w-11 md:h-6 md:w-6"
-            onClick={() => onAddTask(col.status!.id)}
-            title={t("column.addTask")}
-          >
-            <Plus className="h-3 w-3" />
-          </Button>
-        )}
-      </div>
-
-      <div
-        ref={setNodeRef}
-        data-testid="board-column"
-        data-column-id={col.id}
-        data-status-id={col.status?.id ?? ""}
-        className={
-          "min-h-[60px] space-y-2 rounded-xl bg-muted/50 p-2 transition-colors" +
-          (isOver ? " ring-2 ring-primary/30 bg-muted/70" : "") +
-          (!dndEnabled ? " opacity-90" : "")
-        }
-      >
-        <SortableContext
-          items={dndEnabled ? taskIds : []}
-          strategy={verticalListSortingStrategy}
-        >
-          {tasks.map((task) => (
-            <SortableTaskCard
-              key={task.id}
-              task={task}
-              columnId={col.id}
-              statusCategory={col.status?.category}
-              onClick={onTaskClick}
-              onEditClick={onTaskEdit}
-              checkedOutByName={
-                task.checked_out_by ? holderNameById.get(task.checked_out_by) : undefined
-              }
-              gateStatusName={gateStatusByTask?.[task.id]}
-            />
-          ))}
-        </SortableContext>
-
-        {tasks.length === 0 && (
-          <p className="py-4 text-center text-xs text-muted-foreground">
-            {t("column.empty")}
-          </p>
-        )}
-      </div>
-      {closed?.slice.hasMore && <ClosedSliceFooter statusId={col.id} closed={closed} />}
-    </div>
-  );
-}, boardColumnPropsEqual);
-
-// ---------------------------------------------------------------------------
-// Tiny priority icon for column headers
-// ---------------------------------------------------------------------------
-
-function PriorityIcon({ priority }: { priority: Priority }) {
-  const color = PRIORITY_COLORS[priority];
-  const Icon = priority === "urgent" ? AlertTriangle : Flag;
-  return <Icon className="h-3.5 w-3.5" style={{ color }} />;
-}
+export { boardCardMemoEnabled };
 
 // ---------------------------------------------------------------------------
 // Sort helper — sort tasks within a column by the given SortBy value
@@ -472,26 +172,6 @@ function sortTasks(tasks: Task[], sortBy: SortBy): Task[] {
         return a.position - b.position;
     }
   });
-}
-
-// ---------------------------------------------------------------------------
-// Position calculation helpers
-// ---------------------------------------------------------------------------
-
-function calculatePosition(tasks: Task[], targetIndex: number): number {
-  if (tasks.length === 0) return 1;
-  if (targetIndex <= 0) {
-    const first = tasks[0];
-    return first ? first.position - 1 : 1;
-  }
-  if (targetIndex >= tasks.length) {
-    const last = tasks[tasks.length - 1];
-    return last ? last.position + 1 : 1;
-  }
-  const prev = tasks[targetIndex - 1];
-  const next = tasks[targetIndex];
-  if (prev && next) return (prev.position + next.position) / 2;
-  return targetIndex;
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +256,6 @@ export function BoardPage() {
   const [slideOverTaskId, setSlideOverTaskId] = useState<string | null>(null);
 
   // Drag state
-  const [activeTask, setActiveTask] = useState<Task | null>(null);
 
   // ---- Toolbar state ----
   const [groupBy, setGroupBy] = useState<GroupBy>("status");
@@ -603,8 +282,6 @@ export function BoardPage() {
   // during the brief window while switching projects.
   const [filtersHydrated, setFiltersHydrated] = useState(false);
 
-  const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS));
-
   // A WS event refreshes in the background (no skeleton remount), debounced. While
   // a card is being dragged the refresh waits for the drop/cancel, so the lists do
   // not change under the pointer.
@@ -619,11 +296,10 @@ export function BoardPage() {
   );
 
   // Listen for real-time WebSocket events.
-  useWebSocket({
-    workspaceSlug: wsSlug,
-    projectId: currentProject?.id,
-    onEvent: useCallback(
-      (event: WSMessage) => {
+  useRealtime(
+    { kind: "project", id: currentProject?.id },
+    useCallback(
+      (event: RealtimeEvent) => {
         const eventType = event.type;
         if (eventType === "summary") {
           const data = event.data as Record<string, unknown>;
@@ -642,7 +318,7 @@ export function BoardPage() {
       },
       [debouncedRefetch, t],
     ),
-  });
+  );
 
   useEffect(() => {
     if (!currentProject) return;
@@ -771,6 +447,8 @@ export function BoardPage() {
   // id → display name for checkout holders. Built from the same two sources as
   // assigneeCandidates: project members cover the normal case, and assignees seen
   // on loaded tasks cover a holder who is not a formal member of this project.
+  const shortTags = useAgentShortTagMap();
+  const ownedVcs = useSlotOwnedVcsProviders("task.badge");
   const holderNameById = useMemo(() => {
     const byId = new Map<string, string>();
     for (const m of projectMembers) {
@@ -962,7 +640,7 @@ export function BoardPage() {
     const cols: BoardCol[] = assignees.map((a) => ({
       id: `assignee-${a.id}`,
       title: a.name ?? t("toolbar.assignee.unassigned"),
-      color: "#9ca3af",
+      color: "var(--fallback-gray-400)",
       assigneeId: a.id,
       assigneeName: a.name ?? undefined,
       assigneeType: a.type,
@@ -988,37 +666,6 @@ export function BoardPage() {
     t,
   ]);
 
-  // BoardCol objects above are rebuilt from scratch on every recompute —
-  // including one triggered by a single task's drag, which changes
-  // tasksByStatus/filteredTasks but not a single status's id/title/color.
-  // BoardColumn is memoized (below) and compares `col` by reference, so a
-  // fresh-but-identical object would defeat that memo for EVERY column on
-  // EVERY drag. Reconcile by id + shallow content against the previous
-  // render's objects and reuse them when nothing actually changed, so
-  // unrelated columns keep the same `col` reference across a drag.
-  const boardColCacheRef = useRef<Map<string, BoardCol>>(new Map());
-  const columns = useMemo(() => {
-    const cache = boardColCacheRef.current;
-    const next = new Map<string, BoardCol>();
-    const stabilized = rawColumns.map((col) => {
-      const cached = cache.get(col.id);
-      const unchanged =
-        cached !== undefined &&
-        cached.title === col.title &&
-        cached.color === col.color &&
-        cached.status === col.status &&
-        cached.priority === col.priority &&
-        cached.assigneeId === col.assigneeId &&
-        cached.assigneeName === col.assigneeName &&
-        cached.assigneeType === col.assigneeType;
-      const stable = unchanged ? cached : col;
-      next.set(col.id, stable);
-      return stable;
-    });
-    boardColCacheRef.current = next;
-    return stabilized;
-  }, [rawColumns]);
-
   // Cards waiting on a human are listed in the Triage column (once, with their
   // real status shown) so the human sees them without any status change.
   const { tasksByColumn, gateStatusByTask } = useMemo(() => {
@@ -1032,9 +679,92 @@ export function BoardPage() {
     return { tasksByColumn: r.tasksByColumn, gateStatusByTask: r.statusNameByTask };
   }, [groupBy, rawColumns, baseTasksByColumn, filteredTasks, sortBy]);
 
+  // ----- Contract data for the board.* slots -----
+
+  const canMove = useCan("task.move");
+  const canCreate = useCan("task.create");
+  const isMobile = useIsMobile();
+  const currentWorkspace = useWorkspaceStore((s) => s.currentWorkspace);
+  const themeSettings = useThemeSettings() as BoardLayoutSettings;
+
+  const fieldCatalog = useMemo(
+    () => buildFieldCatalog(customFieldDefs, (k) => t(k)),
+    [customFieldDefs, t],
+  );
+  const cardFields = useMemo(
+    () => resolveCardFields(fieldCatalog, themeSettings.card_fields).map((f) => f.key),
+    [fieldCatalog, themeSettings.card_fields],
+  );
+
+  const mode = document.documentElement.classList.contains("dark") ? "dark" : "light";
+  const locale = i18n.language;
+  const ctx = useMemo<SlotContext>(
+    () => ({
+      slot: "board.layout",
+      contractVersion: BOARD_CONTRACT_VERSION,
+      locale,
+      mode,
+      isMobile,
+      workspace: currentWorkspace
+        ? { id: currentWorkspace.id, slug: currentWorkspace.slug, name: currentWorkspace.name }
+        : null,
+    }),
+    [locale, mode, isMobile, currentWorkspace],
+  );
+
   // DnD is only fully active when groupBy === 'status'
   // (we disable cross-column drag for other groupings to keep status intact)
   const dndEnabled = groupBy === "status";
+
+  // Column data is rebuilt from scratch on every recompute, including one a single
+  // card's drag triggers; stabilizeColumns hands back the previous object of every
+  // column whose content did not change, so the column memo holds across a drag.
+  const columnCacheRef = useRef<Map<string, BoardColumnData>>(new Map());
+  const columnData = useMemo(() => {
+    const built = rawColumns.map<BoardColumnData>((col) => {
+      const category = col.status?.category;
+      const closed =
+        groupBy === "status" && col.status && isClosedCategory(col.status.category)
+          ? closedInfoByStatus[col.id]
+          : undefined;
+      const raw = tasksByColumn[col.id] ?? [];
+      return {
+        id: col.id,
+        kind: !col.status ? "group" : category === "triage" ? "triage" : "status",
+        title: col.title,
+        color: col.color,
+        status: col.status ? toStatusData(col.status) : undefined,
+        tasks: raw.map((task) =>
+          toTaskData(task, category, task.checked_out_by ? holderNameById.get(task.checked_out_by) : undefined, shortTags, ownedVcs),
+        ),
+        totalCount: closed?.slice.hasMore && !closed.filtersActive ? closed.slice.total : raw.length,
+        countLabel: columnCountLabel(raw.length, closed),
+        wipLimit: null,
+        isClosed: Boolean(col.status && isClosedCategory(col.status.category)),
+        hasMore: Boolean(closed?.slice.hasMore),
+        loadingMore: false,
+        closedSlice: closed
+          ? { loaded: closed.slice.loaded, total: closed.slice.total, filtersActive: closed.filtersActive }
+          : undefined,
+        gateStatusNameByTask: category === "triage" ? gateStatusByTask : undefined,
+        group: col.priority
+          ? { priority: col.priority }
+          : col.assigneeId
+            ? {
+                assignee: {
+                  id: col.assigneeId,
+                  name: col.assigneeName,
+                  type: col.assigneeType ?? "unassigned",
+                  ...(col.assigneeType === "agent" && shortTags.has(col.assigneeId) ? { shortTag: shortTags.get(col.assigneeId) } : {}),
+                },
+              }
+            : undefined,
+      };
+    });
+    const { columns, cache } = stabilizeColumns(columnCacheRef.current, built);
+    columnCacheRef.current = cache;
+    return columns;
+  }, [rawColumns, tasksByColumn, gateStatusByTask, groupBy, closedInfoByStatus, holderNameById, shortTags, ownedVcs]);
 
   // ----- Drag handlers -----
 
@@ -1056,94 +786,70 @@ export function BoardPage() {
     window.addEventListener("pointercancel", release, true);
   }, [markDragStart, flushPendingRefetch]);
 
-  const handleDragStart = useCallback((event: DragStartEvent) => {
-    dragActiveRef.current = true;
-    const data = event.active.data.current as { task: Task; columnId: string } | undefined;
-    if (data?.task) setActiveTask(data.task);
-    markDragStart();
-  }, [markDragStart]);
-
-  const findColumnId = useCallback(
-    (overId: string | number): string | null => {
-      const colPrefix = "column-";
-      const strId = String(overId);
-      if (strId.startsWith(colPrefix)) return strId.slice(colPrefix.length);
-
-      // Otherwise it is a task id; find which column it belongs to
-      for (const col of columns) {
-        const colTasks = tasksByColumn[col.id] ?? [];
-        if (colTasks.some((t) => t.id === strId)) return col.id;
-      }
-      return null;
+  const handleDragActiveChange = useCallback(
+    (active: boolean) => {
+      dragActiveRef.current = active;
+      if (active) markDragStart();
+      else flushPendingRefetch();
     },
-    [columns, tasksByColumn],
+    [markDragStart, flushPendingRefetch],
   );
 
-  const handleDragOver = useCallback((_event: DragOverEvent) => {
-    // Handled in DragEnd
-  }, []);
+  // Latest values for the stable actions below: a drag must not rebuild them.
+  const latest = useRef({ tasksByColumn, gateStatusByTask, dndEnabled, closedInfoByStatus, cardFields, fieldCatalog });
+  latest.current = { tasksByColumn, gateStatusByTask, dndEnabled, closedInfoByStatus, cardFields, fieldCatalog };
 
-  const handleDragEnd = useCallback(
-    async (event: DragEndEvent) => {
-      setActiveTask(null);
-      if (!dndEnabled) return;
-
-      const { active, over } = event;
-      if (!over) return;
-
-      const activeData = active.data.current as { task: Task; columnId: string } | undefined;
-      if (!activeData) return;
-
-      const draggedTask = activeData.task;
-      const sourceColId = activeData.columnId;
-      const targetColId = findColumnId(over.id);
-
-      if (!targetColId) return;
-
-      // For status grouping, targetColId IS the status id
-      const targetStatusId = targetColId;
-
-      // Gated cards listed in Triage only by gate keep their real status.
-      const targetTasks = dropPeers(
-        draggedTask.id,
-        sourceColId,
-        targetColId,
-        tasksByColumn[targetColId] ?? [],
-        gateStatusByTask,
-      );
-      if (!targetTasks) return;
-
-      let dropIndex = targetTasks.length;
-      const overStr = String(over.id);
-      if (!overStr.startsWith("column-")) {
-        const idx = targetTasks.findIndex((t) => t.id === overStr);
-        if (idx !== -1) dropIndex = idx;
-      }
-
-      const newPosition = calculatePosition(targetTasks, dropIndex);
-
-      if (sourceColId === targetColId && draggedTask.position === newPosition) return;
-
-      await moveTask(draggedTask.id, {
-        status_id: targetStatusId,
-        position: newPosition,
+  const moveTaskAction = useCallback(
+    async (taskId: string, toColumnId: string, position: { index: number }) => {
+      const L = latest.current;
+      if (!L.dndEnabled) return;
+      const source = Object.entries(L.tasksByColumn).find(([, rows]) => rows.some((t) => t.id === taskId));
+      const task = source?.[1].find((t) => t.id === taskId);
+      if (!source || !task) return;
+      const plan = planMoveToIndex({
+        task,
+        sourceColId: source[0],
+        targetColId: toColumnId,
+        index: position.index,
+        tasksByColumn: L.tasksByColumn,
+        gateStatusByTask: L.gateStatusByTask,
       });
+      if (!plan) return;
+      await moveTask(task.id, plan);
     },
-    [dndEnabled, findColumnId, tasksByColumn, gateStatusByTask, moveTask],
+    [moveTask],
   );
 
-  const handleDragCancel = useCallback(() => {
-    dragActiveRef.current = false;
-    setActiveTask(null);
-    flushPendingRefetch();
-  }, [flushPendingRefetch]);
-  const handleDragEndThenRefresh = useCallback(
-    (event: DragEndEvent) =>
-      handleDragEnd(event).finally(() => {
-        dragActiveRef.current = false;
-        flushPendingRefetch();
-      }),
-    [handleDragEnd, flushPendingRefetch],
+  const handleMove = useCallback(
+    async (move: MoveRequest) => {
+      if (move.item.kind !== "task" || move.to.kind !== "status") return;
+      await moveTaskAction(move.item.id, move.to.id, { index: move.index });
+    },
+    [moveTaskAction],
+  );
+
+  const registryVersion = useSlotRegistryVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a registration change must re-resolve the nested views
+  const components = useMemo(() => resolveBoardComponents(), [registryVersion]);
+
+  const renderDragOverlay = useCallback(
+    (item: { id: string }) => {
+      const task = useTaskStore.getState().tasks.find((t) => t.id === item.id);
+      if (!task) return null;
+      const { Card } = components;
+      const fields = resolveCardFields(latest.current.fieldCatalog, latest.current.cardFields);
+      return (
+        <div className="w-72">
+          <Card
+            data={{ task: toTaskData(task, undefined, undefined, shortTags, ownedVcs), column: { id: "", kind: "status" }, fields, selected: false, isOverlay: true }}
+            actions={{ openTask: () => {} }}
+            themeSettings={themeSettings}
+            ctx={ctx}
+          />
+        </div>
+      );
+    },
+    [components, themeSettings, ctx],
   );
 
   // ----- New task helpers -----
@@ -1238,15 +944,79 @@ export function BoardPage() {
 
   const [recurringOpen, setRecurringOpen] = useState(false);
 
-  const handleTaskClick = useCallback((task: Task) => {
-    // Full-screen task page on every viewport. Was gated to isMobile in #70,
-    // leaving desktop on the slide-over (Pavel 2026-07-07 — fullscreen only).
-    if (wsSlug && currentProject) {
-      navigate(`/w/${wsSlug}/p/${currentProject.slug}/t/${task.id}`);
-    } else {
-      setSlideOverTaskId(task.id);
-    }
-  }, [wsSlug, currentProject, navigate]);
+  const { openTask: coreOpenTask, quickEdit: coreQuickEdit } = useCoreActions();
+  const openTaskById = useCallback(
+    (taskId: string, opts?: { newTab?: boolean }) => {
+      // Full-screen task page on every viewport. Was gated to isMobile in #70,
+      // leaving desktop on the slide-over (Alex 2026-07-07 — fullscreen only).
+      if (wsSlug && currentProject) {
+        if (opts?.newTab) window.open(taskPath(wsSlug, currentProject.slug, taskId), "_blank", "noopener");
+        else coreOpenTask(taskId);
+      } else {
+        setSlideOverTaskId(taskId);
+      }
+    },
+    [wsSlug, currentProject, coreOpenTask],
+  );
+  // The primitives inside the cards get one object that never changes: reading router context would re-render
+  // every card on each navigation. The live values sit in a ref.
+  const coreLive = useRef({ openTaskById, coreQuickEdit, wsSlug, slug: currentProject?.slug });
+  coreLive.current = { openTaskById, coreQuickEdit, wsSlug, slug: currentProject?.slug };
+  const coreActions = useMemo(
+    () => ({
+      openTask: (id: string) => coreLive.current.openTaskById(id),
+      quickEdit: (id: string, field: QuickEditField, value: unknown) => coreLive.current.coreQuickEdit(id, field, value),
+      taskHref: (id: string) => taskPath(coreLive.current.wsSlug, coreLive.current.slug, id),
+    }),
+    [],
+  );
+
+  const layoutActions = useMemo<BoardLayoutActions>(
+    () => ({
+      moveTask: moveTaskAction,
+      openTask: openTaskById,
+      quickEdit: (taskId: string, patch: QuickEditPatch) => coreQuickEdit(taskId, patch.field, patch.value),
+      createTask: canCreate ? openCreateDialog : undefined,
+      loadMore: (columnId: string) => {
+        const info = latest.current.closedInfoByStatus[columnId];
+        return info ? info.onLoadMore(columnId) : Promise.resolve();
+      },
+      retry: () => {
+        if (currentProject) void reloadBoard(currentProject.id);
+      },
+    }),
+    [moveTaskAction, openTaskById, coreQuickEdit, openCreateDialog, canCreate, currentProject, reloadBoard],
+  );
+
+  const boardReady = listComplete && listProjectId === currentProject?.id;
+  const columnsAsync: Async<BoardColumnData[]> = !boardReady
+    ? listError && !isLoading && listProjectId === currentProject?.id
+      ? { state: "error", error: { code: "load_failed", message: t("refresh.failedInitial") }, retry: layoutActions.retry }
+      : { state: "loading" }
+    : listProjectId === currentProject?.id && listError
+      ? { state: "error", error: { code: "refresh_failed", message: t("refresh.failedPartial") }, value: columnData, retry: layoutActions.retry }
+      : isLoading
+        ? { state: "refreshing", value: columnData }
+        : { state: "ready", value: columnData };
+
+  const layoutData = {
+    project: { id: currentProject?.id ?? "", slug: currentProject?.slug ?? "", name: currentProject?.name ?? "" },
+    groupBy,
+    sortBy: sortBy as BoardSortBy,
+    columns: columnsAsync,
+    dnd: {
+      enabled: dndEnabled && canMove,
+      reason: !dndEnabled ? ("group_by" as const) : !canMove ? ("no_permission" as const) : undefined,
+      nonDroppableColumnIds: columnData.filter((c) => c.kind !== "status").map((c) => c.id),
+    },
+    availableFields: fieldCatalog,
+    cardFields,
+    emptyReason: statuses.length === 0 ? ("no_statuses" as const) : ("no_matches" as const),
+    closedPartial:
+      showClosed && groupBy !== "status" && boardReady ? closedPartial : null,
+    components,
+  };
+  const Layout = withSlotFallback("board.layout", resolveSlotView("board.layout"));
 
   // ----- Render -----
 
@@ -1299,91 +1069,22 @@ export function BoardPage() {
         />
       </div>
 
-      {listProjectId === currentProject?.id && listError && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
-          <span>{listComplete ? t("refresh.failedPartial") : t("refresh.failedInitial")}</span>
-          <Button variant="outline" size="sm" disabled={isLoading} onClick={() => currentProject && reloadBoard(currentProject.id)}>{t("refresh.retry")}</Button>
-        </div>
-      )}
-      {isLoading && listComplete && listProjectId === currentProject?.id && (
-        <p role="status" className="text-xs text-muted-foreground">{t("refresh.inProgress")}</p>
-      )}
-
-      {showClosed && groupBy !== "status" && closedPartial && listComplete && listProjectId === currentProject?.id && (
-        <p role="status" className="text-xs text-muted-foreground" data-testid="closed-partial-note">
-          {t("closedPartial", { loaded: closedPartial.loaded, total: closedPartial.total })}
-        </p>
-      )}
-
-      {/* Nothing renders until all open work is loaded: open counts are exact. */}
-      {!listComplete || listProjectId !== currentProject?.id ? (
-        listError && !isLoading && listProjectId === currentProject?.id ? null :
-        <div className="flex gap-4 overflow-x-auto pb-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="w-72 shrink-0 space-y-3">
-              <Skeleton className="h-8 w-full rounded-lg" />
-              <Skeleton className="h-24 w-full rounded-lg" />
-              <Skeleton className="h-24 w-full rounded-lg" />
+      <CoreActionsProvider actions={coreActions}>
+        {columnsAsync.state === "loading" || (columnsAsync.state === "error" && !columnsAsync.value) ? (
+          <Layout data={layoutData} actions={layoutActions} themeSettings={themeSettings} ctx={ctx} />
+        ) : (
+          <DndProvider
+            enabled={dndEnabled}
+            onMove={handleMove}
+            onDragActiveChange={handleDragActiveChange}
+            renderOverlay={renderDragOverlay}
+          >
+            <div style={{ display: "contents" }} onPointerDownCapture={handleCardPointerDownCapture}>
+              <Layout data={layoutData} actions={layoutActions} themeSettings={themeSettings} ctx={ctx} />
             </div>
-          ))}
-        </div>
-      ) : (
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCorners}
-          onDragStart={handleDragStart}
-          onDragOver={handleDragOver}
-          onDragEnd={handleDragEndThenRefresh}
-          onDragCancel={handleDragCancel}
-        >
-          <div className="flex gap-4 overflow-x-auto pb-4" onPointerDownCapture={handleCardPointerDownCapture}>
-            {columns.map((col) => (
-              <BoardColumn
-                key={col.id}
-                col={col}
-                tasks={tasksByColumn[col.id] ?? []}
-                dndEnabled={dndEnabled}
-                onAddTask={openCreateDialog}
-                onTaskClick={handleTaskClick}
-                onTaskEdit={handleTaskClick}
-                holderNameById={holderNameById}
-                gateStatusByTask={col.status?.category === "triage" ? gateStatusByTask : undefined}
-                closed={
-                  groupBy === "status" && col.status && isClosedCategory(col.status.category)
-                    ? closedInfoByStatus[col.id]
-                    : undefined
-                }
-              />
-            ))}
-
-            {columns.length === 0 && (
-              <div className="flex w-full items-center justify-center py-12">
-                <div className="text-center">
-                  <Columns3 className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
-                  <h3 className="mb-2 text-lg font-semibold">
-                    {statuses.length === 0
-                      ? t("empty.noStatuses.title")
-                      : t("empty.noMatches.title")}
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    {statuses.length === 0
-                      ? t("empty.noStatuses.hint")
-                      : t("empty.noMatches.hint")}
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <DragOverlay>
-            {activeTask ? (
-              <div className="w-72">
-                <TaskCard task={activeTask} isDragging />
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
-      )}
+          </DndProvider>
+        )}
+      </CoreActionsProvider>
 
       <CreateRecurringDialog
         open={recurringOpen}

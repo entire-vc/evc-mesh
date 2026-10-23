@@ -152,7 +152,7 @@ func (h *IntegrationHandler) Configure(c echo.Context) error {
 	case domain.IntegrationProviderMCP:
 		// mcp is a reference-only card — a static .mcp.json connection
 		// snippet, not a channel. No handler or service has ever read this
-		// row back for behavior (#4a3195a5), so a toggle here would control
+		// row back for behavior, so a toggle here would control
 		// nothing. Reject rather than silently store a row nobody consults.
 		return c.JSON(http.StatusBadRequest, apierror.BadRequest(
 			"mcp is a reference-only connection card and cannot be configured or toggled"))
@@ -563,7 +563,7 @@ func prepareGitHubConfig(existing *domain.IntegrationConfig, config interface{})
 
 // prepareGitLabConfig mirrors prepareGitHubConfig, plus a plaintext
 // base_url field (not a secret — the self-hosted instance's URL, e.g.
-// "https://git.entire.host" — so it is never encrypted or masked-out).
+// "https://git.example.com" — so it is never encrypted or masked-out).
 func prepareGitLabConfig(existing *domain.IntegrationConfig, config interface{}) (json.RawMessage, *apierror.Error) {
 	var merged service.GitLabIntegrationConfig
 	if existing != nil && len(existing.Config) > 0 {

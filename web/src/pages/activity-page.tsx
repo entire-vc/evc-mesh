@@ -60,7 +60,7 @@ type Tab = "mentions" | "my-comments" | "all-recent";
 // Page-boundary cursor for the comment view endpoints: created_at alone is
 // not a unique sort key, so a page boundary landing inside a group of
 // same-timestamp comments needs the id tie-breaker too, or the rest of that
-// group silently never loads — #c6dc694e.
+// group silently never loads — an internal ticket.
 interface CommentCursor {
   before: string;
   beforeId: string;
@@ -405,7 +405,7 @@ function MentionsTab({
     <div className="space-y-4">
       {failed.length > 0 && (
         <p
-          className="rounded-md border border-amber-400/40 bg-amber-50/50 px-3 py-2 text-xs text-muted-foreground dark:bg-amber-950/20"
+          className="rounded-md border border-tone-warning-400/40 bg-tone-warning-50/50 px-3 py-2 text-xs text-muted-foreground dark:bg-tone-warning-950/20"
           data-testid="mentions-load-failed"
         >
           {failedSourcesMessage(failed, t)} {t("page.failed.partial")}
@@ -511,7 +511,7 @@ function CommentCard({
   return (
     <button
       onClick={() => onClick(comment)}
-      className="w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40"
+      className="w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-tone-info-500/40"
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
@@ -599,16 +599,16 @@ function MentionCard({
       onClick={() => onClick(mention)}
       data-testid={`mention-card-${mention.source}`}
       className={cn(
-        "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/40",
+        "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-tone-info-500/40",
         isNew && "border-primary/30 bg-primary/5",
         isShown && "opacity-70",
         hasQuestion &&
-          "border-l-4 border-l-amber-400 bg-amber-50/50 dark:bg-amber-950/20",
+          "border-l-4 border-l-tone-warning-400 bg-tone-warning-50/50 dark:bg-tone-warning-950/20",
       )}
     >
       <div className="flex items-start gap-2">
         {isNew && (
-          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
+          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-tone-danger-500" />
         )}
         <div className={cn("min-w-0 flex-1", !isNew && "pl-4")}>
           <div className="flex flex-wrap items-center gap-2">

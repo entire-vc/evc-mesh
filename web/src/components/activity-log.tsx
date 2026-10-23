@@ -34,12 +34,12 @@ interface ActivityLogProps {
 
 function ActorTypeIcon({ type }: { type: ActivityLogEntry["actor_type"] }) {
   if (type === "agent") {
-    return <Bot className="h-4 w-4 text-violet-500" />;
+    return <Bot className="h-4 w-4 text-tone-violet-500" />;
   }
   if (type === "system") {
     return <Monitor className="h-4 w-4 text-muted-foreground" />;
   }
-  return <User className="h-4 w-4 text-sky-500" />;
+  return <User className="h-4 w-4 text-tone-sky-500" />;
 }
 
 export function ActivityLog({ taskId }: ActivityLogProps) {

@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "graphite",
+  "name": "Graphite",
+  "version": "1.0.0",
+  "kind": "theme",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "Cool grey palette with a restrained blue accent",
+  "category": "appearance",
+  "tags": ["dark", "light"],
+  "levels": { "instance": true, "workspace": true, "project": false },
+  "capabilities": {},
+  "theme": {
+    "tokens_contract": "1",
+    "modes": ["light", "dark"],
+    "tokens": {
+      "light": {
+        "background": "210 20% 98%",
+        "foreground": "222 30% 14%",
+        "primary": "217 55% 32%",
+        "primary-foreground": "210 40% 98%",
+        "ring": "217 55% 45%"
+      },
+      "dark": {
+        "background": "222 22% 10%",
+        "foreground": "210 25% 94%",
+        "primary": "212 70% 68%",
+        "primary-foreground": "222 30% 10%",
+        "ring": "212 70% 68%"
+      }
+    }
+  }
+}

@@ -59,6 +59,9 @@ func (s *mentionablesService) Search(ctx context.Context, workspaceID uuid.UUID,
 			Slug:        slug,
 			DisplayName: u.Name,
 			AvatarURL:   avatarURL,
+
+			IsServiceUser: u.ServiceAgentID != nil,
+			AgentID:       u.ServiceAgentID,
 		})
 	}
 

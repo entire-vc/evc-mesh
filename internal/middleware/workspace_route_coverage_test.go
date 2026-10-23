@@ -226,7 +226,8 @@ func TestBodyTenantFieldsAreDeclared(t *testing.T) {
 // declaredBodyTenantFields is the reviewed verdict on every tenant-identifying id
 // that arrives in a request body. The key is "<file>:<struct>.<json field>".
 var declaredBodyTenantFields = map[string]string{
-	"user_runtime_handler.go:managerBody.agent_id": "UserRuntimeRepo.managerChange checks in the transaction that the agent's operator_user_id is the signed-in user (a human, never a connector); another tenant's agent is a plain 404",
+	"agent_chat_handler.go:createThreadBody.agent_id": "checked: AgentChatHandler.CreateThread requires the agent to be in the project's chat agent list (422 otherwise)",
+	"user_runtime_handler.go:managerBody.agent_id":    "UserRuntimeRepo.managerChange checks in the transaction that the agent's operator_user_id is the signed-in user (a human, never a connector); another tenant's agent is a plain 404",
 	// Guarded by middleware.RequireBodyWorkspace on the route.
 	"extension_ui_handler.go:uiContextRequest.workspace_id":         "guarded: bodyWS on POST /ext/:ext_id/ui-context",
 	"extension_ui_handler.go:uiContextRequest.project_id":           "checked: ExtensionUIHandler.UIContext requires the project to belong to workspace_id (404 otherwise)",
@@ -237,6 +238,9 @@ var declaredBodyTenantFields = map[string]string{
 	"rule_handler.go:evaluateRuleRequest.task_id":                   "benign: only narrows an evaluation already scoped to the guarded workspace",
 
 	// Checked in the handler, or in the service it calls.
+	"chat_session_handler.go:chatSessionIssueRequest.workspace_id":     "checked: ChatSessionService.checkLive requires the user to be a member and the agent connected in this workspace; the route is runner-only (ChatControllerAuth)",
+	"chat_session_handler.go:chatSessionIssueRequest.project_id":       "checked: ChatSessionService.checkLive requires the project to belong to workspace_id and both user and agent to be members of it",
+	"chat_session_handler.go:chatSessionIssueRequest.agent_id":         "checked: ChatSessionService.checkLive requires an active connection of this agent to workspace_id and a project membership",
 	"memory_handler.go:rememberRequest.workspace_id":                   "checked: MemoryHandler.requireWorkspaceID -> workspaceAllowed",
 	"memory_handler.go:rememberRequest.project_id":                     "checked: same call, the project is narrowed inside the allowed workspace",
 	"spark_handler.go:installRequest.workspace_id":                     "checked: SparkHandler.Install -> memberRepo.GetRole + PermRegisterAgent",
@@ -287,7 +291,7 @@ var declaredBodyTenantFields = map[string]string{
 	"secret_materialize_handler.go:materializeRequest.workspace_id":   "checked: possession of the SpawnAuth shared secret (X-Spawn-Token) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnAuth doc comment",
 	"secret_materialize_handler.go:materializeRequest.project_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
 	"secret_materialize_handler.go:materializeRequest.agent_id":       "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
-	"secret_materialize_handler.go:materializationAudit.workspace_id": "checked: never decoded from a request — the activity_log payload the handler WRITES for each issuance (#1c9f527d); its value is materializeRequest.workspace_id, already authorized by SpawnAuth above",
+	"secret_materialize_handler.go:materializationAudit.workspace_id": "checked: never decoded from a request — the activity_log payload the handler WRITES for each issuance; its value is materializeRequest.workspace_id, already authorized by SpawnAuth above",
 	"secret_materialize_handler.go:materializationAudit.project_id":   "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
 	"secret_materialize_handler.go:materializationAudit.agent_id":     "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
 }

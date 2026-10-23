@@ -172,5 +172,28 @@
   },
   "fallback": {
     "agent": "Agent"
+  },
+  "dnd": {
+    "instructions": "Press Space or Enter to pick up. Arrow keys move, Space or Enter drops, Escape cancels.",
+    "pickedUp": "Picked up {{name}}",
+    "over": "{{name}} is over {{where}}",
+    "dropped": "{{name}} dropped at {{where}}",
+    "cancelled": "Move of {{name}} cancelled",
+    "outside": "outside any list",
+    "position": "position {{position}} of {{total}}"
+  },
+  "fields": {
+    "labels": "Labels",
+    "runtime": "Work state",
+    "assignee": "Assignee",
+    "gate": "Waiting on a human",
+    "reviewer": "Reviewer",
+    "priority": "Priority",
+    "delegation": "Delegation level",
+    "checkout": "Checkout",
+    "artifacts": "Artifacts",
+    "dueDate": "Due date",
+    "subtasks": "Subtasks",
+    "estimate": "Estimate"
   }
 }

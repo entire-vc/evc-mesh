@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadServerExpanded, saveServerExpanded } from "@/lib/docs-tree-sync";
 
 // Regression: the sync module called /me/ui-state/... without the /api/v1
-// prefix. In prod that hit the SPA fallback (GET 200 text/html, PUT 405), so
+// prefix. In production that hit the SPA fallback (GET 200 text/html, PUT 405), so
 // the server copy never worked. The component test mocks this module, so the
 // real URL is asserted here against the true boundary (fetch).
 

@@ -84,7 +84,7 @@ export function InvitedAgentDialog({
 
   const statusCfg = agentStatusConfig[agent.status as keyof typeof agentStatusConfig] ?? {
     label: agent.status,
-    dotColor: "bg-gray-400",
+    dotColor: "bg-tone-neutral-400",
   };
 
   const finish = () => {

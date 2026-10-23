@@ -31,15 +31,15 @@ const line = () =>
 
 describe("DocMeta", () => {
   it("names the creator and says when the page last changed", () => {
-    render(<DocMeta doc={makeDoc({ created_by_name: "Pavel Rogozhin" })} />);
-    expect(line()).toContain("Created by Pavel Rogozhin");
+    render(<DocMeta doc={makeDoc({ created_by_name: "Alex Rogozhin" })} />);
+    expect(line()).toContain("Created by Alex Rogozhin");
     expect(line()).toMatch(/Updated Aug 1[34], 2026 \d{2}:\d{2}/);
   });
 
   it("does not claim the creator was the last editor on a legacy row", () => {
     // Rows written before updated_by existed carry null; inventing an editor
     // would be a lie the reader cannot check.
-    render(<DocMeta doc={makeDoc({ created_by_name: "Pavel Rogozhin" })} />);
+    render(<DocMeta doc={makeDoc({ created_by_name: "Alex Rogozhin" })} />);
     expect(line()).not.toContain("Last updated by");
   });
 
@@ -55,13 +55,13 @@ describe("DocMeta", () => {
   });
 
   it("renders a machine-readable timestamp with the exact time on hover", () => {
-    render(<DocMeta doc={makeDoc({ created_by_name: "Pavel" })} />);
+    render(<DocMeta doc={makeDoc({ created_by_name: "Alex" })} />);
     const stamp = screen.getByText(/Updated Aug 1[34], 2026/);
     expect(stamp).toHaveAttribute("datetime", "2026-08-14T09:30:00Z");
   });
 
   it("shows hh:mm next to the date, in the viewer's time zone", () => {
-    render(<DocMeta doc={makeDoc({ created_by_name: "Pavel" })} />);
+    render(<DocMeta doc={makeDoc({ created_by_name: "Alex" })} />);
     const hhmm = formatTime("2026-08-14T09:30:00Z");
     expect(hhmm).toMatch(/^\d{2}:\d{2}$/);
     expect(line()).toMatch(new RegExp(`Updated Aug 1[34], 2026 ${hhmm}$`));
@@ -73,14 +73,14 @@ describe("DocMeta — the editor the API resolves", () => {
     render(
       <DocMeta
         doc={makeDoc({
-          created_by_name: "Pavel Rogozhin",
+          created_by_name: "Alex Rogozhin",
           updated_by: "22222222-2222-2222-2222-222222222222",
-          updated_by_name: "Daedalus",
+          updated_by_name: "Dana",
         })}
       />,
     );
-    expect(line()).toContain("Created by Pavel Rogozhin");
-    expect(line()).toContain("Last updated by Daedalus");
+    expect(line()).toContain("Created by Alex Rogozhin");
+    expect(line()).toContain("Last updated by Dana");
     // The date stops repeating the word "Updated" once an editor is named.
     expect(line()).toMatch(/Aug 1[34], 2026 \d{2}:\d{2}/);
     expect(line()).not.toContain("Updated Aug 14");
@@ -91,7 +91,7 @@ describe("DocMeta — the editor the API resolves", () => {
     render(
       <DocMeta
         doc={makeDoc({
-          created_by_name: "Pavel",
+          created_by_name: "Alex",
           updated_by: "22222222-2222-2222-2222-222222222222",
         })}
       />,
@@ -104,9 +104,9 @@ describe("DocMeta — the editor the API resolves", () => {
 describe("DocMeta — bad data", () => {
   it("drops the date rather than throwing on an unparseable timestamp", () => {
     render(
-      <DocMeta doc={makeDoc({ created_by_name: "Pavel", updated_at: "soon" })} />,
+      <DocMeta doc={makeDoc({ created_by_name: "Alex", updated_at: "soon" })} />,
     );
-    expect(line()).toContain("Created by Pavel");
+    expect(line()).toContain("Created by Alex");
     expect(screen.queryByText(/Updated/)).not.toBeInTheDocument();
   });
 

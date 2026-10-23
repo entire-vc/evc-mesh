@@ -1,8 +1,12 @@
 package storage
 
 import (
+	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAddCharset(t *testing.T) {
@@ -55,5 +59,43 @@ func TestContentDisposition(t *testing.T) {
 	}
 	if !strings.Contains(cyrillic, "%D0%94%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82") {
 		t.Errorf("Cyrillic filename missing percent-encoded Cyrillic chars: %q", cyrillic)
+	}
+}
+
+func TestPresignPutURL_SignsTheDeclaredHeaders(t *testing.T) {
+	s, err := NewS3Client("localhost:9000", "ak", "sk", "bkt", "us-east-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.bucketReady.Store(true) // no network: the bucket is taken as existing
+	h := http.Header{}
+	h.Set("Content-Type", "image/png")
+	h.Set("Content-Length", "1234")
+	u, err := s.PresignPutURL(context.Background(), "chat/ws/id", time.Minute, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"/bkt/chat/ws/id", "X-Amz-Signature=", "content-length", "content-type"} {
+		if !strings.Contains(strings.ToLower(u), strings.ToLower(want)) {
+			t.Errorf("presigned URL %q lacks %q", u, want)
+		}
+	}
+
+	s.SetPublicURL("https://mesh.example.com/s3")
+	u, err = s.PresignPutURL(context.Background(), "chat/ws/id", time.Minute, h)
+	if err != nil || !strings.HasPrefix(u, "https://mesh.example.com/s3/bkt/chat/ws/id?") {
+		t.Errorf("public URL rewrite: %q, %v", u, err)
+	}
+}
+
+func TestStatObject_UnreachableStorageIsClassified(t *testing.T) {
+	s, err := NewS3Client("127.0.0.1:1", "ak", "sk", "bkt", "us-east-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := s.StatObject(ctx, "chat/ws/id"); !errors.Is(err, ErrUnreachable) {
+		t.Errorf("StatObject on a dead endpoint = %v, want ErrUnreachable", err)
 	}
 }

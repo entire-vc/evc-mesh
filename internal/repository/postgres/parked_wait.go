@@ -99,7 +99,7 @@ func parkedSnapshot(task *domain.Task, p domain.ParkedWaitPlan, actor uuid.UUID,
 		}
 		switch label {
 		case "freeze", "no-promote", "no-intake-promote", "hold", "manual-park", "wait-external",
-			"awaiting-window", "no-pavel-triage", "backlog-candidate", "golden", "eval-harness", "kind:monitor", "kind:verify":
+			"awaiting-window", "no-alex-triage", "backlog-candidate", "golden", "eval-harness", "kind:monitor", "kind:verify":
 			return parkedConflict()
 		}
 		if strings.HasPrefix(label, "park:") || strings.HasPrefix(label, "wake:") ||
@@ -424,7 +424,7 @@ func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UU
 		}
 	}
 	activityID := uuid.New()
-	changes, err := json.Marshal(map[string]any{"status": map[string]string{"old": old.Name, "new": target.Name}, "source": "parked-wait-api", "reason": p.Reason, "trigger": input.Trigger, "pipeline_status": verifiedStatus, "required_jobs": p.Condition.RequiredJobs, "wait_comment_id": p.WaitCommentID, "feed_receipt_id": p.FeedReceiptID, "registration_id": p.ID, "release_id": input.ReleaseID, "removed_labels": p.RemoveLabels, "cleared_start_after": p.ClearStartAfter, "old_version": task.Version, "new_version": task.Version + 1})
+	changes, err := json.Marshal(actorctx.AnnotateChanges(ctx, map[string]any{"status": map[string]string{"old": old.Name, "new": target.Name}, "source": "parked-wait-api", "reason": p.Reason, "trigger": input.Trigger, "pipeline_status": verifiedStatus, "required_jobs": p.Condition.RequiredJobs, "wait_comment_id": p.WaitCommentID, "feed_receipt_id": p.FeedReceiptID, "registration_id": p.ID, "release_id": input.ReleaseID, "removed_labels": p.RemoveLabels, "cleared_start_after": p.ClearStartAfter, "old_version": task.Version, "new_version": task.Version + 1}))
 	if err != nil {
 		return nil, err
 	}

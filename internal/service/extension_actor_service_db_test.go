@@ -381,3 +381,23 @@ func TestExtensionActorService_SelfRotate(t *testing.T) {
 	_, err = f.svc.SelfRotate(ctx, p, rot2.Token, 0)
 	assert.Error(t, err)
 }
+
+func TestExtensionActorService_RotateIssuesFirstToken(t *testing.T) {
+	f := newExtActorFixture(t)
+	ctx := context.Background()
+	consents := postgres.NewIntegrationConsentRepo(f.db)
+	svc := WithConsents(f.svc, consents)
+
+	_, err := svc.Rotate(ctx, f.ws.ID, f.conn.ID)
+	assert.Error(t, err, "no consent recorded: nothing to issue")
+
+	require.NoError(t, consents.SetConsent(ctx, f.conn.ID, domain.ExtensionConsent{Capabilities: []string{"api:tasks:read"}, At: time.Now()}))
+	_, err = svc.Rotate(ctx, uuid.New(), f.conn.ID)
+	assert.Error(t, err, "foreign workspace")
+
+	first, err := svc.Rotate(ctx, f.ws.ID, f.conn.ID)
+	require.NoError(t, err)
+	p, err := svc.Authenticate(ctx, first.Token)
+	require.NoError(t, err)
+	assert.True(t, p.HasAPI("tasks:read"))
+}

@@ -496,7 +496,7 @@ func TestGetPreviousInstanceSummary_RuneSafeTruncation(t *testing.T) {
 }
 
 // AC#1 extra — softenTruncationBoundary must not cut a real word in half when a
-// whitespace boundary exists within the lookback window (task c9fa3b4b: prior
+// whitespace boundary exists within the lookback window (an internal ticket: prior
 // behavior cut "...дефектом ПОДАЧИ ... вместо ложного f" mid-word).
 func TestGetPreviousInstanceSummary_TruncationBacksOffToWordBoundary(t *testing.T) {
 	repo := NewMockRecurringRepository()
@@ -602,7 +602,7 @@ func TestCreateInstance_DescriptionBackstop(t *testing.T) {
 	}
 }
 
-// Task c9fa3b4b — the injected previous-instance report must be clearly framed
+// an internal ticket — the injected previous-instance report must be clearly framed
 // as historical context, never as an unlabeled continuation of the current
 // instance's instructions. Repro: instance 30's description ended with a bare
 // "…Recall@episodic оказался дефектом ПОДАЧИ … вместо ложного f" — the raw
@@ -685,7 +685,7 @@ func TestCreateInstance_PrevSummaryIsFramedAsContext(t *testing.T) {
 	}
 }
 
-// Riker's review on PR #358 (task c9fa3b4b): two of six live schedules put
+// Robin's review: two of six live schedules put
 // {{.PrevSummary}} mid-template, not at the end. Without a closing marker,
 // everything after the placeholder falls inside the "NOT instructions for
 // this run" block — an inversion of the original bug: real instructions get
@@ -1216,7 +1216,7 @@ func TestRunOneSchedule_CallsSupersede(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // runOneSchedule — open previous instance repeats instead of spawning a
-// sibling (recurring-duplicate class fixed alongside #d1eff1c6).
+// sibling (recurring-duplicate class fixed alongside an internal ticket).
 // ---------------------------------------------------------------------------
 
 func TestRunOneSchedule_PreviousInstanceOpen_RepeatsInsteadOfCreating(t *testing.T) {
@@ -1495,7 +1495,7 @@ func TestTaskService_FindOpenRecurringInstance_RepoErr_ReturnsError(t *testing.T
 
 // ---------------------------------------------------------------------------
 // recordMissedOutcome — consecutive-miss counter and owner-alert comment.
-// #8b57630b НЕГАТИВНЫЙ-2: two consecutive missed rollovers must signal the
+// an internal ticket НЕГАТИВНЫЙ-2: two consecutive missed rollovers must signal the
 // schedule's owner, not silently continue forever.
 // ---------------------------------------------------------------------------
 

@@ -614,3 +614,26 @@ func TestGetParkedWaitNotFound(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	require.Equal(t, 404, apiErr.Code)
 }
+
+// A parked-wait release made through a chat-session token writes its own
+// activity row; it must carry the same user/chat attribution as every other
+// task-history writer.
+func TestParkedWaitReleaseCarriesChatAttribution(t *testing.T) {
+	f := newParkedFixture(t)
+	f.register(t)
+	attr := actorctx.ChatAttribution{InitiatedByUserID: uuid.New(), ChatThreadID: uuid.New(), ChatSessionID: uuid.New(), ExecutionEpoch: 3}
+	ctx := actorctx.WithChatAttribution(f.ctx, attr)
+	_, err := f.repo.ReleaseParkedWaitVerified(ctx, f.id, f.request(), func(context.Context, *domain.Task, domain.ParkedWaitPlan) (string, error) {
+		return "success", nil
+	})
+	require.NoError(t, err)
+	var raw []byte
+	require.NoError(t, f.repo.db.Get(&raw, `SELECT changes FROM activity_log WHERE entity_id=$1 AND action='task.moved'`, f.id))
+	var changes map[string]any
+	require.NoError(t, json.Unmarshal(raw, &changes))
+	require.Equal(t, attr.InitiatedByUserID.String(), changes["initiated_by_user_id"])
+	require.Equal(t, attr.ChatThreadID.String(), changes["chat_thread_id"])
+	require.Equal(t, attr.ChatSessionID.String(), changes["chat_session_id"])
+	require.EqualValues(t, 3, changes["execution_epoch"])
+	require.Equal(t, "parked-wait-api", changes["source"])
+}

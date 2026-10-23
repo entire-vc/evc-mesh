@@ -33,7 +33,7 @@ const MENTION_RE =
 const OPAQUE = new Set(["CODE", "PRE", "A"]);
 
 const MENTION_CLASS =
-  "mention-link inline-block whitespace-nowrap rounded px-1 py-0.5 text-blue-600 bg-blue-50 hover:underline dark:text-blue-400 dark:bg-blue-900/30";
+  "mention-link inline-block whitespace-nowrap rounded px-1 py-0.5 text-tone-info-600 bg-tone-info-50 hover:underline dark:text-tone-info-400 dark:bg-tone-info-900/30";
 
 function isOpaque(node: Node): boolean {
   for (let el = node.parentElement; el; el = el.parentElement) {

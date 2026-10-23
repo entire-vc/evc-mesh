@@ -110,7 +110,7 @@ export function CalendarGrid({
                         isDone && "line-through opacity-60",
                       )}
                       style={{
-                        borderLeft: `2px solid ${status?.color ?? "#9ca3af"}`,
+                        borderLeft: `2px solid ${status?.color ?? "var(--fallback-gray-400)"}`,
                       }}
                     >
                       <span className="min-w-0 flex-1 truncate">{task.title}</span>

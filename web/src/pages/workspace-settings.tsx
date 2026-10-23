@@ -89,8 +89,8 @@ function roleBadgeVariant(role: WorkspaceRole): "default" | "secondary" | "outli
 }
 
 function RoleIcon({ role }: { role: WorkspaceRole }) {
-  if (role === "owner") return <Crown className="h-3.5 w-3.5 text-amber-500" />;
-  if (role === "admin") return <Shield className="h-3.5 w-3.5 text-blue-500" />;
+  if (role === "owner") return <Crown className="h-3.5 w-3.5 text-tone-warning-500" />;
+  if (role === "admin") return <Shield className="h-3.5 w-3.5 text-tone-info-500" />;
   return null;
 }
 
@@ -109,13 +109,13 @@ function formatDate(iso: string): string {
 function agentStatusColor(status: string): string {
   switch (status) {
     case "online":
-      return "bg-green-500";
+      return "bg-tone-success-500";
     case "busy":
-      return "bg-amber-500";
+      return "bg-tone-warning-500";
     case "error":
-      return "bg-red-500";
+      return "bg-tone-danger-500";
     default:
-      return "bg-gray-400";
+      return "bg-tone-neutral-400";
   }
 }
 
@@ -606,7 +606,7 @@ function AssignmentRulesEditor({
         <p
           className={cn(
             "text-sm",
-            feedback.type === "success" ? "text-green-600" : "text-destructive",
+            feedback.type === "success" ? "text-tone-success-600" : "text-destructive",
           )}
         >
           {feedback.message}
@@ -629,7 +629,7 @@ function ViolationRow({ v }: { v: RuleViolation }) {
   const { t } = useTranslation("settings");
   return (
     <div className="flex items-start gap-3 py-2.5 border-b border-border last:border-0">
-      <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+      <AlertTriangle className="h-4 w-4 text-tone-warning-500 shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium capitalize">
@@ -1226,7 +1226,7 @@ export function WorkspaceSettingsPage() {
               <p
                 className={
                   generalFeedback.type === "success"
-                    ? "text-sm text-green-600"
+                    ? "text-sm text-tone-success-600"
                     : "text-sm text-destructive"
                 }
               >
@@ -1287,7 +1287,7 @@ export function WorkspaceSettingsPage() {
                 <p
                   className={
                     iconFeedback.type === "success"
-                      ? "text-sm text-green-600"
+                      ? "text-sm text-tone-success-600"
                       : "text-sm text-destructive"
                   }
                 >
@@ -1737,7 +1737,7 @@ export function WorkspaceSettingsPage() {
                     {resendResult.error ? (
                       <p className="text-xs text-destructive">{resendResult.error}</p>
                     ) : resendResult.delivery?.email_sent ? (
-                      <p className="text-xs text-green-600 dark:text-green-400">
+                      <p className="text-xs text-tone-success-600 dark:text-tone-success-400">
                         {t("workspace.invites.emailSent", { email: invite.email })}
                       </p>
                     ) : (
@@ -1804,7 +1804,7 @@ export function WorkspaceSettingsPage() {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            <AlertTriangle className="h-4 w-4 text-tone-warning-500" />
             <div className="space-y-1.5">
               <CardTitle>{t("workspace.violations.title")}</CardTitle>
               <CardDescription>
@@ -1970,7 +1970,7 @@ export function WorkspaceSettingsPage() {
                   )}
                   <div className="flex items-center justify-between">
                     {templatesSaved && (
-                      <span className="text-xs text-green-600 flex items-center gap-1">
+                      <span className="text-xs text-tone-success-600 flex items-center gap-1">
                         <Check className="h-3.5 w-3.5" />
                         {t("workspace.templates.saved")}
                       </span>
@@ -2104,7 +2104,7 @@ export function WorkspaceSettingsPage() {
 
               {importConfigResult && (
                 <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-1.5 text-xs">
-                  <p className="font-medium text-green-700 dark:text-green-400 flex items-center gap-1">
+                  <p className="font-medium text-tone-success-700 dark:text-tone-success-400 flex items-center gap-1">
                     <Check className="h-3.5 w-3.5" />
                     {t("workspace.config.importSuccess")}
                   </p>
@@ -2112,7 +2112,7 @@ export function WorkspaceSettingsPage() {
                     <p className="text-muted-foreground">
                       {t("workspace.config.teamUpdated", { agents: importConfigResult.team.agents_updated, humans: importConfigResult.team.humans_updated })}
                       {importConfigResult.team.errors && importConfigResult.team.errors.length > 0 && (
-                        <span className="text-amber-600"> {t("workspace.config.errorsCount", { n: importConfigResult.team.errors.length })}</span>
+                        <span className="text-tone-warning-600"> {t("workspace.config.errorsCount", { n: importConfigResult.team.errors.length })}</span>
                       )}
                     </p>
                   )}
@@ -2128,7 +2128,7 @@ export function WorkspaceSettingsPage() {
                   )}
                   {importConfigResult.warnings.length > 0 && (
                     <div className="space-y-0.5">
-                      <p className="text-amber-600 flex items-center gap-1">
+                      <p className="text-tone-warning-600 flex items-center gap-1">
                         <AlertTriangle className="h-3 w-3 shrink-0" />
                         {t("workspace.config.warnings", { n: importConfigResult.warnings.length })}
                       </p>
@@ -2227,7 +2227,7 @@ export function WorkspaceSettingsPage() {
 
               {importTeamResult && (
                 <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-1 text-xs">
-                  <p className="font-medium text-green-700 dark:text-green-400 flex items-center gap-1">
+                  <p className="font-medium text-tone-success-700 dark:text-tone-success-400 flex items-center gap-1">
                     <Check className="h-3.5 w-3.5" />
                     {t("workspace.config.teamImportSuccess")}
                   </p>
@@ -2236,7 +2236,7 @@ export function WorkspaceSettingsPage() {
                   </p>
                   {importTeamResult.errors && importTeamResult.errors.length > 0 && (
                     <div className="space-y-0.5">
-                      <p className="text-amber-600">{t("workspace.config.errors")}</p>
+                      <p className="text-tone-warning-600">{t("workspace.config.errors")}</p>
                       {importTeamResult.errors.map((e, i) => (
                         <p key={i} className="pl-4 text-muted-foreground">{e}</p>
                       ))}

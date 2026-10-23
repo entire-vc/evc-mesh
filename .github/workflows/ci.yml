@@ -38,12 +38,12 @@ env:
   # Kept in step with .gitlab-ci.yml's GOOSE_VERSION and go.mod's goose
   # library requirement — @latest resolves at job run time, not pinned to a
   # commit, and broke every job here when v3.28.0 raised its go.mod floor to
-  # go 1.26 while these runners are on 1.25 (#b97dfc58).
+  # go 1.26 while these runners are on 1.25.
   GOOSE_VERSION: "v3.27.3"
 
 # Every job carries `timeout-minutes`. GitHub's default is 360 (six hours), and
 # this workflow runs on `merge_group` — so a job that hangs holds the whole merge
-# queue behind it, which is how #72d1bf09 (queue stalled 5h) started life as
+# queue behind it, which is how an internal ticket (queue stalled 5h) started life as
 # "the benchmark is hanging". The ceilings below are ~4-6x the p100 measured over
 # the last 8 green runs (slowest: coverage-gate 5.7m, test 5.2m), and every one is
 # under the ruleset's `check_response_timeout_minutes: 60`. That ordering is the
@@ -101,30 +101,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: "v2.11.3"
-          # The action's own `config verify` step has no way to point at a
-          # local schema (golangci-lint-action only forwards --config, never
-          # --schema, to that command) — it always fetches the schema over
-          # the network, putting an external host on the merge-queue
-          # critical path. PR #711 (a Caddyfile-only change, zero Go
-          # touched) got ejected from the queue when that fetch timed out,
-          # costing ~20min and a manual re-enqueue for a config file that
-          # hadn't changed (task #848579ba). Disabled here; replaced by the
-          # step below against a vendored copy.
-          verify: false
-      - name: golangci-lint config verify (local schema, no network)
-        # `--schema` is a real (if hidden/"debugging purpose only") flag on
-        # `golangci-lint config verify` in v2.11.x — it accepts a local file
-        # path and skips the network fetch entirely. Schema pinned to match
-        # `version` above; see .github/golangci-schema.json for where to
-        # re-vendor it from when that version changes.
-        #
-        # NB for a future version bump: golangci-lint v2.12 removed this
-        # flag — `config verify` there always validates against an
-        # embedded schema with no network call of its own, so upgrading
-        # past v2.11.x means deleting this workaround (both steps here,
-        # `verify: false` above included) rather than adjusting it.
-        run: golangci-lint config verify --schema .github/golangci-schema.json
+          version: "v2.14.0"
 
   test:
     name: Test
@@ -331,7 +308,7 @@ jobs:
   # The job above is a REPORT: `continue-on-error: true` means its red is a
   # colour, not a refusal. That mitigation was added 63480da5 (18.06) because the
   # suite was flaky; the docker-run NATS/MinIO rework that removed the actual
-  # cause of the flake landed c97f936d (28.07), 40 days LATER, and nobody
+  # cause of the flake landed an internal ticket (28.07), 40 days LATER, and nobody
   # revisited the mitigation. Meanwhile ./tests/integration/cross_tenant_*.go
   # became the only place in the repository where tenancy is proved over live
   # HTTP against the real router — and on #682 it went red for a real reason
@@ -781,7 +758,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
-          version: 10
+          version: 10.34.5
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -811,9 +788,9 @@ jobs:
     name: "Authed E2E"
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # DISABLED 2026-09-10 (#8daab9da). Dev canon moved to GitLab 2026-08-23
+    # DISABLED 2026-09-10. Dev canon moved to GitLab 2026-08-23
     # (§0z); .gitlab-ci.yml:authed-e2e already gates real merges there with
-    # working creds (set via gl-admin set-ci-variable, 2026-09-07, #d5619f11).
+    # working creds (set via gl-admin set-ci-variable, 2026-09-07).
     # This GitHub copy's E2E_USER_EMAIL/E2E_USER_PASSWORD repo secrets were
     # never updated to match, so every mirror push has failed login (HTTP 401)
     # since 2026-09-07 ~19:40 — 20+ false-red runs, zero real signal (the
@@ -837,7 +814,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
-          version: 10
+          version: 10.34.5
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -895,7 +872,7 @@ jobs:
         working-directory: web
         # WHERE THIS WRITES, AND AS WHOM — read this before changing the suite.
         #
-        # E2E_USER_EMAIL is e2e-ci@entire.vc. It is a member of exactly ONE
+        # E2E_USER_EMAIL is user@example.com. It is a member of exactly ONE
         # workspace, `e2e-ci-sandbox`, and of NO real workspace: asking the
         # production workspace for anything under this credential answers
         # 403 "workspace access denied". The suite asserts that membership list
@@ -904,7 +881,7 @@ jobs:
         #
         # Inside the sandbox its role is `member` (create/update/delete tasks,
         # documents, comments — see internal/middleware/rbac.go). It is NOT the
-        # owner: admin@entire.vc is, so this credential cannot delete the
+        # owner: user@example.com is, so this credential cannot delete the
         # workspace or change anyone's role, and a human can clean the sandbox
         # up. `viewer` was the previous setting and made the required check
         # structurally unable to test any write path, which is what §1n asks for.
@@ -935,7 +912,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
-          version: 10
+          version: 10.34.5
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22

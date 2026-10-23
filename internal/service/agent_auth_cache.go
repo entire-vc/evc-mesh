@@ -183,13 +183,13 @@ func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKe
 // against the database before trusting it — two independent things, both
 // skipped by construction on a hit:
 //
-//  1. Grant revocation (task U2 AC4, `#fbc12881`): a grant-derived hit
+//  1. Grant revocation (task U2 AC4, an internal ticket): a grant-derived hit
 //     (agent.GrantID != nil) can have been revoked by ANY process against the
 //     same database — as of U2 the ONLY revoke path is a direct SQL UPDATE
 //     (U3 adds an API) — and nothing calls InvalidateAgent for that.
 //     RotateAPIKey/Delete below cover the two cases THIS process can be told
 //     about explicitly; this covers everything else.
-//  2. Workspace soft-delete (`#315d9a52`): Authenticate resolves the
+//  2. Workspace soft-delete: Authenticate resolves the
 //     workspace via workspaceRepo.GetBySlug/GetByID, both of which already
 //     filter deleted_at IS NULL — but a hit skips Authenticate entirely, so a
 //     workspace soft-deleted mid-TTL kept answering from a still-warm entry

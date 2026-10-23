@@ -10,6 +10,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
@@ -26,7 +27,13 @@ const activityEnrichedSelect = `SELECT a.id, a.workspace_id, a.entity_type, a.en
 		WHEN a.actor_type = 'extension' THEN
 			(SELECT COALESCE(NULLIF(ea.display_name, ''), ea.extension_id) FROM extension_actors ea WHERE ea.actor_id = a.actor_id)
 		ELSE NULL
-	END AS actor_name`
+	END AS actor_name,
+	-- "Agent X on behalf of Y (chat)": the user a chat-session agent acted for.
+	-- Only our own writer puts initiated_by_user_id into changes; the regex keeps
+	-- a malformed value from failing the whole list on the uuid cast.
+	CASE WHEN a.changes->>'initiated_by_user_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+		(SELECT display_name FROM users WHERE id = (a.changes->>'initiated_by_user_id')::uuid)
+	END AS initiated_by_name`
 
 // ActivityLogRepo implements repository.ActivityLogRepository with PostgreSQL.
 type ActivityLogRepo struct {
@@ -47,6 +54,8 @@ func (r *ActivityLogRepo) Create(ctx context.Context, entry *domain.ActivityLog)
 	if changes == nil {
 		changes = json.RawMessage(`{}`)
 	}
+	// "Agent X on behalf of Y (chat)": the verified chat attribution rides in changes.
+	changes = actorctx.AnnotateRawChanges(ctx, changes)
 	_, err := r.db.ExecContext(ctx, q,
 		entry.ID, entry.WorkspaceID, entry.EntityType, entry.EntityID,
 		entry.Action, entry.ActorID, entry.ActorType, changes, entry.CreatedAt,

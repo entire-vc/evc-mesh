@@ -27,18 +27,18 @@ const LINK_TYPE_CONFIG: Record<
   VCSLinkType,
   { icon: typeof GitPullRequest; color: string }
 > = {
-  pr: { icon: GitPullRequest, color: "text-violet-500" },
-  commit: { icon: GitCommit, color: "text-amber-500" },
-  branch: { icon: GitBranch, color: "text-teal-500" },
+  pr: { icon: GitPullRequest, color: "text-tone-violet-500" },
+  commit: { icon: GitCommit, color: "text-tone-warning-500" },
+  branch: { icon: GitBranch, color: "text-tone-teal-500" },
 };
 
 const PR_STATUS_CONFIG: Record<
   string,
   { className: string }
 > = {
-  open: { className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200" },
-  merged: { className: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200" },
-  closed: { className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
+  open: { className: "bg-tone-positive-100 text-tone-positive-800 dark:bg-tone-positive-900 dark:text-tone-positive-200" },
+  merged: { className: "bg-tone-violet-100 text-tone-violet-800 dark:bg-tone-violet-900 dark:text-tone-violet-200" },
+  closed: { className: "bg-tone-danger-100 text-tone-danger-800 dark:bg-tone-danger-900 dark:text-tone-danger-200" },
 };
 
 /**

@@ -97,7 +97,18 @@ type extensionActorService struct {
 	actors       repository.ExtensionActorRepository
 	integrations repository.IntegrationRepository
 	workspaces   repository.WorkspaceRepository
+	consents     repository.ExtensionConsentRepository
 	now          func() time.Time
+}
+
+// WithConsents lets Rotate issue the first token of a connection that has no
+// actor yet, from the consent recorded at connect. Without it Rotate needs an
+// existing actor.
+func WithConsents(s ExtensionActorService, c repository.ExtensionConsentRepository) ExtensionActorService {
+	if impl, ok := s.(*extensionActorService); ok {
+		impl.consents = c
+	}
+	return s
 }
 
 // NewExtensionActorService wires the service.
@@ -172,6 +183,9 @@ func (s *extensionActorService) Rotate(ctx context.Context, workspaceID, connect
 	if err != nil {
 		return nil, err
 	}
+	if row == nil && s.consents != nil {
+		return s.issueFirst(ctx, workspaceID, connectionID)
+	}
 	if row == nil || row.WorkspaceID != workspaceID {
 		return nil, apierror.NotFound("Extension actor")
 	}
@@ -190,6 +204,27 @@ func (s *extensionActorService) Rotate(ctx context.Context, workspaceID, connect
 		return nil, apierror.Conflict("extension actor is revoked; reconnect the extension to issue a new token")
 	}
 	return &IssuedExtensionToken{Token: raw, ActorID: row.ActorID, Actor: row.Principal(), Grace: ExtensionTokenRotationGrace, Rotated: true, IssuedAt: s.now()}, nil
+}
+
+// issueFirst issues the first token of a connection made before any actor
+// existed, with the capabilities consented to at connect.
+func (s *extensionActorService) issueFirst(ctx context.Context, workspaceID, connectionID uuid.UUID) (*IssuedExtensionToken, error) {
+	conn, err := s.integrations.GetByID(ctx, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil || conn.WorkspaceID != workspaceID {
+		return nil, apierror.NotFound("Extension actor")
+	}
+	id := string(conn.Provider)
+	consent, err := s.consents.GetConsent(ctx, workspaceID, id)
+	if err != nil {
+		return nil, err
+	}
+	if consent == nil {
+		return nil, apierror.NotFound("Extension actor")
+	}
+	return s.Issue(ctx, workspaceID, connectionID, id, id, consent.Capabilities)
 }
 
 // ExtensionSelfRotateMaxGrace bounds the transition window a caller may ask for.

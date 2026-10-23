@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { ViewTabBar } from "@/components/view-tab-bar";
+import { BUILTIN_PROJECT_TABS } from "@/lib/project-view-tabs";
 import type { ProjectViewTab } from "@/types";
 
 const navigate = vi.fn();
@@ -82,8 +83,6 @@ describe("ViewTabBar", () => {
     const menu = openKebab();
     const formats = within(menu).getAllByRole("menuitem");
     expect(formats.map((i) => i.textContent?.trim())).toEqual([
-      // Phone-only entry; present in the DOM at every width, hidden above `sm`.
-      "Calendar",
       "Dependencies",
       "Updates",
       "Save current view",
@@ -123,42 +122,118 @@ describe("ViewTabBar", () => {
   it("keeps the Formats group when there is no project id", () => {
     renderBar("board");
     const menu = openKebab();
-    // Timeline + Updates, plus the phone-only Calendar entry, which is in the
-    // DOM at every width and hidden with `sm:hidden`.
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(3);
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
   });
 
   // ---------------------------------------------------------------------
-  // Phone layout: four icons plus the kebab do not fit next to the
-  // breadcrumbs at 393px. jsdom applies no media queries, so these assert
-  // the responsive classes; the rendered proof is the 393px screenshot.
+  // Overflow: jsdom has no layout, so tab widths and the strip's room are
+  // stubbed. Every tab is 80px; the "…" trigger box is `kebab` px wide (40 by
+  // default, 49 once the mobile touch target and its divider are counted), and
+  // the strip reserves that plus the trigger's 4px left margin (44 / 53).
   // ---------------------------------------------------------------------
 
-  it("drops Calendar from the strip below sm and keeps the other three", () => {
-    renderBar("board");
-    expect(screen.getByRole("button", { name: "Calendar" }).className).toContain(
-      "hidden sm:flex",
+  describe("overflow", () => {
+    let room = 0;
+    let kebab = 40;
+    const offsetWidth = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetWidth",
     );
-    for (const name of ["Board", "List", "Docs"]) {
-      expect(screen.getByRole("button", { name }).className).not.toContain(
-        "hidden",
+    const clientWidth = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "clientWidth",
+    );
+
+    beforeEach(() => {
+      kebab = 40;
+      Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains("border-l") ? kebab : 80;
+        },
+      });
+      Object.defineProperty(Element.prototype, "clientWidth", {
+        configurable: true,
+        get: () => room,
+      });
+    });
+
+    afterEach(() => {
+      if (offsetWidth)
+        Object.defineProperty(HTMLElement.prototype, "offsetWidth", offsetWidth);
+      if (clientWidth)
+        Object.defineProperty(Element.prototype, "clientWidth", clientWidth);
+    });
+
+    const stripLabels = () =>
+      screen
+        .getAllByRole("button")
+        .filter((b) => !/more views/i.test(b.getAttribute("title") ?? ""))
+        .map((b) => b.textContent?.trim());
+
+    it("shows every built-in tab when they all fit", () => {
+      room = 4 * 80 + 44;
+      renderBar("board");
+      expect(stripLabels()).toEqual(["Board", "List", "Calendar", "Docs"]);
+    });
+
+    it("moves Calendar into the menu first when the strip is short", () => {
+      room = 3 * 80 + 44;
+      renderBar("board", "project-1");
+      expect(stripLabels()).toEqual(["Board", "List", "Docs"]);
+      fireEvent.click(screen.getByRole("button", { name: /more views/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /calendar/i }));
+      expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/calendar");
+    });
+
+    it("reserves the measured trigger width, not a fixed 44px", () => {
+      // 3 tabs + 44px would fit; with a 53px trigger the third tab must move out.
+      kebab = 49;
+      room = 3 * 80 + 44;
+      renderBar("board");
+      expect(stripLabels()).toEqual(["Board", "List"]);
+    });
+
+    it("drops Docs, then List, as the strip narrows further", () => {
+      room = 2 * 80 + 44;
+      renderBar("board");
+      expect(stripLabels()).toEqual(["Board", "List"]);
+    });
+
+    it("marks the menu trigger active when the current tab overflowed", () => {
+      room = 3 * 80 + 44;
+      renderBar("calendar");
+      const trigger = screen.getByRole("button", { name: /more views/i });
+      expect(trigger.className).toContain("bg-muted");
+      fireEvent.click(trigger);
+      expect(
+        screen.getByRole("menuitem", { name: /calendar/i }),
+      ).toHaveAttribute("aria-current", "page");
+    });
+
+    it("renders tabs supplied as data, with no edit to the component", () => {
+      room = 10 * 80;
+      render(
+        <MemoryRouter>
+          <ViewTabBar
+            currentView="board"
+            wsSlug="acme"
+            projectSlug="mesh"
+            tabs={[
+              ...BUILTIN_PROJECT_TABS,
+              {
+                id: "ext",
+                labelKey: "viewTabs.tabs.docs",
+                Icon: BUILTIN_PROJECT_TABS[0]!.Icon,
+                path: (ws, proj) => `/w/${ws}/p/${proj}/x/ext`,
+                overflowRank: 5,
+              },
+            ]}
+          />
+        </MemoryRouter>,
       );
-    }
-  });
-
-  it("offers Calendar in the kebab, shown only below sm", () => {
-    renderBar("board");
-    openKebab();
-    const item = screen.getByRole("menuitem", { name: /calendar/i });
-    expect(item.className).toContain("sm:hidden");
-    fireEvent.click(item);
-    expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/calendar");
-  });
-
-  it("marks the kebab active at phone width when Calendar is current", () => {
-    renderBar("calendar");
-    const trigger = screen.getByRole("button", { name: /more views/i });
-    expect(trigger.className).toContain("max-sm:bg-muted");
+      expect(stripLabels()).toHaveLength(5);
+    });
   });
 
   it("nests no button inside another button", () => {

@@ -34,13 +34,13 @@ const statusCategoryIcons: Record<StatusCategory, typeof CheckCircle2> = {
 };
 
 const statusCategoryColors: Record<StatusCategory, string> = {
-  done: "text-emerald-500",
+  done: "text-tone-positive-500",
   cancelled: "text-muted-foreground",
-  in_progress: "text-blue-500",
-  review: "text-yellow-500",
+  in_progress: "text-tone-info-500",
+  review: "text-tone-attention-500",
   todo: "text-muted-foreground",
   backlog: "text-muted-foreground",
-  triage: "text-orange-500",
+  triage: "text-tone-high-500",
 };
 
 const statusCategoryLabelKeys: Record<StatusCategory, string> = {

@@ -6,7 +6,7 @@ BIN_DIR := bin
 API_BINARY := $(BIN_DIR)/mesh-api
 # No MCP_BINARY here on purpose: the MCP server lives in its own repository
 # (entire-vc/evc-mesh-mcp). This repo's copy (cmd/mcp + internal/mcp) was a
-# duplicate that had drifted 12 tools behind and was deleted — Mesh #e85e4e05.
+# duplicate that had drifted 12 tools behind and was deleted — Mesh an internal ticket.
 
 # Database connection (matches docker-compose defaults)
 DB_DSN ?= postgres://mesh:mesh@localhost:5437/mesh?sslmode=disable
@@ -79,16 +79,16 @@ help:
 #
 # Pinned tool versions — must match ci.yml
 # GOOSE_VERSION: keep in step with go.mod and .gitlab-ci.yml's GOOSE_VERSION.
-GOLANGCI_LINT_VERSION := v2.11.3
+GOLANGCI_LINT_VERSION := v2.14.0
 GOOSE_VERSION := v3.27.3
 GOLANGCI_LINT         := $(shell go env GOPATH)/bin/golangci-lint
 GOOSE                 := $(shell go env GOPATH)/bin/goose
 
-# ── Per-checkout isolation (#89bf0595) ───────────────────────────────────────
+# ── Per-checkout isolation ───────────────────────────────────────
 # `docker compose -f deploy/docker/mesh/docker-compose.yml` derives its
 # default project name from the COMPOSE FILE'S OWN DIRECTORY, not from the
-# checkout root — so every checkout of this repo (evc-mesh, evc-mesh-linus,
-# evc-mesh-daedalus, every ephemeral per-task worktree) resolved to the same
+# checkout root — so every checkout of this repo (evc-mesh, evc-mesh-liam,
+# evc-mesh-dana, every ephemeral per-task worktree) resolved to the same
 # project "mesh". A second agent's `make ci` didn't get its own stand: compose
 # adopted the first agent's containers under that shared name and recreated
 # them, because the `./volumes/*` bind paths (relative to the compose file's
@@ -157,7 +157,7 @@ ci-install-tools:
 		go install github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION); \
 	fi
 
-## ci-lint: Run golangci-lint (pinned v2.11.3, matches ci.yml).
+## ci-lint: Run golangci-lint (pinned v2.14.0, matches ci.yml).
 ci-lint:
 	@echo "── Lint (golangci-lint $(GOLANGCI_LINT_VERSION)) ──────────────────────"
 	$(GOLANGCI_LINT) run ./...
@@ -201,7 +201,7 @@ ci-services-up: ci-project-env
 ## (`down -v`, not `stop`). `stop` — the previous behavior — left the
 ## containers and this project's docker network sitting around forever: it
 ## releases neither, so even a caller that remembered to call it would only
-## have paused the leak, not fixed it. See #03eed881: nothing ever called
+## have paused the leak, not fixed it. See an internal ticket: nothing ever called
 ## this target at all, so 26 abandoned per-checkout networks (~78 containers)
 ## piled up across every worktree/push on this shared host until Docker's
 ## whole address pool was exhausted and `ci-services-up` started failing for
@@ -215,11 +215,11 @@ ci-services-down:
 ## single `trap ... EXIT` covers it end to end: services come down whether
 ## the migration fails, the tests fail, or everything passes. Before this,
 ## a failure here left the just-started stack (and its network) running
-## forever, which is the majority case that produced #03eed881 — a failing
+## forever, which is the majority case that produced an internal ticket — a failing
 ## `make ci` is a normal, frequent outcome, not an edge case worth
 ## leaving unhandled.
 ##
-## That fix is still incomplete on its own (#01fc9e81): EXIT alone is not
+## That fix is still incomplete on its own: EXIT alone is not
 ## guaranteed to run for every way this shell dies, and NOTHING can trap
 ## SIGKILL — the most common way a run actually dies here (hung-turn-
 ## watchdog, a fiddler relaunch, /switch, Ctrl+C, the rm guard force-killing
@@ -251,7 +251,7 @@ ci-test: ci-services-up
 ## existed, `make ci` compiled and typechecked web/ but never executed a
 ## single one of its 94 test files / 851 tests — same gap as the CI
 ## pipeline's `test:web` job (see that job's own comment, .gitlab-ci.yml,
-## for the incident this closes: MR !896 went fully green on a web/src/**
+## for the incident this closes: a review went fully green on a web/src/**
 ## diff having run zero of the tests that diff should have exercised).
 ci-test-web:
 	@echo "── Frontend: test (vitest) ───────────────────────────────────────"

@@ -1,0 +1,2 @@
+{"schema":1,"id":"hello-ext","name":"Hello","version":"1.0.0","kind":"plugin","runtime":"builtin","mesh_api":">=1 <2","publisher":"example","description":"A plugin","category":"development","levels":{"instance":true,"workspace":true,"project":false},"capabilities":{},
+ "theme":{"tokens_contract":"1","modes":["light"]}}

@@ -628,7 +628,7 @@ function WorkflowRulesSection({
         <p
           className={cn(
             "text-sm",
-            feedback.type === "success" ? "text-green-600" : "text-destructive",
+            feedback.type === "success" ? "text-tone-success-600" : "text-destructive",
           )}
         >
           {feedback.message}
@@ -1025,7 +1025,7 @@ function ProjectAssignmentRulesSection({
         <p
           className={cn(
             "text-sm",
-            feedback.type === "success" ? "text-green-600" : "text-destructive",
+            feedback.type === "success" ? "text-tone-success-600" : "text-destructive",
           )}
         >
           {feedback.message}
@@ -1100,7 +1100,7 @@ export function ProjectSettingsPage() {
   // this workspace via agent_workspace_grants (task U1/U3) never appears
   // there — U4 built exactly this endpoint for the Members-tab "Agents (N)"
   // list, and the project-level Add-Agent dropdown needs the same source
-  // (task #80dfb336).
+  //.
   const { workspaceAgentGrants, fetchWorkspaceAgentGrants } =
     useAgentWorkspaceGrantStore();
 
@@ -1673,7 +1673,7 @@ export function ProjectSettingsPage() {
                 className={cn(
                   "text-sm",
                   generalFeedback.type === "success"
-                    ? "text-green-600"
+                    ? "text-tone-success-600"
                     : "text-destructive",
                 )}
               >

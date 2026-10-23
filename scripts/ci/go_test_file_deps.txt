@@ -28,6 +28,7 @@ internal/service <- internal/**/*.go cmd/**/*.go scripts/audit/task-transition.s
 internal/repository/postgres <- **/*.go **/*.sql docs/api/agent-runtime.example.json
 internal/domain <- docs/api/agent-runtime.example.json web/src/locales/**/board.json
 internal/extensions <- internal/extensions/schema/**/*
+internal/extensions/agentchat <- internal/extensions/schema/**/*
 internal/extensions/runner <- internal/extensions/schema/**/*
 internal/extensions/schema <- internal/extensions/schema/**/*
 internal/extensions/spark <- internal/extensions/schema/**/*
@@ -36,3 +37,4 @@ internal/extensions/telegram <- internal/extensions/schema/**/*
 pkg/apierror <- web/src/locales/**/apiErrors.json
 tests/integration <- cmd/api/main.go
 internal/extensions/repoinstall <- internal/extensions/schema/**/*
+internal/extensions/migrationlint <- internal/extensions/**/migrations/*.sql

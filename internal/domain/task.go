@@ -113,7 +113,7 @@ type Task struct {
 	// the future, on ANY status. DueDate keeps its own separate meaning
 	// (a backlog wake-alarm on backlog, a deadline elsewhere) — the two used
 	// to collide on one field, which froze live todo/in_progress work when a
-	// due_date-based backfill ran (#e9ce6b91, #7e6fea59).
+	// due_date-based backfill ran (an internal ticket).
 	StartAfter     *time.Time      `json:"start_after" db:"start_after"`
 	EstimatedHours *float64        `json:"estimated_hours" db:"estimated_hours"`
 	CustomFields   json.RawMessage `json:"custom_fields" db:"custom_fields"`
@@ -130,7 +130,7 @@ type Task struct {
 	RecurringInstanceNumber *int       `json:"recurring_instance_number,omitempty" db:"recurring_instance_number"`
 
 	DelegationLevel DelegationLevel `json:"delegation_level" db:"delegation_level"`
-	// HumanGate is a sticky flag set when a human (Pavel) sign-off is required.
+	// HumanGate is a sticky flag set when a human (Alex) sign-off is required.
 	// Once set, only a human actor may move the task to backlog/done/cancelled.
 	HumanGate bool `json:"human_gate" db:"human_gate"`
 	// HumanGateClass classifies the current (or most recently armed) human_gate as
@@ -144,8 +144,8 @@ type Task struct {
 	// GateAuthor / GateAuthorType / GateReason / RecommendedDefault / GateDeadline
 	// carry the rest of the "waiting on a human" answer on the TASK, so a client's
 	// is_human_gated collapses to reading HumanGate instead of re-deriving it from
-	// comment text (task #4545660b — the fleet had 21 such re-derivations, and the
-	// phantom-gate class #84ab54fd came from one driver reading another's boilerplate).
+	// comment text (an internal ticket — the fleet had 21 such re-derivations, and the
+	// phantom-gate class an internal ticket came from one driver reading another's boilerplate).
 	//
 	// All five are read-only here for the same reason as HumanGateClass: they are
 	// written only through TaskRepository.ArmHumanGate/.SetHumanGate, never Update().
@@ -155,7 +155,7 @@ type Task struct {
 	GateAuthorType *ActorType `json:"gate_author_type,omitempty" db:"gate_author_type"`
 	GateReason     *string    `json:"gate_reason,omitempty" db:"gate_reason"`
 	// RecommendedDefault is what the gate's author will do if nobody answers. Consumed
-	// by the default-on-timeout sweep (task #060ccaae); nil means the gate can only
+	// by the default-on-timeout sweep; nil means the gate can only
 	// ever be resolved by a human answering it.
 	RecommendedDefault *string `json:"recommended_default,omitempty" db:"recommended_default"`
 	// GateDeadline is when RecommendedDefault applies. Nil means no deadline — which
@@ -166,7 +166,7 @@ type Task struct {
 	IsShipped bool `json:"is_shipped" db:"is_shipped"`
 	// CompletionSignal is set by an agent to indicate "agent-side work is done"
 	// without changing the task status. For supervised/review tasks this surfaces
-	// to Pavel (via review-verify-driver) as "ready to close"; Pavel still moves to done.
+	// to Alex (via review-verify-driver) as "ready to close"; Alex still moves to done.
 	CompletionSignal bool `json:"completion_signal" db:"completion_signal"`
 	// StatusChangedAt records when the task last changed status. Used to measure
 	// time-in-status for Prometheus histograms. Not exposed in the JSON API.
@@ -201,12 +201,12 @@ type Task struct {
 	// Populated by HTTP handlers from request scheme+host. Empty in non-HTTP contexts.
 	URL string `json:"url,omitempty"`
 	// HumanGateInfo surfaces WHO currently owns a live human_gate ask and
-	// whether they can clear it themselves (task #040cddcf) — never
+	// whether they can clear it themselves — never
 	// persisted, populated only by GET handlers when HumanGate is true, same
 	// pattern as URL above.
 	HumanGateInfo *HumanGateInfo `json:"human_gate_info,omitempty"`
-	// FalseOpen surfaces the "false-open" graph signal (task #c80fe88f, sibling
-	// of #65dc5949 which sat 80 days in urgent although every subtask had been
+	// FalseOpen surfaces the "false-open" graph signal (an internal ticket, sibling
+	// of an internal ticket which sat 80 days in urgent although every subtask had been
 	// closed since June): priority and created_at describe the CARD, not
 	// whether the WORK under it is still moving, and Mesh already has the
 	// graph data to say so. Populated only for parent tasks (SubtaskCount > 0)
@@ -222,11 +222,11 @@ type Task struct {
 
 // FalseOpenSignal reports whether an open umbrella's own content is stale
 // relative to its subtasks. Two mutually exclusive flags on purpose, not one
-// merged bool: task #c80fe88f's review found that a single "false-open" flag
-// built to also catch #65dc5949 (which has one still-open BACKLOG child,
-// c0afa1c5) would equally catch umbrellas that are correctly blocked on a
+// merged bool: an internal ticket's review found that a single "false-open" flag
+// built to also catch an internal ticket (which has one still-open BACKLOG child,
+// an internal ticket) would equally catch umbrellas that are correctly blocked on a
 // parked dependency — the exact opposite failure the fleet had already
-// separately catalogued (#d68b8466, "correctly-blocked-not-neglected").
+// separately catalogued (an internal ticket, "correctly-blocked-not-neglected").
 // Blending the two populations would make the signal as untrustworthy as the
 // priority field it's meant to replace.
 type FalseOpenSignal struct {
@@ -237,8 +237,8 @@ type FalseOpenSignal struct {
 	// OnlyParkedChildrenLeft: at least one subtask is still open, and every
 	// open subtask sits in backlog — none todo/in_progress/review/triage
 	// (StaleDays >= FalseOpenStaleDays). Weaker: content exists, it just
-	// isn't moving. This is the bucket #65dc5949 belongs to (blocked on
-	// backlog child c0afa1c5), never AllChildrenClosed.
+	// isn't moving. This is the bucket an internal ticket belongs to (blocked on
+	// backlog child), never AllChildrenClosed.
 	OnlyParkedChildrenLeft bool `json:"only_parked_children_left"`
 	// OpenChildrenCount is how many subtasks are still in a non-terminal
 	// status right now (any category other than done/cancelled).
@@ -253,7 +253,7 @@ type FalseOpenSignal struct {
 
 // HumanGateInfo exposes, read-only, the ownership service.commentService
 // already computes internally to decide whether a human_gate withdrawal
-// comment may clear the flag (task #9959f201/#a2e2ac72) — task #040cddcf
+// comment may clear the flag (an internal ticket/an internal ticket) — an internal ticket
 // found that this was never surfaced anywhere: a live measurement showed 46
 // of 47 gated tasks HAD a clearable owner, but nothing ever told them so.
 //
@@ -269,7 +269,7 @@ type FalseOpenSignal struct {
 //     (ReasonIfNot="raw_armed") — → ClearableByOwner=false; it becomes true
 //     once real time passes, with no further action needed.
 //   - no live marker, but the task row records a gate_author that is an AGENT
-//     (an API arm, task #f933dc05) → that agent owns it, ClearableByOwner=true,
+//     (an API arm, an internal ticket) → that agent owns it, ClearableByOwner=true,
 //     and ClearPath="clear_endpoint" because the withdrawal-comment door does
 //     not open for this shape — see ClearPath.
 type HumanGateInfo struct {
@@ -281,7 +281,7 @@ type HumanGateInfo struct {
 	ClearableByOwner bool       `json:"clearable_by_owner"`
 	ReasonIfNot      string     `json:"reason_if_not,omitempty"`
 	// ClearPath names WHICH door opens for OwnerAgentID, and exists because
-	// there are now two of them that are not interchangeable (task #f933dc05).
+	// there are now two of them that are not interchangeable.
 	// Empty whenever ClearableByOwner is false — there is no door to name.
 	//
 	// Reporting ClearableByOwner=true without saying which path applies would

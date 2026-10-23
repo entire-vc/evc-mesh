@@ -56,13 +56,15 @@ type stubVCSLinkService struct {
 	// createReturnCreated defaults to true (a fresh insert) so existing tests
 	// that don't care about the upsert-vs-insert distinction keep observing
 	// the historical 201. Set false to simulate the upsert-onto-existing-row
-	// branch (#b73171fa).
+	// branch.
 	createReturnCreated   *bool
 	listReturn            []domain.VCSLink
 	listReturnErr         error
 	deleteReturnErr       error
 	patchCalls            []patchCall
 	patchReturnErr        error
+	shipCalls             []shipCall
+	shipReturnErr         error
 	resolveCalls          [][]service.TaskRefSource
 	resolveWorkspaceCalls []uuid.UUID
 	resolveTaskID         uuid.UUID
@@ -82,6 +84,16 @@ func (s *stubVCSLinkService) Create(_ context.Context, input domain.CreateVCSLin
 	}
 	link := &domain.VCSLink{ID: uuid.New(), TaskID: input.TaskID}
 	return link, created, s.createReturnErr
+}
+
+func (s *stubVCSLinkService) PatchShipSHAByURL(_ context.Context, ws uuid.UUID, mrURL, sha string) ([]domain.VCSLink, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shipCalls = append(s.shipCalls, shipCall{ws: ws, url: mrURL, sha: sha})
+	if s.shipReturnErr != nil {
+		return nil, s.shipReturnErr
+	}
+	return []domain.VCSLink{{ID: uuid.New()}}, nil
 }
 
 func (s *stubVCSLinkService) PatchMetadata(_ context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error) {
@@ -107,7 +119,7 @@ func (s *stubVCSLinkService) ListByTask(_ context.Context, _ uuid.UUID) ([]domai
 }
 
 // ResolveTaskRef records what the push path asked about (including which
-// workspace it was scoped to, #839b9897) and answers with a canned task, so
+// workspace it was scoped to) and answers with a canned task, so
 // a handler test can assert the branch and message actually reached the
 // resolver.
 func (s *stubVCSLinkService) ResolveTaskRef(_ context.Context, workspaceID uuid.UUID, sources ...service.TaskRefSource) (uuid.UUID, service.TaskRef) {
@@ -396,7 +408,7 @@ func TestGitHubWebhook_PullRequest_DelegatesToService(t *testing.T) {
 // A transient service failure (DB down) must answer 5xx so the delivery is
 // retried, and must release the dedup claim — otherwise the redelivery with
 // the SAME X-GitHub-Delivery is swallowed as "duplicate" and the event is
-// lost exactly as with the old 200 "error_logged" (#b593c566).
+// lost exactly as with the old 200 "error_logged".
 func TestGitHubWebhook_PullRequest_TransientServiceError_503AndRetryIsProcessed(t *testing.T) {
 	svc := &stubVCSLinkService{handleErr: errors.New("db down")}
 	dedup := newMemDedupStore()
@@ -552,7 +564,7 @@ func TestGitHubWebhook_NoSignatureWhenSecretConfigured(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// GitLabWebhook (#bc39d781) — mirrors the GitHubWebhook tests above, adapted
+// GitLabWebhook — mirrors the GitHubWebhook tests above, adapted
 // to GitLab's auth model (a shared X-Gitlab-Token secret, not an HMAC
 // signature) and payload shape (object_attributes nesting).
 // ---------------------------------------------------------------------------
@@ -716,7 +728,7 @@ func TestGitLabWebhook_MergeRequest_DelegatesToService(t *testing.T) {
 }
 
 // A transient service failure must surface as 5xx so the MR event is not
-// silently lost (#b593c566: a "closed" MR hook answered 200 "error_logged"
+// silently lost (an internal ticket: a "closed" MR hook answered 200 "error_logged"
 // left the link open forever); the redelivery is then processed normally.
 func TestGitLabWebhook_MergeRequest_TransientServiceError_503ThenRetryOK(t *testing.T) {
 	svc := &stubVCSLinkService{gitlabHandleErr: errors.New("db down")}
@@ -859,7 +871,7 @@ func TestVCSLinkHandler_Create_RequiresLinkType(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Create — status field (#df734dd9: add_vcs_link had no way to record a PR's
+// Create — status field (an internal ticket: add_vcs_link had no way to record a PR's
 // status at link time, so a link to an already-merged PR sat blocked
 // forever since no webhook fires for a merge that predates the link).
 // ---------------------------------------------------------------------------
@@ -909,7 +921,7 @@ func TestVCSLinkHandler_Create_OmittedStatusPassesThrough(t *testing.T) {
 // rather than inserting one. The handler must reflect that in the status
 // code — 200, not 201 — otherwise the response reads as "a new link was
 // created" when in fact nothing but status/title/metadata/url changed on the
-// SAME row (#b73171fa: the previous handler always answered 201 regardless
+// SAME row (an internal ticket: the previous handler always answered 201 regardless
 // of which branch the service actually took).
 func TestVCSLinkHandler_Create_UpsertOnExistingLinkReturns200(t *testing.T) {
 	taskID := uuid.New()
@@ -1045,7 +1057,7 @@ func TestReleaseDelivery_NoDedupStoreIsNoop(t *testing.T) {
 }
 
 const pipelineHookBody = `{"object_kind":"pipeline",
-	"object_attributes":{"id":987,"status":"failed","ref":"linus/ab12cd34"},
+	"object_attributes":{"id":987,"status":"failed","ref":"liam/ab12cd34"},
 	"merge_request":{"iid":1285,"url":"https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/1285"},
 	"project":{"path_with_namespace":"entire-vc/evc-mesh"}}`
 
@@ -1098,7 +1110,7 @@ func TestGitLabWebhook_PipelineHook_InvalidToken_401(t *testing.T) {
 	assert.Empty(t, svc.pipelineCalls)
 }
 
-// #3c907442: a verified delivery reaches the service as the system actor (the
+// an internal ticket: a verified delivery reaches the service as the system actor (the
 // transition gate must not see actor_type ""); an unverified one — validation
 // off — keeps the empty actor so it cannot use the system exemption.
 func TestGitLabWebhook_ActorOnCtx(t *testing.T) {
@@ -1145,4 +1157,9 @@ func TestGitHubWebhook_ActorOnCtx(t *testing.T) {
 			assert.Equal(t, []domain.ActorType{tc.want}, svc.handleActors)
 		})
 	}
+}
+
+type shipCall struct {
+	ws       uuid.UUID
+	url, sha string
 }

@@ -78,7 +78,7 @@ func TestResolve_NoRow_UsesInstance(t *testing.T) {
 }
 
 // A workspace that switched Team Relay off stays off however the instance
-// (env) is set: the bug #33a4bb57 AC2 fixed.
+// (env) is set: the bug an internal ticket AC2 fixed.
 func TestResolve_InactiveRow_InstanceConfigured_StillOff(t *testing.T) {
 	p := newProvider(conns{row: &extensions.Connection{IsActive: false}}, instance("https://inst.example", true))
 	_, _, ok := resolve(t, p, uuid.New())

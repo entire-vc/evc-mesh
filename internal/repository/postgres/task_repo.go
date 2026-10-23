@@ -16,6 +16,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 	pkgmetrics "github.com/entire-vc/evc-mesh/pkg/metrics"
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
@@ -54,11 +55,11 @@ var ErrInvalidCheckoutToken = errors.New("invalid checkout token")
 
 // FalseOpenStaleDays is how many days an umbrella's own content (its
 // updated_at, its newest comment) must have sat untouched before the
-// false-open signal (domain.FalseOpenSignal, task #c80fe88f) is allowed to
+// false-open signal (domain.FalseOpenSignal, an internal ticket) is allowed to
 // fire. Chosen at 14 days: long enough that a parent which simply hasn't
 // caught up with subtasks closed minutes/hours ago never lights up, short
-// enough to still catch the class of problem the signal exists for — #65dc5949
-// sat 80 days, and task #c80fe88f's own live measurement found false-open
+// enough to still catch the class of problem the signal exists for — an internal ticket
+// sat 80 days, and an internal ticket's own live measurement found false-open
 // umbrellas averaging 38-52 days idle (max 72) even without any staleness
 // gate applied. 14 days is two work-weeks of margin under that curve.
 const FalseOpenStaleDays = 14
@@ -122,7 +123,7 @@ const taskComputedCols = `
 	END AS created_by_name`
 
 // falseOpenComputedColsNoAlias/falseOpenComputedColsAliased expose the raw
-// per-row stats domain.FalseOpenSignal (task #c80fe88f) is built from — the
+// per-row stats domain.FalseOpenSignal is built from — the
 // AllChildrenClosed/OnlyParkedChildrenLeft threshold logic itself lives in Go
 // (taskRow.toDomain, alongside the FalseOpenStaleDays constant) rather than
 // duplicated across these two SQL variants, so there is exactly one place
@@ -221,7 +222,7 @@ type taskRow struct {
 	HumanGateClass   domain.HumanGateClass  `db:"human_gate_class"`
 	HumanGateArmedAt *time.Time             `db:"human_gate_armed_at"`
 
-	// Gate authorship + default (task #4545660b) — see domain.Task doc comment.
+	// Gate authorship + default — see domain.Task doc comment.
 	GateAuthor         *uuid.UUID        `db:"gate_author"`
 	GateAuthorType     *domain.ActorType `db:"gate_author_type"`
 	GateReason         *string           `db:"gate_reason"`
@@ -267,7 +268,7 @@ type taskRow struct {
 	// draw a per-provider badge (extension slot task.badge) without a fetch.
 	VCSProviders pq.StringArray `db:"vcs_providers"`
 
-	// False-open raw stats (task #c80fe88f) — see falseOpenComputedCols*
+	// False-open raw stats — see falseOpenComputedCols*
 	// and toDomain's threshold logic below.
 	FalseOpenChildrenCount          int                   `db:"false_open_children_count"`
 	FalseOpenNonparkedChildrenCount int                   `db:"false_open_nonparked_children_count"`
@@ -351,9 +352,9 @@ func (r *taskRow) toDomainBase() domain.Task {
 // already terminal has nothing to say here. AllChildrenClosed and
 // OnlyParkedChildrenLeft are mutually exclusive and both gated on
 // FalseOpenStaleDays — see domain.FalseOpenSignal and the const's doc for
-// why (task #c80fe88f review comment 2026-08-20: merging the two into one
+// why (an internal ticket review comment 2026-08-20: merging the two into one
 // flag would equally catch umbrellas correctly blocked on a live parked
-// dependency, e.g. #65dc5949 on c0afa1c5).
+// dependency, e.g. an internal ticket on an internal ticket).
 func (r *taskRow) falseOpenSignal() *domain.FalseOpenSignal {
 	if r.SubtaskCount == 0 {
 		return nil
@@ -386,7 +387,7 @@ func taskRowsToSlice(rows []taskRow) []domain.Task {
 type TaskRepo struct {
 	db *sqlx.DB
 	// defaultGateTimeoutHours is ArmHumanGate's auto-deadline window (task
-	// #060ccaae). Zero (the zero value, and every one of NewTaskRepo's 60+
+	// an internal ticket). Zero (the zero value, and every one of NewTaskRepo's 60+
 	// existing call sites that never call SetDefaultGateTimeoutHours) means
 	// "use the built-in default" — see defaultGateTimeoutHoursOrDefault.
 	// Optional post-construction setter rather than a constructor parameter,
@@ -403,8 +404,8 @@ func NewTaskRepo(db *sqlx.DB) *TaskRepo {
 }
 
 // DefaultGateTimeoutHours is the auto-deadline window used when nobody has
-// configured HUMAN_GATE_DEFAULT_TIMEOUT_H (Pavel decision 2026-09-06, task
-// #060ccaae: 24h, not the original 72h spec).
+// configured HUMAN_GATE_DEFAULT_TIMEOUT_H (Alex decision 2026-09-06, task
+// an internal ticket: 24h, not the original 72h spec).
 const DefaultGateTimeoutHours = 24
 
 // SetDefaultGateTimeoutHours wires the configured default-on-timeout window
@@ -536,7 +537,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 			}
 			// Statement 3: the creation audit entry, in the SAME transaction as the
 			// insert above. If this fails, the whole transaction rolls back — a task
-			// must never exist without the event that says it was created (#819e7b29:
+			// must never exist without the event that says it was created (an internal ticket:
 			// the prior fire-and-forget post-commit write silently dropped 8.47% of
 			// system-created tasks' task.created rows under concurrent recurring-tick
 			// load, with no retry and no error surfaced to the caller).
@@ -545,6 +546,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.Task, activity *doma
 				if changes == nil {
 					changes = json.RawMessage(`{}`)
 				}
+				changes = actorctx.AnnotateRawChanges(ctx, changes)
 				_, err = tx.ExecContext(ctx, qActivityInsert,
 					activity.ID, activity.WorkspaceID, activity.EntityType, activity.EntityID,
 					activity.Action, activity.ActorID, activity.ActorType, changes, activity.CreatedAt,
@@ -785,7 +787,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 }
 
 // ArmHumanGate atomically arms the gate AND writes the whole "waiting on a human"
-// answer in one statement (task #4545660b): who asked, what they asked, what happens by
+// answer in one statement: who asked, what they asked, what happens by
 // default and by when. One statement rather than a SetHumanGate + SetHumanGateClass +
 // three more calls, because a partially-armed gate is exactly the state every client
 // used to paper over by going back to the comment text.
@@ -794,10 +796,10 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 // armed gate refreshes the ask (a later marker supersedes an earlier one, matching how
 // SetHumanGateClass already lets a hard marker downgrade a soft one) but must NOT reset
 // the age the soft-timeout sweep measures — otherwise a driver's repeat ping would keep
-// a soft gate alive forever, the latch shape of #84ab54fd.
+// a soft gate alive forever, the latch shape of an internal ticket.
 //
 // gate_deadline auto-defaults to armed_at + the configured default-on-timeout window
-// (task #060ccaae; Pavel decision 2026-09-06 set this to 24h — see
+// (an internal ticket; Alex decision 2026-09-06 set this to 24h — see
 // TaskRepo.defaultGateTimeoutHoursOrDefault, HUMAN_GATE_DEFAULT_TIMEOUT_H) when the
 // caller left it nil — but ONLY when there is a stated recommended_default to apply at
 // that deadline (an ask with no default cannot time out, matching
@@ -808,7 +810,7 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.Task) error {
 // armed_at, not NOW(), for the same reason it must not reset armed_at itself.
 //
 // A hard-classified gate DOES get this auto-computed deadline when it has a
-// recommended_default — task 1.4b (#4d61d877) deliberately removed the earlier
+// recommended_default — task 1.4b deliberately removed the earlier
 // `WHEN $2 = 'hard' THEN NULL` branch that forced it to NULL unconditionally. This is
 // safe, not a loosening of HumanGateClassHard's contract: the deadline on a hard gate is
 // for ESCALATION/VISIBILITY (sortable "how long has this been open") only, never for
@@ -925,7 +927,7 @@ func (r *TaskRepo) SetHumanGateClass(ctx context.Context, taskID uuid.UUID, clas
 // task_repo_human_gate_class_db_test.go for the live negative control (a hard fixture
 // armed decades ago, queried with a decades-future cutoff, still absent from the result).
 //
-// `gate_deadline IS NULL` (added task #060ccaae) hands a soft gate that names a real
+// `gate_deadline IS NULL` (added an internal ticket) hands a soft gate that names a real
 // recommended_default off to FindExpiredDefaultGates exclusively: that gate WILL be
 // resolved (default applied, decision recorded) at its 72h deadline, and this blunt
 // "unfreeze but leave the question open" release at the 24h window would otherwise fire
@@ -969,7 +971,7 @@ func (r *TaskRepo) FindSoftTimedOutGates(ctx context.Context, cutoff time.Time) 
 }
 
 // FindExpiredDefaultGates returns armed gates whose gate_deadline has passed with no
-// answer — the sweep this feeds (task #060ccaae) applies each one's own stated
+// answer — the sweep this feeds applies each one's own stated
 // recommended_default and records that as a decision.
 //
 // Three predicates are fixed literals in this query text, the same structural-proof
@@ -1630,9 +1632,9 @@ const LiveWaitMarkerMaxAge = 48 * time.Hour
 //   - (?n) newline-sensitive: `^` and `$` match at every line boundary, so a
 //     marker on ANY line counts, not only one that opens the whole body. Without
 //     it `^` anchors to the start of the body, and a report that ends with its
-//     WAIT line (the normal way a lead writes it) is invisible: #53f30091 was
+//     WAIT line (the normal way a lead writes it) is invisible: an internal ticket was
 //     parked on 11.10 two hours after a comment whose last line was
-//     `⏳ WAIT card:#2d54f716`, and the card it blocked stalled ~16 h.
+//     `⏳ WAIT card:#00000000`, and the card it blocked stalled ~16 h.
 //   - (?i) case-insensitive, as re.I.
 //   - `[[:space:]]*` before the marker: the fleet strips each line. A marker that
 //     does not open its line (prose quoting one) is not a declaration.
@@ -1673,7 +1675,7 @@ const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:b
 //
 // This is load-bearing, not belt-and-braces. `add_comment` does not touch
 // tasks.updated_at — only a status change does (measured 2026-08-20 on
-// #603f340a: updated_at 20:47:07, last comment 21:02:32, no write in between).
+// an internal ticket: updated_at 20:47:07, last comment 21:02:32, no write in between).
 // So an agent that reports progress the way the fleet workflow tells it to —
 // a comment every few minutes, status unchanged because the work is unfinished —
 // is, to an updated_at-only query, indistinguishable from a dead session. This
@@ -1694,7 +1696,7 @@ const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:b
 // make release_task the LAST step after a WAIT, so "in_progress, no lease, quiet" is
 // exactly what a healthy waiting card looks like. Without this exclusion the sweep
 // parked such a card in backlog ~2h after its WAIT, with start_after pushing the wake
-// a day out regardless of the event (#2777fee7: a card waiting on an open MR).
+// a day out regardless of the event (an internal ticket: a card waiting on an open MR).
 // The exemption is capped at LiveWaitMarkerMaxAge so a WAIT nobody ever answers does
 // not make a card immortal; past the cap it is swept like any other quiet card.
 //
@@ -1706,7 +1708,7 @@ const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:b
 // selects it again. Unlike phase 1 — which cannot loop, because phase 2 nulls the
 // checkout_expires it keys on — nothing here clears the selection condition.
 //
-// Measured on prod 2026-09-06: #2921ff07 (human_gate armed 14:45) failed to park
+// Measured on prod 2026-09-06: an internal ticket (human_gate armed 14:45) failed to park
 // 145 times, once per 60s tick across restarts, and was the reaper's ONLY
 // observable output. Each attempt also rewrote due_date to now+24h, sliding the
 // park alarm permanently out of reach, because parkTask arms before it moves.
@@ -1760,7 +1762,7 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 // auto-unpark a card once the wake-up time it was parked with arrives.
 //
 // The label filter this query used to carry (`'kind:monitor' = ANY(labels)`) was
-// removed by #559270cf. It made due_date a wake-up only for cards that had been parked
+// removed by an internal ticket. It made due_date a wake-up only for cards that had been parked
 // by one specific mechanism — the lease reaper's auto-park, which is what sets that
 // label — while every card a human or agent parked with a date and any other label (or
 // no label) sat with an alarm that nothing was listening to. The audit measured 8 such

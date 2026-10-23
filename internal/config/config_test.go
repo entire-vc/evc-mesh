@@ -136,7 +136,7 @@ func TestLoad_NATSStreamMaxBytesInvalidFallsBackToDefault(t *testing.T) {
 }
 
 // TestLoad_HumanGateDefaultTimeoutHours_Defaults pins the value itself, not just that
-// SOME default exists: task #060ccaae / Pavel decision 2026-09-06 is specifically 24,
+// SOME default exists: an internal ticket / Alex decision 2026-09-06 is specifically 24,
 // not the original 72h spec — a silently-reverted default would ship the wrong policy
 // with every other test in this file staying green.
 func TestLoad_HumanGateDefaultTimeoutHours_Defaults(t *testing.T) {
@@ -168,7 +168,7 @@ func TestLoad_HumanGateDefaultTimeoutHours_InvalidFallsBackToDefault(t *testing.
 // A NATS_MAX_MSG_SIZE outside int32's range must fall back to the default,
 // not wrap silently. int32(getEnvInt(...)) truncated a value like this into
 // an unrelated, possibly negative, number instead — caught by CodeQL on
-// PR #720 before this test existed.
+// a PR before this test existed.
 func TestLoad_NATSMaxMsgSizeOutOfInt32RangeFallsBackToDefault(t *testing.T) {
 	t.Setenv("NATS_MAX_MSG_SIZE", "5000000000") // > math.MaxInt32
 
@@ -177,7 +177,7 @@ func TestLoad_NATSMaxMsgSizeOutOfInt32RangeFallsBackToDefault(t *testing.T) {
 	assert.Equal(t, int32(256*1024), cfg.NATS.MaxMsgSize)
 }
 
-// The Telegram channel's instance switch (#4c642bd7). The default is the whole
+// The Telegram channel's instance switch. The default is the whole
 // point of the flag: mesh.prototypes.ventures runs the channel and never sets
 // the variable, so a default of false would have turned OFF a working channel
 // on the instance this change was required not to touch. Disabling is opt-in.
@@ -228,4 +228,10 @@ func TestLoad_OAuthTokenRPM(t *testing.T) {
 		assert.Equal(t, 2400, cfg.RateLimit.OAuthTokenRPM)
 		assert.Equal(t, 600, cfg.RateLimit.APIRPM)
 	})
+}
+
+func TestLoad_ExtensionDataPurgeOffByDefault(t *testing.T) {
+	cfg := Load()
+	assert.False(t, cfg.ExtensionRetention.PurgeEnabled, "prod must not change: purge is opt-in")
+	assert.Equal(t, 30*24*time.Hour, cfg.ExtensionRetention.Retention)
 }

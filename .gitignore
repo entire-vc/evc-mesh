@@ -80,3 +80,6 @@ web/perf/test-results/
 # committed before any rule existed and is left alone here deliberately.
 __pycache__/
 *.pyc
+web/e2e-tabs/results/
+web/e2e-tabs/shots/
+web/e2e-tabs/view-tab-bar.before.tsx

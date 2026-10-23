@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
 func writeTransitionAudit(ctx context.Context, tx *sqlx.Tx, task *domain.Task, oldVersion, newVersion int64, audit *domain.TransitionAudit) error {
@@ -37,6 +38,7 @@ func writeTransitionAudit(ctx context.Context, tx *sqlx.Tx, task *domain.Task, o
 		}
 		changes["session_id"], changes["correlation_id"], changes["trigger_task_id"] = audit.SessionID, audit.CorrelationID, audit.TriggerTaskID
 		changes["lease_generation"], changes["previous_holder"] = audit.LeaseGeneration, audit.PreviousHolder
+		changes = actorctx.AnnotateChanges(ctx, changes)
 		data, err := json.Marshal(changes)
 		if err != nil {
 			return err

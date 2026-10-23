@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -100,4 +101,48 @@ func TestTeam_FiltersProjectsByWorkspace(t *testing.T) {
 	// Verify the two results are different (cross-workspace leakage guard)
 	assert.NotEqual(t, resultA.Humans[0].Projects, resultB.Humans[0].Projects,
 		"projects must not leak across workspaces")
+}
+
+func TestDecideHandoff_Handler(t *testing.T) {
+	projID := uuid.New()
+	hot := `{"starts":5,"current":"harper"}`
+
+	call := func(t *testing.T, wf *domain.WorkflowRulesResponse) domain.HandoffDecision {
+		t.Helper()
+		svc := &MockRulesService{
+			GetProjectWorkflowRulesFunc: func(context.Context, uuid.UUID, *uuid.UUID) (*domain.WorkflowRulesResponse, error) {
+				return wf, nil
+			},
+			GetEffectiveAssignmentRulesFunc: func(context.Context, uuid.UUID) (*domain.EffectiveAssignmentRules, error) {
+				return &domain.EffectiveAssignmentRules{FallbackChain: []string{"agent:robin"}}, nil
+			},
+		}
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(hot))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		c := echo.New().NewContext(req, rec)
+		c.SetParamNames("proj_id")
+		c.SetParamValues(projID.String())
+		require.NoError(t, NewRulesHandler(svc).DecideHandoff(c))
+		require.Equal(t, http.StatusOK, rec.Code)
+		var d domain.HandoffDecision
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &d))
+		return d
+	}
+
+	t.Run("policy not set: prod unchanged", func(t *testing.T) {
+		assert.Equal(t, domain.HandoffOutcomeNone, call(t, &domain.WorkflowRulesResponse{}).Outcome)
+	})
+	t.Run("policy disabled", func(t *testing.T) {
+		wf := &domain.WorkflowRulesResponse{}
+		wf.Handoff = &domain.HandoffConfig{StartCap: 1}
+		assert.Equal(t, domain.HandoffOutcomeNone, call(t, wf).Outcome)
+	})
+	t.Run("enabled, no lead: chain", func(t *testing.T) {
+		wf := &domain.WorkflowRulesResponse{}
+		wf.Handoff = &domain.HandoffConfig{Enabled: true, StartCap: 3}
+		d := call(t, wf)
+		assert.Equal(t, domain.HandoffOutcomeHandoff, d.Outcome)
+		assert.Equal(t, "agent:robin", d.Recipient)
+	})
 }

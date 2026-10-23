@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
+import { useMemberStore } from "@/stores/member";
 import { useWebSocketStore } from "@/stores/websocket";
 import { useInstallPrompt } from "@/hooks/use-install-prompt";
 import { useDynamicFavicon } from "@/hooks/use-dynamic-favicon";
@@ -81,7 +82,7 @@ export function AppLayout() {
   }, [isAuthenticated, initialized]);
 
   // Resolve workspace slug. A slug that doesn't match any live workspace —
-  // deleted (soft-delete renames its slug away, task #c164a5df), never
+  // deleted (soft-delete renames its slug away, an internal ticket), never
   // existed, or belongs to a workspace this account can't see — must not be
   // allowed to silently keep whatever workspace was current before this
   // navigation: without the reset below, clicking a stale bookmark/deep-link
@@ -119,6 +120,15 @@ export function AppLayout() {
       fetchProjects(currentWorkspace.id);
     }
   }, [currentWorkspace, fetchProjects]);
+
+  // The role behind every permission check (Can, Draggable, InlineEdit).
+  const currentWorkspaceId = currentWorkspace?.id;
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    // The previous workspace's role must not govern this one while its own loads.
+    useMemberStore.setState({ myRole: null, myRoleError: null });
+    void useMemberStore.getState().fetchMyRole(currentWorkspaceId);
+  }, [currentWorkspaceId]);
 
   // Resolve project slug (re-runs when projects finish loading)
   useEffect(() => {
@@ -221,7 +231,7 @@ export function AppLayout() {
     location.pathname.startsWith("/tasks/") ||
     location.pathname.startsWith("/d/") ||
     // An artifact's own page: the id resolves its workspace server-side, so it
-    // must not bounce to the default workspace home before it loads (#eb6fde4e).
+    // must not bounce to the default workspace home before it loads.
     location.pathname.startsWith("/a/") ||
     isProjectDeepLinkRoute;
 

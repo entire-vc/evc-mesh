@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
@@ -44,7 +46,7 @@ func (r *InstanceExtensionSettingRepo) Get(ctx context.Context, extensionID stri
 }
 
 func (r *InstanceExtensionSettingRepo) InsertIfAbsent(ctx context.Context, s *domain.InstanceExtensionSetting, secretKeys []string) (bool, error) {
-	blob, err := encryptSettings(s.Settings, secretKeys)
+	blob, err := encryptSettings(ctx, s.ExtensionID, s.Settings, secretKeys)
 	if err != nil {
 		return false, err
 	}
@@ -61,7 +63,7 @@ func (r *InstanceExtensionSettingRepo) InsertIfAbsent(ctx context.Context, s *do
 }
 
 func (r *InstanceExtensionSettingRepo) Upsert(ctx context.Context, s *domain.InstanceExtensionSetting, secretKeys []string) error {
-	blob, err := encryptSettings(s.Settings, secretKeys)
+	blob, err := encryptSettings(ctx, s.ExtensionID, s.Settings, secretKeys)
 	if err != nil {
 		return err
 	}
@@ -77,7 +79,7 @@ func (r *InstanceExtensionSettingRepo) Upsert(ctx context.Context, s *domain.Ins
 
 // encryptSettings encrypts the string values of secretKeys. An empty value is
 // left empty (nothing to protect).
-func encryptSettings(raw json.RawMessage, secretKeys []string) ([]byte, error) {
+func encryptSettings(ctx context.Context, extensionID string, raw json.RawMessage, secretKeys []string) ([]byte, error) {
 	m := map[string]any{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &m); err != nil {
@@ -86,12 +88,12 @@ func encryptSettings(raw json.RawMessage, secretKeys []string) ([]byte, error) {
 	}
 	for _, k := range secretKeys {
 		v, ok := m[k].(string)
-		if !ok || v == "" || encryption.IsEncrypted(v) {
+		if !ok || v == "" || encryption.IsEncrypted(v) || strings.HasPrefix(v, secretstore.KeepPrefix) {
 			continue
 		}
-		enc, err := encryption.Encrypt(v)
+		enc, err := secretstore.Default().Put(ctx, secretstore.Ref{ExtensionID: extensionID, Field: k}, v)
 		if err != nil {
-			return nil, fmt.Errorf("encrypt %q: %w", k, err)
+			return nil, fmt.Errorf("seal %q: %w", k, err)
 		}
 		m[k] = enc
 	}
@@ -108,12 +110,12 @@ func decryptSettings(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	for k, v := range m {
 		str, ok := v.(string)
-		if !ok || !encryption.IsEncrypted(str) {
+		if !ok || (!encryption.IsEncrypted(str) && !strings.HasPrefix(str, secretstore.KeepPrefix)) {
 			continue
 		}
-		plain, err := encryption.Decrypt(str)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt %q: %w", k, err)
+		plain, reason := secretstore.Open(context.Background(), str)
+		if reason != "" {
+			return nil, fmt.Errorf("open %q: secret store degraded: %s", k, reason)
 		}
 		m[k] = plain
 	}
@@ -123,7 +125,7 @@ func decryptSettings(raw json.RawMessage) (json.RawMessage, error) {
 // IsInstanceAdmin reports whether userID is an owner/admin of the instance's
 // owner workspace — the oldest non-deleted workspace (the one created first
 // at install). The instance has no separate admin role today; this is the
-// decision recorded on card 807ac4ed.
+// decision recorded on card an internal ticket.
 func (r *InstanceExtensionSettingRepo) IsInstanceAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var ok bool
 	err := r.db.GetContext(ctx, &ok, `

@@ -34,4 +34,7 @@ type ActivityLog struct {
 
 	// Computed (not a DB column — populated via subquery in SELECT).
 	ActorName *string `json:"actor_name,omitempty" db:"actor_name"`
+	// InitiatedByName is the display name of the user a chat-session agent acted
+	// for (changes.initiated_by_user_id); nil for every other action.
+	InitiatedByName *string `json:"initiated_by_name,omitempty" db:"initiated_by_name"`
 }

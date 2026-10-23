@@ -16,13 +16,13 @@ import { displayName, isNamePlaceholder } from "@/lib/user-display";
 // Determine whether to use dark or light text on a given background color.
 function getContrastColor(hexColor: string): string {
   const hex = hexColor.replace("#", "");
-  if (hex.length < 6) return "#000";
+  if (hex.length < 6) return "#000"; // color-ok: contrast text on user-chosen hex
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
   const b = parseInt(hex.slice(4, 6), 16);
   // Luminance formula
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return luminance > 0.5 ? "#000" : "#fff";
+  return luminance > 0.5 ? "#000" : "#fff"; // color-ok: contrast text on user-chosen hex
 }
 
 // Helper to extract typed choices from options.
@@ -533,7 +533,7 @@ function CustomFieldReadOnly({
         <span
           className={cn(
             "inline-block h-2.5 w-2.5 rounded-full",
-            value ? "bg-green-500" : "bg-gray-400",
+            value ? "bg-tone-success-500" : "bg-tone-neutral-400",
           )}
           title={value ? t("customField.renderer.yes") : t("customField.renderer.no")}
         />

@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/entire-vc/evc-mesh/internal/config"
+	"github.com/entire-vc/evc-mesh/internal/themes"
 )
 
 func stubSendMail(t *testing.T, fn func(addr string, a smtp.Auth, from string, to []string, msg []byte) error) {
@@ -249,7 +252,7 @@ func TestSendNotification_TransportErrorPropagates(t *testing.T) {
 // unescaped comment body would let anyone who can comment on a task inject
 // markup into every subscriber's notification email.
 func TestBuildNotificationEmail_EscapesUserContent(t *testing.T) {
-	html := buildNotificationEmail("en", `<img src=x onerror=alert(1)>`, `<script>alert(2)</script>`, "https://mesh.example.com/t/abc")
+	html := buildNotificationEmail("en", `<img src=x onerror=alert(1)>`, `<script>alert(2)</script>`, "https://mesh.example.com/t/abc", themes.DefaultBrand())
 	if strings.Contains(html, "<img src=x") || strings.Contains(html, "<script>") {
 		t.Fatalf("event title/body were embedded unescaped: %s", html)
 	}
@@ -259,8 +262,68 @@ func TestBuildNotificationEmail_EscapesUserContent(t *testing.T) {
 }
 
 func TestBuildNotificationEmail_OmitsLinkWhenTaskURLEmpty(t *testing.T) {
-	html := buildNotificationEmail("en", "Task assigned", "body", "")
+	html := buildNotificationEmail("en", "Task assigned", "body", "", themes.DefaultBrand())
 	if strings.Contains(html, "View task") {
 		t.Fatalf("expected no task link when taskURL is empty, got: %s", html)
+	}
+}
+
+// --- theming ------------------------------------------------------------------
+
+type brandBySource map[uuid.UUID]themes.Brand
+
+// BrandFor serves the brand of a workspace, or of the instance (key uuid.Nil).
+func (b brandBySource) BrandFor(_ context.Context, ws *uuid.UUID) themes.Brand {
+	key := uuid.Nil
+	if ws != nil {
+		key = *ws
+	}
+	if br, ok := b[key]; ok {
+		return br
+	}
+	return themes.DefaultBrand()
+}
+
+func themedBrand(primary string) themes.Brand {
+	b := themes.DefaultBrand()
+	b.Primary = primary
+	return b
+}
+
+// The invitation is written in the theme of the inviting workspace, not of the instance.
+func TestSendInvite_UsesWorkspaceTheme(t *testing.T) {
+	var msg string
+	stubSendMail(t, func(_ string, _ smtp.Auth, _ string, _ []string, m []byte) error {
+		msg = string(m)
+		return nil
+	})
+	ws := uuid.New()
+	svc := NewEmailService(config.EmailConfig{Host: "smtp.example.com", Port: 587, From: "noreply@example.com"},
+		WithBrandSource(brandBySource{uuid.Nil: themedBrand("#111111"), ws: themedBrand("#abcdef")}))
+
+	if err := svc.SendInvite(WithEmailWorkspace(context.Background(), ws), "u@example.com", "Acme", "https://m/i/abc", "en"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "#abcdef") || strings.Contains(msg, "#111111") || strings.Contains(msg, "#18181b") {
+		t.Fatalf("invite should carry the workspace theme only, got: %s", msg)
+	}
+}
+
+func TestBuildEmails_UseBrandColours(t *testing.T) {
+	br := themedBrand("#abcdef")
+	for name, body := range map[string]string{
+		"notification": buildNotificationEmail("en", "Title", "text", "https://m/t/1", br),
+		"invite":       buildInviteEmail("en", "u@example.com", "Acme", "https://m/i/1", br),
+	} {
+		if !strings.Contains(body, "background:#abcdef") {
+			t.Errorf("%s email lacks the brand primary colour: %s", name, body)
+		}
+		if strings.Contains(body, "#18181b") {
+			t.Errorf("%s email still carries the hard-coded colour", name)
+		}
+	}
+	// No theme: mesh-default colours, never an empty value in a style attribute.
+	if body := buildInviteEmail("en", "u@example.com", "Acme", "https://m/i/1", themes.DefaultBrand()); strings.Contains(body, "background:;") || strings.Contains(body, "color:;") {
+		t.Fatalf("empty colour in default email: %s", body)
 	}
 }

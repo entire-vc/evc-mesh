@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 )
 
 // fakeVCSIntegrationRepo is a minimal repository.IntegrationRepository stub
@@ -98,7 +99,7 @@ func TestDecodeGitHubIntegration_NilOrWrongProvider_NotUsableNotDisabled(t *test
 
 // An inactive row is a THIRD outcome distinct from "no row" — usable=false
 // AND disabled=true, so callers refuse instead of falling through to env
-// (#33a4bb57 AC2; this is the exact distinction the fix adds).
+// (an internal ticket AC2; this is the exact distinction the fix adds).
 func TestDecodeGitHubIntegration_InactiveRow_DisabledNotUsable(t *testing.T) {
 	inactive := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: false, Config: githubCfg("tok", "sec")}
 	_, usable, disabled := decodeGitHubIntegration(inactive)
@@ -202,7 +203,7 @@ func TestVCSIntegrationResolver_ResolveGitHub_NoRow_FallsToEnv(t *testing.T) {
 // A row that exists and explicitly says is_active=false must disable the
 // provider for this workspace OUTRIGHT — env is not consulted, even though
 // env has something usable. Falling through to env here is the exact
-// #33a4bb57 AC2 defect: a workspace turning its integration off would
+// an internal ticket AC2 defect: a workspace turning its integration off would
 // silently keep working off the instance-wide fallback. (This test used to
 // assert the opposite — "InactiveRow_FallsToEnv" — which locked the bug in
 // as expected behavior; corrected together with the fix.)
@@ -246,9 +247,9 @@ func TestVCSIntegrationResolver_ResolveGitHub_NeitherRowNorEnv_Disabled(t *testi
 	}
 }
 
-// A placeholder row identical in shape to the pre-#33a4bb57 prod row
+// A placeholder row identical in shape to the earlier row
 // (active=true, config={}) must not shadow a working env secret — this is
-// the exact regression AC6 of #33a4bb57 guards against.
+// the exact regression AC6 of an internal ticket guards against.
 func TestVCSIntegrationResolver_ResolveGitHub_ActiveEmptyPlaceholderRow_FallsToEnv(t *testing.T) {
 	ws := uuid.New()
 	repo := newFakeVCSIntegrationRepo()
@@ -265,7 +266,7 @@ func TestVCSIntegrationResolver_ResolveGitLab_RequiresBothURLAndToken_FromEnv(t 
 	ws := uuid.New()
 	repo := newFakeVCSIntegrationRepo()
 	// Only URL set, no token — env fallback must not activate (mirrors the
-	// pre-#33a4bb57 `cfg.Webhook.GitLabURL != "" && cfg.Webhook.GitLabToken != ""` gate).
+	// pre `cfg.Webhook.GitLabURL != "" && cfg.Webhook.GitLabToken != ""` gate).
 	r := NewVCSIntegrationResolver(repo, VCSEnvFallback{GitLabBaseURL: "https://gitlab.example.invalid"})
 	_, _, ok := r.ResolveGitLab(context.Background(), ws)
 	if ok {
@@ -339,7 +340,7 @@ func TestVCSIntegrationResolver_GitHubWebhookSecrets_ToggledOff_NoEnv_Disabled(t
 	}
 }
 
-// The realistic prod case #33a4bb57 AC2 is actually about: env IS
+// The realistic prod case an internal ticket AC2 is actually about: env IS
 // configured (as it is on prod — MESH_GITHUB_WEBHOOK_SECRET), and a
 // workspace toggles its own row off. ListActiveByProvider alone can't tell
 // this apart from "no workspace ever configured GitHub" (both come back as
@@ -429,5 +430,38 @@ func TestVCSIntegrationResolver_GitLabWebhookSecrets_UnionOfActiveWorkspaces(t *
 	secrets, source := r.GitLabWebhookSecrets(context.Background())
 	if source != "workspace" || len(secrets) != 2 {
 		t.Fatalf("got secrets=%v source=%q", secrets, source)
+	}
+}
+
+// A secret the store cannot open (Keep down) must refuse the row, never come
+// back as a usable config with an empty credential or fall through to env.
+func TestDecodeVCSIntegration_DegradedSecret_RefusedNotEmptyUsable(t *testing.T) {
+	prev := secretstore.SetDefault(&secretstore.Router{Builtin: secretstore.Builtin{}})
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+
+	gh := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: githubCfg("keep:0a1b2c3d-0000-4000-8000-000000000001", "")}
+	if _, usable, disabled := decodeGitHubIntegration(gh); usable || !disabled {
+		t.Fatalf("github: usable=%v disabled=%v, want refused", usable, disabled)
+	}
+	gl := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true,
+		Config: json.RawMessage(`{"base_url":"https://gl","token":"keep:an internal ticket-0000-4000-8000-000000000001"}`)}
+	if _, usable, disabled := decodeGitLabIntegration(gl); usable || !disabled {
+		t.Fatalf("gitlab: usable=%v disabled=%v, want refused", usable, disabled)
+	}
+}
+
+func TestDecodeVCSIntegration_DegradedWebhookSecret_Refused(t *testing.T) {
+	prev := secretstore.SetDefault(&secretstore.Router{Builtin: secretstore.Builtin{}})
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+	const ref = "keep:0a1b2c3d-0000-4000-8000-000000000001"
+
+	gh := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitHub, IsActive: true, Config: githubCfg("", ref)}
+	if _, usable, disabled := decodeGitHubIntegration(gh); usable || !disabled {
+		t.Fatalf("github: usable=%v disabled=%v, want refused", usable, disabled)
+	}
+	gl := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true,
+		Config: json.RawMessage(`{"base_url":"https://gl","webhook_secret":"` + ref + `"}`)}
+	if _, usable, disabled := decodeGitLabIntegration(gl); usable || !disabled {
+		t.Fatalf("gitlab: usable=%v disabled=%v, want refused", usable, disabled)
 	}
 }

@@ -43,12 +43,12 @@ interface CommentListProps {
 
 function ActorIcon({ type }: { type: ActorType }) {
   if (type === "agent") {
-    return <Bot className="h-4 w-4 text-violet-500" />;
+    return <Bot className="h-4 w-4 text-tone-violet-500" />;
   }
   if (type === "system") {
     return <User className="h-4 w-4 text-muted-foreground" />;
   }
-  return <User className="h-4 w-4 text-sky-500" />;
+  return <User className="h-4 w-4 text-tone-sky-500" />;
 }
 
 function ActorLabel({ id, type, name }: { id?: string; type: ActorType; name?: string }) {
@@ -74,8 +74,8 @@ function ActorLabel({ id, type, name }: { id?: string; type: ActorType; name?: s
  *
  * Below the badges, a missed handle the author can still fix gets a plate
  * with the server's hint and, where one action would change the outcome, a
- * button for it (#ed60c795). The badge alone was a yellow machine word: Pavel
- * wrote "@howard" on Howard's own parked card, saw nothing he recognised as a
+ * button for it. The badge alone was a yellow machine word: Alex
+ * wrote "@harper" on Harper's own parked card, saw nothing he recognised as a
  * miss, and had to ask whether the agent got it.
  *
  * Nothing renders when a comment addressed nobody, which is most comments.
@@ -103,7 +103,7 @@ function DeliveryRecord({
               row.outcome === "delivered" && "text-muted-foreground",
               // Not-delivered is the state worth seeing across a room, since the
               // whole defect being fixed is that it currently looks like success.
-              row.outcome === "skipped" && "text-yellow-600",
+              row.outcome === "skipped" && "text-tone-attention-600",
               row.outcome === "failed" && "text-destructive",
             )}
             title={`@${row.recipient_slug} · ${row.outcome} · ${row.reason} · channel=${row.channel} · presence=${row.recipient_presence}`}
@@ -141,7 +141,7 @@ type MissAction = "move_to_todo" | "assign";
 export function missActionFor(row: CommentDeliveryOutcome): MissAction | null {
   if (row.recipient_kind !== "agent" || !row.recipient_id) return null;
   // Only a backlog card is safe to lift: an in_progress/review card is already
-  // being worked, and a move to todo would reset it (#81ab35b3).
+  // being worked, and a move to todo would reset it.
   if (row.reason === "status_not_fed") {
     return row.task_status_category === "backlog" ? "move_to_todo" : null;
   }
@@ -176,7 +176,7 @@ function DeliveryMissPlate({
       if (action === "move_to_todo") {
         const statuses = await api<TaskStatus[]>(`/api/v1/projects/${projId}/statuses`);
         // The verdict is a snapshot: re-read the card and refuse unless it is
-        // still in backlog, so a card picked up since is never reset (#81ab35b3).
+        // still in backlog, so a card picked up since is never reset.
         const fresh = await store.fetchTask(taskId);
         const current = (statuses ?? []).find((st) => st.id === fresh?.status_id);
         if (current?.category !== "backlog") {
@@ -205,7 +205,7 @@ function DeliveryMissPlate({
   return (
     <div
       data-testid="delivery-miss-plate"
-      className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-50/60 px-2 py-1 text-xs text-yellow-800 dark:bg-yellow-400/10 dark:text-yellow-200"
+      className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-tone-attention-500/30 bg-tone-attention-50/60 px-2 py-1 text-xs text-tone-attention-800 dark:bg-tone-attention-400/10 dark:text-tone-attention-200"
     >
       <span>
         {t("comments.delivery.wontSee", { slug: row.recipient_slug, hint: row.hint })}
@@ -335,7 +335,7 @@ function CommentItem({
         data-comment-id={comment.id}
         className={cn(
           "rounded-lg border border-transparent p-3 transition-colors hover:bg-muted/50",
-          focused && "border-yellow-400 bg-yellow-50/60 dark:bg-yellow-400/10",
+          focused && "border-tone-attention-400 bg-tone-attention-50/60 dark:bg-tone-attention-400/10",
         )}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
@@ -347,7 +347,7 @@ function CommentItem({
               {formatRelative(comment.created_at)}
             </span>
             {comment.is_internal && (
-              <Badge variant="outline" className="gap-1 text-[10px] text-yellow-600">
+              <Badge variant="outline" className="gap-1 text-[10px] text-tone-attention-600">
                 <Lock className="h-2.5 w-2.5" />
                 {t("comments.internal")}
               </Badge>
@@ -499,7 +499,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
   // without this guard would overwrite the right comments with the wrong
   // task's. Mirrors the mountedRef pattern in useProjectTrIntegration and
   // the `cancelled` flag in MarkdownView, both touched by the same rewrite
-  // that introduced this gap. See task c39ea2aa.
+  // that introduced this gap. See an internal ticket.
   const taskIdRef = useRef(taskId);
   taskIdRef.current = taskId;
 
@@ -508,7 +508,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
   // one page silently showed only its earliest comments (the freshest
   // activity never got fetched at all, regardless of how the fetched items
   // were sorted for display). "Show earlier" pages further back in the same
-  // order. See task 4222c17d (D4) / parent diagnosis 9855f866.
+  // order. See an internal ticket (D4) / parent diagnosis an internal ticket.
   const fetchComments = useCallback(
     async (pageNum: number, append: boolean) => {
       const requestedTaskId = taskId;

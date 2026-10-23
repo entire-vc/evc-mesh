@@ -56,7 +56,7 @@ function ActorLabel({ id, type, name }: { id?: string; type: ActorType; name?: s
       <Icon
         className={cn(
           "h-3.5 w-3.5 shrink-0",
-          type === "agent" ? "text-violet-500" : "text-sky-500",
+          type === "agent" ? "text-tone-violet-500" : "text-tone-sky-500",
         )}
       />
       <span className="truncate">{name?.trim() || fallback}<AgentShortTag id={id} type={type} /></span>
@@ -85,7 +85,7 @@ function Quote({
         "mb-2 border-l-2 pl-2 text-xs italic",
         broken
           ? "border-muted-foreground/40 text-muted-foreground line-through decoration-muted-foreground/50"
-          : "border-yellow-400 text-muted-foreground",
+          : "border-tone-attention-400 text-muted-foreground",
       )}
     >
       {text}
@@ -403,7 +403,7 @@ export function Thread({
       }}
       className={cn(
         "cursor-default rounded-lg border p-3 transition-colors",
-        active ? "border-yellow-400 bg-yellow-50/60 dark:bg-yellow-400/10" : "border-border",
+        active ? "border-tone-attention-400 bg-tone-attention-50/60 dark:bg-tone-attention-400/10" : "border-border",
         thread.resolved && "opacity-70",
       )}
     >
@@ -502,7 +502,7 @@ export function DraftCard({
 }) {
   const { t } = useTranslation("docs");
   return (
-    <div className="rounded-lg border border-yellow-400 bg-yellow-50/60 p-3 dark:bg-yellow-400/10">
+    <div className="rounded-lg border border-tone-attention-400 bg-tone-attention-50/60 p-3 dark:bg-tone-attention-400/10">
       {draft.anchor ? (
         <>
           <Quote
@@ -795,15 +795,15 @@ export function DocCommentAffordance({
  * require selecting text first (`DocCommentAffordance` above does).
  *
  * Lives in the page's own action row, not inside the rail or the tree: those
- * two are mutually exclusive (`#a9df0f4a`), and a button mounted inside
+ * two are mutually exclusive, and a button mounted inside
  * either one would only be reachable while that particular surface happens to
  * be on screen. This one is not gated on `railOpen` at all — the click opens
  * the rail itself (`onOpenRail`) so the composer this starts always has
  * somewhere to render, then starts the draft.
  *
  * Icon-only for now: a visible label is copy under §1r.A review on
- * `#03acfaae`, and `web/**` deploys to prod on merge with no human step in
- * between (see `#41d01325`) — so the button ships with no visible text at
+ * an internal ticket, and `web/**` deploys on merge in
+ * between (see an internal ticket) — so the button ships with no visible text at
  * all rather than an unapproved placeholder. `aria-label`/`title` are exempt
  * from that gate (they exist for crawlers and screen readers, not as
  * product copy) and carry the button's only description until the approved
@@ -872,7 +872,7 @@ export function DocCommentToggle({
           that case gets a tick rather than a number. */}
       {unresolvedCount > 0 ? (
         <span
-          className="rounded bg-yellow-400/25 px-1 text-[11px] font-medium tabular-nums text-yellow-900 dark:text-yellow-200"
+          className="rounded bg-tone-attention-400/25 px-1 text-[11px] font-medium tabular-nums text-tone-attention-900 dark:text-tone-attention-200"
           title={t("comments.openOf", { open: unresolvedCount, total: totalCount })}
         >
           {unresolvedCount}

@@ -22,14 +22,28 @@ const tasks = Array.from({ length: 331 }, (_, i) => ({
 }));
 // Newest-updated first: the API's default list order.
 const initialOrder = [...tasks.slice(282), ...tasks.slice(0, 282)];
+// Documents for the docs-shots spec: a three-level tree, one long page, one with a deep path.
+const docs = [
+  ["handbook", null, "Handbook", 0], ["onboarding", "handbook", "Onboarding", 0], ["day-one", "onboarding", "Day one checklist", 0],
+  ["tooling", "onboarding", "Tooling", 1], ["runbooks", null, "Runbooks", 1], ["deploys", "runbooks", "Deploys and rollbacks", 0],
+  ["incidents", "runbooks", "Incident response with a deliberately long title that has to wrap on a phone", 1], ["notes", null, "Notes", 2],
+].map(([id, parent_id, title, position]) => ({
+  id, project_id: project.id, parent_id, slug: id, title, storage_key: `documents/${id}.md`, position,
+  created_by: user.id, created_by_type: "user", created_by_name: user.name, updated_by: user.id, updated_by_name: user.name,
+  created_at: "2026-10-01T10:00:00Z", updated_at: "2026-10-02T11:30:00Z", version: 3, source_kind: "own",
+  body: id === "deploys"
+    ? "# Deploys and rollbacks\n\n" + Array.from({ length: 30 }, (_, i) => `Step ${i + 1}: check the dashboard, then continue with the next stage of the rollout.`).join("\n\n")
+    : `# ${title}\n\nA short page about ${title.toLowerCase()}.\n\n- first point\n- second point`,
+}));
 let mode = "normal", ordered = initialOrder, taskCalls = [];
+const HOST = "127.0.0.1";
 const sockets = new Set();
 const server = http.createServer(async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:3019");
+  res.setHeader("Access-Control-Allow-Origin", `http://${HOST}:3019`);
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
   if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
-  const url = new URL(req.url, "http://127.0.0.1");
+  const url = new URL(req.url, `http://${HOST}`);
   let status = 200, body = {};
   if (url.pathname === "/__fixture") {
     if (req.method === "POST") {
@@ -44,11 +58,19 @@ const server = http.createServer(async (req, res) => {
       }
     }
     body = { mode, taskCalls };
-  } else if (url.pathname === "/api/v1/auth/refresh") body = { tokens: { access_token: "fixture-only-token" } };
+  } else if (url.pathname === "/api/v1/auth/refresh") body = { tokens: { access_token: "fixture-token" } };
   else if (url.pathname === "/api/v1/auth/me") body = user;
   else if (url.pathname === "/api/v1/workspaces") body = [workspace];
   else if (url.pathname.endsWith("/projects")) body = { items: [project, otherProject], total_count: 2 };
   else if (url.pathname.endsWith("/statuses")) body = url.pathname.includes("/other-project/") ? statuses.map((s) => ({ ...s, project_id: otherProject.id })) : statuses;
+  else if (url.pathname === "/api/v1/me/tasks") {
+    // Dashboard "My tasks" widget: five assigned tasks, none, or a failing API.
+    if (mode === "error") { status = 503; body = { message: "Fixture tasks unavailable" }; }
+    else {
+      const rows = mode === "empty" ? [] : tasks.slice(315, 320).map((task, i) => ({ ...task, title: `Assigned task ${i + 1}`, priority: ["urgent", "high", "medium", "low", "medium"][i] }));
+      body = { items: rows, page: 1, page_size: 5, total_count: rows.length, has_more: false };
+    }
+  }
   else if (url.pathname.endsWith("/tasks")) {
     const page = Number(url.searchParams.get("page") ?? 1), size = Number(url.searchParams.get("page_size") ?? 200);
     const ids = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
@@ -65,7 +87,12 @@ const server = http.createServer(async (req, res) => {
       body = { items: rows.slice((page - 1) * size, page * size), page, page_size: size,
         total_count: rows.length, has_more: page * size < rows.length, list_revision: 47 };
     }
-  } else if (url.pathname.endsWith("/custom-fields")) body = [];
+  } else if (url.pathname.endsWith("/documents")) body = { items: docs, total_count: docs.length, page: 1, page_size: 200, has_more: false };
+  else if (url.pathname.endsWith("/team")) body = { agents: [], humans: [] };
+  else if (url.pathname.startsWith("/api/v1/me/ui-state/")) body = { state: { expanded: [] } };
+  else if (/^\/api\/v1\/documents\/[^/]+\/(watch|comments|attachments)/.test(url.pathname)) body = url.pathname.endsWith("/watch") ? { watching: false } : [];
+  else if (url.pathname.startsWith("/api/v1/documents/")) body = docs.find((d) => d.id === url.pathname.split("/").at(-1)) ?? {};
+  else if (url.pathname.endsWith("/custom-fields")) body = [];
   else if (url.pathname.endsWith("/members/me")) body = { role: "owner" };
   else if (url.pathname.endsWith("/members")) body = { members: [], count: 0 };
   else if (url.pathname.endsWith("/agents")) body = { items: [] };

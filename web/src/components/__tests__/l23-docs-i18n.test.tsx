@@ -19,7 +19,7 @@ const parent = {
   position: 0,
   created_by: "11111111-1111-1111-1111-111111111111",
   created_by_type: "user",
-  created_by_name: "Pavel",
+  created_by_name: "Alex",
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-14T09:30:00Z",
   version: 1,
@@ -55,7 +55,7 @@ describe("L2.3 docs: en by default, ru translated, no raw keys", () => {
     fireEvent.click(screen.getByLabelText("Expand Runbook"));
     expect(screen.getByLabelText("Collapse Runbook")).toBeTruthy();
     expect(screen.getByLabelText("New page inside Runbook")).toBeTruthy();
-    expect(document.body.textContent).toContain("Created by Pavel");
+    expect(document.body.textContent).toContain("Created by Alex");
     expect(document.body.innerHTML).not.toMatch(RAW_KEY);
     en.unmount();
 
@@ -68,7 +68,7 @@ describe("L2.3 docs: en by default, ru translated, no raw keys", () => {
     fireEvent.click(screen.getByLabelText("Развернуть «Runbook»"));
     expect(screen.getByLabelText("Свернуть «Runbook»")).toBeTruthy();
     expect(screen.getByLabelText("Новая страница внутри «Runbook»")).toBeTruthy();
-    expect(document.body.textContent).toContain("Автор: Pavel");
+    expect(document.body.textContent).toContain("Автор: Alex");
     expect(document.body.textContent).not.toContain("Created by");
     expect(document.body.innerHTML).not.toMatch(RAW_KEY);
   });

@@ -38,7 +38,7 @@ function makeComment(
     parent_comment_id: parentCommentId,
     author_id: "agent-1",
     author_type: "agent",
-    author_name: "Wally",
+    author_name: "Wade",
     body,
     is_internal: false,
     created_at: "2026-08-21T12:00:00Z",
@@ -59,7 +59,7 @@ beforeEach(() => {
 
 function highlightedIds(): string[] {
   return Array.from(document.querySelectorAll("[data-comment-id]"))
-    .filter((el) => el.className.includes("border-yellow-400"))
+    .filter((el) => el.className.includes("border-tone-attention-400"))
     .map((el) => el.getAttribute("data-comment-id") as string);
 }
 

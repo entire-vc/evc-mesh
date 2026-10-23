@@ -11,7 +11,7 @@ export interface RuntimeRef {
 
 const GITLAB = "https://gitlab.com";
 
-/** Turns a WAIT ref (`card:#4807abf9`, `mr:g/p!3`, `pipeline:g/p#9`, `decision:@x`) into a label and a link. */
+/** Turns a WAIT ref (`card:#00000000`, `mr:g/p!3`, `pipeline:g/p#9`, `decision:@x`) into a label and a link. */
 export function parseRuntimeRef(ref: string | null | undefined): RuntimeRef | null {
   if (!ref) return null;
   const card = /^card:#?([0-9a-f]{8})/i.exec(ref);
@@ -73,10 +73,10 @@ export function isWorking(task: Pick<Task, "runtime_state">): boolean {
 }
 
 export const runtimeKindTone: Record<RuntimeStateKind, string> = {
-  working: "text-emerald-700 dark:text-emerald-400",
-  waiting: "text-sky-700 dark:text-sky-400",
+  working: "text-tone-positive-700 dark:text-tone-positive-400",
+  waiting: "text-tone-sky-700 dark:text-tone-sky-400",
   queued: "text-muted-foreground",
-  stopped: "text-amber-700 dark:text-amber-400",
+  stopped: "text-tone-warning-700 dark:text-tone-warning-400",
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

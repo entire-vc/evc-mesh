@@ -60,7 +60,9 @@ func ValidateManifest(raw []byte) (extensions.Manifest, error) {
 	if err != nil {
 		return m, apiErr(400, CodeManifestInvalid, "mesh-extension.json is not a valid manifest: "+err.Error())
 	}
-	if m.Runtime == "builtin" {
+	// A theme is the one kind whose runtime is "builtin" by schema: Mesh itself
+	// stores and serves its assets, there is no process to run.
+	if m.Runtime == "builtin" && m.Kind != "theme" {
 		return m, apiErr(400, CodeBuiltinRuntime, "builtin extensions ship with Mesh and cannot be installed from a repository")
 	}
 	sch, err := manifestSchema()

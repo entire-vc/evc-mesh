@@ -235,7 +235,7 @@ func escapeLike(s string) string {
 func (r *UserRepo) SearchInWorkspace(ctx context.Context, workspaceID uuid.UUID, query string, limit int) ([]domain.User, error) {
 	const q = `
 		SELECT u.id, u.email, u.password_hash, u.display_name,
-		       COALESCE(u.username, '') AS username, COALESCE(u.avatar_url, '') AS avatar_url, u.is_active, u.created_at, u.updated_at
+		       COALESCE(u.username, '') AS username, COALESCE(u.avatar_url, '') AS avatar_url, u.is_active, u.service_agent_id, u.created_at, u.updated_at
 		FROM users u
 		JOIN workspace_members wm ON wm.user_id = u.id AND wm.workspace_id = $1
 		WHERE u.display_name ILIKE $2 OR COALESCE(u.username, '') ILIKE $2 OR u.email ILIKE $2

@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// MCP-OAuth sec (#266eae6a). RequirePermission clamps an OAuth connector (mot_
+// MCP-OAuth sec. RequirePermission clamps an OAuth connector (mot_
 // token) to its consenting user's workspace role, but only on routes registered
 // behind rbac(). Every other route under agent-auth ran the connector with no
 // role check at all — including PATCH /projects/:id, the status routes and the
@@ -48,6 +48,12 @@ var auditGuardCalls = map[string]string{
 // is a claim a reviewer can check against the handler, not a waiver: if the
 // reason stops being true, the entry has to go and the route needs a guard.
 var auditAllowList = map[string]string{
+	"POST /projects/:proj_id/chat/attachments":                                                  "ChatAttachmentRepo.Create refuses agents and OAuth connectors (user_only) and only records a pending row in a thread the signed-in caller owns (thread_not_found for anyone else), within the workspace size limit; the project role is the chat extension's allowed_roles, not a task-write permission",
+	"POST /projects/:proj_id/chat/threads":                                                      "AgentChatRepo.Gate refuses OAuth connectors and agent keys (403 user_only) before any write; a thread is resolved by the caller's own user id in SQL, so no role or connector can touch someone else's thread",
+	"PATCH /projects/:proj_id/chat/threads/:thread_id":                                          "AgentChatRepo.Gate refuses OAuth connectors and agent keys (403 user_only) before any write; a thread is resolved by the caller's own user id in SQL, so no role or connector can touch someone else's thread",
+	"POST /projects/:proj_id/chat/threads/:thread_id/messages":                                  "AgentChatRepo.Gate refuses OAuth connectors and agent keys (403 user_only) before any write; a thread is resolved by the caller's own user id in SQL, so no role or connector can touch someone else's thread",
+	"POST /projects/:proj_id/chat/threads/:thread_id/stop":                                      "AgentChatRepo.Gate refuses OAuth connectors and agent keys (403 user_only) before any write; a thread is resolved by the caller's own user id in SQL, so no role or connector can touch someone else's thread",
+	"POST /projects/:proj_id/rules/handoff/decide":                                              "read-only computation behind projAccess: reads the project workflow and assignment rules, persists nothing and mutates no task; POST only because the runner sends per-card facts in the body",
 	"POST /workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations":            "handler/repository refuses users and OAuth connectors, requires the presented owner-workspace agent key and freshly checks the controller's exact active reporter grant; it only stores informational quota observations for that controller's own pools and cannot mutate the desired catalog, receiver admission or launch work",
 	"POST /workspaces/:ws_id/runtime/controllers/:controller_ref/report":                        "handler/repository refuses users and OAuth connectors, requires the presented owner-workspace agent key and freshly checks the controller's exact active reporter grant; it cannot mutate desired catalog, receiver admission or launch work",
 	"POST /workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance":              "handler/repository refuses users and OAuth connectors and requires the presented owner-workspace agent key with a fresh exact reporter grant check; it only records authorship facts for an artifact revision and cannot mutate the catalog, admission or launch work",
@@ -111,7 +117,7 @@ var auditConnectorGuards = map[string]string{
 	"POST /memories/import":                        "connectorRBAC(mw.PermWriteMemory)",
 	"DELETE /memories/:id":                         "connectorRBAC(mw.PermWriteMemory)",
 	// /memories/reindex, /backfill-chunks, /rechunk-stale, /backfill-doc-index
-	// moved to rbac(mw.PermMemoryIndex) (task 440358b6): connectorRBAC left a
+	// moved to rbac(mw.PermMemoryIndex): connectorRBAC left a
 	// plain human JWT, including a viewer, untouched on these routes.
 	"POST /agents/:agent_id/activity": "connectorSelfOrRBAC(\"agent_id\", mw.PermDeleteAgent)",
 }
@@ -122,14 +128,17 @@ var auditConnectorGuards = map[string]string{
 // to `e`, `v1` or a sub-group cannot go unnoticed just because the walk only
 // looks at `api`. Key: "<receiver> <METHOD> <path literal>".
 var auditPublicWrites = map[string]string{
-	"registerGroup POST /register":               "public sign-up: creates a new user, no existing identity involved",
-	"loginGroup POST /login":                     "public login: authenticated by the credentials in the body",
-	"refreshGroup POST /refresh":                 "public: authenticated by the refresh token itself",
-	"invitePublicGroup POST /:token/accept":      "public: authenticated by the single-use invite token in the path",
-	"e POST /webhooks/github":                    "authenticated by the GitHub HMAC signature, not a session",
-	"e POST /api/v1/integrations/github/webhook": "authenticated by the GitHub HMAC signature, not a session",
-	"e POST /webhooks/gitlab":                    "authenticated by the GitLab secret token header, not a session",
-	"e POST /internal/secrets/materialize":       "DirectOnly plus SpawnAuth: reachable only by the spawner, never with a bearer token",
+	"registerGroup POST /register":                      "public sign-up: creates a new user, no existing identity involved",
+	"loginGroup POST /login":                            "public login: authenticated by the credentials in the body",
+	"refreshGroup POST /refresh":                        "public: authenticated by the refresh token itself",
+	"invitePublicGroup POST /:token/accept":             "public: authenticated by the single-use invite token in the path",
+	"e POST /webhooks/github":                           "authenticated by the GitHub HMAC signature, not a session",
+	"e POST /api/v1/integrations/github/webhook":        "authenticated by the GitHub HMAC signature, not a session",
+	"e POST /webhooks/gitlab":                           "authenticated by the GitLab secret token header, not a session",
+	"e POST /internal/secrets/materialize":              "DirectOnly plus SpawnAuth: reachable only by the spawner, never with a bearer token",
+	"e POST /internal/chat-sessions/tokens":             "DirectOnly plus ChatControllerAuth: reachable only by the chat runner's controller credential; ChatSessionService re-checks user, agent and project against live state",
+	"e POST /internal/chat-sessions/:session_id/renew":  "DirectOnly plus ChatControllerAuth: runner-only; renewal copies the stored binding and re-checks it",
+	"e POST /internal/chat-sessions/:session_id/revoke": "DirectOnly plus ChatControllerAuth: runner-only; revokes every token of one chat session",
 }
 
 // auditRoute is one api.<METHOD>("<path>", handler, middleware...) registration.

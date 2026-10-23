@@ -1,21 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
-import {
-  ChevronDown,
-  ChevronRight,
-  FileText,
-  MoreHorizontal,
-  Plus,
-} from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/cn";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { loadServerExpanded, saveServerExpanded } from "@/lib/docs-tree-sync";
+import { registerMeshDefaultTheme } from "@/themes/mesh-default";
+import {
+  resolveSlotView,
+  useSlotRegistryVersion,
+  useThemeSettings,
+  withSlotFallback,
+} from "@/core/slots/registry";
+import { useSlotContext } from "@/core/slots/use-slot-context";
+import type { Async, DocNodeData, DocTreeActions, DocTreeSettings, DocTreeView } from "@/core/slots/types";
+import { useWorkspaceStore } from "@/stores/workspace";
 import type { ProjectDocument } from "@/types";
+
+registerMeshDefaultTheme();
 
 export interface DocTreeNode {
   doc: ProjectDocument;
@@ -162,10 +159,17 @@ interface DocTreeProps {
   projectId?: string | null;
   selectedId?: string | null;
   onSelect: (doc: ProjectDocument) => void;
-  onCreateChild: (parent: ProjectDocument) => void;
+  // `null` creates a root document (the slot contract's createChild(null)).
+  onCreateChild: (parent: ProjectDocument | null) => void;
   onRename: (doc: ProjectDocument) => void;
   onMove: (doc: ProjectDocument) => void;
   onDelete: (doc: ProjectDocument) => void;
+  /** Real address of a document (new tab, copy link). */
+  hrefFor?: (doc: ProjectDocument) => string;
+  /** The list is on its way / failed: the view draws the skeleton or the message with a retry. */
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
 }
 
 function readExpanded(key: string | null | undefined): Set<string> {
@@ -199,11 +203,14 @@ export function DocTree({
   onRename,
   onMove,
   onDelete,
+  hrefFor,
+  loading,
+  error,
+  onRetry,
 }: DocTreeProps) {
   // Expanded, not collapsed: everything is closed by default except the branch
   // down to the open document. Anything that makes a node's content appear (a
   // new child, a move) expands that node explicitly, see the effects below.
-  const { t } = useTranslation("docs");
   const [expanded, setExpanded] = useState<Set<string>>(() =>
     readExpanded(storageKey),
   );
@@ -365,173 +372,95 @@ export function DocTree({
 
   // Another project's list is not drawn at all, so it cannot be shown against this
   // project's saved expansion.
-  const nodes = synced ? buildDocTree(documents) : [];
+  const nodes = useMemo<DocNodeData[]>(
+    () => (synced ? visibleNodes(buildDocTree(documents), expanded, selectedId ?? null, hrefFor) : []),
+    [synced, documents, expanded, selectedId, hrefFor],
+  );
+
+  const docById = useMemo(() => new Map(documents.map((d) => [d.id, d])), [documents]);
+  const actions = useMemo<DocTreeActions>(() => {
+    const withDoc = (fn: (doc: ProjectDocument) => void) => (id: string) => {
+      const doc = docById.get(id);
+      if (doc) fn(doc);
+    };
+    return {
+      select: (id, opts) => {
+        const doc = docById.get(id);
+        if (!doc) return;
+        // A modified click: the real address in a new tab.
+        if (opts?.newTab) window.open(hrefFor?.(doc) ?? "#", "_blank", "noopener");
+        else onSelect(doc);
+      },
+      toggleExpanded: toggle,
+      createChild: (id) => {
+        if (id === null) {
+          onCreateChild(null);
+          return;
+        }
+        const doc = docById.get(id);
+        if (doc) onCreateChild(doc);
+      },
+      rename: withDoc(onRename),
+      move: withDoc(onMove),
+      remove: withDoc(onDelete),
+      retry: () => onRetry?.(),
+    };
+    // `toggle` only touches refs and the state setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docById, hrefFor, onSelect, onCreateChild, onRename, onMove, onDelete, onRetry]);
+
+  const workspace = useWorkspaceStore((s) => s.currentWorkspace);
+  const themeSettings = useThemeSettings() as DocTreeSettings;
+  const registryVersion = useSlotRegistryVersion();
+  const View = useMemo(
+    () => withSlotFallback("doc.tree", resolveSlotView("doc.tree")) as DocTreeView,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [registryVersion],
+  );
+  const ctx = useSlotContext("doc.tree", workspace ? { id: workspace.id, slug: workspace.slug, name: workspace.name } : null);
+
+  const asyncNodes: Async<DocNodeData[]> = loading
+    ? { state: "loading" }
+    : error
+      ? { state: "error", error: { code: "documents_failed", message: error }, retry: () => onRetry?.() }
+      : { state: "ready", value: nodes };
 
   return (
-    <ul role="tree" aria-label={t("tree.heading")} className="space-y-0.5">
-      {nodes.map((node) => (
-        <DocTreeItem
-          key={node.doc.id}
-          node={node}
-          depth={0}
-          expanded={expanded}
-          onToggle={toggle}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          onCreateChild={onCreateChild}
-          onRename={onRename}
-          onMove={onMove}
-          onDelete={onDelete}
-        />
-      ))}
-    </ul>
+    <View
+      data={{ projectId: projectId ?? "", nodes: asyncNodes }}
+      actions={actions}
+      themeSettings={themeSettings}
+      ctx={ctx}
+    />
   );
 }
 
-interface DocTreeItemProps extends Omit<DocTreeProps, "documents" | "storageKey"> {
-  node: DocTreeNode;
-  depth: number;
-  expanded: Set<string>;
-  onToggle: (id: string) => void;
-}
-
-function DocTreeItem({
-  node,
-  depth,
-  expanded,
-  onToggle,
-  selectedId,
-  onSelect,
-  onCreateChild,
-  onRename,
-  onMove,
-  onDelete,
-}: DocTreeItemProps) {
-  const { t } = useTranslation("docs");
-  const { doc, children } = node;
-  const hasChildren = children.length > 0;
-  const isOpen = hasChildren && expanded.has(doc.id);
-  const isSelected = selectedId === doc.id;
-
-  return (
-    <li role="none">
-      <div
-        role="treeitem"
-        aria-selected={isSelected}
-        aria-expanded={hasChildren ? isOpen : undefined}
-        className={cn(
-          "group relative flex items-center gap-0.5 rounded-md pr-1 text-sm",
-          // Hover is a neutral tint. It used to be --accent, which is a
-          // saturated teal, not a tint: every row the pointer crossed turned
-          // into a solid brand-coloured block with near-black text on it.
-          "hover:bg-muted",
-          isSelected && [
-            // --secondary is the palette's light teal-green (teal-100 in light
-            // mode, the raised dark-teal surface in dark) and it ships with a
-            // foreground that reads on it: 16.3:1 light, 11.4:1 dark. Both are
-            // computed, not eyeballed — see the doc-tree tests.
-            "bg-secondary font-medium text-secondary-foreground",
-          ],
-        )}
-        style={{ paddingLeft: `${depth * 12}px` }}
-      >
-        {/* --secondary and --muted are close in lightness by design, so the
-            selected row does not rely on its fill to be told apart from the one
-            under the pointer: it also carries a brand-coloured bar at the
-            column edge (5.8:1 against the fill in light, 6.6:1 in dark). A real
-            element rather than a border, because the row's left padding encodes
-            tree depth and a border would shift every nested title by 3px. */}
-        {isSelected && (
-          <span
-            aria-hidden="true"
-            data-selected-bar=""
-            className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-primary"
-          />
-        )}
-
-        {hasChildren ? (
-          <button
-            type="button"
-            aria-label={isOpen ? t("tree.collapse", { title: doc.title }) : t("tree.expand", { title: doc.title })}
-            onClick={() => onToggle(doc.id)}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            {isOpen ? (
-              <ChevronDown className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
-            )}
-          </button>
-        ) : (
-          <span className="h-5 w-5 shrink-0" />
-        )}
-
-        <button
-          type="button"
-          onClick={() => onSelect(doc)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-        >
-          <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="break-words md:truncate">{doc.title}</span>
-        </button>
-
-        {/* Touch actions stay visible on mobile. Desktop reveals them on
-            hover or keyboard focus. */}
-        <div className="flex shrink-0 items-center opacity-100 md:opacity-0 focus-within:opacity-100 group-hover:opacity-100">
-          <button
-            type="button"
-            title={t("tree.newInside")}
-            aria-label={t("tree.newInsideOf", { title: doc.title })}
-            onClick={() => onCreateChild(doc)}
-            className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              title={t("tree.pageActions")}
-              aria-label={t("tree.actionsFor", { title: doc.title })}
-              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
-            >
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="min-w-[9rem]">
-              <DropdownMenuItem onClick={() => onRename(doc)}>
-                {t("actions.rename")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onMove(doc)}>
-                {t("tree.moveTo")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onDelete(doc)}
-                className="text-destructive"
-              >
-                {t("actions.delete")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-
-      {isOpen && (
-        <ul role="group" className="space-y-0.5">
-          {children.map((child) => (
-            <DocTreeItem
-              key={child.doc.id}
-              node={child}
-              depth={depth + 1}
-              expanded={expanded}
-              onToggle={onToggle}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              onCreateChild={onCreateChild}
-              onRename={onRename}
-              onMove={onMove}
-              onDelete={onDelete}
-            />
-          ))}
-        </ul>
-      )}
-    </li>
-  );
+/** The flat list of rows on screen: a collapsed node hides its whole subtree. */
+function visibleNodes(
+  forest: DocTreeNode[],
+  expanded: Set<string>,
+  selectedId: string | null,
+  hrefFor: ((doc: ProjectDocument) => string) | undefined,
+): DocNodeData[] {
+  const out: DocNodeData[] = [];
+  const walk = (list: DocTreeNode[], depth: number) => {
+    for (const { doc, children } of list) {
+      const hasChildren = children.length > 0;
+      const isOpen = hasChildren && expanded.has(doc.id);
+      out.push({
+        id: doc.id,
+        title: doc.title,
+        slug: doc.slug,
+        depth,
+        hasChildren,
+        expanded: isOpen,
+        selected: selectedId === doc.id,
+        updatedAt: doc.updated_at,
+        href: hrefFor?.(doc) ?? "#",
+      });
+      if (isOpen) walk(children, depth + 1);
+    }
+  };
+  walk(forest, 0);
+  return out;
 }

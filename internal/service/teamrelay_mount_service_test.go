@@ -190,7 +190,7 @@ func (f *fakeRelaySyncClient) callCount() int {
 var _ RelaySyncClient = (*fakeRelaySyncClient)(nil)
 
 // fakeKeyDescriber is a no-op KeyDescriber double — every test in this file
-// exercises RefreshIfStale/SyncMount for reasons unrelated to #218d5847's
+// exercises RefreshIfStale/SyncMount for reasons unrelated to an internal ticket's
 // AC4 key-expiry producers, so a canned "no expiry known" response is enough
 // to keep recordSyncOutcome's introspection call from either reaching a real
 // Team Relay server or needing per-test fixture setup it doesn't care about.
@@ -632,7 +632,7 @@ func TestSyncMount_ReRun_IsIdempotentAndDoesNotRedownload(t *testing.T) {
 	assert.Equal(t, callsAfterFirst, f.client.callCount(), "an already-mounted file must not be downloaded again")
 }
 
-// Red control for task 3e6f8029-88e2-41b4-8dfc-e60a19ca78dc: SyncMount is the
+// Red control for an internal ticket-88e2-41b4-8dfc-e60a19ca78dc: SyncMount is the
 // actual source of the 140 corrupt documents found on prod — it downloaded
 // whatever bytes a files-index entry pointed at and stored them as a document
 // body with no check that they were text. A share with a PNG entry among
@@ -701,11 +701,11 @@ func TestRefreshIfStale_SourceTurnedBinary_RefusesAndKeepsOldBody(t *testing.T) 
 }
 
 // ---------------------------------------------------------------------------
-// #218d5847 AC4 — the producers Bill's 2026-08-26 correction found unwired:
+// an internal ticket AC4 — the producers Beth's 2026-08-26 correction found unwired:
 // R5-A built the schema and the UI, but nothing ever called RecordSyncCheck
 // or SetKeyExpiry, so key_expires_at/last_sync_status stayed NULL forever
 // for every real integration. These tests are the positive/negative pair
-// Bill's own acceptance text demanded: "интеграция с заведомо истекающим
+// Beth's own acceptance text demanded: "интеграция с заведомо истекающим
 // ключом показывает предупреждение, интеграция со свежим — не показывает" —
 // proven here at the layer that actually produces the data the handler's
 // existing KeyExpiringSoon computation reads, not by seeding SQL by hand.
@@ -811,7 +811,7 @@ func TestRefreshIfStale_KeyExpired_RecordsKeyExpiredStatus(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RefreshSleepingKeyExpiries (#bab2e6be)
+// RefreshSleepingKeyExpiries
 // ---------------------------------------------------------------------------
 
 // TestRefreshSleepingKeyExpiries_NeverTouched_GetsKeyExpiryWithoutAnyUserAction
@@ -895,7 +895,7 @@ func TestRefreshSleepingKeyExpiries_DisabledIntegration_IsNeverChecked(t *testin
 }
 
 // ---------------------------------------------------------------------------
-// Excluded paths (card #4e97f465 A1): SyncMount must not materialize entries
+// Excluded paths (an internal ticket A1): SyncMount must not materialize entries
 // whose FIRST path segment is in the exclusion list. The default is
 // ["artifacts"] — card artifacts already live on the card's artifacts tab.
 // ---------------------------------------------------------------------------
@@ -1032,7 +1032,7 @@ func TestSyncMount_ExclusionMatchesFirstSegmentNotSubstring(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Archive of vanished copies (card #4e97f465 A2): a copy whose source file is
+// Archive of vanished copies (an internal ticket A2): a copy whose source file is
 // gone from the share (deleted or moved there) is soft-deleted on sync — the
 // reversible штатный mechanism, not a row drop — so Docs stops listing a page
 // backed by nothing. Guards: an EMPTY index or an index error never archives.
@@ -1166,7 +1166,7 @@ func TestSyncMount_ArchivesCopiesUnderNewlyExcludedFolder(t *testing.T) {
 
 // A share folder's placeholder that was filed into a canon folder (docs
 // layout) must be found again by its old path: the next sync used to leave a
-// new empty duplicate at the project's top level every time (card 4048ffea).
+// new empty duplicate at the project's top level every time (card an internal ticket).
 func TestSyncMount_FiledAwayFolderPlaceholderIsReusedNotRecreated(t *testing.T) {
 	f := setupMountFixture(t, "")
 	ctx := context.Background()
@@ -1320,7 +1320,7 @@ func TestSyncMount_VanishedCopyRemountsWhenFileReturns(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scheduled sync (card #4e97f465 A3): SyncDueMounts re-runs the mount for
+// Scheduled sync (an internal ticket A3): SyncDueMounts re-runs the mount for
 // enabled integrations whose interval elapsed, without anyone clicking
 // "Sync now" or opening a document. Per-project locks keep it from ever
 // overlapping a manual sync; interval 0 turns the schedule off.
@@ -1528,7 +1528,7 @@ func TestSyncMount_FailedManualSyncPacesTheScheduler(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Image embeds (card #4e97f465 A4): a mounted body's ![[pic.png]] / ![alt](pic.png)
+// Image embeds (an internal ticket A4): a mounted body's ![[pic.png]] / ![alt](pic.png)
 // references resolve against the share, and each referenced image/PDF is copied
 // into Mesh attachment storage as a document attachment. The stored body is
 // never rewritten — the serve side renders from the attachment records, so

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/extensions/telegram"
 )
 
@@ -160,4 +161,29 @@ func TestManifest_ValidAgainstSchemaV1(t *testing.T) {
 	m := newProvider(nil, nil).Manifest()
 	require.Equal(t, "telegram", m.ID)
 	require.Empty(t, m.InstanceSecretKeys(), "the instance level is a switch with no secrets")
+}
+
+type fixedStore struct{ res secretstore.Result }
+
+func (fixedStore) Put(context.Context, secretstore.Ref, string) (string, error) { return "", nil }
+func (f fixedStore) Resolve(context.Context, string) secretstore.Result         { return f.res }
+
+// A token the store cannot open, or opens to nothing, is "no bot", never an
+// empty token passed on as usable.
+func TestBotToken_UnopenableOrEmptyIsNoBot(t *testing.T) {
+	prev := secretstore.SetDefault(fixedStore{secretstore.Result{Degraded: true, Reason: "keep down"}})
+	t.Cleanup(func() { secretstore.SetDefault(prev) })
+	r := extensions.Resolved{Enabled: true, Settings: map[string]any{"bot_token": "keep:x", "bot_username": "mesh_bot"}}
+	_, _, ok := telegram.BotToken(r)
+	require.False(t, ok, "degraded store")
+
+	secretstore.SetDefault(fixedStore{secretstore.Result{Value: ""}})
+	_, _, ok = telegram.BotToken(r)
+	require.False(t, ok, "empty plaintext")
+
+	secretstore.SetDefault(fixedStore{secretstore.Result{Value: "123:abc"}})
+	tok, name, ok := telegram.BotToken(r)
+	require.True(t, ok)
+	require.Equal(t, "123:abc", tok)
+	require.Equal(t, "mesh_bot", name)
 }

@@ -117,7 +117,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 
 	// The agent-half sibling of "no membership directory"/"membership lookup
 	// errors" below — same fail-closed contract, different directory
-	// (task U3/#71627c5a).
+	// (task U3/an internal ticket).
 	t.Run("no agent grant directory", func(t *testing.T) {
 		svc, projRepo, agentRepo, _, _ := newSvc()
 		projID := seedProject(projRepo)
@@ -161,7 +161,7 @@ func TestAssertAssigneeInProjectWorkspace_RefusalReasons(t *testing.T) {
 	// AC1's core: a GUEST agent — home elsewhere, active connection into
 	// THIS workspace — must be admitted, not just a home agent. Without this
 	// case the whole file is satisfied by a function that only ever checks
-	// agents.workspace_id, which is the exact bug #71627c5a reports.
+	// agents.workspace_id, which is the exact bug an internal ticket reports.
 	t.Run("agent with an active guest grant is allowed", func(t *testing.T) {
 		svc, projRepo, agentRepo, _, grantRepo := newSvc()
 		projID := seedProject(projRepo)
