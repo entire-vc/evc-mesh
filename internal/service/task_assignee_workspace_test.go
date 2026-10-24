@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -456,7 +457,7 @@ func TestValidateAssigneeForProject_NilAssignee_ReturnsUnassignedWithoutLookup(t
 }
 
 // ---------------------------------------------------------------------------
-// An assignee_id that names nobody (#96f1dfc6)
+// An assignee_id that names nobody
 //
 // Distinct from the foreign-principal case above: there the id resolves to a real
 // principal in the wrong workspace, here it resolves to nothing at all, so
@@ -587,4 +588,121 @@ func TestValidateAssigneeForProject_AllowsRealAndEmpty(t *testing.T) {
 		context.Background(), env.projectID, nil, domain.AssigneeTypeUnassigned)
 	require.NoError(t, err, "a template with no assignee at all must still validate")
 	assert.Equal(t, domain.AssigneeTypeUnassigned, resolved)
+}
+
+// grantedReviewerEnv wires a grant repo into the tenancy env and grants the
+// foreign agent into the home workspace under slug.
+func grantedReviewerEnv(t *testing.T, slug string, revoked bool) *tenancyEnv {
+	t.Helper()
+	env := setupTenancyEnv(t, nil)
+	grants := NewMockAgentWorkspaceGrantRepository()
+	grants.slugs = map[uuid.UUID]string{env.foreignAgent: slug}
+	g := &domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: env.foreignAgent, WorkspaceID: env.homeWS, Role: "member"}
+	if revoked {
+		now := time.Now()
+		g.RevokedAt = &now
+	}
+	grants.items = append(grants.items, g)
+	env.svc.agentGrantRepo = grants
+	env.agents.items[env.foreignAgent].Slug = slug
+	return env
+}
+
+func TestResolveSetReviewer_GrantAgentBySlugAndByUUID(t *testing.T) {
+	env := grantedReviewerEnv(t, "auditor", false)
+
+	id, typ, err := env.svc.resolveSetReviewer(context.Background(), env.projectID, "auditor")
+	require.NoError(t, err)
+	assert.Equal(t, env.foreignAgent, *id)
+	assert.Equal(t, domain.AssigneeTypeAgent, typ)
+
+	id, _, err = env.svc.resolveSetReviewer(context.Background(), env.projectID, "agent:"+env.foreignAgent.String())
+	require.NoError(t, err)
+	assert.Equal(t, env.foreignAgent, *id)
+}
+
+func TestResolveSetReviewer_RevokedGrantIsRefused(t *testing.T) {
+	env := grantedReviewerEnv(t, "auditor", true)
+
+	_, _, err := env.svc.resolveSetReviewer(context.Background(), env.projectID, "auditor")
+	require.Error(t, err)
+	_, _, err = env.svc.resolveSetReviewer(context.Background(), env.projectID, "agent:"+env.foreignAgent.String())
+	require.Error(t, err)
+}
+
+func TestResolveSetReviewer_HomeAgentWinsOverGrantWithSameSlug(t *testing.T) {
+	env := grantedReviewerEnv(t, "native", false)
+
+	id, _, err := env.svc.resolveSetReviewer(context.Background(), env.projectID, "native")
+	require.NoError(t, err)
+	assert.Equal(t, env.nativeAgent, *id)
+}
+
+func TestResolveSetReviewer_AmbiguousGrantSlugIsReported(t *testing.T) {
+	env := grantedReviewerEnv(t, "auditor", false)
+	other := uuid.New()
+	env.agents.items[other] = &domain.Agent{ID: other, WorkspaceID: uuid.New(), Slug: "auditor"}
+	grants := env.svc.agentGrantRepo.(*MockAgentWorkspaceGrantRepository)
+	grants.slugs[other] = "auditor"
+	grants.items = append(grants.items, &domain.AgentWorkspaceGrant{ID: uuid.New(), AgentID: other, WorkspaceID: env.homeWS})
+
+	id, _, err := env.svc.resolveSetReviewer(context.Background(), env.projectID, "auditor")
+	require.Error(t, err)
+	assert.Nil(t, id)
+	assert.Contains(t, err.Error(), "ambiguous")
+}
+
+func TestResolveSetReviewer_FailurePaths(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("agent uuid unknown", func(t *testing.T) {
+		env := setupTenancyEnv(t, nil)
+		_, _, err := env.svc.resolveSetReviewer(ctx, env.projectID, "agent:"+uuid.NewString())
+		require.Error(t, err)
+	})
+
+	t.Run("slug lookup error", func(t *testing.T) {
+		env := setupTenancyEnv(t, nil)
+		env.agents.errToReturn = assert.AnError
+		_, _, err := env.svc.resolveSetReviewer(ctx, env.projectID, "auditor")
+		require.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("grant directory error", func(t *testing.T) {
+		env := grantedReviewerEnv(t, "auditor", false)
+		env.svc.agentGrantRepo.(*MockAgentWorkspaceGrantRepository).errToReturn = assert.AnError
+		_, _, err := env.svc.resolveSetReviewer(ctx, env.projectID, "auditor")
+		require.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("grant directory not wired", func(t *testing.T) {
+		env := setupTenancyEnv(t, nil)
+		env.svc.agentGrantRepo = nil
+		_, _, err := env.svc.resolveSetReviewer(ctx, env.projectID, "auditor")
+		require.Error(t, err)
+	})
+
+	t.Run("no grant matches the slug", func(t *testing.T) {
+		env := grantedReviewerEnv(t, "auditor", false)
+		_, _, err := env.svc.resolveSetReviewer(ctx, env.projectID, "nobody")
+		require.Error(t, err)
+	})
+
+	t.Run("lead without default_assignee", func(t *testing.T) {
+		env := setupTenancyEnv(t, nil)
+		env.svc.rulesConfigSvc = NewMockRulesService(&domain.EffectiveAssignmentRules{})
+		_, _, err := env.svc.resolveSetReviewer(ctx, env.projectID, "lead")
+		require.ErrorIs(t, err, errNoDefaultAssignee)
+	})
+}
+
+// A failed comment write must not unwind the status move.
+func TestPostReviewerNotAssignedComment_WriteFailureIsSwallowed(t *testing.T) {
+	env := setupTenancyEnv(t, nil)
+	comments := NewMockCommentRepository()
+	comments.errToReturn = assert.AnError
+	env.svc.commentRepo = comments
+	assert.NotPanics(t, func() {
+		env.svc.postReviewerNotAssignedComment(context.Background(), &domain.Task{ID: uuid.New()}, "x", "why")
+	})
 }

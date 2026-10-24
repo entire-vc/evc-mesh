@@ -479,6 +479,15 @@ func (r *AgentChatRepo) StopTurn(ctx context.Context, ws, project, user, thread 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Lock order is turn, then thread: ChatTurnEventsRepo.ApplyEvents locks the
+	// turn and later writes the thread, so taking the thread first could deadlock
+	// a Stop against an events batch.
+	if _, err = tx.ExecContext(ctx, `SELECT tn.id FROM ext_agent_chat_turns tn
+		JOIN ext_agent_chat_threads t ON t.id = tn.thread_id AND t.workspace_id = tn.workspace_id
+		WHERE `+chatOwnThread+` AND t.id = $4 AND tn.state IN ('queued', 'claimed', 'streaming')
+		ORDER BY tn.id FOR UPDATE OF tn`, ws, project, user, thread); err != nil {
+		return nil, err
+	}
 	var id uuid.UUID
 	if err = tx.GetContext(ctx, &id, `SELECT t.id FROM ext_agent_chat_threads t WHERE `+chatOwnThread+` AND t.id = $4 FOR UPDATE`,
 		ws, project, user, thread); err != nil {
@@ -495,6 +504,17 @@ func (r *AgentChatRepo) StopTurn(ctx context.Context, ws, project, user, thread 
 		return &ChatStopResult{Stopped: false}, tx.Commit()
 	}
 	if err := cancelActiveTurn(ctx, tx, ws, thread); err != nil {
+		return nil, err
+	}
+	if before.State != "queued" {
+		// A running turn: permissions issued before the Stop stop working.
+		if _, err := tx.ExecContext(ctx, `UPDATE ext_agent_chat_threads SET execution_epoch = execution_epoch + 1
+			WHERE id = $1 AND workspace_id = $2`, thread, ws); err != nil {
+			return nil, err
+		}
+	}
+	// Stop is final for the thread's sessions: every chat-session token dies now.
+	if err := revokeThreadSessions(ctx, tx, thread, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	ref := *before

@@ -5,10 +5,15 @@ import { useNavigate, useParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { CoreActionsProvider, useCoreActions } from "@/core/primitives";
 import { roleCan } from "@/core/primitives/permissions";
+import { SlotContextProvider } from "@/core/slots/slot-context";
+import { resolveSlotOverride, useSlotRegistryVersion, useThemeSettings } from "@/core/slots/registry";
+import { useBuildSlotContext } from "@/core/slots/use-slot-context";
 import { useProjectStore } from "@/stores/project";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { useMemberStore } from "@/stores/member";
 import { taskPath } from "@/core/primitives/actions";
 import { useWidgetData } from "./hooks";
+import { useThemeWidgets, widgetSlot } from "./theme-widgets";
 import { CORE_WIDGETS, clampSize, resolveWidgets } from "./registry";
 import { MESH_DEFAULT_WIDGETS } from "./views/mesh-default";
 import type {
@@ -71,6 +76,12 @@ function useSlotCtx(): SlotCtx {
   return useMemo(() => ({ isMobile, wsSlug }), [isMobile, wsSlug]);
 }
 
+/** The full SlotContext the SDK's `useSlotContext()` returns inside a dashboard view. */
+function useDashboardSlotContext(slot: string) {
+  const ws = useWorkspaceStore((s) => s.currentWorkspace);
+  return useBuildSlotContext(slot, ws ? { id: ws.id, slug: ws.slug, name: ws.name } : null);
+}
+
 function useWidgetActions(retry: () => void) {
   const navigate = useNavigate();
   const { wsSlug } = useParams<{ wsSlug: string }>();
@@ -93,21 +104,27 @@ function useWidgetActions(retry: () => void) {
 function WidgetInner({ id, size, retry }: { id: string; size?: WidgetSize; retry: () => void }) {
   const theme = useContext(ThemeContext);
   const ctx = useSlotCtx();
-  const descriptor = [...CORE_WIDGETS, ...(theme.extraWidgets ?? [])].find((d) => d.id === id);
+  const slotContext = useDashboardSlotContext(`dashboard.widget.${id}`);
+  const runtimeSettings = useThemeSettings();
+  useSlotRegistryVersion();
+  const themeWidgets = useThemeWidgets();
+  const descriptor = [...CORE_WIDGETS, ...(theme.extraWidgets ?? []), ...themeWidgets].find((d) => d.id === id);
   const result = useWidgetData(id);
   const actions = useWidgetActions(retry);
   if (!descriptor) return null;
   const data = { id, descriptor, result, size: clampSize(size ?? descriptor.size.default, descriptor) };
-  const settings = theme.settings ?? {};
+  const settings = theme.settings ?? runtimeSettings;
   const Default = (MESH_DEFAULT_WIDGETS as Record<string, AnyWidgetView>)[id];
-  const View = theme.widgets?.[id] ?? Default;
+  const View = theme.widgets?.[id] ?? (resolveSlotOverride(widgetSlot(id)) as AnyWidgetView | undefined) ?? Default;
   if (!View) return null;
   const fallback = Default && View !== Default ? <Default data={data} actions={actions} settings={settings} ctx={ctx} /> : null;
   return (
     <CoreActionsProvider actions={{ openTask: (taskId) => actions.openTask(taskId) }}>
       <div className="contents" data-mesh-widget={id}>
         <WidgetBoundary fallback={fallback}>
-          <View data={data} actions={actions} settings={settings} ctx={ctx} />
+          <SlotContextProvider value={slotContext}>
+            <View data={data} actions={actions} settings={settings} ctx={ctx} />
+          </SlotContextProvider>
         </WidgetBoundary>
       </div>
     </CoreActionsProvider>
@@ -139,10 +156,14 @@ export const MeshDefaultLayout: DashboardLayoutView = ({ data, ctx }) => {
 export function DashboardContainer() {
   const theme = useContext(ThemeContext);
   const ctx = useSlotCtx();
+  const slotContext = useDashboardSlotContext("dashboard.layout");
   const role = useMemberStore((s) => s.myRole);
   const core = useCoreActions();
-  const settings = theme.settings ?? {};
-  const registry = useMemo(() => [...CORE_WIDGETS, ...(theme.extraWidgets ?? [])], [theme.extraWidgets]);
+  const runtimeSettings = useThemeSettings();
+  useSlotRegistryVersion();
+  const themeWidgets = useThemeWidgets();
+  const settings = theme.settings ?? runtimeSettings;
+  const registry = useMemo(() => [...CORE_WIDGETS, ...(theme.extraWidgets ?? []), ...themeWidgets], [theme.extraWidgets, themeWidgets]);
   const data = useMemo<DashboardLayoutData>(() => {
     const { shown, available } = resolveWidgets({ settings, registry, can: (p) => roleCan(role, p) });
     return {
@@ -153,10 +174,12 @@ export function DashboardContainer() {
     };
   }, [settings, registry, role]);
   const actions = useMemo<DashboardLayoutActions>(() => ({ openTask: (id) => core.openTask(id) }), [core]);
-  const Layout = theme.layout ?? MeshDefaultLayout;
+  const Layout = theme.layout ?? (resolveSlotOverride("dashboard.layout") as DashboardLayoutView | undefined) ?? MeshDefaultLayout;
   return (
     <WidgetBoundary fallback={<MeshDefaultLayout data={data} actions={actions} settings={settings} ctx={ctx} />}>
-      <Layout data={data} actions={actions} settings={settings} ctx={ctx} />
+      <SlotContextProvider value={slotContext}>
+        <Layout data={data} actions={actions} settings={settings} ctx={ctx} />
+      </SlotContextProvider>
     </WidgetBoundary>
   );
 }

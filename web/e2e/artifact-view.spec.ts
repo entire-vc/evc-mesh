@@ -8,7 +8,7 @@ import {
 import { loginWithRetry } from "./auth-helper";
 
 /**
- * E2E scenario: artifact-view (route /a/:artifactId, card #eb6fde4e)
+ * E2E scenario: artifact-view (route /a/:artifactId, an internal ticket)
  *
  * What this suite proves:
  *   1. an artifact uploaded to a project WITHOUT Team Relay integration —
@@ -32,7 +32,7 @@ import { loginWithRetry } from "./auth-helper";
  * the workspace Activity page and every assertion below would chase a page
  * that isn't there. beforeAll probes the deployed app once; until
  * deploy:mesh-frontend ships the MR the suite skips LOUDLY, with this reason
- * in the job log — never silently (the #50420d50 lesson). The first pipeline
+ * in the job log — never silently (the an internal ticket lesson). The first pipeline
  * after the deploy (main, or any MR against it) finds the route and the
  * suite activates itself, which is exactly when its assertions mean
  * anything.
@@ -233,6 +233,16 @@ test.beforeAll(async ({ browser }) => {
     // wired up for this project" answer — useProjectTrIntegration treats
     // it as enabled=false by design; the sandbox project has no TR.
     if (resp.status() === 404 && url.pathname.endsWith("/integrations/team-relay")) {
+      return;
+    }
+    // GET /me/ui-state/<scope> answers 404 until the user has stored state for
+    // that scope: the documented "nothing saved yet" contract (the theme store
+    // treats it as empty). Only this GET is tolerated, nothing else.
+    if (
+      resp.status() === 404 &&
+      resp.request().method() === "GET" &&
+      url.pathname.startsWith("/api/v1/me/ui-state/")
+    ) {
       return;
     }
     if (resp.status() >= 400 && !url.pathname.endsWith("/auth/refresh")) {

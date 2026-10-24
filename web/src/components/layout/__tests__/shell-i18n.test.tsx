@@ -20,7 +20,13 @@ import { useProjectStore } from "@/stores/project";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 const LAYOUT_DIR = path.resolve(__dirname, "..");
-const FILES = ["sidebar.tsx", "header.tsx", "app-layout.tsx"];
+const FILES = [
+  "sidebar.tsx",
+  "header.tsx",
+  "app-layout.tsx",
+  "../../core/slots/nav-sidebar/mesh-default-view.tsx",
+  "../../core/slots/nav-topbar/mesh-default-view.tsx",
+];
 
 function referencedKeys(): string[] {
   const keys = new Set<string>();

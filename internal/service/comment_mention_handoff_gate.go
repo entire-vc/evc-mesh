@@ -16,7 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// This file closes the gap measured in audit §3.1 (task #9d8f7606, 2026-09):
+// This file closes the gap measured in audit §3.1 (an internal ticket, 2026-09):
 // 606 @-mentions in one week, 72% never answered, only 3.8% delivered by the
 // feed. The reason is CLAUDE-communication.md "How @-mentions wake": a
 // fiddler-driven agent lane is woken ONLY by a card assigned to it and sitting
@@ -42,8 +42,8 @@ var fyiMentionRegex = regexp.MustCompile(`(?i)(?:^|[\s(\[{])fyi\s*:\s*@([a-z0-9]
 
 // askContextWindowBytes is how far (in bytes, each side) around a single
 // @-mention occurrence this gate looks for an ask-signal before deciding the
-// mention reads as a hand-off attempt. "Соседство" (Riker's #ffa6e607
-// decision, based on the full 7-day shadow-log read on #bb39554c) means
+// mention reads as a hand-off attempt. "Соседство" (Robin's an internal ticket
+// decision, based on the full 7-day shadow-log read on an internal ticket) means
 // near the mention, not anywhere in the comment — a question elsewhere in a
 // multi-paragraph update about a different agent must not turn an unrelated
 // addressed mention into a gated one. 80 bytes covers a short clause on
@@ -51,15 +51,15 @@ var fyiMentionRegex = regexp.MustCompile(`(?i)(?:^|[\s(\[{])fyi\s*:\s*@([a-z0-9]
 // reaching into an adjacent sentence in the bodies this gate actually sees.
 const askContextWindowBytes = 80
 
-// askImperativeWords are the lower-cased imperative verb forms #ffa6e607's
+// askImperativeWords are the lower-cased imperative verb forms an internal ticket's
 // decision names as the ask signal — "сделай", "нужен", "возьми" — plus the
-// close synonyms the shadow-log sample (#bb39554c) actually used on the ask
+// close synonyms the shadow-log sample actually used on the ask
 // examples it found ("нужен вердикт", "разбери", "взгляни ещё раз",
 // "проверь"), and the two most common English equivalents.
 //
 // Deliberately does NOT include the bare stem "делай": the canonical
 // do-not-gate example this gate's own shadow-mode comment names below is
-// "@garfield принято, правку не делай" — a NEGATED imperative — and a bare
+// "@gary принято, правку не делай" — a NEGATED imperative — and a bare
 // stem would match that too, re-introducing exactly the false positive the
 // narrowing exists to remove. Every entry here is a distinct enough verb
 // form that "не <verb>" reads as a real negated ask in Russian too ("не
@@ -145,7 +145,7 @@ func mentionHasAskPattern(body, slug string) bool {
 // create_subtask onto the mentioned agent must have landed for a plain
 // @-mention to count as "accompanied by a hand-off" rather than a bare,
 // undelivered ping. Chosen to match the workflow this gate is written
-// against (CLAUDE-workflow.md §0: assign_task then move_task todo, or
+// against (the team workflow guide §0: assign_task then move_task todo, or
 // create_subtask, immediately before or after writing the comment) — not a
 // tuning knob, a description of "the same breath".
 const mentionHandoffWindow = 60 * time.Second
@@ -159,14 +159,14 @@ const mentionHandoffWindow = 60 * time.Second
 // MentionWakes is a dedicated column, not a Capabilities key, because
 // Capabilities is written by an incompatible second consumer
 // (UpdateAgentProfile's config export/import, which expects a plain string
-// array) that blind-replaces rather than merges — see #33b7d4b7. A single
+// array) that blind-replaces rather than merges — see an internal ticket. A single
 // jsonb value could not hold both shapes at once; whichever write landed
 // last silently destroyed the other, with no activity_log trail. That is
-// exactly how the flag set on the "Riker" lane by migration 20260906004
-// vanished by 2026-09-13 (#ba959606's red/green control caught it).
+// exactly how the flag set on the "Robin" lane by migration 20260906004
+// vanished by 2026-09-13 (an internal ticket's red/green control caught it).
 //
 // As of 2026-09 no lane in the fleet is actually woken by a bare
-// @-mention — Riker moved from the dispatcher (whose SSE listener used to
+// @-mention — Robin moved from the dispatcher (whose SSE listener used to
 // spawn a session on task.mentioned) to fiddler, which is poll-only. This
 // column exists for if/when a fleet-side listener like that comes back for
 // some agent; that agent's row is the one that sets it true then. Which
@@ -227,7 +227,7 @@ func (e *MentionHandoffRequiredError) Error() string {
 //  1. The task is ALREADY theirs and sitting in a status they poll — the
 //     exact fact decideDelivery calls delivered/task_queue. Reused rather
 //     than re-derived: two implementations of "is there a queue path" is
-//     the defect #4545660b removed from this same file one function over.
+//     the defect an internal ticket removed from this same file one function over.
 //  2. Failing that, an assign_task onto them landed on THIS task within the
 //     handoff window, even if the follow-up move to a todo-category status
 //     has not landed yet as a separate call — the assignment itself, this
@@ -285,17 +285,17 @@ func (s *commentService) mentionHasHandoff(
 // marked "fyi:" or the agent's own row claims a fleet-side channel already
 // wakes it (agentMentionAlreadyWakes).
 //
-// The ask-pattern requirement is the narrowing decided in #ffa6e607
+// The ask-pattern requirement is the narrowing decided in an internal ticket
 // (2026-09-13), on the strength of the full 7-day shadow-log read on
-// #bb39554c: 0 of 11 read cards were a real silent hand-off; the dominant
+// an internal ticket: 0 of 11 read cards were a real silent hand-off; the dominant
 // class (48% from one coordinator alone) was ordinary in-thread addressing —
-// "@garfield принято, правку не делай" — inside a thread already routed by a
+// "@gary принято, правку не делай" — inside a thread already routed by a
 // real assign_task/task-splitter/ROUTE elsewhere. Gating every bare @slug
 // would have refused that routine traffic to catch zero confirmed misses.
 // Narrowing to "@slug next to an imperative or a question mark, with no
-// accompanying hand-off" is the alternative #9d8f7606 itself proposed.
+// accompanying hand-off" is the alternative an internal ticket itself proposed.
 //
-// Deliberately scoped to AGENT recipients only. A human username (@pavel and
+// Deliberately scoped to AGENT recipients only. A human username (@alex and
 // anyone else) is never gated here: humans have a real notification channel
 // (in-app/push/email/Telegram, see userHasMentionSubscription) that this
 // gate has no business second-guessing, and an unresolved handle is an
@@ -319,6 +319,12 @@ func (s *commentService) enforceMentionHandoffGate(
 	exempt := fyiExemptSlugs(comment.Body)
 
 	actorID, actorType := actorctx.FromContext(ctx)
+	// The gate corrects agents that believe a mention hands work off. A person
+	// (web session) gets nothing from the refusal and used to see it as a
+	// silently swallowed comment, so human authors are never gated.
+	if actorType == domain.ActorTypeUser {
+		return nil
+	}
 	now := timeNow()
 	taskInTodo := s.taskIsInTodoCategory(ctx, task)
 
@@ -360,7 +366,7 @@ func (s *commentService) enforceMentionHandoffGate(
 		return nil
 	}
 
-	// SHADOW MODE — the default until #ba959606 flips MENTION_HANDOFF_ENFORCE=1.
+	// SHADOW MODE — the default until an internal ticket flips MENTION_HANDOFF_ENFORCE=1.
 	//
 	// The gate itself is correct: a bare @agent-slug does not wake a fiddler-driven
 	// lane, so a comment that reads as a handoff delivers nothing. Pre-launch
@@ -372,15 +378,15 @@ func (s *commentService) enforceMentionHandoffGate(
 	//     ~272-331 (65-78% of those) would be refused on day one
 	//
 	// and a hand-inspection of a sample found most are NOT authors who believed they
-	// had handed work over. They are ordinary in-thread addressing — "@garfield
+	// had handed work over. They are ordinary in-thread addressing — "@gary
 	// принято, правку не делай." — which CLAUDE-communication.md §5a explicitly
 	// endorses: you may address a paragraph to a colleague, the mention was never
 	// claimed to deliver.
 	//
 	// That is why the WIDE trigger was never flipped. A full 7-day shadow-log read
-	// (#bb39554c, 130 log lines / 97 cards, 11 cards read in full across all 13
+	// (an internal ticket, 130 log lines / 97 cards, 11 cards read in full across all 13
 	// authors) confirmed it live: 0 of 11 were a real silent hand-off, dominant class
-	// was exactly this kind of addressing. #ffa6e607 decided NOT to gate every bare
+	// was exactly this kind of addressing. an internal ticket decided NOT to gate every bare
 	// @slug, and instead to require the ask-pattern check above
 	// (mentionHasAskPattern) — a question mark or an imperative right next to the
 	// mention — before a missing hand-off counts as "blocked" at all. `blocked` at
@@ -388,7 +394,7 @@ func (s *commentService) enforceMentionHandoffGate(
 	//
 	// ⚠️ A flag that defaults to off is normally how a guard dies quietly, which is a
 	// failure mode this fleet has paid for repeatedly. The difference here is that the
-	// flip is tracked on its own card (#ba959606) with the enabling condition written
+	// flip is tracked on its own card with the enabling condition written
 	// down, and this log makes the not-yet-enforcing state loud rather than silent. If
 	// you find this still defaulting to shadow long after that card closed, that IS
 	// the rot — treat it as a bug, not as configuration.

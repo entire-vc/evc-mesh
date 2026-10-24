@@ -679,6 +679,30 @@
       "enum": "Выберите один из вариантов",
       "minimum": "Не меньше {{min}}",
       "maximum": "Не больше {{max}}"
+    },
+    "color": {
+      "pick": "Выбрать цвет: {{name}}",
+      "invalid": "Формат #rgb или #rrggbb"
+    },
+    "font": {
+      "themeDefault": "Как в теме",
+      "sample": "Съешь ещё этих мягких французских булок"
+    },
+    "image": {
+      "upload": "Загрузить картинку",
+      "replace": "Заменить картинку",
+      "removeNamed": "Убрать картинку: {{name}}",
+      "badType": "Нужен PNG, JPEG, WebP или SVG",
+      "tooLarge": "Картинка больше {{kb}} КБ",
+      "readFailed": "Не удалось прочитать файл"
+    },
+    "order": {
+      "empty": "Ничего не выбрано",
+      "up": "Выше: {{name}}",
+      "down": "Ниже: {{name}}",
+      "remove": "Убрать: {{name}}",
+      "add": "Добавить…",
+      "addNamed": "Добавить в «{{name}}»"
     }
   },
   "catalog": {

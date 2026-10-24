@@ -35,14 +35,15 @@ func TestParseVCSLinkType(t *testing.T) {
 	}
 }
 
-// Every accepted spelling must resolve to one of the three canonical values —
+// Every accepted spelling must resolve to one of the canonical values —
 // an alias table entry pointing at a fourth spelling would silently split the
 // stored vocabulary in two.
 func TestVCSLinkTypeAliasesResolveToCanonicalValues(t *testing.T) {
 	canonical := map[VCSLinkType]bool{
-		VCSLinkTypePR:     true,
-		VCSLinkTypeCommit: true,
-		VCSLinkTypeBranch: true,
+		VCSLinkTypePR:        true,
+		VCSLinkTypeCommit:    true,
+		VCSLinkTypeBranch:    true,
+		VCSLinkTypeReference: true,
 	}
 	for spelling, resolved := range vcsLinkTypeAliases {
 		if !canonical[resolved] {
@@ -127,7 +128,7 @@ func TestNormalizeVCSURL(t *testing.T) {
 	}
 }
 
-// #0fbed572 defect 2's negative control: a GitHub PR and a GitLab MR that
+// an internal ticket defect 2's negative control: a GitHub PR and a GitLab MR that
 // happen to share the same number must NEVER normalize to the same string —
 // folding that far is what silently collapsed two distinct objects into one.
 func TestNormalizeVCSURL_DifferentProvidersSameNumberStayDistinct(t *testing.T) {

@@ -5,7 +5,14 @@ export type Widget =
   | "list"
   | "group"
   | "project-picker"
-  | "agent-picker";
+  | "agent-picker"
+  | "color"
+  | "font-select"
+  | "image"
+  | "field-picker"
+  | "widget-picker"
+  | "layout-picker"
+  | "order-list";
 
 /** One condition value: equals, one of, negated, or presence. */
 export type VisibleIfExpected =
@@ -44,6 +51,10 @@ export interface FieldSchema {
   "x-widget"?: Widget;
   "x-visible-if"?: VisibleIf;
   "x-help"?: string;
+  /** Labels for `enum` values (layout-picker, font-select, order-list); a value without one shows as itself. */
+  /** Theme settings: the design token this field drives; a colour token takes "H S% L%". */
+  "x-token"?: string;
+  "x-options"?: Record<string, string>;
 }
 
 export type Values = Record<string, unknown>;

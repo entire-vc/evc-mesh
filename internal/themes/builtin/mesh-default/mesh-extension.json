@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "id": "mesh-default",
+  "name": "Mesh",
+  "version": "1.0.0",
+  "kind": "theme",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "The Mesh look: current brand and every default view. Pick it to tune accent, radius, font, density, card fields and dashboard widgets.",
+  "category": "appearance",
+  "tags": [
+    "default"
+  ],
+  "license": "Apache-2.0",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "capabilities": {},
+  "settings": {
+    "workspace": {
+      "$ref": "#/schemas/workspace"
+    },
+    "instance": {
+      "$ref": "#/schemas/instance"
+    }
+  },
+  "schemas": {
+    "instance": {
+      "type": "object",
+      "properties": {
+        "accent": {
+          "type": "string",
+          "title": "Accent colour",
+          "x-widget": "color",
+          "x-token": "primary"
+        },
+        "radius": {
+          "type": "string",
+          "title": "Corner radius",
+          "enum": [
+            "0.25rem",
+            "0.5rem",
+            "0.75rem",
+            "1rem"
+          ],
+          "default": "0.5rem",
+          "x-widget": "layout-picker",
+          "x-token": "radius",
+          "x-options": {
+            "0.25rem": "Sharp",
+            "0.5rem": "Default",
+            "0.75rem": "Soft",
+            "1rem": "Round"
+          }
+        },
+        "font": {
+          "type": "string",
+          "title": "Font",
+          "enum": [
+            "Inter",
+            "system-ui, sans-serif",
+            "Georgia, serif",
+            "ui-monospace, Menlo, monospace"
+          ],
+          "default": "Inter",
+          "x-widget": "font-select",
+          "x-token": "font-sans",
+          "x-options": {
+            "Inter": "Inter",
+            "system-ui, sans-serif": "System",
+            "Georgia, serif": "Georgia",
+            "ui-monospace, Menlo, monospace": "Monospace"
+          }
+        },
+        "density": {
+          "type": "string",
+          "title": "Density",
+          "enum": [
+            "0.225rem",
+            "0.25rem",
+            "0.275rem"
+          ],
+          "default": "0.25rem",
+          "x-widget": "layout-picker",
+          "x-token": "space-unit",
+          "x-options": {
+            "0.225rem": "Compact",
+            "0.25rem": "Default",
+            "0.275rem": "Roomy"
+          }
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "accent": {
+          "type": "string",
+          "title": "Accent colour",
+          "x-widget": "color",
+          "x-token": "primary"
+        },
+        "radius": {
+          "type": "string",
+          "title": "Corner radius",
+          "enum": [
+            "0.25rem",
+            "0.5rem",
+            "0.75rem",
+            "1rem"
+          ],
+          "default": "0.5rem",
+          "x-widget": "layout-picker",
+          "x-token": "radius",
+          "x-options": {
+            "0.25rem": "Sharp",
+            "0.5rem": "Default",
+            "0.75rem": "Soft",
+            "1rem": "Round"
+          }
+        },
+        "font": {
+          "type": "string",
+          "title": "Font",
+          "enum": [
+            "Inter",
+            "system-ui, sans-serif",
+            "Georgia, serif",
+            "ui-monospace, Menlo, monospace"
+          ],
+          "default": "Inter",
+          "x-widget": "font-select",
+          "x-token": "font-sans",
+          "x-options": {
+            "Inter": "Inter",
+            "system-ui, sans-serif": "System",
+            "Georgia, serif": "Georgia",
+            "ui-monospace, Menlo, monospace": "Monospace"
+          }
+        },
+        "density": {
+          "type": "string",
+          "title": "Density",
+          "enum": [
+            "0.225rem",
+            "0.25rem",
+            "0.275rem"
+          ],
+          "default": "0.25rem",
+          "x-widget": "layout-picker",
+          "x-token": "space-unit",
+          "x-options": {
+            "0.225rem": "Compact",
+            "0.25rem": "Default",
+            "0.275rem": "Roomy"
+          }
+        },
+        "card_fields": {
+          "type": "array",
+          "title": "Card fields",
+          "items": {
+            "type": "string"
+          },
+          "x-widget": "field-picker"
+        },
+        "widgets": {
+          "type": "array",
+          "title": "Dashboard widgets",
+          "items": {
+            "type": "string"
+          },
+          "x-widget": "widget-picker"
+        }
+      }
+    }
+  },
+  "theme": {
+    "tokens_contract": "1",
+    "modes": [
+      "light",
+      "dark"
+    ]
+  }
+}

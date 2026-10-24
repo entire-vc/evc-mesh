@@ -44,6 +44,7 @@ beforeEach(() => {
     isSearching: false,
     myRole: null,
     myRoleError: null,
+    myRoleLoaded: false,
   });
   mockedApi.mockReset();
 });
@@ -242,6 +243,20 @@ describe("fetchMyRole", () => {
   // 404 NotFound — a genuine, known answer (no role), not a failed lookup.
   // Must NOT surface as myRoleError, or a real non-member would be
   // permanently flagged as "we don't know" instead of "you have none".
+  it("myRoleLoaded is false while the lookup is in flight and true once it settles, even on 404", async () => {
+    let reject!: (e: unknown) => void;
+    mockedApi.mockImplementationOnce(() => new Promise((_, r) => { reject = r; }));
+
+    const p = useMemberStore.getState().fetchMyRole(WS);
+    expect(useMemberStore.getState().myRoleLoaded).toBe(false);
+    reject(new ApiRequestError("WorkspaceMember not found", "NOT_FOUND", 404));
+    await p;
+
+    expect(useMemberStore.getState().myRoleLoaded).toBe(true);
+    expect(useMemberStore.getState().myRoleWorkspaceId).toBe(WS);
+    expect(useMemberStore.getState().myRole).toBeNull();
+  });
+
   it("treats 404 (not a member) as a real answer, not a fetch failure", async () => {
     mockedApi.mockRejectedValueOnce(
       new ApiRequestError("WorkspaceMember not found", "NOT_FOUND", 404),

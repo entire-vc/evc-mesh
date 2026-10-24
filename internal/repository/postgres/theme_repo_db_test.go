@@ -41,10 +41,10 @@ func TestThemeRepo_Workspace(t *testing.T) {
 	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM installed_extensions WHERE extension_id='themerepo-test'`) })
 
 	id := "themerepo-test"
-	first, err := repo.SetWorkspace(ctx, ws, &id, json.RawMessage(`{"dense":true}`), by)
+	first, err := repo.SetWorkspace(ctx, ws, &id, json.RawMessage(`{"dense":true}`), by, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Version)
-	second, err := repo.SetWorkspace(ctx, ws, &id, nil, by)
+	second, err := repo.SetWorkspace(ctx, ws, &id, nil, by, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, second.Version, "every write bumps the version")
 	require.JSONEq(t, `{}`, string(second.Settings))
@@ -64,7 +64,7 @@ func TestThemeRepo_InstanceSingleton(t *testing.T) {
 	before, err := repo.GetInstance(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, before, "the migration seeds the row")
-	after, err := repo.SetInstance(ctx, nil, json.RawMessage(`{}`), uuid.New())
+	after, err := repo.SetInstance(ctx, nil, json.RawMessage(`{}`), uuid.New(), nil)
 	require.NoError(t, err)
 	require.Equal(t, before.Version+1, after.Version)
 	var n int
@@ -72,4 +72,68 @@ func TestThemeRepo_InstanceSingleton(t *testing.T) {
 	require.Equal(t, 1, n)
 	_, err = db.Exec(`INSERT INTO instance_theme(id) VALUES(false)`)
 	require.Error(t, err, "only one row can exist")
+}
+
+func TestThemeRepo_DeleteTheme(t *testing.T) {
+	repo, db, wsA := themeFixture(t)
+	ctx, by := context.Background(), uuid.New()
+	id, other := "t7b-"+uuid.NewString()[:8], "t7b-"+uuid.NewString()[:8]
+	for _, ext := range []string{id, other} {
+		_, err := db.Exec(`INSERT INTO installed_extensions(extension_id, version, manifest, source, trust_level) VALUES($1,'1.0.0','{"kind":"theme"}','repo','custom')`, ext)
+		require.NoError(t, err)
+	}
+	wsB, wsStale := uuid.New(), uuid.New()
+	for _, ws := range []uuid.UUID{wsB, wsStale} {
+		_, err := db.Exec(`INSERT INTO workspaces(id,name,slug,owner_id) VALUES($1,'theme fixture',$2,$3)`, ws, ws.String(), uuid.New())
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM workspaces WHERE id = ANY($1)`, []string{wsB.String(), wsStale.String()})
+		_, _ = db.Exec(`DELETE FROM extension_repo_credentials WHERE extension_id = ANY($1)`, []string{id, other})
+		_, _ = db.Exec(`DELETE FROM installed_extensions WHERE extension_id = ANY($1)`, []string{id, other})
+		_, _ = db.Exec(`UPDATE instance_theme SET theme_id = NULL, settings = '{}'::jsonb`)
+	})
+
+	settings := json.RawMessage(`{"accent":"1 2% 3%"}`)
+	_, err := repo.SetInstance(ctx, &id, settings, by, nil)
+	require.NoError(t, err)
+	_, err = repo.SetWorkspace(ctx, wsA, &id, settings, by, nil)
+	require.NoError(t, err)
+	_, err = repo.SetWorkspace(ctx, wsB, &other, settings, by, nil)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO extension_repo_credentials(extension_id, token_enc) VALUES($1, 'enc'), ($2, 'enc')`, id, other)
+	require.NoError(t, err)
+	// What the foreign key leaves behind when a selection races the delete: no
+	// theme any more, settings still there.
+	_, err = db.Exec(`INSERT INTO workspace_theme(workspace_id, theme_id, settings) VALUES($1, NULL, '{"stale":1}')`, wsStale)
+	require.NoError(t, err)
+
+	ok, err := repo.DeleteTheme(ctx, id, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	inst, err := repo.GetInstance(ctx)
+	require.NoError(t, err)
+	require.Nil(t, inst.ThemeID)
+	require.JSONEq(t, `{}`, string(inst.Settings))
+	for _, ws := range []uuid.UUID{wsA, wsStale} {
+		sel, gerr := repo.GetWorkspace(ctx, ws)
+		require.NoError(t, gerr)
+		require.Nil(t, sel.ThemeID)
+		require.JSONEq(t, `{}`, string(sel.Settings))
+	}
+	kept, err := repo.GetWorkspace(ctx, wsB)
+	require.NoError(t, err)
+	require.Equal(t, other, *kept.ThemeID, "control: a workspace on another theme is untouched")
+	require.JSONEq(t, string(settings), string(kept.Settings))
+
+	var creds int
+	require.NoError(t, db.Get(&creds, `SELECT count(*) FROM extension_repo_credentials WHERE extension_id = $1`, id))
+	require.Zero(t, creds, "the repository token goes with the theme")
+	require.NoError(t, db.Get(&creds, `SELECT count(*) FROM extension_repo_credentials WHERE extension_id = $1`, other))
+	require.Equal(t, 1, creds, "control: another theme's token stays")
+
+	ok, err = repo.DeleteTheme(ctx, id, nil)
+	require.NoError(t, err)
+	require.False(t, ok, "already gone")
 }

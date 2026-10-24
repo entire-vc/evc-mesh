@@ -58,16 +58,16 @@ func TestThemes_VersionsAndErrors(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got)
 
-	first, err := th.SetInstance(ctx, &id, json.RawMessage(`{}`), by)
+	first, err := th.SetInstance(ctx, &id, json.RawMessage(`{}`), by, nil)
 	require.NoError(t, err)
-	second, err := th.SetInstance(ctx, nil, json.RawMessage(`{}`), by)
+	second, err := th.SetInstance(ctx, nil, json.RawMessage(`{}`), by, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int{1, 2}, []int{first.Version, second.Version})
 	require.Nil(t, second.ThemeID)
 
-	w1, err := th.SetWorkspace(ctx, ws, &id, nil, by)
+	w1, err := th.SetWorkspace(ctx, ws, &id, nil, by, nil)
 	require.NoError(t, err)
-	w2, err := th.SetWorkspace(ctx, ws, &id, nil, by)
+	w2, err := th.SetWorkspace(ctx, ws, &id, nil, by, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int{1, 2}, []int{w1.Version, w2.Version})
 	read, err := th.GetWorkspace(ctx, ws)
@@ -80,11 +80,11 @@ func TestThemes_VersionsAndErrors(t *testing.T) {
 	th.Err = errDown
 	_, err = th.GetInstance(ctx)
 	require.ErrorIs(t, err, errDown)
-	_, err = th.SetInstance(ctx, &id, nil, by)
+	_, err = th.SetInstance(ctx, &id, nil, by, nil)
 	require.ErrorIs(t, err, errDown)
 	_, err = th.GetWorkspace(ctx, ws)
 	require.ErrorIs(t, err, errDown)
-	_, err = th.SetWorkspace(ctx, ws, &id, nil, by)
+	_, err = th.SetWorkspace(ctx, ws, &id, nil, by, nil)
 	require.ErrorIs(t, err, errDown)
 	th.Err = nil
 	read, _ = th.GetWorkspace(ctx, ws)
@@ -167,4 +167,115 @@ func TestManifest_JSON(t *testing.T) {
 		require.Contains(t, s, "instance")
 		require.Contains(t, s["workspace"].(map[string]any)["properties"], "dense")
 	})
+}
+
+func TestThemes_DeleteTheme(t *testing.T) {
+	ctx, by, ws, other := context.Background(), uuid.New(), uuid.New(), uuid.New()
+	id, keep := "graphite", "other"
+	inst, th := NewInstalled(), NewThemes()
+	th.Installed = inst
+	inst.Add(id, []byte(`{}`))
+	inst.Add(keep, []byte(`{}`))
+	_, _ = th.SetInstance(ctx, &id, json.RawMessage(`{"a":1}`), by, nil)
+	_, _ = th.SetWorkspace(ctx, ws, &id, json.RawMessage(`{"a":1}`), by, nil)
+	_, _ = th.SetWorkspace(ctx, other, &keep, json.RawMessage(`{"a":1}`), by, nil)
+
+	ok, err := th.DeleteTheme(ctx, id, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotContains(t, inst.Rows, id)
+	require.Contains(t, inst.Rows, keep)
+	require.Nil(t, th.Instance.ThemeID)
+	require.JSONEq(t, `{}`, string(th.Workspace[ws].Settings))
+	require.Equal(t, keep, *th.Workspace[other].ThemeID, "control: another theme's selection stays")
+
+	ok, err = th.DeleteTheme(ctx, id, nil)
+	require.NoError(t, err)
+	require.False(t, ok, "already gone")
+
+	th.OnDelete = func(string) bool { return true }
+	ok, err = th.DeleteTheme(ctx, id, nil)
+	require.NoError(t, err)
+	require.True(t, ok, "OnDelete decides when the rows live elsewhere")
+
+	th.Err = errDown
+	_, err = th.DeleteTheme(ctx, id, nil)
+	require.ErrorIs(t, err, errDown)
+}
+
+func entry(action string) *domain.InstanceExtensionJournalEntry {
+	return &domain.InstanceExtensionJournalEntry{ExtensionID: "a", Action: action, Details: json.RawMessage(`{"k":"v"}`)}
+}
+
+func TestThemes_JournalCommitsWithTheMutation(t *testing.T) {
+	ctx, by := context.Background(), uuid.New()
+	id, ws := "a", uuid.New()
+	th := NewThemes()
+
+	_, err := th.SetInstance(ctx, &id, json.RawMessage(`{}`), by, entry("theme_selected"))
+	require.NoError(t, err)
+	_, err = th.SetWorkspace(ctx, ws, &id, json.RawMessage(`{}`), by, entry("theme_selected"))
+	require.NoError(t, err)
+	require.Len(t, th.Journal, 2)
+	var d map[string]any
+	require.NoError(t, json.Unmarshal(th.Journal[0].Details, &d))
+	require.EqualValues(t, 1, d["version"], "the entry carries the stored version")
+	require.Equal(t, "v", d["k"])
+
+	_, err = th.SetInstance(ctx, &id, nil, by, nil)
+	require.NoError(t, err, "no entry: nothing journaled")
+	require.Len(t, th.Journal, 2)
+
+	th.JournalErr = errDown
+	before := th.Instance.Version
+	_, err = th.SetInstance(ctx, nil, nil, by, entry("theme_selected"))
+	require.ErrorIs(t, err, errDown)
+	require.Equal(t, before, th.Instance.Version, "a failed journal write leaves the choice alone")
+	_, err = th.SetWorkspace(ctx, ws, nil, nil, by, entry("theme_selected"))
+	require.ErrorIs(t, err, errDown)
+	require.NotNil(t, th.Workspace[ws].ThemeID)
+	_, err = th.SetInstance(ctx, nil, nil, by, nil)
+	require.NoError(t, err, "control: without an entry the journal is not consulted")
+}
+
+func TestThemes_InstallBuiltinAndDeleteJournal(t *testing.T) {
+	ctx := context.Background()
+	inst := NewInstalled()
+	th := NewThemes()
+	th.Installed = inst
+	ext := &domain.InstalledExtension{ExtensionID: "a", Version: "1.0.0"}
+
+	th.JournalErr = errDown
+	require.ErrorIs(t, th.InstallBuiltin(ctx, ext, entry("installed")), errDown)
+	require.NotContains(t, inst.Rows, "a", "nothing installed when the journal fails")
+	th.JournalErr = nil
+	require.NoError(t, th.InstallBuiltin(ctx, ext, entry("installed")))
+	require.Contains(t, inst.Rows, "a")
+	require.Len(t, th.Journal, 1)
+
+	th.JournalErr = errDown
+	ok, err := th.DeleteTheme(ctx, "a", entry("theme_deleted"))
+	require.ErrorIs(t, err, errDown)
+	require.False(t, ok)
+	require.Contains(t, inst.Rows, "a", "still installed")
+	th.JournalErr = nil
+	ok, err = th.DeleteTheme(ctx, "a", entry("theme_deleted"))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, th.Journal, 2)
+	ok, err = th.DeleteTheme(ctx, "a", entry("theme_deleted"))
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Len(t, th.Journal, 2, "nothing deleted, nothing recorded")
+
+	var stood []string
+	th2 := NewThemes()
+	th2.OnInstall = func(e *domain.InstalledExtension) error { stood = append(stood, e.ExtensionID); return nil }
+	require.NoError(t, th2.InstallBuiltin(ctx, ext, nil))
+	require.Equal(t, []string{"a"}, stood, "OnInstall stands in for Installed")
+	th2.OnInstall = func(*domain.InstalledExtension) error { return errDown }
+	require.ErrorIs(t, th2.InstallBuiltin(ctx, ext, nil), errDown)
+	th2.Err = errDown
+	require.ErrorIs(t, th2.InstallBuiltin(ctx, ext, nil), errDown)
+	require.NoError(t, NewThemes().InstallBuiltin(ctx, ext, nil), "no installed store at all")
 }

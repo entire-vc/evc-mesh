@@ -145,7 +145,9 @@ test.beforeAll(async ({ browser }) => {
       return;
     }
     if (resp.status() >= 400 && !url.pathname.endsWith("/auth/refresh")) {
-      failedApiCalls.push(`${resp.status()} ${resp.request().method()} ${url.pathname}`);
+      // The query and whether a credential went out say WHY a 401 happened (no token yet vs a rejected one).
+      const sentAuth = resp.request().headers()["authorization"] ? "with-auth" : "no-auth";
+      failedApiCalls.push(`${resp.status()} ${resp.request().method()} ${url.pathname}${url.search} (${sentAuth})`);
     }
   });
 });

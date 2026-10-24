@@ -7,7 +7,6 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
-  type HTMLAttributes,
   type ReactNode,
 } from "react";
 import {
@@ -33,7 +32,8 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import i18n from "@/i18n";
 import { useCan } from "./permissions";
-import { zoneKey, type DragItem, type DropZoneRef, type Id, type MoveRequest } from "./types";
+import type { DndProviderProps, DraggableProps, DropZoneProps } from "@entire-vc/mesh-theme-sdk";
+import { zoneKey, type DragItem, type DropZoneRef, type Id } from "./types";
 
 // Module-level, not inline at the useSensor call site: an inline options
 // object is a new reference every render, so useSensors returns a new array,
@@ -92,22 +92,7 @@ const setKeyboardDrag = (store: KeyboardDragStore, id: Id | null) => {
 };
 
 /** The one DnD container of a page: pointer + keyboard sensors, screen-reader announcements, overlay and move resolution. */
-export function DndProvider({
-  onMove,
-  onDragActiveChange,
-  renderOverlay,
-  enabled = true,
-  children,
-}: {
-  /** Called once per finished drop on a zone; the core decides what the move means. */
-  onMove: (move: MoveRequest) => void | Promise<void>;
-  /** true on pick-up (pointer past 5px or keyboard), false after drop/cancel (once onMove settled). */
-  onDragActiveChange?: (active: boolean) => void;
-  renderOverlay?: (item: DragItem) => ReactNode;
-  /** false: Draggables and DropZones below render without a handle / accept no drops. */
-  enabled?: boolean;
-  children: ReactNode;
-}) {
+export function DndProvider({ onMove, onDragActiveChange, renderOverlay, enabled = true, children }: DndProviderProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS),
@@ -219,26 +204,6 @@ const ZoneContext = createContext<DropZoneRef | null>(null);
 /** The container's switch: false = nothing on the page is draggable (e.g. board not grouped by status). */
 const DndEnabledContext = createContext(true);
 
-type PassThrough = Omit<HTMLAttributes<HTMLElement>, "children" | "className"> & {
-  [data: `data-${string}`]: string | undefined;
-};
-
-export interface DropZoneProps extends PassThrough {
-  zone: DropZoneRef;
-  orientation: "vertical" | "horizontal";
-  as?: string;
-  className?: string | ((s: { isOver: boolean }) => string);
-  /**
-   * Ids of the Draggables inside, in DOM order. Amendment to the §3 contract:
-   * the sortable list needs them up front; scanning the DOM after each render
-   * would cost a second render per drop.
-   */
-  itemIds: readonly Id[];
-  /** false: the zone lists its items but accepts no drops (e.g. board not grouped by status). */
-  enabled?: boolean;
-  children: ReactNode | ((s: { isOver: boolean }) => ReactNode);
-}
-
 const OFF_PREFIX = "off:";
 
 export function DropZone({
@@ -277,7 +242,7 @@ export function DropZone({
             ref: setNodeRef,
             className: typeof className === "function" ? className({ isOver }) : className,
             // marks a zone that accepts drops; a switched-off zone is only the list its cards belong to
-            ...(enabled ? { "data-mesh-dropzone": key } : {}),
+            ...(enabled ? { "data-mesh-dropzone": `${zone.kind}:${zone.id ?? "root"}` } : {}),
             ...rest,
           },
           typeof children === "function" ? children({ isOver }) : children,
@@ -293,17 +258,6 @@ interface HandleBinding {
   setActivatorNodeRef: (el: HTMLElement | null) => void;
 }
 const HandleContext = createContext<HandleBinding | null>(null);
-
-export interface DraggableProps extends PassThrough {
-  item: DragItem;
-  as?: string;
-  handle?: "self" | "custom";
-  /** Name read out by the screen reader while the item is moved (the task title). */
-  label?: string;
-  /** false: no handle even with the permission (the container is not accepting drags right now). */
-  enabled?: boolean;
-  children: ReactNode | ((s: { isDragging: boolean; isKeyboardDragging: boolean }) => ReactNode);
-}
 
 export function Draggable({
   item,
@@ -347,6 +301,8 @@ export function Draggable({
     {
       ref: setNodeRef,
       style: css,
+      // Contract tests find the card by it, handle or not (viewers get no handle but keep the marker).
+      "data-mesh-draggable": `${item.kind}:${item.id}`,
       ...rest,
       ...(live && handle === "self" ? { ...attributes, ...listeners } : {}),
     },

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import "../mesh-default";
 import { Slot } from "../registry";
-import { useSlotContext } from "../use-slot-context";
+import { useBuildSlotContext } from "../use-slot-context";
 import type { AuthField, AuthScreenActions, AuthScreenData } from "./types";
 
 // Instance-level theme settings only: the workspace is unknown before sign-in
@@ -19,7 +19,7 @@ export function AuthScreenSlot({
   onSubmit: () => Promise<void>;
   onNavigate: (to: string) => void;
 }) {
-  const ctx = useSlotContext("auth.screen", null);
+  const ctx = useBuildSlotContext("auth.screen", null);
   const actions: AuthScreenActions = useMemo(
     () => ({ setValue: onSetValue, submit: onSubmit, navigate: onNavigate }),
     [onSetValue, onSubmit, onNavigate],

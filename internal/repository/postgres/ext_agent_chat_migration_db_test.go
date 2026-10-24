@@ -23,6 +23,7 @@ var agentChatTables = []string{
 	"ext_agent_chat_attachments",
 	"ext_agent_chat_commands",
 	"ext_agent_chat_messages",
+	"ext_agent_chat_runners",
 	"ext_agent_chat_threads",
 	"ext_agent_chat_tool_events",
 	"ext_agent_chat_turns",
@@ -34,6 +35,7 @@ var agentChatIndexes = []string{
 	"ext_agent_chat_commands_pending",
 	"ext_agent_chat_messages_idem",
 	"ext_agent_chat_messages_page",
+	"ext_agent_chat_runners_agent",
 	"ext_agent_chat_threads_list",
 	"ext_agent_chat_threads_purge",
 	"ext_agent_chat_turns_claim",
@@ -90,7 +92,7 @@ func TestAgentChatMigrationDownUpCatalog(t *testing.T) {
 
 	require.NoError(t, goose.Up(db, migrationsDir))
 	left := agentChatLeftovers(t, db)
-	require.Equal(t, agentChatTables, left["tables"], "exactly the six tables after the second up")
+	require.Equal(t, agentChatTables, left["tables"], "exactly the chat tables after the second up")
 	require.Subset(t, left["indexes"], agentChatIndexes)
 	require.Len(t, left["policies"], len(agentChatTables), "one RLS policy per table")
 	var rlsOn int

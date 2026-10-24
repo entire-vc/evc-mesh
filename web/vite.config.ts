@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
+import { e2eProxy } from "./e2e-proxy";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { execSync } from "node:child_process";
@@ -96,6 +97,9 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
+      // The theme SDK lives in the repo (packages/mesh-theme-sdk) and only declares its primitives; inside the app the
+      // same names are the core's (src/core/themes/sdk-host.ts). Types still come from the package (tsconfig paths).
+      { find: /^@entire-vc\/mesh-theme-sdk$/, replacement: fileURLToPath(new URL("./src/core/themes/sdk-host.ts", import.meta.url)) },
       // React's production build never calls <Profiler onRender>; the
       // profiling build does. Perf build only — see src/lib/perf-profiler.tsx.
       ...(PERF_PROFILER
@@ -155,6 +159,17 @@ export default defineConfig({
             "/api": { target: process.env.PERF_API_URL, changeOrigin: true },
           },
         }
+      : {}),
+    // authed-e2e on a merge request serves THIS build with `vite preview` and
+    // sends /api and /s3 to the live deployment (the sandbox account lives
+    // there). The API sees a same-site Origin, as it would from the real app;
+    // the page under test is still the MR's dist/, never the deployed frontend.
+    // The API answers with absolute links to its own host (presigned /s3 URLs),
+    // so JSON bodies are rewritten to this origin: the page then stays on one
+    // origin, as it does in production, and the spec's origin assertion keeps
+    // its meaning.
+    ...(process.env.E2E_PROXY_API_URL
+      ? { proxy: e2eProxy(process.env.E2E_PROXY_API_URL) }
       : {}),
   },
   server: {

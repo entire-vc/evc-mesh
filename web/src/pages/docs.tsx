@@ -14,7 +14,7 @@ import { useAuthStore } from "@/stores/auth";
 import { DocTree, buildDocPath, moveTargets } from "@/components/doc-tree";
 import { DOC_VIEW_BLOCKS, DocPageProvider, type DocPageState } from "@/core/slots/doc-blocks";
 import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
-import { useSlotContext } from "@/core/slots/use-slot-context";
+import { useBuildSlotContext } from "@/core/slots/use-slot-context";
 import type {
   Async,
   DocViewActions,
@@ -951,7 +951,7 @@ export function DocsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [registryVersion],
   );
-  const viewCtx = useSlotContext(
+  const viewCtx = useBuildSlotContext(
     "doc.view",
     workspace ? { id: workspace.id, slug: workspace.slug, name: workspace.name } : null,
   );

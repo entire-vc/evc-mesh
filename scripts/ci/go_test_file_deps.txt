@@ -38,3 +38,4 @@ pkg/apierror <- web/src/locales/**/apiErrors.json
 tests/integration <- cmd/api/main.go
 internal/extensions/repoinstall <- internal/extensions/schema/**/*
 internal/extensions/migrationlint <- internal/extensions/**/migrations/*.sql
+internal/themes <- packages/mesh-theme-sdk/cli/**/* packages/mesh-theme-sdk/fixtures/**/*

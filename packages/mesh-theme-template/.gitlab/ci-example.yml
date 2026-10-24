@@ -1,0 +1,30 @@
+# Example CI for a theme repository. Copy into .gitlab-ci.yml (or the equivalent for your host).
+# The contract tests run inside `mesh-theme build` and need a checkout of the Mesh web workspace
+# (MESH_WEB_DIR); the published SDK documentation says where to get it.
+stages: [test, release]
+
+test:
+  stage: test
+  image: node:22
+  variables:
+    MESH_WEB_DIR: "$CI_PROJECT_DIR/mesh/web"
+  script:
+    - corepack enable
+    - git clone --depth 1 https://github.com/entire-vc/evc-mesh.git mesh
+    - (cd mesh/web && pnpm install --frozen-lockfile)
+    - pnpm install
+    - pnpm test
+    - pnpm build
+
+# An instance installs a repository at a ref and reads mesh-extension.json, theme.css and views.js from its
+# root, so the release ref carries the contents of dist/ at its root.
+release:
+  stage: release
+  image: node:22
+  rules: [{ if: "$CI_COMMIT_TAG" }]
+  script:
+    - pnpm install && pnpm build
+    - cd dist && git init -q -b release && git add -A
+    - git -c user.name=ci -c user.email=ci@example.com commit -qm "release $CI_COMMIT_TAG"
+    # RELEASE_PUSH_URL: a URL with a write token, kept in a masked CI variable.
+    - git push -f "$RELEASE_PUSH_URL" "release:refs/heads/release-$CI_COMMIT_TAG"

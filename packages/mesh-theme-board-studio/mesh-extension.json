@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "id": "board-studio",
+  "name": "Board Studio",
+  "version": "1.0.0",
+  "kind": "theme",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "The board as status bands with a person filter and a new card; the dashboard on its own grid with a due-this-week widget",
+  "category": "appearance",
+  "tags": ["board", "dashboard", "layout"],
+  "license": "Apache-2.0",
+  "levels": { "instance": true, "workspace": true, "project": false },
+  "capabilities": {},
+  "settings": {
+    "workspace": { "$ref": "#/schemas/workspace" },
+    "instance": { "$ref": "#/schemas/instance" }
+  },
+  "schemas": {
+    "instance": {
+      "type": "object",
+      "properties": {
+        "accent": { "type": "string", "title": "Accent colour", "x-widget": "color", "x-token": "primary" }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "accent": { "type": "string", "title": "Accent colour", "x-widget": "color", "x-token": "primary" },
+        "cover_style": {
+          "type": "string",
+          "title": "Card cover",
+          "description": "The priority colour on the left edge of a card",
+          "enum": ["block", "strip", "none"],
+          "default": "block",
+          "x-widget": "layout-picker",
+          "x-options": { "block": "Wide block", "strip": "Thin strip", "none": "No cover" }
+        },
+        "show_wip": { "type": "boolean", "title": "Show work-in-progress limits on bands", "default": true },
+        "focus_horizon_days": { "type": "integer", "title": "Days ahead in the due-this-week widget", "minimum": 1, "maximum": 30, "default": 7 },
+        "card_fields": { "type": "array", "title": "Card fields", "items": { "type": "string" }, "x-widget": "field-picker" },
+        "widgets": { "type": "array", "title": "Dashboard widgets", "items": { "type": "string" }, "x-widget": "widget-picker" }
+      }
+    }
+  },
+  "theme": {
+    "tokens_contract": "1",
+    "modes": ["light", "dark"],
+    "tokens": {
+      "light": { "primary": "232 48% 36%", "primary-foreground": "0 0% 100%", "radius": "0.625rem" },
+      "dark": { "primary": "228 85% 74%", "primary-foreground": "232 40% 12%", "radius": "0.625rem" }
+    }
+  }
+}

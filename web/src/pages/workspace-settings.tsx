@@ -2,7 +2,7 @@ import * as i18nFmt from "@/i18n/format";
 import { agentLabel } from "@/lib/agent-label";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { asCapabilityList } from "@/lib/agent-utils";
 import {
@@ -45,6 +45,7 @@ import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { InviteLinkBox } from "@/components/invite-link-box";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { ThemeSettingsPanel } from "@/components/themes/theme-settings-panel";
 import { useAuthStore } from "@/stores/auth";
 import { useMemberStore } from "@/stores/member";
 import { useAgentStore } from "@/stores/agent";
@@ -672,6 +673,8 @@ export function WorkspaceSettingsPage() {
     workspaceMembers,
     myRole,
     myRoleError,
+    myRoleLoaded,
+    myRoleWorkspaceId,
     isLoadingWorkspaceMembers,
     fetchWorkspaceMembers,
     fetchMyRole,
@@ -768,6 +771,7 @@ export function WorkspaceSettingsPage() {
   const WS_TABS = [
     { id: "profile", label: t("workspace.tabs.profile") },
     { id: "general", label: t("workspace.tabs.general") },
+    { id: "theme", label: t("workspace.tabs.theme") },
     { id: "members", label: t("workspace.tabs.members") },
     { id: "team", label: t("workspace.tabs.team") },
     { id: "assignment", label: t("workspace.tabs.assignment") },
@@ -1244,8 +1248,8 @@ export function WorkspaceSettingsPage() {
       </Card>
       )}
 
-      {/* Branding */}
-      {activeTab === "general" && (
+      {/* Theme: branding (workspace icon) + theme choice and its settings */}
+      {activeTab === "theme" && (
       <Card className="mt-4">
         <CardHeader>
           <CardTitle>{t("workspace.branding.title")}</CardTitle>
@@ -1296,6 +1300,21 @@ export function WorkspaceSettingsPage() {
               )}
             </div>
           </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {activeTab === "theme" && currentWorkspace && (
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>{t("themes.workspace.title")}</CardTitle>
+          <CardDescription>{t("themes.workspace.description")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ThemeSettingsPanel level="workspace" workspaceId={currentWorkspace.id} readOnly={!canManageMembers} roleLoading={!(myRoleLoaded && myRoleWorkspaceId === currentWorkspace.id)} roleUnknown={!!myRoleError} />
+          <Link to={`/w/${currentWorkspace.slug}/instance/themes`} className="inline-block text-sm text-primary hover:underline">
+            {t("themes.workspace.instanceLink")}
+          </Link>
         </CardContent>
       </Card>
       )}

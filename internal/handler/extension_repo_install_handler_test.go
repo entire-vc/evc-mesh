@@ -57,7 +57,7 @@ func (m *repoStore) List(context.Context) ([]domain.InstalledExtension, error) {
 	}
 	return out, nil
 }
-func (m *repoStore) InsertRepo(_ context.Context, e *domain.InstalledExtension, _ string) error {
+func (m *repoStore) InsertRepo(_ context.Context, e *domain.InstalledExtension, _ string, _ *domain.InstanceExtensionJournalEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c := *e

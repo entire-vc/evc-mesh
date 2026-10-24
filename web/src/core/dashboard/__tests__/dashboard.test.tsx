@@ -6,6 +6,12 @@ import { useMemberStore } from "@/stores/member";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { TaskLink } from "@/core/primitives";
+import { useSlotContext } from "@/core/slots/slot-context";
+import { registerSlotViewOverride } from "@/core/slots/registry";
+import type { WidgetDescriptor } from "@/core/slots/types";
+import { setThemeWidgets } from "../theme-widgets";
+import { ownWidgets } from "@/core/themes/bundle";
+import { useThemeStore } from "@/core/themes/store";
 import {
   CORE_WIDGETS,
   DashboardContainer,
@@ -137,6 +143,22 @@ describe("dashboard.layout", () => {
     expect(ids(container)).toHaveLength(4);
   });
 
+  it("useSlotContext() inside a widget view gives the full context of dashboard.widget.<id>", async () => {
+    const Inner = () => {
+      const c = useSlotContext();
+      return <p>ctx {c.slot} {c.workspace?.slug} {c.contractVersion}</p>;
+    };
+    const Own: DashboardWidgetView = () => <Inner />;
+    mountDashboard({
+      theme: {
+        extraWidgets: [{ ...base, id: "ink.overdue", origin: "theme", dataHook: "useTasks" }],
+        widgets: { "ink.overdue": Own },
+      },
+    });
+    await settle();
+    expect(screen.getByText("ctx dashboard.widget.ink.overdue acme 1.0.0")).toBeTruthy();
+  });
+
   it("CT-dash-06 a theme's own widget is drawn next to core ones", async () => {
     const Own: DashboardWidgetView = ({ data }) => <p>own {data.id}</p>;
     const { container } = mountDashboard({
@@ -263,5 +285,70 @@ describe("dashboard.widget.*", () => {
       theme: { settings: { widgets: ["ink.mine"] }, extraWidgets: [{ ...base, id: "ink.mine", origin: "theme" }], widgets: { "ink.mine": Own } },
     });
     await waitFor(() => expect(screen.getByText("n=2")).toBeTruthy());
+  });
+
+  it("CT-widget-10 useTasks asks for a full page and sorts by due date, undated last, before the limit", async () => {
+    const dues = [null, "2026-03-09", "2026-03-02", "2026-03-07", "2026-03-01", "2026-03-05", "2026-03-03", "2026-03-04"];
+    vi.mocked(api).mockImplementation(async (url: string, opts?: { params?: { per_page?: number } }) => {
+      if (url !== "/api/v1/me/tasks") return {};
+      const all = dues.map((d, i) => ({ ...task(i + 1), due_date: d }));
+      return { items: all.slice(0, opts?.params?.per_page ?? 20) };
+    });
+    const Own: DashboardWidgetView = () => {
+      const r = useTasks({ scope: "mine", sort: "due_date", limit: 3 });
+      return <p>{r.state === "ready" ? r.value.items.map((t) => t.id).join(",") : "loading"}</p>;
+    };
+    mountDashboard({
+      theme: { settings: { widgets: ["ink.due"] }, extraWidgets: [{ ...base, id: "ink.due", origin: "theme" }], widgets: { "ink.due": Own } },
+    });
+    await waitFor(() => expect(screen.getByText("t5,t3,t7")).toBeTruthy());
+  });
+
+  it("CT-widget-11 useTasks shows a failed read as an error with a retry, not as an empty list", async () => {
+    let down = true;
+    vi.mocked(api).mockImplementation(async (url: string) => {
+      if (url !== "/api/v1/me/tasks") return {};
+      if (down) throw new Error("boom");
+      return { items: [task(1)] };
+    });
+    const Own: DashboardWidgetView = () => {
+      const r = useTasks({ scope: "mine", limit: 5 });
+      if (r.state === "error") return <button onClick={() => r.retry()}>retry-it</button>;
+      return <p>{r.state === "ready" ? `n=${r.value.items.length}` : "loading"}</p>;
+    };
+    mountDashboard({
+      theme: { settings: { widgets: ["ink.err"] }, extraWidgets: [{ ...base, id: "ink.err", origin: "theme" }], widgets: { "ink.err": Own } },
+    });
+    const btn = await screen.findByText("retry-it");
+    down = false;
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByText("n=1")).toBeTruthy());
+  });
+});
+
+describe("a live theme bundle (runtime registry, no provider)", () => {
+  const own: WidgetDescriptor = { id: "studio.focus", title: "Focus", description: "Due soon", origin: "theme", dataHook: "useTasks", actions: ["openTask"], size: { default: { w: 2, h: 1 }, min: { w: 1, h: 1 }, max: { w: 4, h: 2 } } };
+  afterEach(() => { setThemeWidgets([]); useThemeStore.getState().set({ settings: {} }); });
+
+  it("a registered dashboard.layout replaces the default and a theme's own widget is listed and drawn with its view", async () => {
+    const disposers = [
+      registerSlotViewOverride("dashboard.layout", (({ data }: { data: { widgets: { descriptor: { id: string } }[]; components: { Widget: React.ComponentType<{ id: string }> } } }) => (
+        <section data-testid="studio-grid">{data.widgets.map((w) => <data.components.Widget key={w.descriptor.id} id={w.descriptor.id} />)}</section>
+      )) as never),
+      registerSlotViewOverride("dashboard.widget.focus", (() => <p>Own focus widget</p>) as never),
+    ];
+    setThemeWidgets([own]);
+    const { container } = mountDashboard();
+    await settle();
+    expect(screen.getByTestId("studio-grid")).toBeTruthy();
+    expect(ids(container)).toEqual(["mentions", "triage", "my-tasks", "sessions", "studio.focus"]);
+    expect(screen.getByText("Own focus widget")).toBeTruthy();
+    disposers.forEach((d) => d());
+  });
+
+  it("ownWidgets keeps a well-formed descriptor and drops a foreign id, a viewless one and a wrong size", () => {
+    const bundle = { views: {}, widgets: [own, { ...own, id: "other.focus" }, { ...own, id: "studio.nope" }, { ...own, id: "studio.big", size: { ...own.size, max: { w: 9, h: 1 } } }] };
+    const kept = ownWidgets("studio", bundle as never, ["dashboard.widget.focus", "dashboard.widget.big"]);
+    expect(kept.map((d) => d.id)).toEqual(["studio.focus"]);
   });
 });

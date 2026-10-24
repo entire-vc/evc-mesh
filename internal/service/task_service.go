@@ -3561,9 +3561,11 @@ func (s *taskService) prepareTransitionAssigneeRoute(ctx context.Context, task *
 		}
 		if err := s.assertAssigneeInProjectWorkspace(ctx, task.ProjectID, id, typ); err != nil {
 			log.Printf("[review-assign] REFUSED task %s: %v", task.ID, err)
+			s.postReviewerNotAssignedComment(ctx, task, id.String(), err.Error())
 			return "", nil
 		}
 		if err := s.ensureAssigneeProjectMember(ctx, task.ProjectID, id, typ); err != nil {
+			s.postReviewerNotAssignedComment(ctx, task, id.String(), err.Error())
 			return "", err
 		}
 		previousType := task.AssigneeType
@@ -3696,6 +3698,10 @@ func (s *taskService) resolveReviewTarget(ctx context.Context, task *domain.Task
 			if err == nil && id != nil {
 				return id, typ, "set_reviewer on review transition"
 			}
+			if err == nil {
+				err = fmt.Errorf("reviewer resolved to no principal")
+			}
+			s.postReviewerNotAssignedComment(ctx, task, tr.OnTransition.SetReviewer, err.Error())
 			return nil, "", ""
 		}
 	}
@@ -3705,6 +3711,11 @@ func (s *taskService) resolveReviewTarget(ctx context.Context, task *domain.Task
 	}
 	id, typ, err := s.resolveSetReviewer(ctx, task.ProjectID, "lead")
 	if err != nil || id == nil {
+		// A configured lead that cannot be resolved is a visible failure; a
+		// project with no lead at all simply has nobody to route to.
+		if err != nil && !errors.Is(err, errNoDefaultAssignee) {
+			s.postReviewerNotAssignedComment(ctx, task, "lead", err.Error())
+		}
 		return nil, "", ""
 	}
 	return id, typ, "self-created card entering review: routed to the project lead"
@@ -3752,6 +3763,40 @@ func (s *taskService) postAssigneeChangeComment(ctx context.Context, task *domai
 	}
 }
 
+// postReviewerNotAssignedComment tells the caller (and anyone reading the thread)
+// that the project's set_reviewer rule matched but the card was NOT handed to the
+// reviewer. Until now this was a server-log line only, so a card could sit in
+// review on the executor with nothing on it to say why. Best effort: the status
+// move itself is never unwound by a failed comment.
+func (s *taskService) postReviewerNotAssignedComment(ctx context.Context, task *domain.Task, reviewer, reason string) {
+	log.Printf("[review-assign] reviewer %q not assigned on task %s: %s", reviewer, task.ID, reason)
+	if s.commentRepo == nil {
+		return
+	}
+	now := timeNow()
+	comment := &domain.Comment{
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		AuthorID:     uuid.Nil,
+		AuthorType:   domain.ActorTypeSystem,
+		SystemCode:   SysCodePtr(SysCodeReviewerNotAssigned),
+		SystemParams: SysParamsJSON(map[string]any{"reviewer": reviewer, "reason": reason}),
+		Body: fmt.Sprintf(
+			"⚠️ Auto: set_reviewer %q was not applied, the card stays with its current assignee: %s.",
+			reviewer, reason,
+		),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.commentRepo.Create(ctx, comment); err != nil {
+		log.Printf("[review-assign] WARNING: failed to post reviewer-not-assigned comment on task %s: %v", task.ID, err)
+	}
+}
+
+// errNoDefaultAssignee means the project has no lead configured: for the implicit
+// lead fallback that is "nothing to route to", not a failure worth a card comment.
+var errNoDefaultAssignee = errors.New("no default_assignee configured for project")
+
 // resolveSetReviewer resolves a SetReviewer config value to an agent UUID.
 // "lead" maps to the project's default_assignee from assignment rules;
 // any other value is treated as an agent slug.
@@ -3763,7 +3808,7 @@ func (s *taskService) resolveSetReviewer(ctx context.Context, projectID uuid.UUI
 			return nil, "", fmt.Errorf("get assignment rules: %w", err)
 		}
 		if rules == nil || rules.DefaultAssignee == nil || rules.DefaultAssignee.Value == "" {
-			return nil, "", fmt.Errorf("no default_assignee configured for project")
+			return nil, "", errNoDefaultAssignee
 		}
 		slug = rules.DefaultAssignee.Value
 	}
@@ -3781,19 +3826,51 @@ func (s *taskService) resolveSetReviewer(ctx context.Context, projectID uuid.UUI
 	if raw := strings.TrimPrefix(slug, "agent:"); raw != slug || uuid.Validate(raw) == nil {
 		if agentID, perr := uuid.Parse(raw); perr == nil {
 			agent, gerr := s.agentRepo.GetByID(ctx, agentID)
-			if gerr != nil || agent == nil || agent.WorkspaceID != proj.WorkspaceID {
-				return nil, "", fmt.Errorf("agent id=%q not found in workspace: %v", raw, gerr)
+			if gerr != nil || agent == nil {
+				return nil, "", fmt.Errorf("agent id=%q not found: %v", raw, gerr)
 			}
+			// Home agent, or an agent holding an ACTIVE grant into this workspace;
+			// a revoked/absent grant refuses (same rule as every assignee write).
 			id := agent.ID
+			if aerr := s.assertAssigneeInProjectWorkspace(ctx, projectID, &id, domain.AssigneeTypeAgent); aerr != nil {
+				return nil, "", fmt.Errorf("agent id=%q is neither native nor actively granted in the project's workspace: %w", raw, aerr)
+			}
 			return &id, domain.AssigneeTypeAgent, nil
 		}
 	}
 	agent, err := s.agentRepo.GetBySlug(ctx, proj.WorkspaceID, slug)
-	if err != nil || agent == nil {
-		return nil, "", fmt.Errorf("agent slug=%q not found in workspace: %w", slug, err)
+	if err != nil {
+		return nil, "", fmt.Errorf("agent slug=%q lookup failed: %w", slug, err)
 	}
-	id := agent.ID
-	return &id, domain.AssigneeTypeAgent, nil
+	if agent != nil {
+		// A home agent always wins over a grant agent with the same slug.
+		id := agent.ID
+		return &id, domain.AssigneeTypeAgent, nil
+	}
+	// Not native: look among agents with an ACTIVE grant into this workspace.
+	// Revoked grants are not listed; two grant agents sharing the slug is an
+	// ambiguity that is reported, never resolved by picking one.
+	if s.agentGrantRepo == nil {
+		return nil, "", fmt.Errorf("agent slug=%q not found in workspace (grant directory unavailable)", slug)
+	}
+	grants, gerr := s.agentGrantRepo.ListActiveByWorkspace(ctx, proj.WorkspaceID)
+	if gerr != nil {
+		return nil, "", fmt.Errorf("agent slug=%q not found in workspace; could not read grants: %w", slug, gerr)
+	}
+	var matches []uuid.UUID
+	for _, g := range grants {
+		if g.Agent.Slug == slug {
+			matches = append(matches, g.AgentID)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, "", fmt.Errorf("agent slug=%q not found in workspace or among active grants", slug)
+	case 1:
+		id := matches[0]
+		return &id, domain.AssigneeTypeAgent, nil
+	}
+	return nil, "", fmt.Errorf("agent slug=%q is ambiguous: %d granted agents share it; use agent:<uuid>", slug, len(matches))
 }
 
 // SupersedeRecurringInstances closes all non-terminal instances of scheduleID

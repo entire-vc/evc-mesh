@@ -1,4 +1,5 @@
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type KeyboardEvent } from "react";
+import type { InlineEditProps } from "@entire-vc/mesh-theme-sdk";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useMemberStore } from "@/stores/member";
 import { useTaskStore } from "@/stores/task";
@@ -49,15 +50,7 @@ function parseValue(field: QuickEditField, raw: string, assignees: AssigneeOptio
  * Enter opens an editor for the field; Enter/blur commits through
  * actions.quickEdit, Esc cancels.
  */
-export function InlineEdit({
-  taskId,
-  field,
-  children,
-}: {
-  taskId: Id;
-  field: QuickEditField;
-  children: ReactNode;
-}) {
+export function InlineEdit({ taskId, field, children }: InlineEditProps) {
   const allowed = useCan("task.edit", { kind: "task", id: taskId });
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId));
   const { quickEdit } = useCoreActions();

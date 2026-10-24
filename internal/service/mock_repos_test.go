@@ -1948,6 +1948,8 @@ type MockAgentWorkspaceGrantRepository struct {
 	mu          sync.RWMutex
 	items       []*domain.AgentWorkspaceGrant
 	errToReturn error
+	// slugs lets a test give a granted agent the slug the real JOIN would return.
+	slugs map[uuid.UUID]string
 }
 
 func NewMockAgentWorkspaceGrantRepository() *MockAgentWorkspaceGrantRepository {
@@ -2089,7 +2091,10 @@ func (m *MockAgentWorkspaceGrantRepository) ListActiveByWorkspace(_ context.Cont
 	var out []domain.AgentWorkspaceGrantWithAgent
 	for _, g := range m.items {
 		if g.WorkspaceID == workspaceID && !g.IsRevoked() {
-			out = append(out, domain.AgentWorkspaceGrantWithAgent{AgentWorkspaceGrant: *g})
+			out = append(out, domain.AgentWorkspaceGrantWithAgent{
+				AgentWorkspaceGrant: *g,
+				Agent:               domain.AgentBrief{ID: g.AgentID, Slug: m.slugs[g.AgentID]},
+			})
 		}
 	}
 	return out, nil

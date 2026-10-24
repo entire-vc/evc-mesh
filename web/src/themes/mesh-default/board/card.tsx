@@ -1,4 +1,4 @@
-import { forwardRef, memo, useMemo, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
+import { forwardRef, memo, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AlignLeft, CircleCheck, ExternalLink, GitBranch, Hand, Lock, Paperclip, Pencil, RefreshCw, Snowflake } from "lucide-react";
 import { AgentShortTagView } from "@/components/agent-short-tag";
@@ -8,7 +8,7 @@ import { PriorityFlag } from "@/components/priority-flag";
 import { RuntimeStateBadge } from "@/components/runtime-state-badge";
 import { Badge } from "@/components/ui/badge";
 import { SlotBadges } from "@/components/extensions/slots/slot-host";
-import { Draggable, InlineEdit, TaskLink } from "@/core/primitives";
+import { Draggable, InlineEdit, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
 import { PerfProfiler } from "@/lib/perf-profiler";
 import { agentLabel } from "@/lib/agent-label";
 import { cn } from "@/lib/cn";
@@ -161,24 +161,9 @@ export const CardBody = memo(
 CardBody.displayName = "CardBody";
 
 /** `task.badge` insertion point (required by the contract). */
-/** The REST-shaped task an extension's `task.badge` reads, rebuilt from the card's data unless the legacy list card passes its own (a view gets only `props.data`, never a store). */
-function badgeTaskFromData(d: TaskData): Task {
-  return {
-    id: d.id,
-    project_id: d.projectId,
-    title: d.title,
-    status_id: d.statusId,
-    priority: d.priority,
-    labels: d.labels,
-    vcs_link_count: d.counts.vcsLinks,
-    vcs_providers: d.vcsProviders,
-    vcs_pipeline_status: d.pipelineStatus,
-  } as unknown as Task;
-}
-
 function CardBadges({ data, task: given }: { data: TaskData; task?: Task }) {
-  const task = useMemo(() => given ?? badgeTaskFromData(data), [given, data]);
-  return <SlotBadges task={task} />;
+  // The drag overlay already holds the REST task; the slot view rebuilds it from its data.
+  return given ? <SlotBadges task={given} /> : <TaskBadges task={data} />;
 }
 
 function rowField(f: FieldDescriptor, task: TaskData, t: T): ReactNode {

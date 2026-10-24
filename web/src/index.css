@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Theme CSS (ADR D4) sits in its own layer, declared last so it can repaint utilities. */
+@layer mesh-theme;
 @import "./styles/fonts.css";
 @import "./styles/brandkit.css";
 

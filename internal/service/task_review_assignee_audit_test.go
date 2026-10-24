@@ -50,7 +50,7 @@ func setupReviewAssigneeAuditEnv(t *testing.T) *reviewAssigneeAuditEnv {
 		},
 	}
 	effectiveRules := &domain.EffectiveAssignmentRules{
-		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 	}
 	svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
 
@@ -68,7 +68,7 @@ func setupReviewAssigneeAuditEnv(t *testing.T) *reviewAssigneeAuditEnv {
 		ID: env.reviewStatusID, ProjectID: env.projectID, Category: domain.StatusCategoryReview, Name: "review",
 	}
 	projRepo.items[env.projectID] = &domain.Project{ID: env.projectID, WorkspaceID: workspaceID}
-	agentRepo.items[env.leadID] = &domain.Agent{ID: env.leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+	agentRepo.items[env.leadID] = &domain.Agent{ID: env.leadID, WorkspaceID: workspaceID, Slug: "gary"}
 	agentRepo.items[env.builderID] = &domain.Agent{ID: env.builderID, WorkspaceID: workspaceID, Slug: "builder"}
 
 	env.svc, env.tasks = svc, taskRepo
@@ -129,7 +129,7 @@ func findActivityByReason(t *testing.T, repo *MockActivityLogRepository, taskID 
 }
 
 // TestApplyReviewAssignee_RecordsRealOldAndPostsComment pins DoD #1/#2 from task
-// f06ebeb7 for the set_reviewer review-transition bounce: before the fix, the
+// an internal ticket for the set_reviewer review-transition bounce: before the fix, the
 // activity entry always recorded "old": nil regardless of who held the card, and
 // no comment was posted at all — an agent reading the thread had no way to tell
 // the card had moved out from under them.
@@ -202,4 +202,65 @@ func TestApplyReviewAssignee_CommentPostFailureDoesNotBlockAssignment(t *testing
 	require.NotNil(t, task.AssigneeID)
 	assert.Equal(t, env.leadID, *task.AssigneeID, "the reviewer rotation must still take effect")
 	assert.Empty(t, env.commentRepo.items, "the failed comment write must not have landed")
+}
+
+// A set_reviewer rule that cannot be honoured must say so on the card; before,
+// the refusal lived only in the server log and the card sat in review on the
+// executor with nothing explaining why.
+func TestMoveTask_ReviewerNotResolvable_PostsVisibleComment(t *testing.T) {
+	env := setupReviewAssigneeAuditEnv(t)
+	delete(env.svc.agentRepo.(*MockAgentRepository).items, env.leadID) // "lead" no longer resolves
+	taskID := env.seedTask()
+
+	require.NoError(t, env.svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &env.reviewStatusID}))
+
+	assert.Equal(t, env.builderID, *env.tasks.items[taskID].AssigneeID, "card must stay with the builder")
+	var found bool
+	for _, c := range env.commentRepo.items {
+		if c.TaskID == taskID && c.SystemCode != nil && *c.SystemCode == SysCodeReviewerNotAssigned {
+			found = true
+			assert.Contains(t, c.Body, "was not applied")
+		}
+	}
+	assert.True(t, found, "a failed reviewer assignment must leave a system comment on the card")
+}
+
+// A reviewer that resolves but refuses assignments (accepts_from=[]) fails the
+// move; the card must still carry the reason.
+func TestMoveTask_ReviewerRefusesAssignments_PostsVisibleComment(t *testing.T) {
+	env := setupReviewAssigneeAuditEnv(t)
+	env.svc.agentRepo.(*MockAgentRepository).items[env.leadID].AcceptsFrom = json.RawMessage(`[]`)
+	taskID := env.seedTask()
+
+	err := env.svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &env.reviewStatusID})
+	require.Error(t, err)
+
+	var found bool
+	for _, c := range env.commentRepo.items {
+		if c.TaskID == taskID && c.SystemCode != nil && *c.SystemCode == SysCodeReviewerNotAssigned {
+			found = true
+		}
+	}
+	assert.True(t, found, "an enrollment refusal must leave a system comment on the card")
+}
+
+// The implicit lead fallback (self-created card, no set_reviewer rule): a lead
+// that is configured but unresolvable is reported on the card.
+func TestMoveTask_ImplicitLeadUnresolvable_PostsVisibleComment(t *testing.T) {
+	env := setupReviewAssigneeAuditEnv(t)
+	env.svc.rulesConfigSvc.(*MockRulesService).WithWorkflowRules(&domain.WorkflowRulesResponse{})
+	delete(env.svc.agentRepo.(*MockAgentRepository).items, env.leadID)
+	taskID := env.seedTask()
+	task := env.tasks.items[taskID]
+	task.CreatedBy, task.CreatedByType = env.builderID, domain.ActorTypeAgent
+
+	require.NoError(t, env.svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &env.reviewStatusID}))
+
+	var found bool
+	for _, c := range env.commentRepo.items {
+		if c.TaskID == taskID && c.SystemCode != nil && *c.SystemCode == SysCodeReviewerNotAssigned {
+			found = true
+		}
+	}
+	assert.True(t, found, "an unresolvable configured lead must be reported on the card")
 }

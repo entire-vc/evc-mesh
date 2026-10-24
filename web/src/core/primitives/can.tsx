@@ -1,20 +1,9 @@
-import type { ReactNode } from "react";
 import { useCan } from "./permissions";
-import type { Permission, ResourceRef } from "./types";
+import type { CanProps } from "@entire-vc/mesh-theme-sdk";
 
 export { useCan };
 
 /** Renders children only when the user holds the permission. */
-export function Can({
-  permission,
-  resource,
-  fallback = null,
-  children,
-}: {
-  permission: Permission;
-  resource?: ResourceRef;
-  fallback?: ReactNode;
-  children: ReactNode;
-}) {
+export function Can({ permission, resource, fallback = null, children }: CanProps) {
   return <>{useCan(permission, resource) ? children : fallback}</>;
 }

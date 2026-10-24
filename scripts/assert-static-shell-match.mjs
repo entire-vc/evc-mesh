@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * "Static = live" gate for the index.html shell (perf·Б2, `#2417383b`).
+ * "Static = live" gate for the index.html shell (perf·Б2, an internal ticket).
  *
  * WHY THIS EXISTS
  * web/index.html paints a hand-written copy of React's first frame into
@@ -20,6 +20,9 @@
  *  3. Layout shift across the swap, both routes: CLS ≤ 0.01.
  *  4. Kill switch: ?static-shell=off paints no shell, ?static-shell=on
  *     brings it back.
+ *  5. Instance theme (themes T5): with a cached instance theme the shell is
+ *     painted in it (differs from the mesh-default shell) and still matches
+ *     the live first frame, which is painted in the same theme.
  *
  * The local server holds every /api request open, so React stays on its
  * first frame (auth still loading, registration link at its initial
@@ -357,6 +360,48 @@ console.log(`\n4. Kill switch`);
     console.log(`  ${mark(pass)} ${what}`);
   }
   await ctx.close();
+}
+
+console.log(`\n5. Shell in the instance theme (cached by public/instance-theme.js)`);
+{
+  // Distinct, unmistakable tokens: background and muted both change, so the
+  // skeleton and the page differ from mesh-default at a glance.
+  const THEME = {
+    hash: "gate",
+    tokens_css: ":root{--background:300 60% 90%;--muted:200 70% 60%;}",
+    brand: { theme_color: "#ccaacc", theme_color_dark: "#222222" },
+  };
+  const route = ROUTES[1];
+  const vp = VIEWPORTS[0];
+  const themed = async (live) => {
+    const ctx = await newContext(browser, vp, "light");
+    await ctx.addInitScript((t) => {
+      try {
+        localStorage.setItem("mesh-instance-theme", JSON.stringify(t));
+      } catch {}
+    }, THEME);
+    if (!live) await ctx.route((u) => isBundleJs(u.href), (r) => r.abort());
+    const page = await ctx.newPage();
+    await page.goto(BASE + route.path, { waitUntil: "load" });
+    if (live) await page.waitForFunction(reactMounted, null, { timeout: 15_000 });
+    await settle(page);
+    const png = await shot(page);
+    await ctx.close();
+    return png;
+  };
+  const plainShell = (await captureShell(browser, route, vp, "light")).png;
+  const themedShell = await themed(false);
+  const themedLive = await themed(true);
+  const vsDefault = await pixelDiff(plainShell, themedShell);
+  const vsLive = await pixelDiff(themedShell, themedLive);
+  const checks = [
+    [vsDefault.diff > vsDefault.total * 0.5, `shell is painted in the instance theme (${vsDefault.diff}/${vsDefault.total} px differ from the default shell)`],
+    [vsLive.diff >= 0 && vsLive.diff <= MAX_DIFF_PX, `themed shell matches the themed live first frame (${vsLive.diff} px differ)`],
+  ];
+  for (const [pass, what] of checks) {
+    ok &&= pass;
+    console.log(`  ${mark(pass)} ${what}`);
+  }
 }
 
 if (selftest) {

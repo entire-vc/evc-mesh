@@ -22,6 +22,13 @@ interface MemberState {
   // an internal ticket, a silent catch here hid every admin control with no
   // explanation on a genuine transient failure.
   myRoleError: string | null;
+  // False from the moment fetchMyRole starts until it settles (any outcome,
+  // including a 404 "not a member"); myRole === null alone cannot tell
+  // "still loading" from "loaded, no role".
+  myRoleLoaded: boolean;
+  // Workspace the settled role belongs to: myRoleLoaded alone is stale for one
+  // render after a workspace switch, until the reset effect runs.
+  myRoleWorkspaceId: string | null;
   projectMembers: ProjectMemberWithUser[];
   userSearchResults: UserSearchResult[];
   isLoadingWorkspaceMembers: boolean;
@@ -94,6 +101,8 @@ export const useMemberStore = create<MemberState>((set) => ({
   workspaceMembers: [],
   myRole: null,
   myRoleError: null,
+  myRoleLoaded: false,
+  myRoleWorkspaceId: null,
   projectMembers: [],
   userSearchResults: [],
   isLoadingWorkspaceMembers: false,
@@ -118,12 +127,13 @@ export const useMemberStore = create<MemberState>((set) => ({
     // Only the newest call may write: a slow answer for the workspace the user
     // already left must not overwrite the current workspace's role.
     const mine = ++latestMyRoleFetch;
+    set({ myRoleLoaded: false });
     try {
       const me = await api<{ role: string }>(
         `/api/v1/workspaces/${workspaceId}/members/me`,
       );
       if (mine !== latestMyRoleFetch) return;
-      set({ myRole: (me?.role as WorkspaceRole) ?? null, myRoleError: null });
+      set({ myRole: (me?.role as WorkspaceRole) ?? null, myRoleError: null, myRoleLoaded: true, myRoleWorkspaceId: workspaceId });
     } catch (err) {
       if (mine !== latestMyRoleFetch) return;
       // 404 from this endpoint means "you have no membership row here" —
@@ -140,13 +150,13 @@ export const useMemberStore = create<MemberState>((set) => ({
       // workspace, manage rules/secrets) disappears with no explanation,
       // indistinguishable from "you were never an admin".
       if (err instanceof ApiRequestError && err.status === 404) {
-        set({ myRole: null, myRoleError: null });
+        set({ myRole: null, myRoleError: null, myRoleLoaded: true, myRoleWorkspaceId: workspaceId });
       } else {
         const message =
           err instanceof ApiRequestError
             ? err.message
             : miscT("errors.roleCheckUnreachable", "Could not reach the server to check your role");
-        set({ myRole: null, myRoleError: message });
+        set({ myRole: null, myRoleError: message, myRoleLoaded: true, myRoleWorkspaceId: workspaceId });
       }
     }
   },

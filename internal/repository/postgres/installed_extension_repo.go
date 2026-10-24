@@ -26,6 +26,10 @@ const installedExtensionCols = `extension_id, version, manifest, source, repo_ur
 	artifact_sha256, trust_level, installed_by, previous_version, blocked, blocked_reason, created_at, updated_at`
 
 func (r *InstalledExtensionRepo) UpsertBuiltin(ctx context.Context, ext *domain.InstalledExtension) error {
+	return upsertBuiltin(ctx, r.db, ext)
+}
+
+func upsertBuiltin(ctx context.Context, ex sqlx.ExecerContext, ext *domain.InstalledExtension) error {
 	const q = `
 		INSERT INTO installed_extensions (extension_id, version, manifest, source, trust_level)
 		VALUES ($1, $2, $3, 'builtin', $4)
@@ -36,7 +40,7 @@ func (r *InstalledExtensionRepo) UpsertBuiltin(ctx context.Context, ext *domain.
 			manifest = EXCLUDED.manifest,
 			updated_at = now()
 		WHERE installed_extensions.source = 'builtin'`
-	_, err := r.db.ExecContext(ctx, q, ext.ExtensionID, ext.Version, []byte(ext.Manifest), string(ext.TrustLevel))
+	_, err := ex.ExecContext(ctx, q, ext.ExtensionID, ext.Version, []byte(ext.Manifest), string(ext.TrustLevel))
 	return err
 }
 

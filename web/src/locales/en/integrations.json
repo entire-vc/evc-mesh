@@ -679,6 +679,30 @@
       "enum": "Pick one of the options",
       "minimum": "At least {{min}}",
       "maximum": "At most {{max}}"
+    },
+    "color": {
+      "pick": "Pick a colour: {{name}}",
+      "invalid": "Use #rgb or #rrggbb"
+    },
+    "font": {
+      "themeDefault": "Theme default",
+      "sample": "The quick brown fox jumps over the lazy dog"
+    },
+    "image": {
+      "upload": "Upload image",
+      "replace": "Replace image",
+      "removeNamed": "Remove image: {{name}}",
+      "badType": "Use a PNG, JPEG, WebP or SVG image",
+      "tooLarge": "The image is over {{kb}} KB",
+      "readFailed": "Couldn't read the file"
+    },
+    "order": {
+      "empty": "Nothing selected",
+      "up": "Move up: {{name}}",
+      "down": "Move down: {{name}}",
+      "remove": "Remove: {{name}}",
+      "add": "Add…",
+      "addNamed": "Add to {{name}}"
     }
   },
   "catalog": {

@@ -480,12 +480,18 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	// :thread_id belongs to one user, not to a workspace: every AgentChatRepo query carries workspace_id, project_id and user_id = caller, so another user's, a deleted and a missing thread are the same 404 thread_not_found
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/messages":                                  true,
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id/stop":                                      true,
+	"/api/v1/runner/chat/runners/:runner_id":                                                      true, // ChatRunnerRepo.RevokeRunner matches the runner id and the calling agent in one UPDATE (404 otherwise), and an agent belongs to one workspace
+	"/api/v1/runner/chat/commands/:command_id/ack":                                                true, // ChatRunnerRepo.AckCommand compares the command's agent_id with the calling agent (403 otherwise), and an agent belongs to one workspace
+	"/api/v1/runner/chat/threads/:thread_id/history":                                              true, // ChatRunnerRepo.History only answers the runner of the thread's own agent that holds an active turn of it
+	"/api/v1/runner/chat/turns/:id/lease":                                                         true, // runner-only: ChatRunnerRepo.RenewLease pins the turn to the key's workspace and agent in SQL, and answers an unknown or foreign turn with the same 404
+	"/api/v1/runner/chat/turns/:id/events":                                                        true, // runner-only: ChatTurnEventsRepo.ApplyEvents serves only a turn of the key's own agent (ServesAgent), held by the calling runner id with the current claim_token, and answers an unknown or foreign turn with the same 404
 	"/api/v1/ext/:ext_id/ui-context":                                                              true, // :ext_id is a registry id, not tenant data; the workspace is in the body (bodyWS) and the handler checks membership, task and project against it
 	"/api/v1/extensions/:ext_id/instance-settings":                                                true,
 	"/api/v1/extensions/:ext_id/catalog-card":                                                     true,
 	"/api/v1/extensions/:ext_id/allowed":                                                          true,
 	"/api/v1/extensions/:ext_id/update":                                                           true,
 	"/api/v1/extensions/:ext_id/rollback":                                                         true,
+	"/api/v1/instance/themes/:id":                                                                 true, // :id is an installed theme's manifest id in the instance-level catalog (installed_extensions), which no workspace owns; ThemeHandler.Delete answers 403 unless the caller is an instance admin before anything is touched
 	"/api/v1/memories/:id":                                                                        true,
 	"/api/v1/projects/:proj_id/chat/threads/:thread_id":                                           true, // ChatThreadDeleteRepo selects the thread by id AND project_id AND the caller's user_id; anything else is a 404 thread_not_found
 	"/api/v1/me/ui-state/:scope":                                                                  true,

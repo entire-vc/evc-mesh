@@ -84,11 +84,20 @@ func (r *InstanceExtensionPolicyRepo) SetAutoUpdate(ctx context.Context, on bool
 }
 
 func (r *InstanceExtensionPolicyRepo) AppendJournal(ctx context.Context, e *domain.InstanceExtensionJournalEntry) error {
+	return appendJournal(ctx, r.db, e)
+}
+
+// appendJournal writes one journal row through db or an open transaction; a nil
+// entry is a no-op, so callers pass their optional entry straight through.
+func appendJournal(ctx context.Context, ex sqlx.ExecerContext, e *domain.InstanceExtensionJournalEntry) error {
+	if e == nil {
+		return nil
+	}
 	details := e.Details
 	if len(details) == 0 {
 		details = []byte(`{}`)
 	}
-	_, err := r.db.ExecContext(ctx, `
+	_, err := ex.ExecContext(ctx, `
 		INSERT INTO instance_extension_journal (actor_id, extension_id, action, details) VALUES ($1, $2, $3, $4)`,
 		e.ActorID, e.ExtensionID, e.Action, []byte(details))
 	return err

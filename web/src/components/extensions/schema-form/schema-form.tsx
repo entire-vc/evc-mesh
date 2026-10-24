@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,16 +9,27 @@ import { cn } from "@/lib/cn";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useProjectStore } from "@/stores/project";
 import { useAgentStore } from "@/stores/agent";
+import { useCustomFieldStore } from "@/stores/custom-field";
+import { CORE_WIDGETS } from "@/core/dashboard";
+import { ColorWidget, FontWidget, ImageWidget, LayoutWidget, OrderedWidget, type PickerOption } from "./widgets";
 import { resolveSchema } from "./resolve";
 import { buildPayload, initialState, setAtPath } from "./state";
 import { validate, type Errors } from "./validate";
 import { isVisible } from "./visibility";
 import type { FieldError, FieldSchema, Values, Widget } from "./types";
 
-export interface PickerOption {
-  value: string;
-  label: string;
-}
+export type { PickerOption };
+
+/** Task fields a theme may show on a card or row: what the core knows, then the custom fields loaded now. */
+const CORE_TASK_FIELDS: readonly PickerOption[] = [
+  { value: "status", label: "Status" },
+  { value: "priority", label: "Priority" },
+  { value: "assignee", label: "Assignee" },
+  { value: "due_date", label: "Due date" },
+  { value: "labels", label: "Labels" },
+  { value: "estimated_hours", label: "Estimate" },
+  { value: "created_at", label: "Created" },
+];
 
 export interface SchemaFormProps {
   /** Settings schema of one level (may hold `$ref` into `manifest`). */
@@ -38,6 +49,14 @@ export interface SchemaFormProps {
   /** Override the options of the project/agent pickers (defaults: current stores). */
   projectOptions?: PickerOption[];
   agentOptions?: PickerOption[];
+  /** Options of `field-picker` (default: core task fields + the loaded custom fields). */
+  fieldOptions?: PickerOption[];
+  /** Options of `widget-picker` (default: the core dashboard widgets). */
+  widgetOptions?: PickerOption[];
+  /** Called with the current draft on every edit and on mount: the live preview reads it. */
+  onValuesChange?: (values: Values) => void;
+  /** Id of the <form>: lets a button outside it (a sticky action bar) submit it. */
+  formId?: string;
 }
 
 function widgetOf(f: FieldSchema): Widget | "text" {
@@ -58,6 +77,8 @@ interface Ctx {
   disabled: boolean;
   projectOptions: PickerOption[];
   agentOptions: PickerOption[];
+  fieldOptions: PickerOption[];
+  widgetOptions: PickerOption[];
   onChange: (path: string[], v: unknown) => void;
   idBase: string;
   /** Manifest id: scopes the per-locale field labels (`schemaFields.<id>.<path>`). */
@@ -211,6 +232,26 @@ function Field({
         ))}
       </Select>
     );
+  } else if (widget === "color") {
+    control = <ColorWidget {...common} label={label} hsl={Boolean(field["x-token"])} value={value} onChange={(v) => ctx.onChange(path, v)} />;
+  } else if (widget === "font-select") {
+    control = <FontWidget {...common} label={label} field={field} value={value} onChange={(v) => ctx.onChange(path, v)} />;
+  } else if (widget === "image") {
+    control = <ImageWidget {...common} label={label} value={value} onChange={(v) => ctx.onChange(path, v)} />;
+  } else if (widget === "layout-picker") {
+    control = <LayoutWidget {...common} label={label} field={field} value={value} onChange={(v) => ctx.onChange(path, v)} />;
+  } else if (widget === "field-picker" || widget === "widget-picker" || widget === "order-list") {
+    const options = widget === "field-picker" ? ctx.fieldOptions : widget === "widget-picker" ? ctx.widgetOptions : undefined;
+    control = (
+      <OrderedWidget
+        {...common}
+        label={label}
+        value={value}
+        options={options}
+        labelOf={(v) => field["x-options"]?.[v] ?? v}
+        onChange={(v) => ctx.onChange(path, v)}
+      />
+    );
   } else if (widget === "textarea") {
     control = <Textarea {...common} value={typeof value === "string" ? value : ""} onChange={(e) => ctx.onChange(path, e.target.value)} rows={4} />;
   } else if (widget === "list") {
@@ -282,7 +323,7 @@ function Field({
   );
 }
 
-export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hideSubmit = false, disabled = false, projectOptions, agentOptions }: SchemaFormProps) {
+export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hideSubmit = false, disabled = false, projectOptions, agentOptions, fieldOptions, widgetOptions, onValuesChange, formId }: SchemaFormProps) {
   const { t } = useTranslation("integrations");
   const idBase = useId();
   const resolved = useMemo(() => resolveSchema(schema, manifest ?? {}), [schema, manifest]);
@@ -298,6 +339,12 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
 
   const projects = useProjectStore((s) => s.projects);
   const agents = useAgentStore((s) => s.agents);
+  const customFields = useCustomFieldStore((s) => s.fields);
+  const fOpts = useMemo(
+    () => fieldOptions ?? [...CORE_TASK_FIELDS, ...customFields.map((f) => ({ value: `cf:${f.slug}`, label: f.name }))],
+    [fieldOptions, customFields],
+  );
+  const wOpts = useMemo(() => widgetOptions ?? CORE_WIDGETS.map((w) => ({ value: w.id, label: w.title })), [widgetOptions]);
   const pOpts = projectOptions ?? projects.map((p) => ({ value: p.id, label: p.name }));
   const aOpts = agentOptions ?? agents.map((a) => ({ value: a.id, label: a.name }));
 
@@ -316,6 +363,8 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
     disabled: disabled || saving,
     projectOptions: pOpts,
     agentOptions: aOpts,
+    fieldOptions: fOpts,
+    widgetOptions: wOpts,
     onChange: (path, v) => {
       setValues((prev) => setAtPath(prev, path, v));
       const key = path.join(".");
@@ -326,6 +375,12 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
     idBase,
     extId: typeof (manifest as { id?: unknown } | undefined)?.id === "string" ? (manifest as { id: string }).id : undefined,
   };
+
+  const seen = useRef(onValuesChange);
+  seen.current = onValuesChange;
+  useEffect(() => {
+    seen.current?.(values);
+  }, [values]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -381,7 +436,7 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
   };
 
   return (
-    <form onSubmit={submit} noValidate className="space-y-4">
+    <form id={formId} onSubmit={submit} noValidate className="space-y-4">
       <Fields schema={resolved} values={values} prefix={[]} ctx={ctx} />
       {formError && (
         <p role="alert" className="text-sm text-destructive">

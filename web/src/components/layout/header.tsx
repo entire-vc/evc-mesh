@@ -1,33 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useLocation, useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import {
-  Activity,
-  BarChart2,
-  Bot,
-  Brain,
   ChevronRight,
-  Download,
-  Inbox,
-  LayoutDashboard,
   LayoutGrid,
   Loader2,
   LogOut,
-  Menu,
-  MonitorDot,
   Network,
-  Search,
-  Settings,
-  Sparkles,
-  UserRound,
-  Target,
+  Search as SearchIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useProjectStore } from "@/stores/project";
 import { useTaskStore } from "@/stores/task";
-import { Button } from "@/components/ui/button";
+import { useNotificationStore } from "@/stores/notification";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
 import {
@@ -40,6 +27,10 @@ import {
 import { ViewTabBar } from "@/components/view-tab-bar";
 import { NotificationBell } from "@/components/notification-bell";
 import { api } from "@/lib/api";
+import "@/core/slots/mesh-default";
+import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
+import { useBuildSlotContext } from "@/core/slots/use-slot-context";
+import type { TopbarActions, TopbarCrumb, TopbarData } from "@/core/slots/nav-topbar/types";
 import type { PaginatedResponse, ProjectViewTab, Task } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -318,7 +309,7 @@ function TaskSearchBox({ wsSlug }: { wsSlug: string | undefined }) {
 
   return (
     <div ref={containerRef} className="relative hidden w-64 md:block">
-      <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+      <SearchIcon className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
       {isLoading && (
         <Loader2 className="absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground animate-spin pointer-events-none" />
       )}
@@ -471,25 +462,26 @@ function useTeamView(): "tree" | "grid" | null {
 interface WorkspacePage {
   /** `shell` namespace key, resolved at render. */
   titleKey: string;
-  icon: React.ComponentType<{ className?: string }>;
+  /** Icon name from the nav slots' icon set. */
+  icon: string;
 }
 
 const WORKSPACE_PAGES: Array<{
   pattern: RegExp;
   titleKey: string;
-  icon: React.ComponentType<{ className?: string }>;
+  icon: string;
 }> = [
-  { pattern: /\/w\/[^/]+\/?$/, titleKey: "nav.dashboard", icon: LayoutDashboard },
-  { pattern: /\/w\/[^/]+\/org-chart(\/grid)?\/?$/, titleKey: "nav.team", icon: Bot },
-  { pattern: /\/w\/[^/]+\/memories\/?$/, titleKey: "nav.memory", icon: Brain },
-  { pattern: /\/w\/[^/]+\/sessions\/?$/, titleKey: "nav.sessions", icon: MonitorDot },
-  { pattern: /\/w\/[^/]+\/spark\/?$/, titleKey: "nav.spark", icon: Sparkles },
-  { pattern: /\/w\/[^/]+\/events\/?$/, titleKey: "nav.events", icon: Activity },
-  { pattern: /\/w\/[^/]+\/analytics\/?$/, titleKey: "nav.analytics", icon: BarChart2 },
-  { pattern: /\/w\/[^/]+\/extensions\/?$/, titleKey: "nav.extensions", icon: Settings },
-  { pattern: /\/w\/[^/]+\/initiatives\/?$/, titleKey: "nav.initiatives", icon: Target },
-  { pattern: /\/w\/[^/]+\/triage\/?$/, titleKey: "nav.triage", icon: Inbox },
-  { pattern: /\/w\/[^/]+\/me\/?$/, titleKey: "nav.profile", icon: UserRound },
+  { pattern: /\/w\/[^/]+\/?$/, titleKey: "nav.dashboard", icon: "LayoutDashboard" },
+  { pattern: /\/w\/[^/]+\/org-chart(\/grid)?\/?$/, titleKey: "nav.team", icon: "Bot" },
+  { pattern: /\/w\/[^/]+\/memories\/?$/, titleKey: "nav.memory", icon: "Brain" },
+  { pattern: /\/w\/[^/]+\/sessions\/?$/, titleKey: "nav.sessions", icon: "MonitorDot" },
+  { pattern: /\/w\/[^/]+\/spark\/?$/, titleKey: "nav.spark", icon: "Sparkles" },
+  { pattern: /\/w\/[^/]+\/events\/?$/, titleKey: "nav.events", icon: "Activity" },
+  { pattern: /\/w\/[^/]+\/analytics\/?$/, titleKey: "nav.analytics", icon: "BarChart2" },
+  { pattern: /\/w\/[^/]+\/extensions\/?$/, titleKey: "nav.extensions", icon: "Settings" },
+  { pattern: /\/w\/[^/]+\/initiatives\/?$/, titleKey: "nav.initiatives", icon: "Target" },
+  { pattern: /\/w\/[^/]+\/triage\/?$/, titleKey: "nav.triage", icon: "Inbox" },
+  { pattern: /\/w\/[^/]+\/me\/?$/, titleKey: "nav.profile", icon: "UserRound" },
 ];
 
 function useWorkspacePage(): WorkspacePage | null {
@@ -547,144 +539,140 @@ function TeamViewTabs({ currentView, wsSlug }: { currentView: "tree" | "grid"; w
   );
 }
 
-export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps) {
-  const { t } = useTranslation("shell");
+// The blocks the header hands to its slot view: each reads its own state, so the view only
+// decides where they go. Module-level, so their identity (and the state under them) is stable.
+function ViewTabs() {
   const { wsSlug, projectSlug } = useParams();
+  const { currentProject } = useProjectStore();
+  const currentView = useCurrentView();
+  const openTaskProject = useOpenTaskProjectLink();
+  // View tabs — shown when inside a project. On an open task the same
+  // strip stays (no tab active) so Docs is a tab, not a separate icon;
+  // it targets the task's own project (see useOpenTaskProjectLink).
+  if (currentView && wsSlug && projectSlug) {
+    return (
+      <ViewTabBar
+        currentView={currentView}
+        wsSlug={wsSlug}
+        projectSlug={projectSlug}
+        projectId={currentProject?.id}
+        className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
+      />
+    );
+  }
+  return openTaskProject ? (
+    <ViewTabBar
+      currentView={null}
+      wsSlug={openTaskProject.wsSlug}
+      projectSlug={openTaskProject.projectSlug}
+      projectId={openTaskProject.projectId}
+      className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
+    />
+  ) : null;
+}
+
+// Team view tabs — shown on the org-chart page.
+function TeamTabs() {
+  const { wsSlug } = useParams();
+  const teamView = useTeamView();
+  return teamView && wsSlug ? <TeamViewTabs currentView={teamView} wsSlug={wsSlug} /> : null;
+}
+
+function Search() {
+  const { wsSlug } = useParams();
+  return <TaskSearchBox wsSlug={wsSlug} />;
+}
+
+// User menu — name and email open the profile screen, where theme,
+// language and app access live.
+function UserMenu() {
+  const { t } = useTranslation("shell");
+  const { wsSlug } = useParams();
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
   const { currentWorkspace } = useWorkspaceStore();
-  const { currentProject } = useProjectStore();
-  const currentView = useCurrentView();
-  const teamView = useTeamView();
-  const workspacePage = useWorkspacePage();
   const profileSlug = wsSlug ?? currentWorkspace?.slug;
-  const openTaskProject = useOpenTaskProjectLink();
   return (
-    <header className="mesh-mobile-header flex h-14 items-center gap-2 sm:gap-4 border-b border-border bg-background px-2 sm:px-4">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onToggleSidebar}
-        className="shrink-0"
-      >
-        <Menu className="h-4 w-4" />
-      </Button>
-
-      {/* Breadcrumbs */}
-      <nav className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
-        {currentWorkspace && (
-          <>
-            <Link
-              to={`/w/${wsSlug}`}
-              className="min-w-0 shrink truncate max-w-[80px] sm:max-w-[160px] hover:text-foreground transition-colors"
-            >
-              {currentWorkspace.name}
-            </Link>
-            {currentProject && (
-              <>
-                <ChevronRight className="h-3 w-3 shrink-0" />
-                <Link
-                  to={`/w/${wsSlug}/p/${projectSlug}`}
-                  className="min-w-0 shrink truncate max-w-[100px] sm:max-w-none hover:text-foreground transition-colors font-medium text-foreground"
-                >
-                  {currentProject.name}
-                </Link>
-              </>
-            )}
-            {!currentProject && workspacePage && (
-              <>
-                <ChevronRight className="h-3 w-3 shrink-0" />
-                <span className="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
-                  <workspacePage.icon className="h-3.5 w-3.5" />
-                  {t(workspacePage.titleKey)}
-                </span>
-              </>
-            )}
-          </>
-        )}
-      </nav>
-
-      {/* View tabs — shown when inside a project. On an open task the same
-          strip stays (no tab active) so Docs is a tab, not a separate icon;
-          it targets the task's own project (see useOpenTaskProjectLink). */}
-      {currentView && wsSlug && projectSlug ? (
-        <ViewTabBar
-          currentView={currentView}
-          wsSlug={wsSlug}
-          projectSlug={projectSlug}
-          projectId={currentProject?.id}
-          className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
-        />
-      ) : (
-        openTaskProject && (
-          <ViewTabBar
-            currentView={null}
-            wsSlug={openTaskProject.wsSlug}
-            projectSlug={openTaskProject.projectSlug}
-            projectId={openTaskProject.projectId}
-            className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
-          />
-        )
-      )}
-
-      {/* Team view tabs — shown on org-chart page */}
-      {teamView && wsSlug && (
-        <TeamViewTabs currentView={teamView} wsSlug={wsSlug} />
-      )}
-
-      <div className="flex-1" />
-
-      {/* Search */}
-      <TaskSearchBox wsSlug={wsSlug} />
-
-      {/* Notifications */}
-      <NotificationBell />
-
-      {/* PWA install — desktop only, non-intrusive */}
-      {installable && onInstall && (
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onInstall}
-          title={t("header.installApp")}
-          className="hidden md:inline-flex"
-        >
-          <Download className="h-4 w-4" />
-        </Button>
-      )}
-
-      {/* User menu — name and email open the profile screen, where theme,
-          language and app access live. */}
-      <DropdownMenu>
-        <DropdownMenuTrigger>
-          <Avatar name={user?.name || t("header.userMenu.userFallback")} src={user?.avatar_url} size="sm" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[14rem]">
-          {profileSlug ? (
-            <DropdownMenuItem
-              aria-label={t("header.userMenu.profile")}
-              onClick={() => navigate(`/w/${profileSlug}/me`)}
-              className="gap-3 py-1.5"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{user?.name}</span>
-                <span className="block truncate text-xs text-muted-foreground">{user?.email}</span>
-              </span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-            </DropdownMenuItem>
-          ) : (
-            <div className="px-2 py-1.5">
-              <p className="text-sm font-medium">{user?.name}</p>
-              <p className="text-xs text-muted-foreground">{user?.email}</p>
-            </div>
-          )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={logout}>
-            <LogOut className="mr-2 h-4 w-4" />
-            {t("header.userMenu.logOut")}
+    <DropdownMenu>
+      <DropdownMenuTrigger>
+        <Avatar name={user?.name || t("header.userMenu.userFallback")} src={user?.avatar_url} size="sm" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[14rem]">
+        {profileSlug ? (
+          <DropdownMenuItem
+            aria-label={t("header.userMenu.profile")}
+            onClick={() => navigate(`/w/${profileSlug}/me`)}
+            className="gap-3 py-1.5"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{user?.name}</span>
+              <span className="block truncate text-xs text-muted-foreground">{user?.email}</span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </header>
+        ) : (
+          <div className="px-2 py-1.5">
+            <p className="text-sm font-medium">{user?.name}</p>
+            <p className="text-xs text-muted-foreground">{user?.email}</p>
+          </div>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={logout}>
+          <LogOut className="mr-2 h-4 w-4" />
+          {t("header.userMenu.logOut")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
+
+const TOPBAR_COMPONENTS: TopbarData["components"] = {
+  NotificationBell,
+  UserMenu,
+  ViewTabs,
+  TeamTabs,
+  Search,
+};
+
+// The container of the `nav.topbar` slot: route, stores and the core blocks live here; what is
+// drawn lives in the active theme's view (`core/slots/nav-topbar/mesh-default-view.tsx`).
+export function Header({ onToggleSidebar, installable, onInstall }: HeaderProps) {
+  const { t } = useTranslation("shell");
+  const { wsSlug, projectSlug } = useParams();
+  const { user } = useAuthStore();
+  const unread = useNotificationStore((s) => s.unreadCount);
+  const { currentWorkspace } = useWorkspaceStore();
+  const { currentProject } = useProjectStore();
+  const workspacePage = useWorkspacePage();
+
+  const breadcrumbs: TopbarCrumb[] = [];
+  if (currentWorkspace) {
+    breadcrumbs.push({ kind: "workspace", label: currentWorkspace.name, href: `/w/${wsSlug}` });
+    if (currentProject) {
+      breadcrumbs.push({ kind: "project", label: currentProject.name, href: `/w/${wsSlug}/p/${projectSlug}`, strong: true });
+    } else if (workspacePage) {
+      breadcrumbs.push({ kind: "page", label: t(workspacePage.titleKey), icon: workspacePage.icon, strong: true });
+    }
+  }
+
+  const data: TopbarData = {
+    breadcrumbs,
+    user: { id: user?.id ?? "", name: user?.name ?? "", avatarUrl: user?.avatar_url || undefined },
+    notifications: { unread },
+    installable: !!(installable && onInstall),
+    isMobile: typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches,
+    components: TOPBAR_COMPONENTS,
+  };
+  const actions: TopbarActions = {
+    toggleSidebar: onToggleSidebar,
+    install: installable && onInstall ? onInstall : undefined,
+  };
+  const ctx = useBuildSlotContext(
+    "nav.topbar",
+    currentWorkspace ? { id: currentWorkspace.id, slug: currentWorkspace.slug, name: currentWorkspace.name } : null,
+  );
+  const themeSettings = useThemeSettings();
+  useSlotRegistryVersion();
+  const View = withSlotFallback("nav.topbar", resolveSlotView("nav.topbar"));
+  return <View data={data} actions={actions} themeSettings={themeSettings} ctx={ctx} />;
 }

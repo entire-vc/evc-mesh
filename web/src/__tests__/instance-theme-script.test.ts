@@ -51,10 +51,22 @@ describe("public/instance-theme.js", () => {
     expect(style()?.textContent).toContain("cached");
   });
 
-  it("leaves the signed-in app's tokens alone, only the chrome colour", async () => {
+  it("paints the instance tokens on the app's static shell too (no workspace cache yet)", async () => {
     await run("/board", theme("b"));
-    expect(style()).toBeNull();
+    expect(style()?.textContent).toContain("--primary:b");
     expect(meta().content).toBe("b");
+  });
+
+  it("inside /w/<slug>/ the cached workspace theme paints before the first frame and the instance tokens stay out", async () => {
+    localStorage.setItem(
+      "mesh-theme:acme",
+      JSON.stringify({ hash: "w", tokens_css: ":root{--primary:ws;}", css: ".x{color:red}" }),
+    );
+    await run("/w/acme/dashboard", theme("inst"));
+    expect(document.getElementById("mesh-theme-tokens")?.textContent).toContain("--primary:ws");
+    expect(document.getElementById("mesh-theme-css")?.textContent).toMatch(/^@layer mesh-theme \{/);
+    expect(style()).toBeNull();
+    expect(meta().content).toBe("inst");
   });
 
   it("uses the dark chrome colour in dark mode", async () => {

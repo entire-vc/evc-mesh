@@ -159,6 +159,16 @@ test.beforeAll(async ({ browser }) => {
   page.on("response", (resp) => {
     const url = new URL(resp.url());
     if (!url.pathname.startsWith("/api/v1/")) return;
+    // GET /me/ui-state/<scope> answers 404 until the user has stored state for
+    // that scope: the documented "nothing saved yet" contract (the theme store
+    // treats it as empty). Only this GET is tolerated, nothing else.
+    if (
+      resp.status() === 404 &&
+      resp.request().method() === "GET" &&
+      url.pathname.startsWith("/api/v1/me/ui-state/")
+    ) {
+      return;
+    }
     if (resp.status() >= 400 && !url.pathname.endsWith("/auth/refresh")) {
       failedApiCalls.push(`${resp.status()} ${resp.request().method()} ${url.pathname}`);
     }

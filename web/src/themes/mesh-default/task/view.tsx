@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ListTree, Package } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePanelTabs } from "@/components/extensions/slots/slot-host";
 import { resolveSlotTab } from "@/lib/extension-slots";
@@ -99,8 +100,13 @@ export const TaskView: TaskViewView = ({ data }) => {
       <>
         {topBar}
         {error?.message ? (
-          <div role="alert" className="flex flex-1 items-center justify-center text-muted-foreground">
+          <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
             <p className="text-sm">{error.message}</p>
+            {data.task.state === "error" ? (
+              <Button variant="outline" size="sm" onClick={() => data.task.state === "error" && data.task.retry()}>
+                {t("actions.retry")}
+              </Button>
+            ) : null}
           </div>
         ) : null}
       </>

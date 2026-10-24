@@ -740,3 +740,47 @@ seed (ceiling 20 -> 17). `task.open` issued the comments/members GETs twice
 (panel mounted for one frame before its own loading skeleton); fixed, but its
 layout count under delay (6-8 vs 4) stays: comments, custom fields and the
 team-relay flag are separate sections that each paint when they arrive.
+
+`login.initial_js_kb_gz` 172.7 → 179.2 (**+6.5 KB gz**) and `total_js_kb_gz` 672.3 →
+685.9 (**+13.6 KB gz**), themes T5: the theme runtime lives in the eagerly
+loaded `AppLayout` (registry of slot views, per-slot error boundary, version check,
+style apply and per-slug cache, `useWorkspaceTheme`), which is what the
+no-flash switch needs. Main measured within ~0.1 KB of its 172.7 / 672.3 ceilings, so there
+was no headroom. The shared copies for theme bundles (React, react-dom, i18n, the
+primitives) are a lazy chunk loaded only when a theme ships views (first attempt put
+them in the entry: 205 KB gz initial). The build measured 178.32 / 684.9 locally;
+the ceilings carry ~0.5 KB for the local-vs-CI difference. Lead sign-off: the product lead,
+requested on the card.
+
+`login.initial_js_kb_gz` 179.2 → 179.4 (**+0.2 KB gz**) and `total_js_kb_gz` 685.9 → 686.1
+(**+0.2 KB gz**): the colour-mode store (`core/themes/mode.ts`: light / dark /
+system, server sync, `prefers-color-scheme` watcher) is loaded with `AppLayout`, because
+the mode must be applied before the first screen after sign-in. CI measured 179.33 / 686.03 (after review fixes: per-workspace cached modes, a guard against a late sync
+overwriting a fresh choice); the ceilings moved by the smallest step above that. Lead sign-off: the product lead.
+
+`login.initial_js_kb_gz` 180.8 → 181.2 (**+0.4 KB gz**) and `total_js_kb_gz` 687.7 → 689.0
+(**+1.3 KB gz**), T6.1: the slot contract types move to the `@entire-vc/mesh-theme-sdk`
+package (type-only, no bytes) and the core gains `SlotContextProvider` / `useSlotContext`
+and an explicitly typed `sdk` export object in `core/themes/shared.ts`, so an SDK
+declaration the core lacks fails `tsc`. The provider and the export object are the only
+runtime additions; the sum covers every chunk, so lazy loading does not help. CI measured
+181.1 / 688.88 (perf-bundle job 354106) on the base carrying the 180.8 / 687.7 ceilings; the
+ceilings moved by the smallest 0.1-step above that. Revert: revert the MR. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 689.0 → 700.5 and `login.initial_js_kb_gz` 181.2 → 181.6
+(theme UI: **+11.5 KB gz total / +0.5 KB gz login** over main): the workspace
+Theme tab, instance themes page, seven new SchemaForm widgets and their
+en/ru strings. CI measured 700.18 / 181.52 on the base of 2026-10-23. If main
+moves before the merge, recompute from the new main with the same increment.
+Lead sign-off: the product lead, 2026-10-23.
+
+`total_js_kb_gz` 700.5 → 701.0 (**+0.5 KB gz**), runner chat turn events: ten `chat_*` runner
+error codes (`chat_stale_claim`, `chat_seq_gap`, `chat_rate_limited`, …) are added to
+`apiErrors` in `en` and `ru`, so the UI can name them when a run is refused. Main sat on its
+700.5 ceiling; CI measured 700.81 with them (perf-bundle, pipeline 17356). The ceiling moved by
+the smallest step above that. Lead sign-off: the product lead.
+
+`total_js_kb_gz` 701.0 → 701.2 (+0.2 KB gz): after main took the theme Remove refactor,
+CI measured 701.1 on this MR (perf-bundle, pipeline 17441, over the 701.0 ceiling by 0.1).
+Same `apiErrors` strings as above; the ceiling moved by the smallest 0.1-step above the
+measurement. Revert: set the ceiling back to 701.0. Lead sign-off: the product lead, requested on the card.

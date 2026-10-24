@@ -1242,6 +1242,9 @@ type PRHandleResult struct {
 	NewStatus    string // status slug; empty when no transition
 	Transitioned bool
 	Reason       string
+	// LinksSynced is how many existing links had their status refreshed by an
+	// ambiguous_task_ref delivery (no task chosen, no transition). 0 otherwise.
+	LinksSynced int
 }
 
 // IntegrationService provides business logic for workspace integration configs.

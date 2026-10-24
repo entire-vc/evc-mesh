@@ -140,7 +140,7 @@ func (m *memRepo) List(context.Context) ([]domain.InstalledExtension, error) {
 	}
 	return out, nil
 }
-func (m *memRepo) InsertRepo(_ context.Context, e *domain.InstalledExtension, token string) error {
+func (m *memRepo) InsertRepo(_ context.Context, e *domain.InstalledExtension, token string, _ *domain.InstanceExtensionJournalEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.rows[e.ExtensionID]; ok {

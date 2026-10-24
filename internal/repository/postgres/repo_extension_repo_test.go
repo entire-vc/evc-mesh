@@ -19,7 +19,7 @@ func TestRepoExtensionRepo_InsertRepo_TokenFailsClosedWithoutKey(t *testing.T) {
 	encryption.ResetForTest()
 	t.Cleanup(encryption.ResetForTest)
 
-	err := NewRepoExtensionRepo(nil).InsertRepo(context.Background(), &domain.InstalledExtension{ExtensionID: "x"}, "glpat-secret")
+	err := NewRepoExtensionRepo(nil).InsertRepo(context.Background(), &domain.InstalledExtension{ExtensionID: "x"}, "glpat-secret", nil)
 	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "glpat-secret")
+	assert.NotContains(t, err.Error(), "glpat-secret", nil)
 }

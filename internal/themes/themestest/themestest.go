@@ -90,8 +90,33 @@ type Themes struct {
 	mu        sync.Mutex
 	Instance  *domain.ThemeSelection
 	Workspace map[uuid.UUID]*domain.ThemeSelection
+	// Installed, when set, loses the row on DeleteTheme like installed_extensions does.
+	Installed *Installed
+	// OnDelete stands in for Installed when the installed rows live in another fake.
+	OnDelete func(id string) bool
+	// OnInstall stands in for Installed on InstallBuiltin when the installed rows
+	// live in another fake.
+	OnInstall func(*domain.InstalledExtension) error
+	// Journal collects the entries committed with a mutation.
+	Journal []domain.InstanceExtensionJournalEntry
+	// JournalErr, when set, fails the journal write; like the real store, the
+	// mutation it belongs to is then not applied.
+	JournalErr error
 	// Err, when set, fails every call: the store is unreachable.
 	Err error
+}
+
+// journal is the in-transaction journal write: it runs last and, when it fails,
+// the caller has not yet applied anything.
+func (t *Themes) journal(e *domain.InstanceExtensionJournalEntry) error {
+	if e == nil {
+		return nil
+	}
+	if t.JournalErr != nil {
+		return t.JournalErr
+	}
+	t.Journal = append(t.Journal, *e)
+	return nil
 }
 
 func NewThemes() *Themes { return &Themes{Workspace: map[uuid.UUID]*domain.ThemeSelection{}} }
@@ -113,13 +138,17 @@ func (t *Themes) GetInstance(context.Context) (*domain.ThemeSelection, error) {
 	return t.Instance, nil
 }
 
-func (t *Themes) SetInstance(_ context.Context, id *string, settings json.RawMessage, by uuid.UUID) (*domain.ThemeSelection, error) {
+func (t *Themes) SetInstance(_ context.Context, id *string, settings json.RawMessage, by uuid.UUID, journal *domain.InstanceExtensionJournalEntry) (*domain.ThemeSelection, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.Err != nil {
 		return nil, t.Err
 	}
-	t.Instance = next(t.Instance, id, settings, by)
+	n := next(t.Instance, id, settings, by)
+	if err := t.journal(withVersion(journal, n.Version)); err != nil {
+		return nil, err
+	}
+	t.Instance = n
 	return t.Instance, nil
 }
 
@@ -132,14 +161,87 @@ func (t *Themes) GetWorkspace(_ context.Context, ws uuid.UUID) (*domain.ThemeSel
 	return t.Workspace[ws], nil
 }
 
-func (t *Themes) SetWorkspace(_ context.Context, ws uuid.UUID, id *string, settings json.RawMessage, by uuid.UUID) (*domain.ThemeSelection, error) {
+func (t *Themes) SetWorkspace(_ context.Context, ws uuid.UUID, id *string, settings json.RawMessage, by uuid.UUID, journal *domain.InstanceExtensionJournalEntry) (*domain.ThemeSelection, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.Err != nil {
 		return nil, t.Err
 	}
-	t.Workspace[ws] = next(t.Workspace[ws], id, settings, by)
+	n := next(t.Workspace[ws], id, settings, by)
+	if err := t.journal(withVersion(journal, n.Version)); err != nil {
+		return nil, err
+	}
+	t.Workspace[ws] = n
 	return t.Workspace[ws], nil
+}
+
+func withVersion(e *domain.InstanceExtensionJournalEntry, version int) *domain.InstanceExtensionJournalEntry {
+	if e == nil {
+		return nil
+	}
+	d := map[string]any{}
+	_ = json.Unmarshal(e.Details, &d)
+	d["version"] = version
+	c := *e
+	c.Details, _ = json.Marshal(d)
+	return &c
+}
+
+// InstallBuiltin writes the row, then the journal entry; a failed journal write
+// removes the row again, as the rolled-back transaction would.
+func (t *Themes) InstallBuiltin(ctx context.Context, e *domain.InstalledExtension, journal *domain.InstanceExtensionJournalEntry) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.Err != nil {
+		return t.Err
+	}
+	if t.JournalErr != nil && journal != nil {
+		return t.JournalErr
+	}
+	if t.OnInstall != nil {
+		if err := t.OnInstall(e); err != nil {
+			return err
+		}
+	} else if t.Installed != nil {
+		t.Installed.mu.Lock()
+		c := *e
+		t.Installed.Rows[e.ExtensionID] = &c
+		t.Installed.mu.Unlock()
+	}
+	return t.journal(journal)
+}
+
+func (t *Themes) DeleteTheme(_ context.Context, id string, journal *domain.InstanceExtensionJournalEntry) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.Err != nil {
+		return false, t.Err
+	}
+	if t.JournalErr != nil && journal != nil {
+		return false, t.JournalErr
+	}
+	reset := func(sel *domain.ThemeSelection) {
+		if sel != nil && sel.ThemeID != nil && *sel.ThemeID == id {
+			sel.ThemeID, sel.Settings, sel.Version = nil, json.RawMessage(`{}`), sel.Version+1
+		}
+	}
+	reset(t.Instance)
+	for _, sel := range t.Workspace {
+		reset(sel)
+	}
+	ok := true
+	if t.OnDelete != nil {
+		ok = t.OnDelete(id)
+	} else if t.Installed != nil {
+		t.Installed.mu.Lock()
+		_, ok = t.Installed.Rows[id]
+		delete(t.Installed.Rows, id)
+		t.Installed.mu.Unlock()
+	}
+	if ok {
+		return true, t.journal(journal)
+	}
+	return false, nil
 }
 
 // Store is an in-memory object store.

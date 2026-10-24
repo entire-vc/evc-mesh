@@ -187,7 +187,23 @@
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "themeTokens": {
       "type": "object",
-      "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+      "$comment": "Token names from evc-mesh 31c05fbd internal/themes/contract.go (contract v1); Mesh checks this allowlist outside its JSON Schema.",
+      "propertyNames": {
+        "enum": [
+          "background", "foreground", "card", "card-foreground", "popover", "popover-foreground",
+          "primary", "primary-foreground", "secondary", "secondary-foreground",
+          "muted", "muted-foreground", "accent", "accent-foreground",
+          "destructive", "destructive-foreground", "success", "success-foreground", "warning", "warning-foreground",
+          "border", "input", "ring",
+          "sidebar-background", "sidebar-foreground", "sidebar-primary", "sidebar-accent", "sidebar-border",
+          "sidebar-primary-foreground", "sidebar-accent-foreground", "info", "info-foreground",
+          "priority-urgent", "priority-high", "priority-medium", "priority-low", "priority-none",
+          "status-backlog", "status-triage", "status-todo", "status-in-progress", "status-review", "status-done", "status-cancelled",
+          "chart-1", "chart-2", "chart-3", "chart-4", "chart-5",
+          "avatar-1", "avatar-2", "avatar-3", "avatar-4", "avatar-5", "avatar-6", "avatar-7", "avatar-8",
+          "radius", "space-unit", "font-sans", "font-mono"
+        ]
+      },
       "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 200 }
     },
     "theme": {
@@ -249,7 +265,9 @@
       "type": "object",
       "properties": {
         "x-secret": { "type": "boolean" },
-        "x-widget": { "enum": ["project-picker", "agent-picker", "textarea", "toggle", "select", "list", "group"] },
+        "x-widget": { "enum": ["project-picker", "agent-picker", "textarea", "toggle", "select", "list", "group", "color", "font-select", "image", "field-picker", "widget-picker", "layout-picker", "order-list"] },
+        "x-token": { "type": "string", "minLength": 1 },
+        "x-options": { "type": "object", "additionalProperties": { "type": "string" } },
         "x-visible-if": { "type": "object" },
         "x-help": { "type": "string" }
       }

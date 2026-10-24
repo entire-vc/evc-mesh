@@ -17,30 +17,35 @@ export function resolveAgentStatus(agent: TeamDirectoryAgent): string {
   return (agent.heartbeat_status ?? agent.status ?? "offline").toLowerCase();
 }
 
-/** One load per workspace (+ optional polling). A failed read yields `empty`, as the dashboard always did. */
-function useLoad<T>(load: (wsId: string) => Promise<T>, empty: T, refreshMs?: number): Async<T> {
+/**
+ * One load per workspace (+ optional polling). A failed read yields `empty`, as the dashboard always did, unless
+ * `surfaceErrors`: then it is an `error` state with a retry (a theme's own widget must not show an outage as "nothing here").
+ */
+function useLoad<T>(load: (wsId: string) => Promise<T>, empty: T, refreshMs?: number, surfaceErrors = false): Async<T> {
   const wsId = useWorkspaceStore((s) => s.currentWorkspace?.id);
   // Tagged with its workspace: another workspace's data is never shown as ready.
-  const [loaded, setLoaded] = useState<{ wsId: string; value: T } | null>(null);
+  const [loaded, setLoaded] = useState<{ wsId: string; value: T } | { wsId: string; error: Error } | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!wsId) return;
     let live = true;
     const run = () =>
       load(wsId)
         .then((v) => live && setLoaded({ wsId, value: v }))
-        .catch(() => live && setLoaded({ wsId, value: empty }));
+        .catch((e) => live && setLoaded(surfaceErrors ? { wsId, error: e instanceof Error ? e : new Error(String(e)) } : { wsId, value: empty }));
     void run();
     const id = refreshMs ? setInterval(() => void run(), refreshMs) : undefined;
     return () => {
       live = false;
       if (id) clearInterval(id);
     };
-    // load/empty are module-level constants at every call site.
-  }, [wsId, load, empty, refreshMs]);
-  return useMemo<Async<T>>(
-    () => (loaded === null || loaded.wsId !== wsId ? { state: "loading" } : { state: "ready", value: loaded.value }),
-    [loaded, wsId],
-  );
+    // load/empty are module-level constants at every call site (useTasks memoizes its loader by query).
+  }, [wsId, load, empty, refreshMs, surfaceErrors, attempt]);
+  return useMemo<Async<T>>(() => {
+    if (loaded === null || loaded.wsId !== wsId) return { state: "loading" };
+    if ("error" in loaded) return { state: "error", error: loaded.error, retry: () => { setLoaded(null); setAttempt((n) => n + 1); } };
+    return { state: "ready", value: loaded.value };
+  }, [loaded, wsId]);
 }
 
 interface MentionsRaw {
@@ -97,8 +102,8 @@ const loadTriage = async (wsId: string): Promise<TasksData> => {
   return { items: sorted.slice(0, 5), total: sorted.length, projectNames: {} };
 };
 
-const loadMine = async (wsId: string): Promise<TasksData> => {
-  const data = await api<PaginatedResponse<Task>>("/api/v1/me/tasks", { params: { workspace_id: wsId, per_page: 5 } });
+const loadMine = async (wsId: string, perPage = 5): Promise<TasksData> => {
+  const data = await api<PaginatedResponse<Task>>("/api/v1/me/tasks", { params: { workspace_id: wsId, per_page: perPage } });
   const items = data?.items ?? [];
   return { items, total: items.length, projectNames: {} };
 };
@@ -140,11 +145,17 @@ const UNSUPPORTED: Async<never> = {
 };
 
 const loadQuery = (q: TaskQuery) => async (wsId: string): Promise<TasksData> => {
-  const base = await (q.gated ? loadTriage(wsId) : loadMine(wsId));
+  // a theme widget filters and sorts client-side, so it needs the whole page, not the five rows of the built-in card
+  const base = await (q.gated ? loadTriage(wsId) : loadMine(wsId, 50));
   let items = base.items;
   if (q.priority?.length) items = items.filter((t) => q.priority!.includes(t.priority));
   if (q.dueBefore) items = items.filter((t) => t.due_date && t.due_date < q.dueBefore!);
   if (q.sort === "priority") items = [...items].sort((a, b) => PRIO.indexOf(a.priority) - PRIO.indexOf(b.priority));
+  if (q.sort === "due_date") {
+    // no due date sorts last
+    const due = (t: Task) => (t.due_date ? new Date(t.due_date).getTime() : Infinity);
+    items = [...items].sort((a, b) => due(a) - due(b));
+  }
   items = items.slice(0, Math.min(q.limit ?? 50, 50));
   return { items, total: items.length, projectNames: {} };
 };
@@ -156,7 +167,7 @@ export function useTasks(q: TaskQuery): Async<TasksData> {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const load = useMemo(() => loadQuery(q), [key]);
   const supported = q.scope === "mine" || (q.scope === "workspace" && !!q.gated);
-  const r = useLoad(supported ? load : loadNothing, EMPTY_TASKS);
+  const r = useLoad(supported ? load : loadNothing, EMPTY_TASKS, undefined, true);
   return useMemo(() => (supported ? withProjectNames(r, projects) : UNSUPPORTED), [supported, r, projects]);
 }
 const loadNothing = async (): Promise<TasksData> => EMPTY_TASKS;

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/url"
 	"path"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
+	"github.com/entire-vc/evc-mesh/pkg/metrics"
 )
 
 // vcsLinkService implements VCSLinkService.
@@ -32,6 +34,21 @@ type vcsLinkService struct {
 	// pipelineSource resolves a per-workspace GitLab client to read an MR's
 	// head pipeline when the MR merges; nil disables that sync.
 	pipelineSource func(ctx context.Context, workspaceID uuid.UUID) (MRHeadPipelineSource, bool)
+	// mrStateSource resolves a per-workspace GitLab client to read an MR's live
+	// state when a link is added without a status; nil disables that check.
+	mrStateSource func(ctx context.Context, workspaceID uuid.UUID) (gitlabapi.MergeRequestChecker, bool)
+}
+
+// vcsLinkCreateLiveCheckTimeout bounds the GitLab round trip Create makes to
+// learn an MR's real state. Link creation never fails because of it.
+const vcsLinkCreateLiveCheckTimeout = 3 * time.Second
+
+// WithVCSMRStateSource lets Create ask GitLab for the state of an MR linked
+// without an explicit status, so a link to an MR that merged before any webhook
+// could see it is stored as merged/closed instead of open forever. It mirrors
+// the checker the done gate resolves (taskService.resolveGitLabChecker).
+func WithVCSMRStateSource(f func(ctx context.Context, workspaceID uuid.UUID) (gitlabapi.MergeRequestChecker, bool)) VCSLinkServiceOption {
+	return func(s *vcsLinkService) { s.mrStateSource = f }
 }
 
 // MRHeadPipelineSource reads the head pipeline of a GitLab merge request.
@@ -143,8 +160,17 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 	// — track it here, not by re-checking input.Status later.
 	explicitStatus := input.Status != ""
 	status := input.Status
+	liveVerified := false
 	if !explicitStatus && linkType == domain.VCSLinkTypePR {
 		status = domain.VCSLinkStatusOpen
+		// No webhook can report an MR that merged before this link existed, so
+		// ask GitLab once instead of storing "open" for ever. Best effort.
+		if provider == domain.VCSProviderGitLab {
+			if live, ok := s.liveGitLabLinkStatus(ctx, input.TaskID, input.URL); ok {
+				status = live
+				liveVerified = true
+			}
+		}
 	}
 
 	if explicitStatus {
@@ -172,6 +198,18 @@ func (s *vcsLinkService) Create(ctx context.Context, input domain.CreateVCSLinkI
 		Status:     status,
 		Metadata:   metadata,
 		CreatedAt:  time.Now(),
+	}
+
+	if liveVerified {
+		// GitLab itself reported a terminal state. Upsert (not Create) because
+		// only Upsert stamps status_synced_at, the "confirmed at" mark the
+		// done gate and staleness checks read; this status is measured, not
+		// self-declared, so no status_declared_manually trail is written.
+		created, err := s.repo.Upsert(ctx, link)
+		if err != nil {
+			return nil, false, wrapVCSLinkRepoErr(err)
+		}
+		return link, created, nil
 	}
 
 	if explicitStatus {
@@ -215,6 +253,48 @@ func wrapVCSLinkRepoErr(err error) error {
 		return apiErr
 	}
 	return fmt.Errorf("create vcs link: %w", err)
+}
+
+// liveGitLabLinkStatus asks GitLab for the current state of the MR a new link
+// names. ok=true only when GitLab answered merged or closed; every other
+// outcome (no source wired, task or workspace unresolvable, URL not an MR URL,
+// no token, timeout, API error, MR still open) returns ok=false and the caller
+// keeps its "open" default. It never returns an error: a GitLab problem must
+// not fail link creation.
+func (s *vcsLinkService) liveGitLabLinkStatus(ctx context.Context, taskID uuid.UUID, mrURL string) (domain.VCSLinkStatus, bool) {
+	if s.mrStateSource == nil || s.taskRepo == nil || s.projectRepo == nil {
+		return "", false
+	}
+	projectPath, iid, ok := gitlabapi.ParseMergeRequestURL(mrURL)
+	if !ok {
+		return "", false
+	}
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil || task == nil {
+		return "", false
+	}
+	proj, err := s.projectRepo.GetByID(ctx, task.ProjectID)
+	if err != nil || proj == nil {
+		return "", false
+	}
+	checker, ok := s.mrStateSource(ctx, proj.WorkspaceID)
+	if !ok || checker == nil {
+		return "", false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, vcsLinkCreateLiveCheckTimeout)
+	defer cancel()
+	state, err := checker.GetMergeRequestState(checkCtx, projectPath, iid)
+	if err != nil {
+		log.Printf("[vcs-link] live gitlab state for new link %s!%d (task=%s) unavailable, storing open: %v", projectPath, iid, taskID, err)
+		return "", false
+	}
+	switch {
+	case state.Merged || state.State == "merged":
+		return domain.VCSLinkStatusMerged, true
+	case state.State == "closed":
+		return domain.VCSLinkStatusClosed, true
+	}
+	return "", false
 }
 
 // GetByID retrieves a VCS link by ID.
@@ -338,7 +418,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		{Name: "body", Text: ev.PRBody},
 		{Name: "branch", Text: ev.PRBranch},
 	}
-	taskID, matched, outcome := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
+	taskID, matched, outcome, candidates := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] pr=%s#%d resolved task=%s via=%s src=%s raw=%q",
 			ev.Repository, ev.PRNumber, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
@@ -368,9 +448,20 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		// delivery took this fallback, the refusal added one commit earlier
 		// could never undo it. A link that can only be corrected by hand is a
 		// link that stays wrong.
-		log.Printf("[vcs-webhook] pr=%s#%d ambiguous_task_ref: refusing to reuse any stored link for this PR",
-			ev.Repository, ev.PRNumber)
-		return PRHandleResult{Reason: "ambiguous_task_ref"}, nil
+		//
+		// What an ambiguous delivery MAY do is refresh the status of a link that
+		// already names exactly this PR on one of the tasks the payload mentioned:
+		// the PR's own state is not in doubt, only which task it belongs to. It
+		// never picks a task, creates a link, or transitions a task, so the #433
+		// protection is untouched; without this a merged PR left its link open
+		// for ever whenever the body quoted a second task id.
+		synced, err := s.syncExistingLinksOnAmbiguousRef(ctx, ev.WorkspaceID, domain.VCSProviderGitHub,
+			strconv.Itoa(ev.PRNumber), ev.PRHTMLURL, candidates, githubLinkStatus(ev), []byte("{}"))
+		recordAmbiguousTaskRef(domain.VCSProviderGitHub, fmt.Sprintf("%s#%d", ev.Repository, ev.PRNumber), ev.PRHTMLURL, len(candidates), synced)
+		if err != nil {
+			return PRHandleResult{Reason: "ambiguous_task_ref"}, err
+		}
+		return PRHandleResult{Reason: "ambiguous_task_ref", LinksSynced: synced}, nil
 	}
 	if taskID == uuid.Nil {
 		links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitHub, domain.VCSLinkTypePR, strconv.Itoa(ev.PRNumber))
@@ -404,16 +495,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 	}
 
 	// 2. Compute target link status.
-	linkStatus := domain.VCSLinkStatus(strings.ToLower(ev.PRState))
-	if ev.PRMerged {
-		linkStatus = domain.VCSLinkStatusMerged
-	}
-	if ev.Action == "closed" && !ev.PRMerged {
-		linkStatus = domain.VCSLinkStatusClosed
-	}
-	if linkStatus == "" {
-		linkStatus = domain.VCSLinkStatusOpen
-	}
+	linkStatus := githubLinkStatus(ev)
 
 	// 3. Upsert the link so subsequent webhooks update the same row.
 	link := &domain.VCSLink{
@@ -463,7 +545,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		{Name: "body", Text: ev.MRBody},
 		{Name: "branch", Text: ev.MRBranch},
 	}
-	taskID, matched, outcome := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
+	taskID, matched, outcome, candidates := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] mr=%s!%d resolved task=%s via=%s src=%s raw=%q",
 			ev.ProjectPath, ev.MRIID, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
@@ -480,10 +562,18 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		// See the identical guard in HandleGitHubPullRequestEvent: an
 		// ambiguous payload must not fall back to whatever was stored for a
 		// prior delivery of the same MR — that reuse is what let a PR
-		// stick to the wrong task irreversibly.
-		log.Printf("[vcs-webhook] mr=%s!%d ambiguous_task_ref: refusing to reuse any stored link for this MR",
-			ev.ProjectPath, ev.MRIID)
-		return PRHandleResult{Reason: "ambiguous_task_ref"}, nil
+		// stick to the wrong task irreversibly. It may only refresh the status
+		// of links that already name this exact MR on a mentioned task.
+		synced, err := s.syncExistingLinksOnAmbiguousRef(ctx, ev.WorkspaceID, domain.VCSProviderGitLab,
+			strconv.Itoa(ev.MRIID), ev.MRURL, candidates, gitlabLinkStatus(ev.MRState), gitLabLinkMetadata(ev.HeadSHA))
+		recordAmbiguousTaskRef(domain.VCSProviderGitLab, fmt.Sprintf("%s!%d", ev.ProjectPath, ev.MRIID), ev.MRURL, len(candidates), synced)
+		if err != nil {
+			return PRHandleResult{Reason: "ambiguous_task_ref"}, err
+		}
+		if synced > 0 && ev.MRState == "merged" {
+			s.syncMergedPipeline(ctx, ev)
+		}
+		return PRHandleResult{Reason: "ambiguous_task_ref", LinksSynced: synced}, nil
 	}
 	if taskID == uuid.Nil {
 		links, err := s.repo.ListByExternalID(ctx, domain.VCSProviderGitLab, domain.VCSLinkTypePR, strconv.Itoa(ev.MRIID))
@@ -514,15 +604,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	// 2. Compute target link status. GitLab's `state` already distinguishes
 	//    merged from closed (unlike GitHub's open/closed-only `state`, which
 	//    needs the separate `merged` boolean), so this is a direct mapping.
-	var linkStatus domain.VCSLinkStatus
-	switch ev.MRState {
-	case "merged":
-		linkStatus = domain.VCSLinkStatusMerged
-	case "closed":
-		linkStatus = domain.VCSLinkStatusClosed
-	default: // "opened", "locked" (locked is transient while GitLab processes a merge)
-		linkStatus = domain.VCSLinkStatusOpen
-	}
+	linkStatus := gitlabLinkStatus(ev.MRState)
 
 	// 3. Upsert the link so subsequent webhooks update the same row.
 	link := &domain.VCSLink{
@@ -557,6 +639,91 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitLab, strconv.Itoa(ev.MRIID), ev.MRURL, taskID,
 		merged, fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
 	return res, err
+}
+
+// githubLinkStatus maps a pull_request delivery to the status its link stores.
+func githubLinkStatus(ev GitHubWebhookEvent) domain.VCSLinkStatus {
+	linkStatus := domain.VCSLinkStatus(strings.ToLower(ev.PRState))
+	if ev.PRMerged {
+		linkStatus = domain.VCSLinkStatusMerged
+	}
+	if ev.Action == "closed" && !ev.PRMerged {
+		linkStatus = domain.VCSLinkStatusClosed
+	}
+	if linkStatus == "" {
+		linkStatus = domain.VCSLinkStatusOpen
+	}
+	return linkStatus
+}
+
+// gitlabLinkStatus maps a GitLab MR `state` to the status its link stores.
+func gitlabLinkStatus(mrState string) domain.VCSLinkStatus {
+	switch mrState {
+	case "merged":
+		return domain.VCSLinkStatusMerged
+	case "closed":
+		return domain.VCSLinkStatusClosed
+	default: // "opened", "locked" (locked is transient while GitLab processes a merge)
+		return domain.VCSLinkStatusOpen
+	}
+}
+
+// recordAmbiguousTaskRef makes a refused delivery visible: a warn-level
+// structured line and a counter. Before this, an ambiguous merge event left one
+// log line without the MR url and no metric, so ten links went stale unseen.
+func recordAmbiguousTaskRef(provider domain.VCSProvider, ref, prURL string, candidates, synced int) {
+	outcome := "none"
+	if synced > 0 {
+		outcome = "status_synced"
+	}
+	slog.Warn("vcs webhook ambiguous_task_ref",
+		"provider", string(provider),
+		"ref", ref,
+		"url", prURL,
+		"candidates", candidates,
+		"links_synced", synced,
+	)
+	metrics.RecordVCSWebhookAmbiguousTaskRef(string(provider), outcome)
+}
+
+// syncExistingLinksOnAmbiguousRef refreshes the status (and head metadata) of
+// links that already name exactly this PR/MR on one of candidates — the tasks
+// an ambiguous payload mentioned — and returns how many it wrote.
+//
+// It is deliberately narrower than the "payload names nothing" fallback: the
+// link must match by external id AND url (an iid alone is reused across
+// projects), live in the delivering workspace, and belong to a mentioned task.
+// An empty url matches nothing here, because without it a same-numbered MR of
+// another project could not be told apart. It writes through Upsert on the
+// stored row itself, so it can neither create a link nor choose a task, and it
+// never reaches applyPRTransitionPolicy or closeReviewSubjects: no task moves.
+func (s *vcsLinkService) syncExistingLinksOnAmbiguousRef(ctx context.Context, workspaceID uuid.UUID, provider domain.VCSProvider, externalID, rawURL string, candidates []uuid.UUID, status domain.VCSLinkStatus, metadata []byte) (int, error) {
+	if rawURL == "" || len(candidates) == 0 {
+		return 0, nil
+	}
+	links, err := s.repo.ListByExternalID(ctx, provider, domain.VCSLinkTypePR, externalID)
+	if err != nil {
+		return 0, fmt.Errorf("list vcs links by external_id: %w", err)
+	}
+	links = s.filterLinksInWorkspace(ctx, workspaceID, filterLinksByURL(links, rawURL))
+	mentioned := make(map[uuid.UUID]bool, len(candidates))
+	for _, id := range candidates {
+		mentioned[id] = true
+	}
+	synced := 0
+	for _, l := range links {
+		if !mentioned[l.TaskID] {
+			continue
+		}
+		l := l
+		l.Status = status
+		l.Metadata = metadata
+		if _, err := s.repo.Upsert(ctx, &l); err != nil {
+			return synced, fmt.Errorf("upsert vcs link: %w", err)
+		}
+		synced++
+	}
+	return synced, nil
 }
 
 // syncMergedPipeline stores the MR's head pipeline on its links at merge time.
@@ -855,7 +1022,7 @@ const maxRefCandidates = 12
 //
 // Returns uuid.Nil when nothing resolves or the payload is ambiguous.
 func (s *vcsLinkService) ResolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef) {
-	id, ref, _ := s.resolveTaskRef(ctx, workspaceID, sources...)
+	id, ref, _, _ := s.resolveTaskRef(ctx, workspaceID, sources...)
 	return id, ref
 }
 
@@ -875,7 +1042,10 @@ const (
 	refAmbiguous
 )
 
-func (s *vcsLinkService) resolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef, refOutcome) {
+// The fourth result lists the distinct existing tasks the payload named; it is
+// only consulted for refAmbiguous, where it bounds which tasks' links an
+// ambiguous delivery may refresh (see syncExistingLinksOnAmbiguousRef).
+func (s *vcsLinkService) resolveTaskRef(ctx context.Context, workspaceID uuid.UUID, sources ...TaskRefSource) (uuid.UUID, TaskRef, refOutcome, []uuid.UUID) { //nolint:gocritic // unnamedResult: the 4 results are documented above; naming them would shadow the locals below
 	type hit struct {
 		id  uuid.UUID
 		ref TaskRef
@@ -903,9 +1073,14 @@ func (s *vcsLinkService) resolveTaskRef(ctx context.Context, workspaceID uuid.UU
 
 	switch len(hits) {
 	case 0:
-		return uuid.Nil, TaskRef{}, refNone
+		return uuid.Nil, TaskRef{}, refNone, nil
 	case 1:
-		return hits[0].id, hits[0].ref, refResolved
+		return hits[0].id, hits[0].ref, refResolved, []uuid.UUID{hits[0].id}
+	}
+
+	candidates := make([]uuid.UUID, 0, len(hits))
+	for _, h := range hits {
+		candidates = append(candidates, h.id)
 	}
 
 	// Ambiguous. A title is short and deliberate, so a single reference there
@@ -917,7 +1092,7 @@ func (s *vcsLinkService) resolveTaskRef(ctx context.Context, workspaceID uuid.UU
 		}
 	}
 	if len(fromTitle) == 1 {
-		return fromTitle[0].id, fromTitle[0].ref, refResolved
+		return fromTitle[0].id, fromTitle[0].ref, refResolved, candidates
 	}
 
 	ids := make([]string, 0, len(hits))
@@ -926,7 +1101,7 @@ func (s *vcsLinkService) resolveTaskRef(ctx context.Context, workspaceID uuid.UU
 	}
 	log.Printf("[vcs-webhook] ambiguous payload names %d distinct tasks, linking none: %s",
 		len(hits), strings.Join(ids, " "))
-	return uuid.Nil, TaskRef{}, refAmbiguous
+	return uuid.Nil, TaskRef{}, refAmbiguous, candidates
 }
 
 // lookupRef turns one candidate into a task id, reporting whether it named a

@@ -14,6 +14,7 @@ const DefaultThemeID = "mesh-default"
 // Instance journal actions of the theme backend.
 const (
 	InstanceJournalThemeSelected = "theme_selected"
+	InstanceJournalThemeDeleted  = "theme_deleted"
 )
 
 // ThemeSelection is a stored theme choice, at instance level (instance_theme)

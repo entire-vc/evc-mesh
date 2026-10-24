@@ -121,6 +121,10 @@ func ids(out map[string]any) []string {
 // Privacy rule: a thread belongs to its author. Another member, and a workspace
 // owner, cannot see, read, write to, stop, rename or delete it, and every such
 // attempt is the same 404 as for an id that never existed.
+//
+// Red control: replacing `t.user_id = $3` in chatOwnThread (repository/postgres/agent_chat_repo.go)
+// with a predicate that ignores the caller makes this test and
+// TestAgentChatRepo_ThreadsAreOwnedByTheirUser fail on the "Should be empty" assertions.
 func TestAgentChatPrivacy_OtherUserCannotSeeOrDeleteThread(t *testing.T) {
 	env := newAgentChatEnv(t)
 	thread := env.createThread(t, env.userA)
