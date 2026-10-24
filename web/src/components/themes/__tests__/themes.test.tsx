@@ -193,7 +193,43 @@ describe("ThemeSettingsPanel (workspace)", () => {
     await screen.findByLabelText("Accent");
     expect((screen.getByRole("button", { name: "Save theme" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Reset to the instance theme" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reset" }));
     await waitFor(() => expect(put).toHaveBeenCalledWith({ theme_id: null, settings: {} }));
+  });
+
+  it("reset asks first: Cancel sends no PUT and keeps the saved theme", async () => {
+    const put = routes({ ...base, theme_id: "graphite", settings: { accent: "0 0% 100%" } });
+    render(<ThemeSettingsPanel level="workspace" workspaceId="ws1" />);
+    await screen.findByLabelText("Accent");
+    fireEvent.click(screen.getByRole("button", { name: "Reset to the instance theme" }));
+    expect(await screen.findByText("Reset to the instance theme?")).toBeTruthy();
+    expect(put).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Reset to the instance theme?")).toBeNull());
+    expect(put).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Reset to the instance theme" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a click outside the dialog closes it without a PUT", async () => {
+    const put = routes({ ...base, theme_id: "graphite", settings: { accent: "0 0% 100%" } });
+    render(<ThemeSettingsPanel level="workspace" workspaceId="ws1" />);
+    await screen.findByLabelText("Accent");
+    fireEvent.click(screen.getByRole("button", { name: "Reset to the instance theme" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(dialog.parentElement?.previousElementSibling as HTMLElement); // the dimmed backdrop a real click lands on
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("Esc closes the reset dialog without a PUT", async () => {
+    const put = routes({ ...base, theme_id: "graphite", settings: { accent: "0 0% 100%" } });
+    render(<ThemeSettingsPanel level="workspace" workspaceId="ws1" />);
+    await screen.findByLabelText("Accent");
+    fireEvent.click(screen.getByRole("button", { name: "Reset to the instance theme" }));
+    await screen.findByRole("dialog");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(put).not.toHaveBeenCalled();
   });
 
   it("role still loading: no read-only banner, placeholder instead", () => {
