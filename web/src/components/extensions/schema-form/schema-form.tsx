@@ -21,7 +21,7 @@ import type { FieldError, FieldSchema, Values, Widget } from "./types";
 export type { PickerOption };
 
 /** Task fields a theme may show on a card or row: what the core knows, then the custom fields loaded now. */
-const CORE_TASK_FIELDS: readonly PickerOption[] = [
+export const CORE_TASK_FIELDS: readonly PickerOption[] = [
   { value: "status", label: "Status" },
   { value: "priority", label: "Priority" },
   { value: "assignee", label: "Assignee" },

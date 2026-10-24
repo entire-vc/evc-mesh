@@ -15,6 +15,7 @@ import {
   KeyboardSensor,
   PointerSensor,
   closestCorners,
+  type CollisionDetection,
   useDroppable,
   useSensor,
   useSensors,
@@ -106,6 +107,25 @@ export function DndProvider({ onMove, onDragActiveChange, renderOverlay, enabled
   const activeChangeRef = useRef(onDragActiveChange);
   activeChangeRef.current = onDragActiveChange;
 
+  // closestCorners alone never lands on an empty zone that is wider than a card: the keyboard puts the card's corner at the
+  // zone's corner, yet the nearer corners of a card in the row above win. An empty zone holding the card's top-left corner is
+  // the target.
+  const collisionDetection = useMemo<CollisionDetection>(
+    () => (args) => {
+      const base = closestCorners(args);
+      const at = args.collisionRect;
+      for (const c of args.droppableContainers) {
+        if ((c.data.current as ZoneData | undefined)?.type !== "zone") continue;
+        if ((zoneItems.current.get(String(c.id))?.length ?? 0) > 0) continue;
+        const r = args.droppableRects.get(c.id);
+        if (!r || at.left < r.left - 1 || at.left > r.left + r.width || at.top < r.top - 1 || at.top > r.top + r.height) continue;
+        return [{ id: c.id, data: { droppableContainer: c, value: 0 } }, ...base.filter((x) => x.id !== c.id)];
+      }
+      return base;
+    },
+    [],
+  );
+
   const announcements = useMemo<Announcements>(() => {
     const name = (id: string | number, data?: { current?: unknown }) =>
       (data?.current as ItemData | undefined)?.label ?? String(id).slice(0, 8);
@@ -177,7 +197,7 @@ export function DndProvider({ onMove, onDragActiveChange, renderOverlay, enabled
       <DndEnabledContext.Provider value={enabled}>
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={collisionDetection}
         accessibility={{
           announcements,
           screenReaderInstructions: {

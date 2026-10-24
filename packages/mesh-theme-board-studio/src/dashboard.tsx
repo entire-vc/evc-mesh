@@ -15,6 +15,11 @@ export const FOCUS_WIDGET: WidgetDescriptor = {
   size: { default: { w: 2, h: 2 }, min: { w: 1, h: 1 }, max: { w: 4, h: 3 } },
 };
 
+const total = (items: { id: string; title: string; due_date?: string | null; project_id: string }[], days: number) => {
+  const f = pickFocus(items, days);
+  return f.overdue.length + f.soon.length;
+};
+
 /** `dashboard.layout`: a twelve-column grid; a widget takes three columns per unit of width. */
 export const DashLayout: DashboardLayoutView = ({ data, ctx }) => {
   const { Widget } = data.components;
@@ -44,7 +49,7 @@ export const FocusWidget: DashboardWidgetView = ({ settings }) => {
   const r = useTasks({ scope: "mine", sort: "due_date", limit: 50 });
   return (
     <section className="studio-focus" data-state={r.state}>
-      <h2 className="studio-focus-title">{say(locale, "focusTitle")}</h2>
+      <h2 className="studio-focus-title">{say(locale, "focusTitle")}{r.state === "ready" && total(r.value.items, days) > 0 && <b>{total(r.value.items, days)}</b>}</h2>
       {r.state === "loading" && <p role="status" className="studio-note">{say(locale, "loading")}</p>}
       {r.state === "error" && (
         <div role="alert" className="studio-alert">
@@ -68,7 +73,8 @@ function FocusList({ locale, days, items, projectNames }: { locale: string; days
           {list.map((t) => (
             <li key={t.id}>
               <TaskLink taskId={t.id}>{t.title}</TaskLink>
-              <span className="studio-focus-meta">{projectNames[t.project_id] ? `${projectNames[t.project_id]} · ` : ""}{t.due_date?.slice(0, 10)}</span>
+              <span className="studio-focus-date">{t.due_date?.slice(0, 10)}</span>
+              {projectNames[t.project_id] && <span className="studio-focus-meta">{projectNames[t.project_id]}</span>}
             </li>
           ))}
         </ul>

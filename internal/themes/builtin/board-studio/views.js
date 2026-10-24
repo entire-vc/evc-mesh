@@ -275,6 +275,10 @@ var FOCUS_WIDGET = {
   actions: [],
   size: { default: { w: 2, h: 2 }, min: { w: 1, h: 1 }, max: { w: 4, h: 3 } }
 };
+var total = (items, days) => {
+  const f = focus(items, days);
+  return f.overdue.length + f.soon.length;
+};
 var DashLayout = ({ data, ctx }) => {
   const { Widget } = data.components;
   const locale = useSlotContext().locale;
@@ -288,7 +292,10 @@ var FocusWidget = ({ settings }) => {
   const days = horizon(settings.focus_horizon_days);
   const r = useTasks({ scope: "mine", sort: "due_date", limit: 50 });
   return /* @__PURE__ */ jsxs3("section", { className: "studio-focus", "data-state": r.state, children: [
-    /* @__PURE__ */ jsx3("h2", { className: "studio-focus-title", children: say(locale, "focusTitle") }),
+    /* @__PURE__ */ jsxs3("h2", { className: "studio-focus-title", children: [
+      say(locale, "focusTitle"),
+      r.state === "ready" && total(r.value.items, days) > 0 && /* @__PURE__ */ jsx3("b", { children: total(r.value.items, days) })
+    ] }),
     r.state === "loading" && /* @__PURE__ */ jsx3("p", { role: "status", className: "studio-note", children: say(locale, "loading") }),
     r.state === "error" && /* @__PURE__ */ jsxs3("div", { role: "alert", className: "studio-alert", children: [
       /* @__PURE__ */ jsx3("span", { children: say(locale, "focusError") }),
@@ -308,10 +315,8 @@ function FocusList({ locale, days, items, projectNames }) {
     ] }),
     /* @__PURE__ */ jsx3("ul", { children: list.map((t) => /* @__PURE__ */ jsxs3("li", { children: [
       /* @__PURE__ */ jsx3(TaskLink2, { taskId: t.id, children: t.title }),
-      /* @__PURE__ */ jsxs3("span", { className: "studio-focus-meta", children: [
-        projectNames[t.project_id] ? `${projectNames[t.project_id]} \xB7 ` : "",
-        t.due_date?.slice(0, 10)
-      ] })
+      /* @__PURE__ */ jsx3("span", { className: "studio-focus-date", children: t.due_date?.slice(0, 10) }),
+      projectNames[t.project_id] && /* @__PURE__ */ jsx3("span", { className: "studio-focus-meta", children: projectNames[t.project_id] })
     ] }, t.id)) })
   ] });
   return /* @__PURE__ */ jsxs3(Fragment3, { children: [

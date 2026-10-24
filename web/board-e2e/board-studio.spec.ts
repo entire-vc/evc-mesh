@@ -121,6 +121,41 @@ test.describe("board-studio: the board", () => {
     await expect(col(page, "in_progress").locator(`[data-task-id="${id}"]`)).toBeAttached();
   });
 
+  test("keyboard: Space, ArrowDown, Space takes a card into an empty band", async ({ page }) => {
+    await openBoard(page);
+    await expect(col(page, "review").locator('[data-testid="task-card"]')).toHaveCount(0);
+    const card = col(page, "in_progress").locator('[data-testid="task-card"]').first();
+    const id = (await card.getAttribute("data-task-id"))!;
+    await card.focus();
+    const moved = page.waitForRequest(isMove);
+    const live = page.locator("[aria-live]").first();
+    await page.keyboard.press("Space");
+    await expect(live).toContainText("is over");
+    await page.waitForTimeout(250); // dnd-kit attaches its key listeners a tick after pickup
+    await page.keyboard.press("ArrowDown");
+    await expect(live).toContainText("position 1 of 1");
+    await page.keyboard.press("Space");
+    const req = await moved;
+    expect(req.url()).toContain(`/tasks/${id}/move`);
+    expect(req.postDataJSON().status_id).toBe("review");
+    await expect(col(page, "review").locator(`[data-task-id="${id}"]`)).toBeAttached();
+  });
+
+  test("393: quick actions are one segmented bar of 44px targets inside the card", async ({ page }) => {
+    await page.setViewportSize({ width: 393, height: 900 });
+    await openBoard(page);
+    const card = page.locator('[data-testid="studio-card"]').first();
+    const bar = card.locator(".studio-actions");
+    expect(await bar.evaluate((el) => getComputedStyle(el).display)).toBe("grid");
+    const boxes = await bar.locator(".studio-act").evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
+    expect(boxes).toHaveLength(3);
+    for (const b of boxes) expect(b.height).toBeGreaterThanOrEqual(44);
+    expect(new Set(boxes.map((b) => Math.round(b.top))).size).toBe(1);
+    const cardBox = (await card.boundingBox())!, barBox = (await bar.boundingBox())!;
+    expect(barBox.x).toBeGreaterThanOrEqual(cardBox.x);
+    expect(barBox.x + barBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1);
+  });
+
   test("a viewer gets no drag handle, no quick actions, and a drag sends nothing", async ({ page }) => {
     await page.route(`${API}/**/members/me`, (route) => route.fulfill({ json: { role: "viewer" } }));
     await openBoard(page);

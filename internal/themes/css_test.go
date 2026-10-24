@@ -38,7 +38,7 @@ func TestCheckContrast_WCAG(t *testing.T) {
 	require.Less(t, w[0].Ratio, MinTextContrast)
 
 	// Control: a passing pair gives no warning, and a pair with one side unset is skipped.
-	ok := map[string]map[string]string{"light": {"foreground": "0 0% 5%", "background": "0 0% 100%", "primary": "0 0% 100%"}}
+	ok := map[string]map[string]string{"light": {"foreground": "0 0% 5%", "background": "0 0% 100%", "secondary": "0 0% 100%"}}
 	require.Empty(t, CheckContrast(ok))
 	// 4.5:1 is the floor: just under warns, at the floor passes.
 	for l := 40.0; l < 60; l += 0.5 {
@@ -73,5 +73,21 @@ func TestCheckContrast_IsAdviceNotRefusal(t *testing.T) {
 	require.NotEmpty(t, CheckContrast(low))
 	for _, s := range []Spec{{TokensContract: "1", Modes: []string{"light"}, Tokens: low}} {
 		require.Empty(t, s.Check())
+	}
+}
+
+func TestCheckContrast_AccentAgainstInheritedForeground(t *testing.T) {
+	// Black accent over mesh-default: dark primary-foreground is near-black (~1.08:1).
+	w := CheckContrast(mergeOverrides(map[string]map[string]string{}, map[string]string{"primary": "0 0% 0%"}))
+	var dark bool
+	for _, x := range w {
+		if x.Mode == "dark" && x.Pair == "primary-foreground/primary" && x.Ratio < 1.2 {
+			dark = true
+		}
+	}
+	require.True(t, dark, "got %v", w)
+	// Control: the default teal accent passes in light, where it is paired with white.
+	for _, x := range CheckContrast(mergeOverrides(map[string]map[string]string{}, map[string]string{"primary": "180 100% 21%"})) {
+		require.NotEqual(t, "light", x.Mode, "%v", x)
 	}
 }

@@ -194,6 +194,8 @@
     "artifacts": "Artifacts",
     "dueDate": "Due date",
     "subtasks": "Subtasks",
-    "estimate": "Estimate"
+    "estimate": "Estimate",
+    "status": "Status",
+    "created": "Created"
   }
 }

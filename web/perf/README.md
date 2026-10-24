@@ -784,3 +784,9 @@ the smallest step above that. Lead sign-off: the product lead.
 CI measured 701.1 on this MR (perf-bundle, pipeline 17441, over the 701.0 ceiling by 0.1).
 Same `apiErrors` strings as above; the ceiling moved by the smallest 0.1-step above the
 measurement. Revert: set the ceiling back to 701.0. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 703.1 → 703.3 (+0.2 KB gz): the theme preview now labels the picker-only
+`status`, `estimated_hours` and `created_at` fields, which adds three board labels in `en`
+and `ru`. perf-bundle measured 703.29 on this MR on top of main `a8a64693` (pipeline 17734,
+job 371633, over the 703.1 ceiling by 0.19). The ceiling moved by the smallest 0.1-step above
+the measurement. Revert: set the ceiling back to 703.1. Lead sign-off: the product lead.

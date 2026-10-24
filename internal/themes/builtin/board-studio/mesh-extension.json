@@ -118,11 +118,11 @@
     },
     "css": {
       "path": "theme.css",
-      "sha256": "3ea83cc286e8fd934d6eac412c8b6ee5fd5725af5201e0a0e3a9e570a7b162cc"
+      "sha256": "c0d2a5975eea9451ae6a12c68001c6ff7668748f14e6a1ebdf885166f8e1bd7e"
     },
     "views": {
       "bundle": "views.js",
-      "sha256": "04729bc88cdbf58cd165b8a50d647c7d4cee5974a1a26a1e108847e4742660f2"
+      "sha256": "c6e31528e45d2d40184ac6f1386f9861183f4acf644ec54378cd52f9b7275414"
     },
     "slots": {
       "board.layout": "^1",
@@ -133,7 +133,7 @@
     },
     "contract_report": {
       "sdk_version": "1.0.0",
-      "bundle_sha256": "04729bc88cdbf58cd165b8a50d647c7d4cee5974a1a26a1e108847e4742660f2",
+      "bundle_sha256": "c6e31528e45d2d40184ac6f1386f9861183f4acf644ec54378cd52f9b7275414",
       "passed": {
         "board.layout": "1.0.0",
         "board.column": "1.0.0",

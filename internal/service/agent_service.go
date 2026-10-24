@@ -691,8 +691,8 @@ func (s *agentService) IsGrantRevoked(ctx context.Context, grantID uuid.UUID) (b
 // IsWorkspaceDeleted implements WorkspaceDeletionChecker: reports whether
 // workspaceID no longer resolves — soft-deleted or never existed, same
 // question workspaceRepo.GetByID already answers for every other caller.
-// See the interface doc for why cachedAgentAuth needs this on a cache hit
-//: Authenticate itself always gets this right via
+// See the interface doc for why cachedAgentAuth needs this on a cache hit:
+// Authenticate itself always gets this right via
 // GetBySlug/GetByID's own deleted_at filter, but a hit never reaches
 // Authenticate at all.
 func (s *agentService) IsWorkspaceDeleted(ctx context.Context, workspaceID uuid.UUID) (bool, error) {

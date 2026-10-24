@@ -2121,8 +2121,8 @@ func TestTaskHandler_MoveTask_ServiceError(t *testing.T) {
 }
 
 // TestTaskHandler_MoveTask_HumanGateFrozen_DoneMessageDoesNotMentionBacklog is the
-// HTTP-layer counterpart of the service-level control in task_human_gate_test.go
-//: the wire message a caller actually sees for a refused done/cancelled
+// HTTP-layer counterpart of the service-level control in task_human_gate_test.go:
+// the wire message a caller actually sees for a refused done/cancelled
 // move must not claim backlog is human-only too, since the gate's own author IS
 // allowed to park there — the handler used to hardcode a single string
 // for every category and this pinned the stale one.

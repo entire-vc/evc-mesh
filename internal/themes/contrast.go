@@ -43,9 +43,19 @@ func (w ContrastWarning) String() string {
 	return fmt.Sprintf("%s: %s %.2f:1 (< %.1f:1)", w.Mode, w.Pair, w.Ratio, w.Min)
 }
 
-// CheckContrast measures every pair of which the theme sets both tokens in a
-// mode. A pair with a side the theme leaves to mesh-default cannot be judged
-// here and is skipped; the default is held to the same floor by the web tests.
+// defaultPrimaryPair is what mesh-default resolves primary-foreground and
+// primary to per mode (web/src/styles/brandkit.css). A theme or an accent
+// setting that sets only one side is judged against the other side's default,
+// the way the browser renders it.
+var defaultPrimaryPair = map[string]map[string]string{
+	"light": {"primary": "180 100% 21%", "primary-foreground": "0 0% 100%"},
+	"dark":  {"primary": "172 66% 50%", "primary-foreground": "180 45% 4%"},
+}
+
+// CheckContrast measures every pair of which the theme sets at least one token
+// in a mode. For the primary pair a side the theme leaves to mesh-default is
+// taken from that default; any other pair with a missing side cannot be judged
+// here and is skipped (the default is held to the floor by the web tests).
 func CheckContrast(tokens map[string]map[string]string) []ContrastWarning {
 	var out []ContrastWarning
 	modes := make([]string, 0, len(tokens))
@@ -58,6 +68,16 @@ func CheckContrast(tokens map[string]map[string]string) []ContrastWarning {
 		for _, p := range contrastPairs {
 			fg, fok := set[p[0]]
 			bg, bok := set[p[1]]
+			if def, ok := defaultPrimaryPair[mode]; ok && (fok || bok) {
+				if p[0] == "primary-foreground" {
+					if !fok {
+						fg, fok = def[p[0]], true
+					}
+					if !bok {
+						bg, bok = def[p[1]], true
+					}
+				}
+			}
 			if !fok || !bok {
 				continue
 			}
