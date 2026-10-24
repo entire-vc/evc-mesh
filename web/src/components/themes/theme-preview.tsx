@@ -2,7 +2,7 @@ import { useMemo, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import type { FieldSchema, Values } from "@/components/extensions/schema-form";
-import { BUILTIN_FIELDS } from "@/core/slots/board-data";
+import { BUILTIN_FIELDS, PICKER_FIELD_LABEL_KEYS } from "@/core/slots/board-data";
 import type { ThemeInfo } from "@/lib/themes";
 
 /** The mini card is fixed-height: more fields than this collapse into a "+N" row. */
@@ -59,8 +59,8 @@ export function ThemePreview({
 
   const fieldLabels = cardFields?.length
     ? cardFields.map((k) => {
-        const b = BUILTIN_FIELDS.find((f) => f.key === k);
-        return b ? tb(b.labelKey) : k.replace(/^cf:/, "");
+        const labelKey = BUILTIN_FIELDS.find((f) => f.key === k)?.labelKey ?? PICKER_FIELD_LABEL_KEYS[k];
+        return labelKey ? tb(labelKey) : k.replace(/^cf:/, "");
       })
     : undefined;
   const shownFields = fieldLabels && [

@@ -37,8 +37,8 @@ type ArmHumanGateRequest struct {
 	// already written down; making the caller state the four answers, with reasons, is
 	// what turns "I felt unsure" into something a reviewer can check afterwards.
 	Predicate *domain.GateArmPredicate `json:"predicate"`
-	// Addressee is the @name of the person being asked. Required from an agent key
-	//: it must resolve to a human, the same rule the marker path has.
+	// Addressee is the @name of the person being asked. Required from an agent key;
+	// it must resolve to a human, the same rule the marker path has.
 	Addressee string `json:"addressee"`
 	// Supersedes names what the previous, already answered, ask did not cover — the
 	// same opt-out `supersedes:` gives a marker comment.

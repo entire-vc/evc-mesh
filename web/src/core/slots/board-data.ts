@@ -36,6 +36,13 @@ export const BUILTIN_FIELDS: readonly { key: string; kind: FieldDescriptor["kind
   { key: "estimate", kind: "number", labelKey: "fields.estimate" },
 ];
 
+/** Theme field-picker keys that name a task column rather than a board card field; same i18n namespace as BUILTIN_FIELDS. */
+export const PICKER_FIELD_LABEL_KEYS: Readonly<Record<string, string>> = {
+  status: "fields.status",
+  estimated_hours: "fields.estimate",
+  created_at: "fields.created",
+};
+
 const CUSTOM_KIND: Record<string, FieldDescriptor["kind"]> = {
   number: "number",
   date: "date",

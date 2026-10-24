@@ -13,6 +13,8 @@ import { hexToHsl, hslToHex, parseTokensCss } from "../color";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { ThemeSettingsPanel } from "../theme-settings-panel";
 import { ThemePreview } from "../theme-preview";
+import { BUILTIN_FIELDS, PICKER_FIELD_LABEL_KEYS } from "@/core/slots/board-data";
+import { CORE_TASK_FIELDS } from "@/components/extensions/schema-form/schema-form";
 
 const apiMock = vi.mocked(api);
 
@@ -312,6 +314,18 @@ describe("ThemePreview card fields", () => {
   it("collapses long selections so the fixed-height card never clips", () => {
     render(<ThemePreview cardFields={["assignee", "priority", "due_date", "labels", "estimate"]} />);
     expect(text()).toMatch(/\+2$/);
+  });
+
+  it("labels status and estimated_hours instead of showing the raw key", () => {
+    render(<ThemePreview cardFields={["status", "estimated_hours"]} />);
+    expect(text()).toBe("StatusEstimate");
+  });
+
+  it("every field-picker key resolves to a label", () => {
+    for (const { value } of CORE_TASK_FIELDS) {
+      const known = BUILTIN_FIELDS.some((f) => f.key === value) || value in PICKER_FIELD_LABEL_KEYS;
+      expect(known, value).toBe(true);
+    }
   });
 
   it("keeps the generic sample card when no fields are given", () => {

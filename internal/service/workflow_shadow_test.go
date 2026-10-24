@@ -15,13 +15,14 @@ import (
 )
 
 func TestRepoFromVCSURL(t *testing.T) {
-	cases := map[string]string{
-		"https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/12": "entire-vc/evc-mesh",
-		"https://gitlab.example.invalid/a/b/c/-/merge_requests/3":               "a/b/c",
-		"https://github.com/Entire-VC/Repo/pull/7":                       "entire-vc/repo",
-		"https://example.com/nothing":                                    "",
+	cases := []struct{ in, want string }{
+		{"https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/12", "entire-vc/evc-mesh"},
+		{"https://gitlab.example.invalid/a/b/c/-/merge_requests/3", "a/b/c"},
+		{"https://github.com/Entire-VC/Repo/pull/7", "entire-vc/repo"},
+		{"https://example.com/nothing", ""},
 	}
-	for in, want := range cases {
+	for _, c := range cases {
+		in, want := c.in, c.want
 		if got := RepoFromVCSURL(in); got != want {
 			t.Errorf("RepoFromVCSURL(%q)=%q want %q", in, got, want)
 		}

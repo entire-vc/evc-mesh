@@ -196,6 +196,8 @@
     "artifacts": "Артефакты",
     "dueDate": "Срок",
     "subtasks": "Подзадачи",
-    "estimate": "Оценка"
+    "estimate": "Оценка",
+    "status": "Статус",
+    "created": "Создана"
   }
 }
