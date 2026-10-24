@@ -61,7 +61,7 @@ func sampleDocument() domain.Document {
 	parent := uuid.New()
 	editor := uuid.New()
 	editorType := domain.ActorTypeAgent
-	creatorName, editorName := "Ada", "harper"
+	creatorName, editorName := "Ada", "howard"
 	return domain.Document{
 		ID:            uuid.New(),
 		ProjectID:     uuid.New(),
@@ -228,7 +228,7 @@ func TestDocumentRepo_GetByID_CarriesTheResolvedActorNames(t *testing.T) {
 	require.NotNil(t, got.CreatedByName)
 	assert.Equal(t, "Ada", *got.CreatedByName)
 	require.NotNil(t, got.UpdatedByName)
-	assert.Equal(t, "harper", *got.UpdatedByName)
+	assert.Equal(t, "howard", *got.UpdatedByName)
 }
 
 // A row written before updated_by existed has no last editor, and nothing may

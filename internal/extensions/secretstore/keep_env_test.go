@@ -28,7 +28,7 @@ func TestNewKeepRouterFromEnv_BadOrgRefused(t *testing.T) {
 
 func TestNewKeepRouterFromEnv_ConfiguredOpensKeepRefsAndKeepsNewValuesBuiltin(t *testing.T) {
 	r, err := NewKeepRouterFromEnv(envOf(map[string]string{
-		EnvKeepURL: "http://127.0.0.1:1", EnvKeepOrgID: "an internal ticket-3a55-4d0c-9d5e-1b3f6c0a7a11", EnvKeepToken: "t"}))
+		EnvKeepURL: "http://127.0.0.1:1", EnvKeepOrgID: "6f1c1f0e-3a55-4d0c-9d5e-1b3f6c0a7a11", EnvKeepToken: "t"}))
 	require.NoError(t, err)
 	require.NotNil(t, r)
 	assert.Nil(t, r.Selected, "new values stay builtin until the switch is made on purpose")

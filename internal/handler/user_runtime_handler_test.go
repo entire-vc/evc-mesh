@@ -159,7 +159,7 @@ func TestUserRuntimeHandler_ReadsAndWrites(t *testing.T) {
 	require.Equal(t, http.StatusOK, c)
 	require.Empty(t, out["history"])
 	mock.ExpectQuery("FROM user_runtime_managers m JOIN agents").WithArgs(user).WillReturnRows(
-		sqlmock.NewRows([]string{"agent_id", "agent_name", "granted_at"}).AddRow(agent, "robin", time.Now()))
+		sqlmock.NewRows([]string{"agent_id", "agent_name", "granted_at"}).AddRow(agent, "riker", time.Now()))
 	c, out = callUserRuntime(t, h.Managers, http.MethodGet, "/", "", user, uuid.Nil, nil)
 	require.Equal(t, http.StatusOK, c)
 	require.Len(t, out["managers"], 1)

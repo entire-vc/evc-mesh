@@ -242,7 +242,7 @@ func WithTaskAgentGrantRepo(r repository.AgentWorkspaceGrantRepository) TaskServ
 }
 
 // WithGatePredicateLog wires the append-only log of gate-arming predicate evaluations
-//. Optional: when unset, arming still enforces the predicate — the
+// Optional: when unset, arming still enforces the predicate — the
 // guard must not depend on the recorder being present, or "the log was not wired" would
 // silently become "the guard is off", which is the disarm-by-omission shape this fleet
 // keeps paying for.
@@ -2610,7 +2610,7 @@ func (e *DoneEvidenceError) Error() string {
 	// PR link, comments are only consulted when there is NO VCS link at
 	// all. A message promising one taught agents to write a comment,
 	// hit the same 422 again, and conclude the gate itself was broken
-	//.
+	//
 	if e.PRStatusCheckedLive {
 		// The gate just asked the provider and got a definitive "not
 		// merged" — don't suggest "if that's stale", there is no cache

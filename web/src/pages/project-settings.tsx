@@ -1100,7 +1100,7 @@ export function ProjectSettingsPage() {
   // this workspace via agent_workspace_grants (task U1/U3) never appears
   // there — U4 built exactly this endpoint for the Members-tab "Agents (N)"
   // list, and the project-level Add-Agent dropdown needs the same source
-  //.
+  //
   const { workspaceAgentGrants, fetchWorkspaceAgentGrants } =
     useAgentWorkspaceGrantStore();
 

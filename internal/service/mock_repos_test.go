@@ -459,6 +459,10 @@ func (m *MockTaskRepository) ListByAssignee(_ context.Context, workspaceID, assi
 	var result []domain.Task
 	for _, t := range m.items {
 		if t.AssigneeID != nil && *t.AssigneeID == assigneeID && t.AssigneeType == assigneeType {
+			if filter.StatusCategory != nil && m.statusCategoryOf != nil &&
+				m.statusCategoryOf(t.StatusID) != *filter.StatusCategory {
+				continue
+			}
 			result = append(result, *t)
 		}
 	}
@@ -4868,7 +4872,7 @@ type MockClosedFollowUpRootRepository struct {
 	// the call number.
 	onRootsClaim func(call int)
 	// failClaimFirstN models a TRANSIENT outage for the retry ladder
-	//: exactly the first N Claim calls fail, then the store
+	// exactly the first N Claim calls fail, then the store
 	// recovers. The sticky errToReturn is the database down for the whole
 	// test; the ladder needs the in-between shape: fail once, land on retry.
 	failClaimFirstN int

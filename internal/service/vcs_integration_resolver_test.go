@@ -444,7 +444,7 @@ func TestDecodeVCSIntegration_DegradedSecret_RefusedNotEmptyUsable(t *testing.T)
 		t.Fatalf("github: usable=%v disabled=%v, want refused", usable, disabled)
 	}
 	gl := &domain.IntegrationConfig{Provider: domain.IntegrationProviderGitLab, IsActive: true,
-		Config: json.RawMessage(`{"base_url":"https://gl","token":"keep:an internal ticket-0000-4000-8000-000000000001"}`)}
+		Config: json.RawMessage(`{"base_url":"https://gl","token":"keep:0a1b2c3d-0000-4000-8000-000000000001"}`)}
 	if _, usable, disabled := decodeGitLabIntegration(gl); usable || !disabled {
 		t.Fatalf("gitlab: usable=%v disabled=%v, want refused", usable, disabled)
 	}

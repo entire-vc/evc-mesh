@@ -52,15 +52,15 @@ describe("AppAccessSection", () => {
   it("shows the agent short tag after the agent name, and nothing extra when there is none", async () => {
     mockApi.mockResolvedValueOnce({
       grants: [
-        { ...GRANT, id: "g3", agent_name: "Liam", agent_short_tag: "mesh-dev" },
+        { ...GRANT, id: "g3", agent_name: "Linus", agent_short_tag: "mesh-dev" },
         { ...GRANT, id: "g4", agent_name: "Bare Agent", agent_short_tag: null },
         { ...GRANT, id: "g5", agent_name: "Legacy Agent" },
       ],
     });
     renderPage();
 
-    const tagged = (await screen.findByText(/acts as Liam/)).closest("p") as HTMLElement;
-    expect(tagged.textContent).toBe("Workspace Acme · acts as Liam · mesh-dev");
+    const tagged = (await screen.findByText(/acts as Linus/)).closest("p") as HTMLElement;
+    expect(tagged.textContent).toBe("Workspace Acme · acts as Linus · mesh-dev");
     expect((screen.getByText(/acts as Bare Agent/).closest("p") as HTMLElement).textContent).toBe(
       "Workspace Acme · acts as Bare Agent",
     );

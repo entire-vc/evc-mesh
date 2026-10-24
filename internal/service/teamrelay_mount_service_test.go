@@ -632,7 +632,7 @@ func TestSyncMount_ReRun_IsIdempotentAndDoesNotRedownload(t *testing.T) {
 	assert.Equal(t, callsAfterFirst, f.client.callCount(), "an already-mounted file must not be downloaded again")
 }
 
-// Red control for an internal ticket-88e2-41b4-8dfc-e60a19ca78dc: SyncMount is the
+// Red control for an internal ticket: SyncMount is the
 // actual source of the 140 corrupt documents found on prod — it downloaded
 // whatever bytes a files-index entry pointed at and stored them as a document
 // body with no check that they were text. A share with a PNG entry among

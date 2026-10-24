@@ -546,7 +546,7 @@ const (
 	// somewhere else in the same body it also asserts one of
 	// explicitNonWithdrawalMarkers ("not withdrawing", "гейт остаётся", …),
 	// which overrides it regardless of which paragraph either lands in
-	//. Checked before out-of-scope/blocker-still-open below —
+	// Checked before out-of-scope/blocker-still-open below —
 	// an explicit refusal is the most specific explanation available and
 	// should not be shadowed by a narrower one.
 	negatorMissExplicitRefusal negatorMissReason = "explicit-non-withdrawal-stated-elsewhere"

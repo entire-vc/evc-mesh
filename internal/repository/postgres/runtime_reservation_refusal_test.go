@@ -41,12 +41,12 @@ func TestTaskWriterActiveNamesHolderAndExpiry(t *testing.T) {
 	expires := time.Date(2026, 10, 19, 21, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("FROM runtime_reservations r").WithArgs(task).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "agent_id", "agent_name", "state", "expires_at"}).
-			AddRow(reservation, agent, "Dana", "reserved", expires))
+			AddRow(reservation, agent, "Daedalus", "reserved", expires))
 
 	refusal := asRefusal(t, runtimeTaskWriterActive(context.Background(), db, task))
 	require.Equal(t, "task_writer_active", refusal.Details)
 	require.Equal(t, "2026-10-19T21:00:00Z", refusal.Context["expires_at"])
-	require.Equal(t, map[string]any{"reservation_id": reservation, "agent_id": agent, "agent_name": "Dana", "state": "reserved"}, refusal.Context["holder"])
+	require.Equal(t, map[string]any{"reservation_id": reservation, "agent_id": agent, "agent_name": "Daedalus", "state": "reserved"}, refusal.Context["holder"])
 	require.NotContains(t, refusal.Context, "blocks_until")
 }
 
@@ -55,7 +55,7 @@ func TestTaskWriterActiveConsumedHolderBlocksUntilRelease(t *testing.T) {
 	task := uuid.New()
 	mock.ExpectQuery("FROM runtime_reservations r").WithArgs(task).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "agent_id", "agent_name", "state", "expires_at"}).
-			AddRow(uuid.New(), uuid.New(), "Grace", "consumed", time.Now().Add(-time.Hour)))
+			AddRow(uuid.New(), uuid.New(), "Gandalf", "consumed", time.Now().Add(-time.Hour)))
 
 	refusal := asRefusal(t, runtimeTaskWriterActive(context.Background(), db, task))
 	require.Equal(t, "release", refusal.Context["blocks_until"])
@@ -79,7 +79,7 @@ func TestRuntimeUniqueConflictMapsConstraints(t *testing.T) {
 
 	mock.ExpectQuery("FROM runtime_reservations r").WithArgs(task).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "agent_id", "agent_name", "state", "expires_at"}).
-			AddRow(uuid.New(), uuid.New(), "Dana", "reserved", time.Now().Add(time.Minute)))
+			AddRow(uuid.New(), uuid.New(), "Daedalus", "reserved", time.Now().Add(time.Minute)))
 	race := asRefusal(t, runtimeUniqueConflict(context.Background(), db, task, unique("runtime_reservations_active_task")))
 	require.Equal(t, "task_writer_active", race.Details)
 	require.Contains(t, race.Context, "holder", "the race path names the holder too")
