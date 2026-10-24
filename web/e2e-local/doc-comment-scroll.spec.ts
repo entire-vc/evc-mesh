@@ -67,7 +67,7 @@ for (const vp of [
     expect(after).toBeGreaterThan(before - 150);
     if (vp.width >= 1024) await expectInViewport(page, target);
     await expectInViewport(page, textarea);
-    await page.screenshot({ path: `/tmp/liam-2336-draft-${vp.name}.png` });
+    await page.screenshot({ path: `/tmp/linus-2336-draft-${vp.name}.png` });
   });
 }
 

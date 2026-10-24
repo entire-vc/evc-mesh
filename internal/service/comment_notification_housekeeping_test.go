@@ -66,13 +66,13 @@ func TestCommentNotifications_HousekeepingMentions(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				env := setupCommentServiceWithUserMentions()
 				env.svc.deliveryRepo = NewMockCommentDeliveryOutcomeRepository()
-				user := &domain.User{ID: uuid.New(), Username: "alex"}
+				user := &domain.User{ID: uuid.New(), Username: "pavel"}
 				env.userRepo.AddUser(env.wsID, user)
-				agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "alex"}
+				agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "pavel"}
 				env.agentSvc.AddAgent(env.wsID, agent)
 				task := &domain.Task{ID: uuid.New(), ProjectID: env.projID}
 				env.taskRepo.items[task.ID] = task
-				comment := &domain.Comment{ID: uuid.New(), TaskID: task.ID, AuthorID: uuid.New(), AuthorType: author, Body: "[fiddler] reminder for @alex"}
+				comment := &domain.Comment{ID: uuid.New(), TaskID: task.ID, AuthorID: uuid.New(), AuthorType: author, Body: "[fiddler] reminder for @pavel"}
 				ctx := actorctx.WithActor(context.Background(), comment.AuthorID, author)
 				if edit {
 					old := *comment
@@ -111,13 +111,13 @@ func TestCommentNotifications_HousekeepingTransitionRestoresOnlyHuman(t *testing
 		t.Run(string(author), func(t *testing.T) {
 			env := setupCommentServiceWithUserMentions()
 			env.svc.deliveryRepo = NewMockCommentDeliveryOutcomeRepository()
-			user := &domain.User{ID: uuid.New(), Username: "alex"}
+			user := &domain.User{ID: uuid.New(), Username: "pavel"}
 			env.userRepo.AddUser(env.wsID, user)
-			agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "alex"}
+			agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "pavel"}
 			env.agentSvc.AddAgent(env.wsID, agent)
 			task := &domain.Task{ID: uuid.New(), ProjectID: env.projID}
 			env.taskRepo.items[task.ID] = task
-			comment := &domain.Comment{TaskID: task.ID, AuthorID: uuid.New(), AuthorType: author, Body: "[fiddler] reminder for @alex"}
+			comment := &domain.Comment{TaskID: task.ID, AuthorID: uuid.New(), AuthorType: author, Body: "[fiddler] reminder for @pavel"}
 			ctx := actorctx.WithActor(context.Background(), comment.AuthorID, author)
 			require.NoError(t, env.svc.Create(ctx, comment))
 			require.Len(t, filterByEvent(env.agentNotify.Calls(), "task.mentioned"), 1)
@@ -130,10 +130,10 @@ func TestCommentNotifications_HousekeepingTransitionRestoresOnlyHuman(t *testing
 			// author in the request. Update authorizes against the saved row.
 			if author != domain.ActorTypeUser {
 				humanCtx := actorctx.WithActor(context.Background(), comment.AuthorID, domain.ActorTypeUser)
-				require.Error(t, env.svc.Update(humanCtx, &domain.Comment{ID: comment.ID, AuthorType: domain.ActorTypeUser, Body: "@alex forged edit"}))
+				require.Error(t, env.svc.Update(humanCtx, &domain.Comment{ID: comment.ID, AuthorType: domain.ActorTypeUser, Body: "@pavel forged edit"}))
 			}
 			// Repeating housekeeping must not notify the human or re-send the agent.
-			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, AuthorType: domain.ActorTypeUser, Body: "[fiddler] another reminder for @alex"}))
+			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, AuthorType: domain.ActorTypeUser, Body: "[fiddler] another reminder for @pavel"}))
 			require.Len(t, filterNotificationEvents(env.notifySvc.Calls(), "task.mentioned"), initialHumans)
 			// Only body is accepted from Update; a forged AuthorType must not classify
 			// a human's saved comment as automation (or an agent's as human).
@@ -141,7 +141,7 @@ func TestCommentNotifications_HousekeepingTransitionRestoresOnlyHuman(t *testing
 			if author != domain.ActorTypeUser {
 				inputAuthor = domain.ActorTypeUser
 			}
-			edit := &domain.Comment{ID: comment.ID, AuthorType: inputAuthor, Body: "@alex please review findings"}
+			edit := &domain.Comment{ID: comment.ID, AuthorType: inputAuthor, Body: "@pavel please review findings"}
 			require.NoError(t, env.svc.Update(ctx, edit))
 			require.Equal(t, author, edit.AuthorType)
 			mentions := filterNotificationEvents(env.notifySvc.Calls(), "task.mentioned")
@@ -149,7 +149,7 @@ func TestCommentNotifications_HousekeepingTransitionRestoresOnlyHuman(t *testing
 			require.Equal(t, user.ID, *mentions[0].TargetUserID)
 			require.Len(t, filterByEvent(env.agentNotify.Calls(), "task.mentioned"), 1)
 			// Subsequent ordinary edits deduplicate both recipients again.
-			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@alex please review updated findings"}))
+			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@pavel please review updated findings"}))
 			require.Len(t, filterNotificationEvents(env.notifySvc.Calls(), "task.mentioned"), 1)
 			require.Len(t, filterByEvent(env.agentNotify.Calls(), "task.mentioned"), 1)
 		})
@@ -176,30 +176,30 @@ func TestCommentNotifications_RestoreUsesPersistentHumanHistory(t *testing.T) {
 			env := setupCommentServiceWithUserMentions()
 			history := NewMockCommentDeliveryOutcomeRepository()
 			env.svc.deliveryRepo = history
-			user := &domain.User{ID: uuid.New(), Username: "alex"}
+			user := &domain.User{ID: uuid.New(), Username: "pavel"}
 			env.userRepo.AddUser(env.wsID, user)
-			agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "alex"}
+			agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "pavel"}
 			env.agentSvc.AddAgent(env.wsID, agent)
 			task := &domain.Task{ID: uuid.New(), ProjectID: env.projID}
 			env.taskRepo.items[task.ID] = task
-			body := "[fiddler] reminder for @alex"
+			body := "[fiddler] reminder for @pavel"
 			if startNormal {
-				body = "@alex review findings"
+				body = "@pavel review findings"
 			}
 			comment := &domain.Comment{TaskID: task.ID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent, Body: body}
 			ctx := actorctx.WithActor(context.Background(), comment.AuthorID, comment.AuthorType)
 			require.NoError(t, env.svc.Create(ctx, comment))
-			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "[fiddler] reminder for @alex"}))
+			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "[fiddler] reminder for @pavel"}))
 			// A fresh service instance shares only persisted repositories, not a
 			// remembered set of notified handles.
 			replacement := *env.svc
 			env.svc = &replacement
-			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@alex please review findings"}))
+			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@pavel please review findings"}))
 			require.Len(t, filterNotificationEvents(env.notifySvc.Calls(), "task.mentioned"), 1)
 			require.Len(t, filterByEvent(env.agentNotify.Calls(), "task.mentioned"), 1)
 			// Removing and re-adding a normal mention retains the existing behavior.
 			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "ordinary text without a handle"}))
-			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@alex review again"}))
+			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@pavel review again"}))
 			require.Len(t, filterNotificationEvents(env.notifySvc.Calls(), "task.mentioned"), 2)
 			require.Len(t, filterByEvent(env.agentNotify.Calls(), "task.mentioned"), 2)
 		})
@@ -219,14 +219,14 @@ func TestCommentNotifications_HistoryUnavailableOnlySkipsRestoredHuman(t *testin
 		t.Run(mode, func(t *testing.T) {
 			env := setupCommentServiceWithUserMentions()
 			env.svc.deliveryRepo = NewMockCommentDeliveryOutcomeRepository()
-			for _, slug := range []string{"alex", "newuser"} {
+			for _, slug := range []string{"pavel", "newuser"} {
 				env.userRepo.AddUser(env.wsID, &domain.User{ID: uuid.New(), Username: slug})
 			}
 			agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "newagent"}
 			env.agentSvc.AddAgent(env.wsID, agent)
 			task := &domain.Task{ID: uuid.New(), ProjectID: env.projID}
 			env.taskRepo.items[task.ID] = task
-			comment := &domain.Comment{TaskID: task.ID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent, Body: "[fiddler] reminder for @alex"}
+			comment := &domain.Comment{TaskID: task.ID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent, Body: "[fiddler] reminder for @pavel"}
 			ctx := actorctx.WithActor(context.Background(), comment.AuthorID, comment.AuthorType)
 			require.NoError(t, env.svc.Create(ctx, comment))
 			if mode == "nil" {
@@ -234,7 +234,7 @@ func TestCommentNotifications_HistoryUnavailableOnlySkipsRestoredHuman(t *testin
 			} else {
 				env.svc.deliveryRepo = unreadableCommentHistory{env.svc.deliveryRepo}
 			}
-			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@alex @newuser @newagent please review"}))
+			require.NoError(t, env.svc.Update(ctx, &domain.Comment{ID: comment.ID, Body: "@pavel @newuser @newagent please review"}))
 			calls := filterNotificationEvents(env.notifySvc.Calls(), "task.mentioned")
 			require.Len(t, calls, 1)
 			user, err := env.userRepo.GetByUsername(ctx, env.wsID, "newuser")

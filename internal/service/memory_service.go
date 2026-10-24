@@ -542,7 +542,7 @@ func (s *memoryService) Remember(ctx context.Context, mem *domain.Memory, intent
 	// not move agent behaviour. Flipping straight to enforce at that compliance
 	// would reject the majority of fleet remember() calls the moment the flag
 	// changed, so enforce stays reserved for a later, separately-decided task
-	//. warn is the intermediate step: the write still succeeds, but
+	// warn is the intermediate step: the write still succeeds, but
 	// the caller is told, and the omission is logged so per-agent compliance can
 	// be tracked (see requireMemoryReasonMode's doc and memory_revisions.reason).
 	reasonMode := requireMemoryReasonMode()
@@ -1086,7 +1086,7 @@ func (s *memoryService) embedAndStore(id uuid.UUID, content, prefix string) {
 // chunk_end. Before this, the composite key+content+tags string was chunked as a
 // whole, so the key landed only in chunk 0 and tags only in the last chunk — ~94% of
 // a multi-chunk memory's chunks were searchable without the memory's own key
-//. Measured fix (variant B2, not the naive "prefix the existing composite
+// Measured fix (variant B2, not the naive "prefix the existing composite
 // chunks" B1, which failed its own single-chunk control): +0.058 MRR on the live query
 // distribution, +0.112 on multi-chunk memories specifically, and a genuine ~0 on the
 // single-chunk control where the mechanism cannot apply.

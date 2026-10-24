@@ -164,7 +164,7 @@ const topbarData = (over: Partial<TopbarData> = {}): TopbarData => ({
     { kind: "project", label: "Lab", href: "/w/acme/p/lab" },
     { kind: "page", label: "Board", strong: true },
   ],
-  user: { id: "u1", name: "Alex" },
+  user: { id: "u1", name: "Pavel" },
   notifications: { unread: 0 },
   installable: false,
   isMobile: false,

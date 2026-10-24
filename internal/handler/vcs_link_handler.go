@@ -506,7 +506,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 	// entirely (required==false) or the matching secret was the unscoped
 	// env fallback. Threaded into GitHubWebhookEvent/ResolveTaskRef below so
 	// task-ref resolution can't touch a task outside this workspace
-	//.
+	//
 	var matchedWorkspaceID uuid.UUID
 	if required {
 		if len(secrets) == 0 {

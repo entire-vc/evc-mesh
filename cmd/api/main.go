@@ -2824,6 +2824,8 @@ func main() {
 	backlogPromotionAdvisorySvc := service.NewBacklogPromotionAdvisoryService(
 		taskRepo, taskStatusRepo, taskDependencyRepo, activityLogRepo, projectRepo,
 		service.WithLiftBlockersShadow(rulesService),
+		service.WithLaneAvailability(agentRepo),
+		service.WithCapacityBrake(4), // FLEET_BALANCE_DEV_CAP default in fleet-balancer.py
 	)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)

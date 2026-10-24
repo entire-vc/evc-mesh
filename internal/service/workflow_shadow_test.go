@@ -42,7 +42,7 @@ func TestDecideShadowReview(t *testing.T) {
 	author, claudeB, codexA, codexNoRepo := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	repo := "entire-vc/evc-mesh"
 	cands := []ShadowReviewCandidate{
-		{AgentID: author, Slug: "liam", Family: "anthropic", Repos: []string{repo}},
+		{AgentID: author, Slug: "linus", Family: "anthropic", Repos: []string{repo}},
 		{AgentID: claudeB, Slug: "bob", Family: "anthropic", Repos: []string{repo}},
 		{AgentID: codexNoRepo, Slug: "cora", Family: "openai", Repos: []string{"other/x"}},
 		{AgentID: codexA, Slug: "charles", Family: "openai", Repos: []string{"ENTIRE-VC/evc-mesh"}},

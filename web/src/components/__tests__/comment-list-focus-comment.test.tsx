@@ -38,7 +38,7 @@ function makeComment(
     parent_comment_id: parentCommentId,
     author_id: "agent-1",
     author_type: "agent",
-    author_name: "Wade",
+    author_name: "Wally",
     body,
     is_internal: false,
     created_at: "2026-08-21T12:00:00Z",

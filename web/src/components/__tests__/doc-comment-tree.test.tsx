@@ -17,7 +17,7 @@ function makeComment(overrides: Partial<DocumentComment> = {}): DocumentComment 
     parent_comment_id: null,
     author_id: ME,
     author_type: "user",
-    author_name: "Alex",
+    author_name: "Pavel",
     body: "body",
     anchor: {
       exact: "quote",

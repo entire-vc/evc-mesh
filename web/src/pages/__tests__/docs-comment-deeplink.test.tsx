@@ -99,7 +99,7 @@ const THREAD_B_ROOT = makeComment({ id: "root-b", body: "second thread" });
 const THREAD_B_REPLY = makeComment({
   id: "reply-b",
   parent_comment_id: "root-b",
-  body: "@alex here",
+  body: "@pavel here",
 });
 
 function mockRoutes(comments: DocumentComment[]) {

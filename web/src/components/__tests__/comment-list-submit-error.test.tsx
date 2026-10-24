@@ -38,19 +38,19 @@ describe("CommentList submit failure", () => {
   it("shows the translated server error and keeps the draft on 422", async () => {
     render(<CommentList taskId="t1" projId="p1" />);
     const editor = await screen.findByLabelText("editor");
-    fireEvent.change(editor, { target: { value: "@robin проверь?" } });
+    fireEvent.change(editor, { target: { value: "@riker проверь?" } });
     const form = editor.closest("form")!;
     fireEvent.submit(form);
 
     const alert = await screen.findByRole("alert");
     await waitFor(() => expect(alert.textContent).toContain("A mention does not wake an agent"));
-    expect((screen.getByLabelText("editor") as HTMLTextAreaElement).value).toBe("@robin проверь?");
+    expect((screen.getByLabelText("editor") as HTMLTextAreaElement).value).toBe("@riker проверь?");
   });
 
   it("drops the error when the form is reused for another task", async () => {
     const { rerender } = render(<CommentList taskId="t1" projId="p1" />);
     const editor = await screen.findByLabelText("editor");
-    fireEvent.change(editor, { target: { value: "@robin проверь?" } });
+    fireEvent.change(editor, { target: { value: "@riker проверь?" } });
     fireEvent.submit(editor.closest("form")!);
     await screen.findByRole("alert");
 
@@ -68,7 +68,7 @@ describe("CommentList submit failure", () => {
     });
     const { rerender } = render(<CommentList taskId="t1" projId="p1" />);
     const editor = await screen.findByLabelText("editor");
-    fireEvent.change(editor, { target: { value: "@robin проверь?" } });
+    fireEvent.change(editor, { target: { value: "@riker проверь?" } });
     fireEvent.submit(editor.closest("form")!);
 
     rerender(<CommentList taskId="t2" projId="p1" />);

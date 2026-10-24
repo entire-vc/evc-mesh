@@ -78,6 +78,14 @@ type BacklogPromotionDecision struct {
 // parent, ABSOLUTE_NO_PROMOTE labels and the due_date / wake:<type> overrides live in
 // backlog_promotion_gates.go, ported function-for-function. Still NOT covered:
 //
+// INTAKE brakes (an internal ticket; source of truth is now fleet-balancer.py INTAKE, since the
+// sweep is retired — an internal ticket): start_after, lease, fleet-paused assignee lane
+// (WithLaneAvailability), blocking-edge dep_freeze, per-assignee capacity incl. this
+// tick's promotions (WithCapacityBrake). NOT ported, server would PROMOTE where the
+// balancer holds: a lane switched off in fiddler.json, operator_paused config, the
+// turn_waits / parked-WAIT ledger, the ownerless-card team-slot check, MAX_MOVES and
+// the per-project FLEET_INTAKE_LIMIT. Measure these as 0 before enforcing.
+//
 // server holds where the sweep promotes (safe direction, costs a delay):
 //   - the comment-aware release tiers of is_human_gated (Alex answered → un-freeze);
 //   - the QUEUE-BEHIND lift of a passive-wait label; wake-condition comment types.
@@ -99,6 +107,11 @@ type backlogPromotionAdvisoryService struct {
 	activityRepo repository.ActivityLogRepository
 	projectRepo  repository.ProjectRepository
 	now          func() time.Time
+	// agentRepo, when set, lets the rule hold a card whose assignee lane is paused
+	// (WithLaneAvailability). nil = lane pauses are not evaluated.
+	agentRepo repository.AgentRepository
+	// devCap > 0 turns on the per-assignee capacity brake (WithCapacityBrake).
+	devCap int
 	// liftRules, when set, makes the sweep journal workflow.shadow_lift_blocker for
 	// promotable cards of projects with mid_pipeline.lift_backlog_blockers.
 	liftRules midPipelineSource
@@ -112,6 +125,22 @@ type BacklogAdvisoryOption func(*backlogPromotionAdvisoryService)
 // workflow.shadow_lift_blocker activity entry. Nothing is moved either way.
 func WithLiftBlockersShadow(rules midPipelineSource) BacklogAdvisoryOption {
 	return func(s *backlogPromotionAdvisoryService) { s.liftRules = rules }
+}
+
+// WithLaneAvailability holds a card whose agent assignee is fleet-paused (or no longer
+// exists). Port of the lane_ok brake in fleet-balancer.py INTAKE, limited to what the
+// server can see: Agent.FleetPaused. The balancer's other half — a lane switched off in
+// fiddler.json — is config the server does not have (see the type doc).
+func WithLaneAvailability(agents repository.AgentRepository) BacklogAdvisoryOption {
+	return func(s *backlogPromotionAdvisoryService) { s.agentRepo = agents }
+}
+
+// WithCapacityBrake holds a card whose agent assignee already carries devCap cards in
+// todo+in_progress+review, counting the cards this tick already advised to promote —
+// the balancer's `load[aid] >= DEV_CAP` check with its in-tick `load[aid] += 1`.
+// devCap mirrors FLEET_BALANCE_DEV_CAP (default 4); <= 0 leaves the brake off.
+func WithCapacityBrake(devCap int) BacklogAdvisoryOption {
+	return func(s *backlogPromotionAdvisoryService) { s.devCap = devCap }
 }
 
 // NewBacklogPromotionAdvisoryService constructs a BacklogPromotionAdvisoryService.
@@ -155,6 +184,8 @@ func (s *backlogPromotionAdvisoryService) SweepAdvisory(ctx context.Context) ([]
 	projectWSCache := make(map[uuid.UUID]uuid.UUID)
 
 	liftEnabled := make(map[uuid.UUID]bool) // project -> mid_pipeline.lift_backlog_blockers
+	// assignee -> cards already advised to promote this tick, added to the DB load.
+	tickLoad := make(map[uuid.UUID]int)
 	decisions := make([]BacklogPromotionDecision, 0, len(tasks))
 	for i := range tasks {
 		task := &tasks[i]
@@ -162,6 +193,15 @@ func (s *backlogPromotionAdvisoryService) SweepAdvisory(ctx context.Context) ([]
 		if err != nil {
 			reason = fmt.Sprintf("guard lookup failed, fail-closed no-promote: %v", err)
 			promote = false
+		}
+		if promote {
+			if why, cerr := s.capacityHold(ctx, task, projectWSCache, tickLoad); cerr != nil {
+				promote, reason = false, fmt.Sprintf("guard lookup failed, fail-closed no-promote: capacity: %v", cerr)
+			} else if why != "" {
+				promote, reason = false, why
+			} else if task.AssigneeID != nil {
+				tickLoad[*task.AssigneeID]++
+			}
 		}
 		decisions = append(decisions, BacklogPromotionDecision{TaskID: task.ID, Promote: promote, Reason: reason})
 		log.Printf("[backlog-promotion-advisory] task=%s promote=%v reason=%q", task.ID, promote, reason)
@@ -240,17 +280,29 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 		}
 	}
 
-	// 3. Dependencies — ALL outgoing edges regardless of dependency_type, matching
-	// mesh-intake-sweep.py's get_dependencies() (which takes the REST endpoint's
-	// "outgoing" list unfiltered) rather than hasUnresolvedBlockers' Blocks-only
-	// filter elsewhere in this package. Parity with the sweep is the point here, not
-	// the narrower canonical-blocking-dependency definition.
+	// 2a. Scheduling, lease and lane brakes — fleet_intake.evaluate: start_after not
+	// reached, card leased, assignee lane unavailable.
+	if why, lerr := s.laneHold(ctx, task); lerr != nil {
+		return false, "", fmt.Errorf("lane lookup: %w", lerr)
+	} else if why != "" {
+		return false, why, nil
+	}
+
+	// 3. Dependencies — blocking edges only (dependency_type == blocks), the
+	// DEP_BLOCKING_TYPES set of human_gate.dep_freeze_reason that fleet-balancer INTAKE
+	// uses (the single promoter after an internal ticket). Cleared = done OR cancelled.
 	deps, err := s.depRepo.ListByTask(ctx, task.ID)
 	if err != nil {
 		return false, "", fmt.Errorf("list dependencies: %w", err)
 	}
 	depIDs := make([]uuid.UUID, 0, len(deps))
 	for _, d := range deps {
+		// fleet-balancer INTAKE freezes on human_gate.dep_freeze_reason, which looks at
+		// DEP_BLOCKING_TYPES = {"blocks"} only; a relates_to / is_child_of edge is not a
+		// blocker there. (The sweep this rule was first ported from took every edge.)
+		if d.DependencyType != domain.DependencyTypeBlocks {
+			continue
+		}
 		depIDs = append(depIDs, d.DependsOnTaskID)
 	}
 
@@ -419,4 +471,65 @@ func (s *backlogPromotionAdvisoryService) journalLift(
 	if err := s.activityRepo.Create(ctx, entry); err != nil {
 		log.Printf("[lift-blockers-shadow] task %s: %v", task.ID, err)
 	}
+}
+
+// laneHold ports the cheap pre-comment brakes of fleet_intake.evaluate that are plain
+// task fields: start_after (schedule_ready), a live checkout ("leased"), and the
+// assignee lane. A start_after in the future holds; so does a held checkout. The lane
+// check applies only to an agent assignee and only when WithLaneAvailability is wired:
+// a missing agent row or Agent.FleetPaused() means no promotion.
+func (s *backlogPromotionAdvisoryService) laneHold(ctx context.Context, t *domain.Task) (string, error) {
+	if t.StartAfter != nil && t.StartAfter.After(s.now()) {
+		return fmt.Sprintf("start_after %s not reached", t.StartAfter.UTC().Format(time.RFC3339)), nil
+	}
+	// An expired checkout is no lease (same rule as ResolveRuntimeState).
+	if t.CheckedOutBy != nil && (t.CheckoutExpires == nil || t.CheckoutExpires.After(s.now())) {
+		return "leased (checked out)", nil
+	}
+	if s.agentRepo == nil || t.AssigneeID == nil || t.AssigneeType != domain.AssigneeTypeAgent {
+		return "", nil
+	}
+	a, err := s.agentRepo.GetByID(ctx, *t.AssigneeID)
+	if err != nil {
+		return "", err
+	}
+	if a == nil {
+		return "assignee lane unavailable (agent not found)", nil
+	}
+	if a.FleetPaused() {
+		return "assignee lane unavailable (fleet paused)", nil
+	}
+	return "", nil
+}
+
+// capacityHold ports `load[aid] >= DEV_CAP` of intake_team: an agent assignee already
+// holding devCap cards in todo/in_progress/review (plus those advised this tick) gets no
+// further promotion. Unassigned cards are not evaluated — the balancer's team-slot
+// check for ownerless cards needs the project roster, which the server does not hold.
+func (s *backlogPromotionAdvisoryService) capacityHold(
+	ctx context.Context, t *domain.Task, wsCache map[uuid.UUID]uuid.UUID, tickLoad map[uuid.UUID]int,
+) (string, error) {
+	if s.devCap <= 0 || t.AssigneeID == nil || t.AssigneeType != domain.AssigneeTypeAgent {
+		return "", nil
+	}
+	ws, err := s.projectWorkspaceOf(ctx, t.ProjectID, wsCache)
+	if err != nil {
+		return "", err
+	}
+	load := tickLoad[*t.AssigneeID]
+	for _, cat := range []domain.StatusCategory{
+		domain.StatusCategoryTodo, domain.StatusCategoryInProgress, domain.StatusCategoryReview,
+	} {
+		c := cat
+		_, total, err := s.taskRepo.ListByAssignee(ctx, ws, *t.AssigneeID, domain.AssigneeTypeAgent,
+			repository.AssigneeTaskFilter{StatusCategory: &c, Limit: 1})
+		if err != nil {
+			return "", err
+		}
+		load += total
+	}
+	if load >= s.devCap {
+		return fmt.Sprintf("capacity %d>=%d for assignee", load, s.devCap), nil
+	}
+	return "", nil
 }

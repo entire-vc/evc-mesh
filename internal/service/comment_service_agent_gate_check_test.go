@@ -33,21 +33,21 @@ func TestCheckAgentGateArm(t *testing.T) {
 
 	// No addressee, and an agent / unknown name as addressee — refused with a code.
 	assert.Equal(t, GateRefusalAddresseeMissing, refusalCode(t, env.svc.CheckAgentGateArm(ctx, taskID, "", "", "")))
-	assert.Equal(t, GateRefusalAddresseeNotUser, refusalCode(t, env.svc.CheckAgentGateArm(ctx, taskID, "@beth", "", "")))
+	assert.Equal(t, GateRefusalAddresseeNotUser, refusalCode(t, env.svc.CheckAgentGateArm(ctx, taskID, "@bill", "", "")))
 	assert.Equal(t, GateRefusalAddresseeNotUser, refusalCode(t, env.svc.CheckAgentGateArm(ctx, taskID, "nobody-here", "", "")))
 
 	// POSITIVE CONTROL: a human addressee on a thread with no earlier ask passes.
-	require.NoError(t, env.svc.CheckAgentGateArm(ctx, taskID, "@Alex", "", ""))
+	require.NoError(t, env.svc.CheckAgentGateArm(ctx, taskID, "@Pavel", "", ""))
 
 	// Earlier ask, answered by a human: a new ask is a repeat.
 	marker := &domain.Comment{TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeAgent,
-		Body: "❓ **Blocking @alex**: merge now?"}
+		Body: "❓ **Blocking @pavel**: merge now?"}
 	require.NoError(t, env.svc.Create(ctx, marker))
 	answer := &domain.Comment{TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
 		ParentCommentID: &marker.ID, Body: "merge it"}
 	require.NoError(t, env.svc.Create(ctx, answer))
 
-	err := env.svc.CheckAgentGateArm(ctx, taskID, "alex", "", "")
+	err := env.svc.CheckAgentGateArm(ctx, taskID, "pavel", "", "")
 	assert.Equal(t, GateRefusalRepeatAsk, refusalCode(t, err))
 	assert.Contains(t, err.Error(), "merge it", "the refusal quotes the answer")
 	var notice bool
@@ -59,7 +59,7 @@ func TestCheckAgentGateArm(t *testing.T) {
 	assert.True(t, notice, "the thread records why nothing was armed")
 
 	// Explicit supersedes is the opt-out, as on the marker path.
-	require.NoError(t, env.svc.CheckAgentGateArm(ctx, taskID, "alex", "the answer does not cover rollback", ""))
+	require.NoError(t, env.svc.CheckAgentGateArm(ctx, taskID, "pavel", "the answer does not cover rollback", ""))
 
 	// A live recorded decision under the same canonical_key refuses the ask, as on the marker path.
 	key := "merge-gateway"
@@ -67,7 +67,7 @@ func TestCheckAgentGateArm(t *testing.T) {
 		TaskID: taskID, CanonicalKey: &key, DecidedBy: uuid.New(),
 		Provenance: ptr(domain.HumanGateProvenanceDirect), Channel: ptr(domain.HumanGateChannelMesh),
 	}))
-	assert.Equal(t, GateRefusalRepeatAsk, refusalCode(t, env.svc.CheckAgentGateArm(ctx, taskID, "alex", "new subject", key)))
+	assert.Equal(t, GateRefusalRepeatAsk, refusalCode(t, env.svc.CheckAgentGateArm(ctx, taskID, "pavel", "new subject", key)))
 	// POSITIVE CONTROL: a different key is not blocked by that decision.
-	require.NoError(t, env.svc.CheckAgentGateArm(ctx, taskID, "alex", "new subject", "other-key"))
+	require.NoError(t, env.svc.CheckAgentGateArm(ctx, taskID, "pavel", "new subject", "other-key"))
 }

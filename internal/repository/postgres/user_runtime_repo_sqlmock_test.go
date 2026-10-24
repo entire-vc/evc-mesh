@@ -236,11 +236,11 @@ func TestUserRuntime_HistoryAndManagersLists(t *testing.T) {
 	assert.Equal(t, "agent", hist[0].AuthorType)
 
 	mock.ExpectQuery("FROM user_runtime_managers m JOIN agents").WithArgs(user).WillReturnRows(
-		sqlmock.NewRows([]string{"agent_id", "agent_name", "granted_at"}).AddRow(agent, "robin", time.Now()))
+		sqlmock.NewRows([]string{"agent_id", "agent_name", "granted_at"}).AddRow(agent, "riker", time.Now()))
 	mgrs, err := repo.Managers(context.Background(), UserRuntimeActor{UserID: user})
 	require.NoError(t, err)
 	require.Len(t, mgrs, 1)
-	assert.Equal(t, "robin", mgrs[0].AgentName)
+	assert.Equal(t, "riker", mgrs[0].AgentName)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
