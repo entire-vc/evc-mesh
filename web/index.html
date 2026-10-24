@@ -21,7 +21,7 @@
     <script>
       try {
         var t = localStorage.getItem("theme");
-        if (t === "dark" || (!t && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+        if (t === "dark" || (t !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
           document.documentElement.classList.add("dark");
         }
       } catch (e) {}
@@ -33,6 +33,14 @@
       look, so only a first visit can paint it before the answer arrives.
     -->
     <script src="/instance-theme.js"></script>
+    <!--
+      Import map for theme view bundles (ADR D10): React, react-dom, jsx-runtime,
+      react-i18next and the SDK are the core's single copies, so a theme bundle
+      never carries its own React. The shims in /theme-shared re-export from
+      window.__MESH_SHARED__ (src/core/themes/shared.ts). Generated list:
+      scripts/gen-theme-shims.mjs --check keeps this block in step.
+    -->
+    <script type="importmap">{"imports":{"react":"/theme-shared/react.js","react-dom":"/theme-shared/react-dom.js","react/jsx-runtime":"/theme-shared/jsx-runtime.js","react-i18next":"/theme-shared/react-i18next.js","@entire-vc/mesh-theme-sdk":"/theme-shared/mesh-theme-sdk.js"}}</script>
     <!-- Self-hosted (src/styles/fonts.css) — no more render-blocking round
          trip to fonts.googleapis.com before the font URLs even arrive.
          Preload only the one face nearly every screen paints text with

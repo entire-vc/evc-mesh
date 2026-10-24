@@ -211,10 +211,12 @@ func (s *Service) install(ctx context.Context, actor uuid.UUID, repoURL, ref, to
 		ExtensionID: m.ID, Version: m.Version, Manifest: m.Raw, Source: domain.ExtensionSourceRepo,
 		RepoURL: repoURL, RepoRef: ref, CommitSHA: f.sha, TrustLevel: domain.ExtensionTrustCustom, InstalledBy: &actor,
 	}
-	if err := s.Repo.InsertRepo(ctx, row, token); err != nil {
+	// The journal entry commits with the row: a failed write fails the install.
+	raw, _ := json.Marshal(map[string]any{"version": m.Version, "ref": ref, "commit_sha": f.sha, "repo_url": repoURL})
+	entry := &domain.InstanceExtensionJournalEntry{ActorID: &actor, ExtensionID: m.ID, Action: domain.InstanceJournalInstalled, Details: raw}
+	if err := s.Repo.InsertRepo(ctx, row, token, entry); err != nil {
 		return nil, err
 	}
-	s.journal(ctx, &actor, m.ID, domain.InstanceJournalInstalled, map[string]any{"version": m.Version, "ref": ref, "commit_sha": f.sha, "repo_url": repoURL})
 	s.changed(ctx)
 	return s.Installed.Get(ctx, m.ID)
 }

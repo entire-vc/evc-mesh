@@ -26,8 +26,16 @@ export default defineConfig({
     },
   },
   resolve: {
+    // The contract-test harness lives in packages/ and has no node_modules of its own: it must run on the web copies
+    // of these (a second React would break every hook).
+    dedupe: ["react", "react-dom", "@testing-library/react", "@testing-library/user-event", "axe-core"],
     alias: {
+      // `mesh-theme build` points this at the built views.js (src/core/slots/__tests__/theme-bundle-contract.test.tsx).
+      "@theme-bundle": process.env.MESH_THEME_BUNDLE ?? fileURLToPath(new URL("./src/test-utils/no-theme-bundle.ts", import.meta.url)),
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@entire-vc/mesh-theme-sdk/testing": fileURLToPath(new URL("../packages/mesh-theme-sdk/testing/index.ts", import.meta.url)),
+      // Declarations only in the package; the core's runtime sits behind the same names (src/core/themes/sdk-host.ts).
+      "@entire-vc/mesh-theme-sdk": fileURLToPath(new URL("./src/core/themes/sdk-host.ts", import.meta.url)),
     },
   },
 });

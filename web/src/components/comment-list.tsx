@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Bot, Edit2, Lock, Reply, Trash2, User } from "lucide-react";
 import { api } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -467,6 +468,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
   const [isInternal, setIsInternal] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const { currentWorkspace } = useWorkspaceStore();
   const { teamDirectory, fetchTeamDirectory } = useRulesStore();
@@ -536,6 +538,7 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
 
   useEffect(() => {
     setLoading(true);
+    setSubmitError(null);
     void fetchComments(1, false);
   }, [fetchComments]);
 
@@ -582,7 +585,9 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!body.trim()) return;
+    const submittedTaskId = taskId;
     setSubmitting(true);
+    setSubmitError(null);
 
     try {
       const req: CreateCommentRequest = {
@@ -598,8 +603,11 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
       setReplyTo(null);
       setBody("");
       setIsInternal(false);
-    } catch {
-      // error handled by api layer
+    } catch (err) {
+      // Keep the draft: only the error is shown, so the author can fix and resend.
+      // A failure that lands after the user moved to another task is not theirs to see.
+      if (taskIdRef.current !== submittedTaskId) return;
+      setSubmitError(apiErrorMessage(err, t("comments.submitFailed")));
     } finally {
       setSubmitting(false);
     }
@@ -748,6 +756,9 @@ export function CommentList({ taskId, projId, focusCommentId }: CommentListProps
               {t("comments.internalNote")}
             </label>
             <div className="flex items-center gap-2">
+              {submitError && (
+                <p role="alert" className="text-xs text-destructive">{submitError}</p>
+              )}
               <Button type="submit" size="sm" disabled={!body.trim() || submitting}>
                 {t("comments.submit")}
               </Button>

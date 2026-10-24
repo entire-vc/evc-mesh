@@ -6,12 +6,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
 type ChatThreadDeleteHandler struct {
-	repo *postgres.ChatThreadDeleteRepo
+	repo   *postgres.ChatThreadDeleteRepo
+	events ChatEvents
+}
+
+// WithEvents turns on the chat.thread.changed event for a deleted thread.
+func (h *ChatThreadDeleteHandler) WithEvents(e ChatEvents) *ChatThreadDeleteHandler {
+	h.events = e
+	return h
 }
 
 func NewChatThreadDeleteHandler(repo *postgres.ChatThreadDeleteRepo) *ChatThreadDeleteHandler {
@@ -29,8 +37,13 @@ func (h *ChatThreadDeleteHandler) Delete(c echo.Context) error {
 	if err != nil || thread == uuid.Nil {
 		return handleError(c, apierror.BadRequest("invalid thread_id"))
 	}
-	if err := h.repo.SoftDeleteThread(c.Request().Context(), userRuntimeActor(c), project, thread); err != nil {
+	actor := userRuntimeActor(c)
+	if err := h.repo.SoftDeleteThread(c.Request().Context(), actor, project, thread); err != nil {
 		return handleError(c, err)
+	}
+	if h.events != nil {
+		ws, _ := mw.GetWorkspaceID(c)
+		chatEmit("thread deleted", h.events.ThreadChanged(c.Request().Context(), chatThreadRef(ws, project, thread, actor.UserID), "deleted", nil))
 	}
 	return c.NoContent(http.StatusNoContent)
 }

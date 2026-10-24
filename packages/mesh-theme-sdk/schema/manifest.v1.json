@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mesh.entire.host/schemas/extensions/manifest.v1.json",
+  "title": "Mesh extension manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "name", "version", "kind", "runtime", "mesh_api", "publisher", "description", "category", "levels", "capabilities"],
+  "properties": {
+    "schema": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,40}$",
+      "not": { "anyOf": [{ "pattern": "mesh" }, { "pattern": "-(plugin|extension)$" }] }
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "kind": { "enum": ["integration", "plugin", "theme"] },
+    "runtime": { "enum": ["builtin", "external"] },
+    "mesh_api": { "type": "string", "pattern": "^(>=|<=|>|<|=)?[1-9][0-9]*( (>=|<=|>|<|=)?[1-9][0-9]*)*$" },
+    "publisher": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "category": { "enum": ["development", "communication", "documents", "agents", "security", "analytics", "entire-vc", "appearance"] },
+    "tags": { "type": "array", "maxItems": 10, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,29}$" } },
+    "icon": { "type": "string", "minLength": 1 },
+    "license": { "type": "string", "minLength": 1 },
+    "repository": { "type": "string", "format": "uri" },
+    "homepage": { "type": "string", "format": "uri" },
+    "levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instance", "workspace", "project"],
+      "properties": {
+        "instance": { "type": "boolean" },
+        "workspace": { "type": "boolean" },
+        "project": { "type": "boolean" }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "instance": { "$ref": "#/$defs/settingsLevel" },
+        "workspace": { "$ref": "#/$defs/settingsLevel" },
+        "project": { "$ref": "#/$defs/settingsLevel" }
+      }
+    },
+    "schemas": { "type": "object", "additionalProperties": { "$ref": "#/$defs/settingsLevel" } },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^((tasks|comments|artifacts|docs|projects|workspaces|members|agents|agent_keys|vcs_links|events|secrets):(read|write)|agent_key:rotate|ext_token:self_rotate)$" }
+        },
+        "events": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "task.created", "task.updated", "task.moved", "task.assigned", "task.completed", "task.gate.decided",
+              "comment.created", "artifact.uploaded", "doc.updated",
+              "project.created", "project.updated",
+              "workspace.member.added", "workspace.member.removed",
+              "agent.key.issued", "agent.key.revoked",
+              "extension.installed", "extension.connected", "extension.disabled", "extension.updated"
+            ]
+          }
+        },
+        "webhooks_in": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,39}$" } },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed_domains"],
+          "properties": {
+            "allowed_domains": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "reasoning": { "type": "string" }
+          }
+        },
+        "ui": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/slot" } },
+        "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "theme": { "$ref": "#/$defs/theme" },
+    "requires": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/extensionId" }
+    },
+    "project_view": { "$ref": "#/$defs/projectView" },
+    "external": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["base_url_setting", "health_path", "install_path", "events_path"],
+          "properties": {
+            "base_url_setting": { "type": "string", "minLength": 1 },
+            "health_path": { "type": "string", "pattern": "^/" },
+            "install_path": { "type": "string", "pattern": "^/" },
+            "events_path": { "type": "string", "pattern": "^/" },
+            "ui": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/slot" },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "title"],
+                "properties": {
+                  "path": { "type": "string", "pattern": "^/" },
+                  "title": { "type": "string", "minLength": 1 },
+                  "icon": { "type": "string" }
+                }
+              }
+            },
+            "image": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "runtime": { "const": "builtin" } } },
+      "then": { "properties": { "external": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "runtime": { "const": "external" } } },
+      "then": { "required": ["external"], "properties": { "external": { "type": "object" } } }
+    },
+    {
+      "if": { "required": ["capabilities"], "properties": { "capabilities": { "required": ["ui"], "properties": { "ui": { "contains": { "const": "project.view" } } } } } },
+      "then": { "required": ["project_view"], "properties": { "levels": { "properties": { "project": { "const": true } } } } },
+      "else": { "not": { "required": ["project_view"] } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "theme" } } },
+      "then": {
+        "required": ["theme"],
+        "properties": {
+          "runtime": { "const": "builtin" },
+          "category": { "const": "appearance" },
+          "levels": {
+            "properties": { "instance": { "const": true }, "workspace": { "const": true }, "project": { "const": false } }
+          },
+          "capabilities": { "type": "object", "maxProperties": 0 },
+          "external": { "type": "null" }
+        }
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["theme"] },
+            { "required": ["category"], "properties": { "category": { "const": "appearance" } } }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "extensionId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{2,40}$",
+      "not": { "anyOf": [{ "pattern": "mesh" }, { "pattern": "-(plugin|extension)$" }] }
+    },
+    "projectView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["icon", "title"],
+      "properties": {
+        "icon": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "after": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+        "visible_if": { "type": "object" }
+      }
+    },
+    "themeSlot": {
+      "anyOf": [
+        { "enum": ["board.layout", "board.column", "board.card", "task.row", "task.view", "dashboard.layout", "nav.sidebar", "nav.topbar", "doc.tree", "doc.view", "auth.screen"] },
+        { "type": "string", "pattern": "^dashboard\\.widget\\.[a-z][a-z0-9-]{0,39}$" }
+      ]
+    },
+    "semverMajorRange": { "type": "string", "pattern": "^\\^[1-9][0-9]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "themeTokens": {
+      "type": "object",
+      "$comment": "Token names from evc-mesh 31c05fbd internal/themes/contract.go (contract v1); Mesh checks this allowlist outside its JSON Schema.",
+      "propertyNames": {
+        "enum": [
+          "background", "foreground", "card", "card-foreground", "popover", "popover-foreground",
+          "primary", "primary-foreground", "secondary", "secondary-foreground",
+          "muted", "muted-foreground", "accent", "accent-foreground",
+          "destructive", "destructive-foreground", "success", "success-foreground", "warning", "warning-foreground",
+          "border", "input", "ring",
+          "sidebar-background", "sidebar-foreground", "sidebar-primary", "sidebar-accent", "sidebar-border",
+          "sidebar-primary-foreground", "sidebar-accent-foreground", "info", "info-foreground",
+          "priority-urgent", "priority-high", "priority-medium", "priority-low", "priority-none",
+          "status-backlog", "status-triage", "status-todo", "status-in-progress", "status-review", "status-done", "status-cancelled",
+          "chart-1", "chart-2", "chart-3", "chart-4", "chart-5",
+          "avatar-1", "avatar-2", "avatar-3", "avatar-4", "avatar-5", "avatar-6", "avatar-7", "avatar-8",
+          "radius", "space-unit", "font-sans", "font-mono"
+        ]
+      },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 200 }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens_contract", "modes"],
+      "properties": {
+        "tokens_contract": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "modes": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["light", "dark"] } },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "light": { "$ref": "#/$defs/themeTokens" }, "dark": { "$ref": "#/$defs/themeTokens" } }
+        },
+        "css": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" } }
+        },
+        "views": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bundle", "sha256"],
+          "properties": { "bundle": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" } }
+        },
+        "slots": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/themeSlot" },
+          "additionalProperties": { "$ref": "#/$defs/semverMajorRange" }
+        },
+        "contract_report": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sdk_version", "bundle_sha256", "passed"],
+          "properties": {
+            "sdk_version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+            "bundle_sha256": { "$ref": "#/$defs/sha256" },
+            "passed": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/themeSlot" },
+              "additionalProperties": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" }
+            }
+          }
+        }
+      },
+      "dependentRequired": { "views": ["slots", "contract_report"], "slots": ["views"] }
+    },
+    "slot": {
+      "enum": ["workspace.settings", "project.settings", "task.panel", "task.badge", "task.actions", "sidebar.item", "command", "doc.panel", "project.view"]
+    },
+    "settingsLevel": {
+      "type": "object",
+      "properties": {
+        "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "field": {
+      "type": "object",
+      "properties": {
+        "x-secret": { "type": "boolean" },
+        "x-widget": { "enum": ["project-picker", "agent-picker", "textarea", "toggle", "select", "list", "group", "color", "font-select", "image", "field-picker", "widget-picker", "layout-picker", "order-list"] },
+        "x-token": { "type": "string", "minLength": 1 },
+        "x-options": { "type": "object", "additionalProperties": { "type": "string" } },
+        "x-visible-if": { "type": "object" },
+        "x-help": { "type": "string" }
+      }
+    }
+  }
+}

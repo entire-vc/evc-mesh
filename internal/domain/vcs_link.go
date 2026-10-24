@@ -25,6 +25,10 @@ const (
 	VCSLinkTypePR     VCSLinkType = "pr"
 	VCSLinkTypeCommit VCSLinkType = "commit"
 	VCSLinkTypeBranch VCSLinkType = "branch"
+	// VCSLinkTypeReference points at someone else's PR/MR the card only reads
+	// or reviews; it is never the card's own deliverable, so the done-gate
+	// does not wait for it to merge.
+	VCSLinkTypeReference VCSLinkType = "reference"
 )
 
 // vcsLinkTypeAliases maps accepted spellings onto the canonical link type.
@@ -38,11 +42,12 @@ var vcsLinkTypeAliases = map[string]VCSLinkType{
 	"pull_request": VCSLinkTypePR,
 	"commit":       VCSLinkTypeCommit,
 	"branch":       VCSLinkTypeBranch,
+	"reference":    VCSLinkTypeReference,
 }
 
 // VCSLinkTypeNames lists the accepted link_type spellings, canonical first,
 // for use in validation error messages.
-var VCSLinkTypeNames = []string{"pr", "pull_request", "commit", "branch"}
+var VCSLinkTypeNames = []string{"pr", "pull_request", "commit", "branch", "reference"}
 
 // ParseVCSLinkType resolves a caller-supplied link_type to its canonical
 // value. Matching ignores surrounding whitespace and case ("PR" and

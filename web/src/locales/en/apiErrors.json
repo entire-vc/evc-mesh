@@ -41,5 +41,15 @@
   "extension_incompatible": "This extension is incompatible with this version of Mesh.",
   "extension_manifest_invalid": "The repository's mesh-extension.json is not a valid manifest.",
   "extension_id_conflict": "An extension with this id is already installed.",
-  "extension_repo_unavailable": "The repository can't be read: check the address, the ref and the token."
+  "extension_repo_unavailable": "The repository can't be read: check the address, the ref and the token.",
+  "chat_protocol_unsupported": "This chat protocol version is not supported.",
+  "chat_not_claim_holder": "This turn is held by another runner.",
+  "chat_turn_not_found": "The chat turn was not found.",
+  "chat_stale_claim": "The turn was handed to another claim. Stop working on it.",
+  "chat_lease_expired": "The turn lease has expired. Stop working on it.",
+  "chat_turn_terminal": "The turn is already finished.",
+  "chat_not_started": "The turn has not been started yet.",
+  "chat_seq_gap": "An event is missing: resend from the expected sequence number.",
+  "chat_batch_too_large": "The event batch is too large.",
+  "chat_rate_limited": "Too many event batches for this turn. Try again shortly."
 }

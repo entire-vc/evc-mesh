@@ -22,7 +22,7 @@ type RepoExtensionRepo struct {
 // NewRepoExtensionRepo creates a new RepoExtensionRepo.
 func NewRepoExtensionRepo(db *sqlx.DB) *RepoExtensionRepo { return &RepoExtensionRepo{db: db} }
 
-func (r *RepoExtensionRepo) InsertRepo(ctx context.Context, ext *domain.InstalledExtension, token string) error {
+func (r *RepoExtensionRepo) InsertRepo(ctx context.Context, ext *domain.InstalledExtension, token string, journal *domain.InstanceExtensionJournalEntry) error {
 	// Encrypt first and fail closed: Encrypt hands plaintext back when no key is
 	// configured, and a repository token must never reach the table that way.
 	var enc string
@@ -57,6 +57,9 @@ func (r *RepoExtensionRepo) InsertRepo(ctx context.Context, ext *domain.Installe
 			ext.ExtensionID, enc, ext.InstalledBy); err != nil {
 			return err
 		}
+	}
+	if err := appendJournal(ctx, tx, journal); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

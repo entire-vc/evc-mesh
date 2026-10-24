@@ -41,7 +41,9 @@ type AssetStore interface {
 type Service struct {
 	Installed repository.InstalledExtensionRepository
 	Themes    repository.ThemeRepository
-	// Journal records admin actions; may be nil.
+	// Journal switches the admin journal on (nil: off). The entries themselves are
+	// written by the stores in the mutation's own transaction, so a failed write
+	// fails the install, choice or delete instead of leaving it unrecorded.
 	Journal repository.InstanceExtensionPolicyRepository
 	// Store holds the bundle files; nil when S3 is not configured, which only
 	// refuses themes that carry a stylesheet or views.
@@ -117,18 +119,14 @@ func (s *Service) PrepareInstall(ctx context.Context, m extensions.Manifest, fet
 // InstallBuiltin installs a theme shipped with Mesh. Idempotent: installing
 // again refreshes the row.
 func (s *Service) InstallBuiltin(ctx context.Context, actor uuid.UUID, id string) (*domain.InstalledExtension, error) {
-	known := false
-	for _, b := range BuiltinIDs() {
-		known = known || b == id
-	}
-	if !known {
+	if !builtinKnown(id) {
 		return nil, apierror.NotFound("builtin theme")
 	}
 	raw, err := builtinFile(id, repoinstall.ManifestFile)
 	if err != nil {
 		return nil, apierror.InternalError(err.Error())
 	}
-	m, err := repoinstall.ValidateManifest(raw)
+	m, err := validateBuiltinManifest(id, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -140,19 +138,42 @@ func (s *Service) InstallBuiltin(ctx context.Context, actor uuid.UUID, id string
 		return nil, err
 	}
 	row := &domain.InstalledExtension{ExtensionID: m.ID, Version: m.Version, Manifest: m.Raw, Source: domain.ExtensionSourceBuiltin, TrustLevel: domain.ExtensionTrustBuiltin}
-	if err := s.Installed.UpsertBuiltin(ctx, row); err != nil {
+	if err := s.Themes.InstallBuiltin(ctx, row, s.entry(actor, m.ID, domain.InstanceJournalInstalled, map[string]any{"version": m.Version, "source": "builtin", "kind": KindTheme})); err != nil {
 		return nil, err
 	}
-	s.journal(ctx, actor, m.ID, domain.InstanceJournalInstalled, map[string]any{"version": m.Version, "source": "builtin", "kind": KindTheme})
 	return s.Installed.Get(ctx, m.ID)
 }
 
-func (s *Service) journal(ctx context.Context, actor uuid.UUID, extID, action string, details map[string]any) {
+// Delete removes an installed theme. Every selection that pointed at it falls
+// back (workspace: "as the instance", instance: mesh-default) with its settings
+// cleared. A built-in theme can be removed too: it stays in builtin_available.
+// An id that is not an installed theme is a 404.
+func (s *Service) Delete(ctx context.Context, actor uuid.UUID, id string) error {
+	row, err := s.Installed.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if row == nil || parseTheme(row) == nil {
+		return apierror.NotFound("theme")
+	}
+	ok, err := s.Themes.DeleteTheme(ctx, id, s.entry(actor, id, domain.InstanceJournalThemeDeleted, map[string]any{"version": row.Version, "source": row.Source, "kind": KindTheme}))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return apierror.NotFound("theme")
+	}
+	return nil
+}
+
+// entry is the journal record that goes into the mutation's transaction; nil
+// when the journal is off.
+func (s *Service) entry(actor uuid.UUID, extID, action string, details map[string]any) *domain.InstanceExtensionJournalEntry {
 	if s.Journal == nil {
-		return
+		return nil
 	}
 	raw, _ := json.Marshal(details)
-	_ = s.Journal.AppendJournal(ctx, &domain.InstanceExtensionJournalEntry{ActorID: &actor, ExtensionID: extID, Action: action, Details: raw})
+	return &domain.InstanceExtensionJournalEntry{ActorID: &actor, ExtensionID: extID, Action: action, Details: raw}
 }
 
 // installedTheme is an installed row of kind theme with its parsed parts.
@@ -198,7 +219,10 @@ type Info struct {
 	HasViews    bool              `json:"has_views"`
 	Slots       map[string]string `json:"slots,omitempty"`
 	Settings    map[string]any    `json:"settings"`
-	Warnings    []ContrastWarning `json:"contrast_warnings"`
+	// Tokens are the theme's own values per mode (light/dark), enough to paint
+	// a preview before the theme is chosen; settings bound to a token are applied by the caller.
+	Tokens   map[string]map[string]string `json:"tokens"`
+	Warnings []ContrastWarning            `json:"contrast_warnings"`
 }
 
 // List returns the installed themes with the settings schemas the form needs.
@@ -206,6 +230,12 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 	rows, err := s.Installed.List(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// mesh-default is always on the list: its settings schema is what the admin edits before anything is stored.
+	if !hasRow(rows, domain.DefaultThemeID) {
+		if raw, ferr := builtinFile(domain.DefaultThemeID, repoinstall.ManifestFile); ferr == nil {
+			rows = append(rows, domain.InstalledExtension{ExtensionID: domain.DefaultThemeID, Manifest: raw, Source: domain.ExtensionSourceBuiltin, TrustLevel: domain.ExtensionTrustBuiltin})
+		}
 	}
 	out := []Info{}
 	for i := range rows {
@@ -223,11 +253,18 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 			ID: t.manifest.ID, Name: t.manifest.Name, Version: t.manifest.Version, Publisher: t.manifest.Publisher,
 			Description: t.manifest.Description, Source: string(rows[i].Source), TrustLevel: string(rows[i].TrustLevel),
 			Modes: t.spec.modeNames(), HasCSS: t.spec.CSS != nil, HasViews: t.spec.Views != nil, Slots: t.spec.Slots,
-			Settings: settings, Warnings: nonNil(CheckContrast(t.spec.Tokens)),
+			Settings: settings, Tokens: nonNilTokens(t.spec.Tokens), Warnings: nonNil(CheckContrast(t.spec.Tokens)),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+func nonNilTokens(t map[string]map[string]string) map[string]map[string]string {
+	if t == nil {
+		return map[string]map[string]string{}
+	}
+	return t
 }
 
 func nonNil(w []ContrastWarning) []ContrastWarning {
@@ -254,6 +291,8 @@ type Resolved struct {
 	ThemeCSSURL string         `json:"theme_css_url"`
 	ViewsURL    string         `json:"views_url"`
 	Settings    map[string]any `json:"settings"`
+	// Modes are the colour modes the theme ships; one entry forces that mode.
+	Modes []string `json:"modes"`
 	// Brand is the theme outside the app (browser chrome, manifest, emails);
 	// always complete, mesh-default where the theme is silent.
 	Brand Brand  `json:"brand"`
@@ -321,7 +360,7 @@ func (s *Service) Resolve(ctx context.Context, workspaceID *uuid.UUID) (*Resolve
 			}
 		}
 	}
-	r := &Resolved{ThemeID: t.manifest.ID, Source: source, Settings: settings}
+	r := &Resolved{ThemeID: t.manifest.ID, Source: source, Settings: settings, Modes: t.spec.modeNames()}
 	over := tokenOverrides(t.manifest, settings)
 	r.TokensCSS = BuildTokensCSS(t.spec.Tokens, over)
 	r.Brand = BrandOf(mergeOverrides(t.spec.Tokens, over))
@@ -352,7 +391,7 @@ func (s *Service) BrandFor(ctx context.Context, workspaceID *uuid.UUID) Brand {
 }
 
 func defaultResolved() *Resolved {
-	r := &Resolved{ThemeID: domain.DefaultThemeID, Source: "default", Settings: map[string]any{}, Brand: DefaultBrand()}
+	r := &Resolved{ThemeID: domain.DefaultThemeID, Source: "default", Settings: map[string]any{}, Modes: []string{"dark", "light"}, Brand: DefaultBrand()}
 	r.Hash = Hash(domain.DefaultThemeID)
 	return r
 }
@@ -398,7 +437,16 @@ func (s *Service) Select(ctx context.Context, workspaceID *uuid.UUID, actor uuid
 		settings = map[string]any{}
 	}
 	if themeID != nil && *themeID == domain.DefaultThemeID {
-		themeID = nil
+		if len(settings) == 0 {
+			themeID = nil
+		} else if t, err := s.load(ctx, *themeID); err != nil {
+			return nil, err
+		} else if t == nil {
+			// mesh-default carries its own settings schema; the row it is stored against appears with the first save.
+			if _, err := s.InstallBuiltin(ctx, actor, *themeID); err != nil {
+				return nil, err
+			}
+		}
 	}
 	level := LevelInstance
 	if workspaceID != nil {
@@ -424,25 +472,26 @@ func (s *Service) Select(ctx context.Context, workspaceID *uuid.UUID, actor uuid
 		warnings = CheckContrast(mergeOverrides(t.spec.Tokens, tokenOverrides(t.manifest, eff)))
 	}
 	raw, _ := json.Marshal(settings)
-	var stored *domain.ThemeSelection
-	var err error
-	if workspaceID == nil {
-		stored, err = s.Themes.SetInstance(ctx, themeID, raw, actor)
-	} else {
-		stored, err = s.Themes.SetWorkspace(ctx, *workspaceID, themeID, raw, actor)
-	}
-	if err != nil {
-		return nil, err
-	}
 	chosen := domain.DefaultThemeID
 	if themeID != nil {
 		chosen = *themeID
 	}
-	detail := map[string]any{"level": level, "version": stored.Version}
+	detail := map[string]any{"level": level}
 	if workspaceID != nil {
 		detail["workspace_id"] = workspaceID.String()
 	}
-	s.journal(ctx, actor, chosen, domain.InstanceJournalThemeSelected, detail)
+	// The store adds the stored version to the entry and commits both together.
+	entry := s.entry(actor, chosen, domain.InstanceJournalThemeSelected, detail)
+	var stored *domain.ThemeSelection
+	var err error
+	if workspaceID == nil {
+		stored, err = s.Themes.SetInstance(ctx, themeID, raw, actor, entry)
+	} else {
+		stored, err = s.Themes.SetWorkspace(ctx, *workspaceID, themeID, raw, actor, entry)
+	}
+	if err != nil {
+		return nil, err
+	}
 	v := selectionView(stored)
 	v.Warnings = nonNil(warnings)
 	return v, nil
@@ -506,4 +555,33 @@ func StatusForError(err error) int {
 		return ae.StatusCode()
 	}
 	return http.StatusInternalServerError
+}
+
+// validateBuiltinManifest holds an embedded manifest to the same schema as any
+// other. The schema reserves every id containing "mesh" so that no third party
+// can pass as the app; mesh-default is the one embedded manifest that carries it,
+// so it is checked under a neutral id and returned under its own.
+func validateBuiltinManifest(id string, raw []byte) (extensions.Manifest, error) {
+	if id != domain.DefaultThemeID {
+		return repoinstall.ValidateManifest(raw)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return extensions.Manifest{}, apierror.InternalError("builtin theme manifest is not JSON: " + err.Error())
+	}
+	doc["id"] = "default-look"
+	neutral, _ := json.Marshal(doc)
+	if _, err := repoinstall.ValidateManifest(neutral); err != nil {
+		return extensions.Manifest{}, err
+	}
+	return extensions.ParseManifest(raw)
+}
+
+func hasRow(rows []domain.InstalledExtension, id string) bool {
+	for i := range rows {
+		if rows[i].ExtensionID == id {
+			return true
+		}
+	}
+	return false
 }

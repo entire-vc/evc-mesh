@@ -37,8 +37,11 @@
       "archived": "Archived ({{count}})",
       "unarchive": "Unarchive",
       "unarchiveProject": "Unarchive {{name}}",
-      "unarchiveFailed": "Failed to unarchive project"
-    }
+      "unarchiveFailed": "Failed to unarchive project",
+      "create": "New project"
+    },
+    "unread": "{{count}} unread",
+    "toggle": "Toggle sidebar"
   },
   "createWorkspace": {
     "title": "Create Workspace",
@@ -64,7 +67,9 @@
       "userFallback": "User",
       "logOut": "Log out",
       "profile": "Open profile"
-    }
+    },
+    "toggleSidebar": "Toggle sidebar",
+    "breadcrumbs": "Breadcrumbs"
   },
   "workspaceNotFound": {
     "title": "Workspace not found",

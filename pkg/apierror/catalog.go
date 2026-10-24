@@ -71,6 +71,16 @@ var Catalog = []Entry{
 	{"extension_manifest_invalid", "The repository's mesh-extension.json is not a valid manifest.", "Файл mesh-extension.json в репозитории не является корректным манифестом."},
 	{"extension_id_conflict", "An extension with this id is already installed.", "Расширение с таким id уже установлено."},
 	{"extension_repo_unavailable", "The repository can't be read: check the address, the ref and the token.", "Не удаётся прочитать репозиторий: проверьте адрес, тег или ветку и токен."},
+	{"chat_protocol_unsupported", "This chat protocol version is not supported.", "Эта версия протокола чата не поддерживается."},
+	{"chat_not_claim_holder", "This turn is held by another runner.", "Ход выполняет другой раннер."},
+	{"chat_turn_not_found", "The chat turn was not found.", "Ход чата не найден."},
+	{"chat_stale_claim", "The turn was handed to another claim. Stop working on it.", "Ход передан по новому захвату. Прекратите работу над ним."},
+	{"chat_lease_expired", "The turn lease has expired. Stop working on it.", "Аренда хода истекла. Прекратите работу над ним."},
+	{"chat_turn_terminal", "The turn is already finished.", "Ход уже завершён."},
+	{"chat_not_started", "The turn has not been started yet.", "Ход ещё не запущен."},
+	{"chat_seq_gap", "An event is missing: resend from the expected sequence number.", "Пропущено событие: повторите отправку с ожидаемого номера."},
+	{"chat_batch_too_large", "The event batch is too large.", "Пачка событий слишком большая."},
+	{"chat_rate_limited", "Too many event batches for this turn. Try again shortly.", "Слишком много пачек событий для этого хода. Повторите чуть позже."},
 }
 
 // Lookup returns the text of code in locale ("ru" or anything else for

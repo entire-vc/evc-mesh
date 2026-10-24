@@ -574,6 +574,7 @@ func (h *VCSLinkHandler) GitHubWebhook(c echo.Context) error {
 			"reason":       result.Reason,
 			"old_status":   result.OldStatus,
 			"new_status":   result.NewStatus,
+			"links_synced": result.LinksSynced,
 		})
 
 	case "push":
@@ -768,6 +769,7 @@ func (h *VCSLinkHandler) GitLabWebhook(c echo.Context) error {
 		"reason":       result.Reason,
 		"old_status":   result.OldStatus,
 		"new_status":   result.NewStatus,
+		"links_synced": result.LinksSynced,
 	})
 }
 

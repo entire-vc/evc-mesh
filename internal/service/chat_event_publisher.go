@@ -216,7 +216,13 @@ type ChatDeltaStream struct {
 }
 
 func (p *ChatEventPublisher) NewDeltaStream(t ChatThreadRef, messageID, turnID uuid.UUID) *ChatDeltaStream {
-	return &ChatDeltaStream{p: p, t: t, messageID: messageID, turnID: turnID, interval: ChatDeltaBatchInterval}
+	return p.NewDeltaStreamAt(t, messageID, turnID, 0)
+}
+
+// NewDeltaStreamAt resumes a stream whose message already holds sent code
+// points (another replica streamed them), so offsets stay continuous.
+func (p *ChatEventPublisher) NewDeltaStreamAt(t ChatThreadRef, messageID, turnID uuid.UUID, sent int) *ChatDeltaStream {
+	return &ChatDeltaStream{p: p, t: t, messageID: messageID, turnID: turnID, interval: ChatDeltaBatchInterval, sent: sent}
 }
 
 // Append queues text; the first fragment of a batch arms the flush timer.

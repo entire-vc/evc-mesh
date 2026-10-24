@@ -91,6 +91,9 @@ const (
 	// SysCodeAssigneeAutoChanged — automatic assignee change.
 	// params: {"from": "<id|null>", "to": "<id|null>", "reason": "<text>"}.
 	SysCodeAssigneeAutoChanged = "assignee_auto_changed"
+	// SysCodeReviewerNotAssigned — a review transition could not hand the card to
+	// the configured reviewer. params: {"reviewer": "<config value>", "reason": "<text>"}.
+	SysCodeReviewerNotAssigned = "reviewer_not_assigned"
 	// SysCodeRecurringRepeat — schedule fired while the instance is still open
 	// ("🔁 Repeat N"). params: {"n": <int>}.
 	SysCodeRecurringRepeat = "recurring_repeat"
@@ -146,7 +149,7 @@ var SystemCodes = []string{
 	SysCodeTriageExit, SysCodeReleaseSoftTimeout, SysCodeMonitorUnparked,
 	SysCodeUmbrellaAutoClosed, SysCodeClosedTaskFollowupPending,
 	SysCodeClosedTaskFollowupEscalated, SysCodeClosedTaskFollowupNotice,
-	SysCodeClosedTaskRepeatDeferred, SysCodeRepeatComment, SysCodeAssigneeAutoChanged,
+	SysCodeClosedTaskRepeatDeferred, SysCodeRepeatComment, SysCodeAssigneeAutoChanged, SysCodeReviewerNotAssigned,
 	SysCodeRecurringRepeat, SysCodeRecurringMissed, SysCodeLeaseParked,
 	SysCodeLeaseBlockerReturned, SysCodeLeaseHandoff,
 	SysCodeWithdrawalBlockedRawArmed, SysCodeWithdrawalBlockedReaffirmPending,

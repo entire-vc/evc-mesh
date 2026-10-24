@@ -8,7 +8,7 @@ import i18n from "@/i18n";
 import { AgentShortTag } from "@/components/agent-short-tag";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TaskLink } from "@/core/primitives";
+import { TaskLink } from "@entire-vc/mesh-theme-sdk";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import type { Async, DashboardWidgetView } from "../types";

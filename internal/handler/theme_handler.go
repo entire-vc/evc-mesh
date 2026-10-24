@@ -245,6 +245,18 @@ func (h *ThemeHandler) PutInstance(c echo.Context) error {
 	return h.put(c, nil, uid)
 }
 
+// Delete handles DELETE /instance/themes/:id.
+func (h *ThemeHandler) Delete(c echo.Context) error {
+	uid, denied, err := authorizeInstanceAdmin(c, h.admins)
+	if denied {
+		return err
+	}
+	if err := h.svc.Delete(c.Request().Context(), uid, c.Param("id")); err != nil {
+		return handleError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 type installThemeBody struct {
 	Source    string `json:"source"`
 	ID        string `json:"id"`

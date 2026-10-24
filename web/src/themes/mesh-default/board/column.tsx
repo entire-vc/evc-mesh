@@ -5,7 +5,7 @@ import { AgentShortTagView } from "@/components/agent-short-tag";
 import { AssigneeAvatarView } from "@/components/assignee-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DropZone } from "@/core/primitives";
+import { DropZone } from "@entire-vc/mesh-theme-sdk";
 import { apiErrorMessage } from "@/lib/api-error";
 import type {
   BoardCardView,

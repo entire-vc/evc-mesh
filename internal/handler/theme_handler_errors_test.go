@@ -17,6 +17,7 @@ var errThemeStoreDown = errors.New("store unreachable")
 // themeStores swaps the fixture's service stores for ones that can be failed on demand.
 func (f *themeFixture) stores() (*themestest.Installed, *themestest.Themes) {
 	inst, th := themestest.NewInstalled(), themestest.NewThemes()
+	th.Installed = inst
 	f.svc.Installed, f.svc.Themes = inst, th
 	return inst, th
 }
@@ -119,7 +120,7 @@ func (s *failSecondRead) Get(ctx context.Context, id string) (*domain.InstalledE
 func TestThemeAPI_InstallBuiltin(t *testing.T) {
 	f := newThemeFixture(t)
 	admin := as(f.instAdmin)
-	f.stores()
+	_, th := f.stores()
 
 	rec := f.do(http.MethodPost, "/api/v1/instance/themes", `{"source":"builtin","id":"graphite"}`, admin)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
@@ -128,7 +129,9 @@ func TestThemeAPI_InstallBuiltin(t *testing.T) {
 
 	require.Equal(t, http.StatusNotFound, f.do(http.MethodPost, "/api/v1/instance/themes", `{"source":"builtin","id":"ghost"}`, admin).Code)
 
-	f.svc.Installed = &failSecondRead{Installed: themestest.NewInstalled()}
+	fresh := themestest.NewInstalled()
+	th.Installed = fresh
+	f.svc.Installed = &failSecondRead{Installed: fresh}
 	rec = f.do(http.MethodPost, "/api/v1/instance/themes", `{"source":"builtin","id":"graphite"}`, admin)
 	require.Equal(t, http.StatusInternalServerError, rec.Code, "an install whose report cannot be read is not reported as a success")
 }

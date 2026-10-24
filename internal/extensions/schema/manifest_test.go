@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "f243313cae6043ae6e3b18fa1c3b636fb82333911fe9f0febc788e9aaa970564"
+const manifestV1SHA256 = "695609ed5dbe3653c0483f8bfe3da84194afd91f563268e5db9915c87ec61651"
 
 const schemaFile = "manifest.v1.json"
 
@@ -72,6 +73,32 @@ func TestManifestV1_InvalidFixturesRejected(t *testing.T) {
 	}
 }
 
+// settingsField validates mesh-ext-hello with one extra workspace settings field.
+func settingsField(t *testing.T, sch *jsonschema.Schema, field map[string]any) error {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("fixtures", "valid", "mesh-ext-hello.json"))
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	props := doc["settings"].(map[string]any)["workspace"].(map[string]any)["properties"].(map[string]any)
+	props["extra"] = field
+	out, err := json.Marshal(doc)
+	require.NoError(t, err)
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(out))
+	require.NoError(t, err)
+	return sch.Validate(inst)
+}
+
+func TestManifestV1_ThemeSettingsWidgets(t *testing.T) {
+	sch := compileSchema(t)
+	for _, w := range []string{"color", "font-select", "image", "field-picker", "widget-picker", "layout-picker", "order-list"} {
+		require.NoError(t, settingsField(t, sch, map[string]any{"type": "string", "x-widget": w}), w)
+	}
+	require.NoError(t, settingsField(t, sch, map[string]any{"type": "string", "x-token": "primary", "x-options": map[string]any{"wide": "Wide"}}))
+	require.Error(t, settingsField(t, sch, map[string]any{"type": "string", "x-widget": "no-such-widget"}), "control: an unknown widget is still refused")
+	require.Error(t, settingsField(t, sch, map[string]any{"type": "string", "x-options": []string{"wide"}}), "x-options labels are an object")
+}
+
 func TestManifestV1_SchemaSHA256(t *testing.T) {
 	raw, err := os.ReadFile(schemaFile)
 	require.NoError(t, err)
@@ -101,4 +128,23 @@ func TestManifestV1_ActionCapabilities(t *testing.T) {
 	for _, bad := range []string{"agent_key:read", "agent_keys:rotate", "ext_token:rotate", "ext_token:self_rotate:x", "agent_key:rotate "} {
 		require.Error(t, with(bad), bad)
 	}
+}
+
+// TestManifestV1_ThemeTokenNames pins the token-name allowlist: a known name is
+// accepted, an unknown one is rejected.
+func TestManifestV1_ThemeTokenNames(t *testing.T) {
+	sch := compileSchema(t)
+	base, err := os.ReadFile(filepath.Join("fixtures", "valid", "theme-full.json"))
+	require.NoError(t, err)
+
+	with := func(token string) error {
+		raw := bytes.Replace(base, []byte(`"chart-1":"12 76% 61%"`), []byte(`"`+token+`":"12 76% 61%"`), 1)
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+		require.NoError(t, err)
+		return sch.Validate(doc)
+	}
+	require.NoError(t, with("chart-1"))
+	require.NoError(t, with("sidebar-border"))
+	require.Error(t, with("chart-9"))
+	require.Error(t, with("made-up-token"))
 }

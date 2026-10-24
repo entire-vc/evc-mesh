@@ -1420,7 +1420,10 @@ type RepoExtensionRepository interface {
 	// InsertRepo inserts a source=repo row together with its access token (when
 	// not empty) in one transaction; apierror.Conflict when the id is taken. The
 	// token is stored encrypted or not at all.
-	InsertRepo(ctx context.Context, ext *domain.InstalledExtension, token string) error
+	//
+	// journal, when not nil, is written in the same transaction: a failed write
+	// rolls the install back.
+	InsertRepo(ctx context.Context, ext *domain.InstalledExtension, token string, journal *domain.InstanceExtensionJournalEntry) error
 	GetState(ctx context.Context, extensionID string) (*domain.ExtensionRepoState, error)
 	// ApplyUpdate moves the current version into previous_* and writes the new
 	// one, clearing any pending update.
@@ -2156,9 +2159,21 @@ type TaskExternalRefRepository interface {
 type ThemeRepository interface {
 	GetInstance(ctx context.Context) (*domain.ThemeSelection, error)
 	// SetInstance stores the choice and bumps its version.
-	SetInstance(ctx context.Context, themeID *string, settings json.RawMessage, by uuid.UUID) (*domain.ThemeSelection, error)
+	//
+	// Every mutation below takes an optional journal entry (nil: none) and writes
+	// it in the mutation's own transaction, so the state and its record commit or
+	// fail together. For Set* the stored version is added to the entry's details.
+	SetInstance(ctx context.Context, themeID *string, settings json.RawMessage, by uuid.UUID, journal *domain.InstanceExtensionJournalEntry) (*domain.ThemeSelection, error)
 	GetWorkspace(ctx context.Context, workspaceID uuid.UUID) (*domain.ThemeSelection, error)
-	SetWorkspace(ctx context.Context, workspaceID uuid.UUID, themeID *string, settings json.RawMessage, by uuid.UUID) (*domain.ThemeSelection, error)
+	SetWorkspace(ctx context.Context, workspaceID uuid.UUID, themeID *string, settings json.RawMessage, by uuid.UUID, journal *domain.InstanceExtensionJournalEntry) (*domain.ThemeSelection, error)
+	// InstallBuiltin is InstalledExtensionRepository.UpsertBuiltin plus the journal
+	// entry in one transaction.
+	InstallBuiltin(ctx context.Context, ext *domain.InstalledExtension, journal *domain.InstanceExtensionJournalEntry) error
+	// DeleteTheme resets every selection (instance and workspaces) that points at
+	// the installed extension to "no theme, no settings" and removes its
+	// installed_extensions row, in one transaction. It reports false when there
+	// was no such row.
+	DeleteTheme(ctx context.Context, extensionID string, journal *domain.InstanceExtensionJournalEntry) (bool, error)
 }
 
 // ErrChatEpochStale is returned by ChatSessionTokenRepository.Issue when the

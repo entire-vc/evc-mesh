@@ -22,6 +22,10 @@ COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 COPY web/patches/ ./patches/
 RUN pnpm install --frozen-lockfile
 COPY web/ .
+# The app reads the theme SDK's source (tsconfig paths and the vite alias point at ../packages/mesh-theme-sdk/src).
+COPY packages/mesh-theme-sdk/src/ /packages/mesh-theme-sdk/src/
+# web's typecheck also covers the contract-test harness the app's tests import (builder stage only).
+COPY packages/mesh-theme-sdk/testing/ /packages/mesh-theme-sdk/testing/
 RUN pnpm build
 
 # Stage 3: Production image

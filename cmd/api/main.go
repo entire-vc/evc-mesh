@@ -467,6 +467,7 @@ func main() {
 		DB:       cfg.Redis.DB,
 	})
 	wsPublisher := service.NewRedisWSPublisher(wsBadgeRedis)
+	chatEvents := service.NewChatEventPublisher(wsPublisher, service.NewRedisChatSeq(wsBadgeRedis))
 
 	// RulesService (assignment/workflow config) is created before taskService for auto-assign injection.
 	rulesService := service.NewRulesServiceWithOptions(wsRuleRepo, projRuleRepo, ruleViolationLogRepo, agentRepo, workspaceMemberRepo, workspaceRepo, projectRepo,
@@ -774,6 +775,13 @@ func main() {
 			}
 			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
 		}), // stores the head pipeline when an MR merges, for the delivery-proof gate
+		service.WithVCSMRStateSource(func(ctx context.Context, ws uuid.UUID) (gitlabapi.MergeRequestChecker, bool) {
+			cfg, _, ok := vcsIntegrationResolver.ResolveGitLab(ctx, ws)
+			if !ok || cfg.BaseURL == "" || cfg.Token == "" {
+				return nil, false
+			}
+			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
+		}), // lets add_vcs_link without status learn that an MR already merged/closed (same resolution as the done gate)
 		service.WithVCSProjectRepo(projectRepo), // scopes webhook task-ref resolution to the workspace whose secret validated the request
 	)
 	// The runtime catalog is changed only through the versioned runtime API;
@@ -1078,8 +1086,16 @@ func main() {
 		chatObjects = s3Client
 	}
 	chatThreadDeleteRepo := postgres.NewChatThreadDeleteRepo(db, chatObjects)
-	chatThreadDeleteHandler := handler.NewChatThreadDeleteHandler(chatThreadDeleteRepo)
-	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo)
+	chatThreadDeleteHandler := handler.NewChatThreadDeleteHandler(chatThreadDeleteRepo).WithEvents(chatEvents)
+	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo).WithEvents(chatEvents)
+	chatRunnerHandler := handler.NewChatRunnerHandler(postgres.NewChatRunnerRepo(db))
+	chatClaimHandler := handler.NewChatClaimHandler(postgres.NewChatRunnerRepo(db), agentNotifyRedis, chatAttachmentStore)
+	chatClaimHandler.SetShutdownSignal(httpShutdownCh)
+	chatTurnEventsService := service.NewChatTurnEventsService(
+		postgres.NewChatTurnEventsRepo(db),
+		chatEvents).
+		WithRateLimiter(service.NewRedisChatRateLimiter(wsBadgeRedis))
+	chatRunnerEventsHandler := handler.NewChatRunnerEventsHandler(chatTurnEventsService)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
@@ -1387,6 +1403,8 @@ func main() {
 	// Chat history retention + 30-day physical purge. The purge half skips itself
 	// without object storage; the retention soft delete runs either way.
 	go service.NewChatRetentionJob(chatThreadDeleteRepo, time.Hour).Run(reaperCtx)
+	// Offline chat turns: a queued turn nobody claimed within its TTL expires (not delivered).
+	go chatTurnEventsService.RunExpiry(reaperCtx, time.Minute)
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -1675,6 +1693,7 @@ func main() {
 	api.GET("/instance/theme", themeHandler.GetInstance, mw.RequireUserAuth())
 	api.PUT("/instance/theme", themeHandler.PutInstance, mw.RequireUserAuth())
 	api.POST("/instance/themes", themeHandler.Install, mw.RequireUserAuth())
+	api.DELETE("/instance/themes/:id", themeHandler.Delete, mw.RequireUserAuth())
 
 	// Workspace member routes.
 	// NOTE: /members/me MUST be registered before /members/:user_id to avoid "me" being parsed as UUID.
@@ -1782,6 +1801,16 @@ func main() {
 	api.PUT("/projects/:proj_id/chat/settings", agentChatHandler.PutProjectSettings, projAccess, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/chat/settings", agentChatHandler.GetWorkspaceSettings, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
 	api.PUT("/workspaces/:ws_id/chat/settings", agentChatHandler.PutWorkspaceSettings, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
+	// Claim long-poll and lease of the chat runner (agent key, protocol §4).
+	api.GET("/runner/chat/claim", chatClaimHandler.Claim)
+	api.POST("/runner/chat/turns/:id/lease", chatClaimHandler.RenewLease)
+	api.POST("/runner/chat/turns/:id/events", chatRunnerEventsHandler.Events)
+	// Orders and recovery history for the chat runner (agent key, protocol §8, §9).
+	api.POST("/runner/chat/runners", chatRunnerHandler.RegisterRunner)
+	api.DELETE("/runner/chat/runners/:runner_id", chatRunnerHandler.RevokeRunner)
+	api.GET("/runner/chat/commands", chatRunnerHandler.Commands)
+	api.POST("/runner/chat/commands/:command_id/ack", chatRunnerHandler.AckCommand)
+	api.GET("/runner/chat/threads/:thread_id/history", chatRunnerHandler.History)
 	api.POST("/projects/:proj_id/members", projectMemberHandler.Add, projAccess, rbac(mw.PermManageMembers))
 	api.POST("/projects/:proj_id/members/agents", projectMemberHandler.AddAgent, projAccess, rbac(mw.PermManageMembers))
 	api.PATCH("/projects/:proj_id/members/:user_id", projectMemberHandler.UpdateRole, projAccess, rbac(mw.PermManageMembers))

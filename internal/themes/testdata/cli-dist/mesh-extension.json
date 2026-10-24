@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "id": "fixture-theme",
+  "name": "Fixture theme",
+  "version": "1.0.0",
+  "kind": "theme",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "entire-vc",
+  "description": "A theme the CLI tests build",
+  "category": "appearance",
+  "levels": {
+    "instance": true,
+    "workspace": true,
+    "project": false
+  },
+  "capabilities": {},
+  "theme": {
+    "tokens_contract": "1",
+    "modes": [
+      "light"
+    ],
+    "tokens": {
+      "light": {
+        "primary": "217 55% 32%"
+      }
+    },
+    "css": {
+      "path": "theme.css",
+      "sha256": "dee404726a7bb173ceac771165894071799040b57594b6ec224d3f9988308553"
+    },
+    "views": {
+      "bundle": "views.js",
+      "sha256": "7ebc1cd99c1811ee9594e0d99a1c891785a53b2de6e130ae16b650c12b1ff12a"
+    },
+    "slots": {
+      "board.card": "^1"
+    },
+    "contract_report": {
+      "sdk_version": "1.0.0",
+      "bundle_sha256": "7ebc1cd99c1811ee9594e0d99a1c891785a53b2de6e130ae16b650c12b1ff12a",
+      "passed": {
+        "board.card": "1.0.0"
+      }
+    }
+  }
+}

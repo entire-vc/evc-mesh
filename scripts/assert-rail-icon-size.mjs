@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Size guard for the collapsed-rail glyphs (`#13ff4803`).
+ * Size guard for the collapsed-rail glyphs.
  *
  * WHY THIS EXISTS
  * Three consecutive fixes of the collapsed rail measured tile geometry and
@@ -31,7 +31,7 @@
  * WHY IT IMPORTS BOTH SIDES RATHER THAN RESTATING THEM
  * The fill ratio and the tile size come from
  * `web/src/components/layout/rail-icon-classes.ts`; the rail's glyph class is
- * read out of `sidebar.tsx`; the mark's paths are read out of
+ * read out of `nav-sidebar/mesh-default-view.tsx`; the mark's paths are read out of
  * `mesh-icon.tsx`; the comparison icon's geometry is imported from
  * `lucide-react` itself. A restated copy of any of them is a copy that keeps
  * passing after the thing it copied has changed — which is precisely how a
@@ -83,7 +83,7 @@ const { inkBoxSource, opticalSize } = await import(
 );
 
 /**
- * The fill as it shipped from `1a63877f` through `#119078b0` — the value that
+ * The fill as it shipped from `an internal ticket` through an internal ticket — the value that
  * rendered the mark 18.55px wide in a column of 16px glyphs. Kept ONLY as the
  * negative control's input. It is deliberately a literal: this is the one
  * place a frozen copy is correct, because it must not follow the module when
@@ -133,18 +133,21 @@ function findBuiltCss() {
  */
 function railGlyphClassFromSidebar() {
   const src = readFileSync(
-    path.join(WEB, "src/components/layout/sidebar.tsx"),
+    path.join(WEB, "src/core/slots/nav-sidebar/mesh-default-view.tsx"),
     "utf8",
   );
-  const collapsedStart = src.indexOf("if (collapsed) {");
-  if (collapsedStart === -1) fail("sidebar.tsx: no `if (collapsed)` branch found");
+  const collapsedStart = src.indexOf("if (data.collapsed) {");
+  if (collapsedStart === -1) fail("nav-sidebar/mesh-default-view.tsx: no `if (data.collapsed)` branch found");
   // The collapsed branch ends where the expanded return begins; taking the
   // whole rest of the file would mix in the expanded sidebar's own icons.
   const collapsedEnd = src.indexOf("\n  return (", collapsedStart);
-  const region = src.slice(
-    collapsedStart,
-    collapsedEnd === -1 ? src.length : collapsedEnd,
-  );
+  // The nav glyphs themselves are drawn by `RailItem`, which the branch calls.
+  const railItemStart = src.indexOf("function RailItem(");
+  const railItemEnd = src.indexOf("\nfunction RowItem(", railItemStart);
+  if (railItemStart === -1 || railItemEnd === -1) fail("nav-sidebar/mesh-default-view.tsx: no `RailItem` found");
+  const region =
+    src.slice(collapsedStart, collapsedEnd === -1 ? src.length : collapsedEnd) +
+    src.slice(railItemStart, railItemEnd);
   const classes = [
     ...region.matchAll(/<([A-Z][A-Za-z0-9]*)\s+className="(h-\d[^"]*w-\d[^"]*)"/g),
   ]
@@ -153,12 +156,12 @@ function railGlyphClassFromSidebar() {
     .map((m) => m[2])
     // The unread-count badge is a positioned dot, not a rail glyph.
     .filter((c) => !c.includes("absolute"));
-  if (classes.length === 0) fail("sidebar.tsx: no rail icon classes found in the collapsed branch");
+  if (classes.length === 0) fail("nav-sidebar/mesh-default-view.tsx: no rail icon classes found in the collapsed branch");
   const sizeOf = (c) => (c.match(/\bh-\d+\b/) || [""])[0] + " " + (c.match(/\bw-\d+\b/) || [""])[0];
   const sizes = [...new Set(classes.map(sizeOf))];
   if (sizes.length !== 1) {
     fail(
-      `sidebar.tsx: the collapsed rail draws more than one glyph size (${sizes.join(", ")}).\n` +
+      `nav-sidebar/mesh-default-view.tsx: the collapsed rail draws more than one glyph size (${sizes.join(", ")}).\n` +
         `There is no single rail glyph size to hold the workspace mark to. Make the\n` +
         `rail consistent first, or teach this guard which one is canonical.`,
     );
@@ -294,7 +297,7 @@ const selftest = process.argv.includes("--selftest");
 const css = findBuiltCss();
 const glyph = railGlyphClassFromSidebar();
 console.log(
-  `rail glyph class read from sidebar.tsx: "${glyph.klass}" ` +
+  `rail glyph class read from nav-sidebar/mesh-default-view.tsx: "${glyph.klass}" ` +
     `(${glyph.count} icons in the collapsed branch, all agreeing)`,
 );
 

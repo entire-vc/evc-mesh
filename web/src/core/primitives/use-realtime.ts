@@ -2,9 +2,9 @@ import { useCallback } from "react";
 import { useParams } from "react-router";
 import { useWebSocket } from "@/hooks/use-websocket";
 import type { WSMessage } from "@/types";
-import type { Id, RealtimeEvent } from "./types";
+import type { RealtimeEvent, RealtimeTopic } from "@entire-vc/mesh-theme-sdk";
 
-export type RealtimeTopic = { kind: "project"; id: Id | null | undefined } | { kind: "workspace" };
+export type { RealtimeTopic };
 
 /** Subscribes to the topic for the component's lifetime; unsubscribes on unmount. */
 export function useRealtime(

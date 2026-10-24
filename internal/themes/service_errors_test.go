@@ -18,23 +18,17 @@ import (
 
 var errDown = errors.New("store unreachable")
 
-// journalLog keeps the entries Service writes; the rest of the interface is unused.
-type journalLog struct {
+// journalOnSwitch only switches the journal on: the stores write the entries
+// (themestest.Themes.Journal), in the mutation's own transaction.
+type journalOnSwitch struct {
 	repository.InstanceExtensionPolicyRepository
-	entries []*domain.InstanceExtensionJournalEntry
-}
-
-func (j *journalLog) AppendJournal(_ context.Context, e *domain.InstanceExtensionJournalEntry) error {
-	j.entries = append(j.entries, e)
-	return nil
 }
 
 func strp(s string) *string { return &s }
 
 func TestJournal_RecordsInstallAndSelection(t *testing.T) {
-	svc, inst, _, _ := newService()
-	log := &journalLog{}
-	svc.Journal = log
+	svc, inst, th, _ := newService()
+	svc.Journal = journalOnSwitch{}
 	actor := uuid.New()
 	ctx := context.Background()
 
@@ -46,11 +40,11 @@ func TestJournal_RecordsInstallAndSelection(t *testing.T) {
 	_, err = svc.Select(ctx, &ws, actor, strp("graphite"), nil)
 	require.NoError(t, err)
 
-	require.Len(t, log.entries, 3)
-	require.Equal(t, domain.InstanceJournalInstalled, log.entries[0].Action)
-	require.Equal(t, domain.InstanceJournalThemeSelected, log.entries[1].Action)
-	require.Contains(t, string(log.entries[2].Details), ws.String(), "the workspace choice names the workspace")
-	require.Equal(t, actor, *log.entries[2].ActorID)
+	require.Len(t, th.Journal, 3)
+	require.Equal(t, domain.InstanceJournalInstalled, th.Journal[0].Action)
+	require.Equal(t, domain.InstanceJournalThemeSelected, th.Journal[1].Action)
+	require.Contains(t, string(th.Journal[2].Details), ws.String(), "the workspace choice names the workspace")
+	require.Equal(t, actor, *th.Journal[2].ActorID)
 	require.Contains(t, inst.Rows, "graphite")
 }
 
@@ -108,8 +102,11 @@ func TestList_SkipsUnusableRowsAndReportsStoreErrors(t *testing.T) {
 
 	got, err := svc.List(ctx)
 	require.NoError(t, err)
-	require.Len(t, got, 1)
+	// mesh-default is always listed, installed or not: its schema is what the admin edits first.
+	require.Len(t, got, 2)
 	require.Equal(t, "good", got[0].ID)
+	require.Equal(t, "mesh-default", got[1].ID)
+	require.Contains(t, got[1].Settings, "workspace")
 
 	inst.Err = errDown
 	_, err = svc.List(ctx)
@@ -204,6 +201,36 @@ func TestSelect_Refusals(t *testing.T) {
 		sel, err := svc.Select(ctx, nil, actor, strp(domain.DefaultThemeID), nil)
 		require.NoError(t, err)
 		require.Nil(t, sel.ThemeID)
+	})
+	t.Run("mesh-default keeps its settings", func(t *testing.T) {
+		svc, _, _, _ := newService()
+		sel, err := svc.Select(ctx, &ws, actor, strp(domain.DefaultThemeID), map[string]any{"accent": "10 50% 40%", "density": "0.225rem"})
+		require.NoError(t, err)
+		require.Equal(t, domain.DefaultThemeID, *sel.ThemeID)
+		r, err := svc.Resolve(ctx, &ws)
+		require.NoError(t, err)
+		require.Equal(t, domain.DefaultThemeID, r.ThemeID)
+		require.Equal(t, "workspace", r.Source)
+		require.Contains(t, r.TokensCSS, "10 50% 40%")
+		require.Contains(t, r.TokensCSS, "0.225rem")
+		_, err = svc.Select(ctx, &ws, actor, strp(domain.DefaultThemeID), map[string]any{"density": "9rem"})
+		require.Equal(t, http.StatusUnprocessableEntity, apiErr(t, err).StatusCode(), "a value outside the theme's list")
+		back, err := svc.Select(ctx, &ws, actor, strp(domain.DefaultThemeID), nil)
+		require.NoError(t, err)
+		require.Nil(t, back.ThemeID, "no settings = the plain default again")
+	})
+	t.Run("board-studio installs and accepts its settings", func(t *testing.T) {
+		svc, _, _, _ := newService()
+		_, err := svc.InstallBuiltin(ctx, actor, "board-studio")
+		require.NoError(t, err)
+		_, err = svc.Select(ctx, &ws, actor, strp("board-studio"), map[string]any{"cover_style": "strip", "focus_horizon_days": 14, "show_wip": false})
+		require.NoError(t, err)
+		_, err = svc.Select(ctx, &ws, actor, strp("board-studio"), map[string]any{"cover_style": "huge"})
+		require.Equal(t, http.StatusUnprocessableEntity, apiErr(t, err).StatusCode())
+		r, err := svc.Resolve(ctx, &ws)
+		require.NoError(t, err)
+		require.NotEmpty(t, r.ViewsURL)
+		require.NotEmpty(t, r.ThemeCSSURL)
 	})
 	t.Run("theme not installed", func(t *testing.T) {
 		svc, _, _, _ := newService()
@@ -306,4 +333,89 @@ func TestSelect_RefAndSiblingConstraintsAccumulate(t *testing.T) {
 
 	_, err = svc.Select(ctx, nil, actor, &id, map[string]any{"base": "x", "accent_colour": "1 2% 3%"})
 	require.NoError(t, err, "control: both required fields present")
+}
+
+func TestDelete_ResetsEverySelectionAndJournals(t *testing.T) {
+	svc, inst, th, _ := newService()
+	svc.Journal = journalOnSwitch{}
+	ctx, actor, ws := context.Background(), uuid.New(), uuid.New()
+	inst.Add("graphite", themestest.Manifest{Settings: themestest.ColourSettings()}.JSON())
+	inst.Add("other", themestest.Manifest{ID: "other"}.JSON())
+	_, err := svc.Select(ctx, nil, actor, strp("graphite"), map[string]any{"accent_colour": "1 2% 3%"})
+	require.NoError(t, err)
+	_, err = svc.Select(ctx, &ws, actor, strp("graphite"), nil)
+	require.NoError(t, err)
+	other := uuid.New()
+	_, err = svc.Select(ctx, &other, actor, strp("other"), nil)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Delete(ctx, actor, "graphite"))
+
+	require.NotContains(t, inst.Rows, "graphite")
+	require.Contains(t, inst.Rows, "other", "control: another theme stays")
+	inSel, _ := svc.GetSelection(ctx, nil)
+	require.Nil(t, inSel.ThemeID, "the instance is back on mesh-default")
+	require.Empty(t, inSel.Settings, "settings go with the theme")
+	wsSel, _ := svc.GetSelection(ctx, &ws)
+	require.Nil(t, wsSel.ThemeID, "a workspace falls back to the instance")
+	otherSel, _ := svc.GetSelection(ctx, &other)
+	require.Equal(t, "other", *otherSel.ThemeID, "control: a workspace on another theme is untouched")
+	require.Equal(t, domain.InstanceJournalThemeDeleted, th.Journal[len(th.Journal)-1].Action)
+
+	require.Equal(t, http.StatusNotFound, apiErr(t, svc.Delete(ctx, actor, "graphite")).StatusCode())
+	inst.Add("not-a-theme", []byte(`{"kind":"plugin","id":"not-a-theme"}`))
+	require.Equal(t, http.StatusNotFound, apiErr(t, svc.Delete(ctx, actor, "not-a-theme")).StatusCode(), "only themes are deleted here")
+	require.Contains(t, inst.Rows, "not-a-theme")
+}
+
+func TestDelete_StoreFailuresAndARowThatVanished(t *testing.T) {
+	ctx, actor := context.Background(), uuid.New()
+	manifest := themestest.Manifest{Settings: themestest.ColourSettings()}.JSON()
+
+	t.Run("installed store down", func(t *testing.T) {
+		svc, inst, _, _ := newService()
+		inst.Add("graphite", manifest)
+		inst.Err = errors.New("installed store down")
+		require.ErrorIs(t, svc.Delete(ctx, actor, "graphite"), inst.Err)
+	})
+	t.Run("theme store down", func(t *testing.T) {
+		svc, inst, th, _ := newService()
+		inst.Add("graphite", manifest)
+		th.Err = errors.New("theme store down")
+		require.ErrorIs(t, svc.Delete(ctx, actor, "graphite"), th.Err)
+		require.Contains(t, inst.Rows, "graphite", "a failed delete leaves the theme installed")
+	})
+	t.Run("journal down: nothing is deleted", func(t *testing.T) {
+		svc, inst, th, _ := newService()
+		svc.Journal = journalOnSwitch{}
+		inst.Add("graphite", manifest)
+		_, err := svc.Select(ctx, nil, actor, strp("graphite"), nil)
+		require.NoError(t, err)
+		th.JournalErr = errors.New("journal down")
+
+		require.ErrorIs(t, svc.Delete(ctx, actor, "graphite"), th.JournalErr)
+		require.Contains(t, inst.Rows, "graphite", "the theme is still installed")
+		sel, _ := svc.GetSelection(ctx, nil)
+		require.Equal(t, "graphite", *sel.ThemeID, "the selection is untouched")
+
+		th.JournalErr = nil // control: the same call succeeds once the journal is back
+		require.NoError(t, svc.Delete(ctx, actor, "graphite"))
+		require.NotContains(t, inst.Rows, "graphite")
+		require.Equal(t, domain.InstanceJournalThemeDeleted, th.Journal[len(th.Journal)-1].Action)
+	})
+	t.Run("row removed between the read and the delete", func(t *testing.T) {
+		svc, inst, th, _ := newService()
+		inst.Add("graphite", manifest)
+		th.OnDelete = func(string) bool { return false }
+		require.Equal(t, http.StatusNotFound, apiErr(t, svc.Delete(ctx, actor, "graphite")).StatusCode())
+	})
+	t.Run("fake without installed rows", func(t *testing.T) {
+		svc, inst, th, _ := newService()
+		th.Installed = nil
+		inst.Add("graphite", manifest)
+		ok, err := th.DeleteTheme(ctx, "graphite", nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.NoError(t, svc.Delete(ctx, actor, "graphite"))
+	})
 }

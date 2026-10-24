@@ -74,6 +74,9 @@ const ExtensionsPage = lazy(() =>
 const ExtensionInstanceSettingsPage = lazy(() =>
   import("@/pages/extension-instance-settings").then((m) => ({ default: m.ExtensionInstanceSettingsPage })),
 );
+const InstanceThemesPage = lazy(() =>
+  import("@/pages/instance-themes").then((m) => ({ default: m.InstanceThemesPage })),
+);
 const IntegrationsRedirect = lazy(() =>
   import("@/pages/extensions").then((m) => ({ default: m.IntegrationsRedirect })),
 );
@@ -349,6 +352,14 @@ const router = createBrowserRouter(
           element={
             <LazyPage>
               <ExtensionInstanceSettingsPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/instance/themes"
+          element={
+            <LazyPage>
+              <InstanceThemesPage />
             </LazyPage>
           }
         />

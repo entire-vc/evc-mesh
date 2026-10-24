@@ -1,10 +1,13 @@
 import { Component, createElement, useSyncExternalStore, type ReactNode } from "react";
 import type { SlotProps, SlotView } from "./types";
+import { useThemeStore } from "@/core/themes/store";
+import { reportThemeIssue } from "@/core/themes/log";
+import { SlotContextProvider } from "./slot-context";
 
 export const DEFAULT_THEME_ID = "mesh-default";
 
-// slot name -> theme id -> view. Until themes ship (T5) only `mesh-default`
-// is registered.
+// slot name -> theme id -> view. `mesh-default` is built in; a theme's views
+// arrive from its bundle (core/themes/bundle.ts) after the contract check.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyView = SlotView<any, any, any>;
 const views = new Map<string, Map<string, AnyView>>();
@@ -48,6 +51,14 @@ export function registerSlotView(slot: string, themeId: string, view: AnyView): 
 const overrides = new Map<string, AnyView>();
 
 /** Registers the built-in (mesh-default) view of a slot. */
+/** Drops every view a theme registered: a new bundle of the same theme replaces the old one whole, not slot by slot. */
+export function unregisterThemeViews(themeId: string): void {
+  if (themeId === DEFAULT_THEME_ID) return;
+  let changed = false;
+  for (const byTheme of views.values()) changed = byTheme.delete(themeId) || changed;
+  if (changed) registryChanged();
+}
+
 export function registerDefaultSlotView(slot: string, view: AnyView): void {
   registerSlotView(slot, DEFAULT_THEME_ID, view);
 }
@@ -62,6 +73,11 @@ export function registerSlotViewOverride(slot: string, view: AnyView): () => voi
       registryChanged();
     }
   };
+}
+
+/** The live theme's view for a slot, or undefined when the theme does not replace it (the host then draws its own default). */
+export function resolveSlotOverride(slot: string): AnyView | undefined {
+  return overrides.get(slot);
 }
 
 export function resolveSlotView(slot: string, themeId?: string): AnyView {
@@ -102,12 +118,27 @@ export function useThemeSettings(): Record<string, unknown> {
 // A view that throws while rendering must not take the page down: fall back
 // to the `mesh-default` view of the same slot (CT-common-07).
 export class SlotBoundary extends Component<
-  { fallback: ReactNode; children: ReactNode },
+  { fallback: ReactNode; children: ReactNode; slot?: string; themeId?: string; resetKey?: unknown },
   { failed: boolean }
 > {
   state = { failed: false };
   static getDerivedStateFromError() {
     return { failed: true };
+  }
+  componentDidUpdate(prev: { resetKey?: unknown }) {
+    // A different view (another theme went live) deserves its own chance; the failure belonged to the old one.
+    if (this.state.failed && prev.resetKey !== this.props.resetKey) this.setState({ failed: false });
+  }
+  componentDidCatch(error: Error) {
+    // The default view crashing has no further fallback; only a theme's view is reported here.
+    if (this.props.themeId && this.props.themeId !== DEFAULT_THEME_ID) {
+      reportThemeIssue({
+        code: "view-crashed",
+        theme: this.props.themeId,
+        slot: this.props.slot,
+        message: error?.message ?? String(error),
+      });
+    }
   }
   render() {
     return this.state.failed ? this.props.fallback : this.props.children;
@@ -116,14 +147,19 @@ export class SlotBoundary extends Component<
 
 export function Slot<D, A, S>({
   name,
-  themeId = DEFAULT_THEME_ID,
+  themeId,
   ...props
 }: SlotProps<D, A, S> & { name: string; themeId?: string }) {
-  const View = resolveSlotView(name, themeId);
+  // Explicit prop wins (tests); otherwise the theme whose bundle is live.
+  const activeId = useThemeStore((s) => s.viewsThemeId);
+  const id = themeId ?? activeId;
+  const View = resolveSlotView(name, id);
   const Default = resolveSlotView(name, DEFAULT_THEME_ID);
   return (
-    <SlotBoundary fallback={<Default {...props} />}>
-      <View {...props} />
+    <SlotBoundary slot={name} themeId={View === Default ? DEFAULT_THEME_ID : id} resetKey={View} fallback={<Default {...props} />}>
+      <SlotContextProvider value={props.ctx}>
+        <View {...props} />
+      </SlotContextProvider>
     </SlotBoundary>
   );
 }
@@ -141,8 +177,8 @@ export function withSlotFallback(slot: string, view: AnyView): AnyView {
   const hit = wrapped.get(slot);
   if (hit && hit.view === view) return hit.wrapper;
   const wrapper: AnyView = (props) => (
-    <SlotBoundary fallback={<Default {...props} />}>
-      {createElement(view, props)}
+    <SlotBoundary slot={slot} themeId={useThemeStore.getState().viewsThemeId} resetKey={view} fallback={<Default {...props} />}>
+      <SlotContextProvider value={props.ctx}>{createElement(view, props)}</SlotContextProvider>
     </SlotBoundary>
   );
   wrapped.set(slot, { view, wrapper });

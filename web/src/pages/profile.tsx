@@ -10,6 +10,7 @@ import { AppAccessSection } from "@/pages/connected-apps";
 import { apiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
+import { chooseMode, useModeStore, type ColorMode } from "@/core/themes/mode";
 
 type UsernameStatus = "idle" | "checking" | "available" | "taken" | "invalid";
 
@@ -160,17 +161,13 @@ function AccountCard() {
 
 function AppearanceCard() {
   const { t } = useTranslation("settings");
-  const [isDark, setIsDark] = useState(document.documentElement.classList.contains("dark"));
+  const chosen = useModeStore((s) => s.chosen);
+  const forced = useModeStore((s) => s.forced);
 
-  const apply = (dark: boolean) => {
-    setIsDark(dark);
-    document.documentElement.classList.toggle("dark", dark);
-    localStorage.setItem("theme", dark ? "dark" : "light");
-  };
-
-  const options = [
-    { dark: false, label: t("profilePage.appearance.light") },
-    { dark: true, label: t("profilePage.appearance.dark") },
+  const options: { mode: ColorMode; label: string }[] = [
+    { mode: "light", label: t("profilePage.appearance.light") },
+    { mode: "dark", label: t("profilePage.appearance.dark") },
+    { mode: "system", label: t("profilePage.appearance.system") },
   ];
 
   return (
@@ -179,22 +176,27 @@ function AppearanceCard() {
         <CardTitle id="appearance-title">{t("profilePage.appearance.title")}</CardTitle>
         <CardDescription>{t("profilePage.appearance.description")}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
         <div role="radiogroup" aria-labelledby="appearance-title" className="flex flex-wrap gap-2">
-          {options.map(({ dark, label }) => (
+          {options.map(({ mode, label }) => (
             <Button
-              key={label}
+              key={mode}
               type="button"
               role="radio"
-              aria-checked={isDark === dark}
-              variant={isDark === dark ? "default" : "outline"}
+              aria-checked={chosen === mode}
+              variant={chosen === mode ? "default" : "outline"}
               size="sm"
-              onClick={() => apply(dark)}
+              onClick={() => chooseMode(mode)}
             >
               {label}
             </Button>
           ))}
         </div>
+        {forced && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {t(forced === "dark" ? "profilePage.appearance.forcedDark" : "profilePage.appearance.forcedLight")}
+          </p>
+        )}
       </CardContent>
     </Card>
   );

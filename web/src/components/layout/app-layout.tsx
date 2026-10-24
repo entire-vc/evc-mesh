@@ -11,6 +11,7 @@ import { useMemberStore } from "@/stores/member";
 import { useWebSocketStore } from "@/stores/websocket";
 import { useInstallPrompt } from "@/hooks/use-install-prompt";
 import { useDynamicFavicon } from "@/hooks/use-dynamic-favicon";
+import { useColorMode, useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { prefetchNextRouteOnIdle } from "@/lib/prefetch-next-route";
 import { InstallPromptBanner } from "@/components/install-prompt";
 import { Sidebar } from "./sidebar";
@@ -49,6 +50,8 @@ export function AppLayout() {
 
   const installPrompt = useInstallPrompt();
   useDynamicFavicon();
+  useWorkspaceTheme(wsSlug, isAuthenticated);
+  useColorMode(isAuthenticated);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.innerWidth < 768,
   );
@@ -126,7 +129,7 @@ export function AppLayout() {
   useEffect(() => {
     if (!currentWorkspaceId) return;
     // The previous workspace's role must not govern this one while its own loads.
-    useMemberStore.setState({ myRole: null, myRoleError: null });
+    useMemberStore.setState({ myRole: null, myRoleError: null, myRoleLoaded: false });
     void useMemberStore.getState().fetchMyRole(currentWorkspaceId);
   }, [currentWorkspaceId]);
 
@@ -300,7 +303,7 @@ export function AppLayout() {
             : "translate-x-0 w-60",
         )}
       >
-        <Sidebar collapsed={sidebarCollapsed} />
+        <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">

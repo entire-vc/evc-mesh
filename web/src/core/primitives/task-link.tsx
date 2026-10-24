@@ -1,20 +1,12 @@
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent } from "react";
 import { useCoreActions, useTaskHrefFor } from "./actions";
-import type { Id } from "./types";
+import type { TaskLinkProps } from "@entire-vc/mesh-theme-sdk";
 
 /**
  * A real href (new tab, copy link) with an in-app click: a plain left click
  * calls actions.openTask; modified and middle clicks are left to the browser.
  */
-export function TaskLink({
-  taskId,
-  children,
-  className,
-}: {
-  taskId: Id;
-  children: ReactNode;
-  className?: string;
-}) {
+export function TaskLink({ taskId, children, className }: TaskLinkProps) {
   const href = useTaskHrefFor(taskId);
   const { openTask } = useCoreActions();
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {

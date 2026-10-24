@@ -7,7 +7,7 @@ import {
   useThemeSettings,
   withSlotFallback,
 } from "@/core/slots/registry";
-import { useSlotContext } from "@/core/slots/use-slot-context";
+import { useBuildSlotContext } from "@/core/slots/use-slot-context";
 import type { Async, DocNodeData, DocTreeActions, DocTreeSettings, DocTreeView } from "@/core/slots/types";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { ProjectDocument } from "@/types";
@@ -417,7 +417,7 @@ export function DocTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [registryVersion],
   );
-  const ctx = useSlotContext("doc.tree", workspace ? { id: workspace.id, slug: workspace.slug, name: workspace.name } : null);
+  const ctx = useBuildSlotContext("doc.tree", workspace ? { id: workspace.id, slug: workspace.slug, name: workspace.name } : null);
 
   const asyncNodes: Async<DocNodeData[]> = loading
     ? { state: "loading" }

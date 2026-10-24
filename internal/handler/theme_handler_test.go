@@ -89,7 +89,16 @@ func newThemeFixture(t *testing.T) *themeFixture {
 		inst: &themeStore{repoStore: newRepoStore()}, store: themestest.NewStore(),
 	}
 	roles := &themeRoles{workspace: f.ws, roles: map[uuid.UUID]string{f.owner: domain.RoleOwner, f.member: domain.RoleMember, f.instAdmin: domain.RoleAdmin}, admins: map[uuid.UUID]bool{f.instAdmin: true}}
-	f.svc = &themes.Service{Installed: f.inst, Themes: themestest.NewThemes(), Store: f.store}
+	th := themestest.NewThemes()
+	th.OnDelete = func(id string) bool {
+		f.inst.mu.Lock()
+		defer f.inst.mu.Unlock()
+		_, ok := f.inst.rows[id]
+		delete(f.inst.rows, id)
+		return ok
+	}
+	th.OnInstall = func(e *domain.InstalledExtension) error { return f.inst.UpsertBuiltin(context.Background(), e) }
+	f.svc = &themes.Service{Installed: f.inst, Themes: th, Store: f.store}
 	h := NewThemeHandler(f.svc, roles, &themeWorkspaces{themeRoles: roles}, &themeMembers{themeRoles: roles})
 	h.WithRepoInstall(&repoinstall.Service{
 		Client: &repoinstall.Client{HTTP: http.DefaultClient, AllowInsecure: true},
@@ -140,6 +149,7 @@ func newThemeFixture(t *testing.T) *themeFixture {
 	api.GET("/instance/theme", h.GetInstance, middleware.RequireUserAuth())
 	api.PUT("/instance/theme", h.PutInstance, middleware.RequireUserAuth())
 	api.POST("/instance/themes", h.Install, middleware.RequireUserAuth())
+	api.DELETE("/instance/themes/:id", h.Delete, middleware.RequireUserAuth())
 	f.e = e
 	return f
 }
@@ -196,8 +206,9 @@ func TestThemeAPI_InstanceRoutesNeedInstanceAdmin(t *testing.T) {
 		"put theme": {http.MethodPut, "/api/v1/instance/theme"},
 		"get theme": {http.MethodGet, "/api/v1/instance/theme"},
 		"install":   {http.MethodPost, "/api/v1/instance/themes"},
+		"delete":    {http.MethodDelete, "/api/v1/instance/themes/graphite"},
 	}
-	bodies := map[string]string{"put theme": `{"theme_id":"graphite"}`, "get theme": ``, "install": `{"source":"builtin","id":"graphite"}`}
+	bodies := map[string]string{"put theme": `{"theme_id":"graphite"}`, "get theme": ``, "install": `{"source":"builtin","id":"graphite"}`, "delete": ``}
 	for name, r := range routes {
 		t.Run(name, func(t *testing.T) {
 			// A workspace owner is not an instance administrator.
@@ -210,6 +221,26 @@ func TestThemeAPI_InstanceRoutesNeedInstanceAdmin(t *testing.T) {
 	}
 	require.Empty(t, f.svcInstanceChoice(), "no refused call may have stored a choice")
 	require.Equal(t, http.StatusOK, f.do(http.MethodPut, "/api/v1/instance/theme", `{"theme_id":"graphite"}`, as(f.instAdmin)).Code, "control: the instance admin")
+}
+
+func TestThemeAPI_DeleteFallsBackWhereTheThemeWasChosen(t *testing.T) {
+	f := newThemeFixture(t)
+	f.addTheme(themestest.Manifest{Tokens: map[string]map[string]string{"light": {"primary": "10 90% 40%", "background": "0 0% 100%"}}})
+	path := "/api/v1/theme?workspace=" + f.ws.Slug
+
+	require.Equal(t, http.StatusOK, f.do(http.MethodPut, f.wsPath(), `{"theme_id":"graphite"}`, as(f.owner)).Code)
+	rec := f.do(http.MethodGet, path, "", as(f.member))
+	require.Contains(t, rec.Body.String(), `"theme_id":"graphite"`, "red: the workspace paints the theme before the delete")
+
+	require.Equal(t, http.StatusNoContent, f.do(http.MethodDelete, "/api/v1/instance/themes/graphite", "", as(f.instAdmin)).Code)
+	rec = f.do(http.MethodGet, path, "", as(f.member))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotContains(t, rec.Body.String(), `graphite`, "the workspace is back on mesh-default")
+	require.Contains(t, rec.Body.String(), `"theme_id":"mesh-default"`)
+
+	rec = f.do(http.MethodGet, "/api/v1/themes", "", as(f.member))
+	require.NotContains(t, rec.Body.String(), `"id":"graphite"`)
+	require.Equal(t, http.StatusNotFound, f.do(http.MethodDelete, "/api/v1/instance/themes/graphite", "", as(f.instAdmin)).Code, "already gone")
 }
 
 func (f *themeFixture) svcInstanceChoice() string {
@@ -295,13 +326,13 @@ func TestThemeAPI_BuiltinInstallAndList(t *testing.T) {
 	f := newThemeFixture(t)
 	rec := f.do(http.MethodGet, "/api/v1/themes", "", as(f.member))
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), `"builtin_available":["graphite"]`)
+	require.Contains(t, rec.Body.String(), `"builtin_available":["board-studio","graphite"]`)
 
 	rec = f.do(http.MethodPost, "/api/v1/instance/themes", `{"source":"builtin","id":"graphite"}`, as(f.instAdmin))
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	rec = f.do(http.MethodGet, "/api/v1/themes", "", as(f.member))
 	require.Contains(t, rec.Body.String(), `"id":"graphite"`)
-	require.Contains(t, rec.Body.String(), `"builtin_available":[]`)
+	require.Contains(t, rec.Body.String(), `"builtin_available":["board-studio"]`)
 
 	rec = f.do(http.MethodPost, "/api/v1/instance/themes", `{"source":"builtin","id":"nope"}`, as(f.instAdmin))
 	require.Equal(t, http.StatusNotFound, rec.Code)

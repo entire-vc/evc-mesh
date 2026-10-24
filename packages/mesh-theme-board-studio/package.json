@@ -1,0 +1,32 @@
+{
+  "name": "mesh-theme-board-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Board Studio: a Mesh theme that redraws the kanban (status bands, new card) and the dashboard (own grid and widget).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "unit": "vitest run",
+    "build": "mesh-theme build",
+    "test": "pnpm typecheck && pnpm unit && mesh-theme build --out .contract-dist",
+    "dev": "mesh-theme dev --instance ${MESH_INSTANCE:?set MESH_INSTANCE to your instance URL}"
+  },
+  "dependencies": {
+    "@entire-vc/mesh-theme-sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.2.18",
+    "axe-core": "^4.10.0",
+    "jsdom": "^26.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "~7.0.2",
+    "vitest": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20.11"
+  }
+}

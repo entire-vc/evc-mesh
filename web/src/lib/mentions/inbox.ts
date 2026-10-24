@@ -29,7 +29,8 @@ import { api } from "@/lib/api";
 import type { DocumentMention, Mention } from "@/types";
 
 /** Which inbox a row came from. Also the field a reader branches on. */
-export type MentionSource = "task" | "document";
+export type { MentionSource } from "@entire-vc/mesh-theme-sdk";
+import type { MentionSource } from "@entire-vc/mesh-theme-sdk";
 
 /** The fields both inboxes have, so a card can render without branching. */
 interface MentionInboxCommon {

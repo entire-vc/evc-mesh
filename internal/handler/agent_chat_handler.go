@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
+	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -26,6 +28,29 @@ type AgentChatHandler struct {
 	repo     *postgres.AgentChatRepo
 	conns    repository.IntegrationRepository
 	projects repository.ProjectIntegrationRepository
+	events   ChatEvents
+}
+
+// WithEvents turns on WS events for thread, message and turn changes.
+func (h *AgentChatHandler) WithEvents(e ChatEvents) *AgentChatHandler {
+	h.events = e
+	return h
+}
+
+// publishTurnState sends chat.turn.state with the thread's header state read
+// after the change. If that read fails nothing is sent: a made-up state would
+// be worse than none, and the client re-reads the thread on reconnect.
+func (h *AgentChatHandler) publishTurnState(ctx context.Context, s *chatScope, thread uuid.UUID, turn postgres.ChatTurnRef) {
+	th, err := h.repo.GetThread(ctx, s.gate.WorkspaceID, s.project, s.user, thread)
+	if err != nil {
+		chatEmit("turn state session lookup", err)
+		return
+	}
+	chatEmit("turn state", h.events.TurnState(ctx, h.ref(s, thread), chatTurnRef(turn), th.SessionState, nil))
+}
+
+func (h *AgentChatHandler) ref(s *chatScope, thread uuid.UUID) service.ChatThreadRef {
+	return chatThreadRef(s.gate.WorkspaceID, s.project, thread, s.user)
 }
 
 func NewAgentChatHandler(repo *postgres.AgentChatRepo, conns repository.IntegrationRepository, projects repository.ProjectIntegrationRepository) *AgentChatHandler {
@@ -117,6 +142,9 @@ func (h *AgentChatHandler) CreateThread(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	if h.events != nil {
+		chatEmit("thread created", h.events.ThreadChanged(c.Request().Context(), h.ref(s, th.ID), "created", th))
+	}
 	return c.JSON(http.StatusCreated, th)
 }
 
@@ -150,6 +178,9 @@ func (h *AgentChatHandler) RenameThread(c echo.Context) error {
 	th, err := h.repo.RenameThread(c.Request().Context(), s.gate.WorkspaceID, s.project, s.user, id, body.Title)
 	if err != nil {
 		return handleError(c, err)
+	}
+	if h.events != nil {
+		chatEmit("thread renamed", h.events.ThreadChanged(c.Request().Context(), h.ref(s, id), "renamed", th))
 	}
 	return c.JSON(http.StatusOK, th)
 }
@@ -194,6 +225,11 @@ func (h *AgentChatHandler) SendMessage(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	if h.events != nil {
+		ctx := c.Request().Context()
+		chatEmit("message created", h.events.MessageCreated(ctx, h.ref(s, id), chatMessagePayload(out.Message)))
+		h.publishTurnState(ctx, s, id, out.Turn)
+	}
 	return c.JSON(http.StatusAccepted, out)
 }
 
@@ -206,6 +242,9 @@ func (h *AgentChatHandler) StopTurn(c echo.Context) error {
 	out, err := h.repo.StopTurn(c.Request().Context(), s.gate.WorkspaceID, s.project, s.user, id)
 	if err != nil {
 		return handleError(c, err)
+	}
+	if h.events != nil && out.Stopped && out.Turn != nil {
+		h.publishTurnState(c.Request().Context(), s, id, *out.Turn)
 	}
 	return c.JSON(http.StatusOK, out)
 }

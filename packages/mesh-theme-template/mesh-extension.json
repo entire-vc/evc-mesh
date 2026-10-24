@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "my-theme",
+  "name": "My theme",
+  "version": "1.0.0",
+  "kind": "theme",
+  "runtime": "builtin",
+  "mesh_api": ">=1 <2",
+  "publisher": "your-name",
+  "description": "A starting point for a Mesh theme: a few tokens, a stylesheet and a board card.",
+  "category": "appearance",
+  "license": "Apache-2.0",
+  "levels": { "instance": true, "workspace": true, "project": false },
+  "capabilities": {},
+  "theme": {
+    "tokens_contract": "1",
+    "modes": ["light", "dark"],
+    "tokens": {
+      "light": { "primary": "217 55% 32%", "primary-foreground": "0 0% 100%", "radius": "0.5rem" },
+      "dark": { "primary": "217 70% 62%", "primary-foreground": "217 40% 10%", "radius": "0.5rem" }
+    }
+  }
+}

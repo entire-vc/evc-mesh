@@ -6,6 +6,7 @@ import { Toaster, toast } from "@/components/ui/toast";
 import { useAuthStore } from "@/stores/auth";
 import { captureStaticShell } from "@/lib/static-shell";
 import { PerfProfiler } from "@/lib/perf-profiler";
+import { watchSystemMode } from "@/core/themes/mode";
 import "./index.css";
 
 // Initialize auth state
@@ -64,10 +65,13 @@ if ("serviceWorker" in navigator) {
 const savedTheme = localStorage.getItem("theme");
 if (
   savedTheme === "dark" ||
-  (!savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches)
+  (savedTheme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)
 ) {
   document.documentElement.classList.add("dark");
 }
+
+// `system` follows the OS on every screen, the sign-in one included.
+watchSystemMode();
 
 // index.html may have painted a static shell into #root; keep what was typed
 // into it before React replaces it (see lib/static-shell.ts).

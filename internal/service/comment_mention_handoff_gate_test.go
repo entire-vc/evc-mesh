@@ -16,7 +16,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Mention-handoff gate (task #9d8f7606, audit §3.1).
+// Mention-handoff gate (an internal ticket, audit §3.1).
 //
 // Three branches, per the task's acceptance criterion:
 //   - gated:                plain @-mention, no queue path, no accompanying
@@ -43,7 +43,7 @@ func newGatedTaskEnv() (mentionTestEnv, uuid.UUID) {
 // --- Branch 1: gated -------------------------------------------------------
 
 // TestEnforceMentionHandoffGate_PlainMentionWithNoQueuePathIsRefused is the
-// headline case the whole gate exists for: "@wally — нужен вердикт" with no
+// headline case the whole gate exists for: "@wade — нужен вердикт" with no
 // assign_task and no move to todo. Before this gate the comment published
 // and notified nothing that mattered (audit §3.1: 3.8% delivered by feed).
 // enforceMentionHandoff opts a test into ENFORCEMENT. Shadow mode is the shipped
@@ -60,21 +60,21 @@ func enforceMentionHandoff(t *testing.T) {
 func TestEnforceMentionHandoffGate_PlainMentionWithNoQueuePathIsRefused(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
 		AuthorType: domain.ActorTypeUser,
-		Body:       "@wally — нужен вердикт",
+		Body:       "@wade — нужен вердикт",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
 	require.Error(t, err)
 	var handoffErr *MentionHandoffRequiredError
 	require.True(t, errors.As(err, &handoffErr), "want MentionHandoffRequiredError, got %T: %v", err, err)
-	assert.Equal(t, []string{"wally"}, handoffErr.Slugs)
+	assert.Equal(t, []string{"wade"}, handoffErr.Slugs)
 	assert.Equal(t, taskID, handoffErr.TaskID)
 
 	// Assert on the RESULT, not just the returned error: the comment must
@@ -90,18 +90,18 @@ func TestEnforceMentionHandoffGate_PlainMentionWithNoQueuePathIsRefused(t *testi
 func TestEnforceMentionHandoffGate_RefusalNamesEveryUngatedSlug(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	env.agentSvc.AddAgent(env.wsID, &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"})
+	env.agentSvc.AddAgent(env.wsID, &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"})
 	env.agentSvc.AddAgent(env.wsID, &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "frank"})
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@wally @frank взгляните",
+		Body: "@wade @frank взгляните",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
 	var handoffErr *MentionHandoffRequiredError
 	require.True(t, errors.As(err, &handoffErr))
-	assert.ElementsMatch(t, []string{"wally", "frank"}, handoffErr.Slugs)
+	assert.ElementsMatch(t, []string{"wade", "frank"}, handoffErr.Slugs)
 }
 
 // --- Branch 2: fyi-allowed ---------------------------------------------------
@@ -112,12 +112,12 @@ func TestEnforceMentionHandoffGate_RefusalNamesEveryUngatedSlug(t *testing.T) {
 // swallows the mention.
 func TestEnforceMentionHandoffGate_FyiPrefixIsExempt(t *testing.T) {
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "fyi: @wally мы решили X, действия не нужны",
+		Body: "fyi: @wade мы решили X, действия не нужны",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 
@@ -133,18 +133,18 @@ func TestEnforceMentionHandoffGate_FyiPrefixIsExempt(t *testing.T) {
 func TestEnforceMentionHandoffGate_FyiExemptsOnlyItsOwnSlug(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	env.agentSvc.AddAgent(env.wsID, &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"})
+	env.agentSvc.AddAgent(env.wsID, &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"})
 	env.agentSvc.AddAgent(env.wsID, &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "frank"})
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "fyi: @wally, но @frank нужно разобраться",
+		Body: "fyi: @wade, но @frank нужно разобраться",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
 	var handoffErr *MentionHandoffRequiredError
 	require.True(t, errors.As(err, &handoffErr))
-	assert.Equal(t, []string{"frank"}, handoffErr.Slugs, "wally is fyi-exempt, frank is not")
+	assert.Equal(t, []string{"frank"}, handoffErr.Slugs, "wade is fyi-exempt, frank is not")
 }
 
 // --- Branch 3: accompanied-by-assignment ------------------------------------
@@ -155,7 +155,7 @@ func TestEnforceMentionHandoffGate_FyiExemptsOnlyItsOwnSlug(t *testing.T) {
 // the assignment itself, this recently, is the accompanying hand-off.
 func TestEnforceMentionHandoffGate_RecentAssignAccompaniesMention(t *testing.T) {
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "linus"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "liam"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	// Simulate `assign_task` 10s ago: current task state points at the agent
@@ -172,7 +172,7 @@ func TestEnforceMentionHandoffGate_RecentAssignAccompaniesMention(t *testing.T) 
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@linus держи, разбери",
+		Body: "@liam держи, разбери",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 	assert.NotEmpty(t, env.commentRepo.items)
@@ -184,7 +184,7 @@ func TestEnforceMentionHandoffGate_RecentAssignAccompaniesMention(t *testing.T) 
 func TestEnforceMentionHandoffGate_StaleAssignIsNotAccompanying(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "linus"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "liam"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	task := env.taskRepo.items[taskID]
@@ -198,7 +198,7 @@ func TestEnforceMentionHandoffGate_StaleAssignIsNotAccompanying(t *testing.T) {
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@linus взгляни ещё раз",
+		Body: "@liam взгляни ещё раз",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
@@ -265,31 +265,31 @@ func TestEnforceMentionHandoffGate_StaleSubtaskIsNotAccompanying(t *testing.T) {
 // themselves; the gate must not refuse an agent naming its own slug.
 func TestEnforceMentionHandoffGate_SelfMentionExempt(t *testing.T) {
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "howard"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "harper"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	ctx := actorctx.WithActor(context.Background(), agent.ID, domain.ActorTypeAgent)
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: agent.ID, AuthorType: domain.ActorTypeAgent,
-		Body: "заметка себе: @howard проверить завтра",
+		Body: "заметка себе: @harper проверить завтра",
 	}
 	require.NoError(t, env.svc.Create(ctx, comment))
 	assert.NotEmpty(t, env.commentRepo.items)
 }
 
-// TestEnforceMentionHandoffGate_HumanUsernameNeverGated: @pavel and any other
+// TestEnforceMentionHandoffGate_HumanUsernameNeverGated: @alex and any other
 // human has a real notification channel this gate has no business
 // second-guessing — only agent slugs are ever refused.
 func TestEnforceMentionHandoffGate_HumanUsernameNeverGated(t *testing.T) {
 	env, taskID := newGatedTaskEnv()
 	userRepo := NewMockUserRepository()
-	pavel := &domain.User{ID: uuid.New(), Username: "pavel"}
-	userRepo.AddUser(env.wsID, pavel)
+	alex := &domain.User{ID: uuid.New(), Username: "alex"}
+	userRepo.AddUser(env.wsID, alex)
 	env.svc.userRepo = userRepo
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "❓ **Blocking @pavel**: нужен approve",
+		Body: "❓ **Blocking @alex**: нужен approve",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 	assert.NotEmpty(t, env.commentRepo.items)
@@ -314,18 +314,18 @@ func TestEnforceMentionHandoffGate_UnresolvedHandleNotGated(t *testing.T) {
 // dedicated MentionWakes column is true opts out of the gate entirely —
 // today that means the dispatcher-driven lane, expressed as data on its own
 // row rather than a hardcoded slug in this file. Not a Capabilities key —
-// see #33b7d4b7.
+// see an internal ticket.
 func TestEnforceMentionHandoffGate_CapabilityFlagExempt(t *testing.T) {
 	env, taskID := newGatedTaskEnv()
 	agent := &domain.Agent{
-		ID: uuid.New(), WorkspaceID: env.wsID, Slug: "riker",
+		ID: uuid.New(), WorkspaceID: env.wsID, Slug: "robin",
 		MentionWakes: true,
 	}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@riker нужен рестарт диспетчера",
+		Body: "@robin нужен рестарт диспетчера",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 	assert.NotEmpty(t, env.commentRepo.items)
@@ -380,12 +380,12 @@ func TestFyiExemptSlugs(t *testing.T) {
 		body string
 		want map[string]bool
 	}{
-		{"no fyi", "@wally please look", map[string]bool{}},
-		{"simple fyi", "fyi: @wally already handled", map[string]bool{"wally": true}},
-		{"case insensitive", "FYI: @Wally fixed", map[string]bool{"wally": true}},
-		{"extra space before colon", "fyi : @wally ok", map[string]bool{"wally": true}},
-		{"fyi word without colon does not exempt", "for your info @wally look", map[string]bool{}},
-		{"two fyi mentions", "fyi: @wally and fyi: @frank", map[string]bool{"wally": true, "frank": true}},
+		{"no fyi", "@wade please look", map[string]bool{}},
+		{"simple fyi", "fyi: @wade already handled", map[string]bool{"wade": true}},
+		{"case insensitive", "FYI: @Wade fixed", map[string]bool{"wade": true}},
+		{"extra space before colon", "fyi : @wade ok", map[string]bool{"wade": true}},
+		{"fyi word without colon does not exempt", "for your info @wade look", map[string]bool{}},
+		{"two fyi mentions", "fyi: @wade and fyi: @frank", map[string]bool{"wade": true, "frank": true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -410,14 +410,14 @@ func TestFyiExemptSlugs(t *testing.T) {
 func TestEnforceMentionHandoffGate_ShadowIsTheDefault(t *testing.T) {
 	// deliberately NOT calling enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
 		AuthorType: domain.ActorTypeUser,
-		Body:       "@wally принято, правку не делай.",
+		Body:       "@wade принято, правку не делай.",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
@@ -430,10 +430,10 @@ func TestEnforceMentionHandoffGate_ShadowIsTheDefault(t *testing.T) {
 }
 
 // TestEnforceMentionHandoffGate_EnforceFlagIsHonoured is the negative control for the
-// test above, PLUS the ask-pattern narrowing (#ffa6e607): a body that DOES read as an
+// test above, PLUS the ask-pattern narrowing: a body that DOES read as an
 // ask ("нужен вердикт" — same shape as the headline case), with the flag flipped, must
 // be refused and must NOT persist. It is deliberately NOT the identical body as the
-// shadow test above — since #ffa6e607, "@wally принято, правку не делай." has no
+// shadow test above — since an internal ticket, "@wade принято, правку не делай." has no
 // ask-pattern and is exempt from this gate regardless of the flag (see
 // TestEnforceMentionHandoffGate_NegatedImperativeIsNotAnAskPattern), so it can no
 // longer serve as a same-input flag toggle. Without a real ask-pattern body, "shadow
@@ -441,25 +441,57 @@ func TestEnforceMentionHandoffGate_ShadowIsTheDefault(t *testing.T) {
 func TestEnforceMentionHandoffGate_EnforceFlagIsHonoured(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID:     taskID,
 		AuthorID:   uuid.New(),
 		AuthorType: domain.ActorTypeUser,
-		Body:       "@wally — нужен вердикт",
+		Body:       "@wade — нужен вердикт",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
 	require.Error(t, err, "with the flag set, an ask-shaped mention must be refused")
 	var handoffErr *MentionHandoffRequiredError
 	require.True(t, errors.As(err, &handoffErr), "got %T: %v", err, err)
-	assert.Equal(t, []string{"wally"}, handoffErr.Slugs)
+	assert.Equal(t, []string{"wade"}, handoffErr.Slugs)
 	assert.Empty(t, env.commentRepo.items, "a refused comment must not be stored")
 }
 
-// --- Ask-pattern narrowing (#ffa6e607, based on the #bb39554c shadow-log read) ---
+// TestEnforceMentionHandoffGate_HumanAuthorIsNeverRefused: the gate targets agents
+// who believe a mention hands work off. A person posting from the web UI gets the
+// refusal silently and loses nothing they could act on, so a human's "@robin проверь?"
+// is saved; the same text from an agent author is still refused.
+func TestEnforceMentionHandoffGate_HumanAuthorIsNeverRefused(t *testing.T) {
+	enforceMentionHandoff(t)
+	env, taskID := newGatedTaskEnv()
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "robin"}
+	env.agentSvc.AddAgent(env.wsID, agent)
+
+	human := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeUser,
+		Body:       "@robin проверь?",
+	}
+	humanCtx := actorctx.WithActor(context.Background(), human.AuthorID, domain.ActorTypeUser)
+	require.NoError(t, env.svc.Create(humanCtx, human))
+	assert.Len(t, env.commentRepo.items, 1, "human comment must be persisted")
+
+	bot := &domain.Comment{
+		TaskID:     taskID,
+		AuthorID:   uuid.New(),
+		AuthorType: domain.ActorTypeAgent,
+		Body:       "@robin проверь?",
+	}
+	botCtx := actorctx.WithActor(context.Background(), bot.AuthorID, domain.ActorTypeAgent)
+	err := env.svc.Create(botCtx, bot)
+	var handoffErr *MentionHandoffRequiredError
+	require.True(t, errors.As(err, &handoffErr), "agent author must still be refused, got %v", err)
+}
+
+// --- Ask-pattern narrowing (an internal ticket, based on the an internal ticket shadow-log read) ---
 
 // TestEnforceMentionHandoffGate_NoAskPatternIsNotGated: a bare @slug with no queue
 // path and no accompanying hand-off, but ALSO no imperative/question nearby, must not
@@ -469,12 +501,12 @@ func TestEnforceMentionHandoffGate_EnforceFlagIsHonoured(t *testing.T) {
 func TestEnforceMentionHandoffGate_NoAskPatternIsNotGated(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@wally взгляд со стороны был полезен, спасибо",
+		Body: "@wade взгляд со стороны был полезен, спасибо",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 	assert.NotEmpty(t, env.commentRepo.items)
@@ -482,18 +514,18 @@ func TestEnforceMentionHandoffGate_NoAskPatternIsNotGated(t *testing.T) {
 
 // TestEnforceMentionHandoffGate_NegatedImperativeIsNotAnAskPattern pins the exact
 // example the gate's own shadow-mode comment names as ordinary addressing —
-// "@garfield принято, правку не делай" — a NEGATED imperative. It must not be gated
+// "@gary принято, правку не делай" — a NEGATED imperative. It must not be gated
 // even under enforcement: matching the bare stem "делай" would defeat the narrowing
 // on its own canonical counter-example.
 func TestEnforceMentionHandoffGate_NegatedImperativeIsNotAnAskPattern(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "garfield"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "gary"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@garfield принято, правку не делай.",
+		Body: "@gary принято, правку не делай.",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment))
 	assert.NotEmpty(t, env.commentRepo.items)
@@ -504,12 +536,12 @@ func TestEnforceMentionHandoffGate_NegatedImperativeIsNotAnAskPattern(t *testing
 func TestEnforceMentionHandoffGate_QuestionMarkIsAnAskPattern(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "@wally это уже смёржено?",
+		Body: "@wade это уже смёржено?",
 	}
 	err := env.svc.Create(context.Background(), comment)
 
@@ -523,16 +555,16 @@ func TestEnforceMentionHandoffGate_QuestionMarkIsAnAskPattern(t *testing.T) {
 func TestEnforceMentionHandoffGate_AskPatternOutsideWindowDoesNotCount(t *testing.T) {
 	enforceMentionHandoff(t)
 	env, taskID := newGatedTaskEnv()
-	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wally"}
+	agent := &domain.Agent{ID: uuid.New(), WorkspaceID: env.wsID, Slug: "wade"}
 	env.agentSvc.AddAgent(env.wsID, agent)
 
 	padding := strings.Repeat("x", askContextWindowBytes+40)
 	comment := &domain.Comment{
 		TaskID: taskID, AuthorID: uuid.New(), AuthorType: domain.ActorTypeUser,
-		Body: "нужен вердикт по соседней теме, " + padding + " @wally смотрели уже эту версию",
+		Body: "нужен вердикт по соседней теме, " + padding + " @wade смотрели уже эту версию",
 	}
 	require.NoError(t, env.svc.Create(context.Background(), comment),
-		"the imperative is far outside the window around @wally — must not gate")
+		"the imperative is far outside the window around @wade — must not gate")
 	assert.NotEmpty(t, env.commentRepo.items)
 }
 
@@ -545,12 +577,12 @@ func TestMentionHasAskPattern(t *testing.T) {
 		slug string
 		want bool
 	}{
-		{"imperative next to mention", "@wally нужен вердикт", "wally", true},
-		{"question mark next to mention", "@wally готово?", "wally", true},
-		{"negated imperative does not count", "@garfield принято, правку не делай.", "garfield", false},
-		{"plain addressing does not count", "@garfield принято, спасибо", "garfield", false},
-		{"one of several occurrences is enough", "@wally смотри, потом @wally нужен ответ", "wally", true},
-		{"far-away imperative outside window does not count", "нужен вердикт " + strings.Repeat("x", askContextWindowBytes+40) + " @wally смотрели уже эту версию", "wally", false},
+		{"imperative next to mention", "@wade нужен вердикт", "wade", true},
+		{"question mark next to mention", "@wade готово?", "wade", true},
+		{"negated imperative does not count", "@gary принято, правку не делай.", "gary", false},
+		{"plain addressing does not count", "@gary принято, спасибо", "gary", false},
+		{"one of several occurrences is enough", "@wade смотри, потом @wade нужен ответ", "wade", true},
+		{"far-away imperative outside window does not count", "нужен вердикт " + strings.Repeat("x", askContextWindowBytes+40) + " @wade смотрели уже эту версию", "wade", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

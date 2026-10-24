@@ -9,6 +9,7 @@ vi.mock("@/lib/api", async () => {
 
 import { ProfilePage } from "@/pages/profile";
 import { useAuthStore } from "@/stores/auth";
+import { useModeStore } from "@/core/themes/mode";
 import type { User } from "@/types";
 
 const USER: User = {
@@ -34,6 +35,7 @@ const renderPage = () =>
 beforeEach(() => {
   localStorage.clear();
   document.documentElement.classList.remove("dark");
+  useModeStore.setState({ chosen: "system", forced: null });
   useAuthStore.setState({ user: USER, isAuthenticated: true, isLoading: false });
 });
 
@@ -51,14 +53,19 @@ describe("ProfilePage", () => {
 
   it("switching the theme applies the dark class and persists it for the next load", () => {
     renderPage();
-    const light = screen.getByRole("radio", { name: "Light" });
-    expect(light).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "System" })).toHaveAttribute("aria-checked", "true");
 
     fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
 
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(localStorage.getItem("theme")).toBe("dark");
     expect(screen.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("says so when the theme forces one mode", () => {
+    useModeStore.setState({ forced: "light" });
+    renderPage();
+    expect(screen.getByRole("status")).toHaveTextContent(/only has a light mode/);
   });
 
   it("changing the language calls setLocale('ru')", async () => {

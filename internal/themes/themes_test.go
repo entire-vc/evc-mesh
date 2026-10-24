@@ -28,6 +28,7 @@ func parse(t *testing.T, raw []byte) extensions.Manifest {
 
 func newService() (*themes.Service, *themestest.Installed, *themestest.Themes, *themestest.Store) {
 	inst, th, st := themestest.NewInstalled(), themestest.NewThemes(), themestest.NewStore()
+	th.Installed = inst
 	return &themes.Service{Installed: inst, Themes: th, Store: st}, inst, th, st
 }
 

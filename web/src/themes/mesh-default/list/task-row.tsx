@@ -6,7 +6,7 @@ import { CustomFieldRenderer } from "@/components/custom-field-renderer";
 import { PriorityFlag } from "@/components/priority-flag";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { TaskLink } from "@/core/primitives";
+import { TaskLink } from "@entire-vc/mesh-theme-sdk";
 import type { TaskRowActions, TaskRowColumn, TaskRowData, TaskRowView } from "@/core/slots/types";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/utils";

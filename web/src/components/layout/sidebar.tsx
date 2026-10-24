@@ -1,40 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useLocation, useNavigate, useParams } from "react-router";
-import {
-  Activity,
-  AlertTriangle,
-  ArchiveRestore,
-  BarChart2,
-  Bell,
-  Bot,
-  Brain,
-  ChevronDown,
-  ChevronRight,
-  FolderKanban,
-  Inbox,
-  LayoutDashboard,
-  MonitorDot,
-  Plug,
-  Server,
-  Puzzle,
-  Plus,
-  Settings,
-  Sparkles,
-  Target,
-} from "lucide-react";
-import { cn } from "@/lib/cn";
-import {
-  PROJECT_RAIL_ICON_LABEL,
-  WORKSPACE_LOGO_ICON_FILL,
-  RAIL_COLLAPSED_ASIDE,
-  RAIL_COLLAPSED_HEADER,
-  RAIL_COLLAPSED_NAV,
-  projectRailIconParts,
-  workspaceLogoContainerParts,
-} from "./rail-icon-classes";
-import type { WorkspaceLogoVariant } from "./rail-icon-classes";
-import { MeshIcon } from "@/components/mesh-icon";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { fetchUnseenMentionCount } from "@/lib/mentions/inbox";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useCapabilitiesStore } from "@/stores/capabilities";
@@ -42,17 +8,7 @@ import { useProjectStore } from "@/stores/project";
 import { useAuthStore } from "@/stores/auth";
 import { useWebSocketStore } from "@/stores/websocket";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -62,116 +18,33 @@ import {
 import { CreateProjectDialog } from "@/components/create-project-dialog";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useSidebarItems } from "@/lib/extension-slots";
+import "@/core/slots/mesh-default";
+import { resolveSlotView, useSlotRegistryVersion, useThemeSettings, withSlotFallback } from "@/core/slots/registry";
+import { useBuildSlotContext } from "@/core/slots/use-slot-context";
+import type { Async } from "@/core/slots/types";
+import type {
+  NavItem,
+  NavProject,
+  NavSidebarActions,
+  NavSidebarData,
+} from "@/core/slots/nav-sidebar/types";
+import type { Project } from "@/types";
 
 interface SidebarProps {
   collapsed: boolean;
+  onToggle?: () => void;
 }
 
-// The sizing/tint recipes this component renders live in `rail-icon-classes.ts`
-// — an import-free module so the contrast guard
-// (`scripts/assert-rail-icon-contrast.mjs`) can measure the SAME definitions
-// rather than restating them and drifting out of sync. The reasoning behind
-// each rule is documented there. See an internal ticket.
-
-type ImageStatus = "pending" | "loaded" | "error";
-
-interface WorkspaceLogoProps {
-  iconUrl: string | null | undefined;
-  name: string | undefined;
-  variant: WorkspaceLogoVariant;
-  /**
-   * What to show in the tinted box while there is no loaded image
-   *. Defaults to the generic `MeshIcon` mark used by the
-   * workspace header. A caller with its own glyph (e.g. a project's
-   * single-character `icon` in the collapsed rail) passes it here instead
-   * of duplicating the container/sizing/tint logic in a second component.
-   */
-  fallback?: React.ReactNode;
-  /** Overrides `data-testid` on the container — needed when this component
-   * renders many times on one page (one per rail item) and a single shared
-   * testid would no longer identify a specific instance. */
-  testId?: string;
-  /** Extra classes merged (via `cn`/tailwind-merge, so conflicts resolve
-   * last-wins) onto the container — lets a caller add interactive states
-   * (hover/active) without forking the container styling itself. */
-  className?: string;
-}
-
-/**
- * Renders an icon tile in the sidebar — the workspace mark in the header
- * (collapsed and expanded), and, since an internal ticket, a project's rail icon in
- * the collapsed rail — off one shared sizing/tint rule (see the table above)
- * so the two states/callers cannot drift apart again the way header vs.
- * project-list once did (an internal ticket: header got a proper container, the
- * project list next to it did not).
- *
- * Placeholder policy for the two states that are NOT "logo present and
- * loaded" (§2 of the task):
- *  - no icon_url at all            → fallback + tinted box (unchanged default).
- *  - icon_url set, still loading   → fallback + tinted box, same as "no icon" —
- *    never an empty hole while the <img> fetch is in flight.
- *  - icon_url set, failed to load  → `onError` falls back to the identical
- *    fallback + tinted box rather than leaving a broken-image icon or a hole.
- *  - icon_url set and loaded       → bare image, tinted box removed, so a
- *    logo with transparent regions never shows the teal placeholder
- *    bleeding through behind it.
- * A caller that never has an `iconUrl` (e.g. projects — they only ever have
- * a plain-text/emoji `icon`, no uploaded-image field exists for them) always
- * takes the fallback branch, which is exactly the "always show the tile"
- * behavior an internal ticket asks for.
- */
-function WorkspaceLogo({
-  iconUrl,
-  name,
-  variant,
-  fallback,
-  testId = "workspace-logo",
-  className,
-}: WorkspaceLogoProps) {
-  const { t } = useTranslation("shell");
-  const [status, setStatus] = useState<ImageStatus>("pending");
-
-  // Re-arm on URL change (workspace switch, or a fresh upload replacing the
-  // old icon) so a stale loaded/error flag from the previous image can never
-  // survive onto this one.
-  useEffect(() => {
-    setStatus("pending");
-  }, [iconUrl]);
-
-  const isLoaded = Boolean(iconUrl) && status === "loaded";
-
-  return (
-    <div
-      data-testid={testId}
-      data-variant={variant}
-      data-status={iconUrl ? status : "none"}
-      className={cn(
-        workspaceLogoContainerParts({ variant, isLoaded, className }),
-      )}
-    >
-      {iconUrl && (
-        <img
-          data-testid="workspace-logo-img"
-          src={iconUrl}
-          alt={name || t("sidebar.workspaceLogoAlt")}
-          className={cn("h-full w-full object-cover", !isLoaded && "hidden")}
-          onLoad={() => setStatus("loaded")}
-          onError={() => setStatus("error")}
-        />
-      )}
-      {!isLoaded &&
-        (fallback ?? <MeshIcon className={WORKSPACE_LOGO_ICON_FILL} />)}
-    </div>
-  );
-}
-
-export function Sidebar({ collapsed }: SidebarProps) {
+// The container of the `nav.sidebar` slot: the stores, permissions, the mention counter and
+// the two dialogs live here; what is drawn lives in the active theme's view
+// (`core/slots/nav-sidebar/mesh-default-view.tsx` by default).
+export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { t } = useTranslation("shell");
   const { wsSlug, projectSlug } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const { workspaces, currentWorkspace, createWorkspace, isLoading: workspacesLoading } = useWorkspaceStore();
-  const { projects: allProjects, unarchiveProject, isLoading: projectsLoading, error: projectsError } = useProjectStore();
+  const { projects: allProjects, unarchiveProject, fetchProjects, isLoading: projectsLoading, error: projectsError } = useProjectStore();
   // Flat /t/ and /d/ links have no workspace until the resolver redirects.
   // Only actual requests are pending; a dead-end resolver may never select one.
   const navigationPending = workspacesLoading || projectsLoading;
@@ -181,7 +54,6 @@ export function Sidebar({ collapsed }: SidebarProps) {
   // had happened).
   const projects = allProjects.filter((p) => !p.is_archived);
   const archivedProjects = allProjects.filter((p) => p.is_archived);
-  const [showArchived, setShowArchived] = useState(false);
   const [unarchiveError, setUnarchiveError] = useState<string | null>(null);
   const { user } = useAuthStore();
   const lastEvent = useWebSocketStore((s) => s.lastEvent);
@@ -197,6 +69,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const unseenFetchedRef = useRef<string | null>(null);
   const sparkEnabled = useCapabilitiesStore((s) => s.sparkEnabled);
   const fetchCapabilities = useCapabilitiesStore((s) => s.fetch);
+  const extensionItems = useSidebarItems();
 
   useEffect(() => {
     fetchCapabilities();
@@ -223,20 +96,6 @@ export function Sidebar({ collapsed }: SidebarProps) {
       setWsCreating(false);
     }
   }, [wsName, wsSlugDraft, createWorkspace, navigate, t]);
-
-  const isDashboardRoute = location.pathname.endsWith("/dashboard");
-  const isOrgChartRoute = location.pathname.endsWith("/org-chart");
-  const isSparkRoute = location.pathname.endsWith("/spark");
-  const isEventsRoute = location.pathname.endsWith("/events");
-  const isAnalyticsRoute = location.pathname.endsWith("/analytics");
-  const isExtensionsRoute = location.pathname.endsWith("/extensions");
-  const isRunnerRoute = location.pathname.endsWith("/runner");
-  const extensionItems = useSidebarItems();
-  const isInitiativesRoute = location.pathname.endsWith("/initiatives");
-  const isTriageRoute = location.pathname.endsWith("/triage");
-  const isMemoriesRoute = location.pathname.endsWith("/memories");
-  const isSessionsRoute = location.pathname.endsWith("/sessions");
-  const isActivityRoute = location.pathname.includes("/activity");
 
   // Fetch unseen mention count for the current workspace, then refresh on
   // cache invalidation. Both inboxes: a badge counting only task mentions is
@@ -290,587 +149,170 @@ export function Sidebar({ collapsed }: SidebarProps) {
     return () => window.removeEventListener("mesh:mentions:shown", handler);
   }, []);
 
-  if (collapsed) {
-    return (
-      <aside className={RAIL_COLLAPSED_ASIDE}>
-        <div className={RAIL_COLLAPSED_HEADER}>
-          <WorkspaceLogo
-            iconUrl={currentWorkspace?.icon_url}
-            name={currentWorkspace?.name}
-            variant="collapsed"
-          />
-        </div>
-        <nav className={RAIL_COLLAPSED_NAV}>
-          {/* Dashboard */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/dashboard` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isDashboardRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <LayoutDashboard className="h-4 w-4" />
-          </Link>
-          {/* Projects */}
-          {navigationPending ? (
-            <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label={t("sidebar.projects.loading")} className="space-y-2">
-              <Skeleton className="h-8 w-8 rounded-lg bg-sidebar-border" />
-              <Skeleton className="h-8 w-8 rounded-lg bg-sidebar-border" />
-            </div>
-          ) : !currentWorkspace ? null : projectsError ? (
-            <div role="alert" aria-label={projectsError} title={projectsError} className="flex h-8 w-8 items-center justify-center rounded-lg text-destructive">
-              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-            </div>
-          ) : projects.map((project) => (
-            <Link
-              key={project.id}
-              to={`/w/${wsSlug}/p/${project.slug}`}
-              data-testid="project-icon"
-              /* an internal ticket: a project's own muted chip, deliberately NOT
-                 `WorkspaceLogo` — that component's "no image" branch is the
-                 workspace's brand-teal tint, and reusing it here is what
-                 made every project tile in a 13-project workspace look like
-                 the workspace mark above them. See `rail-icon-classes.ts`. */
-              className={cn(projectRailIconParts(project.slug === projectSlug))}
-            >
-              <span className={PROJECT_RAIL_ICON_LABEL}>
-                {project.icon || project.name.charAt(0).toUpperCase()}
-              </span>
-            </Link>
-          ))}
-          <div className="my-1 w-6 border-t border-sidebar-border" />
-          {/* Initiatives */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isInitiativesRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Target className="h-4 w-4" />
-          </Link>
-          {/* Triage */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isTriageRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Inbox className="h-4 w-4" />
-          </Link>
-          {/* Activity */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/activity` : "/"}
-            className={cn(
-              "relative flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isActivityRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Bell className="h-4 w-4" />
-            {unseenCount > 0 && (
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-tone-danger-500 text-[10px] font-bold text-white">
-                {unseenCount > 9 ? "9+" : unseenCount}
-              </span>
-            )}
-          </Link>
-          <div className="my-1 w-6 border-t border-sidebar-border" />
-          {/* Team (Org Chart) */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/org-chart` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isOrgChartRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Bot className="h-4 w-4" />
-          </Link>
-          {/* Memory Browser */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/memories` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isMemoriesRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Brain className="h-4 w-4" />
-          </Link>
-          {/* Sessions Dashboard */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/sessions` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isSessionsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <MonitorDot className="h-4 w-4" />
-          </Link>
-          {/* Spark Catalog — hidden when the server has MESH_SPARK_ENABLED=false */}
-          {sparkEnabled && (
-            <Link
-              to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
-              className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-                isSparkRoute && "bg-sidebar-accent text-sidebar-primary",
-              )}
-            >
-              <Sparkles className="h-4 w-4" />
-            </Link>
-          )}
-          {/* Analytics */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isAnalyticsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <BarChart2 className="h-4 w-4" />
-          </Link>
-          {/* Events */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/events` : "/"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isEventsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Activity className="h-4 w-4" />
-          </Link>
-          {/* Integrations */}
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/extensions` : "/"}
-            aria-label={t("nav.extensions")}
-            title={t("nav.extensions")}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-              isExtensionsRoute && "bg-sidebar-accent text-sidebar-primary",
-            )}
-          >
-            <Plug className="h-4 w-4" />
-          </Link>
-          {wsSlug &&
-            extensionItems.map((item) => (
-              <Link
-                key={item.extensionId}
-                to={`/w/${wsSlug}/x/${item.extensionId}`}
-                aria-label={item.title}
-                title={item.title}
-                className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground hover:bg-sidebar-accent",
-                  location.pathname === `/w/${wsSlug}/x/${item.extensionId}` && "bg-sidebar-accent text-sidebar-primary",
-                )}
-              >
-                <Puzzle className="h-4 w-4" />
-              </Link>
-            ))}
-        </nav>
-      </aside>
-    );
+  const path = location.pathname;
+  const ws = wsSlug ? `/w/${wsSlug}` : null;
+  const wsHref = (suffix: string) => (ws ? `${ws}/${suffix}` : "/");
+
+  const items: NavItem[] = [];
+  const core = (
+    id: string,
+    group: NavItem["group"],
+    icon: string,
+    label: string,
+    href: string,
+    active: boolean,
+    extra: Partial<NavItem> = {},
+  ) => items.push({ id, group, icon, label, href, active, origin: "core", inRail: true, ...extra });
+  core("dashboard", "top", "LayoutDashboard", t("nav.dashboard"), wsHref("dashboard"), path.endsWith("/dashboard"));
+  core("initiatives", "inbox", "Target", t("nav.initiatives"), wsHref("initiatives"), path.endsWith("/initiatives"));
+  core("triage", "inbox", "Inbox", t("nav.triage"), wsHref("triage"), path.endsWith("/triage"));
+  core("activity", "inbox", "Bell", t("nav.activity"), wsHref("activity"), path.includes("/activity"), {
+    badge: { count: unseenCount, tone: "attention" },
+  });
+  core("team", "tools", "Bot", t("nav.team"), wsHref("org-chart"), path.endsWith("/org-chart"));
+  core("memory", "tools", "Brain", t("nav.memory"), wsHref("memories"), path.endsWith("/memories"));
+  core("sessions", "tools", "MonitorDot", t("nav.sessions"), wsHref("sessions"), path.endsWith("/sessions"));
+  // Hidden when the server has MESH_SPARK_ENABLED=false.
+  if (sparkEnabled) core("spark", "tools", "Sparkles", t("nav.spark"), wsHref("spark"), path.endsWith("/spark"));
+  core("analytics", "tools", "BarChart2", t("nav.analytics"), wsHref("analytics"), path.endsWith("/analytics"));
+  core("events", "tools", "Activity", t("nav.events"), wsHref("events"), path.endsWith("/events"));
+  core("extensions", "tools", "Plug", t("nav.extensions"), wsHref("extensions"), path.endsWith("/extensions"));
+  core("runner", "tools", "Server", t("nav.myRunner"), wsHref("runner"), path.endsWith("/runner"), { inRail: false });
+  if (wsSlug) {
+    for (const item of extensionItems) {
+      const href = `/w/${wsSlug}/x/${item.extensionId}`;
+      items.push({
+        id: `ext:${item.extensionId}`,
+        group: "tools",
+        icon: "Puzzle",
+        label: item.title,
+        href,
+        active: path === href,
+        origin: "extension",
+        inRail: true,
+      });
+    }
+    core("settings", "footer", "Settings", t("nav.workspaceSettings"), `/w/${wsSlug}/settings`, path === `/w/${wsSlug}/settings`, { inRail: false });
+    if (projectSlug) {
+      const href = `/w/${wsSlug}/p/${projectSlug}/settings`;
+      core("project-settings", "footer", "Settings", t("nav.projectSettings"), href, path === href, { inRail: false });
+    }
   }
 
+  const toNavProject = (p: Project): NavProject => ({
+    id: p.id,
+    slug: p.slug,
+    name: p.name,
+    icon: p.icon,
+    active: p.slug === projectSlug,
+    href: `/w/${wsSlug}/p/${p.slug}`,
+    items: [],
+  });
+
+  const retry = useCallback(() => {
+    if (currentWorkspace) void fetchProjects(currentWorkspace.id);
+  }, [currentWorkspace, fetchProjects]);
+
+  let projectsState: Async<NavProject[]>;
+  if (navigationPending) projectsState = { state: "loading" };
+  else if (!currentWorkspace) projectsState = { state: "ready", value: [] };
+  else if (projectsError) projectsState = { state: "error", error: { code: "projects", message: projectsError }, retry };
+  else projectsState = { state: "ready", value: projects.map(toNavProject) };
+
+  const data: NavSidebarData = {
+    workspace: {
+      id: currentWorkspace?.id ?? "",
+      slug: currentWorkspace?.slug ?? "",
+      name: currentWorkspace?.name ?? "",
+      logoUrl: currentWorkspace?.icon_url ?? undefined,
+    },
+    workspaces: workspaces.map((w) => ({
+      id: w.id,
+      slug: w.slug,
+      name: w.name,
+      logoUrl: w.icon_url ?? undefined,
+      href: `/w/${w.slug}`,
+      current: w.slug === wsSlug,
+    })),
+    items,
+    projects: projectsState,
+    collapsed,
+    isMobile: typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches,
+    workspaceResolved: !!currentWorkspace,
+    archivedProjects: archivedProjects.map(toNavProject),
+    archivedError: unarchiveError,
+  };
+
+  const actions: NavSidebarActions = {
+    toggleCollapsed: () => onToggle?.(),
+    switchWorkspace: (slug) => navigate(`/w/${slug}`),
+    createProject: () => setShowCreateProject(true),
+    createWorkspace: () => setCreateWsOpen(true),
+    unarchiveProject: async (id) => {
+      setUnarchiveError(null);
+      try {
+        await unarchiveProject(id);
+      } catch (err) {
+        setUnarchiveError(apiErrorMessage(err, t("sidebar.projects.unarchiveFailed")));
+      }
+    },
+  };
+
+  const ctx = useBuildSlotContext(
+    "nav.sidebar",
+    currentWorkspace ? { id: currentWorkspace.id, slug: currentWorkspace.slug, name: currentWorkspace.name } : null,
+  );
+  const themeSettings = useThemeSettings();
+  useSlotRegistryVersion();
+  const View = withSlotFallback("nav.sidebar", resolveSlotView("nav.sidebar"));
+
   return (
-    <aside className="flex h-full w-60 flex-col border-r border-sidebar-border bg-sidebar">
-      {/* Workspace switcher */}
-      <div className="flex h-14 items-center border-b border-sidebar-border px-3">
-        <DropdownMenu>
-          <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-sidebar-foreground hover:bg-sidebar-accent">
-            <WorkspaceLogo
-              iconUrl={currentWorkspace?.icon_url}
-              name={currentWorkspace?.name}
-              variant="expanded"
-            />
-            <span className="flex-1 truncate text-left">
-              {currentWorkspace?.name || t("sidebar.workspaceSwitcher.select")}
-            </span>
-            <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel>{t("sidebar.workspaceSwitcher.title")}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {workspaces.map((ws) => (
-              <Link key={ws.id} to={`/w/${ws.slug}`}>
-                <DropdownMenuItem
-                  className={cn(
-                    "gap-2",
-                    ws.slug === wsSlug && "bg-accent text-accent-foreground",
-                  )}
-                >
-                  <div className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded bg-sidebar-primary text-primary-foreground text-[10px] font-bold">
-                    {ws.icon_url ? (
-                      <img src={ws.icon_url} alt={ws.name} className="h-full w-full object-cover" />
-                    ) : (
-                      ws.name.charAt(0).toUpperCase()
-                    )}
-                  </div>
-                  {ws.name}
-                </DropdownMenuItem>
-              </Link>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => setCreateWsOpen(true)}
-              className="gap-2 text-muted-foreground"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {t("sidebar.workspaceSwitcher.newWorkspace")}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-3">
-        {/* Dashboard */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/dashboard` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isDashboardRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <LayoutDashboard className="h-4 w-4" />
-          {t("nav.dashboard")}
-        </Link>
-
-        {/* Projects */}
-        <div className="mt-3">
-          <div className="flex items-center justify-between px-2 py-1">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {t("sidebar.projects.title")}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5"
-              onClick={() => setShowCreateProject(true)}
-            >
-              <Plus className="h-3 w-3" />
-            </Button>
-          </div>
-          <div className="mt-1 space-y-0.5">
-            {navigationPending ? (
-              <div data-testid="sidebar-projects-loading" aria-busy="true" aria-label={t("sidebar.projects.loading")} className="space-y-2 px-2 py-2">
-                <Skeleton className="h-6 w-full bg-sidebar-border" />
-                <Skeleton className="h-6 w-2/3 bg-sidebar-border" />
-              </div>
-            ) : !currentWorkspace ? null : projectsError ? (
-              <p role="alert" className="px-2 py-4 text-center text-xs text-destructive">
-                {projectsError}
-              </p>
-            ) : projects.map((project) => (
-              <Link
-                key={project.id}
-                to={`/w/${wsSlug}/p/${project.slug}`}
-                className={cn(
-                  "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-                  project.slug === projectSlug &&
-                    "bg-sidebar-accent font-medium text-sidebar-primary",
-                )}
-              >
-                {project.icon ? (
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none">
-                    {project.icon}
-                  </span>
-                ) : (
-                  <FolderKanban className="h-4 w-4 shrink-0" />
-                )}
-                <span className="flex-1 truncate">{project.name}</span>
-              </Link>
-            ))}
-            {!navigationPending && currentWorkspace && !projectsError && projects.length === 0 && (
-              <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-                {t("sidebar.projects.empty")}
-              </p>
-            )}
-          </div>
-          {currentWorkspace && archivedProjects.length > 0 && (
-            <div className="mt-1" data-testid="archived-projects">
-              <button
-                type="button"
-                onClick={() => setShowArchived((v) => !v)}
-                aria-expanded={showArchived}
-                className="flex w-full items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-sidebar-accent"
-              >
-                {showArchived ? (
-                  <ChevronDown className="h-3 w-3" />
-                ) : (
-                  <ChevronRight className="h-3 w-3" />
-                )}
-                {t("sidebar.projects.archived", { count: archivedProjects.length })}
-              </button>
-              {showArchived && (
-                <div className="mt-0.5 space-y-0.5">
-                  {archivedProjects.map((project) => (
-                    <div
-                      key={project.id}
-                      className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-sidebar-accent"
-                    >
-                      <Link
-                        to={`/w/${wsSlug}/p/${project.slug}`}
-                        className={cn(
-                          "flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground",
-                          project.slug === projectSlug &&
-                            "font-medium text-sidebar-primary",
-                        )}
-                      >
-                        <FolderKanban className="h-4 w-4 shrink-0" />
-                        <span className="flex-1 truncate">{project.name}</span>
-                      </Link>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 shrink-0"
-                        title={t("sidebar.projects.unarchive")}
-                        aria-label={t("sidebar.projects.unarchiveProject", { name: project.name })}
-                        onClick={async () => {
-                          setUnarchiveError(null);
-                          try {
-                            await unarchiveProject(project.id);
-                          } catch (err) {
-                            setUnarchiveError(
-                              apiErrorMessage(err, t("sidebar.projects.unarchiveFailed")),
-                            );
-                          }
-                        }}
-                      >
-                        <ArchiveRestore className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ))}
-                  {unarchiveError && (
-                    <p className="px-2 py-1 text-xs text-destructive">
-                      {unarchiveError}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="my-2 border-t border-sidebar-border" />
-
-        {/* Initiatives */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/initiatives` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isInitiativesRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Target className="h-4 w-4" />
-          {t("nav.initiatives")}
-        </Link>
-        {/* Triage Inbox */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/triage` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isTriageRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Inbox className="h-4 w-4" />
-          {t("nav.triage")}
-        </Link>
-        {/* Activity */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/activity` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isActivityRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Bell className="h-4 w-4" />
-          {t("nav.activity")}
-          {unseenCount > 0 && (
-            <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-tone-danger-500 px-1 text-[10px] font-bold text-white">
-              {unseenCount > 99 ? "99+" : unseenCount}
-            </span>
-          )}
-        </Link>
-
-        <div className="my-2 border-t border-sidebar-border" />
-
-        {/* Team (Org Chart) */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/org-chart` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isOrgChartRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Bot className="h-4 w-4" />
-          {t("nav.team")}
-        </Link>
-        {/* Memory Browser */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/memories` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isMemoriesRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Brain className="h-4 w-4" />
-          {t("nav.memory")}
-        </Link>
-        {/* Sessions Dashboard */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/sessions` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isSessionsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <MonitorDot className="h-4 w-4" />
-          {t("nav.sessions")}
-        </Link>
-        {/* Spark Catalog — hidden when the server has MESH_SPARK_ENABLED=false */}
-        {sparkEnabled && (
-          <Link
-            to={wsSlug ? `/w/${wsSlug}/spark` : "/"}
-            className={cn(
-              "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-              isSparkRoute && "bg-sidebar-accent font-medium",
-            )}
-          >
-            <Sparkles className="h-4 w-4" />
-            {t("nav.spark")}
-          </Link>
-        )}
-        {/* Analytics */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/analytics` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isAnalyticsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <BarChart2 className="h-4 w-4" />
-          {t("nav.analytics")}
-        </Link>
-        {/* Events */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/events` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isEventsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Activity className="h-4 w-4" />
-          {t("nav.events")}
-        </Link>
-        {/* Integrations */}
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/extensions` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isExtensionsRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Plug className="h-4 w-4" />
-          {t("nav.extensions")}
-        </Link>
-        <Link
-          to={wsSlug ? `/w/${wsSlug}/runner` : "/"}
-          className={cn(
-            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-            isRunnerRoute && "bg-sidebar-accent font-medium",
-          )}
-        >
-          <Server className="h-4 w-4" />
-          {t("nav.myRunner")}
-        </Link>
-        {wsSlug &&
-          extensionItems.map((item) => (
-            <Link
-              key={item.extensionId}
-              to={`/w/${wsSlug}/x/${item.extensionId}`}
-              className={cn(
-                "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-                location.pathname === `/w/${wsSlug}/x/${item.extensionId}` && "bg-sidebar-accent font-medium",
-              )}
-            >
-              <Puzzle className="h-4 w-4" />
-              <span className="truncate">{item.title}</span>
-            </Link>
-          ))}
-      </nav>
-
-      {/* Footer */}
-      <Separator />
-      <div className="p-3 space-y-0.5">
-        {wsSlug && (
-          <Link
-            to={`/w/${wsSlug}/settings`}
-            className={cn(
-              "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-              location.pathname === `/w/${wsSlug}/settings` &&
-                "bg-sidebar-accent font-medium",
-            )}
-          >
-            <Settings className="h-4 w-4" />
-            {t("nav.workspaceSettings")}
-          </Link>
-        )}
-        {wsSlug && projectSlug && (
-          <Link
-            to={`/w/${wsSlug}/p/${projectSlug}/settings`}
-            className={cn(
-              "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent",
-              location.pathname === `/w/${wsSlug}/p/${projectSlug}/settings` &&
-                "bg-sidebar-accent font-medium",
-            )}
-          >
-            <Settings className="h-4 w-4" />
-            {t("nav.projectSettings")}
-          </Link>
-        )}
-      </div>
+    <>
+      <View data={data} actions={actions} themeSettings={themeSettings} ctx={ctx} />
 
       <CreateProjectDialog
         open={showCreateProject}
         onOpenChange={setShowCreateProject}
       />
 
-      {/* Create workspace dialog */}
-      <Dialog open={createWsOpen} onOpenChange={(open) => { setCreateWsOpen(open); if (!open) { setWsName(""); setWsSlugDraft(""); setWsError(null); } }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("createWorkspace.title")}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">{t("createWorkspace.name")}</label>
-              <Input
-                value={wsName}
-                onChange={(e) => handleWsNameChange(e.target.value)}
-                placeholder={t("createWorkspace.namePlaceholder")}
-                autoFocus
-                onKeyDown={(e) => { if (e.key === "Enter" && wsName.trim()) void handleCreateWs(); }}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">{t("createWorkspace.slug")}</label>
-              <Input
-                value={wsSlugDraft}
-                onChange={(e) => setWsSlugDraft(e.target.value)}
-                placeholder={t("createWorkspace.slugPlaceholder")}
-              />
-              <p className="text-xs text-muted-foreground">{t("createWorkspace.slugHint", { slug: wsSlugDraft || "slug" })}</p>
-            </div>
-            {wsError && (
-              <p className="text-sm text-destructive">{wsError}</p>
-            )}
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setCreateWsOpen(false)}>{t("actions.cancel")}</Button>
-              <Button size="sm" onClick={() => void handleCreateWs()} disabled={!wsName.trim() || !wsSlugDraft.trim() || wsCreating}>
-                {wsCreating ? t("actions.creating") : t("actions.create")}
-              </Button>
-            </div>
+    {/* Create workspace dialog */}
+    <Dialog open={createWsOpen} onOpenChange={(open) => { setCreateWsOpen(open); if (!open) { setWsName(""); setWsSlugDraft(""); setWsError(null); } }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("createWorkspace.title")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 pt-2">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">{t("createWorkspace.name")}</label>
+            <Input
+              value={wsName}
+              onChange={(e) => handleWsNameChange(e.target.value)}
+              placeholder={t("createWorkspace.namePlaceholder")}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter" && wsName.trim()) void handleCreateWs(); }}
+            />
           </div>
-        </DialogContent>
-      </Dialog>
-    </aside>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">{t("createWorkspace.slug")}</label>
+            <Input
+              value={wsSlugDraft}
+              onChange={(e) => setWsSlugDraft(e.target.value)}
+              placeholder={t("createWorkspace.slugPlaceholder")}
+            />
+            <p className="text-xs text-muted-foreground">{t("createWorkspace.slugHint", { slug: wsSlugDraft || "slug" })}</p>
+          </div>
+          {wsError && (
+            <p className="text-sm text-destructive">{wsError}</p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setCreateWsOpen(false)}>{t("actions.cancel")}</Button>
+            <Button size="sm" onClick={() => void handleCreateWs()} disabled={!wsName.trim() || !wsSlugDraft.trim() || wsCreating}>
+              {wsCreating ? t("actions.creating") : t("actions.create")}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

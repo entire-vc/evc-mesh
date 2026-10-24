@@ -4,6 +4,7 @@
     "delete": "Delete",
     "done": "Done",
     "edit": "Edit",
+    "retry": "Retry",
     "save": "Save"
   },
   "artifacts": {
@@ -43,6 +44,7 @@
     },
     "empty": "No comments yet. Be the first to comment.",
     "internal": "Internal",
+    "submitFailed": "Comment was not posted",
     "internalNote": "Internal note",
     "loadMore": "Load more",
     "loading": "Loading...",

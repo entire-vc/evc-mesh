@@ -17,10 +17,21 @@ const MAX_PATTERN_LEN = 256;
 const MAX_PATTERN_INPUT = 2048;
 const NESTED_QUANTIFIER = /[+*}]\)?[+*{]/;
 
+// a colour widget holds `#rgb`/`#rrggbb`, or "H S% L%" when the field is bound to a token
+const HEX_VALUE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+const TRIPLET_VALUE = /^(\d{1,3}(?:\.\d+)?) (\d{1,3}(?:\.\d+)?)% (\d{1,3}(?:\.\d+)?)%$/;
+
+function validColor(v: string): boolean {
+  if (HEX_VALUE.test(v)) return true;
+  const m = TRIPLET_VALUE.exec(v);
+  return m !== null && Number(m[1]) <= 360 && Number(m[2]) <= 100 && Number(m[3]) <= 100;
+}
+
 function checkScalar(f: FieldSchema, v: unknown): FieldError | null {
   const t = f.type ?? "string";
   if (t === "string") {
     if (typeof v !== "string") return { code: "type" };
+    if (f["x-widget"] === "color" && !validColor(v)) return { code: "pattern" };
     if (f.minLength != null && v.length < f.minLength) return { code: "minLength", params: { min: f.minLength } };
     if (f.maxLength != null && v.length > f.maxLength) return { code: "maxLength", params: { max: f.maxLength } };
     if (f.format === "uri") {

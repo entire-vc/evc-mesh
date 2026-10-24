@@ -1019,7 +1019,8 @@
       "assignment": "Assignment Rules",
       "violations": "Violations",
       "workflowTemplates": "Workflow Templates",
-      "config": "Config"
+      "config": "Config",
+      "theme": "Theme"
     },
     "profile": {
       "nameRequired": "Display name is required",
@@ -1176,7 +1177,10 @@
       "title": "Appearance",
       "description": "Interface color theme.",
       "light": "Light",
-      "dark": "Dark"
+      "dark": "Dark",
+      "system": "System",
+      "forcedDark": "The current theme only has a dark mode, so it is always used here. Your choice applies in other themes.",
+      "forcedLight": "The current theme only has a light mode, so it is always used here. Your choice applies in other themes."
     },
     "language": {
       "title": "Language"
@@ -1185,6 +1189,89 @@
       "title": "My agents",
       "description": "Agents you created or supervise.",
       "placeholder": "Coming soon."
+    }
+  },
+  "themes": {
+    "loading": "Loading themes",
+    "loadFailed": "Couldn't load themes.",
+    "retry": "Try again",
+    "save": "Save theme",
+    "saved": "Theme saved",
+    "saveFailed": "Couldn't save the theme.",
+    "reset": "Reset to the instance theme",
+    "resetDone": "The workspace now uses the instance theme",
+    "unsaved": "Unsaved changes",
+    "cancel": "Cancel",
+    "readOnly": "Only workspace owners and admins can change the theme.",
+    "activeUnknown": "Current theme unknown",
+    "noSettings": "This theme has nothing to configure here.",
+    "picker": {
+      "label": "Theme",
+      "inherit": "Instance theme",
+      "inheritHint": "Follows whatever theme the instance administrator picks.",
+      "builtin": "Mesh",
+      "builtinHint": "The built-in look.",
+      "selected": "Selected"
+    },
+    "empty": {
+      "workspace": "No other themes are installed. An instance administrator can add some.",
+      "instance": "No themes are installed yet. Install one below."
+    },
+    "preview": {
+      "title": "Preview",
+      "label": "Theme preview",
+      "hint": "Shows unsaved changes. Nothing is applied until you save.",
+      "board": "Board",
+      "button": "New task",
+      "card1": "Update the pricing page",
+      "card2": "Review the release notes",
+      "meta": "Today"
+    },
+    "contrast": {
+      "title": "Low contrast in this theme",
+      "hint": "The theme is saved anyway. Check that text stays readable."
+    },
+    "workspace": {
+      "title": "Theme",
+      "description": "Pick how this workspace looks. The theme decides which settings appear.",
+      "instanceLink": "Manage instance themes"
+    },
+    "instance": {
+      "title": "Themes",
+      "back": "Settings",
+      "forbidden": "Only instance administrators can manage themes.",
+      "defaultTitle": "Default theme",
+      "defaultHint": "Used by every workspace that doesn't pick its own.",
+      "installedTitle": "Installed themes",
+      "installedHint": "Install, update and remove themes for the whole instance."
+    },
+    "installed": {
+      "installRepo": "Install from repository",
+      "installBuiltin": "Install {{name}}",
+      "install": "Install",
+      "installDone": "Theme installed",
+      "installFailed": "Couldn't install the theme.",
+      "update": "Update",
+      "updateDone": "{{name}} updated",
+      "updateFailed": "Couldn't update the theme.",
+      "remove": "Remove",
+      "removeNamed": "Remove {{name}}",
+      "removeTitle": "Remove {{name}}?",
+      "removeHint": "Workspaces using it go back to the instance theme.",
+      "removeDone": "Theme removed",
+      "removeFailed": "Couldn't remove the theme.",
+      "emptyTitle": "No themes installed",
+      "emptyHint": "Install a built-in theme or add one from a repository.",
+      "repoTitle": "Install a theme from a repository",
+      "repoHint": "The repository must contain a theme manifest at its root.",
+      "repoUrl": "Repository URL",
+      "repoRef": "Tag or branch",
+      "repoToken": "Access token (private repositories)",
+      "repoTokenHint": "Stored encrypted and never shown again.",
+      "source": {
+        "repo": "Repository",
+        "builtin": "Built-in"
+      }
     }
   }
 }

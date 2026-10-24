@@ -111,7 +111,9 @@ describe("task.view / mesh-default", () => {
     expect(container.querySelector('[data-mesh-layout]')).toBeNull();
     expect(screen.getByTestId("core-topbar")).toBeTruthy();
     update(mkData({ task: { state: "error", error: { code: "not_found", message: "Gone" }, retry } }));
-    expect(screen.getByRole("alert").textContent).toBe("Gone");
+    expect(screen.getByRole("alert").querySelector("p")?.textContent).toBe("Gone");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledTimes(1);
     update(mkData({ task: { state: "refreshing", value: mkTask() } }));
     expect(count(desktop(), "description")).toBe(1);
   });

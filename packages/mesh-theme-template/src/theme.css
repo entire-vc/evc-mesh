@@ -1,0 +1,12 @@
+/* Served in the `mesh-theme` cascade layer: it wins over the core's utility classes without !important. */
+.my-card {
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  padding: 0.5rem 0.75rem;
+}
+.my-card-title { font-weight: 600; }
+.my-card-labels { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.25rem 0 0; padding: 0; list-style: none; }
+.my-card-due { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.my-card-overdue { color: hsl(var(--destructive)); }

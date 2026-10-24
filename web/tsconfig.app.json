@@ -19,7 +19,16 @@
     "noUncheckedIndexedAccess": true,
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@theme-bundle": ["./src/test-utils/no-theme-bundle.ts"],
+      "@entire-vc/mesh-theme-sdk/testing": ["../packages/mesh-theme-sdk/testing/index.ts"],
+      "@entire-vc/mesh-theme-sdk": ["../packages/mesh-theme-sdk/src/index.ts"],
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "vitest": ["./node_modules/vitest"],
+      "@testing-library/react": ["./node_modules/@testing-library/react"],
+      "@testing-library/user-event": ["./node_modules/@testing-library/user-event"],
+      "axe-core": ["./node_modules/axe-core"]
     }
   },
   "include": ["src"]

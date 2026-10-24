@@ -31,6 +31,10 @@ const maxUIStateBytes = 64 * 1024
 // an unknown prefix is refused, never stored.
 const docsTreeScopePrefix = "docs.tree:"
 
+// appearanceScope holds the person's own light/dark/system choice. It belongs to
+// the caller alone (no project or workspace), so a human session is all it needs.
+const appearanceScope = "appearance"
+
 // UserUIStateHandler serves /me/ui-state/:scope — the human caller's own
 // remembered interface state (which Docs tree branches are open), synced across
 // devices.
@@ -155,6 +159,9 @@ func (h *UserUIStateHandler) authorize(c echo.Context) (uuid.UUID, string, error
 }
 
 func (h *UserUIStateHandler) authorizeScope(ctx context.Context, userID uuid.UUID, scope string) error {
+	if scope == appearanceScope {
+		return nil
+	}
 	rest, ok := strings.CutPrefix(scope, docsTreeScopePrefix)
 	if !ok {
 		return apierror.ValidationError(map[string]string{"scope": "unknown scope"})

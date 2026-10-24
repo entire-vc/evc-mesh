@@ -223,3 +223,14 @@ func TestUserUIState_ScopeAndBodyValidation(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, f.do(http.MethodPut, f.scope(), f.member.String(), `{}`).Code)
 	require.Equal(t, http.StatusBadRequest, f.do(http.MethodPut, f.scope(), f.member.String(), `not json`).Code)
 }
+
+func TestUserUIState_Appearance_PerUserAndHumanOnly(t *testing.T) {
+	f := newUIStateFixture(t)
+	// Needs no project: a user who belongs to none can still keep a colour mode.
+	require.Equal(t, http.StatusNotFound, f.do(http.MethodGet, "appearance", f.stranger.String(), "").Code)
+	require.Equal(t, http.StatusOK, f.do(http.MethodPut, "appearance", f.stranger.String(), `{"state":{"mode":"dark"}}`).Code)
+	require.Contains(t, f.do(http.MethodGet, "appearance", f.stranger.String(), "").Body.String(), `"dark"`)
+	// Another user's row is untouched, and an agent key never reaches it.
+	require.Equal(t, http.StatusNotFound, f.do(http.MethodGet, "appearance", f.member.String(), "").Code)
+	require.NotEqual(t, http.StatusOK, f.do(http.MethodGet, "appearance", f.stranger.String(), "", "X-Test-Agent", "1").Code)
+}
