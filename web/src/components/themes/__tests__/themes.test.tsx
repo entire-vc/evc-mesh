@@ -12,6 +12,7 @@ import { SchemaForm, type FieldSchema } from "@/components/extensions/schema-for
 import { hexToHsl, hslToHex, parseTokensCss } from "../color";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { ThemeSettingsPanel } from "../theme-settings-panel";
+import { ThemePreview } from "../theme-preview";
 
 const apiMock = vi.mocked(api);
 
@@ -294,5 +295,29 @@ describe("ThemeSettingsPanel (workspace)", () => {
     render(<ThemeSettingsPanel level="workspace" workspaceId="ws1" />);
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+});
+
+describe("ThemePreview card fields", () => {
+  const text = () => screen.getAllByTestId("theme-preview-fields")[0]?.textContent ?? "";
+
+  it("lists the chosen fields in order and changes with them", () => {
+    const { rerender } = render(<ThemePreview cardFields={["priority", "due_date"]} />);
+    const before = text();
+    rerender(<ThemePreview cardFields={["assignee", "priority"]} />);
+    expect(text()).not.toBe(before);
+    expect(text()).toMatch(/^Assignee.*Priority/);
+  });
+
+  it("collapses long selections so the fixed-height card never clips", () => {
+    render(<ThemePreview cardFields={["assignee", "priority", "due_date", "labels", "estimate"]} />);
+    expect(text()).toMatch(/\+2$/);
+  });
+
+  it("keeps the generic sample card when no fields are given", () => {
+    render(<ThemePreview />);
+    expect(screen.queryByTestId("theme-preview-fields")).toBeNull();
+    render(<ThemePreview cardFields={[]} />);
+    expect(screen.queryByTestId("theme-preview-fields")).toBeNull();
   });
 });

@@ -2,7 +2,11 @@ import { useMemo, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import type { FieldSchema, Values } from "@/components/extensions/schema-form";
+import { BUILTIN_FIELDS } from "@/core/slots/board-data";
 import type { ThemeInfo } from "@/lib/themes";
+
+/** The mini card is fixed-height: more fields than this collapse into a "+N" row. */
+const MAX_PREVIEW_FIELDS = 3;
 
 type Tokens = Record<string, string>;
 
@@ -27,6 +31,7 @@ export function isDarkNow(): boolean {
 export function ThemePreview({
   tokens,
   overrides,
+  cardFields,
   dark,
   decorative,
   className,
@@ -34,12 +39,15 @@ export function ThemePreview({
   /** Tokens of the theme per mode; an empty map previews the app's own tokens. */
   tokens?: { light?: Tokens; dark?: Tokens };
   overrides?: Tokens;
+  /** Card fields picked in the settings form, in order; empty or undefined keeps the generic sample card. */
+  cardFields?: string[];
   dark?: boolean;
   /** Card thumbnails repeat the card's own name: hidden from assistive tech. */
   decorative?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation("settings");
+  const { t: tb } = useTranslation("board");
   const mode = dark ?? isDarkNow();
   const vars = useMemo(() => {
     const own = (mode ? (tokens?.dark ?? tokens?.light) : (tokens?.light ?? tokens?.dark)) ?? {};
@@ -48,6 +56,17 @@ export function ThemePreview({
     for (const [k, v] of Object.entries(merged)) style[`--${k}`] = v;
     return style as CSSProperties;
   }, [tokens, overrides, mode]);
+
+  const fieldLabels = cardFields?.length
+    ? cardFields.map((k) => {
+        const b = BUILTIN_FIELDS.find((f) => f.key === k);
+        return b ? tb(b.labelKey) : k.replace(/^cf:/, "");
+      })
+    : undefined;
+  const shownFields = fieldLabels && [
+    ...fieldLabels.slice(0, MAX_PREVIEW_FIELDS),
+    ...(fieldLabels.length > MAX_PREVIEW_FIELDS ? [`+${fieldLabels.length - MAX_PREVIEW_FIELDS}`] : []),
+  ];
 
   return (
     <div
@@ -76,11 +95,23 @@ export function ThemePreview({
           ].map(([status, priority], i) => (
             <div key={status} className="flex flex-col gap-1 rounded-md border p-1.5" style={{ background: "hsl(var(--card))", color: "hsl(var(--card-foreground))", borderColor: "hsl(var(--border))" }}>
               <span className="truncate font-medium">{t(i === 0 ? "themes.preview.card1" : "themes.preview.card2")}</span>
-              <span className="flex gap-1">
-                <i className="h-1.5 w-1.5 rounded-full" style={{ background: `hsl(var(--${status}))` }} />
-                <i className="h-1.5 w-3 rounded-full" style={{ background: `hsl(var(--${priority}))` }} />
-              </span>
-              <span style={{ color: "hsl(var(--muted-foreground))" }}>{t("themes.preview.meta")}</span>
+              {shownFields ? (
+                <span data-testid="theme-preview-fields" className="flex flex-col gap-0.5">
+                  {shownFields.map((l, n) => (
+                    <span key={`${l}-${n}`} className="truncate" style={{ color: "hsl(var(--muted-foreground))" }}>
+                      {l}
+                    </span>
+                  ))}
+                </span>
+              ) : (
+                <>
+                  <span className="flex gap-1">
+                    <i className="h-1.5 w-1.5 rounded-full" style={{ background: `hsl(var(--${status}))` }} />
+                    <i className="h-1.5 w-3 rounded-full" style={{ background: `hsl(var(--${priority}))` }} />
+                  </span>
+                  <span style={{ color: "hsl(var(--muted-foreground))" }}>{t("themes.preview.meta")}</span>
+                </>
+              )}
             </div>
           ))}
         </div>
