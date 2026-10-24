@@ -134,6 +134,7 @@ export function ThemeSettingsPanel({
 
   const theme = useMemo(() => list?.themes.find((x) => x.id === chosen), [list, chosen]);
   const schema = theme?.settings[level];
+  const cardFields = Array.isArray(draft.card_fields) ? (draft.card_fields as string[]) : undefined;
   const overrides = useMemo(() => settingsTokenOverrides([schema], draft), [schema, draft]);
   const previewTokens = chosen ? theme?.tokens : level === "workspace" ? inheritTokens : undefined;
   const stored: Values = selection && storedId === chosen ? selection.settings : {};
@@ -271,7 +272,7 @@ export function ThemeSettingsPanel({
           </div>
           <aside className="order-1 space-y-2 lg:sticky lg:top-4 lg:order-2 lg:self-start">
             <h3 className="text-sm font-medium">{t("themes.preview.title")}</h3>
-            <ThemePreview tokens={previewTokens} overrides={overrides} />
+            <ThemePreview tokens={previewTokens} overrides={overrides} cardFields={cardFields} />
             <p className="text-xs text-muted-foreground">{t("themes.preview.hint")}</p>
           </aside>
         </div>
