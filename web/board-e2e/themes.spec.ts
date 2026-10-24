@@ -164,6 +164,7 @@ test.describe("behaviour (1440 light)", () => {
 
     await backToTheme(page);
     await page.getByRole("button", { name: "Reset to the instance theme" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Reset", exact: true }).click();
     await expect(page.getByText("The workspace now uses the instance theme")).toBeVisible();
     await toBoard(page);
     await expect(page.getByText(LABEL).first()).toBeVisible({ timeout: BOOT_MS });

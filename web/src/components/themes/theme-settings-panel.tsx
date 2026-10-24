@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Lock, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { SchemaForm, type FieldSchema, type Values } from "@/components/extensions/schema-form";
@@ -82,6 +83,7 @@ export function ThemeSettingsPanel({
   const reapply = () => {
     if (wsSlug) void applyWorkspaceTheme(wsSlug);
   };
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const [list, setList] = useState<ThemeList | null>(null);
   const [selection, setSelection] = useState<ThemeSelection | null>(null);
   const [inheritTokens, setInheritTokens] = useState<ThemeInfo["tokens"] | undefined>();
@@ -153,6 +155,7 @@ export function ThemeSettingsPanel({
   };
 
   const reset = async () => {
+    setConfirmingReset(false);
     setSaving(true);
     try {
       const res = await putWorkspaceTheme(workspaceId as string, null, {});
@@ -289,7 +292,7 @@ export function ThemeSettingsPanel({
             {t("themes.save")}
           </Button>
           {level === "workspace" && (
-            <Button type="button" variant="outline" disabled={saving || (selection?.theme_id ?? null) === null} onClick={() => void reset()}>
+            <Button type="button" variant="outline" disabled={saving || (selection?.theme_id ?? null) === null} onClick={() => setConfirmingReset(true)}>
               <RotateCcw className="mr-2 h-4 w-4" aria-hidden />
               {t("themes.reset")}
             </Button>
@@ -297,6 +300,17 @@ export function ThemeSettingsPanel({
           {dirty && <span className="text-xs text-muted-foreground">{t("themes.unsaved")}</span>}
         </div>
       )}
+      <ConfirmDialog
+        open={confirmingReset}
+        onClose={() => setConfirmingReset(false)}
+        title={t("themes.resetConfirmTitle")}
+        description={t("themes.resetConfirmHint")}
+        confirmText={t("themes.resetConfirm")}
+        variant="destructive"
+        dismissible
+        isLoading={saving}
+        onConfirm={() => void reset()}
+      />
     </div>
   );
 }

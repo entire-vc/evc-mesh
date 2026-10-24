@@ -20,9 +20,15 @@ interface DialogProps {
    * `max-w-lg`, so every existing dialog is unchanged.
    */
   className?: string;
+  /**
+   * Close on a click on the dimmed backdrop. Off by default: the wrapper's own
+   * click handler never fires (the backdrop covers it), so existing dialogs
+   * have never closed this way and keep not doing so.
+   */
+  closeOnBackdrop?: boolean;
 }
 
-export function Dialog({ open, onOpenChange, children, className }: DialogProps) {
+export function Dialog({ open, onOpenChange, children, className, closeOnBackdrop = false }: DialogProps) {
   useEffect(() => {
     if (open) {
       document.body.style.overflow = "hidden";
@@ -50,7 +56,10 @@ export function Dialog({ open, onOpenChange, children, className }: DialogProps)
       className="fixed inset-0 z-50 flex items-center justify-center"
       onClick={handleBackdropClick}
     >
-      <div className="fixed inset-0 bg-black/50" />
+      <div
+        className="fixed inset-0 bg-black/50"
+        onClick={closeOnBackdrop ? () => onOpenChange(false) : undefined}
+      />
       <div className={cn("relative z-50 w-full max-w-lg", className)}>{children}</div>
     </div>,
     document.body,
