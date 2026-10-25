@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogEntry } from "@/hooks/useExtensionCatalog";
+import { formatNumber } from "@/i18n/format";
 import { installedStatus, workspaceSettingsSchema } from "@/lib/extension-installed";
 import { consentTokens } from "@/lib/extension-capabilities";
 
@@ -27,6 +28,13 @@ describe("installedStatus", () => {
   it("disabled-with-connection is 'off', nothing at all is 'none'", () => {
     expect(installedStatus(e({ connected: true, status: { enabled: false, source: "workspace" } })).kind).toBe("off");
     expect(installedStatus(e({})).kind).toBe("none");
+  });
+  it("links without any connection row read as receiving events, not 'not connected'", () => {
+    const st = installedStatus(e({ activity: { links: 1748, last_event_at: "2026-10-24T12:00:00Z" } }));
+    expect(st.kind).toBe("receiving");
+    expect(st.values?.count).toBe(formatNumber(1748));
+    expect(installedStatus(e({ activity: { links: 0 } })).kind).toBe("none");
+    expect(installedStatus(e({ connected: true, status: { enabled: false, source: "workspace" }, activity: { links: 5 } })).kind).toBe("off");
   });
 });
 

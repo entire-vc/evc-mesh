@@ -114,6 +114,11 @@ func TestChatEvents_StreamToDone_StoresBodyUsageAndReport(t *testing.T) {
 	assert.Equal(t, "Hello", body)
 	assert.Equal(t, "done", ms)
 
+	var userStatus string
+	require.NoError(t, f.db.Get(&userStatus, `SELECT m.status FROM ext_agent_chat_messages m
+		JOIN ext_agent_chat_turns t ON t.user_message_id = m.id WHERE t.id = $1`, turn))
+	assert.Equal(t, "done", userStatus, "the user message leaves queued once the agent answered")
+
 	var tu struct {
 		In, Out int
 		Cost    float64

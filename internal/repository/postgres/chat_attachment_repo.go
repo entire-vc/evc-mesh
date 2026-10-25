@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -122,6 +123,19 @@ func (r *ChatAttachmentRepo) GetOwned(ctx context.Context, actor UserRuntimeActo
 		return ChatAttachment{}, chatAttachmentNotFound()
 	}
 	return att, err
+}
+
+// PendingInThread returns the not-yet-confirmed, unbound attachments among ids
+// that belong to the thread. Anything else is left for SendMessage to refuse.
+func (r *ChatAttachmentRepo) PendingInThread(ctx context.Context, ws, thread uuid.UUID, ids []uuid.UUID) ([]ChatAttachment, error) {
+	var out []ChatAttachment
+	err := r.db.SelectContext(ctx, &out, `SELECT id, workspace_id, thread_id, message_id, s3_key,
+			file_name, mime, size, width, height, uploaded_at
+		FROM ext_agent_chat_attachments
+		WHERE workspace_id = $1 AND thread_id = $2 AND id = ANY($3::uuid[])
+			AND message_id IS NULL AND uploaded_at IS NULL`,
+		ws, thread, pq.Array(uuidStrings(ids)))
+	return out, err
 }
 
 // MarkUploaded stamps uploaded_at once the object is confirmed in S3.

@@ -347,18 +347,11 @@ describe("board.* contract on mesh-default", () => {
     expect(spies.openTask).toHaveBeenCalledTimes(2);
   });
 
-  it("CT-board-13: Enter on the title opens the editor and commits through quickEdit; a viewer gets no editor", async () => {
-    const { spies, unmount } = mountBoard();
-    const trigger = card("t1").querySelector("[data-inline-edit=title]") as HTMLElement;
-    fireEvent.keyDown(trigger, { key: "Enter" });
-    const input = screen.getByLabelText("title") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "Renamed" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await tick();
-    expect(spies.quickEdit).toHaveBeenCalledWith("t1", { field: "title", value: "Renamed" });
-    unmount();
-    mountBoard({ role: "viewer" });
+  it("CT-board-13: the title is not editable in place and the card has no edit button", () => {
+    const { unmount } = mountBoard();
     expect(card("t1").querySelector("[data-inline-edit]")).toBeNull();
+    expect(card("t1").querySelector("button")).toBeNull();
+    unmount();
   });
 
   it("CT-board-14: a provider-owned task.badge replaces the generic VCS icon on the card; disabled, the generic icon stays", async () => {

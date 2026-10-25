@@ -1,0 +1,126 @@
+{
+  "composer": {
+    "attach": "Attach a file",
+    "attachments": "Attachments",
+    "hint": "Enter sends, Shift+Enter adds a line. Paste an image or drop a file.",
+    "placeholder": "Message the agent",
+    "removeAttachment": "Remove attachment {{name}}",
+    "send": "Send",
+    "stop": "Stop",
+    "uploadFailed": "Could not upload the file",
+    "uploading": "Uploading"
+  },
+  "delete": {
+    "confirm": "Delete",
+    "description": "Chat \"{{title}}\" and all its messages will be deleted for good.",
+    "title": "Delete this chat?"
+  },
+  "empty": {
+    "backToChats": "Back to chats",
+    "disabledAdmin": "Turn it on in project settings, Extensions tab.",
+    "disabledMember": "Ask a project admin to turn the chat on.",
+    "disabledTitle": "Chat with Agent is off",
+    "noAgentsAdmin": "Choose agents in project settings, Extensions tab.",
+    "noAgentsMember": "Ask a project admin to choose the chat agents.",
+    "noAgentsTitle": "No chat agents selected",
+    "noChats": "No chats yet",
+    "nothingToOpen": "No chats available",
+    "openSettings": "Open settings",
+    "pickChat": "Pick a chat on the left or start a new one",
+    "threadNotFound": "This chat does not exist or is not available to you"
+  },
+  "errors": {
+    "agent_not_available": "The agent is not available right now.",
+    "create": "Could not create the chat",
+    "delete": "Could not delete the chat",
+    "generic": "The agent could not answer.",
+    "not_delivered": "The agent did not pick the message up in time.",
+    "rename": "Could not rename the chat",
+    "runner_lost": "The connection to the agent's runner was lost.",
+    "send": "Could not send the message",
+    "stop": "Could not stop the reply",
+    "threadLoad": "Could not load the chat",
+    "treeLoad": "Could not load the chats"
+  },
+  "feed": {
+    "copied": "Copied",
+    "copyCode": "Copy",
+    "copyMessage": "Copy message",
+    "downloadFailed": "Could not download the file",
+    "emptyThread": "Send {{agent}} the first message",
+    "failed": "failed",
+    "loading": "Loading",
+    "older": "Show earlier messages",
+    "queued": "queued",
+    "retry": "Retry",
+    "sending": "sending…",
+    "stopped": "stopped",
+    "thinking": "The agent is thinking",
+    "truncated": "The reply was cut at the length limit",
+    "working": "working: {{label}}"
+  },
+  "page": {
+    "agent": "Agent",
+    "title": "Chat with Agent"
+  },
+  "rename": {
+    "cancel": "Cancel",
+    "label": "Chat title",
+    "save": "Save",
+    "title": "Rename chat"
+  },
+  "session": {
+    "ready": "session open",
+    "starting": "starting",
+    "stopped": "no session",
+    "working": "replying"
+  },
+  "settings": {
+    "agents": "Chat agents",
+    "agentsHint": "Only project agents served by a runner.",
+    "enable": "Turn the chat on in this project",
+    "intro": "A private chat between project members and the agents a workspace runner serves.",
+    "loadFailed": "Could not load the chat settings",
+    "needAgent": "Choose at least one agent to turn the chat on",
+    "noAgents": "No project agent has a runner. Add an agent to the project and connect a runner.",
+    "open": "Open chat",
+    "retry": "Retry",
+    "role": {
+      "admin": "Admins",
+      "member": "Members",
+      "viewer": "Viewers"
+    },
+    "roles": "Who can use the chat",
+    "save": "Save",
+    "saveFailed": "Could not save the chat settings",
+    "saved": "Chat settings saved",
+    "title": "Chat with Agent"
+  },
+  "sidebar": {
+    "back": "Back to chats",
+    "chatMenu": "Actions for chat \"{{title}}\"",
+    "collapse": "Collapse chat list",
+    "delete": "Delete",
+    "expand": "Expand chat list",
+    "filter": "Find a chat",
+    "heading": "Chats",
+    "more": "Show more",
+    "newChat": "New chat",
+    "newChatWith": "New chat with {{agent}}",
+    "presence": {
+      "busy": "busy",
+      "offline": "offline",
+      "online": "online"
+    },
+    "rename": "Rename",
+    "resize": "Resize chat list",
+    "untitled": "Untitled"
+  },
+  "states": {
+    "agentOffline": "{{agent}} is offline. The message waits for the agent and is delivered when it comes back.",
+    "offlineNetwork": "No network connection. Sending is unavailable; the chat refreshes when you are back online.",
+    "queued_one": "Queued: #{{count}}",
+    "queued_other": "Queued: #{{count}}",
+    "starting": "The agent is starting…"
+  }
+}

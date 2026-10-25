@@ -1325,3 +1325,32 @@ func TestMemoryStatus_Constants(t *testing.T) {
 	assert.Equal(t, MemoryStatus("conflicted"), MemoryStatusConflicted)
 	assert.Equal(t, MemoryStatus("review_needed"), MemoryStatusReviewNeeded)
 }
+
+func TestDependencyCondition_ValidAndEvidenceSatisfied(t *testing.T) {
+	for _, c := range []DependencyCondition{
+		DependencyConditionTaskDone, DependencyConditionAccessReady, DependencyConditionContractReady,
+		DependencyConditionArtifactPublished, DependencyConditionDeployed, DependencyConditionAccepted,
+	} {
+		assert.True(t, c.Valid(), c)
+	}
+	assert.False(t, DependencyCondition("").Valid())
+	assert.False(t, DependencyCondition("nonsense").Valid())
+
+	url, blank, met := "https://mesh.example/e", "  ", time.Now()
+	cases := []struct {
+		name string
+		dep  TaskDependency
+		want bool
+	}{
+		{"legacy empty condition", TaskDependency{}, false},
+		{"task_done never evidence-satisfied", TaskDependency{Condition: DependencyConditionTaskDone, EvidenceURL: &url, ConditionMetAt: &met}, false},
+		{"met with evidence", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met}, true},
+		{"met without evidence", TaskDependency{Condition: DependencyConditionAccessReady, ConditionMetAt: &met}, false},
+		{"blank evidence", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &blank, ConditionMetAt: &met}, false},
+		{"evidence but not met", TaskDependency{Condition: DependencyConditionAccessReady, EvidenceURL: &url}, false},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, tc.dep.EvidenceSatisfied(), tc.name)
+	}
+	assert.Contains(t, DependencySatisfiedSQL("d"), "d.condition <> 'task_done'")
+}

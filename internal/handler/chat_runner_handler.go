@@ -187,7 +187,14 @@ func (h *ChatRunnerHandler) History(c echo.Context) error {
 		}
 		before = &id
 	}
-	out, err := h.repo.History(c.Request().Context(), caller, thread, limit, before)
+	// The holder of the turn is the runner instance in X-Chat-Runner-Id (the same
+	// identity claim and lease are fenced on). Missing or malformed → the same 403
+	// as a foreign thread, before anything is read.
+	var runner *uuid.UUID
+	if id, perr := uuid.Parse(strings.TrimSpace(c.Request().Header.Get(chatRunnerIDHeader))); perr == nil && id != uuid.Nil {
+		runner = &id
+	}
+	out, err := h.repo.History(c.Request().Context(), caller, runner, thread, limit, before)
 	if err != nil {
 		return handleError(c, err)
 	}

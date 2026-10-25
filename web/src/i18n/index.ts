@@ -38,7 +38,7 @@ for (const [p, json] of Object.entries(eagerFiles)) {
  * locale files) so the login entry does not carry the chunk table; a test
  * keeps it equal to the files in src/locales/en.
  */
-export const APP_NAMESPACES = ["common", "activity", "apiErrors", "attachDoc", "board", "docs", "integrations", "list", "misc", "notifications", "runner", "settings", "shell", "task"] as const;
+export const APP_NAMESPACES = ["common", "activity", "apiErrors", "attachDoc", "board", "chat", "docs", "integrations", "list", "misc", "notifications", "runner", "settings", "shell", "task"] as const;
 
 /**
  * i18next backend: reads a namespace chunk on demand. The chunk table lives in

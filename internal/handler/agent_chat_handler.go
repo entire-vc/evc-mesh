@@ -17,6 +17,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
+	"github.com/entire-vc/evc-mesh/internal/storage"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -29,6 +30,44 @@ type AgentChatHandler struct {
 	conns    repository.IntegrationRepository
 	projects repository.ProjectIntegrationRepository
 	events   ChatEvents
+	atts     *postgres.ChatAttachmentRepo
+	store    ChatAttachmentStore
+}
+
+// WithAttachments lets SendMessage confirm a presigned upload by looking the
+// object up in storage: the client PUTs straight to S3 and tells nobody.
+func (h *AgentChatHandler) WithAttachments(repo *postgres.ChatAttachmentRepo, store ChatAttachmentStore) *AgentChatHandler {
+	h.atts, h.store = repo, store
+	return h
+}
+
+// confirmUploads stamps uploaded_at on the attachments whose object is in
+// storage with the declared size. A missing or wrong-sized object stays
+// unconfirmed, so SendMessage answers attachment_not_found for it.
+func (h *AgentChatHandler) confirmUploads(ctx context.Context, s *chatScope, thread uuid.UUID, ids []uuid.UUID) error {
+	if len(ids) == 0 || h.atts == nil || h.store == nil {
+		return nil
+	}
+	pending, err := h.atts.PendingInThread(ctx, s.gate.WorkspaceID, thread, ids)
+	if err != nil {
+		return err
+	}
+	for _, att := range pending {
+		size, serr := h.store.StatObject(ctx, att.S3Key)
+		if errors.Is(serr, storage.ErrNotFound) {
+			continue
+		}
+		if serr != nil {
+			return apierror.ServiceUnavailable("object storage is unavailable")
+		}
+		if size != att.Size {
+			continue
+		}
+		if err := h.atts.MarkUploaded(ctx, att.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // WithEvents turns on WS events for thread, message and turn changes.
@@ -219,6 +258,9 @@ func (h *AgentChatHandler) SendMessage(c echo.Context) error {
 	var body sendMessageBody
 	if err = c.Bind(&body); err != nil {
 		return handleError(c, apierror.BadRequest("invalid body"))
+	}
+	if err = h.confirmUploads(c.Request().Context(), s, id, body.AttachmentIDs); err != nil {
+		return handleError(c, err)
 	}
 	out, err := h.repo.SendMessage(c.Request().Context(), s.gate, s.project, s.user, id,
 		postgres.SendInput{ClientMessageID: body.ClientMessageID, Body: body.Body, AttachmentIDs: body.AttachmentIDs})

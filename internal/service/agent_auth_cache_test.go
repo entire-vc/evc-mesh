@@ -138,6 +138,7 @@ func newCacheFixture(t *testing.T, ttl time.Duration) (*cachedAgentAuth, *counti
 	clock := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	wrapped := NewCachedAgentAuth(inner, ttl).(*cachedAgentAuth)
 	wrapped.now = func() time.Time { return clock }
+	wrapped.jitter = func(ttl time.Duration) time.Duration { return ttl }
 	return wrapped, inner, &clock
 }
 
@@ -361,7 +362,7 @@ func TestCachedAgentAuth_InvalidateUnknownAgentIsNoop(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Grant revocation freshness (task U2 AC4, `#fbc12881`)
+// Grant revocation freshness (task U2 AC4, an internal ticket)
 //
 // A grant can be revoked by a direct SQL UPDATE — the only revoke path that
 // exists until U3 ships an API — which is a change this process never gets
@@ -382,7 +383,7 @@ func newGrantCacheFixture(t *testing.T, ttl time.Duration) (*cachedAgentAuth, *c
 	return c, inner, clock
 }
 
-// The exact scenario Garfield's independent review reproduced against the
+// The exact scenario Gary's independent review reproduced against the
 // deployed cachedAgentAuth+agentService pairing: a grant-derived key is
 // cached, the grant is revoked mid-TTL by something outside this process,
 // and the SAME key must be denied on the very next request — not up to
@@ -462,7 +463,7 @@ func TestCachedAgentAuth_GrantRevocationCheckErrors_IsNotTrusted(t *testing.T) {
 // reason that has nothing to do with whatever the test is actually trying to
 // exercise. That is exactly how independent review found
 // TestCachedAgentAuth_WrappingRealAgentService_WorkspaceSoftDeletedDenies
-// Immediately vacuous (#315d9a52): it kept passing even with the fix
+// Immediately vacuous: it kept passing even with the fix
 // reverted, because by the time this suite runs in 2026, the "hit" it
 // exercised was never a hit at all — the entry had already fallen through to
 // a real, unrelated re-Authenticate on key expiry before cachedAuthStillValid
@@ -478,7 +479,7 @@ func newFrozenCachedRealAgentService(inner AgentService, ttl time.Duration) *cac
 // wires the EXACT composition cmd/api/main.go uses in prod —
 // NewCachedAgentAuth(NewAgentService(...), ttl) over a real *agentService,
 // not the countingAgentService stand-in above — and reproduces the scenario
-// Garfield's independent review found manually against a live stand before
+// Gary's independent review found manually against a live stand before
 // this fix: a grant cached warm, then revoked by a direct SQL-shaped UPDATE
 // (grantRepo.Revoke, mirroring the only revoke path that exists pre-U3),
 // must deny the same key on the very next request rather than up to
@@ -511,8 +512,8 @@ func TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately(
 }
 
 // ---------------------------------------------------------------------------
-// Workspace soft-delete freshness (`#315d9a52`) — Khan's live side-finding
-// against the #7661fc5d deploy: a guest key already warm in cache kept
+// Workspace soft-delete freshness — Kim's live side-finding
+// against the an internal ticket deploy: a guest key already warm in cache kept
 // reading its own now-soft-deleted, now-empty workspace's member routes for
 // the rest of the TTL, because a cache hit skips the very Authenticate call
 // that would otherwise have re-run workspaceRepo.GetBySlug/GetByID's own
@@ -592,7 +593,7 @@ func TestCachedAgentAuth_WorkspaceDeletionCheckErrors_IsNotTrusted(t *testing.T)
 // TestCachedAgentAuth_WrappingRealAgentService_WorkspaceSoftDeletedDeniesImmediately
 // wires the EXACT composition cmd/api/main.go uses in prod, same as
 // TestCachedAgentAuth_WrappingRealAgentService_RevokedGrantDeniesImmediately
-// above, but reproduces Khan's live #315d9a52 finding instead: a grant-
+// above, but reproduces Kim's live an internal ticket finding instead: a grant-
 // derived guest key cached warm, then its OWN workspace soft-deleted via
 // workspaceRepo.Delete (the same row DELETE /workspaces/:id acts on), must
 // deny the same key on the very next request. Deleting the fix's check in
@@ -616,7 +617,7 @@ func TestCachedAgentAuth_WrappingRealAgentService_WorkspaceSoftDeletedDeniesImme
 	require.NotNil(t, first.GrantID)
 
 	// Soft-delete the guest workspace itself — the grant row is untouched,
-	// same as Khan's live probe (explicit revoke is a separate, already-
+	// same as Kim's live probe (explicit revoke is a separate, already-
 	// covered case). Nothing here touches InvalidateAgent.
 	require.NoError(t, wsRepo.Delete(ctx, guestWS.ID))
 
@@ -627,7 +628,7 @@ func TestCachedAgentAuth_WrappingRealAgentService_WorkspaceSoftDeletedDeniesImme
 // A legacy-path entry (no connection row exists — GrantID is nil) has no
 // grant to re-check, so the revocation half of the freshness check keeps
 // being skipped exactly as before this fix. It is NOT exempt from the
-// workspace-deletion half, though (#315d9a52) — a legacy agent's home
+// workspace-deletion half, though — a legacy agent's home
 // workspace can be soft-deleted the same as any grant-derived one's, and
 // before that check existed a legacy hit was trusted for its full TTL with
 // zero re-verification of anything at all.
@@ -782,4 +783,200 @@ func TestCachedAgentAuth_ConcurrentAccessIsRaceFree(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// slowAuthService makes the inner Authenticate take long enough that a burst
+// of concurrent callers all arrive while the first one is still verifying.
+type slowAuthService struct {
+	*countingAgentService
+	delay time.Duration
+}
+
+func (s *slowAuthService) Authenticate(ctx context.Context, slug, key string) (*domain.Agent, error) {
+	time.Sleep(s.delay)
+	return s.countingAgentService.Authenticate(ctx, slug, key)
+}
+
+// A burst of parallel requests carrying one cold key (an agent running several
+// sessions, or every agent reconnecting after an API restart) must pay one
+// bcrypt, not one per request: on a 2-core host N parallel cost-12 compares
+// queue behind the CPU for seconds (an internal ticket, GET /agents/me 1.4-3.5s).
+func TestCachedAgentAuth_ConcurrentMissesShareOneVerification(t *testing.T) {
+	c, counting, _ := newCacheFixture(t, time.Minute)
+	c.AgentService = &slowAuthService{countingAgentService: counting, delay: 150 * time.Millisecond}
+	ctx := context.Background()
+
+	const burst = 40
+	var wg sync.WaitGroup
+	ids := make([]uuid.UUID, burst)
+	for i := 0; i < burst; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			a, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+			if assert.NoError(t, err) {
+				ids[i] = a.ID
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	assert.EqualValues(t, 1, counting.authCalls.Load(), "burst of %d cold requests must verify once", burst)
+	for _, id := range ids {
+		assert.Equal(t, counting.agent.ID, id)
+	}
+}
+
+// Entries stored in the same instant must not all expire in the same instant.
+func TestCachedAgentAuth_TTLIsJittered(t *testing.T) {
+	c, _, clock := newCacheFixture(t, time.Minute)
+	c.jitter = jitterTTL
+	seen := map[time.Time]struct{}{}
+	for i := 0; i < 50; i++ {
+		c.store(agentAuthCacheKey("acme", uuid.NewString()), &domain.Agent{ID: uuid.New()}, *clock)
+	}
+	for _, e := range c.entries {
+		assert.False(t, e.expiresAt.After(clock.Add(time.Minute)))
+		assert.False(t, e.expiresAt.Before(clock.Add(45*time.Second)))
+		seen[e.expiresAt] = struct{}{}
+	}
+	assert.Greater(t, len(seen), 10, "expiry times must be spread, not identical")
+}
+
+// One caller disconnecting mid-verification must not fail the others that share
+// its verification.
+func TestCachedAgentAuth_LeaderCancelDoesNotFailWaiters(t *testing.T) {
+	c, counting, _ := newCacheFixture(t, time.Minute)
+	c.AgentService = &slowAuthService{countingAgentService: counting, delay: 200 * time.Millisecond}
+
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := c.Authenticate(leaderCtx, "acme", "agk_acme_secret")
+		leaderDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := c.Authenticate(context.Background(), "acme", "agk_acme_secret")
+		waiterDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+
+	assert.ErrorIs(t, <-leaderDone, context.Canceled)
+	assert.NoError(t, <-waiterDone)
+	assert.EqualValues(t, 1, counting.authCalls.Load())
+}
+
+// TestAgentAuthCacheTTL_OutlivesAgentPollPeriod is the ratchet for task
+// an internal ticket: agents poll about once a minute, so a TTL at or below that period
+// turns every poll into a bcrypt miss and the fleet into a per-minute burst.
+func TestAgentAuthCacheTTL_OutlivesAgentPollPeriod(t *testing.T) {
+	const agentPollPeriod = time.Minute
+	assert.GreaterOrEqual(t, AgentAuthCacheTTL, 5*agentPollPeriod)
+}
+
+// slowWorkspaceCheckService stretches the per-hit freshness check so a burst
+// of hits overlaps inside it.
+type slowWorkspaceCheckService struct {
+	*countingAgentService
+	delay time.Duration
+}
+
+func (s *slowWorkspaceCheckService) IsWorkspaceDeleted(ctx context.Context, id uuid.UUID) (bool, error) {
+	time.Sleep(s.delay)
+	return s.countingAgentService.IsWorkspaceDeleted(ctx, id)
+}
+
+// A burst of polls from one key (every MCP process of an agent ticks on the
+// same second) must share the revocation queries that are in flight, but an
+// answer is never reused once the call has returned.
+func TestCachedAgentAuth_ConcurrentHitsShareOneFreshnessCheck(t *testing.T) {
+	c, counting, _ := newCacheFixture(t, time.Hour)
+	ctx := context.Background()
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+	c.AgentService = &slowWorkspaceCheckService{countingAgentService: counting, delay: 150 * time.Millisecond}
+
+	const burst = 40
+	var wg sync.WaitGroup
+	for i := 0; i < burst; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	assert.Less(t, counting.wsDeletedCheckCalls.Load(), int64(burst/4),
+		"overlapping hits must share the in-flight freshness check")
+	assert.EqualValues(t, 1, counting.authCalls.Load(), "hits must not re-verify the key")
+
+	// Sequential calls after the burst each run their own check: nothing is memoised.
+	before := counting.wsDeletedCheckCalls.Load()
+	for i := 0; i < 3; i++ {
+		_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+		require.NoError(t, err)
+	}
+	assert.EqualValues(t, before+3, counting.wsDeletedCheckCalls.Load())
+}
+
+// gatedWorkspaceCheckService reads the workspace state, then holds the FIRST
+// call until released, so a revocation can commit between "read valid" and
+// "return valid".
+type gatedWorkspaceCheckService struct {
+	*countingAgentService
+	firstRead chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (s *gatedWorkspaceCheckService) IsWorkspaceDeleted(ctx context.Context, id uuid.UUID) (bool, error) {
+	deleted, err := s.countingAgentService.IsWorkspaceDeleted(ctx, id)
+	s.once.Do(func() {
+		close(s.firstRead)
+		<-s.release
+	})
+	return deleted, err
+}
+
+// A request that starts after a revocation commits must not receive the result
+// of a check that read the pre-revocation state.
+func TestCachedAgentAuth_RequestAfterRevocationDoesNotJoinStaleCheck(t *testing.T) {
+	c, counting, _ := newCacheFixture(t, time.Hour)
+	ctx := context.Background()
+	_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+	require.NoError(t, err)
+	gated := &gatedWorkspaceCheckService{
+		countingAgentService: counting,
+		firstRead:            make(chan struct{}),
+		release:              make(chan struct{}),
+	}
+	c.AgentService = gated
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+		first <- err
+	}()
+	<-gated.firstRead // the in-flight check has read "live"
+
+	counting.wsDeleted.Store(true) // revocation commits
+
+	second := make(chan error, 1)
+	go func() {
+		_, err := c.Authenticate(ctx, "acme", "agk_acme_secret")
+		second <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let the second request queue behind the first
+	close(gated.release)
+
+	require.NoError(t, <-first, "the request that started before the revocation may succeed")
+	require.NoError(t, <-second) // the fixture's inner Authenticate always succeeds
+	assert.EqualValues(t, 2, counting.authCalls.Load(),
+		"the late request must see the revocation and fall through to a full Authenticate")
 }

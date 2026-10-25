@@ -347,11 +347,11 @@ func (r *AgentRepo) CreateWithHomeGrant(ctx context.Context, agent *domain.Agent
 
 	const grantQ = `
 		INSERT INTO agent_workspace_grants
-			(id, agent_id, workspace_id, role, api_key_prefix, api_key_hash, invited_by, created_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULL, $6)
+			(id, agent_id, workspace_id, role, api_key_prefix, api_key_hash, api_key_sha256, invited_by, created_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULLIF($7, ''), NULL, $6)
 	`
 	if _, err := tx.ExecContext(ctx, grantQ,
-		agent.ID, agent.WorkspaceID, domain.RoleMember, agent.APIKeyPrefix, agent.APIKeyHash, agent.CreatedAt,
+		agent.ID, agent.WorkspaceID, domain.RoleMember, agent.APIKeyPrefix, agent.APIKeyHash, agent.CreatedAt, agent.APIKeySHA256,
 	); err != nil {
 		return err
 	}
@@ -376,11 +376,11 @@ func (r *AgentRepo) RotateHomeGrantKey(ctx context.Context, agent *domain.Agent)
 
 	const grantQ = `
 		UPDATE agent_workspace_grants
-		SET api_key_prefix = $3, api_key_hash = $4
+		SET api_key_prefix = $3, api_key_hash = $4, api_key_sha256 = NULLIF($5, '')
 		WHERE agent_id = $1 AND workspace_id = $2
 	`
 	if _, err := tx.ExecContext(ctx, grantQ,
-		agent.ID, agent.WorkspaceID, agent.APIKeyPrefix, agent.APIKeyHash,
+		agent.ID, agent.WorkspaceID, agent.APIKeyPrefix, agent.APIKeyHash, agent.APIKeySHA256,
 	); err != nil {
 		return err
 	}
@@ -508,11 +508,22 @@ func (r *AgentRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// activeGrantIntoWorkspace matches agents (outer table: agents) holding a
+// non-revoked agent_workspace_grants connection into workspace $1 — the guests
+// of that workspace. Home agents carry their own home grant row too, so the
+// predicate is always OR-ed with workspace_id = $1, never used alone.
+const activeGrantIntoWorkspace = `EXISTS (
+		SELECT 1 FROM agent_workspace_grants g
+		WHERE g.agent_id = agents.id AND g.workspace_id = $1 AND g.revoked_at IS NULL)`
+
 func (r *AgentRepo) List(ctx context.Context, workspaceID uuid.UUID, filter repository.AgentFilter, pg pagination.Params) (*pagination.Page[domain.Agent], error) {
 	pg.Normalize()
 
 	args := []interface{}{workspaceID} // $1
 	conditions := []string{"workspace_id = $1", "deleted_at IS NULL"}
+	if filter.IncludeGranted {
+		conditions[0] = "(workspace_id = $1 OR " + activeGrantIntoWorkspace + ")"
+	}
 	argIdx := 2
 
 	if filter.Status != nil {
@@ -733,9 +744,10 @@ func (r *AgentRepo) ListWithProjects(ctx context.Context, workspaceID uuid.UUID)
 func (r *AgentRepo) SearchByPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string, limit int) ([]domain.Agent, error) {
 	const q = `
 		SELECT ` + agentSelectCols + ` FROM agents
-		WHERE workspace_id = $1 AND deleted_at IS NULL
+		WHERE (workspace_id = $1 OR ` + activeGrantIntoWorkspace + `) AND deleted_at IS NULL
 		  AND (name ILIKE $2 OR slug ILIKE $2)
 		ORDER BY
+		  CASE WHEN workspace_id = $1 THEN 0 ELSE 1 END,
 		  CASE WHEN slug ILIKE $3 OR name ILIKE $3 THEN 0 ELSE 1 END,
 		  name
 		LIMIT $4

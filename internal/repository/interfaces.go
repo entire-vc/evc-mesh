@@ -272,6 +272,9 @@ type TaskDependencyRepository interface {
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	ListDependents(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	Exists(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
+	// UpdateCondition sets the edge's condition, evidence and met-time and
+	// returns the stored row, or (nil, nil) when the edge does not exist.
+	UpdateCondition(ctx context.Context, id uuid.UUID, condition domain.DependencyCondition, evidenceURL *string, metAt *time.Time) (*domain.TaskDependency, error)
 }
 
 // ClosedFollowUpReopenWindow is the storm-limit window the whole mechanism
@@ -746,6 +749,10 @@ type AgentFilter struct {
 	AgentType     *domain.AgentType
 	Search        string
 	ParentAgentID *uuid.UUID
+	// IncludeGranted also returns guest agents: home workspace elsewhere, active
+	// agent_workspace_grants connection into this one. Off by default — callers
+	// that merge guests themselves (GetTeamDirectory) must not see them twice.
+	IncludeGranted bool
 }
 
 // MergedPROpenTask is one card still open although its PR/MR is merged.
@@ -851,6 +858,10 @@ type AgentWorkspaceGrantRepository interface {
 	// has vanished, so treating "gone" the same as "revoked" is the fail-closed
 	// choice, not a guess.
 	IsRevoked(ctx context.Context, id uuid.UUID) (bool, error)
+	// SetAPIKeySHA256 stores the keyed digest of a grant's key so later
+	// authentications skip bcrypt. Guarded by the bcrypt hash the caller
+	// verified against; a lost race is not an error.
+	SetAPIKeySHA256(ctx context.Context, id uuid.UUID, digest, expectedBcryptHash string) error
 
 	// --- Below: task U3 (invite/revoke API). U1/U2 only needed reads. ---
 

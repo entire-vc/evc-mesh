@@ -349,7 +349,9 @@ func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UU
 	// A joined category read in the blocking SELECT can retain its old
 	// statement snapshot after a blocker reopens. Read it in a fresh statement
 	// only once every blocker row is locked, and lock status definitions too.
-	err = tx.SelectContext(ctx, &blockers, `SELECT b.id,s.category,b.deleted_at FROM tasks b JOIN task_statuses s ON s.id=b.status_id WHERE b.id=ANY($1::uuid[]) ORDER BY b.id FOR SHARE OF s`, pq.Array(blockerIDs))
+	err = tx.SelectContext(ctx, &blockers, `SELECT b.id,
+ CASE WHEN EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=$2 AND d.depends_on_task_id=b.id AND d.dependency_type='blocks' AND `+domain.DependencySatisfiedSQL("d")+`) THEN 'done' ELSE s.category END AS category, -- evidence-satisfied edge reads as released
+ b.deleted_at FROM tasks b JOIN task_statuses s ON s.id=b.status_id WHERE b.id=ANY($1::uuid[]) ORDER BY b.id FOR SHARE OF s`, pq.Array(blockerIDs), taskID)
 	if err != nil {
 		return nil, err
 	}

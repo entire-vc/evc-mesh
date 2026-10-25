@@ -41,6 +41,7 @@ type ChatRunnerStore interface {
 	ClaimTurns(ctx context.Context, p postgres.ChatClaimParams) ([]postgres.ChatClaimedTurn, error)
 	RenewLease(ctx context.Context, workspaceID uuid.UUID, agentIDs []uuid.UUID, runnerID, turnID uuid.UUID,
 		claimToken string, leaseSeconds int) (*postgres.ChatLease, error)
+	ActiveTurns(ctx context.Context, workspaceID uuid.UUID, agentIDs []uuid.UUID, runnerID uuid.UUID) ([]postgres.ChatActiveTurn, error)
 }
 
 // ChatClaimHandler serves /runner/chat/*: the runner side of Chat with Agent
@@ -286,6 +287,30 @@ func (h *ChatClaimHandler) RenewLease(c echo.Context) error {
 		"lease_until": lease.LeaseUntil, "state": lease.State,
 		"cancel_requested": lease.CancelRequested, "execution_epoch": lease.ExecutionEpoch,
 	})
+}
+
+// Active handles GET /runner/chat/turns/active: the claimed or streaming turns
+// this runner id still holds, so a restarted runner can resume or abandon them
+// instead of waiting for the lease to lapse.
+func (h *ChatClaimHandler) Active(c echo.Context) error {
+	caller, err := h.authorize(c)
+	if err != nil {
+		return runnerError(c, err)
+	}
+	turns, err := h.repo.ActiveTurns(c.Request().Context(), caller.workspaceID, []uuid.UUID{caller.agentID}, caller.runnerID)
+	if err != nil {
+		return runnerError(c, err)
+	}
+	items := make([]map[string]any, 0, len(turns))
+	for _, t := range turns {
+		items = append(items, map[string]any{
+			"turn_id": t.TurnID, "thread_id": t.ThreadID, "agent_id": t.AgentID, "state": t.State,
+			"attempt": t.Attempt, "claim_token": t.ClaimToken, "lease_until": t.LeaseUntil.UTC(),
+			"execution_epoch": t.ExecutionEpoch,
+		})
+	}
+	noStore(c)
+	return c.JSON(http.StatusOK, map[string]any{"protocol": chatProtocolVersion, "turns": items})
 }
 
 // runtimeForRunner exposes exactly the four fields of §4.2 thread_runtime, null

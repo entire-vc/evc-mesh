@@ -5,7 +5,7 @@ import i18n, { setLanguage } from "@/i18n";
 
 function Probe() {
   const { t } = useTranslation("common");
-  return <p data-testid="p">{t("i18nDemo.greeting", { name: "Ann" })}</p>;
+  return <p data-testid="p">{t("time.daysAgo", { count: 3 })}</p>;
 }
 
 afterEach(async () => {
@@ -14,9 +14,9 @@ afterEach(async () => {
 
 it("a mounted component re-renders en -> ru without a reload", async () => {
   render(<Probe />);
-  expect(screen.getByTestId("p").textContent).toBe("Hello, Ann");
+  expect(screen.getByTestId("p").textContent).toBe("3d ago");
   await act(async () => {
     await setLanguage("ru");
   });
-  expect(screen.getByTestId("p").textContent).toBe("Привет, Ann");
+  expect(screen.getByTestId("p").textContent).toBe("3 дн назад");
 });

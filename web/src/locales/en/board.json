@@ -116,8 +116,6 @@
     "recurring": "Recurring task",
     "recurringNumber": "Recurring task #{{number}}",
     "hasVcsLinks": "Has VCS links",
-    "edit": "Edit task",
-    "hasDescription": "Has description",
     "humanGate": {
       "soft": "Waiting on a human sign-off (soft — auto-releases after a timeout)",
       "hard": "Waiting on a human sign-off (hard)",
@@ -128,16 +126,7 @@
     "falseOpen": {
       "allChildrenClosed": "False-open: all subtasks closed",
       "onlyParkedChildrenLeft": "False-open: only parked subtasks left"
-    },
-    "checkout": {
-      "lapsedTitle": "Work lock lapsed {{time}} — the holder's session is gone, nobody is on this",
-      "liveHolderTitle": "In {{holder}}'s hands until {{time}}",
-      "liveTitle": "In hands until {{time}}",
-      "lapsed": "Work lock lapsed",
-      "live": "Checked out"
-    },
-    "subtaskCount_one": "{{count}} subtask",
-    "subtaskCount_other": "{{count}} subtasks"
+    }
   },
   "column": {
     "addTask": "Add task",
@@ -190,7 +179,6 @@
     "reviewer": "Reviewer",
     "priority": "Priority",
     "delegation": "Delegation level",
-    "checkout": "Checkout",
     "artifacts": "Artifacts",
     "dueDate": "Due date",
     "subtasks": "Subtasks",

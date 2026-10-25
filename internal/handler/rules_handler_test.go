@@ -105,7 +105,7 @@ func TestTeam_FiltersProjectsByWorkspace(t *testing.T) {
 
 func TestDecideHandoff_Handler(t *testing.T) {
 	projID := uuid.New()
-	hot := `{"starts":5,"current":"howard"}`
+	hot := `{"starts":5,"current":"harper"}`
 
 	call := func(t *testing.T, wf *domain.WorkflowRulesResponse) domain.HandoffDecision {
 		t.Helper()
@@ -114,7 +114,7 @@ func TestDecideHandoff_Handler(t *testing.T) {
 				return wf, nil
 			},
 			GetEffectiveAssignmentRulesFunc: func(context.Context, uuid.UUID) (*domain.EffectiveAssignmentRules, error) {
-				return &domain.EffectiveAssignmentRules{FallbackChain: []string{"agent:riker"}}, nil
+				return &domain.EffectiveAssignmentRules{FallbackChain: []string{"agent:robin"}}, nil
 			},
 		}
 		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(hot))
@@ -143,6 +143,6 @@ func TestDecideHandoff_Handler(t *testing.T) {
 		wf.Handoff = &domain.HandoffConfig{Enabled: true, StartCap: 3}
 		d := call(t, wf)
 		assert.Equal(t, domain.HandoffOutcomeHandoff, d.Outcome)
-		assert.Equal(t, "agent:riker", d.Recipient)
+		assert.Equal(t, "agent:robin", d.Recipient)
 	})
 }

@@ -93,3 +93,35 @@ describe("DropdownMenuTrigger asChild", () => {
     expect(screen.getByText("Item")).toBeInTheDocument();
   });
 });
+
+describe("DropdownMenuContent viewport containment", () => {
+  const open = (style?: React.CSSProperties) => {
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>Open</DropdownMenuTrigger>
+        <DropdownMenuContent style={style}>
+          <DropdownMenuItem>Item</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(393);
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ left: 300, right: 510, top: 0, bottom: 0, width: 210, height: 0, x: 300, y: 0, toJSON: () => ({}) });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    rectSpy.mockRestore();
+    vi.restoreAllMocks();
+    return screen.getByRole("menuitem").parentElement as HTMLElement;
+  };
+
+  it("shifts a menu overflowing the right edge back inside the viewport", () => {
+    const menu = open();
+    expect(menu.style.transform).toBe("translateX(-125px)");
+  });
+
+  it("keeps a caller-supplied transform when shifting", () => {
+    const menu = open({ transform: "scale(2)" });
+    // the shift leads, so a non-unit caller transform cannot scale it
+    expect(menu.style.transform).toBe("translateX(-125px) scale(2)");
+  });
+});

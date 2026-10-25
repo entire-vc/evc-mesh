@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams, useSearchParams } from "react-router";
-import { AlertTriangle, PackageSearch, Plug, Puzzle, Search } from "lucide-react";
+import { AlertTriangle, PackageSearch, Palette, Plug, Puzzle, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,7 +27,7 @@ export function KindTrustBadges({ entry }: { entry: Pick<CatalogEntry, "kind" | 
 }
 
 export function ExtensionIcon({ entry, className }: { entry: Pick<CatalogEntry, "kind">; className?: string }) {
-  const Icon = entry.kind === "plugin" ? Puzzle : Plug;
+  const Icon = entry.kind === "plugin" ? Puzzle : entry.kind === "theme" ? Palette : Plug;
   return (
     <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground", className)}>
       <Icon className="h-5 w-5" aria-hidden />
@@ -141,7 +141,7 @@ export function ExtensionsCatalog({ catalog }: { catalog: CatalogState }) {
   const panel = (
     <div className="space-y-5">
       <CheckGroup title={t("catalog.filters.kind")} name="kind" options={KINDS} selected={filters.kinds}
-        label={(o) => t(`catalog.kind.${o}`)} onToggle={toggle("kinds")} />
+        label={(o) => t(o === "theme" ? "catalog.filters.kindTheme" : `catalog.kind.${o}`)} onToggle={toggle("kinds")} />
       <CheckGroup title={t("catalog.filters.category")} name="category" options={CATEGORIES} selected={filters.categories}
         label={(o) => t(`catalog.category.${o}`)} onToggle={toggle("categories")} />
       <CheckGroup title={t("catalog.filters.trust")} name="trust" options={TRUSTS} selected={filters.trusts}

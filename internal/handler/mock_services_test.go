@@ -288,6 +288,7 @@ type MockTaskDependencyService struct {
 	ListByTaskFunc               func(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	ListByTaskBothDirectionsFunc func(ctx context.Context, taskID uuid.UUID) (outgoing, incoming []domain.EnrichedTaskDependency, err error)
 	CheckCycleFunc               func(ctx context.Context, taskID, dependsOnTaskID uuid.UUID) (bool, error)
+	UpdateConditionFunc          func(ctx context.Context, id uuid.UUID, in service.UpdateDependencyConditionInput) (*domain.TaskDependency, error)
 }
 
 func (m *MockTaskDependencyService) Create(ctx context.Context, dep *domain.TaskDependency) error {
@@ -295,6 +296,13 @@ func (m *MockTaskDependencyService) Create(ctx context.Context, dep *domain.Task
 		return m.CreateFunc(ctx, dep)
 	}
 	return nil
+}
+
+func (m *MockTaskDependencyService) UpdateCondition(ctx context.Context, id uuid.UUID, in service.UpdateDependencyConditionInput) (*domain.TaskDependency, error) {
+	if m.UpdateConditionFunc != nil {
+		return m.UpdateConditionFunc(ctx, id, in)
+	}
+	return nil, nil
 }
 
 func (m *MockTaskDependencyService) Delete(ctx context.Context, id uuid.UUID) error {

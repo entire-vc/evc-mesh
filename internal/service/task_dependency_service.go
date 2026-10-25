@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,6 +18,42 @@ type taskDependencyService struct {
 	taskRepo     repository.TaskRepository
 	activityRepo repository.ActivityLogRepository
 	projectRepo  repository.ProjectRepository
+	resolver     DependencyResolver
+}
+
+// DependencyResolver is told when an edge became satisfied by evidence, so the
+// dependents it was holding can leave backlog now instead of at the next sweep.
+type DependencyResolver interface {
+	CheckDependencyResolution(ctx context.Context, resolvedTaskID uuid.UUID) error
+}
+
+// UpdateDependencyConditionInput is a partial update: nil fields are kept.
+type UpdateDependencyConditionInput struct {
+	Condition   *domain.DependencyCondition
+	EvidenceURL *string
+}
+
+// WithDependencyResolver wires the auto-transition hook into a service built by
+// NewTaskDependencyService; any other implementation is returned unchanged.
+func WithDependencyResolver(svc TaskDependencyService, r DependencyResolver) TaskDependencyService {
+	if s, ok := svc.(*taskDependencyService); ok {
+		s.resolver = r
+	}
+	return svc
+}
+
+// blockerWarning explains why a `blocks` edge on t will probably never clear:
+// monitors, umbrellas and recurring cards do not reach done by construction.
+func blockerWarning(t *domain.Task) string {
+	for _, l := range t.Labels {
+		if l == "kind:monitor" || l == "kind:umbrella" {
+			return "blocker is labelled " + l + " and normally never reaches done, so this dependency may hold the card forever; set a condition (e.g. access_ready) with evidence_url instead"
+		}
+	}
+	if t.RecurringScheduleID != nil {
+		return "blocker belongs to a recurring schedule and normally never reaches done, so this dependency may hold the card forever; set a condition (e.g. access_ready) with evidence_url instead"
+	}
+	return ""
 }
 
 // NewTaskDependencyService returns a new TaskDependencyService backed by the given repositories.
@@ -75,7 +113,7 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 	// The boundary is the WORKSPACE, not the project. It was written as same-project
 	// because that is trivially inside the same workspace and no cross-project case had
 	// been asked for; the guard was never about projects. The cost of the stricter
-	// version was real and measured on 2026-09-07 (#559270cf, Riker): three refusals in
+	// version was real and measured on 2026-09-07 (an internal ticket, Robin): three refusals in
 	// a single triage pass, on blockers that genuinely cross projects — Billing waiting
 	// on a Team Relay site rollout, Spark ↔ Lab, Spark ↔ Argus. With no cross-project
 	// `blocks` edge available, the only way left to park such a card is a due_date,
@@ -83,6 +121,36 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 	// blocker actually cleared. Same-workspace edges restore the event.
 	if tenancyErr := s.assertSameTenancy(ctx, task, depTask); tenancyErr != nil {
 		return tenancyErr
+	}
+
+	if dep.Condition == "" {
+		dep.Condition = domain.DependencyConditionTaskDone
+	}
+	if !dep.Condition.Valid() {
+		return apierror.BadRequest("invalid condition")
+	}
+	if dep.DependencyType != domain.DependencyTypeBlocks && dep.Condition != domain.DependencyConditionTaskDone {
+		return apierror.BadRequest("condition applies to blocks dependencies only")
+	}
+	if dep.EvidenceURL != nil && strings.TrimSpace(*dep.EvidenceURL) == "" {
+		dep.EvidenceURL = nil
+	}
+	dep.ConditionMetAt = nil
+	if dep.Condition != domain.DependencyConditionTaskDone && dep.EvidenceURL != nil {
+		now := timeNow()
+		dep.ConditionMetAt = &now
+	} else if dep.Condition == domain.DependencyConditionTaskDone {
+		dep.EvidenceURL = nil
+	}
+	dep.ConditionSatisfied = dep.EvidenceSatisfied()
+	dep.Warning = ""
+	if dep.DependencyType == domain.DependencyTypeBlocks && dep.Condition == domain.DependencyConditionTaskDone {
+		if w := blockerWarning(depTask); w != "" {
+			if s.rejectBlocksOnMonitor(ctx, depTask.ProjectID) {
+				return apierror.Conflict(w)
+			}
+			dep.Warning = w
+		}
 	}
 
 	// Check for duplicate.
@@ -154,7 +222,85 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 		}
 	}
 
+	// An edge born already satisfied (condition + evidence on POST) can release a
+	// parked dependent, the same as the PATCH path.
+	if dep.DependencyType == domain.DependencyTypeBlocks && dep.EvidenceSatisfied() && s.resolver != nil {
+		if rerr := s.resolver.CheckDependencyResolution(ctx, dep.DependsOnTaskID); rerr != nil {
+			log.Printf("[task-dependency] WARNING: resolution check after create of satisfied edge on %s failed: %v", dep.DependsOnTaskID, rerr)
+		}
+	}
+
 	return nil
+}
+
+// rejectBlocksOnMonitor reads the project's opt-in policy; unreadable settings
+// mean "off" so a lookup failure never turns the default warning into a refusal.
+func (s *taskDependencyService) rejectBlocksOnMonitor(ctx context.Context, projectID uuid.UUID) bool {
+	if s.projectRepo == nil {
+		return false
+	}
+	p, err := s.projectRepo.GetByID(ctx, projectID)
+	if err != nil || p == nil {
+		return false
+	}
+	return p.GetSettings().RejectBlocksOnMonitor
+}
+
+// UpdateCondition implements TaskDependencyService.
+func (s *taskDependencyService) UpdateCondition(ctx context.Context, id uuid.UUID, in UpdateDependencyConditionInput) (*domain.TaskDependency, error) {
+	dep, err := s.depRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if dep == nil {
+		return nil, apierror.NotFound("TaskDependency")
+	}
+	condition := dep.Condition
+	if in.Condition != nil {
+		condition = *in.Condition
+	}
+	if !condition.Valid() {
+		return nil, apierror.BadRequest("invalid condition")
+	}
+	if dep.DependencyType != domain.DependencyTypeBlocks && condition != domain.DependencyConditionTaskDone {
+		return nil, apierror.BadRequest("condition applies to blocks dependencies only")
+	}
+	evidence := dep.EvidenceURL
+	if in.EvidenceURL != nil {
+		evidence = in.EvidenceURL
+	}
+	if evidence != nil && strings.TrimSpace(*evidence) == "" {
+		evidence = nil
+	}
+	if condition == domain.DependencyConditionTaskDone {
+		if evidence != nil {
+			return nil, apierror.BadRequest("evidence_url needs a condition other than task_done")
+		}
+		evidence = nil
+	}
+	var metAt *time.Time
+	if evidence != nil {
+		// Keep the original met-time when the same evidence is re-sent.
+		if dep.ConditionMetAt != nil && dep.Condition == condition && dep.EvidenceURL != nil && *dep.EvidenceURL == *evidence {
+			metAt = dep.ConditionMetAt
+		} else {
+			now := timeNow()
+			metAt = &now
+		}
+	}
+	updated, err := s.depRepo.UpdateCondition(ctx, id, condition, evidence, metAt)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		return nil, apierror.NotFound("TaskDependency")
+	}
+	if updated.ConditionSatisfied && !dep.ConditionSatisfied && s.resolver != nil {
+		if rerr := s.resolver.CheckDependencyResolution(ctx, updated.DependsOnTaskID); rerr != nil {
+			log.Printf("[task-dependency] WARNING: resolution check after condition met on %s failed: %v", updated.DependsOnTaskID, rerr)
+		}
+	}
+	return updated, nil
 }
 
 func (s *taskDependencyService) atomicHierarchy() bool {

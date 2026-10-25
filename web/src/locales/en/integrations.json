@@ -646,7 +646,6 @@
     },
     "updates": {
       "emptyTitle": "Everything is up to date",
-      "emptyBody": "No installed extension has a newer version.",
       "loading": "Checking for updates",
       "errorTitle": "Couldn't check for updates",
       "errorBody": "Update information is unavailable right now. Try again in a minute.",
@@ -708,7 +707,8 @@
   "catalog": {
     "kind": {
       "integration": "Integration",
-      "plugin": "Plugin"
+      "plugin": "Plugin",
+      "theme": "Theme"
     },
     "trust": {
       "official": "Official",
@@ -728,6 +728,7 @@
     "filters": {
       "label": "Filters",
       "kind": "Type",
+      "kindTheme": "Themes",
       "category": "Category",
       "trust": "Trust"
     },
@@ -981,6 +982,7 @@
       "instance": "Active · set up by the instance admin",
       "workspace": "Connected in this workspace",
       "off": "Turned off",
+      "receiving": "Receiving events · {{count}} links, last {{last}}",
       "none": "Not connected"
     },
     "saved": "{{name}}: settings saved",
@@ -1029,7 +1031,6 @@
     "data": {
       "title": "What happens to the extension's data",
       "keep": "Keep the data",
-      "keepHint": "Only the connection is removed; reconnecting restores the data.",
       "delete": "Delete the data too",
       "deleteHint": "The extension's data in this workspace is erased and cannot be restored.",
       "deleteUnsupported": "This extension has no data deletion yet; the data is kept."

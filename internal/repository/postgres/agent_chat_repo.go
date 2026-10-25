@@ -589,8 +589,20 @@ func (r *AgentChatRepo) ListMessages(ctx context.Context, ws, project, user, thr
 		c := encodeChatCursor(rows[len(rows)-1].CreatedAt, rows[len(rows)-1].ID)
 		page.NextCursor = &c
 	}
+	ids := make([]uuid.UUID, 0, len(rows))
 	for _, row := range rows {
-		page.Items = append(page.Items, row.toMessage())
+		ids = append(ids, row.ID)
+	}
+	atts, err := chatAttachmentViews(ctx, r.db, ws, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		m := row.toMessage()
+		if a := atts[row.ID]; a != nil {
+			m.Attachments = a
+		}
+		page.Items = append(page.Items, m)
 	}
 	turn, err := activeTurn(ctx, r.db, ws, thread)
 	if err != nil {
@@ -614,12 +626,7 @@ type SendInput struct {
 func (r *AgentChatRepo) SendMessage(ctx context.Context, gate *ChatGate, project, user, thread uuid.UUID, in SendInput) (*ChatAccepted, error) {
 	ws := gate.WorkspaceID
 	body := strings.TrimSpace(in.Body)
-	if len(in.AttachmentIDs) > 0 {
-		// Attachments (presign, upload, ownership) are a separate unit; until then
-		// no id can name an uploaded object of the caller.
-		return nil, chatErr(http.StatusUnprocessableEntity, ChatCodeAttachmentNF, "attachment not found")
-	}
-	if body == "" {
+	if body == "" && len(in.AttachmentIDs) == 0 {
 		return nil, chatErr(http.StatusUnprocessableEntity, ChatCodeEmptyMessage, "message is empty")
 	}
 	if utf8.RuneCountInString(body) > ChatBodyMax || utf8.RuneCountInString(in.ClientMessageID) < 8 || utf8.RuneCountInString(in.ClientMessageID) > 64 {
@@ -685,6 +692,24 @@ func (r *AgentChatRepo) SendMessage(ctx context.Context, gate *ChatGate, project
 	if _, err = tx.ExecContext(ctx, `UPDATE ext_agent_chat_turns SET user_message_id = $3 WHERE id = $1 AND workspace_id = $2`, turnID, ws, msgID); err != nil {
 		return nil, err
 	}
+	msg := created.toMessage()
+	if len(in.AttachmentIDs) > 0 {
+		// Only an uploaded, unbound attachment of this very thread can be sent.
+		res, aerr := tx.ExecContext(ctx, `UPDATE ext_agent_chat_attachments SET message_id = $3
+			WHERE workspace_id = $1 AND thread_id = $2 AND id = ANY($4::uuid[]) AND message_id IS NULL AND uploaded_at IS NOT NULL`,
+			ws, thread, msgID, pq.Array(uuidStrings(in.AttachmentIDs)))
+		if aerr != nil {
+			return nil, aerr
+		}
+		if n, _ := res.RowsAffected(); int(n) != len(uniqueUUIDs(in.AttachmentIDs)) {
+			return nil, chatErr(http.StatusUnprocessableEntity, ChatCodeAttachmentNF, "attachment not found")
+		}
+		byMsg, aerr := chatAttachmentViews(ctx, tx, ws, []uuid.UUID{msgID})
+		if aerr != nil {
+			return nil, aerr
+		}
+		msg.Attachments = byMsg[msgID]
+	}
 	title := th.Title
 	if !th.TitleIsCustom && title == "" {
 		title = ChatAutoTitle(body)
@@ -700,7 +725,7 @@ func (r *AgentChatRepo) SendMessage(ctx context.Context, gate *ChatGate, project
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &ChatAccepted{Message: created.toMessage(), Turn: *ref}, nil
+	return &ChatAccepted{Message: msg, Turn: *ref}, nil
 }
 
 // replay answers an idempotent repeat with the original message and its turn.
@@ -719,7 +744,54 @@ func (r *AgentChatRepo) replay(ctx context.Context, tx *sqlx.Tx, ws uuid.UUID, p
 	} else if cur != nil && cur.ID == t.ID {
 		ref = *cur
 	}
-	return &ChatAccepted{Message: prior.toMessage(), Turn: ref}, tx.Commit()
+	msg := prior.toMessage()
+	atts, err := chatAttachmentViews(ctx, tx, ws, []uuid.UUID{prior.ID})
+	if err != nil {
+		return nil, err
+	}
+	if a := atts[prior.ID]; a != nil {
+		msg.Attachments = a
+	}
+	return &ChatAccepted{Message: msg, Turn: ref}, tx.Commit()
+}
+
+func uniqueUUIDs(in []uuid.UUID) map[uuid.UUID]struct{} {
+	out := make(map[uuid.UUID]struct{}, len(in))
+	for _, id := range in {
+		out[id] = struct{}{}
+	}
+	return out
+}
+
+// chatAttachmentViews loads the attachments bound to the given messages.
+func chatAttachmentViews(ctx context.Context, q sqlx.QueryerContext, ws uuid.UUID, msgIDs []uuid.UUID) (map[uuid.UUID][]ChatAttachmentView, error) {
+	out := map[uuid.UUID][]ChatAttachmentView{}
+	if len(msgIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		MessageID uuid.UUID `db:"message_id"`
+		ChatAttachmentRow
+	}
+	if err := sqlx.SelectContext(ctx, q, &rows, `SELECT message_id, id, file_name, mime, size, width, height
+		FROM ext_agent_chat_attachments WHERE workspace_id = $1 AND message_id = ANY($2::uuid[]) ORDER BY uploaded_at, id`,
+		ws, pq.Array(uuidStrings(msgIDs))); err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.MessageID] = append(out[r.MessageID], ChatAttachmentView{ID: r.ID, FileName: r.FileName, Mime: r.Mime, Size: r.Size, Width: r.Width, Height: r.Height})
+	}
+	return out, nil
+}
+
+// ChatAttachmentRow mirrors ChatAttachmentView for scanning.
+type ChatAttachmentRow struct {
+	ID       uuid.UUID `db:"id"`
+	FileName string    `db:"file_name"`
+	Mime     string    `db:"mime"`
+	Size     int64     `db:"size"`
+	Width    *int      `db:"width"`
+	Height   *int      `db:"height"`
 }
 
 // ServedAgents says which of the given agents a workspace runner serves and

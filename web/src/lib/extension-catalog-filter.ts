@@ -3,7 +3,7 @@ import type { CatalogEntry, ExtensionKind, TrustLevel } from "@/hooks/useExtensi
 export const CATEGORIES = [
   "development", "communication", "documents", "agents", "security", "analytics", "entire-vc",
 ] as const;
-export const KINDS: ExtensionKind[] = ["integration", "plugin"];
+export const KINDS: ExtensionKind[] = ["integration", "plugin", "theme"];
 export const TRUSTS: TrustLevel[] = ["official", "verified", "community", "custom"];
 export const SORTS = ["popular", "new", "updated"] as const;
 export type CatalogSort = (typeof SORTS)[number];

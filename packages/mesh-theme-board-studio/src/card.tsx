@@ -1,4 +1,4 @@
-import { Can, Draggable, InlineEdit, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
+import { Can, Draggable, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
 import type { BoardCardSettings, BoardCardView, BoardCardViewData, FieldDescriptor, TaskData } from "@entire-vc/mesh-theme-sdk";
 import { dimmed, initials, nextDay, raised, say } from "./logic";
 
@@ -53,9 +53,7 @@ function Body({ data, actions, themeSettings, locale, plain }: { data: BoardCard
       <div className="studio-body">
         <h3 className="studio-title">
           {plain ? task.title : (
-            <InlineEdit taskId={task.id} field="title">
-              <TaskLink taskId={task.id}>{task.title}</TaskLink>
-            </InlineEdit>
+            <TaskLink taskId={task.id}>{task.title}</TaskLink>
           )}
         </h3>
         <div className="studio-meta">

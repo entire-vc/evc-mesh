@@ -15,8 +15,6 @@
     "spark": "Spark Catalog",
     "analytics": "Analytics",
     "events": "Events",
-    "integrations": "Integrations",
-    "connectedApps": "App access",
     "workspaceSettings": "Workspace Settings",
     "projectSettings": "Project Settings",
     "extensions": "Extensions",

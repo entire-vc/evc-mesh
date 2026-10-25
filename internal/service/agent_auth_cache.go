@@ -5,10 +5,12 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/repository"
@@ -27,13 +29,21 @@ import (
 // cachedGrantStillValid re-checks a grant-derived hit's revocation status on
 // every request, specifically because the only way to revoke a connection as
 // of task U2 is a manual UPDATE, so leaving it inside the TTL window would
-// have made every revoke silently take up to a minute to take effect.
-const AgentAuthCacheTTL = 60 * time.Second
+// have made every revoke silently take up to the full TTL to take effect.
+//
+// The TTL must stay well above the agents' poll period (~60 s): with a 60 s TTL
+// and -25% jitter every poll landed on an expired entry, so each one paid a
+// bcrypt on a 2-core host and the fleet produced a slow-request burst every
+// minute.
+const AgentAuthCacheTTL = 10 * time.Minute
 
 // agentAuthCacheMaxEntries bounds the map so a caller that presents a large
 // number of distinct VALID keys cannot grow it without limit. Only successful
 // authentications are ever stored, so reaching this bound requires that many
 // real agents; the purge below is a safety net, not a hot path.
+// authVerifyTimeout bounds one shared verification (bcrypt plus a few lookups).
+const authVerifyTimeout = 30 * time.Second
+
 const agentAuthCacheMaxEntries = 8192
 
 // cachedAuthEntry is one verified (workspaceSlug, apiKey) -> agent result.
@@ -78,6 +88,14 @@ type cachedAgentAuth struct {
 	byAgent map[uuid.UUID]map[[sha256.Size]byte]struct{}
 
 	ttl time.Duration
+	// flight collapses concurrent misses for one key into a single inner
+	// Authenticate, so N parallel requests from the same agent pay one bcrypt.
+	flight singleflight.Group
+	// validGate batches the per-hit validity re-check, see validBatch.
+	validGate validGate
+	// jitter shortens a TTL by a random amount; tests swap in a no-op to drive
+	// expiry on an exact clock.
+	jitter func(ttl time.Duration) time.Duration
 	// now is injectable so tests can drive expiry without sleeping.
 	now func() time.Time
 }
@@ -96,6 +114,7 @@ func NewCachedAgentAuth(inner AgentService, ttl time.Duration) AgentService {
 		byAgent:      make(map[uuid.UUID]map[[sha256.Size]byte]struct{}),
 		ttl:          ttl,
 		now:          time.Now,
+		jitter:       jitterTTL,
 	}
 }
 
@@ -155,7 +174,7 @@ func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKe
 	now := c.now()
 
 	if agent, ok := c.lookup(key, now); ok {
-		if c.cachedAuthStillValid(ctx, agent) {
+		if c.cachedAuthStillValidShared(ctx, key, agent) {
 			metrics.RecordAgentAuth("hit")
 			return agent, nil
 		}
@@ -168,18 +187,125 @@ func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKe
 		c.evict(key, agent.ID)
 	}
 
-	agent, err := c.AgentService.Authenticate(ctx, workspaceSlug, apiKey)
-	if err != nil {
+	// Misses for one key share a single verification. Failures are shared too
+	// but never stored, same as before. Each caller gets its own copy.
+	//
+	// The shared call must not belong to the first caller: its request context
+	// being canceled would fail every waiter. It runs detached with its own
+	// deadline, and each caller still gives up on its own ctx.
+	ch := c.flight.DoChan(string(key[:]), func() (any, error) {
+		vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), authVerifyTimeout)
+		defer cancel()
+		a, err := c.AgentService.Authenticate(vctx, workspaceSlug, apiKey)
+		if err != nil {
+			return nil, err
+		}
+		c.store(key, a, now)
+		return a, nil
+	})
+	var res singleflight.Result
+	select {
+	case res = <-ch:
+	case <-ctx.Done():
 		metrics.RecordAgentAuth("miss")
+		return nil, ctx.Err()
+	}
+	v, err := res.Val, res.Err
+	metrics.RecordAgentAuth("miss")
+	if err != nil {
 		return nil, err
 	}
-
-	c.store(key, agent, now)
-	metrics.RecordAgentAuth("miss")
-	return agent, nil
+	shared := *(v.(*domain.Agent))
+	return &shared, nil
 }
 
-// cachedAuthStillValid re-checks a cache hit's continuing validity directly
+// validBatch is one run of the freshness checks plus everyone waiting on it.
+type validBatch struct {
+	agent domain.Agent
+	done  chan struct{}
+	ok    bool
+}
+
+// validGate coalesces the freshness checks of concurrent hits for one cache key
+// without ever handing a request an answer computed before it arrived.
+//
+// A request that arrives while a run is executing may NOT join it: that run may
+// already have read "valid" before a revocation committed. It joins the next
+// run instead, which starts only after the current one finishes, so every
+// waiter's result comes from a check that began after the waiter did. A burst
+// therefore costs at most two runs per key, not one per request.
+type validGate struct {
+	mu sync.Mutex
+	m  map[[sha256.Size]byte]*validState
+}
+
+type validState struct {
+	running *validBatch
+	next    *validBatch
+}
+
+// cachedAuthStillValidShared runs the freshness checks for a cache hit, sharing
+// them only with requests that arrived before the run started.
+func (c *cachedAgentAuth) cachedAuthStillValidShared(ctx context.Context, key [sha256.Size]byte, agent *domain.Agent) bool {
+	g := &c.validGate
+	g.mu.Lock()
+	if g.m == nil {
+		g.m = make(map[[sha256.Size]byte]*validState)
+	}
+	st := g.m[key]
+	var b *validBatch
+	switch {
+	case st == nil:
+		b = &validBatch{agent: *agent, done: make(chan struct{})}
+		g.m[key] = &validState{running: b}
+		go c.runValidBatch(key, b)
+	case st.next != nil:
+		b = st.next
+	default:
+		b = &validBatch{agent: *agent, done: make(chan struct{})}
+		st.next = b
+	}
+	g.mu.Unlock()
+
+	select {
+	case <-b.done:
+		return b.ok
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// runValidBatch executes b detached from any single caller's context (one
+// canceled request must not fail the others), then starts the queued batch.
+//
+// Invariant: callers only ever join the QUEUED batch (st.next), never st.running,
+// so a running or finished batch is unreachable to a new arrival. The gate state
+// advances under the lock before b.done is closed, which keeps that true even
+// for a caller scheduled between the check finishing and its result publishing.
+func (c *cachedAgentAuth) runValidBatch(key [sha256.Size]byte, b *validBatch) {
+	ctx, cancel := context.WithTimeout(context.Background(), authVerifyTimeout)
+	b.ok = c.stillValidUncoalesced(ctx, &b.agent)
+	cancel()
+
+	g := &c.validGate
+	g.mu.Lock()
+	st := g.m[key]
+	var next *validBatch
+	if st.next == nil {
+		delete(g.m, key)
+	} else {
+		next = st.next
+		st.running, st.next = next, nil
+	}
+	g.mu.Unlock()
+
+	close(b.done)
+	if next != nil {
+		go c.runValidBatch(key, next)
+	}
+}
+
+// stillValidUncoalesced re-checks a cache hit's continuing validity directly
 // against the database before trusting it — two independent things, both
 // skipped by construction on a hit:
 //
@@ -205,7 +331,7 @@ func (c *cachedAgentAuth) Authenticate(ctx context.Context, workspaceSlug, apiKe
 // treated the same as "looks bad", so a transient failure here narrows to
 // "fall through to the uncached path" rather than "silently keep serving a
 // key we could not actually verify is still good".
-func (c *cachedAgentAuth) cachedAuthStillValid(ctx context.Context, agent *domain.Agent) bool {
+func (c *cachedAgentAuth) stillValidUncoalesced(ctx context.Context, agent *domain.Agent) bool {
 	if wsChecker, ok := c.AgentService.(WorkspaceDeletionChecker); ok {
 		deleted, err := wsChecker.IsWorkspaceDeleted(ctx, agent.WorkspaceID)
 		if err != nil || deleted {
@@ -289,13 +415,29 @@ func (c *cachedAgentAuth) store(key [sha256.Size]byte, agent *domain.Agent, now 
 		}
 	}
 
-	c.entries[key] = cachedAuthEntry{agent: *agent, expiresAt: now.Add(c.ttl)}
+	c.entries[key] = cachedAuthEntry{agent: *agent, expiresAt: now.Add(c.jitteredTTL())}
 	keys, ok := c.byAgent[agent.ID]
 	if !ok {
 		keys = make(map[[sha256.Size]byte]struct{}, 1)
 		c.byAgent[agent.ID] = keys
 	}
 	keys[key] = struct{}{}
+}
+
+// jitteredTTL spreads expiry by up to -25% of ttl. Entries stored in the same
+// second (an API restart makes every agent reconnect at once) would otherwise
+// all expire together and send every agent back through bcrypt in the same
+// instant, which on a small host queues behind the CPU for seconds.
+func (c *cachedAgentAuth) jitteredTTL() time.Duration {
+	return c.jitter(c.ttl)
+}
+
+func jitterTTL(ttl time.Duration) time.Duration {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ttl // no jitter beats failing an authentication
+	}
+	return ttl - time.Duration(binary.BigEndian.Uint64(b[:])%uint64(int64(ttl)/4+1))
 }
 
 // purgeExpiredLocked drops aged-out entries. Caller must hold the write lock.

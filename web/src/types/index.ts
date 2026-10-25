@@ -283,6 +283,10 @@ export interface TaskDependency {
   depends_on_task_id: string;
   dependency_type: DependencyType;
   created_at: string;
+  condition?: string;
+  evidence_url?: string | null;
+  condition_met_at?: string | null;
+  condition_satisfied?: boolean;
   related_task_title?: string;
   related_task_status_id?: string;
 }
@@ -758,7 +762,7 @@ export type ViewType = "board" | "list" | "timeline" | "calendar";
  * saved_view_service.go) only accepts board/list/timeline/calendar, so widening
  * ViewType itself would let the UI POST a view_type the API rejects.
  */
-export type ProjectViewTab = ViewType | "docs";
+export type ProjectViewTab = ViewType | "docs" | "chat" | "updates" | `ext:${string}`;
 
 export interface SavedView {
   id: string;

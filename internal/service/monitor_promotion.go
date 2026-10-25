@@ -15,7 +15,7 @@ import (
 
 // This sweeper used to have `kind:monitor` as its ENTRY CONDITION — the label the lease
 // reaper's auto-park writes (checkoutLeaseReaper.parkTask, which still writes it as
-// `parkMonitorLabel`). That is the defect #559270cf fixed: a due_date only woke a card
+// `parkMonitorLabel`). That is the defect an internal ticket fixed: a due_date only woke a card
 // parked by that one mechanism, so every card a human or agent parked with a date and a
 // different label — or no label — carried an alarm nothing listened to. The constant
 // that encoded it is gone rather than left unused, so nothing here reads as if the
@@ -26,19 +26,19 @@ import (
 // override. Two groups, for two different reasons:
 //
 //   - freeze / no-intake-promote / no-promote — an explicit human "stay in backlog"
-//     (task 383dd12a, Pavel's «из беклога не доставать»). A date must never outrank a
+//     (Alex's «из беклога не доставать»). A date must never outrank a
 //     person: the park has no expiry unless the person who set it states one.
-//   - park:wait-pavel — the park is bound to a human answer (or to the pause of the
+//   - park:wait-alex — the park is bound to a human answer (or to the pause of the
 //     assignee's lane, which the server cannot see: it lives in fiddler's
 //     lane-availability.json), never to a date. A passed due_date left on such a card
-//     bounced it back to todo while the lane was still paused (#afff1a9d, Howard
-//     #1ceb915f / #0aaf6cf0 / #3bf20dda). park:wait-date and park:wait-external keep
+//     bounced it back to todo while the lane was still paused (an internal ticket, Harper
+//     an internal ticket / an internal ticket / an internal ticket). park:wait-date and park:wait-external keep
 //     waking on the date: the date IS their condition.
 //   - golden / eval-harness — Agent-Eval fixtures. Promoting one makes an agent
 //     decompose and execute a synthetic fixture and pollutes the eval counts; it has
-//     recurred three times at real cost (#9f50def6, #0df1f585, #1fa93c49).
+//     recurred three times at real cost (an internal ticket, an internal ticket).
 //
-// This set matters far more now than it did before #559270cf. While the sweeper only
+// This set matters far more now than it did before an internal ticket. While the sweeper only
 // looked at kind:monitor cards it could not have reached a frozen card by accident;
 // widening the candidate query to every dated backlog card is exactly what puts a
 // human freeze in its path, so the guard has to be widened in the same change, not
@@ -53,10 +53,10 @@ import (
 // date alone — the opposite of what the schema means. Not porting it costs nothing
 // today: the Python sweep is still live and still performs that override, so a
 // wake-labelled frozen card is promoted by it exactly as before. Closing this belongs
-// with the sweep's retirement (#00327dc6 / #56ec28e8), which is where the comment
+// with the sweep's retirement (an internal ticket / an internal ticket), which is where the comment
 // parsing has to land anyway.
 var absoluteNoPromoteLabels = map[string]struct{}{
-	"freeze": {}, "no-intake-promote": {}, "no-promote": {}, "park:wait-pavel": {},
+	"freeze": {}, "no-intake-promote": {}, "no-promote": {}, "park:wait-alex": {},
 	"golden": {}, "eval-harness": {},
 }
 
@@ -172,7 +172,7 @@ func (s *monitorPromotionService) SweepDueBacklogTasks(ctx context.Context) (int
 // to move a human_gated task to backlog/done/cancelled and forbidden to move a shipped
 // task anywhere but done (see MoveTask), so selecting one here produces a move that
 // fails on every single tick, forever, and crowds the log with one retry per minute —
-// measured on prod 2026-09-06 on the lease reaper, where #2921ff07 failed to park 145
+// measured in production 2026-09-06 on the lease reaper, where an internal ticket failed to park 145
 // times and was that reaper's only output while it spun. Refusing to select such a card
 // is not the same as trying and handling the error: only the former terminates.
 func (s *monitorPromotionService) skipReason(
@@ -208,15 +208,15 @@ func (s *monitorPromotionService) skipReason(
 		return "has open blocks dependencies"
 	}
 
-	// 5. Demotion-into-backlog guard (#559270cf amendment, #1eb4fd7d) — a card whose
+	// 5. Demotion-into-backlog guard (an internal ticket amendment) — a card whose
 	// most recent status move DEMOTED it into backlog is a deliberate park, and
 	// "no open blocks dependencies" is vacuously true for one that never had any
-	// (#b832d451: the sweep once undid such a park in 26 minutes by reading exactly
+	// (an internal ticket: the sweep once undid such a park in 26 minutes by reading exactly
 	// that vacuous truth as "ready").
 	//
 	// Gated on hasBlocksEdge being FALSE — mirroring
 	// backlog_promotion_advisory.go's own dep_ids-empty gate on this same check
-	// (#bbf3db92): a card that HAS (or HAD) a `blocks` edge is judged by whether that
+	// a card that HAS (or HAD) a `blocks` edge is judged by whether that
 	// edge is now clear (guard 4, above), never by its move history — the edge
 	// clearing IS the informative event this sweep exists to catch when the
 	// event-triggered auto-transition (auto_transition.go tryUnblockTask) missed it
@@ -264,6 +264,10 @@ func (s *monitorPromotionService) blockerStatus(ctx context.Context, taskID uuid
 			continue
 		}
 		hasBlocksEdge = true
+		if dep.EvidenceSatisfied() {
+			// Released by evidence regardless of the blocker, even a deleted one.
+			continue
+		}
 		if _, seen := categories[dep.DependsOnTaskID]; seen {
 			continue
 		}
@@ -306,7 +310,7 @@ func (s *monitorPromotionService) findTodoStatusID(ctx context.Context, projectI
 
 // postSystemComment writes an audit comment on the task explaining the auto-unpark.
 // It names the label the card was parked under (or says it had none), because after
-// #559270cf that is no longer a constant — the reader can no longer assume kind:monitor.
+// an internal ticket that is no longer a constant — the reader can no longer assume kind:monitor.
 func (s *monitorPromotionService) postSystemComment(ctx context.Context, task *domain.Task) {
 	if s.commentRepo == nil {
 		return

@@ -36,7 +36,8 @@ func NewAgentWorkspaceGrantRepo(db *sqlx.DB) *AgentWorkspaceGrantRepo {
 // revoked-vs-absent distinction matters more here than the index hit.
 func (r *AgentWorkspaceGrantRepo) GetByWorkspaceAndPrefix(ctx context.Context, workspaceID uuid.UUID, prefix string) (*domain.AgentWorkspaceGrant, error) {
 	const q = `
-		SELECT id, agent_id, workspace_id, role, api_key_prefix, api_key_hash, invited_by, created_at, revoked_at
+		SELECT id, agent_id, workspace_id, role, api_key_prefix, api_key_hash,
+		       COALESCE(api_key_sha256, '') AS api_key_sha256, invited_by, created_at, revoked_at
 		FROM agent_workspace_grants
 		WHERE workspace_id = $1 AND api_key_prefix = $2
 	`
@@ -74,7 +75,8 @@ func (r *AgentWorkspaceGrantRepo) IsRevoked(ctx context.Context, id uuid.UUID) (
 // GetByWorkspaceAndPrefix.
 func (r *AgentWorkspaceGrantRepo) GetByAgentAndWorkspace(ctx context.Context, agentID, workspaceID uuid.UUID) (*domain.AgentWorkspaceGrant, error) {
 	const q = `
-		SELECT id, agent_id, workspace_id, role, api_key_prefix, api_key_hash, invited_by, created_at, revoked_at
+		SELECT id, agent_id, workspace_id, role, api_key_prefix, api_key_hash,
+		       COALESCE(api_key_sha256, '') AS api_key_sha256, invited_by, created_at, revoked_at
 		FROM agent_workspace_grants
 		WHERE agent_id = $1 AND workspace_id = $2
 	`
@@ -106,10 +108,26 @@ func (r *AgentWorkspaceGrantRepo) Create(ctx context.Context, g *domain.AgentWor
 func (r *AgentWorkspaceGrantRepo) Reactivate(ctx context.Context, id uuid.UUID, role, apiKeyPrefix, apiKeyHash string, invitedBy *uuid.UUID) error {
 	const q = `
 		UPDATE agent_workspace_grants
-		SET role = $2, api_key_prefix = $3, api_key_hash = $4, invited_by = $5, revoked_at = NULL
+		SET role = $2, api_key_prefix = $3, api_key_hash = $4, api_key_sha256 = NULL, invited_by = $5, revoked_at = NULL
 		WHERE id = $1
 	`
 	_, err := r.db.ExecContext(ctx, q, id, role, apiKeyPrefix, apiKeyHash, invitedBy)
+	return err
+}
+
+// SetAPIKeySHA256 writes the fast-path digest for a grant without touching any
+// other column. expectedBcryptHash guards against a Reactivate that replaced
+// the key between the read and this write; no rows affected is a normal race
+// outcome, not an error.
+func (r *AgentWorkspaceGrantRepo) SetAPIKeySHA256(ctx context.Context, id uuid.UUID, digest, expectedBcryptHash string) error {
+	const q = `
+		UPDATE agent_workspace_grants
+		SET api_key_sha256 = $2
+		WHERE id = $1
+		  AND api_key_hash = $3
+		  AND api_key_sha256 IS DISTINCT FROM $2
+	`
+	_, err := r.db.ExecContext(ctx, q, id, digest, expectedBcryptHash)
 	return err
 }
 

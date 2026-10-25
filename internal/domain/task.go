@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -186,12 +187,23 @@ type Task struct {
 	CheckoutGeneration int64      `json:"checkout_generation" db:"checkout_generation"`
 
 	// Computed fields — populated by enriched list/get queries, not stored columns.
-	SubtaskCount  int     `json:"subtask_count"`
-	AssigneeName  *string `json:"assignee_name,omitempty"`
-	ReviewerName  *string `json:"reviewer_name,omitempty"`
-	CreatedByName *string `json:"created_by_name,omitempty"`
-	ArtifactCount int     `json:"artifact_count"`
-	VCSLinkCount  int     `json:"vcs_link_count"`
+	SubtaskCount int `json:"subtask_count"`
+	// OpenSubtaskCount counts subtasks whose status category is not done/cancelled.
+	OpenSubtaskCount int `json:"open_subtask_count"`
+	// DependencyCount counts `blocks` edges this task waits on (it is the dependent
+	// side); OpenDependencyCount those whose blocker is not done/cancelled.
+	DependencyCount     int     `json:"dependency_count"`
+	OpenDependencyCount int     `json:"open_dependency_count"`
+	AssigneeName        *string `json:"assignee_name,omitempty"`
+	ReviewerName        *string `json:"reviewer_name,omitempty"`
+	CreatedByName       *string `json:"created_by_name,omitempty"`
+	ArtifactCount       int     `json:"artifact_count"`
+	VCSLinkCount        int     `json:"vcs_link_count"`
+	// AcceptanceMissing is true when the task has subtasks, all of them are
+	// done or cancelled, and some pr link (own or a child's) has no recorded
+	// acceptance. Links recorded as the subject of a review (role=review) are
+	// not counted: they are not the task's own deliverable. A signal only: nothing moves on it.
+	AcceptanceMissing bool `json:"acceptance_missing"`
 	// VCSPipelineStatus is the latest GitLab pipeline state across the task's
 	// links (nil when none reported) — the board card badge reads it.
 	VCSPipelineStatus *string `json:"vcs_pipeline_status"`
@@ -378,6 +390,57 @@ type TaskDependency struct {
 	DependsOnTaskID uuid.UUID      `json:"depends_on_task_id" db:"depends_on_task_id"`
 	DependencyType  DependencyType `json:"dependency_type" db:"dependency_type"`
 	CreatedAt       time.Time      `json:"created_at" db:"created_at"`
+	// Condition is what the edge waits for. task_done (the default) releases it
+	// when the blocker is done/cancelled; any other condition is released by
+	// evidence instead — see ConditionSatisfied.
+	Condition      DependencyCondition `json:"condition" db:"condition"`
+	EvidenceURL    *string             `json:"evidence_url,omitempty" db:"evidence_url"`
+	ConditionMetAt *time.Time          `json:"condition_met_at,omitempty" db:"condition_met_at"`
+	// ConditionSatisfied is the edge-level half of the satisfaction rule,
+	// computed by DependencySatisfiedSQL on read; it ignores the blocker status.
+	ConditionSatisfied bool `json:"condition_satisfied" db:"condition_satisfied"`
+	// Warning is set on the create response only (never stored): the blocker is
+	// a monitor/umbrella/recurring card that normally never reaches done.
+	Warning string `json:"warning,omitempty" db:"-"`
+}
+
+// DependencyCondition names what a `blocks` edge is waiting for.
+type DependencyCondition string
+
+const (
+	DependencyConditionTaskDone          DependencyCondition = "task_done"
+	DependencyConditionAccessReady       DependencyCondition = "access_ready"
+	DependencyConditionContractReady     DependencyCondition = "contract_ready"
+	DependencyConditionArtifactPublished DependencyCondition = "artifact_published"
+	DependencyConditionDeployed          DependencyCondition = "deployed"
+	DependencyConditionAccepted          DependencyCondition = "accepted"
+)
+
+// Valid reports whether c is a known condition.
+func (c DependencyCondition) Valid() bool {
+	switch c {
+	case DependencyConditionTaskDone, DependencyConditionAccessReady, DependencyConditionContractReady,
+		DependencyConditionArtifactPublished, DependencyConditionDeployed, DependencyConditionAccepted:
+		return true
+	}
+	return false
+}
+
+// EvidenceSatisfied is the single Go definition of "the edge is released by
+// its own condition": a non-task_done condition, marked met, with evidence.
+// The blocker being done/cancelled releases the edge independently of this.
+// SQL readers use DependencySatisfiedSQL, which must stay equivalent.
+func (d TaskDependency) EvidenceSatisfied() bool {
+	return d.Condition != "" && d.Condition != DependencyConditionTaskDone &&
+		d.ConditionMetAt != nil && d.EvidenceURL != nil && strings.TrimSpace(*d.EvidenceURL) != ""
+}
+
+// DependencySatisfiedSQL returns the SQL predicate equivalent to
+// EvidenceSatisfied for the task_dependencies row aliased as alias. Every SQL
+// reader that asks "is this blocker still holding" ORs it with the blocker's
+// done/cancelled check instead of writing its own copy.
+func DependencySatisfiedSQL(alias string) string {
+	return "(" + alias + ".condition <> 'task_done' AND " + alias + ".condition_met_at IS NOT NULL AND COALESCE(btrim(" + alias + ".evidence_url), '') <> '')"
 }
 
 // EnrichedTaskDependency is a TaskDependency joined with the OTHER task in the

@@ -50,7 +50,7 @@ func setupReviewAssigneeAuditEnv(t *testing.T) *reviewAssigneeAuditEnv {
 		},
 	}
 	effectiveRules := &domain.EffectiveAssignmentRules{
-		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "garfield", Source: "project"},
+		DefaultAssignee: &domain.EffectiveAssignmentRule{Value: "gary", Source: "project"},
 	}
 	svc, taskRepo, statusRepo, agentRepo, projRepo := setupTaskServiceWithWorkflow(wfResp, effectiveRules)
 
@@ -68,7 +68,7 @@ func setupReviewAssigneeAuditEnv(t *testing.T) *reviewAssigneeAuditEnv {
 		ID: env.reviewStatusID, ProjectID: env.projectID, Category: domain.StatusCategoryReview, Name: "review",
 	}
 	projRepo.items[env.projectID] = &domain.Project{ID: env.projectID, WorkspaceID: workspaceID}
-	agentRepo.items[env.leadID] = &domain.Agent{ID: env.leadID, WorkspaceID: workspaceID, Slug: "garfield"}
+	agentRepo.items[env.leadID] = &domain.Agent{ID: env.leadID, WorkspaceID: workspaceID, Slug: "gary"}
 	agentRepo.items[env.builderID] = &domain.Agent{ID: env.builderID, WorkspaceID: workspaceID, Slug: "builder"}
 
 	env.svc, env.tasks = svc, taskRepo

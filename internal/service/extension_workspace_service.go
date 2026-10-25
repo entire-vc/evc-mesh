@@ -94,6 +94,21 @@ type WorkspaceExtensionView struct {
 	// SettingsManagedElsewhere: the stored settings are written only through the
 	// extension's own API, so the generic connect/settings/remove calls refuse.
 	SettingsManagedElsewhere bool `json:"settings_managed_elsewhere"`
+	// Activity is set for gitlab/github only, and only when links exist.
+	Activity *ExtensionActivityView `json:"activity,omitempty"`
+}
+
+// ExtensionActivityView is what the workspace's data says about an extension
+// regardless of its connection row: GitLab/GitHub links keep arriving through
+// webhooks whose secret lives at instance level, with no integration_config.
+type ExtensionActivityView struct {
+	Links       int        `json:"links"`
+	LastEventAt *time.Time `json:"last_event_at,omitempty"`
+}
+
+// VCSActivitySource counts a provider's vcs_links in a workspace.
+type VCSActivitySource interface {
+	WorkspaceProviderActivity(ctx context.Context, workspaceID uuid.UUID, provider string) (count int, last *time.Time, err error)
 }
 
 // ExtensionTestResult is the body of POST .../test.
@@ -114,11 +129,18 @@ type ExtensionWorkspaceService struct {
 	// external serves every runtime=external extension (they are registered at
 	// run time, so no id-specific hook can be wired at startup).
 	external ExtensionSaveHook
+	activity VCSActivitySource
 }
 
 // ExternalRuntime marks a provider backed by an external service.
 type ExternalRuntime interface {
 	IsExternal() bool
+}
+
+// WithVCSActivity lets the list report link activity for the VCS extensions.
+func (s *ExtensionWorkspaceService) WithVCSActivity(a VCSActivitySource) *ExtensionWorkspaceService {
+	s.activity = a
+	return s
 }
 
 // WithExternalHook registers the save hook shared by external extensions.
@@ -576,6 +598,15 @@ func (s *ExtensionWorkspaceService) view(ctx context.Context, ws uuid.UUID, p ex
 	_, v.CanPurgeData = p.(ExtensionDataPurger)
 	if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
 		v.SettingsManagedElsewhere = true
+	}
+	if s.activity != nil && (m.ID == "gitlab" || m.ID == "github") {
+		n, last, actErr := s.activity.WorkspaceProviderActivity(ctx, ws, m.ID)
+		if actErr != nil {
+			return WorkspaceExtensionView{}, actErr
+		}
+		if n > 0 {
+			v.Activity = &ExtensionActivityView{Links: n, LastEventAt: last}
+		}
 	}
 	row, err := s.storedRow(ctx, ws, m.ID)
 	if err != nil {

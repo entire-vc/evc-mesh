@@ -364,3 +364,9 @@
   /* Spacing unit (Tailwind --spacing) */
   --space-unit: 0.25rem;
 }
+
+/* Compact density (profile > Appearance): the rem is the only thing that moves, so type,
+ * --space-unit spacing and rem-sized controls shrink together, about the same as -10% zoom. */
+html[data-density="compact"] {
+  font-size: 90%;
+}

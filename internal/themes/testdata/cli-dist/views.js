@@ -1,5 +1,5 @@
 // src/index.tsx
-import { Draggable, InlineEdit, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
+import { Draggable, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
 import { jsx, jsxs } from "react/jsx-runtime";
 var text = (v) => v == null || v === "" ? "" : Array.isArray(v) ? v.join(", ") : String(v);
 function field(f, task) {
@@ -26,7 +26,7 @@ var Card = ({ data }) => {
   const { task } = data;
   const body = /* @__PURE__ */ jsxs("div", { className: "card", children: [
     /* @__PURE__ */ jsxs("div", { className: "card-title", children: [
-      data.isOverlay ? task.title : /* @__PURE__ */ jsx(InlineEdit, { taskId: task.id, field: "title", children: /* @__PURE__ */ jsx(TaskLink, { taskId: task.id, children: task.title }) }),
+      data.isOverlay ? task.title : /* @__PURE__ */ jsx(TaskLink, { taskId: task.id, children: task.title }),
       /* @__PURE__ */ jsx(TaskBadges, { task })
     ] }),
     data.fields.map((f) => field(f, task))

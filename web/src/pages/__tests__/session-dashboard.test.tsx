@@ -15,8 +15,8 @@ const SAMPLE_COST: CostMetrics = {
   session_count: 8,
   reported_session_count: 8,
   by_agent: [
-    { agent_id: "a1", agent_name: "Linus", cost: 8, tokens_in: 100_000, tokens_out: 30_000 },
-    { agent_id: "a2", agent_name: "Garfield", cost: 4.5, tokens_in: 50_000, tokens_out: 15_000 },
+    { agent_id: "a1", agent_name: "Liam", cost: 8, tokens_in: 100_000, tokens_out: 30_000 },
+    { agent_id: "a2", agent_name: "Gary", cost: 4.5, tokens_in: 50_000, tokens_out: 15_000 },
   ],
   by_project: [],
   by_day: [],
@@ -52,7 +52,7 @@ type AgentCardFixture = React.ComponentProps<typeof AgentSessionCard>["agent"];
 
 const BASE_AGENT: AgentCardFixture = {
 	id: "agent-1",
-	name: "Gandalf",
+	name: "Grace",
 	status: "busy",
 	last_heartbeat_at: "2026-10-03T18:20:20Z",
 	seconds_since_heartbeat: 30,
@@ -193,8 +193,8 @@ describe("CostTrackingSection", () => {
     expect(screen.getByText("$1.56")).toBeInTheDocument();
     expect(screen.getByText("8 of 8 sessions reported (100%)")).toBeInTheDocument();
 
-    expect(screen.getByText("Linus")).toBeInTheDocument();
-    expect(screen.getByText("Garfield")).toBeInTheDocument();
+    expect(screen.getByText("Liam")).toBeInTheDocument();
+    expect(screen.getByText("Gary")).toBeInTheDocument();
     // $8.00 appears twice: agent-A's spend and the (coincidentally equal-cost) top task.
     expect(screen.getAllByText("$8.00")).toHaveLength(2);
     expect(screen.getByText("$4.50")).toBeInTheDocument();

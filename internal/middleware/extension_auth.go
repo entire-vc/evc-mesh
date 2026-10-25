@@ -149,6 +149,7 @@ var extensionRouteCapabilities = map[string]string{
 	"POST /api/v1/tasks/:task_id/assign":                 "tasks:write",
 	"POST /api/v1/tasks/:task_id/subtasks":               "tasks:write",
 	"POST /api/v1/tasks/:task_id/dependencies":           "tasks:write",
+	"PATCH /api/v1/tasks/:task_id/dependencies/:dep_id":  "tasks:write",
 	"DELETE /api/v1/tasks/:task_id/dependencies/:dep_id": "tasks:write",
 
 	// comments

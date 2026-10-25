@@ -15,8 +15,6 @@
     "spark": "Каталог Spark",
     "analytics": "Аналитика",
     "events": "События",
-    "integrations": "Интеграции",
-    "connectedApps": "Доступ внешних приложений",
     "workspaceSettings": "Настройки пространства",
     "projectSettings": "Настройки проекта",
     "extensions": "Расширения",

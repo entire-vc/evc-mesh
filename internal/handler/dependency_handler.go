@@ -37,6 +37,16 @@ func (h *DependencyHandler) WithGraphReader(reader repository.DependencyGraphRea
 type createDependencyRequest struct {
 	DependsOnTaskID uuid.UUID             `json:"depends_on_task_id"`
 	DependencyType  domain.DependencyType `json:"dependency_type"`
+	// Condition defaults to task_done; EvidenceURL with another condition marks
+	// the edge satisfied at creation.
+	Condition   domain.DependencyCondition `json:"condition"`
+	EvidenceURL *string                    `json:"evidence_url"`
+}
+
+// updateDependencyRequest is the PATCH body; omitted fields are kept.
+type updateDependencyRequest struct {
+	Condition   *domain.DependencyCondition `json:"condition"`
+	EvidenceURL *string                     `json:"evidence_url"`
 }
 
 // dependencyListResponse is returned by List. It replaces the old bare-array
@@ -93,6 +103,8 @@ func (h *DependencyHandler) Create(c echo.Context) error {
 		TaskID:          taskID,
 		DependsOnTaskID: req.DependsOnTaskID,
 		DependencyType:  depType,
+		Condition:       req.Condition,
+		EvidenceURL:     req.EvidenceURL,
 	}
 
 	if err := h.depService.Create(c.Request().Context(), dep); err != nil {
@@ -100,6 +112,47 @@ func (h *DependencyHandler) Create(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusCreated, dep)
+}
+
+// Update handles PATCH /tasks/:task_id/dependencies/:dep_id: set the edge's
+// condition and/or evidence_url. Evidence on a non-task_done edge marks it met
+// now, so the dependent stops being held without the blocker reaching done.
+func (h *DependencyHandler) Update(c echo.Context) error {
+	taskID, err := resolveTaskID(c.Request().Context(), c.Param("task_id"), h.taskService)
+	if err != nil {
+		return handleError(c, err)
+	}
+	depID, err := uuid.Parse(c.Param("dep_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid dependency_id"))
+	}
+	var req updateDependencyRequest
+	if bindErr := c.Bind(&req); bindErr != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
+	}
+	if req.Condition == nil && req.EvidenceURL == nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("condition or evidence_url is required"))
+	}
+	ctx := c.Request().Context()
+	deps, err := h.depService.ListByTask(ctx, taskID)
+	if err != nil {
+		return handleError(c, err)
+	}
+	belongs := false
+	for i := range deps {
+		if deps[i].ID == depID {
+			belongs = true
+			break
+		}
+	}
+	if !belongs {
+		return c.JSON(http.StatusNotFound, apierror.NotFound("TaskDependency"))
+	}
+	dep, err := h.depService.UpdateCondition(ctx, depID, service.UpdateDependencyConditionInput{Condition: req.Condition, EvidenceURL: req.EvidenceURL})
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, dep)
 }
 
 // Delete handles DELETE /tasks/:task_id/dependencies/:dep_id

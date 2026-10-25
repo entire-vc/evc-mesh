@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mergeCatalog, trustOf, type WorkspaceDto } from "@/hooks/useExtensionCatalog";
-import { applyFilters, filtersFromParams, filtersToParams } from "@/lib/extension-catalog-filter";
+import { KINDS, applyFilters, filtersFromParams, filtersToParams } from "@/lib/extension-catalog-filter";
 import { allowedDomains, describeCapabilities } from "@/lib/extension-capabilities";
 
 const summary = (id: string, over: Record<string, unknown> = {}) => ({
@@ -43,6 +43,23 @@ describe("catalog filters", () => {
     expect(applyFilters(entries, filtersFromParams(new URLSearchParams("trust=custom"))).map((e) => e.id)).toEqual(["custom-x"]);
     expect(applyFilters(entries, filtersFromParams(new URLSearchParams("q=RUNNER"))).map((e) => e.id)).toEqual(["runner"]);
     expect(applyFilters(entries, filtersFromParams(new URLSearchParams("q=nothing-like-this")))).toEqual([]);
+  });
+
+  it("offers theme as a third kind and filters to exactly the themes", () => {
+    expect(KINDS).toEqual(["integration", "plugin", "theme"]);
+    const withThemes = mergeCatalog(
+      [
+        summary("gitlab"),
+        summary("telegram", { kind: "plugin" }),
+        summary("graphite", { kind: "theme", category: "appearance" }),
+        summary("board-studio", { kind: "theme", category: "appearance" }),
+      ],
+      [],
+    );
+    const themes = applyFilters(withThemes, filtersFromParams(new URLSearchParams("kind=theme")));
+    expect(themes.map((e) => e.id).sort()).toEqual(["board-studio", "graphite"]);
+    const integrations = applyFilters(withThemes, filtersFromParams(new URLSearchParams("kind=integration")));
+    expect(integrations.map((e) => e.id)).toEqual(["gitlab"]);
   });
 
   it("sorts popular (connected first), newest and recently updated", () => {

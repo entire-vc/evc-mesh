@@ -4,7 +4,7 @@ import { api, ApiRequestError } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { ManifestCapabilities } from "@/lib/extension-capabilities";
 
-export type ExtensionKind = "integration" | "plugin";
+export type ExtensionKind = "integration" | "plugin" | "theme";
 export type TrustLevel = "official" | "verified" | "community" | "custom";
 
 export interface ExtensionStatusDto {
@@ -28,6 +28,12 @@ export interface ExtensionManifest {
   /** Settings schemas per level; a level may be a `$ref` into `schemas`. */
   settings?: { instance?: FieldSchema; workspace?: FieldSchema; project?: FieldSchema };
   schemas?: Record<string, unknown>;
+}
+
+/** Links the workspace's own data holds for a VCS extension, connection row or not. */
+export interface ExtensionActivityDto {
+  links: number;
+  last_event_at?: string;
 }
 
 export interface ConnectionDto {
@@ -61,6 +67,7 @@ export interface CatalogEntry {
   manifest: ExtensionManifest;
   status?: ExtensionStatusDto;
   connection?: ConnectionDto | null;
+  activity?: ExtensionActivityDto;
   /** Catalog-supplied extras (absent for built-ins). */
   versions?: VersionEntry[];
   checks?: ChecksCard;
@@ -96,7 +103,7 @@ export interface SummaryDto {
 export interface WorkspaceDto {
   id: string; name: string; version: string; kind: string; category: string;
   manifest?: ExtensionManifest & { runtime?: string; publisher?: string; description?: string };
-  status?: ExtensionStatusDto; connection?: ConnectionDto | null;
+  status?: ExtensionStatusDto; connection?: ConnectionDto | null; activity?: ExtensionActivityDto;
   can_purge_data?: boolean; settings_managed_elsewhere?: boolean;
 }
 
@@ -125,7 +132,7 @@ export function mergeCatalog(
     const status = w?.status;
     return {
       id: s.id, name: s.name, version: s.version,
-      kind: s.kind === "plugin" ? "plugin" : "integration",
+      kind: s.kind === "plugin" || s.kind === "theme" ? s.kind : "integration",
       runtime: s.runtime, publisher: s.publisher, description: s.description,
       category: s.category, trust: trustOf(s.trust_level, s.source), source: s.source,
       blocked: s.blocked, blockedReason: s.blocked_reason,
@@ -134,7 +141,7 @@ export function mergeCatalog(
       connected: Boolean(w?.connection) || status?.source === "instance",
       enabled: Boolean(status?.enabled),
       createdAt: s.created_at ?? "", updatedAt: s.updated_at ?? "",
-      manifest: s.manifest ?? {}, status, connection: w?.connection, versions: s.versions, checks: s.checks,
+      manifest: s.manifest ?? {}, status, connection: w?.connection, activity: w?.activity, versions: s.versions, checks: s.checks,
       canPurgeData: Boolean(w?.can_purge_data), managedElsewhere: Boolean(w?.settings_managed_elsewhere),
     };
   };

@@ -153,6 +153,11 @@ export interface Task {
   updated_at: string;
   completed_at: string | null;
   subtask_count?: number;
+  /** Subtasks not in a done/cancelled status category. */
+  open_subtask_count?: number;
+  /** `blocks` edges where this task is the dependent, and how many blockers are not done/cancelled. */
+  dependency_count?: number;
+  open_dependency_count?: number;
   artifact_count?: number;
   vcs_link_count?: number;
   /** Distinct providers of the task's VCS links (`github`, `gitlab`); lets a card badge be drawn per provider. */

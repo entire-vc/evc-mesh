@@ -24,3 +24,9 @@ event) that do not change existing behaviour do not raise it.
 Maintainers document each breaking extension API change and its migration path
 for existing extensions. Update the version constant together with that decision
 and the matching handler test so the change is deliberate and reviewable.
+
+## Agent API contract
+
+The `/api/v1/agents/me/*` surface used by external runners is pinned by contract
+tests (`go test ./internal/handler -run Contract`); what counts as breaking is in
+`agents-me-contract.md`.

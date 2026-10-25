@@ -10,8 +10,5 @@
     "minutesAgo": "{{count}} мин назад",
     "hoursAgo": "{{count}} ч назад",
     "daysAgo": "{{count}} дн назад"
-  },
-  "i18nDemo": {
-    "greeting": "Привет, {{name}}"
   }
 }

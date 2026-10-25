@@ -308,7 +308,6 @@
       "moveUp": "Move up",
       "moveDown": "Move down",
       "cancel": "Cancel",
-      "save": "Save",
       "delete": "Delete"
     },
     "assign": {
@@ -914,15 +913,14 @@
       "board": "Board",
       "list": "List",
       "calendar": "Calendar",
-      "docs": "Docs"
-    },
-    "formats": {
+      "docs": "Docs",
+      "chat": "Chat",
       "timeline": "Dependencies",
-      "updates": "Updates"
+      "updates": "Updates",
+      "extension": "Extension"
     },
     "moreViews": "More views",
     "moreViewsActive": "{{name}} - more views",
-    "formatsLabel": "Formats",
     "saveCurrent": "Save current view",
     "resetFilters": "Reset filters",
     "myViews": "My views",
@@ -1179,6 +1177,9 @@
       "light": "Light",
       "dark": "Dark",
       "system": "System",
+      "comfortable": "Comfortable",
+      "compact": "Compact",
+      "densityTitle": "Density",
       "forcedDark": "The current theme only has a dark mode, so it is always used here. Your choice applies in other themes.",
       "forcedLight": "The current theme only has a light mode, so it is always used here. Your choice applies in other themes."
     },
@@ -1212,8 +1213,6 @@
       "label": "Theme",
       "inherit": "Instance theme",
       "inheritHint": "Follows whatever theme the instance administrator picks.",
-      "builtin": "Mesh",
-      "builtinHint": "The built-in look.",
       "selected": "Selected"
     },
     "empty": {

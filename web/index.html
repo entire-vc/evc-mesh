@@ -25,6 +25,9 @@
           document.documentElement.classList.add("dark");
         }
       } catch (e) {}
+      try {
+        if (localStorage.getItem("density") === "compact") document.documentElement.dataset.density = "compact";
+      } catch (e) {}
     </script>
     <!--
       Instance theme before the first frame: public/instance-theme.js applies

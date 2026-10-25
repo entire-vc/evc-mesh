@@ -150,6 +150,9 @@ func TestChatRunnerCommandAddressedToOtherRunnerIsNotIssued(t *testing.T) {
 	require.Len(t, cmds, 2)
 }
 
+// historyRunner is the runner instance holding the active turn of historyThread.
+var historyRunner = uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+
 // historyThread: one old exchange plus n more, then an active claimed turn.
 func (f *chatDeleteFixture) historyThread(t *testing.T, pairs int) (thread, current uuid.UUID, ids []uuid.UUID) {
 	t.Helper()
@@ -172,8 +175,8 @@ func (f *chatDeleteFixture) historyThread(t *testing.T, pairs int) (thread, curr
 	}
 	current = add("user", "done", "current", n)
 	agentMsg := add("agent", "streaming", "", n+1)
-	_, err = f.db.Exec(`INSERT INTO ext_agent_chat_turns (workspace_id, thread_id, agent_id, user_message_id, agent_message_id, state, lease_until, expires_at)
-		VALUES ($1,$2,$3,$4,$5,'claimed', now() + interval '1 minute', now() + interval '1 day')`, f.wsA, thread, f.agentA, current, agentMsg)
+	_, err = f.db.Exec(`INSERT INTO ext_agent_chat_turns (workspace_id, thread_id, agent_id, user_message_id, agent_message_id, state, lease_until, expires_at, runner_id)
+		VALUES ($1,$2,$3,$4,$5,'claimed', now() + interval '1 minute', now() + interval '1 day', $6)`, f.wsA, thread, f.agentA, current, agentMsg, historyRunner)
 	require.NoError(t, err)
 	return thread, current, ids
 }
@@ -184,7 +187,7 @@ func TestChatRunnerHistoryReturnsExactlyLastNInOrder(t *testing.T) {
 	thread, current, ids := f.historyThread(t, 5) // 10 past messages
 	repo := NewChatRunnerRepo(f.db)
 
-	h, err := repo.History(ctx, f.agentA, thread, 4, nil)
+	h, err := repo.History(ctx, f.agentA, &historyRunner, thread, 4, nil)
 	require.NoError(t, err)
 	require.Len(t, h.Messages, 4)
 	require.True(t, h.HasMore)
@@ -194,18 +197,18 @@ func TestChatRunnerHistoryReturnsExactlyLastNInOrder(t *testing.T) {
 	}
 
 	// the cursor pages further back without overlap
-	older, err := repo.History(ctx, f.agentA, thread, 4, &h.Messages[0].MessageID)
+	older, err := repo.History(ctx, f.agentA, &historyRunner, thread, 4, &h.Messages[0].MessageID)
 	require.NoError(t, err)
 	require.Len(t, older.Messages, 4)
 	require.Equal(t, ids[2], older.Messages[0].MessageID)
 	require.Equal(t, ids[5], older.Messages[3].MessageID)
 	require.True(t, older.HasMore)
 
-	all, err := repo.History(ctx, f.agentA, thread, 0, nil)
+	all, err := repo.History(ctx, f.agentA, &historyRunner, thread, 0, nil)
 	require.NoError(t, err)
 	require.Len(t, all.Messages, 10)
 	require.False(t, all.HasMore)
-	big, err := repo.History(ctx, f.agentA, thread, 5000, nil)
+	big, err := repo.History(ctx, f.agentA, &historyRunner, thread, 5000, nil)
 	require.NoError(t, err)
 	require.Len(t, big.Messages, 10, "limit is capped, not rejected")
 }
@@ -221,7 +224,7 @@ func TestChatRunnerHistorySkipsBodylessFailuresAndListsAttachmentMetadata(t *tes
 		VALUES ($1,$2,$3,'chat/k.png','a.png','image/png',10, now())`, f.wsA, thread, ids[0])
 	require.NoError(t, err)
 
-	h, err := NewChatRunnerRepo(f.db).History(ctx, f.agentA, thread, 50, nil)
+	h, err := NewChatRunnerRepo(f.db).History(ctx, f.agentA, &historyRunner, thread, 50, nil)
 	require.NoError(t, err)
 	require.Len(t, h.Messages, 4, "the empty failed message is left out")
 	require.Equal(t, []ChatHistoryAttachment{{FileName: "a.png", Mime: "image/png", Size: 10}}, h.Messages[0].Attachments)
@@ -234,18 +237,27 @@ func TestChatRunnerHistoryForbiddenForForeignRunnerOrIdleThread(t *testing.T) {
 	thread, _, _ := f.historyThread(t, 1)
 	repo := NewChatRunnerRepo(f.db)
 
-	_, err := repo.History(ctx, f.agentB, thread, 5, nil)
+	_, err := repo.History(ctx, f.agentB, &historyRunner, thread, 5, nil)
 	requireChatStatus(t, err, http.StatusForbidden)
-	_, err = repo.History(ctx, uuid.Nil, thread, 5, nil)
+	_, err = repo.History(ctx, uuid.Nil, &historyRunner, thread, 5, nil)
 	requireChatStatus(t, err, http.StatusForbidden)
+
+	// D3: the right agent key but another runner instance, or none named, is not the holder
+	other := uuid.New()
+	_, err = repo.History(ctx, f.agentA, &other, thread, 5, nil)
+	requireChatStatus(t, err, http.StatusForbidden)
+	_, err = repo.History(ctx, f.agentA, nil, thread, 5, nil)
+	requireChatStatus(t, err, http.StatusForbidden)
+	_, err = repo.History(ctx, f.agentA, &historyRunner, thread, 5, nil)
+	require.NoError(t, err, "control: the holder reads it")
 
 	// no active turn: the runner does not hold the thread any more
 	_, err = f.db.Exec(`UPDATE ext_agent_chat_turns SET state = 'done' WHERE thread_id = $1`, thread)
 	require.NoError(t, err)
-	_, err = repo.History(ctx, f.agentA, thread, 5, nil)
+	_, err = repo.History(ctx, f.agentA, &historyRunner, thread, 5, nil)
 	requireChatStatus(t, err, http.StatusForbidden)
 
-	_, err = repo.History(ctx, f.agentA, uuid.New(), 5, nil)
+	_, err = repo.History(ctx, f.agentA, &historyRunner, uuid.New(), 5, nil)
 	requireChatStatus(t, err, http.StatusForbidden)
 }
 
@@ -254,12 +266,12 @@ func TestChatRunnerHistoryForbiddenAfterLeaseExpired(t *testing.T) {
 	f := newChatDeleteFixture(t)
 	thread, _, _ := f.historyThread(t, 1)
 	repo := NewChatRunnerRepo(f.db)
-	_, err := repo.History(context.Background(), f.agentA, thread, 5, nil)
+	_, err := repo.History(context.Background(), f.agentA, &historyRunner, thread, 5, nil)
 	require.NoError(t, err)
 
 	_, err = f.db.Exec(`UPDATE ext_agent_chat_turns SET lease_until = now() - interval '1 second' WHERE thread_id = $1`, thread)
 	require.NoError(t, err)
-	_, err = repo.History(context.Background(), f.agentA, thread, 5, nil)
+	_, err = repo.History(context.Background(), f.agentA, &historyRunner, thread, 5, nil)
 	requireChatStatus(t, err, http.StatusForbidden)
 }
 

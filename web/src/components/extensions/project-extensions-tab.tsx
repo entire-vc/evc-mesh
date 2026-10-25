@@ -17,6 +17,12 @@ import {
 } from "@/lib/extension-settings";
 import { apiErrorMessage } from "@/lib/api-error";
 import * as i18nFmt from "@/i18n/format";
+import { ChatSettingsCard } from "@/components/extensions/chat-settings-card";
+import { useParams, useSearchParams } from "react-router";
+
+// Chat with Agent has its own settings endpoint and card; the generic binding
+// card would show a second, conflicting copy of it.
+const CHAT_EXTENSION_ID = "agent-chat";
 
 /** Actions with their own button; `check` has the dedicated «Проверить». */
 const EXTRA_ACTION_METHOD = "POST";
@@ -102,7 +108,7 @@ function BindingCard({
   return (
     <Card data-testid={`binding-${id}`}>
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-col gap-3">
           <CardTitle className="flex items-center gap-2">
             {name}
             <Badge variant={binding.enabled ? "success" : "secondary"}>
@@ -189,7 +195,7 @@ function BindingCard({
 
 function NewBinding({
   projectId, entries, onDone,
-}: { projectId: string; entries: CatalogEntry[]; onDone: () => void }) {
+}: { projectId: string; entries: CatalogEntry[]; onDone: (extensionId: string) => void }) {
   const { t } = useTranslation("integrations");
   const [pick, setPick] = useState(entries[0]?.id ?? "");
   const entry = entries.find((e) => e.id === pick) ?? entries[0];
@@ -216,7 +222,7 @@ function NewBinding({
             onSubmit={async (settings) => {
               await saveProjectExtension(projectId, entry.id, { enabled: true, settings });
               toast.success(t("projectTab.bound", { name: entry.name }));
-              onDone();
+              onDone(entry.id);
             }}
           />
         )}
@@ -250,11 +256,24 @@ export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
   useEffect(() => { setBindings(null); load(); }, [load]);
 
   const byId = useMemo(() => new Map(catalog.entries.map((e) => [e.id, e])), [catalog.entries]);
+  const { wsSlug, projectSlug } = useParams();
+  const genericBindings = (bindings ?? []).filter((b) => b.extension_id !== CHAT_EXTENSION_ID);
   const bound = new Set((bindings ?? []).map((b) => b.extension_id));
   const bindable = catalog.entries.filter(
-    (e) => e.manifest.levels?.project && e.connected && e.enabled && !bound.has(e.id),
+    (e) => e.manifest.levels?.project && e.connected && e.enabled && !bound.has(e.id) && e.id !== CHAT_EXTENSION_ID,
   );
-  const refresh = () => { setAdding(false); load(); };
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabs = [
+    ...(byId.has(CHAT_EXTENSION_ID) ? [{ id: CHAT_EXTENSION_ID, name: byId.get(CHAT_EXTENSION_ID)!.name }] : []),
+    ...genericBindings.map((b) => ({ id: b.extension_id, name: byId.get(b.extension_id)?.name ?? b.extension_id })),
+  ];
+  const wanted = searchParams.get("ext");
+  const activeId = tabs.find((x) => x.id === wanted)?.id ?? tabs[0]?.id;
+  const selectTab = (ext: string) => {
+    setAdding(false);
+    setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set("ext", ext); return n; }, { replace: true });
+  };
+  const refresh = (ext?: string) => { setAdding(false); load(); if (ext) selectTab(ext); };
 
   if (failed || catalog.state === "error") {
     return (
@@ -276,27 +295,40 @@ export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
     );
   }
 
+  const activeBinding = genericBindings.find((b) => b.extension_id === activeId);
+
   return (
-    <div className="space-y-4" data-testid="extensions-tab">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted-foreground">{t("projectTab.intro")}</p>
-        {bindable.length > 0 && !adding && (
-          <Button size="sm" onClick={() => setAdding(true)}>
+    <div className="mx-auto max-w-2xl space-y-4" data-testid="extensions-tab">
+      <p className="text-sm text-muted-foreground">{t("projectTab.intro")}</p>
+      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-2" role="tablist">
+        {tabs.map((x) => {
+          const on = !adding && x.id === activeId;
+          return (
+            <Button key={x.id} role="tab" aria-selected={on} data-testid={`ext-tab-${x.id}`} variant={on ? "secondary" : "ghost"} size="sm" onClick={() => selectTab(x.id)}>
+              {x.name}
+            </Button>
+          );
+        })}
+        {bindable.length > 0 && (
+          <Button size="sm" variant={adding ? "secondary" : "outline"} className="ml-auto" onClick={() => setAdding(true)}>
             <Plus className="mr-1.5 h-4 w-4" aria-hidden />{t("projectTab.bindButton")}
           </Button>
         )}
       </div>
       {adding && <NewBinding key={projectId} projectId={projectId} entries={bindable} onDone={refresh} />}
-      {bindings.length === 0 && !adding && (
+      {!adding && activeId === CHAT_EXTENSION_ID && <ChatSettingsCard projectId={projectId} chatPath={`/w/${wsSlug}/p/${projectSlug}/chat`} />}
+      {!adding && activeBinding && activeId !== CHAT_EXTENSION_ID && (
+        <BindingCard key={`${projectId}:${activeBinding.extension_id}`} projectId={projectId} binding={activeBinding} entry={byId.get(activeBinding.extension_id)} onChanged={load} />
+      )}
+      {/* Chat has its own on/off and is always configurable, so it is a tab even
+          with no binding; the empty state still speaks for the bindings. */}
+      {!adding && genericBindings.length === 0 && (
         <Card data-testid="extensions-tab-empty">
           <CardContent className="py-6 text-sm text-muted-foreground">
             {bindable.length > 0 ? t("projectTab.empty") : t("projectTab.emptyNoneConnected")}
           </CardContent>
         </Card>
       )}
-      {bindings.map((b) => (
-        <BindingCard key={`${projectId}:${b.extension_id}`} projectId={projectId} binding={b} entry={byId.get(b.extension_id)} onChanged={load} />
-      ))}
     </div>
   );
 }

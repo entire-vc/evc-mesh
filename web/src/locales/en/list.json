@@ -20,7 +20,6 @@
   },
   "columnPicker": {
     "button": "Columns",
-    "toggle": "Toggle columns",
     "required": "required",
     "reset": "Reset to default"
   },

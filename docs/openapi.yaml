@@ -588,7 +588,7 @@ components:
         mention_wakes:
           type: boolean
           description: >-
-            Dedicated column, not a Capabilities key — see #33b7d4b7.
+            Dedicated column, not a Capabilities key — see an internal ticket.
         status:
           type: string
           enum: [online, offline, busy, error]
@@ -693,6 +693,22 @@ components:
         created_at:
           type: string
           format: date-time
+        condition:
+          type: string
+          enum: [task_done, access_ready, contract_ready, artifact_published, deployed, accepted]
+        evidence_url:
+          type: string
+          nullable: true
+        condition_met_at:
+          type: string
+          format: date-time
+          nullable: true
+        condition_satisfied:
+          type: boolean
+          description: True when the edge is released by its own condition (non-task_done, met, with evidence), independent of the blocker's status. A blocker in done/cancelled releases the edge as before.
+        warning:
+          type: string
+          description: Create response only. See POST.
 
     # ---------- Custom Field Definition ----------
     CustomFieldDefinition:
@@ -2349,9 +2365,20 @@ paths:
                   type: string
                   enum: [blocks, relates_to, is_child_of]
                   default: blocks
+                condition:
+                  type: string
+                  enum: [task_done, access_ready, contract_ready, artifact_published, deployed, accepted]
+                  default: task_done
+                  description: What a blocks edge waits for. Only task_done is released by the blocker reaching done/cancelled.
+                evidence_url:
+                  type: string
+                  description: Proof the condition holds. With a non-task_done condition it marks the edge satisfied at creation.
       responses:
         "201":
-          description: Dependency created
+          description: |
+            Dependency created. `warning` is set when a `blocks` edge with condition task_done
+            targets a card labelled kind:monitor / kind:umbrella or belonging to a recurring
+            schedule. A project with settings.reject_blocks_on_monitor=true answers 409 instead.
           content:
             application/json:
               schema:
@@ -2371,6 +2398,32 @@ paths:
         schema:
           type: string
           format: uuid
+    patch:
+      tags: [Dependencies]
+      summary: Set the condition and/or evidence of a dependency
+      description: |
+        Evidence on a non-task_done edge marks the condition met now; the edge then no longer
+        holds the dependent even though the blocker is not done (`condition_satisfied=true`).
+        An empty evidence_url clears it. Partial update: omitted fields are kept.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                condition:
+                  type: string
+                  enum: [task_done, access_ready, contract_ready, artifact_published, deployed, accepted]
+                evidence_url:
+                  type: string
+      responses:
+        "200":
+          description: Updated dependency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskDependency"
     delete:
       tags: [Dependencies]
       summary: Remove a dependency
@@ -4078,6 +4131,23 @@ paths:
       operationId: getAgentMyTasks
       security:
         - AgentKeyAuth: []
+      parameters:
+        - name: status_category
+          in: query
+          description: backlog, todo, in_progress, review, done, cancelled or triage. Anything else is 400.
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          description: Row cap; `page_size` is accepted as an alias. Omit for the whole feed.
+          schema:
+            type: integer
+            minimum: 1
       responses:
         "200":
           description: Tasks assigned to the agent
@@ -4092,6 +4162,24 @@ paths:
                       $ref: "#/components/schemas/Task"
                   count:
                     type: integer
+                  total_count:
+                    type: integer
+                    description: Rows matching the filter before the limit.
+                  has_more:
+                    type: boolean
+                    description: True when the limit cut the feed (count < total_count).
+        "400":
+          description: Malformed status_category, project_id or limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The key resolved no workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
           description: Unauthorized
           content:
@@ -4107,6 +4195,22 @@ paths:
       security:
         - AgentKeyAuth: []
       parameters:
+        - name: status_category
+          in: query
+          description: backlog, todo, in_progress, review, done, cancelled or triage. Anything else is 400.
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          description: Row cap; `page_size` is accepted as an alias. Omit for the whole feed.
+          schema:
+            type: integer
+            minimum: 1
         - name: timeout
           in: query
           description: Long-poll timeout in seconds (default 30, max 120)
@@ -4128,6 +4232,27 @@ paths:
                       $ref: "#/components/schemas/Task"
                   count:
                     type: integer
+                  total_count:
+                    type: integer
+                    description: Rows matching the filter before the limit.
+                  has_more:
+                    type: boolean
+                    description: True when the limit cut the feed (count < total_count).
+                  changed:
+                    type: boolean
+                    description: True when a notification arrived during the wait; false on timeout or server shutdown.
+        "400":
+          description: Malformed status_category, project_id or limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The key resolved no workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
           description: Unauthorized
           content:
@@ -4142,6 +4267,13 @@ paths:
       operationId: agentEventStream
       security:
         - AgentKeyAuth: []
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          description: Cursor (UUID) of the last event received; missed events are replayed first.
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
           description: SSE stream (text/event-stream). Sends keepalive comments every 30s.
@@ -4149,12 +4281,60 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          description: Last-Event-ID is not a UUID
+        "410":
+          description: Cursor expired or unknown; body carries `code` = `cursor_expired`. Recover with a full GET /agents/me/tasks.
         "401":
           description: Unauthorized
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /api/v1/agents/me/sessions/report:
+    post:
+      tags: [Agents]
+      summary: Add token and cost usage to the calling agent's active session
+      operationId: reportAgentSession
+      security:
+        - AgentKeyAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tokens_in: {type: integer}
+                tokens_out: {type: integer}
+                model: {type: string}
+                estimated_cost: {type: number}
+                task_id: {type: string, format: uuid, description: Scopes the session to a task}
+                tool_breakdown: {type: object, additionalProperties: {type: integer}}
+      responses:
+        "200":
+          description: Totals of the session after this report (additive)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: {type: string, format: uuid}
+                  totals:
+                    type: object
+                    properties:
+                      tokens_in: {type: integer}
+                      tokens_out: {type: integer}
+                      estimated_cost: {type: number}
+                      model_used: {type: string}
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: Session tracking not configured
 
   /api/v1/agents/{agent_id}/sub-agents:
     parameters:
@@ -4228,7 +4408,7 @@ paths:
                   description: >-
                     Dedicated column, not a Capabilities key — flags that a
                     plain @-mention already has a fleet-side path to wake
-                    this agent (see #33b7d4b7). Omit to leave unchanged.
+                    this agent (see an internal ticket). Omit to leave unchanged.
                 zone:
                   type: string
                 max_tasks:

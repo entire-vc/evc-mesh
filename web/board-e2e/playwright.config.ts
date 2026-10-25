@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 const host = "127.0.0.1";
 const cwd = fileURLToPath(new URL("..", import.meta.url));
 export default defineConfig({
-  testDir: ".", testMatch: process.env.DOCS_SHOTS ? /docs-shots\.spec\.ts$/ : /(board-(pagination|dnd|shots|studio)|dashboard|themes)\.spec\.ts$/, workers: 1, retries: 0,
+  testDir: ".", testMatch: process.env.DOCS_SHOTS ? /docs-shots\.spec\.ts$/ : /(board-(pagination|dnd|shots|studio|counters)|dashboard|themes)\.spec\.ts$/, workers: 1, retries: 0,
   use: { baseURL: `http://${host}:3019`, viewport: { width: 1440, height: 900 }, trace: "off",
     channel: process.env.BOARD_BROWSER_CHANNEL },
   webServer: [

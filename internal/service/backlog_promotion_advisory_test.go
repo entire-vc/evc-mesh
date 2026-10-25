@@ -7,23 +7,25 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
 // ---------------------------------------------------------------------------
-// Backlog promotion advisory rule tests (task #9f3f4064, parent #00327dc6).
+// Backlog promotion advisory rule tests (an internal ticket, parent an internal ticket).
 //
 // Contract under test — mirroring <ops-repo>/scripts/mesh-intake-sweep.py:
 //   - A task DEMOTED into backlog from a working status, with NO dependencies, is a
-//     deliberate park and must NOT be advised as promotable (#b832d451: vacuously-true
+//     deliberate park and must NOT be advised as promotable (an internal ticket: vacuously-true
 //     empty-dep-set undid a park in 26 minutes).
 //   - A task BORN in backlog (never moved), with no dependencies, IS promotable —
 //     that is genuine intake, the positive control.
 //   - The demotion-park guard must NOT protect a task that HAS dependencies, even one
 //     with a parent_task_id and a real (cleared) dependency — was_deliberately_parked's
 //     own dep_ids-empty gate means such a card is judged on dependency-clear alone
-//     (#bbf3db92: a naive "last transition = demotion" check WITHOUT this gate would
+//     (an internal ticket: a naive "last transition = demotion" check WITHOUT this gate would
 //     wrongly protect this exact class of card, diverging from the live sweep, which
 //     re-promoted it twice over 7.5h before the label route was added).
 //   - Advisory only: SweepAdvisory never calls MoveTask (there is no mover wired in at
@@ -164,7 +166,7 @@ func TestBacklogPromotionAdvisory_DemotedNoDeps_NotPromotable(t *testing.T) {
 	task := h.addTask(t, projectID, backlog.ID)
 	h.addMove(t, task, "In Progress", "Backlog", time.Now().Add(-26*time.Minute))
 	// No dependencies — all_deps_cleared([]) would be vacuously true; this is
-	// EXACTLY the #b832d451 shape (demoted, zero deps).
+	// EXACTLY the an internal ticket shape (demoted, zero deps).
 
 	decisions, err := h.svc.SweepAdvisory(context.Background())
 	if err != nil {
@@ -176,7 +178,7 @@ func TestBacklogPromotionAdvisory_DemotedNoDeps_NotPromotable(t *testing.T) {
 	}
 }
 
-// --- Negative control 2 (the #bbf3db92 trap): demoted + parented + real cleared
+// --- Negative control 2 (the an internal ticket trap): demoted + parented + real cleared
 // dependency → the demotion-park guard must NOT fire; the card is judged on its
 // (cleared) dependency alone, matching the live sweep's actual behaviour. This test
 // specifically guards against a NAIVE port that checks "last transition = demotion"
@@ -211,7 +213,7 @@ func TestBacklogPromotionAdvisory_DemotedParentedWithClearedDep_StillPromotable(
 	if !got.Promote {
 		t.Fatalf("expected promote=true (dependency-bearing card judged by dep-clear, not demotion) — "+
 			"a false here means the demotion-park guard incorrectly fired on a card WITH dependencies "+
-			"(the #bbf3db92 trap), got false, reason=%q", got.Reason)
+			"(the an internal ticket trap), got false, reason=%q", got.Reason)
 	}
 }
 
@@ -248,7 +250,7 @@ func TestBacklogPromotionAdvisory_DemotedParentedWithOpenDep_NotPromotable(t *te
 }
 
 // --- Label-based park (freeze/no-promote/etc.) is respected even with no move
-// history at all — the other real-world park mechanism, and how #bbf3db92 was
+// history at all — the other real-world park mechanism, and how an internal ticket was
 // actually remediated (labels added to the card). -----------------------------------
 
 func TestBacklogPromotionAdvisory_FreezeLabel_NotPromotable(t *testing.T) {
@@ -318,12 +320,12 @@ func TestBacklogPromotionAdvisory_CancelledBlocker_ClearsDep(t *testing.T) {
 	}
 }
 
-// --- Workspace scope (#a24616da, prerequisite of #f42fe0a8): mesh-intake-sweep.py
+// --- Workspace scope (an internal ticket, prerequisite of an internal ticket): mesh-intake-sweep.py
 // only ever polls ONE workspace (WORKSPACE_ID in <ops-repo>/scripts/mesh-intake-sweep.py,
 // same UUID as backlogInScopeWorkspaceID here). A backlog task whose project sits in
-// any OTHER workspace (KidCash — Pavel's personal workspace under Codex; Editorial)
+// any OTHER workspace (Sandbox — Alex's personal workspace under Codex; Editorial)
 // is invisible to the sweep and must be HELD, not promoted — promoting it would be new
-// behaviour, not parity, per Riker's #f42fe0a8 decision (2026-09-21T16:16Z).
+// behaviour, not parity, per Robin's an internal ticket decision (2026-09-21T16:16Z).
 
 // Negative control: a project in a foreign workspace — otherwise a "born in backlog,
 // no dependencies" card that the positive control above shows IS promotable when the
@@ -399,7 +401,7 @@ func TestBacklogPromotionAdvisory_UnresolvableProject_FailsClosedNotPromotable(t
 	}
 }
 
-// --- Umbrella with open children (#d70b6815): sweep branch 1a-bis ---------------
+// --- Umbrella with open children: sweep branch 1a-bis ---------------
 
 func (h *backlogHarness) addChild(t *testing.T, parent *domain.Task, statusID uuid.UUID) *domain.Task {
 	t.Helper()
@@ -466,4 +468,31 @@ func TestBacklogPromotionAdvisory_UmbrellaChildUnknownStatus_NotPromotable(t *te
 	if got := decisionFor(t, decisions, umbrella.ID); got.Promote {
 		t.Fatalf("expected promote=false (child status unresolvable), got true, reason=%q", got.Reason)
 	}
+}
+
+// An edge released by its own condition + evidence no longer holds a backlog
+// card, even though its blocker is a monitor that is still in progress.
+func TestBacklogPromotionAdvisory_EvidenceSatisfiedEdge_ClearsDep(t *testing.T) {
+	h := newBacklogHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, "Backlog", domain.StatusCategoryBacklog)
+	inProgress := h.addStatus(t, projectID, "In Progress", domain.StatusCategoryInProgress)
+
+	monitor := h.addTask(t, projectID, inProgress.ID)
+	released := h.addTask(t, projectID, backlog.ID)
+	held := h.addTask(t, projectID, backlog.ID)
+	h.addDependency(t, held.ID, monitor.ID)
+
+	url, met := "https://mesh.example/e", time.Now()
+	require.NoError(t, h.depRepo.Create(context.Background(), &domain.TaskDependency{
+		ID: uuid.New(), TaskID: released.ID, DependsOnTaskID: monitor.ID, DependencyType: domain.DependencyTypeBlocks,
+		Condition: domain.DependencyConditionAccessReady, EvidenceURL: &url, ConditionMetAt: &met, CreatedAt: time.Now(),
+	}))
+
+	decisions, err := h.svc.SweepAdvisory(context.Background())
+	require.NoError(t, err)
+	got := decisionFor(t, decisions, released.ID)
+	assert.True(t, got.Promote, got.Reason)
+	assert.Contains(t, got.Reason, "all dependencies cleared", "a card that had a blocks edge is not 'born in backlog'")
+	assert.False(t, decisionFor(t, decisions, held.ID).Promote, "the plain edge on the same monitor still holds")
 }

@@ -487,3 +487,69 @@ func findGraphNode(t *testing.T, body, id string) map[string]any {
 	}
 	return walk(doc)
 }
+
+// A `blocks` edge on a perpetual monitor never clears by status. With a
+// condition met by evidence it must stop holding the dependent in every reader:
+// the graph's unfinished_blockers, HasOpenBlockedDependents and the stored edge.
+// 15 dependents mirror the 24.10 CRM incident; the plain task_done edge and the
+// edge with a condition but no evidence stay held.
+func TestDependencyGraphDB_ConditionEvidenceReleasesMonitorBlocker(t *testing.T) {
+	f := newGraphDBFixture(t, 18)
+	ids := f.ids(t)
+	monitor := ids[0]
+	repo := postgres.NewTaskDependencyRepo(f.db)
+	ctx := context.Background()
+
+	released := ids[1:16]
+	for _, dep := range released {
+		f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at) VALUES($1,$2,$3,'blocks','access_ready','https://mesh.example/evidence',now())`, uuid.New(), dep, monitor)
+	}
+	plain, noEvidence := ids[16], ids[17]
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type) VALUES($1,$2,$3,'blocks')`, uuid.New(), plain, monitor)
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type,condition,evidence_url,condition_met_at) VALUES($1,$2,$3,'blocks','access_ready',NULL,now())`, uuid.New(), noEvidence, monitor)
+
+	s := f.read(t, uuid.Nil)
+	for _, dep := range released {
+		assert.Equal(t, 0, graphFixtureNode(t, s, dep).UnfinishedBlockers, "evidence-satisfied edge must not hold the dependent")
+	}
+	assert.Equal(t, 1, graphFixtureNode(t, s, plain).UnfinishedBlockers, "task_done edge keeps its old behaviour")
+	assert.Equal(t, 1, graphFixtureNode(t, s, noEvidence).UnfinishedBlockers, "a met condition without evidence_url does not release")
+
+	edges, err := repo.ListByTask(ctx, released[0])
+	require.NoError(t, err)
+	require.Len(t, edges, 1)
+	assert.Equal(t, domain.DependencyConditionAccessReady, edges[0].Condition)
+	assert.True(t, edges[0].ConditionSatisfied)
+	assert.True(t, edges[0].EvidenceSatisfied())
+	old, err := repo.ListByTask(ctx, plain)
+	require.NoError(t, err)
+	assert.Equal(t, domain.DependencyConditionTaskDone, old[0].Condition)
+	assert.False(t, old[0].ConditionSatisfied)
+
+	// plain and noEvidence still wait on the monitor.
+	open, err := repo.HasOpenBlockedDependents(ctx, monitor)
+	require.NoError(t, err)
+	assert.True(t, open)
+	f.exec(t, `DELETE FROM task_dependencies WHERE task_id IN ($1,$2)`, plain, noEvidence)
+	open, err = repo.HasOpenBlockedDependents(ctx, monitor)
+	require.NoError(t, err)
+	assert.False(t, open, "only evidence-satisfied edges remain: nothing waits on the monitor")
+
+	// UpdateCondition marks a plain edge met and the graph follows.
+	id := uuid.New()
+	f.exec(t, `INSERT INTO task_dependencies(id,task_id,depends_on_task_id,dependency_type) VALUES($1,$2,$3,'blocks')`, id, plain, monitor)
+	url, now := "https://mesh.example/e2", time.Now()
+	upd, err := repo.UpdateCondition(ctx, id, domain.DependencyConditionDeployed, &url, &now)
+	require.NoError(t, err)
+	require.NotNil(t, upd)
+	assert.True(t, upd.ConditionSatisfied)
+	assert.Equal(t, 0, graphFixtureNode(t, f.read(t, uuid.Nil), plain).UnfinishedBlockers)
+}
+
+func TestTaskDependencyDB_UpdateConditionUnknownEdge(t *testing.T) {
+	f := newGraphDBFixture(t, 1)
+	url := "https://mesh.example/e"
+	got, err := postgres.NewTaskDependencyRepo(f.db).UpdateCondition(context.Background(), uuid.New(), domain.DependencyConditionDeployed, &url, nil)
+	require.NoError(t, err)
+	assert.Nil(t, got, "an unknown edge is (nil, nil), like GetByID")
+}

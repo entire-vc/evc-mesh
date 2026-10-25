@@ -13,9 +13,9 @@ afterEach(async () => {
 describe("language switch", () => {
   it("renders the same key in en and ru without a reload", async () => {
     await setLanguage("en");
-    expect(i18n.t("common:i18nDemo.greeting", { name: "Ann" })).toBe("Hello, Ann");
+    expect(i18n.t("common:time.daysAgo", { count: 3 })).toBe("3d ago");
     await setLanguage("ru");
-    expect(i18n.t("common:i18nDemo.greeting", { name: "Ann" })).toBe("Привет, Ann");
+    expect(i18n.t("common:time.daysAgo", { count: 3 })).toBe("3 дн назад");
     expect(document.documentElement.lang).toBe("ru");
   });
 

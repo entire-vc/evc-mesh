@@ -211,7 +211,123 @@ const (
 	// pipeline_sha is the commit the stored pipeline_status ran on, written by
 	// the pipeline webhook.
 	VCSLinkMetaPipelineSHA = "pipeline_sha"
+
+	// Delivery-state keys: merge, deploy and acceptance are separate facts
+	// about one SHA each, not one aggregated pipeline status.
+	VCSLinkMetaImplementationSHA = "implementation_sha"
+	VCSLinkMetaCIVerdict         = "ci_verdict"
+	VCSLinkMetaMergedSHA         = "merged_sha"
+	VCSLinkMetaDeployed          = "deployed"
+	VCSLinkMetaAcceptance        = "acceptance"
 )
+
+// VCSEnvProd is the environment whose deploy makes a link shipped.
+const VCSEnvProd = "prod"
+
+// VCSCIVerdict is the CI result of one pipeline on one commit.
+type VCSCIVerdict struct {
+	Status     string `json:"status"`
+	PipelineID int64  `json:"pipeline_id,omitempty"`
+	SHA        string `json:"sha,omitempty"`
+}
+
+// VCSDeployed records that SHA is running in Environment since At.
+type VCSDeployed struct {
+	SHA         string     `json:"sha"`
+	Environment string     `json:"environment"`
+	At          *time.Time `json:"at,omitempty"`
+}
+
+// VCSAcceptance is the live acceptance result, separate from CI and deploy.
+type VCSAcceptance struct {
+	Result      string `json:"result"` // passed | failed
+	By          string `json:"by,omitempty"`
+	EvidenceURL string `json:"evidence_url,omitempty"`
+	SHA         string `json:"sha,omitempty"`
+}
+
+// VCSDelivery is the typed read model over vcs_links.metadata; absent facts
+// are nil/empty, never guessed.
+type VCSDelivery struct {
+	ImplementationSHA string         `json:"implementation_sha,omitempty"`
+	CIVerdict         *VCSCIVerdict  `json:"ci_verdict,omitempty"`
+	MergedSHA         string         `json:"merged_sha,omitempty"`
+	Deployed          *VCSDeployed   `json:"deployed,omitempty"`
+	Acceptance        *VCSAcceptance `json:"acceptance,omitempty"`
+	IsShipped         bool           `json:"is_shipped"`
+}
+
+func (l VCSLink) metaObject(key string, dst any) bool {
+	var m map[string]json.RawMessage
+	if len(l.Metadata) == 0 || json.Unmarshal(l.Metadata, &m) != nil {
+		return false
+	}
+	raw, ok := m[key]
+	return ok && json.Unmarshal(raw, dst) == nil
+}
+
+// Deployed is the recorded deploy, nil when none.
+func (l VCSLink) Deployed() *VCSDeployed {
+	var d VCSDeployed
+	if !l.metaObject(VCSLinkMetaDeployed, &d) || d.SHA == "" {
+		return nil
+	}
+	return &d
+}
+
+// Acceptance is the recorded live acceptance, nil when none.
+func (l VCSLink) Acceptance() *VCSAcceptance {
+	var a VCSAcceptance
+	if !l.metaObject(VCSLinkMetaAcceptance, &a) || a.Result == "" {
+		return nil
+	}
+	return &a
+}
+
+// CIVerdict is the recorded CI verdict, nil when none.
+func (l VCSLink) CIVerdict() *VCSCIVerdict {
+	var v VCSCIVerdict
+	if !l.metaObject(VCSLinkMetaCIVerdict, &v) || v.Status == "" {
+		return nil
+	}
+	return &v
+}
+
+// IsShipped reports whether the change is live in production. Once a link carries
+// merged_sha or deployed it is judged only by them: deployed.sha equal to
+// merged_sha in production. Merged without a matching production deploy is not shipped.
+// A link with neither key predates these fields and keeps the old rule
+// (merged + independent SHIP + green pipeline on the head).
+func (l VCSLink) IsShipped() bool {
+	merged, dep := l.metaString(VCSLinkMetaMergedSHA), l.Deployed()
+	if merged == "" && dep == nil {
+		return l.IsMergedShippedGreen()
+	}
+	return merged != "" && dep != nil && dep.SHA == merged && dep.Environment == VCSEnvProd
+}
+
+// Delivery assembles the typed delivery state of the link.
+func (l VCSLink) Delivery() VCSDelivery {
+	return VCSDelivery{
+		ImplementationSHA: l.metaString(VCSLinkMetaImplementationSHA),
+		CIVerdict:         l.CIVerdict(),
+		MergedSHA:         l.metaString(VCSLinkMetaMergedSHA),
+		Deployed:          l.Deployed(),
+		Acceptance:        l.Acceptance(),
+		IsShipped:         l.IsShipped(),
+	}
+}
+
+// MarshalJSON extends the stored fields with the derived delivery state; the
+// existing fields are unchanged.
+func (l VCSLink) MarshalJSON() ([]byte, error) {
+	type plain VCSLink
+	return json.Marshal(struct {
+		plain
+		Delivery  VCSDelivery `json:"delivery"`
+		IsShipped bool        `json:"is_shipped"`
+	}{plain(l), l.Delivery(), l.IsShipped()})
+}
 
 func (l VCSLink) metaString(key string) string {
 	var m map[string]interface{}
@@ -285,7 +401,10 @@ func ExtractChangeRequestRefs(text string) []ChangeRequestRef {
 // AgentWritableVCSMetadataKeys is the whitelist of vcs_links.metadata keys
 // fleet tools may write through the metadata PATCH. head_sha is deliberately
 // absent: only the MR sync owns it.
-var AgentWritableVCSMetadataKeys = map[string]bool{"ship_sha": true}
+var AgentWritableVCSMetadataKeys = map[string]bool{
+	VCSLinkMetaShipSHA: true, VCSLinkMetaImplementationSHA: true, VCSLinkMetaMergedSHA: true,
+	VCSLinkMetaCIVerdict: true, VCSLinkMetaDeployed: true, VCSLinkMetaAcceptance: true,
+}
 
 // IsFullCommitSHA reports whether s is a 40-character lowercase hex git SHA.
 func IsFullCommitSHA(s string) bool {

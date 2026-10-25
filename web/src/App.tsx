@@ -104,6 +104,9 @@ const TimelinePage = lazy(() =>
 const CalendarPage = lazy(() =>
   import("@/pages/calendar").then((m) => ({ default: m.CalendarPage })),
 );
+const ChatPage = lazy(() =>
+  import("@/pages/chat").then((m) => ({ default: m.ChatPage })),
+);
 const DocsPage = lazy(() =>
   import("@/pages/docs").then((m) => ({ default: m.DocsPage })),
 );
@@ -412,6 +415,14 @@ const router = createBrowserRouter(
           }
         />
         <Route
+          path="w/:wsSlug/p/:projectSlug/x/:extId"
+          element={
+            <LazyPage>
+              <ExtensionScreenPage />
+            </LazyPage>
+          }
+        />
+        <Route
           path="w/:wsSlug/p/:projectSlug/timeline"
           element={
             <LazyPage>
@@ -424,6 +435,22 @@ const router = createBrowserRouter(
           element={
             <LazyPage>
               <CalendarPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/chat"
+          element={
+            <LazyPage>
+              <ChatPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="w/:wsSlug/p/:projectSlug/chat/:threadId"
+          element={
+            <LazyPage>
+              <ChatPage />
             </LazyPage>
           }
         />

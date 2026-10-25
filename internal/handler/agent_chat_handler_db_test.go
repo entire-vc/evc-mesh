@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -283,10 +285,58 @@ func TestAgentChatTurns_QueuedWithoutRunnerStopAndIdempotency(t *testing.T) {
 
 	status, _ = env.send(t, env.userA, thread, "key-empty-001", "   ")
 	require.Equal(t, http.StatusUnprocessableEntity, status)
+	env.finishTurns(t, thread) // the attachment is checked against an idle thread
 	status, out = env.call(t, env.h.SendMessage, http.MethodPost,
 		fmt.Sprintf(`{"client_message_id":"key-att-0001","body":"x","attachment_ids":[%q]}`, uuid.New()), env.userA, env.thr(thread))
 	require.Equal(t, http.StatusUnprocessableEntity, status)
 	require.Equal(t, "attachment_not_found", out["error_code"])
+}
+
+func TestAgentChatSend_BindsUploadedAttachment(t *testing.T) {
+	env := newAgentChatEnv(t)
+	thread := env.createThread(t, env.userA)
+	ctx := context.Background()
+	insert := func(uploaded bool) uuid.UUID {
+		id := uuid.New()
+		var at any
+		if uploaded {
+			at = time.Now()
+		}
+		_, err := env.db.ExecContext(ctx, `INSERT INTO ext_agent_chat_attachments
+			(id, workspace_id, thread_id, s3_key, file_name, mime, size, uploaded_at) VALUES ($1,$2,$3,$4,'a.png','image/png',10,$5)`,
+			id, env.ws, thread, "k/"+id.String(), at)
+		require.NoError(t, err)
+		return id
+	}
+	send := func(key string, ids ...uuid.UUID) (int, map[string]any) {
+		list, _ := json.Marshal(ids)
+		return env.call(t, env.h.SendMessage, http.MethodPost,
+			fmt.Sprintf(`{"client_message_id":%q,"body":"","attachment_ids":%s}`, key, list), env.userA, env.thr(thread))
+	}
+
+	pending := insert(false)
+	status, out := send("key-att-pend1", pending)
+	require.Equal(t, http.StatusUnprocessableEntity, status, "an attachment that never reached storage is not sendable")
+	require.Equal(t, "attachment_not_found", out["error_code"])
+
+	ok := insert(true)
+	status, out = send("key-att-ok-01", ok)
+	require.Equal(t, http.StatusAccepted, status, "an image-only message is a message: %v", out)
+	atts := out["message"].(map[string]any)["attachments"].([]any)
+	require.Len(t, atts, 1)
+	require.Equal(t, ok.String(), atts[0].(map[string]any)["id"])
+
+	env.finishTurns(t, thread)
+	status, _ = send("key-att-reuse1", ok)
+	require.Equal(t, http.StatusUnprocessableEntity, status, "an attachment is bound once")
+
+	status, out = env.call(t, env.h.ListMessages, http.MethodGet, "", env.userA, env.thr(thread))
+	require.Equal(t, http.StatusOK, status)
+	bound := 0
+	for _, it := range out["items"].([]any) {
+		bound += len(it.(map[string]any)["attachments"].([]any))
+	}
+	require.Equal(t, 1, bound, "history carries the attachment")
 }
 
 func TestAgentChatThreads_DeleteIsSoftAndCancelsTheTurn(t *testing.T) {
@@ -391,4 +441,46 @@ func TestAgentChatSettings_Validation(t *testing.T) {
 func callUserRuntimeQuery(t *testing.T, fn echo.HandlerFunc, uri string, user uuid.UUID, params map[string]string) (status int, out map[string]any) {
 	t.Helper()
 	return callUserRuntime(t, fn, http.MethodGet, uri, "", user, uuid.Nil, params)
+}
+
+// A presigned upload is confirmed at send time: the client PUTs straight to S3
+// and never calls the API again, so the object itself is the proof.
+func TestAgentChat_SendConfirmsPresignedUpload(t *testing.T) {
+	f := newAgentChatEnv(t)
+	store := &fakeChatStore{objects: map[string]int64{}}
+	atts := postgres.NewChatAttachmentRepo(f.db)
+	f.h.WithAttachments(atts, store)
+	ah := NewChatAttachmentHandler(atts, store)
+	thread := f.createThread(t, f.userA)
+
+	presign := func(size int64) uuid.UUID {
+		status, out := callUserRuntime(t, ah.Presign, http.MethodPost, "/", presignBody(uuid.MustParse(thread), size), f.userA, uuid.Nil, f.proj())
+		require.Equal(t, http.StatusCreated, status, "%v", out)
+		return uuid.MustParse(out["attachment_id"].(string))
+	}
+	sendWith := func(key string, id uuid.UUID) (int, map[string]any) {
+		return f.call(t, f.h.SendMessage, http.MethodPost,
+			fmt.Sprintf(`{"client_message_id":%q,"body":"look","attachment_ids":[%q]}`, key, id), f.userA, f.thr(thread))
+	}
+
+	// No object in storage: refused, and the row stays unconfirmed.
+	missing := presign(1024)
+	status, out := sendWith("att-missing", missing)
+	require.Equal(t, http.StatusUnprocessableEntity, status, "%v", out)
+	require.Contains(t, fmt.Sprint(out), "attachment_not_found")
+
+	// Object of another size than declared: refused.
+	wrong := presign(1024)
+	store.objects[chatAttachmentKey(f.ws, wrong)] = 1
+	status, out = sendWith("att-wrong-size", wrong)
+	require.Equal(t, http.StatusUnprocessableEntity, status, "%v", out)
+	require.Contains(t, fmt.Sprint(out), "attachment_not_found")
+
+	// Object present with the declared size: accepted, attachment in the answer.
+	ok := presign(1024)
+	store.objects[chatAttachmentKey(f.ws, ok)] = 1024
+	status, out = sendWith("att-ok-send", ok)
+	require.Equal(t, http.StatusAccepted, status, "%v", out)
+	msg := out["message"].(map[string]any)
+	require.Len(t, msg["attachments"], 1)
 }

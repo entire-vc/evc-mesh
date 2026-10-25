@@ -10,6 +10,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -95,21 +96,51 @@ export function DropdownMenuTrigger({
   );
 }
 
+const VIEWPORT_MARGIN = 8;
+
 export function DropdownMenuContent({
   className,
   align = "end",
+  style,
   ...props
 }: HTMLAttributes<HTMLDivElement> & { align?: "start" | "end" }) {
   const { open } = useContext(DropdownMenuContext);
+  const ref = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState(0);
+
+  // Keep the panel inside the viewport: an absolutely positioned menu opened
+  // near the right edge (e.g. the tab bar "⋮" at 393px) was clipped.
+  useLayoutEffect(() => {
+    if (!open || !ref.current) return;
+    const el = ref.current;
+    const rect = el.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    let dx = 0;
+    if (rect.right > vw - VIEWPORT_MARGIN) dx = vw - VIEWPORT_MARGIN - rect.right;
+    if (rect.left + dx < VIEWPORT_MARGIN) dx = VIEWPORT_MARGIN - rect.left;
+    setShift(dx);
+    return () => setShift(0);
+  }, [open]);
+
   if (!open) return null;
 
   return (
     <div
+      ref={ref}
       className={cn(
-        "absolute z-50 mt-2 min-w-[8rem] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg",
+        "absolute z-50 mt-2 min-w-[8rem] max-w-[calc(100vw-1rem)] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg",
         align === "end" ? "right-0" : "left-0",
         className,
       )}
+      style={
+        shift
+          ? {
+              ...style,
+              // translate first so it is applied in viewport coordinates, not the caller's scaled space
+              transform: [`translateX(${shift}px)`, style?.transform].filter(Boolean).join(" "),
+            }
+          : style
+      }
       {...props}
     />
   );
