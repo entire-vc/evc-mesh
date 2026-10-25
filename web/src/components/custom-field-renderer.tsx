@@ -512,6 +512,8 @@ export function CustomFieldRenderer({
 // Read-only display
 // ---------------------------------------------------------------------------
 
+const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
 function CustomFieldReadOnly({
   field,
   value,
@@ -587,14 +589,21 @@ function CustomFieldReadOnly({
 
     case "url": {
       const urlStr = String(value);
-      let displayUrl = urlStr;
-      if (compact) {
-        try {
-          displayUrl = new URL(urlStr).hostname;
-        } catch {
-          // not a valid URL, show as-is
-        }
+      let parsed: URL | null = null;
+      try {
+        parsed = new URL(urlStr);
+      } catch {
+        // not a valid URL, show as-is
       }
+      // Only link schemes that open a page; javascript:, data: and the like stay plain text.
+      if (!parsed || !SAFE_LINK_PROTOCOLS.has(parsed.protocol)) {
+        return (
+          <span className={cn("text-xs break-all", compact && "truncate text-[10px]")}>
+            {urlStr}
+          </span>
+        );
+      }
+      const displayUrl = compact && parsed.hostname ? parsed.hostname : urlStr;
       return (
         <a
           href={urlStr}

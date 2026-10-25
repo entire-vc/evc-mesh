@@ -47,7 +47,10 @@ func (r *mockUserRepo) UsernameExists(_ context.Context, _ string) (bool, error)
 	return false, nil
 }
 
-func (r *mockUserRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.User, error) {
+func (r *mockUserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.getByIDErr != nil {
@@ -151,6 +154,10 @@ type mockRefreshTokenRepo struct {
 	// exercises RefreshTokens' documented non-fatal handling of that failure
 	// (logged, rotation still succeeds; see LinkSuccessor's doc comment).
 	linkSuccessorErr error
+	// afterRevokeByHash, when non-nil, runs right after a successful
+	// RevokeByHash — lets a test cancel the request context at exactly the
+	// point a client disconnect lands between revoking and linking.
+	afterRevokeByHash func()
 }
 
 func newMockRefreshTokenRepo() *mockRefreshTokenRepo {
@@ -210,20 +217,31 @@ func (r *mockRefreshTokenRepo) RevokeByUserID(_ context.Context, userID uuid.UUI
 // RevokeByHash models the real repo's conditional UPDATE: the test-and-set happens under
 // one lock, so exactly one concurrent caller can observe true for a given token. A mock
 // that unconditionally reported true would make the concurrency test below vacuous.
-func (r *mockRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string) (bool, error) {
+func (r *mockRefreshTokenRepo) RevokeByHash(ctx context.Context, tokenHash string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	t, ok := r.tokens[tokenHash]
 	if !ok || t.RevokedAt != nil {
+		r.mu.Unlock()
 		return false, nil
 	}
 	now := time.Now()
 	t.RevokedAt = &now
+	r.mu.Unlock()
+	if r.afterRevokeByHash != nil {
+		r.afterRevokeByHash()
+	}
 	return true, nil
 }
 
 // LinkSuccessor mirrors the real repo's plain, non-atomic UPDATE.
-func (r *mockRefreshTokenRepo) LinkSuccessor(_ context.Context, oldHash, newHash string) error {
+// Like a real query, it fails on an already-cancelled context.
+func (r *mockRefreshTokenRepo) LinkSuccessor(ctx context.Context, oldHash, newHash string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.linkSuccessorErr != nil {
@@ -720,7 +738,7 @@ func TestLogin_InactiveUser(t *testing.T) {
 	assert.Contains(t, err.Error(), "inactive")
 }
 
-// AC (#734ca49e): a deactivated account probed with a WRONG password must
+// AC: a deactivated account probed with a WRONG password must
 // be indistinguishable from a nonexistent account — same error TYPE, not
 // merely the same string. Before the fix, IsActive was checked BEFORE the
 // password, so this exact request (wrong password, inactive account)
@@ -780,7 +798,7 @@ func TestLogin_InactiveUser_WrongPassword_IndistinguishableFromNonexistent(t *te
 		"deactivated-account-wrong-password and nonexistent-account-wrong-password must produce byte-identical error text")
 }
 
-// AC (#734ca49e), the complementary case: a deactivated account probed with
+// AC, the complementary case: a deactivated account probed with
 // the CORRECT password must still get the clear "account is inactive"
 // response, not be folded into ErrInvalidCredentials. At that point the
 // caller has already proven they hold the credential — telling the actual
@@ -844,14 +862,14 @@ func TestRefreshTokens_ExpiredToken(t *testing.T) {
 }
 
 // TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair pins
-// #cfb14ad6's grace window: a replay of a token that died in an ordinary,
+// an internal ticket's grace window: a replay of a token that died in an ordinary,
 // successful rotation — the shape a client produces when it rotates
 // successfully but never sees the response (dropped mobile connection,
 // closed tab, proxy timeout) and retries with the only token it has — gets a
 // fresh pair instead of a full-account revoke, as long as the replay lands
 // inside the window (default 10s).
 //
-// Verified by mutation: this test fails against the pre-#cfb14ad6 service
+// Verified by mutation: this test fails against the pre service
 // (unconditional revoke-all on any replay of a revoked token) — it is not a
 // restatement of the implementation.
 func TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair(t *testing.T) {
@@ -886,7 +904,7 @@ func TestRefreshTokens_RevokedToken_WithinGraceWindow_ReturnsFreshPair(t *testin
 }
 
 // TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection is the
-// other half of the AC in #cfb14ad6: a replay older than the window gets no
+// other half of the AC in an internal ticket: a replay older than the window gets no
 // benefit of the doubt — full revoke, same as before the window existed.
 func TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection(t *testing.T) {
 	svc, _, refreshRepo, _, _ := newTestService()
@@ -920,7 +938,7 @@ func TestRefreshTokens_RevokedToken_OutsideGraceWindow_TheftDetection(t *testing
 // TestRefreshTokens_RevokedToken_GraceWindowDisabled_AlwaysTheftDetection
 // pins the rollback lever (WithRefreshReuseGraceWindow(0) /
 // MESH_AUTH_REFRESH_REUSE_GRACE_WINDOW=0): with the window off, behavior
-// matches the service before #cfb14ad6 exactly — no exceptions.
+// matches the service before an internal ticket exactly — no exceptions.
 func TestRefreshTokens_RevokedToken_GraceWindowDisabled_AlwaysTheftDetection(t *testing.T) {
 	userRepo := newMockUserRepo()
 	refreshRepo := newMockRefreshTokenRepo()
@@ -987,6 +1005,37 @@ func TestRefreshTokens_Rotation_LinkSuccessorError_StillReturnsFreshPair(t *test
 	refreshRepo.mu.RUnlock()
 	require.NotNil(t, otherToken)
 	assert.Nil(t, otherToken.RevokedAt, "a lost LinkSuccessor call must not fall back to revoking other sessions")
+}
+
+// TestRefreshTokens_ClientDisconnectAfterRevoke_RetryGetsGrace reproduces a
+// page reload landing mid-rotation: the request context is cancelled right
+// after the old token is revoked. The rotation must still record its
+// successor, so the browser's retry with the old token (it never saw the new
+// cookie) gets a fresh pair inside the grace window instead of a theft
+// verdict that revokes every session the user has.
+func TestRefreshTokens_ClientDisconnectAfterRevoke_RetryGetsGrace(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	user, tokens, err := svc.Register(context.Background(), "reload@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	otherHash := "other-device-token-hash-reload"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	refreshRepo.afterRevokeByHash = cancel
+	_, _ = svc.RefreshTokens(ctx, tokens.RefreshToken)
+	refreshRepo.afterRevokeByHash = nil
+
+	retryPair, err := svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err, "a retry after a mid-rotation disconnect must be grace-eligible")
+	assert.NotEmpty(t, retryPair.RefreshToken)
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.Nil(t, otherToken.RevokedAt, "a client disconnect must not revoke the user's other sessions")
 }
 
 // TestRefreshTokens_WithinGraceWindow_UserLookupError covers handleTokenReuse's

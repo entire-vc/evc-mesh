@@ -28,6 +28,11 @@ import (
 // doubt. See WithRefreshReuseGraceWindow and handleTokenReuse.
 const defaultRefreshReuseGraceWindow = 10 * time.Second
 
+// rotationWriteTimeout bounds the refresh-rotation writes RefreshTokens runs
+// detached from the request context, so a stuck DB still cannot hold them
+// open forever.
+const rotationWriteTimeout = 5 * time.Second
+
 const (
 	// bcryptCost is the bcrypt work factor for hashing user passwords.
 	bcryptCost = 10
@@ -148,7 +153,7 @@ func WithAllowRegistration(allow bool) Option {
 }
 
 // WithAgentRepo enables the username↔agent-slug collision guard on
-// UpdateProfile/CheckUsername (task fee35355). Without it (nil, the default —
+// UpdateProfile/CheckUsername. Without it (nil, the default —
 // most tests never call this), the guard is a no-op: usernameCollidesWithAgentSlug
 // short-circuits on a nil agentRepo before touching anything.
 func WithAgentRepo(agentRepo repository.AgentRepository) Option {
@@ -159,7 +164,7 @@ func WithAgentRepo(agentRepo repository.AgentRepository) Option {
 // rotation, a replay of the token that rotation just retired is treated as a
 // benign retry instead of theft — see handleTokenReuse's doc comment for the
 // exact rule and which of the two reuse branches it applies to. Defaults to
-// 10s (#cfb14ad6's spec). Pass 0 to disable the grace window entirely: every
+// 10s (an internal ticket's spec). Pass 0 to disable the grace window entirely: every
 // replay of an already-revoked token is theft, matching behavior before this
 // option existed — the fastest rollback lever if the window ever needs to
 // come out without a deploy (MESH_AUTH_REFRESH_REUSE_GRACE_WINDOW=0).
@@ -303,7 +308,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 	}
 
 	// Generate tokens.
-	tokens, err := s.generateTokenPair(user)
+	tokens, err := s.generateTokenPair(context.Background(), user)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -321,7 +326,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 // nonexistent (or active) account returned ErrInvalidCredentials — a
 // distinguishable body for free, no rate limit or brute force needed. On
 // our prod, where self-registration is closed, "an account exists here"
-// is itself the sensitive fact (see #734ca49e).
+// is itself the sensitive fact (see an internal ticket).
 //
 // Checking the password first closes that: a WRONG password against a
 // deactivated account now returns the same ErrInvalidCredentials as a
@@ -348,14 +353,14 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 // TestAuthHandler_Login_InactiveAccount_WrongPassword_CountsAgainstLockoutBudget.
 //
 // Second, ORTHOGONAL timing side-channel this function must also close
-// (#c9055b2c, found on the #734ca49e review): before this fix, the
+// (an internal ticket, found on the an internal ticket review): before this fix, the
 // user==nil branch returned ErrInvalidCredentials immediately, BEFORE
 // bcrypt ever ran, while the found-user branch always ran bcrypt in full
 // (cost=bcryptCost, ~45ms measured). That made a nonexistent account
 // ~950ns and an existing one ~45ms — a ~4.5-order-of-magnitude gap an
 // attacker can use to enumerate which emails have accounts purely from
 // response LATENCY, independent of the response body/headers (which the
-// #734ca49e fix above already made identical). It is a different channel
+// an internal ticket fix above already made identical). It is a different channel
 // than the one that fix closed: that one distinguished "deactivated" from
 // "active or none" in the response body; this one distinguishes "exists"
 // from "doesn't", for every account state and every password, in time.
@@ -379,7 +384,7 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (*
 // the DoS surface of this endpoint — flooding it with garbage emails used
 // to be nearly free to reject and now is not. But the endpoint's PRIMARY
 // brute-force defense, mw.LoginLockout wired in
-// internal/handler/auth_handler.go, was deliberately built (#5d759aad) to
+// internal/handler/auth_handler.go, was deliberately built to
 // key its failure budget on the SUBMITTED identifier string (via
 // AuthHandler.Login's `identifier := auth.NormalizeEmail(req.Email)`), not
 // on the account row this function resolves — so it already throttles
@@ -422,7 +427,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*domain.Us
 		return nil, nil, ErrUserInactive
 	}
 
-	tokens, err := s.generateTokenPair(user)
+	tokens, err := s.generateTokenPair(context.Background(), user)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -467,19 +472,28 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 	// safe way to tell a genuinely concurrent replay from a racing thief without
 	// reopening the exact TOCTOU window TestRefreshTokens_ConcurrentRequests_OnlySucceeds
 	// pins shut.
-	revoked, err := s.refreshTokenRepo.RevokeByHash(ctx, tokenHash)
+	//
+	// From the revoke on, the rotation's writes run detached from the request:
+	// once the old token is revoked, a client that disconnects mid-request (page
+	// reload, closed tab, dropped mobile network) retries with that same token, and
+	// only a completed LinkSuccessor lets handleTokenReuse treat the retry as
+	// grace-eligible. Cancelling halfway — revoked but unlinked — turns a reload
+	// into a sweep of every session the user has.
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rotationWriteTimeout)
+	defer cancel()
+	revoked, err := s.refreshTokenRepo.RevokeByHash(wctx, tokenHash)
 	if err != nil {
 		return nil, apierror.Wrap(err)
 	}
 	if !revoked {
-		_ = s.refreshTokenRepo.RevokeByUserID(ctx, stored.UserID)
+		_ = s.refreshTokenRepo.RevokeByUserID(wctx, stored.UserID)
 		log.Printf("[refresh-reuse] user=%s reason=lost_conditional_revoke grace=false", stored.UserID)
 		metrics.RecordRefreshTokenReuse("lost_conditional_revoke", false)
 		return nil, ErrTokenReused
 	}
 
 	// Look up the user to generate new tokens.
-	user, err := s.userRepo.GetByID(ctx, stored.UserID)
+	user, err := s.userRepo.GetByID(wctx, stored.UserID)
 	if err != nil {
 		return nil, apierror.Wrap(err)
 	}
@@ -487,7 +501,7 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 		return nil, ErrUserInactive
 	}
 
-	pair, err := s.generateTokenPair(user)
+	pair, err := s.generateTokenPair(wctx, user)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +511,7 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 	// only means that specific replay won't get the grace window, never a
 	// security regression.
 	newHash := hashRefreshToken(pair.RefreshToken)
-	if linkErr := s.refreshTokenRepo.LinkSuccessor(ctx, tokenHash, newHash); linkErr != nil {
+	if linkErr := s.refreshTokenRepo.LinkSuccessor(wctx, tokenHash, newHash); linkErr != nil {
 		log.Printf("[refresh-reuse] failed to link rotation successor for user %s: %v", stored.UserID, linkErr)
 	}
 
@@ -545,7 +559,7 @@ func (s *Service) handleTokenReuse(ctx context.Context, stored *repository.Refre
 	if user == nil || !user.IsActive {
 		return nil, ErrUserInactive
 	}
-	pair, err := s.generateTokenPair(user)
+	pair, err := s.generateTokenPair(context.Background(), user)
 	return pair, err
 }
 
@@ -575,11 +589,12 @@ func (s *Service) ValidateAccessToken(tokenString string) (*Claims, error) {
 }
 
 // generateTokenPair creates a new JWT access token and an opaque refresh
-// token. Unchanged by #cfb14ad6 — callers that need the new refresh token's
+// token. Unchanged by an internal ticket — callers that need the new refresh token's
 // hash (RefreshTokens' rotation path, to call LinkSuccessor) derive it with
 // hashRefreshToken(pair.RefreshToken) instead of this function returning it,
 // so this function's existing error branches stay out of that change's diff.
-func (s *Service) generateTokenPair(user *domain.User) (*TokenPair, error) {
+// ctx governs the refresh-token insert.
+func (s *Service) generateTokenPair(ctx context.Context, user *domain.User) (*TokenPair, error) {
 	now := timeNow()
 
 	// Generate JWT access token.
@@ -609,7 +624,7 @@ func (s *Service) generateTokenPair(user *domain.User) (*TokenPair, error) {
 
 	// Store refresh token hash in the database.
 	if err := s.refreshTokenRepo.Create(
-		context.Background(),
+		ctx,
 		user.ID,
 		tokenHash,
 		now.Add(s.refreshTokenTTL),
@@ -691,9 +706,9 @@ func (s *Service) RefreshTokenTTL() time.Duration {
 // naming the agent and workspace — or nil if it's free.
 //
 // agents.slug is unique per-workspace (uq_agents_workspace_slug); users.username
-// is unique globally (ix_users_username). Nothing before task fee35355 kept the
+// is unique globally (ix_users_username). Nothing before an internal ticket kept the
 // two namespaces disjoint, so a workspace could end up with an agent and a human
-// both answering to the same @-mention — task f4f47938 stopped that from being
+// both answering to the same @-mention — an internal ticket stopped that from being
 // a SILENT loss (both branches now resolve and both get their own delivery row),
 // but did nothing to stop the collision from being created in the first place.
 //

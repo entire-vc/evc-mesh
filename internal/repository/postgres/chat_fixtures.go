@@ -16,7 +16,7 @@ import (
 
 // Isolated fixtures for the agent-chat CI run (E6 setup): four users
 // A (member), B (member), C (admin), V (viewer), two agents (Claude, Codex) and
-// one agent that never has a runner (offline), all inside the scratch
+// one agent whose runner lease has lapsed (offline), all inside the scratch
 // workspace e2e-ci-sandbox. SeedChatFixtures is idempotent; CleanupChatFixtures
 // removes exactly what it created and nothing else.
 //
@@ -196,6 +196,20 @@ func SeedChatFixtures(ctx context.Context, db *sqlx.DB, workspaceSlug string, pa
 		if n, _ := res.RowsAffected(); n > 0 {
 			rep.Created++
 		}
+	}
+	// The chat only accepts agents served by a runner of the workspace (an
+	// agent_controllers row, see AgentChatRepo.ServedAgents), so the offline agent
+	// gets a row whose lease lapsed long ago: allowed in the settings, offline in
+	// the picker. No runner announces this agent; a lapsed row would be taken over
+	// by one that did, and setup then fails with "offline agent fixture is online".
+	res, err := tx.ExecContext(ctx, `INSERT INTO agent_controllers (agent_id, runner_id, runner_name, host, version, lease_expires_at)
+		VALUES ($1, $2, $2, 'none', '', now() - interval '1 day') ON CONFLICT (agent_id) DO NOTHING`,
+		rep.Agents["offline"], chatFixturesPrefix+"offline-runner")
+	if err != nil {
+		return nil, fmt.Errorf("offline agent controller: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		rep.Created++
 	}
 	return rep, tx.Commit()
 }

@@ -310,7 +310,7 @@ defineTests([
 const AU = ["auth.screen"];
 
 const input = (root: ParentNode, label: string): HTMLInputElement => {
-  const l = Array.from(root.querySelectorAll("label")).find((e) => e.textContent?.replace("*", "").trim() === label);
+  const l = Array.from(root.querySelectorAll("label")).find((e) => e.textContent?.replace(/\*/g, "").trim() === label);
   const el = l?.htmlFor ? (root as Element).ownerDocument!.getElementById(l.htmlFor) : l?.querySelector("input");
   if (!(el instanceof HTMLInputElement)) throw new Error(`no <input> labelled "${label}" (a field needs a <label>)`);
   return el;

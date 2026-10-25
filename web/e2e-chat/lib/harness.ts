@@ -70,7 +70,7 @@ export class F1 {
       const url = msg.location().url;
       // The browser logs a failed fetch as a console error: it is the expected one only when the request is.
       if (url && this.isExpectedUrl(url)) return;
-      this.consoleErrors.push(msg.text().slice(0, 200));
+      this.consoleErrors.push(`${msg.text().slice(0, 200)}${url ? ` [${new URL(url).pathname.slice(0, 120)}]` : ""}`);
     });
     page.on("response", (resp) => {
       const u = new URL(resp.url());
