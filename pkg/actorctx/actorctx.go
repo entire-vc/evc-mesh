@@ -82,7 +82,7 @@ func AnnotateChanges(ctx context.Context, changes map[string]any) map[string]any
 	if !ok {
 		return changes
 	}
-	out := make(map[string]any, len(changes)+4)
+	out := make(map[string]any, len(changes))
 	for k, v := range changes {
 		out[k] = v
 	}

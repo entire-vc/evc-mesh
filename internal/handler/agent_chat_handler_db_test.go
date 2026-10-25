@@ -484,3 +484,27 @@ func TestAgentChat_SendConfirmsPresignedUpload(t *testing.T) {
 	msg := out["message"].(map[string]any)
 	require.Len(t, msg["attachments"], 1)
 }
+
+// History contract: the agent's reply comes back from
+// GET .../threads/:thread_id/messages with role "assistant", which the web
+// feed and the agent-chat e2e harness wait for. The table stores 'agent'.
+//
+// Red control: on main before ChatWireRole the reply role is "agent".
+func TestAgentChatHistory_AgentReplyRoleIsAssistant(t *testing.T) {
+	env := newAgentChatEnv(t)
+	thread := env.createThread(t, env.userA)
+	status, _ := env.send(t, env.userA, thread, "key-role0001", "ping")
+	require.Equal(t, http.StatusAccepted, status)
+	_, err := env.db.ExecContext(context.Background(), `INSERT INTO ext_agent_chat_messages (workspace_id, thread_id, role, body, status)
+		VALUES ($1, $2, 'agent', 'pong', 'done')`, env.ws, thread)
+	require.NoError(t, err)
+
+	status, out := env.call(t, env.h.ListMessages, http.MethodGet, "", env.userA, env.thr(thread))
+	require.Equal(t, http.StatusOK, status)
+	roles := map[string]string{}
+	for _, it := range out["items"].([]any) {
+		m := it.(map[string]any)
+		roles[m["body"].(string)] = m["role"].(string)
+	}
+	require.Equal(t, map[string]string{"ping": "user", "pong": "assistant"}, roles)
+}

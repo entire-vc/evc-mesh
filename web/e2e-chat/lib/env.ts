@@ -28,7 +28,9 @@ export function missingEnv(): string[] {
 export const cfg = () => ({
   baseURL: env("APP_BASE_URL").replace(/\/$/, ""),
   wsSlug: env("E2E_CHAT_WS_SLUG") || "e2e-ci-sandbox",
-  projectSlug: env("E2E_CHAT_PROJECT_SLUG") || "e2e-fixtures",
+  // The fixture agents (claude/codex/offline) are members of e2e-chat-fixtures only; e2e-fixtures
+  // has none of them, so opening the chat there fails setup with 422 agent_not_available.
+  projectSlug: env("E2E_CHAT_PROJECT_SLUG") || "e2e-chat-fixtures",
   expectSha: env("E2E_CHAT_EXPECT_SHA"),
   agents: {
     claude: env("E2E_CHAT_AGENT_CLAUDE_ID"),

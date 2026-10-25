@@ -116,7 +116,7 @@ def main():
 
     # 3. apply + journal + rollback round trip
     m = FakeMesh(tree())
-    jp = tempfile.mktemp(suffix=".jsonl")
+    jp = os.path.join(tempfile.mkdtemp(), "journal.jsonl")
     L.apply_renames(m, PROJECT, plan, jp, allow_irreversible=False)
     assert by_slug(m, 10) == "adr-001-use-nats" and by_slug(m, 17) == "---", "irreversible one is skipped by default"
     recs = L.read_journal(jp)
@@ -152,7 +152,8 @@ def main():
     def forged(mod, why, needle):
         recs = [dict(r) for r in good]
         mod(recs)
-        p = tempfile.mktemp(suffix=".jsonl")
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
         with open(p, "w") as fh:
             fh.write("\n".join(json.dumps(r) for r in recs) + "\n")
         before = len(m.writes())

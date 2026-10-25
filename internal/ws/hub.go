@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,8 +117,11 @@ func (h *Hub) fanOut(msg *redis.Message) {
 	// Derive workspace channel from Redis channel (ws:slug -> workspace:slug).
 	wsChannel := msg.Channel // e.g. "ws:my-workspace"
 	projectChannel := ""
-	if event.ProjectID != "" {
-		projectChannel = "project:" + event.ProjectID
+	// A personal channel (ws:user:<id>) goes only to its exact subscriber. Its
+	// payload may still carry a project_id (chat threads, mentions); falling back
+	// to project subscribers would hand one user's events to every member.
+	if event.ProjectID != "" && !strings.HasPrefix(msg.Channel, personalChannelPrefix) {
+		projectChannel = projectChannelPrefix + event.ProjectID
 	}
 
 	h.clients.Range(func(_, value any) bool {

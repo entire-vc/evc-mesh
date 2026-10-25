@@ -76,7 +76,7 @@ def validate_judge_env(config: BenchConfig) -> list[str]:
     if config.judge_api_key and not _looks_like_api_key(config.judge_api_key):
         errors.append(
             "LME_JUDGE_API_KEY does not look like an API key "
-            f"(got {config.judge_api_key!r}). "
+            f"(got a {len(config.judge_api_key)}-char value without a known key prefix). "
             f"Put your sk-... key in {path_hint}, not the model name."
         )
     if (

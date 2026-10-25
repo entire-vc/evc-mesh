@@ -1032,6 +1032,15 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 	var targetSlug string
 	switch currentStatus.Category {
 	case domain.StatusCategoryInProgress:
+		// The merge is not the end of the work when the AC asks for a run
+		// after it; review would stop the executor's lane.
+		if match := postMergeACMatch(task); match != "" {
+			body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q). Acceptance needs a post-merge check (%q) — task stays in %#q until the assignee runs it.", refLabel, mergeRefLabel, match, currentStatus.Slug)
+			if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
+			}
+			return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: "post_merge_ac_pending"}, nil
+		}
 		targetSlug = "review"
 	case domain.StatusCategoryReview:
 		targetSlug = "done"

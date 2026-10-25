@@ -1239,7 +1239,8 @@ type PipelineHandleResult struct {
 // Transitioned == false with Reason != "" means the orchestrator deliberately
 // did not move the task. Reason values are stable identifiers suitable for
 // logging: "no_task_ref", "not_closed", "closed_without_merge",
-// "awaiting_other_prs", "source_status_not_eligible", "transitioned".
+// "awaiting_other_prs", "source_status_not_eligible", "post_merge_ac_pending",
+// "transitioned".
 type PRHandleResult struct {
 	TaskID       uuid.UUID
 	OldStatus    string // status slug; empty when no task resolved

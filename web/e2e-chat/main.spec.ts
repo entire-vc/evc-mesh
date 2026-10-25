@@ -57,14 +57,22 @@ for (const h of HARNESSES) {
     test(`S03 ${h}: real paste of a PNG, one message with one attachment`, async () => {
       await step("S03", h, async () => {
         const png = await makeCodePng(A.page, code);
-        await pastePng(A.page, png.bytes);
-        // The browser's own paste event put the file into the composer, and the image is readable.
         const pending = A.page.getByTestId("chat-pending-attachment");
-        await expect(pending, "a pasted image appears in the composer").toHaveCount(1, { timeout: 30_000 });
-        await expect(pending).toHaveAttribute("data-status", "ready", { timeout: 60_000 });
-        const readable = await pending.locator("img").evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0);
-        expect(readable, "the pasted image preview decodes").toBe(true);
-        await snap(A.page, `paste-preview-${h}`);
+        // The browser's own paste event puts the file into the composer, and the image is readable.
+        let pasted = { bytes: png.bytes, sha: png.sha };
+        const paste = async () => {
+          pasted = await pastePng(A.page, png.bytes);
+          await expect(pending, "a pasted image appears in the composer").toHaveCount(1, { timeout: 30_000 });
+          await expect(pending).toHaveAttribute("data-status", "ready", { timeout: 60_000 });
+          const readable = await pending.locator("img").evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0);
+          expect(readable, "the pasted image preview decodes").toBe(true);
+        };
+        // snap reloads the page for every viewport and theme, and a pending attachment lives only in
+        // the composer: paste for each shot, then once more on a fresh page for the message itself.
+        await snap(A.page, `paste-preview-${h}`, paste);
+        await A.page.reload();
+        await A.page.getByTestId("chat-composer").waitFor({ timeout: 30_000 });
+        await paste();
 
         await A.page.getByTestId("chat-input").fill(text1);
         await A.page.getByTestId("chat-send").click();
@@ -80,7 +88,7 @@ for (const h of HARNESSES) {
         expect(m.attachments, "exactly one attachment").toHaveLength(1);
         const att = m.attachments[0]!;
         expect(att.mime).toBe("image/png");
-        expect(att.size).toBe(png.bytes.length);
+        expect(att.size, "the stored size is the pasted file's").toBe(pasted.bytes.length);
         expect([att.width, att.height]).toEqual([png.width, png.height]);
         expect(att.file_name, "the code is in the pixels, not in the file name").not.toContain(code);
 
@@ -95,7 +103,7 @@ for (const h of HARNESSES) {
         } else {
           bytes = await hop.bytes();
         }
-        expect(sha256(bytes), "the downloaded bytes are the pasted PNG").toBe(png.sha);
+        expect(sha256(bytes), "the downloaded bytes are the pasted PNG").toBe(pasted.sha);
 
         await A.page.reload();
         await expect(A.page.getByTestId("chat-message").filter({ hasText: text1 })).toHaveCount(1);

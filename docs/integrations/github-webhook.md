@@ -83,7 +83,7 @@ The task a PR belongs to is resolved in this order:
 If neither resolves a task, the event is acknowledged with
 `200 {"status":"ok","reason":"no_task_ref"}` and nothing changes.
 
-> **Tip:** short prefixes shown in the UI (e.g. `[#264f7eb6]`) are **not**
+> **Tip:** short prefixes shown in the UI (e.g. `[an internal ticket]`) are **not**
 > parsed from PR text — only the full `MESH-<uuid>`. To link by short id, create
 > the link explicitly via `POST /api/v1/tasks/:task_id/vcs-links` once; from then
 > on the PR-number fallback keeps it linked.
@@ -98,11 +98,12 @@ on `action=closed`:**
 |-----------|--------|
 | `closed`, not merged | Comment "closed without merge — no status change". No transition. |
 | `closed` + `merged`, but the task has other PR links still non-terminal | Comment "Awaiting N more PR(s)…". No transition (multi-PR awareness). |
-| `closed` + `merged`, all linked PRs terminal, task in **in_progress** | Move task → **review**. |
+| `closed` + `merged`, all linked PRs terminal, task in **in_progress**, description names a post-merge check (live run, after merge/deploy, `post-merge`/`post-deploy`) or label `post-merge-ac` | Comment "Acceptance needs a post-merge check". No transition: the assignee runs the check and moves the task. |
+| `closed` + `merged`, all linked PRs terminal, task in **in_progress** (no post-merge check) | Move task → **review**. |
 | `closed` + `merged`, all linked PRs terminal, task in **review** | Move task → **done**. |
 | `closed` + `merged`, task in any other status | Comment "no auto-transition". No change. |
 
-On a successful transition Mesh posts a system comment authored as **Garfield**
+On a successful transition Mesh posts a system comment authored as **Gary**
 (`source: github-webhook`):
 
 ```
@@ -123,7 +124,8 @@ On a successful transition Mesh posts a system comment authored as **Garfield**
 ```
 
 `reason` is one of: `transitioned`, `not_closed`, `closed_without_merge`,
-`awaiting_other_prs`, `source_status_not_eligible`, `no_task_ref`,
+`awaiting_other_prs`, `source_status_not_eligible`, `post_merge_ac_pending`,
+`no_task_ref`,
 `task_not_found`. The handler always returns `200` for well-formed, authentic
 events (even when no transition occurs) so GitHub does not retry; genuine
 processing failures are logged and returned as `200 {"status":"error_logged"}`

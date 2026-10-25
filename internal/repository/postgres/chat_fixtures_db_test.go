@@ -116,6 +116,19 @@ func TestChatFixtures_SeedIsIdempotentAndCleanupExact(t *testing.T) {
 	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash), []byte("pw-c-1")), "positive control: the CI value logs in")
 	require.Error(t, bcrypt.CompareHashAndPassword([]byte(hash), []byte("pw-c-2")))
 
+	// The chat settings accept the offline agent, and it stays offline. The two harness
+	// fixtures are served only once their live runners announce them, which this test does not
+	// start: the same query leaving them out is the control that a controller row is still needed.
+	served, err := NewAgentChatRepo(db).ServedAgents(ctx, first.ProjectID,
+		[]uuid.UUID{first.Agents["claude"], first.Agents["codex"], first.Agents["offline"]})
+	require.NoError(t, err)
+	require.True(t, served[first.Agents["offline"]], "PUT chat settings rejects an offline agent without a controller row")
+	require.False(t, served[first.Agents["claude"]], "no runner announced this harness fixture")
+	require.False(t, served[first.Agents["codex"]], "no runner announced this harness fixture")
+	var live bool
+	require.NoError(t, db.Get(&live, `SELECT lease_expires_at > now() FROM agent_controllers WHERE agent_id = $1`, first.Agents["offline"]))
+	require.False(t, live, "the offline fixture must not look live")
+
 	// Second run, same passwords: nothing is created, ids are stable.
 	second, err := SeedChatFixtures(ctx, db, ChatFixturesWorkspaceSlug, fixturePasswords("1"))
 	require.NoError(t, err)

@@ -89,14 +89,25 @@ export async function makeCodePng(page: Page, code: string): Promise<{ bytes: Bu
  * A real paste: the PNG goes into the system clipboard (clipboard-write permission)
  * and the composer receives the browser's own paste event from Ctrl+V. No file
  * chooser, no synthetic ClipboardEvent.
+ *
+ * The browser sanitizes a clipboard image: it decodes the PNG and encodes the pixels
+ * again, so the pasted file has other bytes than the canvas PNG. Returns the PNG the
+ * clipboard holds (clipboard-read permission): those are the bytes the composer gets.
  */
-export async function pastePng(page: Page, png: Buffer): Promise<void> {
-  await page.evaluate(async (b64) => {
-    const bin = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+export async function pastePng(page: Page, png: Buffer): Promise<{ bytes: Buffer; sha: string }> {
+  const b64 = await page.evaluate(async (src) => {
+    const bin = Uint8Array.from(atob(src), (ch) => ch.charCodeAt(0));
     await navigator.clipboard.write([new ClipboardItem({ "image/png": new Blob([bin], { type: "image/png" }) })]);
+    const [item] = await navigator.clipboard.read();
+    const buf = new Uint8Array(await (await item!.getType("image/png")).arrayBuffer());
+    let s = "";
+    for (const v of buf) s += String.fromCharCode(v);
+    return btoa(s);
   }, png.toString("base64"));
   await page.getByTestId("chat-input").focus();
   await page.keyboard.press("ControlOrMeta+V");
+  const bytes = Buffer.from(b64, "base64");
+  return { bytes, sha: sha256(bytes) };
 }
 
 export const codeOf = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");

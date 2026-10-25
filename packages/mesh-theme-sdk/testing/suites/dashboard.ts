@@ -36,8 +36,14 @@ function clickAndSee(el: Element, init: MouseEventInit = {}): { prevented: boole
 }
 
 const realHref = (a: Element | null) => {
-  const href = a?.getAttribute("href") ?? "";
-  return href.length > 0 && href !== "#" && !href.startsWith("javascript:");
+  const href = a?.getAttribute("href")?.trim() ?? "";
+  if (href.length === 0 || href === "#") return false;
+  try {
+    // Relative links resolve against the base and stay http(s); script and data schemes never do.
+    return ["http:", "https:"].includes(new URL(href, "https://mesh.test/").protocol);
+  } catch {
+    return false;
+  }
 };
 
 /** Inline sizes a 1-column widget cannot afford (jsdom has no layout: what the markup itself pins down). */

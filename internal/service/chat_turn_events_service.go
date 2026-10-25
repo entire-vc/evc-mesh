@@ -144,7 +144,7 @@ func (s *ChatTurnEventsService) ApplyEvents(ctx context.Context, in postgres.Cha
 }
 
 func chatMessagePayload(m *postgres.ChatMessageRow) ChatMessagePayload {
-	return ChatMessagePayload{ID: m.ID, ThreadID: m.ThreadID, Role: m.Role, Body: m.Body, Status: m.Status,
+	return ChatMessagePayload{ID: m.ID, ThreadID: m.ThreadID, Role: postgres.ChatWireRole(m.Role), Body: m.Body, Status: m.Status,
 		Truncated: m.Truncated, TurnID: m.TurnID, ErrorCode: m.ErrorCode, Attachments: []any{}, CreatedAt: m.CreatedAt}
 }
 

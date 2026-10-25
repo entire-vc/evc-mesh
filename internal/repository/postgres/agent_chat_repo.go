@@ -544,8 +544,18 @@ type chatMessageRow struct {
 
 const chatMessageCols = `m.id, m.thread_id, m.role, m.body, m.status, m.truncated, m.turn_id, m.error_code, m.client_message_id, m.created_at`
 
+// ChatWireRole is the role clients see for a stored message role. The table
+// keeps 'agent' (the runner protocol reads it), while the web client and the
+// agent-chat e2e harness speak 'assistant'; 'user' and 'system' pass through.
+func ChatWireRole(stored string) string {
+	if stored == "agent" {
+		return "assistant"
+	}
+	return stored
+}
+
 func (row chatMessageRow) toMessage() ChatMessage {
-	m := ChatMessage{ID: row.ID, ThreadID: row.ThreadID, Role: row.Role, Body: row.Body, Status: row.Status,
+	m := ChatMessage{ID: row.ID, ThreadID: row.ThreadID, Role: ChatWireRole(row.Role), Body: row.Body, Status: row.Status,
 		Truncated: row.Truncated, TurnID: row.TurnID, Attachments: []ChatAttachmentView{}, CreatedAt: row.CreatedAt}
 	if row.ErrorCode.Valid {
 		m.ErrorCode = &row.ErrorCode.String

@@ -171,11 +171,19 @@ class MainFlowTest(unittest.TestCase):
         self.assertEqual(seen, prepush.ORDER)
 
 
+
+def _lock_file():
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".lock")
+    os.close(fd)
+    return path
+
+
 class GateLockTest(unittest.TestCase):
     def test_second_gate_waits_then_gets_lock(self):
-        import tempfile, threading, time
+        import threading, time
         orig = prepush.LOCK_PATH
-        prepush.LOCK_PATH = tempfile.mktemp()
+        prepush.LOCK_PATH = _lock_file()
         try:
             first = prepush.acquire_lock()
             got = []
@@ -192,9 +200,8 @@ class GateLockTest(unittest.TestCase):
             prepush.LOCK_PATH = orig
 
     def test_lock_timeout_fails_closed(self):
-        import tempfile
         orig = (prepush.LOCK_PATH, prepush.LOCK_WAIT_S)
-        prepush.LOCK_PATH, prepush.LOCK_WAIT_S = tempfile.mktemp(), 0
+        prepush.LOCK_PATH, prepush.LOCK_WAIT_S = _lock_file(), 0
         try:
             first = prepush.acquire_lock()
             self.assertIsNone(prepush.acquire_lock())
