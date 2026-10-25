@@ -1,44 +1,50 @@
 import { SetupFail } from "./env";
-import type { Actor } from "./harness";
+import type { Actor, Ctx } from "./harness";
 
 /**
- * Read-only QA diagnostics of the chat (session/process per thread, shared-memory
- * audit with source attribution, extension-event metadata). The endpoints are
- * delivered by an internal ticket (setup-API). Until their paths are bound through the
- * CI variables below, every call is FAIL SETUP: no personal or admin access, no
- * DB shortcut, and no pass by absence.
+ * Read-only QA audit of the chat, delivered by an internal ticket (setup-API):
  *
- *   E2E_CHAT_DIAG_SESSION_PATH  e.g. /api/v1/.../{thread}   -> { session_id, process_alive }
- *   E2E_CHAT_DIAG_MEMORY_PATH   audit of shared-memory writes -> { items: [{ thread_id, turn_id, user_id, text? }] }
- *   E2E_CHAT_DIAG_EVENTS_PATH   extension-event metadata      -> { items: [{ kind, thread_id?, has_body: boolean }] }
+ *   GET /api/v1/workspaces/{ws}/chat/audit/threads/{thread}         runtime.session_id, turns[].session_id, …
+ *   GET /api/v1/workspaces/{ws}/chat/audit/threads/{thread}/events  { events: [{ turn_id, seq, kind, label_length }], attachments: [...] }
+ *   GET /api/v1/workspaces/{ws}/chat/audit/memory-writes?thread_id= { items: [{ memory_id, chat_thread_id, initiated_by_user_id, turn_id, … }] }
  *
- * The response shapes above are what this suite reads; when an internal ticket merges its
- * contract replaces them here, in one file.
+ * Access is owner/admin of the workspace (actor C), not a personal admin and not
+ * the DB. The calls go through the QA actor's page (Actor.fetch), so a red control
+ * can answer them with a known-bad body through context.route. Anything but 200 is
+ * FAIL SETUP: no pass by absence.
  */
-const need = (name: string): string => {
-  const v = process.env[name];
-  if (!v) throw new SetupFail(`${name} is not bound: the read-only diagnostic of an internal ticket is not available (P05–P07, S06 cancel ack, S08 stay FAIL SETUP)`);
-  return v;
-};
+const auditBase = (x: Ctx) => `/api/v1/workspaces/${x.workspaceId}/chat/audit`;
 
-export async function sessionOf(qa: Actor, threadId: string): Promise<string | undefined> {
-  const res = await qa.api("GET", need("E2E_CHAT_DIAG_SESSION_PATH").replace("{thread}", threadId));
-  if (res.status !== 200) throw new SetupFail(`session diagnostic answered ${res.status} for the QA actor`);
-  return (res.json() as { session_id?: string }).session_id;
+async function read(qa: Actor, what: string, path: string): Promise<{ text: string; json: unknown }> {
+  const res = await qa.fetch("GET", path);
+  if (res.status !== 200) throw new SetupFail(`${what} audit answered ${res.status} for the QA actor ${qa.id}`);
+  return { text: res.text, json: JSON.parse(res.text) };
 }
 
-export interface MemoryAuditItem { thread_id?: string; turn_id?: string; user_id?: string; text?: string }
-
-export async function memoryAudit(qa: Actor): Promise<MemoryAuditItem[]> {
-  const res = await qa.api("GET", need("E2E_CHAT_DIAG_MEMORY_PATH"));
-  if (res.status !== 200) throw new SetupFail(`memory audit answered ${res.status} for the QA actor`);
-  return (res.json() as { items: MemoryAuditItem[] }).items;
+/** The agent session of a thread: the runtime's current one, else the latest turn that recorded one. */
+export async function sessionOf(qa: Actor, x: Ctx, threadId: string): Promise<string | undefined> {
+  const { json } = await read(qa, "thread", `${auditBase(x)}/threads/${threadId}`);
+  const a = json as { runtime?: { session_id?: string } | null; turns?: Array<{ session_id?: string | null }> };
+  return a.runtime?.session_id ?? [...(a.turns ?? [])].reverse().find((t) => t.session_id)?.session_id ?? undefined;
 }
 
-export interface ExtEvent { kind: string; thread_id?: string; has_body?: boolean }
+export interface MemoryWrite { memory_id?: string; chat_thread_id?: string; initiated_by_user_id?: string; turn_id?: string | null; [k: string]: unknown }
 
-export async function extensionEvents(qa: Actor): Promise<ExtEvent[]> {
-  const res = await qa.api("GET", need("E2E_CHAT_DIAG_EVENTS_PATH"));
-  if (res.status !== 200) throw new SetupFail(`extension events answered ${res.status} for the QA actor`);
-  return (res.json() as { items: ExtEvent[] }).items;
+export async function memoryWrites(qa: Actor, x: Ctx, threadId?: string): Promise<MemoryWrite[]> {
+  const q = threadId ? `?thread_id=${threadId}&limit=200` : "?limit=200";
+  const { json } = await read(qa, "memory-writes", `${auditBase(x)}/memory-writes${q}`);
+  return (json as { items: MemoryWrite[] }).items;
+}
+
+/** Keys that would mean an event or attachment row carries content, not metadata. */
+const CONTENT_KEYS = ["body", "text", "content", "payload", "label", "file_name", "data"];
+
+export interface ExtEvent { kind: string; has_body: boolean }
+
+/** Tool events and attachments of one thread, reduced to "does this row carry content". */
+export async function threadEvents(qa: Actor, x: Ctx, threadId: string): Promise<{ raw: string; items: ExtEvent[] }> {
+  const { text, json } = await read(qa, "events", `${auditBase(x)}/threads/${threadId}/events`);
+  const a = json as { events?: Array<Record<string, unknown>>; attachments?: Array<Record<string, unknown>> };
+  const rows = [...(a.events ?? []).map((e) => ({ kind: String(e.kind ?? "event"), e })), ...(a.attachments ?? []).map((e) => ({ kind: "attachment", e }))];
+  return { raw: text, items: rows.map(({ kind, e }) => ({ kind, has_body: CONTENT_KEYS.some((k) => k in e) })) };
 }

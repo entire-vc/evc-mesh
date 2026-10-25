@@ -27,19 +27,27 @@ export async function step<T>(id: string, who: string, fn: () => Promise<T>): Pr
   }
 }
 
-/** A red control passes only when the detector under test throws. */
-export async function redControl(id: string, who: string, mutated: () => unknown | Promise<unknown>): Promise<void> {
-  let threw = false;
+/**
+ * A red control passes only when the detector under test throws. With `reason`
+ * the error must also be the detector's own: a setup error, a TypeError or a
+ * dead page would otherwise count as a caught mutant.
+ */
+export async function redControl(id: string, who: string, mutated: () => unknown | Promise<unknown>, reason?: RegExp): Promise<void> {
+  let err: Error | undefined;
   try {
     await mutated();
-  } catch {
-    threw = true;
+  } catch (e) {
+    err = e instanceof Error ? e : new Error(String(e));
   }
-  if (!threw) {
+  if (!err) {
     row(id, who, "FAIL", "red control stayed green: the check cannot fail");
     throw new Error(`${id} red control (${who}) stayed green — the check cannot fail`);
   }
-  row(id, who, "RED-OK");
+  if (reason && !reason.test(err.message)) {
+    row(id, who, "FAIL", `red control failed for another reason: ${err.message}`);
+    throw new Error(`${id} red control (${who}) failed for another reason, not by its detector: ${err.message}`);
+  }
+  row(id, who, "RED-OK", reason ? err.message : "");
 }
 
 export function timeline(name: string, events: unknown[]): void {
@@ -93,13 +101,14 @@ export class F1 {
     return this.expected.some((e) => e.path.test(u.pathname));
   }
 
-  verify(who: string): void {
+  /** `requireExpected=false` when the tests that make the registered negatives were filtered out of the run. */
+  verify(who: string, requireExpected = true): void {
     const bad = [
       ...this.consoleErrors.map((m) => `console.error: ${m}`),
       ...this.pageErrors.map((m) => `pageerror: ${m}`),
       ...this.unexpected,
     ];
-    const missed = this.expected.filter((e) => e.hits === 0).map((e) => `${e.method} ${e.path} ${e.status} never seen`);
+    const missed = requireExpected ? this.expected.filter((e) => e.hits === 0).map((e) => `${e.method} ${e.path} ${e.status} never seen`) : [];
     row("F1", who, bad.length + missed.length === 0 ? "PASS" : "FAIL", [...bad, ...missed].join(" | "));
     if (bad.length > 0) throw new Error(`F1 (${who}): ${bad.slice(0, 5).join(" | ")}`);
     if (missed.length > 0) throw new Error(`F1 (${who}): an expected negative never happened: ${missed.join(" | ")}`);
@@ -141,6 +150,32 @@ function parseFrame(payload: string): Frame | null {
   }
 }
 
+/**
+ * Init script: every message of every WebSocket the page constructs goes to the
+ * __e2eChatFrame binding. window.WebSocket is held behind an accessor, so a class
+ * installed later (Playwright's routeWebSocket mock) is wrapped as well.
+ */
+function tapWebSocket(): void {
+  const w = window as unknown as { WebSocket: typeof WebSocket; __e2eChatFrame?: (p: string) => void };
+  const tapped = new WeakSet<object>();
+  const wrap = (W: typeof WebSocket): typeof WebSocket => {
+    if (tapped.has(W)) return W;
+    const N = new Proxy(W, {
+      construct(t, args, nt) {
+        const sock = Reflect.construct(t, args, nt) as WebSocket;
+        sock.addEventListener("message", (ev) => {
+          if (typeof ev.data === "string") void w.__e2eChatFrame?.(ev.data);
+        });
+        return sock;
+      },
+    });
+    tapped.add(N);
+    return N;
+  };
+  let current = wrap(w.WebSocket);
+  Object.defineProperty(window, "WebSocket", { configurable: true, get: () => current, set: (W: typeof WebSocket) => { current = wrap(W); } });
+}
+
 /** One real login and one isolated browser context per actor; storage is never shared. */
 export async function openActor(browser: Browser, id: ActorId): Promise<Actor> {
   const c = cfg();
@@ -153,16 +188,18 @@ export async function openActor(browser: Browser, id: ActorId): Promise<Actor> {
     const who = (await me.json()) as { id?: string; email?: string };
     if (!who.id) throw new SetupFail(`actor ${id}: /auth/me carries no user id`);
     if (who.email?.toLowerCase() !== c.email(id).toLowerCase()) throw new SetupFail(`actor ${id}: session belongs to another user`);
+    // Frames are taken inside the page, from every socket the app opens, as the app
+    // receives them. CDP's page.on("websocket") does not see a socket served by
+    // page.routeWebSocket, so the P05 mutant would be invisible to it.
+    const frames: Frame[] = [];
+    await context.exposeBinding("__e2eChatFrame", (_src, payload: string) => {
+      const fr = parseFrame(payload);
+      if (fr) frames.push(fr);
+    });
+    await context.addInitScript(tapWebSocket);
     page = await context.newPage();
     const f1 = new F1();
     f1.attach(page);
-    const frames: Frame[] = [];
-    page.on("websocket", (ws) => {
-      ws.on("framereceived", (ev) => {
-        const fr = parseFrame(typeof ev.payload === "string" ? ev.payload : ev.payload.toString());
-        if (fr) frames.push(fr);
-      });
-    });
     const auth = { Authorization: `Bearer ${accessToken}` };
     const req: APIRequestContext = context.request;
     return {
