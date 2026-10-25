@@ -7,7 +7,7 @@ import {
   type Actor, type Ctx, chatBase, chatUrl, openAllActors, redControl, resolveCtx, row, sha256, step, timeline, track, until,
 } from "./lib/harness";
 import { agentId, history, makeCodePng, waitAssistantDone } from "./lib/chat";
-import { extensionEvents, memoryAudit, sessionOf } from "./lib/diag";
+import { memoryWrites, sessionOf, threadEvents } from "./lib/diag";
 
 /**
  * e2e/agent-chat/privacy P01–P07 for B and for C (workspace admin, not the author),
@@ -59,11 +59,15 @@ const forbiddenFor = (owner: ActorId): Forbidden => {
 };
 
 let ready = false;
+/** Attackers whose live P02–P04 ran: only they can be held to the registered negatives (a `-red` run filters them out). */
+const exercised = new Set<ActorId>();
 
 test.beforeAll(async ({ browser }) => {
   U = await openAllActors(browser);
   x = await resolveCtx(U.A);
   for (const id of ["B", "C", "V"] as const) expect((await resolveCtx(U[id])).projectId, `${id} sees the same project`).toBe(x.projectId);
+  // Actor.fetch runs in the page: it needs the app origin even when a filtered run starts with a red control.
+  for (const a of Object.values(U)) await a.page.goto(chatUrl(x));
   seeded.A = await seed(U.A, `${CA} please answer with the word ok`);
   seeded.B = await seed(U.B, `${CB} please answer with the word ok`);
   seeded.C = await seed(U.C, `${CC} please answer with the word ok`);
@@ -85,7 +89,7 @@ test.afterAll(async () => {
   try {
     // A failed beforeAll leaves the actors half-built: report that failure, not a secondary one.
     if (ready) {
-      for (const id of ATTACKERS) U[id].f1.verify(id);
+      for (const id of ATTACKERS) U[id].f1.verify(id, exercised.has(id));
       U.A.f1.verify("A");
     }
   } finally {
@@ -146,6 +150,25 @@ async function checkP04(a: Actor, call: P04Call): Promise<void> {
   assertDenied(`P04 ${a.id} ${call}`, r.status);
 }
 
+function checkP05Frames(a: Actor, from = 0): void {
+  assertFramesClean(`P05 ${a.id}`, a.frames.slice(from), forbiddenFor("A"));
+}
+
+async function checkP06(id: ActorId): Promise<void> {
+  assertDistinctSessions({ A: await sessionOf(U.C, x, seeded.A!.threadId), [id]: await sessionOf(U.C, x, seeded[id]!.threadId) });
+}
+
+/** Before A says "remember": no shared-memory write from T-A, no canary in memory, no content in T-A's event rows. */
+async function checkP07(): Promise<void> {
+  const tA = seeded.A!.threadId;
+  const writes = await memoryWrites(U.C, x);
+  const ev = await threadEvents(U.C, x, tA);
+  assertMemoryAndEventsClean(writes, ev.items, CA);
+  if (ev.raw.toLowerCase().includes(CA.toLowerCase())) throw new Error("P07: the canary is in T-A's event audit — matched=true");
+  const fromTA = writes.filter((w) => w.chat_thread_id === tA);
+  if (fromTA.length > 0) throw new Error(`P07: ${fromTA.length} shared-memory write(s) from T-A without "remember"`);
+}
+
 /** A mutant: the page's own request to a matching URL is answered by a broken server. */
 async function withMutant(a: Actor, pattern: RegExp, status: number, body: string, run: () => Promise<void>): Promise<void> {
   const h = (route: import("@playwright/test").Route) => route.fulfill({ status, contentType: "application/json", body });
@@ -187,6 +210,7 @@ for (const id of ATTACKERS) {
 
     test(`P02 ${id}: direct URL, detail and history of a foreign thread are 404`, async () => {
       await step("P02", id, async () => {
+        exercised.add(id);
         const a = me();
         await a.page.goto(chatUrl(x, seeded.A!.threadId));
         await expect(a.page.getByText("This chat does not exist or is not available to you")).toBeVisible({ timeout: 30_000 });
@@ -278,7 +302,7 @@ for (const id of ATTACKERS) {
         await waitAssistantDone(a, x, own().threadId, 2);
         const mine = a.frames.slice(from);
         assertOwnEvents(`P05 ${id}`, mine, own().threadId, 2);
-        assertFramesClean(`P05 ${id}`, a.frames, forbiddenFor("A"));
+        checkP05Frames(a);
         // Positive control: A's own socket did receive A's events.
         expect(U.A.frames.some((f) => f.thread_id === seeded.A!.threadId && f.event === "chat.message.delta")).toBe(true);
         timeline(`P05-${id}`, mine.map(({ raw: _r, ...rest }) => rest));
@@ -297,16 +321,13 @@ for (const id of ATTACKERS) {
         const reply = await waitAssistantDone(a, x, own().threadId, n);
         assertNoLeak(`P06 ${id} reply`, reply.body, { ...forbiddenFor("A"), texts: [] });
         assertNoLeak(`P06 ${id} history`, JSON.stringify(await history(a, x, own().threadId)), forbiddenFor("A"));
-        // Session isolation needs the read-only diagnostic: FAIL SETUP until it is bound.
-        assertDistinctSessions({ A: await sessionOf(U.C, seeded.A!.threadId), [id]: await sessionOf(U.C, own().threadId) });
+        await checkP06(id);
       });
     });
 
     test(`P07 ${id}: a canary without "remember" is not in shared memory or event bodies`, async () => {
       await step("P07", id, async () => {
-        const audit = await memoryAudit(U.C);
-        const events = await extensionEvents(U.C);
-        assertMemoryAndEventsClean(audit, events, CA);
+        await checkP07();
         // Positive control: an explicit "remember" from A creates an attributed record (exercised in the control step below).
         row("P07-control", id, "PASS", "see P07-remember");
       });
@@ -316,16 +337,21 @@ for (const id of ATTACKERS) {
 
 test("P07-remember: an explicit remember by A is recorded with its source", async () => {
   await step("P07-remember", "A", async () => {
+    // The audit carries ids, never text: the write is found by its source, not by the marker.
     const marker = canary("REMEMBER");
-    await U.A.page.goto(chatUrl(x, seeded.A!.threadId));
+    const tA = seeded.A!.threadId;
+    const before = (await memoryWrites(U.C, x, tA)).length;
+    await U.A.page.goto(chatUrl(x, tA));
     await U.A.page.getByTestId("chat-input").fill(`${RUN_ID} remember this: ${marker}`);
     await U.A.page.getByTestId("chat-send").click();
-    const n = (await history(U.A, x, seeded.A!.threadId)).items.filter((m) => m.role === "assistant").length + 1;
-    await waitAssistantDone(U.A, x, seeded.A!.threadId, n);
-    const hit = (await memoryAudit(U.C)).find((i) => JSON.stringify(i).includes(marker));
-    expect(hit, "the remembered text is in shared memory").toBeTruthy();
-    expect(hit!.user_id, "attributed to A").toBe(U.A.userId);
-    expect(hit!.thread_id, "attributed to T-A").toBe(seeded.A!.threadId);
+    const n = (await history(U.A, x, tA)).items.filter((m) => m.role === "assistant").length + 1;
+    await waitAssistantDone(U.A, x, tA, n);
+    const writes = await until("a shared-memory write from T-A", async () => {
+      const w = await memoryWrites(U.C, x, tA);
+      return w.length > before && w;
+    }, 60_000, 2_000);
+    expect(writes[0]!.initiated_by_user_id, "attributed to A").toBe(U.A.userId);
+    expect(writes[0]!.chat_thread_id, "attributed to T-A").toBe(tA);
   });
 });
 
@@ -336,18 +362,18 @@ test.describe("red controls (detector mutants)", () => {
     const B = () => U[id];
     test(`P01-red ${id}: the list leaks T-A -> P01 fails`, async () => {
       const leaked = JSON.stringify({ items: [{ id: seeded.A!.threadId, title: `${RUN_ID}-A`, project_id: x.projectId }, { id: seeded.B!.threadId }, { id: seeded.C!.threadId }], has_more: false, next_cursor: null });
-      await redControl("P01-red", id, () => withMutant(B(), /\/chat\/threads\?/, 200, leaked, () => checkP01(B())));
+      await redControl("P01-red", id, () => withMutant(B(), /\/chat\/threads\?/, 200, leaked, () => checkP01(B())), new RegExp(`^P01 ${id} list: foreign data present`));
     });
     test(`P02-red ${id}: detail and history answer 200 with T-A -> P02 fails`, async () => {
       const th = (await U.A.api("GET", `${chatBase(x)}/threads/${seeded.A!.threadId}`)).text;
       const hs = (await U.A.api("GET", `${chatBase(x)}/threads/${seeded.A!.threadId}/messages?limit=50`)).text;
-      await redControl("P02-red-detail", id, () => withMutant(B(), new RegExp(`/chat/threads/${seeded.A!.threadId}$`), 200, th, () => checkP02(B())));
+      await redControl("P02-red-detail", id, () => withMutant(B(), new RegExp(`/chat/threads/${seeded.A!.threadId}$`), 200, th, () => checkP02(B())), new RegExp(`^P02 ${id} detail: expected 404`));
       // The detail stays the real 404 here, so only the history assert can catch this one.
-      await redControl("P02-red-history", id, () => withMutant(B(), new RegExp(`/chat/threads/${seeded.A!.threadId}/messages`), 200, hs, () => checkP02(B())));
+      await redControl("P02-red-history", id, () => withMutant(B(), new RegExp(`/chat/threads/${seeded.A!.threadId}/messages`), 200, hs, () => checkP02(B())), new RegExp(`^P02 ${id} history: expected 404`));
     });
     test(`P03-red ${id}: foreign download and presign succeed -> P03 fails`, async () => {
-      await redControl("P03-red-download", id, () => withMutant(B(), /\/chat\/attachments\/[^/]+\/download/, 200, "{}", () => checkP03(B())));
-      await redControl("P03-red-presign", id, () => withMutant(B(), /\/chat\/attachments$/, 200, `{"attachment_id":"${seeded.A!.attachmentId}"}`, () => checkP03(B())));
+      await redControl("P03-red-download", id, () => withMutant(B(), /\/chat\/attachments\/[^/]+\/download/, 200, "{}", () => checkP03(B())), new RegExp(`^P03 ${id} download: expected 404`));
+      await redControl("P03-red-presign", id, () => withMutant(B(), /\/chat\/attachments$/, 200, `{"attachment_id":"${seeded.A!.attachmentId}"}`, () => checkP03(B())), new RegExp(`^P03 ${id} presign: expected 404`));
     });
     test(`P04-red ${id}: each foreign mutation answers 2xx -> its own assert fails`, async () => {
       const tA = seeded.A!.threadId;
@@ -356,8 +382,46 @@ test.describe("red controls (detector mutants)", () => {
         send: new RegExp(`/chat/threads/${tA}/messages$`), stop: new RegExp(`/chat/threads/${tA}/stop$`),
       };
       for (const call of ["rename", "delete", "send", "stop"] as P04Call[]) {
-        await redControl(`P04-red-${call}`, id, () => withMutant(B(), pats[call], 200, "{}", () => checkP04(B(), call)));
+        await redControl(`P04-red-${call}`, id, () => withMutant(B(), pats[call], 200, "{}", () => checkP04(B(), call)), new RegExp(`^P04 ${id} ${call}: foreign request succeeded`));
       }
+    });
+    test(`P05-red ${id}: a frame of T-A reaches ${id}'s socket -> P05 fails`, async () => {
+      // The socket of a fresh page of the attacker is served by the real server plus one
+      // injected frame shaped like the leak of job 394408 (chat.message.created of T-A on
+      // the project channel). The frames go through the same in-page tap as the live run.
+      const a = B();
+      const tA = seeded.A!.threadId;
+      const foreign = JSON.stringify({
+        type: "chat.message.created", channel: `project:${x.projectId}`, timestamp: new Date().toISOString(),
+        data: { event: "chat.message.created", workspace_id: x.workspaceId, project_id: x.projectId, thread_id: tA, seq: 4, message: { id: seeded.A!.messageId, thread_id: tA, role: "assistant", body: "ok" } },
+      });
+      const page = await a.context.newPage();
+      const from = a.frames.length;
+      await page.routeWebSocket(/\/ws\?/, (ws) => {
+        ws.connectToServer();
+        ws.send(foreign);
+      });
+      try {
+        await page.goto(chatUrl(x, seeded[id]!.threadId));
+        await expect(page.getByTestId("chat-composer")).toBeVisible({ timeout: 30_000 });
+        await until("the injected frame reaches the in-page tap", async () => a.frames.slice(from).some((f) => f.thread_id === tA), 30_000, 200);
+        await redControl("P05-red", id, () => checkP05Frames(a, from), new RegExp(`^P05 ${id}: foreign WS frame chat\\.message\\.created`));
+      } finally {
+        await page.close();
+        a.frames.splice(from);
+      }
+    });
+    test(`P06-red ${id}: the audit names one session for T-A and T-${id} -> P06 fails`, async () => {
+      const shared = JSON.stringify({ runtime: { session_id: `shared-${RUN_ID}` }, turns: [] });
+      await redControl("P06-red", id, () => withMutant(U.C, /\/chat\/audit\/threads\/[^/?]+$/, 200, shared, () => checkP06(id)), /two threads share one session id/);
+    });
+    test(`P07-red ${id}: the canary in memory, a write from T-A, a body in an event row -> P07 fails`, async () => {
+      const tA = seeded.A!.threadId;
+      const write = (o: object) => JSON.stringify({ items: [{ memory_id: crypto.randomUUID(), chat_thread_id: seeded[id]!.threadId, initiated_by_user_id: U[id].userId, ...o }] });
+      await redControl("P07-red-canary-in-memory", id, () => withMutant(U.C, /\/chat\/audit\/memory-writes/, 200, write({ text: CA }), () => checkP07()), /the canary reached shared memory/);
+      await redControl("P07-red-write-from-TA", id, () => withMutant(U.C, /\/chat\/audit\/memory-writes/, 200, write({ chat_thread_id: tA, initiated_by_user_id: U.A.userId }), () => checkP07()), /write\(s\) from T-A without "remember"/);
+      const body = JSON.stringify({ thread_id: tA, events: [{ turn_id: crypto.randomUUID(), seq: 1, kind: "tool", body: "x" }], attachments: [] });
+      await redControl("P07-red-event-body", id, () => withMutant(U.C, /\/chat\/audit\/threads\/[^/]+\/events$/, 200, body, () => checkP07()), /carry a body or attachment payload/);
     });
   }
 });
