@@ -91,10 +91,29 @@ const taskBaseColsNoAlias = `
 	gate_author, gate_author_type, gate_reason, recommended_default, gate_deadline,
 	runtime_state`
 
-const taskComputedCols = `
+var taskComputedCols = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) AS subtask_count,
+	(SELECT COUNT(*) FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+		WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL
+		AND sts.category NOT IN ('done', 'cancelled')) AS open_subtask_count,
+	(SELECT COUNT(*) FROM task_dependencies td JOIN tasks bt ON bt.id = td.depends_on_task_id
+		WHERE td.task_id = tasks.id AND td.dependency_type = 'blocks'
+		AND bt.deleted_at IS NULL) AS dependency_count,
+	(SELECT COUNT(*) FROM task_dependencies td JOIN tasks bt ON bt.id = td.depends_on_task_id
+		JOIN task_statuses bts ON bts.id = bt.status_id
+		WHERE td.task_id = tasks.id AND td.dependency_type = 'blocks'
+		AND bt.deleted_at IS NULL AND bts.category NOT IN ('done', 'cancelled')
+		AND NOT ` + domain.DependencySatisfiedSQL("td") + `) AS open_dependency_count,
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = tasks.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = tasks.id) AS vcs_link_count,
+	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) > 0
+		AND NOT EXISTS (SELECT 1 FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+			WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL AND sts.category NOT IN ('done', 'cancelled'))
+		-- role=review links name someone else's MR, never this task's deliverable, so no acceptance is owed on them (same rule as the done-evidence gate)
+		AND EXISTS (SELECT 1 FROM vcs_links v JOIN tasks vt ON vt.id = v.task_id
+			WHERE (vt.id = tasks.id OR vt.parent_task_id = tasks.id) AND vt.deleted_at IS NULL
+			AND v.link_type = 'pr' AND COALESCE(v.metadata->>'role', '') <> 'review'
+			AND COALESCE(v.metadata->'acceptance'->>'result', '') = '') AS acceptance_missing,
 	(SELECT v.pipeline_status FROM vcs_links v WHERE v.task_id = tasks.id AND v.pipeline_status IS NOT NULL ORDER BY v.pipeline_updated_at DESC LIMIT 1) AS vcs_pipeline_status,
 	ARRAY(SELECT DISTINCT v.provider FROM vcs_links v WHERE v.task_id = tasks.id ORDER BY 1) AS vcs_providers,
 	` + falseOpenComputedColsNoAlias + `,
@@ -154,10 +173,29 @@ const falseOpenComputedColsAliased = `
 		COALESCE((SELECT MAX(c.created_at) FROM comments c WHERE c.task_id = t.id), t.updated_at)
 	) AS false_open_last_activity_at`
 
-const taskComputedColsAliased = `
+var taskComputedColsAliased = `
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL) AS subtask_count,
+	(SELECT COUNT(*) FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+		WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL
+		AND sts.category NOT IN ('done', 'cancelled')) AS open_subtask_count,
+	(SELECT COUNT(*) FROM task_dependencies td JOIN tasks bt ON bt.id = td.depends_on_task_id
+		WHERE td.task_id = t.id AND td.dependency_type = 'blocks'
+		AND bt.deleted_at IS NULL) AS dependency_count,
+	(SELECT COUNT(*) FROM task_dependencies td JOIN tasks bt ON bt.id = td.depends_on_task_id
+		JOIN task_statuses bts ON bts.id = bt.status_id
+		WHERE td.task_id = t.id AND td.dependency_type = 'blocks'
+		AND bt.deleted_at IS NULL AND bts.category NOT IN ('done', 'cancelled')
+		AND NOT ` + domain.DependencySatisfiedSQL("td") + `) AS open_dependency_count,
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = t.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = t.id) AS vcs_link_count,
+	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL) > 0
+		AND NOT EXISTS (SELECT 1 FROM tasks st JOIN task_statuses sts ON sts.id = st.status_id
+			WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL AND sts.category NOT IN ('done', 'cancelled'))
+		-- role=review links name someone else's MR, never this task's deliverable, so no acceptance is owed on them (same rule as the done-evidence gate)
+		AND EXISTS (SELECT 1 FROM vcs_links v JOIN tasks vt ON vt.id = v.task_id
+			WHERE (vt.id = t.id OR vt.parent_task_id = t.id) AND vt.deleted_at IS NULL
+			AND v.link_type = 'pr' AND COALESCE(v.metadata->>'role', '') <> 'review'
+			AND COALESCE(v.metadata->'acceptance'->>'result', '') = '') AS acceptance_missing,
 	(SELECT v.pipeline_status FROM vcs_links v WHERE v.task_id = t.id AND v.pipeline_status IS NOT NULL ORDER BY v.pipeline_updated_at DESC LIMIT 1) AS vcs_pipeline_status,
 	ARRAY(SELECT DISTINCT v.provider FROM vcs_links v WHERE v.task_id = t.id ORDER BY 1) AS vcs_providers,
 	` + falseOpenComputedColsAliased + `,
@@ -257,13 +295,17 @@ type taskRow struct {
 	RuntimeState []byte `db:"runtime_state"`
 
 	// Computed enrichment fields populated by enriched queries.
-	SubtaskCount      int     `db:"subtask_count"`
-	AssigneeName      *string `db:"assignee_name"`
-	ReviewerName      *string `db:"reviewer_name"`
-	CreatedByName     *string `db:"created_by_name"`
-	ArtifactCount     int     `db:"artifact_count"`
-	VCSLinkCount      int     `db:"vcs_link_count"`
-	VCSPipelineStatus *string `db:"vcs_pipeline_status"`
+	SubtaskCount        int     `db:"subtask_count"`
+	OpenSubtaskCount    int     `db:"open_subtask_count"`
+	DependencyCount     int     `db:"dependency_count"`
+	OpenDependencyCount int     `db:"open_dependency_count"`
+	AssigneeName        *string `db:"assignee_name"`
+	ReviewerName        *string `db:"reviewer_name"`
+	CreatedByName       *string `db:"created_by_name"`
+	ArtifactCount       int     `db:"artifact_count"`
+	VCSLinkCount        int     `db:"vcs_link_count"`
+	AcceptanceMissing   bool    `db:"acceptance_missing"`
+	VCSPipelineStatus   *string `db:"vcs_pipeline_status"`
 	// VCSProviders is the distinct providers of the task's links, so a card can
 	// draw a per-provider badge (extension slot task.badge) without a fetch.
 	VCSProviders pq.StringArray `db:"vcs_providers"`
@@ -335,11 +377,15 @@ func (r *taskRow) toDomainBase() domain.Task {
 		CheckoutRequestID:       r.CheckoutRequestID,
 		CheckoutGeneration:      r.CheckoutGeneration,
 		SubtaskCount:            r.SubtaskCount,
+		OpenSubtaskCount:        r.OpenSubtaskCount,
+		DependencyCount:         r.DependencyCount,
+		OpenDependencyCount:     r.OpenDependencyCount,
 		AssigneeName:            r.AssigneeName,
 		ReviewerName:            r.ReviewerName,
 		CreatedByName:           r.CreatedByName,
 		ArtifactCount:           r.ArtifactCount,
 		VCSLinkCount:            r.VCSLinkCount,
+		AcceptanceMissing:       r.AcceptanceMissing,
 		VCSPipelineStatus:       r.VCSPipelineStatus,
 		VCSProviders:            []string(r.VCSProviders),
 		FalseOpen:               r.falseOpenSignal(),
@@ -1708,7 +1754,7 @@ const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:b
 // selects it again. Unlike phase 1 — which cannot loop, because phase 2 nulls the
 // checkout_expires it keys on — nothing here clears the selection condition.
 //
-// Measured on prod 2026-09-06: an internal ticket (human_gate armed 14:45) failed to park
+// Measured in production 2026-09-06: an internal ticket (human_gate armed 14:45) failed to park
 // 145 times, once per 60s tick across restarts, and was the reaper's ONLY
 // observable output. Each attempt also rewrote due_date to now+24h, sliding the
 // park alarm permanently out of reach, because parkTask arms before it moves.
@@ -1884,7 +1930,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 		return nil, err
 	}
 
-	const dataQ = `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+	dataQ := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,
@@ -1911,7 +1957,7 @@ func (r *TaskRepo) ListByUserActive(ctx context.Context, workspaceID, userID uui
 // ListOpenByRecurringScheduleID returns non-terminal tasks (not done/cancelled/deleted)
 // belonging to the given recurring schedule, excluding exceptTaskID (the new instance).
 func (r *TaskRepo) ListOpenByRecurringScheduleID(ctx context.Context, scheduleID, exceptTaskID uuid.UUID) ([]domain.Task, error) {
-	const q = `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
+	q := `SELECT t.id, t.version, t.project_id, t.status_id, t.title, t.description,
 		t.assignee_id, t.assignee_type, t.priority, t.parent_task_id, t.position,
 		t.due_date, t.start_after, t.estimated_hours, t.custom_fields, t.labels,
 		t.task_number, t.created_by, t.created_by_type, t.created_at, t.updated_at,

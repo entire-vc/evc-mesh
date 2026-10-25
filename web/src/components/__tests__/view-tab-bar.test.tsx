@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { ViewTabBar } from "@/components/view-tab-bar";
-import { BUILTIN_PROJECT_TABS } from "@/lib/project-view-tabs";
+import { BUILTIN_PROJECT_TABS, projectTabsWith } from "@/lib/project-view-tabs";
 import type { ProjectViewTab } from "@/types";
 
 const navigate = vi.fn();
@@ -43,24 +43,31 @@ function renderBar(currentView: ProjectViewTab, projectId?: string) {
 
 function openKebab() {
   fireEvent.click(screen.getByRole("button", { name: /more views/i }));
-  return screen.getByRole("menuitem", { name: /dependencies/i }).parentElement!;
+  return screen.queryByRole("menu");
 }
 
 describe("ViewTabBar", () => {
   beforeEach(() => {
     navigate.mockReset();
+    localStorage.clear();
   });
 
-  it("shows Board, List, Calendar and Docs in the strip, not Timeline", () => {
+  it("shows all six built-in tabs in the strip", () => {
     renderBar("board");
     const strip = screen.getByRole("button", { name: "Board" }).parentElement!;
     const labels = within(strip)
       .getAllByRole("button")
       .map((b) => b.textContent?.trim());
-    // One trailing empty: the kebab trigger itself. There used to be two —
-    // DropdownMenuTrigger ignores `asChild` and rendered its own button around
-    // the one it was given, which is invalid HTML.
-    expect(labels).toEqual(["Board", "List", "Calendar", "Docs", ""]);
+    // One trailing empty: the kebab trigger itself.
+    expect(labels).toEqual([
+      "Board",
+      "List",
+      "Dependencies",
+      "Calendar",
+      "Docs",
+      "Updates",
+      "",
+    ]);
   });
 
   it("navigates to the docs route from the Docs tab", () => {
@@ -77,37 +84,25 @@ describe("ViewTabBar", () => {
     );
   });
 
-  it("offers Timeline and Updates under Formats in the single kebab", () => {
-    // "list" rather than "board": the board tab adds a Reset filters item.
-    renderBar("list", "project-1");
-    const menu = openKebab();
-    const formats = within(menu).getAllByRole("menuitem");
-    expect(formats.map((i) => i.textContent?.trim())).toEqual([
-      "Dependencies",
-      "Updates",
-      "Save current view",
-    ]);
-    // One kebab only.
-    expect(screen.getAllByRole("button", { name: /more views/i })).toHaveLength(1);
-  });
-
-  it("navigates to timeline and updates from the kebab", () => {
+  it("navigates to timeline and updates from the strip", () => {
     renderBar("board");
-    openKebab();
-    fireEvent.click(screen.getByRole("menuitem", { name: /dependencies/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
     expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/timeline");
-
-    openKebab();
-    fireEvent.click(screen.getByRole("menuitem", { name: /updates/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Updates" }));
     expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/updates");
   });
 
-  it("marks Timeline active in the kebab when it is the current view", () => {
+  it("marks Timeline and Updates active in the strip", () => {
     renderBar("timeline");
+    expect(screen.getByRole("button", { name: "Dependencies" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("keeps only the saved-view items in the kebab when every tab fits", () => {
+    renderBar("list", "project-1");
     openKebab();
-    expect(
-      screen.getByRole("menuitem", { name: /dependencies/i }),
-    ).toHaveAttribute("aria-current", "page");
+    const items = screen.getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent?.trim())).toEqual(["Save current view"]);
+    expect(screen.getAllByRole("button", { name: /more views/i })).toHaveLength(1);
   });
 
   // Docs is not in the server's saved-view enum, so it must not be savable.
@@ -119,10 +114,29 @@ describe("ViewTabBar", () => {
     ).toBeNull();
   });
 
-  it("keeps the Formats group when there is no project id", () => {
-    renderBar("board");
-    const menu = openKebab();
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+  it("marks an extension tab active and offers no Save current view there", () => {
+    render(
+      <MemoryRouter>
+        <ViewTabBar
+          currentView="ext:gitlab"
+          wsSlug="acme"
+          projectSlug="mesh"
+          projectId="project-1"
+          tabs={projectTabsWith([{ extensionId: "gitlab", title: "GitLab" }])}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: "GitLab" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: /more views/i }));
+    expect(screen.queryByRole("menuitem", { name: /save current view/i })).toBeNull();
+  });
+
+  it("hides Save current view on the updates tab", () => {
+    renderBar("updates", "project-1");
+    openKebab();
+    expect(
+      screen.queryByRole("menuitem", { name: /save current view/i }),
+    ).toBeNull();
   });
 
   // ---------------------------------------------------------------------
@@ -172,36 +186,58 @@ describe("ViewTabBar", () => {
         .map((b) => b.textContent?.trim());
 
     it("shows every built-in tab when they all fit", () => {
-      room = 4 * 80 + 44;
+      room = 6 * 80 + 44;
       renderBar("board");
-      expect(stripLabels()).toEqual(["Board", "List", "Calendar", "Docs"]);
+      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Calendar", "Docs", "Updates"]);
+    });
+
+    it("remembers the split for this width, and a stale one is corrected by the measurement", () => {
+      room = 5 * 80 + 44;
+      const { unmount } = renderBar("board");
+      const stored = JSON.parse(localStorage.getItem("mesh.projectTabs.split")!);
+      expect(stored[1]).toEqual(["calendar"]);
+      expect(stored[0]).toMatch(new RegExp(`\\|${window.innerWidth}$`));
+      unmount();
+
+      // Same width, but a viewport that now fits everything: the seed renders
+      // first, the measurement then puts Calendar back.
+      room = 6 * 80 + 44;
+      renderBar("board");
+      expect(stripLabels()).toContain("Calendar");
     });
 
     it("moves Calendar into the menu first when the strip is short", () => {
-      room = 3 * 80 + 44;
+      room = 5 * 80 + 44;
       renderBar("board", "project-1");
-      expect(stripLabels()).toEqual(["Board", "List", "Docs"]);
+      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Docs", "Updates"]);
       fireEvent.click(screen.getByRole("button", { name: /more views/i }));
       fireEvent.click(screen.getByRole("menuitem", { name: /calendar/i }));
       expect(navigate).toHaveBeenCalledWith("/w/acme/p/mesh/calendar");
     });
 
     it("reserves the measured trigger width, not a fixed 44px", () => {
-      // 3 tabs + 44px would fit; with a 53px trigger the third tab must move out.
+      // 5 tabs + 44px would fit; with a 53px trigger the next tab must move out.
       kebab = 49;
-      room = 3 * 80 + 44;
+      room = 5 * 80 + 44;
       renderBar("board");
-      expect(stripLabels()).toEqual(["Board", "List"]);
+      expect(stripLabels()).toEqual(["Board", "List", "Dependencies", "Docs"]);
     });
 
-    it("drops Docs, then List, as the strip narrows further", () => {
+    it("drops Calendar, Updates, Docs, Dependencies, then List as the strip narrows", () => {
       room = 2 * 80 + 44;
       renderBar("board");
       expect(stripLabels()).toEqual(["Board", "List"]);
+      room = 1 * 80 + 44;
+    });
+
+    it("keeps Board alone at the narrowest width", () => {
+      room = 1 * 80 + 44;
+      renderBar("board");
+      expect(stripLabels()).toEqual(["Board"]);
     });
 
     it("marks the menu trigger active when the current tab overflowed", () => {
-      room = 3 * 80 + 44;
+      room = 5 * 80 + 44;
       renderBar("calendar");
       const trigger = screen.getByRole("button", { name: /more views/i });
       expect(trigger.className).toContain("bg-muted");
@@ -212,7 +248,7 @@ describe("ViewTabBar", () => {
     });
 
     it("renders tabs supplied as data, with no edit to the component", () => {
-      room = 10 * 80;
+      room = 12 * 80;
       render(
         <MemoryRouter>
           <ViewTabBar
@@ -232,7 +268,7 @@ describe("ViewTabBar", () => {
           />
         </MemoryRouter>,
       );
-      expect(stripLabels()).toHaveLength(5);
+      expect(stripLabels()).toHaveLength(7);
     });
   });
 
@@ -241,5 +277,19 @@ describe("ViewTabBar", () => {
     openKebab();
     const nested = Array.from(document.querySelectorAll("button button"));
     expect(nested).toEqual([]);
+  });
+});
+
+describe("projectTabsWith", () => {
+  it("adds no tab when no extension screen is enabled", () => {
+    expect(projectTabsWith([])).toBe(BUILTIN_PROJECT_TABS);
+  });
+
+  it("adds one titled tab per enabled extension screen, routed to its screen", () => {
+    const tabs = projectTabsWith([{ extensionId: "gitlab", title: "GitLab" }]);
+    expect(tabs).toHaveLength(BUILTIN_PROJECT_TABS.length + 1);
+    const ext = tabs[tabs.length - 1]!;
+    expect(ext.label).toBe("GitLab");
+    expect(ext.path("acme", "mesh")).toBe("/w/acme/p/mesh/x/gitlab");
   });
 });

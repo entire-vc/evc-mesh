@@ -1,4 +1,4 @@
-import { Draggable, InlineEdit, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
+import { Draggable, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
 import type { BoardCardView, FieldDescriptor, TaskData } from "@entire-vc/mesh-theme-sdk";
 import { dueLabel, text } from "./fields";
 
@@ -29,9 +29,7 @@ export const Card: BoardCardView = ({ data }) => {
       <div className="my-card-title">
         {/* The drag preview is a picture of the card: no editor, no link. */}
         {data.isOverlay ? task.title : (
-          <InlineEdit taskId={task.id} field="title">
-            <TaskLink taskId={task.id}>{task.title}</TaskLink>
-          </InlineEdit>
+          <TaskLink taskId={task.id}>{task.title}</TaskLink>
         )}
         {/* The task.badge insertion point: extensions (GitLab, GitHub…) draw their badges here. */}
         <TaskBadges task={task} />

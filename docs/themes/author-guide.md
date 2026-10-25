@@ -9,6 +9,8 @@ A theme is a repository with a manifest, optional tokens, an optional stylesheet
 The `mesh-theme build` command turns it into three files that an instance installs: `mesh-extension.json`,
 `theme.css` and `views.js`.
 
+Set `"kind": "theme"` in the manifest (the template does). The catalog then shows a Theme badge and lists the theme under the Themes filter instead of Integrations.
+
 Start from [`packages/mesh-theme-template`](../../packages/mesh-theme-template).
 
 ```bash
@@ -78,16 +80,14 @@ Every slot has `<Slot>Data`, `<Slot>Actions`, `<Slot>Settings` types and a `<Slo
 `@entire-vc/mesh-theme-sdk`. A view is a function of its props:
 
 ```tsx
-import { Draggable, InlineEdit, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
+import { Draggable, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
 import type { BoardCardView } from "@entire-vc/mesh-theme-sdk";
 
 export const MinimalCard: BoardCardView = ({ data }) => {
   const { task } = data;
   const body = (
     <div className="my-card">
-      <InlineEdit taskId={task.id} field="title">
-        <TaskLink taskId={task.id}>{task.title}</TaskLink>
-      </InlineEdit>
+      <TaskLink taskId={task.id}>{task.title}</TaskLink>
       <TaskBadges task={task} />
     </div>
   );
@@ -225,3 +225,10 @@ contract tests. Read it for how the real views handle states you will meet:
 - `doc/tree.tsx`, `doc/view.tsx`: the document tree and page.
 
 The template's card is a trimmed version of `board/card.tsx`.
+
+Block order of the reference card, top to bottom (default `data.fields` order is `runtime, labels, assignee, gate,
+reviewer, priority, delegation, due_date, estimate, subtasks, artifacts`): the title with the subtask count beside it; the
+runtime row ("Being worked on…", Waiting, Queued, Stopped); labels and custom fields; the bottom row (assignee, gate,
+reviewer, priority, delegation, due date, estimate) with the VCS marks and the attachment count at its right end.
+There is no description mark, no edit pencil and no `checkout` field; a stored selection that still names `checkout`
+is skipped. A theme draws `data.fields` in the order it is given, so it follows this order without extra code.

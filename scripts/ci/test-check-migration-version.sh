@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Red/green controls for scripts/check-migration-version.sh in a throwaway repo:
-# deleting or renaming a migration that already exists on base must fail (#3cb090a0),
+# deleting or renaming a migration that already exists on base must fail,
 # and the explicit exception file must be the only way past it.
 set -euo pipefail
 
@@ -33,4 +33,13 @@ expect_fail "deleting an existing migration"
 
 git reset -q --hard origin/main && echo x > migrations/20260102001_new.sql && git add . && git commit -qm add
 expect_pass "adding a newer migration"
+# Two branches that each took the next free version and were merged one after the
+# other leave a duplicate on main itself (an internal ticket, 20261025001): the directory check
+# must go red on that tree even where no base branch is available to compare with.
+git reset -q --hard origin/main && echo x > migrations/20260101003_other.sql && git add . && git commit -qm dup
+expect_fail "duplicate version in the tree"
+if MIGRATION_BASE_REF=no-such-branch bash "$SCRIPT" migrations >"$tmp/out" 2>&1; then
+    echo "FAIL (expected red): duplicate version without a base branch"; cat "$tmp/out"; exit 1
+fi
+echo "ok red: duplicate version without a base branch"
 echo "all migration-gate controls passed"

@@ -1057,7 +1057,7 @@ func TestReleaseDelivery_NoDedupStoreIsNoop(t *testing.T) {
 }
 
 const pipelineHookBody = `{"object_kind":"pipeline",
-	"object_attributes":{"id":987,"status":"failed","ref":"linus/ab12cd34"},
+	"object_attributes":{"id":987,"status":"failed","ref":"liam/ab12cd34"},
 	"merge_request":{"iid":1285,"url":"https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/1285"},
 	"project":{"path_with_namespace":"entire-vc/evc-mesh"}}`
 

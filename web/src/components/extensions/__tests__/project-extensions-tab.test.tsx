@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { ProjectExtensionsTab } from "@/components/extensions/project-extensions-tab";
 import { api, ApiRequestError } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
 
+vi.mock("@/components/extensions/chat-settings-card", () => ({ ChatSettingsCard: () => <div data-testid="chat-card" /> }));
 vi.mock("@/lib/api", async () => ({ ...await vi.importActual("@/lib/api"), api: vi.fn() }));
 
 const gitlabManifest = {
@@ -36,6 +38,8 @@ function mockApi(overrides: Record<string, unknown> = {}) {
   });
 }
 
+const render = (ui: React.ReactElement, url = "/") => rtlRender(<MemoryRouter initialEntries={[url]}>{ui}</MemoryRouter>);
+
 describe("ProjectExtensionsTab", () => {
   beforeEach(() => {
     vi.mocked(api).mockReset();
@@ -62,7 +66,7 @@ describe("ProjectExtensionsTab", () => {
       return base(path, opts);
     });
     const { rerender } = render(<ProjectExtensionsTab projectId="p1" />);
-    rerender(<ProjectExtensionsTab projectId="p2" />);
+    rerender(<MemoryRouter><ProjectExtensionsTab projectId="p2" /></MemoryRouter>);
     expect(await screen.findByTestId("extensions-tab-empty")).toBeInTheDocument();
     releaseP1({ extensions: [{ extension_id: "gitlab", enabled: true, settings: { repo_path: "old/p1" } }] });
     await new Promise((r) => setTimeout(r, 20));
@@ -81,7 +85,7 @@ describe("ProjectExtensionsTab", () => {
     });
     const { rerender } = render(<ProjectExtensionsTab projectId="p1" />);
     expect(await screen.findByDisplayValue("old/p1")).toBeInTheDocument();
-    rerender(<ProjectExtensionsTab projectId="p2" />);
+    rerender(<MemoryRouter><ProjectExtensionsTab projectId="p2" /></MemoryRouter>);
     expect(await screen.findByDisplayValue("new/p2")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("old/p1")).toBeNull();
   });
@@ -145,5 +149,49 @@ describe("ProjectExtensionsTab", () => {
     render(<ProjectExtensionsTab projectId="p1" />);
     expect(await screen.findByTestId("extensions-tab-error")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("N bindings give N second-level tabs, ext= picks the tab, Bind stays on every tab", async () => {
+    bindings = [
+      { extension_id: "gitlab", enabled: true, settings: { repo_path: "a/b" } },
+      { extension_id: "team-relay", enabled: true, settings: { share_id: "s" } },
+    ];
+    mockApi();
+    render(<ProjectExtensionsTab projectId="p1" />, "/?tab=integrations&ext=team-relay");
+    expect(await screen.findByTestId("binding-team-relay")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.queryByTestId("binding-gitlab")).toBeNull();
+    expect(screen.getByTestId("ext-tab-team-relay")).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByTestId("ext-tab-gitlab"));
+    expect(await screen.findByTestId("binding-gitlab")).toBeInTheDocument();
+    expect(screen.queryByTestId("binding-team-relay")).toBeNull();
+    // Telegram has no project level and both others are bound: nothing left to bind
+    expect(screen.queryByRole("button", { name: /Bind extension/ })).toBeNull();
+  });
+
+  it("Bind extension is visible next to the tabs when another extension can be bound", async () => {
+    bindings = [{ extension_id: "gitlab", enabled: true, settings: { repo_path: "a/b" } }];
+    mockApi();
+    render(<ProjectExtensionsTab projectId="p1" />);
+    expect(await screen.findByTestId("binding-gitlab")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Bind extension/ }));
+    expect(await screen.findByTestId("new-binding")).toBeInTheDocument();
+    expect(screen.queryByTestId("binding-gitlab")).toBeNull();
+  });
+
+  it("Chat with Agent is a tab of its own and the empty state still shows when nothing else is bound", async () => {
+    mockApi();
+    const base = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path: string, opts?: { method?: string }) => {
+      if (path === "/api/v1/workspaces/w1/extensions" && !opts?.method) {
+        return { extensions: [ws("agent-chat", "Chat with Agent", { levels: { project: true } }), ws("gitlab", "GitLab", gitlabManifest)] };
+      }
+      return base(path, opts);
+    });
+    render(<ProjectExtensionsTab projectId="p1" />);
+    expect(await screen.findByTestId("chat-card")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.getByTestId("extensions-tab-empty")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Bind extension/ })).toBeInTheDocument();
   });
 });

@@ -150,7 +150,8 @@ func (h *AgentHandler) List(c echo.Context) error {
 	pg.Normalize()
 
 	filter := repository.AgentFilter{
-		Search: q.Search,
+		Search:         q.Search,
+		IncludeGranted: true,
 	}
 
 	if q.Status != "" {

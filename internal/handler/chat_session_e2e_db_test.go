@@ -91,6 +91,7 @@ func newChatE2EEnv(t *testing.T) *chatE2EEnv {
 	api := e.Group("/api/v1")
 	api.Use(mw.ChatSessionAuth(chatSvc))
 	api.Use(mw.DualAuth(authSvc, agentSvc, nil))
+	api.Use(mw.ChatSessionDenialAudit(activityRepo))
 	api.Use(mw.WorkspaceRLS(db, projectRepo))
 	api.Use(mw.RequireWorkspaceMemberScoped(db))
 	api.Use(mw.ChatSessionProjectScope(db))
@@ -291,9 +292,21 @@ func TestChatSessionToken_ViewerCannotCloseTask_AgentKeyCan(t *testing.T) {
 	env.reset(t, task, env.todoID)
 
 	// Same call, chat token of a viewer: 403, and nothing changes.
-	viewerTok := env.issue(t, viewer, newChatSession(), 1)
+	viewerCS := newChatSession()
+	viewerTok := env.issue(t, viewer, viewerCS, 1)
 	assert.Equal(t, http.StatusForbidden, env.move(t, task, env.doneID, bearer(viewerTok)))
 	assert.Equal(t, env.todoID, env.taskStatus(t, task), "a denied call must not change the task")
+
+	// The refusal is audited: agent as actor, the viewer it acted for, no bearer.
+	var denied struct {
+		ActorID uuid.UUID       `db:"actor_id"`
+		Changes json.RawMessage `db:"changes"`
+	}
+	require.NoError(t, env.db.Get(&denied, `SELECT actor_id, changes FROM activity_log
+		WHERE entity_type = 'chat_session' AND entity_id = $1 AND action = 'chat_session.denied'`, viewerCS.session))
+	assert.Equal(t, env.agent.ID, denied.ActorID)
+	assert.Contains(t, string(denied.Changes), viewer.String())
+	assert.NotContains(t, string(denied.Changes), viewerTok)
 
 	// A member's chat token closes it.
 	memberTok := env.issue(t, member, newChatSession(), 1)

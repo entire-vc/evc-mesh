@@ -421,7 +421,7 @@ func TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo(t *testing.T) {
 			return &domain.HumanGateInfo{
 				Gated:            true,
 				OwnerAgentID:     &ownerID,
-				OwnerName:        "Howard",
+				OwnerName:        "Harper",
 				MarkerCommentID:  &markerID,
 				MarkerCreatedAt:  &markerAt,
 				ClearableByOwner: true,
@@ -449,7 +449,7 @@ func TestTaskHandler_GetByID_GatedTask_AttachesHumanGateInfo(t *testing.T) {
 	assert.True(t, result.HumanGateInfo.Gated)
 	require.NotNil(t, result.HumanGateInfo.OwnerAgentID)
 	assert.Equal(t, ownerID, *result.HumanGateInfo.OwnerAgentID)
-	assert.Equal(t, "Howard", result.HumanGateInfo.OwnerName)
+	assert.Equal(t, "Harper", result.HumanGateInfo.OwnerName)
 	assert.True(t, result.HumanGateInfo.ClearableByOwner)
 }
 
@@ -2414,7 +2414,7 @@ func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {
 		CheckoutTaskFunc: func(_ context.Context, _ uuid.UUID, _ int, _ map[string]interface{}) (*service.CheckoutResult, error) {
 			return nil, &service.CheckoutConflictError{
 				CheckedOutBy:     holderID,
-				CheckedOutByName: "Linus",
+				CheckedOutByName: "Liam",
 				CheckedOutByKind: "agent",
 				ExpiresAt:        expiresAt,
 				AcquiredAt:       &acquiredAt,
@@ -2440,7 +2440,7 @@ func TestTaskHandler_Checkout_409_AllFieldsPresent(t *testing.T) {
 	assert.Equal(t, "task_already_checked_out", body["error_code"], "the conflict carries a stable machine code")
 	details, ok := body["details"].(map[string]interface{})
 	require.True(t, ok, "response must have a 'details' object")
-	assert.Equal(t, "Linus", details["checked_out_by_name"], "checked_out_by_name must always be present")
+	assert.Equal(t, "Liam", details["checked_out_by_name"], "checked_out_by_name must always be present")
 	assert.NotNil(t, details["expires_in_seconds"], "expires_in_seconds must always be present")
 	assert.NotNil(t, details["acquired_at"], "acquired_at must be present when AcquiredAt is set")
 }

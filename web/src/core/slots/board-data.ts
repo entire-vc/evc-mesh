@@ -7,17 +7,17 @@ const DONE_CATEGORIES = new Set<StatusCategory>(["done", "cancelled"]);
 
 /** Today's card, as a field list: the rows and their order `mesh-default` draws without any setting. */
 export const DEFAULT_CARD_FIELDS: readonly string[] = [
-  "labels",
   "runtime",
+  "labels",
   "assignee",
   "gate",
   "reviewer",
   "priority",
   "delegation",
-  "checkout",
-  "artifacts",
   "due_date",
+  "estimate",
   "subtasks",
+  "artifacts",
 ];
 
 /** Built-in card fields; labels are i18n keys of the `board` namespace (the core translates). */
@@ -29,7 +29,6 @@ export const BUILTIN_FIELDS: readonly { key: string; kind: FieldDescriptor["kind
   { key: "reviewer", kind: "person", labelKey: "fields.reviewer" },
   { key: "priority", kind: "select", labelKey: "fields.priority" },
   { key: "delegation", kind: "badge", labelKey: "fields.delegation" },
-  { key: "checkout", kind: "badge", labelKey: "fields.checkout" },
   { key: "artifacts", kind: "number", labelKey: "fields.artifacts" },
   { key: "due_date", kind: "date", labelKey: "fields.dueDate" },
   { key: "subtasks", kind: "number", labelKey: "fields.subtasks" },
@@ -168,6 +167,9 @@ export function toTaskData(task: Task, statusCategory?: StatusCategory, holderNa
     customFields: task.custom_fields ?? {},
     counts: {
       subtasks: task.subtask_count ?? 0,
+      openSubtasks: task.open_subtask_count ?? 0,
+      dependencies: task.dependency_count ?? 0,
+      openDependencies: task.open_dependency_count ?? 0,
       artifacts: task.artifact_count ?? 0,
       vcsLinks: task.vcs_link_count ?? 0,
     },

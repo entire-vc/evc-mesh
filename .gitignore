@@ -76,10 +76,10 @@ web/dist-perf/
 web/perf/.fixture.json
 web/perf/test-results/
 
-# Python bytecode. Note this does not untrack scripts/ci/__pycache__, which was
-# committed before any rule existed and is left alone here deliberately.
+# Python bytecode.
 __pycache__/
 *.pyc
 web/e2e-tabs/results/
 web/e2e-tabs/shots/
 web/e2e-tabs/view-tab-bar.before.tsx
+web/agent-chat-e2e/

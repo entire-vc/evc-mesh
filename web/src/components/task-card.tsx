@@ -11,8 +11,6 @@ interface TaskCardProps extends HTMLAttributes<HTMLDivElement> {
   isDragging?: boolean;
   /** Optional status category — used to suppress overdue highlighting for done/cancelled tasks. */
   statusCategory?: StatusCategory;
-  /** Called when the explicit edit icon is clicked. Receives the mouse event (already stopped propagation). */
-  onEditClick?: (e: React.MouseEvent) => void;
   /** Display name of the checkout holder, when the parent can resolve it. */
   checkedOutByName?: string;
   /** Set when the board shows this gated card in the Triage column: the card's real status name. */
@@ -30,7 +28,7 @@ export function humanGateTitle(task: Pick<Task, "human_gate_class" | "gate_reaso
  */
 export const TaskCard = memo(
   forwardRef<HTMLDivElement, TaskCardProps>(
-    ({ task, isDragging, statusCategory, onEditClick, checkedOutByName, gateStatusName, ...props }, ref) => {
+    ({ task, isDragging, statusCategory, checkedOutByName, gateStatusName, ...props }, ref) => {
       const shortTags = useAgentShortTagMap();
       const ownedVcs = useSlotOwnedVcsProviders("task.badge");
       const data = useMemo(
@@ -44,7 +42,7 @@ export const TaskCard = memo(
         }),
         [task, statusCategory, checkedOutByName, gateStatusName, shortTags, ownedVcs],
       );
-      return <CardBody ref={ref} data={data} isDragging={isDragging} onEdit={onEditClick} plainTitle badgeTask={task} {...props} />;
+      return <CardBody ref={ref} data={data} isDragging={isDragging} plainTitle badgeTask={task} {...props} />;
     },
   ),
 );

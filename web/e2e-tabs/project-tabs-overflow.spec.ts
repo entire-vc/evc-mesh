@@ -6,7 +6,7 @@ import { mkdirSync } from "node:fs";
 // is in the menu and opens from there. Screenshots of the strip from this branch
 // and from the merge-request base go to e2e-tabs/shots/ for the review.
 
-const TABS = ["Board", "List", "Calendar", "Docs"];
+const TABS = ["Board", "List", "Dependencies", "Calendar", "Docs", "Updates"];
 // TABS_IMPL=before runs the two behaviour tests against the base strip: the red run.
 const IMPL = process.env.TABS_IMPL ?? "after";
 const SHOTS = "e2e-tabs/shots";
@@ -23,12 +23,23 @@ test("1440: every built-in tab is in the strip and none is in the menu", async (
   for (const name of TABS) await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
   await moreViews(page).click();
   await expect(page.getByRole("menuitem", { name: "Calendar" })).toHaveCount(0);
+  // Dependencies and Updates are tabs now: the base strip also listed them under Formats.
+  await expect(page.getByRole("menuitem", { name: "Dependencies" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Updates" })).toHaveCount(0);
 });
 
 test("1440: a tab supplied as data appears in the strip", async ({ page }) => {
   await open(page, 1440, "light", IMPL, "&extra=1");
   // Two tabs share the Docs label here, so a strip that renders the list has two.
   await expect(page.getByRole("button", { name: "Docs", exact: true })).toHaveCount(2);
+});
+
+// Chat has no server-side saved-view type, like Docs: "Save current view" must not be offered on it.
+test("393: the chat tab does not offer to save the view", async ({ page }) => {
+  await open(page, 393, "light", IMPL, "&chat=1");
+  await moreViews(page).click();
+  await expect(page.getByRole("menuitem").first()).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /save current view/i })).toHaveCount(0);
 });
 
 test("393: Calendar is first in the menu, opens from there, and the trigger carries the active state", async ({ page }) => {

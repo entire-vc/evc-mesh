@@ -45,6 +45,15 @@ describe("board card commits on task open", () => {
     await act(async () => { fireEvent.click(document.querySelector('[data-testid="task-card"] a') as HTMLElement, { ctrlKey: true }); await new Promise((r) => setTimeout(r, 50)); });
     expect(document.querySelector("[data-inline-edit-open]")).toBeNull();
   });
+  it("a board card has no edit pencil and no inline title editor; a title click opens the task", async () => {
+    render(<MemoryRouter initialEntries={["/ws/proj"]}><Routes><Route path="/:wsSlug/:projectSlug/*" element={<BoardPage />} /><Route path="/:wsSlug/:projectSlug/t/:id" element={<div>task page</div>} /></Routes></MemoryRouter>);
+    const cards = await screen.findAllByTestId("task-card");
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    expect(cards[0]?.querySelector("button")).toBeNull();
+    expect(cards[0]?.querySelector("[data-inline-edit]")).toBeNull();
+    await act(async () => { fireEvent.click(cards[0]?.querySelector("a") as HTMLElement); await new Promise((r) => setTimeout(r, 100)); });
+    expect(document.querySelector("[data-inline-edit-open]")).toBeNull();
+  });
   it("the drag overlay card is not profiled as a board card (board.drag counts one commit more otherwise)", () => {
     registerMeshDefaultTheme();
     const Card = resolveSlotView("board.card") as BoardCardView;

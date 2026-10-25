@@ -257,3 +257,96 @@ func TestAgentService_Authenticate_GrantRepoNotWired_UsesLegacyPath(t *testing.T
 	require.NotNil(t, got)
 	assert.Equal(t, out.Agent.ID, got.ID)
 }
+
+// seedGuestAgent stores an agent homed in a workspace other than ws and gives
+// the grant-repo JOIN the slug it would report.
+func seedGuestAgent(f *grantAuthFixture, slug string) *domain.Agent {
+	a := &domain.Agent{ID: uuid.New(), WorkspaceID: uuid.New(), Name: slug, Slug: slug}
+	f.agentRepo.items[a.ID] = a
+	f.grantRepo.SeedSlug(a.ID, slug)
+	return a
+}
+
+// GetBySlug resolves a guest (active grant into the workspace) so @mentions
+// reach it; revoked grants, and two guests sharing a slug, do not resolve.
+func TestAgentService_GetBySlug_GuestViaActiveGrant(t *testing.T) {
+	f, ws := setupGrantAuthFixture()
+	guest := seedGuestAgent(f, "robin")
+	seedGrant(t, f, guest.ID, ws, "member", false)
+
+	got, err := f.svc.GetBySlug(context.Background(), ws.ID, "robin")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, guest.ID, got.ID)
+}
+
+func TestAgentService_GetBySlug_RevokedGrantNotResolved(t *testing.T) {
+	f, ws := setupGrantAuthFixture()
+	guest := seedGuestAgent(f, "robin")
+	seedGrant(t, f, guest.ID, ws, "member", true)
+
+	got, err := f.svc.GetBySlug(context.Background(), ws.ID, "robin")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestAgentService_GetBySlug_HomeAgentWinsOverGuestWithSameSlug(t *testing.T) {
+	f, ws := setupGrantAuthFixture()
+	home := &domain.Agent{ID: uuid.New(), WorkspaceID: ws.ID, Name: "Twin", Slug: "twin"}
+	f.agentRepo.items[home.ID] = home
+	guest := seedGuestAgent(f, "twin")
+	seedGrant(t, f, guest.ID, ws, "member", false)
+
+	got, err := f.svc.GetBySlug(context.Background(), ws.ID, "twin")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, home.ID, got.ID)
+}
+
+func TestAgentService_GetBySlug_TwoGuestsSameSlugIsAmbiguous(t *testing.T) {
+	f, ws := setupGrantAuthFixture()
+	g1 := seedGuestAgent(f, "twin")
+	g2 := seedGuestAgent(f, "twin")
+	seedGrant(t, f, g1.ID, ws, "member", false)
+	seedGrant(t, f, g2.ID, ws, "member", false)
+
+	got, err := f.svc.GetBySlug(context.Background(), ws.ID, "twin")
+	require.Error(t, err)
+	assert.Nil(t, got)
+}
+
+// The first authentication of a grant key pays bcrypt and records the keyed
+// digest; the next one is verified by the digest alone. Rewriting the stored
+// bcrypt hash to garbage proves the second call never reads it, and a wrong key
+// is still refused on the digest path.
+func TestAgentService_Authenticate_ViaGrant_BackfillsDigestAndSkipsBcrypt(t *testing.T) {
+	f, homeWS := setupGrantAuthFixture()
+	agent, _ := seedHomeAgent(t, f, homeWS, "Digest Agent")
+	guestWS := &domain.Workspace{ID: uuid.New(), Name: "Guest Co", Slug: "guest"}
+	f.svc.workspaceRepo.(*MockWorkspaceRepository).items[guestWS.ID] = guestWS
+	key := seedGrant(t, f, agent.ID, guestWS, "member", false)
+
+	grant, err := f.grantRepo.GetByWorkspaceAndPrefix(context.Background(), guestWS.ID, extractPrefix(key, guestWS.Slug))
+	require.NoError(t, err)
+	require.NotNil(t, grant)
+	require.Empty(t, grant.APIKeySHA256, "a fresh grant starts on the bcrypt path")
+
+	_, err = f.svc.Authenticate(context.Background(), guestWS.Slug, key)
+	require.NoError(t, err)
+
+	f.grantRepo.mu.Lock()
+	for _, g := range f.grantRepo.items {
+		if g.ID == grant.ID {
+			require.Equal(t, agentKeyDigest(key), g.APIKeySHA256, "first success must record the digest")
+			g.APIKeyHash = "not-a-bcrypt-hash"
+		}
+	}
+	f.grantRepo.mu.Unlock()
+
+	_, err = f.svc.Authenticate(context.Background(), guestWS.Slug, key)
+	require.NoError(t, err, "second call must verify by digest without touching bcrypt")
+
+	wrong := key[:len(key)-1] + "x"
+	_, err = f.svc.Authenticate(context.Background(), guestWS.Slug, wrong)
+	requireUnauthorized(t, err)
+}

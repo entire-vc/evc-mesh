@@ -296,11 +296,18 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 		return false, "", fmt.Errorf("list dependencies: %w", err)
 	}
 	depIDs := make([]uuid.UUID, 0, len(deps))
+	hasBlocksEdge := false
 	for _, d := range deps {
 		// fleet-balancer INTAKE freezes on human_gate.dep_freeze_reason, which looks at
 		// DEP_BLOCKING_TYPES = {"blocks"} only; a relates_to / is_child_of edge is not a
 		// blocker there. (The sweep this rule was first ported from took every edge.)
 		if d.DependencyType != domain.DependencyTypeBlocks {
+			continue
+		}
+		hasBlocksEdge = true
+		// An edge released by its own condition + evidence no longer holds the
+		// card, whatever the blocker's status (same rule as hasUnresolvedBlockers).
+		if d.EvidenceSatisfied() {
 			continue
 		}
 		depIDs = append(depIDs, d.DependsOnTaskID)
@@ -315,7 +322,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	// promotes once its deps clear.
 	// A wake that lifted a park label lifts this guard too (sweep: `parked and not
 	// due_wake`), otherwise a demoted monitor card never wakes on its due_date.
-	if len(depIDs) == 0 && !woke {
+	if !hasBlocksEdge && !woke {
 		parked, parkErr := s.wasDeliberatelyParked(ctx, task, nameCatCache)
 		if parkErr != nil {
 			return false, "", fmt.Errorf("activity lookup: %w", parkErr)
@@ -334,7 +341,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 		return false, "unresolved dependencies", nil
 	}
 
-	if len(depIDs) == 0 {
+	if !hasBlocksEdge {
 		return true, "born in backlog, no dependencies", nil
 	}
 	return true, "all dependencies cleared (done/cancelled)", nil

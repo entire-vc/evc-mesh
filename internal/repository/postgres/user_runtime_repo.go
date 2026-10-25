@@ -580,14 +580,43 @@ type operatorAgentRow struct {
 	Live           *bool      `db:"live"`
 }
 
+// effectiveControllerSQL is a LEFT JOIN LATERAL fragment (alias ctl, outer alias
+// a) naming the runner that drives agent a. An explicit agent_controllers row
+// with a live lease wins. Otherwise the controller is derived from the agent's
+// enabled admission plus the freshest report of that admission's integration:
+// runner = controller_ref, host and version from the catalog entry, and the
+// lease end = received_at + the catalog's heartbeat_max_age_seconds (120 s when
+// the entry is missing). An agent without an enabled admission has no derived
+// controller; a lapsed explicit row is the last resort.
+const effectiveControllerSQL = `LEFT JOIN LATERAL (
+		SELECT u.runner_id, u.runner_name, u.host, u.version, u.lease_expires_at FROM (
+			SELECT c.runner_id::text AS runner_id, c.runner_name::text AS runner_name, c.host::text AS host,
+				c.version::text AS version, c.lease_expires_at, 0 AS pri
+			FROM agent_controllers c WHERE c.agent_id = a.id AND c.lease_expires_at > now()
+			UNION ALL
+			(SELECT rep.controller_ref, rep.controller_ref,
+				COALESCE(cat.ctrl->>'host', ''), COALESCE(cat.ctrl->>'version', ''),
+				rep.received_at + make_interval(secs => COALESCE(NULLIF((cat.ctrl->>'heartbeat_max_age_seconds')::int, 0), 120)), 1
+			FROM runtime_binding_admissions adm
+			JOIN runtime_controller_reports rep ON rep.integration_id = adm.integration_id
+			LEFT JOIN LATERAL (SELECT config->'controllers'->rep.controller_ref AS ctrl FROM runtime_catalog_revisions
+				WHERE integration_id = rep.integration_id ORDER BY revision DESC LIMIT 1) cat ON true
+			WHERE adm.agent_id = a.id AND adm.enabled
+			ORDER BY rep.received_at DESC LIMIT 1)
+			UNION ALL
+			SELECT c.runner_id::text, c.runner_name::text, c.host::text, c.version::text, c.lease_expires_at, 2
+			FROM agent_controllers c WHERE c.agent_id = a.id AND c.lease_expires_at <= now()
+		) u ORDER BY u.pri, u.lease_expires_at DESC LIMIT 1
+	) ctl ON true`
+
 // No LIMIT: an operator's own agents are a small bounded set, and a silent cut
 // would hide agents and runners from the screen without any signal.
 const operatorAgentsSQL = `SELECT a.id AS agent_id, a.name, a.max_concurrent_tasks,
 		EXISTS (SELECT 1 FROM user_runtime_managers m
 			WHERE m.operator_user_id=a.operator_user_id AND m.agent_id=a.id AND m.revoked_at IS NULL) AS runtime_manager,
-		c.runner_id, c.runner_name, c.host, c.version, c.lease_expires_at,
-		(c.lease_expires_at > now()) AS live
-	FROM agents a LEFT JOIN agent_controllers c ON c.agent_id=a.id
+		ctl.runner_id, ctl.runner_name, ctl.host, ctl.version, ctl.lease_expires_at,
+		(ctl.lease_expires_at > now()) AS live
+	FROM agents a ` + effectiveControllerSQL + `
 	WHERE a.operator_user_id=$1 AND a.deleted_at IS NULL
 	ORDER BY a.name, a.id`
 

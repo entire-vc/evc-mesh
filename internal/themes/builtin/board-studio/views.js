@@ -1,5 +1,5 @@
 // src/card.tsx
-import { Can, Draggable, InlineEdit, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
+import { Can, Draggable, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
 
 // src/copy.json
 var copy_default = {
@@ -163,7 +163,7 @@ function Body({ data, actions, themeSettings, locale, plain }) {
   return /* @__PURE__ */ jsxs("article", { className: "studio-card", "data-priority": task.priority, "data-cover": cover, "data-dim": dim || void 0, "data-testid": "studio-card", children: [
     cover !== "none" && /* @__PURE__ */ jsx("span", { className: "studio-cover", "aria-hidden": "true" }),
     /* @__PURE__ */ jsxs("div", { className: "studio-body", children: [
-      /* @__PURE__ */ jsx("h3", { className: "studio-title", children: plain ? task.title : /* @__PURE__ */ jsx(InlineEdit, { taskId: task.id, field: "title", children: /* @__PURE__ */ jsx(TaskLink, { taskId: task.id, children: task.title }) }) }),
+      /* @__PURE__ */ jsx("h3", { className: "studio-title", children: plain ? task.title : /* @__PURE__ */ jsx(TaskLink, { taskId: task.id, children: task.title }) }),
       /* @__PURE__ */ jsxs("div", { className: "studio-meta", children: [
         data.fields.map((f) => /* @__PURE__ */ jsx(Meta, { f, task, data, locale }, f.key)),
         /* @__PURE__ */ jsx(TaskBadges, { task })

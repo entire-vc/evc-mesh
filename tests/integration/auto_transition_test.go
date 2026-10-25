@@ -249,6 +249,12 @@ func TestAutoTransition_DependencyResolved(t *testing.T) {
 			"title":     "Task B (depends on A)",
 			"priority":  "medium",
 			"status_id": backlogStatusID,
+			// The backlog→todo rule only releases tasks parked on a dependency
+			// (see dependencyParkIneligibility); an unmarked backlog task is
+			// deliberately unscheduled work and stays put. The marker is a label:
+			// park_reason as a custom field is rejected on create (400, unknown
+			// custom field) unless the project defines it.
+			"labels": []string{"park:dependency"},
 		})
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
 		var task map[string]interface{}

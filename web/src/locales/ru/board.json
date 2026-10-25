@@ -116,8 +116,6 @@
     "recurring": "Повторяющаяся задача",
     "recurringNumber": "Повторяющаяся задача №{{number}}",
     "hasVcsLinks": "Есть ссылки на VCS",
-    "edit": "Изменить задачу",
-    "hasDescription": "Есть описание",
     "humanGate": {
       "soft": "Ждёт подтверждения человека (мягкое — снимется само по таймауту)",
       "hard": "Ждёт подтверждения человека (жёсткое)",
@@ -128,18 +126,7 @@
     "falseOpen": {
       "allChildrenClosed": "False-open: все подзадачи закрыты",
       "onlyParkedChildrenLeft": "False-open: остались только подзадачи в бэклоге"
-    },
-    "checkout": {
-      "lapsedTitle": "Блокировка истекла {{time}} — сессия держателя завершилась, над карточкой никто не работает",
-      "liveHolderTitle": "У {{holder}} до {{time}}",
-      "liveTitle": "В работе до {{time}}",
-      "lapsed": "Блокировка истекла",
-      "live": "Взята в работу"
-    },
-    "subtaskCount_one": "{{count}} подзадача",
-    "subtaskCount_few": "{{count}} подзадачи",
-    "subtaskCount_many": "{{count}} подзадач",
-    "subtaskCount_other": "{{count}} подзадачи"
+    }
   },
   "column": {
     "addTask": "Добавить задачу",
@@ -192,7 +179,6 @@
     "reviewer": "Ревьюер",
     "priority": "Приоритет",
     "delegation": "Уровень делегирования",
-    "checkout": "Захват",
     "artifacts": "Артефакты",
     "dueDate": "Срок",
     "subtasks": "Подзадачи",

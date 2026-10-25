@@ -122,7 +122,7 @@
     },
     "views": {
       "bundle": "views.js",
-      "sha256": "c6e31528e45d2d40184ac6f1386f9861183f4acf644ec54378cd52f9b7275414"
+      "sha256": "0fc8a4fa213156ef7953f2bd227f03c792e1a762f0cb12264656199d80b0d24f"
     },
     "slots": {
       "board.layout": "^1",
@@ -133,7 +133,7 @@
     },
     "contract_report": {
       "sdk_version": "1.0.0",
-      "bundle_sha256": "c6e31528e45d2d40184ac6f1386f9861183f4acf644ec54378cd52f9b7275414",
+      "bundle_sha256": "0fc8a4fa213156ef7953f2bd227f03c792e1a762f0cb12264656199d80b0d24f",
       "passed": {
         "board.layout": "1.0.0",
         "board.column": "1.0.0",

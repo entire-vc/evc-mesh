@@ -538,6 +538,14 @@ func (a *batchApplier) terminate(ctx context.Context, e ChatTurnEvent, state, st
 		WHERE id = $1 AND state IN ('claimed', 'streaming')`, a.t.ID, state, e.Seq, a.now, stop, errCode); err != nil {
 		return err
 	}
+	if state == ChatTurnDone {
+		// The agent answered, so the user message was delivered: it leaves queued.
+		if _, err := a.tx.ExecContext(ctx, `UPDATE ext_agent_chat_messages SET status = 'done'
+			WHERE workspace_id = $2 AND status = 'queued'
+			  AND id = (SELECT user_message_id FROM ext_agent_chat_turns WHERE id = $1)`, a.t.ID, a.t.WorkspaceID); err != nil {
+			return err
+		}
+	}
 	a.res.State, a.res.LeaseUntil = state, nil
 	a.fx.Terminal = &ChatStateEffect{State: state, ErrorCode: errCode}
 	return nil

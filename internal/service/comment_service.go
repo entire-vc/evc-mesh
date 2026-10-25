@@ -38,7 +38,7 @@ import (
 // the failure invisible from both ends: `notifyMentions` only ever writes a
 // delivery-outcome row for a slug it extracted, so an uppercase handle produced
 // no comment_mentions row AND no `recipient_unknown` outcome row — a silent miss
-// indistinguishable from "nobody was mentioned", live-measured on prod (`@Liam`
+// indistinguishable from "nobody was mentioned", live-measured in production (`@Liam`
 // vs `@liam` on an identical fixture, 0 delivery records vs 1). `(?i)` widens
 // only the two `[a-z0-9]` character classes to `[A-Za-z0-9]`; the boundary
 // anchors (`\s`, brackets, `\b`) are untouched by it.
@@ -1870,7 +1870,7 @@ const mentionEmailChannel = "email"
 // ensureMentionDelivery gives a person who has never configured notification
 // preferences somewhere for an @-mention to actually arrive, instead of
 // silently recording them as delivered-or-skipped while every channel stays
-// empty either way. Root cause measured on prod 2026-08-23:
+// empty either way. Root cause measured in production 2026-08-23:
 // notification_preferences had rows for none of the humans being @-mentioned
 // in "❓ Blocking" comments, so every one of them landed as skipped/
 // no_subscription regardless of how the mention itself was handled.
@@ -2134,7 +2134,7 @@ func (s *commentService) enforceBlockingTriage(ctx context.Context, comment *dom
 	// triage move) has nothing to do with whether the person it names should hear about
 	// it. Before this moved here, the notify lived after the triage MOVE below and never
 	// fired for auto-mode tasks — which was 103 of 107 currently-armed human_gate tasks
-	// in prod (measured 2026-09-06, an internal ticket), i.e. the notification this whole
+	// in production (measured 2026-09-06, an internal ticket), i.e. the notification this whole
 	// mechanism exists for essentially never reached anyone.
 	if s.notifySvc != nil {
 		targetUser, uErr := s.userRepo.GetByUsername(ctx, wsID, userSlug)

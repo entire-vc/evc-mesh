@@ -111,9 +111,12 @@ func (r failingMergeRepo) MergeMetadata(context.Context, uuid.UUID, uuid.UUID, j
 
 func TestPatchMetadata_RepoErrorIsWrappedNotSwallowed(t *testing.T) {
 	boom := errors.New("db down")
-	svc := NewVCSLinkService(failingMergeRepo{newFakeVCSLinkRepo(), boom})
+	repo := newFakeVCSLinkRepo()
+	link := &domain.VCSLink{ID: uuid.New(), TaskID: uuid.New(), LinkType: domain.VCSLinkTypePR}
+	repo.links[link.ID] = link
+	svc := NewVCSLinkService(failingMergeRepo{repo, boom})
 
-	_, err := svc.PatchMetadata(context.Background(), uuid.New(), uuid.New(), map[string]any{"ship_sha": strings.Repeat("b", 40)})
+	_, err := svc.PatchMetadata(context.Background(), link.TaskID, link.ID, map[string]any{"ship_sha": strings.Repeat("b", 40)})
 
 	require.ErrorIs(t, err, boom)
 }

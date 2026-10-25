@@ -156,7 +156,7 @@ func (r *RuntimeRepo) Capacity(ctx context.Context, ws uuid.UUID, actor RuntimeA
  SELECT t.assignee_id AS agent_id, t.human_gate AS gate, s.category='triage' AS triage,
   EXISTS (SELECT 1 FROM parked_waits w WHERE w.task_id=t.id AND w.release_id IS NULL) AS parked,
   EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks b ON b.id=d.depends_on_task_id JOIN task_statuses bs ON bs.id=b.status_id
-   WHERE d.task_id=t.id AND d.dependency_type='blocks' AND b.deleted_at IS NULL AND bs.category NOT IN ('done','cancelled')) AS deps,
+   WHERE d.task_id=t.id AND d.dependency_type='blocks' AND b.deleted_at IS NULL AND bs.category NOT IN ('done','cancelled') AND NOT `+domain.DependencySatisfiedSQL("d")+`) AS deps,
   COALESCE(t.start_after>now(), false) AS later
  FROM tasks t JOIN task_statuses s ON s.id=t.status_id JOIN projects p ON p.id=t.project_id
  WHERE p.workspace_id=$1 AND p.deleted_at IS NULL AND t.deleted_at IS NULL

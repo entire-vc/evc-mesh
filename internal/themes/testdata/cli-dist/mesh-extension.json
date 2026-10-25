@@ -31,14 +31,14 @@
     },
     "views": {
       "bundle": "views.js",
-      "sha256": "7ebc1cd99c1811ee9594e0d99a1c891785a53b2de6e130ae16b650c12b1ff12a"
+      "sha256": "42bd14c261963622c8dbbdb280a4db03c56a8cfa6457a3af5185f3af3d2274d2"
     },
     "slots": {
       "board.card": "^1"
     },
     "contract_report": {
       "sdk_version": "1.0.0",
-      "bundle_sha256": "7ebc1cd99c1811ee9594e0d99a1c891785a53b2de6e130ae16b650c12b1ff12a",
+      "bundle_sha256": "42bd14c261963622c8dbbdb280a4db03c56a8cfa6457a3af5185f3af3d2274d2",
       "passed": {
         "board.card": "1.0.0"
       }

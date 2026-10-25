@@ -460,11 +460,20 @@ func (r *VCSLinkRepo) SetPipelineStatus(ctx context.Context, id uuid.UUID, pipel
 }
 
 // MergeMetadata merges patch into metadata with jsonb ||, so keys the patch
-// does not name (head_sha, role, manual_status_declaration) survive.
+// does not name (head_sha, role, manual_status_declaration) survive. A deployed
+// patch naming the sha and environment already stored keeps the stored
+// deployed.at; the comparison runs inside the row-locked UPDATE, so two
+// concurrent reports of one deploy cannot replace the first timestamp.
 func (r *VCSLinkRepo) MergeMetadata(ctx context.Context, taskID, id uuid.UUID, patch json.RawMessage) (*domain.VCSLink, error) {
 	const q = `
 		UPDATE vcs_links
-		SET metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+		SET metadata = CASE
+		    WHEN metadata->'deployed' ? 'at'
+		     AND metadata->'deployed'->>'sha' = $3::jsonb->'deployed'->>'sha'
+		     AND metadata->'deployed'->>'environment' = $3::jsonb->'deployed'->>'environment'
+		    THEN jsonb_set(COALESCE(metadata, '{}'::jsonb) || $3::jsonb, '{deployed,at}', metadata->'deployed'->'at')
+		    ELSE COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+		  END
 		WHERE id = $1 AND task_id = $2 AND link_type = 'pr'
 		RETURNING ` + vcsLinkSelectCols
 	var row vcsLinkRow
@@ -480,3 +489,24 @@ func (r *VCSLinkRepo) MergeMetadata(ctx context.Context, taskID, id uuid.UUID, p
 
 // Ensure VCSLinkRepo satisfies the repository.VCSLinkRepository interface.
 var _ repository.VCSLinkRepository = (*VCSLinkRepo)(nil)
+
+// WorkspaceProviderActivity counts the vcs_links of one provider across the
+// workspace's projects and returns the latest sign of life of any of them
+// (created, status synced or pipeline updated); last is nil when there are none.
+func (r *VCSLinkRepo) WorkspaceProviderActivity(ctx context.Context, workspaceID uuid.UUID, provider string) (count int, last *time.Time, err error) {
+	var row struct {
+		N    int        `db:"n"`
+		Last *time.Time `db:"last"`
+	}
+	err = r.db.GetContext(ctx, &row, `
+		SELECT COUNT(*) AS n,
+		       MAX(GREATEST(v.created_at, COALESCE(v.status_synced_at, v.created_at), COALESCE(v.pipeline_updated_at, v.created_at))) AS last
+		FROM vcs_links v
+		JOIN tasks t ON t.id = v.task_id
+		JOIN projects p ON p.id = t.project_id
+		WHERE p.workspace_id = $1 AND v.provider = $2`, workspaceID, provider)
+	if err != nil {
+		return 0, nil, fmt.Errorf("vcs link activity: %w", err)
+	}
+	return row.N, row.Last, nil
+}

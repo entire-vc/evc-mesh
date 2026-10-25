@@ -641,8 +641,8 @@ func (s *agentService) touchKeyUsed(ctx context.Context, keyID, primaryAgent *uu
 // connection — WorkspaceID and WorkspaceRole reflect where the caller just
 // authenticated INTO, which is not necessarily the agent's home workspace.
 func (s *agentService) authenticateViaGrant(ctx context.Context, grant *domain.AgentWorkspaceGrant, apiKey string) (*domain.Agent, error) {
-	if err := bcrypt.CompareHashAndPassword([]byte(grant.APIKeyHash), bcryptInput(apiKey)); err != nil {
-		return nil, apierror.Unauthorized("invalid API key")
+	if err := s.verifyGrantKey(ctx, grant, apiKey); err != nil {
+		return nil, err
 	}
 
 	agent, err := s.agentRepo.GetByID(ctx, grant.AgentID)
@@ -673,6 +673,26 @@ func (s *agentService) authenticateViaGrant(ctx context.Context, grant *domain.A
 		s.touchKeyUsed(ctx, nil, &agent.ID)
 	}
 	return &resolved, nil
+}
+
+// verifyGrantKey checks apiKey against a connection's stored credentials,
+// preferring the keyed digest and falling back to bcrypt, exactly like
+// verifyAPIKey does for the agents table. Without the digest every agent
+// reconnecting to a freshly restarted API paid a ~163 ms bcrypt on a 2-core
+// host, which queued into a burst of slow requests.
+func (s *agentService) verifyGrantKey(ctx context.Context, grant *domain.AgentWorkspaceGrant, apiKey string) error {
+	if grant.APIKeySHA256 != "" {
+		if !agentKeyDigestMatches(grant.APIKeySHA256, apiKey) {
+			return apierror.Unauthorized("invalid API key")
+		}
+		return nil
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(grant.APIKeyHash), bcryptInput(apiKey)); err != nil {
+		return apierror.Unauthorized("invalid API key")
+	}
+	// Best effort: the key verified, so a failed write only costs one more bcrypt.
+	_ = s.grantRepo.SetAPIKeySHA256(ctx, grant.ID, agentKeyDigest(apiKey), grant.APIKeyHash)
+	return nil
 }
 
 // IsGrantRevoked implements GrantRevocationChecker: a fast PK-keyed
@@ -848,6 +868,33 @@ func (s *agentService) RotateAPIKey(ctx context.Context, agentID uuid.UUID) (str
 
 // GetBySlug returns the agent with the given slug in a workspace.
 // Returns (nil, nil) when no matching agent exists.
+//
+// A home agent always wins. Otherwise an agent holding an ACTIVE grant into the
+// workspace with that slug is returned, so @mentions reach guests; two guests
+// sharing the slug is an ambiguity reported as an error, never resolved by
+// picking one (same rule as taskService's assignee-by-slug lookup).
 func (s *agentService) GetBySlug(ctx context.Context, workspaceID uuid.UUID, slug string) (*domain.Agent, error) {
-	return s.agentRepo.GetBySlug(ctx, workspaceID, slug)
+	agent, err := s.agentRepo.GetBySlug(ctx, workspaceID, slug)
+	if err != nil || agent != nil || s.grantRepo == nil {
+		return agent, err
+	}
+	grants, err := s.grantRepo.ListActiveByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	var match *uuid.UUID
+	for _, g := range grants {
+		if g.Agent.Slug != slug {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("agent slug=%q is ambiguous: several granted agents share it", slug)
+		}
+		id := g.AgentID
+		match = &id
+	}
+	if match == nil {
+		return nil, nil
+	}
+	return s.agentRepo.GetByID(ctx, *match)
 }

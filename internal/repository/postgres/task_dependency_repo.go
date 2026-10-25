@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -31,7 +32,8 @@ func (r *TaskDependencyRepo) AtomicHierarchy() bool { return true }
 // `SELECT *` is unsafe: sqlx refuses to scan a column with no matching
 // struct field, so an additive migration to this table breaks every read
 // until redeployed.
-const taskDependencySelectCols = `id, task_id, depends_on_task_id, dependency_type, created_at`
+var taskDependencySelectCols = `id, task_id, depends_on_task_id, dependency_type, created_at, condition, evidence_url, condition_met_at, ` +
+	domain.DependencySatisfiedSQL("task_dependencies") + ` AS condition_satisfied`
 
 func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDependency) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
@@ -45,11 +47,15 @@ func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDepende
 		return err
 	}
 	const q = `
-		INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO task_dependencies (id, task_id, depends_on_task_id, dependency_type, created_at, condition, evidence_url, condition_met_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
+	if dep.Condition == "" {
+		dep.Condition = domain.DependencyConditionTaskDone
+	}
 	_, err = tx.ExecContext(ctx, q,
 		dep.ID, dep.TaskID, dep.DependsOnTaskID, dep.DependencyType, dep.CreatedAt,
+		dep.Condition, dep.EvidenceURL, dep.ConditionMetAt,
 	)
 	if err != nil {
 		return err
@@ -59,7 +65,7 @@ func (r *TaskDependencyRepo) Create(ctx context.Context, dep *domain.TaskDepende
 
 // GetByID returns the dependency, or (nil, nil) when no row matches.
 func (r *TaskDependencyRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.TaskDependency, error) {
-	const q = `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE id = $1`
+	q := `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE id = $1`
 	var dep domain.TaskDependency
 	if err := r.db.GetContext(ctx, &dep, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -91,9 +97,22 @@ func (r *TaskDependencyRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return tx.Commit()
 }
 
+// UpdateCondition implements repository.TaskDependencyRepository.
+func (r *TaskDependencyRepo) UpdateCondition(ctx context.Context, id uuid.UUID, condition domain.DependencyCondition, evidenceURL *string, metAt *time.Time) (*domain.TaskDependency, error) {
+	q := `UPDATE task_dependencies SET condition = $2, evidence_url = $3, condition_met_at = $4 WHERE id = $1 RETURNING ` + taskDependencySelectCols
+	var dep domain.TaskDependency
+	if err := r.db.GetContext(ctx, &dep, q, id, condition, evidenceURL, metAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &dep, nil
+}
+
 // ListByTask returns all dependencies where the given task depends on another.
 func (r *TaskDependencyRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
-	const q = `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE task_id = $1 ORDER BY created_at ASC`
+	q := `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE task_id = $1 ORDER BY created_at ASC`
 	var deps []domain.TaskDependency
 	if err := r.db.SelectContext(ctx, &deps, q, taskID); err != nil {
 		return nil, err
@@ -106,7 +125,7 @@ func (r *TaskDependencyRepo) ListByTask(ctx context.Context, taskID uuid.UUID) (
 
 // ListDependents returns all dependencies where another task depends on the given task.
 func (r *TaskDependencyRepo) ListDependents(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error) {
-	const q = `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE depends_on_task_id = $1 ORDER BY created_at ASC`
+	q := `SELECT ` + taskDependencySelectCols + ` FROM task_dependencies WHERE depends_on_task_id = $1 ORDER BY created_at ASC`
 	var deps []domain.TaskDependency
 	if err := r.db.SelectContext(ctx, &deps, q, taskID); err != nil {
 		return nil, err
@@ -143,7 +162,7 @@ func (r *TaskDependencyRepo) Exists(ctx context.Context, taskID, dependsOnTaskID
 // scoping the dependency graph applies to legacy cross-tenant rows
 // (wsEdgesCTE); the blocker side (b, bp) is joined only for that check.
 func (r *TaskDependencyRepo) HasOpenBlockedDependents(ctx context.Context, blockerID uuid.UUID) (bool, error) {
-	const q = `
+	q := `
 		SELECT EXISTS (
 		    SELECT 1
 		    FROM task_dependencies d
@@ -154,6 +173,7 @@ func (r *TaskDependencyRepo) HasOpenBlockedDependents(ctx context.Context, block
 		    JOIN projects bp        ON bp.id = b.project_id
 		    WHERE d.depends_on_task_id = $1
 		      AND d.dependency_type = 'blocks'
+		      AND NOT ` + domain.DependencySatisfiedSQL("d") + `
 		      AND dep.deleted_at IS NULL
 		      AND s.category NOT IN ('done', 'cancelled')
 		      AND dp.workspace_id = bp.workspace_id

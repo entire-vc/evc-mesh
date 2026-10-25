@@ -209,11 +209,30 @@ func (r *ChatTurnEventsRepo) RequestCancel(ctx context.Context, userID, project,
 	return o, tx.Commit()
 }
 
+// revokeThreadSessions ends every chat session of a thread for good. A session
+// is the turn (the session id of a token is its turn id), so the tombstone is
+// written for the thread's live turns as well as for sessions that already have
+// a token: a token requested after Stop but validated before it must find the
+// tombstone. Each session id is locked with the same advisory key
+// ChatSessionTokenRepo.Issue takes, so Stop and an issue in flight are
+// serialised: either the token exists and is revoked here, or Issue sees the stop.
 func revokeThreadSessions(ctx context.Context, tx *sqlx.Tx, thread uuid.UUID, now time.Time) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO chat_session_stops (chat_session_id, stopped_at, reason)
-		SELECT DISTINCT chat_session_id, $2::timestamptz, 'stop' FROM chat_session_tokens WHERE chat_thread_id = $1
-		ON CONFLICT (chat_session_id) DO NOTHING`, thread, now); err != nil {
+	var sessions []uuid.UUID
+	if err := tx.SelectContext(ctx, &sessions, `
+		SELECT id FROM ext_agent_chat_turns WHERE thread_id = $1 AND state IN ('claimed', 'streaming')
+		UNION
+		SELECT chat_session_id FROM chat_session_tokens WHERE chat_thread_id = $1
+		ORDER BY 1`, thread); err != nil {
 		return err
+	}
+	for _, id := range sessions {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1::text))`, "chat_session:"+id.String()); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO chat_session_stops (chat_session_id, stopped_at, reason)
+			VALUES ($1, $2::timestamptz, 'stop') ON CONFLICT (chat_session_id) DO NOTHING`, id, now); err != nil {
+			return err
+		}
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE chat_session_tokens SET revoked_at = $2::timestamptz, revoked_reason = 'stop'
 		WHERE chat_thread_id = $1 AND (revoked_at IS NULL OR revoked_at > $2::timestamptz)`, thread, now)

@@ -71,6 +71,13 @@ var wsScopedRoutes = []wsRoute{
 	{http.MethodPost, "/agents", map[string]string{"name": "intruder-agent"}},
 	{http.MethodGet, "/agents/status", nil},
 
+	// Chat audit: the repository answers a non-owner/admin 403 before it looks at
+	// the thread or agent id, so a foreign id never reaches a lookup.
+	{http.MethodGet, "/chat/audit/threads/" + dummyUUID, nil},
+	{http.MethodGet, "/chat/audit/threads/" + dummyUUID + "/events", nil},
+	{http.MethodGet, "/chat/audit/agents/" + dummyUUID + "/sessions", nil},
+	{http.MethodGet, "/chat/audit/memory-writes", nil},
+
 	{http.MethodGet, "/agent-grants", nil},
 	{http.MethodPost, "/agent-grants", map[string]string{"agent_id": dummyUUID, "role": "member"}},
 	{http.MethodDelete, "/agent-grants/" + dummyUUID, nil},
@@ -298,6 +305,8 @@ func TestCrossTenant_RouteTableIsComplete(t *testing.T) {
 		suffix = strings.ReplaceAll(suffix, "/invites/"+dummyUUID, "/invites/:invite_id")
 		suffix = strings.ReplaceAll(suffix, "/agent-grants/"+dummyUUID, "/agent-grants/:grant_id")
 		suffix = strings.ReplaceAll(suffix, "/extensions/"+dummyUUID, "/extensions/:ext_id")
+		suffix = strings.ReplaceAll(suffix, "/chat/audit/threads/"+dummyUUID, "/chat/audit/threads/:thread_id")
+		suffix = strings.ReplaceAll(suffix, "/chat/audit/agents/"+dummyUUID, "/chat/audit/agents/:agent_id")
 		suffix = strings.ReplaceAll(suffix, "/runtime/controllers/runner-a/", "/runtime/controllers/:controller_ref/")
 		suffix = strings.ReplaceAll(suffix, "/runtime/bindings/worker-b", "/runtime/bindings/:binding_id")
 		suffix = strings.ReplaceAll(suffix, "/reservations/"+dummyUUID, "/reservations/:reservation_id")

@@ -1,7 +1,7 @@
 // Editing this file does not redeploy prod, and that is deliberate.
 //
 // `deploy-backend.yml` used to trigger on `internal/**` with no exclusion, so a
-// merge touching only this file redeployed the backend — PR #407 did exactly
+// merge touching only this file redeployed the backend — a PR did exactly
 // that (deploy run 30339003119; /api/version moved 5d2cda8 -> ba7deae). The
 // binary was identical either side of it, because the Go toolchain never
 // compiles `_test.go` into a non-test build. The deploy changed nothing and
@@ -616,7 +616,7 @@ func TestRemember_InvalidKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRemember_ReservedTags — task #0104878c
+// TestRemember_ReservedTags — an internal ticket
 // ---------------------------------------------------------------------------
 
 // newMemoryServiceWithWorkspaceRepo wires the reserved-tag guard the way
@@ -737,8 +737,8 @@ func TestRemember_ReservedTag_FleetTagsUnaffected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestReservedTag_OtherWritePaths — task #d378586f. enforceReservedTags was
-// wired to Remember only (#0104878c); ExtractFromEvent and ImportMemories are
+// TestReservedTag_OtherWritePaths — an internal ticket. enforceReservedTags was
+// wired to Remember only; ExtractFromEvent and ImportMemories are
 // the other two internal callers of memRepo.Upsert and were bypassing it
 // entirely. Same red/green shape as the Remember tests above, on the other
 // two paths.
@@ -838,7 +838,7 @@ func TestImportMemories_ReservedTag_AllowedInBenchWorkspace(t *testing.T) {
 }
 
 // TestEnforceReservedTags_CaseInsensitiveMatch covers the second half of
-// #d378586f: the map lookup used to be an exact match, so `LME-Bench` passed
+// an internal ticket: the map lookup used to be an exact match, so `LME-Bench` passed
 // straight through outside the bench workspace. The comparison is now
 // case-insensitive on the lookup key only.
 func TestEnforceReservedTags_CaseInsensitiveMatch(t *testing.T) {
@@ -932,7 +932,7 @@ func TestRecall_BasicSearch(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestRecall_TouchAccessed_OnlyFinalTrimmedSet
 //
-// Regression test for task #c5b5fb48: TouchAccessed (the last_accessed_at
+// Regression test for an internal ticket: TouchAccessed (the last_accessed_at
 // signal runReviewTriage's 60-day stale branch keys off) used to run INSIDE
 // FullTextSearchRanked, over that arm's own oversized pre-fusion candidate
 // pool (poolSize = limit*candidateMultiplier). That counted "was a candidate"
@@ -1131,7 +1131,7 @@ func TestDefaultExpiresAt_KindSessionCheckpointTag(t *testing.T) {
 		Key:         "test-checkpoint",
 		Content:     "session data",
 		Scope:       domain.ScopeWorkspace,
-		Tags:        []string{"kind:session-checkpoint", "owner:linus"},
+		Tags:        []string{"kind:session-checkpoint", "owner:liam"},
 	}
 	_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 	require.NoError(t, err)
@@ -1474,7 +1474,7 @@ func TestComputeImportanceScore_BaseByKind(t *testing.T) {
 		{"kind:session-checkpoint", 0.30},
 		// Not a recognised kind: it falls through to the 0.50 default. Pinned
 		// because <ops-repo>/CLAUDE-memory.md documented it at 0.80 for months and
-		// nothing contradicted the claim (#17840d1b).
+		// nothing contradicted the claim.
 		{"kind:canonical-decision", 0.50},
 	}
 	for _, tc := range cases {
@@ -1557,7 +1557,7 @@ func TestTagOverlapRatio(t *testing.T) {
 
 func TestIsGenericTag(t *testing.T) {
 	generic := []string{
-		"kind:incident", "kind:decision", "owner:bill", "project:spark",
+		"kind:incident", "kind:decision", "owner:beth", "project:spark",
 		"phase:execute", "fleet", "infra", "bug", "feature", "wip", "p0", "p2",
 	}
 	for _, tag := range generic {
@@ -1573,11 +1573,11 @@ func TestIsGenericTag(t *testing.T) {
 }
 
 func TestFilterSemanticTags(t *testing.T) {
-	in := []string{"kind:incident", "owner:linus", "project:mesh-dev", "auth-migration", "postgres-upgrade"}
+	in := []string{"kind:incident", "owner:liam", "project:mesh-dev", "auth-migration", "postgres-upgrade"}
 	got := filterSemanticTags(in)
 	assert.Equal(t, []string{"auth-migration", "postgres-upgrade"}, got)
 
-	assert.Empty(t, filterSemanticTags([]string{"kind:fact", "owner:riker", "phase:execute"}))
+	assert.Empty(t, filterSemanticTags([]string{"kind:fact", "owner:robin", "phase:execute"}))
 	assert.Empty(t, filterSemanticTags(nil))
 }
 
@@ -1971,7 +1971,7 @@ func TestResolveProjectSlug(t *testing.T) {
 		assert.False(t, ok)
 	})
 	t.Run("no project tag → no resolve", func(t *testing.T) {
-		_, ok := resolveProjectSlug([]string{"kind:decision", "owner:riker"})
+		_, ok := resolveProjectSlug([]string{"kind:decision", "owner:robin"})
 		assert.False(t, ok)
 	})
 	t.Run("evc-spark alias resolves to spark", func(t *testing.T) {
@@ -2017,7 +2017,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Key:         "checkpoint-mesh",
 			Content:     "session end",
 			Scope:       domain.ScopeProject,
-			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
+			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:gary"},
 		}
 		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
@@ -2025,7 +2025,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 		assert.Equal(t, projID, *upserted.ProjectID)
 	})
 
-	// Regression guard for the scope-identity fix (task #4edf3fb5): slug
+	// Regression guard for the scope-identity fix: slug
 	// resolution must NOT populate project_id on scope=workspace, even when
 	// the tag resolves cleanly — 544 of 1186 active workspace-scoped rows had
 	// exactly this shape (a workspace-wide record incoherently carrying a
@@ -2054,7 +2054,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Key:         "checkpoint-mesh-ws",
 			Content:     "session end",
 			Scope:       domain.ScopeWorkspace,
-			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
+			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:gary"},
 		}
 		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
@@ -2088,7 +2088,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 			Key:         "checkpoint-mesh-agent",
 			Content:     "session end",
 			Scope:       domain.ScopeAgent,
-			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:garfield"},
+			Tags:        []string{"kind:session-checkpoint", "project:mesh", "owner:gary"},
 		}
 		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
 		require.NoError(t, err)
@@ -2197,7 +2197,7 @@ func TestRemember_SlugResolution(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestRemember_SourceTaskIDProjectInference
 //
-// Audit #1b010be6 (plan:1.11): 4484/5161 memories carried no project_id.
+// an internal ticket (plan:1.11): 4484/5161 memories carried no project_id.
 // TestRemember_SlugResolution above covers the pre-existing project:<slug>
 // tag path; this covers the new fallback added alongside it — inferring
 // project_id from the source task when the write carries source_task_id but
@@ -2232,7 +2232,7 @@ func TestRemember_SourceTaskIDProjectInference(t *testing.T) {
 			Key:          "checkpoint-from-task",
 			Content:      "session end",
 			Scope:        domain.ScopeProject,
-			Tags:         []string{"kind:session-checkpoint", "owner:garfield"},
+			Tags:         []string{"kind:session-checkpoint", "owner:gary"},
 			SourceTaskID: &taskID,
 		}
 		_, err := svc.Remember(context.Background(), mem, domain.MemoryWriteIntent{})
@@ -2405,7 +2405,7 @@ func TestResolveProjectSlugForTags_MatchesUnexported(t *testing.T) {
 		{"project:evc-mesh", "kind:fact"},
 		{"project:mesh-dev", "project:spark"},
 		{"project:nonexistent"},
-		{"owner:riker"},
+		{"owner:robin"},
 	}
 	for _, tags := range cases {
 		wantSlug, wantOK := resolveProjectSlug(tags)
@@ -2418,7 +2418,7 @@ func TestResolveProjectSlugForTags_MatchesUnexported(t *testing.T) {
 // ---------------------------------------------------------------------------
 // TestRemember_ExplicitProjectIDNormalizedByScope
 //
-// Task #2c0154db/F3 gated BOTH known project_id auto-stamp sources (server
+// an internal ticket/F3 gated BOTH known project_id auto-stamp sources (server
 // resolveProjectSlug, MCP client active-task auto-populate) to scope=project
 // only. Neither gate stops a CALLER from passing project_id explicitly
 // alongside scope=workspace/agent — measured live: 4 fresh rows got exactly
@@ -2624,6 +2624,9 @@ func (m *mockTaskDepRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.TaskD
 	return nil, nil
 }
 func (m *mockTaskDepRepo) ListDependents(_ context.Context, _ uuid.UUID) ([]domain.TaskDependency, error) {
+	return nil, nil
+}
+func (m *mockTaskDepRepo) UpdateCondition(_ context.Context, _ uuid.UUID, _ domain.DependencyCondition, _ *string, _ *time.Time) (*domain.TaskDependency, error) {
 	return nil, nil
 }
 func (m *mockTaskDepRepo) Exists(_ context.Context, _, _ uuid.UUID) (bool, error) { return false, nil }
@@ -3042,7 +3045,7 @@ func TestSetProjectKnowledge_Amendment4_CanonicalSupersede(t *testing.T) {
 					{
 						ID:              genericOnlyID,
 						WorkspaceID:     wsID,
-						Tags:            []string{"kind:fact", "project:mesh-dev", "owner:linus"},
+						Tags:            []string{"kind:fact", "project:mesh-dev", "owner:liam"},
 						ImportanceScore: 0.3,
 						Archived:        false,
 					},
@@ -3074,7 +3077,7 @@ func TestSetProjectKnowledge_Amendment4_CanonicalSupersede(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters — task #ddb5cf78, same
+// TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters — an internal ticket, same
 // class of fix as the value limit below, applied to the 80-byte key cap.
 // ---------------------------------------------------------------------------
 
@@ -3098,7 +3101,7 @@ func TestSetProjectKnowledge_KeyLimitIsBytesNotCharacters(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRemember_TagLimitIsBytesNotCharacters — task #ddb5cf78, same class of
+// TestRemember_TagLimitIsBytesNotCharacters — an internal ticket, same class of
 // fix applied to the 64-byte-per-tag cap.
 // ---------------------------------------------------------------------------
 
@@ -3127,7 +3130,7 @@ func TestRemember_TagLimitIsBytesNotCharacters(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestSetProjectKnowledge_ValueLimitIsBytesNotCharacters — task #ddb5cf78
+// TestSetProjectKnowledge_ValueLimitIsBytesNotCharacters — an internal ticket
 //
 // The limit is enforced on len(input.Value), i.e. UTF-8 bytes. The error
 // message used to say "characters", which is wrong on any non-ASCII text
@@ -3590,7 +3593,7 @@ func (s *switchModelEmbedder) Model() string   { return s.model }
 func (s *switchModelEmbedder) Dimensions() int { return s.dim }
 
 // ---------------------------------------------------------------------------
-// Chunked embed path (ADR-0002, #b052cdda subtask 5)
+// Chunked embed path (ADR-0002, an internal ticket subtask 5)
 // ---------------------------------------------------------------------------
 
 // mockMemoryChunkRepo is an in-memory repository.MemoryChunkRepository. ReplaceChunks
@@ -3646,7 +3649,7 @@ func (m *mockMemoryChunkRepo) MemoryIDsWithChunks(_ context.Context, memoryIDs [
 // (all embedMaxAttempts retries), then succeeds for everything after. Models a memory
 // that genuinely cannot be embedded while its neighbours can — which is what
 // "one memory's failure must not abort the batch" needs. A fail-once mock cannot express
-// this any more: embedWithRetry recovers transient failures by design (#67f4e0d9).
+// this any more: embedWithRetry recovers transient failures by design.
 type failsFirstMemoryEmbedder struct {
 	dim   int
 	calls atomic.Int64
@@ -3870,7 +3873,7 @@ func TestEmbedAndStore_Chunked_PartialEmbedFailureNeverWritesPartialChunks(t *te
 	memRepo := &mockMemoryRepo{}
 	chunkRepo := newMockMemoryChunkRepo()
 	// Long enough to chunk into several pieces; fail EVERY attempt. Permanent, not
-	// transient: embedWithRetry legitimately recovers a transient failure (#67f4e0d9),
+	// transient: embedWithRetry legitimately recovers a transient failure,
 	// so a fail-once mock would exercise the retry path, not the abort path this test
 	// is about. The property under test is unchanged — a memory that cannot be fully
 	// embedded must leave no partial chunk set behind.
@@ -4017,7 +4020,7 @@ func TestEmbedConcurrencyUnboundedByDefault(t *testing.T) {
 	}
 }
 
-// TestRecallEmbedConcurrencyBound is the regression guard for #3d10774e: the recall
+// TestRecallEmbedConcurrencyBound is the regression guard for an internal ticket: the recall
 // query-embed call (RecallWithStats' vector-arm goroutine) previously ignored
 // embedSem entirely, so EMBEDDING_CONCURRENCY bounded only embedAndStore and every
 // concurrent recall fired its own unbounded embed call straight at the embedder.
@@ -4082,7 +4085,7 @@ func TestRecallEmbedConcurrencyUnboundedByDefault(t *testing.T) {
 	}
 }
 
-// TestBatchEmbedConcurrencyBound verifies BatchEmbed also acquires embedSem (#3d10774e
+// TestBatchEmbedConcurrencyBound verifies BatchEmbed also acquires embedSem (an internal ticket
 // call site :1775) — it shares the budget with embedAndStore/RecallWithStats even though
 // its own loop is sequential, so a manual backfill run concurrently with live write/recall
 // traffic counts against the same cap instead of adding an unbounded extra caller.
@@ -4145,7 +4148,7 @@ func (e *concurrencyTrackingEmbedder) Model() string   { return "concurrency-tra
 func (e *concurrencyTrackingEmbedder) Dimensions() int { return e.dim }
 
 // countingBatchEmbedder records how many EmbedBatch round trips it served and how many
-// texts each one carried — the quantity that actually caused #67f4e0d9.
+// texts each one carried — the quantity that actually caused an internal ticket.
 type countingBatchEmbedder struct {
 	dim         int
 	batchCalls  atomic.Int64
@@ -4173,7 +4176,7 @@ func (e *countingBatchEmbedder) Model() string   { return "counting-batch" }
 func (e *countingBatchEmbedder) Dimensions() int { return e.dim }
 
 // TestEmbedAndStore_Chunked_UsesOneBatchedCallNotOnePerChunk is the load half of
-// #67f4e0d9. Before the fix a memory of N chunks issued N sequential embedder calls
+// an internal ticket. Before the fix a memory of N chunks issued N sequential embedder calls
 // inside one flat 30s budget, so under concurrent load the budget ran out mid-document
 // (538 deadline failures at chunk 12-15 of 18-24) and the memory was lost entirely —
 // silently, because the goroutine only logs.
@@ -4227,7 +4230,7 @@ func (e *transientThenOKEmbedder) Model() string   { return "transient-then-ok" 
 func (e *transientThenOKEmbedder) Dimensions() int { return e.dim }
 
 // TestEmbedAndStore_Chunked_TransientEmbedFailureIsRetried is the retry half of
-// #67f4e0d9: before the fix there was no retry at all, so one blip against the shared
+// an internal ticket: before the fix there was no retry at all, so one blip against the shared
 // embedder lost the memory permanently — the goroutine logged and exited, and nothing
 // re-embeds it until someone runs reindex by hand. RED on the pre-fix code.
 func TestEmbedAndStore_Chunked_TransientEmbedFailureIsRetried(t *testing.T) {
@@ -4274,7 +4277,7 @@ func (r *fkViolationChunkRepo) ReplaceChunks(_ context.Context, _ uuid.UUID, _ [
 
 // TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure pins the distinction
 // that kept the real errors hidden: 34 FK races appeared alongside 538 genuine deadline
-// failures in the #67f4e0d9 window, and counting the races as embedding failures is what
+// failures in the an internal ticket window, and counting the races as embedding failures is what
 // makes the counter useless for alerting.
 func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing.T) {
 	before := testutilCounterValue(t, "store")
@@ -4292,7 +4295,7 @@ func TestEmbedAndStore_Chunked_ForeignKeyViolationIsNotAnEmbedFailure(t *testing
 }
 
 // TestEmbedAndStore_Chunked_EmbedFailureIncrementsCounter is the positive half of the
-// chunked path's failure accounting, and it was the missing one (#a8cc2bf9): deleting the
+// chunked path's failure accounting, and it was the missing one: deleting the
 // Inc() on the chunked branch left the whole suite green, because the only test touching
 // that counter here asserts it does NOT move (the FK race). A negative assertion without
 // its positive twin pins nothing — the counter can silently return to "declared and always
@@ -4313,7 +4316,7 @@ func TestEmbedAndStore_Chunked_EmbedFailureIncrementsCounter(t *testing.T) {
 	ms.embedAndStore(uuid.New(), longTranscript(30), "")
 
 	assert.Greater(t, testutilCounterValue(t, "store"), before,
-		"a chunked-path embed failure must increment mesh_memory_embed_failures_total — this is the path all 538 failures in #67f4e0d9 took, and its visibility is half the point of the fix")
+		"a chunked-path embed failure must increment mesh_memory_embed_failures_total — this is the path all 538 failures in an internal ticket took, and its visibility is half the point of the fix")
 	assert.Zero(t, chunkRepo.replaceCalls, "a failed embed must not write chunks")
 }
 
@@ -4334,7 +4337,7 @@ func TestEmbedAndStore_Legacy_EmbedFailureIncrementsCounter(t *testing.T) {
 }
 
 // TestRecall_EmbedFailureIncrementsCounter is the recall-path sibling of the two
-// EmbedFailureIncrementsCounter tests above — and it was the missing one (#dd53f9d5):
+// EmbedFailureIncrementsCounter tests above — and it was the missing one:
 // mesh_memory_embed_failures_total{op="recall"} has two call sites in RecallWithStats
 // (memory_service.go, semaphore-wait and Embed() error) and neither had a test proving
 // either one actually moves the counter. A Grafana alert was about to be built on top of
@@ -4358,11 +4361,11 @@ func TestRecall_EmbedFailureIncrementsCounter(t *testing.T) {
 	require.NoError(t, err, "an embedder failure on recall must fail OPEN to bm25, not surface as an error")
 	assert.Equal(t, domain.SearchModeBM25Only, mode, "the dense arm did not run — the served mode must say so")
 	assert.Greater(t, testutilCounterValue(t, "recall"), before,
-		"a recall-path embed failure must increment mesh_memory_embed_failures_total{op=\"recall\"} — this is the exact counter the Grafana alert in #dd53f9d5 watches")
+		"a recall-path embed failure must increment mesh_memory_embed_failures_total{op=\"recall\"} — this is the exact counter the Grafana alert in an internal ticket watches")
 }
 
 // TestRecall_EmbedSemaphoreTimeoutIncrementsCounter covers the OTHER recall-path call
-// site: a recall queued behind a full embedSem (#3d10774e/PR #611) whose own context
+// site: a recall queued behind a full embedSem (an internal ticket/a PR) whose own context
 // deadline expires before a slot frees. acquireEmbedSem returns ctx.Err() WITHOUT ever
 // calling Embed — a distinct code path from the one above, and the one #611's fix
 // actually introduced. Reuses concurrencyTrackingEmbedder (already used by the
@@ -4401,7 +4404,7 @@ func TestRecall_EmbedSemaphoreTimeoutIncrementsCounter(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// B2 key+tags-per-chunk prefix fix (#38bb958c measurement, task e11fe15e)
+// B2 key+tags-per-chunk prefix fix (an internal ticket measurement, an internal ticket)
 // ---------------------------------------------------------------------------
 
 // capturingPrefixEmbedder records every text handed to EmbedBatch/Embed, across calls,
@@ -4446,7 +4449,7 @@ func (e *capturingPrefixEmbedder) allTexts() []string {
 }
 
 // TestEmbedChunked_KeyTagsPrefix_PresentInEveryChunk is AC1 of the B2 fix (task
-// e11fe15e, measurement closed on #38bb958c): before this fix, `key + " " + content +
+// an internal ticket, measurement closed on an internal ticket): before this fix, `key + " " + content +
 // " " + tags` was built as ONE composite string and THAT was chunked — so the key
 // survived only in chunk 0 and tags only in the last chunk. On a multi-chunk memory,
 // ~94% of chunks were searchable without the memory's own key. B2 chunks content alone
@@ -4493,7 +4496,7 @@ func longCyrillicText(repeats int) string {
 }
 
 // TestEmbedChunked_NonASCIIContent_ByteOffsetsMatchContentSlices is AC2 of the B2 fix
-// (task e11fe15e): chunk_start/chunk_end must remain BYTE offsets into content alone
+// chunk_start/chunk_end must remain BYTE offsets into content alone
 // (ADR-0002) and stay internally consistent — in particular the last chunk must reach
 // content's end — now that chunking runs on content alone instead of the composite
 // key+content+tags string. This is deliberately a non-ASCII fixture: on ASCII content,

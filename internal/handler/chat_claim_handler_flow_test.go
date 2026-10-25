@@ -26,13 +26,16 @@ import (
 // response shape, the long-poll loop, and how store errors reach the wire.
 
 type fakeRunnerStore struct {
-	mu       sync.Mutex
-	batches  [][]postgres.ChatClaimedTurn // returned one per call, then empty
-	claimErr error
-	calls    int
-	params   postgres.ChatClaimParams
-	lease    *postgres.ChatLease
-	leaseErr error
+	mu        sync.Mutex
+	batches   [][]postgres.ChatClaimedTurn // returned one per call, then empty
+	claimErr  error
+	calls     int
+	params    postgres.ChatClaimParams
+	lease     *postgres.ChatLease
+	leaseErr  error
+	active    []postgres.ChatActiveTurn
+	activeErr error
+	activeRun uuid.UUID
 }
 
 func (f *fakeRunnerStore) ClaimTurns(_ context.Context, p postgres.ChatClaimParams) ([]postgres.ChatClaimedTurn, error) {
@@ -49,6 +52,11 @@ func (f *fakeRunnerStore) ClaimTurns(_ context.Context, p postgres.ChatClaimPara
 	b := f.batches[0]
 	f.batches = f.batches[1:]
 	return b, nil
+}
+
+func (f *fakeRunnerStore) ActiveTurns(_ context.Context, _ uuid.UUID, _ []uuid.UUID, runner uuid.UUID) ([]postgres.ChatActiveTurn, error) {
+	f.activeRun = runner
+	return f.active, f.activeErr
 }
 
 func (f *fakeRunnerStore) RenewLease(context.Context, uuid.UUID, []uuid.UUID, uuid.UUID, uuid.UUID, string, int) (*postgres.ChatLease, error) {
@@ -194,4 +202,48 @@ func TestChatRunnerLease_Answers(t *testing.T) {
 
 	rec, _ = call(&fakeRunnerStore{}, turn.String(), `{}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "claim_token is required")
+}
+
+func TestChatRunnerActive_ListsTheTurnsTheRunnerHolds(t *testing.T) {
+	agent, runner := uuid.New(), uuid.New()
+	turn := uuid.New()
+	store := &fakeRunnerStore{active: []postgres.ChatActiveTurn{{TurnID: turn, AgentID: agent, State: "streaming",
+		Attempt: 2, ClaimToken: "ct_x", LeaseUntil: time.Now(), ExecutionEpoch: 3}}}
+	h := NewChatClaimHandler(store, nil, nil)
+	c, rec := runnerCtx(http.MethodGet, "/runner/chat/turns/active", "", agent)
+	c.Request().Header.Set(chatRunnerIDHeader, runner.String())
+	require.NoError(t, h.Active(c))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"), "the response carries the claim_token")
+	assert.Equal(t, runner, store.activeRun)
+	var body struct {
+		Turns []map[string]any `json:"turns"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Turns, 1)
+	assert.Equal(t, turn.String(), body.Turns[0]["turn_id"])
+	assert.Equal(t, "ct_x", body.Turns[0]["claim_token"])
+	assert.Equal(t, "streaming", body.Turns[0]["state"])
+}
+
+func TestChatRunnerActive_EmptyIsAListAndErrorsReachTheWire(t *testing.T) {
+	agent := uuid.New()
+	h := NewChatClaimHandler(&fakeRunnerStore{}, nil, nil)
+	c, rec := runnerCtx(http.MethodGet, "/runner/chat/turns/active", "", agent)
+	c.Request().Header.Set(chatRunnerIDHeader, uuid.NewString())
+	require.NoError(t, h.Active(c))
+	assert.JSONEq(t, `{"protocol":"1","turns":[]}`, rec.Body.String())
+
+	h = NewChatClaimHandler(&fakeRunnerStore{activeErr: errors.New("db down")}, nil, nil)
+	c, rec = runnerCtx(http.MethodGet, "/runner/chat/turns/active", "", agent)
+	c.Request().Header.Set(chatRunnerIDHeader, uuid.NewString())
+	require.NoError(t, h.Active(c))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	h = NewChatClaimHandler(&fakeRunnerStore{}, nil, nil)
+	c, rec = runnerCtx(http.MethodGet, "/runner/chat/turns/active", "", agent)
+	c.Request().Header.Del(chatRunnerIDHeader)
+	require.NoError(t, h.Active(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

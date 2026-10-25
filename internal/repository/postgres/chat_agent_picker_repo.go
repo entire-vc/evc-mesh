@@ -63,7 +63,9 @@ type chatAgentRow struct {
 }
 
 // Agents served by a runner of the workspace (an agent_controllers row, live or
-// lapsed) and members of the project. The inner join drops runner-less agents;
+// lapsed, or a controller derived from admission + report, see
+// effectiveControllerSQL) and members of the project. The runner_id predicate
+// drops runner-less agents;
 // the project_id predicate keeps other projects' agents out. The agent's own
 // workspace must equal the project's, so a stale cross-workspace membership
 // cannot surface.
@@ -76,7 +78,7 @@ type chatAgentRow struct {
 // served by this workspace's runners, and a guest is served by its home
 // workspace's runner.
 const chatAgentsSQL = `SELECT a.id AS agent_id, a.name, a.max_concurrent_tasks,
-		(c.lease_expires_at > now()) AS live,
+		(ctl.lease_expires_at > now()) AS live,
 		(SELECT count(*) FROM ext_agent_chat_turns tr
 			WHERE tr.agent_id = a.id AND tr.workspace_id = a.workspace_id
 			AND tr.state IN ('claimed', 'streaming')) AS running,
@@ -87,8 +89,8 @@ const chatAgentsSQL = `SELECT a.id AS agent_id, a.name, a.max_concurrent_tasks,
 	FROM project_members pm
 	JOIN projects p ON p.id = pm.project_id AND p.deleted_at IS NULL
 	JOIN agents a ON a.id = pm.agent_id AND a.workspace_id = p.workspace_id AND a.deleted_at IS NULL
-	JOIN agent_controllers c ON c.agent_id = a.id
-	WHERE pm.project_id = $1
+	` + effectiveControllerSQL + `
+	WHERE pm.project_id = $1 AND ctl.runner_id IS NOT NULL
 	ORDER BY a.name, a.id`
 
 // List returns the chat agents of a project. The caller must be a signed-in

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSidebarItems } from "@/lib/extension-slots";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router";
 import {
@@ -25,6 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ViewTabBar } from "@/components/view-tab-bar";
+import { projectTabsWith } from "@/lib/project-view-tabs";
+import { useChatEnabled } from "@/lib/chat/use-chat-enabled";
 import { NotificationBell } from "@/components/notification-bell";
 import { api } from "@/lib/api";
 import "@/core/slots/mesh-default";
@@ -440,12 +443,16 @@ interface HeaderProps {
 function useCurrentView(): ProjectViewTab | null {
   const location = useLocation();
   const path = location.pathname;
-  if (path.endsWith("/list")) return "list";
-  if (path.endsWith("/timeline")) return "timeline";
-  if (path.endsWith("/calendar")) return "calendar";
+  // Before the suffix checks: an extension id like "calendar" ends the same way.
+  const ext = /\/p\/[^/]+\/x\/([^/]+)\/?$/.exec(path);
+  if (ext) return `ext:${ext[1]}`;
+  const suffix = /\/(list|timeline|calendar|updates)\/?$/.exec(path);
+  if (suffix) return suffix[1] as ProjectViewTab;
   // /docs and /docs/:docId are the same tab — matching only the bare path left
-  // an open document with no tab highlighted and no view strip at all.
-  if (/\/docs(\/[^/]+)?\/?$/.test(path)) return "docs";
+  // an open document with no tab highlighted and no view strip at all. Chat
+  // likewise carries a conversation id.
+  const section = /\/(chat|docs)(\/[^/]+)?\/?$/.exec(path);
+  if (section) return section[1] as ProjectViewTab;
   // Check if we're on a project page (board is the default project view)
   if (/\/w\/[^/]+\/p\/[^/]+\/?$/.test(path)) return "board";
   return null;
@@ -546,6 +553,11 @@ function ViewTabs() {
   const { currentProject } = useProjectStore();
   const currentView = useCurrentView();
   const openTaskProject = useOpenTaskProjectLink();
+  const sidebarItems = useSidebarItems();
+  const chatEnabled = useChatEnabled(currentProject?.id);
+  // Built-ins, the Chat tab where the project turned it on, one tab per enabled
+  // extension screen; stable while the registry is.
+  const tabs = useMemo(() => projectTabsWith(sidebarItems, chatEnabled), [sidebarItems, chatEnabled]);
   // View tabs — shown when inside a project. On an open task the same
   // strip stays (no tab active) so Docs is a tab, not a separate icon;
   // it targets the task's own project (see useOpenTaskProjectLink).
@@ -556,6 +568,7 @@ function ViewTabs() {
         wsSlug={wsSlug}
         projectSlug={projectSlug}
         projectId={currentProject?.id}
+        tabs={tabs}
         className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
       />
     );
@@ -566,6 +579,7 @@ function ViewTabs() {
       wsSlug={openTaskProject.wsSlug}
       projectSlug={openTaskProject.projectSlug}
       projectId={openTaskProject.projectId}
+      tabs={tabs}
       className="mesh-project-tabs ml-1 shrink-0 sm:ml-4"
     />
   ) : null;

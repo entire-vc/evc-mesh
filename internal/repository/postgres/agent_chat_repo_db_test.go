@@ -330,3 +330,50 @@ func TestAgentChatRepo_DatabaseErrorsPropagate(t *testing.T) {
 		require.Error(t, call(), name)
 	}
 }
+
+func TestAgentChatRepo_SendBindsUploadedAttachments(t *testing.T) {
+	f := newChatFixture(t)
+	ctx := context.Background()
+	g := f.gate(t, f.userA)
+	th, err := f.repo.CreateThread(ctx, g, f.project, f.userA, f.agent, "")
+	require.NoError(t, err)
+	att := func(uploaded bool) uuid.UUID {
+		id := uuid.New()
+		up := "NULL"
+		if uploaded {
+			up = "now()"
+		}
+		chatExec(t, f.db, `INSERT INTO ext_agent_chat_attachments (id, workspace_id, thread_id, s3_key, file_name, mime, size, uploaded_at)
+			VALUES ($1, $2, $3, $4, 'a.png', 'image/png', 10, `+up+`)`, id, f.ws, th.ID, "k/"+id.String())
+		return id
+	}
+	send := func(key string, ids ...uuid.UUID) (*ChatAccepted, error) {
+		return f.repo.SendMessage(ctx, g, f.project, f.userA, th.ID, SendInput{ClientMessageID: key, AttachmentIDs: ids})
+	}
+
+	_, err = send("key-att-none1", uuid.New())
+	requireChatErr(t, err, http.StatusUnprocessableEntity, ChatCodeAttachmentNF)
+	_, err = send("key-att-pend1", att(false))
+	requireChatErr(t, err, http.StatusUnprocessableEntity, ChatCodeAttachmentNF)
+
+	ok := att(true)
+	acc, err := send("key-att-ok-01", ok, ok)
+	require.NoError(t, err, "a repeated id is one attachment, and an image alone is a message")
+	require.Len(t, acc.Message.Attachments, 1)
+	require.Equal(t, ok, acc.Message.Attachments[0].ID)
+	require.Equal(t, "a.png", acc.Message.Attachments[0].FileName)
+
+	replay, err := send("key-att-ok-01", ok)
+	require.NoError(t, err)
+	require.Equal(t, acc.Message.ID, replay.Message.ID)
+	require.Len(t, replay.Message.Attachments, 1, "an idempotent repeat answers with the same attachments")
+
+	chatExec(t, f.db, `UPDATE ext_agent_chat_turns SET state='done', finished_at=now() WHERE thread_id=$1`, th.ID)
+	_, err = send("key-att-reuse1", ok)
+	requireChatErr(t, err, http.StatusUnprocessableEntity, ChatCodeAttachmentNF)
+
+	page, err := f.repo.ListMessages(ctx, f.ws, f.project, f.userA, th.ID, 10, "")
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	require.Len(t, page.Items[0].Attachments, 1)
+}

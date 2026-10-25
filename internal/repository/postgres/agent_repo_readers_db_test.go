@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -184,10 +185,10 @@ func TestAgentRepoSearchByPrefix_MatchesAndPopulates(t *testing.T) {
 	db := agentDigestTestDB(t)
 	wsID := seedAgentWorkspace(t, db)
 	token := uuid.New().String()[:8]
-	seeded := seedAgent(t, db, wsID, "Howard "+token, "howard-"+token, nil)
+	seeded := seedAgent(t, db, wsID, "Harper "+token, "harper-"+token, nil)
 	seedAgent(t, db, wsID, "Unrelated", "unrelated-"+uuid.New().String()[:8], nil)
 
-	got, err := NewAgentRepo(db).SearchByPrefix(context.Background(), wsID, "Howard "+token, 10)
+	got, err := NewAgentRepo(db).SearchByPrefix(context.Background(), wsID, "Harper "+token, 10)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 
@@ -313,4 +314,106 @@ func TestAgentRepoGetSubAgentTree_SkipsSoftDeleted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got,
 		"the recursive CTE walks down through the child, so deleting it removes its subtree too")
+}
+
+// ---------------------------------------------------------------------------
+// Guests: agents whose home workspace is elsewhere but hold an agent_workspace_grants
+// connection into this one (mentionables / workspace agent list must see them).
+// ---------------------------------------------------------------------------
+
+func grantGuest(t *testing.T, db *sqlx.DB, guest *domain.Agent, wsID uuid.UUID, revoked bool) {
+	t.Helper()
+	g := &domain.AgentWorkspaceGrant{
+		ID: uuid.New(), AgentID: guest.ID, WorkspaceID: wsID, Role: "member",
+		APIKeyPrefix: "g" + uuid.New().String()[:10], APIKeyHash: "$2a$12$guest-hash",
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, NewAgentWorkspaceGrantRepo(db).Create(context.Background(), g))
+	if revoked {
+		ok, err := NewAgentWorkspaceGrantRepo(db).Revoke(context.Background(), g.ID, wsID)
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+}
+
+func TestAgentRepoSearchByPrefix_IncludesGrantedGuestNotRevoked(t *testing.T) {
+	db := agentDigestTestDB(t)
+	vc := seedAgentWorkspace(t, db)
+	home := seedAgentWorkspace(t, db)
+	token := uuid.New().String()[:8]
+	guest := seedAgent(t, db, home, "Robin "+token, "robin-"+token, nil)
+	revoked := seedAgent(t, db, home, "Auditor "+token, "auditor-"+token, nil)
+	grantGuest(t, db, guest, vc, false)
+	grantGuest(t, db, revoked, vc, true)
+
+	repo := NewAgentRepo(db)
+	got, err := repo.SearchByPrefix(context.Background(), vc, "robin-"+token, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, guest.ID, got[0].ID)
+
+	got, err = repo.SearchByPrefix(context.Background(), vc, "auditor-"+token, 10)
+	require.NoError(t, err)
+	assert.Empty(t, got, "a revoked grant must not make the agent mentionable")
+}
+
+func TestAgentRepoSearchByPrefix_HomeAgentRanksBeforeGuestOnSlugCollision(t *testing.T) {
+	db := agentDigestTestDB(t)
+	vc := seedAgentWorkspace(t, db)
+	other := seedAgentWorkspace(t, db)
+	token := uuid.New().String()[:8]
+	slug := "twin-" + token
+	guest := seedAgent(t, db, other, "Twin", slug+"-g", nil)
+	homeAgent := seedAgent(t, db, vc, "Twin", slug+"-h", nil)
+	grantGuest(t, db, guest, vc, false)
+
+	got, err := NewAgentRepo(db).SearchByPrefix(context.Background(), vc, slug, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, homeAgent.ID, got[0].ID)
+	assert.Equal(t, guest.ID, got[1].ID)
+}
+
+func TestAgentRepoList_IncludeGranted(t *testing.T) {
+	db := agentDigestTestDB(t)
+	vc := seedAgentWorkspace(t, db)
+	home := seedAgentWorkspace(t, db)
+	homeAgent := seedAgent(t, db, vc, "Native", "native-"+uuid.New().String()[:8], nil)
+	guest := seedAgent(t, db, home, "Guest", "guest-"+uuid.New().String()[:8], nil)
+	revoked := seedAgent(t, db, home, "Gone", "gone-"+uuid.New().String()[:8], nil)
+	grantGuest(t, db, guest, vc, false)
+	grantGuest(t, db, revoked, vc, true)
+
+	repo := NewAgentRepo(db)
+	pg := pagination.Params{Page: 1, PageSize: 50}
+
+	def, err := repo.List(context.Background(), vc, repository.AgentFilter{}, pg)
+	require.NoError(t, err)
+	require.Len(t, def.Items, 1, "default List stays home-only (GetTeamDirectory merges guests itself)")
+	assert.Equal(t, homeAgent.ID, def.Items[0].ID)
+
+	with, err := repo.List(context.Background(), vc, repository.AgentFilter{IncludeGranted: true}, pg)
+	require.NoError(t, err)
+	require.Len(t, with.Items, 2)
+	assert.Equal(t, 2, with.TotalCount)
+	ids := []uuid.UUID{with.Items[0].ID, with.Items[1].ID}
+	assert.ElementsMatch(t, []uuid.UUID{homeAgent.ID, guest.ID}, ids)
+}
+
+// Ownership outranks match quality: a home agent that merely contains the query
+// still sorts before a guest whose slug starts with it.
+func TestAgentRepoSearchByPrefix_HomeSubstringMatchBeforeGuestPrefixMatch(t *testing.T) {
+	db := agentDigestTestDB(t)
+	vc := seedAgentWorkspace(t, db)
+	other := seedAgentWorkspace(t, db)
+	token := uuid.New().String()[:8]
+	homeAgent := seedAgent(t, db, vc, "Home", "xx-"+token+"-home", nil)
+	guest := seedAgent(t, db, other, "Guest", token+"-guest", nil)
+	grantGuest(t, db, guest, vc, false)
+
+	got, err := NewAgentRepo(db).SearchByPrefix(context.Background(), vc, token, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, homeAgent.ID, got[0].ID)
+	assert.Equal(t, guest.ID, got[1].ID)
 }

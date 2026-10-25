@@ -16,7 +16,7 @@ import (
 // ---------------------------------------------------------------------------
 // Backlog due-date promotion tests.
 //
-// Contract as of #559270cf (was: task ff9431fe, parent bug e1b46862 — kind:monitor
+// Contract as of an internal ticket (was: an internal ticket, parent bug an internal ticket — kind:monitor
 // only). A backlog task whose due_date has passed is promoted to the project's
 // todo-category status, WHATEVER its labels, unless one of four guards says no:
 //
@@ -30,7 +30,7 @@ import (
 // ordinary deadline field on a card that is already being worked.
 //
 // The label-negative-control this file used to carry ("past due + no kind:monitor ⇒ not
-// promoted") is deliberately GONE — it asserted exactly the behaviour #559270cf
+// promoted") is deliberately GONE — it asserted exactly the behaviour an internal ticket
 // removed. It was written with a `freeze` label, so it would have stayed green after
 // the widening while testing something else entirely; keeping it would have meant
 // carrying a passing test whose stated reason was false. Its two real halves live on
@@ -183,7 +183,7 @@ func TestBacklogPromotion_PastDueKindMonitor_PromotedToTodo(t *testing.T) {
 	}
 }
 
-// The widening itself. Before #559270cf this card was invisible to the sweeper: it
+// The widening itself. Before an internal ticket this card was invisible to the sweeper: it
 // carries a due_date that has passed and nothing at all listened to it. This is the
 // case the audit counted 8 of on prod.
 func TestBacklogPromotion_PastDueUnlabelled_Promoted(t *testing.T) {
@@ -202,9 +202,9 @@ func TestBacklogPromotion_PastDueUnlabelled_Promoted(t *testing.T) {
 	}
 }
 
-// Positive control for park:wait-pavel: the other park:wait-* labels are bound to a date or
+// Positive control for park:wait-alex: the other park:wait-* labels are bound to a date or
 // an external event, so a passed due_date must still wake them. Without this the
-// wait-pavel guard could be a blanket park:* block and the tests above would stay green.
+// wait-alex guard could be a blanket park:* block and the tests above would stay green.
 func TestBacklogPromotion_PastDueOtherParkWaitLabels_Promoted(t *testing.T) {
 	for _, label := range []string{"park:wait-date", "park:wait-external"} {
 		t.Run(label, func(t *testing.T) {
@@ -255,7 +255,7 @@ func TestBacklogPromotion_FutureDue_NotPromoted(t *testing.T) {
 // separately: they are one map in the source, and a subset check would pass while the
 // rest of the map was silently dropped.
 func TestBacklogPromotion_PastDueFreezeLabel_NotPromoted(t *testing.T) {
-	for _, label := range []string{"freeze", "no-promote", "no-intake-promote", "park:wait-pavel", "golden", "eval-harness"} {
+	for _, label := range []string{"freeze", "no-promote", "no-intake-promote", "park:wait-alex", "golden", "eval-harness"} {
 		t.Run(label, func(t *testing.T) {
 			h := newMonitorHarness()
 			projectID := uuid.New()
@@ -291,7 +291,7 @@ func TestBacklogPromotion_FreezeBeatsKindMonitor(t *testing.T) {
 
 // Guard 2. A system actor is FORBIDDEN by MoveTask to move a human_gated task to
 // backlog/done/cancelled, and selecting one here would retry forever — the shape that
-// made the lease reaper fail to park #2921ff07 145 times.
+// made the lease reaper fail to park an internal ticket 145 times.
 func TestBacklogPromotion_HumanGateArmed_NotPromoted(t *testing.T) {
 	h := newMonitorHarness()
 	projectID := uuid.New()
@@ -399,12 +399,12 @@ func TestBacklogPromotion_RelatesToDependency_DoesNotBlock(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Guard 5: demotion-into-backlog (#559270cf amendment, #1eb4fd7d).
+// Guard 5: demotion-into-backlog (an internal ticket amendment).
 // ---------------------------------------------------------------------------
 
 // A card with no blocks dependency, demoted into backlog from a working status, must
 // NOT be promoted just because "no open blockers" is vacuously true for a card that
-// never had any (#b832d451: the July incident this guard exists to prevent — the
+// never had any (an internal ticket: the July incident this guard exists to prevent — the
 // original sweep undid such a park in 26 minutes).
 func TestBacklogPromotion_DemotedNoDeps_NotPromoted(t *testing.T) {
 	h := newMonitorHarness()
@@ -440,7 +440,7 @@ func TestBacklogPromotion_NeverMoved_Promoted(t *testing.T) {
 	}
 }
 
-// The #bbf3db92 trap, ported: a demoted card that ALSO carries a `blocks` edge must be
+// The an internal ticket trap, ported: a demoted card that ALSO carries a `blocks` edge must be
 // judged by whether that edge is cleared, never by its move history — once the edge
 // clears, that IS the informative event this due-date sweep exists to catch when the
 // event-triggered auto-transition (tryUnblockTask) missed it because the blocker
@@ -602,7 +602,7 @@ func TestBacklogPromotion_NoDueTasks_ReturnsZero(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// start_after independence (sub4 of #e9ce6b91, blocked on sub1 #246b8fcc which
+// start_after independence (sub4 of an internal ticket, blocked on sub1 an internal ticket which
 // added the column). FindDueBacklogTasks's SQL selects on due_date alone, and
 // skipReason's five guards never read StartAfter either — this sweep was never
 // wired to the field. These tests exist to catch a FUTURE regression that wires
@@ -680,5 +680,29 @@ func TestBacklogPromotion_StartAfterOnlyNoDueDate_NotPromoted(t *testing.T) {
 	}
 	if len(h.mover.movesSeen) != 0 {
 		t.Errorf("MoveTask should not have been called")
+	}
+}
+
+// An edge released by evidence must not depend on the blocker row at all: a
+// soft-deleted blocker used to exit blockerStatus as "blocked" before the
+// predicate was consulted.
+func TestBacklogPromotion_EvidenceSatisfiedEdgeOnDeletedBlocker_Promoted(t *testing.T) {
+	h := newMonitorHarness()
+	projectID := uuid.New()
+	backlog := h.addStatus(t, projectID, domain.StatusCategoryBacklog)
+	h.addStatus(t, projectID, domain.StatusCategoryTodo)
+
+	task := h.addTask(t, projectID, backlog.ID, nil, hourAgo())
+	evidence := "https://mesh.example/e"
+	met := time.Now()
+	if err := h.depRepo.Create(context.Background(), &domain.TaskDependency{
+		ID: uuid.New(), TaskID: task.ID, DependsOnTaskID: uuid.New(), DependencyType: domain.DependencyTypeBlocks,
+		Condition: domain.DependencyConditionAccessReady, EvidenceURL: &evidence, ConditionMetAt: &met,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := h.sweep(t); n != 1 {
+		t.Errorf("an evidence-satisfied edge must release the card even if its blocker is gone, got n=%d", n)
 	}
 }

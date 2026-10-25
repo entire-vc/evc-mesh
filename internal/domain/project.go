@@ -64,6 +64,9 @@ type DodGateConfig struct {
 // ProjectSettings is the typed view of the Project.Settings JSONB blob.
 type ProjectSettings struct {
 	DodGates []DodGateConfig `json:"dod_gates,omitempty"`
+	// RejectBlocksOnMonitor turns the add_dependency warning for a `blocks`
+	// edge on a monitor/umbrella/recurring blocker into a 409. Off by default.
+	RejectBlocksOnMonitor bool `json:"reject_blocks_on_monitor,omitempty"`
 }
 
 // Project belongs to a Workspace and contains tasks, statuses, and custom fields.

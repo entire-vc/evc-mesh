@@ -2,7 +2,7 @@
 # docs/mcp-reference.md is the public catalogue of the MCP tools, but the tools live in a
 # DIFFERENT repository (evc-mesh-mcp). Nothing in this repo's CI can notice when a tool is
 # added there, so the page drifted to 20 undocumented tools plus 4 documented tools the
-# server never registered (Mesh #1f0ee22c).
+# server never registered (Mesh an internal ticket).
 #
 # This compares both directions:
 #   1. every "#### N. `name`" heading in the page names a tool the server registers
@@ -13,11 +13,11 @@
 # exactly the kind of figure that goes stale unwatched, and it was the fourth mutually
 # inconsistent MCP-tool count in this repo when this check was written.
 #
-# The server source is fetched over HTTPS from the PUBLIC GitHub mirror of evc-mesh-mcp,
-# because that needs no credentials from a CI runner. The mirror trails the GitLab canon by
-# up to ~10 minutes (systemd timer, see CLAUDE-workflow.md §0z), so a tool added to canon in
-# the last few minutes may not be visible here yet. For a docs catalogue that lag is
-# acceptable; for anything where it is not, point MCP_SERVER_GO at a canon checkout.
+# The server source is read from the GitLab CANON of evc-mesh-mcp (private) with the job's
+# CI_JOB_TOKEN; evc-mesh is in that project's job-token allowlist. It is NOT read from the
+# GitHub showcase: the showcase is a reviewed public export (draft PR twice a day, merged by
+# hand), so it trails canon by a day or more by design, and a tool added to canon went red
+# on every evc-mesh MR until the next export was merged (a review, Mesh an internal ticket).
 #
 # Set MCP_SERVER_GO to a local checkout's internal/mcp/server.go to run offline.
 #
@@ -26,7 +26,10 @@ set -euo pipefail
 
 DOC="${1:-docs/mcp-reference.md}"
 README="${2:-README.md}"
-SERVER_URL="${MCP_SERVER_URL:-https://raw.githubusercontent.com/entire-vc/evc-mesh-mcp/main/internal/mcp/server.go}"
+# Canon read: GitLab files API, project entire-vc/evc-mesh-mcp (id 23), ref main.
+CANON_API="${MCP_CANON_API:-${CI_API_V4_URL:-https://gitlab.example.invalid/api/v4}/projects/entire-vc%2Fevc-mesh-mcp/repository/files}"
+CANON_REF="${MCP_CANON_REF:-main}"
+CANON_DIR="internal%2Fmcp%2F"
 
 [[ -f "$DOC" ]] || { echo "ERROR: $DOC not found." >&2; exit 1; }
 
@@ -54,18 +57,26 @@ if [[ -n "${MCP_SERVER_GO:-}" ]]; then
         cp "$src" "$tmp/$f"
     done
 else
-    if ! curl -fsSL --max-time 30 "$SERVER_URL" -o "$tmp/server.go"; then
-        # Not reachable is not "nothing to check" — refuse rather than pass silently.
-        echo "ERROR: could not fetch the MCP server source from $SERVER_URL." >&2
+    if [[ -z "${CI_JOB_TOKEN:-}" && -z "${MCP_CANON_TOKEN:-}" ]]; then
+        echo "ERROR: no credentials for the canon repository (CI_JOB_TOKEN / MCP_CANON_TOKEN unset)." >&2
         echo "       Set MCP_SERVER_GO=/path/to/evc-mesh-mcp/internal/mcp/server.go to run offline." >&2
         exit 1
     fi
-    for f in "${CONST_FILES[@]}"; do
-        if ! curl -fsSL --max-time 30 "${SERVER_URL%/*}/$f" -o "$tmp/$f"; then
-            echo "ERROR: could not fetch ${SERVER_URL%/*}/$f (tool-name constants)." >&2
+    if [[ -n "${MCP_CANON_TOKEN:-}" ]]; then
+        auth=(--header "PRIVATE-TOKEN: $MCP_CANON_TOKEN")
+    else
+        auth=(--header "JOB-TOKEN: $CI_JOB_TOKEN")
+    fi
+    fetch_canon() {
+        # Not reachable is not "nothing to check" — refuse rather than pass silently.
+        if ! curl -fsSL --max-time 30 "${auth[@]}" "$CANON_API/${CANON_DIR}$1/raw?ref=$CANON_REF" -o "$tmp/$1"; then
+            echo "ERROR: could not fetch internal/mcp/$1 from canon (ref $CANON_REF)." >&2
+            echo "       Set MCP_SERVER_GO=/path/to/evc-mesh-mcp/internal/mcp/server.go to run offline." >&2
             exit 1
         fi
-    done
+    }
+    fetch_canon server.go
+    for f in "${CONST_FILES[@]}"; do fetch_canon "$f"; done
 fi
 
 # `|| true`: no match makes grep exit 1, which under `pipefail` would kill the script
@@ -175,4 +186,4 @@ if [[ "$fail" -ne 0 ]]; then
 fi
 
 echo "OK: $DOC documents all $n_registered registered tools, no extras, counts agree."
-[[ -f "$README" ]] && echo "OK: $README agrees on $n_registered."
+if [[ -f "$README" ]]; then echo "OK: $README agrees on $n_registered."; fi

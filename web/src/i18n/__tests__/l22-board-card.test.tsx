@@ -21,21 +21,21 @@ const task = {
   created_at: "2026-08-20T10:00:00Z",
   updated_at: "2026-08-20T10:00:00Z",
   human_gate: false,
-  description: "has text",
+  vcs_link_count: 1,
 } as Task;
 
 describe("L2.2 board card: en by default, ru translated, no raw keys", () => {
-  it("renders the description marker label in en, then ru", async () => {
+  it("renders the VCS marker label in en, then ru", async () => {
     const view = render(<TaskCard task={task} />);
-    const en = screen.getByLabelText(i18n.t("board:card.hasDescription"));
+    const en = screen.getByLabelText(i18n.t("board:card.hasVcsLinks"));
     expect(en).toBeTruthy();
-    expect(i18n.t("board:card.hasDescription")).not.toMatch(/[а-яё]/i);
+    expect(i18n.t("board:card.hasVcsLinks")).not.toMatch(/[а-яё]/i);
     view.unmount();
     await act(async () => {
       await setLanguage("ru");
     });
     render(<TaskCard task={task} />);
-    const ru = i18n.t("board:card.hasDescription");
+    const ru = i18n.t("board:card.hasVcsLinks");
     expect(ru).toMatch(/[а-яё]/i);
     expect(screen.getByLabelText(ru)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/\bcard\.[a-zA-Z]+/);

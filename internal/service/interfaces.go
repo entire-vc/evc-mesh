@@ -323,6 +323,10 @@ type TaskStatusService interface {
 type TaskDependencyService interface {
 	Create(ctx context.Context, dep *domain.TaskDependency) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	// UpdateCondition changes an edge's condition and/or evidence. A
+	// non-task_done edge with evidence is marked met now; clearing the evidence
+	// un-marks it. Returns the stored edge.
+	UpdateCondition(ctx context.Context, id uuid.UUID, in UpdateDependencyConditionInput) (*domain.TaskDependency, error)
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]domain.TaskDependency, error)
 	// ListByTaskBothDirections returns taskID's dependencies split by direction,
 	// each enriched with the related task's title and status. Outgoing = edges

@@ -6,6 +6,7 @@ vi.mock("@/lib/api", async () => {
 });
 import { api, ApiRequestError } from "@/lib/api";
 import { chooseMode, setThemeModes, syncModeFromServer, useModeStore, watchSystemMode } from "../mode";
+import { chooseDensity } from "../density";
 
 // matchMedia stand-in whose `matches` the test flips and whose listeners it fires.
 let osDark = false;
@@ -49,9 +50,9 @@ describe("colour mode", () => {
     expect(localStorage.getItem("theme")).toBe("light");
   });
 
-  it("choosing saves to the server scope `appearance`", () => {
+  it("choosing saves to the server scope `appearance`", async () => {
     chooseMode("light");
-    expect(api).toHaveBeenCalledWith("/api/v1/me/ui-state/appearance", { method: "PUT", body: { state: { mode: "light" } } });
+    await vi.waitFor(() => expect(api).toHaveBeenCalledWith("/api/v1/me/ui-state/appearance", { method: "PUT", body: { state: { mode: "light" } } }));
     expect(localStorage.getItem("theme")).toBe("light");
   });
 
@@ -64,7 +65,7 @@ describe("colour mode", () => {
     vi.mocked(api).mockClear();
     vi.mocked(api).mockRejectedValueOnce(new ApiRequestError("not found", "not_found", 404)).mockResolvedValue({});
     await syncModeFromServer();
-    expect(api).toHaveBeenLastCalledWith("/api/v1/me/ui-state/appearance", { method: "PUT", body: { state: { mode: "dark" } } });
+    await vi.waitFor(() => expect(api).toHaveBeenLastCalledWith("/api/v1/me/ui-state/appearance", { method: "PUT", body: { state: { mode: "dark" } } }));
   });
 
   it("an unreachable server changes nothing", async () => {
@@ -110,5 +111,51 @@ describe("colour mode", () => {
     expect(isDark()).toBe(true);
     setThemeModes(undefined);
     expect(isDark()).toBe(false);
+  });
+
+  it("takes the server's density from the same answer", async () => {
+    vi.mocked(api).mockResolvedValue({ state: { mode: "dark", density: "compact" } });
+    await syncModeFromServer();
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("density")).toBe("compact");
+    expect(document.documentElement.dataset.density).toBe("compact");
+    expect(useModeStore.getState().density).toBe("compact"); // the open profile control follows the pull
+  });
+
+  it("a write carries the density painted on <html>", async () => {
+    document.documentElement.dataset.density = "compact";
+    chooseMode("dark");
+    await vi.waitFor(() => expect(api).toHaveBeenCalledWith("/api/v1/me/ui-state/appearance", { method: "PUT", body: { state: { mode: "dark", density: "compact" } } }));
+    delete document.documentElement.dataset.density;
+  });
+
+  it("a density chosen while the sync was in flight wins", async () => {
+    vi.mocked(api).mockResolvedValueOnce({ state: { mode: "dark", density: "compact" } });
+    const sync = syncModeFromServer();
+    chooseDensity("comfortable");
+    await sync;
+    expect(document.documentElement.dataset.density).toBe("comfortable");
+    delete document.documentElement.dataset.density;
+  });
+
+  it("choosing the density that is already painted still wins over the late answer", async () => {
+    document.documentElement.dataset.density = "comfortable";
+    vi.mocked(api).mockResolvedValueOnce({ state: { mode: "dark", density: "compact" } });
+    const sync = syncModeFromServer();
+    chooseDensity("comfortable");
+    await sync;
+    expect(document.documentElement.dataset.density).toBe("comfortable");
+    delete document.documentElement.dataset.density;
+  });
+
+  it("a mode write during the sign-in pull waits and carries the server's density", async () => {
+    vi.mocked(api).mockResolvedValueOnce({ state: { mode: "dark", density: "compact" } }).mockResolvedValue({});
+    const sync = syncModeFromServer();
+    chooseMode("light");
+    await sync;
+    await vi.waitFor(() =>
+      expect(api).toHaveBeenLastCalledWith("/api/v1/me/ui-state/appearance", { method: "PUT", body: { state: { mode: "light", density: "compact" } } }),
+    );
+    delete document.documentElement.dataset.density;
   });
 });

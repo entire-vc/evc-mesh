@@ -20,9 +20,18 @@ import (
 // runnerCall drives one runner handler as the given agent, against a real repo.
 func runnerCall(t *testing.T, fn echo.HandlerFunc, method, target, body string, agent uuid.UUID, params map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
+	return runnerCallAs(t, fn, method, target, body, agent, "", params)
+}
+
+// runnerCallAs is runnerCall from the runner instance named in X-Chat-Runner-Id ("" sends none).
+func runnerCallAs(t *testing.T, fn echo.HandlerFunc, method, target, body string, agent uuid.UUID, runner string, params map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
 	e := echo.New()
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	if runner != "" {
+		req.Header.Set(chatRunnerIDHeader, runner)
+	}
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.Set(mw.ContextKeyAgentID, agent)
@@ -78,12 +87,22 @@ func TestChatRunnerHandler_CommandsAckAndHistory(t *testing.T) {
 	msg("user", "first", "done", "10 minutes")
 	second := msg("agent", "second", "done", "9 minutes")
 	current := msg("user", "current", "done", "1 minute")
-	_, err = db.Exec(`INSERT INTO ext_agent_chat_turns (workspace_id, thread_id, agent_id, user_message_id, state, lease_until, expires_at)
-		VALUES ($1,$2,$3,$4,'claimed', now() + interval '1 minute', now() + interval '1 day')`, ws, thread, agent, current)
+	holder := uuid.New()
+	_, err = db.Exec(`INSERT INTO ext_agent_chat_turns (workspace_id, thread_id, agent_id, user_message_id, state, lease_until, expires_at, runner_id)
+		VALUES ($1,$2,$3,$4,'claimed', now() + interval '1 minute', now() + interval '1 day', $5)`, ws, thread, agent, current, holder)
 	require.NoError(t, err)
 
 	h := NewChatRunnerHandler(postgres.NewChatRunnerRepo(db))
-	hist := runnerCall(t, h.History, http.MethodGet, "/?limit=1", "", agent, map[string]string{"thread_id": thread.String()})
+	threadParam := map[string]string{"thread_id": thread.String()}
+	// D3: the right agent key without the holder's runner id, or with another runner's, is refused
+	// and the answer carries no message text.
+	for name, runner := range map[string]string{"no runner": "", "other runner": uuid.NewString()} {
+		denied := runnerCallAs(t, h.History, http.MethodGet, "/?limit=1", "", agent, runner, threadParam)
+		require.Equal(t, http.StatusForbidden, denied.Code, name)
+		require.NotContains(t, denied.Body.String(), "second", name)
+		require.Contains(t, denied.Body.String(), "chat_history_forbidden", name)
+	}
+	hist := runnerCallAs(t, h.History, http.MethodGet, "/?limit=1", "", agent, holder.String(), threadParam)
 	require.Equal(t, http.StatusOK, hist.Code, hist.Body.String())
 	var page struct {
 		Messages []struct {
@@ -96,10 +115,10 @@ func TestChatRunnerHandler_CommandsAckAndHistory(t *testing.T) {
 	require.Equal(t, second, page.Messages[0].MessageID, "the current user message is left out; the last one before it is returned")
 	require.True(t, page.HasMore)
 
-	older := runnerCall(t, h.History, http.MethodGet, "/?before="+second.String(), "", agent, map[string]string{"thread_id": thread.String()})
+	older := runnerCallAs(t, h.History, http.MethodGet, "/?before="+second.String(), "", agent, holder.String(), threadParam)
 	require.Equal(t, http.StatusOK, older.Code, older.Body.String())
 	require.Equal(t, http.StatusForbidden,
-		runnerCall(t, h.History, http.MethodGet, "/", "", other, map[string]string{"thread_id": thread.String()}).Code)
+		runnerCallAs(t, h.History, http.MethodGet, "/", "", other, holder.String(), threadParam).Code)
 
 	// deleting the thread orders both commands
 	del := NewChatThreadDeleteHandler(postgres.NewChatThreadDeleteRepo(db, nil))

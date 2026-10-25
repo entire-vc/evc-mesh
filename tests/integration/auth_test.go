@@ -5,6 +5,7 @@ package integration
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,23 +99,35 @@ func TestAuthFlow_RegisterLoginLogout(t *testing.T) {
 		env.AuthToken = tokens["access_token"].(string)
 	})
 
-	// --- Step 6: Reuse old refresh token (theft detection) ---
+	// --- Step 6: Replay the pre-rotation refresh token ---
 	// The jar now holds the ROTATED cookie, so replay the pre-rotation value
-	// explicitly via a raw request — this is exactly the scenario the task's
-	// tab-race concern is about: an old, already-revoked token showing up.
-	t.Run("RefreshTokenReuse", func(t *testing.T) {
+	// explicitly via a raw request — an old, already-revoked token showing up.
+	// replay posts it through a plain, jar-less client: env.HTTPClient's own jar
+	// already holds the rotated cookie, and a Jar-backed Do() would silently
+	// append its current cookie alongside the one we set here.
+	replay := func(t *testing.T) int {
+		t.Helper()
 		req, err := http.NewRequest(http.MethodPost, env.BaseURL+"/api/v1/auth/refresh", nil)
 		require.NoError(t, err)
 		req.AddCookie(&http.Cookie{Name: "refresh_token", Value: preRefreshToken}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- AddCookie on an http.Request only serializes Name=Value into the Cookie request header; Secure/HttpOnly are response-cookie attributes and meaningless here
-
-		// A plain, jar-less client — env.HTTPClient's own jar already holds
-		// the ROTATED cookie, and a Jar-backed Do() would silently append
-		// its current cookie alongside the one we set here.
 		resp, err := (&http.Client{}).Do(req)
 		require.NoError(t, err)
-		// Should be 401 because token was already rotated.
-		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-		resp.Body.Close()
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// Inside the grace window (default 10s, MESH_AUTH_REFRESH_REUSE_GRACE_WINDOW)
+	// a replay of the token the last rotation retired is a client that never saw
+	// the rotation response, not theft: it gets a fresh pair.
+	t.Run("RefreshTokenReplayInGraceWindow", func(t *testing.T) {
+		assert.Equal(t, http.StatusOK, replay(t))
+	})
+
+	// Past the window the same replay is theft: 401 and every session revoked.
+	t.Run("RefreshTokenReuse", func(t *testing.T) {
+		// The window is measured from the rotation in Step 5; wait it out with margin.
+		time.Sleep(11 * time.Second)
+		assert.Equal(t, http.StatusUnauthorized, replay(t))
 	})
 
 	// --- Step 7: Logout ---

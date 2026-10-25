@@ -1,16 +1,14 @@
 import { forwardRef, memo, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlignLeft, CircleCheck, ExternalLink, GitBranch, Hand, Lock, Paperclip, Pencil, RefreshCw, Snowflake } from "lucide-react";
-import { AgentShortTagView } from "@/components/agent-short-tag";
+import { CircleCheck, ExternalLink, GitBranch, Link2, Lock, Paperclip, RefreshCw, Snowflake } from "lucide-react";
 import { AssigneeAvatarView } from "@/components/assignee-avatar";
 import { DelegationLevelBadge } from "@/components/delegation-level-select";
 import { PriorityFlag } from "@/components/priority-flag";
 import { RuntimeStateBadge } from "@/components/runtime-state-badge";
 import { Badge } from "@/components/ui/badge";
 import { SlotBadges } from "@/components/extensions/slots/slot-host";
-import { Draggable, InlineEdit, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
+import { Draggable, TaskBadges, TaskLink } from "@entire-vc/mesh-theme-sdk";
 import { PerfProfiler } from "@/lib/perf-profiler";
-import { agentLabel } from "@/lib/agent-label";
 import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/utils";
 import type { DelegationLevel, Task } from "@/types";
@@ -30,8 +28,9 @@ export function humanGateTitle(gate: { class: "hard" | "soft"; reason: string },
   return gate.reason ? t("card.humanGate.withReason", { base, reason: gate.reason }) : base;
 }
 
-// Fields that share one row (in the order chosen); every other field is a row of its own.
-const INLINE_FIELDS = new Set(["assignee", "gate", "reviewer", "priority", "delegation", "checkout", "artifacts", "due_date", "estimate"]);
+// Fields of the bottom row, in the order chosen. `subtasks` (counters) and `runtime` sit under the title, in that order;
+// `artifacts` closes the bottom row, after the VCS marks. Every other field is a row of its own.
+const INLINE_FIELDS = new Set(["assignee", "gate", "reviewer", "priority", "delegation", "due_date", "estimate"]);
 
 function formatCustom(value: unknown): string {
   if (value == null || value === "") return "";
@@ -45,9 +44,7 @@ type T = (key: string, vars?: Record<string, unknown>) => string;
 interface CardBodyProps extends Omit<HTMLAttributes<HTMLDivElement>, "children"> {
   data: BoardCardViewData;
   isDragging?: boolean;
-  /** The explicit edit icon; omitted = no icon. */
-  onEdit?: (e: MouseEvent) => void;
-  /** Title as plain text (drag preview, a card drawn outside a board): no link, no inline edit. */
+  /** Title as plain text (drag preview, a card drawn outside a board): no link. */
   plainTitle?: boolean;
   /** The REST task for `task.badge` extensions, when the caller holds it; a board card finds it in the store. */
   badgeTask?: Task;
@@ -55,7 +52,7 @@ interface CardBodyProps extends Omit<HTMLAttributes<HTMLDivElement>, "children">
 
 /** The card itself: today's kanban card, drawn from the contract's data only. */
 export const CardBody = memo(
-  forwardRef<HTMLDivElement, CardBodyProps>(({ data, isDragging, onEdit, plainTitle, badgeTask, className, ...props }, ref) => {
+  forwardRef<HTMLDivElement, CardBodyProps>(({ data, isDragging, plainTitle, badgeTask, className, ...props }, ref) => {
     const { t } = useTranslation("board");
     const { task, fields } = data;
     const borderColor = priorityBorderColors[task.priority] ?? "border-l-transparent";
@@ -68,28 +65,23 @@ export const CardBody = memo(
       : true;
 
     const rows: ReactNode[] = [];
-    let inline: ReactNode[] = [];
-    const flushInline = () => {
-      if (inline.length) {
-        rows.push(
-          <div key={`row-${rows.length}`} className="mt-1.5 flex items-center gap-2">
-            {inline}
-          </div>,
-        );
-        inline = [];
-      }
-    };
+    const bottom: ReactNode[] = [];
+    let runtimeRow: ReactNode = null;
+    let subtasks: ReactNode = null;
+    let artifacts: ReactNode = null;
     for (const f of fields) {
-      if (INLINE_FIELDS.has(f.key)) {
+      if (f.key === "runtime") runtimeRow = rowField(f, task);
+      else if (f.key === "subtasks") subtasks = rowField(f, task);
+      else if (f.key === "artifacts") artifacts = inlineField(f, task, data.gateStatusName, t as T);
+      else if (INLINE_FIELDS.has(f.key)) {
         const node = inlineField(f, task, data.gateStatusName, t as T);
-        if (node) inline.push(node);
-        continue;
+        if (node) bottom.push(node);
+      } else {
+        const node = rowField(f, task);
+        if (node) rows.push(node);
       }
-      flushInline();
-      const node = rowField(f, task, t as T);
-      if (node) rows.push(node);
     }
-    flushInline();
+    const showVcs = hasVcsLinks && hasUnownedVcsLinks;
 
     return (
       <div
@@ -120,40 +112,25 @@ export const CardBody = memo(
             {plainTitle || data.isOverlay ? (
               task.title
             ) : (
-              <InlineEdit taskId={task.id} field="title">
-                <TaskLink taskId={task.id}>{task.title}</TaskLink>
-              </InlineEdit>
+              <TaskLink taskId={task.id}>{task.title}</TaskLink>
             )}
           </p>
-          <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-            <CardBadges data={task} task={badgeTask} />
-            {hasVcsLinks && hasUnownedVcsLinks && (
-              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" aria-label={t("card.hasVcsLinks")} />
-            )}
-            {onEdit && (
-              <button
-                type="button"
-                className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onEdit(e);
-                }}
-                aria-label={t("card.edit")}
-                title={t("card.edit")}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
         </div>
 
-        {task.hasDescription && (
-          <div className="mt-1">
-            <AlignLeft className="h-3.5 w-3.5 text-muted-foreground" aria-label={t("card.hasDescription")} />
-          </div>
-        )}
+        {subtasks}
+
+        {runtimeRow}
 
         {rows}
+
+        <div className={cn("flex items-center gap-2", (bottom.length > 0 || showVcs || artifacts) && "mt-1.5")}>
+          {bottom}
+          <div className="ml-auto flex items-center gap-1 empty:hidden">
+            <CardBadges data={task} task={badgeTask} />
+            {showVcs && <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" aria-label={t("card.hasVcsLinks")} />}
+            {artifacts}
+          </div>
+        </div>
       </div>
     );
   }),
@@ -166,7 +143,7 @@ function CardBadges({ data, task: given }: { data: TaskData; task?: Task }) {
   return given ? <SlotBadges task={given} /> : <TaskBadges task={data} />;
 }
 
-function rowField(f: FieldDescriptor, task: TaskData, t: T): ReactNode {
+function rowField(f: FieldDescriptor, task: TaskData): ReactNode {
   switch (f.key) {
     case "labels":
       return task.labels.length > 0 ? (
@@ -184,13 +161,15 @@ function rowField(f: FieldDescriptor, task: TaskData, t: T): ReactNode {
           <RuntimeStateBadge state={task.runtimeState} />
         </div>
       ) : null;
-    case "subtasks":
-      return task.counts.subtasks > 0 ? (
-        <div key="subtasks" className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
-          <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>{t("card.subtaskCount", { count: task.counts.subtasks })}</span>
+    case "subtasks": {
+      const { subtasks, openSubtasks = 0, dependencies = 0, openDependencies = 0 } = task.counts;
+      return subtasks > 0 || dependencies > 0 ? (
+        <div key="subtasks" className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+          {subtasks > 0 && <CountPair icon={<GitBranch className="h-3.5 w-3.5" aria-hidden="true" />} total={subtasks} open={openSubtasks} />}
+          {dependencies > 0 && <CountPair icon={<Link2 className="h-3.5 w-3.5" aria-hidden="true" />} total={dependencies} open={openDependencies} />}
         </div>
       ) : null;
+    }
     default: {
       if (!f.key.startsWith("cf:")) return null;
       const text = formatCustom(task.customFields[f.key.slice(3)]);
@@ -202,6 +181,17 @@ function rowField(f: FieldDescriptor, task: TaskData, t: T): ReactNode {
       ) : null;
     }
   }
+}
+
+/** «total (open)»: the bracket is the destructive tone and is dropped at zero open. */
+function CountPair({ icon, total, open }: { icon: ReactNode; total: number; open: number }) {
+  return (
+    <span className="flex items-center gap-1">
+      {icon}
+      <span>{total}</span>
+      {open > 0 && <span className="text-destructive">({open})</span>}
+    </span>
+  );
 }
 
 function inlineField(
@@ -239,36 +229,6 @@ function inlineField(
       return task.delegationLevel && task.delegationLevel !== "review" ? (
         <DelegationLevelBadge key="delegation" value={task.delegationLevel as DelegationLevel} />
       ) : null;
-    case "checkout": {
-      const co = task.checkout;
-      if (!co) return null;
-      const holder = task.checkedOutBy;
-      return (
-        <span
-          key="checkout"
-          className={cn("inline-flex items-center gap-0.5 text-xs", co.lapsed ? "text-tone-warning-600" : "text-muted-foreground")}
-          title={
-            co.lapsed
-              ? t("card.checkout.lapsedTitle", { time: formatRelative(co.expiresAt) })
-              : holder
-                ? t("card.checkout.liveHolderTitle", { holder: agentLabel(holder.name, holder.shortTag), time: formatRelative(co.expiresAt) })
-                : t("card.checkout.liveTitle", { time: formatRelative(co.expiresAt) })
-          }
-          data-testid="checkout-indicator"
-          data-checkout-state={co.lapsed ? "lapsed" : "live"}
-        >
-          <Hand className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="sr-only">{co.lapsed ? t("card.checkout.lapsed") : t("card.checkout.live")}</span>
-          {holder && (
-            <span>
-              {holder.name}
-              <AgentShortTagView tag={holder.shortTag ?? null} />
-            </span>
-          )}
-          <span>{formatRelative(co.expiresAt)}</span>
-        </span>
-      );
-    }
     case "artifacts":
       return task.counts.artifacts > 0 ? (
         <span key="artifacts" className="inline-flex items-center gap-0.5 text-xs text-muted-foreground">
@@ -278,7 +238,7 @@ function inlineField(
       ) : null;
     case "due_date":
       return task.dueDate ? (
-        <span key="due" className={cn("ml-auto text-xs", task.overdue ? "font-medium text-tone-danger-500" : "text-muted-foreground")}>
+        <span key="due" className={cn("text-xs", task.overdue ? "font-medium text-tone-danger-500" : "text-muted-foreground")}>
           {formatRelative(task.dueDate)}
         </span>
       ) : null;
@@ -356,7 +316,7 @@ export const BoardCard: BoardCardView = ({ data, actions }) => {
     <Draggable item={{ kind: "task", id: data.task.id }} label={data.task.title} data-testid="task-card" data-task-id={data.task.id}>
       {({ isDragging }) => (
         <PerfProfiler id="board-card">
-          <CardBody data={data} onClick={open} onEdit={() => actions.openTask()} isDragging={isDragging} />
+          <CardBody data={data} onClick={open} isDragging={isDragging} />
         </PerfProfiler>
       )}
     </Draggable>

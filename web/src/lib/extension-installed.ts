@@ -1,6 +1,7 @@
+import { formatDateTime, formatNumber } from "@/i18n/format";
 import type { CatalogEntry } from "@/hooks/useExtensionCatalog";
 
-export type InstalledStatusKind = "blocked" | "error" | "instance" | "workspace" | "off" | "none";
+export type InstalledStatusKind = "blocked" | "error" | "instance" | "workspace" | "off" | "receiving" | "none";
 
 export interface InstalledStatus {
   kind: InstalledStatusKind;
@@ -26,6 +27,13 @@ export function installedStatus(e: CatalogEntry): InstalledStatus {
   if (s?.enabled && s.source === "instance") return { kind: "instance", key: "installed.status.instance" };
   if (s?.enabled) return { kind: "workspace", key: "installed.status.workspace" };
   if (e.connected || s?.source === "workspace") return { kind: "off", key: "installed.status.off" };
+  // Links keep arriving (instance-level webhook) although this workspace has no connection row.
+  if (e.activity && e.activity.links > 0) {
+    return {
+      kind: "receiving", key: "installed.status.receiving",
+      values: { count: formatNumber(e.activity.links), last: e.activity.last_event_at ? formatDateTime(e.activity.last_event_at) : "-" },
+    };
+  }
   return { kind: "none", key: "installed.status.none" };
 }
 

@@ -197,11 +197,11 @@ type ChatHistory struct {
 
 // History returns the last limit messages of a thread, oldest to newest, before
 // the optional cursor message. Only the runner of the thread's agent that
-// currently holds a claimed or streaming turn of the thread with a live lease may read it (the
+// (by runner instance) currently holds a claimed or streaming turn of the thread with a live lease may read it (the
 // history is a user's private chat). The current turn's user message is left
 // out (the claim already carries it), and so are messages still being written
 // and failed/cancelled ones with no body.
-func (r *ChatRunnerRepo) History(ctx context.Context, caller, thread uuid.UUID, limit int, before *uuid.UUID) (*ChatHistory, error) {
+func (r *ChatRunnerRepo) History(ctx context.Context, caller uuid.UUID, runner *uuid.UUID, thread uuid.UUID, limit int, before *uuid.UUID) (*ChatHistory, error) {
 	if limit <= 0 {
 		limit = ChatHistoryDefaultLimit
 	}
@@ -209,7 +209,9 @@ func (r *ChatRunnerRepo) History(ctx context.Context, caller, thread uuid.UUID, 
 		limit = ChatHistoryMaxLimit
 	}
 	forbidden := apierror.ForbiddenWithDetails("history is only available to the runner of an active turn", "chat_history_forbidden")
-	if caller == uuid.Nil {
+	// The turn is held by one runner instance: a caller that names no runner, or
+	// another one, is the same as an idle thread.
+	if caller == uuid.Nil || runner == nil || *runner == uuid.Nil {
 		return nil, forbidden
 	}
 	// One query answers both "is this the caller's thread" and "does it hold an
@@ -222,8 +224,8 @@ func (r *ChatRunnerRepo) History(ctx context.Context, caller, thread uuid.UUID, 
 		FROM ext_agent_chat_threads t
 		JOIN ext_agent_chat_turns u ON u.thread_id = t.id AND u.workspace_id = t.workspace_id
 		WHERE t.id = $1 AND t.agent_id = $2 AND t.deleted_at IS NULL
-		  AND u.agent_id = $2 AND u.state IN ('claimed', 'streaming') AND u.lease_until > $3
-		LIMIT 1`, thread, caller, r.now().UTC())
+		  AND u.agent_id = $2 AND u.runner_id = $4 AND u.state IN ('claimed', 'streaming') AND u.lease_until > $3
+		LIMIT 1`, thread, caller, r.now().UTC(), *runner)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, forbidden
 	}

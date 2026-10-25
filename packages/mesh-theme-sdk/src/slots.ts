@@ -65,7 +65,16 @@ export interface TaskData {
   overdue: boolean;
   estimatedHours: number | null;
   customFields: Record<string, unknown>;
-  counts: { subtasks: number; artifacts: number; vcsLinks: number };
+  counts: {
+    subtasks: number;
+    artifacts: number;
+    vcsLinks: number;
+    /** Subtasks whose status category is not done/cancelled; absent on an older API. */
+    openSubtasks?: number;
+    /** `blocks` edges this task waits on, and how many of those blockers are still open. */
+    dependencies?: number;
+    openDependencies?: number;
+  };
   vcsProviders: ("github" | "gitlab")[];
   pipelineStatus: string | null;
   gate: { class: "hard" | "soft"; reason: string } | null;

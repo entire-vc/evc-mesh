@@ -1,8 +1,12 @@
 import {
   Calendar,
   Columns3,
+  FileText,
+  GitBranch,
   List,
+  MessageSquare,
   NotebookText,
+  Puzzle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -15,6 +19,8 @@ export interface ProjectViewTabDescriptor {
   id: string;
   /** i18n key in the `settings` namespace. */
   labelKey: string;
+  /** Literal title (an extension's own); wins over `labelKey`. */
+  label?: string;
   Icon: LucideIcon;
   path: (wsSlug: string, projectSlug: string) => string;
   /**
@@ -25,36 +31,58 @@ export interface ProjectViewTabDescriptor {
   overflowRank: number;
 }
 
+// Every route is `/w/<ws>/p/<proj>/<segment>` and every label `viewTabs.tabs.<id>`;
+// the board is the project's bare path.
+const builtin = (
+  id: string,
+  Icon: LucideIcon,
+  overflowRank: number,
+): ProjectViewTabDescriptor => ({
+  id,
+  labelKey: `viewTabs.tabs.${id}`,
+  Icon,
+  path: (ws, proj) => `/w/${ws}/p/${proj}${id === "board" ? "" : `/${id}`}`,
+  overflowRank,
+});
+
 export const BUILTIN_PROJECT_TABS: readonly ProjectViewTabDescriptor[] = [
-  {
-    id: "board",
-    labelKey: "viewTabs.tabs.board",
-    Icon: Columns3,
-    path: (ws, proj) => `/w/${ws}/p/${proj}`,
-    overflowRank: 30,
-  },
-  {
-    id: "list",
-    labelKey: "viewTabs.tabs.list",
-    Icon: List,
-    path: (ws, proj) => `/w/${ws}/p/${proj}/list`,
-    overflowRank: 20,
-  },
-  {
-    id: "calendar",
-    labelKey: "viewTabs.tabs.calendar",
-    Icon: Calendar,
-    path: (ws, proj) => `/w/${ws}/p/${proj}/calendar`,
-    overflowRank: 0,
-  },
-  {
-    id: "docs",
-    labelKey: "viewTabs.tabs.docs",
-    Icon: NotebookText,
-    path: (ws, proj) => `/w/${ws}/p/${proj}/docs`,
-    overflowRank: 10,
-  },
+  builtin("board", Columns3, 30),
+  builtin("list", List, 20),
+  builtin("timeline", GitBranch, 15),
+  builtin("calendar", Calendar, 0),
+  builtin("docs", NotebookText, 10),
+  builtin("updates", FileText, 5),
 ];
+
+/**
+ * The Chat with Agent tab. Not in BUILTIN_PROJECT_TABS: the strip adds it only
+ * for a project that turned the extension on.
+ */
+export const CHAT_PROJECT_TAB = builtin("chat", MessageSquare, 5);
+
+/**
+ * The strip of a project: the built-in tabs, Chat where the project turned it
+ * on, and one tab per extension that is enabled and declares a screen. A
+ * disabled extension is not in `screens`, so it has no tab.
+ */
+export function projectTabsWith(
+  screens: ReadonlyArray<{ extensionId: string; title: string }>,
+  chatEnabled = false,
+): readonly ProjectViewTabDescriptor[] {
+  if (screens.length === 0 && !chatEnabled) return BUILTIN_PROJECT_TABS;
+  return [
+    ...BUILTIN_PROJECT_TABS,
+    ...(chatEnabled ? [CHAT_PROJECT_TAB] : []),
+    ...screens.map(({ extensionId, title }): ProjectViewTabDescriptor => ({
+      id: `ext:${extensionId}`,
+      labelKey: "viewTabs.tabs.extension",
+      label: title,
+      Icon: Puzzle,
+      path: (ws, proj) => `/w/${ws}/p/${proj}/x/${extensionId}`,
+      overflowRank: 8,
+    })),
+  ];
+}
 
 /**
  * Splits `tabs` into the ones that stay in the strip and the ones that go to

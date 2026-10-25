@@ -211,7 +211,7 @@ func (s *autoTransitionService) moveAutomatic(ctx context.Context, taskID, trigg
 // "review" to auto-close to "done" once every subtask is terminal. Deliberately
 // narrow and exact-match — not the free-form "epic"/"sprint"/"captain" labels
 // already in casual use on real umbrellas. Measured live against the 10 stale
-// umbrellas #d1eff1c6 was written for (07.09.2026): 0 of 10 carried either of
+// umbrellas an internal ticket was written for (07.09.2026): 0 of 10 carried either of
 // these two tags (3 had a bare "epic" label, 2 had "sprint"+"captain", 5 had
 // neither) — so adopting the label going forward, not just shipping this switch,
 // is what makes the rule fire on the next case. See CheckSubtaskCompletion.
@@ -485,6 +485,9 @@ func allSubtasksTerminal(subtasks []domain.Task, categoryByStatusID map[uuid.UUI
 func hasUnresolvedBlockers(deps []domain.TaskDependency, categoryByTaskID map[uuid.UUID]domain.StatusCategory) bool {
 	for _, dep := range deps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
+			continue
+		}
+		if dep.EvidenceSatisfied() {
 			continue
 		}
 		cat, ok := categoryByTaskID[dep.DependsOnTaskID]

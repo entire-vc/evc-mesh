@@ -1,14 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Suspense, lazy, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useNavigate } from "react-router";
 import {
   Bookmark,
   BookmarkPlus,
   Check,
-  FileText,
   FilterX,
-  GitBranch,
   MoreVertical,
   Share2,
   Trash2,
@@ -22,14 +20,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useSavedViewStore } from "@/stores/saved-view-store";
 import { isBoardFiltersAtDefault } from "@/lib/board-saved-view";
 import { toast } from "@/components/ui/toast";
@@ -39,6 +29,8 @@ import {
   type ProjectViewTabDescriptor,
 } from "@/lib/project-view-tabs";
 import type { ProjectViewTab, ViewType } from "@/types";
+
+const SaveViewDialog = lazy(() => import("@/components/view-tab-save-dialog"));
 
 interface ViewTabBarProps {
   // null on an open task: the strip is navigation only, no tab is active.
@@ -60,22 +52,37 @@ const KEBAB_RESERVE_PX = 44;
 // measure does not need getComputedStyle (a style recalculation per resize).
 const KEBAB_MARGIN_PX = 4;
 
-// Secondary formats — reachable from the kebab rather than the strip, which is
-// capped at four tabs so it still fits next to the breadcrumbs on a laptop.
-const FORMATS = [
-  {
-    id: "timeline" as const,
-    labelKey: "viewTabs.formats.timeline",
-    Icon: GitBranch,
-    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/timeline`,
-  },
-  {
-    id: "updates" as const,
-    labelKey: "viewTabs.formats.updates",
-    Icon: FileText,
-    path: (ws: string, proj: string) => `/w/${ws}/p/${proj}/updates`,
-  },
-] as const;
+// The last split, kept per viewport width so the next mount renders the right
+// strip at once. Measuring after mount costs one extra commit and layout
+// whenever the strip overflows; a repeat visit at the same width does not pay.
+const SPLIT_KEY = "mesh.projectTabs.split";
+
+const tabLabel = (tab: ProjectViewTabDescriptor, t: (key: string) => string) =>
+  tab.label ?? t(tab.labelKey);
+
+// Tab ids and viewport width: a stored split is only good for the same strip.
+const splitStamp = (tabs: readonly ProjectViewTabDescriptor[]) =>
+  `${tabs.map((t) => t.id)}|${window.innerWidth}`;
+
+function storeOverflow(tabs: readonly ProjectViewTabDescriptor[], ids: string[]) {
+  try {
+    localStorage.setItem(SPLIT_KEY, JSON.stringify([splitStamp(tabs), ids]));
+  } catch {
+    // Storage blocked: the next mount measures again.
+  }
+}
+
+function readStoredOverflow(tabs: readonly ProjectViewTabDescriptor[]): string[] {
+  try {
+    const [stamp, ids] = JSON.parse(localStorage.getItem(SPLIT_KEY) ?? "[]");
+    if (stamp === splitStamp(tabs) && Array.isArray(ids)) {
+      return ids;
+    }
+  } catch {
+    // Storage blocked or a malformed value: measure as usual.
+  }
+  return [];
+}
 
 const VIEW_TYPE_PATH: Record<ViewType, (ws: string, proj: string) => string> = {
   board: (ws, proj) => `/w/${ws}/p/${proj}`,
@@ -84,9 +91,9 @@ const VIEW_TYPE_PATH: Record<ViewType, (ws: string, proj: string) => string> = {
   calendar: (ws, proj) => `/w/${ws}/p/${proj}/calendar`,
 };
 
-// Docs has no server-side saved-view type, so it must not reach createView().
+// Only the four ViewType values are saved-view types; Docs, Chat, Updates and extension tabs must not reach createView().
 function isSavedViewType(view: ProjectViewTab | null): view is ViewType {
-  return view !== null && view !== "docs";
+  return view !== null && view in VIEW_TYPE_PATH;
 }
 
 // Hidden full-size copy of every tab. Memoized: the strip re-renders on every
@@ -107,14 +114,14 @@ const MeasureStrip = memo(function MeasureStrip({
       aria-hidden
       className="pointer-events-none invisible col-start-1 row-start-1 flex h-0 w-max overflow-hidden"
     >
-      {tabs.map(({ id, labelKey, Icon }) => (
+      {tabs.map((tab) => (
         <span
-          key={id}
+          key={tab.id}
           className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-sm font-medium"
           tabIndex={-1}
         >
-          <Icon className="h-3.5 w-3.5" />
-          <span>{t(labelKey)}</span>
+          <tab.Icon className="h-3.5 w-3.5" />
+          <span>{tabLabel(tab, t)}</span>
         </span>
       ))}
       {/* Stands in for the trigger so the basis includes it. */}
@@ -165,8 +172,8 @@ export function ViewTabBar({
   const kebabRef = useRef<HTMLDivElement>(null);
   // Only the ids that overflow live in state: a strip that fits (the common
   // case) never re-renders after mount.
-  const [overflowIds, setOverflowIds] = useState<string[]>([]);
-  const shownRef = useRef<{ ids: string[] }>({ ids: [] });
+  const [overflowIds, setOverflowIds] = useState<string[]>(() => readStoredOverflow(tabs));
+  const shownRef = useRef<{ ids: string[] }>({ ids: overflowIds });
 
   useLayoutEffect(() => {
     const wrap = wrapRef.current;
@@ -191,6 +198,8 @@ export function ViewTabBar({
         available,
       ).overflow.map((t) => t.id);
       const cur = shownRef.current.ids;
+      // Only a real measurement is worth remembering (0 widths mean no layout).
+      if (wrap.clientWidth) storeOverflow(tabs, next);
       // Same split as already rendered: no state update, so no extra commit.
       if (cur.length === next.length && cur.every((id, i) => id === next[i])) return;
       shownRef.current.ids = next;
@@ -215,16 +224,20 @@ export function ViewTabBar({
   const visibleTabs = tabs.filter((t) => !overflowIds.includes(t.id));
   const overflowTabs = tabs.filter((t) => overflowIds.includes(t.id));
 
-  const activeFormat = FORMATS.find((f) => f.id === currentView);
   // A tab that moved into the menu cannot show its active state in the strip,
   // so the trigger carries it.
-  const overflowTabActive = overflowTabs.some((t) => t.id === currentView);
+  const activeOverflowTab = overflowTabs.find((t) => t.id === currentView);
+  const overflowTabActive = activeOverflowTab !== undefined;
 
   // Filter views for current view type
   const relevantViews = views.filter((v) => v.view_type === currentView);
   const personalViews = relevantViews.filter((v) => !v.is_shared);
   const sharedViews = relevantViews.filter((v) => v.is_shared);
   const hasViews = relevantViews.length > 0;
+
+  const go = (tab: ProjectViewTabDescriptor) => {
+    if (tab.id !== currentView) navigate(tab.path(wsSlug, projectSlug));
+  };
 
   const handleApply = (view: import("@/types").SavedView) => {
     const targetPath = VIEW_TYPE_PATH[view.view_type];
@@ -302,16 +315,13 @@ export function ViewTabBar({
       >
         <MeasureStrip measureRef={measureRef} tabs={tabs} t={t} />
         <div className="col-start-1 row-start-1 flex min-w-0 items-center">
-          {visibleTabs.map(({ id, labelKey, Icon, path }) => {
+          {visibleTabs.map((tab) => {
+            const { id, Icon } = tab;
             const isActive = currentView === id;
             return (
               <button
                 key={id}
-                onClick={() => {
-                  if (!isActive) {
-                    navigate(path(wsSlug, projectSlug));
-                  }
-                }}
+                onClick={() => go(tab)}
                 className={cn(
                   "flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-sm transition-colors",
                   isActive
@@ -321,7 +331,7 @@ export function ViewTabBar({
                 aria-current={isActive ? "page" : undefined}
               >
                 <Icon className="h-3.5 w-3.5" />
-                <span>{t(labelKey)}</span>
+                <span>{tabLabel(tab, t)}</span>
               </button>
             );
           })}
@@ -335,65 +345,35 @@ export function ViewTabBar({
               <DropdownMenuTrigger
                 className={cn(
                   "flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground",
-                  // The strip cannot show an active state for a format that
-                  // lives inside the menu, so the trigger carries it instead.
-                  activeFormat ? "bg-muted text-foreground" : "text-muted-foreground",
-                  overflowTabActive && "bg-muted text-foreground",
+                  overflowTabActive ? "bg-muted text-foreground" : "text-muted-foreground",
                 )}
                 title={
-                  activeFormat
-                    ? t("viewTabs.moreViewsActive", { name: t(activeFormat.labelKey) })
+                  activeOverflowTab
+                    ? t("viewTabs.moreViewsActive", { name: tabLabel(activeOverflowTab, t) })
                     : t("viewTabs.moreViews")
                 }
               >
                 <MoreVertical className="h-3.5 w-3.5" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56">
-                {overflowTabs.map(({ id, labelKey, Icon, path }) => {
+                {overflowTabs.map((tab) => {
+                  const { id, Icon } = tab;
                   const isActive = currentView === id;
                   return (
                     <DropdownMenuItem
                       key={id}
-                      onClick={() => {
-                        if (!isActive) {
-                          navigate(path(wsSlug, projectSlug));
-                        }
-                      }}
+                      onClick={() => go(tab)}
                       className="gap-2"
                       aria-current={isActive ? "page" : undefined}
                     >
                       <Icon className="h-3.5 w-3.5" />
-                      <span className="flex-1">{t(labelKey)}</span>
+                      <span className="flex-1">{tabLabel(tab, t)}</span>
                       {isActive && <Check className="h-3.5 w-3.5" />}
                     </DropdownMenuItem>
                   );
                 })}
 
-                {overflowTabs.length > 0 && <DropdownMenuSeparator />}
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {t("viewTabs.formatsLabel")}
-                </DropdownMenuLabel>
-                {FORMATS.map(({ id, labelKey, Icon, path }) => {
-                  const isActive = currentView === id;
-                  return (
-                    <DropdownMenuItem
-                      key={id}
-                      onClick={() => {
-                        if (!isActive) {
-                          navigate(path(wsSlug, projectSlug));
-                        }
-                      }}
-                      className="gap-2"
-                      aria-current={isActive ? "page" : undefined}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      <span className="flex-1">{t(labelKey)}</span>
-                      {isActive && <Check className="h-3.5 w-3.5" />}
-                    </DropdownMenuItem>
-                  );
-                })}
-
-                {/* Saved views need a project to scope them to. */}
+                                {/* Saved views need a project to scope them to. */}
                 {projectId && (
                   <>
                     <DropdownMenuSeparator />
@@ -477,57 +457,20 @@ export function ViewTabBar({
         </div>
       </div>
 
-      {/* Save view dialog */}
-      <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("viewTabs.dialog.title")}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 p-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">{t("viewTabs.dialog.viewName")}</label>
-              <Input
-                value={saveName}
-                onChange={(e) => setSaveName(e.target.value)}
-                placeholder={t("viewTabs.dialog.placeholder")}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && saveName.trim()) {
-                    void handleSave();
-                  }
-                }}
-                autoFocus
-              />
-            </div>
-
-            <label className="flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-input"
-                checked={saveIsShared}
-                onChange={(e) => setSaveIsShared(e.target.checked)}
-              />
-              <span className="text-sm">{t("viewTabs.dialog.share")}</span>
-            </label>
-
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSaveDialogOpen(false)}
-              >
-                {t("viewTabs.dialog.cancel")}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => void handleSave()}
-                disabled={!saveName.trim() || isSaving}
-              >
-                {isSaving ? t("viewTabs.dialog.saving") : t("viewTabs.dialog.save")}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {saveDialogOpen && (
+        <Suspense fallback={null}>
+          <SaveViewDialog
+            t={t}
+            onOpenChange={setSaveDialogOpen}
+            name={saveName}
+            onNameChange={setSaveName}
+            isShared={saveIsShared}
+            onSharedChange={setSaveIsShared}
+            isSaving={isSaving}
+            onSave={() => void handleSave()}
+          />
+        </Suspense>
+      )}
     </>
   );
 }

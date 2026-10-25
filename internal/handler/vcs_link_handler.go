@@ -335,8 +335,9 @@ func (h *VCSLinkHandler) Create(c echo.Context) error {
 }
 
 // PatchMetadata handles PATCH /tasks/:task_id/vcs-links/:link_id/metadata.
-// Body: {"ship_sha":"<40 hex lowercase>"}. Merges into the link's metadata;
-// responds with the updated link.
+// Body: any of ship_sha, implementation_sha, merged_sha (40 hex lowercase),
+// ci_verdict, deployed, acceptance (objects). Merges key by key into the
+// link's metadata; responds with the updated link.
 func (h *VCSLinkHandler) PatchMetadata(c echo.Context) error {
 	taskID, err := uuid.Parse(c.Param("task_id"))
 	if err != nil {

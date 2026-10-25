@@ -2,7 +2,7 @@
 // (`data-mesh-draggable="task:<id>"`): a card that is not a Draggable has no way to be moved and fails these tests.
 import { fireEvent, waitFor, within } from "@testing-library/react";
 import { expect } from "vitest";
-import { button, calls, keyboardMove, markup, pointerDrag, tick, visibleText } from "../helpers";
+import { button, calls, keyboardMove, markup, pointerDrag, visibleText } from "../helpers";
 import { fixtures } from "../fixtures";
 import { defineTests, type TestCtx } from "../suite";
 import type { Mounted } from "../types";
@@ -217,19 +217,11 @@ defineTests([
   },
   {
     id: "CT-board-13",
-    title: "Enter on the title opens the editor, Enter commits through quickEdit; a viewer gets no editor",
+    title: "the title is not editable in place; editing happens inside the opened task",
     slots: ["board.card"],
-    async run(t) {
+    run(t) {
       const m = cardOf(t, [fixtures.task("t1")]);
-      const trigger = card(m, "t1").querySelector<HTMLElement>("[data-inline-edit=title]");
-      expect(trigger, "the title must be wrapped in <InlineEdit field=\"title\">").not.toBeNull();
-      fireEvent.keyDown(trigger!, { key: "Enter" });
-      const input = within(m.container).getByLabelText(/title/i) as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "Renamed" } });
-      fireEvent.keyDown(input, { key: "Enter" });
-      await tick();
-      expect(calls(m, "quickEdit")).toContainEqual(["t1", { field: "title", value: "Renamed" }]);
-      m.unmount();
+      expect(card(m, "t1").querySelector("[data-inline-edit]")).toBeNull();
       const viewer = t.mount({ role: "viewer" });
       expect(card(viewer, "t1").querySelector("[data-inline-edit]")).toBeNull();
     },

@@ -14,22 +14,56 @@ let choices = 0;
 
 const isMode = (v: unknown): v is ColorMode => v === "light" || v === "dark" || v === "system";
 
-export function readLocalMode(): ColorMode {
+const readKey = (key: string): string | null => {
   try {
-    const v = localStorage.getItem(KEY);
-    return isMode(v) ? v : "system";
+    return localStorage.getItem(key);
   } catch {
-    return "system";
+    return null; // locked storage
   }
+};
+
+export function readLocalMode(): ColorMode {
+  const v = readKey(KEY);
+  return isMode(v) ? v : "system";
 }
 
 interface ModeState {
   chosen: ColorMode;
   /** The only mode the current theme ships, or null when it ships both. */
   forced: "light" | "dark" | null;
+  /** Density chosen or pulled on this page (the painted value is on <html>); lets the profile control follow the sign-in pull. */
+  density?: string;
 }
 
 export const useModeStore = create<ModeState>(() => ({ chosen: readLocalMode(), forced: null }));
+
+// The `appearance` state is one object (mode + density). Density lives in density.ts (profile
+// page only); here the value on <html> (set by index.html / density.ts / the sign-in sync; absent until
+// chosen) is just carried along, because a PUT replaces the whole object.
+const html = () => document.documentElement.dataset;
+
+/** Locked storage: the choice lasts for this page only. */
+export function remember(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* see above */
+  }
+}
+
+// Bumped by every density choice, so a pull that started earlier cannot overwrite it (even with the same value).
+let densityChoices = 0;
+export const markDensityChoice = (): void => {
+  densityChoices++;
+};
+
+// The sign-in pull in flight: a write waits for it, so it carries the server's density, not an unset one.
+let pulling: Promise<unknown> = Promise.resolve();
+
+export const saveAppearance = (mode: ColorMode) =>
+  void pulling
+    .then(() => api(SCOPE, { method: "PUT", body: { state: { mode, density: html().density } } }))
+    .catch(() => {});
 
 const query = () => window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -66,13 +100,9 @@ export function setThemeModes(modes: unknown): void {
 /** Remembers the choice here at once, then on the server (best effort: offline still works locally). */
 export function chooseMode(mode: ColorMode): void {
   choices++;
-  try {
-    localStorage.setItem(KEY, mode);
-  } catch {
-    /* locked storage: the choice lasts for this page only */
-  }
+  remember(KEY, mode);
   useModeStore.setState({ chosen: mode });
-  void api(SCOPE, { method: "PUT", body: { state: { mode } } }).catch(() => {});
+  saveAppearance(mode);
 }
 
 /**
@@ -80,31 +110,31 @@ export function chooseMode(mode: ColorMode): void {
  * an explicit local choice is uploaded so the next device gets it. An unreachable
  * server changes nothing.
  */
-export async function syncModeFromServer(): Promise<void> {
+export const syncModeFromServer = (): Promise<void> => (pulling = pull());
+
+async function pull(): Promise<void> {
   const seen = choices;
+  const seenDensity = densityChoices;
   let server: ColorMode | null = null;
   try {
-    const res = await api<{ state?: { mode?: unknown } | null }>(SCOPE);
+    const res = await api<{ state?: { mode?: unknown; density?: unknown } | null }>(SCOPE);
     if (isMode(res?.state?.mode)) server = res.state.mode;
+    const d = res?.state?.density;
+    // Same answer, second field: the server's density wins unless it was chosen meanwhile.
+    if ((d === "compact" || d === "comfortable") && densityChoices === seenDensity) {
+      html().density = d;
+      remember("density", d);
+      useModeStore.setState({ density: d });
+    }
   } catch (err) {
     if ((err as { status?: number } | null)?.status !== 404) return;
   }
   if (choices !== seen) return; // the person chose while we waited; their choice is already saved
   if (server) {
-    try {
-      localStorage.setItem(KEY, server);
-    } catch {
-      /* see chooseMode */
-    }
+    remember(KEY, server);
     if (useModeStore.getState().chosen !== server) useModeStore.setState({ chosen: server });
     return;
   }
   const local = readLocalMode();
-  let explicit = false;
-  try {
-    explicit = localStorage.getItem(KEY) !== null;
-  } catch {
-    /* nothing to upload */
-  }
-  if (explicit) void api(SCOPE, { method: "PUT", body: { state: { mode: local } } }).catch(() => {});
+  if (readKey(KEY) !== null) saveAppearance(local); // an explicit local choice is uploaded
 }

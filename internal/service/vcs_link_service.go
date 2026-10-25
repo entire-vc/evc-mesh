@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -317,32 +319,51 @@ func (s *vcsLinkService) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// PatchMetadata validates the agent patch against the whitelist and merges it.
+// PatchMetadata validates the agent patch against the whitelist and merges it
+// key by key. Writes are idempotent per (link, key): a value equal to the
+// stored one is not rewritten, and re-reporting the same deployed sha and
+// environment keeps the original deployed.at.
 func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.UUID, patch map[string]any) (*domain.VCSLink, error) {
 	if len(patch) == 0 {
 		return nil, apierror.BadRequest("metadata patch is empty")
 	}
-	// Keys come from the whitelist and values are validated lowercase hex, so
-	// concatenating them cannot produce invalid JSON.
-	var raw strings.Builder
-	raw.WriteByte('{')
-	first := true
+	existing, err := s.repo.GetByID(ctx, linkID)
+	if err != nil {
+		return nil, fmt.Errorf("get vcs link: %w", err)
+	}
+	if existing == nil || existing.TaskID != taskID || existing.LinkType != domain.VCSLinkTypePR {
+		return nil, apierror.NotFound("VCSLink")
+	}
+	var stored map[string]json.RawMessage
+	if len(existing.Metadata) > 0 {
+		_ = json.Unmarshal(existing.Metadata, &stored)
+	}
+	out := make(map[string]any, len(patch))
 	for k, v := range patch {
 		if !domain.AgentWritableVCSMetadataKeys[k] {
-			return nil, apierror.BadRequest("metadata key " + strconv.Quote(k) + " is not writable; allowed: ship_sha")
+			return nil, apierror.BadRequest("metadata key " + strconv.Quote(k) + " is not writable; allowed: ship_sha, implementation_sha, merged_sha, ci_verdict, deployed, acceptance")
 		}
-		str, ok := v.(string)
-		if !ok || !domain.IsFullCommitSHA(str) {
-			return nil, apierror.BadRequest(k + " must be a 40-character lowercase hex string")
+		val, vErr := normalizeVCSMetadataValue(k, v, existing)
+		if vErr != nil {
+			return nil, vErr
 		}
-		if !first {
-			raw.WriteByte(',')
+		raw, mErr := json.Marshal(val)
+		if mErr != nil {
+			return nil, apierror.BadRequest(k + " is not valid JSON")
 		}
-		first = false
-		raw.WriteString(strconv.Quote(k) + ":" + strconv.Quote(str))
+		if old, ok := stored[k]; ok && jsonEqual(old, raw) {
+			continue
+		}
+		out[k] = val
 	}
-	raw.WriteByte('}')
-	link, err := s.repo.MergeMetadata(ctx, taskID, linkID, json.RawMessage(raw.String()))
+	if len(out) == 0 {
+		return existing, nil
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("marshal metadata patch: %w", err)
+	}
+	link, err := s.repo.MergeMetadata(ctx, taskID, linkID, body)
 	if err != nil {
 		return nil, fmt.Errorf("patch vcs link metadata: %w", err)
 	}
@@ -350,6 +371,95 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 		return nil, apierror.NotFound("VCSLink")
 	}
 	return link, nil
+}
+
+func jsonEqual(a, b []byte) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	xb, _ := json.Marshal(x)
+	yb, _ := json.Marshal(y)
+	return string(xb) == string(yb)
+}
+
+var vcsEnvironmentRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+// decodeStrict unmarshals v into dst and rejects unknown fields.
+func decodeStrict(key string, v, dst any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return apierror.BadRequest(key + " must be a JSON object")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(dst); err != nil {
+		return apierror.BadRequest(key + ": " + err.Error())
+	}
+	return nil
+}
+
+// normalizeVCSMetadataValue validates one whitelisted metadata value and
+// returns its canonical form.
+func normalizeVCSMetadataValue(key string, v any, existing *domain.VCSLink) (any, error) {
+	switch key {
+	case domain.VCSLinkMetaShipSHA, domain.VCSLinkMetaImplementationSHA, domain.VCSLinkMetaMergedSHA:
+		str, ok := v.(string)
+		if !ok || !domain.IsFullCommitSHA(str) {
+			return nil, apierror.BadRequest(key + " must be a 40-character lowercase hex string")
+		}
+		return str, nil
+	case domain.VCSLinkMetaCIVerdict:
+		var c domain.VCSCIVerdict
+		if err := decodeStrict(key, v, &c); err != nil {
+			return nil, err
+		}
+		status, ok := domain.NormalizePipelineStatus(c.Status)
+		if !ok {
+			return nil, apierror.BadRequest("ci_verdict.status is not a known pipeline status")
+		}
+		if c.SHA != "" && !domain.IsFullCommitSHA(c.SHA) {
+			return nil, apierror.BadRequest("ci_verdict.sha must be a 40-character lowercase hex string")
+		}
+		if c.PipelineID < 0 {
+			return nil, apierror.BadRequest("ci_verdict.pipeline_id must be positive")
+		}
+		c.Status = status
+		return c, nil
+	case domain.VCSLinkMetaDeployed:
+		var d domain.VCSDeployed
+		if err := decodeStrict(key, v, &d); err != nil {
+			return nil, err
+		}
+		if !domain.IsFullCommitSHA(d.SHA) {
+			return nil, apierror.BadRequest("deployed.sha must be a 40-character lowercase hex string")
+		}
+		d.Environment = strings.ToLower(strings.TrimSpace(d.Environment))
+		if !vcsEnvironmentRe.MatchString(d.Environment) {
+			return nil, apierror.BadRequest("deployed.environment must be 1-32 chars of a-z, 0-9, _ or -")
+		}
+		if prev := existing.Deployed(); prev != nil && prev.SHA == d.SHA && prev.Environment == d.Environment && prev.At != nil {
+			d.At = prev.At // same deploy reported again: the first deployed_at stands
+		} else if d.At == nil {
+			now := time.Now().UTC()
+			d.At = &now
+		}
+		return d, nil
+	case domain.VCSLinkMetaAcceptance:
+		var a domain.VCSAcceptance
+		if err := decodeStrict(key, v, &a); err != nil {
+			return nil, err
+		}
+		a.Result = strings.ToLower(strings.TrimSpace(a.Result))
+		if a.Result != "passed" && a.Result != "failed" {
+			return nil, apierror.BadRequest("acceptance.result must be passed or failed")
+		}
+		if a.SHA != "" && !domain.IsFullCommitSHA(a.SHA) {
+			return nil, apierror.BadRequest("acceptance.sha must be a 40-character lowercase hex string")
+		}
+		return a, nil
+	}
+	return nil, apierror.BadRequest("metadata key " + strconv.Quote(key) + " is not writable")
 }
 
 // PatchShipSHAByURL resolves the pr links naming mrURL (number from the last

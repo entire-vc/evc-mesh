@@ -174,7 +174,7 @@ func main() {
 	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
 	integrationRepo := postgres.NewIntegrationRepo(db)
 
-	// Keep-backed secret store: only when MESH_KEEP_URL/ORG_ID/TOKEN are set.
+	// Keep-backed secret store: only when MESH_KEEP_URL/ORG_ID/WORKSPACE_ID/EVENTS_SECRET are set.
 	// Without it the default stays builtin-only and a keep: reference is
 	// answered as degraded, never as an empty value.
 	if keepStore, keepErr := secretstore.NewKeepRouterFromEnv(os.Getenv); keepErr != nil {
@@ -716,7 +716,7 @@ func main() {
 		service.WithClosedFollowUpRootRepo(closedFollowUpRootRepo),
 		service.WithClosedFollowUpPendingRepo(closedFollowUpPendingRepo),
 	)
-	depService := service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo)
+	depService := service.WithDependencyResolver(service.NewTaskDependencyService(taskDependencyRepo, taskRepo, activityLogRepo, projectRepo), autoTransitionSvc)
 	activityLogService := service.NewActivityLogService(activityLogRepo)
 	// Built here, not beside secretMaterializationService above: every
 	// issuance is journaled, so it needs the activity service.
@@ -1069,6 +1069,7 @@ func main() {
 	extensionWorkspaceHandler := handler.NewExtensionWorkspaceHandler(
 		service.NewExtensionWorkspaceService(extensionRegistry, integrationRepo, extensionConsentRepo).
 			WithAllowList(extensionPolicyRepo).
+			WithVCSActivity(vcsLinkRepo).
 			WithExternalHook(&external.Hook{Reg: extensionRegistry, Conns: integrationRepo, HS: externalHandshaker}).
 			WithSaveHook("telegram", service.NewTelegramSaveHook(telegramClient, telegramBotManager, telegramGate)))
 	// Mesh as the identity provider of external-extension iframe screens: instance
@@ -1087,7 +1088,9 @@ func main() {
 	}
 	chatThreadDeleteRepo := postgres.NewChatThreadDeleteRepo(db, chatObjects)
 	chatThreadDeleteHandler := handler.NewChatThreadDeleteHandler(chatThreadDeleteRepo).WithEvents(chatEvents)
-	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo).WithEvents(chatEvents)
+	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo).WithEvents(chatEvents).
+		WithAttachments(postgres.NewChatAttachmentRepo(db), chatAttachmentStore)
+	chatAuditHandler := handler.NewChatAuditHandler(postgres.NewChatAuditRepo(db))
 	chatRunnerHandler := handler.NewChatRunnerHandler(postgres.NewChatRunnerRepo(db))
 	chatClaimHandler := handler.NewChatClaimHandler(postgres.NewChatRunnerRepo(db), agentNotifyRedis, chatAttachmentStore)
 	chatClaimHandler.SetShutdownSignal(httpShutdownCh)
@@ -1096,6 +1099,7 @@ func main() {
 		chatEvents).
 		WithRateLimiter(service.NewRedisChatRateLimiter(wsBadgeRedis))
 	chatRunnerEventsHandler := handler.NewChatRunnerEventsHandler(chatTurnEventsService)
+	chatTurnStartHandler := handler.NewChatTurnStartHandler(postgres.NewChatRunnerRepo(db), chatSessionService)
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 	projectUpdateHandler := handler.NewProjectUpdateHandler(projectUpdateService)
 	initiativeHandler := handler.NewInitiativeHandler(initiativeService)
@@ -1615,6 +1619,8 @@ func main() {
 	// fall-through) and DualAuth then skips the request.
 	api.Use(mw.ChatSessionAuth(chatSessionService))
 	api.Use(mw.DualAuth(authService, agentService, oauthService))
+	// A refused chat-token call leaves an audit row (it changes nothing else).
+	api.Use(mw.ChatSessionDenialAudit(activityLogRepo))
 	// Deny-by-default route -> capability check for extension actors; inert for
 	// every other principal.
 	api.Use(mw.ExtensionCapabilityGuard(extensionActorService))
@@ -1801,9 +1807,19 @@ func main() {
 	api.PUT("/projects/:proj_id/chat/settings", agentChatHandler.PutProjectSettings, projAccess, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/chat/settings", agentChatHandler.GetWorkspaceSettings, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
 	api.PUT("/workspaces/:ws_id/chat/settings", agentChatHandler.PutWorkspaceSettings, mw.RequireUserAuth(), rbac(mw.PermManageWebhooks))
+	// Read-only QA audit of chat (E6 setup): no route guard on purpose, the
+	// repository admits only a human owner/admin of the workspace in the path
+	// (listed in auditReadRoutes, cmd/api/rbac_routes_audit_test.go).
+	api.GET("/workspaces/:ws_id/chat/audit/threads/:thread_id", chatAuditHandler.Thread)
+	api.GET("/workspaces/:ws_id/chat/audit/threads/:thread_id/events", chatAuditHandler.ThreadEvents)
+	api.GET("/workspaces/:ws_id/chat/audit/agents/:agent_id/sessions", chatAuditHandler.AgentSessions)
+	api.GET("/workspaces/:ws_id/chat/audit/memory-writes", chatAuditHandler.MemoryWrites)
 	// Claim long-poll and lease of the chat runner (agent key, protocol §4).
 	api.GET("/runner/chat/claim", chatClaimHandler.Claim)
+	api.GET("/runner/chat/turns/active", chatClaimHandler.Active)
+	api.POST("/runner/chat/turns/:id/start", chatTurnStartHandler.Start)
 	api.POST("/runner/chat/turns/:id/lease", chatClaimHandler.RenewLease)
+	api.POST("/runner/chat/turns/:id/session-token", chatTurnStartHandler.SessionToken)
 	api.POST("/runner/chat/turns/:id/events", chatRunnerEventsHandler.Events)
 	// Orders and recovery history for the chat runner (agent key, protocol §8, §9).
 	api.POST("/runner/chat/runners", chatRunnerHandler.RegisterRunner)
@@ -1881,6 +1897,7 @@ func main() {
 	// Dependency routes.
 	api.GET("/tasks/:task_id/dependencies", depHandler.List, wsAccess)
 	api.POST("/tasks/:task_id/dependencies", depHandler.Create, wsAccess, rbac(mw.PermUpdateTask))
+	api.PATCH("/tasks/:task_id/dependencies/:dep_id", depHandler.Update, wsAccess, rbac(mw.PermUpdateTask))
 	api.DELETE("/tasks/:task_id/dependencies/:dep_id", depHandler.Delete, wsAccess, rbac(mw.PermUpdateTask))
 	api.GET("/projects/:proj_id/dependency-graph", depHandler.DependencyGraph, projAccess)
 

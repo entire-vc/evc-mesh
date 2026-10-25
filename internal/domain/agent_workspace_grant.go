@@ -21,9 +21,12 @@ type AgentWorkspaceGrant struct {
 	// Role is the workspace_role enum (owner/admin/member/viewer) — the
 	// agent's permission level IN THIS WORKSPACE, distinct from
 	// Agent.Role (the team role, e.g. "developer").
-	Role         string     `json:"role" db:"role"`
-	APIKeyPrefix string     `json:"api_key_prefix" db:"api_key_prefix"`
-	APIKeyHash   string     `json:"-" db:"api_key_hash"`
+	Role         string `json:"role" db:"role"`
+	APIKeyPrefix string `json:"api_key_prefix" db:"api_key_prefix"`
+	APIKeyHash   string `json:"-" db:"api_key_hash"`
+	// APIKeySHA256 is the keyed digest of the same key (see Agent.APIKeySHA256);
+	// empty until the key has been presented once after the column was added.
+	APIKeySHA256 string     `json:"-" db:"api_key_sha256"`
 	InvitedBy    *uuid.UUID `json:"invited_by,omitempty" db:"invited_by"`
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty" db:"revoked_at"`
@@ -40,7 +43,7 @@ type AgentBrief struct {
 	ID   uuid.UUID `json:"id" db:"id"`
 	Name string    `json:"name" db:"name"`
 	Slug string    `json:"slug" db:"slug"`
-	// ShortTag is the agent's role label (Mesh aa1b4845) — nullable like on
+	// ShortTag is the agent's role label (Mesh an internal ticket) — nullable like on
 	// the agent itself; see domain.Agent.ShortTag.
 	ShortTag *string `json:"short_tag" db:"short_tag"`
 }

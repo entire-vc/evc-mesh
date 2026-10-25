@@ -11,6 +11,7 @@ import { apiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/cn";
 import { useAuthStore } from "@/stores/auth";
 import { chooseMode, useModeStore, type ColorMode } from "@/core/themes/mode";
+import { chooseDensity, readDensity, type Density } from "@/core/themes/density";
 
 type UsernameStatus = "idle" | "checking" | "available" | "taken" | "invalid";
 
@@ -163,6 +164,12 @@ function AppearanceCard() {
   const { t } = useTranslation("settings");
   const chosen = useModeStore((s) => s.chosen);
   const forced = useModeStore((s) => s.forced);
+  const density = useModeStore((s) => s.density ?? readDensity());
+
+  const densities: { value: Density; label: string }[] = [
+    { value: "comfortable", label: t("profilePage.appearance.comfortable") },
+    { value: "compact", label: t("profilePage.appearance.compact") },
+  ];
 
   const options: { mode: ColorMode; label: string }[] = [
     { mode: "light", label: t("profilePage.appearance.light") },
@@ -191,6 +198,24 @@ function AppearanceCard() {
               {label}
             </Button>
           ))}
+        </div>
+        <div className="space-y-1.5">
+          <p id="density-title" className="text-sm font-medium">{t("profilePage.appearance.densityTitle")}</p>
+          <div role="radiogroup" aria-labelledby="density-title" className="flex flex-wrap gap-2">
+            {densities.map(({ value, label }) => (
+              <Button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={density === value}
+                variant={density === value ? "default" : "outline"}
+                size="sm"
+                onClick={() => chooseDensity(value)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
         </div>
         {forced && (
           <p role="status" className="text-sm text-muted-foreground">

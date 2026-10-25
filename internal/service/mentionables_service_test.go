@@ -33,15 +33,15 @@ func (r mentionablesUserRepo) SearchInWorkspace(context.Context, uuid.UUID, stri
 func TestMentionablesSearch_ServiceUserMarker(t *testing.T) {
 	agentID := uuid.New()
 	svc := NewMentionablesService(
-		mentionablesAgentRepo{agents: []domain.Agent{{ID: agentID, Name: "Hugh", Slug: "hugh"}}},
+		mentionablesAgentRepo{agents: []domain.Agent{{ID: agentID, Name: "Hana", Slug: "hana"}}},
 		mentionablesUserRepo{users: []domain.User{
-			{ID: uuid.New(), Name: "Hugh (QA Mesh)", Username: "hugh-qa", ServiceAgentID: &agentID},
+			{ID: uuid.New(), Name: "Hana (QA Mesh)", Username: "hana-qa", ServiceAgentID: &agentID},
 			// Same display-name shape, but no agent link: a person, not a service user.
-			{ID: uuid.New(), Name: "Hugh (QA X)", Username: "hugh-x"},
+			{ID: uuid.New(), Name: "Hana (QA X)", Username: "hana-x"},
 		}},
 	)
 
-	got, err := svc.Search(context.Background(), uuid.New(), "hugh", 10)
+	got, err := svc.Search(context.Background(), uuid.New(), "hana", 10)
 	require.NoError(t, err)
 
 	byName := map[string]domain.Mentionable{}
@@ -49,16 +49,16 @@ func TestMentionablesSearch_ServiceUserMarker(t *testing.T) {
 		byName[m.DisplayName] = m
 	}
 
-	svcUser := byName["Hugh (QA Mesh)"]
+	svcUser := byName["Hana (QA Mesh)"]
 	assert.True(t, svcUser.IsServiceUser)
 	require.NotNil(t, svcUser.AgentID)
 	assert.Equal(t, agentID, *svcUser.AgentID)
 
-	person := byName["Hugh (QA X)"]
+	person := byName["Hana (QA X)"]
 	assert.False(t, person.IsServiceUser, "a real user named like a service user must not be flagged")
 	assert.Nil(t, person.AgentID)
 
-	agent := byName["Hugh"]
+	agent := byName["Hana"]
 	assert.False(t, agent.IsServiceUser)
 	assert.Nil(t, agent.AgentID)
 }

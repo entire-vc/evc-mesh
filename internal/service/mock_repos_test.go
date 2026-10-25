@@ -1194,6 +1194,26 @@ func (m *MockTaskDependencyRepository) Exists(_ context.Context, taskID, depends
 	return false, nil
 }
 
+func (m *MockTaskDependencyRepository) UpdateCondition(_ context.Context, id uuid.UUID, condition domain.DependencyCondition, evidenceURL *string, metAt *time.Time) (*domain.TaskDependency, error) {
+	if m.errToReturn != nil {
+		return nil, m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	dep, ok := m.items[id]
+	if !ok {
+		return nil, nil
+	}
+	// Replace, never mutate: a caller holding the pointer GetByID returned must
+	// still see the edge as it was, like a real row read.
+	next := *dep
+	next.Condition, next.EvidenceURL, next.ConditionMetAt = condition, evidenceURL, metAt
+	next.ConditionSatisfied = next.EvidenceSatisfied()
+	m.items[id] = &next
+	out := next
+	return &out, nil
+}
+
 // ---------------------------------------------------------------------------
 // MockCustomFieldDefinitionRepository
 // ---------------------------------------------------------------------------
@@ -1900,6 +1920,7 @@ func (m *MockAgentRepository) CreateWithHomeGrant(_ context.Context, a *domain.A
 		Role:         domain.RoleMember,
 		APIKeyPrefix: a.APIKeyPrefix,
 		APIKeyHash:   a.APIKeyHash,
+		APIKeySHA256: a.APIKeySHA256,
 		CreatedAt:    a.CreatedAt,
 	}
 	m.grants[a.ID] = grant
@@ -1928,6 +1949,7 @@ func (m *MockAgentRepository) RotateHomeGrantKey(_ context.Context, a *domain.Ag
 	if g, ok := m.grants[a.ID]; ok {
 		g.APIKeyPrefix = a.APIKeyPrefix
 		g.APIKeyHash = a.APIKeyHash
+		g.APIKeySHA256 = a.APIKeySHA256
 	}
 	return nil
 }
@@ -1960,6 +1982,16 @@ func NewMockAgentWorkspaceGrantRepository() *MockAgentWorkspaceGrantRepository {
 	return &MockAgentWorkspaceGrantRepository{}
 }
 
+// SeedSlug sets the slug the ListActiveByWorkspace JOIN reports for agentID.
+func (m *MockAgentWorkspaceGrantRepository) SeedSlug(agentID uuid.UUID, slug string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.slugs == nil {
+		m.slugs = map[uuid.UUID]string{}
+	}
+	m.slugs[agentID] = slug
+}
+
 // Seed adds a connection row directly, bypassing any service-layer logic —
 // this mock has no create/revoke methods because the real repository (task
 // U2's scope) does not need them yet; U3 adds those.
@@ -1982,6 +2014,22 @@ func (m *MockAgentWorkspaceGrantRepository) GetByWorkspaceAndPrefix(_ context.Co
 		}
 	}
 	return nil, nil
+}
+
+// SetAPIKeySHA256 mirrors the real guarded UPDATE: it writes only while the
+// stored bcrypt hash still equals the one the caller verified against.
+func (m *MockAgentWorkspaceGrantRepository) SetAPIKeySHA256(_ context.Context, id uuid.UUID, digest, expectedBcryptHash string) error {
+	if m.errToReturn != nil {
+		return m.errToReturn
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.items {
+		if g.ID == id && g.APIKeyHash == expectedBcryptHash {
+			g.APIKeySHA256 = digest
+		}
+	}
+	return nil
 }
 
 // IsRevoked mirrors the real repository's PK lookup: found+revoked_at set →
@@ -2061,6 +2109,7 @@ func (m *MockAgentWorkspaceGrantRepository) Reactivate(_ context.Context, id uui
 		g.Role = role
 		g.APIKeyPrefix = apiKeyPrefix
 		g.APIKeyHash = apiKeyHash
+		g.APIKeySHA256 = ""
 		g.InvitedBy = invitedBy
 		g.RevokedAt = nil
 		return nil

@@ -4,7 +4,7 @@ import { appendFileSync } from "node:fs";
 import { useEffect, type ComponentType } from "react";
 import { describe, expect, it } from "vitest";
 import { cleanupMounts, mountSlot, runSlotSuite, setHarnessHost } from "@entire-vc/mesh-theme-sdk/testing";
-import { Draggable, InlineEdit, TaskLink } from "@/core/primitives";
+import { Draggable, TaskLink } from "@/core/primitives";
 import { SlotBadges } from "@/components/extensions/slots/slot-host";
 import { registerMeshDefaultTheme } from "@/themes/mesh-default";
 import { meshHost } from "@/test-utils/slot-host";
@@ -30,7 +30,7 @@ const makeCard = (draggable: boolean): BoardCardView =>
     const keys = fields.map((f) => f.key);
     const body = (
       <>
-        <InlineEdit taskId={task.id} field="title"><TaskLink taskId={task.id}>{task.title}</TaskLink></InlineEdit>
+        <TaskLink taskId={task.id}>{task.title}</TaskLink>
         {data.gateStatusName ? <span>{data.gateStatusName}</span> : null}
         {keys.map((k) =>
           k === "labels" ? <span key={k}>{task.labels.join(", ")}</span>

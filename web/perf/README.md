@@ -790,3 +790,28 @@ measurement. Revert: set the ceiling back to 701.0. Lead sign-off: the product l
 and `ru`. perf-bundle measured 703.29 on this MR on top of main `a8a64693` (pipeline 17734,
 job 371633, over the 703.1 ceiling by 0.19). The ceiling moved by the smallest 0.1-step above
 the measurement. Revert: set the ceiling back to 703.1. Lead sign-off: the product lead.
+
+`total_js_kb_gz` 703.9 → 720.6 (**+16.7 KB gz**) and `login.initial_js_kb_gz` 182.1 → 183.0
+(**+0.9 KB gz**), (Chat E3): the chat screen (page, feed with Markdown, composer with
+image paste, thread sidebar, reducer, project settings, en/ru strings). The page is a
+`React.lazy` route chunk, but the total sums every chunk, so lazy loading does not help it.
+The entry grows by the project tab (`CHAT_PROJECT_TAB`, `MessageSquare`), the `useChatEnabled`
+hook in the header and the `chat` i18n namespace registration; none of the chat screen code
+is in the entry. perf-bundle measured 182.95 / 720.55 on this MR (pipeline 18003, job
+378075, over the 182.1 / 703.9 ceilings by 0.85 / 16.65). Each ceiling moved by the smallest
+0.1-step above the measurement. Revert: revert the MR. Lead sign-off: the product lead, requested on the card.
+
+`login.initial_js_kb_gz` 183.0 → 183.1 (+0.1 KB gz) and `total_js_kb_gz` 720.6 → 721.0 (+0.4 KB gz):
+the merge result of the earlier change (Chat E3) with the neighbouring branch on main, not new code. perf-bundle
+measured 183.04 / 720.96 on main `a664a287` (pipeline 18044, job 379510, over the 183.0 / 720.6
+ceilings by 0.04 / 0.36), against 182.95 / 720.55 on the MR branch. Each ceiling moved by the smallest
+step above the measurement; no further raise for this screen. Revert: set the ceilings back to
+183.0 / 720.6. Lead sign-off: the product lead, on the card.
+
+`login.initial_js_kb_gz` 183.1 → 183.2 (+0.1 KB gz) and `total_js_kb_gz` 721.0 → 721.4 (+0.4 KB gz),
+viewport containment in `DropdownMenuContent` (measure in a layout effect, shift state, transform
+merge) so the tab bar "⋮" menu no longer clips at 393px. Main measured 183.01 / 720.99 (pipeline 18243),
+so there was no headroom; perf-bundle measured 183.16 / 721.33 on this MR (pipeline 18235, job 383444,
+over by 0.06 / 0.33). The sum covers every chunk and the component is in the entry, so lazy loading does
+not help. Each ceiling moved by the smallest step above the measurement. Revert: set the ceilings back to
+183.1 / 721.0 together with reverting the MR. Lead sign-off: the product lead, requested on the card.
