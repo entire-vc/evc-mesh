@@ -2,6 +2,7 @@ import type { FieldSchema } from "@/components/extensions/schema-form";
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiRequestError } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { getResolvedWorkspaceTheme } from "@/lib/themes";
 import type { ManifestCapabilities } from "@/lib/extension-capabilities";
 
 export type ExtensionKind = "integration" | "plugin" | "theme";
@@ -34,6 +35,15 @@ export interface ExtensionManifest {
 export interface ExtensionActivityDto {
   links: number;
   last_event_at?: string;
+  /** Repositories whose events brought those links; absent until the backend reports them. */
+  repos?: ExtensionRepoActivityDto[];
+}
+
+export interface ExtensionRepoActivityDto {
+  repo: string;
+  host: string;
+  links: number;
+  last_event_at?: string;
 }
 
 export interface ConnectionDto {
@@ -59,8 +69,10 @@ export interface CatalogEntry {
   allowed: boolean;
   /** Present in this instance (built-in or installed); false for catalog-only entries. */
   installed: boolean;
-  /** Workspace has a connection, or the instance level governs it. */
+  /** Workspace has a connection, or the instance level governs it. Never true for a theme: it is chosen, not connected. */
   connected: boolean;
+  /** Themes only: this theme paints the workspace now; undefined when that is not known. */
+  themeActive?: boolean;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -75,6 +87,8 @@ export interface CatalogEntry {
   canPurgeData: boolean;
   /** Settings are written only through the extension's own API; generic connect/settings/remove refuse. */
   managedElsewhere: boolean;
+  /** A built-in part of Mesh (Runner): kept for lookups and `requires`, left out of the lists. */
+  hidden: boolean;
 }
 
 export interface VersionEntry {
@@ -104,7 +118,7 @@ export interface WorkspaceDto {
   id: string; name: string; version: string; kind: string; category: string;
   manifest?: ExtensionManifest & { runtime?: string; publisher?: string; description?: string };
   status?: ExtensionStatusDto; connection?: ConnectionDto | null; activity?: ExtensionActivityDto;
-  can_purge_data?: boolean; settings_managed_elsewhere?: boolean;
+  can_purge_data?: boolean; settings_managed_elsewhere?: boolean; hidden?: boolean;
 }
 
 export function trustOf(level: string, source: string): TrustLevel {
@@ -125,11 +139,14 @@ export function mergeCatalog(
   summaries: SummaryDto[],
   workspace: WorkspaceDto[],
   catalogExtras: SummaryDto[] = [],
+  /** The theme the workspace paints now (`GET /theme?workspace=`); undefined = unknown. */
+  activeThemeId?: string,
 ): CatalogEntry[] {
   const inst = new Map(summaries.map((s) => [s.id, s]));
   const rows: CatalogEntry[] = [];
   const row = (s: SummaryDto, w: WorkspaceDto | undefined, installed: boolean): CatalogEntry => {
     const status = w?.status;
+    const theme = s.kind === "theme";
     return {
       id: s.id, name: s.name, version: s.version,
       kind: s.kind === "plugin" || s.kind === "theme" ? s.kind : "integration",
@@ -138,11 +155,13 @@ export function mergeCatalog(
       blocked: s.blocked, blockedReason: s.blocked_reason,
       allowed: s.allowed ?? !s.blocked,
       installed,
-      connected: Boolean(w?.connection) || status?.source === "instance",
+      connected: !theme && (Boolean(w?.connection) || status?.source === "instance"),
+      themeActive: theme && activeThemeId !== undefined ? activeThemeId === s.id : undefined,
       enabled: Boolean(status?.enabled),
       createdAt: s.created_at ?? "", updatedAt: s.updated_at ?? "",
       manifest: s.manifest ?? {}, status, connection: w?.connection, activity: w?.activity, versions: s.versions, checks: s.checks,
       canPurgeData: Boolean(w?.can_purge_data), managedElsewhere: Boolean(w?.settings_managed_elsewhere),
+      hidden: Boolean(w?.hidden),
     };
   };
   for (const w of workspace) {
@@ -184,6 +203,7 @@ export interface CatalogState {
 export function useExtensionCatalog(): CatalogState {
   const { currentWorkspace } = useWorkspaceStore();
   const wsId = currentWorkspace?.id;
+  const wsSlug = currentWorkspace?.slug;
   const [data, setData] = useState<{ entries: CatalogEntry[]; unavailable: boolean } | null>(null);
   const [failed, setFailed] = useState(false);
   const [nonce, setNonce] = useState(0);
@@ -194,9 +214,11 @@ export function useExtensionCatalog(): CatalogState {
     setFailed(false);
     (async () => {
       try {
-        const [list, mine] = await Promise.all([
+        const [list, mine, active] = await Promise.all([
           api<{ extensions: SummaryDto[] }>("/api/v1/extensions"),
           api<{ extensions: WorkspaceDto[] }>(`/api/v1/workspaces/${wsId}/extensions`),
+          // themes are chosen per workspace, not connected: their status is the resolved theme; a failure leaves it unknown
+          wsSlug ? getResolvedWorkspaceTheme(wsSlug).then((r) => r?.theme_id, () => undefined) : Promise.resolve(undefined),
         ]);
         let extras: SummaryDto[] = [];
         let unavailable = false;
@@ -206,14 +228,14 @@ export function useExtensionCatalog(): CatalogState {
           unavailable = !(e instanceof ApiRequestError && e.status === 404);
         }
         if (!cancelled) {
-          setData({ entries: mergeCatalog(list.extensions ?? [], mine.extensions ?? [], extras), unavailable });
+          setData({ entries: mergeCatalog(list.extensions ?? [], mine.extensions ?? [], extras, active), unavailable });
         }
       } catch {
         if (!cancelled) setFailed(true);
       }
     })();
     return () => { cancelled = true; };
-  }, [wsId, nonce]);
+  }, [wsId, wsSlug, nonce]);
 
   const reload = useCallback(() => { setData(null); setNonce((n) => n + 1); }, []);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);

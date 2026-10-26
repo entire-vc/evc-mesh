@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
-import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import reposFixture from "@/components/extensions/__fixtures__/vcs-repos.json";
 import { ProjectExtensionsTab } from "@/components/extensions/project-extensions-tab";
 import { api, ApiRequestError } from "@/lib/api";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useMemberStore } from "@/stores/member";
 
 vi.mock("@/components/extensions/chat-settings-card", () => ({ ChatSettingsCard: () => <div data-testid="chat-card" /> }));
 vi.mock("@/lib/api", async () => ({ ...await vi.importActual("@/lib/api"), api: vi.fn() }));
@@ -45,6 +47,7 @@ describe("ProjectExtensionsTab", () => {
     vi.mocked(api).mockReset();
     bindings = [];
     useWorkspaceStore.setState({ currentWorkspace: { id: "w1" } as never });
+    useMemberStore.setState({ myRole: null });
   });
 
   it("empty: offers only connected extensions that have a project level", async () => {
@@ -190,8 +193,159 @@ describe("ProjectExtensionsTab", () => {
     });
     render(<ProjectExtensionsTab projectId="p1" />);
     expect(await screen.findByTestId("chat-card")).toBeInTheDocument();
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    // GitLab is on in the workspace with no binding: a read-only tab of its own, not a second Chat.
+    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual(["Chat with Agent", "GitLab"]);
     expect(screen.getByTestId("extensions-tab-empty")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Bind extension/ })).toBeInTheDocument();
+  });
+
+  describe("VCS extension on in the workspace without a project binding", () => {
+    const instanceGitlab = (links = 1855) => ({
+      ...ws("gitlab", "GitLab", gitlabManifest), connection: null,
+      status: { enabled: true, source: "instance", health: { ok: true, message: "" } },
+      ...(links ? { activity: { links, last_event_at: "2026-10-25T22:00:00Z" } } : {}),
+    });
+    const withWorkspace = (list: unknown[]) => {
+      mockApi();
+      const base = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async (path: string, opts?: { method?: string }) => {
+        if (path === "/api/v1/workspaces/w1/extensions" && !opts?.method) return { extensions: list };
+        return base(path, opts);
+      });
+    };
+
+    it("?ext=gitlab opens a GitLab tab with the workspace status and links, not Chat", async () => {
+      withWorkspace([ws("agent-chat", "Chat with Agent", { levels: { project: true } }), instanceGitlab()]);
+      render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+      const card = await screen.findByTestId("workspace-vcs-gitlab");
+      expect(screen.queryByTestId("chat-card")).toBeNull();
+      expect(screen.getByTestId("ext-tab-gitlab").getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByTestId("ext-activity-gitlab").textContent).toMatch(/1,855 links, last event/);
+      expect(card.textContent).toContain("Active · set up by the instance admin");
+      expect(card.textContent).toContain("through the instance webhook");
+      // No secret or settings field is rendered for the workspace level.
+      expect(card.querySelector("input")).toBeNull();
+    });
+
+    it("Bind a repository opens a repository form for this provider and binds with PUT", async () => {
+      useMemberStore.setState({ myRole: "admin" });
+      withWorkspace([instanceGitlab(), ws("team-relay", "Team Relay", trManifest)]);
+      render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+      fireEvent.click(await screen.findByRole("button", { name: "Bind a repository" }));
+      fireEvent.change(within(await screen.findByTestId("vcs-bind-form")).getByLabelText("Repository"), { target: { value: "grp/new" } });
+      fireEvent.click(within(screen.getByTestId("vcs-bind-form")).getByRole("button", { name: "Bind" }));
+      await waitFor(() => expect(vi.mocked(api)).toHaveBeenCalledWith(`${P}/gitlab`, { method: "PUT", body: { enabled: true, settings: { repo_path: "grp/new" } } }));
+    });
+
+    it("says there are no links yet instead of a blank", async () => {
+      withWorkspace([instanceGitlab(0)]);
+      render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+      expect((await screen.findByTestId("ext-activity-gitlab")).textContent).toBe("No task links yet");
+    });
+
+    it("a bound VCS extension keeps its binding card and gets no second tab", async () => {
+      bindings = [{ extension_id: "gitlab", enabled: true, settings: { repo_path: "a/b" } }];
+      withWorkspace([instanceGitlab()]);
+      render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+      expect(await screen.findByTestId("binding-gitlab")).toBeInTheDocument();
+      expect(screen.queryByTestId("workspace-vcs-gitlab")).toBeNull();
+      expect(screen.getAllByTestId("ext-tab-gitlab")).toHaveLength(1);
+    });
+
+    it("an ext the project cannot show is named, not silently swapped for the first tab", async () => {
+      withWorkspace([ws("agent-chat", "Chat with Agent", { levels: { project: true } }), { ...instanceGitlab(), status: { enabled: false, source: "none" } }]);
+      render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+      expect((await screen.findByTestId("extensions-tab-unknown")).textContent).toContain("GitLab is neither bound");
+      expect(screen.queryByTestId("chat-card")).toBeNull();
+    });
+
+    describe("repositories", () => {
+      const R = `${P}/gitlab/repos`;
+      const reposCalls = () => vi.mocked(api).mock.calls.filter(([p, o]) => p === R && !o).length;
+      const withRepos = (repos: unknown, ws_ = [instanceGitlab()]) => {
+        withWorkspace(ws_);
+        const base = vi.mocked(api).getMockImplementation()!;
+        vi.mocked(api).mockImplementation(async (path: string, opts?: { method?: string }) => {
+          if (path === R && !opts?.method) { if (repos instanceof Error) throw repos; return repos; }
+          return base(path, opts);
+        });
+      };
+
+      it("lists each repository with its source: webhook, binding, both", async () => {
+        useMemberStore.setState({ myRole: "admin" });
+        bindings = [{ extension_id: "gitlab", enabled: true, settings: { repo_path: "entire-vc/evc-spark" } }];
+        withRepos(reposFixture);
+        render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        const source = async (repo: string) => within(await screen.findByTestId(`vcs-repo-${repo}`)).getByTestId("repo-source").textContent;
+        expect(await source("entire-vc/evc-mesh")).toBe("webhook + bound");
+        expect(await source("entire-vc/evc-mesh-mcp")).toBe("via instance webhook");
+        expect(await source("entire-vc/evc-spark")).toBe("bound to project");
+        expect(screen.getByTestId("vcs-repo-entire-vc/evc-mesh").textContent).toContain("1,234 links");
+        expect(screen.getByTestId("vcs-repos-gitlab").textContent).toContain("arrive through the instance webhook");
+      });
+
+      it("Bind on a webhook row saves that repository and re-reads the list", async () => {
+        useMemberStore.setState({ myRole: "owner" });
+        withRepos(reposFixture);
+        render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        fireEvent.click(await screen.findByRole("button", { name: "Bind entire-vc/evc-mesh-mcp" }));
+        const form = await screen.findByTestId("vcs-bind-form");
+        expect((within(form).getByLabelText("Repository") as HTMLInputElement).value).toBe("entire-vc/evc-mesh-mcp");
+        const before = reposCalls();
+        fireEvent.click(within(form).getByRole("button", { name: "Bind" }));
+        await waitFor(() => expect(vi.mocked(api)).toHaveBeenCalledWith(`${P}/gitlab`, { method: "PUT", body: { enabled: true, settings: { repo_path: "entire-vc/evc-mesh-mcp" } } }));
+        await waitFor(() => expect(reposCalls()).toBeGreaterThan(before));
+      });
+
+      it("Unbind deletes the binding only after confirmation", async () => {
+        useMemberStore.setState({ myRole: "admin" });
+        bindings = [{ extension_id: "gitlab", enabled: true, settings: { repo_path: "entire-vc/evc-spark" } }];
+        withRepos(reposFixture);
+        render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        fireEvent.click(await screen.findByRole("button", { name: "Unbind entire-vc/evc-spark" }));
+        expect(vi.mocked(api)).not.toHaveBeenCalledWith(`${P}/gitlab`, { method: "DELETE" });
+        expect(await screen.findByText("Unbind entire-vc/evc-spark?")).toBeInTheDocument();
+        // The dialog is portalled to the end of <body>: its confirm is the last plain «Unbind».
+        const unbinds = screen.getAllByRole("button", { name: "Unbind" });
+        fireEvent.click(unbinds[unbinds.length - 1]!);
+        await waitFor(() => expect(vi.mocked(api)).toHaveBeenCalledWith(`${P}/gitlab`, { method: "DELETE" }));
+      });
+
+      it("without manage rights the list is shown and no Bind/Unbind", async () => {
+        useMemberStore.setState({ myRole: "member" });
+        withRepos(reposFixture);
+        render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        expect(await screen.findByTestId("vcs-repo-entire-vc/evc-mesh")).toBeInTheDocument();
+        expect(within(screen.getByTestId("vcs-repos-gitlab")).queryAllByRole("button")).toHaveLength(0);
+      });
+
+      it("empty, error with retry, and a server without the endpoint", async () => {
+        useMemberStore.setState({ myRole: "admin" });
+        withRepos({ repos: [] });
+        const { unmount } = render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        expect(await screen.findByTestId("vcs-repos-empty-gitlab")).toBeInTheDocument();
+        unmount();
+
+        withRepos(new ApiRequestError("boom", "INTERNAL", 500));
+        const r2 = render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        const err = await screen.findByTestId("vcs-repos-error-gitlab");
+        const before = reposCalls();
+        fireEvent.click(within(err).getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(reposCalls()).toBe(before + 1));
+        r2.unmount();
+
+        withRepos(new ApiRequestError("nf", "NOT_FOUND", 404));
+        const r3 = render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        expect((await screen.findByTestId("vcs-repos-empty-gitlab")).textContent).toMatch(/not available on this server yet, and no repository is bound/);
+        expect(screen.queryByTestId("vcs-repos-partial-gitlab")).toBeNull();
+        r3.unmount();
+
+        bindings = [{ extension_id: "gitlab", enabled: true, settings: { repo_path: "a/b" } }];
+        withRepos(new ApiRequestError("nf", "NOT_FOUND", 404));
+        render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        expect(within(await screen.findByTestId("vcs-repo-a/b")).getByTestId("repo-source").textContent).toBe("bound to project");
+        expect(screen.getByTestId("vcs-repos-partial-gitlab")).toBeInTheDocument();
+      });
+    });
   });
 });

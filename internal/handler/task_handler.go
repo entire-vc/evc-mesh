@@ -410,6 +410,21 @@ func (h *TaskHandler) attachHumanGateInfo(ctx context.Context, task *domain.Task
 	task.HumanGateInfo = info
 }
 
+// attachStatusCategory resolves task.StatusCategory from task.StatusID for the
+// single-task GET responses. A failed lookup leaves it empty, so a
+// client reads "unknown", never a guessed category.
+func (h *TaskHandler) attachStatusCategory(ctx context.Context, task *domain.Task) {
+	if task == nil {
+		return
+	}
+	st, err := h.taskService.GetStatusByID(ctx, task.StatusID)
+	if err != nil || st == nil {
+		log.Printf("[task-get] WARNING: status lookup for task %s (status %s) failed: %v", task.ID, task.StatusID, err)
+		return
+	}
+	task.StatusCategory = st.Category
+}
+
 // gateClearRefusal builds the message for the 403 an agent gets when it PATCHes
 // human_gate true→false. It NEVER changes the outcome — the refusal stands
 // either way; it only decides what the refusal SAYS.
@@ -534,6 +549,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 				return handleError(c, err2)
 			}
 			h.attachHumanGateInfo(c.Request().Context(), task)
+			h.attachStatusCategory(c.Request().Context(), task)
 			decorateTask(c, task)
 			return c.JSON(http.StatusOK, task)
 		}
@@ -546,6 +562,7 @@ func (h *TaskHandler) GetByID(c echo.Context) error {
 	}
 
 	h.attachHumanGateInfo(c.Request().Context(), task)
+	h.attachStatusCategory(c.Request().Context(), task)
 	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
@@ -563,6 +580,7 @@ func (h *TaskHandler) GetByShortID(c echo.Context) error {
 	}
 
 	h.attachHumanGateInfo(c.Request().Context(), task)
+	h.attachStatusCategory(c.Request().Context(), task)
 	decorateTask(c, task)
 	return c.JSON(http.StatusOK, task)
 }
@@ -1110,10 +1128,16 @@ func (h *TaskHandler) MoveTask(c echo.Context) error {
 		input.Source = "api"
 	}
 
-	if err := h.taskService.MoveTask(c.Request().Context(), taskID, input); err != nil {
+	moveCtx, moveWarnings := service.ContextWithMoveWarnings(c.Request().Context())
+	if err := h.taskService.MoveTask(moveCtx, taskID, input); err != nil {
 		return handleError(c, err)
 	}
 
+	// "warnings" appears only when the move succeeded with something worth
+	// saying (e.g. a parent closed over open children); it never blocks.
+	if warnings := moveWarnings.Items(); len(warnings) > 0 {
+		return c.JSON(http.StatusOK, map[string]any{"status": "ok", "warnings": warnings})
+	}
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 

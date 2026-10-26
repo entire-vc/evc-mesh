@@ -154,6 +154,7 @@ function Bubble({ projectId, message, wsSlug }: { projectId: string; message: Ch
           {message.body !== "" && (
             <MarkdownView
               content={message.body}
+              breaks={mine}
               wsSlug={wsSlug}
               className={cn("chat-markdown", mine && "text-primary-foreground [&_a]:text-inherit [&_a]:underline [&_strong]:text-inherit [&_em]:text-inherit")}
             />

@@ -15,6 +15,9 @@ export default async function globalTeardown() {
   if (missingEnv().length > 0) return; // setup already failed loudly
   const browser = await chromium.launch();
   const leftovers: string[] = [];
+  // What the server answers after the cleanup, kept as read, so the artifact proves the window is closed.
+  const threads: Array<{ actor: string; threadId: string; delete: number; readback: number }> = [];
+  let settings: { status: number; enabled?: boolean; agents?: string[] } | null = null;
   try {
     const actors = [] as Awaited<ReturnType<typeof openActor>>[];
     try {
@@ -26,14 +29,24 @@ export default async function globalTeardown() {
         const del = await a.api("DELETE", `${base}/threads/${t.threadId}`);
         // 404 = already deleted through the UI by the spec itself.
         if (del.status >= 300 && del.status !== 404) leftovers.push(`thread ${t.threadId} (${t.actor}) delete=${del.status}`);
+        const back = await a.api("GET", `${base}/threads/${t.threadId}`);
+        threads.push({ actor: t.actor, threadId: t.threadId, delete: del.status, readback: back.status });
+        if (back.status !== 404) leftovers.push(`thread ${t.threadId} (${t.actor}) still answers ${back.status} after delete`);
       }
       const baseline = existsSync(join(OUT_DIR, ".settings-baseline.json"))
         ? (JSON.parse(readFileSync(join(OUT_DIR, ".settings-baseline.json"), "utf8")) as { allowed_roles?: string[] })
         : {};
       // Close the window: the sandbox goes back to enabled=false, no agents.
       await actors[2]!.api("PUT", `${base}/settings`, { enabled: false, agents: [], allowed_roles: baseline.allowed_roles });
-      const back = (await actors[2]!.api("GET", `${base}/settings`)).json() as { enabled: boolean; agents: string[] };
-      if (back.enabled || back.agents.length > 0) leftovers.push(`settings still enabled=${back.enabled} agents=${back.agents.length}`);
+      const read = await actors[2]!.api("GET", `${base}/settings`);
+      if (read.status !== 200) {
+        settings = { status: read.status };
+        leftovers.push(`settings readback answered ${read.status}`);
+      } else {
+        const back = read.json() as { enabled: boolean; agents: string[] };
+        settings = { status: read.status, enabled: back.enabled, agents: back.agents };
+        if (back.enabled || back.agents.length > 0) leftovers.push(`settings still enabled=${back.enabled} agents=${back.agents.length}`);
+      }
     } finally {
       await Promise.allSettled(actors.map((a) => a.close()));
     }
@@ -43,6 +56,6 @@ export default async function globalTeardown() {
     await browser.close();
   }
   row("CLEANUP", "window", leftovers.length === 0 ? "PASS" : "FAIL", leftovers.join(" | "));
-  writeFileSync(join(OUT_DIR, "cleanup.json"), JSON.stringify({ closed_at: new Date().toISOString(), leftovers }, null, 1));
+  writeFileSync(join(OUT_DIR, "cleanup.json"), JSON.stringify({ closed_at: new Date().toISOString(), settings, threads, leftovers }, null, 1));
   if (leftovers.length > 0) throw new Error(`cleanup left: ${leftovers.join(" | ")}`);
 }

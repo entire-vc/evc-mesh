@@ -466,26 +466,40 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 	// Revoke the old refresh token. The conditional revoke — not the RevokedAt read
 	// above — is what actually decides the winner: the read is only an early-out, and
 	// between it and this line another request can consume the same one-shot token.
-	// Losing here is TRUE CONCURRENCY (both requests observed the token as live) —
-	// the ambiguous case theft-detection exists to catch — and is NEVER grace-eligible,
-	// regardless of how quickly the loser arrives: unlike the branch above, there is no
-	// safe way to tell a genuinely concurrent replay from a racing thief without
-	// reopening the exact TOCTOU window TestRefreshTokens_ConcurrentRequests_OnlySucceeds
-	// pins shut.
+	// Exactly one request wins; a loser read the token as live and arrived while the
+	// winner was rotating it — a page reload whose new page sends the cookie while the
+	// old page's refresh is still in flight. By the time the loser's UPDATE matches
+	// nothing, the winner's write (revoked_at and replaced_by_hash together) is
+	// committed, so the loser re-reads the row and gets exactly the verdict a
+	// sequential replay a moment later would: grace inside the window, theft outside
+	// it or with the window switched off. Holding it to a stricter rule would buy
+	// nothing — a thief who loses the race only has to replay sequentially.
 	//
-	// From the revoke on, the rotation's writes run detached from the request:
-	// once the old token is revoked, a client that disconnects mid-request (page
-	// reload, closed tab, dropped mobile network) retries with that same token, and
-	// only a completed LinkSuccessor lets handleTokenReuse treat the retry as
-	// grace-eligible. Cancelling halfway — revoked but unlinked — turns a reload
-	// into a sweep of every session the user has.
+	// The successor's hash is generated before the revoke and recorded by the same
+	// UPDATE, so the token is never visible as revoked-but-unlinked: a page reload
+	// that replays the old cookie while this request is still minting the new pair
+	// already finds the successor and gets the grace window instead of a sweep of
+	// every session the user has.
+	//
+	// From the revoke on, the rotation's writes run detached from the request: a
+	// client that disconnects mid-request (page reload, closed tab, dropped mobile
+	// network) must not leave the successor row uninserted behind a token it
+	// cannot reuse.
+	plainRefreshToken, newHash, err := generateRefreshToken()
+	if err != nil {
+		return nil, apierror.InternalError("failed to generate refresh token")
+	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rotationWriteTimeout)
 	defer cancel()
-	revoked, err := s.refreshTokenRepo.RevokeByHash(wctx, tokenHash)
+	revoked, err := s.refreshTokenRepo.RevokeByHash(wctx, tokenHash, newHash)
 	if err != nil {
 		return nil, apierror.Wrap(err)
 	}
 	if !revoked {
+		current, rereadErr := s.refreshTokenRepo.GetByHash(wctx, tokenHash)
+		if rereadErr == nil && current != nil && current.RevokedAt != nil {
+			return s.handleTokenReuse(wctx, current, "lost_conditional_revoke")
+		}
 		_ = s.refreshTokenRepo.RevokeByUserID(wctx, stored.UserID)
 		log.Printf("[refresh-reuse] user=%s reason=lost_conditional_revoke grace=false", stored.UserID)
 		metrics.RecordRefreshTokenReuse("lost_conditional_revoke", false)
@@ -501,43 +515,27 @@ func (s *Service) RefreshTokens(ctx context.Context, refreshToken string) (*Toke
 		return nil, ErrUserInactive
 	}
 
-	pair, err := s.generateTokenPair(wctx, user)
-	if err != nil {
-		return nil, err
-	}
-
-	// Link the rotation so a later replay of tokenHash can be told apart from a
-	// real reuse. Non-fatal: see LinkSuccessor's doc comment — losing this call
-	// only means that specific replay won't get the grace window, never a
-	// security regression.
-	newHash := hashRefreshToken(pair.RefreshToken)
-	if linkErr := s.refreshTokenRepo.LinkSuccessor(wctx, tokenHash, newHash); linkErr != nil {
-		log.Printf("[refresh-reuse] failed to link rotation successor for user %s: %v", stored.UserID, linkErr)
-	}
-
-	return pair, nil
+	return s.issueTokenPair(wctx, user, plainRefreshToken, newHash)
 }
 
 // handleTokenReuse decides what happens when a refresh token is presented
-// that was ALREADY revoked at the moment RefreshTokens read it — i.e. nothing
-// is racing this request; it is a purely sequential replay. (The
-// true-concurrency loss inside RefreshTokens' RevokeByHash call never reaches
-// this function — see that call site's comment for why it stays a hard
-// failure unconditionally.)
+// that is already revoked: either RefreshTokens read it that way (a sequential
+// replay), or the request lost the conditional revoke to a concurrent rotation
+// and re-read the winner's row (see that call site's comment).
 //
 // stored.ReplacedByHash tells us WHY the token was revoked:
 //
-//   - set: an earlier request rotated it successfully (LinkSuccessor ran). A
-//     replay within the grace window is most likely the client that made
-//     THAT request never seeing its response — a dropped mobile connection,
+//   - set: an earlier request won the rotation (RevokeByHash records the
+//     successor in the same UPDATE, so this holds even while that request is
+//     still minting the new pair). A replay within the grace window is most
+//     likely the client that made THAT request never seeing its response — a dropped mobile connection,
 //     a closed tab, a proxy timeout — retrying with the only token it has.
 //     Mint a fresh pair; do not touch the account's other sessions. A replay
 //     past the window gets no benefit of the doubt and falls through to the
 //     same full revoke as the case below.
-//   - nil: the token died some other way — an explicit logout, an earlier
-//     theft detection on this account, or (rarely) a rotation whose
-//     LinkSuccessor call was lost (safe by construction, see its doc
-//     comment). Nothing vouches for the replay: always theft.
+//   - nil: the token died some other way — an explicit logout or an earlier
+//     theft detection on this account. Nothing vouches for the replay: always
+//     theft.
 //
 // reason labels the metric/log for observability.
 func (s *Service) handleTokenReuse(ctx context.Context, stored *repository.RefreshToken, reason string) (*TokenPair, error) {
@@ -589,12 +587,19 @@ func (s *Service) ValidateAccessToken(tokenString string) (*Claims, error) {
 }
 
 // generateTokenPair creates a new JWT access token and an opaque refresh
-// token. Unchanged by an internal ticket — callers that need the new refresh token's
-// hash (RefreshTokens' rotation path, to call LinkSuccessor) derive it with
-// hashRefreshToken(pair.RefreshToken) instead of this function returning it,
-// so this function's existing error branches stay out of that change's diff.
-// ctx governs the refresh-token insert.
+// token. ctx governs the refresh-token insert.
 func (s *Service) generateTokenPair(ctx context.Context, user *domain.User) (*TokenPair, error) {
+	plainRefreshToken, tokenHash, err := generateRefreshToken()
+	if err != nil {
+		return nil, apierror.InternalError("failed to generate refresh token")
+	}
+	return s.issueTokenPair(ctx, user, plainRefreshToken, tokenHash)
+}
+
+// issueTokenPair signs an access token and stores an already-generated refresh
+// token. RefreshTokens' rotation path calls it directly because it needs the
+// new refresh token's hash before the pair exists (see RevokeByHash there).
+func (s *Service) issueTokenPair(ctx context.Context, user *domain.User, plainRefreshToken, tokenHash string) (*TokenPair, error) {
 	now := timeNow()
 
 	// Generate JWT access token.
@@ -614,12 +619,6 @@ func (s *Service) generateTokenPair(ctx context.Context, user *domain.User) (*To
 	accessToken, err := token.SignedString(s.jwtSecret)
 	if err != nil {
 		return nil, apierror.InternalError("failed to sign access token")
-	}
-
-	// Generate opaque refresh token.
-	plainRefreshToken, tokenHash, err := generateRefreshToken()
-	if err != nil {
-		return nil, apierror.InternalError("failed to generate refresh token")
 	}
 
 	// Store refresh token hash in the database.

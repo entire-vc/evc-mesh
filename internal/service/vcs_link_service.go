@@ -39,6 +39,9 @@ type vcsLinkService struct {
 	// mrStateSource resolves a per-workspace GitLab client to read an MR's live
 	// state when a link is added without a status; nil disables that check.
 	mrStateSource func(ctx context.Context, workspaceID uuid.UUID) (gitlabapi.MergeRequestChecker, bool)
+	// depResolver is told when a deploy is recorded so dependents waiting on a
+	// "deployed" edge leave backlog now; nil skips that.
+	depResolver DependencyResolver
 }
 
 // vcsLinkCreateLiveCheckTimeout bounds the GitLab round trip Create makes to
@@ -103,6 +106,13 @@ func WithVCSCommentService(svc CommentService) VCSLinkServiceOption {
 // passes uuid.Nil (unscoped) never touches this dependency at all.
 func WithVCSProjectRepo(r repository.ProjectRepository) VCSLinkServiceOption {
 	return func(s *vcsLinkService) { s.projectRepo = r }
+}
+
+// WithVCSDependencyResolver injects the resolver run after a deploy is recorded
+// on a link, so a dependent held by a "deployed" dependency edge is released
+// without waiting for the next sweep.
+func WithVCSDependencyResolver(r DependencyResolver) VCSLinkServiceOption {
+	return func(s *vcsLinkService) { s.depResolver = r }
 }
 
 // NewVCSLinkService creates a new VCSLinkService.
@@ -370,6 +380,11 @@ func (s *vcsLinkService) PatchMetadata(ctx context.Context, taskID, linkID uuid.
 	if link == nil {
 		return nil, apierror.NotFound("VCSLink")
 	}
+	if _, deployed := out[domain.VCSLinkMetaDeployed]; deployed && s.depResolver != nil {
+		if rerr := s.depResolver.CheckDependencyResolution(ctx, taskID); rerr != nil {
+			log.Printf("[vcs-link] WARNING: dependency resolution after deploy on task %s failed: %v", taskID, rerr)
+		}
+	}
 	return link, nil
 }
 
@@ -529,6 +544,7 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		{Name: "branch", Text: ev.PRBranch},
 	}
 	taskID, matched, outcome, candidates := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
+	viaMention := taskID != uuid.Nil
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] pr=%s#%d resolved task=%s via=%s src=%s raw=%q",
 			ev.Repository, ev.PRNumber, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
@@ -607,17 +623,30 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 	// 2. Compute target link status.
 	linkStatus := githubLinkStatus(ev)
 
+	// 2b. A mention from a repository the task's project does not use is a
+	//     reference, never the card's own deliverable (see vcs_link_foreign_repo.go).
+	//     Only a native mention goes on to the binding rule.
+	foreign := viaMention && s.isForeignRepoMention(ctx, taskID, ev.Repository, ev.PRHTMLURL)
+	var bind prBinding
+	if !foreign {
+		bind = s.bindStrength(ctx, taskID, matched, ev.PRHTMLURL)
+	}
+	linkType, linkMeta := domain.VCSLinkTypePR, bind.metadata([]byte("{}"))
+	if foreign {
+		linkType, linkMeta = domain.VCSLinkTypeReference, referenceOnlyMetadata(nil)
+	}
+
 	// 3. Upsert the link so subsequent webhooks update the same row.
 	link := &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     taskID,
 		Provider:   domain.VCSProviderGitHub,
-		LinkType:   domain.VCSLinkTypePR,
+		LinkType:   linkType,
 		ExternalID: strconv.Itoa(ev.PRNumber),
 		URL:        ev.PRHTMLURL,
 		Title:      ev.PRTitle,
 		Status:     linkStatus,
-		Metadata:   []byte("{}"),
+		Metadata:   linkMeta,
 		CreatedAt:  time.Now(),
 	}
 	if _, err := s.repo.Upsert(ctx, link); err != nil {
@@ -630,8 +659,23 @@ func (s *vcsLinkService) HandleGitHubPullRequestEvent(ctx context.Context, ev Gi
 		return PRHandleResult{TaskID: taskID, Reason: "not_closed"}, nil
 	}
 
-	res, err := s.applyPRTransitionPolicy(ctx, taskID, ev.PRMerged,
-		fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), "github-webhook")
+	if foreign {
+		res := s.finishForeignMention(ctx, taskID, ev.PRMerged, fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), mrRepoName(ev.Repository, ev.PRHTMLURL), "github-webhook")
+		s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitHub, strconv.Itoa(ev.PRNumber), ev.PRHTMLURL, taskID,
+			ev.PRMerged, fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), "github-webhook")
+		return res, nil
+	}
+
+	var (
+		res PRHandleResult
+		err error
+	)
+	if bind.bound {
+		res, err = s.applyPRTransitionPolicy(ctx, taskID, ev.PRMerged,
+			fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), "github-webhook")
+	} else {
+		res = s.noteMention(ctx, taskID, ev.PRMerged, fmt.Sprintf("PR #%d", ev.PRNumber), bind.reason, "github-webhook")
+	}
 	s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitHub, strconv.Itoa(ev.PRNumber), ev.PRHTMLURL, taskID,
 		ev.PRMerged, fmt.Sprintf("PR #%d", ev.PRNumber), shortSHA(ev.MergeSHA), "github-webhook")
 	return res, err
@@ -656,6 +700,7 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 		{Name: "branch", Text: ev.MRBranch},
 	}
 	taskID, matched, outcome, candidates := s.resolveTaskRef(ctx, ev.WorkspaceID, sources...)
+	viaMention := taskID != uuid.Nil
 	if taskID != uuid.Nil {
 		log.Printf("[vcs-webhook] mr=%s!%d resolved task=%s via=%s src=%s raw=%q",
 			ev.ProjectPath, ev.MRIID, taskID, matched.Kind, matched.Source, truncate(matched.Raw, 60))
@@ -716,17 +761,30 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	//    needs the separate `merged` boolean), so this is a direct mapping.
 	linkStatus := gitlabLinkStatus(ev.MRState)
 
+	// 2b. A mention from a repository the task's project does not use is a
+	//     reference, never the card's own deliverable (see vcs_link_foreign_repo.go).
+	//     Only a native mention goes on to the binding rule.
+	foreign := viaMention && s.isForeignRepoMention(ctx, taskID, ev.ProjectPath, ev.MRURL)
+	var bind prBinding
+	if !foreign {
+		bind = s.bindStrength(ctx, taskID, matched, ev.MRURL)
+	}
+	linkType, linkMeta := domain.VCSLinkTypePR, bind.metadata(gitLabLinkMetadata(ev.HeadSHA))
+	if foreign {
+		linkType, linkMeta = domain.VCSLinkTypeReference, referenceOnlyMetadata(gitLabLinkMetadata(ev.HeadSHA))
+	}
+
 	// 3. Upsert the link so subsequent webhooks update the same row.
 	link := &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     taskID,
 		Provider:   domain.VCSProviderGitLab,
-		LinkType:   domain.VCSLinkTypePR,
+		LinkType:   linkType,
 		ExternalID: strconv.Itoa(ev.MRIID),
 		URL:        ev.MRURL,
 		Title:      ev.MRTitle,
 		Status:     linkStatus,
-		Metadata:   gitLabLinkMetadata(ev.HeadSHA),
+		Metadata:   linkMeta,
 		CreatedAt:  time.Now(),
 	}
 	if _, err := s.repo.Upsert(ctx, link); err != nil {
@@ -741,11 +799,25 @@ func (s *vcsLinkService) HandleGitLabMergeRequestEvent(ctx context.Context, ev G
 	}
 
 	merged := linkStatus == domain.VCSLinkStatusMerged
+	if foreign {
+		res := s.finishForeignMention(ctx, taskID, merged, fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), mrRepoName(ev.ProjectPath, ev.MRURL), "gitlab-webhook")
+		s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitLab, strconv.Itoa(ev.MRIID), ev.MRURL, taskID,
+			merged, fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
+		return res, nil
+	}
 	if merged {
 		s.syncMergedPipeline(ctx, ev)
 	}
-	res, err := s.applyPRTransitionPolicy(ctx, taskID, merged,
-		fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
+	var (
+		res PRHandleResult
+		err error
+	)
+	if bind.bound {
+		res, err = s.applyPRTransitionPolicy(ctx, taskID, merged,
+			fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
+	} else {
+		res = s.noteMention(ctx, taskID, merged, fmt.Sprintf("MR !%d", ev.MRIID), bind.reason, "gitlab-webhook")
+	}
 	s.closeReviewSubjects(ctx, ev.WorkspaceID, domain.VCSProviderGitLab, strconv.Itoa(ev.MRIID), ev.MRURL, taskID,
 		merged, fmt.Sprintf("MR !%d", ev.MRIID), shortSHA(ev.MergeSHA), "gitlab-webhook")
 	return res, err
@@ -952,6 +1024,15 @@ func (s *vcsLinkService) closeReviewSubjects(ctx context.Context, workspaceID uu
 		if err != nil || cur == nil || cur.Category == domain.StatusCategoryDone || cur.Category == domain.StatusCategoryCancelled {
 			continue
 		}
+		// Same rule as the primary transition: a card a person has to accept
+		// or close is not closed by the merge of the thing it reviews.
+		if _, why := autoDoneBlockedReason(task); why != "" {
+			body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q). Review card NOT moved to done: %s.", refLabel, mergeRefLabel, why)
+			if cerr := s.postSystemComment(ctx, l.TaskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", l.TaskID, cerr)
+			}
+			continue
+		}
 		done, err := s.resolveStatusBySlug(ctx, task.ProjectID, "done")
 		if err != nil || done == nil {
 			log.Printf("[vcs-webhook] review-subject no done status task=%s: %v", l.TaskID, err)
@@ -997,7 +1078,8 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 	}
 	var pendingCount int
 	for _, l := range taskLinks {
-		if l.LinkType != domain.VCSLinkTypePR {
+		// A mention is some other task's work; it holds nothing back here.
+		if l.LinkType != domain.VCSLinkTypePR || l.IsRelatesTo() {
 			continue
 		}
 		if l.Status != domain.VCSLinkStatusMerged && l.Status != domain.VCSLinkStatusClosed {
@@ -1043,6 +1125,17 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 		}
 		targetSlug = "review"
 	case domain.StatusCategoryReview:
+		// A merge closes a card in review only when nobody else still has to
+		// accept it. A raised human gate and an agent's completion signal both
+		// say a person closes this card; the merge is then one fact among
+		// others, not the acceptance (25.10 incident). Say so and stop.
+		if reason, why := autoDoneBlockedReason(task); reason != "" {
+			body := fmt.Sprintf("🤖 Auto: %s merged (commit %#q). Task NOT moved to done: %s.", refLabel, mergeRefLabel, why)
+			if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
+				log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
+			}
+			return PRHandleResult{TaskID: taskID, OldStatus: currentStatus.Slug, Reason: reason}, nil
+		}
 		targetSlug = "done"
 	default:
 		body := fmt.Sprintf("🤖 Auto: %s merged. Task in %#q; no auto-transition.", refLabel, currentStatus.Slug)
@@ -1076,6 +1169,113 @@ func (s *vcsLinkService) applyPRTransitionPolicy(ctx context.Context, taskID uui
 		Transitioned: true,
 		Reason:       "transitioned",
 	}, nil
+}
+
+// prBinding says whether the task a payload resolved to is the PR/MR's own
+// work (bound: its merge may move the task) or only mentioned by it.
+type prBinding struct {
+	bound bool
+	// reason names why: linked / project_repo when bound; body_only /
+	// foreign_repo / repo_unknown / probe_failed when only mentioned.
+	reason string
+	// wasMention: the stored link is a relates_to one that this delivery binds.
+	wasMention bool
+}
+
+// metadata returns the link metadata for this binding: a mention is marked
+// relates_to; a binding that upgrades an earlier mention clears the mark
+// (the repository merges metadata, so leaving the key out would keep it).
+func (b prBinding) metadata(base []byte) []byte {
+	if b.bound && !b.wasMention {
+		return base
+	}
+	m := map[string]any{}
+	_ = json.Unmarshal(base, &m)
+	if b.bound {
+		m["relation"] = ""
+	} else {
+		m["relation"] = domain.VCSLinkRelationRelatesTo
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return base
+	}
+	return out
+}
+
+// bindStrength decides whether the PR/MR at rawURL is taskID's own work. It is
+// when the task already holds a (non-mention) link to this exact PR/MR — set by
+// add_vcs_link or an earlier bound delivery — or when the reference came from
+// the title or branch AND the repository is one the task's project works in,
+// i.e. some card of the project links a PR/MR of the same repository. Anything
+// else, notably an id quoted in the description, is a mention (an internal ticket: a
+// runner MR body naming another project's review card moved it to done).
+func (s *vcsLinkService) bindStrength(ctx context.Context, taskID uuid.UUID, ref TaskRef, rawURL string) prBinding {
+	var wasMention bool
+	if rawURL != "" {
+		if links, err := s.repo.ListByTask(ctx, taskID); err == nil {
+			for _, l := range filterLinksByURL(links, rawURL) {
+				if l.LinkType != domain.VCSLinkTypePR {
+					continue
+				}
+				if !l.IsRelatesTo() {
+					return prBinding{bound: true, reason: "linked"}
+				}
+				wasMention = true
+			}
+		}
+	}
+	mention := func(reason string) prBinding {
+		return prBinding{reason: reason, wasMention: wasMention}
+	}
+	if ref.Source != "title" && ref.Source != "branch" {
+		return mention("body_only")
+	}
+	key := vcsRepoKey(rawURL)
+	if key == "" || s.taskRepo == nil {
+		return mention("repo_unknown")
+	}
+	task, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil || task == nil {
+		return mention("repo_unknown")
+	}
+	found, err := s.repo.ProjectHasPRLinkToRepo(ctx, task.ProjectID, key)
+	if err != nil {
+		log.Printf("[vcs-webhook] project repo probe task=%s url=%s: %v", taskID, rawURL, err)
+		return mention("probe_failed")
+	}
+	if found {
+		return prBinding{bound: true, reason: "project_repo", wasMention: wasMention}
+	}
+	return mention("foreign_repo")
+}
+
+// vcsRepoKey names the repository of a PR/MR url as lowercased host plus
+// "group/project", or "" when the url has no PR/MR shape.
+func vcsRepoKey(raw string) string {
+	repo := RepoFromVCSURL(raw)
+	if repo == "" {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Host) + "/" + repo
+}
+
+// noteMention handles a terminal delivery for a task the PR/MR only mentions:
+// the link is already stored as relates_to, the task never moves, and a merge
+// leaves one line saying so.
+func (s *vcsLinkService) noteMention(ctx context.Context, taskID uuid.UUID, merged bool, refLabel, why, source string) PRHandleResult {
+	log.Printf("[vcs-webhook] %s task=%s mentioned only (%s); no status change", refLabel, taskID, why)
+	if merged {
+		body := fmt.Sprintf("🤖 Auto: %s merged — mentioned only, no status change.", refLabel)
+		if cerr := s.postSystemComment(ctx, taskID, body, source); cerr != nil {
+			log.Printf("[vcs-webhook] post comment failed task=%s: %v", taskID, cerr)
+		}
+	}
+	return PRHandleResult{TaskID: taskID, Reason: "mentioned_only"}
 }
 
 // postSystemComment writes a non-internal comment authored as Gary.
@@ -1414,4 +1614,17 @@ func gitLabLinkMetadata(headSHA string) []byte {
 	headSHA = strings.TrimSpace(headSHA)
 	b, _ := json.Marshal(map[string]string{domain.VCSLinkMetaHeadSHA: headSHA}) // a string map cannot fail to marshal
 	return b
+}
+
+// autoDoneBlockedReason says whether a merge must leave a card in review where
+// it is, and why. The reason is the stable PRHandleResult.Reason; the text goes
+// into the card's automation comment.
+func autoDoneBlockedReason(task *domain.Task) (reason, why string) {
+	switch {
+	case task.HumanGate:
+		return "human_gate_active", "it has an active human gate, so a person has to accept it"
+	case task.CompletionSignal:
+		return "completion_signal_pending", "the executor already signalled completion and the card waits for a person to accept and close it"
+	}
+	return "", ""
 }

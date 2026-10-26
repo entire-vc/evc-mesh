@@ -742,7 +742,9 @@
       "installed": "Installed",
       "connected": "Connected",
       "blocked": "Blocked by catalog",
-      "notAllowed": "Not allowed by the instance administrator"
+      "notAllowed": "Not allowed by the instance administrator",
+      "themeActive": "Active in this workspace",
+      "themeInactive": "Not selected"
     },
     "search": "Search extensions",
     "results": "Extensions",
@@ -780,7 +782,9 @@
       "allow": "Allow",
       "blocked": "Blocked",
       "askAdmin": "Not installed on this instance. Ask the instance administrator to install it.",
-      "notAllowed": "Not allowed by the instance administrator."
+      "notAllowed": "Not allowed by the instance administrator.",
+      "chooseTheme": "Choose",
+      "configureTheme": "Configure"
     },
     "permissions": {
       "none": "This extension asks for no special permissions.",
@@ -859,6 +863,11 @@
       "noSlots": "The extension works in the background; it adds nothing to the screens.",
       "bindProjects": "Bind it to projects",
       "toInstalled": "Go to installed extensions"
+    },
+    "theme": {
+      "heading": "Theme {{name}}",
+      "hint": "Pick the settings and check the preview. Applying replaces the workspace's current theme; only one theme is active at a time.",
+      "apply": "Apply"
     }
   },
   "capabilities": {
@@ -983,7 +992,9 @@
       "workspace": "Connected in this workspace",
       "off": "Turned off",
       "receiving": "Receiving events · {{count}} links, last {{last}}",
-      "none": "Not connected"
+      "none": "Not connected",
+      "themeActive": "Active in this workspace",
+      "themeInactive": "Not selected"
     },
     "saved": "{{name}}: settings saved",
     "connected": "{{name}} connected",
@@ -1034,7 +1045,22 @@
       "delete": "Delete the data too",
       "deleteHint": "The extension's data in this workspace is erased and cannot be restored.",
       "deleteUnsupported": "This extension has no data deletion yet; the data is kept."
-    }
+    },
+    "managedHint": "The instance admin connected this extension for every workspace. Its secrets stay at instance level.",
+    "close": "Close",
+    "chooseTheme": "Choose",
+    "configureTheme": "Configure",
+    "repos": {
+      "title": "Repositories sending links",
+      "none": "No repository activity yet",
+      "links_one": "{{value}} link",
+      "links_other": "{{value}} links",
+      "last": "last event {{last}}"
+    },
+    "editInstance": "Edit at instance level",
+    "instanceCredentials": "Credentials are managed by the instance admin",
+    "useOwn": "Use own credentials for this workspace",
+    "useOwnHint": "Your own token replaces the instance connection in this workspace only. Nothing changes until you save."
   },
   "projectTab": {
     "intro": "Extensions bound to this project. Connect an extension to the workspace first; here you choose what it does for this project.",
@@ -1079,7 +1105,37 @@
     "empty": "No extensions are bound to this project yet.",
     "emptyNoneConnected": "No extensions with a project level are connected to the workspace. Connect one in the workspace extensions first.",
     "loadFailed": "Couldn't load the project extensions.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "workspaceLevel": "Workspace",
+    "bindRepo": "Bind a repository",
+    "vcsNote": "{{name}} is on in the workspace: commits, branches and merge requests are linked to tasks through the instance webhook. Binding a repository to this project is a separate, optional step.",
+    "unknownExt": "{{name}} is neither bound to this project nor on in the workspace.",
+    "repos": {
+      "title": "Repositories",
+      "sources": "«Via instance webhook»: task links from this repository arrive through the instance webhook. «Bound to project»: the repository is bound to this project in its settings.",
+      "source": {
+        "webhook": "via instance webhook",
+        "binding": "bound to project",
+        "both": "webhook + bound"
+      },
+      "field": "Repository",
+      "links_one": "{{n}} link",
+      "links_other": "{{n}} links",
+      "noLinks": "no task links yet",
+      "lastEvent": "last event {{when}}",
+      "empty": "No repositories yet: no task of this project links to one, and none is bound.",
+      "loadFailed": "Couldn't load the repositories.",
+      "partial": "Repository activity is not available on this server yet; only the bound repository is shown.",
+      "partialEmpty": "Repository activity is not available on this server yet, and no repository is bound to this project.",
+      "filter": "Filter repositories",
+      "bindRepo": "Bind {{repo}}",
+      "unbindRepo": "Unbind {{repo}}",
+      "bound": "{{repo}} bound to the project",
+      "unbound": "{{repo}} unbound from the project",
+      "replaces": "Replaces the current binding: {{repo}}",
+      "unbindTitle": "Unbind {{repo}}?",
+      "unbindDesc": "The project binding is removed. Task links from this repository keep arriving through the instance webhook."
+    }
   },
   "instanceAdmin": {
     "title": "Instance extension settings",
@@ -1202,5 +1258,15 @@
     "rolledBack": "{{name}} rolled back",
     "updatedAll_one": "{{count}} extension updated",
     "updatedAll_other": "{{count}} extensions updated"
+  },
+  "statusPanel": {
+    "state": "Status",
+    "health": "Health",
+    "links": "Task links",
+    "linksValue_one": "{{value}} link, last event {{last}}",
+    "linksValue_other": "{{value}} links, last event {{last}}",
+    "linksNone": "No task links yet",
+    "lastError": "Last error",
+    "instanceNote": "Set up by the instance admin. Secrets are kept at instance level and are never shown."
   }
 }

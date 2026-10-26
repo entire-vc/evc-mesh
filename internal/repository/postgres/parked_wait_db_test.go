@@ -637,3 +637,25 @@ func TestParkedWaitReleaseCarriesChatAttribution(t *testing.T) {
 	require.EqualValues(t, 3, changes["execution_epoch"])
 	require.Equal(t, "parked-wait-api", changes["source"])
 }
+
+// A typed blocks edge is judged by its own condition when a dependency WAIT wakes:
+// a merged (done) blocker does not release a "deployed" edge until a deploy is
+// recorded on one of its VCS links.
+func TestParkedWaitTypedEdgeFollowsItsCondition(t *testing.T) {
+	f := newParkedFixture(t)
+	blocker := f.blocker(t, f.done)
+	f.dependency(t, blocker)
+	_, err := f.repo.db.Exec(`UPDATE task_dependencies SET condition='deployed' WHERE task_id=$1 AND depends_on_task_id=$2`, f.id, blocker)
+	require.NoError(t, err)
+	f.register(t)
+
+	_, err = f.repo.ReleaseParkedWait(f.ctx, f.id, f.request(), "")
+	parked409(t, err)
+
+	_, err = f.repo.db.Exec(`INSERT INTO vcs_links(id,task_id,provider,link_type,external_id,url,metadata) VALUES($1,$2,'gitlab','pr','7','https://git.example/mr/7',$3::jsonb)`,
+		uuid.New(), blocker, `{"deployed":{"sha":"0123456789abcdef0123456789abcdef01234567","environment":"production","at":"2026-10-25T10:00:00Z"}}`)
+	require.NoError(t, err)
+	r, err := f.repo.ReleaseParkedWait(f.ctx, f.id, f.request(), "")
+	require.NoError(t, err)
+	require.True(t, r.Released, "a recorded deploy releases the deployed edge")
+}

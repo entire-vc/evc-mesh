@@ -49,6 +49,7 @@ const (
 // workspace (Keep K5.9, evc-keep docs/mesh-extension.md):
 //
 //	PUT  /orgs/{org}/mesh/secrets/{ref}          {value} -> {ref, version, fingerprint}
+//	                                             (version is a string; an older Keep sent a number)
 //	POST /orgs/{org}/mesh/secrets/{ref}/resolve  (empty body) -> {value, version}
 //
 // There is no bearer. Each request carries X-Mesh-Workspace, X-Mesh-Timestamp,
@@ -220,16 +221,27 @@ func (c *HTTPKeepClient) PutValue(ctx context.Context, ref Ref, plain string) (s
 		return "", ErrKeepValueSize
 	}
 	var put struct {
-		Ref     string `json:"ref"`
-		Version int    `json:"version"`
+		Ref     string          `json:"ref"`
+		Version json.RawMessage `json:"version"`
 	}
 	if err := c.do(ctx, http.MethodPut, "mesh/secrets/"+id, map[string]string{"value": plain}, &put); err != nil {
 		return "", err
 	}
-	if put.Ref != id || put.Version < 1 {
+	if put.Ref != id || !validVersion(put.Version) {
 		return "", errors.New("keep: unexpected put answer")
 	}
 	return id, nil
+}
+
+// validVersion reports whether a PUT answer names a stored version: a
+// non-empty string, or a positive integer from an older Keep.
+func validVersion(raw json.RawMessage) bool {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s != ""
+	}
+	var n int64
+	return json.Unmarshal(raw, &n) == nil && n > 0
 }
 
 func (c *HTTPKeepClient) GetValue(ctx context.Context, secretID string) (string, error) {

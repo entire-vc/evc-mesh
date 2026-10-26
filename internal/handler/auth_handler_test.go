@@ -124,7 +124,7 @@ func (r *authTestRefreshTokenRepo) RevokeByUserID(_ context.Context, userID uuid
 	}
 	return nil
 }
-func (r *authTestRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash string) (bool, error) {
+func (r *authTestRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash, successorHash string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	t, ok := r.tokens[tokenHash]
@@ -133,16 +133,8 @@ func (r *authTestRefreshTokenRepo) RevokeByHash(_ context.Context, tokenHash str
 	}
 	now := time.Now()
 	t.RevokedAt = &now
+	t.ReplacedByHash = &successorHash
 	return true, nil
-}
-func (r *authTestRefreshTokenRepo) LinkSuccessor(_ context.Context, oldHash, newHash string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if t, ok := r.tokens[oldHash]; ok {
-		h := newHash
-		t.ReplacedByHash = &h
-	}
-	return nil
 }
 func (r *authTestRefreshTokenRepo) DeleteExpired(_ context.Context) error { return nil }
 
@@ -398,9 +390,9 @@ func TestAuthHandler_Refresh_RotatesCookie(t *testing.T) {
 // #562, the httpOnly-cookie + Web Locks migration): a replay of an
 // already-rotated refresh token must still be able to trip full reuse
 // detection and clear the client cookie — the grace window added by
-// #cfb14ad6 is a narrow, time-boxed exception (see the test below), not a
+// an internal ticket is a narrow, time-boxed exception (see the test below), not a
 // removal of this guarantee. Grace window explicitly disabled here so this
-// test keeps meaning exactly what it meant before #cfb14ad6 existed.
+// test keeps meaning exactly what it meant before an internal ticket existed.
 func TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401(t *testing.T) {
 	h, e := newAuthHandlerTest(newAuthTestUserRepo(), auth.WithRefreshReuseGraceWindow(0))
 
@@ -432,7 +424,7 @@ func TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401(t *testing.T)
 }
 
 // TestAuthHandler_Refresh_ReusedToken_WithinGraceWindow_RotatesInstead is the
-// new behavior #cfb14ad6 adds on top of AC7 above: a replay of the just-
+// new behavior an internal ticket adds on top of AC7 above: a replay of the just-
 // rotated token, inside the default grace window, is the shape a mobile
 // client produces when it never saw the rotation response (dropped
 // connection, closed tab, proxy timeout) — it gets a fresh cookie instead of

@@ -18,6 +18,9 @@ import {
 import { apiErrorMessage } from "@/lib/api-error";
 import * as i18nFmt from "@/i18n/format";
 import { ChatSettingsCard } from "@/components/extensions/chat-settings-card";
+import { ExtensionStatusPanel, VCS_EXTENSION_IDS } from "@/components/extensions/status-panel";
+import { VcsRepos } from "@/components/extensions/vcs-repos";
+import { useMemberStore } from "@/stores/member";
 import { useParams, useSearchParams } from "react-router";
 
 // Chat with Agent has its own settings endpoint and card; the generic binding
@@ -193,11 +196,34 @@ function BindingCard({
   );
 }
 
-function NewBinding({
-  projectId, entries, onDone,
-}: { projectId: string; entries: CatalogEntry[]; onDone: (extensionId: string) => void }) {
+/**
+ * A VCS extension that is on in the workspace but has no binding here: task
+ * links already arrive through the instance webhooks, so show what the
+ * workspace has; the repositories and Bind live in `VcsRepos` below it.
+ */
+function WorkspaceVcsCard({ entry }: { entry: CatalogEntry }) {
   const { t } = useTranslation("integrations");
-  const [pick, setPick] = useState(entries[0]?.id ?? "");
+  return (
+    <Card data-testid={`workspace-vcs-${entry.id}`}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {entry.name}
+          <Badge variant="secondary">{t("projectTab.workspaceLevel")}</Badge>
+        </CardTitle>
+        <CardDescription>{t("projectTab.vcsNote", { name: entry.name })}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ExtensionStatusPanel entry={entry} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function NewBinding({
+  projectId, entries, initial, onDone,
+}: { projectId: string; entries: CatalogEntry[]; initial?: string; onDone: (extensionId: string) => void }) {
+  const { t } = useTranslation("integrations");
+  const [pick, setPick] = useState(initial ?? entries[0]?.id ?? "");
   const entry = entries.find((e) => e.id === pick) ?? entries[0];
   const schema = entry?.manifest.settings?.project;
   if (!entry) return null;
@@ -239,9 +265,13 @@ function NewBinding({
 export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
   const { t } = useTranslation("integrations");
   const catalog = useExtensionCatalog();
+  const myRole = useMemberStore((s) => s.myRole);
+  // Bind/Unbind need manage_webhooks on the server: workspace owner or admin.
+  const canManage = myRole === "owner" || myRole === "admin";
   const [bindings, setBindings] = useState<ProjectBinding[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [adding, setAdding] = useState(false);
+  // Bind form open; a string preselects that extension.
+  const [adding, setAdding] = useState<boolean | string>(false);
 
   // Only the newest request may write state: a slow answer for the previous
   // project must not land under the current one.
@@ -262,13 +292,19 @@ export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
   const bindable = catalog.entries.filter(
     (e) => e.manifest.levels?.project && e.connected && e.enabled && !bound.has(e.id) && e.id !== CHAT_EXTENSION_ID,
   );
+  const workspaceVcs = catalog.entries.filter(
+    (e) => VCS_EXTENSION_IDS.has(e.id) && e.enabled && e.connected && !bound.has(e.id),
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const tabs = [
     ...(byId.has(CHAT_EXTENSION_ID) ? [{ id: CHAT_EXTENSION_ID, name: byId.get(CHAT_EXTENSION_ID)!.name }] : []),
     ...genericBindings.map((b) => ({ id: b.extension_id, name: byId.get(b.extension_id)?.name ?? b.extension_id })),
+    ...workspaceVcs.map((e) => ({ id: e.id, name: e.name })),
   ];
   const wanted = searchParams.get("ext");
-  const activeId = tabs.find((x) => x.id === wanted)?.id ?? tabs[0]?.id;
+  // An `ext` this project cannot show is said so, not silently swapped for the first tab.
+  const unknownExt = wanted && !tabs.some((x) => x.id === wanted) ? wanted : null;
+  const activeId = unknownExt ? undefined : tabs.find((x) => x.id === wanted)?.id ?? tabs[0]?.id;
   const selectTab = (ext: string) => {
     setAdding(false);
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set("ext", ext); return n; }, { replace: true });
@@ -296,6 +332,8 @@ export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
   }
 
   const activeBinding = genericBindings.find((b) => b.extension_id === activeId);
+  const activeVcs = workspaceVcs.find((e) => e.id === activeId);
+  const vcsEntry = activeId && VCS_EXTENSION_IDS.has(activeId) ? byId.get(activeId) : undefined;
 
   return (
     <div className="mx-auto max-w-2xl space-y-4" data-testid="extensions-tab">
@@ -315,14 +353,29 @@ export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
           </Button>
         )}
       </div>
-      {adding && <NewBinding key={projectId} projectId={projectId} entries={bindable} onDone={refresh} />}
+      {adding !== false && (
+        <NewBinding key={`${projectId}:${String(adding)}`} projectId={projectId} entries={bindable}
+          initial={typeof adding === "string" ? adding : undefined} onDone={refresh} />
+      )}
+      {!adding && unknownExt && (
+        <Card data-testid="extensions-tab-unknown">
+          <CardContent className="py-6 text-sm text-muted-foreground">
+            {t("projectTab.unknownExt", { name: byId.get(unknownExt)?.name ?? unknownExt })}
+          </CardContent>
+        </Card>
+      )}
       {!adding && activeId === CHAT_EXTENSION_ID && <ChatSettingsCard projectId={projectId} chatPath={`/w/${wsSlug}/p/${projectSlug}/chat`} />}
+      {!adding && vcsEntry && (activeBinding || activeVcs) && (
+        <VcsRepos key={`${projectId}:${vcsEntry.id}`} projectId={projectId} entry={vcsEntry} binding={activeBinding}
+          canBind={!!activeBinding || bindable.some((e) => e.id === vcsEntry.id)} canManage={canManage} onChanged={load} />
+      )}
       {!adding && activeBinding && activeId !== CHAT_EXTENSION_ID && (
         <BindingCard key={`${projectId}:${activeBinding.extension_id}`} projectId={projectId} binding={activeBinding} entry={byId.get(activeBinding.extension_id)} onChanged={load} />
       )}
+      {!adding && activeVcs && <WorkspaceVcsCard entry={activeVcs} />}
       {/* Chat has its own on/off and is always configurable, so it is a tab even
           with no binding; the empty state still speaks for the bindings. */}
-      {!adding && genericBindings.length === 0 && (
+      {!adding && !unknownExt && genericBindings.length === 0 && (
         <Card data-testid="extensions-tab-empty">
           <CardContent className="py-6 text-sm text-muted-foreground">
             {bindable.length > 0 ? t("projectTab.empty") : t("projectTab.emptyNoneConnected")}

@@ -50,7 +50,9 @@ type Subscriptions interface {
 }
 
 // installRequest is the body of POST {base}{install_path}. The service keeps
-// signing_secret and verifies every later event with it.
+// signing_secret and verifies every later event with it. install_code is the
+// one-time code the service issued for binding; it is sent only when the
+// workspace holds it, so without one the body is unchanged.
 type installRequest struct {
 	ExtensionID   string    `json:"extension_id"`
 	Version       string    `json:"version"`
@@ -58,6 +60,7 @@ type installRequest struct {
 	SigningSecret string    `json:"signing_secret"`
 	Events        []string  `json:"events"`
 	EventsPath    string    `json:"events_path"`
+	InstallCode   string    `json:"install_code,omitempty"`
 }
 
 // Handshaker performs the install handshake for one workspace connection and
@@ -76,7 +79,18 @@ type Handshaker struct {
 
 // SecretName is the workspace secret that signs events for an extension.
 func SecretName(extensionID string) string {
-	return "EXT_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(extensionID)) + "_SIGNING_SECRET"
+	return secretPrefix(extensionID) + "_SIGNING_SECRET"
+}
+
+// InstallCodeName is the workspace secret holding the binding code the service
+// issued. An admin or agent sets it through the workspace secrets API; it never
+// lives in the connection settings.
+func InstallCodeName(extensionID string) string {
+	return secretPrefix(extensionID) + "_INSTALL_CODE"
+}
+
+func secretPrefix(extensionID string) string {
+	return "EXT_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(extensionID))
 }
 
 // Sign is the documented request signature: hex HMAC-SHA256 of
@@ -90,13 +104,19 @@ func Sign(secret, timestamp string, body []byte) string {
 
 func (h *Handshaker) key(ws uuid.UUID, ext string) string { return ws.String() + "/" + ext }
 
-// fingerprint covers what the service was told, including the full SHA-256 digest of
-// the signing secret so a rotated secret forces a new handshake.
-func fingerprint(m extensions.Manifest, base, secret string) string {
+// fingerprint covers what the service was told, including the full SHA-256
+// digests of the signing secret and the install code, so a rotated secret or a
+// new code forces a new handshake.
+func fingerprint(m extensions.Manifest, base, secret, code string) string {
 	ev := slices.Clone(m.Capabilities.Events)
 	slices.Sort(ev)
 	sum := sha256.Sum256([]byte(secret))
-	return m.Version + "|" + base + "|" + strings.Join(ev, ",") + "|" + hex.EncodeToString(sum[:])
+	fp := m.Version + "|" + base + "|" + strings.Join(ev, ",") + "|" + hex.EncodeToString(sum[:])
+	if code != "" {
+		cs := sha256.Sum256([]byte(code))
+		fp += "|" + hex.EncodeToString(cs[:])
+	}
+	return fp
 }
 
 // Forget drops the memo so the next Ensure or Run talks to the service again.
@@ -113,11 +133,15 @@ func (h *Handshaker) Ensure(ctx context.Context, p *Provider, ws uuid.UUID, sett
 	if err != nil {
 		return err
 	}
-	secret, ok, err := h.readSecret(ctx, ws, SecretName(p.Man.ID))
+	secret, ok, err := h.readSecret(ctx, ws, SecretName(p.Man.ID), "signing secret")
 	if err != nil || !ok {
 		return h.Run(ctx, p, ws, settings)
 	}
-	fp := fingerprint(p.Man, base, secret)
+	code, err := h.installCode(ctx, p, ws)
+	if err != nil {
+		return h.Run(ctx, p, ws, settings)
+	}
+	fp := fingerprint(p.Man, base, secret, code)
 	h.mu.Lock()
 	same := h.done[h.key(ws, p.Man.ID)] == fp
 	h.mu.Unlock()
@@ -149,11 +173,15 @@ func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 	if err != nil {
 		return err
 	}
+	code, err := h.installCode(ctx, p, ws)
+	if err != nil {
+		return err
+	}
 	events := publicDeclared(m)
 	if p.ext.InstallPath != "" {
 		if err := h.install(ctx, p, base, installRequest{
 			ExtensionID: m.ID, Version: m.Version, WorkspaceID: ws, SigningSecret: secret,
-			Events: events, EventsPath: p.ext.EventsPath,
+			Events: events, EventsPath: p.ext.EventsPath, InstallCode: code,
 		}, secret); err != nil {
 			return err
 		}
@@ -165,7 +193,7 @@ func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 	if h.done == nil {
 		h.done = map[string]string{}
 	}
-	h.done[h.key(ws, m.ID)] = fingerprint(m, base, secret)
+	h.done[h.key(ws, m.ID)] = fingerprint(m, base, secret, code)
 	h.mu.Unlock()
 	return nil
 }
@@ -180,8 +208,18 @@ func publicDeclared(m extensions.Manifest) []string {
 	return out
 }
 
+// installCode reads the optional binding code; "" when none is set or the
+// extension has no install endpoint to send it to.
+func (h *Handshaker) installCode(ctx context.Context, p *Provider, ws uuid.UUID) (string, error) {
+	if p.ext.InstallPath == "" {
+		return "", nil
+	}
+	v, _, err := h.readSecret(ctx, ws, InstallCodeName(p.Man.ID), "install code")
+	return v, err
+}
+
 func (h *Handshaker) signingSecret(ctx context.Context, ws uuid.UUID, name string) (string, error) {
-	if v, ok, err := h.readSecret(ctx, ws, name); err != nil || ok {
+	if v, ok, err := h.readSecret(ctx, ws, name, "signing secret"); err != nil || ok {
 		return v, err
 	}
 	buf := make([]byte, 32)
@@ -199,7 +237,7 @@ func (h *Handshaker) signingSecret(ctx context.Context, ws uuid.UUID, name strin
 		}
 	}
 	// Read back what is stored: after a lost create race the other writer's value wins.
-	v, ok, err := h.readSecret(ctx, ws, name)
+	v, ok, err := h.readSecret(ctx, ws, name, "signing secret")
 	if err != nil {
 		return "", err
 	}
@@ -209,15 +247,17 @@ func (h *Handshaker) signingSecret(ctx context.Context, ws uuid.UUID, name strin
 	return v, nil
 }
 
-func (h *Handshaker) readSecret(ctx context.Context, ws uuid.UUID, name string) (value string, found bool, err error) {
+// readSecret finds a current workspace secret by name. Errors name what was
+// looked up (what) and never carry the value.
+func (h *Handshaker) readSecret(ctx context.Context, ws uuid.UUID, name, what string) (value string, found bool, err error) {
 	all, err := h.Reader.ResolveCurrentValues(ctx, ws, nil, nil)
 	if err != nil {
-		return "", false, errors.New("signing secret lookup failed")
+		return "", false, errors.New(what + " lookup failed")
 	}
 	for i := range all {
 		if all[i].Name == name {
 			if all[i].Expired || all[i].Value == "" {
-				return "", false, errors.New("signing secret is expired")
+				return "", false, errors.New(what + " is expired")
 			}
 			return all[i].Value, true, nil
 		}

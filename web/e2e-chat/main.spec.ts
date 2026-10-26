@@ -1,13 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { RUN_ID, type Harness } from "./lib/env";
 import {
-  assertFrozen, assertIntermediateThenFinal, assertNoDeltaAfter, assertStreaming, type BodySnapshot,
+  assertDeltasInFinal, assertEarlyDelta, assertFrozen, assertIntermediateThenFinal, assertNoDeltaAfter, assertStreaming, type BodySnapshot,
 } from "./lib/detect";
 import {
   type Actor, type Ctx, chatBase, chatUrl, openActor, resolveCtx, sha256, snap, step, timeline, until,
 } from "./lib/harness";
 import {
-  codeOf, history, makeCodePng, newChatViaUi, pastePng, waitAssistantDone, listThreadIds, agentId,
+  holdTurnPrompt, expectTurnRunning, codeOf, history, makeCodePng, newChatViaUi, pastePng, waitAssistantDone, listThreadIds, agentId, sendVia, assertUserSettled,
 } from "./lib/chat";
 
 /**
@@ -49,7 +49,7 @@ for (const h of HARNESSES) {
         const hist = await history(A, x, threadId);
         expect(hist.items, "a new thread has an empty history").toHaveLength(0);
         await expect(A.page.getByTestId("chat-empty-thread")).toBeVisible();
-        await snap(A.page, `empty-${h}`);
+        await snap(A, `empty-${h}`, undefined, undefined, [A.page.getByTestId("chat-empty-thread")]);
         await A.page.goto(chatUrl(x, threadId));
       });
     });
@@ -69,13 +69,14 @@ for (const h of HARNESSES) {
         };
         // snap reloads the page for every viewport and theme, and a pending attachment lives only in
         // the composer: paste for each shot, then once more on a fresh page for the message itself.
-        await snap(A.page, `paste-preview-${h}`, paste);
+        await snap(A, `paste-preview-${h}`, paste, undefined, [A.page.locator('[data-testid="chat-pending-attachment"][data-status="ready"]')]);
         await A.page.reload();
         await A.page.getByTestId("chat-composer").waitFor({ timeout: 30_000 });
         await paste();
 
         await A.page.getByTestId("chat-input").fill(text1);
-        await A.page.getByTestId("chat-send").click();
+        const sent = await sendVia(A.page, threadId, () => A.page.getByTestId("chat-send").click());
+        expect(sent.status, "the send answers 202").toBe(202);
 
         const msgs = await until("the user message is stored with its attachment", async () => {
           const hist = await history(A, x, threadId);
@@ -111,7 +112,10 @@ for (const h of HARNESSES) {
       });
     });
 
-    test(`S04 ${h}: streaming with at least two deltas, final carries the code`, async () => {
+    // A reply of one block arrives as one delta on either harness: the interactive transcript holds
+    // whole blocks only and Codex writes its final message in one piece. S04 asks for text before
+    // completed; the multi-block stream is S04b.
+    test(`S04 ${h}: streaming: text arrives as delta(s) before completed, final carries the code`, async () => {
       await step("S04", h, async () => {
         // Deltas are collected from the WS frames of this page, from the first message on.
         const first = await until("first assistant body appears (streaming or done)", async () => {
@@ -122,12 +126,15 @@ for (const h of HARNESSES) {
         const intermediate = first.status === "streaming" ? first.body : "";
         const done = await waitAssistantDone(A, x, threadId, 1);
         expect(done.status, "turn ends done").toBe("done");
-        const deltas = A.frames.filter((f) => f.event === "chat.message.delta" && f.message_id === done.id);
-        timeline(`S04-${h}`, A.frames.filter((f) => f.thread_id === threadId).map(({ raw: _raw, ...rest }) => rest));
-        assertStreaming(deltas);
-        if (intermediate) assertIntermediateThenFinal(intermediate, done.body);
+        await until("the completed frame of the reply", async () => A.frames.some((f) => f.event === "chat.message.completed" && f.message_id === done.id), 30_000, 200);
+        const frames = A.frames.filter((f) => f.thread_id === threadId);
+        timeline(`S04-${h}`, frames.map(({ raw: _raw, ...rest }) => rest));
+        assertDeltasInFinal(assertStreaming(frames, done.id), done.body);
+        // One block arrives as one delta, so the in-flight body may already be the whole reply.
+        if (intermediate) assertIntermediateThenFinal(intermediate, done.body, false);
         expect(codeOf(done.body), "the reply names the visual code of the picture").toContain(codeOf(code));
         await expect(A.page.getByTestId("chat-message").filter({ hasText: code }).last()).toBeVisible();
+        await assertUserSettled(A, x, threadId, text1);
       });
     });
 
@@ -155,21 +162,28 @@ for (const h of HARNESSES) {
     });
 
     test(`S06 ${h}: Stop on a long streaming reply ends cancelled and frozen`, async () => {
+      // No delta before the end of a codex turn, so there is no mid-reply moment to press Stop in (jobs 414033, 414785).
+      test.skip(h === "codex", "codex rollout delivers the final message in one piece at turn end");
       await step("S06", h, async () => {
-        await A.page.getByTestId("chat-input").fill(`${RUN_ID} Count from 1 to 1000, one number per line, with a short remark on each.`);
+        await A.page.getByTestId("chat-input").fill(`${RUN_ID} ${holdTurnPrompt(h)}`);
+        const sentAt = Date.now();
         await A.page.getByTestId("chat-send").click();
         // Stop is pressed only after the server has streamed something: a real delta, not a guess.
         const before = A.frames.length;
         await until("a delta of the long reply", async () => A.frames.slice(before).find((f) => f.event === "chat.message.delta" && (f.textLen ?? 0) > 0), 240_000, 200);
-        await snap(A.page, `streaming-${h}`);
-        await expect(A.page.getByTestId("chat-stop")).toBeVisible();
+        // Stop exists only while the turn runs: each reloaded frame must still be mid-reply. A turn that is
+        // already over fails here by name, not as a missing button after the reload.
+        await expectTurnRunning(A, x, threadId, 3, sentAt);
+        await snap(A, `streaming-${h}`, undefined, undefined, [A.page.getByTestId("chat-stop")]);
+        await expectTurnRunning(A, x, threadId, 3, sentAt);
+        await expect(A.page.getByTestId("chat-stop"), "the turn is still running when Stop is pressed").toBeVisible({ timeout: 15_000 });
         await A.page.getByTestId("chat-stop").click();
 
         const msg = await waitAssistantDone(A, x, threadId, 3, 120_000);
         expect(msg.status, "cancelled, not done").toBe("cancelled");
         expect(msg.body.length, "the partial body is kept").toBeGreaterThan(0);
         await expect(A.page.getByText("stopped", { exact: true }).last()).toBeVisible();
-        await snap(A.page, `cancelled-${h}`);
+        await snap(A, `cancelled-${h}`, undefined, undefined, [A.page.getByText("stopped", { exact: true })]);
 
         const terminalSeq = Math.max(...A.frames.filter((f) => f.thread_id === threadId && f.event === "chat.turn.state").map((f) => f.seq ?? 0));
         // Drain window: bounded by the protocol's cancel/drain deadline, observed on the stored body, not slept blind.
@@ -190,6 +204,38 @@ for (const h of HARNESSES) {
       });
     });
 
+    test(`S04b ${h}: a reply of several blocks streams them one by one`, async () => {
+      test.skip(h === "codex", "codex rollout delivers the final message in one piece at turn end");
+      await step("S04b", h, async () => {
+        const multi = await newChatViaUi(A, x, h);
+        await A.page.goto(chatUrl(x, multi));
+        const code2 = `VC${Array.from({ length: 4 }, () => "ACDEFGHJKMNPQRTUVWXY2346789"[Math.floor(Math.random() * 27)]).join("")}`;
+        const png = await makeCodePng(A.page, code2);
+        await pastePng(A.page, png.bytes);
+        await expect(A.page.getByTestId("chat-pending-attachment")).toHaveAttribute("data-status", "ready", { timeout: 60_000 });
+        await A.page.getByTestId("chat-input").fill(
+          `${RUN_ID} First write one short sentence saying you will now look at the picture. Then open the attached picture. Then name the visual code in it.`);
+        await A.page.getByTestId("chat-send").click();
+
+        // The stored body while the reply streams, read as often as the API allows.
+        let intermediate = "";
+        const done = await until("the multi-block reply is terminal", async () => {
+          const a = (await history(A, x, multi)).items.find((i) => i.role === "assistant");
+          if (a?.status === "streaming" && a.body !== "" && !intermediate) intermediate = a.body;
+          return a && ["done", "failed", "cancelled"].includes(a.status) ? a : false;
+        }, 240_000, 150);
+        expect(done.status, "turn ends done").toBe("done");
+        await until("the completed frame of the reply", async () => A.frames.some((f) => f.event === "chat.message.completed" && f.message_id === done.id), 30_000, 200);
+        const frames = A.frames.filter((f) => f.thread_id === multi);
+        timeline(`S04b-${h}`, frames.map(({ raw: _raw, ...rest }) => rest));
+        assertDeltasInFinal(assertStreaming(frames, done.id, 2), done.body);
+        assertEarlyDelta(frames, done.id, 1000);
+        assertIntermediateThenFinal(intermediate, done.body);
+        expect(codeOf(done.body), "the reply names the visual code of the picture").toContain(codeOf(code2));
+        await A.page.goto(chatUrl(x, threadId));
+      });
+    });
+
     test(`S09 ${h}: delete asks first; cancel changes nothing, confirm removes the chat`, async () => {
       await step("S09", h, async () => {
         const control = await newChatViaUi(A, x, h);
@@ -198,16 +244,24 @@ for (const h of HARNESSES) {
         const histBefore = JSON.stringify((await history(A, x, threadId)).items.map((m) => [m.id, m.body, m.status]));
 
         const del = async () => {
-          await A.page.locator(`[data-testid="chat-thread-item"][data-thread-id="${threadId}"]`).getByTestId("chat-thread-menu").click();
-          await A.page.getByRole("menuitem", { name: "Delete" }).click();
+          // Below md an open thread hides the chat list: a phone user goes back to the list first.
+          // Bounded clicks: a missing control fails here by name, not as the test timeout (job 411311).
+          // isVisible() does not wait: right after goto the list is not drawn yet, so wait for either control first.
+          // Only visible matches count: on a phone the item is in the DOM but hidden, at some widths both show.
+          const item = A.page.locator(`[data-testid="chat-thread-item"][data-thread-id="${threadId}"]`);
+          const back = A.page.getByRole("button", { name: "Back to chats" });
+          await expect(item.or(back).filter({ visible: true }).first()).toBeVisible({ timeout: 15_000 });
+          if (!(await item.isVisible())) await back.click({ timeout: 15_000 });
+          await item.getByTestId("chat-thread-menu").click({ timeout: 15_000 });
+          await A.page.getByRole("menuitem", { name: "Delete" }).click({ timeout: 15_000 });
         };
         await del();
         await expect(A.page.getByRole("dialog")).toContainText("Delete this chat?");
         // Frames of the open confirmation: the dialog is re-opened after each reload of the frame set.
-        await snap(A.page, `delete-confirm-${h}`, async () => {
+        await snap(A, `delete-confirm-${h}`, async () => {
           await del();
           await expect(A.page.getByRole("dialog")).toBeVisible();
-        }, async () => { await A.page.keyboard.press("Escape"); });
+        }, async () => { await A.page.keyboard.press("Escape"); }, [A.page.getByRole("dialog")]);
         await del();
         await A.page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
         expect(await listThreadIds(A, x, agentId(h))).toEqual(ids);

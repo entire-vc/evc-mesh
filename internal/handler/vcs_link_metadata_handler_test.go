@@ -118,3 +118,66 @@ func TestVCSLinkHandler_PatchShipSHAByURL_ServiceErrorsKeepTheirStatus(t *testin
 	h := NewVCSLinkHandler(&stubVCSLinkService{shipReturnErr: apierror.NotFound("VCSLink")})
 	assert.Equal(t, http.StatusNotFound, shipSHAByURLRequest(h, &ws, `{"url":"u","ship_sha":"x"}`).Code)
 }
+
+func deploymentRequest(h *VCSLinkHandler, taskID, linkID, body string) *httptest.ResponseRecorder {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("task_id", "link_id")
+	c.SetParamValues(taskID, linkID)
+	_ = h.RecordDeployment(c)
+	return rec
+}
+
+func TestVCSLinkHandler_RecordDeployment_WritesTheDeployedMetadataKey(t *testing.T) {
+	stub := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(stub)
+	taskID, linkID := uuid.New(), uuid.New()
+	sha := strings.Repeat("a", 40)
+
+	rec := deploymentRequest(h, taskID.String(), linkID.String(), `{"sha":" `+sha+` ","env":"production"}`)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, stub.patchCalls, 1)
+	assert.Equal(t, taskID, stub.patchCalls[0].taskID)
+	assert.Equal(t, linkID, stub.patchCalls[0].linkID)
+	assert.Equal(t, map[string]any{"deployed": map[string]any{"sha": sha, "environment": "production"}}, stub.patchCalls[0].patch,
+		"one record of a deploy: the same metadata.deployed key PATCH .../metadata writes")
+}
+
+func TestVCSLinkHandler_RecordDeployment_BadInputIs400AndNeverReachesService(t *testing.T) {
+	stub := &stubVCSLinkService{}
+	h := NewVCSLinkHandler(stub)
+	good := uuid.New().String()
+	for name, tc := range map[string]struct{ task, link, body string }{
+		"bad task_id": {"nope", good, `{"sha":"a","env":"production"}`},
+		"bad link_id": {good, "nope", `{"sha":"a","env":"production"}`},
+		"not json":    {good, good, `nope`},
+		"no sha":      {good, good, `{"env":"production"}`},
+		"no env":      {good, good, `{"sha":"a"}`},
+		"blank env":   {good, good, `{"sha":"a","env":"  "}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, deploymentRequest(h, tc.task, tc.link, tc.body).Code)
+		})
+	}
+	assert.Empty(t, stub.patchCalls)
+}
+
+func TestVCSLinkHandler_RecordDeployment_ServiceErrorsKeepTheirStatus(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want int
+	}{
+		"bad sha":    {apierror.BadRequest("deployed.sha must be a 40-character lowercase hex string"), http.StatusBadRequest},
+		"not a link": {apierror.NotFound("VCSLink"), http.StatusNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := NewVCSLinkHandler(&stubVCSLinkService{patchReturnErr: tc.err})
+			rec := deploymentRequest(h, uuid.New().String(), uuid.New().String(), `{"sha":"a","env":"production"}`)
+			assert.Equal(t, tc.want, rec.Code)
+		})
+	}
+}

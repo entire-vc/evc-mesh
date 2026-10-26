@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// These tests are the acceptance criteria of task 695d7ddf: the webhook was
+// These tests are the acceptance criteria of an internal ticket: the webhook was
 // live and answering 200 to 444 deliveries a week while creating nothing,
 // because it recognised only MESH-<uuid> — a spelling no agent writes. Each
 // case here is a form that appears in real pull requests.
@@ -68,7 +68,13 @@ func (h *harness) linksFor(taskID uuid.UUID) []domain.VCSLink {
 func (h *harness) linkCount() int {
 	h.repo.mu.Lock()
 	defer h.repo.mu.Unlock()
-	return len(h.repo.links)
+	n := 0
+	for _, l := range h.repo.links {
+		if l.TaskID != h.siblingID {
+			n++
+		}
+	}
+	return n
 }
 
 func TestHandlePR_RecognisesFormsAgentsActuallyWrite(t *testing.T) {
@@ -83,7 +89,7 @@ func TestHandlePR_RecognisesFormsAgentsActuallyWrite(t *testing.T) {
 			title: func(tk *domain.Task) string { return "MESH-" + tk.ID.String() + " fix the gate" },
 		},
 		{
-			name:  "Refs #<8hex> in the body — the form in the PR behind #55dc6e19",
+			name:  "Refs #<8hex> in the body — the form in the PR behind an internal ticket",
 			title: func(*domain.Task) string { return "feat(gate): hold money PRs for sign-off" },
 			body:  func(tk *domain.Task) string { return "Refs #" + tk.ID.String()[:8] + "\n\nDetails below." },
 		},
@@ -218,8 +224,7 @@ func TestHandlePR_ShortRefDrivesTransitionOnMerge(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTaskWithID(t, fixedTaskID(1), domain.StatusCategoryInProgress)
 
-	ev := mergedClosedEvent(605, task.ID, "feat: dense rows")
-	ev.PRBody = "Refs #" + task.ID.String()[:8]
+	ev := mergedClosedEvent(605, task.ID, "feat: dense rows (#"+task.ID.String()[:8]+")")
 
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
@@ -392,7 +397,7 @@ func TestHandlePR_UnresolvableIDDoesNotCreateAmbiguity(t *testing.T) {
 // A PR that was mislinked once must not keep re-confirming that link.
 //
 // This is the bug the ambiguity refusal did NOT close, found by independent
-// verification of 695d7ddf against the already-deployed code. ResolveTaskRef
+// verification of an internal ticket against the already-deployed code. ResolveTaskRef
 // correctly declined to choose — and the handler then fell through to
 // "reuse whatever is already stored for this PR number", which is the wrong
 // task. Upsert keys on (task_id, provider, link_type, external_id), so every
@@ -403,7 +408,7 @@ func TestHandlePR_AmbiguousPayload_DoesNotReuseStaleLink(t *testing.T) {
 	documented := h.makeTaskWithID(t, fixedTaskID(40), domain.StatusCategoryInProgress)
 	subject := h.makeTaskWithID(t, fixedTaskID(41), domain.StatusCategoryInProgress)
 
-	// The wrong row, exactly as it exists in production for PR #433.
+	// The wrong row, exactly as it exists in production for a PR.
 	stale := &domain.VCSLink{
 		ID:         uuid.New(),
 		TaskID:     documented.ID,

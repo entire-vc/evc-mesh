@@ -275,6 +275,10 @@ type TaskDependencyRepository interface {
 	// UpdateCondition sets the edge's condition, evidence and met-time and
 	// returns the stored row, or (nil, nil) when the edge does not exist.
 	UpdateCondition(ctx context.Context, id uuid.UUID, condition domain.DependencyCondition, evidenceURL *string, metAt *time.Time) (*domain.TaskDependency, error)
+	// DeployedTasks returns the subset of taskIDs with a VCS link that records a
+	// deploy (metadata.deployed with sha and at) — the "deployed" input of
+	// domain.TaskDependency.Released.
+	DeployedTasks(ctx context.Context, taskIDs []uuid.UUID) (map[uuid.UUID]bool, error)
 }
 
 // ClosedFollowUpReopenWindow is the storm-limit window the whole mechanism
@@ -763,6 +767,17 @@ type MergedPROpenTask struct {
 	MergedAt  time.Time
 }
 
+// VCSRepoActivity is one repository as the vcs_links name it: Repo is the
+// lowercased path ("group/project", "owner/name"), Host the lowercased host
+// without scheme, Links how many links point into it, LastEventAt the latest
+// sign of life of any of them.
+type VCSRepoActivity struct {
+	Repo        string    `db:"repo"`
+	Host        string    `db:"host"`
+	Links       int       `db:"links"`
+	LastEventAt time.Time `db:"last_event_at"`
+}
+
 // AgentWithProjects pairs an agent with its project affiliation names.
 type AgentWithProjects struct {
 	domain.Agent
@@ -1106,12 +1121,10 @@ type RefreshToken struct {
 	CreatedAt time.Time  `db:"created_at"`
 	RevokedAt *time.Time `db:"revoked_at"`
 	// ReplacedByHash is the hash of the token that succeeded this one in an
-	// ORDINARY rotation, set by LinkSuccessor right after a winning
-	// RevokeByHash. Nil means either this token is still live, or it died
-	// some other way — an explicit RevokeByUserID call (logout, theft
-	// detection) never touches this column, and a rotation whose
-	// LinkSuccessor call was lost leaves it nil too (safe by construction,
-	// see LinkSuccessor's doc comment).
+	// ORDINARY rotation, set by the same winning RevokeByHash that revoked it.
+	// Nil means either this token is still live, or it died some other way —
+	// an explicit RevokeByUserID call (logout, theft detection) never touches
+	// this column.
 	//
 	// This is what lets auth.Service tell "this token died in a rotation
 	// whose response the client may never have seen" from "this token died
@@ -1126,24 +1139,17 @@ type RefreshTokenRepository interface {
 	GetByHash(ctx context.Context, tokenHash string) (*RefreshToken, error)
 	RevokeByUserID(ctx context.Context, userID uuid.UUID) error
 	// RevokeByHash atomically revokes the token with this hash if and only if it is
-	// still un-revoked. It reports whether THIS call performed the revocation, which
-	// is the sole authority on who won a concurrent one-shot rotation: exactly one
-	// caller can ever observe true for a given token. A false with a nil error means
-	// the token was already consumed (by a racing request or an earlier one) — the
+	// still un-revoked, recording successorHash as its ReplacedByHash in the same
+	// write. It reports whether THIS call performed the revocation, which is the
+	// sole authority on who won a concurrent one-shot rotation: exactly one caller
+	// can ever observe true for a given token. A false with a nil error means the
+	// token was already consumed (by a racing request or an earlier one) — the
 	// caller must treat it as reuse, never as success.
-	RevokeByHash(ctx context.Context, tokenHash string) (bool, error)
-	// LinkSuccessor records that oldHash was rotated to newHash, for later reuse
-	// classification (see RefreshToken.ReplacedByHash). Call it once, right after a
-	// winning RevokeByHash(oldHash), from the same request that won.
 	//
-	// It intentionally does NOT re-check revoked_at or attempt to be atomic with the
-	// revoke: at most one request can ever reach this call for a given oldHash,
-	// because RevokeByHash's own atomicity already picked that single winner before
-	// this is ever called. Losing this write (e.g. a crash between the two calls) is
-	// safe — a later replay of oldHash simply won't find a successor and falls back
-	// to the pre-existing full-account-revoke behavior; it never causes a security
-	// regression, only a missed optimization.
-	LinkSuccessor(ctx context.Context, oldHash, newHash string) error
+	// Revoke and successor are one write so no reader can ever see the token
+	// revoked but not yet linked: a replay landing while the winner is still
+	// minting the successor is classified exactly like one landing after it.
+	RevokeByHash(ctx context.Context, tokenHash, successorHash string) (bool, error)
 	DeleteExpired(ctx context.Context) error
 }
 
@@ -1287,6 +1293,11 @@ type VCSLinkRepository interface {
 	// payload has no MESH-<uuid> ref but the (provider, type, external_id)
 	// tuple was previously linked to a task.
 	ListByExternalID(ctx context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error)
+	// ProjectHasPRLinkToRepo reports whether any live task of projectID holds a
+	// PR/MR link (mentions and review subjects excluded) into repo,
+	// given as lowercased "host/group/project". The webhook reads it to tell
+	// whether a repository is one the project works in.
+	ProjectHasPRLinkToRepo(ctx context.Context, projectID uuid.UUID, repo string) (bool, error)
 	// ListOpenTasksWithMergedPR returns tasks that are not done/cancelled and whose
 	// PR/MR links (review-subject links excluded) include a merged one and no open
 	// one, and that have no workflow.shadow_close_on_merge entry yet. Feeds the

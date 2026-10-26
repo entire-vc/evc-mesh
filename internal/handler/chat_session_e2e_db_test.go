@@ -106,6 +106,9 @@ func newChatE2EEnv(t *testing.T) *chatE2EEnv {
 	}
 	api.PATCH("/projects/:proj_id", projectHandler.Update, mw.RequireProjectMember(db), connectorRBAC(mw.PermManageProject))
 	api.POST("/projects/:proj_id/knowledge", memoryHandler.SetProjectKnowledge, mw.RequireProjectMember(db), connectorRBAC(mw.PermWriteMemory))
+	api.POST("/memories", memoryHandler.Remember, connectorRBAC(mw.PermWriteMemory))
+	api.GET("/memories", memoryHandler.List)
+	api.GET("/workspaces/:ws_id/chat/audit/memory-writes", NewChatAuditHandler(postgres.NewChatAuditRepo(db)).MemoryWrites)
 	api.GET("/tasks/:task_id/activity", activityHandler.ListByTask)
 	api.GET("/agents/me", agentHandler.Me)
 	api.GET("/workspaces/:ws_id/projects", projectHandler.List) // workspace-level list: no project of its own
@@ -771,4 +774,67 @@ func TestChatSessionToken_ChildResourcesResolveToProject(t *testing.T) {
 	require.NoError(t, err)
 	code, _ = env.get(t, "/api/v1/probe/rule_id/"+wsRule.String(), bearer(tok))
 	assert.Equal(t, http.StatusForbidden, code, "a workspace-scoped rule is outside the chat's project")
+}
+
+// A chat token writes its project's memory through POST /memories: scope and
+// project default to the chat's, anything wider is refused, and the write shows
+// up in the chat memory-write audit with the thread and the initiating user.
+func TestChatSessionToken_WritesProjectMemoryOnly(t *testing.T) {
+	env := newChatE2EEnv(t)
+	member := env.newUser(t, "chat-mem", domain.RoleMember)
+	cs := newChatSession()
+	_, err := env.db.Exec(`INSERT INTO ext_agent_chat_threads (id, workspace_id, project_id, agent_id, user_id) VALUES ($1,$2,$3,$4,$5)`,
+		cs.thread, env.workspaceID, env.projectID, env.agent.ID, member)
+	require.NoError(t, err)
+	tok := env.issue(t, member, cs, 1)
+	key := "chat-mem-" + uuid.New().String()[:8]
+
+	code, body := env.post(t, "/api/v1/memories", bearer(tok), map[string]any{"key": key, "content": "remember this"})
+	require.Equal(t, http.StatusOK, code, string(body))
+	var stored struct {
+		Scope     string    `db:"scope"`
+		ProjectID uuid.UUID `db:"project_id"`
+	}
+	require.NoError(t, env.db.Get(&stored, `SELECT scope, project_id FROM memories WHERE workspace_id = $1 AND key = $2`, env.workspaceID, key))
+	assert.Equal(t, "project", stored.Scope)
+	assert.Equal(t, env.projectID, stored.ProjectID)
+
+	for name, extra := range map[string]map[string]any{
+		"workspace-scope":   {"scope": "workspace"},
+		"agent-scope":       {"scope": "agent"},
+		"foreign-project":   {"project_id": env.otherProj},
+		"foreign-workspace": {"workspace_id": uuid.New()},
+	} {
+		req := map[string]any{"key": key + "-" + name, "content": "x"}
+		for k, v := range extra {
+			req[k] = v
+		}
+		got, resp := env.post(t, "/api/v1/memories", bearer(tok), req)
+		assert.Equal(t, http.StatusForbidden, got, name+": "+string(resp))
+		var n int
+		require.NoError(t, env.db.Get(&n, `SELECT count(*) FROM memories WHERE key = $1`, key+"-"+name))
+		assert.Zero(t, n, name+": nothing may be written")
+	}
+	code, _ = env.get(t, "/api/v1/memories?project_id="+env.projectID.String(), bearer(tok))
+	assert.Equal(t, http.StatusForbidden, code, "reading memory stays refused to a chat token")
+
+	viewer := env.newUser(t, "chat-mem-viewer", domain.RoleViewer)
+	vtok := env.issue(t, viewer, newChatSession(), 1)
+	code, _ = env.post(t, "/api/v1/memories", bearer(vtok), map[string]any{"key": key + "-viewer", "content": "x"})
+	assert.Equal(t, http.StatusForbidden, code, "a viewer's chat token holds no write_memory")
+
+	code, body = env.get(t, "/api/v1/workspaces/"+env.workspaceID.String()+"/chat/audit/memory-writes?thread_id="+cs.thread.String(), bearer(env.ownerToken))
+	require.Equal(t, http.StatusOK, code, string(body))
+	var audit struct {
+		Items []struct {
+			ChatThreadID uuid.UUID `json:"chat_thread_id"`
+			UserID       uuid.UUID `json:"initiated_by_user_id"`
+			ProjectID    uuid.UUID `json:"project_id"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(body, &audit))
+	require.Len(t, audit.Items, 1, string(body))
+	assert.Equal(t, cs.thread, audit.Items[0].ChatThreadID)
+	assert.Equal(t, member, audit.Items[0].UserID)
+	assert.Equal(t, env.projectID, audit.Items[0].ProjectID)
 }

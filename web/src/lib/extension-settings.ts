@@ -119,3 +119,21 @@ export async function searchProjectAction(projectId: string, extensionId: string
   );
   return res.docs ?? [];
 }
+
+/** Where a project learns of a repository: task links via the instance webhook, the project binding, or both. */
+export type ProjectRepoSource = "webhook" | "binding" | "both";
+
+export interface ProjectRepo {
+  repo: string;
+  host: string;
+  links: number;
+  last_event_at?: string;
+  bound: boolean;
+  source: ProjectRepoSource;
+}
+
+/** `GET /projects/{p}/extensions/{id}/repos` — repositories of a VCS extension (gitlab/github) for this project. */
+export async function listProjectRepos(projectId: string, extensionId: string): Promise<ProjectRepo[]> {
+  const res = await api<{ repos: ProjectRepo[] | null }>(`/api/v1/projects/${projectId}/extensions/${extensionId}/repos`);
+  return res.repos ?? [];
+}

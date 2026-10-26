@@ -5,8 +5,8 @@ export type Loaded<T> =
   | { state: "error" }
   | { state: "ready"; data: T };
 
-/** One fetch with a retry; a stale answer never overwrites a newer one. */
-export function useLoad<T>(fetcher: () => Promise<T>): { result: Loaded<T>; reload: () => void } {
+/** One fetch with a retry; a stale answer never overwrites a newer one. A new `key` fetches again. */
+export function useLoad<T>(fetcher: () => Promise<T>, key?: string): { result: Loaded<T>; reload: () => void } {
   const [result, setResult] = useState<Loaded<T>>({ state: "loading" });
   const [nonce, setNonce] = useState(0);
   const fetchRef = useRef(fetcher);
@@ -20,7 +20,7 @@ export function useLoad<T>(fetcher: () => Promise<T>): { result: Loaded<T>; relo
       () => { if (!cancelled) setResult({ state: "error" }); },
     );
     return () => { cancelled = true; };
-  }, [nonce]);
+  }, [nonce, key]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   return { result, reload };

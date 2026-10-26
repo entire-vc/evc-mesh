@@ -240,6 +240,27 @@ so the interface knows one shape and no system-specific path.
 | `GET /projects/{p}/extensions/{id}/actions/search?q=&limit=` | project access | `team-relay` only: search the documents of the bound share (same answer as `GET /projects/{p}/tr/search`) |
 | `POST /projects/{p}/extensions/{id}/actions/mount` | `manage_webhooks` | `team-relay` only: materialize the share into the project Docs now (same answer as `POST /projects/{p}/tr/mount`) |
 
+### Repositories (`gitlab`, `github`)
+
+`GET /projects/{p}/extensions/{id}/repos` (project access; `404` for any other
+extension) is read-only: it joins the repositories the project's VCS links point
+into with the one its binding names (`repo_path` for GitLab, `repo` for GitHub;
+bind and unbind stay `PUT`/`DELETE /projects/{p}/extensions/{id}`).
+
+```json
+{ "repos": [{ "repo": "entire-vc/evc-mesh", "host": "gitlab.example.invalid", "links": 1234,
+              "last_event_at": "2026-10-26T10:00:00Z", "bound": true, "source": "both" }] }
+```
+
+`source` is `webhook` (links, no binding), `binding` (bound, no links: `links` 0,
+no `last_event_at`; `host` from the workspace connection's `base_url`, else
+`github.com` for GitHub, else the host of the project's other links) or `both`. The repository of a link is its url without
+scheme, lowercased, cut before `/-/merge_requests/`, `/merge_requests/`,
+`/pull/`, `/commit/` or `/tree/`. In the workspace list
+(`GET /workspaces/{ws}/extensions`) `activity.repos` of `gitlab`/`github` is
+the same aggregate over the workspace: the 20 most linked repositories, without
+`bound`/`source`.
+
 An action answers only on its own method; any other method, an unknown action
 or another extension's action is `404`. `check` exists for every extension with a
 project level. The old `GET /tr/search`, `GET /projects/{p}/tr/search` and
@@ -264,5 +285,6 @@ Alias response bodies are unchanged from today.
 ## Instance settings
 
 - `GET/PUT /api/v1/extensions/{id}/instance-settings`: human instance administrator only; secrets are masked on GET, a masked value on PUT keeps the stored secret.
+- `PUT /api/v1/extensions/keep/instance-settings` with `{"enabled": true, "settings": {"secret_provider": "builtin"|"keep"}}` chooses where new x-secret values are stored (default `builtin`). With `keep`, saving a secret fails while Keep is not configured or unreachable; values stored earlier keep resolving through their own provider. The change takes effect within 30 seconds and is journaled by key only.
 
 Instance administrator = a human user (never an agent key) with the owner/admin role in the oldest non-deleted workspace of the instance. There is no separate instance-level role.

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { AlertTriangle, MoreHorizontal, PackageSearch, Settings2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SchemaForm, type FieldSchema, type Values } from "@/components/extensions/schema-form";
 import { ExtensionIcon, KindTrustBadges } from "@/components/extensions/catalog";
+import { ExtensionStatusPanel, VCS_EXTENSION_IDS, VcsRepoList, instanceManaged } from "@/components/extensions/status-panel";
+import { useIsInstanceAdmin } from "@/lib/extension-admin";
 import type { CatalogEntry, CatalogState } from "@/hooks/useExtensionCatalog";
 import { consentTokens, describeCapabilities } from "@/lib/extension-capabilities";
 import { installedStatus, workspaceSettingsSchema } from "@/lib/extension-installed";
@@ -37,15 +39,27 @@ function SettingsDialog({ entry, workspaceId, onClose, onDone }: {
   entry: CatalogEntry; workspaceId: string; onClose: () => void; onDone: () => void;
 }) {
   const { t } = useTranslation("integrations");
-  const connected = Boolean(entry.connection);
-  const [agree, setAgree] = useState(connected);
+  const { wsSlug = "" } = useParams();
+  const isInstanceAdmin = useIsInstanceAdmin();
+  // Same predicate as the row: an instance-governed extension is connected, never offered Connect again.
+  const connected = entry.connected;
+  const managed = instanceManaged(entry);
+  // Own credentials over an instance connection are an explicit opt-in, folded away by default.
+  const [own, setOwn] = useState(false);
+  // What a submit writes to: the workspace's own connection row, if it has one.
+  const hasOwn = Boolean(entry.connection);
+  const [agree, setAgree] = useState(hasOwn);
   const schema = workspaceSettingsSchema(entry);
   const lines = describeCapabilities(entry.manifest.capabilities);
+  const showForm = !managed || own;
+  const ownRef = useRef<HTMLDivElement>(null);
+  // On a phone the opened form starts below the fold; bring it to the user.
+  useEffect(() => { if (own) ownRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" }); }, [own]);
 
   const submit = async (settings: Values) => {
-    if (connected) await saveWorkspaceExtensionSettings(workspaceId, entry.id, settings);
+    if (hasOwn) await saveWorkspaceExtensionSettings(workspaceId, entry.id, settings);
     else await connectWorkspaceExtension(workspaceId, entry.id, settings, consentTokens(entry.manifest.capabilities));
-    toast.success(t(connected ? "installed.saved" : "installed.connected", { name: entry.name }));
+    toast.success(t(hasOwn ? "installed.saved" : "installed.connected", { name: entry.name }));
     onDone();
   };
 
@@ -54,9 +68,36 @@ function SettingsDialog({ entry, workspaceId, onClose, onDone }: {
       <DialogContent onClose={onClose} className="max-h-[85vh] overflow-y-auto" role="dialog" aria-label={entry.name}>
         <DialogHeader>
           <DialogTitle>{t(connected ? "installed.settingsTitle" : "installed.connectTitle", { name: entry.name })}</DialogTitle>
-          <DialogDescription>{t(connected ? "installed.settingsHint" : "installed.connectHint")}</DialogDescription>
+          <DialogDescription>{t(managed ? "installed.managedHint" : connected ? "installed.settingsHint" : "installed.connectHint")}</DialogDescription>
         </DialogHeader>
-        {!connected && (
+        {connected && <ExtensionStatusPanel entry={entry} className="mt-4" instanceNote={!managed} />}
+        {managed && (
+          <div className="mt-4 space-y-4">
+            {VCS_EXTENSION_IDS.has(entry.id) && <VcsRepoList entry={entry} />}
+            {isInstanceAdmin ? (
+              <Link to={`/w/${wsSlug}/instance/extensions?ext=${encodeURIComponent(entry.id)}`} className="inline-block text-sm text-primary hover:underline">
+                {t("installed.editInstance")}
+              </Link>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t("installed.instanceCredentials")}</p>
+            )}
+          </div>
+        )}
+        {managed && !own && (
+          <DialogFooter className="mt-4">
+            {schema && (
+              <Button variant="ghost" onClick={() => setOwn(true)}>{t("installed.useOwn")}</Button>
+            )}
+            <Button variant="outline" onClick={onClose}>{t("installed.close")}</Button>
+          </DialogFooter>
+        )}
+        {managed && own && (
+          <div ref={ownRef} className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+            <p className="text-sm text-muted-foreground">{t("installed.useOwnHint")}</p>
+            <Button variant="outline" size="sm" onClick={() => setOwn(false)}>{t("installed.cancel")}</Button>
+          </div>
+        )}
+        {showForm && !hasOwn && (
           <div className="mt-4 space-y-2 rounded-lg border border-border p-3">
             <p className="text-sm font-medium">{t("installed.consentTitle")}</p>
             {lines.length === 0 ? (
@@ -75,20 +116,20 @@ function SettingsDialog({ entry, workspaceId, onClose, onDone }: {
             </label>
           </div>
         )}
-        <div className="mt-4">
+        {showForm && <div className="mt-4">
           {schema ? (
             <SchemaForm
               schema={schema as FieldSchema}
               manifest={entry.manifest}
               value={entry.connection?.settings as Values | undefined}
               onSubmit={submit}
-              submitLabel={t(connected ? "installed.save" : "installed.connect")}
+              submitLabel={t(hasOwn ? "installed.save" : "installed.connect")}
               disabled={!agree}
             />
           ) : (
             <>
               <p className="text-sm text-muted-foreground">{t("installed.noSettings")}</p>
-              {!connected && (
+              {!hasOwn && (
                 <DialogFooter className="mt-4">
                   <Button disabled={!agree} onClick={() => void submit({}).catch((e) => toast.error(apiErrorMessage(e, t("installed.actionFailed"))))}>
                     {t("installed.connect")}
@@ -97,7 +138,7 @@ function SettingsDialog({ entry, workspaceId, onClose, onDone }: {
               )}
             </>
           )}
-        </div>
+        </div>}
       </DialogContent>
     </Dialog>
   );
@@ -146,9 +187,10 @@ function Row({ entry, canManage, busy, onToggle, onSettings, onTest, onRemove }:
 }) {
   const { t } = useTranslation("integrations");
   const { wsSlug = "" } = useParams();
+  const navigate = useNavigate();
   const st = installedStatus(entry);
   const on = Boolean(entry.status?.enabled);
-  const connected = Boolean(entry.connection) || entry.status?.source === "instance";
+  const connected = entry.connected;
   const health = entry.status?.health;
   const healthLabel = t(health ? (health.ok ? "installed.health.ok" : "installed.health.bad") : "installed.health.unknown");
   const elsewhere = entry.managedElsewhere ? t("installed.managedElsewhere") : undefined;
@@ -167,10 +209,23 @@ function Row({ entry, canManage, busy, onToggle, onSettings, onTest, onRemove }:
             <span role="img" aria-label={healthLabel} title={healthLabel} className={cn("h-2.5 w-2.5 shrink-0 rounded-full", health ? (health.ok ? "bg-success" : "bg-destructive") : "bg-muted-foreground/40")} />
             {t(st.key, st.values)}
           </p>
+          {entry.blocked && st.kind !== "blocked" && (
+            <p className="mt-1 text-xs text-destructive">{t("installed.status.blocked", { reason: entry.blockedReason || "-" })}</p>
+          )}
           {entry.status?.last_error && st.kind !== "error" && (
             <p className="mt-1 text-xs text-muted-foreground">{t("installed.lastError", { message: entry.status.last_error })}</p>
           )}
         </div>
+        {entry.kind === "theme" ? (
+          // a theme is chosen in its own screen (settings, preview, apply); it has no switch, check or removal here
+          <div className="flex items-center gap-2 pl-[3.25rem] sm:pl-0">
+            <Button variant="outline" size="sm" disabled={!canManage || entry.blocked}
+              onClick={() => navigate(`/w/${wsSlug}/extensions/${entry.id}/connect`)}>
+              <Settings2 className="mr-1 h-4 w-4" aria-hidden />
+              {t(entry.themeActive ? "installed.configureTheme" : "installed.chooseTheme")}
+            </Button>
+          </div>
+        ) : (
         <div className="flex items-center gap-2 pl-[3.25rem] sm:pl-0">
           <button
             type="button" role="switch" aria-checked={on}
@@ -200,6 +255,7 @@ function Row({ entry, canManage, busy, onToggle, onSettings, onTest, onRemove }:
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        )}
       </div>
     </li>
   );
@@ -265,7 +321,7 @@ export function InstalledExtensions({ catalog }: { catalog: CatalogState }) {
       </div>
     );
   }
-  const rows = catalog.entries.filter((e) => e.installed);
+  const rows = catalog.entries.filter((e) => e.installed && !e.hidden);
   if (rows.length === 0) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-12 text-center">

@@ -695,7 +695,7 @@ components:
           format: date-time
         condition:
           type: string
-          enum: [task_done, access_ready, contract_ready, artifact_published, deployed, accepted]
+          enum: [task_done, access_ready, contract_ready, artifact_published, shipped, deployed, accepted]
         evidence_url:
           type: string
           nullable: true
@@ -705,7 +705,21 @@ components:
           nullable: true
         condition_satisfied:
           type: boolean
-          description: True when the edge is released by its own condition (non-task_done, met, with evidence), independent of the blocker's status. A blocker in done/cancelled releases the edge as before.
+          description: |
+            Server-computed: true when the edge no longer holds the dependent. Evidence (a met
+            non-task_done condition with evidence_url) releases it whatever the blocker is.
+            Without evidence the blocker decides: task_done / access_ready / contract_ready /
+            artifact_published are released by done or cancelled; shipped by is_shipped or done;
+            deployed by is_shipped or a VCS link with a recorded deploy; accepted by done only
+            (cancelled never releases shipped, deployed or accepted). Always true for a
+            relates_to / is_child_of edge.
+        related_task_title:
+          type: string
+          description: List response only. Title of the other task of the edge.
+        related_task_status_id:
+          type: string
+          format: uuid
+          description: List response only. Status of the other task of the edge.
         warning:
           type: string
           description: Create response only. See POST.
@@ -915,6 +929,18 @@ components:
         created_at:
           type: string
           format: date-time
+        deployed_sha:
+          type: string
+          nullable: true
+          description: Commit running in deployed_env; null until a deploy is recorded.
+        deployed_env:
+          type: string
+          nullable: true
+        deployed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the deploy was recorded. A blocker with any link carrying it releases a "deployed" dependency edge.
 
     # ---------- Integration ----------
     IntegrationConfig:
@@ -2338,15 +2364,25 @@ paths:
     get:
       tags: [Dependencies]
       summary: List dependencies for a task
+      description: |
+        Both directions. Every edge carries `condition` and the server-computed
+        `condition_satisfied`; `related_task_title` / `related_task_status_id` name the other end.
       responses:
         "200":
-          description: List of dependencies
+          description: Edges the task depends on (outgoing) and edges that depend on it (incoming)
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/TaskDependency"
+                type: object
+                properties:
+                  outgoing:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskDependency"
+                  incoming:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskDependency"
     post:
       tags: [Dependencies]
       summary: Add a dependency between tasks
@@ -2367,9 +2403,13 @@ paths:
                   default: blocks
                 condition:
                   type: string
-                  enum: [task_done, access_ready, contract_ready, artifact_published, deployed, accepted]
+                  enum: [task_done, access_ready, contract_ready, artifact_published, shipped, deployed, accepted]
                   default: task_done
-                  description: What a blocks edge waits for. Only task_done is released by the blocker reaching done/cancelled.
+                  description: >-
+                    What a blocks edge waits for; only for dependency_type blocks (400 otherwise).
+                    task_done is released by the blocker reaching done or cancelled; shipped by
+                    is_shipped or done; deployed by is_shipped or a recorded deploy on one of the
+                    blocker's VCS links; accepted by done. Unknown value: 400.
                 evidence_url:
                   type: string
                   description: Proof the condition holds. With a non-task_done condition it marks the edge satisfied at creation.
@@ -2414,7 +2454,7 @@ paths:
               properties:
                 condition:
                   type: string
-                  enum: [task_done, access_ready, contract_ready, artifact_published, deployed, accepted]
+                  enum: [task_done, access_ready, contract_ready, artifact_published, shipped, deployed, accepted]
                 evidence_url:
                   type: string
       responses:
@@ -4925,6 +4965,64 @@ paths:
                 $ref: "#/components/schemas/VCSLink"
         "400":
           description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/tasks/{task_id}/vcs-links/{link_id}/deployment:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: link_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [VCSLinks]
+      summary: Record a deployment on a pr link
+      description: |
+        Sets deployed_sha, deployed_env and deployed_at (now) on the link, and re-checks the
+        dependents waiting on a "deployed" dependency edge of the task. Reporting the same sha and
+        env again keeps the first deployed_at. Requires the same permission as creating a VCS
+        link. Stored as the link's metadata.deployed, the record PATCH .../metadata writes.
+      operationId: recordVCSDeployment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sha, env]
+              properties:
+                sha:
+                  type: string
+                  description: 40-character lowercase hex commit SHA.
+                env:
+                  type: string
+                  description: Environment, 1-32 chars of a-z, 0-9, _ or -.
+                  example: production
+      responses:
+        "200":
+          description: The updated link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VCSLink"
+        "400":
+          description: Missing or malformed sha / env
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Link not found on this task, or not a pr link
           content:
             application/json:
               schema:

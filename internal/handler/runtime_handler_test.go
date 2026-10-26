@@ -26,6 +26,7 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/preview", h.Preview)
 	e.POST("/workspaces/:ws_id/runtime/artifacts/:provenance_artifact_id/provenance", h.Provenance)
 	e.GET("/workspaces/:ws_id/runtime/capacity", h.Capacity)
+	e.GET("/workspaces/:ws_id/runtime/revisions", h.Revisions)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations", h.AcquireReservation)
 	e.GET("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id", h.GetReservation)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume", h.ConsumeReservation)
@@ -63,6 +64,10 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 		{"preview missing capabilities", http.MethodPost, "/workspaces/" + ws + "/runtime/bindings/b/preview" + owner, `{"purpose":"new_launch"}`},
 
 		{"capacity invalid workspace", http.MethodGet, "/workspaces/not-a-uuid/runtime/capacity", ""},
+		{"revisions invalid workspace", http.MethodGet, "/workspaces/not-a-uuid/runtime/revisions", ""},
+		{"revisions limit not a number", http.MethodGet, "/workspaces/" + ws + "/runtime/revisions?limit=x", ""},
+		{"revisions limit zero", http.MethodGet, "/workspaces/" + ws + "/runtime/revisions?limit=0", ""},
+		{"revisions limit above cap", http.MethodGet, "/workspaces/" + ws + "/runtime/revisions?limit=201", ""},
 		{"capacity invalid agent", http.MethodGet, "/workspaces/" + ws + "/runtime/capacity?agent_id=nope", ""},
 		{"capacity nil agent", http.MethodGet, "/workspaces/" + ws + "/runtime/capacity?agent_id=" + uuid.Nil.String(), ""},
 		{"acquire invalid workspace", http.MethodPost, "/workspaces/nope/runtime/bindings/b/reservations" + owner, acquire},

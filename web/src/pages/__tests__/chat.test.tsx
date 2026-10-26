@@ -454,6 +454,21 @@ describe("ChatPage — stream, stop, states", () => {
     expect(mine.querySelector("code")).toHaveTextContent("ls");
   });
 
+  it("keeps the line breaks I typed in my own message", async () => {
+    db.messages.t1 = [message({ id: "m-nl", role: "user", body: "line one\nReply with the single word ok." })];
+    renderChat("t1");
+    const mine = (await screen.findAllByTestId("chat-message")).find((m) => m.dataset.role === "user")!;
+    const para = await waitFor(() => {
+      const p = mine.querySelector("p");
+      expect(p).not.toBeNull();
+      return p!;
+    });
+    // Two rows: the newline is a <br> between the two lines, not a space.
+    expect(para.querySelector("br")).not.toBeNull();
+    expect(para.childNodes[0]!.textContent).toBe("line one");
+    expect(para.textContent).toBe("line oneReply with the single word ok.");
+  });
+
   it("stays at the newest message when the feed grows after the first paint", async () => {
     let fire: () => void = () => {};
     vi.stubGlobal(

@@ -51,7 +51,8 @@
       "accounts": "Accounts",
       "pools": "Pools",
       "profiles": "Profiles",
-      "agents": "Agent settings"
+      "agents": "Agent settings",
+      "bindings": "Agent settings"
     },
     "empty": "Nothing here yet.",
     "name": "Name",
@@ -71,7 +72,14 @@
     "discard": "Discard",
     "saved": "Resources saved",
     "saveFailed": "Could not save resources",
-    "conflict": "Someone changed this while you were editing. Reloaded the latest version; apply your change again."
+    "conflict": "Someone changed this while you were editing. Reloaded the latest version; apply your change again.",
+    "catalogHint": "Workspace runner catalog, revision {{n}}. The runner picks up every saved revision. Credential references stay hidden: leave credential_ref empty to keep the stored one.",
+    "filter": "Filter resources",
+    "noMatches": "No matches.",
+    "summary": {
+      "max": "max {{n}}",
+      "disabled": "off"
+    }
   },
   "history": {
     "title": "Revision history",
@@ -83,7 +91,9 @@
       "config": "Resources changed",
       "limits": "Limit changed",
       "manager_granted": "Management assigned",
-      "manager_revoked": "Management taken back"
+      "manager_revoked": "Management taken back",
+      "catalog": "Runner catalog saved",
+      "catalogPaused": "Runner catalog saved, runner paused"
     }
   }
 }

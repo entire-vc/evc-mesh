@@ -20,7 +20,11 @@ import (
 // (not even as a restricted node) and never counts as a blocker. Deleted tasks and
 // projects stay in: they are still this workspace's "missing" boundary.
 // $%d is the workspace id.
-var wsEdgesCTE = `ws_edges AS (SELECT d.id,d.task_id,d.depends_on_task_id,d.dependency_type,d.created_at,d.condition,d.evidence_url,d.condition_met_at,` + domain.DependencySatisfiedSQL("d") + ` AS condition_satisfied FROM task_dependencies d WHERE NOT EXISTS (SELECT 1 FROM tasks xt JOIN projects xp ON xp.id=xt.project_id WHERE xt.id IN (d.task_id,d.depends_on_task_id) AND xp.workspace_id<>$%d))`
+//
+// released is the full verdict (evidence OR the blocker's own state, see
+// domain.DependencyReleasedSQL); condition_satisfied stays the evidence half, the
+// only part that is edge metadata and safe to show next to a restricted blocker.
+var wsEdgesCTE = `ws_edges AS (SELECT d.id,d.task_id,d.depends_on_task_id,d.dependency_type,d.created_at,d.condition,d.evidence_url,d.condition_met_at,` + domain.DependencySatisfiedSQL("d") + ` AS condition_satisfied,` + domain.DependencyReleasedSQL("d", "rb", "rbs.category") + ` AS released FROM task_dependencies d LEFT JOIN tasks rb ON rb.id=d.depends_on_task_id LEFT JOIN task_statuses rbs ON rbs.id=rb.status_id WHERE NOT EXISTS (SELECT 1 FROM tasks xt JOIN projects xp ON xp.id=xt.project_id WHERE xt.id IN (d.task_id,d.depends_on_task_id) AND xp.workspace_id<>$%d))`
 
 // ReadGraph uses one read-only repeatable-read transaction and five bulk reads (six for focus).
 // Only compact fields of project tasks and direct boundary nodes are read;
@@ -64,7 +68,12 @@ func (r *TaskDependencyRepo) ReadGraph(ctx context.Context, projectID, focus uui
 	if err := tx.SelectContext(ctx, &snapshot.Topology, `/* graph_read */ SELECT d.id,d.task_id,d.depends_on_task_id,d.dependency_type,d.created_at,d.condition,d.evidence_url,d.condition_met_at,`+domain.DependencySatisfiedSQL("d")+` AS condition_satisfied FROM task_dependencies d JOIN tasks a ON a.id=d.task_id JOIN projects ap ON ap.id=a.project_id JOIN tasks b ON b.id=d.depends_on_task_id JOIN projects bp ON bp.id=b.project_id WHERE ap.workspace_id=$1 AND bp.workspace_id=$1 AND a.deleted_at IS NULL AND b.deleted_at IS NULL AND ap.deleted_at IS NULL AND bp.deleted_at IS NULL AND ($2 OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=ap.id AND (($3 AND m.agent_id=$4) OR (NOT $3 AND m.user_id=$4)))) AND ($2 OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=bp.id AND (($3 AND m.agent_id=$4) OR (NOT $3 AND m.user_id=$4)))) AND d.dependency_type='blocks' ORDER BY d.id`, wsID, scope.Admin && !scope.Agent, scope.Agent, scope.ActorID); err != nil {
 		return nil, err
 	}
-	if err := tx.SelectContext(ctx, &snapshot.Dependencies, fmt.Sprintf(`/* graph_read */ WITH local AS (SELECT id FROM tasks WHERE deleted_at IS NULL AND (($2='00000000-0000-0000-0000-000000000000'::uuid AND project_id=$1) OR id=$2)), `+wsEdgesCTE+` SELECT d.id,d.task_id,d.depends_on_task_id,d.dependency_type,d.created_at,d.condition,d.evidence_url,d.condition_met_at,d.condition_satisfied FROM ws_edges d WHERE d.task_id IN (SELECT id FROM local) OR d.depends_on_task_id IN (SELECT id FROM local) ORDER BY d.id`, 3), projectID, focus, wsID); err != nil {
+	// Edge verdict for the client: the full state-aware satisfaction only when the
+	// blocker is one this actor may see; otherwise just the evidence half, so a
+	// restricted or deleted blocker's status never leaks through the edge.
+	if err := tx.SelectContext(ctx, &snapshot.Dependencies, fmt.Sprintf(`/* graph_read */ WITH local AS (SELECT id FROM tasks WHERE deleted_at IS NULL AND (($2='00000000-0000-0000-0000-000000000000'::uuid AND project_id=$1) OR id=$2)), `+wsEdgesCTE+`,
+ allowed_projects AS (SELECT p.id FROM projects p WHERE p.workspace_id=$3 AND p.deleted_at IS NULL AND ($4 OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND (($5 AND m.agent_id=$6) OR (NOT $5 AND m.user_id=$6)))))
+ SELECT d.id,d.task_id,d.depends_on_task_id,d.dependency_type,d.created_at,d.condition,d.evidence_url,d.condition_met_at,CASE WHEN ap.id IS NOT NULL AND bt.deleted_at IS NULL THEN d.released ELSE d.condition_satisfied END AS condition_satisfied FROM ws_edges d LEFT JOIN tasks bt ON bt.id=d.depends_on_task_id LEFT JOIN allowed_projects ap ON ap.id=bt.project_id WHERE d.task_id IN (SELECT id FROM local) OR d.depends_on_task_id IN (SELECT id FROM local) ORDER BY d.id`, 3), projectID, focus, wsID, scope.Admin && !scope.Agent, scope.Agent, scope.ActorID); err != nil {
 		return nil, err
 	}
 	// Use CASE at the SQL boundary: inaccessible metadata never enters Go memory.
@@ -76,7 +85,7 @@ func (r *TaskDependencyRepo) ReadGraph(ctx context.Context, projectID, focus uui
  allowed_projects AS (SELECT p.id FROM projects p WHERE p.workspace_id=$3 AND p.deleted_at IS NULL AND ($4 OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND (($5 AND m.agent_id=$6) OR (NOT $5 AND m.user_id=$6))))),
  access AS (SELECT i.id, (t.id IS NOT NULL AND t.deleted_at IS NULL AND ap.id IS NOT NULL) AS allowed FROM ids i LEFT JOIN tasks t ON t.id=i.id LEFT JOIN allowed_projects ap ON ap.id=t.project_id),
  counts AS (SELECT d.task_id, COUNT(*) AS blockers,
- COUNT(*) FILTER (WHERE NOT d.condition_satisfied AND (ap.id IS NULL OR t.deleted_at IS NOT NULL OR s.category IS NULL OR s.category NOT IN ('done','cancelled'))) AS unfinished_blockers,
+ COUNT(*) FILTER (WHERE NOT d.condition_satisfied AND (ap.id IS NULL OR t.deleted_at IS NOT NULL OR s.category IS NULL OR NOT d.released)) AS unfinished_blockers,
  COUNT(*) FILTER (WHERE ap.id IS NULL OR t.deleted_at IS NOT NULL) AS unknown_blockers
  FROM ws_edges d LEFT JOIN tasks t ON t.id=d.depends_on_task_id LEFT JOIN task_statuses s ON s.id=t.status_id LEFT JOIN allowed_projects ap ON ap.id=t.project_id WHERE d.dependency_type='blocks' AND d.task_id IN (SELECT id FROM ids) GROUP BY d.task_id),
  dependents AS (SELECT depends_on_task_id,COUNT(*) AS n FROM ws_edges WHERE dependency_type='blocks' AND depends_on_task_id IN (SELECT id FROM ids) GROUP BY depends_on_task_id)

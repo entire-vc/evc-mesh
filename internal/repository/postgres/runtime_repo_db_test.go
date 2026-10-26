@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -500,4 +501,66 @@ func TestRunnerConnectionCreatorsWaitForSharedLock(t *testing.T) {
 	var rows int
 	require.NoError(t, f.db.GetContext(ctx, &rows, `SELECT count(*) FROM integration_configs WHERE workspace_id=$1 AND provider IN ('runner','agent_runtime')`, f.owner))
 	require.Equal(t, 1, rows, "one Runner connection per workspace whichever name created it")
+}
+
+// The editor sends back the redacted Inventory catalog: accounts keep their
+// stored credential_ref, a brand-new account without one is refused, and
+// every save shows up in Revisions with its author.
+func TestRuntimeRepoSaveKeepsRedactedCredentialRefsAndListsRevisions(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	empty, err := f.repo.Revisions(ctx, f.owner, f.ownerActor, 50)
+	require.NoError(t, err)
+	require.False(t, empty.Managed, "no connection yet")
+	require.Empty(t, empty.Revisions)
+	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+	snapshot, err := f.repo.Inventory(ctx, f.owner, f.ownerActor)
+	require.NoError(t, err)
+
+	edited := *snapshot.Catalog
+	edited.Pools = maps.Clone(snapshot.Catalog.Pools)
+	var poolRef string
+	for ref := range edited.Pools {
+		poolRef = ref
+		break
+	}
+	pool := edited.Pools[poolRef]
+	pool.MaxConcurrency++
+	edited.Pools[poolRef] = pool
+	data, err := json.Marshal(edited)
+	require.NoError(t, err)
+	enabled := true
+	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, RuntimeSave{IfRevision: snapshot.Revision, Enabled: &enabled, Config: data})
+	require.NoError(t, err, "a redacted catalog is accepted")
+
+	var stored []byte
+	require.NoError(t, f.db.GetContext(ctx, &stored, `SELECT r.config FROM runtime_catalog_revisions r JOIN integration_configs i ON i.id=r.integration_id WHERE i.workspace_id=$1 ORDER BY r.revision DESC LIMIT 1`, f.owner))
+	saved, err := domain.ParseRuntimeCatalog(stored)
+	require.NoError(t, err)
+	for ref, account := range f.catalog.Accounts {
+		require.Equal(t, account.CredentialRef, saved.Accounts[ref].CredentialRef, "account %s keeps its credential_ref", ref)
+	}
+	require.Equal(t, pool.MaxConcurrency, saved.Pools[poolRef].MaxConcurrency)
+
+	edited.Accounts = maps.Clone(snapshot.Catalog.Accounts)
+	edited.Accounts["brand-new"] = domain.RuntimeAccount{Provider: "provider-a", QuotaPoolsByMode: map[string][]string{"api": {poolRef}}}
+	data, err = json.Marshal(edited)
+	require.NoError(t, err)
+	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, RuntimeSave{IfRevision: snapshot.Revision + 1, Enabled: &enabled, Config: data})
+	require.ErrorContains(t, err, "invalid runtime catalog", "a new account has no stored reference to inherit")
+
+	listed, err := f.repo.Revisions(ctx, f.owner, f.ownerActor, 50)
+	require.NoError(t, err)
+	require.True(t, listed.Managed)
+	revisions := listed.Revisions
+	require.Len(t, revisions, 2)
+	require.EqualValues(t, 2, revisions[0].Revision, "newest first")
+	require.Equal(t, f.ownerActor.UserID, revisions[0].AuthorID)
+	require.NotEmpty(t, revisions[0].AuthorName)
+	limited, err := f.repo.Revisions(ctx, f.owner, f.ownerActor, 1)
+	require.NoError(t, err)
+	require.Len(t, limited.Revisions, 1)
+	_, err = f.repo.Revisions(ctx, f.owner, f.receiverActor, 50)
+	require.Error(t, err, "another workspace's admin cannot read the history")
 }

@@ -176,11 +176,12 @@ var extensionRouteCapabilities = map[string]string{
 	"POST /api/v1/documents/:doc_id/comments":           "docs:write",
 
 	// vcs links
-	"GET /api/v1/tasks/:task_id/vcs-links":                     "vcs_links:read",
-	"POST /api/v1/tasks/:task_id/vcs-links":                    "vcs_links:write",
-	"DELETE /api/v1/vcs-links/:link_id":                        "vcs_links:write",
-	"PATCH /api/v1/tasks/:task_id/vcs-links/:link_id/metadata": "vcs_links:write",
-	"PATCH /api/v1/vcs-links/ship-sha":                         "vcs_links:write",
+	"GET /api/v1/tasks/:task_id/vcs-links":                      "vcs_links:read",
+	"POST /api/v1/tasks/:task_id/vcs-links":                     "vcs_links:write",
+	"DELETE /api/v1/vcs-links/:link_id":                         "vcs_links:write",
+	"PATCH /api/v1/tasks/:task_id/vcs-links/:link_id/metadata":  "vcs_links:write",
+	"POST /api/v1/tasks/:task_id/vcs-links/:link_id/deployment": "vcs_links:write",
+	"PATCH /api/v1/vcs-links/ship-sha":                          "vcs_links:write",
 
 	// events
 	"GET /api/v1/projects/:proj_id/events":  "events:read",

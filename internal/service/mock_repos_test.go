@@ -1111,10 +1111,12 @@ type MockTaskDependencyRepository struct {
 	mu          sync.RWMutex
 	items       map[uuid.UUID]*domain.TaskDependency
 	errToReturn error
+	// deployed holds the blocker task ids DeployedTasks reports as deployed.
+	deployed map[uuid.UUID]bool
 }
 
 func NewMockTaskDependencyRepository() *MockTaskDependencyRepository {
-	return &MockTaskDependencyRepository{items: make(map[uuid.UUID]*domain.TaskDependency)}
+	return &MockTaskDependencyRepository{items: make(map[uuid.UUID]*domain.TaskDependency), deployed: make(map[uuid.UUID]bool)}
 }
 
 func (m *MockTaskDependencyRepository) Create(_ context.Context, dep *domain.TaskDependency) error {
@@ -1212,6 +1214,28 @@ func (m *MockTaskDependencyRepository) UpdateCondition(_ context.Context, id uui
 	m.items[id] = &next
 	out := next
 	return &out, nil
+}
+
+// DeployedTasks returns the ids listed in deployed (set by the test).
+func (m *MockTaskDependencyRepository) DeployedTasks(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[uuid.UUID]bool{}
+	for _, id := range ids {
+		if m.deployed[id] {
+			out[id] = true
+		}
+	}
+	return out, m.errToReturn
+}
+
+// catStates lifts a category-only map into the BlockerState map the readers take.
+func catStates(cats map[uuid.UUID]domain.StatusCategory) map[uuid.UUID]domain.BlockerState {
+	out := make(map[uuid.UUID]domain.BlockerState, len(cats))
+	for id, c := range cats {
+		out[id] = domain.BlockerState{Category: c}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -3455,6 +3479,10 @@ func (m *MockVCSLinkRepository) SetPipelineStatus(_ context.Context, id uuid.UUI
 
 func (m *MockVCSLinkRepository) ListOpenTasksWithMergedPR(_ context.Context, _, _ int) ([]repository.MergedPROpenTask, error) {
 	return nil, m.errToReturn
+}
+
+func (m *MockVCSLinkRepository) ProjectHasPRLinkToRepo(_ context.Context, _ uuid.UUID, _ string) (bool, error) {
+	return false, m.errToReturn
 }
 
 func (m *MockVCSLinkRepository) ListByExternalID(_ context.Context, provider domain.VCSProvider, linkType domain.VCSLinkType, externalID string) ([]domain.VCSLink, error) {

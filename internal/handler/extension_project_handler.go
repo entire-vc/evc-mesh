@@ -2,8 +2,12 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +15,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -58,6 +63,18 @@ type ExtensionProjectHandler struct {
 	pi       service.ProjectIntegrationService
 	projects service.ProjectService
 	actions  map[string][]ProjectAction
+	repos    ProjectRepoSource
+}
+
+// ProjectRepoSource lists the repositories a project's vcs_links point into.
+type ProjectRepoSource interface {
+	ProjectProviderRepos(ctx context.Context, projectID uuid.UUID, provider, prefer string, limit int) ([]repository.VCSRepoActivity, error)
+}
+
+// WithRepos gives the handler the link aggregate GET .../repos reads.
+func (h *ExtensionProjectHandler) WithRepos(src ProjectRepoSource) *ExtensionProjectHandler {
+	h.repos = src
+	return h
 }
 
 func NewExtensionProjectHandler(registry extensionLookup, pi service.ProjectIntegrationService) *ExtensionProjectHandler {
@@ -181,6 +198,10 @@ func (h *ExtensionProjectHandler) List(c echo.Context) error {
 				m := p.Manifest()
 				resp.ProjectView = projectViewOf(extID, m.ProjectView)
 				for _, req := range m.Requires {
+					// An extension without a project level has no binding to enable here.
+					if dep, ok := h.registry.Get(req); ok && !dep.Manifest().Levels.Project {
+						continue
+					}
 					if !enabled[req] {
 						resp.UnmetRequires = append(resp.UnmetRequires, req)
 					}
@@ -224,6 +245,100 @@ func (h *ExtensionProjectHandler) binding(c echo.Context, projectID uuid.UUID, e
 		return h.pi.GetTeamRelay(c.Request().Context(), projectID)
 	}
 	return h.pi.GetBinding(c.Request().Context(), projectID, extID)
+}
+
+// vcsRepoSetting is the project setting in which each VCS extension's binding
+// names its repository (as Put stores it).
+var vcsRepoSetting = map[string]string{"gitlab": "repo_path", "github": "repo"}
+
+// projectRepoLimit caps the link-derived part of GET .../repos.
+const projectRepoLimit = 100
+
+// projectRepoResponse is one repository of GET .../repos. Source says where it
+// is known from: "webhook" (links only), "binding" (the binding only), "both".
+type projectRepoResponse struct {
+	Repo        string     `json:"repo"`
+	Host        string     `json:"host"`
+	Links       int        `json:"links"`
+	LastEventAt *time.Time `json:"last_event_at,omitempty"`
+	Bound       bool       `json:"bound"`
+	Source      string     `json:"source"`
+}
+
+// Repos handles GET /projects/:proj_id/extensions/:ext_id/repos (gitlab and
+// github only): the repositories the project's links point into, joined with
+// the one its binding names. Read-only; binding stays with Put/Delete.
+func (h *ExtensionProjectHandler) Repos(c echo.Context) error {
+	projectID, extID, provider, err := h.target(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	key, ok := vcsRepoSetting[extID]
+	if !ok || h.repos == nil {
+		return handleError(c, apierror.NotFound("Extension"))
+	}
+	ctx := c.Request().Context()
+	bound := ""
+	pi, err := h.pi.GetBinding(ctx, projectID, extID)
+	var apiErr *apierror.Error
+	switch {
+	case err == nil:
+		if pi.Enabled {
+			settings := map[string]any{}
+			_ = json.Unmarshal(pi.Settings, &settings)
+			s, _ := settings[key].(string)
+			bound = strings.Trim(strings.ToLower(strings.TrimSpace(s)), "/")
+		}
+	case errors.As(err, &apiErr) && apiErr.StatusCode() == http.StatusNotFound:
+	default:
+		return handleError(c, err)
+	}
+	rows, err := h.repos.ProjectProviderRepos(ctx, projectID, extID, bound, projectRepoLimit)
+	if err != nil {
+		return handleError(c, err)
+	}
+	out := make([]projectRepoResponse, 0, len(rows)+1)
+	seen := false
+	for _, r := range rows {
+		item := projectRepoResponse{Repo: r.Repo, Host: r.Host, Links: r.Links, Source: "webhook"}
+		at := r.LastEventAt
+		item.LastEventAt = &at
+		if bound != "" && r.Repo == bound {
+			item.Bound, item.Source, seen = true, "both", true
+		}
+		out = append(out, item)
+	}
+	if bound != "" && !seen {
+		host := h.bindingHost(ctx, projectID, extID, provider)
+		if host == "" && len(rows) > 0 {
+			host = rows[0].Host
+		}
+		out = append(out, projectRepoResponse{Repo: bound, Host: host, Bound: true, Source: "binding"})
+	}
+	return c.JSON(http.StatusOK, map[string]any{"repos": out})
+}
+
+// bindingHost is the host a bound repository lives on when no link names it:
+// the base_url of the connection governing the project's workspace, else
+// github.com for GitHub. Empty when neither is known; the caller then falls
+// back to the host of the project's own links. A failed lookup is not an
+// error of the listing: the host is then simply unknown.
+func (h *ExtensionProjectHandler) bindingHost(ctx context.Context, projectID uuid.UUID, extID string, provider extensions.Provider) string {
+	if h.projects != nil {
+		if project, err := h.projects.GetByID(ctx, projectID); err == nil && project != nil {
+			if res, err := provider.Resolve(ctx, project.WorkspaceID); err == nil {
+				if raw, _ := res.Settings["base_url"].(string); raw != "" {
+					if u, err := url.Parse(strings.TrimSpace(raw)); err == nil && u.Host != "" {
+						return strings.ToLower(u.Host)
+					}
+				}
+			}
+		}
+	}
+	if extID == "github" {
+		return "github.com"
+	}
+	return ""
 }
 
 // teamRelayProjectSettings are the keys the project level of Team Relay accepts.

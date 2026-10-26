@@ -501,6 +501,7 @@ var workspaceScopeHandlerCheckedRoutes = map[string]bool{
 	"/api/v1/me/ui-state/:scope":                                                                  true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id":                                                true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id/actions":                                        true,
+	"/api/v1/projects/:proj_id/extensions/:ext_id/repos":                                          true,
 	"/api/v1/projects/:proj_id/extensions/:ext_id/actions/:action":                                true,
 	"/api/v1/projects/:proj_id/chat/attachments/:attachment_id/download":                          true, // the repo resolves the attachment through its thread with project_id = :proj_id and user_id = caller; anyone else gets 404
 	"/api/v1/memories/:id/related":                                                                true,

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -210,4 +211,93 @@ func TestResolveChildProject_RealDB(t *testing.T) {
 
 	_, ok = resolveChildProject(ctx, db, `SELECT project_id FROM no_such_table WHERE id = $1`, project.String())
 	assert.False(t, ok, "a failing query is refused, never allowed")
+}
+
+// POST /memories is the one memory route a chat token reaches: the body is pinned
+// to the chat's project before the handler sees it, anything wider is refused, and
+// the other memory routes stay closed.
+func TestChatSessionProjectScope_MemoryWrite(t *testing.T) {
+	p := chatPrincipal()
+	proj, ws := p.Token.ProjectID.String(), p.Token.WorkspaceID.String()
+
+	run := func(method, route, body string) (int, map[string]any) {
+		e := echo.New()
+		req := httptest.NewRequest(method, "/x", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetPath(route)
+		c.Set(ContextKeyChatSession, p)
+		var seen map[string]any
+		h := ChatSessionProjectScope(nil)(func(c echo.Context) error {
+			raw, err := io.ReadAll(c.Request().Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(raw, &seen))
+			assert.Equal(t, int64(len(raw)), c.Request().ContentLength)
+			return c.NoContent(http.StatusNoContent)
+		})
+		require.NoError(t, h(c))
+		return rec.Code, seen
+	}
+
+	for name, body := range map[string]string{
+		"defaults":         `{"key":"k","content":"v"}`,
+		"explicit-project": `{"key":"k","content":"v","scope":"project","project_id":"` + proj + `","workspace_id":"` + ws + `"}`,
+		"empty-scope":      `{"key":"k","content":"v","scope":""}`,
+		"null-project":     `{"key":"k","content":"v","project_id":null}`,
+	} {
+		code, seen := run(http.MethodPost, ChatSessionMemoryWriteRoute, body)
+		require.Equal(t, http.StatusNoContent, code, name)
+		assert.Equal(t, "project", seen["scope"], name)
+		assert.Equal(t, proj, seen["project_id"], name)
+		assert.Equal(t, "v", seen["content"], name+": the rest of the body is kept")
+	}
+
+	for name, body := range map[string]string{
+		"workspace-scope":   `{"key":"k","scope":"workspace"}`,
+		"agent-scope":       `{"key":"k","scope":"agent"}`,
+		"foreign-project":   `{"key":"k","project_id":"` + uuid.NewString() + `"}`,
+		"bad-project":       `{"key":"k","project_id":"nope"}`,
+		"foreign-workspace": `{"key":"k","workspace_id":"` + uuid.NewString() + `"}`,
+		"bad-workspace":     `{"key":"k","workspace_id":"nope"}`,
+		"wrong-type":        `{"key":"k","scope":1}`,
+		"not-json":          `nope`,
+		"not-object":        `[1]`,
+		"null":              `null`,
+	} {
+		code, _ := run(http.MethodPost, ChatSessionMemoryWriteRoute, body)
+		assert.Equal(t, http.StatusForbidden, code, name)
+	}
+
+	code, _ := run(http.MethodGet, ChatSessionMemoryWriteRoute, "")
+	assert.Equal(t, http.StatusForbidden, code, "reading memory stays refused")
+	code, _ = run(http.MethodPost, "/api/v1/memories/import", `{}`)
+	assert.Equal(t, http.StatusForbidden, code, "import stays refused")
+}
+
+func TestPinMemoryWriteToProject_NoBody(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/x", http.NoBody)
+	req.Body = nil
+	assert.False(t, pinMemoryWriteToProject(echo.New().NewContext(req, httptest.NewRecorder()), uuid.New(), uuid.New()))
+}
+
+// The agent ceiling of a chat token admits write_memory on POST /memories only;
+// the user's role still decides.
+func TestClampConnector_ChatSessionMemoryWrite(t *testing.T) {
+	require.False(t, agentPerms[PermWriteMemory], "precondition: write_memory is outside the agent ceiling")
+	run := func(role, method, route string) int {
+		c, rec := newRBACOAuthConnectorContext(uuid.New(), uuid.New(), uuid.New())
+		c.Request().Method = method
+		c.SetPath(route)
+		c.Set(ContextKeyChatSession, &service.ChatSessionPrincipal{UserRole: role})
+		h := RequireConnectorPermission(PermWriteMemory, newRBACMockMemberRepo(), nil)(func(c echo.Context) error {
+			return c.NoContent(http.StatusNoContent)
+		})
+		require.NoError(t, h(c))
+		return rec.Code
+	}
+	assert.Equal(t, http.StatusNoContent, run(domain.RoleMember, http.MethodPost, ChatSessionMemoryWriteRoute))
+	assert.Equal(t, http.StatusForbidden, run(domain.RoleViewer, http.MethodPost, ChatSessionMemoryWriteRoute), "viewer holds no write_memory")
+	assert.Equal(t, http.StatusForbidden, run(domain.RoleMember, http.MethodPost, "/api/v1/memories/import"))
+	assert.Equal(t, http.StatusForbidden, run(domain.RoleMember, http.MethodDelete, "/api/v1/memories/:id"))
+	assert.Equal(t, http.StatusForbidden, run(domain.RoleMember, http.MethodPost, "/api/v1/projects/:proj_id/knowledge"))
 }

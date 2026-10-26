@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -86,6 +87,25 @@ func (h *RuntimeHandler) Save(c echo.Context) error {
 		return handleError(c, err)
 	}
 	value, err := h.repo.Save(c.Request().Context(), ws, runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+// Revisions lists catalog revisions newest first: number, author, time (limit 1..200, default 50).
+func (h *RuntimeHandler) Revisions(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	limit := 50
+	if raw := c.QueryParam("limit"); raw != "" {
+		if limit, err = strconv.Atoi(raw); err != nil || limit < 1 || limit > 200 {
+			return handleError(c, apierror.BadRequest("invalid limit"))
+		}
+	}
+	value, err := h.repo.Revisions(c.Request().Context(), ws, runtimeActor(c), limit)
 	if err != nil {
 		return handleError(c, err)
 	}

@@ -217,6 +217,13 @@ type Task struct {
 	// persisted, populated only by GET handlers when HumanGate is true, same
 	// pattern as URL above.
 	HumanGateInfo *HumanGateInfo `json:"human_gate_info,omitempty"`
+	// StatusCategory is the category of StatusID, resolved by the single-task
+	// GET handlers (by UUID and by short ID) — never persisted, same pattern as
+	// HumanGateInfo. Without it a client that walks a dependency/WAIT chain over
+	// REST sees only an opaque status_id and cannot tell a live blocker from a
+	// closed one (an internal ticket: the runner's blocking-path diagnostic reported
+	// "status unknown" for every live card). Empty (omitted) when the lookup fails.
+	StatusCategory StatusCategory `json:"status_category,omitempty" db:"-"`
 	// FalseOpen surfaces the "false-open" graph signal (an internal ticket, sibling
 	// of an internal ticket which sat 80 days in urgent although every subtask had been
 	// closed since June): priority and created_at describe the CARD, not
@@ -396,8 +403,10 @@ type TaskDependency struct {
 	Condition      DependencyCondition `json:"condition" db:"condition"`
 	EvidenceURL    *string             `json:"evidence_url,omitempty" db:"evidence_url"`
 	ConditionMetAt *time.Time          `json:"condition_met_at,omitempty" db:"condition_met_at"`
-	// ConditionSatisfied is the edge-level half of the satisfaction rule,
-	// computed by DependencySatisfiedSQL on read; it ignores the blocker status.
+	// ConditionSatisfied is the full verdict "this edge no longer holds the
+	// dependent", computed on read by DependencyReleasedSQL (the Go twin is
+	// TaskDependency.Released): the evidence half OR the blocker's own state
+	// for the condition. Always true for a non-blocks edge.
 	ConditionSatisfied bool `json:"condition_satisfied" db:"condition_satisfied"`
 	// Warning is set on the create response only (never stored): the blocker is
 	// a monitor/umbrella/recurring card that normally never reaches done.
@@ -412,6 +421,7 @@ const (
 	DependencyConditionAccessReady       DependencyCondition = "access_ready"
 	DependencyConditionContractReady     DependencyCondition = "contract_ready"
 	DependencyConditionArtifactPublished DependencyCondition = "artifact_published"
+	DependencyConditionShipped           DependencyCondition = "shipped"
 	DependencyConditionDeployed          DependencyCondition = "deployed"
 	DependencyConditionAccepted          DependencyCondition = "accepted"
 )
@@ -420,27 +430,91 @@ const (
 func (c DependencyCondition) Valid() bool {
 	switch c {
 	case DependencyConditionTaskDone, DependencyConditionAccessReady, DependencyConditionContractReady,
-		DependencyConditionArtifactPublished, DependencyConditionDeployed, DependencyConditionAccepted:
+		DependencyConditionArtifactPublished, DependencyConditionShipped, DependencyConditionDeployed,
+		DependencyConditionAccepted:
 		return true
 	}
 	return false
 }
 
-// EvidenceSatisfied is the single Go definition of "the edge is released by
-// its own condition": a non-task_done condition, marked met, with evidence.
-// The blocker being done/cancelled releases the edge independently of this.
-// SQL readers use DependencySatisfiedSQL, which must stay equivalent.
+// EvidenceSatisfied is the edge-level half of the satisfaction rule: a
+// non-task_done condition, marked met, with evidence. It never looks at the
+// blocker. SQL readers use DependencySatisfiedSQL, which must stay equivalent.
+// Readers that decide "does this edge still hold the dependent" use Released.
 func (d TaskDependency) EvidenceSatisfied() bool {
 	return d.Condition != "" && d.Condition != DependencyConditionTaskDone &&
 		d.ConditionMetAt != nil && d.EvidenceURL != nil && strings.TrimSpace(*d.EvidenceURL) != ""
 }
 
 // DependencySatisfiedSQL returns the SQL predicate equivalent to
-// EvidenceSatisfied for the task_dependencies row aliased as alias. Every SQL
-// reader that asks "is this blocker still holding" ORs it with the blocker's
-// done/cancelled check instead of writing its own copy.
+// EvidenceSatisfied for the task_dependencies row aliased as alias. It is the
+// evidence half only; DependencyReleasedSQL adds the blocker's own state.
 func DependencySatisfiedSQL(alias string) string {
 	return "(" + alias + ".condition <> 'task_done' AND " + alias + ".condition_met_at IS NOT NULL AND COALESCE(btrim(" + alias + ".evidence_url), '') <> '')"
+}
+
+// BlockerState is what Released reads off the blocker task. Category is the
+// category of the blocker's status ("" when unknown); IsShipped is tasks.is_shipped;
+// HasDeployment is true when any pr link of the blocker records a deploy
+// (metadata.deployed with sha and at).
+type BlockerState struct {
+	Category      StatusCategory
+	IsShipped     bool
+	HasDeployment bool
+}
+
+// NeedsDeploymentLookup reports whether Released would read HasDeployment for
+// this edge, so a caller can skip the vcs_links query for every other edge.
+func (d TaskDependency) NeedsDeploymentLookup() bool {
+	return d.DependencyType == DependencyTypeBlocks && d.Condition == DependencyConditionDeployed && !d.EvidenceSatisfied()
+}
+
+// Released is the single Go definition of "this edge no longer holds the
+// dependent". DependencyReleasedSQL must stay equivalent.
+//
+//   - not a blocks edge: always released (it never holds anything);
+//   - evidence (EvidenceSatisfied): released whatever the blocker is;
+//   - shipped:  blocker is_shipped OR in done. Cancelled never.
+//   - deployed: blocker is_shipped OR any of its pr links records a deploy.
+//     Merged/done alone is not enough: that is the point of the condition.
+//   - accepted: blocker in done. Cancelled never.
+//   - task_done and the evidence-only conditions (access_ready, contract_ready,
+//     artifact_published): blocker in done OR cancelled, the rule every edge
+//     had before conditions existed.
+func (d TaskDependency) Released(b BlockerState) bool {
+	if d.DependencyType != DependencyTypeBlocks {
+		return true
+	}
+	if d.EvidenceSatisfied() {
+		return true
+	}
+	done := b.Category == StatusCategoryDone
+	switch d.Condition {
+	case DependencyConditionShipped:
+		return b.IsShipped || done
+	case DependencyConditionDeployed:
+		return b.IsShipped || b.HasDeployment
+	case DependencyConditionAccepted:
+		return done
+	default:
+		return done || b.Category == StatusCategoryCancelled
+	}
+}
+
+// DependencyReleasedSQL is the SQL twin of TaskDependency.Released for the
+// task_dependencies row aliased edge, whose blocker is the tasks row aliased
+// blocker with status category expression category (for example "bts.category").
+// A NULL category (blocker or status missing) reads as not done.
+// Every SQL reader that asks "is this blocker still holding" uses it instead of
+// writing its own copy.
+func DependencyReleasedSQL(edge, blocker, category string) string {
+	deployed := "EXISTS (SELECT 1 FROM vcs_links dv WHERE dv.task_id = " + blocker + ".id AND dv.link_type = 'pr'" +
+		" AND COALESCE(dv.metadata->'deployed'->>'sha', '') <> '' AND dv.metadata->'deployed'->>'at' IS NOT NULL)"
+	return "COALESCE(" + edge + ".dependency_type <> 'blocks' OR " + DependencySatisfiedSQL(edge) + " OR (CASE " + edge + ".condition" +
+		" WHEN 'shipped' THEN (" + blocker + ".is_shipped OR " + category + " = 'done')" +
+		" WHEN 'deployed' THEN (" + blocker + ".is_shipped OR " + deployed + ")" +
+		" WHEN 'accepted' THEN " + category + " = 'done'" +
+		" ELSE " + category + " IN ('done', 'cancelled') END), false)"
 }
 
 // EnrichedTaskDependency is a TaskDependency joined with the OTHER task in the

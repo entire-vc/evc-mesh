@@ -15,6 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/extensions/exttest"
+	"github.com/entire-vc/evc-mesh/internal/extensions/runner"
 	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -569,6 +570,24 @@ func TestExtensionWorkspace_ViewFlagsPurgeAndManagedSettings(t *testing.T) {
 	list, err = g.svc.List(ctx, g.ws)
 	require.NoError(t, err)
 	require.False(t, list[0].CanPurgeData)
+}
+
+// Runner is the built-in My Runner screen: the workspace list still names it
+// (agent-chat requires it) but marks it hidden from the extension lists.
+func TestExtensionWorkspace_RunnerIsHiddenFromListings(t *testing.T) {
+	ctx := context.Background()
+	f, err := exttest.NewFixture(nil, false)
+	require.NoError(t, err)
+	require.NoError(t, f.Registry.Register(runner.New(extensions.Deps{Conns: extensions.IntegrationConnections{Repo: f.Integ}})))
+	svc := service.NewExtensionWorkspaceService(f.Registry, f.Integ, f.Consents)
+
+	list, err := svc.List(ctx, uuid.New())
+	require.NoError(t, err)
+	hidden := map[string]bool{}
+	for _, v := range list {
+		hidden[v.ID] = v.Hidden
+	}
+	require.Equal(t, map[string]bool{"runner": true, "demo": false}, hidden)
 }
 
 // plainRegistry registers the demo provider without the managed-elsewhere flag,

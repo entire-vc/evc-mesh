@@ -156,6 +156,33 @@ function verifyWebhook(body, timestamp, signature, secret) {
 }
 ```
 
+## Extension Install Handshake
+
+An external extension (`runtime: external`) whose manifest sets `external.install_path` receives one signed `POST {base_url}{install_path}` when its connection is saved, and again whenever the address, version, event list, signing secret or install code changes:
+
+```json
+{
+  "extension_id": "hello",
+  "version": "0.1.0",
+  "workspace_id": "6f1c2a3b-0000-4000-8000-000000000001",
+  "signing_secret": "<hex>",
+  "events": ["task.updated"],
+  "events_path": "/mesh/events",
+  "install_code": "BIND-7Q2X-91LK"
+}
+```
+
+The request carries `X-Mesh-Timestamp` and `X-Mesh-Signature` computed exactly as above, with `signing_secret` as the key. The service keeps `signing_secret` and verifies every later event with it.
+
+### `install_code`
+
+`signing_secret` travels in the same body, so its signature alone only shows that the sender knows that secret, not which Mesh workspace sent it. To bind an installation to a workspace, the service can issue a one-time code and the workspace admin (or an agent) stores it as the workspace secret `EXT_<ID>_INSTALL_CODE`, where `<ID>` is the extension id upper-cased with `-` and `.` replaced by `_` (for `keep-notes`: `EXT_KEEP_NOTES_INSTALL_CODE`). Set it through the workspace secrets API or UI; it is not a connection setting and never appears in the connection's settings, and secret listings show only its fingerprint.
+
+- **When it is sent:** only while that secret exists. Without it the field is omitted and the body is byte-for-byte what earlier Mesh versions sent. An expired secret fails the handshake (the error names the secret, never its value).
+- **Signature:** the field is part of the signed body, so it is covered by the same `X-Mesh-Signature`; a changed code invalidates the signature.
+- **Re-handshake:** setting or changing the code makes Mesh repeat the handshake.
+- **Service side:** check `install_code` only on the first binding of a workspace (when you do not yet hold a signing secret for it), then consume the code. Later handshakes for an already bound workspace are verified with the stored signing secret; a stale or absent code there is not an error.
+
 ## Retry Policy
 
 If your endpoint returns a non-2xx status code or the request times out:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -37,6 +38,9 @@ type svc struct {
 	installs     int
 	healthStatus int
 	installCode  int
+	lastBody     []byte
+	lastTS       string
+	lastSig      string
 	srv          *httptest.Server
 }
 
@@ -58,6 +62,7 @@ func (s *svc) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/mesh/install":
 		var in installRequest
 		_ = json.Unmarshal(body, &in)
+		s.lastBody, s.lastTS, s.lastSig = body, r.Header.Get("X-Mesh-Timestamp"), r.Header.Get("X-Mesh-Signature")
 		if s.installCode != 0 {
 			w.WriteHeader(s.installCode)
 			return
@@ -121,7 +126,8 @@ type fakeSecrets struct {
 	createErr error
 	readErr   error
 	expired   bool
-	hide      bool // Create succeeds but the value never reads back
+	expiredOf string // only this name reads as expired
+	hide      bool   // Create succeeds but the value never reads back
 }
 
 func (s *fakeSecrets) Create(_ context.Context, in domain.CreateSecretInput) (domain.Secret, error) {
@@ -148,7 +154,7 @@ func (s *fakeSecrets) ResolveCurrentValues(context.Context, uuid.UUID, *uuid.UUI
 	}
 	var out []domain.MaterializedSecret
 	for k, v := range s.vals {
-		out = append(out, domain.MaterializedSecret{Name: k, Value: v, Expired: s.expired})
+		out = append(out, domain.MaterializedSecret{Name: k, Value: v, Expired: s.expired || k == s.expiredOf})
 	}
 	return out, nil
 }
@@ -527,8 +533,103 @@ func TestCleanBaseURL_HTTPSOrLoopback(t *testing.T) {
 // truncated digest in the fingerprint would treat them as the same secret.
 func TestFingerprint_DistinguishesSecretsWithCollidingShortDigest(t *testing.T) {
 	m := extensions.Manifest{Version: "0.1.0"}
-	a := fingerprint(m, "https://svc.example", "secret-36533")
-	b := fingerprint(m, "https://svc.example", "secret-103289")
+	a := fingerprint(m, "https://svc.example", "secret-36533", "")
+	b := fingerprint(m, "https://svc.example", "secret-103289", "")
 	assert.NotEqual(t, a, b)
 	assert.NotContains(t, a, "secret-36533", "the fingerprint never carries the secret")
+}
+
+// Without an install code the install body is exactly what Mesh sent before
+// the field existed: services that never heard of install_code see no change.
+func TestInstallRequest_WithoutCodeIsByteForByteUnchanged(t *testing.T) {
+	ws := uuid.MustParse("6f1c2a3b-0000-4000-8000-000000000001")
+	body, err := json.Marshal(installRequest{
+		ExtensionID: "hello", Version: "0.1.0", WorkspaceID: ws, SigningSecret: "s3cr3t",
+		Events: []string{"task.updated"}, EventsPath: "/mesh/events",
+	})
+	require.NoError(t, err)
+	const golden = `{"extension_id":"hello","version":"0.1.0","workspace_id":"6f1c2a3b-0000-4000-8000-000000000001",` +
+		`"signing_secret":"s3cr3t","events":["task.updated"],"events_path":"/mesh/events"}`
+	assert.Equal(t, golden, string(body))
+
+	s := newSvc(t, "")
+	r := newRig(t, s.srv.URL)
+	require.NoError(t, r.hs.Run(context.Background(), r.p, r.ws, r.settings(s.srv.URL)))
+	assert.NotContains(t, string(s.lastBody), "install_code", "no code set: the field is not sent")
+}
+
+func TestHandshake_InstallCodeIsSentUnderTheSignature(t *testing.T) {
+	const code = "BIND-7Q2X-91LK"
+	s := newSvc(t, "")
+	r := newRig(t, s.srv.URL)
+	r.secrets.vals = map[string]string{InstallCodeName("hello"): code}
+	ctx := context.Background()
+
+	require.NoError(t, r.hs.Ensure(ctx, r.p, r.ws, r.settings(s.srv.URL)))
+	var in installRequest
+	require.NoError(t, json.Unmarshal(s.lastBody, &in))
+	assert.Equal(t, code, in.InstallCode)
+	assert.Equal(t, Sign(r.secrets.vals[SecretName("hello")], s.lastTS, s.lastBody), s.lastSig,
+		"the body carrying the code is what Sign() covered")
+	tampered := strings.Replace(string(s.lastBody), code, "BIND-0000-0000", 1)
+	assert.NotEqual(t, Sign(r.secrets.vals[SecretName("hello")], s.lastTS, []byte(tampered)), s.lastSig,
+		"a swapped code breaks the signature")
+
+	require.NoError(t, r.hs.Ensure(ctx, r.p, r.ws, r.settings(s.srv.URL)))
+	assert.Equal(t, 1, s.installs, "unchanged code: memoised")
+
+	r.secrets.mu.Lock()
+	r.secrets.vals[InstallCodeName("hello")] = "BIND-NEW1-CODE"
+	r.secrets.mu.Unlock()
+	require.NoError(t, r.hs.Ensure(ctx, r.p, r.ws, r.settings(s.srv.URL)))
+	assert.Equal(t, 2, s.installs, "a new code repeats the handshake")
+	require.NoError(t, json.Unmarshal(s.lastBody, &in))
+	assert.Equal(t, "BIND-NEW1-CODE", in.InstallCode)
+}
+
+func TestInstallCodeName(t *testing.T) {
+	assert.Equal(t, "EXT_KEEP_NOTES_INSTALL_CODE", InstallCodeName("keep-notes"))
+	assert.Equal(t, "EXT_KEEP_NOTES_SIGNING_SECRET", SecretName("keep-notes"))
+}
+
+// The install code is a credential: no error, log line or health message may
+// quote it, whatever the service answers.
+func TestHandshake_InstallCodeNeverLeaks(t *testing.T) {
+	const canary = "CANARY-install-code-5f0e9d"
+	var logs strings.Builder
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	ctx := context.Background()
+
+	var errs []string
+	check := func(name string, setup func(s *svc, r *rig)) {
+		t.Run(name, func(t *testing.T) {
+			s := newSvc(t, "")
+			r := newRig(t, s.srv.URL)
+			r.secrets.vals = map[string]string{InstallCodeName("hello"): canary}
+			setup(s, r)
+			err := r.hs.Run(ctx, r.p, r.ws, r.settings(s.srv.URL))
+			require.Error(t, err)
+			errs = append(errs, err.Error())
+			reg := extensions.NewRegistry()
+			require.NoError(t, reg.Register(r.p))
+			(&Hook{Reg: reg, Conns: r.conns, HS: r.hs}).Saved(ctx, r.connID)
+			rep := r.p.Health(ctx, extensions.Resolved{ExtensionID: "hello", Enabled: true, WorkspaceID: r.ws, Settings: r.settings(s.srv.URL)})
+			errs = append(errs, rep.Message)
+		})
+	}
+	check("service rejects with 401", func(s *svc, _ *rig) { s.installCode = http.StatusUnauthorized })
+	check("service fails with 500", func(s *svc, _ *rig) { s.installCode = http.StatusInternalServerError })
+	check("service unreachable", func(s *svc, _ *rig) { s.srv.Close() })
+	check("install code expired", func(_ *svc, r *rig) { r.secrets.expiredOf = InstallCodeName("hello") })
+	check("secret store down", func(_ *svc, r *rig) { r.secrets.readErr = errors.New("db down: " + canary) })
+
+	require.NotEmpty(t, errs)
+	assert.Contains(t, strings.Join(errs, "\n"), "install code is expired", "an expired code is an error, named without its value")
+	for _, e := range errs {
+		assert.NotContains(t, e, canary)
+	}
+	assert.Contains(t, logs.String(), "install handshake", "the hook logged the failures")
+	assert.NotContains(t, logs.String(), canary)
 }

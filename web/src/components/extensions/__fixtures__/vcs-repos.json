@@ -1,0 +1,7 @@
+{
+  "repos": [
+    { "repo": "entire-vc/evc-mesh", "host": "gitlab.example.invalid", "links": 1234, "last_event_at": "2026-10-25T22:00:00Z", "bound": true, "source": "both" },
+    { "repo": "entire-vc/evc-mesh-mcp", "host": "gitlab.example.invalid", "links": 87, "last_event_at": "2026-10-24T09:30:00Z", "bound": false, "source": "webhook" },
+    { "repo": "entire-vc/evc-spark", "host": "gitlab.example.invalid", "links": 0, "bound": true, "source": "binding" }
+  ]
+}

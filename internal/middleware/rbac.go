@@ -318,7 +318,7 @@ func clampConnector(c echo.Context, perm Permission, memberRepo repository.Works
 	// plumbing for the user-role half, but unlike a mot_ connector it also
 	// carries the agent's own ceiling. Routes behind the connector-only
 	// middlewares have no rbac(), so nothing else applies agentPerms to them.
-	if IsChatSession(c) && !agentPerms[perm] {
+	if IsChatSession(c) && !agentPerms[perm] && !chatSessionMemoryWrite(c, perm) {
 		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("agents cannot perform this action"))
 	}
 	wsID, wsErr := GetAgentAuthWorkspaceID(c)
@@ -345,6 +345,14 @@ func clampConnector(c echo.Context, perm Permission, memberRepo repository.Works
 		return true, c.JSON(http.StatusForbidden, apierror.Forbidden("insufficient permissions — the connected user's workspace role no longer grants this"))
 	}
 	return false, nil
+}
+
+// chatSessionMemoryWrite lifts the agent ceiling for one route: a chat token may
+// write memory through POST /memories, which ChatSessionProjectScope pins to the
+// chat's project. The agent's own key writes memory there unclamped; the user's
+// role (a viewer holds no write_memory) still applies below.
+func chatSessionMemoryWrite(c echo.Context, perm Permission) bool {
+	return perm == PermWriteMemory && c.Request().Method == http.MethodPost && c.Path() == ChatSessionMemoryWriteRoute
 }
 
 // RequireConnectorPermission is the role bar for a route that has no rbac():

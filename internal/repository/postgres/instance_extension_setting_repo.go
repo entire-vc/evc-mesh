@@ -77,6 +77,20 @@ func (r *InstanceExtensionSettingRepo) Upsert(ctx context.Context, s *domain.Ins
 	return err
 }
 
+// SecretProvider reads the provider switch for new secret values: the
+// secret_provider setting of the keep extension instance, "" when unset. Only
+// that key is read, so the keep extension's own secrets are not opened.
+func (r *InstanceExtensionSettingRepo) SecretProvider(ctx context.Context) (string, error) {
+	var v string
+	err := r.db.GetContext(ctx, &v, `
+		SELECT COALESCE(settings->>$2, '') FROM instance_extension_settings WHERE extension_id = $1`,
+		secretstore.KeepExtensionID, secretstore.SettingSecretProvider)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
 // encryptSettings encrypts the string values of secretKeys. An empty value is
 // left empty (nothing to protect).
 func encryptSettings(ctx context.Context, extensionID string, raw json.RawMessage, secretKeys []string) ([]byte, error) {

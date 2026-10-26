@@ -166,6 +166,14 @@ func ChatSessionProjectScope(db *sqlx.DB) echo.MiddlewareFunc {
 					return deny(c, "resource is outside the chat's project")
 				}
 			}
+			// The memory write names its project in the body: it is pinned to the
+			// chat's project memory, and that makes the route project-scoped.
+			if c.Request().Method == http.MethodPost && c.Path() == ChatSessionMemoryWriteRoute {
+				if !pinMemoryWriteToProject(c, p.Token.WorkspaceID, p.Token.ProjectID) {
+					return deny(c, "memory write is outside the chat's project")
+				}
+				seenProject = true
+			}
 			// A query project_id is a filter the caller controls, never proof that the
 			// route is project-scoped: it may only agree with the token, and does not
 			// lift the fail-closed refusal of a route that names no project itself.
@@ -255,6 +263,59 @@ func resolveTaskProject(ctx context.Context, db *sqlx.DB, raw string) (uuid.UUID
 		return uuid.Nil, false
 	}
 	return projectID, true
+}
+
+// ChatSessionMemoryWriteRoute is the one memory route open to a chat token: a
+// write to the chat's project memory. Reads, import and delete stay refused.
+const ChatSessionMemoryWriteRoute = "/api/v1/memories"
+
+// pinMemoryWriteToProject confines a memory write body to the chat's project:
+// scope and project_id default to "project" and the token's project, and any
+// other scope, project or workspace is false. An unreadable or non-object body
+// is false too (fail-closed). The rewritten body is handed to the handler.
+func pinMemoryWriteToProject(c echo.Context, workspaceID, projectID uuid.UUID) bool {
+	req := c.Request()
+	if req.Body == nil {
+		return false
+	}
+	raw, err := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+	if err != nil {
+		return false
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil || body == nil {
+		return false
+	}
+	var fields struct {
+		WorkspaceID *string `json:"workspace_id"`
+		ProjectID   *string `json:"project_id"`
+		Scope       *string `json:"scope"`
+	}
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	if fields.Scope != nil && *fields.Scope != "" && *fields.Scope != "project" {
+		return false
+	}
+	if fields.ProjectID != nil {
+		if id, perr := uuid.Parse(*fields.ProjectID); perr != nil || id != projectID {
+			return false
+		}
+	}
+	if fields.WorkspaceID != nil && *fields.WorkspaceID != "" {
+		if id, perr := uuid.Parse(*fields.WorkspaceID); perr != nil || id != workspaceID {
+			return false
+		}
+	}
+	body["scope"], _ = json.Marshal("project")
+	body["project_id"], _ = json.Marshal(projectID)
+	pinned, err := json.Marshal(body)
+	if err != nil {
+		return false
+	}
+	req.Body = io.NopCloser(bytes.NewReader(pinned))
+	req.ContentLength = int64(len(pinned))
+	return true
 }
 
 // chatSessionDependencyRoute takes depends_on_task_id from the body.

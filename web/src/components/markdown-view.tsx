@@ -17,6 +17,8 @@ export interface MarkdownViewProps {
   className?: string;
   mentionables?: Map<string, MentionEntry>;
   wsSlug?: string;
+  /** Draw every newline inside a paragraph as a line break (text a person typed). */
+  breaks?: boolean;
 }
 
 /**
@@ -42,6 +44,7 @@ export function MarkdownView({
   className,
   mentionables,
   wsSlug,
+  breaks = false,
 }: MarkdownViewProps) {
   const navigate = useNavigate();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -51,7 +54,7 @@ export function MarkdownView({
 
   useEffect(() => {
     let cancelled = false;
-    void renderMarkdownFragment(content).then((fragment) => {
+    void renderMarkdownFragment(content, breaks).then((fragment) => {
       const host = hostRef.current;
       // Two guards, not one: `cancelled` covers a newer render having started,
       // and the host may be gone if the component unmounted while parsing.
@@ -65,7 +68,7 @@ export function MarkdownView({
     return () => {
       cancelled = true;
     };
-  }, [content, mentionables, wsSlug]);
+  }, [content, breaks, mentionables, wsSlug]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {

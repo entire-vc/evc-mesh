@@ -221,6 +221,39 @@ func TestSecretHandler_ListReturnsMaskedFieldsOnly(t *testing.T) {
 	assert.NotContains(t, out[0], "encrypted_value")
 }
 
+// An external extension's install code (EXT_<ID>_INSTALL_CODE) is set through
+// this API like any other secret: neither the create response, the list nor
+// the audit entry may carry it.
+func TestSecretHandler_InstallCodeCanaryNeverInResponses(t *testing.T) {
+	wsID := uuid.New()
+	const canary = "CANARY-install-code-5f0e9d"
+	stored := sampleSecret(wsID)
+	stored.Name = "EXT_HELLO_INSTALL_CODE"
+	svc := &mockSecretService{
+		create: func(_ context.Context, _ domain.CreateSecretInput) (domain.Secret, error) { return stored, nil },
+		list: func(_ context.Context, _ uuid.UUID, _, _ *uuid.UUID) ([]domain.Secret, error) {
+			return []domain.Secret{stored}, nil
+		},
+	}
+	act := &recordingActivityLog{}
+	h := NewSecretHandler(svc, act)
+
+	c, rec := newSecretCtx(t, http.MethodPost, "/api/v1/workspaces/x/secrets",
+		`{"name":"EXT_HELLO_INSTALL_CODE","scope":"workspace","value":"`+canary+`"}`, wsID, uuid.New())
+	require.NoError(t, h.Create(c))
+	require.Equal(t, http.StatusCreated, rec.Code)
+	assert.NotContains(t, rec.Body.String(), canary)
+
+	c, rec = newSecretCtx(t, http.MethodGet, "/api/v1/workspaces/x/secrets", "", wsID, uuid.New())
+	require.NoError(t, h.List(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "EXT_HELLO_INSTALL_CODE")
+	assert.NotContains(t, rec.Body.String(), canary)
+
+	require.Len(t, act.entries, 1)
+	assert.NotContains(t, string(act.entries[0].Changes), canary)
+}
+
 func TestSecretHandler_ListPassesScopeFiltersThrough(t *testing.T) {
 	wsID, projID, agentID := uuid.New(), uuid.New(), uuid.New()
 	var gotProj, gotAgent *uuid.UUID

@@ -213,6 +213,12 @@ type ServerConfig struct {
 	Port         int
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	// ReadHeaderTimeout bounds how long the server waits for the request
+	// headers (SERVER_READ_HEADER_TIMEOUT, default 10s). Unlike ReadTimeout /
+	// WriteTimeout, which are deliberately NOT applied to the http.Server
+	// (they would cut SSE /agents/me/events/stream, /ws and the runner chat
+	// long-poll), this one only covers the header phase.
+	ReadHeaderTimeout time.Duration
 	// MetricsToken, when set, gates GET /metrics behind a matching
 	// `Authorization: Bearer <token>` header. Empty (the default) leaves the
 	// endpoint open — that's the existing behavior for deployments that
@@ -368,11 +374,12 @@ type VAPIDConfig struct {
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Host:         getEnv("SERVER_HOST", "0.0.0.0"),
-			Port:         getEnvInt("SERVER_PORT", 8005),
-			ReadTimeout:  getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
-			WriteTimeout: getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
-			MetricsToken: getEnvOrFile("MESH_METRICS_TOKEN", "MESH_METRICS_TOKEN_FILE"),
+			Host:              getEnv("SERVER_HOST", "0.0.0.0"),
+			Port:              getEnvInt("SERVER_PORT", 8005),
+			ReadTimeout:       getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
+			WriteTimeout:      getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+			ReadHeaderTimeout: getEnvDuration("SERVER_READ_HEADER_TIMEOUT", 10*time.Second),
+			MetricsToken:      getEnvOrFile("MESH_METRICS_TOKEN", "MESH_METRICS_TOKEN_FILE"),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),

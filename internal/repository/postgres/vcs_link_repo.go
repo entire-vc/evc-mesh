@@ -384,8 +384,33 @@ func (r *VCSLinkRepo) ListByExternalID(ctx context.Context, provider domain.VCSP
 	return result, nil
 }
 
+// ProjectHasPRLinkToRepo: see repository.VCSLinkRepository. The url, scheme
+// stripped and lowercased, must continue the repository path with an MR/PR
+// segment, so a subgroup (group/project/sub) is a different repository. One
+// EXISTS over every link of the project: no page can hide an older match.
+func (r *VCSLinkRepo) ProjectHasPRLinkToRepo(ctx context.Context, projectID uuid.UUID, repo string) (bool, error) {
+	const q = `
+		SELECT EXISTS (
+		    SELECT 1 FROM vcs_links l
+		    JOIN tasks t ON t.id = l.task_id
+		    WHERE t.project_id = $1 AND t.deleted_at IS NULL
+		      AND l.link_type = 'pr'
+		      AND COALESCE(l.metadata->>'relation', '') <> 'relates_to'
+		      AND COALESCE(l.metadata->>'role', '') <> 'review'
+		      AND (regexp_replace(lower(l.url), '^https?://', '') LIKE $2::text || '/-/merge\_requests/%'
+		        OR regexp_replace(lower(l.url), '^https?://', '') LIKE $2::text || '/merge\_requests/%'
+		        OR regexp_replace(lower(l.url), '^https?://', '') LIKE $2::text || '/pull/%'))
+	`
+	var found bool
+	if err := r.db.GetContext(ctx, &found, q, projectID, escapeLike(strings.ToLower(repo))); err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
 // ListOpenTasksWithMergedPR: see repository.VCSLinkRepository. Review-subject
-// links (metadata role=review) name somebody else's work and do not count. The
+// links (metadata role=review) and mentions (relation=relates_to) name somebody
+// else's work and do not count. The
 // activity_log NOT EXISTS makes the shadow journal one entry per card. The rules
 // EXISTS is a superset prefilter (project or workspace rule row with the flag) so
 // projects without it never occupy the page; the service still reads the
@@ -400,6 +425,7 @@ func (r *VCSLinkRepo) ListOpenTasksWithMergedPR(ctx context.Context, limit, offs
 		    FROM vcs_links l
 		    WHERE l.task_id = t.id AND l.link_type = 'pr' AND l.status = 'merged'
 		      AND COALESCE(l.metadata->>'role', '') <> 'review'
+		      AND COALESCE(l.metadata->>'relation', '') <> 'relates_to'
 		    ORDER BY COALESCE(l.status_synced_at, l.created_at) DESC
 		    LIMIT 1
 		) m ON true
@@ -408,7 +434,8 @@ func (r *VCSLinkRepo) ListOpenTasksWithMergedPR(ctx context.Context, limit, offs
 		  AND NOT EXISTS (
 		      SELECT 1 FROM vcs_links o
 		      WHERE o.task_id = t.id AND o.link_type = 'pr' AND o.status = 'open'
-		        AND COALESCE(o.metadata->>'role', '') <> 'review')
+		        AND COALESCE(o.metadata->>'role', '') <> 'review'
+		        AND COALESCE(o.metadata->>'relation', '') <> 'relates_to')
 		  AND (
 		      EXISTS (SELECT 1 FROM project_rules pr
 		              WHERE pr.project_id = t.project_id AND pr.rule_type = 'workflow'
@@ -509,4 +536,53 @@ func (r *VCSLinkRepo) WorkspaceProviderActivity(ctx context.Context, workspaceID
 		return 0, nil, fmt.Errorf("vcs link activity: %w", err)
 	}
 	return row.N, row.Last, nil
+}
+
+// vcsRepoOfLink splits a link url into host and repository: scheme stripped,
+// lowercased, the path cut before the first MR/PR/commit/tree segment. Links
+// whose url has no such segment name no repository and are left out.
+const vcsRepoOfLink = `
+	SELECT split_part(u, '/', 1) AS host,
+	       regexp_replace(substr(u, strpos(u, '/') + 1), '/(-/)?(merge_requests|pull|commit|tree)/.*$', '') AS repo,
+	       at
+	FROM (
+	    SELECT regexp_replace(lower(v.url), '^[a-z][a-z0-9+.-]*://', '') AS u,
+	           GREATEST(v.created_at, COALESCE(v.status_synced_at, v.created_at), COALESCE(v.pipeline_updated_at, v.created_at)) AS at
+	    FROM vcs_links v
+	    JOIN tasks t ON t.id = v.task_id
+	    %s
+	) l
+	WHERE u ~ '^[^/]+/[^/].*/(-/)?(merge_requests|pull|commit|tree)/'`
+
+// WorkspaceProviderRepos returns the repositories one provider's links point
+// into across the workspace, most linked first, at most limit of them. One
+// aggregate: no per-repository query.
+func (r *VCSLinkRepo) WorkspaceProviderRepos(ctx context.Context, workspaceID uuid.UUID, provider string, limit int) ([]repository.VCSRepoActivity, error) {
+	q := `SELECT repo, host, COUNT(*) AS links, MAX(at) AS last_event_at FROM (` +
+		fmt.Sprintf(vcsRepoOfLink, `JOIN projects p ON p.id = t.project_id
+	    WHERE p.workspace_id = $1 AND v.provider = $2 AND t.deleted_at IS NULL`) + `) r
+		GROUP BY repo, host
+		ORDER BY links DESC, repo, host
+		LIMIT $3`
+	out := []repository.VCSRepoActivity{}
+	if err := r.db.SelectContext(ctx, &out, q, workspaceID, provider, limit); err != nil {
+		return nil, fmt.Errorf("vcs link repos: %w", err)
+	}
+	return out, nil
+}
+
+// ProjectProviderRepos is WorkspaceProviderRepos for one project (the scan
+// goes through tasks.project_id). A repository whose path equals prefer is
+// ranked first, so the project's bound repository is never cut by limit.
+func (r *VCSLinkRepo) ProjectProviderRepos(ctx context.Context, projectID uuid.UUID, provider, prefer string, limit int) ([]repository.VCSRepoActivity, error) {
+	q := `SELECT repo, host, COUNT(*) AS links, MAX(at) AS last_event_at FROM (` +
+		fmt.Sprintf(vcsRepoOfLink, `WHERE t.project_id = $1 AND v.provider = $2 AND t.deleted_at IS NULL`) + `) r
+		GROUP BY repo, host
+		ORDER BY (repo = $3) DESC, links DESC, repo, host
+		LIMIT $4`
+	out := []repository.VCSRepoActivity{}
+	if err := r.db.SelectContext(ctx, &out, q, projectID, provider, strings.ToLower(prefer), limit); err != nil {
+		return nil, fmt.Errorf("vcs link repos: %w", err)
+	}
+	return out, nil
 }

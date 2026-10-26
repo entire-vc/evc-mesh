@@ -169,7 +169,8 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
       ? <Button disabled>{t("detail.action.allow")}</Button>
       : <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.notAllowed")}</p>;
   }
-  return <Button onClick={() => navigate(`/w/${wsSlug}/extensions/${entry.id}/connect`)}>{t("detail.action.connect")}</Button>;
+  const label = entry.kind !== "theme" ? "detail.action.connect" : entry.themeActive ? "detail.action.configureTheme" : "detail.action.chooseTheme";
+  return <Button onClick={() => navigate(`/w/${wsSlug}/extensions/${entry.id}/connect`)}>{t(label)}</Button>;
 }
 
 /** README, versions and checks come from Spark's card for the extension; a failure keeps what the catalog already gave. */

@@ -110,4 +110,9 @@ func (p *Provider) Resolve(ctx context.Context, workspaceID uuid.UUID) (extensio
 // (service.SettingsHider).
 func (p *Provider) HideConnectionSettings() bool { return true }
 
+// HiddenFromListings keeps Runner out of the extension lists: it is the
+// built-in My Runner screen, still registered for agent-chat's requires
+// (service.ListingHider).
+func (p *Provider) HiddenFromListings() bool { return true }
+
 func jsonMarshal(v map[string]any) ([]byte, error) { return json.Marshal(v) }

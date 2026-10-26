@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -86,7 +87,7 @@ func TestRevokeByHashDB_ConcurrentCallersExactlyOneWins(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			won[i], errs[i] = repo.RevokeByHash(ctx, tokenHash)
+			won[i], errs[i] = repo.RevokeByHash(ctx, tokenHash, fmt.Sprintf("successor-%d", i))
 		}(i)
 	}
 	close(start)
@@ -124,25 +125,26 @@ func TestRevokeByHashDB_AlreadyRevokedReportsFalse(t *testing.T) {
 	tokenHash := "sequential-probe-" + uuid.New().String()
 	require.NoError(t, repo.Create(ctx, userID, tokenHash, time.Now().Add(time.Hour)))
 
-	won, err := repo.RevokeByHash(ctx, tokenHash)
+	won, err := repo.RevokeByHash(ctx, tokenHash, "successor-1")
 	require.NoError(t, err)
 	assert.True(t, won, "first revoke of a fresh token must report the win")
 
-	won, err = repo.RevokeByHash(ctx, tokenHash)
+	won, err = repo.RevokeByHash(ctx, tokenHash, "successor-2")
 	require.NoError(t, err)
 	assert.False(t, won, "second revoke of the same token must report the loss, not succeed")
 
 	// An unknown hash is the same shape: no row matched, nothing revoked, no error.
-	won, err = repo.RevokeByHash(ctx, "no-such-token-"+uuid.New().String())
+	won, err = repo.RevokeByHash(ctx, "no-such-token-"+uuid.New().String(), "successor-3")
 	require.NoError(t, err)
 	assert.False(t, won, "revoking a nonexistent token must report false, not true")
 }
 
-// TestLinkSuccessorDB_RoundTrip pins the observable half of #cfb14ad6's grace
-// window against a real database: LinkSuccessor's write must be visible on
-// the very next GetByHash, since that read is what auth.Service's
-// handleTokenReuse decides the grace window on.
-func TestLinkSuccessorDB_RoundTrip(t *testing.T) {
+// TestRevokeByHashDB_RecordsSuccessor pins the observable half of an internal ticket's
+// grace window against a real database: the winning revoke's successor must be
+// visible on the very next GetByHash — that read is what auth.Service's
+// handleTokenReuse decides the grace window on — and a losing revoke must not
+// overwrite it.
+func TestRevokeByHashDB_RecordsSuccessor(t *testing.T) {
 	db := refreshTokenTestDB(t)
 	repo := NewRefreshTokenRepo(db)
 	ctx := context.Background()
@@ -152,27 +154,29 @@ func TestLinkSuccessorDB_RoundTrip(t *testing.T) {
 	newHash := "link-new-" + uuid.New().String()
 	require.NoError(t, repo.Create(ctx, userID, oldHash, time.Now().Add(time.Hour)))
 
-	// Before linking: freshly created, no successor, not revoked.
+	// Before rotating: freshly created, no successor, not revoked.
 	stored, err := repo.GetByHash(ctx, oldHash)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Nil(t, stored.ReplacedByHash)
 
-	won, err := repo.RevokeByHash(ctx, oldHash)
+	won, err := repo.RevokeByHash(ctx, oldHash, newHash)
 	require.NoError(t, err)
 	require.True(t, won)
-
-	require.NoError(t, repo.LinkSuccessor(ctx, oldHash, newHash))
 
 	stored, err = repo.GetByHash(ctx, oldHash)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	require.NotNil(t, stored.RevokedAt)
-	require.NotNil(t, stored.ReplacedByHash, "LinkSuccessor's write must be visible on the next GetByHash")
+	require.NotNil(t, stored.ReplacedByHash, "the winning revoke must record its successor in the same write")
 	assert.Equal(t, newHash, *stored.ReplacedByHash)
 
-	// LinkSuccessor on a hash nobody rotated (e.g. an already-lost race) must
-	// not error — it is documented as a best-effort annotation, not a
-	// condition the caller can fail on. See its doc comment on the interface.
-	require.NoError(t, repo.LinkSuccessor(ctx, "no-such-token-"+uuid.New().String(), newHash))
+	won, err = repo.RevokeByHash(ctx, oldHash, "loser-"+uuid.New().String())
+	require.NoError(t, err)
+	require.False(t, won)
+
+	stored, err = repo.GetByHash(ctx, oldHash)
+	require.NoError(t, err)
+	require.NotNil(t, stored.ReplacedByHash)
+	assert.Equal(t, newHash, *stored.ReplacedByHash, "a losing revoke must not overwrite the winner's successor")
 }

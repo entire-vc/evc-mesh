@@ -9,6 +9,7 @@ const server = vi.hoisted(() => ({
   autoUpdate: false,
   journal: [] as unknown[],
   settingsSource: "env" as "env" | "admin",
+  withGithub: false,
 }));
 
 vi.mock("@/lib/api", async () => {
@@ -23,6 +24,7 @@ vi.mock("@/lib/api", async () => {
         items: [
           { id: "gitlab", name: "GitLab", kind: "integration", trust_level: "builtin", allowed: server.allowed.gitlab, allow_explicit: false, has_instance_form: true, enabled: true, settings_source: server.settingsSource },
           { id: "community", name: "Community Tool", kind: "plugin", trust_level: "community", allowed: server.allowed.community, allow_explicit: false, has_instance_form: false, enabled: false, settings_source: "none" },
+          ...(server.withGithub ? [{ id: "github", name: "GitHub", kind: "integration", trust_level: "builtin", allowed: true, allow_explicit: false, has_instance_form: true, enabled: true, settings_source: "admin" }] : []),
         ],
       };
     }
@@ -32,6 +34,9 @@ vi.mock("@/lib/api", async () => {
     }
     if (path === "/api/v1/extensions/gitlab/instance-settings" && method === "GET") {
       return { extension_id: "gitlab", settings: { base_url: "https://git.old" }, enabled: true, source: server.settingsSource, updated_at: "2026-09-03T10:00:00Z" };
+    }
+    if (path === "/api/v1/extensions/github/instance-settings" && method === "GET") {
+      return { extension_id: "github", settings: {}, enabled: true, source: "admin", updated_at: "2026-10-20T10:00:00Z" };
     }
     if (path === "/api/v1/extensions/gitlab/instance-settings" && method === "PUT") {
       server.settingsSource = "admin";
@@ -55,9 +60,9 @@ import { setLanguage } from "@/i18n";
 import { ExtensionInstanceSettingsPage } from "@/pages/extension-instance-settings";
 import { envMigratedDate } from "@/lib/extension-instance";
 
-function renderPage() {
+function renderPage(url = "/w/acme/instance/extensions") {
   return render(
-    <MemoryRouter initialEntries={["/w/acme/instance/extensions"]}>
+    <MemoryRouter initialEntries={[url]}>
       <Routes>
         <Route path="w/:wsSlug/instance/extensions" element={<ExtensionInstanceSettingsPage />} />
       </Routes>
@@ -73,10 +78,25 @@ beforeEach(async () => {
   server.autoUpdate = false;
   server.journal = [];
   server.settingsSource = "env";
+  server.withGithub = false;
   await setLanguage("en");
 });
 
 describe("Instance extension settings page", () => {
+  it("opens on the extension named in ?ext=, as linked from a workspace's Settings dialog", async () => {
+    server.withGithub = true;
+    renderPage("/w/acme/instance/extensions?ext=github");
+    await waitFor(() => expect((screen.getByLabelText("Extension") as HTMLSelectElement).value).toBe("github"));
+    await waitFor(() => expect(calls.list.some((c) => c.path === "/api/v1/extensions/github/instance-settings")).toBe(true));
+    expect(calls.list.some((c) => c.path === "/api/v1/extensions/gitlab/instance-settings")).toBe(false);
+  });
+
+  it("without ?ext= it opens on the first extension with a form", async () => {
+    server.withGithub = true;
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("Extension") as HTMLSelectElement).value).toBe("gitlab"));
+  });
+
   it("shows the allow-list from data: official on, community off, by default", async () => {
     renderPage();
     const gitlab = await screen.findByTestId("allow-row-gitlab");

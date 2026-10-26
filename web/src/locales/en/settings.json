@@ -598,7 +598,7 @@
     }
   },
   "secrets": {
-    "title": "Secrets",
+    "title": "Built-in secrets",
     "subtitle": "Values are stored encrypted and cannot be read back — not here, not through the API. To change one, replace it.",
     "empty": "No secrets stored yet.",
     "expired": "expired",
@@ -1274,6 +1274,7 @@
         "repo": "Repository",
         "builtin": "Built-in"
       }
-    }
+    },
+    "notFound": "Theme {{id}} was not found on this instance."
   }
 }
