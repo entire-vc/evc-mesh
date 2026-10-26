@@ -12,6 +12,7 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -59,8 +60,10 @@ type instanceSettingsResponse struct {
 }
 
 // known reports whether extID is an extension this instance knows and its
-// secret setting keys.
+// secret setting keys. The keep extension is always known: its instance row
+// carries the secret provider switch, which Mesh reads itself.
 func (h *ExtensionInstanceSettingsHandler) known(extID string) (secretKeys []string, ok bool) {
+	ok = extID == secretstore.KeepExtensionID
 	for _, s := range h.sources {
 		if s.ExtensionID == extID {
 			secretKeys, ok = s.SecretKeys, true
@@ -177,9 +180,26 @@ func (h *ExtensionInstanceSettingsHandler) Put(c echo.Context) error {
 		}
 	}
 
-	if h.registry != nil {
+	// The provider switch is Mesh's own setting: checked here, and kept out
+	// of the extension's validation, which knows nothing of it.
+	toValidate := body.Settings
+	if extID == secretstore.KeepExtensionID {
+		if v, present := body.Settings[secretstore.SettingSecretProvider]; present {
+			str, isStr := v.(string)
+			if _, perr := secretstore.ParseProvider(str); !isStr || perr != nil {
+				return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest(secretstore.SettingSecretProvider+" must be "+secretstore.ProviderBuiltin+" or "+secretstore.ProviderKeep))
+			}
+			toValidate = make(map[string]any, len(body.Settings))
+			for k, v := range body.Settings {
+				if k != secretstore.SettingSecretProvider {
+					toValidate[k] = v
+				}
+			}
+		}
+	}
+	if h.registry != nil && len(toValidate) > 0 {
 		if p, reg := h.registry.Get(extID); reg {
-			if verr := p.Validate(extensions.LevelInstance, body.Settings); verr != nil {
+			if verr := p.Validate(extensions.LevelInstance, toValidate); verr != nil {
 				return c.JSON(http.StatusUnprocessableEntity, apierror.BadRequest(verr.Error()))
 			}
 		}

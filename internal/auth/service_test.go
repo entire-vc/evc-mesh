@@ -150,13 +150,9 @@ type mockRefreshTokenRepo struct {
 	// generateTokenPair's own repo-failure branch (a real DB blip while minting
 	// the rotated pair), distinct from every other error path in this file.
 	createErr error
-	// linkSuccessorErr, when non-nil, makes the next LinkSuccessor call fail —
-	// exercises RefreshTokens' documented non-fatal handling of that failure
-	// (logged, rotation still succeeds; see LinkSuccessor's doc comment).
-	linkSuccessorErr error
 	// afterRevokeByHash, when non-nil, runs right after a successful
-	// RevokeByHash — lets a test cancel the request context at exactly the
-	// point a client disconnect lands between revoking and linking.
+	// RevokeByHash — lets a test cancel the request context, or replay the
+	// token, at exactly the point between revoking and minting the successor.
 	afterRevokeByHash func()
 }
 
@@ -217,7 +213,7 @@ func (r *mockRefreshTokenRepo) RevokeByUserID(_ context.Context, userID uuid.UUI
 // RevokeByHash models the real repo's conditional UPDATE: the test-and-set happens under
 // one lock, so exactly one concurrent caller can observe true for a given token. A mock
 // that unconditionally reported true would make the concurrency test below vacuous.
-func (r *mockRefreshTokenRepo) RevokeByHash(ctx context.Context, tokenHash string) (bool, error) {
+func (r *mockRefreshTokenRepo) RevokeByHash(ctx context.Context, tokenHash, successorHash string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -229,29 +225,12 @@ func (r *mockRefreshTokenRepo) RevokeByHash(ctx context.Context, tokenHash strin
 	}
 	now := time.Now()
 	t.RevokedAt = &now
+	t.ReplacedByHash = &successorHash
 	r.mu.Unlock()
 	if r.afterRevokeByHash != nil {
 		r.afterRevokeByHash()
 	}
 	return true, nil
-}
-
-// LinkSuccessor mirrors the real repo's plain, non-atomic UPDATE.
-// Like a real query, it fails on an already-cancelled context.
-func (r *mockRefreshTokenRepo) LinkSuccessor(ctx context.Context, oldHash, newHash string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.linkSuccessorErr != nil {
-		return r.linkSuccessorErr
-	}
-	if t, ok := r.tokens[oldHash]; ok {
-		h := newHash
-		t.ReplacedByHash = &h
-	}
-	return nil
 }
 
 func (r *mockRefreshTokenRepo) DeleteExpired(_ context.Context) error {
@@ -979,37 +958,9 @@ func TestRefreshTokens_Rotation_GenerateTokenPairError(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrTokenReused, "a repo blip while minting the replacement is not theft")
 }
 
-// TestRefreshTokens_Rotation_LinkSuccessorError_StillReturnsFreshPair pins the
-// documented non-fatal handling: losing LinkSuccessor costs THIS ONE token's
-// future grace-window eligibility, never the current rotation's success and
-// never anyone else's sessions.
-func TestRefreshTokens_Rotation_LinkSuccessorError_StillReturnsFreshPair(t *testing.T) {
-	svc, _, refreshRepo, _, _ := newTestService()
-
-	user, tokens, err := svc.Register(context.Background(), "link-fail@example.com", "StrongP4ss", "User")
-	require.NoError(t, err)
-
-	otherHash := "other-device-token-hash-link-fail"
-	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
-
-	refreshRepo.mu.Lock()
-	refreshRepo.linkSuccessorErr = errors.New("db blip")
-	refreshRepo.mu.Unlock()
-
-	newPair, err := svc.RefreshTokens(context.Background(), tokens.RefreshToken)
-	require.NoError(t, err, "a failed LinkSuccessor must not fail the rotation itself")
-	assert.NotEmpty(t, newPair.RefreshToken)
-
-	refreshRepo.mu.RLock()
-	otherToken := refreshRepo.tokens[otherHash]
-	refreshRepo.mu.RUnlock()
-	require.NotNil(t, otherToken)
-	assert.Nil(t, otherToken.RevokedAt, "a lost LinkSuccessor call must not fall back to revoking other sessions")
-}
-
 // TestRefreshTokens_ClientDisconnectAfterRevoke_RetryGetsGrace reproduces a
 // page reload landing mid-rotation: the request context is cancelled right
-// after the old token is revoked. The rotation must still record its
+// after the old token is revoked. The rotation must still insert its
 // successor, so the browser's retry with the old token (it never saw the new
 // cookie) gets a fresh pair inside the grace window instead of a theft
 // verdict that revokes every session the user has.
@@ -1036,6 +987,41 @@ func TestRefreshTokens_ClientDisconnectAfterRevoke_RetryGetsGrace(t *testing.T) 
 	refreshRepo.mu.RUnlock()
 	require.NotNil(t, otherToken)
 	assert.Nil(t, otherToken.RevokedAt, "a client disconnect must not revoke the user's other sessions")
+}
+
+// TestRefreshTokens_RetryMidRotation_GetsGrace reproduces a page reload whose
+// new page replays the old cookie while the first rotation is still in
+// flight: the old token is already revoked but the new pair is not minted yet
+// (prod: age_s=0.050 grace=false). The replay is sequential — it reads the
+// token as already revoked — so it must already see the rotation's successor
+// and get a fresh pair, leaving the user's other sessions alone.
+func TestRefreshTokens_RetryMidRotation_GetsGrace(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	user, tokens, err := svc.Register(context.Background(), "mid-rotation@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	otherHash := "other-device-token-hash-mid-rotation"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	var retryPair *TokenPair
+	var retryErr error
+	refreshRepo.afterRevokeByHash = func() {
+		refreshRepo.afterRevokeByHash = nil
+		retryPair, retryErr = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	}
+	firstPair, err := svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err, "the rotation the retry overlapped must still succeed")
+	assert.NotEmpty(t, firstPair.RefreshToken)
+
+	require.NoError(t, retryErr, "a replay between revoke and successor insert must be grace-eligible")
+	assert.NotEmpty(t, retryPair.RefreshToken)
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.Nil(t, otherToken.RevokedAt, "a mid-rotation replay must not revoke the user's other sessions")
 }
 
 // TestRefreshTokens_WithinGraceWindow_UserLookupError covers handleTokenReuse's
@@ -1082,16 +1068,14 @@ func TestRefreshTokens_WithinGraceWindow_UserNoLongerExists(t *testing.T) {
 	orphanUserID := uuid.New()
 	oldHash := "orphan-old-hash"
 	require.NoError(t, refreshRepo.Create(context.Background(), orphanUserID, oldHash, time.Now().Add(time.Hour)))
-	revoked, err := refreshRepo.RevokeByHash(context.Background(), oldHash)
+	revoked, err := refreshRepo.RevokeByHash(context.Background(), oldHash, "orphan-new-hash")
 	require.NoError(t, err)
 	require.True(t, revoked)
-	newHash := "orphan-new-hash"
-	require.NoError(t, refreshRepo.LinkSuccessor(context.Background(), oldHash, newHash))
 
 	// No user row for orphanUserID at all — the account was deleted after the
 	// token was issued, or never existed. Exercise handleTokenReuse directly
 	// (same package) with a stored record whose RevokedAt/ReplacedByHash are
-	// already set the way LinkSuccessor left them above — the exact shape
+	// already set the way the rotating RevokeByHash left them above — the exact shape
 	// RefreshTokens hands it when reached through the real sequential-replay
 	// path, without needing to also re-derive the token's plaintext/hash here.
 	stored, err := refreshRepo.GetByHash(context.Background(), oldHash)
@@ -1105,9 +1089,10 @@ func TestRefreshTokens_WithinGraceWindow_UserNoLongerExists(t *testing.T) {
 }
 
 // TestRefreshTokens_ConcurrentRequests_OnlyOneSucceeds pins the one-shot guarantee under
-// concurrency, which is where it used to break. Presenting one refresh token N times at
-// once must mint exactly one pair — never N — and every loser must land on the same
-// theft-detection path as a sequential replay.
+// concurrency with the grace window switched off (WithRefreshReuseGraceWindow(0), the
+// rollback lever). Presenting one refresh token N times at once must then mint exactly
+// one pair — never N — and every loser must land on the same theft-detection path as a
+// sequential replay.
 //
 // This is a genuine regression test, not a restatement of the implementation: with the
 // pre-fix service (revoke, then mint unconditionally) every goroutine here returns a
@@ -1116,7 +1101,8 @@ func TestRefreshTokens_WithinGraceWindow_UserNoLongerExists(t *testing.T) {
 func TestRefreshTokens_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
 	const racers = 8
 
-	svc, _, refreshRepo, _, _ := newTestService()
+	refreshRepo := newMockRefreshTokenRepo()
+	svc := NewService(newMockUserRepo(), refreshRepo, newMockWorkspaceRepo(), newMockWorkspaceMemberRepo(), testJWTSecret, WithRefreshReuseGraceWindow(0))
 
 	_, tokens, err := svc.Register(context.Background(), "race@example.com", "StrongP4ss", "User")
 	require.NoError(t, err)
@@ -1163,6 +1149,55 @@ func TestRefreshTokens_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
 		"one-shot refresh token minted %d pairs under %d concurrent requests; exactly 1 is allowed",
 		succeeded, racers)
 	assert.Len(t, minted, succeeded, "distinct access tokens must equal the number of winners")
+}
+
+// TestRefreshTokens_ConcurrentRequests_WithinGraceWindow_NoSweep reproduces a page
+// reload whose new page sends the refresh cookie while the old page's refresh is
+// still reading it: both requests see the token live, one wins the conditional
+// revoke, the other loses it (prod: reason=lost_conditional_revoke grace=false, the
+// user logged out everywhere). The winner has already recorded its successor, so a
+// loser inside the grace window is the same benign replay as a sequential one and
+// must get a fresh pair, without revoking the user's other sessions.
+func TestRefreshTokens_ConcurrentRequests_WithinGraceWindow_NoSweep(t *testing.T) {
+	const racers = 8
+
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	user, tokens, err := svc.Register(context.Background(), "race-grace@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	otherHash := "other-device-token-hash-race-grace"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	refreshRepo.readBarrier = newRaceBarrier(racers)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make([]*TokenPair, racers)
+	errs := make([]error, racers)
+
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	refreshRepo.readBarrier = nil
+
+	for i := 0; i < racers; i++ {
+		require.NoError(t, errs[i], "racer %d: a concurrent replay inside the grace window must not be theft", i)
+		require.NotNil(t, results[i])
+	}
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.Nil(t, otherToken.RevokedAt, "a concurrent replay inside the grace window must not revoke other sessions")
 }
 
 func TestRefreshTokens_InvalidToken(t *testing.T) {

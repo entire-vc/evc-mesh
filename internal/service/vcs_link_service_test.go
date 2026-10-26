@@ -33,6 +33,8 @@ type fakeVCSLinkRepo struct {
 	links map[uuid.UUID]*domain.VCSLink
 	// upsertKey: (task_id|provider|link_type|external_id|url) → link.ID
 	upsertKey map[string]uuid.UUID
+	// projectOf maps a task to its project for ProjectHasPRLinkToRepo.
+	projectOf func(uuid.UUID) uuid.UUID
 	// createErr/upsertErr, when set, are returned by Create/Upsert instead of
 	// succeeding — used to exercise vcsLinkService.Create's and
 	// HandleGitHubPullRequestEvent's error branches (a DB failure on either
@@ -152,6 +154,22 @@ func (r *fakeVCSLinkRepo) SetPipelineStatus(_ context.Context, id uuid.UUID, pip
 
 func (r *fakeVCSLinkRepo) ListOpenTasksWithMergedPR(context.Context, int, int) ([]repository.MergedPROpenTask, error) {
 	return nil, nil
+}
+
+// ProjectHasPRLinkToRepo mirrors the SQL: projectOf stands in for the tasks
+// join; without it no task belongs to any project.
+func (r *fakeVCSLinkRepo) ProjectHasPRLinkToRepo(_ context.Context, projectID uuid.UUID, repo string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.links {
+		if r.projectOf == nil || r.projectOf(l.TaskID) != projectID || l.LinkType != domain.VCSLinkTypePR || l.IsRelatesTo() || l.IsReviewSubject() {
+			continue
+		}
+		if vcsRepoKey(l.URL) == strings.ToLower(repo) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *fakeVCSLinkRepo) ListByExternalID(_ context.Context, p domain.VCSProvider, lt domain.VCSLinkType, eid string) ([]domain.VCSLink, error) {
@@ -491,6 +509,8 @@ func (c *fakeCommentService) ReconcileClosedFollowUpPending(context.Context) (de
 // ---------------------------------------------------------------------------
 
 type harness struct {
+	// siblingID is the done card seedProjectRepos gave the project.
+	siblingID  uuid.UUID
 	repo       *fakeVCSLinkRepo
 	taskRepo   *fakeTaskRepo
 	statusRepo *fakeStatusRepo
@@ -522,7 +542,10 @@ func newHarness(t *testing.T) *harness {
 		WithVCSCommentService(commentSvc),
 	)
 
+	siblingID := seedProjectRepos(repo, taskRepo, projectID, harnessProjectRepos...)
+
 	return &harness{
+		siblingID:  siblingID,
 		repo:       repo,
 		taskRepo:   taskRepo,
 		statusRepo: statusRepo,
@@ -537,6 +560,38 @@ func newHarness(t *testing.T) *harness {
 			domain.StatusCategoryDone:       done.ID,
 		},
 	}
+}
+
+// harnessProjectRepos are the repositories the harness project already works
+// in: a title/branch reference from one of them binds the MR to the task
+// A test of a foreign repository uses a url outside this list.
+var harnessProjectRepos = []string{
+	"https://github.com/example/repo/pull/1",
+	"https://github.com/o/r/pull/1",
+	"https://github.com/entire-vc/evc-mesh/pull/1",
+	"https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/1",
+	"https://git.example.com/g/p/-/merge_requests/1",
+	"https://gitlab.example.invalid/throwaway/repo/-/merge_requests/1",
+}
+
+// seedProjectRepos gives projectID a done sibling card linking a merged PR/MR
+// of each repository, and teaches repo which project a task belongs to.
+func seedProjectRepos(repo *fakeVCSLinkRepo, taskRepo *fakeTaskRepo, projectID uuid.UUID, urls ...string) uuid.UUID {
+	repo.projectOf = func(id uuid.UUID) uuid.UUID {
+		if tk := taskRepo.tasks[id]; tk != nil {
+			return tk.ProjectID
+		}
+		return uuid.Nil
+	}
+	sibling := &domain.Task{ID: uuid.New(), ProjectID: projectID}
+	taskRepo.tasks[sibling.ID] = sibling
+	for _, u := range urls {
+		repo.links[uuid.New()] = &domain.VCSLink{
+			ID: uuid.New(), TaskID: sibling.ID, Provider: domain.VCSProviderGitHub, LinkType: domain.VCSLinkTypePR,
+			ExternalID: "1", URL: u, Status: domain.VCSLinkStatusMerged, Metadata: []byte("{}"),
+		}
+	}
+	return sibling.ID
 }
 
 func (h *harness) makeTask(t *testing.T, cat domain.StatusCategory) *domain.Task {
@@ -751,9 +806,10 @@ func TestHandlePR_MultiPR_AllMerged_TransitionsOnLast(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8 (spec): MESH-<uuid> in body but not title → resolves.
+// Test 8 (spec): MESH-<uuid> in body but not title → resolves, but only as a
+// mention: the body is free text that quotes other cards.
 // ---------------------------------------------------------------------------
-func TestHandlePR_MeshRefInBody_Resolves(t *testing.T) {
+func TestHandlePR_MeshRefInBody_ResolvesAsMention(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
@@ -770,8 +826,12 @@ func TestHandlePR_MeshRefInBody_Resolves(t *testing.T) {
 
 	res, err := h.svc.HandleGitHubPullRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
-	assert.True(t, res.Transitioned)
 	assert.Equal(t, task.ID, res.TaskID)
+	assert.False(t, res.Transitioned)
+	assert.Equal(t, "mentioned_only", res.Reason)
+	links := h.linksFor(task.ID)
+	require.Len(t, links, 1)
+	assert.True(t, links[0].IsRelatesTo())
 }
 
 // ---------------------------------------------------------------------------
@@ -955,7 +1015,7 @@ func TestHandleMR_StillOpen_NoTransition(t *testing.T) {
 	assert.Equal(t, domain.VCSLinkStatusOpen, links[0].Status)
 }
 
-func TestHandleMR_MeshRefInBody_Resolves(t *testing.T) {
+func TestHandleMR_MeshRefInBody_ResolvesAsMention(t *testing.T) {
 	h := newHarness(t)
 	task := h.makeTask(t, domain.StatusCategoryInProgress)
 
@@ -973,7 +1033,9 @@ func TestHandleMR_MeshRefInBody_Resolves(t *testing.T) {
 	res, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), ev)
 	require.NoError(t, err)
 	assert.Equal(t, task.ID, res.TaskID)
-	assert.True(t, res.Transitioned)
+	assert.False(t, res.Transitioned)
+	assert.Equal(t, "mentioned_only", res.Reason)
+	assert.Equal(t, h.statusIDs[domain.StatusCategoryInProgress], h.taskRepo.tasks[task.ID].StatusID)
 }
 
 // A multi-MR task must wait for every linked PR/MR (of either provider) to

@@ -68,6 +68,21 @@ describe("catalog grid", () => {
     expect(screen.getByTestId("where").textContent).toContain("cat=communication");
   });
 
+  it("leaves out the built-in Runner the API marks hidden", () => {
+    state.value = {
+      ...state.value,
+      entries: mergeCatalog([sum("gitlab"), sum("runner", { category: "agents", kind: "plugin" })], [
+        { id: "gitlab", name: "gitlab", version: "1.2.0", kind: "integration", category: "development" },
+        { id: "runner", name: "Runner", version: "1.0.0", kind: "plugin", category: "agents", hidden: true,
+          settings_managed_elsewhere: true, connection: { settings: {} }, status: { enabled: true, source: "workspace" } },
+      ]),
+    };
+    mount("/w/acme/extensions", "catalog");
+    expect(screen.getByTestId("catalog-count").textContent).toBe("1 extension");
+    expect(within(screen.getByRole("list")).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["/w/acme/extensions/gitlab"]);
+    expect(state.value.entries.map((e) => e.id)).toContain("runner");
+  });
+
   it("shows installed state, badges, and a no-match state with reset", () => {
     mount("/w/acme/extensions?q=zzz", "catalog");
     expect(screen.getByText("Nothing matches these filters")).toBeTruthy();
@@ -184,5 +199,28 @@ describe("Spark-listed extension", () => {
     fireEvent.click(btn);
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/api/v1/extensions/install", { method: "POST", body: { source: "catalog", id: "mesh-ext-hello" } }));
     await waitFor(() => expect(state.value.reload).toHaveBeenCalled());
+  });
+});
+
+describe("theme status", () => {
+  const themes = (active?: string) => mergeCatalog(
+    [sum("mesh-default", { kind: "theme", manifest: { capabilities: {} } }), sum("graphite", { kind: "theme", manifest: { capabilities: {} } })],
+    [], [], active,
+  );
+
+  it("marks the workspace's theme active and the rest not selected, never connected", () => {
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions", "catalog");
+    const card = (id: string) => screen.getAllByRole("link").find((a) => a.getAttribute("href") === `/w/acme/extensions/${id}`) as HTMLElement;
+    expect(within(card("graphite")).getByText("Active in this workspace")).toBeTruthy();
+    expect(within(card("mesh-default")).getByText("Not selected")).toBeTruthy();
+    expect(state.value.entries.every((e) => !e.connected)).toBe(true);
+  });
+
+  it("offers Choose on the theme page, leading to the theme screen", () => {
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions/mesh-default", "detail");
+    fireEvent.click(screen.getByRole("button", { name: "Choose" }));
+    expect(screen.getByTestId("where").textContent).toBe("/w/acme/extensions/mesh-default/connect");
   });
 });

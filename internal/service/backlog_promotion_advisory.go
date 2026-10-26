@@ -295,7 +295,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	if err != nil {
 		return false, "", fmt.Errorf("list dependencies: %w", err)
 	}
-	depIDs := make([]uuid.UUID, 0, len(deps))
+	held := make([]domain.TaskDependency, 0, len(deps))
 	hasBlocksEdge := false
 	for _, d := range deps {
 		// fleet-balancer INTAKE freezes on human_gate.dep_freeze_reason, which looks at
@@ -310,7 +310,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 		if d.EvidenceSatisfied() {
 			continue
 		}
-		depIDs = append(depIDs, d.DependsOnTaskID)
+		held = append(held, d)
 	}
 
 	// 4. Deliberate-park guard. Gated on depIDs being EMPTY, exactly like
@@ -333,7 +333,7 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 	}
 
 	// 5. Resolve each blocker's current status category.
-	cleared, err := s.allDepsCleared(ctx, depIDs)
+	cleared, err := s.allDepsCleared(ctx, held)
 	if err != nil {
 		return false, "", fmt.Errorf("resolve blocker categories: %w", err)
 	}
@@ -348,35 +348,41 @@ func (s *backlogPromotionAdvisoryService) evaluate(
 }
 
 // allDepsCleared mirrors mesh-intake-sweep.py's all_deps_cleared(): true (vacuously)
-// when depIDs is empty, otherwise true only when EVERY blocker has reached a terminal
-// category (done or cancelled — a cancelled blocker is abandoned work that will never
-// complete, so the dependent is free; task #9 canonical dep-clear rule, kept in
-// lockstep with auto_transition.go's hasUnresolvedBlockers).
-func (s *backlogPromotionAdvisoryService) allDepsCleared(ctx context.Context, depIDs []uuid.UUID) (bool, error) {
-	statusCache := make(map[uuid.UUID]domain.StatusCategory)
-	for _, depID := range depIDs {
-		cat, ok := statusCache[depID]
-		if !ok {
-			blocker, err := s.taskRepo.GetByID(ctx, depID)
-			if err != nil {
-				return false, err
-			}
-			if blocker == nil {
-				// The blocker task no longer exists. Fail closed: cannot prove
-				// cleared, so treat as unresolved rather than silently skipping it.
-				return false, nil
-			}
-			status, err := s.statusRepo.GetByID(ctx, blocker.StatusID)
-			if err != nil {
-				return false, err
-			}
-			if status == nil {
-				return false, nil
-			}
-			cat = status.Category
-			statusCache[depID] = cat
+// when edges is empty, otherwise true only when EVERY edge is released by its
+// blocker's state (domain.TaskDependency.Released). For a default edge that means
+// the blocker reached a terminal category (done or cancelled — a cancelled blocker
+// is abandoned work that will never complete, so the dependent is free; task #9
+// canonical dep-clear rule, kept in lockstep with auto_transition.go's
+// hasUnresolvedBlockers); a typed edge follows its own condition.
+func (s *backlogPromotionAdvisoryService) allDepsCleared(ctx context.Context, edges []domain.TaskDependency) (bool, error) {
+	states := make(map[uuid.UUID]domain.BlockerState)
+	for _, edge := range edges {
+		if _, ok := states[edge.DependsOnTaskID]; ok {
+			continue
 		}
-		if cat != domain.StatusCategoryDone && cat != domain.StatusCategoryCancelled {
+		blocker, err := s.taskRepo.GetByID(ctx, edge.DependsOnTaskID)
+		if err != nil {
+			return false, err
+		}
+		if blocker == nil {
+			// The blocker task no longer exists. Fail closed: cannot prove
+			// cleared, so treat as unresolved rather than silently skipping it.
+			return false, nil
+		}
+		status, err := s.statusRepo.GetByID(ctx, blocker.StatusID)
+		if err != nil {
+			return false, err
+		}
+		if status == nil {
+			return false, nil
+		}
+		states[edge.DependsOnTaskID] = domain.BlockerState{Category: status.Category, IsShipped: blocker.IsShipped}
+	}
+	if err := fillDeployments(ctx, s.depRepo, edges, states); err != nil {
+		return false, err
+	}
+	for _, edge := range edges {
+		if !edge.Released(states[edge.DependsOnTaskID]) {
 			return false, nil
 		}
 	}

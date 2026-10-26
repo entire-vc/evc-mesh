@@ -512,7 +512,19 @@ export function CustomFieldRenderer({
 // Read-only display
 // ---------------------------------------------------------------------------
 
-const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+// A normalized URL.href is printable ASCII, so the whole value can be matched
+// against an allow-list; javascript:, data: and the like never become a link.
+const SAFE_LINK_HREF = /^(?:https?|mailto):[\x21-\x7e]*$/;
+
+function safeLinkHref(raw: string): string | null {
+  let href: string;
+  try {
+    href = new URL(raw).href;
+  } catch {
+    return null;
+  }
+  return SAFE_LINK_HREF.test(href) ? href : null;
+}
 
 function CustomFieldReadOnly({
   field,
@@ -589,24 +601,18 @@ function CustomFieldReadOnly({
 
     case "url": {
       const urlStr = String(value);
-      let parsed: URL | null = null;
-      try {
-        parsed = new URL(urlStr);
-      } catch {
-        // not a valid URL, show as-is
-      }
-      // Only link schemes that open a page; javascript:, data: and the like stay plain text.
-      if (!parsed || !SAFE_LINK_PROTOCOLS.has(parsed.protocol)) {
+      const href = safeLinkHref(urlStr);
+      if (href === null) {
         return (
           <span className={cn("text-xs break-all", compact && "truncate text-[10px]")}>
             {urlStr}
           </span>
         );
       }
-      const displayUrl = compact && parsed.hostname ? parsed.hostname : urlStr;
+      const displayUrl = (compact && new URL(href).hostname) || urlStr;
       return (
         <a
-          href={urlStr}
+          href={href}
           target="_blank"
           rel="noopener noreferrer"
           className={cn(

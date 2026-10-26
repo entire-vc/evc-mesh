@@ -217,7 +217,7 @@ func TestAutoTransition_NoSubtasks_NoTransition(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// review -> done for a labeled umbrella (#d1eff1c6, 2026-09-07)
+// review -> done for a labeled umbrella (an internal ticket, 2026-09-07)
 // ---------------------------------------------------------------------------
 
 func TestAutoTransition_ReviewParentLabeledUmbrella_AllSubtasksTerminal_ClosesToDone(t *testing.T) {
@@ -229,7 +229,7 @@ func TestAutoTransition_ReviewParentLabeledUmbrella_AllSubtasksTerminal_ClosesTo
 	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
 
 	// Parent already sitting in "review" (e.g. it made this trip once already, then
-	// gained more subtasks later — the exact shape of #52f407e0 and friends).
+	// gained more subtasks later — the exact shape of an internal ticket and friends).
 	parent := seedTask(taskRepo, projectID, reviewStatus.ID, nil, "Umbrella")
 	parent.Labels = []string{"sprint", "kind:epic"}
 	sub := seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
@@ -266,8 +266,8 @@ func TestAutoTransition_ReviewParentUnlabeled_AllSubtasksTerminal_NoTransition(t
 	doneStatus := seedStatus(statusRepo, projectID, domain.StatusCategoryDone, "Done")
 
 	// Parent in review, own evidence obligation implied by having no umbrella label —
-	// e.g. a plain task with subtasks and its own AC, not a captain/epic (#3bc9f59d,
-	// #e04ebd26, #cdaee3e2, #5f71e1b5, #ffdf5a89 in the live measurement — none of
+	// e.g. a plain task with subtasks and its own AC, not a captain/epic (an internal ticket,
+	// an internal ticket, an internal ticket, an internal ticket, an internal ticket in the live measurement — none of
 	// them carried kind:epic/kind:umbrella). Must stay exactly as before this change.
 	parent := seedTask(taskRepo, projectID, reviewStatus.ID, nil, "Real task with subtasks")
 	seedTask(taskRepo, projectID, doneStatus.ID, &parent.ID, "Subtask A")
@@ -714,7 +714,7 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 		deps := []domain.TaskDependency{
 			{ID: uuid.New(), DependsOnTaskID: blockerDoneID, DependencyType: domain.DependencyTypeBlocks},
 		}
-		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
+		assert.False(t, hasUnresolvedBlockers(deps, catStates(categoryMap)))
 	})
 
 	// Canonical dep-clear rule (P3 #9): a cancelled blocker is terminal → clears
@@ -723,7 +723,7 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 		deps := []domain.TaskDependency{
 			{ID: uuid.New(), DependsOnTaskID: blockerCancelledID, DependencyType: domain.DependencyTypeBlocks},
 		}
-		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
+		assert.False(t, hasUnresolvedBlockers(deps, catStates(categoryMap)))
 	})
 
 	t.Run("mixed done + cancelled blockers returns false", func(t *testing.T) {
@@ -731,7 +731,7 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 			{ID: uuid.New(), DependsOnTaskID: blockerDoneID, DependencyType: domain.DependencyTypeBlocks},
 			{ID: uuid.New(), DependsOnTaskID: blockerCancelledID, DependencyType: domain.DependencyTypeBlocks},
 		}
-		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
+		assert.False(t, hasUnresolvedBlockers(deps, catStates(categoryMap)))
 	})
 
 	t.Run("one blocker still in_progress returns true", func(t *testing.T) {
@@ -739,18 +739,18 @@ func TestHasUnresolvedBlockingDeps_Logic(t *testing.T) {
 			{ID: uuid.New(), DependsOnTaskID: blockerDoneID, DependencyType: domain.DependencyTypeBlocks},
 			{ID: uuid.New(), DependsOnTaskID: blockerInProgressID, DependencyType: domain.DependencyTypeBlocks},
 		}
-		assert.True(t, hasUnresolvedBlockers(deps, categoryMap))
+		assert.True(t, hasUnresolvedBlockers(deps, catStates(categoryMap)))
 	})
 
 	t.Run("relates_to dep does not block", func(t *testing.T) {
 		deps := []domain.TaskDependency{
 			{ID: uuid.New(), DependsOnTaskID: blockerInProgressID, DependencyType: domain.DependencyTypeRelatesTo},
 		}
-		assert.False(t, hasUnresolvedBlockers(deps, categoryMap))
+		assert.False(t, hasUnresolvedBlockers(deps, catStates(categoryMap)))
 	})
 
 	t.Run("no deps returns false", func(t *testing.T) {
-		assert.False(t, hasUnresolvedBlockers([]domain.TaskDependency{}, categoryMap))
+		assert.False(t, hasUnresolvedBlockers([]domain.TaskDependency{}, catStates(categoryMap)))
 	})
 }
 

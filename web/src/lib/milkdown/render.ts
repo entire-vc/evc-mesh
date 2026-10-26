@@ -1,4 +1,4 @@
-import { Editor, parserCtx, rootCtx, schemaCtx } from "@milkdown/kit/core";
+import { Editor, parserCtx, remarkPluginsCtx, rootCtx, schemaCtx } from "@milkdown/kit/core";
 import { DOMSerializer } from "@milkdown/kit/prose/model";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
@@ -6,6 +6,7 @@ import {
   attachmentAwareImageSchema,
   safeLinkSchema,
 } from "@/lib/milkdown/schema-overrides";
+import { remarkSoftBreaks } from "@/lib/milkdown/soft-breaks";
 
 /**
  * Rendering markdown for reading, through the same schema that edits it.
@@ -31,15 +32,21 @@ import {
  * by construction.
  */
 
-let enginePromise: Promise<Editor> | null = null;
+// One engine per mode: the remark plugin list is fixed when an editor is
+// created, so "newlines are line breaks" (chat messages a person typed) is its
+// own engine rather than a flag on the shared one.
+const engines = new Map<boolean, Promise<Editor>>();
 
-function createEngine(): Promise<Editor> {
+function createEngine(breaks: boolean): Promise<Editor> {
   // Detached root: this editor is never shown and never focused. It exists to
   // own a parser and a schema.
   const root = document.createElement("div");
   return Editor.make()
     .config((ctx) => {
       ctx.set(rootCtx, root);
+      if (breaks) {
+        ctx.update(remarkPluginsCtx, (ps) => [...ps, { plugin: remarkSoftBreaks, options: {} }]);
+      }
     })
     .use(commonmark)
     .use(gfm)
@@ -52,9 +59,13 @@ function createEngine(): Promise<Editor> {
 }
 
 /** The shared parse/serialise engine, created on first use. */
-export function markdownEngine(): Promise<Editor> {
-  enginePromise ??= createEngine();
-  return enginePromise;
+export function markdownEngine(breaks = false): Promise<Editor> {
+  let engine = engines.get(breaks);
+  if (!engine) {
+    engine = createEngine(breaks);
+    engines.set(breaks, engine);
+  }
+  return engine;
 }
 
 /**
@@ -62,12 +73,14 @@ export function markdownEngine(): Promise<Editor> {
  *
  * Empty (or whitespace-only) input returns an empty fragment rather than a
  * paragraph, so a caller can tell "nothing to show" from "a blank line".
+ * `breaks` draws every newline inside a paragraph as a line break.
  */
 export async function renderMarkdownFragment(
   markdown: string,
+  breaks = false,
 ): Promise<DocumentFragment> {
   if (!markdown.trim()) return document.createDocumentFragment();
-  const editor = await markdownEngine();
+  const editor = await markdownEngine(breaks);
   return editor.action((ctx) => {
     const parser = ctx.get(parserCtx);
     const doc = parser(markdown);
@@ -89,5 +102,5 @@ export async function renderMarkdownFragment(
 
 /** Testing seam: drop the cached engine so a test can build a fresh one. */
 export function resetMarkdownEngineForTest(): void {
-  enginePromise = null;
+  engines.clear();
 }

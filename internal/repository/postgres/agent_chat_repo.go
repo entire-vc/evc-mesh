@@ -122,6 +122,9 @@ type ChatMessagePage struct {
 type ChatAccepted struct {
 	Message ChatMessage `json:"message"`
 	Turn    ChatTurnRef `json:"turn"`
+	// AgentID is the agent whose runner must be woken for a new turn; it never
+	// leaves the server (zero on an idempotent replay: nothing new to claim).
+	AgentID uuid.UUID `json:"-"`
 }
 
 // ChatStopResult is the StopResponse of the OpenAPI.
@@ -735,7 +738,7 @@ func (r *AgentChatRepo) SendMessage(ctx context.Context, gate *ChatGate, project
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &ChatAccepted{Message: msg, Turn: *ref}, nil
+	return &ChatAccepted{Message: msg, Turn: *ref, AgentID: th.AgentID}, nil
 }
 
 // replay answers an idempotent repeat with the original message and its turn.

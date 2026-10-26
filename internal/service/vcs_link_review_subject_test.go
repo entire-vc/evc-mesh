@@ -13,7 +13,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// #fecda06c: a review card is a different card from the work it reviews, and
+// an internal ticket: a review card is a different card from the work it reviews, and
 // no title/body/branch of the MR names it. It is closed by the merge because a
 // link with role=review ties it to the MR's URL.
 
@@ -60,7 +60,7 @@ func TestHandleMR_Merged_LeavesUnboundOrForeignReviewCards(t *testing.T) {
 		name string
 		bind func(h *harness, review *domain.Task)
 	}{
-		{"no link at all (the #863bb5de defect)", func(*harness, *domain.Task) {}},
+		{"no link at all (the an internal ticket defect)", func(*harness, *domain.Task) {}},
 		{"link without the review role", func(h *harness, r *domain.Task) { h.bindReview(r, reviewSubjectURL, `{}`) }},
 		{"same iid in another project", func(h *harness, r *domain.Task) {
 			h.bindReview(r, "https://gitlab.example.invalid/entire-vc/evc-keep/-/merge_requests/101", `{"role":"review"}`)
@@ -161,13 +161,16 @@ func TestMoveTask_DoneGate_ReviewSubjectLinkDoesNotBlock(t *testing.T) {
 		wantErr  bool
 	}{
 		{"review subject passes", `{"role":"review"}`, false},
+		{"relates_to mention passes", `{"relation":"relates_to"}`, false},
 		{"plain open MR still blocks", `{}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			projectID, taskID, statusID := uuid.New(), uuid.New(), uuid.New()
 			checker := &fakeGitLabMRChecker{err: fmt.Errorf("dial tcp: connection refused")}
-			svc, taskRepo, statusRepo, vcsRepo, _ := setupTaskServiceWithDoneGateAndGitLabChecker(checker)
+			svc, taskRepo, statusRepo, vcsRepo, commentRepo := setupTaskServiceWithDoneGateAndGitLabChecker(checker)
 			taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: uuid.New(), Title: "review", VCSLinkCount: 1}
+			// A comment is evidence in its own right, so only the link decides.
+			commentRepo.items[uuid.New()] = &domain.Comment{TaskID: taskID, Body: "verdict"}
 			statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryDone}
 			vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
 				ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR,
@@ -179,6 +182,43 @@ func TestMoveTask_DoneGate_ReviewSubjectLinkDoesNotBlock(t *testing.T) {
 			if tc.wantErr {
 				var doneErr *DoneEvidenceError
 				require.ErrorAs(t, err, &doneErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// A relates_to mention is not the task's evidence: a task whose only link is a
+// mention needs an artifact or a comment like a task with no links at all.
+func TestMoveTask_DoneGate_RelatesToOnlyNeedsEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		comment bool
+		wantErr bool
+	}{
+		{"no comment blocks", false, true},
+		{"comment passes", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			projectID, taskID, statusID := uuid.New(), uuid.New(), uuid.New()
+			svc, taskRepo, statusRepo, vcsRepo, commentRepo := setupTaskServiceWithDoneGateAndGitLabChecker(&fakeGitLabMRChecker{})
+			taskRepo.items[taskID] = &domain.Task{ID: taskID, ProjectID: projectID, StatusID: uuid.New(), Title: "mentioned", VCSLinkCount: 1}
+			statusRepo.items[statusID] = &domain.TaskStatus{ID: statusID, ProjectID: projectID, Category: domain.StatusCategoryDone}
+			vcsRepo.items = append(vcsRepo.items, domain.VCSLink{
+				ID: uuid.New(), TaskID: taskID, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR,
+				Status: domain.VCSLinkStatusMerged, URL: reviewSubjectURL, ExternalID: "101", Metadata: []byte(`{"relation":"relates_to"}`),
+			})
+			if tc.comment {
+				commentRepo.items[uuid.New()] = &domain.Comment{TaskID: taskID, Body: "done"}
+			}
+
+			err := svc.MoveTask(context.Background(), taskID, MoveTaskInput{StatusID: &statusID})
+
+			if tc.wantErr {
+				var doneErr *DoneEvidenceError
+				require.ErrorAs(t, err, &doneErr)
+				assert.Empty(t, doneErr.PRURL, "the mention is not reported as the blocking PR")
 			} else {
 				require.NoError(t, err)
 			}
@@ -231,4 +271,32 @@ func TestBindReviewSubject_CreateFailureIsSwallowed(t *testing.T) {
 
 	links, _ := repo.ListByTask(context.Background(), task.ID)
 	assert.Empty(t, links)
+}
+
+// A review card that a person still has to accept is not closed by the merge of
+// the MR it reviews, exactly like the primary card (25.10 incident).
+func TestHandleMR_Merged_DoesNotCloseGatedOrSignalledReviewCard(t *testing.T) {
+	cases := map[string]func(*domain.Task){
+		"human gate":        func(tk *domain.Task) { tk.HumanGate = true },
+		"completion signal": func(tk *domain.Task) { tk.CompletionSignal = true },
+	}
+	for name, mark := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			work := h.makeTask(t, domain.StatusCategoryInProgress)
+			review := h.makeTask(t, domain.StatusCategoryReview)
+			mark(review)
+			h.bindReview(review, reviewSubjectURL, `{"role":"review"}`)
+
+			_, err := h.svc.HandleGitLabMergeRequestEvent(context.Background(), mergedMREvent(101, work.ID, "MESH-"+work.ID.String()))
+			require.NoError(t, err)
+
+			assert.Equal(t, h.statusIDs[domain.StatusCategoryReview], h.taskRepo.tasks[review.ID].StatusID, "review card must stay")
+			require.NotEmpty(t, h.commentSvc.created)
+			assert.Contains(t, h.commentSvc.created[len(h.commentSvc.created)-1].Body, "NOT moved to done")
+			links, _ := h.repo.ListByTask(context.Background(), review.ID)
+			require.Len(t, links, 1)
+			assert.Equal(t, domain.VCSLinkStatusMerged, links[0].Status, "the link still records the merge")
+		})
+	}
 }

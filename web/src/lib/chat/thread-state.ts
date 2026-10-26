@@ -25,6 +25,8 @@ export interface ThreadState {
   lastSeq: number;
   // A hole in seq or in a delta offset: the page must be refetched.
   needsResync: boolean;
+  // Turns that ended here, newest last: a send response may arrive after its turn's end.
+  endedTurnIds: string[];
 }
 
 export function initialThreadState(projectId: string, threadId: string): ThreadState {
@@ -38,6 +40,7 @@ export function initialThreadState(projectId: string, threadId: string): ThreadS
     error: null,
     lastSeq: 0,
     needsResync: false,
+    endedTurnIds: [],
   };
 }
 
@@ -146,13 +149,18 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
           (m) => !(m.client_message_id === action.clientMessageId && m.id.startsWith(LOCAL_PREFIX)),
         ),
       };
-    case "sent":
+    case "sent": {
+      // The turn already ended on the stream while the request was in flight:
+      // its state and the user row's status are read back from the page.
+      const ended = TERMINAL.has(action.turn.state) || state.endedTurnIds.includes(action.turn.id);
       return {
         ...state,
         messages: upsertMessage(state.messages, action.message),
-        activeTurn: action.turn,
+        activeTurn: ended ? null : action.turn,
         error: null,
+        needsResync: state.needsResync || (ended && !TERMINAL.has(action.message.status)),
       };
+    }
     case "turn":
       return { ...state, activeTurn: action.turn };
   }
@@ -198,8 +206,14 @@ function applyEvent(state: ThreadState, e: ChatEvent): ThreadState {
 
     case "chat.turn.state": {
       const terminal = TERMINAL.has(e.turn.state);
+      // The server sends no event for the user row of a turn; when the turn ends
+      // its status is read back from the page rather than guessed here.
+      const userUnsettled =
+        terminal && base.messages.some((m) => m.role === "user" && m.turn_id === e.turn.id && !TERMINAL.has(m.status));
       return {
         ...base,
+        needsResync: base.needsResync || userUnsettled,
+        endedTurnIds: terminal ? [...base.endedTurnIds, e.turn.id].slice(-20) : base.endedTurnIds,
         activeTurn: terminal ? null : e.turn,
         sessionState: e.session_state,
         tools: terminal ? [] : base.tools,

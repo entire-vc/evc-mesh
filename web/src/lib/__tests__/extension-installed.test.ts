@@ -25,6 +25,12 @@ describe("installedStatus", () => {
     expect(installedStatus(e({ blocked: true, blockedReason: "CVE", status: { enabled: true, source: "instance" } })).kind)
       .toBe("blocked");
   });
+  it("a theme keeps its workspace status when the catalog blocks it", () => {
+    expect(installedStatus(e({ kind: "theme", themeActive: true, blocked: true, blockedReason: "CVE" })).kind).toBe("theme-active");
+    expect(installedStatus(e({ kind: "theme", themeActive: false, blocked: true, blockedReason: "CVE" })).kind).toBe("theme-inactive");
+    // status unknown: the block is all there is to say
+    expect(installedStatus(e({ kind: "theme", blocked: true, blockedReason: "CVE" })).kind).toBe("blocked");
+  });
   it("disabled-with-connection is 'off', nothing at all is 'none'", () => {
     expect(installedStatus(e({ connected: true, status: { enabled: false, source: "workspace" } })).kind).toBe("off");
     expect(installedStatus(e({})).kind).toBe("none");

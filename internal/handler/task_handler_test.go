@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -2030,6 +2031,66 @@ func TestTaskHandler_MoveTask_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestTaskHandler_MoveTask_ReturnsWarningsWhenMoveCarriesThem(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	childID := uuid.New()
+
+	mockSvc := &MockTaskService{
+		MoveTaskFunc: func(ctx context.Context, _ uuid.UUID, _ service.MoveTaskInput) error {
+			service.MoveWarningsFromContext(ctx).Add(service.MoveWarning{
+				Code: service.MoveWarningOpenChildren, Message: "open children", OpenChildren: 1, ChildIDs: []uuid.UUID{childID},
+			})
+			return nil
+		},
+	}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"status_id":"`+statusID.String()+`"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/move")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.MoveTask(c))
+	assert.Equal(t, http.StatusOK, rec.Code, "warnings never turn a successful move into an error")
+
+	var body struct {
+		Status   string `json:"status"`
+		Warnings []struct {
+			Code         string      `json:"code"`
+			OpenChildren int         `json:"open_children"`
+			ChildIDs     []uuid.UUID `json:"child_ids"`
+		} `json:"warnings"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "ok", body.Status)
+	require.Len(t, body.Warnings, 1)
+	assert.Equal(t, "open_children", body.Warnings[0].Code)
+	assert.Equal(t, 1, body.Warnings[0].OpenChildren)
+	assert.Equal(t, []uuid.UUID{childID}, body.Warnings[0].ChildIDs)
+}
+
+func TestTaskHandler_MoveTask_NoWarningsKeepsPlainResponse(t *testing.T) {
+	taskID := uuid.New()
+	statusID := uuid.New()
+	mockSvc := &MockTaskService{MoveTaskFunc: func(context.Context, uuid.UUID, service.MoveTaskInput) error { return nil }}
+	h, e := setupTaskTest(mockSvc)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"status_id":"`+statusID.String()+`"}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/tasks/:task_id/move")
+	c.SetParamNames("task_id")
+	c.SetParamValues(taskID.String())
+
+	require.NoError(t, h.MoveTask(c))
+	assert.JSONEq(t, `{"status":"ok"}`, rec.Body.String())
+}
+
 func TestTaskHandler_MoveTask_StatusOnly(t *testing.T) {
 	taskID := uuid.New()
 	statusID := uuid.New()
@@ -3577,4 +3638,64 @@ func TestTaskHandler_Checkout_409_LogsHolderAndEscapesName(t *testing.T) {
 	assert.Contains(t, out, holderID.String())
 	assert.Contains(t, out, expiresAt.Format(time.RFC3339))
 	assert.Equal(t, 1, strings.Count(strings.TrimSpace(out), "\n")+1, "a newline in the holder name must not split the log entry")
+}
+
+// TestTaskHandler_GetTask_CarriesStatusCategory is an internal ticket: the single-task
+// GETs must name the category of status_id. A REST client walking a WAIT chain
+// (the runner's blocking-path diagnostic) read only status_id and reported
+// "status unknown" for every live card. A failed status lookup omits the key.
+func TestTaskHandler_GetTask_CarriesStatusCategory(t *testing.T) {
+	taskID := uuid.MustParse("721a63a9-0000-4000-8000-000000000001")
+	statusID := uuid.New()
+	task := func() *domain.Task { return &domain.Task{ID: taskID, ProjectID: uuid.New(), StatusID: statusID} }
+
+	cases := []struct {
+		name     string
+		lookup   func(ctx context.Context, id uuid.UUID) (*domain.TaskStatus, error)
+		want     string
+		wantSent bool
+	}{
+		{"resolved", func(_ context.Context, id uuid.UUID) (*domain.TaskStatus, error) {
+			assert.Equal(t, statusID, id)
+			return &domain.TaskStatus{ID: id, Category: domain.StatusCategoryInProgress}, nil
+		}, "in_progress", true},
+		{"lookup error", func(context.Context, uuid.UUID) (*domain.TaskStatus, error) {
+			return nil, errors.New("db down")
+		}, "", false},
+	}
+	routes := []struct {
+		name, path, param, value string
+		call                     func(h *TaskHandler, c echo.Context) error
+	}{
+		{"by uuid", "/tasks/:task_id", "task_id", taskID.String(), (*TaskHandler).GetByID},
+		{"by short id via task_id", "/tasks/:task_id", "task_id", "721a63a9", (*TaskHandler).GetByID},
+		{"by short id", "/tasks/by-short-id/:short", "short", "721a63a9", (*TaskHandler).GetByShortID},
+	}
+	for _, tc := range cases {
+		for _, rt := range routes {
+			t.Run(tc.name+"/"+rt.name, func(t *testing.T) {
+				mockSvc := &MockTaskService{
+					GetByIDFunc:       func(context.Context, uuid.UUID) (*domain.Task, error) { return task(), nil },
+					GetByShortIDFunc:  func(context.Context, string) (*domain.Task, error) { return task(), nil },
+					GetStatusByIDFunc: tc.lookup,
+				}
+				h, e := setupTaskTest(mockSvc)
+				rec := httptest.NewRecorder()
+				c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", http.NoBody), rec)
+				c.SetPath(rt.path)
+				c.SetParamNames(rt.param)
+				c.SetParamValues(rt.value)
+
+				require.NoError(t, rt.call(h, c))
+				require.Equal(t, http.StatusOK, rec.Code)
+				var body map[string]any
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+				got, sent := body["status_category"]
+				assert.Equal(t, tc.wantSent, sent)
+				if tc.wantSent {
+					assert.Equal(t, tc.want, got)
+				}
+			})
+		}
+	}
 }

@@ -313,7 +313,7 @@ func (s *autoTransitionService) dependencyTransitionCandidate(ctx context.Contex
 	if err != nil {
 		return nil, uuid.Nil, err
 	}
-	categories := make(map[uuid.UUID]domain.StatusCategory)
+	states := make(map[uuid.UUID]domain.BlockerState)
 	blockers := 0
 	for _, dep := range deps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
@@ -332,11 +332,14 @@ func (s *autoTransitionService) dependencyTransitionCandidate(ctx context.Contex
 			return nil, uuid.Nil, statusErr
 		}
 		if st != nil {
-			categories[blocker.ID] = st.Category
+			states[blocker.ID] = domain.BlockerState{Category: st.Category, IsShipped: blocker.IsShipped}
 		}
 	}
+	if depErr := fillDeployments(ctx, s.depRepo, deps, states); depErr != nil {
+		return nil, uuid.Nil, depErr
+	}
 	// An event whose edge has since been deleted is not proof of resolution.
-	if blockers == 0 || hasUnresolvedBlockers(deps, categories) {
+	if blockers == 0 || hasUnresolvedBlockers(deps, states) {
 		return nil, uuid.Nil, nil
 	}
 	target, exists, err := s.resolveTargetFromRule(ctx, task.ProjectID, domain.TriggerBlockingDepResolved)
@@ -466,23 +469,23 @@ func allSubtasksTerminal(subtasks []domain.Task, categoryByStatusID map[uuid.UUI
 	return true
 }
 
-// hasUnresolvedBlockers returns true if any "blocks" dependency points to a task
-// that has NOT reached a terminal category.
+// hasUnresolvedBlockers returns true if any "blocks" dependency still holds its
+// dependent, judged by domain.TaskDependency.Released against the blocker's state.
 //
-// Canonical dep-clear rule (P3 #9, 2026-06-16): a blocking dependency is CLEARED
-// when its blocker reaches a TERMINAL status — `done` OR `cancelled`. A cancelled
-// blocker is abandoned/obsoleted work that will never complete, so keeping the
-// dependent blocked on it forever is wrong; the dependent is free to proceed.
-// This brings hasUnresolvedBlockers in line with the rest of the system, which
-// already treated both terminal categories as clearing:
+// Canonical dep-clear rule (P3 #9, 2026-06-16), which a default (task_done) edge
+// keeps: a blocking dependency is CLEARED when its blocker reaches a TERMINAL
+// status — `done` OR `cancelled`. A cancelled blocker is abandoned/obsoleted work
+// that will never complete, so keeping the dependent blocked on it forever is
+// wrong; the dependent is free to proceed. This brings hasUnresolvedBlockers in
+// line with the rest of the system, which already treated both terminal
+// categories as clearing:
 //   - EvaluateOnTaskMove fires CheckDependencyResolution on done OR cancelled.
 //   - allSubtasksTerminal counts a subtask terminal on done OR cancelled.
 //   - mesh-intake-sweep all_deps_cleared promotes on done OR cancelled.
 //
-// Previously this function alone accepted only `done`, so a cancelled blocker
-// left the dependent stuck in backlog server-side while intake-sweep promoted it
-// — an engine-dependent split. Now both engines agree.
-func hasUnresolvedBlockers(deps []domain.TaskDependency, categoryByTaskID map[uuid.UUID]domain.StatusCategory) bool {
+// A typed edge follows its own condition instead (shipped, deployed, accepted:
+// see Released), and an edge released by evidence never holds.
+func hasUnresolvedBlockers(deps []domain.TaskDependency, stateByTaskID map[uuid.UUID]domain.BlockerState) bool {
 	for _, dep := range deps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
 			continue
@@ -490,12 +493,37 @@ func hasUnresolvedBlockers(deps []domain.TaskDependency, categoryByTaskID map[uu
 		if dep.EvidenceSatisfied() {
 			continue
 		}
-		cat, ok := categoryByTaskID[dep.DependsOnTaskID]
-		if !ok || (cat != domain.StatusCategoryDone && cat != domain.StatusCategoryCancelled) {
+		st, ok := stateByTaskID[dep.DependsOnTaskID]
+		if !ok || !dep.Released(st) {
 			return true
 		}
 	}
 	return false
+}
+
+// fillDeployments sets HasDeployment on the states of blockers behind a
+// "deployed" edge, with one vcs_links query for all of them. Edges of any other
+// condition never read it, so they cost nothing.
+func fillDeployments(ctx context.Context, depRepo repository.TaskDependencyRepository, deps []domain.TaskDependency, states map[uuid.UUID]domain.BlockerState) error {
+	var ids []uuid.UUID
+	for _, dep := range deps {
+		if _, known := states[dep.DependsOnTaskID]; known && dep.NeedsDeploymentLookup() {
+			ids = append(ids, dep.DependsOnTaskID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	deployed, err := depRepo.DeployedTasks(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		st := states[id]
+		st.HasDeployment = deployed[id]
+		states[id] = st
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

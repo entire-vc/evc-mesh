@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { AlertTriangle, ArrowLeft, Lock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -105,7 +105,16 @@ function AllowList({ overview, onChange }: { overview: InstanceOverview; onChang
 function SettingsSection({ overview, summaries, onSaved }: { overview: InstanceOverview; summaries: InstanceExtensionSummary[]; onSaved: () => void }) {
   const { t } = useTranslation("integrations");
   const withForm = overview.items.filter((i) => i.has_instance_form);
-  const [selected, setSelected] = useState(withForm[0]?.id ?? "");
+  // `?ext=<id>` comes from a workspace's Settings dialog ("Edit at instance level").
+  const [search] = useSearchParams();
+  const asked = search.get("ext");
+  const [selected, setSelected] = useState(withForm.find((i) => i.id === asked)?.id ?? withForm[0]?.id ?? "");
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (asked && asked === selected) cardRef.current?.scrollIntoView?.({ block: "start" });
+    // Only on arrival: picking another extension later must not jump the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [dto, setDto] = useState<InstanceSettingsDto | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -143,7 +152,7 @@ function SettingsSection({ overview, summaries, onSaved }: { overview: InstanceO
   );
 
   return (
-    <Card data-testid="instance-settings">
+    <Card data-testid="instance-settings" ref={cardRef}>
       <CardHeader>
         <CardTitle>{t("instanceAdmin.settings.title")}</CardTitle>
         <CardDescription>{t("instanceAdmin.settings.body")}</CardDescription>

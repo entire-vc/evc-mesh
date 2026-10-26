@@ -202,6 +202,25 @@ func (l VCSLink) IsReviewSubject() bool {
 	return m.Role == VCSLinkRoleReview
 }
 
+// VCSLinkRelationRelatesTo marks a link the webhook recorded for a task that
+// a PR/MR only mentioned (its description, or a title/branch reference from a
+// repository the task's project does not use). The PR/MR is not the task's
+// work: its merge moves nothing, and it neither holds back nor proves the
+// task's delivery.
+const VCSLinkRelationRelatesTo = "relates_to"
+
+// IsRelatesTo reports whether the link only records a mention
+// (metadata {"relation":"relates_to"}).
+func (l VCSLink) IsRelatesTo() bool {
+	var m struct {
+		Relation string `json:"relation"`
+	}
+	if len(l.Metadata) == 0 || json.Unmarshal(l.Metadata, &m) != nil {
+		return false
+	}
+	return m.Relation == VCSLinkRelationRelatesTo
+}
+
 // Metadata keys the transition gate reads for the author_if_merged_shipped
 // pattern. head_sha is written by Mesh when it syncs the MR; ship_sha by the
 // fleet tool that signs an independent SHIP (code review / glab-merge).
@@ -319,14 +338,30 @@ func (l VCSLink) Delivery() VCSDelivery {
 }
 
 // MarshalJSON extends the stored fields with the derived delivery state; the
-// existing fields are unchanged.
+// existing fields are unchanged. deployed_sha, deployed_env and deployed_at
+// are the flat form of delivery.deployed (null until a deploy is recorded);
+// they are what the dependency condition "deployed" reads.
 func (l VCSLink) MarshalJSON() ([]byte, error) {
 	type plain VCSLink
-	return json.Marshal(struct {
+	out := struct {
 		plain
-		Delivery  VCSDelivery `json:"delivery"`
-		IsShipped bool        `json:"is_shipped"`
-	}{plain(l), l.Delivery(), l.IsShipped()})
+		Delivery    VCSDelivery `json:"delivery"`
+		IsShipped   bool        `json:"is_shipped"`
+		DeployedSHA *string     `json:"deployed_sha"`
+		DeployedEnv *string     `json:"deployed_env"`
+		DeployedAt  *time.Time  `json:"deployed_at"`
+	}{plain: plain(l), Delivery: l.Delivery(), IsShipped: l.IsShipped()}
+	if d := l.Deployed(); d != nil {
+		out.DeployedSHA, out.DeployedEnv, out.DeployedAt = &d.SHA, &d.Environment, d.At
+	}
+	return json.Marshal(out)
+}
+
+// IsDeployed reports whether the link records a deploy in any environment: the
+// Go twin of the vcs_links EXISTS inside DependencyReleasedSQL (sha and at set).
+func (l VCSLink) IsDeployed() bool {
+	d := l.Deployed()
+	return d != nil && d.At != nil
 }
 
 func (l VCSLink) metaString(key string) string {

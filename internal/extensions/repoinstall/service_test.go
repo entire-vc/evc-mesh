@@ -295,6 +295,26 @@ func TestRedControls(t *testing.T) {
 	})
 }
 
+// Updates lists repo-installed extensions only: a built-in row (Runner) is
+// never offered there, next to a repo extension that is.
+func TestUpdatesSkipBuiltins(t *testing.T) {
+	svc, repo, gl, url := setup(t, "")
+	gl.tags, gl.branches = []string{"v0.1.0"}, []string{"main"}
+	gl.set("v0.1.0", "aaa111", manifestJSON(t, withVersion("0.1.0")))
+	ctx := context.Background()
+	_, err := svc.Install(ctx, uuid.New(), url, "v0.1.0", "")
+	require.NoError(t, err)
+	repo.rows["runner"] = &domain.InstalledExtension{ExtensionID: "runner", Source: domain.ExtensionSourceBuiltin, Version: "1.0.0"}
+
+	ups, err := svc.Updates(ctx)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(ups))
+	for _, u := range ups {
+		ids = append(ids, u.ExtensionID)
+	}
+	assert.Equal(t, []string{"hello"}, ids)
+}
+
 func TestUpdatesAutoUpdateAndConsent(t *testing.T) {
 	svc, repo, gl, url := setup(t, "")
 	gl.tags, gl.branches = []string{"v0.1.0"}, []string{"main"}

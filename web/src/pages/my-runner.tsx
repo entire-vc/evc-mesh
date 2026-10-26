@@ -5,7 +5,7 @@ import { HistorySection } from "@/components/my-runner/history-section";
 import { ResourcesSection } from "@/components/my-runner/resources-section";
 import { RunnersSection } from "@/components/my-runner/runners-section";
 import { useLoad } from "@/components/my-runner/use-load";
-import { getMyRuntime, getMyRuntimeHistory, getOperatorAgents, getOperatorRunners } from "@/lib/my-runner";
+import { getOperatorAgents, getOperatorRunners, loadHistory, loadResources } from "@/lib/my-runner";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 
@@ -16,8 +16,9 @@ export function MyRunnerPage() {
   const wsId = useWorkspaceStore((s) => s.currentWorkspace?.id);
   const agents = useLoad(getOperatorAgents);
   const runners = useLoad(getOperatorRunners);
-  const runtime = useLoad(getMyRuntime);
-  const history = useLoad(() => getMyRuntimeHistory());
+  // The workspace runner catalog when the workspace has one, otherwise the user's own document.
+  const runtime = useLoad(() => loadResources(wsId), wsId);
+  const history = useLoad(() => loadHistory(wsId), wsId);
 
   const reloadAll = () => { agents.reload(); runners.reload(); history.reload(); };
 

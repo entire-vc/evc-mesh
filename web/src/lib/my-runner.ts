@@ -7,9 +7,11 @@ import { api } from "@/lib/api";
  */
 
 export const CONFIG_SECTIONS = ["accounts", "pools", "profiles", "agents"] as const;
-export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
+/** The workspace runner catalog (schema v2) keeps per-agent settings under `bindings`. */
+export const CATALOG_SECTIONS = ["accounts", "pools", "profiles", "bindings"] as const;
+export type ConfigSection = (typeof CONFIG_SECTIONS)[number] | (typeof CATALOG_SECTIONS)[number];
 
-export type RuntimeConfig = Partial<Record<ConfigSection, Record<string, unknown>>>;
+export type RuntimeConfig = Partial<Record<ConfigSection, Record<string, unknown>>> & Record<string, unknown>;
 
 export interface UserRuntime {
   user_id: string;
@@ -58,6 +60,28 @@ export interface RuntimeHistoryEntry {
   created_at: string;
 }
 
+/** One saved revision of the workspace runner catalog (GET /workspaces/:ws/runtime/revisions). */
+export interface CatalogRevision {
+  revision: number;
+  digest: string;
+  enabled: boolean;
+  author_id: string;
+  author_name: string;
+  created_at: string;
+}
+
+/**
+ * What the Resources block edits: the workspace runner catalog when the
+ * workspace has a runner connection, otherwise the user's own document.
+ */
+export type ResourceDoc =
+  | { source: "workspace"; wsId: string; revision: number; enabled: boolean; config: RuntimeConfig }
+  | { source: "personal"; revision: number; config: RuntimeConfig };
+
+export type HistoryView =
+  | { source: "workspace"; entries: CatalogRevision[] }
+  | { source: "personal"; entries: RuntimeHistoryEntry[] };
+
 export const MAX_CONCURRENT_CAP = 1000;
 
 export const getMyRuntime = () => api<UserRuntime>("/api/v1/me/runtime");
@@ -79,6 +103,67 @@ export const setAgentLimit = (agentId: string, maxConcurrentTasks: number) =>
 
 export const setRuntimeManager = (agentId: string, granted: boolean) =>
   api(`/api/v1/me/runtime/managers${granted ? "" : "/revoke"}`, { method: "POST", body: { agent_id: agentId } });
+
+const status = (e: unknown) => (e as { status?: number } | null)?.status;
+
+/**
+ * The workspace catalog when the runner connection exists ("managed"); the
+ * personal document when there is none ("direct") or the user may not read it
+ * (403: GET and PUT are both owner/admin). Any other failure is an error, never
+ * a silent switch to a config the runner does not read.
+ */
+export async function loadResources(wsId: string | undefined): Promise<ResourceDoc> {
+  if (wsId) {
+    try {
+      const raw = await api<{ mode?: string; revision?: number; enabled?: boolean; config?: unknown }>(`/api/v1/workspaces/${wsId}/runtime`);
+      if (raw?.mode === "managed") {
+        if (!raw.config || typeof raw.config !== "object" || Array.isArray(raw.config)) throw new Error("runtime catalog missing");
+        return { source: "workspace", wsId, revision: raw.revision ?? 0, enabled: raw.enabled === true, config: raw.config as RuntimeConfig };
+      }
+    } catch (e) {
+      if (status(e) !== 403) throw e;
+    }
+  }
+  const doc = await getMyRuntime();
+  return { source: "personal", revision: doc.revision, config: doc.config ?? {} };
+}
+
+/** Saves the whole draft against the loaded revision; the catalog keeps its enabled (drain) state. */
+export function saveResources(doc: ResourceDoc, config: RuntimeConfig): Promise<unknown> {
+  if (doc.source === "personal") return saveMyRuntime(doc.revision, config);
+  return api(`/api/v1/workspaces/${doc.wsId}/runtime`, { method: "PUT", body: { if_revision: doc.revision, enabled: doc.enabled, config } });
+}
+
+/** Catalog revisions when the workspace has a runner connection (even with none saved yet); otherwise (no connection, no rights, older server) the personal history. */
+export async function loadHistory(wsId: string | undefined, limit = 50): Promise<HistoryView> {
+  if (wsId) {
+    try {
+      const r = await api<{ managed?: boolean; revisions: CatalogRevision[] | null }>(`/api/v1/workspaces/${wsId}/runtime/revisions?limit=${limit}`);
+      if (r?.managed) return { source: "workspace", entries: r.revisions ?? [] };
+    } catch (e) {
+      if (status(e) !== 403 && status(e) !== 404) throw e;
+    }
+  }
+  return { source: "personal", entries: await getMyRuntimeHistory(limit) };
+}
+
+const SUMMARY_LIMIT = 3;
+
+/** A short line of the fields people scan for, so a row says more than its name. */
+export function entrySummary(value: unknown): { text: string[]; max: number | null; disabled: boolean } {
+  const v = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const str = (k: string) => (typeof v[k] === "string" && v[k] ? (v[k] as string) : null);
+  const text: string[] = [];
+  const provider = str("provider");
+  if (provider) text.push(provider);
+  const model = [str("harness"), str("model")].filter(Boolean).join(" · ");
+  if (model) text.push(model);
+  if (Array.isArray(v.permitted_profiles) && v.permitted_profiles.length) {
+    const p = v.permitted_profiles.filter((x): x is string => typeof x === "string");
+    text.push(p.slice(0, SUMMARY_LIMIT).join(", ") + (p.length > SUMMARY_LIMIT ? ` +${p.length - SUMMARY_LIMIT}` : ""));
+  }
+  return { text, max: typeof v.max_concurrency === "number" ? v.max_concurrency : null, disabled: v.enabled === false };
+}
 
 /** A parsed limit, or null when the text is not a whole number in 0..cap. */
 export function parseLimit(text: string): number | null {
@@ -126,6 +211,8 @@ export function findSecretViolation(value: unknown, path = ""): string | null {
     const here = path ? `${path}.${k}` : k;
     if (SECRET_KEY.test(k)) return here;
     if ((k.toLowerCase() === "credential" || k.toLowerCase() === "cred") && !(typeof v === "string" && v.startsWith("cred:"))) return here;
+    // The catalog hides stored references: empty keeps the stored one, anything else must be a reference.
+    if (k.toLowerCase() === "credential_ref" && !(v === "" || (typeof v === "string" && v.startsWith("cred:")))) return here;
     const hit = findSecretViolation(v, here);
     if (hit) return hit;
   }

@@ -174,16 +174,6 @@ func main() {
 	vcsLinkRepo := postgres.NewVCSLinkRepo(db)
 	integrationRepo := postgres.NewIntegrationRepo(db)
 
-	// Keep-backed secret store: only when MESH_KEEP_URL/ORG_ID/WORKSPACE_ID/EVENTS_SECRET are set.
-	// Without it the default stays builtin-only and a keep: reference is
-	// answered as degraded, never as an empty value.
-	if keepStore, keepErr := secretstore.NewKeepRouterFromEnv(os.Getenv); keepErr != nil {
-		log.Fatalf("[secrets] %v", keepErr) //nolint:gocritic // startup: a half-set Keep config must not start silently on builtin
-	} else if keepStore != nil {
-		secretstore.SetDefault(keepStore)
-		log.Printf("[secrets] Keep secret store enabled for keep: references")
-	}
-
 	// Extension registry. Builtin providers (internal/extensions/builtin)
 	// register here; providers not yet moved keep the old per-provider path.
 	extensionRegistry := extensions.NewRegistry()
@@ -191,6 +181,23 @@ func main() {
 	// once (source=env, idempotent); for one release env stays a fallback
 	// (DBInstanceStore warns when it is used).
 	instanceSettingRepo := postgres.NewInstanceExtensionSettingRepo(db)
+
+	// Secret store. Keep is reachable only when MESH_KEEP_URL/ORG_ID/WORKSPACE_ID/EVENTS_SECRET
+	// are set; without it a keep: reference is answered as degraded, never as
+	// an empty value. New values go to the provider named by the keep
+	// extension's secret_provider instance setting (default builtin); keep
+	// selected without a client fails the save instead of falling back.
+	secretRouter, keepErr := secretstore.NewKeepRouterFromEnv(os.Getenv)
+	if keepErr != nil {
+		log.Fatalf("[secrets] %v", keepErr) //nolint:gocritic // startup: a half-set Keep config must not start silently on builtin
+	}
+	if secretRouter != nil {
+		log.Printf("[secrets] Keep secret store enabled for keep: references")
+	} else {
+		secretRouter = &secretstore.Router{Builtin: secretstore.Builtin{}}
+	}
+	secretRouter.Selected = (&secretstore.ProviderSetting{Read: instanceSettingRepo.SecretProvider, TTL: 30 * time.Second}).Selected
+	secretstore.SetDefault(secretRouter)
 	extensionEnvSources := extensions.BuiltinEnvSources()
 	if bootErr := extensions.BootstrapInstanceSettings(context.Background(), instanceSettingRepo, cfg, extensionEnvSources); bootErr != nil {
 		log.Printf("[extensions] instance settings bootstrap failed (env fallback stays in force): %v", bootErr)
@@ -782,7 +789,8 @@ func main() {
 			}
 			return gitlabapi.NewClient(cfg.BaseURL, cfg.Token), true
 		}), // lets add_vcs_link without status learn that an MR already merged/closed (same resolution as the done gate)
-		service.WithVCSProjectRepo(projectRepo), // scopes webhook task-ref resolution to the workspace whose secret validated the request
+		service.WithVCSDependencyResolver(autoTransitionSvc), // a recorded deploy releases dependents waiting on a "deployed" edge
+		service.WithVCSProjectRepo(projectRepo),              // scopes webhook task-ref resolution to the workspace whose secret validated the request
 	)
 	// The runtime catalog is changed only through the versioned runtime API;
 	// the Runner extension's Validate decides what a generic write may do, under
@@ -1089,7 +1097,7 @@ func main() {
 	chatThreadDeleteRepo := postgres.NewChatThreadDeleteRepo(db, chatObjects)
 	chatThreadDeleteHandler := handler.NewChatThreadDeleteHandler(chatThreadDeleteRepo).WithEvents(chatEvents)
 	agentChatHandler := handler.NewAgentChatHandler(postgres.NewAgentChatRepo(db), integrationRepo, projectIntegrationRepo).WithEvents(chatEvents).
-		WithAttachments(postgres.NewChatAttachmentRepo(db), chatAttachmentStore)
+		WithAttachments(postgres.NewChatAttachmentRepo(db), chatAttachmentStore).WithRunnerHints(agentNotifyRedis)
 	chatAuditHandler := handler.NewChatAuditHandler(postgres.NewChatAuditRepo(db))
 	chatRunnerHandler := handler.NewChatRunnerHandler(postgres.NewChatRunnerRepo(db))
 	chatClaimHandler := handler.NewChatClaimHandler(postgres.NewChatRunnerRepo(db), agentNotifyRedis, chatAttachmentStore)
@@ -1210,6 +1218,12 @@ func main() {
 	}))
 	e.Use(middleware.Recover())
 	e.Use(middleware.RequestID())
+
+	// Body-read timings for slow requests and the cause of every failed Bind
+	// POSTs that hung 20–114 s and ended in 400/500 left no trace
+	// of whether the time went into receiving the body or into the handler.
+	e.Use(mw.SlowBody(mw.SlowBodyConfig{Redact: redactInviteToken}))
+	e.Binder = &mw.BindErrorLogger{Inner: e.Binder, Redact: redactInviteToken}
 	// AllowCredentials lets the browser store/send the httpOnly refresh
 	// cookie on cross-origin requests (credentials: "include" — see
 	// web/src/lib/api.ts). It is a no-op for the common same-origin
@@ -1740,6 +1754,7 @@ func main() {
 	api.GET("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.List)
 	api.GET("/workspaces/:ws_id/runtime", runtimeHandler.Inventory, rbac(mw.PermManageWebhooks))
 	api.PUT("/workspaces/:ws_id/runtime", runtimeHandler.Save, rbac(mw.PermManageWebhooks))
+	api.GET("/workspaces/:ws_id/runtime/revisions", runtimeHandler.Revisions, rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/runtime/capacity", runtimeHandler.Capacity)
 	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", runtimeHandler.Report)
 	api.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", runtimeHandler.Desired)
@@ -2103,6 +2118,7 @@ func main() {
 	api.POST("/tasks/:task_id/vcs-links", vcsLinkHandler.Create, rbac(mw.PermUpdateTask))
 	api.DELETE("/vcs-links/:link_id", vcsLinkHandler.Delete, rbac(mw.PermUpdateTask))
 	api.PATCH("/tasks/:task_id/vcs-links/:link_id/metadata", vcsLinkHandler.PatchMetadata, rbac(mw.PermUpdateTask))
+	api.POST("/tasks/:task_id/vcs-links/:link_id/deployment", vcsLinkHandler.RecordDeployment, rbac(mw.PermUpdateTask))
 	api.PATCH("/vcs-links/ship-sha", vcsLinkHandler.PatchShipSHAByURL, rbac(mw.PermUpdateTask))
 
 	// OAuth 2.0 Authorization Server (task MCP-OAuth 1/5). Public — no auth:
@@ -2319,6 +2335,7 @@ func main() {
 	// offered as provider actions, so the interface calls one shape for every extension.
 	extensionProjectHandler := handler.NewExtensionProjectHandler(extensionRegistry, projectIntegrationService).
 		WithProjects(projectService).
+		WithRepos(vcsLinkRepo).
 		WithActions("team-relay",
 			handler.ProjectAction{Name: "search", Method: http.MethodGet, Title: "Search the documents of the bound share", Run: trSearchHandler.Search},
 			handler.ProjectAction{Name: "mount", Method: http.MethodPost, Title: "Mount the share into the project Docs now", Run: trMountHandler.Sync},
@@ -2327,6 +2344,7 @@ func main() {
 	api.GET("/projects/:proj_id/extensions/:ext_id", extensionProjectHandler.Get, projAccess)
 	api.PUT("/projects/:proj_id/extensions/:ext_id", extensionProjectHandler.Put, projAccess, rbac(mw.PermManageWebhooks))
 	api.DELETE("/projects/:proj_id/extensions/:ext_id", extensionProjectHandler.Delete, projAccess, rbac(mw.PermManageWebhooks))
+	api.GET("/projects/:proj_id/extensions/:ext_id/repos", extensionProjectHandler.Repos, projAccess)
 	api.GET("/projects/:proj_id/extensions/:ext_id/actions", extensionProjectHandler.ListActions, projAccess)
 	api.GET("/projects/:proj_id/extensions/:ext_id/actions/:action", extensionProjectHandler.Action, projAccess)
 	api.POST("/projects/:proj_id/extensions/:ext_id/actions/:action", extensionProjectHandler.Action, projAccess, rbac(mw.PermManageWebhooks))
@@ -3015,6 +3033,10 @@ func main() {
 	// 11. Start server with graceful shutdown.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("Starting evc-mesh API server on %s", addr)
+
+	// Only the header phase is bounded: cfg.Server.ReadTimeout/WriteTimeout
+	// would also cut SSE, /ws and the runner chat long-poll.
+	e.Server.ReadHeaderTimeout = cfg.Server.ReadHeaderTimeout
 
 	// Start server in a goroutine.
 	go func() {

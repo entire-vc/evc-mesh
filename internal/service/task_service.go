@@ -1181,20 +1181,28 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 		if status.Category == domain.StatusCategoryDone && s.vcsLinkRepo != nil {
 			_, actorType := actorctx.FromContext(ctx)
 			if actorType != domain.ActorTypeSystem {
+				// A task whose only links are relates_to mentions has no VCS
+				// evidence of its own and falls back to the artifact/comment check.
+				needsEvidence := task.VCSLinkCount == 0
 				if task.VCSLinkCount > 0 {
 					links, linksErr := s.vcsLinkRepo.ListByTask(ctx, taskID)
 					if linksErr == nil {
+						needsEvidence = true
 						// Resolved once per gate check, not per link: every
 						// link on this task belongs to the same task, hence
 						// the same workspace.
 						workspaceID, _ := s.resolveProjectWorkspace(ctx, task.ProjectID)
 						for _, l := range links {
+							if !l.IsRelatesTo() {
+								needsEvidence = false
+							}
 							if l.LinkType != domain.VCSLinkTypePR || l.Status == domain.VCSLinkStatusMerged || l.Status == domain.VCSLinkStatusClosed {
 								continue
 							}
 							// A review card's deliverable is the verdict, not the
-							// merge of the MR it reviews.
-							if l.IsReviewSubject() {
+							// merge of the MR it reviews; a mention is
+							// not the task's work at all.
+							if l.IsReviewSubject() || l.IsRelatesTo() {
 								continue
 							}
 							// Cached status says not-yet-merged (or unknown).
@@ -1223,8 +1231,9 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 							}
 						}
 					}
-				} else if s.commentRepo != nil {
-					// No VCS links: require artifact or at least one comment.
+				}
+				if needsEvidence && s.commentRepo != nil {
+					// No VCS links of its own: require artifact or at least one comment.
 					if task.ArtifactCount == 0 {
 						if hasComment, gateErr := s.commentRepo.HasAnyComment(ctx, taskID); gateErr == nil && !hasComment {
 							return &DoneEvidenceError{}
@@ -1338,6 +1347,11 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	}
 	if s.ctxCacheInv != nil {
 		s.ctxCacheInv.Invalidate(ctx, taskID)
+	}
+
+	// Closing a parent over open children is allowed but should not be silent.
+	if statusChanged {
+		s.collectParentCloseWarning(ctx, task)
 	}
 
 	// Shadow review route: journaled only now that the move is committed, with the
@@ -4374,6 +4388,13 @@ func (s *taskService) ShipTask(ctx context.Context, taskID uuid.UUID, shipped bo
 	if shipped {
 		if task, err := s.taskRepo.GetByID(ctx, taskID); err == nil && task != nil {
 			pkgmetrics.RecordTaskShipped(task.ProjectID.String())
+		}
+		// Dependents held by a "shipped" or "deployed" edge on this task are released
+		// by the flag alone, with no status move to fire the usual resolution.
+		if s.autoTransSvc != nil {
+			if err := s.autoTransSvc.CheckDependencyResolution(ctx, taskID); err != nil {
+				log.Printf("[ship-task] WARNING: dependency resolution after ship of %s failed: %v", taskID, err)
+			}
 		}
 	}
 	return nil

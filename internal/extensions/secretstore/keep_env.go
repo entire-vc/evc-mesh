@@ -20,9 +20,9 @@ const (
 )
 
 // NewKeepRouterFromEnv builds the process-wide store when Keep is configured.
-// It returns (nil, nil) when none of the variables is set. New values keep
-// going to builtin (Selected is nil) until the provider switch is made on
-// purpose; the router only adds the ability to open keep: references.
+// It returns (nil, nil) when none of the variables is set. Selected is left
+// for the caller to wire to the keep extension's secret_provider setting;
+// until then new values go to builtin.
 func NewKeepRouterFromEnv(getenv func(string) string) (*Router, error) {
 	url, org, ws, secret := getenv(EnvKeepURL), getenv(EnvKeepOrgID), getenv(EnvKeepWorkspaceID), getenv(EnvKeepEventsSecret)
 	if url == "" && org == "" && ws == "" && secret == "" {

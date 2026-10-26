@@ -1,7 +1,7 @@
 import { formatDateTime, formatNumber } from "@/i18n/format";
 import type { CatalogEntry } from "@/hooks/useExtensionCatalog";
 
-export type InstalledStatusKind = "blocked" | "error" | "instance" | "workspace" | "off" | "receiving" | "none";
+export type InstalledStatusKind = "blocked" | "error" | "instance" | "workspace" | "off" | "receiving" | "none" | "theme-active" | "theme-inactive";
 
 export interface InstalledStatus {
   kind: InstalledStatusKind;
@@ -17,6 +17,11 @@ export interface InstalledStatus {
  * "on".
  */
 export function installedStatus(e: CatalogEntry): InstalledStatus {
+  // a theme has no connection: it is the workspace's theme or it is not. That stays visible when the
+  // catalog blocks it (the row shows the block on its own line), else an active theme would look absent.
+  if (e.kind === "theme" && e.themeActive !== undefined) {
+    return e.themeActive ? { kind: "theme-active", key: "installed.status.themeActive" } : { kind: "theme-inactive", key: "installed.status.themeInactive" };
+  }
   if (e.blocked) {
     return { kind: "blocked", key: "installed.status.blocked", values: { reason: e.blockedReason || "-" } };
   }

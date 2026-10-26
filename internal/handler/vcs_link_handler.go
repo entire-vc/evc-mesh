@@ -360,6 +360,40 @@ func (h *VCSLinkHandler) PatchMetadata(c echo.Context) error {
 	return c.JSON(http.StatusOK, link)
 }
 
+// RecordDeployment handles POST /tasks/:task_id/vcs-links/:link_id/deployment.
+// Body: {"sha": "<40 hex lowercase>", "env": "production"}. Marks the link
+// deployed from now (deployed_at); reporting the same sha and env again keeps
+// the first deployed_at. It writes the same metadata.deployed that PATCH
+// .../metadata does, so there is one record of a deploy, and responds with the
+// updated link (deployed_sha, deployed_env, deployed_at included).
+func (h *VCSLinkHandler) RecordDeployment(c echo.Context) error {
+	taskID, err := uuid.Parse(c.Param("task_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid task_id"))
+	}
+	linkID, err := uuid.Parse(c.Param("link_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid link_id"))
+	}
+	var req struct {
+		SHA string `json:"sha"`
+		Env string `json:"env"`
+	}
+	if err = json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("body must be a JSON object"))
+	}
+	if strings.TrimSpace(req.SHA) == "" || strings.TrimSpace(req.Env) == "" {
+		return c.JSON(http.StatusBadRequest, apierror.BadRequest("sha and env are required"))
+	}
+	link, err := h.vcsService.PatchMetadata(c.Request().Context(), taskID, linkID, map[string]any{
+		domain.VCSLinkMetaDeployed: map[string]any{"sha": strings.TrimSpace(req.SHA), "environment": strings.TrimSpace(req.Env)},
+	})
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, link)
+}
+
 // PatchShipSHAByURL handles PATCH /vcs-links/ship-sha.
 // Body: {"url":"<MR/PR url>","ship_sha":"<40 hex lowercase>"}. For callers
 // that know the MR but not the card (MR text carries no card id).

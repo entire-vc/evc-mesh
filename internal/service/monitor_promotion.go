@@ -258,7 +258,7 @@ func (s *monitorPromotionService) blockerStatus(ctx context.Context, taskID uuid
 		return true, true, err
 	}
 
-	categories := make(map[uuid.UUID]domain.StatusCategory)
+	states := make(map[uuid.UUID]domain.BlockerState)
 	for _, dep := range deps {
 		if dep.DependencyType != domain.DependencyTypeBlocks {
 			continue
@@ -268,7 +268,7 @@ func (s *monitorPromotionService) blockerStatus(ctx context.Context, taskID uuid
 			// Released by evidence regardless of the blocker, even a deleted one.
 			continue
 		}
-		if _, seen := categories[dep.DependsOnTaskID]; seen {
+		if _, seen := states[dep.DependsOnTaskID]; seen {
 			continue
 		}
 		blocker, err := s.taskRepo.GetByID(ctx, dep.DependsOnTaskID)
@@ -286,9 +286,12 @@ func (s *monitorPromotionService) blockerStatus(ctx context.Context, taskID uuid
 		if status == nil {
 			return true, true, nil
 		}
-		categories[dep.DependsOnTaskID] = status.Category
+		states[dep.DependsOnTaskID] = domain.BlockerState{Category: status.Category, IsShipped: blocker.IsShipped}
 	}
-	return hasUnresolvedBlockers(deps, categories), hasBlocksEdge, nil
+	if err := fillDeployments(ctx, s.depRepo, deps, states); err != nil {
+		return true, true, err
+	}
+	return hasUnresolvedBlockers(deps, states), hasBlocksEdge, nil
 }
 
 // findTodoStatusID returns the ID of the first todo-category status for the project,

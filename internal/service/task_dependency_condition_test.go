@@ -147,15 +147,15 @@ func TestHasUnresolvedBlockers_EvidenceReleasesMonitorEdges(t *testing.T) {
 			TaskID: uuid.New(), DependsOnTaskID: monitor, DependencyType: domain.DependencyTypeBlocks,
 			Condition: domain.DependencyConditionAccessReady, EvidenceURL: &evidence, ConditionMetAt: &met,
 		}
-		assert.False(t, hasUnresolvedBlockers([]domain.TaskDependency{edge}, cats))
+		assert.False(t, hasUnresolvedBlockers([]domain.TaskDependency{edge}, catStates(cats)))
 	}
 	legacy := domain.TaskDependency{TaskID: uuid.New(), DependsOnTaskID: monitor, DependencyType: domain.DependencyTypeBlocks}
-	assert.True(t, hasUnresolvedBlockers([]domain.TaskDependency{legacy}, cats), "empty condition behaves as task_done")
+	assert.True(t, hasUnresolvedBlockers([]domain.TaskDependency{legacy}, catStates(cats)), "empty condition behaves as task_done")
 	legacy.Condition = domain.DependencyConditionTaskDone
-	assert.True(t, hasUnresolvedBlockers([]domain.TaskDependency{legacy}, cats))
+	assert.True(t, hasUnresolvedBlockers([]domain.TaskDependency{legacy}, catStates(cats)))
 	noEvidence := legacy
 	noEvidence.Condition, noEvidence.ConditionMetAt = domain.DependencyConditionAccessReady, &met
-	assert.True(t, hasUnresolvedBlockers([]domain.TaskDependency{noEvidence}, cats), "met without evidence_url holds")
+	assert.True(t, hasUnresolvedBlockers([]domain.TaskDependency{noEvidence}, catStates(cats)), "met without evidence_url holds")
 }
 
 func TestTaskDependencyService_Create_RejectPolicyReturns409(t *testing.T) {

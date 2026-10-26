@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,6 +30,11 @@ const (
 
 	// KeepPrefix marks a stored value that is a reference into Keep.
 	KeepPrefix = "keep:"
+
+	// KeepExtensionID is the extension whose instance settings carry the
+	// provider switch, SettingSecretProvider the key of that setting.
+	KeepExtensionID       = "keep"
+	SettingSecretProvider = "secret_provider"
 )
 
 // Ref names the setting a value belongs to. Keep derives the secret's scope
@@ -111,12 +117,21 @@ func (k Keep) Resolve(ctx context.Context, stored string) Result {
 type Router struct {
 	Builtin Store
 	Keep    Store
-	// Selected names the provider for new values; nil means builtin.
-	Selected func(ctx context.Context) string
+	// Selected names the provider for new values; nil means builtin. An
+	// error fails the Put: a value never lands on a provider nobody chose.
+	Selected func(ctx context.Context) (string, error)
 }
 
 func (r *Router) Put(ctx context.Context, ref Ref, plain string) (string, error) {
-	if r.Selected != nil && r.Selected(ctx) == ProviderKeep {
+	provider := ProviderBuiltin
+	if r.Selected != nil {
+		p, err := r.Selected(ctx)
+		if err != nil {
+			return "", fmt.Errorf("secret provider: %w", err)
+		}
+		provider = p
+	}
+	if provider == ProviderKeep {
 		if r.Keep == nil {
 			return "", ErrKeepNotConfigured
 		}
@@ -133,6 +148,59 @@ func (r *Router) Resolve(ctx context.Context, stored string) Result {
 		return r.Keep.Resolve(ctx, stored)
 	}
 	return r.Builtin.Resolve(ctx, stored)
+}
+
+// ParseProvider checks a secret_provider setting value; empty means the
+// default, builtin.
+func ParseProvider(v string) (string, error) {
+	switch v {
+	case "", ProviderBuiltin:
+		return ProviderBuiltin, nil
+	case ProviderKeep:
+		return ProviderKeep, nil
+	}
+	return "", fmt.Errorf("%s must be %s or %s, got %q", SettingSecretProvider, ProviderBuiltin, ProviderKeep, v)
+}
+
+// ProviderSetting is a Router.Selected that reads the provider switch through
+// Read and keeps the answer for TTL, so a Put does not cost a settings read
+// while a change still takes effect within TTL. A failed read is returned,
+// not replaced by a guess.
+type ProviderSetting struct {
+	Read func(ctx context.Context) (string, error)
+	TTL  time.Duration
+	Now  func() time.Time // nil means time.Now
+
+	mu  sync.Mutex
+	val string
+	at  time.Time
+}
+
+func (p *ProviderSetting) Selected(ctx context.Context) (string, error) {
+	now := time.Now
+	if p.Now != nil {
+		now = p.Now
+	}
+	p.mu.Lock()
+	if p.val != "" && now().Sub(p.at) < p.TTL {
+		v := p.val
+		p.mu.Unlock()
+		return v, nil
+	}
+	p.mu.Unlock()
+
+	raw, err := p.Read(ctx)
+	if err != nil {
+		return "", err
+	}
+	v, err := ParseProvider(raw)
+	if err != nil {
+		return "", err
+	}
+	p.mu.Lock()
+	p.val, p.at = v, now()
+	p.mu.Unlock()
+	return v, nil
 }
 
 var (

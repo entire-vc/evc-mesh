@@ -147,16 +147,6 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if input.IfRevision < 0 || input.Enabled == nil {
 		return nil, apierror.BadRequest("if_revision and enabled are required")
 	}
-	catalog, err := domain.ParseRuntimeCatalog(input.Config)
-	if err != nil {
-		return nil, apierror.BadRequest("invalid runtime catalog")
-	}
-	canonical, err := json.Marshal(catalog)
-	if err != nil {
-		return nil, err
-	}
-	hash := sha256.Sum256(canonical)
-	digest := hex.EncodeToString(hash[:])
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -189,6 +179,27 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if revision != input.IfRevision {
 		return nil, apierror.Conflict("runtime desired revision changed")
 	}
+	// Inventory redacts credential references, so an editor sends back an
+	// account with an empty credential_ref: it keeps the stored reference.
+	config := input.Config
+	if revision > 0 {
+		var previous []byte
+		err = tx.GetContext(ctx, &previous, `SELECT config FROM runtime_catalog_revisions WHERE integration_id=$1 AND revision=$2`, connection.ID, revision)
+		if err != nil {
+			return nil, err
+		}
+		config = inheritCredentialRefs(config, previous)
+	}
+	catalog, err := domain.ParseRuntimeCatalog(config)
+	if err != nil {
+		return nil, apierror.BadRequest("invalid runtime catalog")
+	}
+	canonical, err := json.Marshal(catalog)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(hash[:])
 	for _, c := range catalog.Controllers {
 		var identity domain.RuntimeIdentity
 		err = tx.GetContext(ctx, &identity.AgentID, `SELECT agent_id FROM agent_workspace_grants WHERE id=$1 AND workspace_id=$2`, c.ReporterGrantID, ws)
@@ -222,6 +233,87 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 		return nil, err
 	}
 	return &domain.RuntimeSnapshot{Mode: "managed", Revision: revision, Digest: digest, Enabled: *input.Enabled, DrainRequested: !*input.Enabled, Catalog: catalog.Redacted(), Controllers: []domain.RuntimeControllerState{}}, nil
+}
+
+// inheritCredentialRefs fills an account's missing or empty credential_ref from
+// the same account in the previous revision. A new account, or input that is
+// not a JSON object, passes through unchanged and the schema decides.
+func inheritCredentialRefs(input, previous []byte) []byte {
+	var next, prev map[string]json.RawMessage
+	if json.Unmarshal(input, &next) != nil || json.Unmarshal(previous, &prev) != nil {
+		return input
+	}
+	var nextAccounts, prevAccounts map[string]map[string]json.RawMessage
+	if json.Unmarshal(next["accounts"], &nextAccounts) != nil || json.Unmarshal(prev["accounts"], &prevAccounts) != nil {
+		return input
+	}
+	changed := false
+	for ref, account := range nextAccounts {
+		var current string
+		if raw, ok := account["credential_ref"]; ok && (json.Unmarshal(raw, &current) != nil || current != "") {
+			continue
+		}
+		stored, ok := prevAccounts[ref]["credential_ref"]
+		if !ok || account == nil {
+			continue
+		}
+		account["credential_ref"] = stored
+		changed = true
+	}
+	if !changed {
+		return input
+	}
+	accounts, err := json.Marshal(nextAccounts)
+	if err != nil {
+		return input
+	}
+	next["accounts"] = accounts
+	out, err := json.Marshal(next)
+	if err != nil {
+		return input
+	}
+	return out
+}
+
+// RuntimeRevisionEntry is one saved catalog revision, newest first in Revisions.
+type RuntimeRevisionEntry struct {
+	Revision   int64     `db:"revision" json:"revision"`
+	Digest     string    `db:"digest" json:"digest"`
+	Enabled    bool      `db:"enabled" json:"enabled"`
+	AuthorID   uuid.UUID `db:"author_id" json:"author_id"`
+	AuthorName string    `db:"author_name" json:"author_name"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+}
+
+// RuntimeRevisions is the body of GET /runtime/revisions. Managed tells a
+// connected workspace with no saved revision apart from one without a connection.
+type RuntimeRevisions struct {
+	Managed   bool                   `json:"managed"`
+	Revisions []RuntimeRevisionEntry `json:"revisions"`
+}
+
+// Revisions lists the workspace catalog revisions with their authors; same
+// owner/admin gate as Inventory. No connection yet means managed=false.
+func (r *RuntimeRepo) Revisions(ctx context.Context, ws uuid.UUID, actor RuntimeActor, limit int) (*RuntimeRevisions, error) {
+	if err := runtimeAdmin(ctx, r.db, ws, actor); err != nil {
+		return nil, err
+	}
+	connection, err := runtimeConnection(ctx, r.db, ws, false)
+	if err != nil {
+		return nil, err
+	}
+	out := &RuntimeRevisions{Revisions: []RuntimeRevisionEntry{}}
+	if connection == nil {
+		return out, nil
+	}
+	out.Managed = true
+	err = r.db.SelectContext(ctx, &out.Revisions, `SELECT r.revision,r.digest,r.enabled,r.created_by AS author_id,COALESCE(u.display_name,'') AS author_name,r.created_at
+		FROM runtime_catalog_revisions r LEFT JOIN users u ON u.id=r.created_by
+		WHERE r.integration_id=$1 ORDER BY r.revision DESC LIMIT $2`, connection.ID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *RuntimeRepo) Inventory(ctx context.Context, ws uuid.UUID, actor RuntimeActor) (*domain.RuntimeSnapshot, error) {

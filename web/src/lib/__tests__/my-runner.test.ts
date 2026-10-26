@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentState, findSecretViolation, parseEntryValue, parseLimit, sectionEntries, withEntry, type OperatorAgent } from "@/lib/my-runner";
+import { agentState, entrySummary, findSecretViolation, parseEntryValue, parseLimit, sectionEntries, withEntry, type OperatorAgent } from "@/lib/my-runner";
 
 describe("parseLimit", () => {
   it.each([["0", 0], [" 12 ", 12], ["1000", 1000]])("accepts %j", (text, n) => expect(parseLimit(text)).toBe(n));
@@ -51,5 +51,23 @@ describe("findSecretViolation", () => {
     expect(findSecretViolation({ credential: 5 })).toBe("credential");
     expect(findSecretViolation({ Credential: "sk-live-123" })).toBe("Credential");
     expect(findSecretViolation({ cred: "sk-live-123" })).toBe("cred");
+  });
+});
+
+describe("catalog credential_ref", () => {
+  it("allows the blank (kept) value and a cred: reference only", () => {
+    expect(findSecretViolation({ accounts: { a: { credential_ref: "" } } })).toBeNull();
+    expect(findSecretViolation({ accounts: { a: { credential_ref: "cred:claude/alex" } } })).toBeNull();
+    expect(findSecretViolation({ accounts: { a: { credential_ref: "sk-live-123" } } })).toBe("accounts.a.credential_ref");
+    expect(findSecretViolation({ accounts: { a: { credential_ref: 1 } } })).toBe("accounts.a.credential_ref");
+  });
+});
+
+describe("entrySummary", () => {
+  it("picks the fields people scan for", () => {
+    expect(entrySummary({ provider: "claude", max_concurrency: 4 })).toEqual({ text: ["claude"], max: 4, disabled: false });
+    expect(entrySummary({ harness: "claude-code", model: "opus", enabled: false }).text).toEqual(["claude-code · opus"]);
+    expect(entrySummary({ permitted_profiles: ["a", "b", "c", "d", "e"] }).text).toEqual(["a, b, c +2"]);
+    expect(entrySummary(null)).toEqual({ text: [], max: null, disabled: false });
   });
 });

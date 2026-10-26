@@ -102,8 +102,8 @@ var taskComputedCols = `
 	(SELECT COUNT(*) FROM task_dependencies td JOIN tasks bt ON bt.id = td.depends_on_task_id
 		JOIN task_statuses bts ON bts.id = bt.status_id
 		WHERE td.task_id = tasks.id AND td.dependency_type = 'blocks'
-		AND bt.deleted_at IS NULL AND bts.category NOT IN ('done', 'cancelled')
-		AND NOT ` + domain.DependencySatisfiedSQL("td") + `) AS open_dependency_count,
+		AND bt.deleted_at IS NULL
+		AND NOT ` + domain.DependencyReleasedSQL("td", "bt", "bts.category") + `) AS open_dependency_count,
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = tasks.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = tasks.id) AS vcs_link_count,
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tasks.id AND st.deleted_at IS NULL) > 0
@@ -184,8 +184,8 @@ var taskComputedColsAliased = `
 	(SELECT COUNT(*) FROM task_dependencies td JOIN tasks bt ON bt.id = td.depends_on_task_id
 		JOIN task_statuses bts ON bts.id = bt.status_id
 		WHERE td.task_id = t.id AND td.dependency_type = 'blocks'
-		AND bt.deleted_at IS NULL AND bts.category NOT IN ('done', 'cancelled')
-		AND NOT ` + domain.DependencySatisfiedSQL("td") + `) AS open_dependency_count,
+		AND bt.deleted_at IS NULL
+		AND NOT ` + domain.DependencyReleasedSQL("td", "bt", "bts.category") + `) AS open_dependency_count,
 	(SELECT COUNT(*) FROM artifacts a WHERE a.task_id = t.id) AS artifact_count,
 	(SELECT COUNT(*) FROM vcs_links v WHERE v.task_id = t.id) AS vcs_link_count,
 	(SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id AND st.deleted_at IS NULL) > 0

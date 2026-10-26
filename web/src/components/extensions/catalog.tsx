@@ -63,6 +63,12 @@ function CheckGroup({
 
 function StatusChip({ entry }: { entry: CatalogEntry }) {
   const { t } = useTranslation("integrations");
+  // a theme is chosen, not connected: one is active in the workspace, the rest are not selected
+  if (entry.kind === "theme" && entry.themeActive !== undefined) {
+    return entry.themeActive
+      ? <Badge variant="success">{t("catalog.state.themeActive")}</Badge>
+      : <Badge variant="outline">{t("catalog.state.themeInactive")}</Badge>;
+  }
   if (!entry.connected) return null;
   return (
     <Badge variant="success">
@@ -135,7 +141,9 @@ export function ExtensionsCatalog({ catalog }: { catalog: CatalogState }) {
     );
   }
 
-  const shown = applyFilters(catalog.entries, filters);
+  // Built-in parts of Mesh (Runner) stay in the catalog state but are not listed.
+  const listed = catalog.entries.filter((e) => !e.hidden);
+  const shown = applyFilters(listed, filters);
   const active = filters.kinds.length + filters.categories.length + filters.trusts.length + (filters.q ? 1 : 0);
 
   const panel = (
@@ -201,10 +209,10 @@ export function ExtensionsCatalog({ catalog }: { catalog: CatalogState }) {
             <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center">
               <PackageSearch className="h-8 w-8 text-muted-foreground" aria-hidden />
               <p className="text-sm font-medium">
-                {t(catalog.entries.length === 0 ? "extensionsPage.catalog.emptyTitle" : "catalog.noMatchTitle")}
+                {t(listed.length === 0 ? "extensionsPage.catalog.emptyTitle" : "catalog.noMatchTitle")}
               </p>
               <p className="max-w-prose text-sm text-muted-foreground">
-                {t(catalog.entries.length === 0 ? "extensionsPage.catalog.emptyBody" : "catalog.noMatchBody")}
+                {t(listed.length === 0 ? "extensionsPage.catalog.emptyBody" : "catalog.noMatchBody")}
               </p>
               {active > 0 && (
                 <Button variant="outline" size="sm"

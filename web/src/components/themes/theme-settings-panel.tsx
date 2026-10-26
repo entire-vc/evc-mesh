@@ -66,6 +66,8 @@ export function ThemeSettingsPanel({
   roleLoading = false,
   roleUnknown = false,
   onForbidden,
+  initialThemeId,
+  saveLabel,
 }: {
   level: ThemeLevel;
   workspaceId?: string;
@@ -76,6 +78,9 @@ export function ThemeSettingsPanel({
   roleUnknown?: boolean;
   /** The server refused the admin routes (not an instance administrator). */
   onForbidden?: () => void;
+  /** Opened for one theme (the catalog's "Choose"): it starts chosen, ready to apply. */
+  initialThemeId?: string;
+  saveLabel?: string;
 }) {
   const { t } = useTranslation("settings");
   const { wsSlug } = useParams();
@@ -111,9 +116,11 @@ export function ThemeSettingsPanel({
       ]);
       setList(l);
       setSelection(sel);
-      setChosen(sel?.theme_id ?? baseId);
-      setDraft(sel?.settings ?? {});
-      setWarnings(sel?.contrast_warnings ?? []);
+      const saved = sel?.theme_id ?? baseId;
+      const start = !readOnly && initialThemeId && l.themes.some((x) => x.id === initialThemeId) ? initialThemeId : saved;
+      setChosen(start);
+      setDraft(start === saved ? (sel?.settings ?? {}) : {});
+      setWarnings(start === saved ? (sel?.contrast_warnings ?? []) : []);
       if (readOnly && level === "workspace" && wsSlug) {
         const r = await getResolvedWorkspaceTheme(wsSlug).catch(() => undefined);
         // a failed request leaves the theme unknown (undefined): no card is marked
@@ -128,7 +135,7 @@ export function ThemeSettingsPanel({
       if ((e as { status?: number })?.status === 403 && level === "instance") onForbidden?.();
       setError(apiErrorMessage(e, t("themes.loadFailed")));
     }
-  }, [level, workspaceId, readOnly, wsSlug, onForbidden, baseId, t]);
+  }, [level, workspaceId, readOnly, wsSlug, onForbidden, baseId, initialThemeId, t]);
 
   useEffect(() => {
     void load();
@@ -144,7 +151,14 @@ export function ThemeSettingsPanel({
   const save = async (settings: Values): Promise<void> => {
     setSaving(true);
     try {
-      const res = await (level === "workspace" ? putWorkspaceTheme(workspaceId as string, chosen, settings) : putInstanceTheme(chosen, settings));
+      let res: ThemeSelection;
+      try {
+        res = await (level === "workspace" ? putWorkspaceTheme(workspaceId as string, chosen, settings) : putInstanceTheme(chosen, settings));
+      } catch (e) {
+        // a bare "Not found." does not say what is missing: the theme is the one thing this request names
+        if ((e as { status?: number })?.status === 404 && chosen) throw new Error(t("themes.notFound", { id: chosen }));
+        throw e;
+      }
       setSelection(res);
       setWarnings(res.contrast_warnings ?? []);
       reapply();
@@ -246,6 +260,9 @@ export function ThemeSettingsPanel({
           />
         ))}
       </div>
+      {initialThemeId && !readOnly && !list.themes.some((x) => x.id === initialThemeId) && (
+        <p role="alert" className="text-sm text-destructive">{t("themes.notFound", { id: initialThemeId })}</p>
+      )}
       {list.themes.length === 0 && <p className="text-sm text-muted-foreground">{level === "workspace" ? t("themes.empty.workspace") : t("themes.empty.instance")}</p>}
 
       {changeable && (hasFields(schema) || chosen !== null) && (
@@ -289,7 +306,7 @@ export function ThemeSettingsPanel({
             disabled={saving || !dirty}
             onClick={hasFields(schema) ? undefined : () => void save({}).catch((e) => toast.error(apiErrorMessage(e, t("themes.saveFailed"))))}
           >
-            {t("themes.save")}
+            {saveLabel ?? t("themes.save")}
           </Button>
           {level === "workspace" && (
             <Button type="button" variant="outline" disabled={saving || (selection?.theme_id ?? null) === null} onClick={() => setConfirmingReset(true)}>

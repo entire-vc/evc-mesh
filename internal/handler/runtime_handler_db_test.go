@@ -116,6 +116,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.GET("/workspaces/:ws_id/runtime", h.Inventory)
 	e.GET("/workspaces/:ws_id/runtime/capacity", h.Capacity)
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
+	e.GET("/workspaces/:ws_id/runtime/revisions", h.Revisions)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.ReportQuota)
@@ -169,6 +170,15 @@ func TestRuntimeHTTPEndToEndWithSecretFreeResponses(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 	code, _, _ = f.do(http.MethodPut, base, save, owner)
 	require.Equal(t, http.StatusConflict, code, "stale if_revision loses the CAS")
+
+	code, revisions, body := f.do(http.MethodGet, base+"/revisions?limit=10", "", owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, true, revisions["managed"])
+	list, _ := revisions["revisions"].([]any)
+	require.Len(t, list, 1, "one saved revision, newest first")
+	require.Equal(t, f.ownerUser.String(), list[0].(map[string]any)["author_id"])
+	code, _, _ = f.do(http.MethodGet, base+"/revisions", "", receiver)
+	require.Equal(t, http.StatusForbidden, code, "another workspace's admin cannot read the history")
 
 	code, snapshot, body = f.do(http.MethodGet, base, "", owner)
 	require.Equal(t, http.StatusOK, code)

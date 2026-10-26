@@ -30,6 +30,8 @@ const (
 	// lease that lapses while nobody publishes.
 	chatClaimPollNoRedis = 2 * time.Second
 	chatClaimPollRedis   = 5 * time.Second
+	// How long the claim waits for Redis to confirm its subscription.
+	chatClaimSubscribeWait = time.Second
 
 	// RunnerIDHeader names the runner instance; with the agent key it is the
 	// holder identity every later call is fenced against.
@@ -188,8 +190,15 @@ func (h *ChatClaimHandler) Claim(c echo.Context) error {
 	if h.rdb != nil {
 		sub := h.rdb.Subscribe(ctx, service.ChatRunnerChannel(caller.agentID))
 		defer func() { _ = sub.Close() }()
-		hints = sub.Channel()
-		poll = chatClaimPollRedis
+		// Subscribe only sends the command; until Redis confirms it a publish is
+		// dropped. Without the confirmation the claim keeps the short poll.
+		subCtx, cancel := context.WithTimeout(ctx, chatClaimSubscribeWait)
+		_, rerr := sub.Receive(subCtx)
+		cancel()
+		if rerr == nil {
+			hints = sub.Channel()
+			poll = chatClaimPollRedis
+		}
 	}
 	deadline := time.NewTimer(time.Duration(timeoutSecs) * time.Second)
 	defer deadline.Stop()

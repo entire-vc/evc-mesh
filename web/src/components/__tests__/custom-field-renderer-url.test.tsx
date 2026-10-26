@@ -19,9 +19,9 @@ describe("CustomFieldRenderer url (read-only)", () => {
     },
   );
 
-  it("renders an http(s) URL as a link", () => {
-    const { container } = renderUrl("https://example.com/a?b=1");
-    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com/a?b=1");
+  it.each(["http://example.com/a?b=1", "https://example.com/a?b=1"])("renders %s as a link", (value) => {
+    const { container } = renderUrl(value);
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(value);
   });
 
   it("shows the hostname in compact mode", () => {
@@ -32,6 +32,14 @@ describe("CustomFieldRenderer url (read-only)", () => {
   it("keeps mailto links", () => {
     const { container } = renderUrl("mailto:team@example.com");
     expect(container.querySelector("a")?.getAttribute("href")).toBe("mailto:team@example.com");
+  });
+
+  it("links a non-ASCII URL through its normalized href", () => {
+    const value = "https://ru.wikipedia.org/wiki/Москва";
+    const { container } = renderUrl(value);
+    const link = container.querySelector("a");
+    expect(link?.getAttribute("href")).toBe(new URL(value).href);
+    expect(link?.textContent).toBe(value);
   });
 
   it("renders a non-URL as plain text", () => {

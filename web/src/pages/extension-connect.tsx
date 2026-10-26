@@ -12,6 +12,8 @@ import { connectWorkspaceExtension, testWorkspaceExtension } from "@/lib/extensi
 import { useIsInstanceAdmin } from "@/lib/extension-admin";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useMemberStore } from "@/stores/member";
+import { ThemeSettingsPanel } from "@/components/themes/theme-settings-panel";
 import { cn } from "@/lib/cn";
 
 export const WIZARD_STEPS = ["permissions", "settings", "test", "done"] as const;
@@ -185,7 +187,7 @@ function TestStep({ wsId, entry, onDone }: { wsId: string; entry: CatalogEntry; 
     setState({ kind: "running" });
     try {
       const res = await testWorkspaceExtension(wsId, entry.id);
-      // The health text is raw server output (ADR 789a9235): never shown, only ok/not ok.
+      // The health text is raw server output (ADR an internal ticket): never shown, only ok/not ok.
       setState({ kind: res.ok ? "ok" : "failed" });
     } catch (e) {
       setState({ kind: "error", message: apiErrorMessage(e, t("connect.test.requestFailed")) });
@@ -284,6 +286,9 @@ export function ExtensionConnectPage() {
   const [visitedSettings, setVisitedSettings] = useState(false);
   // the instance administrator is not the workspace admin: only the instance API can tell
   const isAdmin = useIsInstanceAdmin();
+  // the workspace theme is an owner/admin setting, like on the workspace settings page
+  const { myRole, myRoleLoaded, myRoleError } = useMemberStore();
+  const canManageTheme = myRole === "owner" || myRole === "admin";
   const entry = catalog.entries.find((e) => e.id === extId);
   const wsId = currentWorkspace?.id ?? "";
 
@@ -324,6 +329,35 @@ export function ExtensionConnectPage() {
         {back}
         <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
           {t("connect.unavailable")}
+        </div>
+      </div>
+    );
+  }
+  // A theme is not connected: it is chosen for the workspace (`PUT /workspaces/:ws/theme`), and the
+  // permissions and check steps mean nothing for it. Choose → settings with preview → apply.
+  if (entry.kind === "theme") {
+    return (
+      <div className="flex h-full flex-col">
+        {back}
+        <header className="mb-4 flex items-start gap-3">
+          <ExtensionIcon entry={entry} className="h-12 w-12" />
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-semibold">{t("connect.theme.heading", { name: entry.name })}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5"><KindTrustBadges entry={entry} /></div>
+            <p className="mt-2 max-w-prose text-sm text-muted-foreground">{t("connect.theme.hint")}</p>
+          </div>
+        </header>
+        <div className="flex-1 overflow-y-auto pb-6">
+          <ThemeSettingsPanel
+            key={`${wsId}:${entry.id}`}
+            level="workspace"
+            workspaceId={wsId}
+            initialThemeId={entry.id}
+            saveLabel={t("connect.theme.apply")}
+            readOnly={!canManageTheme}
+            roleLoading={!canManageTheme && !myRoleLoaded && !myRoleError}
+            roleUnknown={!!myRoleError}
+          />
         </div>
       </div>
     );

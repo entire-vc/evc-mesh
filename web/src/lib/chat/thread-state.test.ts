@@ -141,6 +141,70 @@ describe("threadReducer", () => {
     expect(s.messages.map((m) => m.id)).toEqual(["old", "live"]);
   });
 
+  it("a finished turn takes the user message status from the server", () => {
+    const user = msg({ id: "u1", role: "user", status: "queued", body: "hi", turn_id: "turn1" });
+    let s = threadReducer(initialThreadState(P, T), {
+      type: "sent",
+      projectId: P,
+      threadId: T,
+      message: user,
+      turn: { id: "turn1", state: "queued" },
+    });
+    s = fold(s, {
+      ...env(1),
+      event: "chat.turn.state",
+      turn: { id: "turn1", state: "done" },
+      session_state: "ready",
+      error_code: null,
+    });
+    // The server sends no event for the user row, so the page is refetched.
+    expect(s.needsResync).toBe(true);
+    s = threadReducer(s, {
+      type: "loaded",
+      projectId: P,
+      threadId: T,
+      messages: [{ ...user, status: "done" }, msg({ id: "a1", status: "done", created_at: "2026-10-24T10:00:01Z" })],
+      activeTurn: null,
+    });
+    expect(s.messages.find((m) => m.id === "u1")?.status).toBe("done");
+    expect(s.needsResync).toBe(false);
+  });
+
+  it("a turn that ends before the send response still refetches the user message", () => {
+    const optimistic = msg({ id: "local-1", role: "user", status: "queued", turn_id: null, client_message_id: "c1" });
+    let s = threadReducer(initialThreadState(P, T), { type: "optimistic", projectId: P, threadId: T, message: optimistic });
+    s = fold(s, {
+      ...env(1),
+      event: "chat.turn.state",
+      turn: { id: "turn1", state: "done" },
+      session_state: "ready",
+      error_code: null,
+    });
+    expect(s.needsResync).toBe(false);
+    s = threadReducer(s, {
+      type: "sent",
+      projectId: P,
+      threadId: T,
+      message: msg({ id: "u1", role: "user", status: "queued", turn_id: "turn1", client_message_id: "c1" }),
+      turn: { id: "turn1", state: "queued" },
+    });
+    expect(s.needsResync).toBe(true);
+    expect(s.activeTurn).toBeNull();
+  });
+
+  it("a finished turn whose user message is already settled needs no refetch", () => {
+    const user = msg({ id: "u1", role: "user", status: "done", turn_id: "turn1" });
+    let s = threadReducer(initialThreadState(P, T), { type: "loaded", projectId: P, threadId: T, messages: [user], activeTurn: null });
+    s = fold(s, {
+      ...env(1),
+      event: "chat.turn.state",
+      turn: { id: "turn1", state: "done" },
+      session_state: "ready",
+      error_code: null,
+    });
+    expect(s.needsResync).toBe(false);
+  });
+
   it("after a detected gap the snapshot replaces the list whole", () => {
     const a = msg({ id: "a", status: "done" });
     let s = threadReducer(initialThreadState(P, T), { type: "loaded", projectId: P, threadId: T, messages: [a], activeTurn: null });

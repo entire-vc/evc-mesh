@@ -35,6 +35,14 @@ type SettingsHider interface {
 	HideConnectionSettings() bool
 }
 
+// ListingHider is implemented by a built-in part of Mesh that is registered as
+// an extension but is not one to the user (Runner: the My Runner screen). The
+// view marks it hidden so the extension lists leave it out; it stays registered
+// for the extensions that require it.
+type ListingHider interface {
+	HiddenFromListings() bool
+}
+
 // ExtensionSaveHook is the extension-specific part of saving workspace
 // settings that the legacy integrations handler used to do inline (Telegram:
 // getMe check and bot_username, poller restart).
@@ -94,6 +102,8 @@ type WorkspaceExtensionView struct {
 	// SettingsManagedElsewhere: the stored settings are written only through the
 	// extension's own API, so the generic connect/settings/remove calls refuse.
 	SettingsManagedElsewhere bool `json:"settings_managed_elsewhere"`
+	// Hidden: a built-in part of Mesh, left out of the Catalog/Installed/Updates lists.
+	Hidden bool `json:"hidden,omitempty"`
 	// Activity is set for gitlab/github only, and only when links exist.
 	Activity *ExtensionActivityView `json:"activity,omitempty"`
 }
@@ -104,11 +114,26 @@ type WorkspaceExtensionView struct {
 type ExtensionActivityView struct {
 	Links       int        `json:"links"`
 	LastEventAt *time.Time `json:"last_event_at,omitempty"`
+	// Repos are the repositories the links point into, most linked first
+	// (at most ExtensionActivityRepoLimit).
+	Repos []ExtensionRepoView `json:"repos"`
 }
+
+// ExtensionRepoView is one repository named by a provider's links.
+type ExtensionRepoView struct {
+	Repo        string    `json:"repo"`
+	Host        string    `json:"host"`
+	Links       int       `json:"links"`
+	LastEventAt time.Time `json:"last_event_at"`
+}
+
+// ExtensionActivityRepoLimit caps activity.repos of the workspace list.
+const ExtensionActivityRepoLimit = 20
 
 // VCSActivitySource counts a provider's vcs_links in a workspace.
 type VCSActivitySource interface {
 	WorkspaceProviderActivity(ctx context.Context, workspaceID uuid.UUID, provider string) (count int, last *time.Time, err error)
+	WorkspaceProviderRepos(ctx context.Context, workspaceID uuid.UUID, provider string, limit int) ([]repository.VCSRepoActivity, error)
 }
 
 // ExtensionTestResult is the body of POST .../test.
@@ -599,13 +624,20 @@ func (s *ExtensionWorkspaceService) view(ctx context.Context, ws uuid.UUID, p ex
 	if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
 		v.SettingsManagedElsewhere = true
 	}
+	if h, ok := p.(ListingHider); ok && h.HiddenFromListings() {
+		v.Hidden = true
+	}
 	if s.activity != nil && (m.ID == "gitlab" || m.ID == "github") {
 		n, last, actErr := s.activity.WorkspaceProviderActivity(ctx, ws, m.ID)
 		if actErr != nil {
 			return WorkspaceExtensionView{}, actErr
 		}
 		if n > 0 {
-			v.Activity = &ExtensionActivityView{Links: n, LastEventAt: last}
+			repos, repoErr := s.activity.WorkspaceProviderRepos(ctx, ws, m.ID, ExtensionActivityRepoLimit)
+			if repoErr != nil {
+				return WorkspaceExtensionView{}, repoErr
+			}
+			v.Activity = &ExtensionActivityView{Links: n, LastEventAt: last, Repos: RepoViews(repos)}
 		}
 	}
 	row, err := s.storedRow(ctx, ws, m.ID)
@@ -695,4 +727,14 @@ func errOrMissing(err error) error {
 		return err
 	}
 	return errors.New("row not found after upsert")
+}
+
+// RepoViews turns repository rows into their API shape (never nil, so an
+// empty list reads as []).
+func RepoViews(rows []repository.VCSRepoActivity) []ExtensionRepoView {
+	out := make([]ExtensionRepoView, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ExtensionRepoView{Repo: r.Repo, Host: r.Host, Links: r.Links, LastEventAt: r.LastEventAt})
+	}
+	return out
 }

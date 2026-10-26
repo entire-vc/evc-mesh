@@ -263,3 +263,69 @@ describe("connect wizard", () => {
     expect((calls[1] as { settings: Record<string, string> }).settings).toEqual({ base_url: "https://gitlab.example", token: "glpat-test" });
   });
 });
+
+describe("theme from the catalog", () => {
+  const themeSchema: FieldSchema = {
+    type: "object",
+    properties: { density: { type: "string", title: "Density", enum: ["compact", "comfortable"], default: "comfortable" } },
+  };
+  const themeInfo = {
+    id: "mesh-default", name: "Mesh", version: "1.0.0", publisher: "Entire VC", description: "", source: "builtin",
+    trust_level: "builtin", modes: ["light"], has_css: true, has_views: false,
+    settings: { workspace: themeSchema }, tokens: {}, contrast_warnings: [],
+  };
+  const calls: { path: string; method: string; body?: unknown }[] = [];
+
+  function mountTheme(themeId = "mesh-default") {
+    state.value = {
+      state: "ready", catalogUnavailable: false, reload: vi.fn(), refresh: vi.fn(),
+      entries: mergeCatalog([sum(themeId, { kind: "theme", manifest: { capabilities: {}, levels: { workspace: true } } })], [], [], "graphite"),
+    };
+    return render(
+      <MemoryRouter initialEntries={[`/w/acme/extensions/${themeId}/connect`]}>
+        <Routes><Route path="w/:wsSlug/extensions/:extId/connect" element={<ExtensionConnectPage />} /></Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  beforeEach(() => {
+    calls.length = 0;
+    api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
+      const method = opts?.method ?? "GET";
+      calls.push({ path, method, body: opts?.body });
+      if (path === "/api/v1/themes") return { default: "mesh-default", themes: [themeInfo], builtin_available: [] };
+      if (path === "/api/v1/workspaces/ws-1/theme" && method === "GET") return { theme_id: "graphite", settings: {}, version: 3, contrast_warnings: [] };
+      if (path === "/api/v1/workspaces/ws-1/theme" && method === "PUT") return { ...(opts?.body as object), version: 4, contrast_warnings: [] };
+      if (path.startsWith("/api/v1/theme")) return { theme_id: "graphite", tokens_css: "" };
+      throw Object.assign(new Error("Not found"), { status: 404 });
+    });
+  });
+
+  it("applies through PUT /workspaces/:ws/theme and never calls the extension connect route", async () => {
+    mountTheme();
+    expect(screen.queryByRole("list", { name: "Connection steps" })).toBeNull();
+    const apply = await screen.findByRole("button", { name: "Apply" });
+    await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(apply);
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+    const put = calls.find((c) => c.method === "PUT");
+    expect(put?.path).toBe("/api/v1/workspaces/ws-1/theme");
+    expect((put?.body as { theme_id: string }).theme_id).toBe("mesh-default");
+    expect(calls.some((c) => c.path.includes("/extensions/"))).toBe(false);
+  });
+
+  it("names the missing theme instead of a bare Not found", async () => {
+    api.mockImplementation(async (path: string, opts?: { method?: string }) => {
+      const method = opts?.method ?? "GET";
+      if (path === "/api/v1/themes") return { default: "mesh-default", themes: [themeInfo], builtin_available: [] };
+      if (path === "/api/v1/workspaces/ws-1/theme" && method === "GET") return { theme_id: null, settings: {}, version: 0, contrast_warnings: [] };
+      if (path === "/api/v1/workspaces/ws-1/theme") throw Object.assign(new Error("Not found"), { status: 404, errorCode: "not_found" });
+      return { theme_id: "mesh-default", tokens_css: "" };
+    });
+    mountTheme();
+    const apply = await screen.findByRole("button", { name: "Apply" });
+    await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(apply);
+    expect(await screen.findByText("Theme mesh-default was not found on this instance.")).toBeTruthy();
+  });
+});

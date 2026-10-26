@@ -134,7 +134,7 @@ func hasActorPattern(allowed []string, p string) bool {
 func mergedShippedEvidence(links []domain.VCSLink) bool {
 	n := 0
 	for _, l := range links {
-		if l.LinkType != domain.VCSLinkTypePR || l.IsReviewSubject() {
+		if l.LinkType != domain.VCSLinkTypePR || l.IsReviewSubject() || l.IsRelatesTo() {
 			continue
 		}
 		n++

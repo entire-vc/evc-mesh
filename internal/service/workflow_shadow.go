@@ -157,7 +157,7 @@ func (s *taskService) shadowRecordReviewRoute(ctx context.Context, task *domain.
 	if s.vcsLinkRepo != nil {
 		if links, lerr := s.vcsLinkRepo.ListByTask(ctx, task.ID); lerr == nil {
 			for _, l := range links {
-				if l.LinkType == domain.VCSLinkTypePR && !l.IsReviewSubject() {
+				if l.LinkType == domain.VCSLinkTypePR && !l.IsReviewSubject() && !l.IsRelatesTo() {
 					if repo = RepoFromVCSURL(l.URL); repo != "" {
 						break
 					}

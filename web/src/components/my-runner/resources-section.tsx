@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,9 +8,12 @@ import { SectionShell } from "@/components/my-runner/section-shell";
 import type { Loaded } from "@/components/my-runner/use-load";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
-  CONFIG_SECTIONS, findSecretViolation, parseEntryValue, saveMyRuntime, sectionEntries, withEntry,
-  type ConfigSection, type RuntimeConfig, type UserRuntime,
+  CATALOG_SECTIONS, CONFIG_SECTIONS, entrySummary, findSecretViolation, parseEntryValue, saveResources, sectionEntries, withEntry,
+  type ConfigSection, type ResourceDoc, type RuntimeConfig,
 } from "@/lib/my-runner";
+
+/** A filter appears once the lists are too long to scan (the fleet catalog has 60+ bindings). */
+const FILTER_FROM = 20;
 
 type Editor = { section: ConfigSection; original: string | null };
 
@@ -53,8 +56,29 @@ function EntryEditor({ config, editor, onApply, onCancel }: {
   );
 }
 
-function ResourcesBody({ doc, onSaved }: { doc: UserRuntime; onSaved: () => void }) {
+function EntrySummary({ value }: { value: unknown }) {
   const { t } = useTranslation("runner");
+  const s = entrySummary(value);
+  const parts = [...s.text, ...(s.max === null ? [] : [t("resources.summary.max", { n: s.max })])];
+  if (parts.length === 0 && !s.disabled) return null;
+  return (
+    <span className="block min-w-0 truncate text-xs text-muted-foreground">
+      {s.disabled && <span className="mr-1 font-medium text-warning">{t("resources.summary.disabled")}</span>}
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
+function matches(name: string, value: unknown, query: string): boolean {
+  if (!query) return true;
+  const s = entrySummary(value);
+  return [name, ...s.text].some((x) => x.toLowerCase().includes(query));
+}
+
+function ResourcesBody({ doc, onSaved }: { doc: ResourceDoc; onSaved: () => void }) {
+  const { t } = useTranslation("runner");
+  const sections = doc.source === "workspace" ? CATALOG_SECTIONS : CONFIG_SECTIONS;
+  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<RuntimeConfig>(doc.config ?? {});
   const [dirty, setDirty] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -87,7 +111,7 @@ function ResourcesBody({ doc, onSaved }: { doc: UserRuntime; onSaved: () => void
     if (secret) return void toast.error(t("resources.secretRejected", { path: secret }));
     setSaving(true);
     try {
-      await saveMyRuntime(doc.revision, draft);
+      await saveResources(doc, draft);
       toast.success(t("resources.saved"));
       onSaved();
     } catch (e) {
@@ -99,11 +123,27 @@ function ResourcesBody({ doc, onSaved }: { doc: UserRuntime; onSaved: () => void
     }
   };
 
+  const total = useMemo(() => sections.reduce((n, s) => n + sectionEntries(draft, s).length, 0), [draft, sections]);
+  const q = total > FILTER_FROM ? query.trim().toLowerCase() : "";
+
   return (
     <div className="space-y-5">
-      <p className="text-sm text-muted-foreground">{t("resources.hint")}</p>
-      {CONFIG_SECTIONS.map((section) => {
-        const entries = sectionEntries(draft, section);
+      <p className="text-sm text-muted-foreground">
+        {doc.source === "workspace" ? t("resources.catalogHint", { n: doc.revision }) : t("resources.hint")}
+      </p>
+      {total > FILTER_FROM && (
+        <Input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("resources.filter")}
+          aria-label={t("resources.filter")}
+          className="h-9 sm:max-w-xs"
+        />
+      )}
+      {sections.map((section) => {
+        const all = sectionEntries(draft, section);
+        const entries = all.filter(([name, value]) => matches(name, value, q));
         return (
           <div key={section} className="space-y-2" data-testid={`my-runner-resources-${section}`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -111,27 +151,37 @@ function ResourcesBody({ doc, onSaved }: { doc: UserRuntime; onSaved: () => void
               <Button size="sm" variant="outline" onClick={() => setEditor({ section, original: null })}>{t("resources.add")}</Button>
             </div>
             {entries.length === 0 && !(editor?.section === section && editor.original === null) && (
-              <p className="text-sm text-muted-foreground">{t("resources.empty")}</p>
+              <p className="text-sm text-muted-foreground">{t(all.length > 0 ? "resources.noMatches" : "resources.empty")}</p>
+            )}
+            {/* The editor opens where the click was: under Add for a new entry, under the row being edited. */}
+            {editor?.section === section && editor.original === null && (
+              <EntryEditor key="new" config={draft} editor={editor} onApply={apply} onCancel={() => setEditor(null)} />
             )}
             <ul className="space-y-2">
-              {entries.map(([name]) => (
-                <li key={name} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
-                  <span className="min-w-0 truncate text-sm font-medium">{name}</span>
-                  <span className="flex gap-2">
-                    <Button size="sm" variant="ghost" onClick={() => setEditor({ section, original: name })}>{t("resources.edit")}</Button>
-                    <Button size="sm" variant="ghost" onClick={() => remove(section, name)}>{t("resources.remove")}</Button>
-                  </span>
+              {entries.map(([name, value]) => (
+                <li key={name} className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
+                    <span className="min-w-0 flex-1">
+                      <span className="block break-all text-sm font-medium">{name}</span>
+                      <EntrySummary value={value} />
+                    </span>
+                    <span className="flex shrink-0 gap-2">
+                      <Button size="sm" variant="ghost" onClick={() => setEditor({ section, original: name })}>{t("resources.edit")}</Button>
+                      <Button size="sm" variant="ghost" onClick={() => remove(section, name)}>{t("resources.remove")}</Button>
+                    </span>
+                  </div>
+                  {editor?.section === section && editor.original === name && (
+                    <EntryEditor key={name} config={draft} editor={editor} onApply={apply} onCancel={() => setEditor(null)} />
+                  )}
                 </li>
               ))}
             </ul>
-            {editor?.section === section && (
-              <EntryEditor key={editor.original ?? "new"} config={draft} editor={editor} onApply={apply} onCancel={() => setEditor(null)} />
-            )}
           </div>
         );
       })}
       {dirty && (
-        <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3" data-testid="my-runner-resources-dirty">
+        // Sticky: after an edit deep in a long list, Save stays in reach instead of 60 rows below.
+        <div className="sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center gap-3 border-t border-border bg-card px-1 py-3" data-testid="my-runner-resources-dirty">
           <span className="text-sm text-muted-foreground">{t("resources.unsaved")}</span>
           <Button size="sm" disabled={saving} onClick={() => void save()}>{t(saving ? "resources.saving" : "resources.save")}</Button>
           <Button size="sm" variant="outline" disabled={saving} onClick={() => { setDraft(doc.config ?? {}); setDirty(false); setEditor(null); }}>
@@ -143,7 +193,7 @@ function ResourcesBody({ doc, onSaved }: { doc: UserRuntime; onSaved: () => void
   );
 }
 
-export function ResourcesSection({ result, reload }: { result: Loaded<UserRuntime>; reload: () => void }) {
+export function ResourcesSection({ result, reload }: { result: Loaded<ResourceDoc>; reload: () => void }) {
   const { t } = useTranslation("runner");
   return (
     <SectionShell title={t("resources.title")} testId="my-runner-resources" result={result} onRetry={reload}>

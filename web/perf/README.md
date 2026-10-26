@@ -815,3 +815,58 @@ so there was no headroom; perf-bundle measured 183.16 / 721.33 on this MR (pipel
 over by 0.06 / 0.33). The sum covers every chunk and the component is in the entry, so lazy loading does
 not help. Each ceiling moved by the smallest step above the measurement. Revert: set the ceilings back to
 183.1 / 721.0 together with reverting the MR. Lead sign-off: the product lead, requested on the card.
+
+`login.initial_js_kb_gz` 183.2 → 183.3 (+0.1 KB gz) and `total_js_kb_gz` 721.4 → 723.1 (+1.7 KB gz),
+a read-only status panel for instance-managed GitLab/GitHub in workspace Settings and a
+workspace VCS tab in project settings (`status-panel.tsx`, shared by both lazy screens) plus its
+en/ru strings in the lazy `integrations` namespace. None of it is in the entry; the entry grows only
+by the new shared chunk's name in the preload map. Main measured 183.16 / 721.23 (pipeline 19145,
+job 400947); perf-bundle measured 183.21 / 723.00 on this MR (pipeline 19138, job 400839, over by
+0.01 / 1.6). Each ceiling moved by the smallest 0.1-step above the measurement. Revert: set the
+ceilings back to 183.2 / 721.4 together with reverting the MR. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 723.1 → 723.3 (+0.2 KB gz): user chat messages keep the line breaks they
+were typed with (`remarkSoftBreaks` in `lib/milkdown/soft-breaks.ts`, a `breaks` mode of the read-only
+markdown renderer that the chat feed turns on for the user's bubble) plus a
+`data-testid` on the layout's sidebar wrapper. The ceiling had 0.1 of headroom (the status-panel change measured
+723.00); perf-bundle measured 723.24 on this MR (pipeline 19367, job 406535, over by 0.14). The sum
+covers every chunk, so lazy loading does not help, and the helper is the fix itself. The ceiling moved
+by the smallest 0.1-step above the measurement. Revert: set the ceiling back to 723.1 together with
+reverting the MR. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 723.3 → 725.2 (+1.9 KB gz): the repository list of a project's GitLab/GitHub
+tab with each repository's source and Bind/Unbind (`vcs-repos.tsx` in the lazy project-settings chunk)
+plus its en/ru strings in the lazy `integrations` namespace (about 1.2 KB gz of the growth). Main
+measured 723.3 locally, at the ceiling with no headroom; perf-bundle measured 725.13 on this MR
+(pipeline 19637, job 412001, over by 1.83). The sum covers every chunk, so lazy loading does not help.
+The ceiling moved by the smallest 0.1-step above the measurement. Revert: set the ceiling back to
+723.3 together with reverting the MR. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 725.2 → 726.1 (+0.9 KB gz): the instance-managed GitHub/GitLab Settings
+dialog lists the repositories sending links (`VcsRepoList` in `status-panel.tsx`), offers the
+instance-settings link and an explicit own-credentials opt-in, plus their en/ru strings in the lazy
+`integrations` namespace and `?ext=` preselection on the instance settings page. Before the repository-list change landed,
+main measured 723.16 (pipeline 19715, job 413328) and perf-bundle measured 724.08 on this MR
+(pipeline 19676, job 412676, +0.92); on top of the repository-list change (725.13) that is 726.05. The sum covers every
+chunk, so lazy loading does not help. The ceiling moved by the smallest 0.1-step above the
+measurement. Revert: set the ceiling back to 725.2 together with reverting the MR. Lead sign-off:
+the product lead, requested on the card.
+`total_js_kb_gz` 726.1 → 727.5 (+1.4 KB gz): the My Runner Resources and Revision history
+blocks read and edit the workspace runtime catalog (catalog loader/saver and entry summaries in
+`lib/my-runner.ts`, the bindings section, filter and revision rows in the lazy my-runner chunk) plus
+their en/ru strings in the lazy `runner` namespace. perf-bundle measured 724.41 on this MR before
+the repository-list change landed (pipeline 19709, job 413207, over 723.3 by 1.11); 727.49 locally after merging main with
+the repository-list change and the Settings-dialog change. The sum covers every chunk, so lazy loading does not help. The ceiling moved by the
+smallest 0.1-step above the measurement. Revert: set the ceiling back to 726.1 together with reverting
+the MR. Lead sign-off: the product lead, requested on the card.
+
+`total_js_kb_gz` 727.5 → 728.7 (+1.2 KB gz): a catalog theme is applied through the
+workspace theme route instead of the extension connect wizard (`extension-connect.tsx`), the
+Installed list and catalog show a theme as active or not selected (`installed.tsx`, `catalog.tsx`,
+`extension-installed.ts`, `useExtensionCatalog.ts`), plus their en/ru strings in the lazy
+`integrations` and `settings` namespaces. perf-bundle measured 727.18 on this MR against the 726.1
+ceiling (pipeline 19843, job 416467, over by 1.08), and the ceiling was first raised to 727.2. After
+the My Runner change raised the ceiling to 727.5 on main, main was merged into this MR: 728.61 locally, the same
++1.1 KB on top of the new base. The sum covers every chunk, so lazy loading does not help. The
+ceiling moved by the smallest 0.1-step above the measurement. Revert: set the ceiling back to 727.5
+together with reverting the MR. Lead sign-off: the product lead, on the card (727.2 for the same growth).

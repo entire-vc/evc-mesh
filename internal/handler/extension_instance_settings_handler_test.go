@@ -220,3 +220,50 @@ func TestInstanceSettings_MaskWithoutStoredSecretIsNotSaved(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, `{"base_url":"https://a"}`, string(repo.row.Settings))
 }
+
+// external stands in for an installed external extension: it refuses every
+// instance-level setting, as external.Provider does.
+type externalProvider struct{ manifestProvider }
+
+func (externalProvider) Validate(extensions.Level, map[string]any) error {
+	return errors.New("keep has no instance-level settings")
+}
+
+func keepHandler(t *testing.T, repo *fakeInstRepo, pol *fakePolicyRepo) *ExtensionInstanceSettingsHandler {
+	t.Helper()
+	m, err := extensions.ParseManifest([]byte(`{"id":"keep","version":"1.0.0","runtime":"builtin"}`))
+	require.NoError(t, err)
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(externalProvider{manifestProvider{m: m}}))
+	return NewExtensionInstanceSettingsHandler(repo, fakeAdmins{ok: true}, reg, nil).WithJournal(pol)
+}
+
+func TestInstanceSettings_KeepSecretProviderSwitch(t *testing.T) {
+	pol := newFakePolicyRepo()
+	repo := &fakeInstRepo{}
+	h := keepHandler(t, repo, pol)
+
+	rec, _ := callInstanceSettings(t, h, http.MethodPut, "keep", `{"enabled":true,"settings":{"secret_provider":"keep"}}`, false)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.JSONEq(t, `{"secret_provider":"keep"}`, string(repo.row.Settings))
+	require.Len(t, pol.journal, 1)
+	require.Equal(t, "keep", pol.journal[0].ExtensionID)
+	require.Contains(t, string(pol.journal[0].Details), `"secret_provider"`, "the journal names the key")
+	require.JSONEq(t, `{"keys":["secret_provider"],"enabled":true}`, string(pol.journal[0].Details),
+		"the journal carries keys, never values")
+
+	for _, bad := range []string{`"vault"`, `true`} {
+		rec, _ = callInstanceSettings(t, h, http.MethodPut, "keep", `{"enabled":true,"settings":{"secret_provider":`+bad+`}}`, false)
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, bad)
+	}
+	require.JSONEq(t, `{"secret_provider":"keep"}`, string(repo.row.Settings), "a refused value is not saved")
+
+	// other keys still go through the extension's own validation
+	rec, _ = callInstanceSettings(t, h, http.MethodPut, "keep", `{"enabled":true,"settings":{"secret_provider":"builtin","other":"x"}}`, false)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+	// keep need not be registered for the switch to be set
+	h = NewExtensionInstanceSettingsHandler(&fakeInstRepo{}, fakeAdmins{ok: true}, nil, nil)
+	rec, _ = callInstanceSettings(t, h, http.MethodPut, "keep", `{"enabled":true,"settings":{"secret_provider":"builtin"}}`, false)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+}

@@ -294,6 +294,7 @@ export function AppLayout() {
 
       {/* Sidebar — fixed overlay on mobile, inline on desktop */}
       <div
+        data-testid="app-sidebar"
         className={cn(
           "shrink-0 transition-all duration-200",
           // Mobile: fixed overlay

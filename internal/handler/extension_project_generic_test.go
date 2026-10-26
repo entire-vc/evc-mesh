@@ -18,8 +18,10 @@ import (
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/agentchat"
 	"github.com/entire-vc/evc-mesh/internal/extensions/github"
 	"github.com/entire-vc/evc-mesh/internal/extensions/gitlab"
+	"github.com/entire-vc/evc-mesh/internal/extensions/runner"
 	teamrelay "github.com/entire-vc/evc-mesh/internal/extensions/team-relay"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -272,6 +274,26 @@ func TestExtensionProjectHandler_ListServesProjectViewPerProject(t *testing.T) {
 	assert.NotContains(t, off, "project_view", "disabled in this project: no tab")
 	assert.NotContains(t, off, "unmet_requires")
 	assert.NotContains(t, item(without, "team-relay"), "project_view")
+}
+
+// Chat with Agent requires the Runner, which is hidden from the extension lists
+// and has no project level: enabling Chat in a project leaves nothing unmet.
+func TestExtensionProjectHandler_ChatRequiresHiddenRunner(t *testing.T) {
+	reg := realRegistry()
+	reg["agent-chat"] = agentchat.New(extensions.Deps{})
+	reg["runner"] = runner.New(extensions.Deps{})
+	require.Equal(t, []string{"runner"}, reg["agent-chat"].Manifest().Requires)
+	store := newBindingStore()
+	h := NewExtensionProjectHandler(reg, store.service())
+	p := uuid.New()
+	store.rows[store.key(p, "agent-chat")] = &domain.ProjectIntegration{ProjectID: p, ExtensionID: "agent-chat", Enabled: true, Settings: json.RawMessage(`{}`)}
+
+	_, out := serveExt(h, http.MethodGet, "/projects/"+p.String()+"/extensions", "")
+	items := out["extensions"].([]any)
+	require.Len(t, items, 1)
+	chat := items[0].(map[string]any)
+	assert.Equal(t, "agent-chat", chat["extension_id"])
+	assert.NotContains(t, chat, "unmet_requires")
 }
 
 // The Team Relay PUT is typed in Go and described in the manifest; they must

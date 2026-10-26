@@ -95,6 +95,7 @@ func newWorkspaceScopeHarness(t *testing.T) *workspaceScopeHarness {
 	taskSvc := &fakeTaskService{taskRepo: taskRepo, statusRepo: statusRepo}
 	commentSvc := &fakeCommentService{}
 	repo := newFakeVCSLinkRepo()
+	seedProjectRepos(repo, taskRepo, projA, "https://gitlab.example.invalid/throwaway/repo/-/merge_requests/1")
 
 	svc := NewVCSLinkService(repo,
 		WithVCSTaskRepo(taskRepo),
@@ -118,6 +119,7 @@ func (h *workspaceScopeHarness) mergedMREvent(workspaceID uuid.UUID, title strin
 		MRTitle:     title,
 		MRState:     "merged",
 		ProjectPath: "throwaway/repo",
+		MRURL:       "https://gitlab.example.invalid/throwaway/repo/-/merge_requests/42",
 		WorkspaceID: workspaceID,
 	}
 }

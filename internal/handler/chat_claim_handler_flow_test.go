@@ -18,6 +18,7 @@ import (
 
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
+	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -246,4 +247,22 @@ func TestChatRunnerActive_EmptyIsAListAndErrorsReachTheWire(t *testing.T) {
 	c.Request().Header.Del(chatRunnerIDHeader)
 	require.NoError(t, h.Active(c))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestChatRunnerClaim_HintWakesParkedClaimBeforeTheTick(t *testing.T) {
+	agent := uuid.New()
+	_, rdb := newSSEMiniredis(t)
+	store := &fakeRunnerStore{batches: [][]postgres.ChatClaimedTurn{nil, {{TurnID: uuid.New(), AgentID: agent, ClaimToken: "ct_hint"}}}}
+	h := NewChatClaimHandler(store, rdb, nil)
+	c, rec := runnerCtx(http.MethodGet, "/runner/chat/claim?agents="+agent.String()+"&timeout=30", "", agent)
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		service.PublishChatRunnerHint(context.Background(), rdb, agent, service.ChatHintTurn, uuid.New())
+	}()
+	start := time.Now()
+	require.NoError(t, h.Claim(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Less(t, time.Since(start), time.Second, "the hint wakes the claim, not the %s tick", chatClaimPollRedis)
+	assert.Equal(t, 2, store.calls)
 }

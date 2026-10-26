@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -15,7 +16,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/actorctx"
 )
 
-// #b593c566: a GitLab "closed" MR delivery whose link upsert failed was
+// an internal ticket: a GitLab "closed" MR delivery whose link upsert failed was
 // answered 200 and never retried, so the link stayed open forever. The
 // handler now answers 5xx so the provider redelivers; this proves the
 // redelivery is SAFE end to end on real Postgres: the first attempt fails at
@@ -46,6 +47,20 @@ func TestHandleMR_ClosedRedeliveryAfterUpsertFailure_OneLinkClosedOneComment(t *
 	})
 
 	linkRepo := postgres.NewVCSLinkRepo(f.db)
+	// The project already works in this repository (another card links one of
+	// its MRs), so the title reference binds the MR to the task.
+	sibling := &domain.Task{ID: uuid.New(), ProjectID: f.projectID, StatusID: f.statusID, Title: "mr retry sibling", AssigneeType: domain.AssigneeTypeUnassigned, Priority: domain.PriorityMedium, CreatedByType: domain.ActorTypeSystem}
+	require.NoError(t, f.taskSvc.Create(ctx, sibling))
+	t.Cleanup(func() {
+		_, _ = f.db.Exec(`SET search_path=public`)
+		_, _ = f.db.Exec(`DELETE FROM vcs_links WHERE task_id=$1`, sibling.ID)
+	})
+	require.NoError(t, linkRepo.Create(ctx, &domain.VCSLink{
+		ID: uuid.New(), TaskID: sibling.ID, Provider: domain.VCSProviderGitLab, LinkType: domain.VCSLinkTypePR,
+		ExternalID: "1", URL: "https://gitlab.example.invalid/entire-vc/evc-mesh/-/merge_requests/1",
+		Status: domain.VCSLinkStatusMerged, Metadata: []byte("{}"), CreatedAt: time.Now(),
+	}))
+
 	svc := NewVCSLinkService(linkRepo,
 		WithVCSTaskRepo(taskRepo),
 		WithVCSStatusRepo(statusRepo),

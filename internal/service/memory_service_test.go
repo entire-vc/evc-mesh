@@ -2630,6 +2630,9 @@ func (m *mockTaskDepRepo) UpdateCondition(_ context.Context, _ uuid.UUID, _ doma
 	return nil, nil
 }
 func (m *mockTaskDepRepo) Exists(_ context.Context, _, _ uuid.UUID) (bool, error) { return false, nil }
+func (m *mockTaskDepRepo) DeployedTasks(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]bool, error) {
+	return map[uuid.UUID]bool{}, nil
+}
 
 var _ repository.TaskDependencyRepository = (*mockTaskDepRepo)(nil)
 

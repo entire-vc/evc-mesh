@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
 	"github.com/entire-vc/evc-mesh/internal/extensions/agentchat"
@@ -32,6 +33,7 @@ type AgentChatHandler struct {
 	events   ChatEvents
 	atts     *postgres.ChatAttachmentRepo
 	store    ChatAttachmentStore
+	hints    *redis.Client
 }
 
 // WithAttachments lets SendMessage confirm a presigned upload by looking the
@@ -68,6 +70,13 @@ func (h *AgentChatHandler) confirmUploads(ctx context.Context, s *chatScope, thr
 		}
 	}
 	return nil
+}
+
+// WithRunnerHints wakes the agent's parked runner claim when a turn is queued;
+// without it the claim only notices the turn on its safety-net tick.
+func (h *AgentChatHandler) WithRunnerHints(rdb *redis.Client) *AgentChatHandler {
+	h.hints = rdb
+	return h
 }
 
 // WithEvents turns on WS events for thread, message and turn changes.
@@ -266,6 +275,10 @@ func (h *AgentChatHandler) SendMessage(c echo.Context) error {
 		postgres.SendInput{ClientMessageID: body.ClientMessageID, Body: body.Body, AttachmentIDs: body.AttachmentIDs})
 	if err != nil {
 		return handleError(c, err)
+	}
+	// After the commit: the woken claim must find the turn in the database.
+	if out.AgentID != uuid.Nil && out.Turn.State == "queued" {
+		service.PublishChatRunnerHint(c.Request().Context(), h.hints, out.AgentID, service.ChatHintTurn, out.Turn.ID)
 	}
 	if h.events != nil {
 		ctx := c.Request().Context()

@@ -350,7 +350,8 @@ func (r *TaskRepo) ReleaseParkedWaitVerified(ctx context.Context, taskID uuid.UU
 	// statement snapshot after a blocker reopens. Read it in a fresh statement
 	// only once every blocker row is locked, and lock status definitions too.
 	err = tx.SelectContext(ctx, &blockers, `SELECT b.id,
- CASE WHEN EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=$2 AND d.depends_on_task_id=b.id AND d.dependency_type='blocks' AND `+domain.DependencySatisfiedSQL("d")+`) THEN 'done' ELSE s.category END AS category, -- evidence-satisfied edge reads as released
+ CASE WHEN EXISTS (SELECT 1 FROM task_dependencies d WHERE d.task_id=$2 AND d.depends_on_task_id=b.id AND d.dependency_type='blocks' AND `+domain.DependencyReleasedSQL("d", "b", "s.category")+`) THEN 'done'
+  WHEN s.category IN ('done','cancelled') THEN 'unreleased' ELSE s.category::text END AS category, -- a released edge reads as done; a terminal blocker whose typed edge is not released still holds
  b.deleted_at FROM tasks b JOIN task_statuses s ON s.id=b.status_id WHERE b.id=ANY($1::uuid[]) ORDER BY b.id FOR SHARE OF s`, pq.Array(blockerIDs), taskID)
 	if err != nil {
 		return nil, err

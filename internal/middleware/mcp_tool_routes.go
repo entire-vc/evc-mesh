@@ -6,7 +6,7 @@ package middleware
 // docs/mcp-reference.md. It exists so agent_sessions.tool_breakdown can be
 // keyed by the names agents actually call ("recall", "remember",
 // "get_task", ...) instead of raw HTTP routes — the audit finding this
-// closes (§1.6, task ce1bc187) specifically asked for a tool_breakdown that
+// closes (§1.6, an internal ticket) specifically asked for a tool_breakdown that
 // shows those three names, not an internal route inventory.
 //
 // Coverage is NOT all 63 documented tools. A handful have no route of their
@@ -30,18 +30,19 @@ package middleware
 // name can't be recovered from the route alone.
 var mcpToolRoutes = map[string]string{
 	// Project & Task Management
-	"GET /api/v1/workspaces/:ws_id/projects":   "list_projects",
-	"GET /api/v1/projects/:proj_id":            "get_project",
-	"GET /api/v1/projects/:proj_id/tasks":      "list_tasks",
-	"GET /api/v1/tasks/:task_id":               "get_task",
-	"GET /api/v1/tasks/by-short-id/:short":     "get_task",
-	"POST /api/v1/projects/:proj_id/tasks":     "create_task",
-	"PATCH /api/v1/tasks/:task_id":             "update_task",
-	"POST /api/v1/tasks/:task_id/move":         "move_task",
-	"POST /api/v1/tasks/:task_id/subtasks":     "create_subtask",
-	"POST /api/v1/tasks/:task_id/dependencies": "add_dependency",
-	"POST /api/v1/tasks/:task_id/assign":       "assign_task",
-	"POST /api/v1/tasks/:task_id/vcs-links":    "add_vcs_link",
+	"GET /api/v1/workspaces/:ws_id/projects":                    "list_projects",
+	"GET /api/v1/projects/:proj_id":                             "get_project",
+	"GET /api/v1/projects/:proj_id/tasks":                       "list_tasks",
+	"GET /api/v1/tasks/:task_id":                                "get_task",
+	"GET /api/v1/tasks/by-short-id/:short":                      "get_task",
+	"POST /api/v1/projects/:proj_id/tasks":                      "create_task",
+	"PATCH /api/v1/tasks/:task_id":                              "update_task",
+	"POST /api/v1/tasks/:task_id/move":                          "move_task",
+	"POST /api/v1/tasks/:task_id/subtasks":                      "create_subtask",
+	"POST /api/v1/tasks/:task_id/dependencies":                  "add_dependency",
+	"POST /api/v1/tasks/:task_id/vcs-links/:link_id/deployment": "mark_vcs_deployed",
+	"POST /api/v1/tasks/:task_id/assign":                        "assign_task",
+	"POST /api/v1/tasks/:task_id/vcs-links":                     "add_vcs_link",
 
 	// Comments & Artifacts
 	"POST /api/v1/tasks/:task_id/comments":  "add_comment",

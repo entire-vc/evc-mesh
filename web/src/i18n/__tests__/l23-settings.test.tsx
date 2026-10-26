@@ -52,7 +52,7 @@ async function renderScreen() {
 describe("L2.3 settings: en by default, ru translated, no raw keys", () => {
   it("renders the secrets section, priority and delegation labels in en, then ru", async () => {
     const view = await renderScreen();
-    expect(screen.getByText("Secrets")).toBeTruthy();
+    expect(screen.getByText("Built-in secrets")).toBeTruthy();
     expect(screen.getByText("Fingerprint")).toBeTruthy();
     expect(screen.getByText("Urgent")).toBeTruthy();
     expect(screen.getByText("Agent completes task autonomously, notifies only.")).toBeTruthy();
@@ -64,7 +64,7 @@ describe("L2.3 settings: en by default, ru translated, no raw keys", () => {
       await setLanguage("ru");
     });
     await renderScreen();
-    expect(screen.getByText("Секреты")).toBeTruthy();
+    expect(screen.getByText("Встроенные секреты")).toBeTruthy();
     expect(screen.getByText("Отпечаток")).toBeTruthy();
     expect(screen.getByText("Срочный")).toBeTruthy();
     expect(screen.getByRole("option", { name: "Автовыполнение" })).toBeTruthy();

@@ -99,6 +99,7 @@ var wsScopedRoutes = []wsRoute{
 	// reads the owner's resource inventory or accepts a controller/consent write.
 	{http.MethodGet, "/runtime", nil},
 	{http.MethodPut, "/runtime", map[string]any{"if_revision": 0, "enabled": false, "config": map[string]any{}}},
+	{http.MethodGet, "/runtime/revisions", nil},
 	{http.MethodPost, "/runtime/controllers/runner-a/report", map[string]any{}},
 	{http.MethodPost, "/runtime/controllers/runner-a/quota-observations", map[string]any{}},
 	{http.MethodGet, "/runtime/controllers/runner-a/quota-observations", nil},

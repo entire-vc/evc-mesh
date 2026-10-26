@@ -33,13 +33,16 @@ type contractKeep struct {
 	audit   []string
 	noStore bool
 	now     func() time.Time
+	// putVersion is what PUT answers as "version"; Keep sends a string
+	// (evc-keep MeshSecretPutResult.Version), a nil one leaves it out.
+	putVersion any
 }
 
 func newContractKeep(t *testing.T, ws uuid.UUID, key []byte) (*contractKeep, *httptest.Server) {
 	t.Helper()
 	k := &contractKeep{
 		org: uuid.New(), secrets: map[uuid.UUID][]byte{ws: key}, vals: map[string]string{},
-		nonces: map[string]bool{}, noStore: true, now: time.Now,
+		nonces: map[string]bool{}, noStore: true, now: time.Now, putVersion: "1",
 	}
 	srv := httptest.NewTLSServer(k)
 	t.Cleanup(srv.Close)
@@ -112,7 +115,11 @@ func (k *contractKeep) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		k.vals[slot] = in.Value
 		fp := sha256.Sum256([]byte(in.Value))
 		k.audit = append(k.audit, fmt.Sprintf("put ws=%s ref=%s len=%d fp=%x", ws, ref, len(in.Value), fp[:4]))
-		_ = json.NewEncoder(w).Encode(map[string]any{"ref": ref, "version": 1, "fingerprint": hex.EncodeToString(fp[:4])})
+		answer := map[string]any{"ref": ref, "fingerprint": hex.EncodeToString(fp[:4])}
+		if k.putVersion != nil {
+			answer["version"] = k.putVersion
+		}
+		_ = json.NewEncoder(w).Encode(answer)
 	case r.Method == http.MethodPost && len(parts) == 6 && parts[5] == "resolve" && len(body) == 0:
 		v, found := k.vals[slot]
 		if !found {
@@ -166,7 +173,7 @@ func leaks(err error, secret string) bool { return err != nil && strings.Contain
 func TestKeepAuthenticatedRoundTrip(t *testing.T) {
 	ws, key, secret := uuid.New(), testKey(t), syntheticSecret(t)
 	k, srv := newContractKeep(t, ws, key)
-	r := &Router{Builtin: Builtin{}, Keep: Keep{Client: clientFor(k, srv, ws, key)}, Selected: func(context.Context) string { return ProviderKeep }}
+	r := &Router{Builtin: Builtin{}, Keep: Keep{Client: clientFor(k, srv, ws, key)}, Selected: func(context.Context) (string, error) { return ProviderKeep, nil }}
 
 	stored, err := r.Put(context.Background(), testRef, secret)
 	if err != nil || stored != KeepPrefix+"gitlab.token" {
@@ -185,6 +192,44 @@ func TestKeepAuthenticatedRoundTrip(t *testing.T) {
 	}
 	if len(k.audit) != 2 {
 		t.Fatalf("want one audit record per call, got %v", k.audit)
+	}
+}
+
+// Keep answers PUT with a string version; an older Keep sent a number. Both
+// are a stored version, an empty or missing one is not.
+func TestKeepPutAcceptsStringOrNumberVersion(t *testing.T) {
+	cases := []struct {
+		name    string
+		version any
+		ok      bool
+	}{
+		{"string", "1", true},
+		{"string-later", "17", true},
+		{"number", 1, true},
+		{"empty-string", "", false},
+		{"zero", 0, false},
+		{"negative", -1, false},
+		{"fraction", 1.5, false},
+		{"missing", nil, false},
+		{"null", json.RawMessage("null"), false},
+		{"bool", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws, key, secret := uuid.New(), testKey(t), syntheticSecret(t)
+			k, srv := newContractKeep(t, ws, key)
+			k.putVersion = tc.version
+			id, err := clientFor(k, srv, ws, key).PutValue(context.Background(), testRef, secret)
+			if leaks(err, secret) {
+				t.Fatalf("error carries the value: %v", err)
+			}
+			if tc.ok && (err != nil || id != "gitlab.token") {
+				t.Fatalf("want ok: %q %v", id, err)
+			}
+			if !tc.ok && (err == nil || err.Error() != "keep: unexpected put answer") {
+				t.Fatalf("want unexpected put answer, got %q %v", id, err)
+			}
+		})
 	}
 }
 

@@ -222,9 +222,18 @@ func (s *taskDependencyService) Create(ctx context.Context, dep *domain.TaskDepe
 		}
 	}
 
-	// An edge born already satisfied (condition + evidence on POST) can release a
-	// parked dependent, the same as the PATCH path.
-	if dep.DependencyType == domain.DependencyTypeBlocks && dep.EvidenceSatisfied() && s.resolver != nil {
+	// The response carries the stored verdict (evidence OR the blocker's own state
+	// for the condition), the same value GET returns. The pre-insert value above
+	// is the evidence-only fallback if the re-read fails.
+	if stored, gerr := s.depRepo.GetByID(ctx, dep.ID); gerr == nil && stored != nil {
+		dep.ConditionSatisfied = stored.ConditionSatisfied
+	}
+
+	// An edge born already satisfied (condition + evidence on POST, or a typed
+	// condition the blocker already meets) can release a parked dependent, the same
+	// as the PATCH path. A default task_done edge never triggers this on creation.
+	bornSatisfied := dep.EvidenceSatisfied() || (dep.Condition != domain.DependencyConditionTaskDone && dep.ConditionSatisfied)
+	if dep.DependencyType == domain.DependencyTypeBlocks && bornSatisfied && s.resolver != nil {
 		if rerr := s.resolver.CheckDependencyResolution(ctx, dep.DependsOnTaskID); rerr != nil {
 			log.Printf("[task-dependency] WARNING: resolution check after create of satisfied edge on %s failed: %v", dep.DependsOnTaskID, rerr)
 		}
