@@ -7092,12 +7092,14 @@ paths:
       tags: [Secrets]
       summary: Create a secret (write-only — the value is never readable again)
       description: >
-        Stores an encrypted value that no read path can return. This is the
-        only legal channel for a human to hand an agent a credential: a value
+        Writes the value to Keep, the only place it is held, and records the
+        name, scope, Keep reference and masked metadata in Mesh; no read path
+        returns the value. This is the only legal channel for a human to hand an agent a credential: a value
         pasted into a chat message or a task comment is retained forever and
         re-read by every later session, which is the leak this endpoint exists
         to close. To replace a value, rotate it — there is no update, and
-        nothing to pre-fill an edit form with.
+        nothing to pre-fill an edit form with. A server without Keep configured
+        answers 503 and stores nothing.
       operationId: createSecret
       requestBody:
         required: true
@@ -7149,6 +7151,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "503":
+          description: Keep is not configured on this server, or did not store the value; nothing was written
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/secrets/{secret_id}/rotate:
     parameters:
@@ -7163,7 +7171,8 @@ paths:
       summary: Replace a secret's value (insert, not update)
       description: >
         Stamps the named row as superseded and inserts a replacement, in one
-        transaction. The name and scope come from the existing row, not the
+        transaction that commits only after Keep has stored the new value as a
+        new version of the same Keep secret. The name and scope come from the existing row, not the
         body — a rotate cannot rename a secret or move it to another scope.
         A secret_id naming an already-superseded row is refused with 409
         rather than redirected to whichever row is current now.
@@ -7200,6 +7209,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "503":
+          description: Keep is not configured on this server, or did not store the value; nothing was written
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/v1/secrets/{secret_id}:
     parameters:
@@ -7216,6 +7231,7 @@ paths:
         Stamps the current row as superseded with no replacement. The write
         history stays queryable — the same append-only posture as the activity
         log — but the secret is no longer written into any lane's env file.
+        The value stays in Keep, which has no delete in its Mesh contract.
       operationId: deleteSecret
       responses:
         "204":

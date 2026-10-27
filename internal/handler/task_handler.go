@@ -296,7 +296,11 @@ func (h *TaskHandler) Create(c echo.Context) error {
 	// Resolve creator from auth context.
 	var createdBy uuid.UUID
 	var createdByType domain.ActorType
-	if mw.IsAgent(c) {
+	if p := mw.GetExtensionPrincipal(c); p != nil {
+		// An extension actor has neither a user_id nor an agent_id in the echo
+		// context; without this branch its cards were signed by uuid.Nil/user.
+		createdBy, createdByType = p.ActorID, domain.ActorTypeExtension
+	} else if mw.IsAgent(c) {
 		createdBy, _ = mw.GetAgentID(c)
 		createdByType = domain.ActorTypeAgent
 	} else {
@@ -1740,8 +1744,18 @@ type ruleViolationAPIResponse struct {
 	Violations []domain.RuleViolation `json:"violations"`
 }
 
+// statusClientClosedRequest is nginx's 499: the client closed the request
+// before the response was written.
+const statusClientClosedRequest = 499
+
 // handleError inspects the error type and returns appropriate JSON response.
 func handleError(c echo.Context, err error) error {
+	if errors.Is(c.Request().Context().Err(), context.Canceled) {
+		// The client gave up (closed the tab, navigated away): whatever failed
+		// failed because of that, not because of us. 499 keeps it out of the
+		// 5xx alerts and the ERROR log.
+		return c.NoContent(statusClientClosedRequest)
+	}
 	var evidenceErr *service.ReviewEvidenceError
 	if errors.As(err, &evidenceErr) {
 		msg := "Task cannot be moved to review without evidence. Add at least one of: a PR/VCS link (use add_dependency or the vcs field), an artifact upload, or a comment with command output/proof (see §1c). To flag a human blocker, add a ❓ Blocking @alex comment first, then retry move→review."

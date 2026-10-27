@@ -14,45 +14,48 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/domain"
 )
 
-// These tests run against a real Postgres because the guarantee under test
-// is a database trigger (migration 20260820111) — the whole point is that
-// it holds for writers that never go through this repository, and nothing
-// in the Go test suite alone can demonstrate that. Mirrors the shape of
-// project_integration_encryption_db_test.go for the same reason.
+// These tests run against a real Postgres: the unique indexes and CHECKs of
+// secret_refs (migration 20261027017) are what serialize concurrent creates
+// and hold for writers that never go through this repository. Keep is the
+// external boundary and is replaced by fakeKeep (secret_ref_repo_sqlmock_test.go).
 
-func newSecretTestWorkspace(t *testing.T) (repo *SecretRepo, wsID uuid.UUID) {
+func newSecretTestWorkspace(t *testing.T) (repo *SecretRefRepo, wsID uuid.UUID) {
 	t.Helper()
-	db := testDB(t)
-	withEncryptionKey(t, 0x42)
-	ws, _, _ := createTestProject(t, db)
-	return NewSecretRepo(db), ws.ID
+	repo, wsID, _ = newSecretTestWorkspaceWithKeep(t)
+	return repo, wsID
 }
 
-func insertSecretDirectSQL(t *testing.T, wsID uuid.UUID, name, value string) error {
+func newSecretTestWorkspaceWithKeep(t *testing.T) (*SecretRefRepo, uuid.UUID, *fakeKeep) {
 	t.Helper()
+	db := testDB(t)
+	ws, _, _ := createTestProject(t, db)
+	keep := newFakeKeep()
+	return NewSecretRefRepo(db, keep), ws.ID, keep
+}
+
+// The table has nowhere a value could go: no column but the masked metadata
+// and the Keep ref.
+func TestSecretRefRepoDB_TableHasNoValueColumn(t *testing.T) {
+	db := testDB(t)
+	var cols []string
+	require.NoError(t, db.SelectContext(context.Background(), &cols,
+		`SELECT column_name FROM information_schema.columns WHERE table_name = 'secret_refs' ORDER BY ordinal_position`))
+	require.NotEmpty(t, cols)
+	assert.NotContains(t, cols, "encrypted_value")
+	assert.NotContains(t, cols, "value")
+	var old *string
+	require.NoError(t, db.GetContext(context.Background(), &old, `SELECT to_regclass('secrets')::text`))
+	assert.Nil(t, old, "the secrets table must be gone")
+}
+
+func TestSecretRefRepoDB_KeepRefShapeIsEnforced(t *testing.T) {
+	_, wsID := newSecretTestWorkspace(t)
 	db := testDB(t)
 	_, err := db.ExecContext(context.Background(),
-		`INSERT INTO secrets (workspace_id, scope, name, encrypted_value, value_sha256_prefix, value_length, value_char_class, created_by, created_by_type)
-		 VALUES ($1, 'workspace', $2, $3, 'deadbeef', 1, 'a-z', $4, 'agent')`,
-		wsID, name, value, uuid.New())
-	return err
-}
-
-// The regression class this whole feature exists to close: a value written
-// straight to Postgres, bypassing the repository, must still be rejected —
-// the same class of gap that left 2026-06's project_integrations rows in
-// the clear.
-func TestSecretRepoDB_TriggerRejectsPlaintextOnDirectInsert(t *testing.T) {
-	_, wsID := newSecretTestWorkspace(t)
-	err := insertSecretDirectSQL(t, wsID, "DIRECT_SQL_TOKEN", "plaintext-value-not-encrypted")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be encrypted")
-}
-
-func TestSecretRepoDB_TriggerAcceptsEncryptedOnDirectInsert(t *testing.T) {
-	_, wsID := newSecretTestWorkspace(t)
-	err := insertSecretDirectSQL(t, wsID, "DIRECT_SQL_TOKEN", "enc:v1:AAAABBBBCCCC")
-	require.NoError(t, err)
+		`INSERT INTO secret_refs (workspace_id, scope, name, keep_ref, value_sha256_prefix, value_length, value_char_class, created_by, created_by_type)
+		 VALUES ($1, 'workspace', 'DIRECT_SQL', 'enc:v1:AAAA', 'deadbeef', 1, 'a-z', $2, 'agent')`,
+		wsID, uuid.New())
+	require.Error(t, err, "a ciphertext is not a Keep ref")
 }
 
 func TestSecretRepoDB_CreateThenListNeverReturnsAValue(t *testing.T) {
@@ -80,18 +83,17 @@ func TestSecretRepoDB_CreateThenListNeverReturnsAValue(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, created.ID, list[0].ID)
 
-	// Direct SQL confirms the stored column is genuinely ciphertext, not a
-	// masked repository return value that merely LOOKS clean.
+	// Direct SQL over the whole row: the value is in no column at all.
 	db := testDB(t)
-	var stored string
-	require.NoError(t, db.GetContext(context.Background(), &stored,
-		`SELECT encrypted_value FROM secrets WHERE id = $1`, created.ID))
-	assert.NotContains(t, stored, "ghp_supersecretvalue123")
-	assert.Regexp(t, `^enc:v1:`, stored)
+	var row string
+	require.NoError(t, db.GetContext(context.Background(), &row,
+		`SELECT row_to_json(s)::text FROM secret_refs s WHERE id = $1`, created.ID))
+	assert.NotContains(t, row, "ghp_supersecretvalue123")
+	assert.Contains(t, row, "keep:mesh-secret.workspace.workspace.HOMER_GH_TOKEN.")
 }
 
 func TestSecretRepoDB_CreateRejectsDuplicateCurrentName(t *testing.T) {
-	repo, wsID := newSecretTestWorkspace(t)
+	repo, wsID, keep := newSecretTestWorkspaceWithKeep(t)
 	actor := uuid.New()
 	input := domain.CreateSecretInput{
 		WorkspaceID: wsID, Scope: domain.SecretScopeWorkspace,
@@ -104,6 +106,10 @@ func TestSecretRepoDB_CreateRejectsDuplicateCurrentName(t *testing.T) {
 	input.Value = "second-value"
 	_, err = repo.Create(context.Background(), input)
 	require.Error(t, err)
+	// The refused duplicate never reached Keep: the current value stands.
+	for _, v := range keep.puts {
+		assert.Equal(t, "first-value", v)
+	}
 }
 
 func TestSecretRepoDB_SameNameAllowedAcrossDifferentScopes(t *testing.T) {
@@ -156,7 +162,7 @@ func TestSecretRepoDB_RotateSupersedesOldRowAndInsertsNew(t *testing.T) {
 	db := testDB(t)
 	var rotatedAt *time.Time
 	require.NoError(t, db.GetContext(context.Background(), &rotatedAt,
-		`SELECT rotated_at FROM secrets WHERE id = $1`, created.ID))
+		`SELECT rotated_at FROM secret_refs WHERE id = $1`, created.ID))
 	require.NotNil(t, rotatedAt)
 }
 
@@ -185,7 +191,7 @@ func TestSecretRepoDB_DeleteStampsRotatedAtWithNoReplacement(t *testing.T) {
 	assert.Empty(t, list)
 }
 
-func TestSecretRepoDB_ResolveCurrentValues_DecryptsAndFlagsExpired(t *testing.T) {
+func TestSecretRepoDB_ResolveCurrentValues_ReadsKeepAndFlagsExpired(t *testing.T) {
 	repo, wsID := newSecretTestWorkspace(t)
 	actor := uuid.New()
 	past := time.Now().Add(-time.Hour)
@@ -217,7 +223,7 @@ func TestSecretRepoDB_ResolveCurrentValues_DecryptsAndFlagsExpired(t *testing.T)
 
 	expired := byName["EXPIRED_TOKEN"]
 	assert.True(t, expired.Expired)
-	assert.Empty(t, expired.Value, "an expired secret's value must not be decrypted or returned")
+	assert.Empty(t, expired.Value, "an expired secret's value must not be read or returned")
 }
 
 func TestSecretRepoDB_ScopeMismatchRejectedByRepo(t *testing.T) {

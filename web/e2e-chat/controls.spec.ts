@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   type Forbidden, type Frame, assertDenied, assertDistinctSessions, assertFramesClean, assertFrozen, assertIntermediateThenFinal,
-  assertEffectiveMode, assertFramesDiffer, assertMarkdownDom, assertMemoryAndEventsClean, assertNoDeltaAfter, assertNoLeak, assertOk,
+  assertEffectiveMode, assertFramesDiffer, assertMarkdownDom, assertReadable, assertMemoryAndEventsClean, assertNoDeltaAfter, assertNoLeak, assertOk,
   assertOpaque404, assertOwnEvents, assertFixtureDisjoint, canary, assertStreaming, assertToolEvents, assertDeltasInFinal, assertEarlyDelta,
   assertTurnRunning,
 } from "./lib/detect";
@@ -59,8 +59,15 @@ test("S06 stop: body growth, a status flip and a late delta after the terminal s
   await redControl("S06-red-late-delta", "detector", () => assertNoDeltaAfter([frame({ message_id: "m", seq: 9 })], "m", 5));
   await redControl("S06-red-turn-over", "detector", () => assertTurnRunning({ status: "done" }, 0, 7000), /turn ended before Stop after 7s/);
   await redControl("S06-red-no-reply", "detector", () => assertTurnRunning(undefined, 0, 1000), /turn ended before Stop/);
+  await redControl("S06-red-codex-turn-over", "detector", () => assertTurnRunning(undefined, 0, 3000, { active: null }), /turn ended before Stop after 3s \(reply status absent, turn none\)/);
+  await redControl("S06-red-codex-reply-done", "detector", () => assertTurnRunning({ status: "done" }, 0, 1000, { active: { state: "streaming" } }), /turn ended before Stop/);
+  await redControl("S06-red-codex-turn-ended-reply-streaming", "detector", () => assertTurnRunning({ status: "streaming" }, 0, 2000, { active: null }), /turn ended before Stop after 2s \(reply status streaming, turn none\)/);
+  await redControl("S06-red-codex-no-active-turn", "detector", () => assertTurnRunning({ status: "streaming" }, 0, 4000, {}), /turn ended before Stop after 4s \(reply status streaming, turn none\)/);
+  await redControl("S06-red-codex-status-flip", "detector", () => assertFrozen([{ body: "", status: "cancelled" }, { body: "", status: "done" }], "cancelled", false));
   assertTurnRunning({ status: "streaming" }, 0);
+  assertTurnRunning(undefined, 0, Date.now(), { active: { state: "streaming" } });
   assertFrozen([{ body: "ab", status: "cancelled" }, { body: "ab", status: "cancelled" }], "cancelled");
+  assertFrozen([{ body: "", status: "cancelled" }, { body: "", status: "cancelled" }], "cancelled", false);
   assertNoDeltaAfter([frame({ message_id: "m", seq: 4 })], "m", 5);
 });
 
@@ -104,6 +111,16 @@ test("AC3 markdown and tools: no heading, a short list, a wrong code and a turn 
     `markdown: no <pre><code> block carries fedcba9876543210; blocks: ${JSON.stringify(["a".repeat(80), "b", "c"])}`,
   );
   assertToolEvents([frame({ event: "chat.turn.tool", turn_id: "t" })], "t", ["Working: Bash"]);
+});
+
+test("E3 attachment name: white on the light card, near-black on the dark card, a transparent card and an unparsed colour all fail", async () => {
+  // The defect as painted in production ea83433: the name inherited the user bubble's primary-foreground over bg-muted.
+  await redControl("E3-red-name-light", "detector", () => assertReadable("name light", { fg: "rgb(255, 255, 255)", bg: "rgb(243, 248, 248)" }), /contrast 1\.\d+:1 < 4\.5:1/);
+  await redControl("E3-red-name-dark", "detector", () => assertReadable("name dark", { fg: "rgb(6, 15, 15)", bg: "rgb(30, 41, 43)" }), /< 4\.5:1/);
+  await redControl("E3-red-transparent", "detector", () => assertReadable("name", { fg: "rgb(0, 0, 0)", bg: "rgba(0, 0, 0, 0)" }), /not opaque/);
+  await redControl("E3-red-unparsed", "detector", () => assertReadable("name", { fg: "oklch(0.2 0 0)", bg: "rgb(243, 248, 248)" }), /cannot parse/);
+  assertReadable("name light", { fg: "rgb(20, 33, 33)", bg: "rgb(243, 248, 248)" });
+  assertReadable("name dark", { fg: "rgb(232, 250, 250)", bg: "rgb(30, 41, 43)" });
 });
 
 test("P05–P07: a foreign frame, a silent socket and a shared session all fail", async () => {

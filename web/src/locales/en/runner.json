@@ -1,18 +1,35 @@
 {
   "title": "My Runner",
-  "subtitle": "Your agents, the resources they run on and the runner leading each. Changes affect only you.",
+  "subtitle": {
+    "neutral": "Agents, the resources they run on and the runner leading each.",
+    "workspace": "Agents in this workspace, the runner catalog they run on and the runner leading each. Catalog changes apply to the whole workspace.",
+    "personal": "Your agents, the resources they run on and the runner leading each. Changes affect only you."
+  },
   "loadFailed": "Could not load this section.",
   "retry": "Retry",
+  "tabs": {
+    "label": "Runner sections",
+    "overview": "Overview",
+    "agents": "Agents",
+    "resources": "Resources",
+    "history": "History"
+  },
   "admin": {
     "title": "Runner for this workspace",
     "offHint": "Runner is off. Turn it on once; each person then configures their own agents under My Runner.",
-    "onHint": "Runner is on for this workspace. Nothing else to set up here.",
+    "onHint": "Runner is on. Turning it off stops runners taking new tasks.",
     "enable": "Turn on Runner",
     "enabling": "Turning on...",
     "enabled": "Runner is on",
     "failed": "Could not turn Runner on",
-    "notConnected": "Runner has never been connected in this workspace, so it cannot be turned on from here yet",
-    "off": "Off"
+    "off": "Off",
+    "disable": "Turn off Runner",
+    "disableConfirm": "Turn Runner off? Runners finish current tasks and take no new ones.",
+    "disableYes": "Turn off",
+    "disabling": "Turning off...",
+    "disabled": "Runner is off",
+    "disableFailed": "Could not turn Runner off",
+    "cancel": "Cancel"
   },
   "agents": {
     "title": "Agents",
@@ -29,7 +46,20 @@
     "managerFailed": "Could not change the assignment",
     "noRunner": "No runner leads this agent",
     "runnerLive": "live",
-    "runnerLapsed": "no heartbeat"
+    "runnerLapsed": "no heartbeat",
+    "noOperator": "No operator: listed because this workspace's runner leads it.",
+    "otherOperator": "Another member operates this agent and sets its limits.",
+    "colAgent": "Agent",
+    "colRunner": "Runner",
+    "colOperator": "Operated by",
+    "colProfiles": "Profiles",
+    "colManager": "Manages",
+    "operatorYou": "You",
+    "operatorOther": "Another member",
+    "operatorNone": "No one",
+    "yes": "yes",
+    "filter": "Filter agents",
+    "moreProfiles": "+{{n}} more"
   },
   "runners": {
     "title": "Runners",
@@ -42,11 +72,27 @@
     "lapsed": "no heartbeat",
     "unknownVersion": "unknown",
     "leaseLive": "expires {{when}}",
-    "leaseLapsed": "expired {{when}}"
+    "leaseLapsed": "expired {{when}}",
+    "sync": "Catalog"
+  },
+  "controllers": {
+    "title": "Controllers",
+    "empty": "The runner catalog has no controllers yet.",
+    "revision": "applied r{{applied}} · desired r{{desired}}",
+    "desiredOnly": "desired r{{desired}}",
+    "heartbeat": "heartbeat {{when}}",
+    "noHeartbeat": "no report yet",
+    "disabled": "disabled in the catalog",
+    "sync": {
+      "applied": "applied",
+      "stale": "behind",
+      "paused": "paused",
+      "error": "error",
+      "unknown": "unknown"
+    }
   },
   "resources": {
     "title": "Resources",
-    "hint": "Provider accounts (cred: references only, never secrets), pools, profiles and per-agent settings.",
     "sections": {
       "accounts": "Accounts",
       "pools": "Pools",
@@ -56,7 +102,6 @@
     },
     "empty": "Nothing here yet.",
     "name": "Name",
-    "value": "Settings (JSON object)",
     "add": "Add",
     "edit": "Edit",
     "remove": "Remove",
@@ -64,7 +109,6 @@
     "cancel": "Cancel",
     "nameRequired": "Enter a name",
     "nameTaken": "This name is already used",
-    "valueInvalid": "Enter a valid JSON object",
     "secretRejected": "Secrets are not allowed: \"{{path}}\". Store a cred: reference instead",
     "unsaved": "Unsaved changes",
     "save": "Save resources",
@@ -73,13 +117,30 @@
     "saved": "Resources saved",
     "saveFailed": "Could not save resources",
     "conflict": "Someone changed this while you were editing. Reloaded the latest version; apply your change again.",
-    "catalogHint": "Workspace runner catalog, revision {{n}}. The runner picks up every saved revision. Credential references stay hidden: leave credential_ref empty to keep the stored one.",
+    "catalogHint": "Workspace runner catalog, revision {{n}}. The runner picks up every saved revision. Credential references stay hidden after saving; leave one unchanged to keep it.",
     "filter": "Filter resources",
     "noMatches": "No matches.",
     "summary": {
       "max": "max {{n}}",
       "disabled": "off"
-    }
+    },
+    "personalHint": "Your own runtime document. It is read-only here: connect Runner in this workspace to edit resources with forms.",
+    "noSchema": "Could not load the Runner form description, so resources can't be edited right now. Reload the page to try again.",
+    "unknownFields": "These fields are not in the Runner schema and will be removed when you apply: {{fields}}",
+    "refused_one": "The runner catalog was not saved: one entry needs fixing. It is open below.",
+    "refused_other": "The runner catalog was not saved: {{count}} entries need fixing. The first one is open below.",
+    "fieldErrors": {
+      "unknown_field": "This field is not part of the catalog",
+      "required": "Fill in this field",
+      "invalid": "This value is not accepted",
+      "missing_reference": "Points to something that does not exist",
+      "provider_mismatch": "Belongs to another provider",
+      "duplicate": "Already used by another entry",
+      "mode_without_pools": "The account has no pools for this mode",
+      "capability_not_on_controller": "The runner host does not offer this capability",
+      "not_permitted": "Only allowed profiles can be used here"
+    },
+    "credentialOnRename": "A renamed account does not carry the hidden reference over: enter it again."
   },
   "history": {
     "title": "Revision history",
@@ -93,7 +154,40 @@
       "manager_granted": "Management assigned",
       "manager_revoked": "Management taken back",
       "catalog": "Runner catalog saved",
-      "catalogPaused": "Runner catalog saved, runner paused"
-    }
+      "catalogPaused": "Runner catalog saved, runner paused",
+      "turnedOn": "Runner turned on",
+      "turnedOff": "Runner turned off"
+    },
+    "restore": "Restore",
+    "restoreConfirm": "Restore revision {{n}} as revision {{next}}? On/off stays as is.",
+    "restoring": "Restoring...",
+    "restored": "Revision {{n}} restored",
+    "restoreFailed": "Could not restore the revision"
+  },
+  "program": {
+    "title": "Runner program",
+    "notInstalled": "The runner program is not installed on this instance yet.",
+    "openCatalog": "Open in the catalog",
+    "askAdmin": "Ask the instance administrator to install Runner from the catalog.",
+    "connectHint": "Set up the runner on your host, then enter the address Mesh reaches it at.",
+    "url": "Runner address",
+    "urlPlaceholder": "https://runner.example.com",
+    "connect": "Connect",
+    "connecting": "Connecting...",
+    "save": "Save address",
+    "saving": "Saving...",
+    "connected": "Runner connected",
+    "saved": "Address saved",
+    "failed": "Could not save the runner address",
+    "invalidUrl": "Enter a full address starting with http:// or https://",
+    "version": "Version {{version}}",
+    "update": "Update {{version}} available",
+    "updates": "Open updates",
+    "health": {
+      "ok": "answering",
+      "bad": "not answering",
+      "unknown": "not checked yet"
+    },
+    "notAllowed": "Not allowed by the instance administrator."
   }
 }

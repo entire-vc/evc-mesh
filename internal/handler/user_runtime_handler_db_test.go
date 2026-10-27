@@ -189,19 +189,22 @@ func TestUserRuntime_OperatorReadAPIIsolation(t *testing.T) {
 	a1 := seedOperatorAgent(t, db, ws, &opA)
 	a2 := seedOperatorAgent(t, db, ws, &opA)
 	b1 := seedOperatorAgent(t, db, ws, &opB)
+	_, err := db.Exec(`INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1,$2,$3,'member')`, uuid.New(), ws, opB)
+	require.NoError(t, err)
+	q := "/?workspace_id=" + ws.String()
 	lease := func(agent uuid.UUID, runner, interval string) {
-		_, err := db.Exec(`INSERT INTO agent_controllers(agent_id,runner_id,runner_name,host,version,lease_expires_at)
+		_, leaseErr := db.Exec(`INSERT INTO agent_controllers(agent_id,runner_id,runner_name,host,version,lease_expires_at)
 			VALUES($1,$2,'n-'||$2,'host-'||$2,'v1',now()+$3::interval)`, agent, runner, interval)
-		require.NoError(t, err)
+		require.NoError(t, leaseErr)
 	}
 	ra, rb := "ra-"+a1.String()[:8], "rb-"+b1.String()[:8]
 	lease(a1, ra, "1 minute")
 	lease(a2, ra, "1 minute")
 	lease(b1, rb, "-1 minute")
-	_, err := db.Exec(`INSERT INTO user_runtime_managers(operator_user_id,agent_id) VALUES($1,$2)`, opA, a1)
+	_, err = db.Exec(`INSERT INTO user_runtime_managers(operator_user_id,agent_id) VALUES($1,$2)`, opA, a1)
 	require.NoError(t, err)
 
-	code, out := callUserRuntime(t, h.OperatorAgents, http.MethodGet, "/", "", opA, uuid.Nil, nil)
+	code, out := callUserRuntime(t, h.OperatorAgents, http.MethodGet, q, "", opA, uuid.Nil, nil)
 	require.Equal(t, http.StatusOK, code, out)
 	agents := out["agents"].([]any)
 	require.Len(t, agents, 2)
@@ -213,7 +216,7 @@ func TestUserRuntime_OperatorReadAPIIsolation(t *testing.T) {
 		require.Equal(t, m["agent_id"] == a1.String(), m["runtime_manager"])
 	}
 
-	code, out = callUserRuntime(t, h.OperatorRunners, http.MethodGet, "/", "", opA, uuid.Nil, nil)
+	code, out = callUserRuntime(t, h.OperatorRunners, http.MethodGet, q, "", opA, uuid.Nil, nil)
 	require.Equal(t, http.StatusOK, code)
 	runners := out["runners"].([]any)
 	require.Len(t, runners, 1, "foreign runner leaked")
@@ -223,7 +226,7 @@ func TestUserRuntime_OperatorReadAPIIsolation(t *testing.T) {
 	require.Equal(t, true, r0["live"])
 
 	// B sees only its own, lapsed lease.
-	code, out = callUserRuntime(t, h.OperatorRunners, http.MethodGet, "/", "", opB, uuid.Nil, nil)
+	code, out = callUserRuntime(t, h.OperatorRunners, http.MethodGet, q, "", opB, uuid.Nil, nil)
 	require.Equal(t, http.StatusOK, code)
 	rs := out["runners"].([]any)
 	require.Len(t, rs, 1)
@@ -232,7 +235,12 @@ func TestUserRuntime_OperatorReadAPIIsolation(t *testing.T) {
 
 	// an agent key is refused on both routes.
 	for _, fn := range []echo.HandlerFunc{h.OperatorAgents, h.OperatorRunners} {
-		code, _ = callUserRuntime(t, fn, http.MethodGet, "/", "", uuid.Nil, a1, nil)
+		code, _ = callUserRuntime(t, fn, http.MethodGet, q, "", uuid.Nil, a1, nil)
+		require.Equal(t, http.StatusForbidden, code)
+		// the workspace is required, and a caller outside it is refused.
+		code, _ = callUserRuntime(t, fn, http.MethodGet, "/", "", opA, uuid.Nil, nil)
+		require.Equal(t, http.StatusBadRequest, code)
+		code, _ = callUserRuntime(t, fn, http.MethodGet, "/?workspace_id="+uuid.NewString(), "", opA, uuid.Nil, nil)
 		require.Equal(t, http.StatusForbidden, code)
 	}
 
@@ -242,9 +250,9 @@ func TestUserRuntime_OperatorReadAPIIsolation(t *testing.T) {
 		"oauth":   {UserID: opA, Connector: true},
 		"no user": {},
 	} {
-		_, err := repo.OperatorAgents(context.Background(), actor)
+		_, err := repo.OperatorAgents(context.Background(), actor, ws)
 		require.Error(t, err, name)
-		_, err = repo.OperatorRunners(context.Background(), actor)
+		_, err = repo.OperatorRunners(context.Background(), actor, ws)
 		require.Error(t, err, name)
 	}
 }

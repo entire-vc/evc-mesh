@@ -183,6 +183,26 @@ The request carries `X-Mesh-Timestamp` and `X-Mesh-Signature` computed exactly a
 - **Re-handshake:** setting or changing the code makes Mesh repeat the handshake.
 - **Service side:** check `install_code` only on the first binding of a workspace (when you do not yet hold a signing secret for it), then consume the code. Later handshakes for an already bound workspace are verified with the stored signing secret; a stale or absent code there is not an error.
 
+### Actor token delivery (`token_path`)
+
+An extension whose manifest sets `external.token_path` gets its actor token (`ext_…`) from Mesh directly; the token never passes through a person. Mesh sends a signed `POST {base_url}{token_path}`, without an `Authorization` header:
+
+```json
+{
+  "extension_id": "hello",
+  "workspace_id": "6f1c2a3b-0000-4000-8000-000000000001",
+  "extension_token": "ext_…"
+}
+```
+
+- **Signature:** `X-Mesh-Timestamp` and `X-Mesh-Signature` as above, keyed with the connection's signing secret (the one sent at install).
+- **Timestamps only go up:** per connection every delivery is signed strictly later than the previous one, even within one second, so the service may refuse a timestamp not newer than the last it accepted.
+- **Success** is `200` with `{"ok":true}`. Anything else is a failed delivery.
+- **When:** once after a successful install handshake, if the current token was not delivered yet (a repeated handshake does not rotate), and on every `POST /api/v1/integrations/{id}/rotate-token`. For such an extension that call answers `{"actor", "previous_valid_for", "delivered": true}` and never the token. If the delivery fails it answers `502`, the new token is withdrawn and the previous one keeps working exactly as before the call.
+- `POST /ext/me/token/rotate` (the extension rotating its own token) is unchanged: the new token is in its response.
+
+Without `token_path` nothing changes: `rotate-token` returns the token in its response.
+
 ## Retry Policy
 
 If your endpoint returns a non-2xx status code or the request times out:

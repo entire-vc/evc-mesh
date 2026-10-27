@@ -24,7 +24,7 @@ func NewExtensionActorRepo(db *sqlx.DB) *ExtensionActorRepo {
 
 const extensionActorCols = `connection_id, workspace_id, actor_id, extension_id, display_name, token_hash,
 	prev_token_hash, prev_token_expires_at, capabilities, violation_count, last_violation_at, last_violation,
-	issued_at, rotated_at, revoked_at`
+	issued_at, rotated_at, revoked_at, token_delivered_at`
 
 func (r *ExtensionActorRepo) Issue(ctx context.Context, a *domain.ExtensionActor) (*domain.ExtensionActor, error) {
 	// actor_id is kept on re-issue: history signed by the extension must keep
@@ -44,7 +44,8 @@ func (r *ExtensionActorRepo) Issue(ctx context.Context, a *domain.ExtensionActor
 			last_violation = '',
 			issued_at = now(),
 			rotated_at = NULL,
-			revoked_at = NULL
+			revoked_at = NULL,
+			token_delivered_at = NULL
 		RETURNING ` + extensionActorCols
 	var out domain.ExtensionActor
 	if err := r.db.GetContext(ctx, &out, q, a.ConnectionID, a.WorkspaceID, a.ActorID, a.ExtensionID,
@@ -89,6 +90,62 @@ func (r *ExtensionActorRepo) Rotate(ctx context.Context, connectionID uuid.UUID,
 			token_hash = $2,
 			rotated_at = now()
 		WHERE connection_id = $1 AND revoked_at IS NULL`, connectionID, newHash, prevExpiresAt)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (r *ExtensionActorRepo) RotateKeepingState(ctx context.Context, connectionID uuid.UUID, newHash string, prevExpiresAt time.Time) (*domain.ExtensionActor, error) {
+	// The row is locked and read in the same statement that rotates it, so the
+	// returned state is exactly what this rotation replaced.
+	var out domain.ExtensionActor
+	err := r.db.GetContext(ctx, &out, `
+		WITH old AS (
+			SELECT connection_id, token_hash, prev_token_hash, prev_token_expires_at, rotated_at, token_delivered_at
+			FROM extension_actors
+			WHERE connection_id = $1 AND revoked_at IS NULL
+			FOR UPDATE
+		)
+		UPDATE extension_actors e SET
+			prev_token_hash = e.token_hash,
+			prev_token_expires_at = $3,
+			token_hash = $2,
+			rotated_at = now()
+		FROM old
+		WHERE e.connection_id = old.connection_id
+		RETURNING old.connection_id, old.token_hash, old.prev_token_hash, old.prev_token_expires_at,
+			old.rotated_at, old.token_delivered_at`, connectionID, newHash, prevExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (r *ExtensionActorRepo) RestoreToken(ctx context.Context, connectionID uuid.UUID, newHash string, before *domain.ExtensionActor) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE extension_actors SET
+			token_hash = $3,
+			prev_token_hash = $4,
+			prev_token_expires_at = $5,
+			rotated_at = $6
+		WHERE connection_id = $1 AND token_hash = $2`,
+		connectionID, newHash, before.TokenHash, before.PrevTokenHash, before.PrevTokenExpiresAt, before.RotatedAt)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (r *ExtensionActorRepo) MarkTokenDelivered(ctx context.Context, connectionID uuid.UUID, tokenHash string, at time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE extension_actors SET token_delivered_at = $3
+		WHERE connection_id = $1 AND token_hash = $2 AND revoked_at IS NULL`, connectionID, tokenHash, at)
 	if err != nil {
 		return false, err
 	}

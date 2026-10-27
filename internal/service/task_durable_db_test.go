@@ -34,7 +34,7 @@ func TestMoveTask_DurableActivityRefusal(t *testing.T) {
 			ip := uuid.New()
 			_, err := f.db.Exec(`INSERT INTO task_statuses(id,project_id,name,slug,category) VALUES($1,$2,'Active','active','in_progress')`, ip, f.projectID)
 			require.NoError(t, err)
-			_, err = f.db.Exec(`UPDATE tasks SET status_id=$2,assignee_id=$3,assignee_type='agent' WHERE id=$1`, id, ip, owner)
+			_, err = f.db.Exec(`UPDATE tasks SET status_id=$2,checkout_stage_status_id=$2,assignee_id=$3,assignee_type='agent' WHERE id=$1`, id, ip, owner)
 			require.NoError(t, err)
 			_, err = repo.AcquireCheckout(ctx, id, owner, uuid.New(), time.Now().Add(-time.Minute), checkoutScope())
 			require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestTaskDurableOutbox_RetryCrashConcurrent(t *testing.T) {
 			return persist(msg)
 		})
 	}()
-	// Why 30s and not the original 6s (#da03cd09). This phase has a built-in
+	// Why 30s and not the original 6s. This phase has a built-in
 	// floor of 3-4s that the old budget did not account for: RunTaskOutbox
 	// ticks once a second (task_outbox_worker.go), the first tick's failed
 	// publish sets available_at = now + 2^(attempts+1)s = 2s
@@ -262,7 +262,7 @@ func TestTaskDurableAudit_ExpiredUnleasedAssignment(t *testing.T) {
 			ip := uuid.New()
 			_, err := f.db.Exec(`INSERT INTO task_statuses(id,project_id,name,slug,category) VALUES($1,$2,'Active','active','in_progress')`, ip, f.projectID)
 			require.NoError(t, err)
-			_, err = f.db.Exec(`UPDATE tasks SET status_id=$2,updated_at=now()-interval '3 hours' WHERE id=$1`, id, ip)
+			_, err = f.db.Exec(`UPDATE tasks SET status_id=$2,checkout_stage_status_id=$2,updated_at=now()-interval '3 hours' WHERE id=$1`, id, ip)
 			require.NoError(t, err)
 			if mode == "expired" {
 				_, err = repo.AcquireCheckout(ctx, id, owner, uuid.New(), time.Now().Add(-time.Minute), checkoutScope())

@@ -32,28 +32,29 @@ type catalogStatusResponse struct {
 	Error     string     `json:"error,omitempty"`
 }
 
-// Catalog handles GET /extensions/catalog: built-in and installed rows first,
-// then every extension the Spark catalog lists that is not installed yet
-// (source "catalog", installed=false). The catalog block shows its freshness.
+// WithBuiltins tells the catalog which ids ship with this Mesh binary, so a
+// Spark record with runtime "builtin" maps onto the code already here.
+func (h *ExtensionHandler) WithBuiltins(known func(id string) bool) *ExtensionHandler {
+	h.builtin = known
+	return h
+}
+
+// Catalog handles GET /extensions/catalog. The signed Spark catalog is the
+// list; every extension has one id in every source, so a row is never glued
+// from two ids. Installed rows come first and carry the page of their catalog
+// record. A catalog record not installed yet follows: source "catalog" for one
+// that downloads, source "builtin" for one whose code ships with Mesh (a
+// built-in theme an admin removed). A builtin record this binary does not
+// carry is left out: there is nothing to install. Without Spark the last
+// verified copy is used; with none at all, only the installed rows answer.
 func (h *ExtensionHandler) Catalog(c echo.Context) error {
 	ctx := c.Request().Context()
 	rows, err := h.installed.List(ctx)
 	if err != nil {
 		return handleError(c, err)
 	}
-	out := make([]extensionSummaryResponse, 0, len(rows))
-	have := make(map[string]bool, len(rows))
-	for i := range rows {
-		s, ok, serr := h.summary(c, &rows[i])
-		if serr != nil {
-			return handleError(c, serr)
-		}
-		if ok {
-			out = append(out, s)
-			have[s.ID] = true
-		}
-	}
 	st := catalogStatusResponse{}
+	var cat *catalog.Catalog
 	if h.catalog != nil {
 		at, lastErr := h.catalog.Status()
 		if !at.IsZero() {
@@ -62,30 +63,60 @@ func (h *ExtensionHandler) Catalog(c echo.Context) error {
 		if lastErr != nil {
 			st.Error = lastErr.Error()
 		}
-		if cat, cerr := h.catalog.Current(); cerr == nil {
-			st.Available = true
-			for i := range cat.Extensions {
-				e := &cat.Extensions[i]
-				if have[e.ID] {
+		if cur, cerr := h.catalog.Current(); cerr == nil {
+			cat, st.Available = cur, true
+		}
+	}
+	out := make([]extensionSummaryResponse, 0, len(rows))
+	have := make(map[string]bool, len(rows))
+	for i := range rows {
+		s, ok, serr := h.summary(c, &rows[i])
+		if serr != nil {
+			return handleError(c, serr)
+		}
+		if !ok {
+			continue
+		}
+		if e, hit := cat.Entry(s.ID); hit {
+			s.PageURL = e.PageURL
+			// A repo install that predates the catalog record holds the id
+			// the catalog now owns: say so instead of showing it as that record.
+			if rows[i].Source == domain.ExtensionSourceRepo {
+				s.IDConflict = string(domain.ExtensionSourceCatalog)
+			}
+		}
+		out = append(out, s)
+		have[s.ID] = true
+	}
+	if cat != nil {
+		for i := range cat.Extensions {
+			e := &cat.Extensions[i]
+			if have[e.ID] {
+				continue
+			}
+			src := domain.ExtensionSourceCatalog
+			if e.Runtime == "builtin" {
+				if h.builtin == nil || !h.builtin(e.ID) {
 					continue
 				}
-				s := extensionSummaryResponse{
-					ID: e.ID, Name: e.Name, Version: e.Latest.Version, Kind: e.Kind, Runtime: e.Runtime,
-					Publisher: e.Publisher, Category: e.Category, Source: string(domain.ExtensionSourceCatalog),
-					TrustLevel: e.Trust, PageURL: e.PageURL, Allowed: domain.DefaultExtensionAllowed(e.Trust),
-				}
-				if b, hit := cat.Blocks(e.ID, e.Latest.Version); hit {
-					s.Blocked, s.BlockedReason = true, b.Reason
-				}
-				if h.allow != nil {
-					ok, aerr := h.allow.Allowed(ctx, e.ID)
-					if aerr != nil {
-						return handleError(c, aerr)
-					}
-					s.Allowed = ok
-				}
-				out = append(out, s)
+				src = domain.ExtensionSourceBuiltin
 			}
+			s := extensionSummaryResponse{
+				ID: e.ID, Name: e.Name, Version: e.Latest.Version, Kind: e.Kind, Runtime: e.Runtime,
+				Publisher: e.Publisher, Category: e.Category, Source: string(src),
+				TrustLevel: e.Trust, PageURL: e.PageURL, Allowed: domain.DefaultExtensionAllowed(e.Trust),
+			}
+			if b, hit := cat.Blocks(e.ID, e.Latest.Version); hit {
+				s.Blocked, s.BlockedReason = true, b.Reason
+			}
+			if h.allow != nil {
+				ok, aerr := h.allow.Allowed(ctx, e.ID)
+				if aerr != nil {
+					return handleError(c, aerr)
+				}
+				s.Allowed = ok
+			}
+			out = append(out, s)
 		}
 	}
 	return extensionJSON(c, http.StatusOK, map[string]any{"extensions": out, "catalog": st})

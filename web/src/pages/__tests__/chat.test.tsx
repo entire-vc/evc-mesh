@@ -450,7 +450,8 @@ describe("ChatPage — stream, stop, states", () => {
     db.messages.t1 = [message({ id: "m-md", role: "user", body: "run **now** `ls`" })];
     renderChat("t1");
     const mine = (await screen.findAllByTestId("chat-message")).find((m) => m.dataset.role === "user")!;
-    expect(mine.querySelector("strong")).toHaveTextContent("now");
+    // MarkdownView parses in a promise after the message node is in the DOM (job 408508 read it too early).
+    await waitFor(() => expect(mine.querySelector("strong")).toHaveTextContent("now"));
     expect(mine.querySelector("code")).toHaveTextContent("ls");
   });
 
@@ -471,19 +472,25 @@ describe("ChatPage — stream, stop, states", () => {
 
   it("stays at the newest message when the feed grows after the first paint", async () => {
     let fire: () => void = () => {};
+    let observed: Element | null = null;
     vi.stubGlobal(
       "ResizeObserver",
       class {
         constructor(cb: () => void) {
           fire = cb;
         }
-        observe() {}
+        observe(el: Element) {
+          observed = el;
+        }
         disconnect() {}
       },
     );
     try {
       renderChat("t1");
       const feed = await screen.findByTestId("chat-feed");
+      // The observer is created in a passive effect that can run after findBy already sees the feed
+      // (jobs 414153, 421618: `fire` was still the no-op); wait until it watches this feed's content.
+      await waitFor(() => expect(observed?.parentElement).toBe(feed));
       Object.defineProperty(feed, "scrollHeight", { configurable: true, value: 900 });
       feed.scrollTop = 0;
       act(() => fire());

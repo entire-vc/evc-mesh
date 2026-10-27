@@ -62,6 +62,32 @@ function checkScalar(f: FieldSchema, v: unknown): FieldError | null {
   return null;
 }
 
+export function isMapSchema(f: FieldSchema): boolean {
+  return f.type === "object" && !f.properties && typeof f.additionalProperties === "object";
+}
+
+/** A map: every key one of `propertyNames.enum` (when given), every value valid by `additionalProperties`. */
+function checkMap(f: FieldSchema, v: unknown): FieldError | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) return { code: "type" };
+  const keys = f.propertyNames?.enum;
+  const of = f.additionalProperties as FieldSchema;
+  for (const [k, item] of Object.entries(v as Values)) {
+    if (keys && !keys.includes(k)) return { code: "enum" };
+    if (of.type === "array") {
+      if (!Array.isArray(item)) return { code: "type" };
+      for (const x of item) {
+        const e = of.items ? checkScalar(of.items, x) : null;
+        if (e) return e;
+      }
+    } else {
+      const e = checkScalar(of, item);
+      if (e) return e;
+    }
+  }
+  return null;
+}
+
 /**
  * Client-side validation by the schema, keyed by dot path. Hidden fields
  * (`x-visible-if`) are skipped. A required secret that is already stored and
@@ -85,17 +111,28 @@ export function validate(
       Object.assign(errors, validate(field, nested, ctx, path));
       continue;
     }
+    if (field.type === "object" && isMapSchema(field)) {
+      const e = checkMap(field, v);
+      if (e) errors[path] = e;
+      continue;
+    }
     if (field.type === "array" && v !== undefined && v !== null && !Array.isArray(v)) {
       errors[path] = { code: "type" };
       continue;
     }
     if (empty(v)) {
       const storedSecret = field["x-secret"] && ctx.secretsSet.has(path);
-      if (required.has(name) && !storedSecret && field.type !== "boolean") errors[path] = { code: "required" };
+      // `minItems: 0` says an empty list is a valid answer, required or not
+      const emptyAllowed = field.type === "array" && field.minItems === 0;
+      if (required.has(name) && !storedSecret && field.type !== "boolean" && !emptyAllowed) errors[path] = { code: "required" };
       continue;
     }
     if (field.type === "array") {
       const items = v as unknown[];
+      if (field.minItems != null && items.length < field.minItems) {
+        errors[path] = { code: "minItems", params: { min: field.minItems } };
+        continue;
+      }
       for (let i = 0; i < items.length; i++) {
         const e = field.items ? checkScalar(field.items, items[i]) : null;
         if (e) {

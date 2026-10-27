@@ -52,13 +52,27 @@ export function getAccessToken(): string | null {
 // attaches automatically — nothing to send here but the request itself.
 // credentials: "include" is what makes the browser both attach that cookie
 // and store the rotated one the response sets.
-async function refreshOnce(): Promise<string> {
+//
+// A 5xx or a dropped connection is retried, a 4xx never is. The server may
+// have revoked the presented token before failing to mint its successor
+// (prod 27.10: a rotation's writes ran past their 5s deadline and answered
+// 500), and the cookie the browser still holds is exactly that revoked one.
+// The server forgives that replay inside its grace window (10s by default),
+// so two retries half a second apart stay well inside it; giving up on the
+// first 5xx turned a transient DB stall into a logout.
+async function refreshOnce(retries = 2): Promise<string> {
   const res = await fetch(`${BASE_URL}/api/v1/auth/refresh`, {
     method: "POST",
     credentials: "include",
+  }).catch((err: unknown) => {
+    if (!retries) throw err;
   });
+  if (retries && !(res && res.status < 500)) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return refreshOnce(retries - 1);
+  }
 
-  if (!res.ok) {
+  if (!res?.ok) {
     accessToken = null;
     throw new ApiRequestError(miscT("errors.sessionExpired", "Session expired"), "UNAUTHORIZED", 401);
   }
@@ -86,7 +100,7 @@ async function refreshOnce(): Promise<string> {
 // misbehaving.
 async function refreshAccessToken(): Promise<string> {
   if (typeof navigator !== "undefined" && navigator.locks) {
-    return navigator.locks.request("mesh-auth-refresh", refreshOnce);
+    return navigator.locks.request("mesh-auth-refresh", () => refreshOnce());
   }
   return refreshOnce();
 }

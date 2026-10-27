@@ -25,11 +25,13 @@ type healthProvider struct {
 	stubProvider
 	calls *int
 	ok    bool
+	// okNow, when set, overrides ok so a test can flip health between checks.
+	okNow *bool
 }
 
 func (p healthProvider) Health(context.Context, extensions.Resolved) extensions.HealthReport {
 	*p.calls++
-	if p.ok {
+	if p.okNow != nil && *p.okNow || p.okNow == nil && p.ok {
 		return extensions.HealthReport{OK: true}
 	}
 	return extensions.HealthReport{Message: "boom"}
@@ -186,6 +188,24 @@ func TestResolveStatus_HealthCachedFor60s(t *testing.T) {
 	_, err = reg.TestConnection(ctx, ws, id)
 	require.NoError(t, err)
 	require.Equal(t, 3, *calls, "TestConnection forces a recheck inside the TTL")
+}
+
+func TestResolveStatus_PassingCheckClearsLastError(t *testing.T) {
+	calls, ok := 0, false
+	stub, _ := newStub(t, &extensions.Connection{IsActive: true}, nil)
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(healthProvider{stubProvider: stub, calls: &calls, okNow: &ok}))
+	ws, ctx := uuid.New(), context.Background()
+
+	s, err := reg.TestConnection(ctx, ws, stub.Manifest().ID)
+	require.NoError(t, err)
+	require.Equal(t, "boom", s.LastError)
+
+	ok = true
+	s, err = reg.TestConnection(ctx, ws, stub.Manifest().ID)
+	require.NoError(t, err)
+	require.True(t, s.Health.OK)
+	require.Empty(t, s.LastError, "a passing check must not keep the old error")
 }
 
 func TestResolveStatus_DisabledSkipsHealthAndFillsFields(t *testing.T) {

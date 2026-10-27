@@ -143,20 +143,29 @@ export interface BodySnapshot {
   status: string;
 }
 
-/** S06/P05: Stop and the reload frames make sense only while the reply is still mid-turn. */
-export function assertTurnRunning(m: { status: string } | undefined, sentAt: number, now = Date.now()): void {
-  if (m?.status === "streaming") return;
-  throw new Error(`turn ended before Stop after ${Math.round((now - sentAt) / 1000)}s (reply status ${m?.status ?? "absent"}): the hold prompt did not keep the turn running`);
+/**
+ * S06/P05: Stop and the reload frames make sense only while the reply is still mid-turn.
+ * `byTurn` is passed for codex: its rollout delivers the reply in one piece at turn end, so a running
+ * codex turn has no reply yet and only the thread's active turn says it is still going; an absent
+ * active turn counts as ended.
+ */
+export function assertTurnRunning(m: { status: string } | undefined, sentAt: number, now = Date.now(), byTurn?: { active?: { state: string } | null }): void {
+  if (byTurn ? !m && byTurn.active?.state === "streaming" : m?.status === "streaming") return;
+  const turn = byTurn ? `, turn ${byTurn.active?.state ?? "none"}` : "";
+  throw new Error(`turn ended before Stop after ${Math.round((now - sentAt) / 1000)}s (reply status ${m?.status ?? "absent"}${turn}): the hold prompt did not keep the turn running`);
 }
 
-/** S06: after the terminal state no later snapshot may change the body or the status. */
-export function assertFrozen(afterTerminal: BodySnapshot[], expectStatus: string): void {
+/**
+ * S06: after the terminal state no later snapshot may change the body or the status. `keepsBody`
+ * is false for codex: Stop lands before its one-piece reply, so the cancelled reply may be empty.
+ */
+export function assertFrozen(afterTerminal: BodySnapshot[], expectStatus: string, keepsBody = true): void {
   if (afterTerminal.length < 2) throw new Error("frozen: need at least two snapshots after the terminal state");
   for (const s of afterTerminal) {
     if (s.status !== expectStatus) throw new Error(`frozen: status ${s.status}, expected ${expectStatus}`);
     if (s.body !== afterTerminal[0]!.body) throw new Error("frozen: body changed after the terminal state");
   }
-  if (afterTerminal[0]!.body === "") throw new Error("frozen: the partial body was not kept");
+  if (keepsBody && afterTerminal[0]!.body === "") throw new Error("frozen: the partial body was not kept");
 }
 
 export function assertNoDeltaAfter(frames: Frame[], messageId: string, terminalSeq: number): void {
@@ -214,6 +223,40 @@ export function assertEffectiveMode(expected: "light" | "dark", p: PaintedMode):
 /** AC7: the light and the dark frame of one state are different pictures. */
 export function assertFramesDiffer(name: string, lightSha: string, darkSha: string): void {
   if (lightSha === darkSha) throw new Error(`${name}: light and dark frames are byte-identical (${lightSha.slice(0, 12)})`);
+}
+
+/** Computed CSS colours of one piece of text and of the first opaque surface behind it. */
+export interface PaintedText {
+  fg: string;
+  bg: string;
+}
+
+function srgb(css: string): [number, number, number, number] | null {
+  const m = /^rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/.exec(css.trim());
+  if (!m) return null;
+  const a = m[4] === undefined ? 1 : m[4].endsWith("%") ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
+  return [Number(m[1]), Number(m[2]), Number(m[3]), a];
+}
+
+function relLuminance([r, g, b]: [number, number, number, number]): number {
+  const lin = (c: number) => (c / 255 <= 0.03928 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/** WCAG contrast ratio of two computed colours; throws when either cannot be judged. */
+export function contrastRatio(p: PaintedText): number {
+  const fg = srgb(p.fg);
+  const bg = srgb(p.bg);
+  if (!fg || !bg) throw new Error(`contrast: cannot parse fg=${p.fg} bg=${p.bg}`);
+  if (bg[3] < 1) throw new Error(`contrast: background ${p.bg} is not opaque`);
+  const [hi, lo] = [relLuminance(fg), relLuminance(bg)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/** E3 AC1: a file attachment's name reads as normal text on its card (WCAG >= 4.5:1). */
+export function assertReadable(what: string, p: PaintedText, min = 4.5): void {
+  const ratio = contrastRatio(p);
+  if (ratio < min) throw new Error(`${what}: contrast ${ratio.toFixed(2)}:1 < ${min}:1 (fg ${p.fg} on bg ${p.bg})`);
 }
 
 /** AC3: the rendered reply carries a heading, a list of at least `items` entries and a code block with `code`. */

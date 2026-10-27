@@ -30,5 +30,8 @@ export function resolveSchema(node: FieldSchema, root: unknown, depth = 0): Fiel
     out = { ...out, properties: props };
   }
   if (out.items) out = { ...out, items: resolveSchema(out.items, root, depth + 1) };
+  if (out.additionalProperties && typeof out.additionalProperties === "object") {
+    out = { ...out, additionalProperties: resolveSchema(out.additionalProperties, root, depth + 1) };
+  }
   return out;
 }

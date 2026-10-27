@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, useSyncExternalStore, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/cn";
 import type { FieldSchema, Values } from "@/components/extensions/schema-form";
@@ -25,6 +25,18 @@ export function settingsTokenOverrides(schemas: Array<FieldSchema | undefined>, 
 
 export function isDarkNow(): boolean {
   return typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+}
+
+// Every mode change (choice, OS follow, a theme that forces one) ends as the `dark` class on <html>: watch that.
+function subscribeDark(onChange: () => void): () => void {
+  const obs = new MutationObserver(onChange);
+  obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+  return () => obs.disconnect();
+}
+
+/** isDarkNow() that re-renders the caller when the mode changes. */
+export function useDarkNow(): boolean {
+  return useSyncExternalStore(subscribeDark, isDarkNow, () => false);
 }
 
 /** Mini board in the theme's tokens: what changes first when a colour or font is edited. */

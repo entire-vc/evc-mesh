@@ -45,12 +45,11 @@ import { AgentDetailDialog } from "@/components/agent-detail-dialog";
 import { InviteLinkBox } from "@/components/invite-link-box";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { ThemeSettingsPanel } from "@/components/themes/theme-settings-panel";
+import { WorkspaceThemeLink } from "@/components/themes/workspace-theme-link";
 import { useAuthStore } from "@/stores/auth";
 import { useMemberStore } from "@/stores/member";
 import { useAgentStore } from "@/stores/agent";
 import { useAgentWorkspaceGrantStore } from "@/stores/agent-workspace-grant";
-import { WorkspaceSecrets } from "@/components/workspace-secrets";
 import {
   Dialog,
   DialogContent,
@@ -673,8 +672,6 @@ export function WorkspaceSettingsPage() {
     workspaceMembers,
     myRole,
     myRoleError,
-    myRoleLoaded,
-    myRoleWorkspaceId,
     isLoadingWorkspaceMembers,
     fetchWorkspaceMembers,
     fetchMyRole,
@@ -847,7 +844,6 @@ export function WorkspaceSettingsPage() {
   const canManageMembers = myRole === "owner" || myRole === "admin";
   const canManageRules = myRole === "owner" || myRole === "admin";
   const canDeleteWorkspace = myRole === "owner" || myRole === "admin";
-  const canManageSecrets = myRole === "owner" || myRole === "admin";
 
   // Count owners to disable remove on last owner
   const ownerCount = workspaceMembers.filter((m) => m.role === "owner").length;
@@ -1311,8 +1307,9 @@ export function WorkspaceSettingsPage() {
           <CardDescription>{t("themes.workspace.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <ThemeSettingsPanel level="workspace" workspaceId={currentWorkspace.id} readOnly={!canManageMembers} roleLoading={!(myRoleLoaded && myRoleWorkspaceId === currentWorkspace.id)} roleUnknown={!!myRoleError} />
-          <Link to={`/w/${currentWorkspace.slug}/instance/themes`} className="inline-block text-sm text-primary hover:underline">
+          {/* the theme is chosen and set up in Extensions, like any extension (П8) */}
+          <WorkspaceThemeLink wsSlug={currentWorkspace.slug} />
+          <Link to={`/w/${currentWorkspace.slug}/instance?tab=themes`} className="inline-block text-sm text-primary hover:underline">
             {t("themes.workspace.instanceLink")}
           </Link>
         </CardContent>
@@ -2174,20 +2171,6 @@ export function WorkspaceSettingsPage() {
           )}
 
           <Separator />
-
-          {/* Secrets — write-only store. Rendered only for owner/admin: the API
-              gates every one of its four routes on PermManageSecrets, so for
-              anyone else this section would be a form whose every submit 403s.
-              The check here is a courtesy, not the guard. */}
-          {canManageSecrets && currentWorkspace && (
-            <>
-              <WorkspaceSecrets
-                workspaceId={currentWorkspace.id}
-                canManage={canManageSecrets}
-              />
-              <Separator />
-            </>
-          )}
 
           {/* Import Team */}
           {canManageRules && (

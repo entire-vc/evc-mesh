@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "id": "runner",
-  "name": "Runner",
+  "id": "widgets-sample",
+  "name": "Widgets sample",
   "version": "1.0.0",
   "kind": "plugin",
   "runtime": "builtin",
@@ -18,7 +18,7 @@
       "properties": {
         "image_registry": {
           "type": "string",
-          "title": "Реестр образов",
+          "title": "Image registry",
           "format": "uri"
         }
       }
@@ -28,17 +28,17 @@
       "properties": {
         "default_agent": {
           "type": "string",
-          "title": "Агент по умолчанию",
+          "title": "Default agent",
           "x-widget": "agent-picker"
         },
         "default_project": {
           "type": "string",
-          "title": "Проект по умолчанию",
+          "title": "Default project",
           "x-widget": "project-picker"
         },
         "allowed_images": {
           "type": "array",
-          "title": "Разрешённые образы",
+          "title": "Allowed images",
           "x-widget": "list",
           "items": {
             "type": "string",
@@ -47,26 +47,26 @@
         },
         "policy": {
           "type": "string",
-          "title": "Политика запуска",
+          "title": "Run policy",
           "x-widget": "textarea",
           "maxLength": 500,
-          "x-help": "Свободный текст для администраторов"
+          "x-help": "Free text for administrators"
         },
         "limits": {
           "type": "object",
           "x-widget": "group",
-          "title": "Лимиты",
+          "title": "Limits",
           "properties": {
             "max_parallel": {
               "type": "integer",
-              "title": "Параллельных запусков",
+              "title": "Parallel runs",
               "minimum": 1,
               "maximum": 50,
               "default": 4
             },
             "run_token": {
               "type": "string",
-              "title": "Токен запуска",
+              "title": "Run token",
               "x-secret": true
             }
           }

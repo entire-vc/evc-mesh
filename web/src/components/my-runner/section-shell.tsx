@@ -6,13 +6,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Loaded } from "@/components/my-runner/use-load";
 
 /** Title + loading / error / ready body shared by every block of the page. */
-export function SectionShell<T>({ title, description, testId, result, onRetry, children }: {
+export function SectionShell<T>({ title, description, testId, result, onRetry, children, footer }: {
   title: string;
   description?: string;
   testId: string;
   result: Loaded<T>;
   onRetry: () => void;
   children: (data: T) => ReactNode;
+  /** Rendered under the body whatever its state: a part with its own load. */
+  footer?: ReactNode;
 }) {
   const { t } = useTranslation("runner");
   return (
@@ -35,6 +37,7 @@ export function SectionShell<T>({ title, description, testId, result, onRetry, c
           </div>
         )}
         {result.state === "ready" && children(result.data)}
+        {footer}
       </CardContent>
     </Card>
   );

@@ -48,6 +48,23 @@ type Service struct {
 	// Store holds the bundle files; nil when S3 is not configured, which only
 	// refuses themes that carry a stylesheet or views.
 	Store AssetStore
+	// Allow is the instance allow-list (nil: everything allowed). A refused
+	// theme cannot be chosen and is not painted; the stored choice is kept, so
+	// allowing the theme again brings it back. The standard theme is never
+	// refused, so a choice can always be reset to it.
+	Allow extensions.AllowList
+}
+
+// allowed says whether a chosen theme may be painted. The standard theme always is.
+func (s *Service) allowed(ctx context.Context, themeID string) (bool, error) {
+	if s.Allow == nil || themeID == domain.DefaultThemeID {
+		return true, nil
+	}
+	ok, err := s.Allow.Allowed(ctx, themeID)
+	if err != nil {
+		return false, fmt.Errorf("theme %q: allow-list: %w", themeID, err)
+	}
+	return ok, nil
 }
 
 func assetKey(sha, ext string) string { return "themes/" + sha + "." + ext }
@@ -325,6 +342,9 @@ func (s *Service) Resolve(ctx context.Context, workspaceID *uuid.UUID) (*Resolve
 		if sel == nil || sel.ThemeID == nil {
 			return nil, nil
 		}
+		if ok, aerr := s.allowed(ctx, *sel.ThemeID); aerr != nil || !ok {
+			return nil, aerr
+		}
 		return s.load(ctx, *sel.ThemeID)
 	}
 	source := "workspace"
@@ -446,6 +466,11 @@ func (s *Service) Select(ctx context.Context, workspaceID *uuid.UUID, actor uuid
 			if _, err := s.InstallBuiltin(ctx, actor, *themeID); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if themeID != nil && *themeID != domain.DefaultThemeID {
+		if err := extensions.RequireAllowed(ctx, s.Allow, *themeID); err != nil {
+			return nil, err
 		}
 	}
 	level := LevelInstance

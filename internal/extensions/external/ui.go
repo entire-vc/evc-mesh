@@ -56,12 +56,33 @@ func FrameFor(m extensions.Manifest, settings map[string]any, slot string) (Fram
 	}
 	var allowed []string
 	if m.Capabilities.Network != nil {
-		allowed = m.Capabilities.Network.AllowedDomains
+		allowed = ExpandAllowedDomains(m.Capabilities.Network.AllowedDomains, settings)
 	}
 	if !HostAllowed(u.Hostname(), allowed) {
 		return Frame{}, ErrDomainNotAllowed
 	}
 	return Frame{URL: base + screen.Path, Origin: u.Scheme + "://" + u.Host, Title: screen.Title}, nil
+}
+
+// ExpandAllowedDomains resolves `{settings.<key>}` entries of allowed_domains to
+// the value of that workspace setting: the manifest lets the person who connects
+// the extension name the service host. A missing, empty or non-string setting
+// allows nothing, and a value with `*` is dropped so a setting can never widen
+// the list to a wildcard. Literal entries are returned unchanged.
+func ExpandAllowedDomains(allowed []string, settings map[string]any) []string {
+	out := make([]string, 0, len(allowed))
+	for _, a := range allowed {
+		t := strings.TrimSpace(a)
+		if !strings.HasPrefix(t, "{settings.") || !strings.HasSuffix(t, "}") {
+			out = append(out, a)
+			continue
+		}
+		v, _ := settings[strings.TrimSuffix(strings.TrimPrefix(t, "{settings."), "}")].(string)
+		if v = strings.TrimSpace(v); v != "" && !strings.Contains(v, "*") {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // HostAllowed matches a host against allowed_domains entries: an exact host, or

@@ -17,7 +17,7 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
-// SecretHandler serves the write-only secrets CRUD (task #64e84eb1, S3).
+// SecretHandler serves the write-only secrets CRUD (an internal ticket, S3).
 //
 // "Write-only" is not a convention this file follows carefully — it is a
 // property of the types it is built from. Every method here calls

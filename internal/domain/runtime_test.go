@@ -127,3 +127,46 @@ func (c *RuntimeCatalog) mustDesired(t *testing.T, ref string) RuntimeDesiredCat
 	require.True(t, ok)
 	return d
 }
+
+// The editor puts the server's reason next to the field: each refusal names
+// the path from the catalog root and a reason code, never the value.
+func TestRuntimeCatalogNamesTheField(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, code string
+		edit             func(doc map[string]any)
+	}{
+		{"unknown field", "pools.long-window.colour", RuntimeFieldUnknown, func(doc map[string]any) {
+			doc["pools"].(map[string]any)["long-window"].(map[string]any)["colour"] = "red"
+		}},
+		{"missing field", "pools.long-window.max_concurrency", RuntimeFieldRequired, func(doc map[string]any) {
+			delete(doc["pools"].(map[string]any)["long-window"].(map[string]any), "max_concurrency")
+		}},
+		{"out of range", "pools.long-window.max_concurrency", RuntimeFieldInvalid, func(doc map[string]any) {
+			doc["pools"].(map[string]any)["long-window"].(map[string]any)["max_concurrency"] = 0
+		}},
+		{"missing pool", "accounts.preferred.quota_pools_by_mode.subscription", RuntimeFieldMissing, func(doc map[string]any) {
+			doc["accounts"].(map[string]any)["preferred"].(map[string]any)["quota_pools_by_mode"] = map[string]any{"subscription": []string{"no-such-pool"}}
+		}},
+		{"missing profile", "bindings.worker-b.permitted_profiles", RuntimeFieldMissing, func(doc map[string]any) {
+			b := doc["bindings"].(map[string]any)["worker-b"].(map[string]any)
+			b["permitted_profiles"] = append(b["permitted_profiles"].([]any), "no-such-profile")
+		}},
+		{"missing account", "profiles.preferred.account_ref", RuntimeFieldMissing, func(doc map[string]any) {
+			doc["profiles"].(map[string]any)["preferred"].(map[string]any)["account_ref"] = "no-such-account"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var doc map[string]any
+			require.NoError(t, json.Unmarshal(runtimeExample(t), &doc))
+			tc.edit(doc)
+			data, err := json.Marshal(doc)
+			require.NoError(t, err)
+			_, err = ParseRuntimeCatalog(data)
+			require.ErrorIs(t, err, ErrRuntimeInput)
+			var fields RuntimeFieldErrors
+			require.ErrorAs(t, err, &fields)
+			require.Equal(t, tc.code, fields[tc.path], "fields: %v", fields)
+			require.NotContains(t, err.Error(), "no-such")
+		})
+	}
+}

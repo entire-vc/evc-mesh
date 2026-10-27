@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 
 const role = vi.hoisted(() => ({ value: "admin", instanceAdmin: true }));
@@ -78,6 +78,15 @@ describe("Extensions section", () => {
     useWorkspaceStore.setState({ currentWorkspace: { id: "ws-uuid-1", slug: "acme", name: "Acme" } as never });
     renderAt("/w/acme/extensions?tab=installed");
     expect(fetchMyRole).toHaveBeenCalledWith("ws-uuid-1");
+  });
+
+  it("Installed has no runner controllers block: that lives on My Runner", async () => {
+    useWorkspaceStore.setState({ currentWorkspace: { id: "ws-uuid-1", slug: "acme", name: "Acme" } as never });
+    renderAt("/w/acme/extensions?tab=installed");
+    expect(await screen.findByText("mcp-reference")).toBeTruthy();
+    await act(async () => {});
+    expect(screen.queryByText("Controllers and resources")).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Controllers/ })).toBeNull();
   });
 
   it("redirects the old integrations URL, keeping query and hash", () => {
@@ -160,7 +169,7 @@ describe("Extensions section", () => {
 
   it("offers the instance administrator the settings link and the install button", async () => {
     renderAt("/w/acme/extensions");
-    expect((await screen.findByText("Instance settings")).closest("a")?.getAttribute("href")).toBe("/w/acme/instance/extensions");
+    expect((await screen.findByText("Instance settings")).closest("a")?.getAttribute("href")).toBe("/w/acme/instance");
     fireEvent.click(screen.getByRole("button", { name: /Install from repository/ }));
     expect(screen.getByRole("dialog", { name: "Install from repository" })).toBeTruthy();
   });
@@ -177,7 +186,7 @@ describe("Extensions section", () => {
     it("an instance admin sees the link without opening the Installed tab", async () => {
       mountWith("admin", true);
       const link = await screen.findByText("Instance settings");
-      expect(link.closest("a")?.getAttribute("href")).toBe("/w/acme/instance/extensions");
+      expect(link.closest("a")?.getAttribute("href")).toBe("/w/acme/instance");
     });
 
     it("an instance admin who is only a member of this workspace still sees the link", async () => {

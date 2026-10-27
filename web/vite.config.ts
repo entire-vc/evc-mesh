@@ -111,12 +111,14 @@ export default defineConfig({
     // Read by web/perf/check-bundle-budget.mjs to find the entry chunk and
     // its static imports without guessing filenames from hashed output.
     manifest: true,
+    // Every browser we support handles <link rel="modulepreload"> natively;
+    // where it doesn't, the entry's static imports still load through the
+    // module graph. The polyfill only cost bytes in the entry chunk.
+    modulePreload: { polyfill: false },
     outDir: PERF_PROFILER ? "dist-perf" : "dist",
     rolldownOptions: {
       output: {
         codeSplitting: {
-          // Pack the tiny icon chunks to share gzip dictionaries, while
-          // keeping route-only icons out of the initial login download.
           groups: [
             // The ru catalogs load only for a Russian session, so one chunk
             // costs an English user nothing and the 13 small JSON modules
@@ -133,12 +135,22 @@ export default defineConfig({
               test: /src[\\/]lib[\\/]extension-(?:repo|instance|settings|connect|admin)\./,
               includeDependenciesRecursively: false,
             },
+            // Everything /login loads before first paint goes in one chunk, its icons
+            // included: a separate initial icon chunk imports the lucide helper from
+            // this one and this one imports the icons back, and that cycle ran the
+            // icons before the helper existed ("t is not a function" on /register).
+            // The same modules used to ship as ~25 chunks of a few hundred bytes
+            // each, every one paying its own gzip header and import/export glue.
+            // Locale JSON is kept out: the test-only eager glob in
+            // src/i18n/index.ts marks every catalog $initial before the branch is
+            // dropped, which would pull the lazy namespaces into this chunk.
             {
-              name: "icons-initial",
-              test: /node_modules[\\/]lucide-react[\\/]/,
+              name: "app-initial",
+              test: /^(?!.*src[\\/]locales[\\/](?!(?:en|ru)[\\/]common\.json))/,
               tags: ["$initial"],
               includeDependenciesRecursively: false,
             },
+            // Route-only icons share one gzip dictionary and stay out of /login.
             {
               name: "icons-lazy",
               test: /node_modules[\\/]lucide-react[\\/]/,

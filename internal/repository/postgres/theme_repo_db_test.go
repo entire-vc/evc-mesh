@@ -137,3 +137,51 @@ func TestThemeRepo_DeleteTheme(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok, "already gone")
 }
+
+// A theme in effect in a workspace counts as used there, whether the workspace
+// chose it or inherits the instance default; an explicit choice beats the default
+// and a soft-deleted workspace is not counted.
+func TestInstalledExtensionRepo_CountActiveConnectionsThemes(t *testing.T) {
+	repo, db, wsA := themeFixture(t)
+	counter := NewInstalledExtensionRepo(db)
+	ctx, by := context.Background(), uuid.New()
+	chosen, inherited := "tcount-"+uuid.NewString()[:8], "tcount-"+uuid.NewString()[:8]
+	for _, id := range []string{chosen, inherited} {
+		_, err := db.Exec(`INSERT INTO installed_extensions(extension_id,version,manifest,source,trust_level) VALUES($1,'1.0.0','{"kind":"theme"}','repo','custom')`, id)
+		require.NoError(t, err)
+		t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM installed_extensions WHERE extension_id=$1`, id) })
+	}
+	before, err := repo.GetInstance(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = repo.SetInstance(ctx, before.ThemeID, before.Settings, by, nil) })
+
+	gone := uuid.New()
+	_, err = db.Exec(`INSERT INTO workspaces(id,name,slug,owner_id,deleted_at) VALUES($1,'theme fixture gone',$2,$3,now())`, gone, gone.String(), uuid.New())
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM workspaces WHERE id=$1", gone) })
+	for _, ws := range []uuid.UUID{wsA, gone} {
+		_, err = repo.SetWorkspace(ctx, ws, &chosen, nil, by, nil)
+		require.NoError(t, err)
+	}
+
+	_, err = repo.SetInstance(ctx, nil, nil, by, nil)
+	require.NoError(t, err)
+	got, err := counter.CountActiveConnections(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, got[chosen], "an explicit choice counts; the soft-deleted workspace does not")
+	require.Zero(t, got[inherited])
+
+	_, err = repo.SetInstance(ctx, &inherited, nil, by, nil)
+	require.NoError(t, err)
+	withDefault, err := counter.CountActiveConnections(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, withDefault[chosen], "the explicit choice beats the instance default")
+	require.Positive(t, withDefault[inherited], "workspaces with no choice inherit the instance default")
+
+	_, err = repo.SetWorkspace(ctx, wsA, nil, nil, by, nil)
+	require.NoError(t, err)
+	asInstance, err := counter.CountActiveConnections(ctx)
+	require.NoError(t, err)
+	require.Zero(t, asInstance[chosen])
+	require.Equal(t, withDefault[inherited]+1, asInstance[inherited], "\"as the instance\" moves the workspace to the default")
+}

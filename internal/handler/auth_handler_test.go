@@ -1,14 +1,18 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -384,6 +388,50 @@ func TestAuthHandler_Refresh_RotatesCookie(t *testing.T) {
 
 	rotated := findRefreshCookie(t, rec)
 	assert.NotEqual(t, firstCookie.Value, rotated.Value, "refresh must rotate the token, not reissue the same one")
+}
+
+// failingCreateRefreshTokenRepo fails every Create once failCreate is set: the
+// successor write of a rotation that has already revoked the presented token.
+type failingCreateRefreshTokenRepo struct {
+	*authTestRefreshTokenRepo
+	failCreate atomic.Bool
+}
+
+func (r *failingCreateRefreshTokenRepo) Create(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
+	if r.failCreate.Load() {
+		return context.DeadlineExceeded
+	}
+	return r.authTestRefreshTokenRepo.Create(ctx, userID, tokenHash, expiresAt)
+}
+
+// TestAuthHandler_Refresh_RotationWriteFails_LogsCause: prod 27.10 answered a
+// refresh with 500 and logged nothing about why — the service returns repo
+// failures already wrapped as *apierror.Error, which handleError answers
+// without a log line. The cause must reach the log.
+func TestAuthHandler_Refresh_RotationWriteFails_LogsCause(t *testing.T) {
+	repo := &failingCreateRefreshTokenRepo{authTestRefreshTokenRepo: newAuthTestRefreshTokenRepo()}
+	authSvc := auth.NewService(newAuthTestUserRepo(), repo, &authTestWorkspaceRepo{}, authTestWorkspaceMemberRepo{}, "test-secret-key-for-jwt-signing-32b")
+	h, e := NewAuthHandler(authSvc), echo.New()
+
+	regBody := `{"email":"refresh-500@example.com","password":"StrongP4ss","name":"Refresh 500"}`
+	regReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(regBody))
+	regReq.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	regRec := httptest.NewRecorder()
+	require.NoError(t, h.Register(e.NewContext(regReq, regRec)))
+	cookie := findRefreshCookie(t, regRec)
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	repo.failCreate.Store(true)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", http.NoBody)
+	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: cookie.Value}) // nosemgrep: go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly,go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure -- request cookie header only
+	rec := httptest.NewRecorder()
+	require.NoError(t, h.Refresh(e.NewContext(req, rec)))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, logBuf.String(), "ERROR POST /api/v1/auth/refresh: context deadline exceeded")
 }
 
 // TestAuthHandler_Refresh_ReusedToken_ClearsCookieAndReturns401 pins AC7 (from

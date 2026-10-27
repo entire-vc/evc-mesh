@@ -64,6 +64,19 @@ describe("new SchemaForm widgets", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("an unset colour shows what applies instead of a black swatch", () => {
+    const accent: FieldSchema = { type: "string", title: "Accent", "x-widget": "color", "x-token": "primary" };
+    const { unmount } = render(<SchemaForm schema={{ type: "object", properties: { accent } }} tokenValues={{ primary: "0 100% 50%" }} onSubmit={vi.fn()} />);
+    const swatch = screen.getByLabelText("Pick a colour: Accent") as HTMLInputElement;
+    expect(swatch.value).toBe("#ff0000");
+    expect((screen.getByLabelText("Accent") as HTMLInputElement).placeholder).toBe("#ff0000");
+    expect(swatch.dataset.empty).toBeUndefined();
+    unmount();
+    // nothing known to apply: the swatch is drawn empty, not as #000000 next to a placeholder
+    form({ accent });
+    expect((screen.getByLabelText("Pick a colour: Accent") as HTMLInputElement).dataset.empty).toBe("true");
+  });
+
   it("a token colour out of range blocks the save", async () => {
     const onSubmit = form({ accent: { type: "string", title: "Accent", "x-widget": "color", "x-token": "primary" } }, undefined, { accent: "999 999% 999%" });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));

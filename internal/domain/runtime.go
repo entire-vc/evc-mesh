@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
 	apicontract "github.com/entire-vc/evc-mesh/docs/api"
 )
@@ -244,18 +245,113 @@ func runtimeJSONValue(d *json.Decoder, depth int) error {
 	return nil
 }
 
-func ParseRuntimeCatalog(data []byte) (*RuntimeCatalog, error) {
-	var catalog RuntimeCatalog
-	if err := DecodeRuntimeJSON(data, &catalog); err != nil {
-		return nil, err
+// RuntimeFieldErrors names what is wrong with a catalog, field by field: a
+// dotted path from the catalog root ("pools.<name>.max_concurrency") mapped to
+// a stable reason code (see the RuntimeField* constants). It wraps
+// ErrRuntimeInput, so callers that only need "invalid" keep working. Codes, not
+// values: a submitted value (possibly a pasted secret) is never echoed.
+type RuntimeFieldErrors map[string]string
+
+const (
+	RuntimeFieldUnknown   = "unknown_field"
+	RuntimeFieldRequired  = "required"
+	RuntimeFieldInvalid   = "invalid"
+	RuntimeFieldMissing   = "missing_reference"
+	RuntimeFieldProvider  = "provider_mismatch"
+	RuntimeFieldDuplicate = "duplicate"
+	RuntimeFieldNoMode    = "mode_without_pools"
+	RuntimeFieldCapable   = "capability_not_on_controller"
+	RuntimeFieldPermitted = "not_permitted"
+)
+
+func (e RuntimeFieldErrors) Error() string { return ErrRuntimeInput.Error() }
+func (e RuntimeFieldErrors) Unwrap() error { return ErrRuntimeInput }
+
+func (e RuntimeFieldErrors) add(code string, path ...string) {
+	key := ""
+	for i, p := range path {
+		if i > 0 {
+			key += "."
+		}
+		key += p
 	}
+	if _, seen := e[key]; !seen {
+		e[key] = code
+	}
+}
+
+func (e RuntimeFieldErrors) orNil() error {
+	if len(e) == 0 {
+		return nil
+	}
+	return e
+}
+
+// schemaFieldErrors flattens a schema validation failure to its leaves.
+func schemaFieldErrors(err error) RuntimeFieldErrors {
+	out := RuntimeFieldErrors{}
+	var walk func(v *jsonschema.ValidationError)
+	walk = func(v *jsonschema.ValidationError) {
+		if len(v.Causes) > 0 {
+			for _, c := range v.Causes {
+				walk(c)
+			}
+			return
+		}
+		at := v.InstanceLocation
+		switch k := v.ErrorKind.(type) {
+		case *kind.AdditionalProperties:
+			for _, name := range k.Properties {
+				out.add(RuntimeFieldUnknown, append(slices.Clone(at), name)...)
+			}
+		case *kind.Required:
+			for _, name := range k.Missing {
+				out.add(RuntimeFieldRequired, append(slices.Clone(at), name)...)
+			}
+		default:
+			out.add(RuntimeFieldInvalid, at...)
+		}
+	}
+	var v *jsonschema.ValidationError
+	if errors.As(err, &v) {
+		walk(v)
+	}
+	if len(out) == 0 {
+		out.add(RuntimeFieldInvalid)
+	}
+	return out
+}
+
+// ParseRuntimeCatalog decodes and validates a catalog. A well-formed JSON
+// document that breaks the schema or a reference rule fails with
+// RuntimeFieldErrors; anything else with plain ErrRuntimeInput.
+func ParseRuntimeCatalog(data []byte) (*RuntimeCatalog, error) {
+	if len(data) > 1<<20 {
+		return nil, ErrRuntimeInput
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
+	if err := runtimeJSONValue(d, 0); err != nil {
+		return nil, ErrRuntimeInput
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return nil, ErrRuntimeInput
+	}
+	// The schema runs first: it names the field (an unknown key, a missing one),
+	// where the strict decoder below only says "invalid".
 	schema, err := catalogSchema()
 	if err != nil {
 		return nil, err
 	}
 	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
-	if err != nil || schema.Validate(value) != nil {
+	if err != nil {
 		return nil, ErrRuntimeInput
+	}
+	if err = schema.Validate(value); err != nil {
+		return nil, schemaFieldErrors(err)
+	}
+	var catalog RuntimeCatalog
+	if err := DecodeRuntimeJSON(data, &catalog); err != nil {
+		return nil, err
 	}
 	if err := catalog.ValidateReferences(); err != nil {
 		return nil, err
@@ -275,74 +371,91 @@ func (c *RuntimeCatalog) ResolvePool(ref string) (string, bool) {
 	return "", false
 }
 
+// ValidateReferences checks what the schema cannot: that every reference
+// names an existing resource of the right provider. Every offending field is
+// reported (RuntimeFieldErrors), not only the first.
 func (c *RuntimeCatalog) ValidateReferences() error {
+	errs := RuntimeFieldErrors{}
 	aliases, physical := map[string]bool{}, map[string]bool{}
-	for ref, p := range c.Pools {
+	for _, ref := range sortedKeys(c.Pools) {
+		p := c.Pools[ref]
 		key := p.Provider + "\x00" + p.ResourceRef
 		if physical[key] {
-			return ErrRuntimeInput
+			errs.add(RuntimeFieldDuplicate, "pools", ref, "resource_ref")
 		}
 		physical[key] = true
 		for _, a := range p.Aliases {
 			_, named := c.Pools[a]
 			if a == ref || named || aliases[a] {
-				return ErrRuntimeInput
+				errs.add(RuntimeFieldDuplicate, "pools", ref, "aliases")
 			}
 			aliases[a] = true
 		}
 	}
-	for _, a := range c.Accounts {
-		for _, refs := range a.QuotaPoolsByMode {
+	for name, a := range c.Accounts {
+		for mode, refs := range a.QuotaPoolsByMode {
 			for _, ref := range refs {
-				name, ok := c.ResolvePool(ref)
-				if !ok || c.Pools[name].Provider != a.Provider {
-					return ErrRuntimeInput
+				pool, ok := c.ResolvePool(ref)
+				if !ok {
+					errs.add(RuntimeFieldMissing, "accounts", name, "quota_pools_by_mode", mode)
+				} else if c.Pools[pool].Provider != a.Provider {
+					errs.add(RuntimeFieldProvider, "accounts", name, "quota_pools_by_mode", mode)
 				}
 			}
 		}
 	}
-	for _, p := range c.Profiles {
+	for name, p := range c.Profiles {
 		controller, ok := c.Controllers[p.ControllerRef]
+		if !ok {
+			errs.add(RuntimeFieldMissing, "profiles", name, "controller_ref")
+		}
 		account, aok := c.Accounts[p.AccountRef]
-		if !ok || !aok || len(account.QuotaPoolsByMode[p.ExecutionMode]) == 0 {
-			return ErrRuntimeInput
+		if !aok {
+			errs.add(RuntimeFieldMissing, "profiles", name, "account_ref")
+		} else if len(account.QuotaPoolsByMode[p.ExecutionMode]) == 0 {
+			errs.add(RuntimeFieldNoMode, "profiles", name, "execution_mode")
 		}
 		for _, cap := range p.Capabilities {
-			if !slices.Contains(controller.Capabilities, cap) {
-				return ErrRuntimeInput
+			if ok && !slices.Contains(controller.Capabilities, cap) {
+				errs.add(RuntimeFieldCapable, "profiles", name, "capabilities")
 			}
 		}
 	}
 	identities := map[RuntimeIdentity]bool{}
-	for _, b := range c.Bindings {
+	for _, name := range sortedKeys(c.Bindings) {
+		b := c.Bindings[name]
 		if identities[b.Binding] {
-			return ErrRuntimeInput
+			errs.add(RuntimeFieldDuplicate, "bindings", name, "binding")
 		}
 		identities[b.Binding] = true
 		for _, ref := range b.PermittedProfiles {
 			if _, ok := c.Profiles[ref]; !ok {
-				return ErrRuntimeInput
+				errs.add(RuntimeFieldMissing, "bindings", name, "permitted_profiles")
 			}
 		}
 		for _, ref := range b.Policy.PrimaryProfiles {
 			if !slices.Contains(b.PermittedProfiles, ref) {
-				return ErrRuntimeInput
+				errs.add(RuntimeFieldPermitted, "bindings", name, "policy", "primary_profiles")
 			}
 		}
 		for from, targets := range b.Policy.QuotaEdges {
 			if !slices.Contains(b.PermittedProfiles, from) {
-				return ErrRuntimeInput
+				errs.add(RuntimeFieldPermitted, "bindings", name, "policy", "quota_edges")
 			}
 			for _, target := range targets {
 				if !slices.Contains(b.PermittedProfiles, target) {
-					return ErrRuntimeInput
+					errs.add(RuntimeFieldPermitted, "bindings", name, "policy", "quota_edges")
 				}
 			}
 		}
 		for provider, account := range b.Policy.PreferredAccounts {
 			a, ok := c.Accounts[account]
-			if !ok || a.Provider != provider {
-				return ErrRuntimeInput
+			if !ok {
+				errs.add(RuntimeFieldMissing, "bindings", name, "policy", "preferred_accounts")
+				continue
+			}
+			if a.Provider != provider {
+				errs.add(RuntimeFieldProvider, "bindings", name, "policy", "preferred_accounts")
 			}
 			permitted := false
 			for _, ref := range b.PermittedProfiles {
@@ -351,11 +464,23 @@ func (c *RuntimeCatalog) ValidateReferences() error {
 				}
 			}
 			if !permitted {
-				return ErrRuntimeInput
+				errs.add(RuntimeFieldPermitted, "bindings", name, "policy", "preferred_accounts")
 			}
 		}
 	}
-	return nil
+	return errs.orNil()
+}
+
+// sortedKeys orders checks whose outcome depends on visiting order (the
+// second of two duplicates is the one reported), so the same catalog always
+// names the same field.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // RuntimeDesired is one controller's slice of the desired catalog. It holds

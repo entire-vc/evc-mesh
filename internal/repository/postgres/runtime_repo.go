@@ -16,6 +16,8 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/runner"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -28,9 +30,18 @@ type RuntimeActor struct {
 }
 
 type RuntimeSave struct {
-	IfRevision int64           `json:"if_revision"`
-	Enabled    *bool           `json:"enabled"`
-	Config     json.RawMessage `json:"config"`
+	IfRevision int64 `json:"if_revision"`
+	// Enabled is accepted for compatibility and ignored: the Runner is switched
+	// on and off only by the extension enable/disable endpoints.
+	Enabled *bool           `json:"enabled"`
+	Config  json.RawMessage `json:"config"`
+}
+
+// RuntimeRestore is the body of POST /runtime/restore: save the stored catalog
+// of Revision as a new revision on top of IfRevision.
+type RuntimeRestore struct {
+	IfRevision int64 `json:"if_revision"`
+	Revision   int64 `json:"revision"`
 }
 
 // RuntimePolicySave is the strict body of PUT .../bindings/:id/policy.
@@ -66,9 +77,19 @@ type RuntimeBindingView struct {
 	PolicyProjection         map[string]any                   `json:"policy_projection"`
 }
 
-type RuntimeRepo struct{ db *sqlx.DB }
+type RuntimeRepo struct {
+	db    *sqlx.DB
+	allow extensions.AllowList
+}
 
 func NewRuntimeRepo(db *sqlx.DB) *RuntimeRepo { return &RuntimeRepo{db: db} }
+
+// WithAllowList makes a save (or restore) into a Runner that is on refuse while
+// the instance allow-list does not allow it; saving it switched off stays allowed.
+func (r *RuntimeRepo) WithAllowList(a extensions.AllowList) *RuntimeRepo {
+	r.allow = a
+	return r
+}
 
 // admin must be checked in the transaction too: a route-level role check is not
 // sufficient to authorize administration of somebody else's provider resource.
@@ -144,8 +165,8 @@ func runtimeRevision(ctx context.Context, q sqlx.QueryerContext, id uuid.UUID) (
 }
 
 func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor, input RuntimeSave) (*domain.RuntimeSnapshot, error) {
-	if input.IfRevision < 0 || input.Enabled == nil {
-		return nil, apierror.BadRequest("if_revision and enabled are required")
+	if input.IfRevision < 0 {
+		return nil, apierror.BadRequest("if_revision is required")
 	}
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -164,13 +185,24 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO integration_configs(id,workspace_id,provider,config,is_active) SELECT $1::uuid,$2::uuid,'agent_runtime','{}'::jsonb,false WHERE NOT EXISTS (SELECT 1 FROM integration_configs WHERE workspace_id=$2::uuid AND provider IN ('runner','agent_runtime')) ON CONFLICT(workspace_id,provider) DO NOTHING`, uuid.New(), ws)
+	// A connection created here starts on, as one created by the extension
+	// enable does; afterwards only that switch changes it.
+	_, err = tx.ExecContext(ctx, `INSERT INTO integration_configs(id,workspace_id,provider,config,is_active) SELECT $1::uuid,$2::uuid,'agent_runtime','{}'::jsonb,true WHERE NOT EXISTS (SELECT 1 FROM integration_configs WHERE workspace_id=$2::uuid AND provider IN ('runner','agent_runtime')) ON CONFLICT(workspace_id,provider) DO NOTHING`, uuid.New(), ws)
 	if err != nil {
 		return nil, err
 	}
 	connection, err := runtimeConnection(ctx, tx, ws, true)
 	if err != nil {
 		return nil, err
+	}
+	// A Runner that is on (a connection created above starts on) takes a new
+	// catalog only while the instance allow-list allows it; one switched off
+	// can still be edited.
+	if connection.IsActive {
+		err = extensions.RequireAllowed(ctx, r.allow, runner.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	revision, _, err := runtimeRevision(ctx, tx, connection.ID)
 	if err != nil {
@@ -192,6 +224,17 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	}
 	catalog, err := domain.ParseRuntimeCatalog(config)
 	if err != nil {
+		// Field by field, so the editor can put each reason next to its field.
+		var fields domain.RuntimeFieldErrors
+		if errors.As(err, &fields) {
+			out := make(map[string]string, len(fields))
+			for path, code := range fields {
+				out["config."+path] = code
+			}
+			e := apierror.ValidationError(out)
+			e.Message = "invalid runtime catalog"
+			return nil, e
+		}
 		return nil, apierror.BadRequest("invalid runtime catalog")
 	}
 	canonical, err := json.Marshal(catalog)
@@ -220,11 +263,13 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 		}
 	}
 	revision++
-	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_catalog_revisions(integration_id,revision,digest,config,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6)`, connection.ID, revision, digest, canonical, *input.Enabled, actor.UserID)
+	// enabled is carried from the connection: a catalog edit never switches
+	// the Runner, so a stale editor cannot undo an operator's disable.
+	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_catalog_revisions(integration_id,revision,digest,config,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6)`, connection.ID, revision, digest, canonical, connection.IsActive, actor.UserID)
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE integration_configs SET config=$2,is_active=$3,updated_at=now() WHERE id=$1`, connection.ID, canonical, *input.Enabled)
+	_, err = tx.ExecContext(ctx, `UPDATE integration_configs SET config=$2,updated_at=now() WHERE id=$1`, connection.ID, canonical)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +277,96 @@ func (r *RuntimeRepo) Save(ctx context.Context, ws uuid.UUID, actor RuntimeActor
 	if err != nil {
 		return nil, err
 	}
-	return &domain.RuntimeSnapshot{Mode: "managed", Revision: revision, Digest: digest, Enabled: *input.Enabled, DrainRequested: !*input.Enabled, Catalog: catalog.Redacted(), Controllers: []domain.RuntimeControllerState{}}, nil
+	return &domain.RuntimeSnapshot{Mode: "managed", Revision: revision, Digest: digest, Enabled: connection.IsActive, DrainRequested: !connection.IsActive, Catalog: catalog.Redacted(), Controllers: []domain.RuntimeControllerState{}}, nil
+}
+
+// Restore saves the catalog of an earlier revision as a new revision. The
+// config, credential references included, comes from the stored row, never
+// from the client, and goes through the same validation and CAS as Save.
+func (r *RuntimeRepo) Restore(ctx context.Context, ws uuid.UUID, actor RuntimeActor, input RuntimeRestore) (*domain.RuntimeSnapshot, error) {
+	if input.IfRevision < 0 || input.Revision < 1 {
+		return nil, apierror.BadRequest("if_revision and revision are required")
+	}
+	if err := runtimeAdmin(ctx, r.db, ws, actor); err != nil {
+		return nil, err
+	}
+	connection, err := runtimeConnection(ctx, r.db, ws, false)
+	if err != nil {
+		return nil, err
+	}
+	if connection == nil {
+		return nil, apierror.NotFound("Runtime revision")
+	}
+	var config []byte
+	err = r.db.GetContext(ctx, &config, `SELECT config FROM runtime_catalog_revisions WHERE integration_id=$1 AND revision=$2`, connection.ID, input.Revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, apierror.NotFound("Runtime revision")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.Save(ctx, ws, actor, RuntimeSave{IfRevision: input.IfRevision, Config: config})
+}
+
+type runtimeAuthorKey struct{}
+
+// WithRuntimeAuthor records the signed-in user behind a Runner on/off switch:
+// the switch appends a catalog revision, and a revision needs an author.
+func WithRuntimeAuthor(ctx context.Context, user uuid.UUID) context.Context {
+	return context.WithValue(ctx, runtimeAuthorKey{}, user)
+}
+
+func runtimeAuthor(ctx context.Context) uuid.UUID {
+	user, _ := ctx.Value(runtimeAuthorKey{}).(uuid.UUID)
+	return user
+}
+
+// setRunnerActive is the one Runner on/off switch. Controllers drain on the
+// latest revision's enabled, not on is_active, so a flip that changes it is
+// appended as a revision with the same catalog, authored by the ctx user.
+func setRunnerActive(ctx context.Context, db *sqlx.DB, ws, id uuid.UUID, active bool) error {
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = lockRunnerConnection(ctx, tx, ws)
+	if err != nil {
+		return err
+	}
+	var locked uuid.UUID
+	err = tx.GetContext(ctx, &locked, `SELECT id FROM integration_configs WHERE id=$1 FOR UPDATE`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return apierror.NotFound("Integration")
+	}
+	if err != nil {
+		return err
+	}
+	var latest struct {
+		Revision int64  `db:"revision"`
+		Digest   string `db:"digest"`
+		Config   []byte `db:"config"`
+		Enabled  bool   `db:"enabled"`
+	}
+	err = tx.GetContext(ctx, &latest, `SELECT revision,digest,config,enabled FROM runtime_catalog_revisions WHERE integration_id=$1 ORDER BY revision DESC LIMIT 1`, id)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// Nothing saved yet: there is no catalog for a controller to drain.
+	case err != nil:
+		return err
+	case latest.Enabled != active:
+		author := runtimeAuthor(ctx)
+		if author == uuid.Nil {
+			return apierror.Forbidden("switching the Runner requires a signed-in user")
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO runtime_catalog_revisions(integration_id,revision,digest,config,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6)`, id, latest.Revision+1, latest.Digest, latest.Config, active, author); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE integration_configs SET is_active=$2,updated_at=now() WHERE id=$1`, id, active); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // inheritCredentialRefs fills an account's missing or empty credential_ref from

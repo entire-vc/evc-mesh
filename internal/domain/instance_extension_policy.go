@@ -44,6 +44,30 @@ type InstanceExtensionJournalEntry struct {
 	CreatedAt   time.Time       `db:"created_at"`
 }
 
+// InstanceJournalFilter narrows the admin journal. Zero values do not filter;
+// Since is inclusive, Until exclusive.
+type InstanceJournalFilter struct {
+	Limit       int
+	ExtensionID string
+	Action      string
+	ActorID     *uuid.UUID
+	Since       *time.Time
+	Until       *time.Time
+}
+
+// InstanceJournalActor is one person who appears in the admin journal.
+type InstanceJournalActor struct {
+	ID   uuid.UUID `db:"id" json:"id"`
+	Name string    `db:"name" json:"name"`
+}
+
+// InstanceJournalFacets lists the values the journal can be filtered by.
+type InstanceJournalFacets struct {
+	Actions    []string               `json:"actions"`
+	Actors     []InstanceJournalActor `json:"actors"`
+	Extensions []string               `json:"extensions"`
+}
+
 // DefaultExtensionAllowed is the allow-list default for a trust level:
 // official and verified (and the builtin class) are on, community and custom
 // need an explicit allow.

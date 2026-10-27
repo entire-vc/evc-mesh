@@ -34,7 +34,9 @@
     "catalog": {
       "type": "object",
       "title": "Runner catalog (versioned through the runtime API)",
-      "title_i18n": { "ru": "Каталог Runner (версионируется через API рантайма)" },
+      "title_i18n": {
+        "ru": "Каталог Runner (версионируется через API рантайма)"
+      },
       "properties": {
         "schema_version": {
           "type": "integer",
@@ -43,27 +45,52 @@
         "controllers": {
           "type": "object",
           "title": "Host controllers",
-          "title_i18n": { "ru": "Контроллеры хостов" }
+          "title_i18n": {
+            "ru": "Контроллеры хостов"
+          },
+          "additionalProperties": {
+            "$ref": "#/schemas/controller"
+          }
         },
         "accounts": {
           "type": "object",
           "title": "Provider accounts",
-          "title_i18n": { "ru": "Аккаунты провайдеров" }
+          "title_i18n": {
+            "ru": "Аккаунты провайдеров"
+          },
+          "additionalProperties": {
+            "$ref": "#/schemas/account"
+          }
         },
         "pools": {
           "type": "object",
           "title": "Resource pools",
-          "title_i18n": { "ru": "Пулы ресурсов" }
+          "title_i18n": {
+            "ru": "Пулы ресурсов"
+          },
+          "additionalProperties": {
+            "$ref": "#/schemas/pool"
+          }
         },
         "profiles": {
           "type": "object",
           "title": "Launch profiles",
-          "title_i18n": { "ru": "Профили запуска" }
+          "title_i18n": {
+            "ru": "Профили запуска"
+          },
+          "additionalProperties": {
+            "$ref": "#/schemas/profile"
+          }
         },
         "bindings": {
           "type": "object",
           "title": "Agent bindings",
-          "title_i18n": { "ru": "Привязки агентов" }
+          "title_i18n": {
+            "ru": "Привязки агентов"
+          },
+          "additionalProperties": {
+            "$ref": "#/schemas/binding"
+          }
         }
       },
       "required": [
@@ -75,6 +102,721 @@
         "bindings"
       ],
       "additionalProperties": false
+    },
+    "controller": {
+      "type": "object",
+      "title": "Host controller",
+      "title_i18n": {
+        "ru": "Контроллер хоста"
+      },
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string",
+          "title": "Host",
+          "title_i18n": {
+            "ru": "Хост"
+          },
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$",
+          "maxLength": 200
+        },
+        "version": {
+          "type": "string",
+          "title": "Version",
+          "title_i18n": {
+            "ru": "Версия"
+          },
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$",
+          "maxLength": 200
+        },
+        "reporter_grant_id": {
+          "type": "string",
+          "title": "Reporter grant ID",
+          "title_i18n": {
+            "ru": "ID доступа для отчётов"
+          },
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "capabilities": {
+          "type": "array",
+          "title": "Capabilities",
+          "title_i18n": {
+            "ru": "Возможности"
+          },
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": []
+        },
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "title_i18n": {
+            "ru": "Включён"
+          },
+          "default": true
+        },
+        "heartbeat_max_age_seconds": {
+          "type": "integer",
+          "title": "Heartbeat timeout, seconds",
+          "title_i18n": {
+            "ru": "Таймаут сердцебиения, секунд"
+          },
+          "minimum": 1,
+          "maximum": 86400,
+          "default": 60
+        }
+      },
+      "required": [
+        "host",
+        "version",
+        "reporter_grant_id",
+        "capabilities",
+        "enabled",
+        "heartbeat_max_age_seconds"
+      ]
+    },
+    "account": {
+      "type": "object",
+      "title": "Provider account",
+      "title_i18n": {
+        "ru": "Аккаунт провайдера"
+      },
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "title": "Provider",
+          "title_i18n": {
+            "ru": "Провайдер"
+          },
+          "x-help": "Whose subscription or API key this account is.",
+          "x-help_i18n": {
+            "ru": "Чья подписка или ключ API у этого аккаунта."
+          },
+          "enum": [
+            "anthropic",
+            "openai",
+            "zai"
+          ],
+          "x-options": {
+            "anthropic": "Anthropic",
+            "openai": "OpenAI",
+            "zai": "Z.ai"
+          }
+        },
+        "credential_ref": {
+          "type": "string",
+          "title": "Credential reference",
+          "title_i18n": {
+            "ru": "Ссылка на учётные данные"
+          },
+          "x-help": "A cred:… reference to the secret kept on the runner host, never the secret itself. It is not shown after saving; leave it unchanged to keep the stored one.",
+          "x-help_i18n": {
+            "ru": "Ссылка cred:… на секрет, который хранится на хосте раннера, а не сам секрет. После сохранения не показывается; не меняйте, чтобы оставить сохранённую."
+          },
+          "pattern": "^cred:[a-zA-Z0-9][a-zA-Z0-9._/-]*$",
+          "maxLength": 200,
+          "x-secret": true
+        },
+        "quota_pools_by_mode": {
+          "type": "object",
+          "title": "Quota pools",
+          "title_i18n": {
+            "ru": "Пулы квоты"
+          },
+          "x-help": "Pools this account draws on, per launch mode. A profile can run in a mode only if its account has pools for it.",
+          "x-help_i18n": {
+            "ru": "Из каких пулов аккаунт берёт квоту в каждом режиме запуска. Профиль работает в режиме, только если у его аккаунта есть пулы для него."
+          },
+          "properties": {
+            "subscription": {
+              "type": "array",
+              "title": "Subscription mode",
+              "title_i18n": {
+                "ru": "Режим подписки"
+              },
+              "x-help": "Pools a subscription-mode run of this account draws on.",
+              "x-help_i18n": {
+                "ru": "Пулы, из которых расходуется квота при запуске по подписке."
+              },
+              "items": {
+                "type": "string",
+                "x-ref": "pools"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "default": []
+            },
+            "api": {
+              "type": "array",
+              "title": "API mode",
+              "title_i18n": {
+                "ru": "Режим API"
+              },
+              "x-help": "Pools an API-mode run of this account draws on.",
+              "x-help_i18n": {
+                "ru": "Пулы, из которых расходуется квота при запуске через API."
+              },
+              "items": {
+                "type": "string",
+                "x-ref": "pools"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "provider",
+        "credential_ref",
+        "quota_pools_by_mode"
+      ]
+    },
+    "pool": {
+      "type": "object",
+      "title": "Resource pool",
+      "title_i18n": {
+        "ru": "Пул ресурсов"
+      },
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "title": "Provider",
+          "title_i18n": {
+            "ru": "Провайдер"
+          },
+          "x-help": "Whose quota this pool counts. Only accounts of the same provider can use it.",
+          "x-help_i18n": {
+            "ru": "Чью квоту считает пул. Использовать его могут только аккаунты того же провайдера."
+          },
+          "enum": [
+            "anthropic",
+            "openai",
+            "zai"
+          ],
+          "x-options": {
+            "anthropic": "Anthropic",
+            "openai": "OpenAI",
+            "zai": "Z.ai"
+          }
+        },
+        "resource_ref": {
+          "type": "string",
+          "title": "Provider resource",
+          "title_i18n": {
+            "ru": "Ресурс у провайдера"
+          },
+          "x-help": "The quota window as the provider names it (for example the 5-hour window of one subscription). Two pools may not name the same resource.",
+          "x-help_i18n": {
+            "ru": "Окно квоты так, как его называет провайдер (например, 5-часовое окно одной подписки). Два пула не могут указывать один ресурс."
+          },
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "title": "Concurrent runs, at most",
+          "title_i18n": {
+            "ru": "Одновременных запусков, не больше"
+          },
+          "x-help": "How many agent runs may hold this pool at once.",
+          "x-help_i18n": {
+            "ru": "Сколько запусков агентов могут одновременно занимать этот пул."
+          },
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 1
+        },
+        "aliases": {
+          "type": "array",
+          "title": "Other names",
+          "title_i18n": {
+            "ru": "Другие имена"
+          },
+          "x-help": "Names under which other accounts see the same pool.",
+          "x-help_i18n": {
+            "ru": "Имена, под которыми этот же пул видят другие аккаунты."
+          },
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": []
+        },
+        "threshold_ref": {
+          "type": "string",
+          "title": "Quota threshold",
+          "title_i18n": {
+            "ru": "Порог квоты"
+          },
+          "x-help": "Optional: the threshold the runner reports this pool against.",
+          "x-help_i18n": {
+            "ru": "Необязательно: порог, по которому раннер сообщает о состоянии пула."
+          },
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+        }
+      },
+      "required": [
+        "provider",
+        "resource_ref",
+        "aliases",
+        "max_concurrency"
+      ]
+    },
+    "profile": {
+      "type": "object",
+      "title": "Launch profile",
+      "title_i18n": {
+        "ru": "Профиль запуска"
+      },
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "title_i18n": {
+            "ru": "Включён"
+          },
+          "x-help": "A turned-off profile is kept but never chosen for a run.",
+          "x-help_i18n": {
+            "ru": "Выключенный профиль сохраняется, но для запусков не выбирается."
+          },
+          "default": true
+        },
+        "account_ref": {
+          "type": "string",
+          "title": "Account",
+          "title_i18n": {
+            "ru": "Аккаунт"
+          },
+          "x-help": "Whose quota the runs of this profile spend.",
+          "x-help_i18n": {
+            "ru": "Чью квоту тратят запуски этого профиля."
+          },
+          "x-ref": "accounts"
+        },
+        "execution_mode": {
+          "type": "string",
+          "title": "Launch mode",
+          "title_i18n": {
+            "ru": "Режим запуска"
+          },
+          "x-help": "Subscription or pay-per-use API. The account needs pools for this mode.",
+          "x-help_i18n": {
+            "ru": "Подписка или оплата API за использование. У аккаунта должны быть пулы для этого режима."
+          },
+          "enum": [
+            "subscription",
+            "api"
+          ],
+          "x-options": {
+            "subscription": "Subscription",
+            "api": "API"
+          },
+          "x-options_i18n": {
+            "ru": {
+              "subscription": "Подписка",
+              "api": "API"
+            }
+          }
+        },
+        "controller_ref": {
+          "type": "string",
+          "title": "Runner host",
+          "title_i18n": {
+            "ru": "Хост раннера"
+          },
+          "x-help": "The host controller that starts these runs.",
+          "x-help_i18n": {
+            "ru": "Контроллер хоста, который запускает эти запуски."
+          },
+          "x-ref": "controllers"
+        },
+        "harness": {
+          "type": "string",
+          "title": "Agent program",
+          "title_i18n": {
+            "ru": "Программа агента"
+          },
+          "x-help": "The CLI the runner starts (for example claude_code or codex).",
+          "x-help_i18n": {
+            "ru": "CLI, который запускает раннер (например, claude_code или codex)."
+          },
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+        },
+        "model": {
+          "type": "string",
+          "title": "Model",
+          "title_i18n": {
+            "ru": "Модель"
+          },
+          "x-help": "The model name passed to the agent program (for example claude-sonnet-5-5).",
+          "x-help_i18n": {
+            "ru": "Имя модели, которое получает программа агента (например claude-sonnet-5-5)."
+          },
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+        },
+        "model_developer": {
+          "type": "string",
+          "title": "Model developer",
+          "title_i18n": {
+            "ru": "Разработчик модели"
+          },
+          "x-help": "Who makes the model (for example anthropic, openai). Review routing compares it between author and reviewer.",
+          "x-help_i18n": {
+            "ru": "Кто делает модель (например, anthropic, openai). По нему маршрутизация ревью разводит автора и ревьюера."
+          },
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+        },
+        "model_family": {
+          "type": "string",
+          "title": "Model family",
+          "title_i18n": {
+            "ru": "Семейство модели"
+          },
+          "x-help": "The model line (for example claude or gpt). Review routing compares it between author and reviewer.",
+          "x-help_i18n": {
+            "ru": "Линейка модели (например claude или gpt). Маршрутизация ревью сравнивает её у автора и ревьюера."
+          },
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+        },
+        "capabilities": {
+          "type": "array",
+          "title": "Capabilities",
+          "title_i18n": {
+            "ru": "Возможности"
+          },
+          "x-help": "What a run of this profile can do. Only capabilities its runner host offers can be chosen.",
+          "x-help_i18n": {
+            "ru": "Что умеет запуск этого профиля. Выбрать можно только то, что предлагает его хост раннера."
+          },
+          "items": {
+            "type": "string",
+            "x-ref": "capabilities"
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": []
+        }
+      },
+      "required": [
+        "controller_ref",
+        "account_ref",
+        "harness",
+        "model",
+        "model_developer",
+        "model_family",
+        "execution_mode",
+        "capabilities",
+        "enabled"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "title": "Agent settings",
+      "title_i18n": {
+        "ru": "Настройки агента"
+      },
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "title_i18n": {
+            "ru": "Включено"
+          },
+          "x-help": "A turned-off agent keeps its settings and gets no runs.",
+          "x-help_i18n": {
+            "ru": "Выключенный агент сохраняет настройки, но не получает запусков."
+          },
+          "default": true
+        },
+        "binding": {
+          "type": "object",
+          "title": "Agent identity",
+          "title_i18n": {
+            "ru": "Кто этот агент"
+          },
+          "x-help": "The agent, its workspace and the access grant the runner acts under.",
+          "x-help_i18n": {
+            "ru": "Агент, его рабочее пространство и доступ, под которым действует раннер."
+          },
+          "properties": {
+            "agent_id": {
+              "type": "string",
+              "title": "Agent ID",
+              "title_i18n": {
+                "ru": "ID агента"
+              },
+              "x-help": "The agent's ID in Mesh.",
+              "x-help_i18n": {
+                "ru": "ID агента в Mesh."
+              },
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "workspace_id": {
+              "type": "string",
+              "title": "Workspace ID",
+              "title_i18n": {
+                "ru": "ID рабочего пространства"
+              },
+              "x-help": "The ID of the workspace the agent works in.",
+              "x-help_i18n": {
+                "ru": "ID воркспейса, в котором работает агент."
+              },
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "grant_id": {
+              "type": "string",
+              "title": "Access grant ID",
+              "title_i18n": {
+                "ru": "ID доступа"
+              },
+              "x-help": "The ID of the access grant the runner acts under for this agent.",
+              "x-help_i18n": {
+                "ru": "ID доступа, под которым раннер действует за этого агента."
+              },
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          "required": [
+            "agent_id",
+            "workspace_id",
+            "grant_id"
+          ],
+          "additionalProperties": false
+        },
+        "permitted_profiles": {
+          "type": "array",
+          "title": "Allowed profiles",
+          "title_i18n": {
+            "ru": "Разрешённые профили"
+          },
+          "x-help": "The profiles this agent may run on.",
+          "x-help_i18n": {
+            "ru": "Профили, на которых может работать этот агент."
+          },
+          "items": {
+            "type": "string",
+            "x-ref": "profiles"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "default": []
+        },
+        "policy": {
+          "type": "object",
+          "title": "Routing",
+          "title_i18n": {
+            "ru": "Маршрутизация"
+          },
+          "x-help": "How the runner chooses a profile for each task of this agent.",
+          "x-help_i18n": {
+            "ru": "Как раннер выбирает профиль для каждой задачи этого агента."
+          },
+          "properties": {
+            "primary_profiles": {
+              "type": "array",
+              "title": "First choice",
+              "title_i18n": {
+                "ru": "Основные профили"
+              },
+              "x-help": "Profiles tried first, from the allowed ones.",
+              "x-help_i18n": {
+                "ru": "Профили, которые пробуются первыми, из разрешённых."
+              },
+              "items": {
+                "type": "string",
+                "x-ref": "permitted_profiles"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "default": []
+            },
+            "quota_edges": {
+              "type": "object",
+              "title": "When quota runs out, switch to",
+              "title_i18n": {
+                "ru": "Когда кончилась квота, переключать на"
+              },
+              "x-help": "For a profile whose quota is spent, the profiles to move to.",
+              "x-help_i18n": {
+                "ru": "Для профиля с исчерпанной квотой — на какие профили переходить."
+              },
+              "x-key-ref": "permitted_profiles",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-ref": "permitted_profiles"
+                },
+                "uniqueItems": true
+              },
+              "default": {}
+            },
+            "preferred_accounts": {
+              "type": "object",
+              "title": "Preferred account per provider",
+              "title_i18n": {
+                "ru": "Предпочтительный аккаунт у провайдера"
+              },
+              "x-help": "For a provider, the account its profiles are tried with first.",
+              "x-help_i18n": {
+                "ru": "Для провайдера — аккаунт, с которым его профили пробуются первыми."
+              },
+              "x-key-ref": "providers",
+              "additionalProperties": {
+                "type": "string",
+                "x-ref": "accounts"
+              },
+              "default": {}
+            },
+            "api_reserve_providers": {
+              "type": "array",
+              "title": "Providers held in API reserve",
+              "title_i18n": {
+                "ru": "Провайдеры в резерве API"
+              },
+              "x-help": "Providers whose API mode is used only when nothing else is left.",
+              "x-help_i18n": {
+                "ru": "Провайдеры, чей режим API используется, только когда больше ничего не осталось."
+              },
+              "items": {
+                "type": "string",
+                "x-ref": "providers"
+              },
+              "minItems": 0,
+              "uniqueItems": true,
+              "default": []
+            },
+            "max_attempts": {
+              "type": "integer",
+              "title": "Attempts, at most",
+              "title_i18n": {
+                "ru": "Попыток, не больше"
+              },
+              "x-help": "How many profiles one task may be tried on.",
+              "x-help_i18n": {
+                "ru": "На скольких профилях можно попробовать одну задачу."
+              },
+              "minimum": 1,
+              "maximum": 256,
+              "default": 2
+            },
+            "evidence_max_age_seconds": {
+              "type": "integer",
+              "title": "Quota data fresh for, seconds",
+              "title_i18n": {
+                "ru": "Данные о квоте свежие, секунд"
+              },
+              "x-help": "Older quota observations are not trusted for routing.",
+              "x-help_i18n": {
+                "ru": "Более старым данным о квоте маршрутизация не доверяет."
+              },
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 1800
+            },
+            "qa": {
+              "type": "object",
+              "title": "Review by another model",
+              "title_i18n": {
+                "ru": "Ревью другой моделью"
+              },
+              "x-help": "Whether reviews of this agent's work go to a model of another family.",
+              "x-help_i18n": {
+                "ru": "Отдаются ли ревью работы этого агента модели другой линейки."
+              },
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "title": "Mode",
+                  "title_i18n": {
+                    "ru": "Режим"
+                  },
+                  "x-help": "Off: any reviewer. Prefer: another family when one is available. Strict: only another family.",
+                  "x-help_i18n": {
+                    "ru": "Выключено — любой ревьюер. По возможности — другая линейка, если она доступна. Строго — только другая линейка."
+                  },
+                  "enum": [
+                    "off",
+                    "prefer",
+                    "strict"
+                  ],
+                  "default": "prefer",
+                  "x-options": {
+                    "off": "Off",
+                    "prefer": "Prefer",
+                    "strict": "Strict"
+                  },
+                  "x-options_i18n": {
+                    "ru": {
+                      "off": "Выключено",
+                      "prefer": "По возможности",
+                      "strict": "Строго"
+                    }
+                  }
+                },
+                "quota_fallback": {
+                  "type": "boolean",
+                  "title": "Fall back when quota runs out",
+                  "title_i18n": {
+                    "ru": "Уступать при нехватке квоты"
+                  },
+                  "x-help": "Let a reviewer of the same model take the review when the other one has no quota.",
+                  "x-help_i18n": {
+                    "ru": "Разрешить ревью той же моделью, когда у другой нет квоты."
+                  },
+                  "default": false
+                }
+              },
+              "required": [
+                "mode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primary_profiles",
+            "quota_edges",
+            "preferred_accounts",
+            "api_reserve_providers",
+            "max_attempts",
+            "evidence_max_age_seconds",
+            "qa"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "binding",
+        "permitted_profiles",
+        "policy",
+        "enabled"
+      ]
     }
   },
   "capabilities": {

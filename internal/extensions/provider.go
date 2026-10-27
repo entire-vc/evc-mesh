@@ -38,6 +38,9 @@ type Resolved struct {
 	Enabled     bool
 	Source      Source
 	Settings    map[string]any
+	// NotAllowed: the instance allow-list refuses the extension, so it is off
+	// whatever its connection says.
+	NotAllowed bool
 }
 
 // HealthReport is the result of a live connection check.

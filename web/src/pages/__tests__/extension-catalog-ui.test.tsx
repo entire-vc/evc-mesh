@@ -12,12 +12,15 @@ vi.mock("@/hooks/useExtensionCatalog", async (orig) => ({
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", async (orig) => ({ ...(await orig<typeof import("@/lib/api")>()), api: apiMock }));
 vi.mock("@/lib/use-is-mobile", () => ({ useIsMobile: () => false }));
+const applyTheme = vi.hoisted(() => vi.fn());
+vi.mock("@/core/themes/runtime", () => ({ applyWorkspaceTheme: applyTheme }));
 vi.mock("@/components/markdown-view", () => ({ MarkdownView: ({ content }: { content: string }) => <div data-testid="md">{content}</div> }));
 
 import { setLanguage } from "@/i18n";
 import { ExtensionsCatalog } from "@/components/extensions/catalog";
 import { ExtensionDetailPage } from "@/pages/extension-detail";
 import { useMemberStore } from "@/stores/member";
+import { useWorkspaceStore } from "@/stores/workspace";
 
 const sum = (id: string, over: Record<string, unknown> = {}) => ({
   id, name: id, version: "1.2.0", kind: "integration", runtime: "builtin", publisher: "Entire VC",
@@ -87,7 +90,7 @@ describe("catalog grid", () => {
     mount("/w/acme/extensions?q=zzz", "catalog");
     expect(screen.getByText("Nothing matches these filters")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Reset filters" }));
-    expect(screen.getByText("Installed")).toBeTruthy();
+    expect(screen.getAllByText("Enabled in workspace").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Official").length).toBeGreaterThan(0);
     expect(screen.getByText("Custom", { selector: "span" })).toBeTruthy();
   });
@@ -102,7 +105,7 @@ describe("catalog grid", () => {
   it("marks an extension the instance does not allow and hides nothing", () => {
     state.value = { ...state.value, entries: mergeCatalog([sum("x", { allowed: false })], []) };
     mount("/w/acme/extensions", "catalog");
-    expect(screen.getByText("Not allowed by the instance administrator")).toBeTruthy();
+    expect(screen.getByText("Not allowed")).toBeTruthy();
   });
 
   it("renders loading and error states", () => {
@@ -118,6 +121,22 @@ describe("catalog grid", () => {
 });
 
 describe("extension page", () => {
+  it.each([
+    ["connected", true, { connection: { settings: { runner_url: "https://r.example" } }, status: { enabled: true, source: "workspace" } }],
+    ["connected but not allowed", false, { connection: { settings: { runner_url: "https://r.example" } }, status: { enabled: true, source: "workspace" } }],
+    ["installed, not connected", true, { connection: null, status: { enabled: false, source: "none" } }],
+    ["blocked", true, { connection: null, status: { enabled: false, source: "none" } }, { blocked: true, blocked_reason: "CVE" }],
+  ])("the runner program, %s, is managed only on the Runner screen", (_name, allowed, ws, extra: Record<string, unknown> = {}) => {
+    state.value = { ...state.value, entries: mergeCatalog(
+      [sum("agent-runner", { kind: "plugin", runtime: "external", source: "catalog", trust_level: "official", allowed, ...extra })],
+      [{ id: "agent-runner", name: "agent-runner", version: "1.2.0", kind: "plugin", category: "agents", ...ws }] as never,
+    ) };
+    mount("/w/acme/extensions/agent-runner", "detail");
+    expect(screen.queryByRole("button", { name: "Open settings" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Manage in Runner" }));
+    expect(screen.getByTestId("where").textContent).toBe("/w/acme/runner");
+  });
+
   it("opens by direct link with the header and switches tabs", () => {
     mount("/w/acme/extensions/gitlab", "detail");
     expect(screen.getByRole("heading", { name: "gitlab" })).toBeTruthy();
@@ -212,15 +231,54 @@ describe("theme status", () => {
     state.value = { ...state.value, entries: themes("graphite") };
     mount("/w/acme/extensions", "catalog");
     const card = (id: string) => screen.getAllByRole("link").find((a) => a.getAttribute("href") === `/w/acme/extensions/${id}`) as HTMLElement;
-    expect(within(card("graphite")).getByText("Active in this workspace")).toBeTruthy();
-    expect(within(card("mesh-default")).getByText("Not selected")).toBeTruthy();
+    expect(within(card("graphite")).getByText("Enabled in workspace")).toBeTruthy();
+    expect(within(card("mesh-default")).getByText("Available")).toBeTruthy();
     expect(state.value.entries.every((e) => !e.connected)).toBe(true);
   });
 
-  it("offers Choose on the theme page, leading to the theme screen", () => {
+  it("lists themes in their own section, with the theme icon, after the extensions", () => {
+    state.value = { ...state.value, entries: [...state.value.entries, ...themes("graphite")] };
+    mount("/w/acme/extensions", "catalog");
+    const section = screen.getByTestId("section-themes");
+    expect(within(section).getByRole("heading", { name: /Themes/ })).toBeTruthy();
+    const hrefs = within(section).getAllByRole("link").map((a) => a.getAttribute("href"));
+    expect(hrefs.sort()).toEqual(["/w/acme/extensions/graphite", "/w/acme/extensions/mesh-default"]);
+    expect(section.querySelectorAll('[data-kind="theme"]').length).toBe(2);
+    const rest = screen.getByRole("heading", { name: /Extensions and integrations/ }).closest("section") as HTMLElement;
+    expect(within(rest).queryByText("graphite")).toBeNull();
+    expect(within(rest).getByText("gitlab")).toBeTruthy();
+  });
+
+  it("without themes the grid has no sections", () => {
+    mount("/w/acme/extensions", "catalog");
+    expect(screen.queryByTestId("section-themes")).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Extensions and integrations/ })).toBeNull();
+  });
+
+  it("enables a theme in the workspace from its page, the way an extension is enabled", async () => {
+    useMemberStore.setState({ myRole: "admin" } as never);
+    useWorkspaceStore.setState({ currentWorkspace: { id: "ws1", slug: "acme" } } as never);
+    apiMock.mockImplementation((url: string) => Promise.resolve(url.endsWith("/theme") ? { theme_id: "mesh-default" } : Promise.reject(new Error("no card"))));
     state.value = { ...state.value, entries: themes("graphite") };
     mount("/w/acme/extensions/mesh-default", "detail");
-    fireEvent.click(screen.getByRole("button", { name: "Choose" }));
-    expect(screen.getByTestId("where").textContent).toBe("/w/acme/extensions/mesh-default/connect");
+    fireEvent.click(screen.getByRole("button", { name: "Enable in workspace" }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith("/api/v1/workspaces/ws1/theme", { method: "PUT", body: { theme_id: "mesh-default", settings: {} } }));
+    await waitFor(() => expect(state.value.reload).toHaveBeenCalled());
+    expect(applyTheme).toHaveBeenCalledWith("acme");
+    expect(screen.getByTestId("where").textContent).toBe("/w/acme/extensions/mesh-default");
+  });
+
+  it("the active theme's page opens its Settings window in Installed", () => {
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions/graphite", "detail");
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(screen.getByTestId("where").textContent).toBe("/w/acme/extensions?tab=installed&settings=graphite");
+  });
+
+  it("a member is told who enables the theme, with no button", () => {
+    state.value = { ...state.value, entries: themes("graphite") };
+    mount("/w/acme/extensions/mesh-default", "detail");
+    expect(screen.queryByRole("button", { name: "Enable in workspace" })).toBeNull();
+    expect(screen.getByText(/workspace owner or admin enables the workspace theme/)).toBeTruthy();
   });
 });

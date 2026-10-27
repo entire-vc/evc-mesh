@@ -4,4 +4,6 @@ package extensions
 type Deps struct {
 	Conns ConnectionStore
 	Inst  InstanceStore
+	// Allow is the instance allow-list; nil allows everything.
+	Allow AllowList
 }

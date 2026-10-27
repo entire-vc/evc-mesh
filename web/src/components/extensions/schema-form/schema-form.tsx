@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import { CORE_WIDGETS } from "@/core/dashboard";
 import { ColorWidget, FontWidget, ImageWidget, LayoutWidget, OrderedWidget, type PickerOption } from "./widgets";
 import { resolveSchema } from "./resolve";
 import { buildPayload, initialState, setAtPath } from "./state";
-import { validate, type Errors } from "./validate";
+import { isMapSchema, validate, type Errors } from "./validate";
 import { isVisible } from "./visibility";
 import type { FieldError, FieldSchema, Values, Widget } from "./types";
 
@@ -57,15 +57,139 @@ export interface SchemaFormProps {
   onValuesChange?: (values: Values) => void;
   /** Id of the <form>: lets a button outside it (a sticky action bar) submit it. */
   formId?: string;
+  /** Secondary buttons (e.g. Cancel) placed before submit in a right-aligned footer, as in a dialog. */
+  actions?: ReactNode;
+  /** Reasons the server gave per field (dot path) on an earlier attempt; shown until the field is edited. */
+  serverErrors?: Record<string, string>;
+  /** Current token values ("H S% L%" by token name): an unset `x-token` colour field shows the one it would override. */
+  tokenValues?: Record<string, string>;
 }
 
-function widgetOf(f: FieldSchema): Widget | "text" {
+function widgetOf(f: FieldSchema): Widget | "text" | "checklist" | "map" {
   if (f["x-widget"]) return f["x-widget"];
   if (f.type === "boolean") return "toggle";
   if (f.enum) return "select";
+  // a list of known things is picked, not typed
+  if (f.type === "array" && f.items?.enum) return "checklist";
   if (f.type === "array") return "list";
   if (f.type === "object" && f.properties) return "group";
+  if (isMapSchema(f)) return "map";
   return "text";
+}
+
+/** Options of an enum, labelled by `x-options`; a value no longer among them stays visible, marked. */
+function enumOptions(f: FieldSchema, current: unknown[], missing: (v: string) => string): PickerOption[] {
+  const labels = f["x-options"] ?? {};
+  const known = (f.enum ?? []).map(String);
+  const opts = known.map((v) => ({ value: v, label: labels[v] ?? v }));
+  for (const c of current) {
+    if (c != null && c !== "" && !known.includes(String(c))) opts.push({ value: String(c), label: missing(String(c)) });
+  }
+  return opts;
+}
+
+function Checklist({ id, label, options, value, disabled, describedBy, onChange }: {
+  id: string; label: string; options: PickerOption[]; value: string[]; disabled: boolean; describedBy?: string; onChange: (v: string[]) => void;
+}) {
+  const { t } = useTranslation("integrations");
+  if (options.length === 0) return <p id={id} className="text-sm text-muted-foreground">{t("schemaForm.checklist.empty")}</p>;
+  return (
+    <div id={id} role="group" aria-label={label} aria-describedby={describedBy} className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+      {options.map((o) => (
+        <label key={o.value} className="flex min-w-0 items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+            disabled={disabled}
+            checked={value.includes(o.value)}
+            onChange={(e) => onChange(e.target.checked ? [...value, o.value] : value.filter((x) => x !== o.value))}
+          />
+          <span className="min-w-0 break-all">{o.label}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+/** A map edited as rows: key on the left (picked from its options), value on the right. */
+function MapField({ id, label, field, value, disabled, describedBy, onChange }: {
+  id: string; label: string; field: FieldSchema; value: unknown; disabled: boolean; describedBy?: string; onChange: (v: Values) => void;
+}) {
+  const { t } = useTranslation("integrations");
+  const missing = (v: string) => t("schemaForm.missingOption", { value: v });
+  const map = (value && typeof value === "object" && !Array.isArray(value) ? value : {}) as Values;
+  const entries = Object.entries(map);
+  const of = field.additionalProperties as FieldSchema;
+  const keyField = field.propertyNames ?? {};
+  const keyOptions = enumOptions(keyField, entries.map(([k]) => k), missing);
+  const free = keyOptions.filter((o) => !(o.value in map));
+  const rename = (from: string, to: string) => onChange(Object.fromEntries(entries.map(([k, v]) => [k === from ? to : k, v])));
+  const set = (k: string, v: unknown) => onChange({ ...map, [k]: v });
+  const blank = of.type === "array" ? [] : "";
+  return (
+    <div id={id} className="space-y-2" aria-describedby={describedBy}>
+      {entries.length === 0 && <p className="text-sm text-muted-foreground">{t("schemaForm.map.empty")}</p>}
+      {entries.map(([k, v], i) => (
+        <div key={k} className="space-y-2 rounded-md border border-border p-2">
+          <div className="flex gap-2">
+            {keyField.enum ? (
+              <Select
+                aria-label={t("schemaForm.map.keyNamed", { name: label, n: i + 1 })}
+                disabled={disabled}
+                value={k}
+                onChange={(e) => rename(k, e.target.value)}
+              >
+                {keyOptions.filter((o) => o.value === k || !(o.value in map)).map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </Select>
+            ) : (
+              <Input aria-label={t("schemaForm.map.keyNamed", { name: label, n: i + 1 })} disabled={disabled} value={k} onChange={(e) => rename(k, e.target.value)} />
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled}
+              aria-label={t("schemaForm.map.removeNamed", { name: label, n: i + 1 })}
+              onClick={() => onChange(Object.fromEntries(entries.filter(([x]) => x !== k)))}
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </Button>
+          </div>
+          {of.type === "array" && of.items?.enum ? (
+            <Checklist
+              id={`${id}-${i}`}
+              label={t("schemaForm.map.valueNamed", { name: label, key: k })}
+              options={enumOptions(of.items, Array.isArray(v) ? v : [], missing)}
+              value={Array.isArray(v) ? v.map(String) : []}
+              disabled={disabled}
+              onChange={(next) => set(k, next)}
+            />
+          ) : of.enum ? (
+            <Select aria-label={t("schemaForm.map.valueNamed", { name: label, key: k })} disabled={disabled} value={v == null ? "" : String(v)} onChange={(e) => set(k, e.target.value)}>
+              <option value="">{t("schemaForm.selectPlaceholder")}</option>
+              {enumOptions(of, [v], missing).map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </Select>
+          ) : (
+            <Input aria-label={t("schemaForm.map.valueNamed", { name: label, key: k })} disabled={disabled} value={v == null ? "" : String(v)} onChange={(e) => set(k, e.target.value)} />
+          )}
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={disabled || (keyField.enum !== undefined && free.length === 0)}
+        onClick={() => set(keyField.enum ? free[0]!.value : "", blank)}
+      >
+        <Plus className="mr-1 h-4 w-4" aria-hidden />
+        {t("schemaForm.map.add")}
+      </Button>
+    </div>
+  );
 }
 
 interface Ctx {
@@ -79,6 +203,7 @@ interface Ctx {
   agentOptions: PickerOption[];
   fieldOptions: PickerOption[];
   widgetOptions: PickerOption[];
+  tokenValues?: Record<string, string>;
   onChange: (path: string[], v: unknown) => void;
   idBase: string;
   /** Manifest id: scopes the per-locale field labels (`schemaFields.<id>.<path>`). */
@@ -221,7 +346,7 @@ function Field({
         ? ctx.projectOptions
         : widget === "agent-picker"
           ? ctx.agentOptions
-          : (field.enum ?? []).map((e) => ({ value: String(e), label: String(e) }));
+          : enumOptions(field, [value], (v) => t("schemaForm.missingOption", { value: v }));
     control = (
       <Select {...common} value={value == null ? "" : String(value)} onChange={(e) => ctx.onChange(path, e.target.value === "" ? undefined : e.target.value)}>
         <option value="">{t("schemaForm.selectPlaceholder")}</option>
@@ -233,7 +358,9 @@ function Field({
       </Select>
     );
   } else if (widget === "color") {
-    control = <ColorWidget {...common} label={label} hsl={Boolean(field["x-token"])} value={value} onChange={(v) => ctx.onChange(path, v)} />;
+    const token = field["x-token"];
+    const fallback = token ? ctx.tokenValues?.[token] : typeof field.default === "string" ? field.default : undefined;
+    control = <ColorWidget {...common} label={label} hsl={Boolean(token)} fallback={fallback} value={value} onChange={(v) => ctx.onChange(path, v)} />;
   } else if (widget === "font-select") {
     control = <FontWidget {...common} label={label} field={field} value={value} onChange={(v) => ctx.onChange(path, v)} />;
   } else if (widget === "image") {
@@ -252,6 +379,21 @@ function Field({
         onChange={(v) => ctx.onChange(path, v)}
       />
     );
+  } else if (widget === "checklist") {
+    const items = Array.isArray(value) ? value.map(String) : [];
+    control = (
+      <Checklist
+        id={id}
+        label={label}
+        options={enumOptions(field.items ?? {}, items, (v) => t("schemaForm.missingOption", { value: v }))}
+        value={items}
+        disabled={ctx.disabled}
+        describedBy={describedBy}
+        onChange={(v) => ctx.onChange(path, v)}
+      />
+    );
+  } else if (widget === "map") {
+    control = <MapField id={id} label={label} field={field} value={value} disabled={ctx.disabled} describedBy={describedBy} onChange={(v) => ctx.onChange(path, v)} />;
   } else if (widget === "textarea") {
     control = <Textarea {...common} value={typeof value === "string" ? value : ""} onChange={(e) => ctx.onChange(path, e.target.value)} rows={4} />;
   } else if (widget === "list") {
@@ -323,7 +465,7 @@ function Field({
   );
 }
 
-export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hideSubmit = false, disabled = false, projectOptions, agentOptions, fieldOptions, widgetOptions, onValuesChange, formId }: SchemaFormProps) {
+export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hideSubmit = false, disabled = false, projectOptions, agentOptions, fieldOptions, widgetOptions, onValuesChange, formId, actions, serverErrors: initialServerErrors, tokenValues }: SchemaFormProps) {
   const { t } = useTranslation("integrations");
   const idBase = useId();
   const resolved = useMemo(() => resolveSchema(schema, manifest ?? {}), [schema, manifest]);
@@ -332,7 +474,7 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
   const [secretsSet, setSecretsSet] = useState<Set<string>>(init.secretsSet);
   const [editingSecrets, setEditingSecrets] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Errors>({});
-  const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>(initialServerErrors ?? {});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -365,6 +507,7 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
     agentOptions: aOpts,
     fieldOptions: fOpts,
     widgetOptions: wOpts,
+    tokenValues,
     onChange: (path, v) => {
       setValues((prev) => setAtPath(prev, path, v));
       const key = path.join(".");
@@ -443,7 +586,8 @@ export function SchemaForm({ schema, manifest, value, onSubmit, submitLabel, hid
           {formError}
         </p>
       )}
-      <div className="flex items-center gap-3">
+      <div className={cn("flex items-center gap-3", actions && "flex-wrap justify-end gap-2")}>
+        {actions}
         {!hideSubmit && (
           <Button type="submit" disabled={disabled || saving}>
             {submitLabel ?? t("schemaForm.save")}

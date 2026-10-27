@@ -71,6 +71,7 @@ var Catalog = []Entry{
 	{"extension_manifest_invalid", "The repository's mesh-extension.json is not a valid manifest.", "Файл mesh-extension.json в репозитории не является корректным манифестом."},
 	{"extension_id_conflict", "An extension with this id is already installed.", "Расширение с таким id уже установлено."},
 	{"extension_repo_unavailable", "The repository can't be read: check the address, the ref and the token.", "Не удаётся прочитать репозиторий: проверьте адрес, тег или ветку и токен."},
+	{"extension_not_allowed", "This extension is not allowed on this instance. An instance administrator has to allow it first.", "Это расширение не разрешено на этом сервере. Сначала его должен разрешить администратор."},
 	{"chat_protocol_unsupported", "This chat protocol version is not supported.", "Эта версия протокола чата не поддерживается."},
 	{"chat_not_claim_holder", "This turn is held by another runner.", "Ход выполняет другой раннер."},
 	{"chat_turn_not_found", "The chat turn was not found.", "Ход чата не найден."},

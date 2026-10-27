@@ -173,7 +173,7 @@ func New(d extensions.Deps) *Provider {
 	if err != nil {
 		panic(fmt.Sprintf("agentchat: embedded manifest: %v", err))
 	}
-	return &Provider{BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst}}
+	return &Provider{BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst, Allow: d.Allow}}
 }
 
 var (

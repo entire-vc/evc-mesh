@@ -7,7 +7,7 @@
   "runtime": "builtin",
   "mesh_api": ">=1 <2",
   "publisher": "entire-vc",
-  "description": "Каталог ассетов Spark: поиск, популярное, установка агентов в воркспейс",
+  "description": "Spark asset catalog: search, popular assets, installing agents into the workspace",
   "category": "development",
   "tags": [
     "catalog"
@@ -34,17 +34,21 @@
         "spark_url": {
           "type": "string",
           "format": "uri",
-          "title": "Адрес каталога Spark"
+          "title": "Spark catalog URL",
+          "title_i18n": { "ru": "Адрес каталога Spark" }
         },
         "catalog_public_key": {
           "type": "string",
-          "title": "Публичный ключ каталога расширений (ed25519, base64)",
-          "description": "Пусто — используется зашитый ключ Spark. Заменить, если ключ каталога сменили."
+          "title": "Extension catalog public key (ed25519, base64)",
+          "title_i18n": { "ru": "Публичный ключ каталога расширений (ed25519, base64)" },
+          "description": "Empty — the built-in Spark key is used. Replace it if the catalog key has changed.",
+          "description_i18n": { "ru": "Пусто — используется зашитый ключ Spark. Заменить, если ключ каталога сменили." }
         },
         "catalog_install_counter": {
           "type": "boolean",
           "default": true,
-          "title": "Сообщать Spark об установках расширений (анонимный счётчик)"
+          "title": "Report extension installs to Spark (anonymous counter)",
+          "title_i18n": { "ru": "Сообщать Spark об установках расширений (анонимный счётчик)" }
         }
       },
       "required": [

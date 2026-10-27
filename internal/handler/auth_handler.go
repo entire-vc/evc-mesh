@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -306,6 +307,14 @@ func (h *AuthHandler) Refresh(c echo.Context) error {
 			// same reuse error (and re-revokes an already-revoked user) on
 			// every reload until it expires on its own.
 			clearRefreshCookie(c)
+		}
+		// handleError logs only errors it has to map itself; the service hands
+		// back repo failures already wrapped as a 500 *apierror.Error, which it
+		// answers silently. Prod 27.10 had a refresh 500 whose cause (a rotation
+		// write past its deadline) was nowhere in the log.
+		var apiErr *apierror.Error
+		if errors.As(err, &apiErr) && apiErr.StatusCode() >= http.StatusInternalServerError {
+			log.Printf("ERROR %s %s: %s", c.Request().Method, c.Request().URL.Path, apiErr.Details)
 		}
 		return handleError(c, err)
 	}

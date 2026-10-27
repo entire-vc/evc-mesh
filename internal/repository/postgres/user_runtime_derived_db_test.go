@@ -47,7 +47,7 @@ func seedDerived(t *testing.T) derivedFixture {
 
 func (d derivedFixture) agentRow(t *testing.T) OperatorAgent {
 	t.Helper()
-	agents, err := d.repo.OperatorAgents(context.Background(), d.actor)
+	agents, err := d.repo.OperatorAgents(context.Background(), d.actor, d.owner)
 	require.NoError(t, err)
 	for _, a := range agents {
 		if a.AgentID == d.agent {
@@ -73,7 +73,7 @@ func TestOperatorAgents_DerivedController(t *testing.T) {
 	require.Equal(t, "runner-a", c.RunnerID)
 	require.True(t, c.Live)
 
-	runners, err := d.repo.OperatorRunners(ctx, d.actor)
+	runners, err := d.repo.OperatorRunners(ctx, d.actor, d.owner)
 	require.NoError(t, err)
 	require.Len(t, runners, 1)
 	require.Equal(t, "runner-a", runners[0].RunnerID)
@@ -86,6 +86,82 @@ func TestOperatorAgents_DerivedController(t *testing.T) {
 	c = d.agentRow(t).Controller
 	require.NotNil(t, c)
 	require.False(t, c.Live, "stale report: controller shown, not live")
+}
+
+func agentIDs(t *testing.T, repo *UserRuntimeRepo, user, ws uuid.UUID) []uuid.UUID {
+	t.Helper()
+	agents, err := repo.OperatorAgents(context.Background(), UserRuntimeActor{UserID: user}, ws)
+	require.NoError(t, err)
+	ids := make([]uuid.UUID, 0, len(agents))
+	for _, a := range agents {
+		ids = append(ids, a.AgentID)
+	}
+	return ids
+}
+
+// The screen is open in one workspace: an agent the same user operates in
+// another workspace is not listed there, nor grouped under its runner.
+func TestOperatorAgents_OnlyCurrentWorkspace(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	d.admitted(true)
+	foreign := seedGrantAgent(t, d.db, d.receiver)
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET operator_user_id=$2 WHERE id=$1`, foreign.ID, d.actor.UserID)
+	require.NoError(t, err)
+	_, err = d.db.ExecContext(ctx, `INSERT INTO agent_controllers(agent_id,runner_id,runner_name,host,version,lease_expires_at)
+		VALUES($1,'foreign-runner','foreign-runner','h','v', now() + interval '1 minute')`, foreign.ID)
+	require.NoError(t, err)
+
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, d.actor.UserID, d.owner))
+	runners, err := d.repo.OperatorRunners(ctx, d.actor, d.owner)
+	require.NoError(t, err)
+	require.Len(t, runners, 1)
+	require.Equal(t, "runner-a", runners[0].RunnerID)
+}
+
+// An agent with no operator that the workspace's runner drives is listed for the
+// workspace's owner or admin, once, and not for a plain member.
+func TestOperatorAgents_RunnerDrivenAgentsForAdmins(t *testing.T) {
+	d := seedDerived(t)
+	ctx := context.Background()
+	_, err := d.db.ExecContext(ctx, `UPDATE agents SET operator_user_id=NULL WHERE id=$1`, d.agent)
+	require.NoError(t, err)
+	admin, member := seedGrantUser(t, d.db), seedGrantUser(t, d.db)
+	for user, role := range map[uuid.UUID]string{admin: "admin", member: "member"} {
+		_, err = d.db.ExecContext(ctx, `INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1,$2,$3,$4)`, uuid.New(), d.owner, user, role)
+		require.NoError(t, err)
+	}
+
+	d.admitted(false)
+	require.Empty(t, agentIDs(t, d.repo, admin, d.owner), "disabled admission: not driven by the runner")
+
+	d.admitted(true)
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, admin, d.owner))
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, d.actor.UserID, d.owner), "the workspace owner sees it too")
+	require.Empty(t, agentIDs(t, d.repo, member, d.owner))
+
+	// owner_id wins over a membership row that says "member".
+	_, err = d.db.ExecContext(ctx, `INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES ($1,$2,$3,'member')
+		ON CONFLICT (workspace_id, user_id) DO UPDATE SET role='member'`, uuid.New(), d.owner, d.actor.UserID)
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, d.actor.UserID, d.owner), "the owner keeps the owner's view")
+
+	row := d.agentRow(t)
+	require.Nil(t, row.OperatorUserID)
+	require.False(t, row.RuntimeManager)
+
+	// operated by the admin and driven by the runner: one row, not two.
+	_, err = d.db.ExecContext(ctx, `UPDATE agents SET operator_user_id=$2 WHERE id=$1`, d.agent, admin)
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{d.agent}, agentIDs(t, d.repo, admin, d.owner))
+	require.Empty(t, agentIDs(t, d.repo, member, d.owner), "the member neither operates it nor administers the workspace")
+	runners, err := d.repo.OperatorRunners(ctx, UserRuntimeActor{UserID: admin}, d.owner)
+	require.NoError(t, err)
+	require.Len(t, runners, 1)
+	require.Len(t, runners[0].Agents, 1)
+
+	_, err = d.repo.OperatorAgents(ctx, UserRuntimeActor{UserID: member}, d.receiver)
+	require.Error(t, err, "a caller outside the workspace is refused")
 }
 
 func TestOperatorAgents_ExplicitAnnounceWins(t *testing.T) {

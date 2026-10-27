@@ -42,6 +42,15 @@ func (f *fakeExtActorService) Rotate(_ context.Context, ws, conn uuid.UUID) (*se
 	}
 	return &service.IssuedExtensionToken{Token: "ext_new", Actor: "ext:gitlab@" + ws.String(), Grace: 5 * time.Minute}, nil
 }
+func (f *fakeExtActorService) RotateForDelivery(context.Context, uuid.UUID, uuid.UUID) (token string, restore func(context.Context) error, err error) {
+	return "", nil, nil
+}
+func (f *fakeExtActorService) TokenDeliveredAt(context.Context, uuid.UUID) (*time.Time, error) {
+	return nil, nil
+}
+func (f *fakeExtActorService) MarkTokenDelivered(context.Context, uuid.UUID, string, time.Time) error {
+	return nil
+}
 func (f *fakeExtActorService) SelfRotate(_ context.Context, p *service.ExtensionPrincipal, presented string, grace time.Duration) (*service.IssuedExtensionToken, error) {
 	f.selfPresented, f.selfGrace = presented, grace
 	if f.selfErr != nil {

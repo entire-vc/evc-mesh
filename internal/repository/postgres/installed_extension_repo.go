@@ -109,3 +109,34 @@ func (r *InstalledExtensionRepo) UpdateCatalog(ctx context.Context, ext *domain.
 	}
 	return nil
 }
+
+// CountActiveConnections returns, per extension id, how many workspaces use it:
+// an active connection (integration_configs.provider is the extension id) or,
+// for a theme, the theme in effect: the workspace's own choice, or the instance
+// default when the workspace has none. Soft-deleted workspaces are not counted.
+func (r *InstalledExtensionRepo) CountActiveConnections(ctx context.Context) (map[string]int, error) {
+	var rows []struct {
+		Provider string `db:"provider"`
+		N        int    `db:"n"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		SELECT u.provider, COUNT(DISTINCT u.workspace_id) AS n
+		FROM (
+			SELECT c.provider, c.workspace_id FROM integration_configs c WHERE c.is_active
+			UNION ALL
+			SELECT COALESCE(wt.theme_id, it.theme_id), w.id
+			FROM workspaces w
+			LEFT JOIN workspace_theme wt ON wt.workspace_id = w.id
+			-- instance_theme is a singleton (id BOOLEAN PRIMARY KEY CHECK (id)): every
+			-- workspace joins its one row, and a missing row leaves the default NULL.
+			LEFT JOIN instance_theme it ON true
+		) u JOIN workspaces w ON w.id = u.workspace_id AND w.deleted_at IS NULL
+		WHERE u.provider IS NOT NULL GROUP BY u.provider`); err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(rows))
+	for _, row := range rows {
+		out[row.Provider] = row.N
+	}
+	return out, nil
+}

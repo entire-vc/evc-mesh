@@ -1,4 +1,4 @@
-/* Board Studio. Served in the `mesh-theme` cascade layer; every colour is a host token, so light and dark both work. */
+/* Prototypes (builtin id `board-studio`). Served in the `mesh-theme` cascade layer; every colour is a host token, so light and dark both work. */
 
 /* ---- board: status bands ------------------------------------------------------------------------------------ */
 .studio-board { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }

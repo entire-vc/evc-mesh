@@ -30,13 +30,17 @@ export interface SlotExtension {
   slots: SlotId[];
   /** Iframe screens by slot; present only for external extensions that declare them. */
   external?: Partial<Record<SlotId, ExternalScreen>>;
+  /** The manifest says the extension works per project (`levels.project`). */
+  projectLevel?: boolean;
 }
 
 interface WorkspaceExtensionDto {
   id: string;
   name: string;
+  levels?: { project?: boolean };
   manifest?: {
     runtime?: string;
+    levels?: { project?: boolean };
     capabilities?: ManifestCapabilities;
     external?: { ui?: Record<string, { path?: string; title?: string; icon?: string }> } | null;
   };
@@ -84,6 +88,7 @@ export function parseSlotExtensions(list: WorkspaceExtensionDto[]): SlotExtensio
     }
     if (slots.length === 0) continue;
     const entry: SlotExtension = { id: ext.id, name: ext.name, slots };
+    if (ext.levels?.project ?? ext.manifest?.levels?.project) entry.projectLevel = true;
     if (ext.manifest?.runtime === "external") {
       // A screen exists only where the manifest both lists the slot and gives it a path.
       for (const slot of FRAME_SLOTS) {
@@ -110,7 +115,7 @@ function sameGrouping(a: BySlot, b: BySlot): boolean {
   return SLOT_IDS.every(
     (s) =>
       a[s].length === b[s].length &&
-      a[s].every((e, i) => e.id === b[s][i]?.id && e.name === b[s][i]?.name && e.external?.[s]?.title === b[s][i]?.external?.[s]?.title),
+      a[s].every((e, i) => e.id === b[s][i]?.id && e.name === b[s][i]?.name && e.external?.[s]?.title === b[s][i]?.external?.[s]?.title && e.projectLevel === b[s][i]?.projectLevel),
   );
 }
 
@@ -209,13 +214,15 @@ export function resolveSlotTab<T extends string>(selected: T, extensionIds: stri
 }
 
 /** `sidebar.item` screens of external extensions, for the navigation. */
-export function useSidebarItems(): Array<{ extensionId: string; title: string; icon?: string }> {
+export function useSidebarItems(): Array<{ extensionId: string; title: string; icon?: string; projectLevel?: boolean }> {
   const exts = useSlotExtensions("sidebar.item");
   return useMemo(
     () =>
       exts.flatMap((e) => {
         const screen = e.external?.["sidebar.item"];
-        return screen ? [{ extensionId: e.id, title: screen.title || e.name, icon: screen.icon }] : [];
+        return screen
+          ? [{ extensionId: e.id, title: screen.title || e.name, icon: screen.icon, ...(e.projectLevel ? { projectLevel: true } : {}) }]
+          : [];
       }),
     [exts],
   );

@@ -31,6 +31,9 @@ type ExtensionActor struct {
 	IssuedAt           time.Time  `json:"issued_at" db:"issued_at"`
 	RotatedAt          *time.Time `json:"rotated_at,omitempty" db:"rotated_at"`
 	RevokedAt          *time.Time `json:"revoked_at,omitempty" db:"revoked_at"`
+	// TokenDeliveredAt is when Mesh last delivered the current token to the
+	// extension's service (external.token_path); nil when it has not.
+	TokenDeliveredAt *time.Time `json:"token_delivered_at,omitempty" db:"token_delivered_at"`
 }
 
 // Principal returns the stable principal name `ext:<id>@<workspace>`.

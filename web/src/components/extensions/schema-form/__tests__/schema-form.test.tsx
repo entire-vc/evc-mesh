@@ -16,7 +16,7 @@ import { resolveSchema } from "@/components/extensions/schema-form/resolve";
 import type { FieldSchema } from "@/components/extensions/schema-form";
 import gitlab from "../../__fixtures__/gitlab.json";
 import telegram from "../../__fixtures__/telegram.json";
-import runner from "../../__fixtures__/runner.json";
+import widgets from "../../__fixtures__/widgets.json";
 import keep from "../../__fixtures__/keep.json";
 
 const SECRET_VALUE = "glpat-SUPER-SECRET-123";
@@ -238,8 +238,8 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
     expect(screen.queryByText("Set")).toBeNull();
   });
 
-  it("Runner: list, group, textarea and pickers", async () => {
-    const onSubmit = form(runner, "workspace", {
+  it("list, group, textarea and pickers", async () => {
+    const onSubmit = form(widgets, "workspace", {
       agentOptions: [{ value: "a1", label: "Vera" }],
       projectOptions: [{ value: "p1", label: "Mesh" }],
     });
@@ -261,6 +261,38 @@ describe("SchemaForm from a manifest (no hand-written fields)", () => {
       policy: "only trusted",
       limits: { max_parallel: 4 },
     });
+  });
+
+  it("map: a stored map is shown as rows; add, rename, edit and remove change the payload", async () => {
+    const schema = {
+      type: "object",
+      properties: {
+        pools: {
+          type: "object",
+          title: "Pools by mode",
+          propertyNames: { enum: ["subscription", "api"] },
+          additionalProperties: { type: "array", items: { enum: ["max", "plus"] } },
+        },
+        labels: { type: "object", title: "Labels", additionalProperties: { type: "string" } },
+      },
+    } as FieldSchema;
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<SchemaForm schema={schema} value={{ pools: { subscription: ["max"] }, labels: { team: "core" } }} onSubmit={onSubmit} />);
+    const stored = screen.getByRole("group", { name: "Pools by mode: subscription" });
+    expect(screen.getByLabelText("Pools by mode, key 1")).toHaveDisplayValue("subscription");
+    expect(screen.getByRole("checkbox", { name: "max" })).toBeChecked();
+    fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]!);
+    // the only free key is offered, and once both are used Add is off
+    expect(screen.getByLabelText("Pools by mode, key 2")).toHaveDisplayValue("api");
+    expect(screen.getAllByRole("button", { name: "Add" })[0]).toBeDisabled();
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "plus" })[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Remove Pools by mode, row 1" }));
+    expect(stored).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Labels, key 1"), { target: { value: "squad" } });
+    fireEvent.change(screen.getByLabelText("Labels: squad"), { target: { value: "web" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0]![0]).toEqual({ pools: { api: ["plus"] }, labels: { squad: "web" } });
   });
 
   it("Keep: x-help is shown for the secret", () => {

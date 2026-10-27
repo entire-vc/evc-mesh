@@ -61,6 +61,8 @@ Use your own class names in your own views and the tokens for every colour:
 
 A stylesheet cannot load anything: `@import` is refused at install, and `url()` accepts only `data:` URIs and fragments.
 
+To ship a font, put the file next to the stylesheet and reference it relatively: `mesh-theme build` inlines `.woff2`, `.woff`, `.png` and `.svg` files as `data:` URIs. Mind the 512 KB limit on `theme.css`, and ship only fonts whose licence allows redistribution under your theme's licence.
+
 ## 4. Slots and contracts
 
 A slot is a place where the interface lets a theme supply the view. A view receives `data` (what to draw),

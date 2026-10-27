@@ -1,6 +1,7 @@
 import { useParams } from "react-router";
 import { applyWorkspaceTheme } from "@/core/themes/runtime";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Lock, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { SchemaForm, type FieldSchema, type Values } from "@/components/extensions/schema-form";
+import { hasTypedSecret, initialState } from "@/components/extensions/schema-form/state";
 import { apiErrorMessage } from "@/lib/api-error";
 import {
   getInstanceTheme,
@@ -24,7 +26,11 @@ import {
 } from "@/lib/themes";
 import { parseTokensCss } from "./color";
 import { ThemeCard } from "./theme-card";
-import { ThemePreview, settingsTokenOverrides } from "./theme-preview";
+import { ThemePreview, settingsTokenOverrides, useDarkNow } from "./theme-preview";
+
+/** The saved settings as the form starts from them: a stored secret comes back as a mask, which is not something typed. */
+const draftOf = (schema: FieldSchema | undefined, settings: Values | undefined): Values =>
+  schema ? initialState(schema, settings).values : (settings ?? {});
 
 export type ThemeLevel = "workspace" | "instance";
 
@@ -68,6 +74,8 @@ export function ThemeSettingsPanel({
   onForbidden,
   initialThemeId,
   saveLabel,
+  onSaved,
+  actionsContainer,
 }: {
   level: ThemeLevel;
   workspaceId?: string;
@@ -81,12 +89,17 @@ export function ThemeSettingsPanel({
   /** Opened for one theme (the catalog's "Choose"): it starts chosen, ready to apply. */
   initialThemeId?: string;
   saveLabel?: string;
+  /** After a save or reset went through: the caller re-reads what depends on the theme. */
+  onSaved?: () => void;
+  /** Where the Save / Reset bar goes (a dialog footer outside its scroll area); without one it sticks to the bottom. */
+  actionsContainer?: HTMLElement | null;
 }) {
   const { t } = useTranslation("settings");
   const { wsSlug } = useParams();
   // the board reads the theme from the runtime, which only refetches on a workspace switch: re-apply after every change
   const reapply = () => {
     if (wsSlug) void applyWorkspaceTheme(wsSlug);
+    onSaved?.();
   };
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [list, setList] = useState<ThemeList | null>(null);
@@ -99,8 +112,6 @@ export function ThemeSettingsPanel({
   const [draft, setDraft] = useState<Values>({});
   const [saving, setSaving] = useState(false);
   const [warnings, setWarnings] = useState<ContrastWarning[]>([]);
-  // The form's first emission after (re)mount is its defaults, not an edit: dirty is measured against it.
-  const baseline = useRef<{ key: string; values: string } | null>(null);
   // The instance has no "as the instance" to fall back on: nothing chosen there is mesh-default, the app's own look,
   // which carries a settings schema like any other theme (the server stores it as "no theme" while it has no settings).
   const baseId = level === "instance" ? MESH_DEFAULT : null;
@@ -119,7 +130,7 @@ export function ThemeSettingsPanel({
       const saved = sel?.theme_id ?? baseId;
       const start = !readOnly && initialThemeId && l.themes.some((x) => x.id === initialThemeId) ? initialThemeId : saved;
       setChosen(start);
-      setDraft(start === saved ? (sel?.settings ?? {}) : {});
+      setDraft(start === saved ? draftOf(l.themes.find((x) => x.id === start)?.settings[level], sel?.settings) : {});
       setWarnings(start === saved ? (sel?.contrast_warnings ?? []) : []);
       if (readOnly && level === "workspace" && wsSlug) {
         const r = await getResolvedWorkspaceTheme(wsSlug).catch(() => undefined);
@@ -147,6 +158,19 @@ export function ThemeSettingsPanel({
   const overrides = useMemo(() => settingsTokenOverrides([schema], draft), [schema, draft]);
   const previewTokens = chosen ? theme?.tokens : level === "workspace" ? inheritTokens : undefined;
   const stored: Values = selection && storedId === chosen ? selection.settings : {};
+  // A colour left unset shows what is in force: the theme's own token, else the page's (the built-in look has no tokens of its own).
+  // the mode is a dependency: both the theme's token and the page's computed one differ per mode
+  const dark = useDarkNow();
+  const tokenValues = useMemo(() => {
+    const own = (dark ? (previewTokens?.dark ?? previewTokens?.light) : (previewTokens?.light ?? previewTokens?.dark)) ?? {};
+    const out: Record<string, string> = {};
+    for (const f of Object.values(schema?.properties ?? {})) {
+      const tok = f["x-token"];
+      const v = tok ? (own[tok] ?? getComputedStyle(document.documentElement).getPropertyValue(`--${tok}`).trim()) : "";
+      if (tok && v) out[tok] = v;
+    }
+    return out;
+  }, [schema, previewTokens, dark]);
 
   const save = async (settings: Values): Promise<void> => {
     setSaving(true);
@@ -211,10 +235,33 @@ export function ThemeSettingsPanel({
   }
 
   const baseName = t("themes.picker.inherit");
-  const formBase = baseline.current?.key === formKey ? baseline.current.values : null;
-  const dirty = storedId !== chosen || (hasFields(schema) && formBase !== null && formBase !== JSON.stringify(draft));
+  // Both sides as the form shows them (defaults filled in), so neither the order of the form's emissions nor a repeated
+  // load that puts the raw saved settings back into the draft reads as an edit. That view drops secrets, so a typed secret
+  // counts on its own.
+  const shown = (v: Values) => (hasFields(schema) ? JSON.stringify(initialState(schema, v).values) : "");
+  const dirty = storedId !== chosen || shown(draft) !== shown(stored) || (hasFields(schema) && hasTypedSecret(schema, draft));
   const changeable = !readOnly;
   const currentId = readOnly ? activeId : chosen;
+
+  const actionBar = (sticky: boolean) => (
+    <div className={sticky ? "sticky bottom-0 -mx-1 flex flex-wrap items-center gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur" : "flex flex-wrap items-center gap-x-3 gap-y-2"}>
+      <Button
+        type={hasFields(schema) ? "submit" : "button"}
+        form={hasFields(schema) ? FORM_ID : undefined}
+        disabled={saving || !dirty}
+        onClick={hasFields(schema) ? undefined : () => void save({}).catch((e) => toast.error(apiErrorMessage(e, t("themes.saveFailed"))))}
+      >
+        {saveLabel ?? t("themes.save")}
+      </Button>
+      {level === "workspace" && (
+        <Button type="button" variant="outline" disabled={saving || (selection?.theme_id ?? null) === null} onClick={() => setConfirmingReset(true)}>
+          <RotateCcw className="mr-2 h-4 w-4" aria-hidden />
+          {t("themes.reset")}
+        </Button>
+      )}
+      {dirty && <span className="text-xs text-muted-foreground">{t("themes.unsaved")}</span>}
+    </div>
+  );
 
   return (
     <div className="space-y-5">
@@ -253,7 +300,7 @@ export function ThemeSettingsPanel({
             disabled={!changeable}
             onSelect={() => {
               setChosen(th.id);
-              setDraft(storedId === th.id ? (selection?.settings ?? {}) : {});
+              setDraft(storedId === th.id ? draftOf(th.settings[level], selection?.settings) : {});
               // warnings describe the saved selection; they do not carry over to another theme
               setWarnings(storedId === th.id ? (selection?.contrast_warnings ?? []) : []);
             }}
@@ -277,10 +324,8 @@ export function ThemeSettingsPanel({
                 value={stored}
                 hideSubmit
                 disabled={saving}
-                onValuesChange={(v) => {
-                  if (baseline.current?.key !== formKey) baseline.current = { key: formKey, values: JSON.stringify(v) };
-                  setDraft(v);
-                }}
+                tokenValues={tokenValues}
+                onValuesChange={setDraft}
                 onSubmit={async (settings) => {
                   await save(settings);
                 }}
@@ -292,31 +337,13 @@ export function ThemeSettingsPanel({
           </div>
           <aside className="order-1 space-y-2 lg:sticky lg:top-4 lg:order-2 lg:self-start">
             <h3 className="text-sm font-medium">{t("themes.preview.title")}</h3>
-            <ThemePreview tokens={previewTokens} overrides={overrides} cardFields={cardFields} />
+            <ThemePreview tokens={previewTokens} overrides={overrides} cardFields={cardFields} dark={dark} />
             <p className="text-xs text-muted-foreground">{t("themes.preview.hint")}</p>
           </aside>
         </div>
       )}
 
-      {changeable && (
-        <div className="sticky bottom-0 -mx-1 flex flex-wrap items-center gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur">
-          <Button
-            type={hasFields(schema) ? "submit" : "button"}
-            form={hasFields(schema) ? FORM_ID : undefined}
-            disabled={saving || !dirty}
-            onClick={hasFields(schema) ? undefined : () => void save({}).catch((e) => toast.error(apiErrorMessage(e, t("themes.saveFailed"))))}
-          >
-            {saveLabel ?? t("themes.save")}
-          </Button>
-          {level === "workspace" && (
-            <Button type="button" variant="outline" disabled={saving || (selection?.theme_id ?? null) === null} onClick={() => setConfirmingReset(true)}>
-              <RotateCcw className="mr-2 h-4 w-4" aria-hidden />
-              {t("themes.reset")}
-            </Button>
-          )}
-          {dirty && <span className="text-xs text-muted-foreground">{t("themes.unsaved")}</span>}
-        </div>
-      )}
+      {changeable && (actionsContainer ? createPortal(actionBar(false), actionsContainer) : actionBar(true))}
       <ConfirmDialog
         open={confirmingReset}
         onClose={() => setConfirmingReset(false)}

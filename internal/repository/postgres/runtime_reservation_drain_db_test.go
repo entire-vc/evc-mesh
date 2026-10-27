@@ -191,11 +191,7 @@ func TestRuntimeReservationDisableDrainsExisting(t *testing.T) {
 	taskNew, reqNew := f.taskIn(t, a)
 	staleInput := f.inputIn(t, a, taskNew, reqNew, "new", "new")
 
-	disabled := false
-	f.input.IfRevision = 1
-	f.input.Enabled = &disabled
-	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
-	require.NoError(t, err)
+	f.runnerSwitch(t, false)
 	view, err := f.repo.Binding(ctx, f.owner, a.receiver, a.ref, a.key)
 	require.NoError(t, err)
 	require.False(t, view.Enabled)
@@ -222,11 +218,7 @@ func TestRuntimeReservationDisableDrainsExisting(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, f.activeCount(t))
 
-	enabled := true
-	f.input.IfRevision = 2
-	f.input.Enabled = &enabled
-	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
-	require.NoError(t, err)
+	f.runnerSwitch(t, true)
 	f.reportControllers(t, false) // controllers re-apply the new revision before admitting
 	_, err = f.acquireIn(a, a.key, fresh)
 	requireReason(t, err, http.StatusConflict, "stale_revision")

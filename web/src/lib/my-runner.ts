@@ -1,9 +1,13 @@
 import { api } from "@/lib/api";
+import type { FieldSchema, Values } from "@/components/extensions/schema-form";
+import { resolveSchema } from "@/components/extensions/schema-form/resolve";
+import type { ExtensionManifest } from "@/hooks/useExtensionCatalog";
 
 /**
  * "My Runner": the signed-in user's own runtime document and the agents they
- * operate. Paths follow internal/handler/user_runtime_handler.go; every route is
- * user-auth only and returns the caller's data alone.
+ * operate in the current workspace (for its owner or admin, also the agents the
+ * workspace's runner drives). Paths follow internal/handler/user_runtime_handler.go;
+ * every route is user-auth only.
  */
 
 export const CONFIG_SECTIONS = ["accounts", "pools", "profiles", "agents"] as const;
@@ -32,7 +36,8 @@ export interface RuntimeController {
 export interface OperatorAgent {
   agent_id: string;
   name: string;
-  operator_user_id: string;
+  /** null: no operator; the agent is listed because the workspace's runner drives it. */
+  operator_user_id: string | null;
   max_concurrent_tasks: number;
   runtime_manager: boolean;
   controller: RuntimeController | null;
@@ -75,7 +80,8 @@ export interface CatalogRevision {
  * workspace has a runner connection, otherwise the user's own document.
  */
 export type ResourceDoc =
-  | { source: "workspace"; wsId: string; revision: number; enabled: boolean; config: RuntimeConfig }
+  /** `manifest`: the Runner manifest whose schemas build the entry forms; null when it could not be read. */
+  | { source: "workspace"; wsId: string; revision: number; enabled: boolean; config: RuntimeConfig; manifest: ExtensionManifest | null }
   | { source: "personal"; revision: number; config: RuntimeConfig };
 
 export type HistoryView =
@@ -92,11 +98,11 @@ export const saveMyRuntime = (ifRevision: number, config: RuntimeConfig) =>
 export const getMyRuntimeHistory = (limit = 50) =>
   api<{ history: RuntimeHistoryEntry[] | null }>(`/api/v1/me/runtime/history?limit=${limit}`).then((r) => r.history ?? []);
 
-export const getOperatorAgents = () =>
-  api<{ agents: OperatorAgent[] | null }>("/api/v1/me/runtime/agents").then((r) => r.agents ?? []);
+export const getOperatorAgents = (workspaceId: string) =>
+  api<{ agents: OperatorAgent[] | null }>(`/api/v1/me/runtime/agents?workspace_id=${encodeURIComponent(workspaceId)}`).then((r) => r.agents ?? []);
 
-export const getOperatorRunners = () =>
-  api<{ runners: OperatorRunner[] | null }>("/api/v1/me/runtime/runners").then((r) => r.runners ?? []);
+export const getOperatorRunners = (workspaceId: string) =>
+  api<{ runners: OperatorRunner[] | null }>(`/api/v1/me/runtime/runners?workspace_id=${encodeURIComponent(workspaceId)}`).then((r) => r.runners ?? []);
 
 export const setAgentLimit = (agentId: string, maxConcurrentTasks: number) =>
   api(`/api/v1/me/runtime/agents/${agentId}/limits`, { method: "PUT", body: { max_concurrent_tasks: maxConcurrentTasks } });
@@ -115,10 +121,13 @@ const status = (e: unknown) => (e as { status?: number } | null)?.status;
 export async function loadResources(wsId: string | undefined): Promise<ResourceDoc> {
   if (wsId) {
     try {
-      const raw = await api<{ mode?: string; revision?: number; enabled?: boolean; config?: unknown }>(`/api/v1/workspaces/${wsId}/runtime`);
+      const [raw, manifest] = await Promise.all([
+        api<{ mode?: string; revision?: number; enabled?: boolean; config?: unknown }>(`/api/v1/workspaces/${wsId}/runtime`),
+        loadRunnerManifest(wsId),
+      ]);
       if (raw?.mode === "managed") {
         if (!raw.config || typeof raw.config !== "object" || Array.isArray(raw.config)) throw new Error("runtime catalog missing");
-        return { source: "workspace", wsId, revision: raw.revision ?? 0, enabled: raw.enabled === true, config: raw.config as RuntimeConfig };
+        return { source: "workspace", wsId, revision: raw.revision ?? 0, enabled: raw.enabled === true, config: raw.config as RuntimeConfig, manifest };
       }
     } catch (e) {
       if (status(e) !== 403) throw e;
@@ -128,10 +137,43 @@ export async function loadResources(wsId: string | undefined): Promise<ResourceD
   return { source: "personal", revision: doc.revision, config: doc.config ?? {} };
 }
 
-/** Saves the whole draft against the loaded revision; the catalog keeps its enabled (drain) state. */
+/**
+ * The Runner manifest as the workspace sees it (localized by the server). A
+ * failure leaves the list readable: the forms are off, not the whole block.
+ */
+async function loadRunnerManifest(wsId: string): Promise<ExtensionManifest | null> {
+  try {
+    const r = await api<{ extensions: { id: string; manifest?: ExtensionManifest }[] | null }>(`/api/v1/workspaces/${wsId}/extensions`);
+    return r?.extensions?.find((e) => e.id === "runner")?.manifest ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Saves the whole draft against the loaded revision. On/off is not part of it:
+ * only the Runner switch on the overview changes that.
+ */
 export function saveResources(doc: ResourceDoc, config: RuntimeConfig): Promise<unknown> {
   if (doc.source === "personal") return saveMyRuntime(doc.revision, config);
-  return api(`/api/v1/workspaces/${doc.wsId}/runtime`, { method: "PUT", body: { if_revision: doc.revision, enabled: doc.enabled, config } });
+  return api(`/api/v1/workspaces/${doc.wsId}/runtime`, { method: "PUT", body: { if_revision: doc.revision, config } });
+}
+
+/** Saves an earlier catalog revision's config as the next revision; the server keeps its credential references. */
+export const restoreRevision = (wsId: string, ifRevision: number, revision: number) =>
+  api(`/api/v1/workspaces/${wsId}/runtime/restore`, { method: "POST", body: { if_revision: ifRevision, revision } });
+
+/** Profiles each agent may run with, by agent id, read from the catalog's bindings. */
+export function profilesByAgent(config: RuntimeConfig | null): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const value of Object.values(config?.bindings ?? {})) {
+    const b = (value && typeof value === "object" ? value : {}) as { binding?: { agent_id?: unknown }; permitted_profiles?: unknown };
+    const id = b.binding?.agent_id;
+    if (typeof id !== "string" || !Array.isArray(b.permitted_profiles)) continue;
+    const list = (out[id] ??= []);
+    for (const p of b.permitted_profiles) if (typeof p === "string" && !list.includes(p)) list.push(p);
+  }
+  return out;
 }
 
 /** Catalog revisions when the workspace has a runner connection (even with none saved yet); otherwise (no connection, no rights, older server) the personal history. */
@@ -178,16 +220,118 @@ export function sectionEntries(config: RuntimeConfig | null, section: ConfigSect
   return Object.entries(config?.[section] ?? {}).sort(([a], [b]) => a.localeCompare(b));
 }
 
-export type EntryParse = { ok: true; value: unknown } | { ok: false };
+/** The form schema of one entry of a catalog section, or null when the manifest does not describe it. */
+export function entrySchema(manifest: ExtensionManifest | null, section: ConfigSection): FieldSchema | null {
+  const catalog = (manifest?.schemas as Record<string, FieldSchema> | undefined)?.catalog;
+  const entry = catalog?.properties?.[section]?.additionalProperties;
+  if (!entry || typeof entry !== "object") return null;
+  const resolved = resolveSchema(entry, manifest);
+  return resolved.properties ? resolved : null;
+}
 
-/** An entry value is any JSON object; secrets are refused by the server, not guessed at here. */
-export function parseEntryValue(text: string): EntryParse {
-  try {
-    const v: unknown = JSON.parse(text);
-    return v && typeof v === "object" && !Array.isArray(v) ? { ok: true, value: v } : { ok: false };
-  } catch {
-    return { ok: false };
+/** What each `x-ref` of the schema may point at, from the draft and the entry being edited. */
+export function refOptions(config: RuntimeConfig, section: ConfigSection, entry: Values): Record<string, string[]> {
+  const names = (s: ConfigSection | "controllers") => Object.keys((config[s] ?? {}) as Record<string, unknown>).sort((a, b) => a.localeCompare(b));
+  const pools = config.pools ?? {};
+  const provider = typeof entry.provider === "string" ? entry.provider : "";
+  const controller = (config.controllers as Record<string, { capabilities?: unknown }> | undefined)?.[String(entry.controller_ref ?? "")];
+  const permitted = Array.isArray(entry.permitted_profiles) ? entry.permitted_profiles.map(String) : [];
+  return {
+    // an account draws only on pools of its own provider (the server refuses the rest)
+    pools: names("pools").filter((n) => section !== "accounts" || !provider || (pools[n] as { provider?: unknown })?.provider === provider),
+    accounts: names("accounts"),
+    profiles: names("profiles"),
+    controllers: names("controllers"),
+    capabilities: Array.isArray(controller?.capabilities) ? controller.capabilities.map(String) : [],
+    permitted_profiles: permitted,
+    // providers the workspace has accounts or pools of
+    providers: [...new Set([...Object.values(config.accounts ?? {}), ...Object.values(pools)].map((v) => (v as { provider?: unknown })?.provider).filter((x): x is string => typeof x === "string"))].sort(),
+  };
+}
+
+/** A copy of the schema where every `x-ref` / `x-key-ref` became an `enum` of what exists now. */
+export function bindRefs(schema: FieldSchema, options: Record<string, string[]>): FieldSchema {
+  const out: FieldSchema = { ...schema };
+  if (schema["x-ref"]) out.enum = options[schema["x-ref"]] ?? [];
+  if (schema["x-key-ref"]) out.propertyNames = { ...(schema.propertyNames ?? {}), type: "string", enum: options[schema["x-key-ref"]] ?? [] };
+  if (schema.items) out.items = bindRefs(schema.items, options);
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") out.additionalProperties = bindRefs(schema.additionalProperties, options);
+  if (schema.properties) out.properties = Object.fromEntries(Object.entries(schema.properties).map(([k, f]) => [k, bindRefs(f, options)]));
+  return out;
+}
+
+/** Dotted paths of fields the entry holds and the schema does not know (the form would drop them). */
+export function unknownFields(schema: FieldSchema, value: unknown, prefix = ""): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    const f = schema.properties?.[k];
+    if (!f) out.push(path);
+    else if (f.properties) out.push(...unknownFields(f, v, path));
   }
+  return out;
+}
+
+/** Whether a field path (`a.b.c`) names a field the form can show; map keys follow the map's value schema. */
+export function isSchemaPath(schema: FieldSchema, path: string): boolean {
+  let at: FieldSchema | undefined = schema;
+  for (const k of path.split(".")) {
+    if (!at) return false;
+    if (at.type === "array") return true;
+    const next: FieldSchema | boolean | undefined = at.properties?.[k] ?? at.additionalProperties;
+    at = typeof next === "object" ? next : undefined;
+  }
+  return at !== undefined;
+}
+
+// The server keeps credential references to itself: GET returns them empty and
+// an empty one on PUT keeps the stored reference.
+const STORED = "********";
+
+/** The entry as the form starts it: a stored credential reference reads as "set", never as text. */
+export function toFormValue(section: ConfigSection, value: unknown, isNew: boolean): Values {
+  const v = { ...((value && typeof value === "object" ? value : {}) as Values) };
+  if (section === "accounts" && !isNew) v.credential_ref = STORED;
+  return v;
+}
+
+/** The entry to store: an untouched credential reference goes back empty, i.e. "keep". */
+export function fromFormValue(section: ConfigSection, payload: Values): Values {
+  if (section !== "accounts") return payload;
+  // A mode with no pools is left out: the catalog lists only the modes an account serves.
+  const out: Values = { ...payload, credential_ref: typeof payload.credential_ref === "string" ? payload.credential_ref : "" };
+  if (payload.quota_pools_by_mode && typeof payload.quota_pools_by_mode === "object") {
+    out.quota_pools_by_mode = Object.fromEntries(
+      Object.entries(payload.quota_pools_by_mode as Values).filter(([, pools]) => !Array.isArray(pools) || pools.length > 0),
+    );
+  }
+  return out;
+}
+
+export interface EntryFieldErrors { section: ConfigSection; name: string; fields: Record<string, string> }
+
+/**
+ * The server's per-field reasons (`config.<section>.<name>.<field>` → code)
+ * grouped by entry, so the editor can reopen it with each reason at its field.
+ * Entry names may hold dots: the longest existing name wins.
+ */
+export function fieldErrorsByEntry(details: Record<string, string> | undefined, config: RuntimeConfig): EntryFieldErrors[] {
+  const out = new Map<string, EntryFieldErrors>();
+  for (const [key, code] of Object.entries(details ?? {})) {
+    const path = key.replace(/^config\./, "");
+    const section = path.slice(0, path.indexOf(".")) as ConfigSection;
+    const rest = path.slice(section.length + 1);
+    const name = Object.keys(config[section] ?? {})
+      .filter((n) => rest === n || rest.startsWith(`${n}.`))
+      .sort((a, b) => b.length - a.length)[0];
+    if (!name) continue;
+    const id = `${section}\u0000${name}`;
+    const e = out.get(id) ?? { section, name, fields: {} };
+    e.fields[rest === name ? "" : rest.slice(name.length + 1)] = code;
+    out.set(id, e);
+  }
+  return [...out.values()];
 }
 
 // Same substrings as rejectSecrets in internal/repository/postgres/user_runtime_repo.go.

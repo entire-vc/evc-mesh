@@ -154,7 +154,7 @@ func newVictimFixture(t *testing.T, prefix string) *victimFixture {
 	// Required, not best-effort, for the same reason as createFlatObjects: a
 	// missing fixture turns the route's assertion into "403 because the id
 	// does not exist", which passes whether or not cross-tenant access is
-	// actually blocked — see #a49500c5, which is exactly this failure mode
+	// actually blocked — see an internal ticket, which is exactly this failure mode
 	// (concreteURL had no :artifact_id fixture and fell through to a dummy
 	// UUID, so the test never exercised "real artifact, foreign workspace"
 	// at all).
@@ -186,7 +186,7 @@ func (f *victimFixture) createFlatObjects(t *testing.T) {
 		"body": "Victim confidential task — comment body",
 	})
 
-	// Third human_gate exit (task #c56339b1): provenance=direct requires the
+	// Third human_gate exit: provenance=direct requires the
 	// authenticated caller to BE decided_by, which this fixture satisfies
 	// since it posts as the victim themselves.
 	f.decisionID = f.create(t, "POST", "/api/v1/tasks/"+f.taskID+"/human-gate-decisions", map[string]any{
@@ -483,7 +483,7 @@ func TestCrossTenant_StrangerCannotRotateOrDeleteASecret(t *testing.T) {
 		t.Helper()
 		var rotated *time.Time
 		require.NoError(t, victim.env.DB.QueryRowContext(context.Background(),
-			"SELECT rotated_at FROM secrets WHERE id = $1", victim.secretID).Scan(&rotated))
+			"SELECT rotated_at FROM secret_refs WHERE id = $1", victim.secretID).Scan(&rotated))
 		return rotated == nil
 	}
 	require.True(t, stillCurrent(t), "fixture secret is not current before the test even starts")

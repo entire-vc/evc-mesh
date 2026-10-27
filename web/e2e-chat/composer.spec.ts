@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { RUN_ID, SetupFail, type Harness } from "./lib/env";
-import { assertMarkdownDom, assertToolEvents } from "./lib/detect";
+import { assertMarkdownDom, assertReadable, assertToolEvents } from "./lib/detect";
 import { type Actor, type Ctx, chatBase, chatUrl, openActor, resolveCtx, sha256, snap, step, timeline } from "./lib/harness";
 import {
   agentId, assertUserSettled, countSends, dropFile, history, makeCodePng, newChatViaUi, pastePng, sendVia, shootSettledBubble, waitAssistantDone,
@@ -294,7 +294,33 @@ for (const h of HARNESSES) {
       assertMarkdownDom(dom, want);
       const labels = await A.page.evaluate(() => (window as unknown as { __toolLabels?: string[] }).__toolLabels ?? []);
       assertToolEvents(A.frames, sent.turnId!, labels);
-      await snap(A, `markdown-${h}`, undefined, undefined, [A.page.locator('[data-testid="chat-message"][data-role="assistant"] pre code')]);
+      const reply = A.page.locator('[data-testid="chat-message"][data-role="assistant"] pre code');
+      if (h !== "claude") {
+        await snap(A, `markdown-${h}`, undefined, undefined, [reply]);
+        return;
+      }
+      // E3 AC1: the attached file's name on the user's own bubble reads as text in both themes and at both widths.
+      const file = A.page.locator('[data-testid="chat-message"][data-role="user"] [data-testid="chat-attachment-file"]').last();
+      await snap(A, `markdown-${h}`, undefined, undefined, [reply, file], async (where) => {
+        // The size is its own span: the button's text runs name and size together ("ac3.txt17 B").
+        await expect(file.locator("span").filter({ hasText: /^\d+ B$/ }), `${where}: the size is shown`).toHaveCount(1);
+        const painted = await file.evaluate((btn, name) => {
+          const label = [...btn.querySelectorAll("span")].find((s) => s.textContent === name);
+          if (!label) return null;
+          let bg = "rgba(0, 0, 0, 0)";
+          for (let n: Element | null = label; n; n = n.parentElement) {
+            const c = getComputedStyle(n).backgroundColor;
+            if (!/rgba\([^)]*,\s*0\)|transparent/.test(c)) {
+              bg = c;
+              break;
+            }
+          }
+          return { fg: getComputedStyle(label).color, bg, icons: btn.querySelectorAll("svg").length };
+        }, `${RUN_ID}-ac3.txt`);
+        expect(painted, `${where}: the file name ${RUN_ID}-ac3.txt is on the attachment card`).not.toBeNull();
+        expect(painted!.icons, `${where}: file and download icons`).toBe(2);
+        assertReadable(`${where} attachment name`, painted!);
+      });
     });
   });
 }

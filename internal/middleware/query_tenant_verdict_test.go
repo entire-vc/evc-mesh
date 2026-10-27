@@ -141,6 +141,11 @@ var declaredQueryTenantParams = map[string]string{
 	// uses.
 	"notification_handler.go:telegramBotInfoQuery.workspace_id": "checked: NotificationHandler.requireWorkspaceMember",
 
+	// GET /me/runtime/agents and /me/runtime/runners: the "My Runner" lists of
+	// the workspace the screen is open in. operatorWorkspace refuses a caller who
+	// is neither a member nor the owner of it before any agent row is read.
+	"user_runtime_handler.go:operatorWorkspace.workspace_id": "checked: UserRuntimeHandler.operatorWorkspace",
+
 	// GET /spark/agents(/popular|/:agent_id) — an optional workspace_id lets a
 	// caller ask "what does MY workspace's spark integration resolve to"
 	// (an internal ticket: the catalog base URL and on/off state are now workspace-scoped,

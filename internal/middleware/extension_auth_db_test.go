@@ -88,6 +88,10 @@ func newExtFixture(t *testing.T, consented []string) *extFixture {
 	g.GET("/projects/:proj_id/tasks", ok("tasks:list"))
 	g.POST("/projects/:proj_id/tasks", ok("tasks:create"))
 	g.POST("/tasks/:task_id/decisions", ok("unmapped"))
+	g.PUT("/tasks/:task_id/external-ref", ok("external-ref:put"))
+	g.POST("/tasks/:task_id/human-gate", ok("human-gate:arm"))
+	g.DELETE("/tasks/:task_id/human-gate", ok("human-gate:clear"))
+	g.POST("/tasks/:task_id/human-gate-decisions", ok("human-gate:decide"))
 	g.GET("/ext/me", ok("me"))
 	return f
 }
@@ -135,6 +139,26 @@ func TestExtension_ConsentedCapabilityPasses(t *testing.T) {
 	f := newExtFixture(t, []string{"api:tasks:read", "api:tasks:write"})
 	assert.Equal(t, http.StatusOK, f.do(http.MethodPost, "/api/v1/projects/"+uuid.New().String()+"/tasks", f.token))
 	assert.Equal(t, 1, f.reached["tasks:create"])
+}
+
+// Keep opens a gate card: create, pin its external ref, arm the gate. Clearing
+// or deciding the gate stays human-only even with tasks:write.
+func TestExtension_GateCardArmButNotClear(t *testing.T) {
+	task := "/api/v1/tasks/" + uuid.New().String()
+
+	f := newExtFixture(t, []string{"api:tasks:read", "api:tasks:write"})
+	assert.Equal(t, http.StatusOK, f.do(http.MethodPut, task+"/external-ref", f.token))
+	assert.Equal(t, http.StatusOK, f.do(http.MethodPost, task+"/human-gate", f.token))
+	assert.Equal(t, http.StatusForbidden, f.do(http.MethodDelete, task+"/human-gate", f.token))
+	assert.Equal(t, http.StatusForbidden, f.do(http.MethodPost, task+"/human-gate-decisions", f.token))
+	assert.Equal(t, 0, f.reached["human-gate:clear"])
+	assert.Equal(t, 0, f.reached["human-gate:decide"])
+
+	// Without tasks:write neither write gets through.
+	ro := newExtFixture(t, []string{"api:tasks:read"})
+	assert.Equal(t, http.StatusForbidden, ro.do(http.MethodPut, task+"/external-ref", ro.token))
+	assert.Equal(t, http.StatusForbidden, ro.do(http.MethodPost, task+"/human-gate", ro.token))
+	assert.Equal(t, 0, ro.reached["external-ref:put"]+ro.reached["human-gate:arm"])
 }
 
 func TestExtension_DisableAndRevokeAre401(t *testing.T) {
@@ -220,6 +244,9 @@ func TestExtensionRouteCapabilities_NoHumanOnlyRoute(t *testing.T) {
 		"POST /api/v1/agents/:agent_id/regenerate-key",
 		"POST /api/v1/integrations/:int_id/rotate-token",
 		"DELETE /api/v1/agents/:agent_id",
+		"DELETE /api/v1/tasks/:task_id/human-gate",
+		"POST /api/v1/tasks/:task_id/human-gate-decisions",
+		"POST /api/v1/human-gate-decisions/:decision_id/revoke",
 	} {
 		_, mapped := caps[closed]
 		assert.False(t, mapped, "%s must stay closed to extensions", closed)

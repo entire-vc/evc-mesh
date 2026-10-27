@@ -69,12 +69,45 @@ const tokensCss = (m, settings) => {
   const block = (sel, vals) => { const all = { ...vals, ...over }; const keys = Object.keys(all).sort(); return keys.length ? `${sel}{${keys.map((k) => `--${k}:${all[k]};`).join("")}}\n` : ""; };
   return block(":root", m.theme.tokens?.light ?? {}) + block(".dark", m.theme.tokens?.dark ?? m.theme.tokens?.light ?? {});
 };
+// Instance admin screen: the allow-list table and the journal, at the size of a real instance.
+const ext = (id, name, kind, source, trust, extra = {}) => ({ id, name, kind, source, version: "1.0.0", trust_level: trust, allowed: !["community", "custom"].includes(trust), allow_explicit: false, has_instance_form: false, enabled: false, settings_source: "none", enabled_workspaces: 0, ...extra });
+let adminAllowed = {}, adminAuto = false;
+const adminItems = () => [
+  ext("github", "GitHub", "integration", "builtin", "builtin", { has_instance_form: true, settings_source: "admin", enabled: true, enabled_workspaces: 6, version: "2.3.0" }),
+  ext("gitlab", "GitLab", "integration", "builtin", "builtin", { has_instance_form: true, settings_source: "env", enabled: true, enabled_workspaces: 4, version: "2.1.0" }),
+  ext("telegram", "Telegram", "integration", "builtin", "builtin", { has_instance_form: true, enabled_workspaces: 2 }),
+  ext("team-relay", "Team Relay", "integration", "builtin", "builtin", { has_instance_form: true, settings_source: "admin", enabled: true, enabled_workspaces: 3 }),
+  ext("spark", "Spark", "integration", "catalog", "official", { has_instance_form: true, enabled_workspaces: 1, version: "0.9.2" }),
+  ext("agent-chat", "Agent chat", "plugin", "builtin", "builtin", { enabled_workspaces: 5 }),
+  ext("keep", "Keep — a very long extension name that must wrap instead of pushing the columns", "integration", "repo", "custom", { has_instance_form: true, enabled_workspaces: 0, version: "0.3.1" }),
+  ext("standup-bot", "Standup bot", "plugin", "catalog", "community", { enabled_workspaces: 0 }),
+  ext("graphite", "Graphite", "theme", "builtin", "builtin", { enabled_workspaces: 1 }),
+  ext("forge", "Forge", "theme", "repo", "community", { enabled_workspaces: 0 }),
+].map((it) => (it.id in adminAllowed ? { ...it, allowed: adminAllowed[it.id], allow_explicit: true } : it));
+const adminJournal = Array.from({ length: 60 }, (_, i) => {
+  const at = new Date(Date.UTC(2026, 9, 27, 12) - i * 3 * 3600e3).toISOString();
+  if (i % 4 === 3) return { id: `j${i}`, actor_id: "u-ann", actor_name: "Ann Admin", extension_id: ["standup-bot", "keep"][i % 2], action: "allow_changed", details: { allowed: i % 8 === 3 }, created_at: at };
+  if (i % 9 === 4) return { id: `j${i}`, actor_id: "u-ann", actor_name: "Ann Admin", extension_id: "gitlab", action: "settings_changed", details: { keys: ["base_url", "token"] }, created_at: at };
+  if (i % 13 === 5) return { id: `j${i}`, actor_id: "u-bob", actor_name: "Bob Builder", extension_id: "forge", action: "updated", details: { from: "1.0.0", to: "1.1.0" }, created_at: at };
+  return { id: `j${i}`, actor_id: "u-bob", actor_name: "Bob Builder", extension_id: "graphite", action: "theme_selected", details: { level: i % 2 ? "workspace" : "instance" }, created_at: at };
+});
+
 const baseStatus = new Map(tasks.map((t) => [t.id, t.status_id]));
 const readBody = async (req) => { let raw = ""; for await (const part of req) raw += part; return raw ? JSON.parse(raw) : {}; };
 const broadcast = (event) => {
   const payload = Buffer.from(JSON.stringify(event));
   const frame = Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
   for (const socket of sockets) socket.write(frame);
+};
+// Extensions catalog (U4): every installed theme is listed as a kind=theme extension next to one connected integration.
+const extSummary = (t) => ({
+  id: t.id, name: t.name, version: t.version, kind: "theme", runtime: "builtin", publisher: t.publisher, description: t.description,
+  category: "documents", source: t.source, trust_level: t.trust_level, blocked: false, blocked_reason: "", allowed: true, manifest: { capabilities: {} },
+});
+const gitlabExt = {
+  id: "gitlab", name: "GitLab", version: "1.0.0", kind: "integration", runtime: "builtin", publisher: "Entire VC", description: "Merge requests and pipelines on tasks",
+  category: "development", source: "builtin", trust_level: "builtin", blocked: false, blocked_reason: "", allowed: true,
+  manifest: { capabilities: {}, settings: { instance: { type: "object", properties: { base_url: { type: "string", title: "Base URL" }, token: { type: "string", title: "Access token", "x-secret": true } }, required: ["base_url"] } } },
 };
 let installed = [graphite, forge, meshDefault], instTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
 let role = "owner", wsTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
@@ -97,7 +130,7 @@ const server = http.createServer(async (req, res) => {
       role = next.role ?? "owner";
       if (next.resetTheme) {
         wsTheme = { theme_id: null, settings: {}, version: 1, contrast_warnings: [] };
-        instTheme = { ...wsTheme }; installed = [graphite, forge, meshDefault]; themePuts = 0; failThemes = 0; themesDelay = 0; iconUrl = null;
+        instTheme = { ...wsTheme }; installed = [graphite, forge, meshDefault]; adminAllowed = {}; adminAuto = false; themePuts = 0; failThemes = 0; themesDelay = 0; iconUrl = null;
       }
       if (next.installedEmpty) installed = [meshDefault];
       if (next.studio) {
@@ -173,6 +206,31 @@ const server = http.createServer(async (req, res) => {
     if (!asset) status = 404;
     else { res.writeHead(200, { "Content-Type": asset[0] === "js" ? "text/javascript" : "text/css", "Cache-Control": "no-store" }); return res.end(asset[1]); }
   }
+  else if (url.pathname === "/api/v1/extensions/instance/overview") body = { auto_update: adminAuto, items: adminItems() };
+  else if (url.pathname === "/api/v1/extensions/instance/journal") {
+    const q = url.searchParams, since = q.get("since"), until = q.get("until");
+    const entries = adminJournal.filter((e) => (!q.get("extension") || e.extension_id === q.get("extension")) && (!q.get("action") || e.action === q.get("action"))
+      && (!q.get("actor") || e.actor_id === q.get("actor")) && (!since || e.created_at >= since) && (!until || e.created_at < until));
+    body = { entries, ...(q.get("facets") === "1" ? { facets: {
+      actions: [...new Set(adminJournal.map((e) => e.action))].sort(), extensions: [...new Set(adminJournal.map((e) => e.extension_id))].sort(),
+      actors: [{ id: "u-ann", name: "Ann Admin" }, { id: "u-bob", name: "Bob Builder" }] } } : {}) };
+  }
+  else if (/^\/api\/v1\/extensions\/[^/]+\/allowed$/.test(url.pathname) && req.method === "PUT") {
+    adminAllowed[url.pathname.split("/").at(-2)] = (await readBody(req)).allowed === true;
+    body = {};
+  }
+  else if (url.pathname === "/api/v1/extensions/instance/auto-update" && req.method === "PUT") { adminAuto = (await readBody(req)).auto_update === true; body = {}; }
+  else if (url.pathname === "/api/v1/extensions/gitlab/instance-settings") body = { extension_id: "gitlab", settings: { base_url: "https://git.example.com" }, enabled: true, source: "env", updated_at: "2026-10-03T10:00:00Z" };
+  else if (url.pathname === "/api/v1/extensions") body = { extensions: [gitlabExt, ...installed.map(extSummary)] };
+  // the instance administrator (instance-admin spec) also sees the repository updates list: none here
+  else if (url.pathname === "/api/v1/extensions/updates") body = { updates: [] };
+  else if (/^\/api\/v1\/workspaces\/[^/]+\/extensions$/.test(url.pathname)) {
+    body = { extensions: [{ id: "gitlab", name: "GitLab", version: "1.0.0", kind: "integration", category: "development", manifest: { capabilities: {} },
+      connection: { settings: {} }, status: { enabled: true, source: "workspace", health: { ok: true, message: "" } } }] };
+  }
+  // no Spark catalog and no instance administrator in this stand
+  else if (url.pathname === "/api/v1/extensions/catalog" || url.pathname.endsWith("/catalog-card")) { status = 404; body = { error: "not found" }; }
+  else if (url.pathname.startsWith("/api/v1/extensions/instance/")) { status = 403; body = { error: "forbidden" }; }
   else if (/^\/api\/v1\/extensions\/[^/]+\/update$/.test(url.pathname) && req.method === "POST") {
     installed = installed.map((t) => (t.id === "forge" ? { ...t, version: "1.1.0" } : t));
     body = {};

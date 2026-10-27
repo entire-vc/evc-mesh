@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import type { CatalogState } from "@/hooks/useExtensionCatalog";
 import { mergeCatalog, type ExtensionStatusDto } from "@/hooks/useExtensionCatalog";
 import { consentTokens } from "@/lib/extension-capabilities";
@@ -22,6 +22,7 @@ import { setLanguage } from "@/i18n";
 import { ExtensionConnectPage } from "@/pages/extension-connect";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useMemberStore } from "@/stores/member";
+import { ThemeSettingsPanel } from "@/components/themes/theme-settings-panel";
 
 import type { FieldSchema } from "@/components/extensions/schema-form";
 
@@ -264,6 +265,8 @@ describe("connect wizard", () => {
   });
 });
 
+function Where() { const l = useLocation(); return <div data-testid="where">{l.pathname + l.search}</div>; }
+
 describe("theme from the catalog", () => {
   const themeSchema: FieldSchema = {
     type: "object",
@@ -283,7 +286,10 @@ describe("theme from the catalog", () => {
     };
     return render(
       <MemoryRouter initialEntries={[`/w/acme/extensions/${themeId}/connect`]}>
-        <Routes><Route path="w/:wsSlug/extensions/:extId/connect" element={<ExtensionConnectPage />} /></Routes>
+        <Routes>
+          <Route path="w/:wsSlug/extensions/:extId/connect" element={<ExtensionConnectPage />} />
+          <Route path="w/:wsSlug/extensions" element={<Where />} />
+        </Routes>
       </MemoryRouter>,
     );
   }
@@ -301,9 +307,20 @@ describe("theme from the catalog", () => {
     });
   });
 
-  it("applies through PUT /workspaces/:ws/theme and never calls the extension connect route", async () => {
+  it("has no wizard of its own: it opens the theme's Settings window in Installed and writes nothing", async () => {
     mountTheme();
+    expect(await screen.findByTestId("where")).toBeTruthy();
+    expect(screen.getByTestId("where").textContent).toBe("/w/acme/extensions?tab=installed&settings=mesh-default");
     expect(screen.queryByRole("list", { name: "Connection steps" })).toBeNull();
+    expect(calls.some((c) => c.method !== "GET")).toBe(false);
+  });
+
+  it("the theme panel applies through PUT /workspaces/:ws/theme and never calls the extension connect route", async () => {
+    render(
+      <MemoryRouter initialEntries={["/w/acme/extensions?tab=installed"]}>
+        <ThemeSettingsPanel level="workspace" workspaceId="ws-1" initialThemeId="mesh-default" saveLabel="Apply" />
+      </MemoryRouter>,
+    );
     const apply = await screen.findByRole("button", { name: "Apply" });
     await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(apply);
@@ -322,7 +339,11 @@ describe("theme from the catalog", () => {
       if (path === "/api/v1/workspaces/ws-1/theme") throw Object.assign(new Error("Not found"), { status: 404, errorCode: "not_found" });
       return { theme_id: "mesh-default", tokens_css: "" };
     });
-    mountTheme();
+    render(
+      <MemoryRouter initialEntries={["/w/acme/extensions?tab=installed"]}>
+        <ThemeSettingsPanel level="workspace" workspaceId="ws-1" initialThemeId="mesh-default" saveLabel="Apply" />
+      </MemoryRouter>,
+    );
     const apply = await screen.findByRole("button", { name: "Apply" });
     await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(apply);

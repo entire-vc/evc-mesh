@@ -6,7 +6,7 @@ import { getResolvedWorkspaceTheme } from "@/lib/themes";
 import type { ManifestCapabilities } from "@/lib/extension-capabilities";
 
 export type ExtensionKind = "integration" | "plugin" | "theme";
-export type TrustLevel = "official" | "verified" | "community" | "custom";
+export type TrustLevel = "builtin" | "official" | "verified" | "community" | "custom";
 
 export interface ExtensionStatusDto {
   enabled: boolean;
@@ -14,6 +14,8 @@ export interface ExtensionStatusDto {
   version?: string;
   health?: { ok: boolean; message: string };
   last_error?: string;
+  /** The instance administrator does not allow it: off whatever the connection says; the connection is kept. */
+  not_allowed?: boolean;
 }
 
 export interface ExtensionManifest {
@@ -121,8 +123,10 @@ export interface WorkspaceDto {
   can_purge_data?: boolean; settings_managed_elsewhere?: boolean; hidden?: boolean;
 }
 
+/** "Official" is only what the catalog calls official; a part of Mesh itself is "builtin", badged on its own. */
 export function trustOf(level: string, source: string): TrustLevel {
-  if (level === "builtin" || level === "official") return "official";
+  if (level === "builtin") return "builtin";
+  if (level === "official") return "official";
   if (level === "verified") return "verified";
   if (level === "community") return "community";
   if (level === "custom" || source === "repo") return "custom";

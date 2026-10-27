@@ -15,7 +15,8 @@ import (
 	"github.com/entire-vc/evc-mesh/pkg/pagination"
 )
 
-// defaultStatuses defines the task statuses created automatically for every new project.
+// defaultStatuses defines the task statuses created automatically for every new project:
+// one per category. Triage holds tasks that need routing; Cancelled is terminal.
 var defaultStatuses = []struct {
 	Name      string
 	Slug      string
@@ -24,11 +25,13 @@ var defaultStatuses = []struct {
 	IsDefault bool
 	Position  int
 }{
-	{Name: "Backlog", Slug: "backlog", Color: "#6B7280", Category: domain.StatusCategoryBacklog, IsDefault: false, Position: 0},
-	{Name: "Todo", Slug: "todo", Color: "#3B82F6", Category: domain.StatusCategoryTodo, IsDefault: true, Position: 1},
-	{Name: "In Progress", Slug: "in_progress", Color: "#F59E0B", Category: domain.StatusCategoryInProgress, IsDefault: false, Position: 2},
-	{Name: "Review", Slug: "review", Color: "#8B5CF6", Category: domain.StatusCategoryReview, IsDefault: false, Position: 3},
-	{Name: "Done", Slug: "done", Color: "#10B981", Category: domain.StatusCategoryDone, IsDefault: false, Position: 4},
+	{Name: "Triage", Slug: "triage", Color: "#EF4444", Category: domain.StatusCategoryTriage, IsDefault: false, Position: 0},
+	{Name: "Backlog", Slug: "backlog", Color: "#6B7280", Category: domain.StatusCategoryBacklog, IsDefault: false, Position: 1},
+	{Name: "Todo", Slug: "todo", Color: "#3B82F6", Category: domain.StatusCategoryTodo, IsDefault: true, Position: 2},
+	{Name: "In Progress", Slug: "in_progress", Color: "#F59E0B", Category: domain.StatusCategoryInProgress, IsDefault: false, Position: 3},
+	{Name: "Review", Slug: "review", Color: "#8B5CF6", Category: domain.StatusCategoryReview, IsDefault: false, Position: 4},
+	{Name: "Done", Slug: "done", Color: "#10B981", Category: domain.StatusCategoryDone, IsDefault: false, Position: 5},
+	{Name: "Cancelled", Slug: "cancelled", Color: "#9CA3AF", Category: domain.StatusCategoryCancelled, IsDefault: false, Position: 6},
 }
 
 type projectService struct {

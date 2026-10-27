@@ -35,7 +35,7 @@ A slot shows only if it is listed in `capabilities.ui` **and** has an entry in `
 Rules Mesh enforces before it opens a frame:
 
 - the service address is `https` (plain `http` only for `localhost`);
-- its host is listed in `capabilities.network.allowed_domains` (an exact host, or `*.example.com` for subdomains). Otherwise the screen is not opened (`409`);
+- its host is listed in `capabilities.network.allowed_domains` (an exact host, `*.example.com` for subdomains, or `{settings.<key>}` for the host the workspace entered in that setting; an empty setting allows nothing). Otherwise the screen is not opened (`409`);
 - the extension is connected and enabled in the workspace;
 - the person is a member of the workspace.
 

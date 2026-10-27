@@ -1,0 +1,65 @@
+{
+  "$comment": "Key shape of the live workspace runner catalog, revision 39 (controller desired view): every field any entry of a section holds, merged into one entry per section; names and values replaced. Regenerate from the controller's desired.json when the runner starts storing new fields.",
+  "revision": 39,
+  "accounts": {
+    "credential_ref": "x",
+    "provider": "x",
+    "quota_pools_by_mode": {
+      "api": [
+        "x"
+      ],
+      "subscription": [
+        "x"
+      ]
+    }
+  },
+  "pools": {
+    "aliases": [],
+    "max_concurrency": 1,
+    "provider": "x",
+    "resource_ref": "x",
+    "threshold_ref": "x"
+  },
+  "profiles": {
+    "account_ref": "x",
+    "capabilities": [
+      "x"
+    ],
+    "controller_ref": "x",
+    "enabled": true,
+    "execution_mode": "x",
+    "harness": "x",
+    "model": "x",
+    "model_developer": "x",
+    "model_family": "x"
+  },
+  "bindings": {
+    "binding": {
+      "agent_id": "x",
+      "grant_id": "x",
+      "workspace_id": "x"
+    },
+    "enabled": true,
+    "permitted_profiles": [
+      "x"
+    ],
+    "policy": {
+      "api_reserve_providers": [],
+      "evidence_max_age_seconds": 1,
+      "max_attempts": 1,
+      "preferred_accounts": {},
+      "primary_profiles": [
+        "x"
+      ],
+      "qa": {
+        "mode": "x",
+        "quota_fallback": false
+      },
+      "quota_edges": {
+        "x": [
+          "x"
+        ]
+      }
+    }
+  }
+}

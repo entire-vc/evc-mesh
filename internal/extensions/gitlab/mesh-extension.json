@@ -7,7 +7,7 @@
   "runtime": "builtin",
   "mesh_api": ">=1 <2",
   "publisher": "entire-vc",
-  "description": "Привязка merge request'ов GitLab к задачам: вебхук, статус MR и пайплайнов",
+  "description": "Links GitLab merge requests to tasks: webhook, MR and pipeline status",
   "category": "development",
   "tags": [
     "vcs"
@@ -31,7 +31,8 @@
       "properties": {
         "repo_path": {
           "type": "string",
-          "title": "Путь проекта (group/project)"
+          "title": "Project path (group/project)",
+          "title_i18n": { "ru": "Путь проекта (group/project)" }
         }
       },
       "required": [
@@ -46,16 +47,19 @@
         "base_url": {
           "type": "string",
           "format": "uri",
-          "title": "URL GitLab"
+          "title": "GitLab URL",
+          "title_i18n": { "ru": "URL GitLab" }
         },
         "token": {
           "type": "string",
-          "title": "Токен",
+          "title": "Token",
+          "title_i18n": { "ru": "Токен" },
           "x-secret": true
         },
         "webhook_secret": {
           "type": "string",
-          "title": "Секрет вебхука",
+          "title": "Webhook secret",
+          "title_i18n": { "ru": "Секрет вебхука" },
           "x-secret": true
         }
       }
@@ -75,7 +79,7 @@
       "allowed_domains": [
         "{settings.base_url}"
       ],
-      "reasoning": "проверка статуса MR и пайплайнов через API GitLab инстанса"
+      "reasoning": "MR and pipeline status check via the GitLab instance API"
     },
     "ui": [
       "task.panel",

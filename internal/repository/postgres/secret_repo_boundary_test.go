@@ -16,7 +16,7 @@ import (
 // growing this list requires a deliberate edit, not that the list itself is
 // clever.
 //
-// Task #a2c330a8 (S6, epic #64e84eb1): the parent task's explicit warning is
+// an internal ticket (S6, epic an internal ticket): the parent task's explicit warning is
 // that a test proving only "wrote it, read it back through the same layer"
 // proves nothing about the OTHER surfaces — get_task/recall payloads, the
 // activity feed, any SSE emission. This test takes the complementary
@@ -29,13 +29,14 @@ import (
 // wherever it's added — not just in the files this test's author happened
 // to check by hand.
 var secretsEncryptedValueAllowlist = map[string]bool{
-	"migrations/20260820111_create_secrets.sql":                 true,
-	"internal/repository/postgres/secret_repo.go":               true,
-	"internal/repository/postgres/secret_repo_db_test.go":       true,
-	"internal/repository/postgres/secret_repo_sqlmock_test.go":  true,
-	"internal/repository/postgres/secret_repo_boundary_test.go": true, // this file's own doc comments
-	"internal/handler/secret_handler_test.go":                   true, // NotContains assertion naming the column it must never see
-	"tests/integration/secrets_plaintext_boundary_test.go":      true, // S6's own end-to-end negative test
+	"migrations/20260820111_create_secrets.sql":                     true,
+	"migrations/20261027017_secret_refs_replace_secrets.sql":        true, // drops the column; its Down restores the old shape
+	"internal/repository/postgres/secret_ref_repo_sqlmock_test.go":  true, // NotContains assertion on the masked columns
+	"internal/repository/postgres/secret_ref_repo_db_test.go":       true, // asserts secret_refs has no such column
+	"internal/repository/postgres/secret_repo_boundary_test.go":     true, // this file's own doc comments
+	"internal/repository/postgres/secret_refs_migration_db_test.go": true, // up -> down -> up against the old shape
+	"internal/handler/workspace_secrets_test.go":                    true, // NotContains assertion naming the column it must never see
+	"tests/integration/secrets_plaintext_boundary_test.go":          true, // S6's own end-to-end negative test
 }
 
 // TestSecretsEncryptedValue_OnlyReferencedByAllowlistedFiles is the

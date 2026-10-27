@@ -249,8 +249,8 @@ var declaredBodyTenantFields = map[string]string{
 	"task_handler.go:moveToProjectRequest.project_id":                  "checked: taskService.MoveToProject requires the task's own workspace",
 	"task_handler.go:moveToProjectBatchRequest.project_id":             "checked: TaskRepo.MoveBatchToProject requires the destination project and every task to be in the caller's authenticated workspace (403 otherwise)",
 	"project_member_handler.go:addAgentMemberRequest.agent_id":         "checked: projectMemberService.AddAgentMember requires the project's own workspace",
-	"secret_handler.go:createSecretRequest.project_id":                 "checked: secretService.Create -> repo.AssertScopeRefInWorkspace, the FK does not carry a workspace predicate",
-	"secret_handler.go:createSecretRequest.agent_id":                   "checked: same call — an agent id from another tenant is refused with the same message as a nonexistent one",
+	"workspace_secrets.go:createSecretRequest.project_id":              "checked: secretService.Create -> repo.AssertScopeRefInWorkspace, the FK does not carry a workspace predicate",
+	"workspace_secrets.go:createSecretRequest.agent_id":                "checked: same call — an agent id from another tenant is refused with the same message as a nonexistent one",
 	"oauth_handler.go:consentDecisionBody.workspace_id":                "checked: oauthService.Decide -> isWorkspaceMember (owner OR workspace_members row) before any write; the route has no :ws_id because the caller is choosing which workspace to consent into, not acting inside one it already proved membership of",
 
 	// Scoped by something other than the id in the body: the row these end up on is
@@ -261,8 +261,8 @@ var declaredBodyTenantFields = map[string]string{
 	"agent_handler.go:reportSessionRequest.task_id":                          "benign: a reference on the calling agent's own session",
 	"rule_handler.go:createRuleRequest.agent_id":                             "benign: narrows who a rule applies to, inside the guarded :ws_id/:proj_id it is created in",
 	"project_integration_handler.go:teamRelayResponse.project_id":            "benign: a response struct, never bound from a request",
-	"secret_handler.go:secretResponse.project_id":                            "benign: a response struct, never bound from a request",
-	"secret_handler.go:secretResponse.agent_id":                              "benign: a response struct, never bound from a request",
+	"workspace_secrets.go:secretResponse.project_id":                         "benign: a response struct, never bound from a request",
+	"workspace_secrets.go:secretResponse.agent_id":                           "benign: a response struct, never bound from a request",
 	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.agent_id":     "benign: a response struct, never bound from a request",
 	"agent_workspace_grant_handler.go:inviteAgentGrantResponse.workspace_id": "response: a response struct, never bound from a request — see the workspace_id-specific test for why this needs its own prefix instead of benign:",
 
@@ -288,12 +288,12 @@ var declaredBodyTenantFields = map[string]string{
 	// IS the trusted spawner, already holding the same level of trust as
 	// MESH_INTEGRATION_ENCRYPTION_KEY itself — so the ids are the scope
 	// resolution input, not something a workspace guard could narrow.
-	"secret_materialize_handler.go:materializeRequest.workspace_id":   "checked: possession of the SpawnAuth shared secret (X-Spawn-Token) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnAuth doc comment",
-	"secret_materialize_handler.go:materializeRequest.project_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
-	"secret_materialize_handler.go:materializeRequest.agent_id":       "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
-	"secret_materialize_handler.go:materializationAudit.workspace_id": "checked: never decoded from a request — the activity_log payload the handler WRITES for each issuance; its value is materializeRequest.workspace_id, already authorized by SpawnAuth above",
-	"secret_materialize_handler.go:materializationAudit.project_id":   "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
-	"secret_materialize_handler.go:materializationAudit.agent_id":     "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
+	"spawn_secrets.go:materializeRequest.workspace_id":   "checked: possession of the SpawnAuth shared secret (X-Spawn-Token) IS the authorization for any workspace named in the body — the caller is trusted global spawn infra (mesh-dispatcher.py/fiddler.py), not a workspace member, by the same trust model as holding MESH_INTEGRATION_ENCRYPTION_KEY itself; see spawn_auth.go SpawnAuth doc comment",
+	"spawn_secrets.go:materializeRequest.project_id":     "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
+	"spawn_secrets.go:materializeRequest.agent_id":       "benign: narrows the already-authorized workspace_id above to a sub-scope, inert reference — same SpawnAuth trust model",
+	"spawn_secrets.go:materializationAudit.workspace_id": "checked: never decoded from a request — the activity_log payload the handler WRITES for each issuance; its value is materializeRequest.workspace_id, already authorized by SpawnAuth above",
+	"spawn_secrets.go:materializationAudit.project_id":   "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
+	"spawn_secrets.go:materializationAudit.agent_id":     "benign: not read from any request — issuance journal payload, see materializationAudit.workspace_id",
 }
 
 // bodyTenantFieldNames are the json field names that identify a tenant, or an

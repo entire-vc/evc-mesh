@@ -24,7 +24,8 @@ type ExtensionHandler struct {
 	allow     interface {
 		Allowed(ctx context.Context, extensionID string) (bool, error)
 	}
-	catalog CatalogSource // optional: the signed Spark catalog
+	catalog CatalogSource        // optional: the signed Spark catalog
+	builtin func(id string) bool // optional: ids whose code ships with Mesh
 }
 
 // WithAllowList adds the instance allow-list verdict to every catalog entry.
@@ -47,18 +48,21 @@ type instanceStatusResponse struct {
 }
 
 type extensionSummaryResponse struct {
-	ID            string                 `json:"id"`
-	Name          string                 `json:"name"`
-	Version       string                 `json:"version"`
-	Kind          string                 `json:"kind"`
-	Runtime       string                 `json:"runtime"`
-	Publisher     string                 `json:"publisher"`
-	Description   string                 `json:"description"`
-	Category      string                 `json:"category"`
-	Levels        extensions.Levels      `json:"levels"`
-	Source        string                 `json:"source"`
-	Installed     bool                   `json:"installed"`
-	PageURL       string                 `json:"page_url,omitempty"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Version     string            `json:"version"`
+	Kind        string            `json:"kind"`
+	Runtime     string            `json:"runtime"`
+	Publisher   string            `json:"publisher"`
+	Description string            `json:"description"`
+	Category    string            `json:"category"`
+	Levels      extensions.Levels `json:"levels"`
+	Source      string            `json:"source"`
+	Installed   bool              `json:"installed"`
+	PageURL     string            `json:"page_url,omitempty"`
+	// IDConflict names the source that owns this id when an installed row
+	// holds it from another one (a repo install of an id the catalog lists).
+	IDConflict    string                 `json:"id_conflict,omitempty"`
 	TrustLevel    string                 `json:"trust_level"`
 	Blocked       bool                   `json:"blocked"`
 	BlockedReason string                 `json:"blocked_reason"`

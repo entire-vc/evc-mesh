@@ -579,33 +579,6 @@
     "close": "Close",
     "cancel": "Cancel"
   },
-  "runtimeResources": {
-    "title": "Controllers and resources",
-    "loadingRuntime": "Loading runtime",
-    "loadError": "Runtime data could not be loaded. Nothing below is assumed.",
-    "retry": "Retry",
-    "forbidden": "Runtime settings are visible to workspace admins only.",
-    "notConfigured": "No runtime connection in this workspace. Agents run in direct mode; runtime facts are unknown.",
-    "desired": "Desired r{{revision}}",
-    "enabled": "enabled",
-    "disabled": "disabled",
-    "draining": "draining",
-    "controllers": "Controllers",
-    "accounts": "Accounts",
-    "noAccounts": "No accounts in the catalog.",
-    "pools": "Pools",
-    "noPools": "No pools in the catalog.",
-    "poolDetail": " · {{provider}} · max {{max}} · threshold {{threshold}}",
-    "notSet": "not set",
-    "aliases": " · aliases: {{aliases}}",
-    "unverified": " (unverified)",
-    "noObservation": " · no observation",
-    "usageLoading": "Loading usage…",
-    "usageForbidden": "Usage is visible to workspace admins only.",
-    "usageUnavailable": "Usage unavailable. Nothing is assumed.",
-    "noUsage": "No usage readings.",
-    "usageOf": "Usage of {{pool}}"
-  },
   "costQuality": {
     "quality": {
       "golden": "golden",
@@ -677,7 +650,8 @@
       "pattern": "Doesn't match the expected pattern",
       "enum": "Pick one of the options",
       "minimum": "At least {{min}}",
-      "maximum": "At most {{max}}"
+      "maximum": "At most {{max}}",
+      "minItems": "Choose at least {{min}}"
     },
     "color": {
       "pick": "Pick a colour: {{name}}",
@@ -702,6 +676,17 @@
       "remove": "Remove: {{name}}",
       "add": "Add…",
       "addNamed": "Add to {{name}}"
+    },
+    "missingOption": "{{value}} (not found)",
+    "checklist": {
+      "empty": "Nothing to choose from yet"
+    },
+    "map": {
+      "add": "Add",
+      "empty": "None yet",
+      "keyNamed": "{{name}}, key {{n}}",
+      "valueNamed": "{{name}}: {{key}}",
+      "removeNamed": "Remove {{name}}, row {{n}}"
     }
   },
   "catalog": {
@@ -711,6 +696,7 @@
       "theme": "Theme"
     },
     "trust": {
+      "builtin": "Built-in",
       "official": "Official",
       "verified": "Verified",
       "community": "Community",
@@ -738,14 +724,6 @@
       "new": "Newest",
       "updated": "Recently updated"
     },
-    "state": {
-      "installed": "Installed",
-      "connected": "Connected",
-      "blocked": "Blocked by catalog",
-      "notAllowed": "Not allowed by the instance administrator",
-      "themeActive": "Active in this workspace",
-      "themeInactive": "Not selected"
-    },
     "search": "Search extensions",
     "results": "Extensions",
     "count_one": "{{count}} extension",
@@ -753,7 +731,12 @@
     "noMatchTitle": "Nothing matches these filters",
     "noMatchBody": "Change the filters or clear the search.",
     "reset": "Reset filters",
-    "unavailableBanner": "The catalog is unavailable. Showing built-in and installed extensions."
+    "unavailableBanner": "The catalog is unavailable. Showing built-in and installed extensions.",
+    "sections": {
+      "extensions": "Extensions and integrations",
+      "themes": "Themes",
+      "themesHint": "Change how the workspace looks. One theme is on at a time."
+    }
   },
   "detail": {
     "back": "All extensions",
@@ -763,8 +746,6 @@
     "notFoundBody": "This extension doesn't exist or was removed from the catalog.",
     "errorTitle": "Couldn't load the extension",
     "errorBody": "The extension data is unavailable right now. Try again in a minute.",
-    "blockedNote": "Blocked by the catalog: {{reason}}",
-    "blockedNoReason": "no reason given",
     "customNote": "Not checked by the catalog. Connect only if you trust the source.",
     "tabs": {
       "label": "Extension sections",
@@ -782,9 +763,10 @@
       "allow": "Allow",
       "blocked": "Blocked",
       "askAdmin": "Not installed on this instance. Ask the instance administrator to install it.",
-      "notAllowed": "Not allowed by the instance administrator.",
-      "chooseTheme": "Choose",
-      "configureTheme": "Configure"
+      "notAllowed": "The instance administrator has not allowed this extension.",
+      "enableTheme": "Enable in workspace",
+      "themeAskAdmin": "A workspace owner or admin enables the workspace theme.",
+      "manageInRunner": "Manage in Runner"
     },
     "permissions": {
       "none": "This extension asks for no special permissions.",
@@ -863,11 +845,6 @@
       "noSlots": "The extension works in the background; it adds nothing to the screens.",
       "bindProjects": "Bind it to projects",
       "toInstalled": "Go to installed extensions"
-    },
-    "theme": {
-      "heading": "Theme {{name}}",
-      "hint": "Pick the settings and check the preview. Applying replaces the workspace's current theme; only one theme is active at a time.",
-      "apply": "Apply"
     }
   },
   "capabilities": {
@@ -967,16 +944,6 @@
       "keep_url": "Keep address",
       "install_secret": "Install secret"
     },
-    "runner": {
-      "image_registry": "Image registry",
-      "default_agent": "Default agent",
-      "default_project": "Default project",
-      "allowed_images": "Allowed images",
-      "policy": "Run policy",
-      "limits": "Limits",
-      "limits_max_parallel": "Parallel runs",
-      "limits_run_token": "Run token"
-    },
     "telegram": {
       "bot_token": "Bot token",
       "own_bot": "Own bot for the workspace",
@@ -985,17 +952,6 @@
     }
   },
   "installed": {
-    "status": {
-      "blocked": "Blocked by the catalog: {{reason}}",
-      "error": "Error: {{message}}",
-      "instance": "Active · set up by the instance admin",
-      "workspace": "Connected in this workspace",
-      "off": "Turned off",
-      "receiving": "Receiving events · {{count}} links, last {{last}}",
-      "none": "Not connected",
-      "themeActive": "Active in this workspace",
-      "themeInactive": "Not selected"
-    },
     "saved": "{{name}}: settings saved",
     "connected": "{{name}} connected",
     "settingsTitle": "{{name}} settings",
@@ -1014,7 +970,6 @@
       "bad": "Health check failed",
       "unknown": "Not checked yet"
     },
-    "lastError": "Last error: {{message}}",
     "toggle": "{{name}} enabled",
     "settings": "Settings",
     "more": "More actions for {{name}}",
@@ -1048,8 +1003,6 @@
     },
     "managedHint": "The instance admin connected this extension for every workspace. Its secrets stay at instance level.",
     "close": "Close",
-    "chooseTheme": "Choose",
-    "configureTheme": "Configure",
     "repos": {
       "title": "Repositories sending links",
       "none": "No repository activity yet",
@@ -1060,7 +1013,13 @@
     "editInstance": "Edit at instance level",
     "instanceCredentials": "Credentials are managed by the instance admin",
     "useOwn": "Use own credentials for this workspace",
-    "useOwnHint": "Your own token replaces the instance connection in this workspace only. Nothing changes until you save."
+    "useOwnHint": "Your own token replaces the instance connection in this workspace only. Nothing changes until you save.",
+    "manageInRunner": "Manage in Runner",
+    "managedInRunner": "Runner is set up and managed on the Runner screen.",
+    "themeSettingsHint": "Pick the theme and its settings. The preview shows the result before you save.",
+    "themeOn": "{{name}} is on in this workspace.",
+    "themeOff": "The workspace is back on the instance theme.",
+    "receiving": "Receiving events · {{count}} links, last {{last}}"
   },
   "projectTab": {
     "intro": "Extensions bound to this project. Connect an extension to the workspace first; here you choose what it does for this project.",
@@ -1138,10 +1097,10 @@
     }
   },
   "instanceAdmin": {
-    "title": "Instance extension settings",
-    "intro": "Settings that apply to the whole instance. Only the instance administrator can change them.",
+    "title": "Instance administration",
+    "intro": "Everything that applies to the whole instance: which extensions are allowed, their instance keys, the default theme and who changed what. Only an instance administrator can open it.",
     "back": "Back to extensions",
-    "loading": "Loading instance settings",
+    "loading": "Loading instance administration",
     "noAccessTitle": "Instance administrators only",
     "noAccessBody": "You do not have access to the instance extension settings. Ask the administrator of this instance.",
     "errorTitle": "Couldn't load the instance settings",
@@ -1155,8 +1114,6 @@
     "allow": {
       "title": "Allowed extensions",
       "body": "Official and verified extensions are allowed by default. Community and custom ones are connected only after you allow them here.",
-      "allowed": "Allowed",
-      "blocked": "Not allowed",
       "default": "by default",
       "explicit": "set by an administrator",
       "toggle": "Allow {{name}}",
@@ -1164,23 +1121,22 @@
       "saveFailed": "Couldn't save the change"
     },
     "trust": {
-      "builtin": "Official",
+      "builtin": "Built-in",
       "official": "Official",
       "verified": "Verified",
       "community": "Community",
       "custom": "Custom"
     },
     "settings": {
-      "title": "Extension settings",
       "body": "Connection values shared by every workspace of this instance.",
-      "pick": "Extension",
       "enabled": "Enabled on this instance",
       "noForm": "This extension has no instance-level settings.",
       "fromEnv": "Moved from environment variables {{date}}",
       "fromEnvNoDate": "Moved from environment variables",
       "saved": "Settings saved",
       "save": "Save settings",
-      "loadFailed": "Couldn't load the settings of this extension"
+      "loadFailed": "Couldn't load the settings of this extension",
+      "titleFor": "Instance settings: {{name}}"
     },
     "journal": {
       "title": "Journal",
@@ -1194,7 +1150,78 @@
       "allow_changed_off": "{{ext}} no longer allowed",
       "auto_update_changed_on": "Automatic updates turned on",
       "auto_update_changed_off": "Automatic updates turned off",
-      "other": "{{action}} {{ext}}"
+      "other": "{{action}} {{ext}}",
+      "filters": "Journal filters",
+      "filterExtension": "Extension",
+      "filterAction": "Action",
+      "filterActor": "Who",
+      "filterFrom": "From",
+      "filterTo": "To",
+      "any": "Any",
+      "loading": "Loading the journal",
+      "loadFailed": "Couldn't load the journal",
+      "noMatch": "No entries match these filters.",
+      "capped": "Showing the latest {{count}} entries. Narrow the filters to see older ones.",
+      "installed": "{{ext}} installed, version {{version}}",
+      "updated": "{{ext}} updated from {{from}} to {{to}}",
+      "rolled_back": "{{ext}} rolled back from {{from}} to {{to}}",
+      "update_pending_consent": "An update of {{ext}} is waiting for consent to new permissions",
+      "theme_selected_instance": "Default theme set to {{ext}}",
+      "theme_selected_workspace": "A workspace switched to the {{ext}} theme",
+      "theme_deleted": "Theme {{ext}} removed",
+      "actions": {
+        "settings_changed": "Settings changed",
+        "allow_changed": "Allow-list changed",
+        "auto_update_changed": "Auto-update changed",
+        "installed": "Installed",
+        "updated": "Updated",
+        "rolled_back": "Rolled back",
+        "update_pending_consent": "Update waiting for consent",
+        "theme_selected": "Theme chosen",
+        "theme_deleted": "Theme removed"
+      }
+    },
+    "tabs": {
+      "label": "Instance administration sections",
+      "extensions": "Extensions",
+      "themes": "Themes",
+      "journal": "Journal"
+    },
+    "table": {
+      "name": "Name",
+      "kind": "Type",
+      "source": "Source",
+      "trust": "Trust",
+      "allowed": "Allowed",
+      "workspaces": "Workspaces",
+      "keys": "Instance keys",
+      "empty": "No extensions are installed on this instance."
+    },
+    "kind": {
+      "integration": "Integration",
+      "plugin": "Plugin",
+      "theme": "Theme"
+    },
+    "source": {
+      "builtin": "Built-in",
+      "catalog": "Catalog",
+      "repo": "Repository"
+    },
+    "keys": {
+      "none": "Not set",
+      "env": "From env",
+      "admin": "Set",
+      "configure": "Configure",
+      "close": "Close",
+      "noForm": "No instance keys"
+    },
+    "filters": {
+      "search": "Search by name",
+      "allKinds": "All types",
+      "allSources": "All sources",
+      "shown": "{{shown}} of {{total}}",
+      "reset": "Reset filters",
+      "noMatch": "Nothing matches these filters."
     }
   },
   "repoInstall": {
@@ -1266,7 +1293,21 @@
     "linksValue_one": "{{value}} link, last event {{last}}",
     "linksValue_other": "{{value}} links, last event {{last}}",
     "linksNone": "No task links yet",
-    "lastError": "Last error",
     "instanceNote": "Set up by the instance admin. Secrets are kept at instance level and are never shown."
+  },
+  "extensionState": {
+    "notAllowed": "Not allowed",
+    "available": "Available",
+    "enabled": "Enabled in workspace",
+    "enabledInstance": "Enabled on the instance",
+    "error": "Error",
+    "blocked": "Blocked by the catalog",
+    "keysFrom": {
+      "instance": "keys from the instance",
+      "workspace": "own keys"
+    },
+    "errorUnknown": "The check failed without a message",
+    "blockedNoReason": "no reason given",
+    "check": "Check"
   }
 }

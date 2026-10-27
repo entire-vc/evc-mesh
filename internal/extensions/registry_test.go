@@ -109,7 +109,7 @@ func TestResolve_SixCases(t *testing.T) {
 
 func TestResolve_StoreErrorPropagates(t *testing.T) {
 	boom := errors.New("db down")
-	_, err := extensions.ResolveSettings(context.Background(), fakeConns{err: boom}, nil, uuid.New(), "gitlab")
+	_, err := extensions.ResolveSettings(context.Background(), fakeConns{err: boom}, nil, nil, uuid.New(), "gitlab")
 	require.ErrorIs(t, err, boom)
 }
 

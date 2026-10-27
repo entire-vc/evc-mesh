@@ -12,13 +12,21 @@ export interface InstanceOverviewItem {
   id: string;
   name: string;
   kind: string;
+  /** Where it came from: builtin, catalog or repo. */
+  source?: string;
+  version?: string;
   trust_level: string;
+  /** Blocked by the catalog; beats the allow-list. */
+  blocked?: boolean;
+  blocked_reason?: string;
   allowed: boolean;
   allow_explicit: boolean;
   has_instance_form: boolean;
   enabled: boolean;
   settings_source: "none" | "env" | "admin";
   settings_updated_at?: string;
+  /** Workspaces where it is on; absent when the server does not count. */
+  enabled_workspaces?: number;
 }
 
 export interface InstanceOverview {
@@ -56,8 +64,34 @@ export interface InstanceExtensionSummary {
 }
 
 export const getInstanceOverview = () => api<InstanceOverview>("/api/v1/extensions/instance/overview");
-export const getInstanceJournal = (limit = 50) =>
-  api<{ entries: InstanceJournalEntry[] }>("/api/v1/extensions/instance/journal", { params: { limit } });
+export interface InstanceJournalFilter {
+  extension?: string;
+  action?: string;
+  actor?: string;
+  /** YYYY-MM-DD, inclusive. */
+  since?: string;
+  /** YYYY-MM-DD, exclusive. */
+  until?: string;
+}
+
+export interface InstanceJournalFacets {
+  actions: string[];
+  actors: { id: string; name: string }[];
+  extensions: string[];
+}
+
+export interface InstanceJournalPage {
+  entries: InstanceJournalEntry[];
+  facets?: InstanceJournalFacets;
+}
+
+/** Newest first. Empty filter values are not sent; `facets` asks for the filter choices too. */
+export const getInstanceJournal = (filter: InstanceJournalFilter = {}, opts: { limit?: number; facets?: boolean } = {}) => {
+  const params: Record<string, string | number> = { limit: opts.limit ?? 200 };
+  for (const [k, v] of Object.entries(filter)) if (v) params[k] = v;
+  if (opts.facets) params.facets = 1;
+  return api<InstanceJournalPage>("/api/v1/extensions/instance/journal", { params });
+};
 export const getInstanceSettings = (id: string) => api<InstanceSettingsDto>(`/api/v1/extensions/${id}/instance-settings`);
 export const listExtensionSummaries = () => api<{ extensions: InstanceExtensionSummary[] }>("/api/v1/extensions");
 

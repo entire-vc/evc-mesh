@@ -42,6 +42,10 @@ func builtinFile(id, path string) ([]byte, error) {
 	return b, nil
 }
 
+// BuiltinKnown reports whether a theme with this id ships with Mesh,
+// mesh-default included.
+func BuiltinKnown(id string) bool { return builtinKnown(id) }
+
 // builtinKnown reports whether an embedded theme with this id exists, mesh-default included.
 func builtinKnown(id string) bool {
 	_, err := fs.Stat(builtinFS, builtinDir(id))

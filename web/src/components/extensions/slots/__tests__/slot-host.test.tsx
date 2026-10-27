@@ -66,6 +66,16 @@ describe("parseSlotExtensions", () => {
     ] as never);
     expect(out).toEqual([{ id: "g", name: "G", slots: ["task.badge"] }]);
   });
+
+  it("marks project-level extensions from levels.project (top-level or manifest), workspace-only ones not", () => {
+    const ui = { capabilities: { ui: ["sidebar.item"] } };
+    const out = parseSlotExtensions([
+      { id: "keep", name: "Keep", status: { enabled: true }, levels: { project: false }, manifest: ui },
+      { id: "p1", name: "P1", status: { enabled: true }, levels: { project: true }, manifest: ui },
+      { id: "p2", name: "P2", status: { enabled: true }, manifest: { ...ui, levels: { project: true } } },
+    ]);
+    expect(out.map((e) => [e.id, e.projectLevel ?? false])).toEqual([["keep", false], ["p1", true], ["p2", true]]);
+  });
 });
 
 describe("task.panel", () => {

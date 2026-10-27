@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import i18n, { APP_NAMESPACES, resources, setLanguage } from "@/i18n";
 import { NAMESPACES } from "@/i18n/chunks";
-import { formatDate, formatNumber, formatRelativeShort } from "@/i18n/format";
+import { formatDate, formatNumber, formatRelativeShort, formatRelativeTime } from "@/i18n/format";
 import { normalizeLanguage, resolveLanguage } from "@/i18n/config";
 
 afterEach(async () => {
@@ -59,6 +59,14 @@ describe("Intl formatters follow the UI language", () => {
     expect(formatRelativeShort(fiveMinAgo, t)).toBe("5m ago");
     await setLanguage("ru");
     expect(formatRelativeShort(fiveMinAgo, t)).toBe("5 мин назад");
+  });
+
+  it("long relative time is translated", async () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600_000);
+    await setLanguage("en");
+    expect(formatRelativeTime(twoHoursAgo)).toBe("about 2 hours ago");
+    await setLanguage("ru");
+    expect(formatRelativeTime(twoHoursAgo)).toBe("около 2 часов назад");
   });
 });
 

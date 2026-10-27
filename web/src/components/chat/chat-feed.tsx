@@ -84,7 +84,7 @@ function AttachmentView({ projectId, attachment }: { projectId: string; attachme
           .then((b) => saveBlob(b, attachment.file_name))
           .catch(() => toast.error(t("feed.downloadFailed")))
       }
-      className="flex max-w-[14rem] items-center gap-2 rounded-md border border-border bg-muted px-2 py-1.5 text-left text-xs hover:bg-muted"
+      className="flex max-w-[14rem] items-center gap-2 rounded-md border border-border bg-muted px-2 py-1.5 text-left text-xs text-foreground hover:bg-muted"
     >
       <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
       <span className="min-w-0 flex-1">

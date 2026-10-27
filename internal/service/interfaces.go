@@ -66,6 +66,9 @@ type MoveTaskInput struct {
 	Reaper        *domain.ReaperExpectation `json:"-"`
 	AlarmDue      *time.Time                `json:"-"`
 	AlarmLabels   []string                  `json:"-"`
+	// CheckoutStage is set only by checkout auto-progression; never bound from
+	// user JSON, and Source alone does not grant it (callers pick their Source).
+	CheckoutStage bool `json:"-"`
 }
 
 // AssignTaskInput holds parameters for assigning a task.
@@ -1903,12 +1906,12 @@ type SecretService interface {
 	GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error)
 }
 
-// SecretMaterializationService decrypts current secret values for
+// SecretMaterializationService reads current secret values from Keep for
 // spawn-time env-file materialization (S4). Wire it into exactly one
 // handler — the internal spawn-hook endpoint dispatcher/fiddler call — and
 // nowhere a browser session or a general agent tool can reach.
 type SecretMaterializationService interface {
-	// ResolveForSpawn decrypts every current secret in scope for the given
+	// ResolveForSpawn reads every current secret in scope for the given
 	// resolution. An expired secret is returned with Expired=true and an
 	// empty Value rather than omitted, so the caller can name it in a loud
 	// spawn error instead of writing a silently empty variable.

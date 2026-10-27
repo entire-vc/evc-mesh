@@ -61,13 +61,14 @@ func newMidPipelineFixture(t *testing.T) *midPipelineFixture {
 }
 
 // insertUnleasedTask creates an in_progress task with no checkout whose
-// tasks.updated_at is `staleFor` in the past.
+// tasks.updated_at is `staleFor` in the past. Its stage is marked as set by a
+// checkout, the only stage the sweep may take back.
 func (f *midPipelineFixture) insertUnleasedTask(t *testing.T, staleFor time.Duration) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	_, err := f.db.ExecContext(context.Background(),
-		`INSERT INTO tasks (id, project_id, status_id, title, task_number, created_by, position, created_at, updated_at)
-		 VALUES ($1, $2, $3, 'stalled card', nextval('mp_gate_task_number'), $4, 1,
+		`INSERT INTO tasks (id, project_id, status_id, checkout_stage_status_id, title, task_number, created_by, position, created_at, updated_at)
+		 VALUES ($1, $2, $3, $3, 'stalled card', nextval('mp_gate_task_number'), $4, 1,
 		         now() - $5::interval, now() - $5::interval)`,
 		id, f.project, f.inProgress, uuid.New(), intervalArg(staleFor))
 	require.NoError(t, err)
@@ -158,7 +159,7 @@ func (f *midPipelineFixture) insertCommentAs(t *testing.T, taskID uuid.UUID, aut
 
 // The fleet rules end a WAIT with release_task, so "in_progress, no lease, quiet" is
 // what a healthy waiting card looks like. The sweep must not park it as abandoned
-// (#2777fee7: a card waiting on an open MR was sent to backlog two hours after its WAIT).
+// (an internal ticket: a card waiting on an open MR was sent to backlog two hours after its WAIT).
 // Each negative differs from the exempted card in exactly one thing.
 func TestFindStaleUnleasedInProgress_LiveWaitMarker(t *testing.T) {
 	f := newMidPipelineFixture(t)

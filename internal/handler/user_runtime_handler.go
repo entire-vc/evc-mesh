@@ -161,18 +161,46 @@ func (h *UserRuntimeHandler) RevokeManager(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"agent_id": agent, "runtime_manager": false})
 }
 
-// OperatorAgents is GET /me/runtime/agents: agents the user operates.
+// operatorWorkspace is the ?workspace_id= the "My Runner" screen is open in. A
+// caller who is neither a member nor the owner of it is refused here, before any
+// agent row is read; the repository repeats the check for its other callers.
+func (h *UserRuntimeHandler) operatorWorkspace(c echo.Context) (uuid.UUID, error) {
+	id, err := uuid.Parse(c.QueryParam("workspace_id"))
+	if err != nil || id == uuid.Nil {
+		return uuid.Nil, apierror.BadRequest("workspace_id query parameter is required")
+	}
+	actor := userRuntimeActor(c)
+	if actor.UserID == uuid.Nil {
+		return uuid.Nil, apierror.Forbidden("operator runtime requires a signed-in user")
+	}
+	if _, err = h.repo.WorkspaceAdmin(c.Request().Context(), id, actor.UserID); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+// OperatorAgents is GET /me/runtime/agents?workspace_id=: the workspace's agents
+// the user operates, plus, for its owner or admin, those its runner drives.
 func (h *UserRuntimeHandler) OperatorAgents(c echo.Context) error {
-	v, err := h.repo.OperatorAgents(c.Request().Context(), userRuntimeActor(c))
+	ws, err := h.operatorWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	v, err := h.repo.OperatorAgents(c.Request().Context(), userRuntimeActor(c), ws)
 	if err != nil {
 		return handleError(c, err)
 	}
 	return c.JSON(http.StatusOK, map[string]any{"agents": v})
 }
 
-// OperatorRunners is GET /me/runtime/runners: the user's agents grouped by runner.
+// OperatorRunners is GET /me/runtime/runners?workspace_id=: the agents of
+// OperatorAgents grouped by runner.
 func (h *UserRuntimeHandler) OperatorRunners(c echo.Context) error {
-	v, err := h.repo.OperatorRunners(c.Request().Context(), userRuntimeActor(c))
+	ws, err := h.operatorWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	v, err := h.repo.OperatorRunners(c.Request().Context(), userRuntimeActor(c), ws)
 	if err != nil {
 		return handleError(c, err)
 	}

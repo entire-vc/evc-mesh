@@ -43,7 +43,7 @@ func New(d extensions.Deps) *Provider {
 	if err != nil {
 		panic(fmt.Sprintf("runner: embedded manifest: %v", err))
 	}
-	return &Provider{BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst}}
+	return &Provider{BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst, Allow: d.Allow}}
 }
 
 // Aliases lets the extension registry resolve the legacy provider name.
@@ -89,16 +89,18 @@ func (p *Provider) Validate(level extensions.Level, settings map[string]any) err
 // place that does.
 func (p *Provider) Resolve(ctx context.Context, workspaceID uuid.UUID) (extensions.Resolved, error) {
 	for _, id := range []string{ID, LegacyID} {
-		res, err := extensions.ResolveSettings(ctx, p.Conns, nil, workspaceID, id)
+		// The allow-list is keyed by the current name, so it is applied once
+		// below, never to the legacy row's id.
+		res, err := extensions.ResolveSettings(ctx, p.Conns, nil, nil, workspaceID, id)
 		if err != nil {
 			return extensions.Resolved{}, err
 		}
 		if res.Source == extensions.SourceWorkspace {
 			res.ExtensionID, res.Settings = ID, nil
-			return res, nil
+			return extensions.ApplyAllowList(ctx, p.Allow, ID, res)
 		}
 	}
-	res, err := extensions.ResolveSettings(ctx, nil, p.Inst, workspaceID, ID)
+	res, err := extensions.ResolveSettings(ctx, nil, p.Inst, p.Allow, workspaceID, ID)
 	if err != nil {
 		return extensions.Resolved{}, err
 	}
