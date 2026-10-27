@@ -15,6 +15,21 @@ vi.mock("@/lib/extension-settings", () => ({
   saveWorkspaceExtensionSettings: api.save,
 }));
 
+const themeApi = vi.hoisted(() => ({ put: vi.fn(), apply: vi.fn() }));
+vi.mock("@/lib/themes", () => ({ putWorkspaceTheme: themeApi.put }));
+vi.mock("@/core/themes/runtime", () => ({ applyWorkspaceTheme: themeApi.apply }));
+// the theme panel has its own tests: here only that it opens on the theme, in the Settings window
+vi.mock("@/components/themes/theme-settings-panel", async () => {
+  const { createPortal } = await import("react-dom");
+  return {
+    ThemeSettingsPanel: (p: { initialThemeId?: string; level: string; workspaceId?: string; readOnly?: boolean; actionsContainer?: HTMLElement | null }) => (
+      <div data-testid="theme-panel" data-theme={p.initialThemeId} data-level={p.level} data-ws={p.workspaceId} data-readonly={String(!!p.readOnly)}>
+        {p.actionsContainer ? createPortal(<button type="button">Save theme</button>, p.actionsContainer) : <button type="button">Save theme</button>}
+      </div>
+    ),
+  };
+});
+
 const instanceAdmin = vi.hoisted(() => ({ value: false }));
 vi.mock("@/lib/extension-admin", () => ({ useIsInstanceAdmin: () => instanceAdmin.value }));
 
@@ -30,14 +45,15 @@ const sum = (id: string, name: string) => ({
 });
 
 let refresh: ReturnType<typeof vi.fn>;
-function mount(entries: CatalogState["entries"], state: CatalogState["state"] = "ready") {
+function mount(entries: CatalogState["entries"], state: CatalogState["state"] = "ready", url = "/w/acme/extensions?tab=installed") {
   refresh = vi.fn();
   const catalog = { state, entries, catalogUnavailable: false, reload: vi.fn(), refresh } as unknown as CatalogState;
   return render(
-    <MemoryRouter initialEntries={["/w/acme/extensions?tab=installed"]}>
+    <MemoryRouter initialEntries={[url]}>
       <Routes>
         <Route path="w/:wsSlug/extensions" element={<InstalledExtensions catalog={catalog} />} />
         <Route path="w/:wsSlug/extensions/:extId/connect" element={<div data-testid="theme-screen" />} />
+        <Route path="w/:wsSlug/runner" element={<div data-testid="runner-screen" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -52,15 +68,38 @@ const instanceGitlab = () =>
 beforeEach(async () => {
   await setLanguage("en");
   Object.values(api).forEach((f) => f.mockReset().mockResolvedValue({ ok: true }));
+  Object.values(themeApi).forEach((f) => f.mockReset().mockResolvedValue({}));
   instanceAdmin.value = false;
   useMemberStore.setState({ myRole: "admin" } as never);
   useWorkspaceStore.setState({ currentWorkspace: { id: "ws1", slug: "acme" } } as never);
 });
 
 describe("Installed list", () => {
+  it("the runner program has no switch or settings here, only the way to the Runner screen", async () => {
+    mount(mergeCatalog([{ ...sum("agent-runner", "Agent Runner"), runtime: "external", source: "catalog", trust_level: "official" }], [{
+      id: "agent-runner", name: "Agent Runner", version: "0.1.0", kind: "plugin", category: "agents",
+      connection: { settings: { runner_url: "https://runner.example.com" } }, status: { enabled: true, source: "workspace" },
+    }] as never));
+    const row = document.querySelector('[data-ext="agent-runner"]') as HTMLElement;
+    expect(within(row).queryByRole("switch")).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Settings" })).toBeNull();
+    fireEvent.click(within(row).getByRole("button", { name: "Manage in Runner" }));
+    expect(await screen.findByTestId("runner-screen")).toBeTruthy();
+  });
+
+  it("?settings=agent-runner opens no settings window and goes to the Runner screen", async () => {
+    mount(mergeCatalog([{ ...sum("agent-runner", "Agent Runner"), runtime: "external", source: "catalog", trust_level: "official" }], [{
+      id: "agent-runner", name: "Agent Runner", version: "0.1.0", kind: "plugin", category: "agents",
+      connection: null, status: { enabled: false, source: "workspace" },
+    }] as never), "ready", "/w/acme/extensions?tab=installed&settings=agent-runner");
+    expect(await screen.findByTestId("runner-screen")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("says where an enabled extension comes from", () => {
     mount(instanceGitlab());
-    expect(screen.getByTestId("status-gitlab").textContent).toContain("Active · set up by the instance admin");
+    expect(screen.getByTestId("status-gitlab").textContent).toContain("Enabled in workspace");
+    expect(screen.getByTestId("status-gitlab").textContent).toContain("keys from the instance");
   });
 
   it("turning off an instance-sourced extension writes nothing until the modal is confirmed", async () => {
@@ -88,6 +127,21 @@ describe("Installed list", () => {
     }] as never));
     fireEvent.click(screen.getByRole("switch", { name: "GitLab enabled" }));
     await waitFor(() => expect(api.setEnabled).toHaveBeenCalledWith("ws1", "gitlab", false));
+  });
+
+  it("an extension the administrator does not allow cannot be switched on or connected", () => {
+    mount(mergeCatalog([sum("gitlab", "GitLab"), { ...sum("github", "GitHub"), allowed: false }], [{
+      id: "gitlab", name: "GitLab", version: "1.0.0", kind: "integration", category: "development",
+      connection: { settings: {} }, status: { enabled: false, source: "workspace", not_allowed: true },
+    }, {
+      id: "github", name: "GitHub", version: "1.0.0", kind: "integration", category: "development",
+      connection: null, status: { enabled: false, source: "none" },
+    }] as never));
+    expect(screen.getByRole("switch", { name: "GitLab enabled" })).toBeDisabled();
+    const github = screen.getByRole("switch", { name: "GitHub enabled" });
+    expect(github).toBeDisabled();
+    const row = github.closest("li") as HTMLElement;
+    expect(within(row).getByRole("button", { name: /connect/i })).toBeDisabled();
   });
 
   it("Remove keeps the extension's data and only drops the connection", async () => {
@@ -125,7 +179,7 @@ describe("Installed list", () => {
       connection: { settings: {} }, status: { enabled: true, source: "workspace", health: { ok: true, message: "" } },
     }] as never));
     expect(screen.queryByText("Runner")).toBeNull();
-    expect(screen.queryByText("Connected in this workspace")).not.toBeNull();
+    expect(screen.queryByText("own keys")).not.toBeNull();
     expect(screen.getByRole("switch", { name: "Chat with Agent enabled" })).toBeTruthy();
   });
 
@@ -277,7 +331,7 @@ describe("Settings of an instance-connected VCS extension", () => {
     expect(dlg.querySelector("input")).toBeNull();
     expect(within(dlg).queryByLabelText(/Access token|Webhook secret/)).toBeNull();
     expect(within(dlg).queryByRole("button", { name: "Save" })).toBeNull();
-    expect(within(dlg).getByTestId("ext-status-github").textContent).toContain("Active · set up by the instance admin");
+    expect(within(dlg).getByTestId("ext-status-github").textContent).toContain("keys from the instance");
   });
 
   it("GitHub and GitLab get the same dialog", () => {
@@ -300,10 +354,22 @@ describe("Settings of an instance-connected VCS extension", () => {
     expect(within(bare).getByText("No repository activity yet")).toBeTruthy();
   });
 
+  it("each repository row puts its meta on a second line under the name, at any width", () => {
+    const dlg = open("gitlab");
+    const list = within(dlg).getByRole("list", { name: "Repositories sending links" });
+    for (const li of within(list).getAllByRole("listitem")) {
+      // A stacked column: no side-by-side wrap that keeps short names and their meta on one line.
+      expect(li.className).toContain("flex-col");
+      expect(li.className).not.toContain("justify-between");
+      expect(li.children).toHaveLength(2);
+      expect(li.children[1]?.textContent).toMatch(/^git\.entire\.host · /);
+    }
+  });
+
   it("an instance admin gets a link to this extension's instance settings", () => {
     instanceAdmin.value = true;
     const dlg = open("github");
-    expect(within(dlg).getByRole("link", { name: "Edit at instance level" }).getAttribute("href")).toBe("/w/acme/instance/extensions?ext=github");
+    expect(within(dlg).getByRole("link", { name: "Edit at instance level" }).getAttribute("href")).toBe("/w/acme/instance?ext=github");
     expect(within(dlg).queryByText("Credentials are managed by the instance admin")).toBeNull();
   });
 
@@ -323,6 +389,20 @@ describe("Settings of an instance-connected VCS extension", () => {
     expect(api.connect).not.toHaveBeenCalled();
   });
 
+  it("the own-credentials form keeps Cancel next to its submit, and the hint above the fields", () => {
+    for (const [id, submit] of [["github", "Save"], ["gitlab", "Connect"]] as const) {
+      const dlg = open(id);
+      fireEvent.click(within(dlg).getByRole("button", { name: "Use own credentials for this workspace" }));
+      const cancel = within(dlg).getByRole("button", { name: "Cancel" });
+      const save = within(dlg).getByRole("button", { name: submit });
+      expect(cancel.parentElement).toBe(save.parentElement);
+      const hint = within(dlg).getByText(/Nothing changes until you save/);
+      const field = within(dlg).getByLabelText(/Access token/);
+      expect(hint.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      cleanup();
+    }
+  });
+
   it("own credentials on a workspace without a connection ask for consent and connect", async () => {
     const dlg = open("gitlab");
     fireEvent.click(within(dlg).getByRole("button", { name: "Use own credentials for this workspace" }));
@@ -336,29 +416,132 @@ describe("Settings of an instance-connected VCS extension", () => {
 
 describe("Installed list — themes", () => {
   const theme = (id: string, name: string) => ({ ...sum(id, name), kind: "theme" });
-  const themes = () => mergeCatalog([theme("mesh-default", "Mesh"), theme("graphite", "Graphite")], [], [], "graphite");
+  const themes = () => mergeCatalog([sum("gitlab", "GitLab"), theme("mesh-default", "Mesh"), theme("graphite", "Graphite")], [], [], "graphite");
 
-  it("shows the active theme and the not selected one, with no switch, check or removal", () => {
+  it("lists themes in a section of their own, after the extensions", () => {
     mount(themes());
-    expect(screen.getByTestId("status-graphite").textContent).toContain("Active in this workspace");
-    expect(screen.getByTestId("status-mesh-default").textContent).toContain("Not selected");
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByRole("button", { name: /More actions/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Configure" })).toBeTruthy();
+    const section = screen.getByTestId("section-themes");
+    expect(within(section).getByRole("heading", { name: /Themes/ })).toBeTruthy();
+    expect(section.querySelector('[data-ext="graphite"]')).toBeTruthy();
+    expect(section.querySelector('[data-ext="mesh-default"]')).toBeTruthy();
+    expect(section.querySelector('[data-ext="gitlab"]')).toBeNull();
+    expect(section.querySelectorAll('[data-kind="theme"]').length).toBe(2);
   });
 
-  it("a blocked active theme still says it is active, and shows the block", () => {
+  it("a theme has the extension switch and Settings, but no check or removal", () => {
+    mount(themes());
+    expect(screen.getByTestId("status-graphite").textContent).toContain("Enabled in workspace");
+    expect(screen.getByTestId("status-mesh-default").textContent).toContain("Available");
+    expect(screen.getByRole("switch", { name: "Graphite enabled" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "Mesh enabled" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByRole("button", { name: /More actions for Graphite/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /More actions for GitLab/ })).toBeTruthy();
+  });
+
+  it("switching a theme on makes it the workspace theme; off goes back to the instance theme", async () => {
+    mount(themes());
+    fireEvent.click(screen.getByRole("switch", { name: "Mesh enabled" }));
+    await waitFor(() => expect(themeApi.put).toHaveBeenCalledWith("ws1", "mesh-default", {}));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(themeApi.apply).toHaveBeenCalledWith("acme");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Graphite enabled" }));
+    await waitFor(() => expect(themeApi.put).toHaveBeenCalledWith("ws1", null, {}));
+    expect(api.setEnabled).not.toHaveBeenCalled();
+    expect(api.connect).not.toHaveBeenCalled();
+  });
+
+  it("Settings opens the theme panel in the Settings window, on that theme", () => {
+    mount(themes());
+    const row = screen.getByTestId("section-themes").querySelector('[data-ext="graphite"]') as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Graphite" });
+    const panel = within(dialog).getByTestId("theme-panel");
+    expect(panel.dataset.theme).toBe("graphite");
+    expect(panel.dataset.level).toBe("workspace");
+    expect(panel.dataset.ws).toBe("ws1");
+    expect(screen.queryByTestId("theme-screen")).toBeNull();
+    // Save sits in the footer, outside the scroll area, so at 393 px it cannot cover a theme card
+    const save = within(dialog).getByRole("button", { name: "Save theme" });
+    expect(screen.getByTestId("theme-settings-body").contains(save)).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("?settings=<id> opens that theme's Settings window", async () => {
+    mount(themes(), "ready", "/w/acme/extensions?tab=installed&settings=mesh-default");
+    const dialog = await screen.findByRole("dialog", { name: "Mesh" });
+    expect(within(dialog).getByTestId("theme-panel").dataset.theme).toBe("mesh-default");
+  });
+
+  it("a member opens only the active theme's Settings, read-only, from the row and from ?settings=<id>", async () => {
+    useMemberStore.setState({ myRole: "member", myRoleLoaded: true } as never);
+    mount(themes(), "ready", "/w/acme/extensions?tab=installed&settings=graphite");
+    const dialog = await screen.findByRole("dialog", { name: "Graphite" });
+    expect(within(dialog).getByTestId("theme-panel").dataset.readonly).toBe("true");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    const settings = (id: string) => within(screen.getByTestId(`status-${id}`).closest("[data-ext]") as HTMLElement)
+      .getByRole("button", { name: "Settings" }) as HTMLButtonElement;
+    expect(settings("graphite").disabled).toBe(false);
+    expect(settings("mesh-default").disabled).toBe(true);
+  });
+
+  it("?settings=<inactive theme> does not open a window for a member", () => {
+    useMemberStore.setState({ myRole: "member", myRoleLoaded: true } as never);
+    mount(themes(), "ready", "/w/acme/extensions?tab=installed&settings=mesh-default");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a blocked theme reads as blocked with the reason, like any extension, and cannot be changed", () => {
     const rows = mergeCatalog([{ ...theme("graphite", "Graphite"), blocked: true, blocked_reason: "CVE-1" }], [], [], "graphite");
     mount(rows);
-    expect(screen.getByTestId("status-graphite").textContent).toContain("Active in this workspace");
-    expect(screen.getByText("Blocked by the catalog: CVE-1")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Configure" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("status-graphite").textContent).toContain("Blocked by the catalog");
+    expect(screen.getByTestId("status-graphite").textContent).toContain("CVE-1");
+    expect((screen.getByRole("button", { name: "Settings" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("switch", { name: "Graphite enabled" }) as HTMLButtonElement).disabled).toBe(true);
   });
+});
 
-  it("Choose opens the theme screen and writes nothing here", () => {
-    mount(themes());
-    fireEvent.click(screen.getByRole("button", { name: "Choose" }));
-    expect(screen.getByTestId("theme-screen")).toBeTruthy();
-    Object.values(api).forEach((f) => expect(f).not.toHaveBeenCalled());
+describe("one health for the row and the Settings window", () => {
+  const keep = (ok: boolean) => mergeCatalog([sum("keep", "Keep")], [{
+    id: "keep", name: "Keep", version: "1.0.0", kind: "integration", category: "security",
+    connection: null,
+    status: ok
+      ? { enabled: true, source: "instance", health: { ok: true, message: "" } }
+      : { enabled: true, source: "instance", health: { ok: false, message: "401 Unauthorized" }, last_error: "401 Unauthorized" },
+  }] as never);
+  const view = (entries: CatalogState["entries"]) => {
+    const catalog = { state: "ready", entries, catalogUnavailable: false, reload: vi.fn(), refresh } as unknown as CatalogState;
+    return (
+      <MemoryRouter initialEntries={["/w/acme/extensions?tab=installed"]}>
+        <Routes><Route path="w/:wsSlug/extensions" element={<InstalledExtensions catalog={catalog} />} /></Routes>
+      </MemoryRouter>
+    );
+  };
+
+  it("an error shows its text and Check; after the check both read the re-read status", async () => {
+    refresh = vi.fn();
+    const { rerender } = render(view(keep(false)));
+    const row = screen.getByTestId("status-keep");
+    expect(row.textContent).toContain("Error");
+    expect(row.textContent).toContain("401 Unauthorized");
+    expect(within(row).getByRole("button", { name: "Check" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const panel = within(screen.getByRole("dialog")).getByTestId("ext-status-keep");
+    expect(panel.textContent).toContain("Error");
+    expect(panel.textContent).toContain("Health check failed");
+    fireEvent.click(within(panel).getByRole("button", { name: "Check" }));
+    await waitFor(() => expect(api.test).toHaveBeenCalledWith("ws1", "keep"));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+
+    // the list is re-read: the open window follows it instead of keeping its own result
+    rerender(view(keep(true)));
+    const after = within(screen.getByRole("dialog")).getByTestId("ext-status-keep");
+    expect(after.textContent).toContain("Enabled in workspace");
+    expect(after.textContent).toContain("Health check passed");
+    expect(after.textContent).not.toContain("401");
+    expect(screen.getByTestId("status-keep").textContent).toContain("Enabled in workspace");
+    expect(screen.getByTestId("status-keep").textContent).not.toContain("401");
   });
 });

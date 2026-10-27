@@ -42,8 +42,14 @@ export interface FieldSchema {
   pattern?: string;
   minimum?: number;
   maximum?: number;
+  minItems?: number;
+  uniqueItems?: boolean;
   items?: FieldSchema;
   properties?: Record<string, FieldSchema>;
+  /** An object without `properties` whose values follow this schema is a map (key → value). */
+  additionalProperties?: FieldSchema | boolean;
+  /** Allowed map keys (`enum`) of a map. */
+  propertyNames?: FieldSchema;
   required?: string[];
   /** Derived by the server; shown, never edited or sent back. */
   readOnly?: boolean;
@@ -55,6 +61,10 @@ export interface FieldSchema {
   /** Theme settings: the design token this field drives; a colour token takes "H S% L%". */
   "x-token"?: string;
   "x-options"?: Record<string, string>;
+  /** Names a set of existing things the value must be one of; the host turns it into `enum` (bindRefs). */
+  "x-ref"?: string;
+  /** The same for the keys of a map (into `propertyNames.enum`). */
+  "x-key-ref"?: string;
 }
 
 export type Values = Record<string, unknown>;
@@ -70,6 +80,7 @@ export type ErrorCode =
   | "maxLength"
   | "pattern"
   | "enum"
+  | "minItems"
   | "minimum"
   | "maximum";
 

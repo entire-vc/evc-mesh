@@ -119,6 +119,12 @@ func refFor(ref Ref) string {
 	return name
 }
 
+// KeepStoredRef is what Keep.Put returns for ref through HTTPKeepClient, known
+// before the PUT so a row can claim its name first.
+func KeepStoredRef(ref Ref) string {
+	return KeepPrefix + refFor(ref)
+}
+
 func (c *HTTPKeepClient) now() time.Time {
 	if c.Now != nil {
 		return c.Now()

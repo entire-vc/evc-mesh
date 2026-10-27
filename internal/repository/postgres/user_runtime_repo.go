@@ -542,7 +542,7 @@ type RuntimeController struct {
 type OperatorAgent struct {
 	AgentID            uuid.UUID          `json:"agent_id"`
 	Name               string             `json:"name"`
-	OperatorUserID     uuid.UUID          `json:"operator_user_id"`
+	OperatorUserID     *uuid.UUID         `json:"operator_user_id"`
 	MaxConcurrentTasks int                `json:"max_concurrent_tasks"`
 	RuntimeManager     bool               `json:"runtime_manager"`
 	Controller         *RuntimeController `json:"controller"`
@@ -570,6 +570,7 @@ type OperatorRunner struct {
 type operatorAgentRow struct {
 	AgentID        uuid.UUID  `db:"agent_id"`
 	Name           string     `db:"name"`
+	OperatorUserID *uuid.UUID `db:"operator_user_id"`
 	MaxConcurrent  int        `db:"max_concurrent_tasks"`
 	RuntimeManager bool       `db:"runtime_manager"`
 	RunnerID       *string    `db:"runner_id"`
@@ -609,35 +610,68 @@ const effectiveControllerSQL = `LEFT JOIN LATERAL (
 		) u ORDER BY u.pri, u.lease_expires_at DESC LIMIT 1
 	) ctl ON true`
 
-// No LIMIT: an operator's own agents are a small bounded set, and a silent cut
-// would hide agents and runners from the screen without any signal.
-const operatorAgentsSQL = `SELECT a.id AS agent_id, a.name, a.max_concurrent_tasks,
+// operatorAgentsSQL lists the agents of workspace $2 the user $1 operates, and,
+// when $3 (the caller is the workspace's owner or admin), every agent of the
+// workspace its runner drives: an enabled admission on the workspace's runner
+// integration. Agents of the same operator in other workspaces stay out.
+// No LIMIT: a workspace's agents are a bounded set, and a silent cut would hide
+// agents and runners from the screen without any signal.
+const operatorAgentsSQL = `SELECT a.id AS agent_id, a.name, a.operator_user_id, a.max_concurrent_tasks,
 		EXISTS (SELECT 1 FROM user_runtime_managers m
 			WHERE m.operator_user_id=a.operator_user_id AND m.agent_id=a.id AND m.revoked_at IS NULL) AS runtime_manager,
 		ctl.runner_id, ctl.runner_name, ctl.host, ctl.version, ctl.lease_expires_at,
 		(ctl.lease_expires_at > now()) AS live
 	FROM agents a ` + effectiveControllerSQL + `
-	WHERE a.operator_user_id=$1 AND a.deleted_at IS NULL
+	WHERE a.workspace_id=$2 AND a.deleted_at IS NULL
+		AND (a.operator_user_id=$1 OR ($3 AND EXISTS (SELECT 1 FROM runtime_binding_admissions adm
+			JOIN integration_configs ic ON ic.id=adm.integration_id
+			WHERE adm.agent_id=a.id AND adm.enabled
+				AND ic.workspace_id=$2 AND ic.provider IN ('runner','agent_runtime'))))
 	ORDER BY a.name, a.id`
 
-func (r *UserRuntimeRepo) operatorRows(ctx context.Context, actor UserRuntimeActor) ([]operatorAgentRow, error) {
+// WorkspaceAdmin reports whether the user owns or administers the workspace;
+// a caller outside it is refused. owner_id wins over a membership row, so an
+// owner whose row says "member" keeps the owner's view.
+func (r *UserRuntimeRepo) WorkspaceAdmin(ctx context.Context, ws, user uuid.UUID) (bool, error) {
+	var role sql.NullString
+	err := r.db.GetContext(ctx, &role, `SELECT CASE WHEN w.owner_id=$2 THEN 'owner'
+			ELSE (SELECT wm.role::text FROM workspace_members wm WHERE wm.workspace_id=w.id AND wm.user_id=$2) END
+		FROM workspaces w WHERE w.id=$1 AND w.deleted_at IS NULL`, ws, user)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !role.Valid) {
+		return false, apierror.Forbidden("not a member of this workspace")
+	}
+	if err != nil {
+		return false, err
+	}
+	return role.String == "owner" || role.String == "admin", nil
+}
+
+func (r *UserRuntimeRepo) operatorRows(ctx context.Context, actor UserRuntimeActor, ws uuid.UUID) ([]operatorAgentRow, error) {
 	if err := operatorOnly(actor); err != nil {
 		return nil, err
 	}
+	if ws == uuid.Nil {
+		return nil, apierror.BadRequest("workspace_id is required")
+	}
+	admin, err := r.WorkspaceAdmin(ctx, ws, actor.UserID)
+	if err != nil {
+		return nil, err
+	}
 	var rows []operatorAgentRow
-	err := r.db.SelectContext(ctx, &rows, operatorAgentsSQL, actor.UserID)
+	err = r.db.SelectContext(ctx, &rows, operatorAgentsSQL, actor.UserID, ws, admin)
 	return rows, err
 }
 
-// OperatorAgents lists the agents the signed-in user operates.
-func (r *UserRuntimeRepo) OperatorAgents(ctx context.Context, actor UserRuntimeActor) ([]OperatorAgent, error) {
-	rows, err := r.operatorRows(ctx, actor)
+// OperatorAgents lists the agents of the workspace the signed-in user operates;
+// for its owner or admin, also the agents the workspace's runner drives.
+func (r *UserRuntimeRepo) OperatorAgents(ctx context.Context, actor UserRuntimeActor, ws uuid.UUID) ([]OperatorAgent, error) {
+	rows, err := r.operatorRows(ctx, actor, ws)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]OperatorAgent, 0, len(rows))
 	for _, row := range rows {
-		a := OperatorAgent{AgentID: row.AgentID, Name: row.Name, OperatorUserID: actor.UserID,
+		a := OperatorAgent{AgentID: row.AgentID, Name: row.Name, OperatorUserID: row.OperatorUserID,
 			MaxConcurrentTasks: row.MaxConcurrent, RuntimeManager: row.RuntimeManager}
 		if row.RunnerID != nil && row.LeaseExpiresAt != nil {
 			a.Controller = &RuntimeController{RunnerID: *row.RunnerID, Name: deref(row.RunnerName), Host: deref(row.Host),
@@ -648,9 +682,9 @@ func (r *UserRuntimeRepo) OperatorAgents(ctx context.Context, actor UserRuntimeA
 	return out, nil
 }
 
-// OperatorRunners groups the operator's agents by the runner that leases them.
-func (r *UserRuntimeRepo) OperatorRunners(ctx context.Context, actor UserRuntimeActor) ([]OperatorRunner, error) {
-	rows, err := r.operatorRows(ctx, actor)
+// OperatorRunners groups the agents OperatorAgents lists by the runner that leases them.
+func (r *UserRuntimeRepo) OperatorRunners(ctx context.Context, actor UserRuntimeActor, ws uuid.UUID) ([]OperatorRunner, error) {
+	rows, err := r.operatorRows(ctx, actor, ws)
 	if err != nil {
 		return nil, err
 	}

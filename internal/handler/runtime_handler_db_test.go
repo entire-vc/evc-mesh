@@ -16,6 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions"
+	"github.com/entire-vc/evc-mesh/internal/extensions/exttest"
+	"github.com/entire-vc/evc-mesh/internal/extensions/runner"
 	mw "github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
@@ -116,6 +119,7 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.GET("/workspaces/:ws_id/runtime", h.Inventory)
 	e.GET("/workspaces/:ws_id/runtime/capacity", h.Capacity)
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
+	e.POST("/workspaces/:ws_id/runtime/restore", h.Restore)
 	e.GET("/workspaces/:ws_id/runtime/revisions", h.Revisions)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
@@ -131,8 +135,27 @@ func newRuntimeHTTP(t *testing.T) *runtimeHTTP {
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/consume", h.ConsumeReservation)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/renew", h.RenewReservation)
 	e.POST("/workspaces/:ws_id/runtime/bindings/:binding_id/reservations/:reservation_id/release", h.ReleaseReservation)
+	// The Runner on/off switch is the extension endpoint, over the real tables.
+	integrations := postgres.NewIntegrationRepo(db)
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(runner.New(extensions.Deps{Conns: extensions.IntegrationConnections{Repo: integrations}, Inst: exttest.InstanceOn{}})))
+	ext := NewExtensionWorkspaceHandler(service.NewExtensionWorkspaceService(reg, integrations, postgres.NewIntegrationConsentRepo(db)))
+	e.POST("/workspaces/:ws_id/extensions/:ext_id/enable", ext.Enable)
+	e.POST("/workspaces/:ws_id/extensions/:ext_id/disable", ext.Disable)
 	f.e = e
 	return f
+}
+
+// runnerSwitch turns the owner workspace's Runner on or off through the one
+// canonical switch, as the owner.
+func (f *runtimeHTTP) runnerSwitch(on bool) {
+	f.t.Helper()
+	action := "disable"
+	if on {
+		action = "enable"
+	}
+	code, _, body := f.do(http.MethodPost, "/workspaces/"+f.owner.String()+"/extensions/runner/"+action, `{"confirm":true}`, map[string]string{"X-Test-User": f.ownerUser.String()})
+	require.Equal(f.t, http.StatusOK, code, body)
 }
 
 func (f *runtimeHTTP) do(method, path, body string, headers map[string]string) (status int, payload map[string]any, raw string) {
@@ -345,8 +368,7 @@ func TestRuntimeHTTPControllerDesiredIsScopedToItsController(t *testing.T) {
 
 	// Same catalog, only enabled flips: the digest is unchanged but the body is
 	// not, so the old tag must not answer 304.
-	code, _, body = f.do(http.MethodPut, base, `{"if_revision":1,"enabled":false,"config":`+string(raw)+`}`, owner)
-	require.Equal(t, http.StatusOK, code, body)
+	f.runnerSwitch(false)
 	hdr["If-None-Match"] = etag
 	code, flipped, body := f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", hdr)
 	require.Equal(t, http.StatusOK, code, "enabled-only change must not be 304: "+body)
@@ -366,6 +388,101 @@ func TestRuntimeHTTPControllerDesiredIsScopedToItsController(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, "same catalog but new revision and enabled=false must not be 304: "+body)
 	require.EqualValues(t, 3, a2["revision"])
 	require.Equal(t, true, a2["drain_requested"])
+}
+
+// The Runner switch has one place, the extension endpoint: PUT /runtime still
+// accepts enabled for compatibility but ignores it, and the switch itself is
+// what the controller sees (a revision with the same catalog).
+func TestRuntimeHTTPSwitchIsTheExtensionEndpointOnly(t *testing.T) {
+	f := newRuntimeHTTP(t)
+	owner := map[string]string{"X-Test-User": f.ownerUser.String()}
+	reporter := map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String()}
+	base := "/workspaces/" + f.owner.String() + "/runtime"
+
+	code, saved, body := f.do(http.MethodPut, base, `{"if_revision":0,"config":`+string(f.catalog)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, "enabled is optional: "+body)
+	require.Equal(t, true, saved["enabled"], "a connection created by the first save starts on")
+
+	code, saved, body = f.do(http.MethodPut, base, `{"if_revision":1,"enabled":false,"config":`+string(f.catalog)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, true, saved["enabled"], "PUT enabled:false is ignored")
+	require.Equal(t, false, saved["drain_requested"])
+	code, inventory, body := f.do(http.MethodGet, base, "", owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, true, inventory["enabled"])
+	code, desired, body := f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", reporter)
+	require.Equal(t, http.StatusOK, code, body)
+	require.EqualValues(t, 2, desired["revision"])
+	require.Equal(t, true, desired["enabled"])
+	require.Equal(t, false, desired["drain_requested"])
+
+	f.runnerSwitch(false)
+	code, drained, body := f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", reporter)
+	require.Equal(t, http.StatusOK, code, body)
+	require.EqualValues(t, 3, drained["revision"], "the switch is a catalog revision")
+	require.Equal(t, desired["digest"], drained["digest"], "with the same catalog")
+	require.Equal(t, true, drained["drain_requested"])
+	code, revisions, body := f.do(http.MethodGet, base+"/revisions", "", owner)
+	require.Equal(t, http.StatusOK, code, body)
+	latest := revisions["revisions"].([]any)[0].(map[string]any)
+	require.Equal(t, false, latest["enabled"])
+	require.Equal(t, f.ownerUser.String(), latest["author_id"], "the switch is authored by the acting user")
+
+	// A catalog edit while off keeps it off.
+	code, saved, body = f.do(http.MethodPut, base, `{"if_revision":3,"enabled":true,"config":`+string(f.catalog)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, false, saved["enabled"], "PUT enabled:true is ignored too")
+
+	f.runnerSwitch(false)
+	code, revisions, body = f.do(http.MethodGet, base+"/revisions", "", owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Len(t, revisions["revisions"], 4, "switching to the current state appends nothing")
+	f.runnerSwitch(true)
+	code, desired, body = f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", reporter)
+	require.Equal(t, http.StatusOK, code, body)
+	require.EqualValues(t, 5, desired["revision"])
+	require.Equal(t, false, desired["drain_requested"])
+}
+
+// Restore saves a stored revision's catalog, credential refs included, as the
+// next revision; the client names the revision, never the config.
+func TestRuntimeHTTPRestoreRevision(t *testing.T) {
+	f := newRuntimeHTTP(t)
+	owner := map[string]string{"X-Test-User": f.ownerUser.String()}
+	receiver := map[string]string{"X-Test-User": f.receiverUser.String()}
+	reporter := map[string]string{"X-Test-Agent": f.reporter.String(), "X-Test-Agent-Workspace": f.owner.String()}
+	base := "/workspaces/" + f.owner.String() + "/runtime"
+
+	code, first, body := f.do(http.MethodPut, base, `{"if_revision":0,"config":`+string(f.catalog)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	catalog, err := domain.ParseRuntimeCatalog(f.catalog)
+	require.NoError(t, err)
+	c := catalog.Controllers["runner-a"]
+	c.Host = "moved-host"
+	catalog.Controllers["runner-a"] = c
+	edited, err := json.Marshal(catalog)
+	require.NoError(t, err)
+	code, second, body := f.do(http.MethodPut, base, `{"if_revision":1,"config":`+string(edited)+`}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.NotEqual(t, first["digest"], second["digest"])
+
+	code, _, _ = f.do(http.MethodPost, base+"/restore", `{"if_revision":2,"revision":1}`, receiver)
+	require.Equal(t, http.StatusForbidden, code, "another workspace's admin cannot restore")
+	code, _, _ = f.do(http.MethodPost, base+"/restore", `{"if_revision":2,"revision":9}`, owner)
+	require.Equal(t, http.StatusNotFound, code, "unknown revision")
+	code, _, _ = f.do(http.MethodPost, base+"/restore", `{"if_revision":1,"revision":1}`, owner)
+	require.Equal(t, http.StatusConflict, code, "stale if_revision loses the CAS")
+
+	code, restored, body := f.do(http.MethodPost, base+"/restore", `{"if_revision":2,"revision":1}`, owner)
+	require.Equal(t, http.StatusOK, code, body)
+	require.EqualValues(t, 3, restored["revision"])
+	require.Equal(t, first["digest"], restored["digest"], "revision 3 is revision 1's catalog")
+	require.Equal(t, true, restored["enabled"])
+	require.NotContains(t, body, "cred:")
+	code, desired, body := f.do(http.MethodGet, base+"/controllers/runner-a/desired", "", reporter)
+	require.Equal(t, http.StatusOK, code, body)
+	require.Equal(t, first["digest"], desired["digest"])
+	require.Contains(t, body, "cred:prepared-preferred", "credential refs come back from the stored revision")
 }
 
 func hdr2(f *runtimeHTTP, etag string) map[string]string {

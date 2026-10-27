@@ -15,7 +15,7 @@ import (
 
 // manifestV1SHA256 is the digest of manifest.v1.json fixed by the extensions
 // manifest ADR. The Spark side pins the same value.
-const manifestV1SHA256 = "695609ed5dbe3653c0483f8bfe3da84194afd91f563268e5db9915c87ec61651"
+const manifestV1SHA256 = "6aaee6872b29431f7faa7dda0fe56d4b003546d371f5145b5e8a0440f40e4581"
 
 const schemaFile = "manifest.v1.json"
 
@@ -147,4 +147,26 @@ func TestManifestV1_ThemeTokenNames(t *testing.T) {
 	require.NoError(t, with("sidebar-border"))
 	require.Error(t, with("chart-9"))
 	require.Error(t, with("made-up-token"))
+}
+
+// externalField validates keep-external with one extra key in its external block.
+func externalField(t *testing.T, sch *jsonschema.Schema, key string, value any) error {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("fixtures", "valid", "keep-external.json"))
+	require.NoError(t, err)
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	doc["external"].(map[string]any)[key] = value
+	out, err := json.Marshal(doc)
+	require.NoError(t, err)
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(out))
+	require.NoError(t, err)
+	return sch.Validate(inst)
+}
+
+func TestManifestV1_ExternalTokenPath(t *testing.T) {
+	sch := compileSchema(t)
+	require.NoError(t, externalField(t, sch, "token_path", "/mesh/token"))
+	require.Error(t, externalField(t, sch, "token_path", "mesh/token"), "a path starts with /")
+	require.Error(t, externalField(t, sch, "token_paths", "/mesh/token"), "control: unknown keys are still refused")
 }

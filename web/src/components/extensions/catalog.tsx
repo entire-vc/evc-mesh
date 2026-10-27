@@ -12,9 +12,11 @@ import {
   type CatalogFilters,
 } from "@/lib/extension-catalog-filter";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { extensionState } from "@/lib/extensionState";
+import { ExtensionStateBadge, ExtensionStateNote } from "@/components/extensions/extension-state";
 import { cn } from "@/lib/cn";
 
-const TRUST_VARIANT = { official: "default", verified: "success", community: "secondary", custom: "warning" } as const;
+const TRUST_VARIANT = { builtin: "secondary", official: "default", verified: "success", community: "secondary", custom: "warning" } as const;
 
 export function KindTrustBadges({ entry }: { entry: Pick<CatalogEntry, "kind" | "trust"> }) {
   const { t } = useTranslation("integrations");
@@ -27,11 +29,57 @@ export function KindTrustBadges({ entry }: { entry: Pick<CatalogEntry, "kind" | 
 }
 
 export function ExtensionIcon({ entry, className }: { entry: Pick<CatalogEntry, "kind">; className?: string }) {
-  const Icon = entry.kind === "plugin" ? Puzzle : entry.kind === "theme" ? Palette : Plug;
+  const theme = entry.kind === "theme";
+  const Icon = entry.kind === "plugin" ? Puzzle : theme ? Palette : Plug;
   return (
-    <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground", className)}>
+    // a theme carries its own tinted palette icon so it reads as a theme at a glance
+    <span
+      data-kind={entry.kind}
+      className={cn(
+        "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+        theme ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+        className,
+      )}
+    >
       <Icon className="h-5 w-5" aria-hidden />
     </span>
+  );
+}
+
+/** Themes are listed in a section of their own after everything else (П8); `id` names it for tests and links. */
+export function KindSections<T extends Pick<CatalogEntry, "kind">>({
+  entries, children, className,
+}: {
+  entries: T[]; children: (items: T[]) => React.ReactNode; className?: string;
+}) {
+  const { t } = useTranslation("integrations");
+  const themes = entries.filter((e) => e.kind === "theme");
+  const rest = entries.filter((e) => e.kind !== "theme");
+  if (themes.length === 0) return <>{children(rest)}</>;
+  return (
+    <div className={cn("space-y-6", className)}>
+      {rest.length > 0 && (
+        <section aria-labelledby="ext-section-extensions" className="space-y-3">
+          <h2 id="ext-section-extensions" className="flex items-center gap-2 text-sm font-semibold">
+            <Puzzle className="h-4 w-4 text-muted-foreground" aria-hidden />
+            {t("catalog.sections.extensions")}
+            <span className="font-normal text-muted-foreground">{rest.length}</span>
+          </h2>
+          {children(rest)}
+        </section>
+      )}
+      <section aria-labelledby="ext-section-themes" data-testid="section-themes" className="space-y-3">
+        <div>
+          <h2 id="ext-section-themes" className="flex items-center gap-2 text-sm font-semibold">
+            <Palette className="h-4 w-4 text-primary" aria-hidden />
+            {t("catalog.sections.themes")}
+            <span className="font-normal text-muted-foreground">{themes.length}</span>
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t("catalog.sections.themesHint")}</p>
+        </div>
+        {children(themes)}
+      </section>
+    </div>
   );
 }
 
@@ -61,25 +109,8 @@ function CheckGroup({
   );
 }
 
-function StatusChip({ entry }: { entry: CatalogEntry }) {
-  const { t } = useTranslation("integrations");
-  // a theme is chosen, not connected: one is active in the workspace, the rest are not selected
-  if (entry.kind === "theme" && entry.themeActive !== undefined) {
-    return entry.themeActive
-      ? <Badge variant="success">{t("catalog.state.themeActive")}</Badge>
-      : <Badge variant="outline">{t("catalog.state.themeInactive")}</Badge>;
-  }
-  if (!entry.connected) return null;
-  return (
-    <Badge variant="success">
-      {t(entry.status?.source === "instance" ? "catalog.state.connected" : "catalog.state.installed")}
-    </Badge>
-  );
-}
-
 function Card({ entry, wsSlug }: { entry: CatalogEntry; wsSlug: string }) {
-  const { t } = useTranslation("integrations");
-  const notAllowed = !entry.allowed;
+  const state = extensionState(entry);
   return (
     <li>
       <Link
@@ -96,10 +127,9 @@ function Card({ entry, wsSlug }: { entry: CatalogEntry; wsSlug: string }) {
         <p className="line-clamp-2 text-sm text-muted-foreground">{entry.description}</p>
         <div className="mt-auto flex flex-wrap items-center gap-1.5">
           <KindTrustBadges entry={entry} />
-          <StatusChip entry={entry} />
-          {entry.blocked && <Badge variant="destructive">{t("catalog.state.blocked")}</Badge>}
-          {notAllowed && <Badge variant="warning">{t("catalog.state.notAllowed")}</Badge>}
+          <ExtensionStateBadge state={state} />
         </div>
+        <ExtensionStateNote state={state} className="-mt-1 line-clamp-2" />
       </Link>
     </li>
   );
@@ -222,9 +252,13 @@ export function ExtensionsCatalog({ catalog }: { catalog: CatalogState }) {
               )}
             </div>
           ) : (
-            <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {shown.map((e) => <Card key={e.id} entry={e} wsSlug={wsSlug} />)}
-            </ul>
+            <KindSections entries={shown}>
+              {(items) => (
+                <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {items.map((e) => <Card key={e.id} entry={e} wsSlug={wsSlug} />)}
+                </ul>
+              )}
+            </KindSections>
           )}
         </section>
       </div>

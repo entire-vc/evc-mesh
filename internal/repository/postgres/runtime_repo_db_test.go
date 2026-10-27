@@ -57,6 +57,17 @@ func seedRuntime(t *testing.T) runtimeFixture {
 	return runtimeFixture{db: db, repo: NewRuntimeRepo(db), owner: owner, receiver: receiver, ownerActor: RuntimeActor{UserID: ownerID}, receiverActor: RuntimeActor{UserID: receiverID}, reporter: RuntimeActor{AgentID: reporter.ID, AuthWorkspaceID: owner}, worker: RuntimeActor{AgentID: worker.ID, AuthWorkspaceID: receiver}, catalog: catalog, input: RuntimeSave{Enabled: &enabled, Config: data}, grant: workerGrant}
 }
 
+// runnerSwitch turns the Runner on or off the way the extension endpoint does:
+// IntegrationRepo.SetActive with the acting owner in the context.
+func (f runtimeFixture) runnerSwitch(t *testing.T, on bool) {
+	t.Helper()
+	ctx := context.Background()
+	connection, err := runtimeConnection(ctx, f.db, f.owner, false)
+	require.NoError(t, err)
+	require.NotNil(t, connection)
+	require.NoError(t, NewIntegrationRepo(f.db).SetActive(WithRuntimeAuthor(ctx, f.ownerActor.UserID), connection.ID, on))
+}
+
 func TestRuntimeRepoCASAndApply(t *testing.T) {
 	f := seedRuntime(t)
 	ctx := context.Background()
@@ -160,11 +171,7 @@ func TestRuntimeRepoExactGrantReceiverAdmissionAndDrain(t *testing.T) {
 	input.IfRevision = 1
 	_, err = f.repo.Admit(ctx, f.owner, f.receiver, "worker-b", f.receiverActor, input)
 	require.NoError(t, err)
-	disabled := false
-	f.input.IfRevision = 1
-	f.input.Enabled = &disabled
-	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
-	require.NoError(t, err)
+	f.runnerSwitch(t, false)
 	view, err = f.repo.Binding(ctx, f.owner, f.receiver, "worker-b", f.worker)
 	require.NoError(t, err)
 	require.False(t, view.Enabled)
@@ -290,7 +297,7 @@ func TestRuntimeRepoRefusesInvalidRequests(t *testing.T) {
 	enabled := true
 	bad := []RuntimeSave{
 		{IfRevision: -1, Enabled: &enabled, Config: f.input.Config},
-		{IfRevision: 0, Enabled: nil, Config: f.input.Config},
+		{IfRevision: 0, Enabled: &enabled, Config: nil},
 		{IfRevision: 0, Enabled: &enabled, Config: json.RawMessage(`{"schema_version":2}`)},
 	}
 	for _, input := range bad {
@@ -376,16 +383,111 @@ func TestIntegrationRepoRefusesAgentRuntimeBypass(t *testing.T) {
 	_, err = integrations.Update(ctx, connection.ID, domain.UpdateIntegrationInput{IsActive: &off})
 	require.ErrorContains(t, err, "versioned runtime API")
 	require.ErrorContains(t, integrations.Delete(ctx, connection.ID), "versioned runtime API")
-	// the extension enable path flips only the active flag, never the catalog
-	require.NoError(t, integrations.SetActive(ctx, connection.ID, !connection.IsActive))
+	// The extension switch flips the active flag and records it as a catalog
+	// revision with the same config; it needs the acting user for that.
+	require.True(t, connection.IsActive)
+	require.ErrorContains(t, integrations.SetActive(ctx, connection.ID, false), "signed-in user")
+	unchanged, err := integrations.GetByID(ctx, connection.ID)
+	require.NoError(t, err)
+	require.True(t, unchanged.IsActive, "a refused switch changes nothing")
+	authored := WithRuntimeAuthor(ctx, f.ownerActor.UserID)
+	require.NoError(t, integrations.SetActive(authored, connection.ID, false))
 	flipped, err := integrations.GetByID(ctx, connection.ID)
 	require.NoError(t, err)
-	require.Equal(t, !connection.IsActive, flipped.IsActive)
+	require.False(t, flipped.IsActive)
 	require.JSONEq(t, string(connection.Config), string(flipped.Config))
-	require.NoError(t, integrations.SetActive(ctx, connection.ID, connection.IsActive))
+	require.NoError(t, integrations.SetActive(authored, connection.ID, true))
 	still, err := integrations.GetByID(ctx, connection.ID)
 	require.NoError(t, err)
 	require.True(t, still.IsActive)
+}
+
+// The switch is what controllers see: it appends a revision with the same
+// digest and the new enabled; switching to the current state appends nothing.
+// A catalog save carries the current state and never changes it.
+func TestRuntimeRepoSwitchAppendsRevision(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	first, err := f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+	require.True(t, first.Enabled, "the connection the first save creates starts on")
+
+	// PUT enabled:false on an enabled Runner is ignored.
+	off := false
+	f.input.IfRevision, f.input.Enabled = 1, &off
+	saved, err := f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+	require.True(t, saved.Enabled)
+	require.False(t, saved.DrainRequested)
+	inventory, err := f.repo.Inventory(ctx, f.owner, f.ownerActor)
+	require.NoError(t, err)
+	require.True(t, inventory.Enabled)
+	desired, err := f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, desired.Revision)
+	require.True(t, desired.Enabled)
+	require.False(t, desired.DrainRequested)
+
+	f.runnerSwitch(t, false)
+	drained, err := f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, drained.Revision)
+	require.Equal(t, desired.Digest, drained.Digest)
+	require.False(t, drained.Enabled)
+	require.True(t, drained.DrainRequested)
+	history, err := f.repo.Revisions(ctx, f.owner, f.ownerActor, 10)
+	require.NoError(t, err)
+	require.Len(t, history.Revisions, 3)
+	require.Equal(t, f.ownerActor.UserID, history.Revisions[0].AuthorID)
+	require.False(t, history.Revisions[0].Enabled)
+
+	f.runnerSwitch(t, false)
+	history, err = f.repo.Revisions(ctx, f.owner, f.ownerActor, 10)
+	require.NoError(t, err)
+	require.Len(t, history.Revisions, 3, "switching to the current state appends nothing")
+
+	// A save while off stays off, whatever enabled says.
+	on := true
+	f.input.IfRevision, f.input.Enabled = 3, &on
+	saved, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+	require.False(t, saved.Enabled)
+	require.True(t, saved.DrainRequested)
+}
+
+// Restore saves a stored revision's catalog as the next revision, through the
+// same CAS as Save.
+func TestRuntimeRepoRestore(t *testing.T) {
+	f := seedRuntime(t)
+	ctx := context.Background()
+	first, err := f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
+	require.NoError(t, err)
+	edited := *f.catalog
+	edited.Controllers = maps.Clone(f.catalog.Controllers)
+	c := edited.Controllers["runner-a"]
+	c.Host = "moved-host"
+	edited.Controllers["runner-a"] = c
+	data, err := json.Marshal(edited)
+	require.NoError(t, err)
+	second, err := f.repo.Save(ctx, f.owner, f.ownerActor, RuntimeSave{IfRevision: 1, Config: data})
+	require.NoError(t, err)
+	require.NotEqual(t, first.Digest, second.Digest)
+
+	_, err = f.repo.Restore(ctx, f.owner, f.ownerActor, RuntimeRestore{IfRevision: 1, Revision: 1})
+	require.ErrorContains(t, err, "revision changed", "stale if_revision")
+	_, err = f.repo.Restore(ctx, f.owner, f.ownerActor, RuntimeRestore{IfRevision: 2, Revision: 7})
+	require.ErrorContains(t, err, "Runtime revision")
+	_, err = f.repo.Restore(ctx, f.owner, f.receiverActor, RuntimeRestore{IfRevision: 2, Revision: 1})
+	require.Error(t, err, "restore is for the resource owner's admins")
+
+	restored, err := f.repo.Restore(ctx, f.owner, f.ownerActor, RuntimeRestore{IfRevision: 2, Revision: 1})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, restored.Revision)
+	require.Equal(t, first.Digest, restored.Digest)
+	desired, err := f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
+	require.NoError(t, err)
+	require.Equal(t, first.Digest, desired.Digest)
+	require.Equal(t, "cred:prepared-preferred", desired.Catalog.Accounts["preferred"].CredentialRef)
 }
 
 func TestRuntimeRepoDesiredIsExactReporterOnly(t *testing.T) {
@@ -421,10 +523,7 @@ func TestRuntimeRepoDesiredIsExactReporterOnly(t *testing.T) {
 	_, err = f.repo.Desired(ctx, f.owner, "unknown", f.reporter)
 	require.ErrorContains(t, err, "Runtime controller")
 
-	off := false
-	f.input.IfRevision, f.input.Enabled = 1, &off
-	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
-	require.NoError(t, err)
+	f.runnerSwitch(t, false)
 	view, err = f.repo.Desired(ctx, f.owner, "runner-a", f.reporter)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, view.Revision)

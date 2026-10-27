@@ -12,12 +12,13 @@ import { toast } from "@/components/ui/toast";
 import { SchemaForm, type FieldSchema } from "@/components/extensions/schema-form";
 import { useExtensionCatalog, type CatalogEntry } from "@/hooks/useExtensionCatalog";
 import {
-  checkProjectExtension, deleteProjectExtension, listProjectActions, listProjectBindings,
+  checkProjectExtension, deleteProjectExtension, listProjectActions,
   runProjectAction, saveProjectExtension, searchProjectAction, type ActionSearchDoc, type ProjectAction, type ProjectBinding,
 } from "@/lib/extension-settings";
 import { apiErrorMessage } from "@/lib/api-error";
 import * as i18nFmt from "@/i18n/format";
 import { ChatSettingsCard } from "@/components/extensions/chat-settings-card";
+import { readProjectBindings } from "@/lib/project-extension-tabs";
 import { ExtensionStatusPanel, VCS_EXTENSION_IDS } from "@/components/extensions/status-panel";
 import { VcsRepos } from "@/components/extensions/vcs-repos";
 import { useMemberStore } from "@/stores/member";
@@ -279,7 +280,8 @@ export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
   const load = useCallback(() => {
     const seq = ++latest.current;
     setFailed(false);
-    listProjectBindings(projectId)
+    // Through the header cache, so the project strip follows a bind/unbind at once.
+    readProjectBindings(projectId)
       .then((list) => { if (seq === latest.current) setBindings(list); })
       .catch(() => { if (seq === latest.current) setFailed(true); });
   }, [projectId]);
@@ -366,11 +368,13 @@ export function ProjectExtensionsTab({ projectId }: { projectId: string }) {
       )}
       {!adding && activeId === CHAT_EXTENSION_ID && <ChatSettingsCard projectId={projectId} chatPath={`/w/${wsSlug}/p/${projectSlug}/chat`} />}
       {!adding && vcsEntry && (activeBinding || activeVcs) && (
-        <VcsRepos key={`${projectId}:${vcsEntry.id}`} projectId={projectId} entry={vcsEntry} binding={activeBinding}
+        // Sibling keys must differ from BindingCard's: a shared key leaves an
+        // orphaned copy of the list after a re-render (Bind → two lists, Unbind lost).
+        <VcsRepos key={`repos:${projectId}:${vcsEntry.id}`} projectId={projectId} entry={vcsEntry} binding={activeBinding}
           canBind={!!activeBinding || bindable.some((e) => e.id === vcsEntry.id)} canManage={canManage} onChanged={load} />
       )}
       {!adding && activeBinding && activeId !== CHAT_EXTENSION_ID && (
-        <BindingCard key={`${projectId}:${activeBinding.extension_id}`} projectId={projectId} binding={activeBinding} entry={byId.get(activeBinding.extension_id)} onChanged={load} />
+        <BindingCard key={`binding:${projectId}:${activeBinding.extension_id}`} projectId={projectId} binding={activeBinding} entry={byId.get(activeBinding.extension_id)} onChanged={load} />
       )}
       {!adding && activeVcs && <WorkspaceVcsCard entry={activeVcs} />}
       {/* Chat has its own on/off and is always configurable, so it is a tab even

@@ -1,20 +1,27 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router";
 import { AlertTriangle, ArrowLeft, ExternalLink, PackageSearch } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownView } from "@/components/markdown-view";
 import { ExtensionIcon, KindTrustBadges } from "@/components/extensions/catalog";
+import { extensionState } from "@/lib/extensionState";
+import { ExtensionStateBadge, ExtensionStateNote } from "@/components/extensions/extension-state";
 import { useExtensionCatalog, type CatalogEntry } from "@/hooks/useExtensionCatalog";
 import { allowedDomains, capabilityText, domainText, describeCapabilities } from "@/lib/extension-capabilities";
 import { useMemberStore } from "@/stores/member";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useIsInstanceAdmin } from "@/lib/extension-admin";
 import { installCatalogExtension, getCatalogCard, type CatalogCard } from "@/lib/extension-repo";
+import { extensionSettingsPath } from "@/lib/extension-settings-route";
 import { toast } from "@/components/ui/toast";
+import { applyWorkspaceTheme } from "@/core/themes/runtime";
+import { putWorkspaceTheme } from "@/lib/themes";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { cn } from "@/lib/cn";
+import { isRunnerProduct, runnerScreenPath } from "@/lib/runner-product";
 
 export const DETAIL_TABS = ["description", "permissions", "versions", "checks", "support"] as const;
 export type DetailTab = (typeof DETAIL_TABS)[number];
@@ -97,7 +104,7 @@ function Versions({ entry }: { entry: CatalogEntry }) {
 
 function Checks({ entry }: { entry: CatalogEntry }) {
   const { t } = useTranslation("integrations");
-  if (entry.trust === "official" && entry.runtime === "builtin") {
+  if (entry.trust === "builtin" || (entry.trust === "official" && entry.runtime === "builtin")) {
     return <p className="text-sm">{t("detail.checks.builtin")}</p>;
   }
   if (!entry.checks) {
@@ -143,8 +150,13 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
   const { t } = useTranslation("integrations");
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
-  // Until the installed list (W2.5) lands, settings live on the legacy Installed tab.
-  const installed = `/w/${wsSlug}/extensions?tab=installed`;
+  const wsId = useWorkspaceStore((s) => s.currentWorkspace?.id ?? "");
+  const settings = extensionSettingsPath(entry, wsSlug);
+  // The installed runner program is connected and managed on the Runner screen, whatever its
+  // state (a blocked or disallowed one says so there).
+  if (entry.installed && isRunnerProduct(entry.id)) {
+    return <Button variant={entry.connected ? "outline" : "default"} onClick={() => navigate(runnerScreenPath(wsSlug))}>{t("detail.action.manageInRunner")}</Button>;
+  }
   if (entry.blocked) return <Button disabled>{t("detail.action.blocked")}</Button>;
   if (!entry.installed && entry.source === "catalog" && isInstanceAdmin) {
     const install = () => {
@@ -161,16 +173,37 @@ function PrimaryAction({ entry, wsSlug, isAdmin, isInstanceAdmin, onInstalled }:
       ? <Button disabled>{t("detail.action.install")}</Button>
       : <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.askAdmin")}</p>;
   }
-  if (entry.connected) {
-    return <Button variant="outline" onClick={() => navigate(installed)}>{t("detail.action.openSettings")}</Button>;
+  // Settings written by the extension itself are never offered the generic Connect wizard.
+  if (entry.connected || entry.managedElsewhere) {
+    return settings
+      ? <Button variant="outline" onClick={() => navigate(settings)}>{t("detail.action.openSettings")}</Button>
+      : <p className="max-w-56 text-xs text-muted-foreground">{t("installed.managedElsewhere")}</p>;
   }
   if (!entry.allowed) {
     return isAdmin && ADMIN_ACTIONS_ENABLED
       ? <Button disabled>{t("detail.action.allow")}</Button>
       : <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.notAllowed")}</p>;
   }
-  const label = entry.kind !== "theme" ? "detail.action.connect" : entry.themeActive ? "detail.action.configureTheme" : "detail.action.chooseTheme";
-  return <Button onClick={() => navigate(`/w/${wsSlug}/extensions/${entry.id}/connect`)}>{t(label)}</Button>;
+  // A theme goes the way of an extension (П8): enable it in the workspace, then its Settings window.
+  if (entry.kind === "theme") {
+    if (entry.themeActive) {
+      return <Button variant="outline" onClick={() => settings && navigate(settings)}>{t("detail.action.openSettings")}</Button>;
+    }
+    if (!isAdmin) return <p className="max-w-56 text-xs text-muted-foreground">{t("detail.action.themeAskAdmin")}</p>;
+    const enable = () => {
+      setBusy(true);
+      putWorkspaceTheme(wsId, entry.id, {})
+        .then(() => {
+          void applyWorkspaceTheme(wsSlug);
+          toast.success(t("installed.themeOn", { name: entry.name }));
+          onInstalled();
+        })
+        .catch((e) => toast.error(apiErrorMessage(e, t("installed.actionFailed"))))
+        .finally(() => setBusy(false));
+    };
+    return <Button disabled={busy || !wsId} onClick={enable}>{t("detail.action.enableTheme")}</Button>;
+  }
+  return <Button onClick={() => navigate(`/w/${wsSlug}/extensions/${entry.id}/connect`)}>{t("detail.action.connect")}</Button>;
 }
 
 /** README, versions and checks come from Spark's card for the extension; a failure keeps what the catalog already gave. */
@@ -223,6 +256,9 @@ export function ExtensionDetailPage() {
       </div>
     );
   }
+  // A built-in kept out of the lists (Runner) has no catalog page: its own section is where it lives.
+  const ownSection = entry?.hidden ? extensionSettingsPath(entry, wsSlug) : null;
+  if (ownSection) return <Navigate to={ownSection} replace />;
   if (catalog.state === "error" || !entry) {
     const notFound = catalog.state === "ready";
     const Icon = notFound ? PackageSearch : AlertTriangle;
@@ -245,6 +281,7 @@ export function ExtensionDetailPage() {
     setSearch(p, { replace: true });
   };
   const readme = entry.manifest.readme?.trim() || entry.description;
+  const state = extensionState(entry);
 
   return (
     <div className="flex h-full flex-col">
@@ -257,9 +294,9 @@ export function ExtensionDetailPage() {
             <p className="text-sm text-muted-foreground">{t("detail.byVersion", { publisher: entry.publisher, version: entry.version })}</p>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <KindTrustBadges entry={entry} />
-              {entry.blocked && <Badge variant="destructive">{t("catalog.state.blocked")}</Badge>}
-              {!entry.allowed && <Badge variant="warning">{t("catalog.state.notAllowed")}</Badge>}
+              <ExtensionStateBadge state={state} />
             </div>
+            {state.state !== "blocked" && <ExtensionStateNote state={state} className="mt-1" />}
           </div>
         </div>
         <PrimaryAction entry={entry} wsSlug={wsSlug} isAdmin={isAdmin} isInstanceAdmin={isInstanceAdmin} onInstalled={catalog.reload} />
@@ -267,7 +304,7 @@ export function ExtensionDetailPage() {
 
       {entry.blocked && (
         <div role="alert" className="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
-          {t("detail.blockedNote", { reason: entry.blockedReason || t("detail.blockedNoReason") })}
+          {t("extensionState.blocked")}: {entry.blockedReason || t("extensionState.blockedNoReason")}
         </div>
       )}
       {entry.trust === "custom" && (

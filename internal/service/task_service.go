@@ -1311,6 +1311,7 @@ func (s *taskService) moveTaskOnce(ctx context.Context, taskID uuid.UUID, input 
 	task.UpdatedAt = timeNow()
 	transition := domain.TaskTransition{ExpectedVersion: oldVersion, ExpectedStatusID: input.ExpectedStatusID, ExpectedUpdatedAt: input.ExpectedUpdatedAt, Reaper: input.Reaper, AlarmDue: input.AlarmDue, AlarmLabels: input.AlarmLabels}
 	transition.DisallowParkedWait = input.Source == "auto_transition"
+	transition.CheckoutStage = input.CheckoutStage && statusChanged
 	transition.Audit = s.moveAudit(ctx, task, input, oldStatusID, oldPosition, oldAssigneeID, oldAssigneeType, statusChanged, positionChanged, assignmentChanged, assignmentReason, transitionViolation)
 	if statusChanged && task.CheckedOutBy != nil {
 		if st, err := s.statusRepo.GetByID(ctx, task.StatusID); err == nil && st != nil && (st.Category == domain.StatusCategoryDone || st.Category == domain.StatusCategoryReview || st.Category == domain.StatusCategoryCancelled) {
@@ -3377,7 +3378,7 @@ func (s *taskService) reflectCheckoutInStatus(ctx context.Context, task *domain.
 	}
 
 	sysCtx := actorctx.WithActor(ctx, uuid.Nil, domain.ActorTypeSystem)
-	if err := s.MoveTask(sysCtx, task.ID, MoveTaskInput{StatusID: inProgressID, Source: "checkout"}); err != nil {
+	if err := s.MoveTask(sysCtx, task.ID, MoveTaskInput{StatusID: inProgressID, Source: "checkout", CheckoutStage: true}); err != nil {
 		// Fail open: the checkout stands, only the board display is degraded.
 		log.Printf("[checkout-auto-progress] WARNING: task %s stays in todo after checkout by %s: %v",
 			task.ID, actorID, err)

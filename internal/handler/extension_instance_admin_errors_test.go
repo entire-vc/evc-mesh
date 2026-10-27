@@ -202,3 +202,19 @@ func TestExtensionCatalog_AllowListVerdict(t *testing.T) {
 	require.NoError(t, h.List(c))
 	require.Equal(t, http.StatusInternalServerError, rec.Code, "an unknown verdict must not look like allowed")
 }
+
+// Themes stay in the overview (allow/journal), but never offer the instance-settings form.
+func TestInstanceAdmin_OverviewThemeHasNoInstanceForm(t *testing.T) {
+	h, _ := newAdminHandler(true)
+	h.installed = &adminInstalledRepo{fakeInstalledRepo{rows: []domain.InstalledExtension{
+		{ExtensionID: "board-studio", TrustLevel: domain.ExtensionTrustBuiltin, Manifest: []byte(`{"schema":1,"id":"board-studio","name":"Board Studio","version":"1.0.0","kind":"theme","runtime":"builtin",
+			"levels":{"instance":true,"workspace":true},"settings":{"instance":{"$ref":"#/schemas/look"}},
+			"schemas":{"look":{"properties":{"accent":{"type":"string"}}}}}`)},
+	}}}
+	h.settings = &fakeInstRepo{}
+	c, rec := adminCtx(http.MethodGet, "", "", false)
+	require.NoError(t, h.Overview(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"id":"board-studio"`)
+	require.Contains(t, rec.Body.String(), `"has_instance_form":false`)
+}

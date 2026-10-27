@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,6 +75,13 @@ type ExtensionStatusView struct {
 	HealthCheckedAt       *time.Time           `json:"health_checked_at,omitempty"`
 	LastError             string               `json:"last_error,omitempty"`
 	ConsentedCapabilities []string             `json:"consented_capabilities"`
+	// NotAllowed: the instance administrator does not allow the extension, so
+	// it is off whatever the connection says; the connection itself is kept.
+	NotAllowed bool `json:"not_allowed,omitempty"`
+	// Degraded: the status could not be resolved right now (the secret store
+	// or the allow-list did not answer), so Enabled says nothing; the list
+	// still shows the extension instead of failing whole.
+	Degraded bool `json:"degraded,omitempty"`
 }
 
 // ExtensionConnectionView is the workspace connection of an extension.
@@ -191,12 +200,11 @@ func (s *ExtensionWorkspaceService) hookFor(id string) ExtensionSaveHook {
 	return nil
 }
 
-// ExtensionAllowList answers whether the instance allows connecting an extension.
-type ExtensionAllowList interface {
-	Allowed(ctx context.Context, extensionID string) (bool, error)
-}
+// ExtensionAllowList answers whether the instance allows an extension.
+type ExtensionAllowList = extensions.AllowList
 
-// WithAllowList makes Connect refuse extensions outside the instance allow-list.
+// WithAllowList makes Connect and switching on refuse extensions outside the
+// instance allow-list.
 func (s *ExtensionWorkspaceService) WithAllowList(a ExtensionAllowList) *ExtensionWorkspaceService {
 	s.allow = a
 	return s
@@ -298,13 +306,52 @@ func (s *ExtensionWorkspaceService) List(ctx context.Context, ws uuid.UUID) ([]W
 		if !p.Manifest().Levels.Workspace {
 			continue
 		}
-		v, err := s.view(ctx, ws, p)
+		m := p.Manifest()
+		var sv ExtensionStatusView
+		st, err := s.reg.ResolveStatus(ctx, ws, m.ID)
+		switch {
+		case err == nil:
+			sv = statusView(st)
+		case ctx.Err() != nil:
+			return nil, err
+		default:
+			// One extension the secret store cannot open must not fail the
+			// whole list (an internal ticket: Keep 502 turned GET /extensions into 500).
+			// Provider and secret store errors carry no credential-free
+			// guarantee, so only a fixed class goes to the log.
+			log.Printf("WARN extensions list: workspace %s: extension %q: %s", ws, m.ID, statusErrorClass(err))
+			sv = degradedStatusView(m.Version)
+		}
+		v, err := s.viewOf(ctx, ws, p, sv)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// statusErrorClass names why a status could not be resolved without echoing
+// the error text.
+func statusErrorClass(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "secret store degraded"):
+		return "secret store degraded"
+	case strings.Contains(msg, "allow-list"):
+		return "allow-list unavailable"
+	case strings.Contains(msg, "consents"):
+		return "consents unavailable"
+	default:
+		return "status resolution failed"
+	}
+}
+
+func degradedStatusView(version string) ExtensionStatusView {
+	return ExtensionStatusView{
+		Source: string(extensions.SourceNone), Version: version, ConsentedCapabilities: []string{},
+		LastError: "status temporarily unavailable", Degraded: true,
+	}
 }
 
 // Connect creates the workspace connection and records what was consented to.
@@ -314,14 +361,8 @@ func (s *ExtensionWorkspaceService) Connect(ctx context.Context, ws uuid.UUID, i
 	if err != nil {
 		return nil, err
 	}
-	if s.allow != nil {
-		ok, aerr := s.allow.Allowed(ctx, id)
-		if aerr != nil {
-			return nil, fmt.Errorf("connect extension: allow-list: %w", aerr)
-		}
-		if !ok {
-			return nil, &apierror.Error{Code: http.StatusForbidden, ErrorCode: "extension_not_allowed", Message: "This extension is not on the allow-list of this instance. An instance administrator has to allow it first."}
-		}
+	if aerr := extensions.RequireAllowed(ctx, s.allow, id); aerr != nil {
+		return nil, aerr
 	}
 	if merr := refuseManagedElsewhere(p); merr != nil {
 		return nil, merr
@@ -429,6 +470,13 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 	if err != nil {
 		return nil, err
 	}
+	// Switching off is always allowed, or a disallowed extension could not be
+	// turned off at all.
+	if enabled {
+		if aerr := extensions.RequireAllowed(ctx, s.allow, id); aerr != nil {
+			return nil, aerr
+		}
+	}
 	row, err := s.storedRow(ctx, ws, id)
 	if err != nil {
 		return nil, err
@@ -521,7 +569,8 @@ func (s *ExtensionWorkspaceService) SetEnabled(ctx context.Context, ws uuid.UUID
 }
 
 // setActive flips a connection. A managed-elsewhere row (Runner) is refused by
-// the repository's generic Update, so it goes through SetActive.
+// the repository's generic Update, so it goes through SetActive, which also
+// records the switch in the Runner's versioned catalog.
 func (s *ExtensionWorkspaceService) setActive(ctx context.Context, p extensions.Provider, rowID uuid.UUID, enabled bool) error {
 	if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
 		return s.integ.SetActive(ctx, rowID, enabled)
@@ -616,9 +665,14 @@ func (s *ExtensionWorkspaceService) view(ctx context.Context, ws uuid.UUID, p ex
 	if err != nil {
 		return WorkspaceExtensionView{}, err
 	}
+	return s.viewOf(ctx, ws, p, statusView(st))
+}
+
+func (s *ExtensionWorkspaceService) viewOf(ctx context.Context, ws uuid.UUID, p extensions.Provider, sv ExtensionStatusView) (WorkspaceExtensionView, error) {
+	m := p.Manifest()
 	v := WorkspaceExtensionView{
 		ID: m.ID, Name: m.Name, Version: m.Version, Kind: m.Kind, Category: m.Category,
-		Levels: m.Levels, Manifest: m.Raw, Status: statusView(st),
+		Levels: m.Levels, Manifest: m.Raw, Status: sv,
 	}
 	_, v.CanPurgeData = p.(ExtensionDataPurger)
 	if h, ok := p.(SettingsHider); ok && h.HideConnectionSettings() {
@@ -664,6 +718,7 @@ func statusView(st extensions.Status) ExtensionStatusView {
 	v := ExtensionStatusView{
 		Enabled: st.Enabled, Source: string(st.Source), Version: st.Version,
 		ConsentedCapabilities: append([]string{}, st.ConsentedCapabilities...),
+		NotAllowed:            st.NotAllowed,
 	}
 	if st.Enabled {
 		v.Health = &ExtensionHealthView{OK: st.Health.OK, Message: st.Health.Message}

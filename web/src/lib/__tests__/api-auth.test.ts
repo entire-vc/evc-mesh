@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Covers the localStorage -> memory + httpOnly cookie migration (Mesh task
-// 0ade477e): the access token must never touch localStorage/sessionStorage,
+// an internal ticket): the access token must never touch localStorage/sessionStorage,
 // legacy tokens from the old scheme must be wiped on load, and refresh must
 // coordinate across tabs via the Web Locks API rather than racing the
 // one-shot refresh-token rotation on the server.
@@ -152,6 +152,80 @@ describe("refresh coordination across tabs", () => {
 
     await expect(bootstrapSession()).rejects.toThrow();
     expect(getAccessToken()).toBeNull();
+  });
+
+  // Prod 27.10 (agent-chat-e2e S03): a rotation whose writes stalled past the
+  // server's 5s deadline answered 500 after the old token was already revoked.
+  // The server's grace window exists for exactly that retry; giving up on the
+  // first 5xx logged the user out instead.
+  it("retries a refresh that failed with a 5xx and keeps the session", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("navigator", {});
+      // mock: external HTTP boundary (the refresh endpoint).
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ error_code: "internal_error" }, 500))
+        .mockResolvedValueOnce(jsonResponse({ tokens: { access_token: "after-retry", expires_in: 900 } }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { bootstrapSession, getAccessToken } = await import("@/lib/api");
+      const resolved = expect(bootstrapSession()).resolves.toBe("after-retry");
+      await vi.runAllTimersAsync();
+      await resolved;
+      expect(getAccessToken()).toBe("after-retry");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a refresh that never reached the server", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("navigator", {});
+      // mock: external HTTP boundary (a dropped connection).
+      const fetchMock = vi.fn()
+        .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+        .mockResolvedValueOnce(jsonResponse({ tokens: { access_token: "after-network", expires_in: 900 } }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { bootstrapSession } = await import("@/lib/api");
+      const resolved = expect(bootstrapSession()).resolves.toBe("after-network");
+      await vi.runAllTimersAsync();
+      await resolved;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after the bounded retries when the server keeps failing", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("navigator", {});
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({}, 503)));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { bootstrapSession, getAccessToken } = await import("@/lib/api");
+      const rejected = expect(bootstrapSession()).rejects.toThrow();
+      await vi.runAllTimersAsync();
+      await rejected;
+
+      expect(getAccessToken()).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a 401: the token is gone, a retry cannot bring it back", async () => {
+    vi.stubGlobal("navigator", {});
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}, 401));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { bootstrapSession } = await import("@/lib/api");
+    await expect(bootstrapSession()).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("refresh requests are sent with credentials 'include' and no body", async () => {

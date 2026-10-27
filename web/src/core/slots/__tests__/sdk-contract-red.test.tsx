@@ -50,13 +50,19 @@ const makeCard = (draggable: boolean): BoardCardView =>
   };
 
 describe("contract suites go red on broken views and green on the fixed one", () => {
-  it("board.card without Draggable fails CT-board-* (not CT-common-*); with Draggable it is green", async () => {
+  // Red and green are two tests, not one: each runs the whole board.card suite on real timers (drag
+  // ticks, dnd-kit's 70 ms click guard), and both in one test went over the 20 s budget on a loaded
+  // CI runner (job 414491, ~1 s locally).
+  it("board.card without Draggable fails CT-board-* (not CT-common-*)", async () => {
     const red = await runSlotSuite("board.card", asView(makeCard(false)));
     const ids = failedIds(red);
     show("RED board.card (no Draggable):", red);
     expect(red.passed).toBe(false);
     for (const id of ["CT-board-01", "CT-board-02", "CT-board-03", "CT-board-04"]) expect(ids).toContain(id);
     expect(ids.filter((i) => i.startsWith("CT-common"))).toEqual([]);
+  });
+
+  it("the same board.card with Draggable is green", async () => {
     const green = await runSlotSuite("board.card", asView(makeCard(true)));
     show("GREEN board.card (fixed):", green);
     expect(failedIds(green)).toEqual([]);

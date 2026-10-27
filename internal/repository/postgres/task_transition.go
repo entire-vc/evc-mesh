@@ -78,11 +78,19 @@ func (r *TaskRepo) UpdateTransition(ctx context.Context, task *domain.Task, inpu
 			q += `,checkout_session_id=NULL,checkout_request_id=NULL`
 		}
 	}
+	// The checkout stage marker follows the status: set to the new status by
+	// checkout auto-progression, otherwise left on the old one, which the
+	// tasks_checkout_stage_guard trigger then clears on any status change.
+	if input.CheckoutStage {
+		q += `, checkout_stage_status_id=$2`
+	}
 	q += ` WHERE t.id=$1 AND t.deleted_at IS NULL AND t.version=$11
  AND ($12::uuid IS NULL OR t.status_id=$12)
  AND ($13::timestamptz IS NULL OR t.updated_at=$13)`
 	if g := input.Reaper; g != nil {
-		q += ` AND NOT t.human_gate AND NOT t.is_shipped
+		// Only a stage the checkout itself set is the reaper's to take back; a
+		// manual or business stage keeps its status whatever the lease does.
+		q += ` AND NOT t.human_gate AND NOT t.is_shipped AND t.checkout_stage_status_id=t.status_id
  AND t.status_id IN (SELECT id FROM task_statuses WHERE category='in_progress')`
 		switch g.Mode {
 		case "expired":

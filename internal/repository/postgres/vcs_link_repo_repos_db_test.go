@@ -31,7 +31,12 @@ func TestVCSLinkRepo_ProviderRepos(t *testing.T) {
 	}
 	gl := "g/p-" + fx.suffix
 	gh := "o/r-" + fx.suffix
-	old, recent := time.Now().Add(-2*time.Hour).UTC().Truncate(time.Second), time.Now().UTC().Truncate(time.Second)
+	// recent sits seconds before the seeding on purpose: Upsert stamps
+	// status_synced_at with the database now(), so last_event_at is the
+	// moment of the last seed, not recent, and the check below bounds it by
+	// the wall clock around seeding instead of a tolerance around recent.
+	old, recent := time.Now().Add(-2*time.Hour).UTC().Truncate(time.Second), time.Now().Add(-3*time.Second).UTC().Truncate(time.Second)
+	seededFrom := time.Now().UTC().Truncate(time.Microsecond)
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://GIT.Example.com/G/P-"+fx.suffix+"/-/merge_requests/1", old)
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://git.example.com/"+gl+"/merge_requests/2", old)
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypeCommit, "https://git.example.com/"+gl+"/-/commit/abc", recent)
@@ -39,6 +44,7 @@ func TestVCSLinkRepo_ProviderRepos(t *testing.T) {
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://git.example.com/"+gl+"/sub/-/merge_requests/3", old)
 	seed(domain.VCSProviderGitLab, domain.VCSLinkTypePR, "https://git.example.com/no-repo-segment", old)
 	seed(domain.VCSProviderGitHub, domain.VCSLinkTypePR, "https://github.com/"+gh+"/pull/7", old)
+	seededTo := time.Now().UTC()
 
 	byRepo := func(rows []repository.VCSRepoActivity) map[string]repository.VCSRepoActivity {
 		m := map[string]repository.VCSRepoActivity{}
@@ -54,7 +60,7 @@ func TestVCSLinkRepo_ProviderRepos(t *testing.T) {
 	assert.Equal(t, gl, glRows[0].Repo, "most linked first")
 	assert.Equal(t, "git.example.com", glRows[0].Host)
 	assert.Equal(t, 4, glRows[0].Links, "MR (both url forms), commit and tree links, scheme and case normalised")
-	assert.WithinDuration(t, recent, glRows[0].LastEventAt, time.Second)
+	assert.WithinRange(t, glRows[0].LastEventAt.UTC(), seededFrom, seededTo, "the newest sync stamp of the seeded links")
 	assert.Equal(t, 1, byRepo(glRows)[gl+"/sub"].Links)
 
 	ghRows, err := repo.WorkspaceProviderRepos(ctx, fx.workspaceID, "github", 20)

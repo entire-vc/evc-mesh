@@ -15,8 +15,8 @@ const (
 	SecretScopeAgent     SecretScope = "agent"
 )
 
-// Secret is the read-side view of a row in the secrets table. It is
-// deliberately structured so that a decrypted or encrypted value has no
+// Secret is the read-side view of a row in the secret_refs index; the value
+// itself is in Keep. It is deliberately structured so that a value has no
 // field to occupy: this type is what every read path in the repository and
 // service layers returns, so "the value isn't in here" is a property of the
 // Go type, not just of the query that happens to have populated it. The
@@ -40,10 +40,10 @@ type Secret struct {
 }
 
 // CreateSecretInput carries a plaintext value from the API boundary down to
-// the repository, which encrypts it on the way in. Value never gets a `db`
-// tag and is never embedded in Secret — it exists only long enough to be
-// encrypted and must not be logged, and must not survive past the Create
-// call that consumes it.
+// the repository, which hands it to Keep. Value never gets a `db` tag and is
+// never embedded in Secret — it exists only long enough to be stored in Keep
+// and must not be logged, and must not survive past the Create call that
+// consumes it.
 type CreateSecretInput struct {
 	WorkspaceID   uuid.UUID
 	ProjectID     *uuid.UUID
@@ -56,7 +56,7 @@ type CreateSecretInput struct {
 	CreatedByType ActorType
 }
 
-// MaterializedSecret is the one place in this codebase a decrypted value is
+// MaterializedSecret is the one place in this codebase a secret value is
 // allowed to exist as a Go value. It exists only for the spawn-time
 // materializer (S4) to write into a lane's env file; nothing else should
 // construct or hold one. Expired carries the expiry state explicitly so the

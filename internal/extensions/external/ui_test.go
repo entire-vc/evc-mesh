@@ -54,6 +54,37 @@ func TestFrameFor(t *testing.T) {
 	})
 }
 
+func TestFrameForSettingsDomain(t *testing.T) {
+	keep := helloManifest("{settings.hello_url}")
+	f, err := FrameFor(keep, map[string]any{"hello_url": "https://keep.example.com"}, SlotSidebarItem)
+	require.NoError(t, err)
+	assert.Equal(t, "https://keep.example.com/mesh/ui/hello", f.URL)
+	assert.Equal(t, "https://keep.example.com", f.Origin)
+
+	t.Run("red: placeholder names another setting than the service address", func(t *testing.T) {
+		m := helloManifest("{settings.keep_url}")
+		_, err := FrameFor(m, map[string]any{"hello_url": "https://evil.example", "keep_url": "https://keep.example.com"}, SlotSidebarItem)
+		assert.ErrorIs(t, err, ErrDomainNotAllowed)
+	})
+	t.Run("red: placeholder setting missing", func(t *testing.T) {
+		m := helloManifest("{settings.keep_url}")
+		_, err := FrameFor(m, map[string]any{"hello_url": "https://keep.example.com"}, SlotSidebarItem)
+		assert.ErrorIs(t, err, ErrDomainNotAllowed)
+	})
+	t.Run("red: no service address", func(t *testing.T) {
+		_, err := FrameFor(keep, map[string]any{}, SlotSidebarItem)
+		assert.Error(t, err)
+	})
+}
+
+func TestExpandAllowedDomains(t *testing.T) {
+	settings := map[string]any{"url": "https://keep.example.com/", "wild": "*.example.com", "num": 3, "empty": " "}
+	assert.Equal(t, []string{"a.example.com", "https://keep.example.com/"},
+		ExpandAllowedDomains([]string{"a.example.com", "{settings.url}", "{settings.wild}", "{settings.num}", "{settings.empty}", "{settings.none}"}, settings))
+	assert.True(t, HostAllowed("keep.example.com", ExpandAllowedDomains([]string{"{settings.url}"}, settings)))
+	assert.False(t, HostAllowed("x.example.com", ExpandAllowedDomains([]string{"{settings.wild}"}, settings)))
+}
+
 func TestHostAllowed(t *testing.T) {
 	assert.True(t, HostAllowed("a.example.com", []string{"*.example.com"}))
 	assert.False(t, HostAllowed("example.com", []string{"*.example.com"}), "wildcard does not cover the apex")

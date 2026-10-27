@@ -120,7 +120,8 @@ export async function pastePng(page: Page, png: Buffer): Promise<{ bytes: Buffer
  * A turn that stays running long enough to press Stop. The interactive transcript delivers whole
  * blocks only, so a long single-block reply streams nothing until it is over: the opening sentence
  * arrives as a delta, something after it must keep the turn alive for the click.
- * codex: a shell wait. Not a bare `sleep`: the agent's shell refuses a standalone foreground sleep,
+ * codex: a shell wait. Its reply comes in one piece at turn end, so the shell call itself is what S06
+ * sees running before Stop. Not a bare `sleep`: the agent's shell refuses a standalone foreground sleep,
  * moves it to the background and the turn ends within seconds (pipeline 19465, S06 claude).
  * claude: no shell at all (Bash is denied on the claude harness, see AC3 in composer.spec.ts), so a
  * shell wait ends the turn in ~7 s (job 410449). One read-only tool call closes the opening block,
@@ -133,10 +134,14 @@ export function holdTurnPrompt(h: Harness): string {
     : "First write one short sentence saying you are starting. Then run exactly this shell command in the foreground and wait for it to finish: python3 -c 'import time; time.sleep(150)' . Then write a list of 50 items.";
 }
 
-/** Reads the nth assistant reply from history and asserts it is still streaming. */
-export async function expectTurnRunning(a: Actor, x: Ctx, threadId: string, nth: number, sentAt: number): Promise<void> {
-  const m = (await history(a, x, threadId)).items.filter((i) => i.role === "assistant")[nth - 1];
-  assertTurnRunning(m, sentAt);
+/**
+ * Reads the nth assistant reply from history and asserts it is still streaming. `byTurn` (codex):
+ * no reply exists before the end of the turn, so the thread's active turn is what must still stream.
+ */
+export async function expectTurnRunning(a: Actor, x: Ctx, threadId: string, nth: number, sentAt: number, byTurn = false): Promise<void> {
+  const h = await history(a, x, threadId);
+  const m = h.items.filter((i) => i.role === "assistant")[nth - 1];
+  assertTurnRunning(m, sentAt, Date.now(), byTurn ? { active: h.active_turn } : undefined);
 }
 
 export const codeOf = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");

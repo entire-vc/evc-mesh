@@ -72,6 +72,11 @@ type Handshaker struct {
 	Secrets SecretWriter
 	Reader  SecretReader
 	Subs    Subscriptions
+	// Tokens delivers the extension actor token to a service whose manifest
+	// sets external.token_path. nil disables delivery.
+	Tokens TokenStore
+
+	delivery tokenDelivery
 
 	mu   sync.Mutex
 	done map[string]string // ws/ext -> fingerprint of the last successful handshake
@@ -187,6 +192,9 @@ func (h *Handshaker) Run(ctx context.Context, p *Provider, ws uuid.UUID, setting
 		}
 	}
 	if err := h.alignSubscriptions(ctx, conn.ID, base, p.ext.EventsPath, name, events); err != nil {
+		return err
+	}
+	if err := h.deliverOnInstall(ctx, p, ws, conn.ID, base, secret); err != nil {
 		return err
 	}
 	h.mu.Lock()

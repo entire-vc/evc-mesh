@@ -70,8 +70,17 @@ func localizeJSON(v any, lang string, inManifest bool) any {
 			if inManifest {
 				if base, ok := strings.CutSuffix(k, "_i18n"); ok {
 					if m, isMap := val.(map[string]any); isMap {
-						if s, has := m[lang].(string); has && s != "" {
-							t[base] = s
+						// A string, or a whole object for a map of labels
+						// ("x-options_i18n": {"ru": {"api": "API"}}).
+						switch tr := m[lang].(type) {
+						case string:
+							if tr != "" {
+								t[base] = tr
+							}
+						case map[string]any:
+							if len(tr) > 0 {
+								t[base] = tr
+							}
 						}
 					}
 					delete(t, k)
@@ -101,6 +110,19 @@ var manifestTextRU = map[string]struct{ Description, Reasoning string }{
 	"team-relay": {
 		Description: "Синхронизация Mesh Docs с шарами Team Relay: подключение к релею и привязка проекта к шаре",
 		Reasoning:   "синк документов и артефактов с релеем по адресу из настроек",
+	},
+	"gitlab": {
+		Description: "Привязка merge request'ов GitLab к задачам: вебхук, статус MR и пайплайнов",
+		Reasoning:   "проверка статуса MR и пайплайнов через API GitLab инстанса",
+	},
+	"spark": {
+		Description: "Каталог ассетов Spark: поиск, популярное, установка агентов в воркспейс",
+	},
+	"telegram": {
+		Description: "Telegram-уведомления: бот воркспейса, привязка людей командой /start, доставка событий",
+	},
+	"agent-chat": {
+		Description: "Чат с агентом: личные треды пользователя с агентом проекта, которого обслуживает раннер воркспейса",
 	},
 	"runner": {
 		Description: "Runner: каталог ресурсов запуска агентов — пулы, аккаунты, профили, привязки и контроллеры; допуск и резервирование",

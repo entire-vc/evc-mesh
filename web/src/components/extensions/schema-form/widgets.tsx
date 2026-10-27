@@ -36,8 +36,12 @@ interface BaseProps {
   label: string;
 }
 
-/** `#rrggbb` value: native picker for choosing, text input for pasting an exact value. */
-export function ColorWidget({ id, disabled, invalid, describedBy, label, value, hsl, onChange }: BaseProps & { value: unknown; hsl?: boolean; onChange: (v: string | undefined) => void }) {
+const expandHex = (h: string) => (h.length === 4 ? `#${h[1]}${h[1]}${h[2]}${h[2]}${h[3]}${h[3]}` : h);
+
+/** `#rrggbb` value: native picker for choosing, text input for pasting an exact value.
+ *  `fallback` is what applies while the field is unset (same encoding as the value): the swatch and the
+ *  placeholder show it; without one the swatch stays empty instead of painting a colour nobody chose. */
+export function ColorWidget({ id, disabled, invalid, describedBy, label, value, hsl, fallback, onChange }: BaseProps & { value: unknown; hsl?: boolean; fallback?: string; onChange: (v: string | undefined) => void }) {
   const { t } = useTranslation("integrations");
   // a token-bound field stores "H S% L%"; the user always sees and types #hex
   const stored = typeof value === "string" ? value : "";
@@ -45,7 +49,9 @@ export function ColorWidget({ id, disabled, invalid, describedBy, label, value, 
   const [typed, setTyped] = useState<string | null>(null);
   const text = typed ?? shown;
   const valid = HEX_COLOR.test(text);
-  const swatch = valid ? (text.length === 4 ? `#${text[1]}${text[1]}${text[2]}${text[2]}${text[3]}${text[3]}` : text) : "#000000"; // color-ok: <input type=color> needs some value
+  const fallbackHex = fallback ? (hsl ? hslToHex(fallback) : HEX_COLOR.test(fallback) ? fallback : null) : null;
+  const empty = text === "" && !fallbackHex;
+  const swatch = valid ? expandHex(text) : text === "" && fallbackHex ? expandHex(fallbackHex) : "#000000"; // color-ok: <input type=color> needs some value; hidden while empty
   const emit = (v: string) => {
     setTyped(v === "" || HEX_COLOR.test(v) ? null : v);
     if (v === "") return onChange(undefined);
@@ -60,15 +66,19 @@ export function ColorWidget({ id, disabled, invalid, describedBy, label, value, 
         aria-label={t("schemaForm.color.pick", { name: label })}
         disabled={disabled}
         value={swatch}
+        data-empty={empty || undefined}
         onChange={(e) => emit(e.target.value)}
-        className="h-9 w-12 shrink-0 cursor-pointer rounded-lg border border-input bg-background p-1 disabled:cursor-not-allowed disabled:opacity-50"
+        className={cn(
+          "h-9 w-12 shrink-0 cursor-pointer rounded-lg border border-input bg-background p-1 disabled:cursor-not-allowed disabled:opacity-50",
+          empty && "border-dashed [&::-moz-color-swatch]:opacity-0 [&::-webkit-color-swatch]:opacity-0",
+        )}
       />
       <Input
         id={id}
         disabled={disabled}
         aria-invalid={invalid || (text !== "" && !valid) || undefined}
         aria-describedby={describedBy}
-        placeholder={HEX_EXAMPLE}
+        placeholder={fallbackHex ?? HEX_EXAMPLE}
         spellCheck={false}
         maxLength={7}
         value={text}

@@ -121,3 +121,53 @@ func TestExtensionCatalogCard(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, call(fakeCatalog{cat: cat}, "mesh-ext-hello"))
 	assert.Equal(t, http.StatusServiceUnavailable, call(fakeCatalog{}, "mesh-ext-hello"))
 }
+
+// U8: built-in extensions and themes are records of the Spark catalog
+// (runtime "builtin", no artifact) under the same id as the code in Mesh.
+// One id, one row: the record never adds a second "catalog" row next to the
+// built-in one, and a record whose code this build lacks is not offered.
+func TestExtensionCatalog_BuiltinRecordsJoinByID(t *testing.T) {
+	page := func(id string) string { return "https://spark.entire.vc/mesh-extensions/" + id }
+	builtin := func(id, name, kind string) catalog.Entry {
+		return catalog.Entry{ID: id, Name: name, Kind: kind, Runtime: "builtin", Trust: "official", Publisher: "entire-vc",
+			PageURL: page(id), Latest: catalog.Release{Version: "1.0.0"}}
+	}
+	cat := &catalog.Catalog{Extensions: []catalog.Entry{
+		builtin("team-relay", "Team Relay", "integration"),
+		builtin("mesh-default", "Mesh", "theme"),
+		builtin("graphite", "Graphite", "theme"),
+		builtin("from-newer-mesh", "Not in this build", "integration"),
+		{ID: "hello", Name: "Hello", Runtime: "external", Trust: "community", PageURL: page("hello"), Latest: catalog.Release{Version: "1.0.0"}},
+	}}
+	repo := builtinRepo()
+	repo.rows = append(repo.rows,
+		domain.InstalledExtension{ExtensionID: "mesh-default", Version: "1.0.0", Source: domain.ExtensionSourceBuiltin, Manifest: json.RawMessage(testManifest)},
+		domain.InstalledExtension{ExtensionID: "hello", Version: "0.1.0", Source: domain.ExtensionSourceRepo, Manifest: json.RawMessage(testManifest)},
+	)
+	ships := map[string]bool{"team-relay": true, "mesh-default": true, "graphite": true}
+	h := NewExtensionHandler(repo, nil).WithCatalog(fakeCatalog{cat: cat, at: time.Now()}).
+		WithBuiltins(func(id string) bool { return ships[id] })
+	rec := doExt(t, h.Catalog, http.MethodGet)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body mergedBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	byID := map[string]map[string]any{}
+	for _, e := range body.Extensions {
+		id := e["id"].(string)
+		require.NotContains(t, byID, id, "one id, one row")
+		byID[id] = e
+	}
+	assert.Len(t, byID, 4)
+	relay := byID["team-relay"]
+	assert.Equal(t, "builtin", relay["source"])
+	assert.Equal(t, true, relay["installed"])
+	assert.Equal(t, page("team-relay"), relay["page_url"], "the built-in row links its catalog record")
+	assert.Equal(t, page("mesh-default"), byID["mesh-default"]["page_url"], "an id with mesh in it is not dropped")
+	graphite := byID["graphite"]
+	assert.Equal(t, "builtin", graphite["source"], "a removed built-in theme is the code in Mesh, not a download")
+	assert.Equal(t, false, graphite["installed"])
+	assert.NotContains(t, byID, "from-newer-mesh")
+	assert.Equal(t, "catalog", byID["hello"]["id_conflict"], "a repo install of a catalog id is flagged, not shown as the record")
+	assert.Nil(t, relay["id_conflict"])
+}

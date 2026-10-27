@@ -453,7 +453,14 @@ let readyControlDone = false;
  * Every frame waits for a ready screen (no skeleton, the URL's thread loaded) after the reload and
  * again after `prepare`; `shows` are the state the frame is about and must be visible in each frame.
  */
-export async function snap(a: Actor, name: string, prepare?: () => Promise<void>, cleanup?: () => Promise<void>, shows: Locator[] = []): Promise<void> {
+export async function snap(
+  a: Actor,
+  name: string,
+  prepare?: () => Promise<void>,
+  cleanup?: () => Promise<void>,
+  shows: Locator[] = [],
+  check?: (where: string) => Promise<void>,
+): Promise<void> {
   const { page } = a;
   const dir = join(OUT_DIR, "shots");
   mkdirSync(dir, { recursive: true });
@@ -488,6 +495,7 @@ export async function snap(a: Actor, name: string, prepare?: () => Promise<void>
           throw new Error(`${name} ${vp.width}/${scheme}: ${l} is not visible after the reload`);
         });
         await settledMode(page, scheme);
+        await check?.(`${name} ${vp.width}/${scheme}`);
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         if (overflow > 0) throw new Error(`${name} ${vp.width}/${scheme}: horizontal overflow ${overflow}px`);
         const late = await chatNotReady(page);

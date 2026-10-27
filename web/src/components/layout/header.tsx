@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSidebarItems } from "@/lib/extension-slots";
+import { useProjectExtensionTabs } from "@/lib/project-extension-tabs";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router";
 import {
@@ -553,11 +553,14 @@ function ViewTabs() {
   const { currentProject } = useProjectStore();
   const currentView = useCurrentView();
   const openTaskProject = useOpenTaskProjectLink();
-  const sidebarItems = useSidebarItems();
+  const inProject = Boolean(currentView && wsSlug && projectSlug);
+  // Extension tabs only for project-level extensions bound to this project; a
+  // workspace-only `sidebar.item` stays in the left menu.
+  const extensionTabs = useProjectExtensionTabs(inProject ? currentProject?.id : openTaskProject?.projectId);
   const chatEnabled = useChatEnabled(currentProject?.id);
-  // Built-ins, the Chat tab where the project turned it on, one tab per enabled
-  // extension screen; stable while the registry is.
-  const tabs = useMemo(() => projectTabsWith(sidebarItems, chatEnabled), [sidebarItems, chatEnabled]);
+  // Built-ins, the Chat tab where the project turned it on, then the extension
+  // tabs; stable while the registry and the bindings are.
+  const tabs = useMemo(() => projectTabsWith(extensionTabs, chatEnabled), [extensionTabs, chatEnabled]);
   // View tabs — shown when inside a project. On an open task the same
   // strip stays (no tab active) so Docs is a tab, not a separate icon;
   // it targets the task's own project (see useOpenTaskProjectLink).

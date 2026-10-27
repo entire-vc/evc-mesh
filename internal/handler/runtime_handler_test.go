@@ -18,6 +18,7 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 	e.HTTPErrorHandler = NewHTTPErrorHandler(e.DefaultHTTPErrorHandler)
 	h := NewRuntimeHandler(nil)
 	e.PUT("/workspaces/:ws_id/runtime", h.Save)
+	e.POST("/workspaces/:ws_id/runtime/restore", h.Restore)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", h.Report)
 	e.GET("/workspaces/:ws_id/runtime/controllers/:controller_ref/desired", h.Desired)
 	e.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/quota-observations", h.ReportQuota)
@@ -45,6 +46,10 @@ func TestRuntimeHandlerRefusesMalformedBodiesBeforeRepository(t *testing.T) {
 		{"save missing if_revision", http.MethodPut, "/workspaces/" + ws + "/runtime", `{"enabled":true,"config":{}}`},
 		{"save unknown secret field", http.MethodPut, "/workspaces/" + ws + "/runtime", `{"if_revision":0,"enabled":true,"config":{},"api_key":"x"}`},
 		{"save invalid workspace", http.MethodPut, "/workspaces/not-a-uuid/runtime", `{"if_revision":0,"enabled":true,"config":{}}`},
+		{"restore missing revision", http.MethodPost, "/workspaces/" + ws + "/runtime/restore", `{"if_revision":2}`},
+		{"restore missing if_revision", http.MethodPost, "/workspaces/" + ws + "/runtime/restore", `{"revision":1}`},
+		{"restore client config", http.MethodPost, "/workspaces/" + ws + "/runtime/restore", `{"if_revision":2,"revision":1,"config":{}}`},
+		{"restore invalid workspace", http.MethodPost, "/workspaces/not-a-uuid/runtime/restore", `{"if_revision":2,"revision":1}`},
 		{"report missing pools", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/report", `{"schema_version":2,"revision":1,"digest":"d","status":"applied","capabilities":[],"emergency_paused":false}`},
 		{"quota missing observations", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/quota-observations", `{"schema_version":1}`},
 		{"quota unknown field", http.MethodPost, "/workspaces/" + ws + "/runtime/controllers/runner-a/quota-observations", `{"schema_version":1,"observations":[],"token":"x"}`},

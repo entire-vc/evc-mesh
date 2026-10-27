@@ -3,6 +3,7 @@ package extensions
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 )
@@ -45,21 +46,41 @@ func clone(v any) any {
 	return out
 }
 
-// Builtin manifests must show no Cyrillic in an English interface.
-func TestBuiltinManifestsEnglishWithoutCyrillic(t *testing.T) {
-	cyr := regexp.MustCompile(`[\x{0400}-\x{04FF}]`)
-	for _, name := range []string{"github", "runner"} {
-		raw, err := os.ReadFile(name + "/mesh-extension.json")
+// shippedManifests returns every builtin manifest in the tree, keyed by id.
+func shippedManifests(t *testing.T) map[string]map[string]any {
+	t.Helper()
+	paths, err := filepath.Glob("*/mesh-extension.json")
+	if err != nil || len(paths) < 7 {
+		t.Fatalf("builtin manifests: %v %v", paths, err)
+	}
+	out := map[string]map[string]any{}
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var m any
+		var m map[string]any
 		if err := json.Unmarshal(raw, &m); err != nil {
 			t.Fatal(err)
 		}
-		en, _ := json.Marshal(LocalizeJSON(map[string]any{"manifest": m}, "en"))
+		out[m["id"].(string)] = m
+	}
+	return out
+}
+
+// Builtin manifests must show no Cyrillic in an English interface, and every
+// one of them must have its description in Russian in a Russian interface.
+func TestBuiltinManifestsEnglishWithoutCyrillic(t *testing.T) {
+	cyr := regexp.MustCompile(`[\x{0400}-\x{04FF}]`)
+	for id, m := range shippedManifests(t) {
+		en, _ := json.Marshal(LocalizeJSON(map[string]any{"manifest": clone(m)}, "en"))
 		if cyr.Match(en) {
-			t.Errorf("%s: Cyrillic in en manifest: %s", name, en)
+			t.Errorf("%s: Cyrillic in en manifest: %s", id, en)
+		}
+		ru := LocalizeJSON(map[string]any{"manifest": clone(m)}, "ru").(map[string]any)
+		desc, _ := ru["manifest"].(map[string]any)["description"].(string)
+		if !cyr.MatchString(desc) {
+			t.Errorf("%s: ru description is not Russian: %q", id, desc)
 		}
 	}
 }
@@ -81,5 +102,19 @@ func TestLocalizeJSONLeavesSettingsAlone(t *testing.T) {
 	want := `{"connection":{"settings":{"label":"a","label_i18n":{"ru":"б"}}},"manifest":{"title":"Т"}}`
 	if string(out) != want {
 		t.Fatalf("got %s", out)
+	}
+}
+
+// Option labels are a map: the whole map is swapped for the language's one.
+func TestLocalizeJSONOptionLabels(t *testing.T) {
+	var v any
+	_ = json.Unmarshal([]byte(`{"manifest":{"x-options":{"api":"API","subscription":"Subscription"},"x-options_i18n":{"ru":{"api":"API","subscription":"Подписка"}}}}`), &v)
+	en, _ := json.Marshal(LocalizeJSON(clone(v), "en"))
+	if string(en) != `{"manifest":{"x-options":{"api":"API","subscription":"Subscription"}}}` {
+		t.Fatalf("en: %s", en)
+	}
+	ru, _ := json.Marshal(LocalizeJSON(clone(v), "ru"))
+	if string(ru) != `{"manifest":{"x-options":{"api":"API","subscription":"Подписка"}}}` {
+		t.Fatalf("ru: %s", ru)
 	}
 }

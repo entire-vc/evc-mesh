@@ -151,6 +151,11 @@ var extensionRouteCapabilities = map[string]string{
 	"POST /api/v1/tasks/:task_id/dependencies":           "tasks:write",
 	"PATCH /api/v1/tasks/:task_id/dependencies/:dep_id":  "tasks:write",
 	"DELETE /api/v1/tasks/:task_id/dependencies/:dep_id": "tasks:write",
+	"GET /api/v1/tasks/:task_id/external-ref":            "tasks:read",
+	"PUT /api/v1/tasks/:task_id/external-ref":            "tasks:write",
+	// Arming only: an extension opens a gate card (Keep). Clearing the gate and
+	// deciding it stay human-only, so DELETE …/human-gate is NOT mapped.
+	"POST /api/v1/tasks/:task_id/human-gate": "tasks:write",
 
 	// comments
 	"GET /api/v1/tasks/:task_id/comments":  "comments:read",

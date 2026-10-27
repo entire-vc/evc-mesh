@@ -178,7 +178,7 @@ func (p placeholderProvider) Resolve(ctx context.Context, ws uuid.UUID) (extensi
 	if err != nil || !res.Enabled || res.Source != extensions.SourceWorkspace || len(res.Settings) > 0 {
 		return res, err
 	}
-	return extensions.ResolveSettings(ctx, nil, p.Inst, ws, p.Man.ID)
+	return extensions.ResolveSettings(ctx, nil, p.Inst, p.Allow, ws, p.Man.ID)
 }
 
 func TestExtensionWorkspace_DisableAfterReenableUnderInstanceNeedsConfirm(t *testing.T) {
@@ -438,6 +438,63 @@ func TestExtensionWorkspace_ConnectRefusedOutsideAllowList(t *testing.T) {
 	_, err = f.svc.WithAllowList(fakeAllow{ok: true}).Connect(ctx, f.ws, "demo", nil, map[string]any{"base_url": "https://x", "token": "s"}, fullConsent)
 	require.NoError(t, err)
 	require.NotNil(t, f.Integ.Find(f.ws, "demo"))
+}
+
+// The administrator's allow-list holds after connect too: a denied extension
+// resolves as off, cannot be switched on, keeps its connection, and comes back
+// with its settings once allowed again.
+func TestExtensionWorkspace_AllowListHoldsAfterConnect(t *testing.T) {
+	ctx := context.Background()
+	f := newFx(t, nil, false)
+	svc := f.svc.WithAllowList(f.Allow)
+	settings := map[string]any{"base_url": "https://x.example"}
+	_, err := svc.Connect(ctx, f.ws, "demo", nil, settings, fullConsent)
+	require.NoError(t, err)
+
+	f.Allow.Deny("demo")
+	res, err := f.Registry.Resolve(ctx, f.ws, "demo")
+	require.NoError(t, err)
+	require.False(t, res.Enabled, "a denied extension resolves as off")
+	require.True(t, res.NotAllowed)
+	require.Nil(t, res.Settings, "no settings reach the runtime")
+	require.Equal(t, extensions.SourceWorkspace, res.Source, "the connection is still shown")
+	list, err := svc.List(ctx, f.ws)
+	require.NoError(t, err)
+	require.True(t, list[0].Status.NotAllowed)
+	require.False(t, list[0].Status.Enabled)
+	require.NotNil(t, list[0].Connection, "the connection is not removed")
+
+	_, err = svc.SetEnabled(ctx, f.ws, "demo", false, false)
+	require.NoError(t, err, "switching a denied extension off is always allowed")
+	_, err = svc.SetEnabled(ctx, f.ws, "demo", true, false)
+	requireAPIErr(t, err, http.StatusForbidden, "extension_not_allowed")
+	require.False(t, f.Integ.Find(f.ws, "demo").IsActive, "a refused enable writes nothing")
+
+	f.Allow.Permit("demo")
+	_, err = svc.SetEnabled(ctx, f.ws, "demo", true, false)
+	require.NoError(t, err)
+	res, err = f.Registry.Resolve(ctx, f.ws, "demo")
+	require.NoError(t, err)
+	require.True(t, res.Enabled)
+	require.False(t, res.NotAllowed)
+	require.Equal(t, "https://x.example", res.Settings["base_url"], "settings are back without a migration")
+}
+
+func TestResolveSettings_AllowList(t *testing.T) {
+	ctx := context.Background()
+	ws := uuid.New()
+	boom := errors.New("db down")
+	_, err := extensions.ResolveSettings(ctx, nil, exttest.InstanceOn{}, fakeAllow{err: boom}, ws, "demo")
+	require.ErrorIs(t, err, boom, "a failing allow-list is an error, never a silent allow")
+
+	res, err := extensions.ResolveSettings(ctx, nil, exttest.InstanceOn{}, fakeAllow{ok: false}, ws, "demo")
+	require.NoError(t, err)
+	require.False(t, res.Enabled, "the instance level does not bypass the allow-list")
+	require.True(t, res.NotAllowed)
+
+	res, err = extensions.ResolveSettings(ctx, nil, exttest.InstanceOn{}, nil, ws, "demo")
+	require.NoError(t, err)
+	require.True(t, res.Enabled, "no allow-list: as before")
 }
 
 func useEncryptionKey(t *testing.T) {
@@ -843,4 +900,55 @@ func TestExtensionWorkspace_SecretStoreFailureRejectsSave(t *testing.T) {
 	by := uuid.New()
 	_, err := f.svc.Connect(context.Background(), f.ws, "demo", &by, map[string]any{"base_url": "https://x", "token": "s3cret"}, fullConsent)
 	requireAPIErr(t, err, http.StatusBadRequest, "")
+}
+
+// flakyProvider answers its health check from *ok, so a test can turn a failing
+// extension healthy between two checks.
+type flakyProvider struct {
+	exttest.DemoProvider
+	ok *bool
+}
+
+func (p flakyProvider) Health(context.Context, extensions.Resolved) extensions.HealthReport {
+	if *p.ok {
+		return extensions.HealthReport{OK: true}
+	}
+	return extensions.HealthReport{Message: "401 Unauthorized"}
+}
+
+// The list and the Settings window read one field: after a passing check the
+// list must not keep the error of the failed one (Keep: list "Last error 401",
+// window "Health check passed").
+func TestExtensionWorkspace_PassingCheckClearsLastErrorInList(t *testing.T) {
+	ctx := context.Background()
+	f, err := exttest.NewFixture(nil, false)
+	require.NoError(t, err)
+	man, err := extensions.ParseManifest([]byte(exttest.Manifest))
+	require.NoError(t, err)
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}}
+	ok := false
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(flakyProvider{exttest.DemoProvider{BaseProvider: base}, &ok}))
+	reg.WithConsentStore(extensions.IntegrationConsents{Repo: f.Consents, Declared: func(string) []string { return nil }})
+	svc := service.NewExtensionWorkspaceService(reg, f.Integ, f.Consents)
+	ws := uuid.New()
+
+	_, err = svc.Connect(ctx, ws, "demo", nil, map[string]any{"base_url": "https://x", "token": "s3cret"}, fullConsent)
+	require.NoError(t, err)
+	res, err := svc.Test(ctx, ws, "demo")
+	require.NoError(t, err)
+	require.False(t, res.OK)
+	list, err := svc.List(ctx, ws)
+	require.NoError(t, err)
+	require.Equal(t, "401 Unauthorized", list[0].Status.LastError)
+
+	ok = true
+	res, err = svc.Test(ctx, ws, "demo")
+	require.NoError(t, err)
+	require.True(t, res.OK)
+	list, err = svc.List(ctx, ws)
+	require.NoError(t, err)
+	require.NotNil(t, list[0].Status.Health)
+	require.True(t, list[0].Status.Health.OK)
+	require.Empty(t, list[0].Status.LastError, "the list shows the check the window just ran")
 }

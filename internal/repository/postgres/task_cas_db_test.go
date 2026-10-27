@@ -68,7 +68,7 @@ func reaperFixture(t *testing.T, expired bool) (*TaskRepo, *domain.Task, uuid.UU
 	ip := uuid.New()
 	_, err = r.db.Exec(`INSERT INTO task_statuses(id,project_id,name,slug,category) VALUES($1,$2,'Active','active','in_progress')`, ip, task.ProjectID)
 	require.NoError(t, err)
-	_, err = r.db.Exec(`UPDATE tasks SET status_id=$2,updated_at=now()-interval '3 hours' WHERE id=$1`, id, ip)
+	_, err = r.db.Exec(`UPDATE tasks SET status_id=$2,checkout_stage_status_id=$2,updated_at=now()-interval '3 hours' WHERE id=$1`, id, ip)
 	require.NoError(t, err)
 	if expired {
 		_, err = r.AcquireCheckout(ctx, id, owner, uuid.New(), time.Now().Add(-time.Minute), generationScope())

@@ -597,84 +597,6 @@
       "deleteView": "Delete view"
     }
   },
-  "secrets": {
-    "title": "Built-in secrets",
-    "subtitle": "Values are stored encrypted and cannot be read back — not here, not through the API. To change one, replace it.",
-    "empty": "No secrets stored yet.",
-    "expired": "expired",
-    "cancel": "Cancel",
-    "error": {
-      "load": "Could not load secrets",
-      "store": "Could not store the secret",
-      "replace": "Could not replace the value",
-      "remove": "Could not remove the secret"
-    },
-    "target": {
-      "unknownAgent": "unknown agent",
-      "unknownProject": "unknown project",
-      "allAgents": "All agents"
-    },
-    "validation": {
-      "name": "Name must look like an environment variable: A-Z, digits and underscores, starting with a letter.",
-      "value": "Paste the value you want to store.",
-      "agent": "Choose which agent this secret is for.",
-      "project": "Choose which project this secret is for.",
-      "newValue": "Paste the new value."
-    },
-    "toast": {
-      "stored": "{{name}} stored",
-      "replaced": "{{name}} replaced",
-      "removed": "{{name}} removed"
-    },
-    "form": {
-      "nameLabel": "Secret name",
-      "valueLabel": "Secret value",
-      "valuePlaceholder": "Paste the value",
-      "expiresLabel": "Expires at (optional)",
-      "storing": "Storing…",
-      "store": "Store",
-      "scopeLabel": "Scope",
-      "scopeWorkspace": "Workspace — every agent",
-      "scopeAgent": "Agent — one lane only",
-      "scopeProject": "Project — one project only",
-      "agentLabel": "Agent",
-      "chooseAgent": "Choose an agent…",
-      "projectLabel": "Project",
-      "chooseProject": "Choose a project…"
-    },
-    "scope": {
-      "workspace": "workspace",
-      "agent": "agent",
-      "project": "project"
-    },
-    "columns": {
-      "name": "Name",
-      "scope": "Scope",
-      "goesTo": "Goes to",
-      "fingerprint": "Fingerprint",
-      "length": "Length",
-      "characters": "Characters",
-      "added": "Added",
-      "expires": "Expires",
-      "actions": "Actions"
-    },
-    "rotate": {
-      "aria": "Replace {{name}}",
-      "title": "Replace {{name}}",
-      "body": "The current value cannot be shown. Storing a new one replaces it and keeps the old entry in the history.",
-      "valueLabel": "New value",
-      "placeholder": "Paste the new value",
-      "replacing": "Replacing…",
-      "replace": "Replace"
-    },
-    "remove": {
-      "aria": "Remove {{name}}",
-      "title": "Remove {{name}}?",
-      "body": "Agents will stop receiving this value on their next start. The entry stays in the history.",
-      "removing": "Removing…",
-      "remove": "Remove"
-    }
-  },
   "statusDialog": {
     "title": {
       "edit": "Edit Status",
@@ -1235,8 +1157,11 @@
     },
     "workspace": {
       "title": "Theme",
-      "description": "Pick how this workspace looks. The theme decides which settings appear.",
-      "instanceLink": "Manage instance themes"
+      "description": "The theme is installed and set up in Extensions, like any extension.",
+      "instanceLink": "Manage instance themes",
+      "extensionsLink": "Theme is in Extensions → {{name}}",
+      "extensionsLinkAll": "Themes are in Extensions",
+      "movedHint": "Enabling, settings and preview are in the theme's Settings window."
     },
     "instance": {
       "title": "Themes",

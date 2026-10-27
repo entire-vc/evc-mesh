@@ -958,6 +958,41 @@ func TestRefreshTokens_Rotation_GenerateTokenPairError(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrTokenReused, "a repo blip while minting the replacement is not theft")
 }
 
+// TestRefreshTokens_MintFailsAfterRevoke_RetryGetsGrace pins the contract the
+// web client's refresh retry rests on (prod 27.10, agent-chat-e2e S03): the
+// rotation revoked the old token, then its successor write ran past the
+// deadline and the request answered 500. The client still holds only the old
+// token; replaying it inside the grace window must mint a fresh pair and
+// leave the user's other sessions alone.
+func TestRefreshTokens_MintFailsAfterRevoke_RetryGetsGrace(t *testing.T) {
+	svc, _, refreshRepo, _, _ := newTestService()
+
+	user, tokens, err := svc.Register(context.Background(), "mint-fail-retry@example.com", "StrongP4ss", "User")
+	require.NoError(t, err)
+
+	otherHash := "other-device-token-hash-mint-fail"
+	require.NoError(t, refreshRepo.Create(context.Background(), user.ID, otherHash, time.Now().Add(time.Hour)))
+
+	refreshRepo.mu.Lock()
+	refreshRepo.createErr = context.DeadlineExceeded
+	refreshRepo.mu.Unlock()
+	_, err = svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.Error(t, err)
+	refreshRepo.mu.Lock()
+	refreshRepo.createErr = nil
+	refreshRepo.mu.Unlock()
+
+	retryPair, err := svc.RefreshTokens(context.Background(), tokens.RefreshToken)
+	require.NoError(t, err, "a retry after a failed successor write must be grace-eligible")
+	assert.NotEmpty(t, retryPair.RefreshToken)
+
+	refreshRepo.mu.RLock()
+	otherToken := refreshRepo.tokens[otherHash]
+	refreshRepo.mu.RUnlock()
+	require.NotNil(t, otherToken)
+	assert.Nil(t, otherToken.RevokedAt, "a failed successor write must not revoke the user's other sessions")
+}
+
 // TestRefreshTokens_ClientDisconnectAfterRevoke_RetryGetsGrace reproduces a
 // page reload landing mid-rotation: the request context is cancelled right
 // after the old token is revoked. The rotation must still insert its

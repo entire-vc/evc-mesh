@@ -54,6 +54,10 @@ type External struct {
 	HealthPath     string `json:"health_path"`
 	InstallPath    string `json:"install_path"`
 	EventsPath     string `json:"events_path"`
+	// TokenPath, when set, is where Mesh delivers the extension actor's token
+	// itself (signed POST at install and on rotate-token), so the token never
+	// passes through a person. Empty keeps the token in the rotate response.
+	TokenPath string `json:"token_path,omitempty"`
 	// UI maps a slot (sidebar.item, task.panel) to the screen the service serves
 	// for it; the screen is shown in an iframe on the service's own origin.
 	UI map[string]ExternalUI `json:"ui,omitempty"`

@@ -152,6 +152,32 @@ ceiling, so it does not move. CI measured 671.70 on the rebased base; the ceilin
 moved by the smallest step above that. Revert: revert the MR. Lead sign-off: the product lead,
 on the card.
 
+`total_js_kb_gz` 729.3 → 715.0 (**−14.3 KB gz**) and `login.initial_js_kb_gz`
+183.8 → 175.1 (**−8.7 KB gz**): the modules `/login` loads before first paint
+used to ship as 26 chunks, most of them a few hundred bytes (`button`, `badge`,
+`input`, `select`, `cn`, `utils`, `workspace`, …), each with its own gzip header
+and import/export glue. The `app-initial` group in `vite.config.ts` puts every
+`$initial` module, the initial icons included, into one chunk; the module set of
+`/login` is unchanged (same sources in the source maps), it is now the entry plus
+the rolldown runtime. Two traps, both in the config comment:
+
+- Locale JSON stays out of the group: the test-only eager glob in
+  `src/i18n/index.ts` marks every catalog `$initial`, and without the exclusion
+  the lazy namespaces landed in the entry chunk (login 214.7).
+- The initial icons cannot keep their own `icons-initial` chunk: it imported the
+  lucide helper from `app-initial` while `app-initial` imported the icons back,
+  the icons ran first and `/register` threw `t is not a function`. The manifest
+  has no static-import cycle now (as on main).
+
+The local build on main `ba95e157` measured 729.22 / 183.77, with the group
+714.92 / 174.96. After merging main `866a6bfb` (its refresh-500 auth fix adds to
+the eager code) the build measures 714.93 / 175.04; each ceiling moved to the
+smallest 0.1 step above that.
+
+Trade-off: a deploy that changes any initial module now invalidates the one
+initial chunk rather than a few small ones. Revert: revert the MR (restore the
+`icons-initial` group, drop `app-initial`, restore both ceilings).
+
 ## Proving the gate actually gates (do this again after touching the script)
 
 A budget check that can't go red isn't a check (a deliberate failure proves enforcement). Two
@@ -851,6 +877,7 @@ main measured 723.16 (pipeline 19715, job 413328) and perf-bundle measured 724.0
 chunk, so lazy loading does not help. The ceiling moved by the smallest 0.1-step above the
 measurement. Revert: set the ceiling back to 725.2 together with reverting the MR. Lead sign-off:
 the product lead, requested on the card.
+
 `total_js_kb_gz` 726.1 → 727.5 (+1.4 KB gz): the My Runner Resources and Revision history
 blocks read and edit the workspace runtime catalog (catalog loader/saver and entry summaries in
 `lib/my-runner.ts`, the bindings section, filter and revision rows in the lazy my-runner chunk) plus
@@ -870,3 +897,109 @@ the My Runner change raised the ceiling to 727.5 on main, main was merged into t
 +1.1 KB on top of the new base. The sum covers every chunk, so lazy loading does not help. The
 ceiling moved by the smallest 0.1-step above the measurement. Revert: set the ceiling back to 727.5
 together with reverting the MR. Lead sign-off: the product lead, on the card (727.2 for the same growth).
+
+`login.initial_js_kb_gz` 183.3 → 184.0 (+0.7 KB gz) and `total_js_kb_gz` 728.7 → 729.5 (+0.8 KB gz),
+the project header strip shows an extension tab only for an extension that works per project
+(`levels.project`) and is bound to this project (`lib/project-extension-tabs.ts`: a per-project
+bindings cache with ordered reads, fail-closed, plus `levels` in the slot registry). The header is
+part of the app shell, so the hook lands in the login chunk. The first version pulled
+`lib/extension-settings` into the shell (185.04 / 724.13 on pipeline 19743, job 414081); the hook now
+calls the bindings endpoint itself with a type-only import, which measures 183.97 / 724.06 locally
+on top of 723.3, 183.97 / 727.00 merged with main after the repository-list change and the Settings-dialog change, 183.96 / 728.30
+after the My Runner change, and 184.00 / 729.44 after the theme change.
+What remains is the fix itself. Each ceiling moved by the smallest 0.1-step above the measurement.
+Revert: set the ceilings back to 183.3 / 728.7 together with reverting the MR. Lead sign-off:
+the product lead, on the card, against perf-bundle on pipeline 19844 (job 416492: 183.97 / 727.00, total then
+726.1 → 727.1), confirmed for 728.4 after the My Runner change; 729.5 after the theme change requested on the card. Login
+headroom is 0.00 KB gz: the next growth of the shell needs its own ratchet argument, not another bump.
+
+`total_js_kb_gz` 729.5 → 729.0 and `login.initial_js_kb_gz` 184.0 → 183.8 (lowered): main went
+0.08 over the 726.1 ceiling after the hidden built-in Runner change landed without a measurement
+against it (726.18, pipeline 19829, job 416190). The cut is `build.modulePreload.polyfill: false` in
+`vite.config.ts`: the polyfill sat in the entry chunk, and every supported browser handles
+`<link rel="modulepreload">` natively; where one doesn't, the entry's static imports still load
+through the module graph. It saves 0.31 KB gz total and about 0.25 KB gz of the login chunk;
+measured locally on top of the earlier change: 728.96 / 183.75. Each ceiling moved to the smallest 0.1-step above
+the measurement. Revert: set the ceilings back to 729.5 / 184.0 together with reverting the MR.
+
+`total_js_kb_gz` 729.0 → 729.3 (+0.3 KB gz): two extension changes landed on main without headroom.
+the earlier change (five extension states from one function, `lib/extensionState.ts` and the shared
+`ExtensionStateBadge` / `ExtensionStateNote` in Catalog, Installed, the extension page and the
+instance admin, plus the separate `builtin` trust badge) took main from 728.43 (pipeline 20332, job
+428561) to 729.01 (pipeline 20353, job 428988); the instance allow-list change after it (`582a771f`)
+took it to 729.22 (pipeline 20354, job 429019, same value locally). The extensions chunk is lazy, but
+the metric sums every chunk; the locale keys the change replaced were removed in the same MR and no
+unused ones remain. The ceiling moved by the smallest 0.1-step above the measurement.
+`login.initial_js_kb_gz` unchanged (183.77). Revert: set the ceiling back to 729.0 together with
+reverting the earlier change. Lead sign-off: the product lead, on the card.
+
+`total_js_kb_gz` 715.0 → 717.3 (raised): the Runner section split into Overview / Agents / Resources /
+History tabs, with the single on/off switch, the agents table with inline limits and catalog
+revision restore (en + ru strings). Main (17cb347b, one initial chunk) measures 714.93 against its
+715.0 ceiling; the branch measures 717.22, a delta of 2.29 (my-runner chunk +1.78, runner locales
++0.5 after shortening the confirm texts). The ceiling is main's plus 2.3 and holds only while the
+branch delta to its main base stays at or under +2.3. `login.initial_js_kb_gz` unchanged (175.04).
+Lead sign-off: the product lead, on the card. Revert: set it back to 715.0 together with reverting the MR.
+
+`total_js_kb_gz` 729.3 → 730.5 (+1.2 KB gz), (U4, themes as a catalog section): Catalog gets
+its own Themes section with the theme icon and badge, Installed lists themes with the same
+enable switch and Settings window as extensions (statuses from `extensionState()`), the theme
+settings panel moves Save / Close / Reset into a footer, and workspace settings link the theme to
+Extensions → Mesh (`workspace-theme-link.tsx`). The old theme picker and Choose/Configure branches
+in `extension-connect.tsx` were removed in the same MR. All of it sits in lazy chunks, but the metric
+sums every chunk. pipeline 20394 (job 430209) measured 730.5 on the previous base; on top of
+`866a6bfb` the local build measures 730.42. The ceiling moved by the smallest 0.1-step above that.
+`login.initial_js_kb_gz` unchanged (183.8). Revert: set the ceiling back to 729.3 together with
+reverting the earlier change. Lead sign-off: the product lead, on the card.
+
+After `7487fd5c` (one initial chunk) lowered the ceilings to 715.0 / 175.1 on main, the earlier change was merged
+with it and the combined build measures 716.14 / 175.03; the same +1.2 KB gz moved onto the new base
+gives 716.2 (same delta as signed). `login.initial_js_kb_gz` stays at main's 175.1. Revert: set the
+ceiling back to 715.0 together with reverting the earlier change.
+
+After `d42e0af7` (Runner tabs, above) raised the ceiling to 717.3 on main, the earlier change was merged with it
+again; by the lead's rule the ceiling is main's value at merge plus the signed +1.2 KB gz: 717.3 + 1.2
+= 718.5. `login.initial_js_kb_gz` stays at main's 175.1. Revert: set the ceiling back to 717.3
+together with reverting the earlier change.
+
+`total_js_kb_gz` 718.5 → 717.8 (main + 2.5): the Runner becomes one product managed on the
+Runner screen. The new runner program card (address, consent with capabilities and domains,
+health, pending update; on/off stays with the one switch of the admin card) and the merged runner/controller rows add about 1.5 KB
+gz to the lazy `my-runner` chunk; the shared runner ids moved into their own 0.72 KB gz chunk
+(`extension-settings-route` shrank by 0.53); the new `runner` and `integrations` locale keys add
+0.33 + 0.41 (ru). The removed Controllers list (`controllers-status.tsx`) had no keys of its own left.
+Measured locally on the MR merged with main `db43680c`: 717.73 / 175.04; plain main `db43680c`
+measures 715.19 / 175.03, so the ceiling sits below main's 718.5 and is the measurement plus the
+smallest 0.1-step. `login.initial_js_kb_gz` stays at 175.1 (+0.01, the chunk import map). Revert:
+set the ceiling back to 718.5 together with reverting the earlier change. Lead sign-off: the product lead, on the card
+(up to +3.05 over main signed; this is +2.54).
+
+`total_js_kb_gz` 717.8 → 723.8 (+6.0 KB gz, two parts):
+
+- Main itself is over its ceiling. Plain main `ee7669d9` measures 720.71 / 175.03 locally against
+  717.8 (+2.91): the 717.8 above was measured on `db43680c`, and the changes merged after that
+  base were not measured against it.
+- The My Runner resources editor built only from the runner manifest schema (the JSON textarea is
+  gone) adds 3.06 KB gz on top of that main: the `my-runner` chunk +1.38 (entry pickers,
+  credential handling, field errors from the server), `schema-form` +0.95 (checklist and map
+  widgets, stale-option labels, server errors at the field), `runner` +0.38 and `locale-ru`
+  +0.47 (help text for every catalog field), measured per chunk against the same main build.
+  The manifest and the test fixtures are not bundled. The earlier note on this MR that removing
+  the JSON editor offsets the form was wrong: it compared against main ceilings, not main builds.
+
+Merged with main `ee7669d9` the build measures 723.77 / 175.03; the ceiling is the smallest 0.1
+step above that. `login.initial_js_kb_gz` unchanged. Revert: set it back to 717.8 together with
+reverting the MR. Lead sign-off: the product lead, on the card.
+
+`total_js_kb_gz` 723.8 → 722.1 and `login.initial_js_kb_gz` 175.1 → 173.2 (both lowered):
+
+- Main `d3b9526c` measured 723.94 / 175.03 (red by 0.14): the 723.8 above was measured with main
+  `ee7669d9`, and the theme panel fix merged in between (`4fa37385`) adds to the settings chunk.
+- `src/i18n/format.ts` passed the whole date-fns `ru` locale to `formatDistanceToNow`, which reads
+  only `locale.formatDistance`; the rest of the object (localize, match, formatLong, formatRelative
+  tables) sat in the initial chunk. It now passes `{ formatDistance }` from the locale's own file.
+  Output is unchanged; `src/i18n/__tests__/i18n.test.ts` pins it for en and ru. `enUS` stays whole:
+  date-fns bundles it as its default locale regardless.
+
+Measured locally on main `d3b9526c` with the change: 722.07 / 173.18 (−1.87 / −1.85); each ceiling is
+the smallest 0.1 step above that. Revert: restore 723.8 / 175.1 together with reverting the MR.

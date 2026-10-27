@@ -74,6 +74,18 @@ type ExtensionActorService interface {
 	// Rotate installs a new token; the previous one works for
 	// ExtensionTokenRotationGrace more.
 	Rotate(ctx context.Context, workspaceID, connectionID uuid.UUID) (*IssuedExtensionToken, error)
+	// RotateForDelivery is Rotate for a token Mesh hands to the extension's
+	// service itself (manifest external.token_path). restore undoes this
+	// rotation, but only while the new token is still current; it is nil when
+	// the call issued the connection's first token (there is nothing to go
+	// back to).
+	RotateForDelivery(ctx context.Context, workspaceID, connectionID uuid.UUID) (token string, restore func(context.Context) error, err error)
+	// TokenDeliveredAt is when the current token was delivered to the
+	// extension's service; nil when it was not (or there is no actor).
+	TokenDeliveredAt(ctx context.Context, connectionID uuid.UUID) (*time.Time, error)
+	// MarkTokenDelivered records the delivery of token at at. It fails when
+	// token is no longer the current one.
+	MarkTokenDelivered(ctx context.Context, connectionID uuid.UUID, token string, at time.Time) error
 	// SelfRotate is the actor rotating its own token (capability
 	// ext_token:self_rotate). presented is the raw token of the call: it stays
 	// valid for grace (default ExtensionTokenRotationGrace) as the previous token.
@@ -186,11 +198,8 @@ func (s *extensionActorService) Rotate(ctx context.Context, workspaceID, connect
 	if row == nil && s.consents != nil {
 		return s.issueFirst(ctx, workspaceID, connectionID)
 	}
-	if row == nil || row.WorkspaceID != workspaceID {
-		return nil, apierror.NotFound("Extension actor")
-	}
-	if row.RevokedAt != nil {
-		return nil, apierror.Conflict("extension actor is revoked; reconnect the extension to issue a new token")
+	if rerr := rotatable(row, workspaceID); rerr != nil {
+		return nil, rerr
 	}
 	raw, err := newExtensionToken()
 	if err != nil {
@@ -201,9 +210,77 @@ func (s *extensionActorService) Rotate(ctx context.Context, workspaceID, connect
 		return nil, err
 	}
 	if !ok {
-		return nil, apierror.Conflict("extension actor is revoked; reconnect the extension to issue a new token")
+		return nil, errExtensionActorRevoked()
 	}
 	return &IssuedExtensionToken{Token: raw, ActorID: row.ActorID, Actor: row.Principal(), Grace: ExtensionTokenRotationGrace, Rotated: true, IssuedAt: s.now()}, nil
+}
+
+func (s *extensionActorService) RotateForDelivery(ctx context.Context, workspaceID, connectionID uuid.UUID) (token string, restore func(context.Context) error, err error) {
+	row, err := s.actors.GetByConnection(ctx, connectionID)
+	if err != nil {
+		return "", nil, err
+	}
+	if row == nil && s.consents != nil {
+		issued, ierr := s.issueFirst(ctx, workspaceID, connectionID)
+		if ierr != nil {
+			return "", nil, ierr
+		}
+		return issued.Token, nil, nil
+	}
+	if rerr := rotatable(row, workspaceID); rerr != nil {
+		return "", nil, rerr
+	}
+	raw, err := newExtensionToken()
+	if err != nil {
+		return "", nil, apierror.InternalError("failed to generate token")
+	}
+	newHash := extensionTokenHash(raw)
+	before, err := s.actors.RotateKeepingState(ctx, connectionID, newHash, s.now().Add(ExtensionTokenRotationGrace))
+	if err != nil {
+		return "", nil, err
+	}
+	if before == nil {
+		return "", nil, errExtensionActorRevoked()
+	}
+	restore = func(ctx context.Context) error {
+		_, rerr := s.actors.RestoreToken(ctx, connectionID, newHash, before)
+		return rerr
+	}
+	return raw, restore, nil
+}
+
+func (s *extensionActorService) TokenDeliveredAt(ctx context.Context, connectionID uuid.UUID) (*time.Time, error) {
+	row, err := s.actors.GetByConnection(ctx, connectionID)
+	if err != nil || row == nil {
+		return nil, err
+	}
+	return row.TokenDeliveredAt, nil
+}
+
+func (s *extensionActorService) MarkTokenDelivered(ctx context.Context, connectionID uuid.UUID, token string, at time.Time) error {
+	ok, err := s.actors.MarkTokenDelivered(ctx, connectionID, extensionTokenHash(token), at)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return apierror.Conflict("the delivered token is no longer the current one")
+	}
+	return nil
+}
+
+// rotatable refuses a missing, foreign or revoked actor.
+func rotatable(row *domain.ExtensionActor, workspaceID uuid.UUID) error {
+	if row == nil || row.WorkspaceID != workspaceID {
+		return apierror.NotFound("Extension actor")
+	}
+	if row.RevokedAt != nil {
+		return errExtensionActorRevoked()
+	}
+	return nil
+}
+
+func errExtensionActorRevoked() error {
+	return apierror.Conflict("extension actor is revoked; reconnect the extension to issue a new token")
 }
 
 // issueFirst issues the first token of a connection made before any actor

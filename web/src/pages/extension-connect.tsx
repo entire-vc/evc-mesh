@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Loader2, Lock, PackageSearch, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,8 +12,7 @@ import { connectWorkspaceExtension, testWorkspaceExtension } from "@/lib/extensi
 import { useIsInstanceAdmin } from "@/lib/extension-admin";
 import { apiErrorMessage } from "@/lib/api-error";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { useMemberStore } from "@/stores/member";
-import { ThemeSettingsPanel } from "@/components/themes/theme-settings-panel";
+import { connectWizardRefused, extensionSettingsPath } from "@/lib/extension-settings-route";
 import { cn } from "@/lib/cn";
 
 export const WIZARD_STEPS = ["permissions", "settings", "test", "done"] as const;
@@ -127,7 +126,7 @@ function SettingsStep({ entry, fromInstance, isAdmin, wsSlug, onBack, onConnect,
             <p className="font-medium">{t("connect.settings.byInstance")}</p>
             <p className="text-muted-foreground">{t("connect.settings.byInstanceHint")}</p>
             {isAdmin && (
-              <Button variant="outline" size="sm" onClick={() => navigate(`/w/${wsSlug}/instance/extensions`)}>
+              <Button variant="outline" size="sm" onClick={() => navigate(`/w/${wsSlug}/instance?ext=${encodeURIComponent(entry.id)}`)}>
                 {t("connect.settings.editInstance")}
               </Button>
             )}
@@ -286,9 +285,6 @@ export function ExtensionConnectPage() {
   const [visitedSettings, setVisitedSettings] = useState(false);
   // the instance administrator is not the workspace admin: only the instance API can tell
   const isAdmin = useIsInstanceAdmin();
-  // the workspace theme is an owner/admin setting, like on the workspace settings page
-  const { myRole, myRoleLoaded, myRoleError } = useMemberStore();
-  const canManageTheme = myRole === "owner" || myRole === "admin";
   const entry = catalog.entries.find((e) => e.id === extId);
   const wsId = currentWorkspace?.id ?? "";
 
@@ -323,7 +319,19 @@ export function ExtensionConnectPage() {
       </div>
     );
   }
-  if (entry.blocked || !entry.installed || !entry.allowed) {
+  // The server refuses generic connect for a hidden or managed-elsewhere provider: send the user
+  // to where its settings are written, or say why there is nothing to connect here.
+  if (connectWizardRefused(entry)) {
+    const own = extensionSettingsPath(entry, wsSlug);
+    if (own) return <Navigate to={own} replace />;
+    return (
+      <div>
+        {back}
+        <div role="note" className="rounded-lg border border-border px-3 py-2 text-sm">{t("installed.managedElsewhere")}</div>
+      </div>
+    );
+  }
+    if (entry.blocked || !entry.installed || !entry.allowed) {
     return (
       <div>
         {back}
@@ -333,34 +341,9 @@ export function ExtensionConnectPage() {
       </div>
     );
   }
-  // A theme is not connected: it is chosen for the workspace (`PUT /workspaces/:ws/theme`), and the
-  // permissions and check steps mean nothing for it. Choose → settings with preview → apply.
+  // A theme has no connect wizard: it is enabled and set up from Installed, like any extension (П8).
   if (entry.kind === "theme") {
-    return (
-      <div className="flex h-full flex-col">
-        {back}
-        <header className="mb-4 flex items-start gap-3">
-          <ExtensionIcon entry={entry} className="h-12 w-12" />
-          <div className="min-w-0">
-            <h1 className="truncate text-xl font-semibold">{t("connect.theme.heading", { name: entry.name })}</h1>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5"><KindTrustBadges entry={entry} /></div>
-            <p className="mt-2 max-w-prose text-sm text-muted-foreground">{t("connect.theme.hint")}</p>
-          </div>
-        </header>
-        <div className="flex-1 overflow-y-auto pb-6">
-          <ThemeSettingsPanel
-            key={`${wsId}:${entry.id}`}
-            level="workspace"
-            workspaceId={wsId}
-            initialThemeId={entry.id}
-            saveLabel={t("connect.theme.apply")}
-            readOnly={!canManageTheme}
-            roleLoading={!canManageTheme && !myRoleLoaded && !myRoleError}
-            roleUnknown={!!myRoleError}
-          />
-        </div>
-      </div>
-    );
+    return <Navigate to={extensionSettingsPath(entry, wsSlug) ?? `/w/${wsSlug}/extensions?tab=installed`} replace />;
   }
   // A workspace connection already exists: connect would answer 409, so the wizard has nothing to do.
   if (entry.status?.source === "workspace" && entry.connected && step !== "test" && step !== "done") {
@@ -369,7 +352,7 @@ export function ExtensionConnectPage() {
         {back}
         <div role="note" className="rounded-lg border border-border px-3 py-2 text-sm">
           {t("connect.alreadyConnected")}{" "}
-          <Link to={`/w/${wsSlug}/extensions?tab=installed`} className="text-primary hover:underline">{t("connect.done.toInstalled")}</Link>
+          <Link to={extensionSettingsPath(entry, wsSlug) ?? `/w/${wsSlug}/extensions?tab=installed`} className="text-primary hover:underline">{t("detail.action.openSettings")}</Link>
         </div>
       </div>
     );

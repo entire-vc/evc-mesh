@@ -35,7 +35,18 @@ type InstanceStore interface {
 // means "off in this workspace" and does not fall through to the instance
 // setting (and does not touch it). Only the absence of a row lets the
 // instance level decide. inst may be nil (no instance level yet).
-func ResolveSettings(ctx context.Context, conns ConnectionStore, inst InstanceStore, workspaceID uuid.UUID, extensionID string) (Resolved, error) {
+//
+// The allow-list governs over both levels: a refused extension resolves as
+// off with NotAllowed set. allow may be nil (everything allowed).
+func ResolveSettings(ctx context.Context, conns ConnectionStore, inst InstanceStore, allow AllowList, workspaceID uuid.UUID, extensionID string) (Resolved, error) {
+	res, err := resolveLevels(ctx, conns, inst, workspaceID, extensionID)
+	if err != nil {
+		return Resolved{}, err
+	}
+	return ApplyAllowList(ctx, allow, extensionID, res)
+}
+
+func resolveLevels(ctx context.Context, conns ConnectionStore, inst InstanceStore, workspaceID uuid.UUID, extensionID string) (Resolved, error) {
 	res := Resolved{ExtensionID: extensionID, Source: SourceNone}
 
 	if conns != nil {
@@ -74,12 +85,13 @@ type BaseProvider struct {
 	Man   Manifest
 	Conns ConnectionStore
 	Inst  InstanceStore
+	Allow AllowList
 }
 
 func (b BaseProvider) Manifest() Manifest { return b.Man }
 
 func (b BaseProvider) Resolve(ctx context.Context, workspaceID uuid.UUID) (Resolved, error) {
-	return ResolveSettings(ctx, b.Conns, b.Inst, workspaceID, b.Man.ID)
+	return ResolveSettings(ctx, b.Conns, b.Inst, b.Allow, workspaceID, b.Man.ID)
 }
 
 func (b BaseProvider) Health(_ context.Context, r Resolved) HealthReport {

@@ -161,27 +161,36 @@ for (const h of HARNESSES) {
       });
     });
 
-    test(`S06 ${h}: Stop on a long streaming reply ends cancelled and frozen`, async () => {
-      // No delta before the end of a codex turn, so there is no mid-reply moment to press Stop in (jobs 414033, 414785).
-      test.skip(h === "codex", "codex rollout delivers the final message in one piece at turn end");
+    test(`S06 ${h}: Stop on a long running turn ends cancelled and frozen`, async () => {
+      // codex delivers its reply in one piece at turn end (S04b), so no delta marks the turn as running
+      // (jobs 414033, 414785). Its shell call does: the rollout writes the call before the command runs,
+      // and the bridge relays it at once as chat.turn.tool. Stop then lands before any reply text.
+      const byTurn = h === "codex";
       await step("S06", h, async () => {
         await A.page.getByTestId("chat-input").fill(`${RUN_ID} ${holdTurnPrompt(h)}`);
+        // Stop is pressed only after the server has shown the turn at work: a real delta (claude) or
+        // tool call (codex), not a guess. The offset is taken before the send: the frame can land
+        // while the click is still resolving.
+        const before = A.frames.length;
         const sentAt = Date.now();
         await A.page.getByTestId("chat-send").click();
-        // Stop is pressed only after the server has streamed something: a real delta, not a guess.
-        const before = A.frames.length;
-        await until("a delta of the long reply", async () => A.frames.slice(before).find((f) => f.event === "chat.message.delta" && (f.textLen ?? 0) > 0), 240_000, 200);
-        // Stop exists only while the turn runs: each reloaded frame must still be mid-reply. A turn that is
+        if (byTurn) {
+          await until("a tool call of the long turn", async () => A.frames.slice(before).find((f) => f.event === "chat.turn.tool" && f.thread_id === threadId), 240_000, 200);
+        } else {
+          await until("a delta of the long reply", async () => A.frames.slice(before).find((f) => f.event === "chat.message.delta" && (f.textLen ?? 0) > 0), 240_000, 200);
+        }
+        // Stop exists only while the turn runs: each reloaded frame must still be mid-turn. A turn that is
         // already over fails here by name, not as a missing button after the reload.
-        await expectTurnRunning(A, x, threadId, 3, sentAt);
+        await expectTurnRunning(A, x, threadId, 3, sentAt, byTurn);
         await snap(A, `streaming-${h}`, undefined, undefined, [A.page.getByTestId("chat-stop")]);
-        await expectTurnRunning(A, x, threadId, 3, sentAt);
+        await expectTurnRunning(A, x, threadId, 3, sentAt, byTurn);
         await expect(A.page.getByTestId("chat-stop"), "the turn is still running when Stop is pressed").toBeVisible({ timeout: 15_000 });
         await A.page.getByTestId("chat-stop").click();
 
         const msg = await waitAssistantDone(A, x, threadId, 3, 120_000);
         expect(msg.status, "cancelled, not done").toBe("cancelled");
-        expect(msg.body.length, "the partial body is kept").toBeGreaterThan(0);
+        // codex: the reply row is created by the cancel itself and may be empty; claude keeps what streamed.
+        if (!byTurn) expect(msg.body.length, "the partial body is kept").toBeGreaterThan(0);
         await expect(A.page.getByText("stopped", { exact: true }).last()).toBeVisible();
         await snap(A, `cancelled-${h}`, undefined, undefined, [A.page.getByText("stopped", { exact: true })]);
 
@@ -193,7 +202,7 @@ for (const h of HARNESSES) {
           snaps.push({ body: m.body, status: m.status });
           await new Promise((r) => setTimeout(r, 2500));
         }
-        assertFrozen(snaps, "cancelled");
+        assertFrozen(snaps, "cancelled", !byTurn);
         assertNoDeltaAfter(A.frames, msg.id, terminalSeq);
 
         // The session stays usable: the next short message finishes.
@@ -213,8 +222,14 @@ for (const h of HARNESSES) {
         const png = await makeCodePng(A.page, code2);
         await pastePng(A.page, png.bytes);
         await expect(A.page.getByTestId("chat-pending-attachment")).toHaveAttribute("data-status", "ready", { timeout: 60_000 });
+        // A foreground pause between the blocks: without it the gap is one tool round-trip
+        // (0.3–1.9 s live) and the model may name the code, which it already sees, before the
+        // tool and send one block. The printed word can only be written after the pause.
         await A.page.getByTestId("chat-input").fill(
-          `${RUN_ID} First write one short sentence saying you will now look at the picture. Then open the attached picture. Then name the visual code in it.`);
+          `${RUN_ID} First write one short sentence saying you will now look at the picture, and nothing else yet. ` +
+          "Then run exactly this shell command in the foreground and wait for it to finish: " +
+          "python3 -c 'import secrets, time; time.sleep(4); print(secrets.token_hex(3))' . " +
+          "Only after it finishes, write a second message that names the visual code in the attached picture and repeats the word the command printed.");
         await A.page.getByTestId("chat-send").click();
 
         // The stored body while the reply streams, read as often as the API allows.

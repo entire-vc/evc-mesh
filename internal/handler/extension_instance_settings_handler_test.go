@@ -267,3 +267,23 @@ func TestInstanceSettings_KeepSecretProviderSwitch(t *testing.T) {
 	rec, _ = callInstanceSettings(t, h, http.MethodPut, "keep", `{"enabled":true,"settings":{"secret_provider":"builtin"}}`, false)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
+
+// A theme is chosen per workspace and its instance default lives in the instance
+// admin's Themes tab: it has no instance-settings form here (U4).
+func TestInstanceSettings_ThemeIsNotAnInstanceSettingsExtension(t *testing.T) {
+	m, err := extensions.ParseManifest([]byte(`{"id":"board-studio","version":"1.0.0","kind":"theme","runtime":"builtin",
+		"levels":{"instance":true,"workspace":true},
+		"settings":{"instance":{"$ref":"#/schemas/look"}},
+		"schemas":{"look":{"properties":{"accent":{"type":"string"}}}}}`))
+	require.NoError(t, err)
+	reg := extensions.NewRegistry()
+	require.NoError(t, reg.Register(manifestProvider{m: m}))
+	repo := &fakeInstRepo{}
+	h := NewExtensionInstanceSettingsHandler(repo, fakeAdmins{ok: true}, reg, nil)
+
+	rec, _ := callInstanceSettings(t, h, http.MethodGet, "board-studio", "", false)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	rec, _ = callInstanceSettings(t, h, http.MethodPut, "board-studio", `{"enabled":true,"settings":{"accent":"#000"}}`, false)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+	require.Nil(t, repo.row, "nothing is stored for a theme")
+}

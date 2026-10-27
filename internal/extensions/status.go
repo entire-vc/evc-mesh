@@ -28,6 +28,8 @@ type Status struct {
 	HealthCheckedAt       time.Time
 	LastError             string
 	ConsentedCapabilities []string
+	// NotAllowed comes from Resolve: the instance allow-list refuses it.
+	NotAllowed bool
 }
 
 // ConsentStore returns the capabilities a workspace consented to. A nil store
@@ -111,6 +113,7 @@ func (r *Registry) status(ctx context.Context, workspaceID uuid.UUID, extensionI
 		Enabled:     res.Enabled,
 		Source:      res.Source,
 		Version:     m.Version,
+		NotAllowed:  res.NotAllowed,
 	}
 
 	r.mu.RLock()
@@ -183,11 +186,11 @@ func (c *statusCache) get(k healthKey, force bool, compute func() HealthReport) 
 		// A panicking check still releases the waiters and frees the key.
 		c.mu.Lock()
 		if finished {
+			// A passing check clears the error: last_error describes the
+			// current state, not the history.
 			e := healthEntry{report: rep, at: now}
 			if !rep.OK {
 				e.lastErr = rep.Message
-			} else if prev, ok := c.entries[k]; ok {
-				e.lastErr = prev.lastErr
 			}
 			c.entries[k] = e
 			call.entry = e

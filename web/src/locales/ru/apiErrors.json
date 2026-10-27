@@ -42,6 +42,7 @@
   "extension_manifest_invalid": "Файл mesh-extension.json в репозитории не является корректным манифестом.",
   "extension_id_conflict": "Расширение с таким id уже установлено.",
   "extension_repo_unavailable": "Не удаётся прочитать репозиторий: проверьте адрес, тег или ветку и токен.",
+  "extension_not_allowed": "Это расширение не разрешено на этом сервере. Сначала его должен разрешить администратор.",
   "chat_protocol_unsupported": "Эта версия протокола чата не поддерживается.",
   "chat_not_claim_holder": "Ход выполняет другой раннер.",
   "chat_turn_not_found": "Ход чата не найден.",

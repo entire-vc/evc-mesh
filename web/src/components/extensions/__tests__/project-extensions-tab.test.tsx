@@ -221,7 +221,7 @@ describe("ProjectExtensionsTab", () => {
       expect(screen.queryByTestId("chat-card")).toBeNull();
       expect(screen.getByTestId("ext-tab-gitlab").getAttribute("aria-selected")).toBe("true");
       expect(screen.getByTestId("ext-activity-gitlab").textContent).toMatch(/1,855 links, last event/);
-      expect(card.textContent).toContain("Active · set up by the instance admin");
+      expect(card.textContent).toContain("keys from the instance");
       expect(card.textContent).toContain("through the instance webhook");
       // No secret or settings field is rendered for the workspace level.
       expect(card.querySelector("input")).toBeNull();
@@ -309,6 +309,44 @@ describe("ProjectExtensionsTab", () => {
         const unbinds = screen.getAllByRole("button", { name: "Unbind" });
         fireEvent.click(unbinds[unbinds.length - 1]!);
         await waitFor(() => expect(vi.mocked(api)).toHaveBeenCalledWith(`${P}/gitlab`, { method: "DELETE" }));
+      });
+
+      it("Bind then Unbind on the same row keeps one list and removes the binding", async () => {
+        useMemberStore.setState({ myRole: "admin" });
+        const sandbox = { repo: "entire-vc/mesh-qa-sandbox", host: "gitlab.example.invalid", links: 0, bound: true, source: "binding" };
+        const other = { repo: "entire-vc/evc-mesh-mcp", host: "gitlab.example.invalid", links: 12, bound: false, source: "webhook" };
+        withRepos({ repos: [] });
+        const base = vi.mocked(api).getMockImplementation()!;
+        // The server: PUT binds, DELETE unbinds, the list and repos follow.
+        vi.mocked(api).mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
+          if (path === `${P}/gitlab` && opts?.method === "PUT") {
+            bindings = [{ extension_id: "gitlab", enabled: true, settings: { repo_path: sandbox.repo } }];
+            return {};
+          }
+          if (path === `${P}/gitlab` && opts?.method === "DELETE") { bindings = []; return undefined; }
+          if (path === R && !opts?.method) return { repos: bindings.length ? [other, sandbox] : [other] };
+          return base(path, opts);
+        });
+        render(<ProjectExtensionsTab projectId="p1" />, "/?ext=gitlab");
+        fireEvent.click(await screen.findByRole("button", { name: "Bind a repository" }));
+        fireEvent.change(within(await screen.findByTestId("vcs-bind-form")).getByLabelText("Repository"), { target: { value: sandbox.repo } });
+        fireEvent.click(within(screen.getByTestId("vcs-bind-form")).getByRole("button", { name: "Bind" }));
+        await screen.findByTestId("binding-gitlab");
+        await screen.findByTestId(`vcs-repo-${sandbox.repo}`);
+        expect(screen.getAllByTestId("vcs-repos-gitlab")).toHaveLength(1);
+        expect(screen.getAllByTestId(`vcs-repo-${other.repo}`)).toHaveLength(1);
+
+        fireEvent.click(screen.getByRole("button", { name: `Unbind ${sandbox.repo}` }));
+        expect(await screen.findByText(`Unbind ${sandbox.repo}?`)).toBeInTheDocument();
+        expect(screen.getAllByTestId("vcs-repos-gitlab")).toHaveLength(1);
+        const unbinds = screen.getAllByRole("button", { name: "Unbind" });
+        fireEvent.click(unbinds[unbinds.length - 1]!);
+        await waitFor(() => expect(vi.mocked(api)).toHaveBeenCalledWith(`${P}/gitlab`, { method: "DELETE" }));
+        await waitFor(() => expect(screen.queryByTestId(`vcs-repo-${sandbox.repo}`)).toBeNull());
+        expect(screen.queryByTestId("binding-gitlab")).toBeNull();
+        expect(screen.getAllByTestId("vcs-repos-gitlab")).toHaveLength(1);
+        // The rest of the list survives the Unbind.
+        expect(screen.getAllByTestId(`vcs-repo-${other.repo}`)).toHaveLength(1);
       });
 
       it("without manage rights the list is shown and no Bind/Unbind", async () => {

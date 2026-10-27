@@ -202,9 +202,24 @@ func (r *IntegrationRepo) Update(ctx context.Context, id uuid.UUID, input domain
 }
 
 // SetActive switches a connection on or off without touching its config. Unlike
-// Update it is allowed on a Runner row: the runtime API's own save flips the
-// same column, and nothing here reaches the versioned catalog.
+// Update it is allowed on a Runner row, where it is the only on/off switch: the
+// change is also appended to the versioned catalog (see setRunnerActive), so
+// the ctx must carry the acting user (WithRuntimeAuthor).
 func (r *IntegrationRepo) SetActive(ctx context.Context, id uuid.UUID, active bool) error {
+	var row struct {
+		WorkspaceID uuid.UUID `db:"workspace_id"`
+		Provider    string    `db:"provider"`
+	}
+	err := r.db.GetContext(ctx, &row, `SELECT workspace_id,provider FROM integration_configs WHERE id=$1`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return apierror.NotFound("Integration")
+	}
+	if err != nil {
+		return err
+	}
+	if domain.IsRuntimeProvider(domain.IntegrationProvider(row.Provider)) {
+		return setRunnerActive(ctx, r.db, row.WorkspaceID, id, active)
+	}
 	res, err := r.db.ExecContext(ctx, `UPDATE integration_configs SET is_active = $2, updated_at = now() WHERE id = $1`, id, active)
 	if err != nil {
 		return err

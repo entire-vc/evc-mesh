@@ -18,7 +18,7 @@ import (
 // unit test proves only that the mock agrees with itself. Each one is exercised
 // here against a real Postgres with its own control row:
 //
-//	no lease at all      → returned      (the defect: #8e2e1c0e, 245h idle on prod)
+//	no lease at all      → returned      (the defect: an internal ticket, 245h idle in production)
 //	live lease           → NOT returned  (must not rob an agent mid-work)
 //	expired lease        → NOT returned  (phase 1 owns that case; no double-move)
 //	idle < grace         → NOT returned  (a just-released card is not stolen)
@@ -82,7 +82,7 @@ func TestFindStaleUnleasedInProgress_Predicates(t *testing.T) {
 		task := makeTestTask(proj.ID, statusID, title)
 		require.NoError(t, repo.Create(ctx, task, nil))
 		_, err := db.ExecContext(ctx,
-			`UPDATE tasks SET updated_at=$1, checked_out_by=$2, checkout_expires=$3 WHERE id=$4`,
+			`UPDATE tasks SET updated_at=$1, checked_out_by=$2, checkout_expires=$3, checkout_stage_status_id=status_id WHERE id=$4`,
 			updated, by, exp, task.ID)
 		require.NoError(t, err)
 
@@ -145,7 +145,7 @@ func TestFindStaleUnleasedInProgress_GraceIsApplied(t *testing.T) {
 
 	task := makeTestTask(proj.ID, inProg.ID, "idle for three hours")
 	require.NoError(t, repo.Create(ctx, task, nil))
-	_, err = db.ExecContext(ctx, `UPDATE tasks SET updated_at=$1 WHERE id=$2`, time.Now().Add(-3*time.Hour), task.ID)
+	_, err = db.ExecContext(ctx, `UPDATE tasks SET updated_at=$1, checkout_stage_status_id=status_id WHERE id=$2`, time.Now().Add(-3*time.Hour), task.ID)
 	require.NoError(t, err)
 
 	contains := func(d time.Duration) bool {
@@ -173,7 +173,7 @@ func TestFindStaleUnleasedInProgress_GraceIsApplied(t *testing.T) {
 // way because phase 2 nulls the checkout_expires it keys on; phase 3 has no such
 // escape, so the exclusion has to live in the query.
 //
-// Measured on prod 2026-09-06 before this fix: #2921ff07 (human_gate armed 14:45)
+// Measured in production 2026-09-06 before this fix: an internal ticket (human_gate armed 14:45)
 // failed to park 145 consecutive times and was the reaper's ONLY output.
 //
 // Both rows differ from the positive control in exactly one boolean, so a
@@ -203,7 +203,7 @@ func TestFindStaleUnleasedInProgress_SkipsUnmovableTasks(t *testing.T) {
 		task := makeTestTask(proj.ID, inProg.ID, title)
 		require.NoError(t, repo.Create(ctx, task, nil))
 		_, err := db.ExecContext(ctx,
-			`UPDATE tasks SET updated_at=$1, human_gate=$2, is_shipped=$3 WHERE id=$4`,
+			`UPDATE tasks SET updated_at=$1, human_gate=$2, is_shipped=$3, checkout_stage_status_id=status_id WHERE id=$4`,
 			stale, gated, shipped, task.ID)
 		require.NoError(t, err)
 
@@ -233,7 +233,7 @@ func TestFindStaleUnleasedInProgress_SkipsUnmovableTasks(t *testing.T) {
 	require.True(t, found[movableID],
 		"the movable unleased idle task was NOT returned — the sweep has stopped doing its job entirely")
 	require.False(t, found[gatedID],
-		"a HUMAN-GATED task was returned — MoveTask will refuse it every tick, forever (prod #2921ff07, 145 failures)")
+		"a HUMAN-GATED task was returned — MoveTask will refuse it every tick, forever (prod an internal ticket, 145 failures)")
 	require.False(t, found[shippedID],
 		"a SHIPPED task was returned — MoveTask refuses any non-done move, so this retries forever")
 }

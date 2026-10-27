@@ -15,6 +15,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/internal/themes"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -61,7 +62,8 @@ type instanceSettingsResponse struct {
 
 // known reports whether extID is an extension this instance knows and its
 // secret setting keys. The keep extension is always known: its instance row
-// carries the secret provider switch, which Mesh reads itself.
+// carries the secret provider switch, which Mesh reads itself. A theme is
+// never known here: its instance default is set in the instance Themes tab.
 func (h *ExtensionInstanceSettingsHandler) known(extID string) (secretKeys []string, ok bool) {
 	ok = extID == secretstore.KeepExtensionID
 	for _, s := range h.sources {
@@ -71,6 +73,9 @@ func (h *ExtensionInstanceSettingsHandler) known(extID string) (secretKeys []str
 	}
 	if h.registry != nil {
 		if p, reg := h.registry.Get(extID); reg {
+			if p.Manifest().Kind == themes.KindTheme {
+				return nil, false
+			}
 			ok = true
 			for _, k := range p.Manifest().InstanceSecretKeys() {
 				if !slices.Contains(secretKeys, k) {

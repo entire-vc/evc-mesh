@@ -17,19 +17,19 @@ const (
 	// recommended_default is a 422, because the caller is a program that can be fixed.
 	ArmHumanGateSourceAPI ArmHumanGateSource = "api"
 	// ArmHumanGateSourceMarker is the server's own enforceBlockingTriage translating a
-	// "❓ Blocking @pavel" comment into the same call, with gate_author taken from the
+	// "❓ Blocking @alex" comment into the same call, with gate_author taken from the
 	// comment's authenticated author.
 	//
 	// A marker that names no recommended_default no longer arms with the field left
 	// NULL: ArmHumanGate (task_service.go) fills it in with
 	// DefaultMarkerRecommendedDefault so the gate can still time out, and posts a task
-	// comment saying so IN ADDITION TO the existing log line (task 1.4b, #4d61d877) —
+	// comment saying so IN ADDITION TO the existing log line (task 1.4b) —
 	// the log-only WARNING was invisible in practice, which is why 94 of 97 live gates
 	// measured 2026-09-07 had no recommended_default and no gate_deadline at all.
 	// Refusing the arm outright would still be strictly worse than the bug being fixed:
 	// the marker is the channel that DELIVERS a live ask, and a rejected arm is silent
 	// to its author — they post the question, believe it was handed over, and the card
-	// keeps being fed (the exact shape of #58a6f4ff and #f421ad57). Tightening this into
+	// keeps being fed (the exact shape of an internal ticket and an internal ticket). Tightening this into
 	// a refusal is still task 1.4's own follow-up, which first has to give the author a
 	// way to see the refusal; auto-filling is the interim fix that makes every gate
 	// resolvable by a clock even before that lands.
@@ -50,10 +50,10 @@ const DefaultMarkerRecommendedDefault = "применить рекомендац
 // asked, what they asked, what happens by default, by when) already on the task.
 type ArmHumanGateInput struct {
 	TaskID uuid.UUID
-	// Author is who raised the ask — an agent id or a user id, discriminated by
-	// AuthorType. Required for BOTH sources: unlike RecommendedDefault, an arm with no
+	// Author is who raised the ask — an agent, user or extension actor id,
+	// discriminated by AuthorType. Required for BOTH sources: unlike RecommendedDefault, an arm with no
 	// author is never the lesser evil, because an unattributed gate cannot be withdrawn
-	// by its owner and has to wait for Pavel by construction.
+	// by its owner and has to wait for Alex by construction.
 	Author     uuid.UUID
 	AuthorType ActorType
 	// Reason is what was asked, in the author's own words.
@@ -70,7 +70,7 @@ type ArmHumanGateInput struct {
 	// fail-closed, matching the column default and SetHumanGate's release behaviour.
 	Class  HumanGateClass
 	Source ArmHumanGateSource
-	// Predicate is the four-question check from task #5d3dc714. REQUIRED for
+	// Predicate is the four-question check from an internal ticket. REQUIRED for
 	// ArmHumanGateSourceAPI; nil is allowed for ArmHumanGateSourceMarker, for the same
 	// reason RecommendedDefault is (see ArmHumanGateSourceMarker's note) — a marker is a
 	// live ask arriving through a channel we do not control, and refusing it is silent
@@ -103,11 +103,11 @@ func (in *ArmHumanGateInput) Validate() error {
 		}
 	}
 	switch in.AuthorType {
-	case ActorTypeUser, ActorTypeAgent, ActorTypeSystem:
+	case ActorTypeUser, ActorTypeAgent, ActorTypeSystem, ActorTypeExtension:
 	default:
 		return &ArmHumanGateValidationError{
 			Field:   "gate_author_type",
-			Message: "must be one of user, agent, system",
+			Message: "must be one of user, agent, system, extension",
 		}
 	}
 	if in.Source == ArmHumanGateSourceAPI && in.RecommendedDefault == "" {

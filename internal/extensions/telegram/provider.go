@@ -53,7 +53,7 @@ func New(d extensions.Deps) *Provider {
 		panic(fmt.Sprintf("telegram: embedded manifest: %v", err))
 	}
 	return &Provider{
-		BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst},
+		BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst, Allow: d.Allow},
 		HTTP:         &http.Client{Timeout: healthTimeout},
 		APIBase:      apiBase,
 	}
@@ -114,7 +114,7 @@ func (p *Provider) Resolve(ctx context.Context, workspaceID uuid.UUID) (extensio
 	if c.IsActive {
 		res.Settings = c.Settings
 	}
-	return res, nil
+	return extensions.ApplyAllowList(ctx, p.Allow, p.Man.ID, res)
 }
 
 // BotToken is the decrypted token and the bot's @username of an effective

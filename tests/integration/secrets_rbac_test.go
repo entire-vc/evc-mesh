@@ -18,8 +18,8 @@ import (
 )
 
 // This file closes two proof gaps left open by the cross-tenant secrets
-// suite in cross_tenant_params_test.go (task #a23e2cd6, follow-up to the
-// second verification round on #37cc114f):
+// suite in cross_tenant_params_test.go (an internal ticket, follow-up to the
+// second verification round on an internal ticket):
 //
 //  1. TestCrossTenant_StrangerCannotRotateOrDeleteASecret proves denial to an
 //     OUTSIDER — someone with no membership in the victim's workspace at
@@ -31,14 +31,14 @@ import (
 //     lists only GET routes, and secrets have no flat GET by design — so the
 //     owner's positive path (create → list → rotate → delete) has never run
 //     as an integration test, only under mocks in
-//     internal/handler/secret_handler_test.go.
+//     internal/handler/workspace_secrets_test.go.
 //
 // Together the two gaps mean the existing suite cannot distinguish "the
 // permission works correctly" from "the permission denies everybody,
 // including its owner" — a gate that strangles everyone looks identically
 // green on cross-tenant tests alone.
 
-// secretsRBACValueClassRE mirrors internal/repository/postgres/secret_repo.go's
+// secretsRBACValueClassRE mirrors internal/repository/postgres/secret_ref_repo.go's
 // classify() exactly (same four buckets, same '+'-joined order, a-z/A-Z/0-9/sym).
 // It is reimplemented here rather than imported so that these tests assert the
 // documented CONTRACT of the masked view (what env-inventory.py and the
@@ -94,7 +94,7 @@ type secretsRBACFixture struct {
 // delete aimed at an id that does not exist would 403/404 whether or not the
 // permission check ran at all, which is exactly the failure mode
 // TestCrossTenant_StrangerCannotRotateOrDeleteASecret's own fixture comment
-// warns about (see f.secretID there, citing #a49500c5).
+// warns about (see f.secretID there, citing an internal ticket).
 func newSecretsRBACFixture(t *testing.T, prefix string) *secretsRBACFixture {
 	t.Helper()
 	env := NewTestEnv(t)
@@ -133,7 +133,7 @@ func (f *secretsRBACFixture) isCurrent(t *testing.T) bool {
 	t.Helper()
 	var rotated *time.Time
 	require.NoError(t, f.ownerEnv.DB.QueryRowContext(context.Background(),
-		"SELECT rotated_at FROM secrets WHERE id = $1", f.secretID).Scan(&rotated))
+		"SELECT rotated_at FROM secret_refs WHERE id = $1", f.secretID).Scan(&rotated))
 	return rotated == nil
 }
 
@@ -249,7 +249,7 @@ func TestSecretsRBAC_AgentKeyIsForbiddenOnAllFourRoutes(t *testing.T) {
 
 // TestSecretsRBAC_OwnerCanCreateRotateAndDeleteTheirOwnSecret is Gap 2: the
 // legitimate owner's positive path, end to end, against the live handler —
-// not the mocked unit coverage in internal/handler/secret_handler_test.go.
+// not the mocked unit coverage in internal/handler/workspace_secrets_test.go.
 // It walks create -> masked list -> rotate -> masked list -> delete ->
 // masked list, asserting the exact sha256[:8]/length/char-class fields the
 // masked view promises at each step, and that rotate inserts a NEW row
@@ -291,7 +291,7 @@ func TestSecretsRBAC_OwnerCanCreateRotateAndDeleteTheirOwnSecret(t *testing.T) {
 
 	env.OnCleanup(func() {
 		_, _ = env.DB.ExecContext(context.Background(),
-			"DELETE FROM secrets WHERE workspace_id = $1 AND name = 'OWNER_POSITIVE_TOKEN'", wsID)
+			"DELETE FROM secret_refs WHERE workspace_id = $1 AND name = 'OWNER_POSITIVE_TOKEN'", wsID)
 	})
 
 	// --- Appears in the masked list ---
@@ -334,12 +334,12 @@ func TestSecretsRBAC_OwnerCanCreateRotateAndDeleteTheirOwnSecret(t *testing.T) {
 
 	var oldRotatedAt *time.Time
 	require.NoError(t, env.DB.QueryRowContext(context.Background(),
-		"SELECT rotated_at FROM secrets WHERE id = $1", secretID).Scan(&oldRotatedAt))
+		"SELECT rotated_at FROM secret_refs WHERE id = $1", secretID).Scan(&oldRotatedAt))
 	assert.NotNil(t, oldRotatedAt, "the superseded row's rotated_at was not stamped")
 
 	var newRotatedAt *time.Time
 	require.NoError(t, env.DB.QueryRowContext(context.Background(),
-		"SELECT rotated_at FROM secrets WHERE id = $1", newSecretID).Scan(&newRotatedAt))
+		"SELECT rotated_at FROM secret_refs WHERE id = $1", newSecretID).Scan(&newRotatedAt))
 	assert.Nil(t, newRotatedAt, "the rotated row is not current")
 
 	// --- List reflects only the current row under this name ---
@@ -357,6 +357,6 @@ func TestSecretsRBAC_OwnerCanCreateRotateAndDeleteTheirOwnSecret(t *testing.T) {
 
 	var deletedRotatedAt *time.Time
 	require.NoError(t, env.DB.QueryRowContext(context.Background(),
-		"SELECT rotated_at FROM secrets WHERE id = $1", newSecretID).Scan(&deletedRotatedAt))
+		"SELECT rotated_at FROM secret_refs WHERE id = $1", newSecretID).Scan(&deletedRotatedAt))
 	assert.NotNil(t, deletedRotatedAt, "the deleted row's rotated_at was not stamped")
 }

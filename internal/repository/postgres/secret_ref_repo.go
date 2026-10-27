@@ -19,12 +19,11 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/repository"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
-	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
-// secretRow is the masked shape returned by every read path except
-// ResolveCurrentValues — it has no column for encrypted_value at all, so a
-// query that forgot to select it cannot accidentally decrypt one either.
+// secretRow is the masked shape returned by every read path. secret_refs has
+// no value column at all: the value is in Keep and only
+// ResolveCurrentValues fetches it from there.
 type secretRow struct {
 	ID                uuid.UUID        `db:"id"`
 	WorkspaceID       uuid.UUID        `db:"workspace_id"`
@@ -65,17 +64,56 @@ const secretMaskedColumns = `id, workspace_id, project_id, agent_id, scope, name
 	value_sha256_prefix, value_length, value_char_class, expires_at,
 	created_by, created_by_type, created_at, rotated_at`
 
-// SecretRepo implements repository.SecretRepository and
-// repository.SecretMaterializer using PostgreSQL. The two interfaces are
-// separate; nothing about this struct forces a caller who only has a
-// SecretRepository to reach ResolveCurrentValues.
-type SecretRepo struct {
-	db *sqlx.DB
+// SecretRefRepo implements repository.SecretRepository and
+// repository.SecretMaterializer over the secret_refs index, with the values
+// in Keep. The two interfaces are separate; nothing about this struct forces a
+// caller who only has a SecretRepository to reach ResolveCurrentValues.
+type SecretRefRepo struct {
+	db   *sqlx.DB
+	keep secretstore.Store
 }
 
-// NewSecretRepo creates a new SecretRepo.
-func NewSecretRepo(db *sqlx.DB) *SecretRepo {
-	return &SecretRepo{db: db}
+// NewSecretRefRepo creates a SecretRefRepo. keep is the Keep provider of the
+// process secret store; nil (Keep not configured) refuses every write with
+// 503 and answers every value read as degraded. There is no builtin fallback:
+// a workspace secret has no other place to live.
+func NewSecretRefRepo(db *sqlx.DB, keep secretstore.Store) *SecretRefRepo {
+	return &SecretRefRepo{db: db, keep: keep}
+}
+
+// keepRefExtension and keepRef name a secret inside Keep the way
+// cmd/migrate-secrets-to-keep did for the rows it moved, so a rotation of a
+// moved secret writes a new version of the same Keep secret.
+const keepRefExtension = "mesh-secret"
+
+func keepRef(workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string) secretstore.Ref {
+	scopeRef := "workspace"
+	switch {
+	case projectID != nil:
+		scopeRef = projectID.String()
+	case agentID != nil:
+		scopeRef = agentID.String()
+	}
+	return secretstore.Ref{WorkspaceID: workspaceID, ExtensionID: keepRefExtension, Field: string(scope) + "." + scopeRef + "." + name}
+}
+
+// putKeep stores value in Keep under ref and checks it landed where the row
+// already points. A Keep failure is a 503 naming the cause, never the value.
+func (r *SecretRefRepo) putKeep(ctx context.Context, ref secretstore.Ref, stored, value string) error {
+	if r.keep == nil {
+		return apierror.ServiceUnavailable("workspace secrets are held by Keep, and Keep is not configured on this server")
+	}
+	got, err := r.keep.Put(ctx, ref, value)
+	if errors.Is(err, secretstore.ErrKeepBadID) {
+		return apierror.ValidationError(map[string]string{"name": "too long for a Keep reference in this scope"})
+	}
+	if err != nil {
+		return apierror.ServiceUnavailable("Keep did not store the value: " + err.Error())
+	}
+	if got != stored {
+		return apierror.ServiceUnavailable("Keep stored the value under an unexpected reference")
+	}
+	return nil
 }
 
 var valueClassRE = struct {
@@ -141,30 +179,37 @@ func scopeRefColumns(scope domain.SecretScope, projectID, agentID *uuid.UUID) (p
 	}
 }
 
-// Create encrypts input.Value and inserts a new current row. The DB trigger
-// (migration 20260820111) is the backstop that makes "plaintext never
-// reaches the table" true even if this method's own Encrypt call were ever
-// bypassed or removed by a future edit.
-func (r *SecretRepo) Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error) {
+const insertSecretRefQuery = `
+		INSERT INTO secret_refs (
+			workspace_id, project_id, agent_id, scope, name, keep_ref,
+			value_sha256_prefix, value_length, value_char_class, expires_at,
+			created_by, created_by_type
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING ` + secretMaskedColumns
+
+// Create claims the name with a new current row, stores the value in Keep and
+// commits, in that order. The row goes first so a duplicate create fails on
+// the unique index BEFORE anything is written to Keep: the Keep ref of a name
+// is fixed, and a PUT for a name that already exists would replace the value
+// of the current secret. A concurrent creator waits on the index until this
+// transaction ends. A failed PUT rolls the row back.
+func (r *SecretRefRepo) Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error) {
 	projectID, agentID, err := scopeRefColumns(input.Scope, input.ProjectID, input.AgentID)
 	if err != nil {
 		return domain.Secret{}, err
 	}
-	enc, err := encryption.Encrypt(input.Value)
+	ref := keepRef(input.WorkspaceID, input.Scope, projectID, agentID, input.Name)
+	stored := secretstore.KeepStoredRef(ref)
+
+	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return domain.Secret{}, err
 	}
+	defer func() { _ = tx.Rollback() }()
 
 	var row secretRow
-	q := fmt.Sprintf(`
-		INSERT INTO secrets (
-			workspace_id, project_id, agent_id, scope, name, encrypted_value,
-			value_sha256_prefix, value_length, value_char_class, expires_at,
-			created_by, created_by_type
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING %s`, secretMaskedColumns)
-	err = r.db.GetContext(ctx, &row, q,
-		input.WorkspaceID, projectID, agentID, string(input.Scope), input.Name, enc,
+	err = sqlx.GetContext(ctx, tx, &row, insertSecretRefQuery,
+		input.WorkspaceID, projectID, agentID, string(input.Scope), input.Name, stored,
 		fingerprint(input.Value), len(input.Value), classify(input.Value), input.ExpiresAt,
 		input.CreatedBy, input.CreatedByType,
 	)
@@ -175,51 +220,7 @@ func (r *SecretRepo) Create(ctx context.Context, input domain.CreateSecretInput)
 		}
 		return domain.Secret{}, err
 	}
-	return row.toDomain(), nil
-}
-
-// Rotate stamps the current row's rotated_at and inserts the replacement in
-// one transaction, so a reader never observes a window with zero current
-// rows for this name (either the old one is still current, or the new one
-// already is).
-func (r *SecretRepo) Rotate(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, input domain.CreateSecretInput) (domain.Secret, error) {
-	pID, aID, err := scopeRefColumns(scope, projectID, agentID)
-	if err != nil {
-		return domain.Secret{}, err
-	}
-	enc, err := encryption.Encrypt(input.Value)
-	if err != nil {
-		return domain.Secret{}, err
-	}
-
-	tx, err := r.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return domain.Secret{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	res, err := tx.ExecContext(ctx, rotateSupersedeQuery(scope), buildScopeArgs(workspaceID, pID, aID, name)...)
-	if err != nil {
-		return domain.Secret{}, err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return domain.Secret{}, apierror.NotFound("Secret")
-	}
-
-	var row secretRow
-	insertQ := fmt.Sprintf(`
-		INSERT INTO secrets (
-			workspace_id, project_id, agent_id, scope, name, encrypted_value,
-			value_sha256_prefix, value_length, value_char_class, expires_at,
-			created_by, created_by_type
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING %s`, secretMaskedColumns)
-	if err := sqlx.GetContext(ctx, tx, &row, insertQ,
-		workspaceID, pID, aID, string(scope), name, enc,
-		fingerprint(input.Value), len(input.Value), classify(input.Value), input.ExpiresAt,
-		input.CreatedBy, input.CreatedByType,
-	); err != nil {
+	if err := r.putKeep(ctx, ref, stored, input.Value); err != nil {
 		return domain.Secret{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -228,10 +229,79 @@ func (r *SecretRepo) Rotate(ctx context.Context, workspaceID uuid.UUID, scope do
 	return row.toDomain(), nil
 }
 
+// Rotate stamps the current row's rotated_at, inserts the replacement and
+// writes the new value to Keep as a new version of the same Keep secret, all
+// before the commit: a reader never sees a window with zero current rows, and
+// a failed PUT leaves the old row current with Keep untouched. Keep has no
+// transaction to join, so the PUT is compensated instead: the current value
+// is read first, and if the commit fails after the PUT it is written back,
+// leaving Keep and the current row describing the same value. The superseded
+// row stays locked until then, so a concurrent rotate waits and then gets 409.
+func (r *SecretRefRepo) Rotate(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, input domain.CreateSecretInput) (domain.Secret, error) {
+	pID, aID, err := scopeRefColumns(scope, projectID, agentID)
+	if err != nil {
+		return domain.Secret{}, err
+	}
+	ref := keepRef(workspaceID, scope, pID, aID, name)
+	stored := secretstore.KeepStoredRef(ref)
+
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return domain.Secret{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var prevRef string
+	err = tx.QueryRowxContext(ctx, rotateSupersedeQuery(scope), buildScopeArgs(workspaceID, pID, aID, name)...).Scan(&prevRef)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Secret{}, apierror.NotFound("Secret")
+	}
+	if err != nil {
+		return domain.Secret{}, err
+	}
+
+	var row secretRow
+	if err := sqlx.GetContext(ctx, tx, &row, insertSecretRefQuery,
+		workspaceID, pID, aID, string(scope), name, stored,
+		fingerprint(input.Value), len(input.Value), classify(input.Value), input.ExpiresAt,
+		input.CreatedBy, input.CreatedByType,
+	); err != nil {
+		return domain.Secret{}, err
+	}
+	// The current value must be readable before anything is overwritten. The
+	// PUT replaces what the old row points at only when both name the same
+	// Keep secret; otherwise a failed commit leaves an unused version, and
+	// the value read here is not needed to undo it.
+	var prev *secretstore.Result
+	if r.keep != nil {
+		res := r.keep.Resolve(ctx, prevRef)
+		if res.Degraded {
+			return domain.Secret{}, apierror.ServiceUnavailable("Keep could not read the current value, so a failed rotation could not be undone; nothing was changed: " + res.Reason)
+		}
+		if prevRef == stored {
+			prev = &res
+		}
+	}
+	if err := r.putKeep(ctx, ref, stored, input.Value); err != nil {
+		return domain.Secret{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		if prev != nil {
+			if _, perr := r.keep.Put(ctx, ref, prev.Value); perr != nil {
+				return domain.Secret{}, fmt.Errorf("rotate %s: commit failed (%w) and Keep could not be given the previous value back (%v); Keep serves the new value, rotate it again", name, err, perr)
+			}
+		}
+		return domain.Secret{}, err
+	}
+	return row.toDomain(), nil
+}
+
 // Delete stamps rotated_at on the current row without inserting a
 // replacement. Same "append, don't erase" posture as Rotate — a deleted
-// secret's history is still queryable, it just stops materializing.
-func (r *SecretRepo) Delete(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, deletedBy uuid.UUID, deletedByType domain.ActorType) error {
+// secret's history is still queryable, it just stops materializing. The Keep
+// secret stays (Keep's Mesh API has no delete); a later create of the same
+// name writes a new version of it.
+func (r *SecretRefRepo) Delete(ctx context.Context, workspaceID uuid.UUID, scope domain.SecretScope, projectID, agentID *uuid.UUID, name string, deletedBy uuid.UUID, deletedByType domain.ActorType) error {
 	pID, aID, err := scopeRefColumns(scope, projectID, agentID)
 	if err != nil {
 		return err
@@ -257,17 +327,20 @@ func (r *SecretRepo) Delete(ctx context.Context, workspaceID uuid.UUID, scope do
 func rotateSupersedeQuery(scope domain.SecretScope) string {
 	switch scope {
 	case domain.SecretScopeWorkspace:
-		return `UPDATE secrets SET rotated_at = now()
+		return `UPDATE secret_refs SET rotated_at = now()
 			WHERE workspace_id = $1 AND project_id IS NULL AND agent_id IS NULL
-			  AND scope = 'workspace' AND name = $2 AND rotated_at IS NULL`
+			  AND scope = 'workspace' AND name = $2 AND rotated_at IS NULL
+			RETURNING keep_ref`
 	case domain.SecretScopeProject:
-		return `UPDATE secrets SET rotated_at = now()
+		return `UPDATE secret_refs SET rotated_at = now()
 			WHERE workspace_id = $1 AND project_id = $2 AND agent_id IS NULL
-			  AND scope = 'project' AND name = $3 AND rotated_at IS NULL`
+			  AND scope = 'project' AND name = $3 AND rotated_at IS NULL
+			RETURNING keep_ref`
 	default: // agent
-		return `UPDATE secrets SET rotated_at = now()
+		return `UPDATE secret_refs SET rotated_at = now()
 			WHERE workspace_id = $1 AND agent_id = $2 AND project_id IS NULL
-			  AND scope = 'agent' AND name = $3 AND rotated_at IS NULL`
+			  AND scope = 'agent' AND name = $3 AND rotated_at IS NULL
+			RETURNING keep_ref`
 	}
 }
 
@@ -282,10 +355,10 @@ func buildScopeArgs(workspaceID uuid.UUID, projectID, agentID *uuid.UUID, name s
 }
 
 // ListCurrent returns masked metadata for every current secret reachable
-// from the given resolution. It never selects encrypted_value.
-func (r *SecretRepo) ListCurrent(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error) {
+// from the given resolution.
+func (r *SecretRefRepo) ListCurrent(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.Secret, error) {
 	q := fmt.Sprintf(`
-		SELECT %s FROM secrets
+		SELECT %s FROM secret_refs
 		WHERE rotated_at IS NULL AND (
 			(scope = 'workspace' AND workspace_id = $1) OR
 			(scope = 'project' AND workspace_id = $1 AND project_id = $2) OR
@@ -309,8 +382,8 @@ func (r *SecretRepo) ListCurrent(ctx context.Context, workspaceID uuid.UUID, pro
 // WHERE clause rather than a post-fetch check: a row belonging to another
 // tenant produces the same NotFound as an id that names nothing, so the API
 // cannot be used to probe for the existence of another workspace's secrets.
-func (r *SecretRepo) GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error) {
-	q := fmt.Sprintf(`SELECT %s FROM secrets WHERE id = $1 AND workspace_id = $2`, secretMaskedColumns)
+func (r *SecretRefRepo) GetByID(ctx context.Context, workspaceID, id uuid.UUID) (domain.Secret, error) {
+	q := fmt.Sprintf(`SELECT %s FROM secret_refs WHERE id = $1 AND workspace_id = $2`, secretMaskedColumns)
 	var row secretRow
 	if err := r.db.GetContext(ctx, &row, q, id, workspaceID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -324,7 +397,7 @@ func (r *SecretRepo) GetByID(ctx context.Context, workspaceID, id uuid.UUID) (do
 // AssertScopeRefInWorkspace verifies in one round-trip that whichever of
 // project_id / agent_id the caller supplied belongs to workspaceID.
 //
-// This is not redundant with the table's foreign keys. secrets.project_id
+// This is not redundant with the table's foreign keys. secret_refs.project_id
 // references projects(id) with no workspace predicate, so a create naming
 // another tenant's project id satisfies the FK, the scope CHECK and the
 // partial unique index alike — the row lands, referencing a project the
@@ -332,7 +405,7 @@ func (r *SecretRepo) GetByID(ctx context.Context, workspaceID, id uuid.UUID) (do
 // materializer matches on workspace_id AND project_id together, so the row
 // would simply never resolve, which reads as a silently broken secret rather
 // than as the tenancy error it is.
-func (r *SecretRepo) AssertScopeRefInWorkspace(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) error {
+func (r *SecretRefRepo) AssertScopeRefInWorkspace(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) error {
 	if projectID == nil && agentID == nil {
 		return nil
 	}
@@ -361,15 +434,16 @@ func (r *SecretRepo) AssertScopeRefInWorkspace(ctx context.Context, workspaceID 
 	return nil
 }
 
-// ResolveCurrentValues is the ONLY method in this package that decrypts a
-// secret's value. It exists for exactly one caller: the spawn-time
-// materialization endpoint (S4). Every current secret in scope is decrypted
-// unconditionally; expiry does not filter the row out, it flags it, so the
-// caller can name the secret in a loud error instead of silently omitting
-// the variable.
-func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error) {
+// ResolveCurrentValues is the ONLY method in this package that produces a
+// secret's value, and it gets every one from Keep. It exists for the
+// spawn-time materialization endpoint and the extension signing paths. Expiry
+// does not filter a row out, it flags it, so the caller can name the secret in
+// a loud error instead of silently omitting the variable. ValueSHA256Prefix is
+// the fingerprint of the value Keep returned, not the one stored at write
+// time, so the issuance journal names the version actually handed out.
+func (r *SecretRefRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) ([]domain.MaterializedSecret, error) {
 	const q = `
-		SELECT id, name, encrypted_value, value_sha256_prefix, expires_at, keep_ref FROM secrets
+		SELECT id, name, keep_ref, value_sha256_prefix, expires_at FROM secret_refs
 		WHERE rotated_at IS NULL AND (
 			(scope = 'workspace' AND workspace_id = $1) OR
 			(scope = 'project' AND workspace_id = $1 AND project_id = $2) OR
@@ -378,10 +452,9 @@ func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.
 	type row struct {
 		ID                uuid.UUID  `db:"id"`
 		Name              string     `db:"name"`
-		EncryptedValue    string     `db:"encrypted_value"`
+		KeepRef           string     `db:"keep_ref"`
 		ValueSHA256Prefix string     `db:"value_sha256_prefix"`
 		ExpiresAt         *time.Time `db:"expires_at"`
-		KeepRef           *string    `db:"keep_ref"`
 	}
 	var rows []row
 	if err := r.db.SelectContext(ctx, &rows, q, workspaceID, projectID, agentID); err != nil {
@@ -391,20 +464,18 @@ func (r *SecretRepo) ResolveCurrentValues(ctx context.Context, workspaceID uuid.
 	for _, rr := range rows {
 		expired := rr.ExpiresAt != nil && rr.ExpiresAt.Before(time.Now())
 		m := domain.MaterializedSecret{ID: rr.ID, Name: rr.Name, ValueSHA256Prefix: rr.ValueSHA256Prefix, Expired: expired}
-		if !expired && rr.KeepRef != nil && *rr.KeepRef != "" {
-			// Migrated row: Keep owns the value. Degraded is an error, never
-			// an empty Value — an empty variable would read as "no secret".
-			plain, reason := secretstore.Open(ctx, *rr.KeepRef)
-			if reason != "" {
-				return nil, &domain.SecretDegradedError{Name: rr.Name, Reason: reason}
+		if !expired {
+			// Degraded is an error, never an empty Value — an empty variable
+			// would read as "no secret".
+			if r.keep == nil {
+				return nil, &domain.SecretDegradedError{Name: rr.Name, Reason: secretstore.ErrKeepNotConfigured.Error()}
 			}
-			m.Value = plain
-		} else if !expired {
-			plain, err := encryption.Decrypt(rr.EncryptedValue)
-			if err != nil {
-				return nil, fmt.Errorf("secret %s: %w", rr.Name, err)
+			res := r.keep.Resolve(ctx, rr.KeepRef)
+			if res.Degraded {
+				return nil, &domain.SecretDegradedError{Name: rr.Name, Reason: res.Reason}
 			}
-			m.Value = plain
+			m.Value = res.Value
+			m.ValueSHA256Prefix = fingerprint(res.Value)
 		}
 		out = append(out, m)
 	}
@@ -422,5 +493,5 @@ func isSecretsUniqueViolation(err error) bool {
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
-var _ repository.SecretRepository = (*SecretRepo)(nil)
-var _ repository.SecretMaterializer = (*SecretRepo)(nil)
+var _ repository.SecretRepository = (*SecretRefRepo)(nil)
+var _ repository.SecretMaterializer = (*SecretRefRepo)(nil)

@@ -57,32 +57,45 @@ func TestProjectService_Create(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, project.Name, stored.Name)
 
-				// Verify 5 default statuses were created.
+				// Verify the 7 default statuses: one per category, unique slugs.
 				statuses, err := statusRepo.ListByProject(context.Background(), project.ID)
 				require.NoError(t, err)
-				assert.Len(t, statuses, 5, "should create 5 default statuses")
+				assert.Len(t, statuses, 7, "should create 7 default statuses")
 
-				// Verify the default status is "Todo".
-				var hasDefault bool
+				// Verify the default status is "Todo" and nothing else is default.
+				var defaults int
 				for _, s := range statuses {
 					if s.IsDefault {
 						assert.Equal(t, "Todo", s.Name)
 						assert.Equal(t, domain.StatusCategoryTodo, s.Category)
-						hasDefault = true
+						defaults++
 					}
 				}
-				assert.True(t, hasDefault, "should have a default status")
+				assert.Equal(t, 1, defaults, "exactly one default status")
 
-				// Verify all categories are present.
-				categories := make(map[domain.StatusCategory]bool)
+				categories := make(map[domain.StatusCategory]int)
+				slugs := make(map[string]int)
 				for _, s := range statuses {
-					categories[s.Category] = true
+					categories[s.Category]++
+					slugs[s.Slug]++
 				}
-				assert.True(t, categories[domain.StatusCategoryBacklog])
-				assert.True(t, categories[domain.StatusCategoryTodo])
-				assert.True(t, categories[domain.StatusCategoryInProgress])
-				assert.True(t, categories[domain.StatusCategoryReview])
-				assert.True(t, categories[domain.StatusCategoryDone])
+				for _, c := range []domain.StatusCategory{
+					domain.StatusCategoryTriage,
+					domain.StatusCategoryBacklog,
+					domain.StatusCategoryTodo,
+					domain.StatusCategoryInProgress,
+					domain.StatusCategoryReview,
+					domain.StatusCategoryDone,
+					domain.StatusCategoryCancelled,
+				} {
+					assert.Equal(t, 1, categories[c], "category %s", c)
+				}
+				for slug, n := range slugs {
+					assert.Equal(t, 1, n, "duplicate slug %s", slug)
+				}
+				assert.Equal(t, 1, slugs["triage"])
+				assert.Equal(t, 1, slugs["cancelled"])
+				assert.Zero(t, slugs["canceled"], "canonical slug is cancelled")
 			},
 		},
 		{
@@ -298,7 +311,7 @@ func TestProjectService_GetByID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestProjectService_Delete (#ddd219f4)
+// TestProjectService_Delete
 // ---------------------------------------------------------------------------
 
 func TestProjectService_Delete(t *testing.T) {

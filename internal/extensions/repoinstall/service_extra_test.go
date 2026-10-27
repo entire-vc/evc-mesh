@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -86,4 +87,38 @@ func TestPreviewAndInstallErrorPaths(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "a", firstLine("a\nb"))
 	assert.Equal(t, "ab", firstLine("ab"))
+}
+
+// One extension, one id: a repository cannot take an id the Spark catalog or
+// the code shipped with Mesh already holds, even when nothing is installed
+// under it yet.
+func TestInstallRefusesIDOwnedByAnotherSource(t *testing.T) {
+	svc, repo, gl, url := setup(t, "")
+	gl.tags = []string{"v1"}
+	gl.set("v1", "aaa", manifestJSON(t, nil))
+	owner := "catalog"
+	svc.Owner = func(_ context.Context, id string) string {
+		if id == "hello" {
+			return owner
+		}
+		return ""
+	}
+
+	_, err := svc.Preview(context.Background(), url, "v1", "")
+	assert.Equal(t, http.StatusConflict, errStatus(err))
+	assert.Equal(t, CodeIDConflict, errCode(err))
+	assert.Contains(t, err.Error(), "install it from the catalog")
+
+	_, err = svc.Install(context.Background(), uuid.New(), url, "v1", "")
+	assert.Equal(t, CodeIDConflict, errCode(err))
+	owner = "builtin"
+	_, err = svc.Install(context.Background(), uuid.New(), url, "v1", "")
+	assert.Equal(t, CodeIDConflict, errCode(err))
+	assert.Contains(t, err.Error(), "ships with Mesh")
+	row, _ := repo.Get(context.Background(), "hello")
+	assert.Nil(t, row, "nothing is written on a refused install")
+
+	owner = ""
+	_, err = svc.Install(context.Background(), uuid.New(), url, "v1", "")
+	require.NoError(t, err, "a free id installs as before")
 }

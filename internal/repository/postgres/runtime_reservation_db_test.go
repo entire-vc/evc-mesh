@@ -423,11 +423,7 @@ func TestRuntimeReservationRevokedGrantDisabledAndDirectMode(t *testing.T) {
 	requireReason(t, err, http.StatusLocked, "identity_cap_unset")
 	f.setCap(t, 2)
 
-	disabled := false
-	f.input.IfRevision = 1
-	f.input.Enabled = &disabled
-	_, err = f.repo.Save(ctx, f.owner, f.ownerActor, f.input)
-	require.NoError(t, err)
+	f.runnerSwitch(t, false)
 	_, _, err = f.acquire(f.acquireInput(t, "preferred", task2, request2, "w2", "k3"))
 	requireReason(t, err, http.StatusLocked, "runtime_disabled")
 	require.Equal(t, 1, f.activeCount(t), "disabling denies new admission but never drops an active one")

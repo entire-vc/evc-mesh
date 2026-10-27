@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -168,6 +171,71 @@ func TestInstallBuiltin(t *testing.T) {
 		_, err := svc.InstallBuiltin(context.Background(), actor, id)
 		require.NoError(t, err, id)
 	}
+}
+
+// A shipped theme's own tokens clear the AA floor in every mode: the warnings
+// are advice for third-party themes, never for ours.
+func TestBuiltinThemesMeetContrast(t *testing.T) {
+	for _, id := range themes.BuiltinIDs() {
+		m := readBuiltinManifest(t, id)
+		require.Empty(t, themes.CheckContrast(m.Theme.Tokens), id)
+	}
+}
+
+// board-studio keeps its id (workspaces have selected it) and shows as Prototypes,
+// in the prototypes.ventures orange and type stack.
+func TestBuiltinPrototypes(t *testing.T) {
+	m := readBuiltinManifest(t, "board-studio")
+	require.Equal(t, "Prototypes", m.Name)
+	// The colours the lead approved for Prototypes, as the browser renders the tokens.
+	brand := map[string]map[string]string{
+		"light": {"primary": "#FF6A1F", "primary-foreground": "#1B1F2A", "background": "#FAFAFB", "foreground": "#14161B",
+			"card": "#FFFFFF", "muted-foreground": "#555B66", "border": "#E2E4E8", "destructive": "#D02C37",
+			"success": "#1FAE4D", "warning": "#E8A400", "info": "#2E9BD6", "sidebar-background": "#0F1320"},
+		"dark": {"primary": "#FF6A1F", "primary-foreground": "#0F1320", "background": "#0F1320", "foreground": "#F3F4F6",
+			"card": "#1B1F2A", "muted-foreground": "#A6ABB4", "border": "#3A3F48", "destructive": "#D02C37",
+			"success": "#1FAE4D", "warning": "#E8A400", "info": "#2E9BD6", "sidebar-background": "#0F1320"},
+	}
+	for mode, want := range brand {
+		for token, hex := range want {
+			require.Equal(t, hex, hslHex(t, m.Theme.Tokens[mode][token]), "%s %s", mode, token)
+		}
+		require.True(t, strings.HasPrefix(m.Theme.Tokens[mode]["font-sans"], `"SB Sans Display"`), mode)
+	}
+	// The face's files are not ours to redistribute in this repository: the theme names it, it ships none.
+	css, err := os.ReadFile("builtin/board-studio/theme.css")
+	require.NoError(t, err)
+	require.NotContains(t, string(css), "@font-face")
+}
+
+type builtinManifest struct {
+	Name  string `json:"name"`
+	Theme struct {
+		Tokens map[string]map[string]string `json:"tokens"`
+	} `json:"theme"`
+}
+
+// hslHex renders an "H S% L%" token the way CSS does, as #RRGGBB.
+func hslHex(t *testing.T, v string) string {
+	t.Helper()
+	var h, sat, l float64
+	_, err := fmt.Sscanf(strings.ReplaceAll(v, "%", ""), "%g %g %g", &h, &sat, &l)
+	require.NoError(t, err, v)
+	sat, l = sat/100, l/100
+	c := (1 - math.Abs(2*l-1)) * sat
+	x := c * (1 - math.Abs(math.Mod(h/60, 2)-1))
+	rgb := [6][3]float64{{c, x, 0}, {x, c, 0}, {0, c, x}, {0, x, c}, {x, 0, c}, {c, 0, x}}[int(h/60)%6]
+	m := l - c/2
+	return fmt.Sprintf("#%02X%02X%02X", int(math.Round((rgb[0]+m)*255)), int(math.Round((rgb[1]+m)*255)), int(math.Round((rgb[2]+m)*255)))
+}
+
+func readBuiltinManifest(t *testing.T, id string) builtinManifest {
+	t.Helper()
+	raw, err := os.ReadFile("builtin/" + id + "/mesh-extension.json")
+	require.NoError(t, err)
+	var m builtinManifest
+	require.NoError(t, json.Unmarshal(raw, &m))
+	return m
 }
 
 func TestResolve_ThreeLevels(t *testing.T) {

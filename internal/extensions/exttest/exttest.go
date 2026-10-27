@@ -176,6 +176,21 @@ func (p PurgingProvider) PurgeData(context.Context, uuid.UUID) error {
 
 type InstanceOn struct{}
 
+// Allow is an allow-list a test flips: everything is allowed until Deny.
+type Allow struct{ denied map[string]bool }
+
+func (a *Allow) Allowed(_ context.Context, id string) (bool, error) { return !a.denied[id], nil }
+
+// Deny takes id off the allow-list; Permit puts it back.
+func (a *Allow) Deny(id string) {
+	if a.denied == nil {
+		a.denied = map[string]bool{}
+	}
+	a.denied[id] = true
+}
+
+func (a *Allow) Permit(id string) { delete(a.denied, id) }
+
 func (InstanceOn) InstanceSetting(context.Context, string) (*extensions.InstanceSetting, error) {
 	return &extensions.InstanceSetting{Enabled: true}, nil
 }
@@ -187,6 +202,9 @@ type Fixture struct {
 	Consents *MemConsents
 	Purged   int
 	PurgeErr error // PurgeData fails with it when set
+	// Allow is the allow-list the demo provider resolves under; all allowed
+	// until a test denies.
+	Allow *Allow
 }
 
 // NewFixture builds the fixture. instance may be nil (no instance level);
@@ -196,9 +214,9 @@ func NewFixture(instance extensions.InstanceStore, purge bool) (*Fixture, error)
 	if err != nil {
 		return nil, err
 	}
-	f := &Fixture{Integ: NewMemIntegrations()}
+	f := &Fixture{Integ: NewMemIntegrations(), Allow: &Allow{}}
 	f.Consents = &MemConsents{Integ: f.Integ, ByID: map[uuid.UUID]domain.ExtensionConsent{}}
-	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}, Inst: instance}
+	base := extensions.BaseProvider{Man: man, Conns: extensions.IntegrationConnections{Repo: f.Integ}, Inst: instance, Allow: f.Allow}
 	var p extensions.Provider = DemoProvider{BaseProvider: base, Healthy: true}
 	if purge {
 		p = PurgingProvider{DemoProvider: DemoProvider{BaseProvider: base, Healthy: true}, Purged: &f.Purged, Err: func() error { return f.PurgeErr }}

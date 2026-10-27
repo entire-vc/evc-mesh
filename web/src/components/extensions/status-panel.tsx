@@ -1,6 +1,8 @@
 import { useTranslation } from "react-i18next";
 import type { CatalogEntry } from "@/hooks/useExtensionCatalog";
-import { installedStatus } from "@/lib/extension-installed";
+import { Button } from "@/components/ui/button";
+import { extensionState } from "@/lib/extensionState";
+import { ExtensionStateBadge, ExtensionStateNote } from "@/components/extensions/extension-state";
 import { formatDateTime, formatNumber } from "@/i18n/format";
 import { cn } from "@/lib/cn";
 
@@ -28,7 +30,7 @@ export function VcsRepoList({ entry }: { entry: CatalogEntry }) {
       ) : (
         <ul aria-labelledby={`ext-repos-${entry.id}-title`} className="max-h-60 divide-y divide-border overflow-y-auto rounded-lg border border-border text-sm">
           {repos.map((r) => (
-            <li key={`${r.host}/${r.repo}`} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-3 py-2">
+            <li key={`${r.host}/${r.repo}`} className="flex flex-col gap-0.5 px-3 py-2">
               <span className="min-w-0 break-all font-medium">{r.repo}</span>
               <span className="text-xs text-muted-foreground">
                 {r.host} · {t("installed.repos.links", { count: r.links, value: formatNumber(r.links) })}
@@ -46,13 +48,16 @@ export function VcsRepoList({ entry }: { entry: CatalogEntry }) {
  * Read-only state of a workspace extension: where it comes from, health, task
  * links it brought in and the last error. Shows no settings and no secrets.
  */
-export function ExtensionStatusPanel({ entry, className, instanceNote = true }: {
+export function ExtensionStatusPanel({ entry, className, instanceNote = true, onCheck, checking }: {
   entry: CatalogEntry; className?: string;
   /** Off where the surrounding view already says who manages the credentials. */
   instanceNote?: boolean;
+  /** Runs the check; the panel then shows the re-read status, never a result of its own. */
+  onCheck?: () => void;
+  checking?: boolean;
 }) {
   const { t } = useTranslation("integrations");
-  const st = installedStatus(entry);
+  const st = extensionState(entry);
   const health = entry.status?.health;
   const vcs = VCS_EXTENSION_IDS.has(entry.id);
   const act = entry.activity;
@@ -60,9 +65,14 @@ export function ExtensionStatusPanel({ entry, className, instanceNote = true }: 
     <dl className={cn("grid gap-x-4 gap-y-2 rounded-lg border border-border p-3 text-sm sm:grid-cols-[auto_1fr]", className)}
       data-testid={`ext-status-${entry.id}`}>
       <dt className="text-muted-foreground">{t("statusPanel.state")}</dt>
-      <dd className="flex items-center gap-2">
-        <span aria-hidden className={cn("h-2.5 w-2.5 shrink-0 rounded-full", health ? (health.ok ? "bg-success" : "bg-destructive") : "bg-muted-foreground/40")} />
-        {t(st.key, st.values)}
+      <dd className="min-w-0 space-y-1">
+        <span className="flex flex-wrap items-center gap-2">
+          <ExtensionStateBadge state={st} />
+          {onCheck && (st.state === "error" || st.state === "enabled") && (
+            <Button variant="outline" size="sm" disabled={checking} onClick={onCheck}>{t("extensionState.check")}</Button>
+          )}
+        </span>
+        <ExtensionStateNote state={st} />
       </dd>
       <dt className="text-muted-foreground">{t("statusPanel.health")}</dt>
       <dd>{t(health ? (health.ok ? "installed.health.ok" : "installed.health.bad") : "installed.health.unknown")}</dd>
@@ -77,12 +87,6 @@ export function ExtensionStatusPanel({ entry, className, instanceNote = true }: 
               })
               : t("statusPanel.linksNone")}
           </dd>
-        </>
-      )}
-      {entry.status?.last_error && (
-        <>
-          <dt className="text-muted-foreground">{t("statusPanel.lastError")}</dt>
-          <dd className="break-words text-destructive">{entry.status.last_error}</dd>
         </>
       )}
       {instanceNote && entry.status?.source === "instance" && (

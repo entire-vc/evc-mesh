@@ -30,6 +30,11 @@ type Service struct {
 	// before its row is written. Without it a theme is refused: its hashes
 	// would otherwise never be checked.
 	Themes ThemeAssets
+	// Owner names the other source that already holds an id ("catalog",
+	// "builtin") or returns "" when the id is free. One extension has one id
+	// in every source, so a repository whose manifest takes such an id is
+	// refused instead of standing in for it. May be nil.
+	Owner func(ctx context.Context, id string) string
 }
 
 // FetchFunc reads one file of the repository at the commit being installed.
@@ -167,10 +172,8 @@ func (s *Service) Preview(ctx context.Context, repoURL, ref, token string) (*Pre
 	if err != nil {
 		return nil, err
 	}
-	if existing, gerr := s.Installed.Get(ctx, f.manifest.ID); gerr != nil {
-		return nil, gerr
-	} else if existing != nil {
-		return nil, apiErr(http.StatusConflict, CodeIDConflict, fmt.Sprintf("an extension with id %q is already installed", f.manifest.ID))
+	if err := s.idFree(ctx, f.manifest.ID); err != nil {
+		return nil, err
 	}
 	m := f.manifest
 	return &Preview{
@@ -178,6 +181,27 @@ func (s *Service) Preview(ctx context.Context, repoURL, ref, token string) (*Pre
 		MeshAPI: m.MeshAPI, Compatible: true, Capabilities: Capabilities(m), Ref: ref, CommitSHA: f.sha,
 		TrustLevel: string(domain.ExtensionTrustCustom), Warning: customWarning,
 	}, nil
+}
+
+// idFree refuses an id that is already installed or that another source
+// (the Spark catalog, the code shipped with Mesh) owns.
+func (s *Service) idFree(ctx context.Context, id string) error {
+	if existing, err := s.Installed.Get(ctx, id); err != nil {
+		return err
+	} else if existing != nil {
+		return apiErr(http.StatusConflict, CodeIDConflict, fmt.Sprintf("an extension with id %q is already installed", id))
+	}
+	if s.Owner == nil {
+		return nil
+	}
+	switch s.Owner(ctx, id) {
+	case "":
+		return nil
+	case string(domain.ExtensionSourceCatalog):
+		return apiErr(http.StatusConflict, CodeIDConflict, fmt.Sprintf("id %q belongs to an extension in the Spark catalog: install it from the catalog", id))
+	default:
+		return apiErr(http.StatusConflict, CodeIDConflict, fmt.Sprintf("id %q belongs to an extension that ships with Mesh", id))
+	}
 }
 
 // Install installs the extension at ref with trust level custom.
@@ -199,10 +223,8 @@ func (s *Service) install(ctx context.Context, actor uuid.UUID, repoURL, ref, to
 	if wantKind != "" && m.Kind != wantKind {
 		return nil, apiErr(http.StatusUnprocessableEntity, CodeManifestInvalid, fmt.Sprintf("the repository holds a %q extension, not a %s", m.Kind, wantKind))
 	}
-	if existing, gerr := s.Installed.Get(ctx, m.ID); gerr != nil {
-		return nil, gerr
-	} else if existing != nil {
-		return nil, apiErr(http.StatusConflict, CodeIDConflict, fmt.Sprintf("an extension with id %q is already installed", m.ID))
+	if err := s.idFree(ctx, m.ID); err != nil {
+		return nil, err
 	}
 	if err := s.prepareTheme(ctx, f, token); err != nil {
 		return nil, err

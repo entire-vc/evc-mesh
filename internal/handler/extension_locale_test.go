@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 
@@ -17,16 +18,19 @@ import (
 
 var cyrillic = regexp.MustCompile(`[\x{0400}-\x{04FF}]`)
 
-// builtinListBody calls GET /extensions through the real handler with the
-// shipped github and runner manifests and returns the response body.
+// builtinListBody calls GET /extensions through the real handler with every
+// shipped builtin manifest and returns the response body.
 func builtinListBody(t *testing.T, acceptLanguage string) string {
 	t.Helper()
+	paths, err := filepath.Glob("../extensions/*/mesh-extension.json")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(paths), 7)
 	var rows []domain.InstalledExtension
-	for _, name := range []string{"github", "runner"} {
-		raw, err := os.ReadFile("../extensions/" + name + "/mesh-extension.json")
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
 		require.NoError(t, err)
 		rows = append(rows, domain.InstalledExtension{
-			ExtensionID: name, Version: "1", Source: domain.ExtensionSourceBuiltin, Manifest: json.RawMessage(raw),
+			ExtensionID: filepath.Base(filepath.Dir(p)), Version: "1", Source: domain.ExtensionSourceBuiltin, Manifest: json.RawMessage(raw),
 		})
 	}
 	h := NewExtensionHandler(&fakeInstalledRepo{rows: rows}, nil)
@@ -39,6 +43,9 @@ func builtinListBody(t *testing.T, acceptLanguage string) string {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `"github"`)
 	require.Contains(t, rec.Body.String(), `"runner"`)
+	require.Contains(t, rec.Body.String(), `"gitlab"`)
+	require.Contains(t, rec.Body.String(), `"spark"`)
+	require.Contains(t, rec.Body.String(), `"telegram"`)
 	return rec.Body.String()
 }
 

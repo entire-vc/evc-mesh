@@ -5,23 +5,27 @@ export type Loaded<T> =
   | { state: "error" }
   | { state: "ready"; data: T };
 
-/** One fetch with a retry; a stale answer never overwrites a newer one. A new `key` fetches again. */
+/**
+ * One fetch with a retry; a stale answer never overwrites a newer one. A change of `key` fetches again,
+ * and a result loaded for another key reads as loading, so a workspace switch never shows the old rows.
+ */
 export function useLoad<T>(fetcher: () => Promise<T>, key?: string): { result: Loaded<T>; reload: () => void } {
-  const [result, setResult] = useState<Loaded<T>>({ state: "loading" });
+  const [loaded, setLoaded] = useState<{ key?: string; result: Loaded<T> }>({ key, result: { state: "loading" } });
   const [nonce, setNonce] = useState(0);
   const fetchRef = useRef(fetcher);
   fetchRef.current = fetcher;
 
   useEffect(() => {
     let cancelled = false;
-    setResult({ state: "loading" });
+    setLoaded({ key, result: { state: "loading" } });
     fetchRef.current().then(
-      (data) => { if (!cancelled) setResult({ state: "ready", data }); },
-      () => { if (!cancelled) setResult({ state: "error" }); },
+      (data) => { if (!cancelled) setLoaded({ key, result: { state: "ready", data } }); },
+      () => { if (!cancelled) setLoaded({ key, result: { state: "error" } }); },
     );
     return () => { cancelled = true; };
   }, [nonce, key]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+  const result: Loaded<T> = loaded.key === key ? loaded.result : { state: "loading" };
   return { result, reload };
 }

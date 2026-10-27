@@ -57,6 +57,16 @@ export function buildPayload(schema: FieldSchema, values: Values): Values {
   return out;
 }
 
+/** Whether the user typed a new secret anywhere in the form: initialState drops secrets, so it cannot see this.
+ *  A draft seeded from the server value must go through initialState first, so that a stored mask never reads as typed. */
+export function hasTypedSecret(schema: FieldSchema, values: Values | undefined): boolean {
+  return Object.entries(schema.properties ?? {}).some(([name, f]) => {
+    const v = values?.[name];
+    if (f.type === "object" && f.properties) return hasTypedSecret(f, v && typeof v === "object" ? (v as Values) : undefined);
+    return !!f["x-secret"] && typeof v === "string" && v !== "";
+  });
+}
+
 export function setAtPath(values: Values, path: string[], next: unknown): Values {
   const [first, ...rest] = path;
   const head = first as string;

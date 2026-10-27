@@ -26,9 +26,9 @@ const (
 )
 
 // SecretMaterializeHandler serves the ONE endpoint in this codebase that
-// returns a decrypted secret value. It must sit behind
+// returns a secret value (fetched from Keep). It must sit behind
 // middleware.SpawnAuth() only — never JWTAuth, never agent-key auth — since
-// any agent identity able to authenticate normally would be able to decrypt
+// any agent identity able to authenticate normally would be able to read
 // every secret in its own scope, which is the leak this whole feature
 // exists to close. See middleware.SpawnAuth's doc comment for the trust
 // model this depends on.

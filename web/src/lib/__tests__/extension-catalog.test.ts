@@ -82,11 +82,12 @@ describe("catalog filters", () => {
     // GET /extensions answered [] and the catalog showed nothing.
     const rows = mergeCatalog([], [ws("gitlab"), ws("github")]);
     expect(rows.map((r) => r.id)).toEqual(["gitlab", "github"]);
-    expect(rows[0]).toMatchObject({ trust: "official", runtime: "builtin", publisher: "Entire VC", installed: true });
+    expect(rows[0]).toMatchObject({ trust: "builtin", runtime: "builtin", publisher: "Entire VC", installed: true });
   });
 
   it("maps trust levels", () => {
-    expect(trustOf("builtin", "builtin")).toBe("official");
+    expect(trustOf("builtin", "builtin")).toBe("builtin");
+    expect(trustOf("official", "catalog")).toBe("official");
     expect(trustOf("", "repo")).toBe("custom");
     expect(trustOf("verified", "catalog")).toBe("verified");
   });

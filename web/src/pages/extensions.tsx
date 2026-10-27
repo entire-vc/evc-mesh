@@ -14,7 +14,6 @@ import { InstalledExtensions } from "@/components/extensions/installed";
 import { RepoInstallDialog } from "@/components/extensions/repo-install-dialog";
 import { UpdatesTab } from "@/components/extensions/updates-tab";
 import { useRepoUpdates } from "@/hooks/useRepoUpdates";
-import { RuntimeResourcesCard } from "@/components/runtime-resources-card";
 import { McpReference } from "@/pages/mcp-reference";
 
 const TABS = ["catalog", "installed", "updates"] as const;
@@ -75,7 +74,7 @@ export function ExtensionsPage() {
         <p className="max-w-prose text-sm text-muted-foreground">{t("extensionsPage.intro")}</p>
         {isInstanceAdmin && (
           <div className="flex items-center gap-3">
-            <Link to={`/w/${wsSlug}/instance/extensions`} className="text-sm text-primary hover:underline">
+            <Link to={`/w/${wsSlug}/instance`} className="text-sm text-primary hover:underline">
               {t("extensionsPage.instanceSettings")}
             </Link>
             <Button size="sm" onClick={() => setInstallOpen(true)}>
@@ -140,7 +139,6 @@ export function ExtensionsPage() {
               </h2>
               <McpReference />
             </section>
-            {currentWorkspace && <RuntimeResourcesCard workspaceId={currentWorkspace.id} />}
           </div>
         )}
         {tab === "updates" && <UpdatesTab state={repoUpdates} autoUpdate={autoUpdate} onAutoUpdateChange={setAutoUpdate} />}

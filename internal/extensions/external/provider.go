@@ -39,7 +39,7 @@ func NewProvider(m extensions.Manifest, d extensions.Deps, client *http.Client, 
 		return nil, fmt.Errorf("external provider %q: external.base_url_setting is empty", m.ID)
 	}
 	return &Provider{
-		BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst},
+		BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst, Allow: d.Allow},
 		ext:          *m.External, client: client, hs: hs,
 	}, nil
 }

@@ -3,7 +3,6 @@ package handler
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,16 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/entire-vc/evc-mesh/internal/domain"
+	"github.com/entire-vc/evc-mesh/internal/extensions/secretstore"
 	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
-	"github.com/entire-vc/evc-mesh/pkg/encryption"
 )
 
 // No //go:build integration tag — same convention as
 // memory_handler_reserved_tag_db_test.go; skips without a reachable Postgres.
 //
-// Acceptance control for task #1c9f527d, AC1: an issuance through the real
-// handler, real SecretRepo and real ActivityLogRepo lands as a row in
+// Acceptance control for an internal ticket, AC1: an issuance through the real
+// handler, real SecretRefRepo and real ActivityLogRepo lands as a row in
 // activity_log, and the row's raw JSON does not contain the value. The unit
 // tests pin the entry's shape against a recorder; this proves the same holds
 // once it has been through Postgres (JSONB) and the production wiring.
@@ -49,11 +48,28 @@ func newMaterializeAuditWorkspace(t *testing.T, db *sqlx.DB) uuid.UUID {
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = db.Exec(`DELETE FROM activity_log WHERE workspace_id = $1`, wsID)
-		_, _ = db.Exec(`DELETE FROM secrets WHERE workspace_id = $1`, wsID)
+		_, _ = db.Exec(`DELETE FROM secret_refs WHERE workspace_id = $1`, wsID)
 		_, _ = db.Exec(`DELETE FROM workspaces WHERE id = $1`, wsID)
 		_, _ = db.Exec(`DELETE FROM users WHERE id = $1`, ownerID)
 	})
 	return wsID
+}
+
+// memKeep is Keep at its boundary: values by stored ref, in memory.
+type memKeep struct{ values map[string]string }
+
+func (m *memKeep) Put(_ context.Context, ref secretstore.Ref, plain string) (string, error) {
+	stored := secretstore.KeepStoredRef(ref)
+	m.values[stored] = plain
+	return stored, nil
+}
+
+func (m *memKeep) Resolve(_ context.Context, stored string) secretstore.Result {
+	v, ok := m.values[stored]
+	if !ok {
+		return secretstore.Result{Degraded: true, Reason: "not found"}
+	}
+	return secretstore.Result{Value: v}
 }
 
 func materializeOverRealStack(t *testing.T, h *SecretMaterializeHandler, wsID uuid.UUID) *httptest.ResponseRecorder {
@@ -85,16 +101,8 @@ func materializeAuditRows(t *testing.T, db *sqlx.DB, wsID uuid.UUID) []materiali
 
 func TestMaterializeAuditDB_IssuanceIsJournaledWithoutTheValue(t *testing.T) {
 	db := reservedTagTestDB(t)
-	key := make([]byte, 32)
-	for i := range key {
-		key[i] = 0x5a + byte(i)
-	}
-	encryption.ResetForTest()
-	t.Setenv(encryption.EnvKey, base64.StdEncoding.EncodeToString(key))
-	t.Cleanup(encryption.ResetForTest)
-
 	wsID := newMaterializeAuditWorkspace(t, db)
-	secretRepo := postgres.NewSecretRepo(db)
+	secretRepo := postgres.NewSecretRefRepo(db, &memKeep{values: map[string]string{}})
 	created, err := secretRepo.Create(context.Background(), domain.CreateSecretInput{
 		WorkspaceID: wsID, Scope: domain.SecretScopeWorkspace,
 		Name: "AUDIT_GH_TOKEN", Value: materializeDBCanary,
@@ -109,7 +117,7 @@ func TestMaterializeAuditDB_IssuanceIsJournaledWithoutTheValue(t *testing.T) {
 
 	rec := materializeOverRealStack(t, h, wsID)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	// Positive control: the value was really decrypted and handed out.
+	// Positive control: the value was really read from Keep and handed out.
 	require.Contains(t, rec.Body.String(), materializeDBCanary)
 
 	rows := materializeAuditRows(t, db, wsID)

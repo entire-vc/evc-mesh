@@ -1,10 +1,14 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 // Theme settings (Mesh Doc e2e/themes S1-S6) against the loopback fixture: real clicks only, no window.app.
+// Since U4 a theme lives in Extensions like any extension: its own catalog section, the Installed switch, and its
+// settings in the same Settings window; Workspace Settings → Theme only links there.
 // The fixture is a stand for the UI, not the backend: saving to the database is covered by the Go tests.
 // Screenshots (S1 edited, S4 instance, S5 read-only; 1440/393 x light/dark) go to web/themes-shots, a CI artifact.
 const API = "http://127.0.0.1:8019";
 const SETTINGS_URL = "/w/board-fixture/settings";
+const CATALOG_URL = "/w/board-fixture/extensions";
+const INSTALLED_URL = "/w/board-fixture/extensions?tab=installed";
 const INSTANCE_URL = "/w/board-fixture/instance/themes";
 const BOOT_MS = 60_000;
 const SHOTS = process.env.THEMES_SHOTS ?? (process.env.CI ? "themes-shots" : undefined);
@@ -30,20 +34,6 @@ const shotEl = async (page: Page, target: Locator, name: string) => {
   const scheme = await page.evaluate(() => localStorage.getItem("theme"));
   await target.screenshot({ path: `${SHOTS}/${name}-${page.viewportSize()!.width}-${scheme}.png` });
 };
-// the viewport as the user sees it, after centring the row: the sticky Save bar must not cover it
-const shotRow = async (page: Page, row: Locator, name: string) => {
-  await row.evaluate((el) => el.scrollIntoView({ block: "center" }));
-  const bar = await page.getByRole("button", { name: "Save theme" }).evaluate((el) => {
-    const b = el.closest(".sticky")!.getBoundingClientRect();
-    return { top: b.top };
-  });
-  const box = (await row.boundingBox())!;
-  expect(box.y + box.height, "the row is above the sticky Save bar").toBeLessThanOrEqual(bar.top);
-  if (!SHOTS) return;
-  mkdirSync(SHOTS, { recursive: true });
-  const scheme = await page.evaluate(() => localStorage.getItem("theme"));
-  await page.screenshot({ path: `${SHOTS}/${name}-${page.viewportSize()!.width}-${scheme}.png` });
-};
 const prepare = async (page: Page, scheme: Scheme) => {
   await page.addInitScript((t) => localStorage.setItem("theme", t), scheme);
   // the fixture's cards carry no labels and all share one priority: give them both so a field change is visible on the board
@@ -54,6 +44,17 @@ const prepare = async (page: Page, scheme: Scheme) => {
     await route.fulfill({ response: res, json: body });
   });
 };
+const freeze = (page: Page) =>
+  page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
+const installedRow = (page: Page, id: string) => page.locator(`[data-ext="${id}"]`);
+// the theme's Settings window, opened the way a user does it: Extensions → Installed → Settings on the theme's row
+const openThemeSettings = async (page: Page, scheme: Scheme, id = "graphite") => {
+  await prepare(page, scheme);
+  await page.goto(INSTALLED_URL);
+  await installedRow(page, id).getByRole("button", { name: "Settings" }).click({ timeout: BOOT_MS });
+  await freeze(page);
+  return page.getByRole("dialog");
+};
 const themeTab = (page: Page) => page.getByRole("tab", { name: "Theme" }).or(page.getByRole("button", { name: "Theme", exact: true })).first();
 const openThemeTab = async (page: Page, scheme: Scheme) => {
   await prepare(page, scheme);
@@ -61,16 +62,24 @@ const openThemeTab = async (page: Page, scheme: Scheme) => {
   await themeTab(page).click({ timeout: BOOT_MS });
   await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}" });
 };
+const closeDialog = async (page: Page) => {
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+};
 const toBoard = async (page: Page) => {
   await page.getByRole("link", { name: /ContentHub fixture/ }).first().click();
   await expect(page.locator('[data-testid="task-card"]').first()).toBeVisible({ timeout: BOOT_MS });
 };
 const backToTheme = async (page: Page) => {
   await page.goBack();
-  await themeTab(page).click({ timeout: BOOT_MS });
+  await installedRow(page, "graphite").getByRole("button", { name: "Settings" }).click({ timeout: BOOT_MS });
 };
 
-test.afterEach(async ({ request }) => {
+// The board refetches /tasks after the last assertion of a test can already pass. Teardown closes the context, which
+// disposes the route.fetch() response still being read in the handler ("Response has been disposed" at res.json()).
+// Wait for the handlers in flight to finish before the context goes.
+test.afterEach(async ({ page, request }) => {
+  await page.unrouteAll({ behavior: "wait" });
   await request.post(`${API}/__fixture`, { data: { mode: "normal", role: "owner", resetTheme: true } });
 });
 
@@ -79,19 +88,44 @@ for (const [width, scheme] of [[1440, "light"], [1440, "dark"], [393, "light"], 
   test.describe(`screens ${width} ${scheme}`, () => {
     test.use({ viewport: { width, height: 900 } });
 
-    test("S1 owner edit, S4 instance, S5 member read-only", async ({ page }) => {
-      test.setTimeout(BOOT_MS + 90_000);
+    test("U4 catalog and installed, S1 owner edit, S4 instance, S5 member read-only", async ({ page }) => {
+      test.setTimeout(BOOT_MS + 120_000);
       await fixture(page);
-      await openThemeTab(page, scheme);
-      await page.getByRole("radio", { name: /Graphite/ }).click({ timeout: BOOT_MS });
-      await page.getByLabel("Add to Card fields").selectOption({ label: "Priority" });
-      await page.getByLabel("Accent colour", { exact: true }).fill("#336699");
-      await shotRow(page, page.getByLabel("Remove: Priority"), "S1-card-fields");
+      await prepare(page, scheme);
+      await page.goto(CATALOG_URL);
+      await expect(page.getByTestId("section-themes")).toBeVisible({ timeout: BOOT_MS });
+      await freeze(page);
+      await shot(page, "U4-catalog");
+      await page.goto(INSTALLED_URL);
+      await expect(installedRow(page, "graphite")).toBeVisible({ timeout: BOOT_MS });
+      await shot(page, "U4-installed");
+
+      const dialog = await openThemeSettings(page, scheme);
+      await dialog.getByRole("radio", { name: /Graphite/ }).click({ timeout: BOOT_MS });
+      // an unset accent: the swatch shows the colour that applies (the one in the placeholder), not black
+      const accent = dialog.getByLabel("Accent colour", { exact: true });
+      await expect(accent).toHaveValue("");
+      expect(await dialog.getByLabel("Pick a colour: Accent colour").inputValue()).toBe(await accent.getAttribute("placeholder"));
+      // Save / Reset sit below the scroll area, so they cannot cover a theme card
+      const body = (await dialog.getByTestId("theme-settings-body").boundingBox())!;
+      expect((await dialog.getByRole("button", { name: "Save theme" }).boundingBox())!.y).toBeGreaterThanOrEqual(body.y + body.height);
+      await shotEl(page, dialog, "S1-settings-window-unset");
+      await dialog.getByLabel("Add to Card fields").selectOption({ label: "Priority" });
+      await dialog.getByLabel("Accent colour", { exact: true }).fill("#336699");
       await shot(page, "S1-edited");
-      await shotEl(page, page.locator("form").filter({ has: page.getByLabel("Accent colour", { exact: true }) }), "S1-editor");
+      await shotEl(page, dialog, "S1-settings-window");
+      await closeDialog(page);
+
+      await page.goto(SETTINGS_URL);
+      await themeTab(page).click({ timeout: BOOT_MS });
+      await expect(page.getByRole("link", { name: /Theme is in Extensions/ })).toBeVisible({ timeout: BOOT_MS });
+      await shot(page, "U4-workspace-settings");
 
       await page.goto(INSTANCE_URL);
       await expect(page.getByText("Installed themes", { exact: true })).toBeVisible({ timeout: BOOT_MS });
+      // nothing edited yet: the form's defaults and a second load of the saved theme are not an edit
+      await expect(page.getByRole("button", { name: "Save theme" })).toBeDisabled();
+      await expect(page.getByText("Unsaved changes", { exact: true })).toHaveCount(0);
       await shot(page, "S4-instance");
       await page.getByRole("button", { name: /Install slate/i }).click();
       await expect(page.getByText("Theme installed")).toBeVisible();
@@ -105,9 +139,8 @@ for (const [width, scheme] of [[1440, "light"], [1440, "dark"], [393, "light"], 
       await expect(page.getByRole("button", { name: "Remove Slate" })).toHaveCount(0);
 
       await fixture(page, { role: "member" });
-      await page.goto(SETTINGS_URL);
-      await themeTab(page).click({ timeout: BOOT_MS });
-      await expect(page.getByText(/Only workspace owners and admins/)).toBeVisible({ timeout: BOOT_MS });
+      await page.goto(INSTALLED_URL);
+      await expect(installedRow(page, "graphite").getByRole("button", { name: "Settings" })).toBeDisabled({ timeout: BOOT_MS });
       await shot(page, "S5-readonly");
     });
   });
@@ -121,9 +154,8 @@ test.describe("behaviour (1440 light)", () => {
     await fixture(page);
     // the pre-paint script asks the instance theme through the dev proxy: it must reach the fixture, not a dead port
     const prepaint = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/theme" && r.ok(), { timeout: BOOT_MS });
-    await openThemeTab(page, "light");
+    await openThemeSettings(page, "light");
     await prepaint;
-    await expect(page.getByRole("button", { name: "Save theme" })).toBeDisabled();
     await page.getByRole("radio", { name: /Graphite/ }).click({ timeout: BOOT_MS });
 
     // card_fields: Priority, then Labels, then move Labels up so the order is Labels, Priority
@@ -158,6 +190,7 @@ test.describe("behaviour (1440 light)", () => {
     expect(await puts(page)).toBe(1);
 
     // no reload: the board has to pick the new fields up from the re-applied theme
+    await closeDialog(page);
     await toBoard(page);
     await expect(page.locator('[data-testid="task-card"] [aria-label="Urgent"]').first()).toBeVisible(); // the Priority flag
     await expect(page.getByText(LABEL)).toHaveCount(0);
@@ -166,8 +199,39 @@ test.describe("behaviour (1440 light)", () => {
     await page.getByRole("button", { name: "Reset to the instance theme" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Reset", exact: true }).click();
     await expect(page.getByText("The workspace now uses the instance theme")).toBeVisible();
+    await closeDialog(page);
     await toBoard(page);
     await expect(page.getByText(LABEL).first()).toBeVisible({ timeout: BOOT_MS });
+  });
+
+  test("U4 a theme is listed in its own section and switched on like an extension", async ({ page }) => {
+    test.setTimeout(BOOT_MS + 60_000);
+    await fixture(page);
+    await prepare(page, "light");
+    await page.goto(CATALOG_URL);
+    const themes = page.getByTestId("section-themes");
+    await expect(themes).toBeVisible({ timeout: BOOT_MS });
+    await expect(themes.getByRole("link", { name: /Graphite/ })).toBeVisible();
+    await expect(themes.getByRole("link", { name: /GitLab/ })).toHaveCount(0);
+    await expect(themes.locator('[data-kind="theme"]').first()).toBeVisible();
+
+    // the old connect route of a theme lands in its Settings window
+    await page.goto("/w/board-fixture/extensions/graphite/connect");
+    await expect(page.getByRole("dialog", { name: "Graphite" })).toBeVisible({ timeout: BOOT_MS });
+    await closeDialog(page);
+
+    const sw = installedRow(page, "graphite").getByRole("switch");
+    await expect(sw).toHaveAttribute("aria-checked", "false");
+    await sw.click();
+    await expect(page.getByText("Graphite is on in this workspace.")).toBeVisible();
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(await puts(page)).toBe(1);
+
+    // Workspace Settings → Theme points to it, and no longer holds a theme picker
+    await page.goto(SETTINGS_URL);
+    await themeTab(page).click({ timeout: BOOT_MS });
+    await expect(page.getByRole("link", { name: "Theme is in Extensions → Graphite" })).toBeVisible({ timeout: BOOT_MS });
+    await expect(page.getByRole("radio", { name: /Graphite/ })).toHaveCount(0);
   });
 
   test("S3 the workspace icon is uploaded from the Theme tab", async ({ page }) => {
@@ -198,27 +262,40 @@ test.describe("behaviour (1440 light)", () => {
   test("S5 member: read-only, no request is sent", async ({ page }) => {
     test.setTimeout(BOOT_MS + 30_000);
     await fixture(page, { role: "member" });
-    await openThemeTab(page, "light");
-    await expect(page.getByText(/Only workspace owners and admins/)).toBeVisible({ timeout: BOOT_MS });
-    await expect(page.getByRole("radio", { name: /Graphite/ })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Save theme" })).toHaveCount(0);
+    await prepare(page, "light");
+    await page.goto(INSTALLED_URL);
+    const row = installedRow(page, "graphite");
+    await expect(row.getByRole("button", { name: "Settings" })).toBeDisabled({ timeout: BOOT_MS });
+    await expect(row.getByRole("switch")).toBeDisabled();
     expect(await puts(page)).toBe(0);
+  });
+
+  // The teardown race of the /tasks handler, made deterministic: the themes list is held by the fixture, so the test
+  // ends while a route.fetch() is still in flight. Without the unrouteAll in afterEach its res.json() is disposed.
+  test("a route handler in flight at the end of a test is waited for", async ({ page }) => {
+    test.setTimeout(BOOT_MS + 30_000);
+    await fixture(page, { themesDelay: 3000 });
+    await page.route(/\/api\/v1\/themes(\?|$)/, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: await res.json() });
+    });
+    const sent = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/v1/themes", { timeout: BOOT_MS });
+    await page.goto(SETTINGS_URL);
+    await themeTab(page).click({ timeout: BOOT_MS });
+    await sent;
   });
 
   test("S6 loading, error with retry, empty", async ({ page }) => {
     test.setTimeout(BOOT_MS + 60_000);
     // loading -> ready
     await fixture(page, { themesDelay: 2500 });
-    await prepare(page, "light");
-    await page.goto(SETTINGS_URL);
-    await themeTab(page).click({ timeout: BOOT_MS });
+    await openThemeSettings(page, "light");
     await expect(page.getByLabel("Loading themes")).toBeVisible();
     await expect(page.getByRole("radio", { name: /Graphite/ })).toBeVisible({ timeout: BOOT_MS });
 
     // error -> retry -> ready
     await fixture(page, { failThemes: 1 });
-    await page.reload();
-    await themeTab(page).click({ timeout: BOOT_MS });
+    await page.goto(`${INSTALLED_URL}&settings=graphite`);
     await expect(page.getByText("Couldn't load themes.")).toBeVisible({ timeout: BOOT_MS });
     await page.getByRole("button", { name: "Try again" }).click();
     await expect(page.getByRole("radio", { name: /Graphite/ })).toBeVisible();

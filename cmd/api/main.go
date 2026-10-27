@@ -205,9 +205,12 @@ func main() {
 	// Builtin providers resolve instance-level settings through this store
 	// (table first, env fallback with a warning).
 	extensionInstanceStore := &extensions.DBInstanceStore{Repo: instanceSettingRepo, Cfg: cfg, Sources: extensionEnvSources}
+	// The instance allow-list governs every resolution, not only connecting.
+	extensionPolicyRepo := postgres.NewInstanceExtensionPolicyRepo(db)
 	extensionDeps := extensions.Deps{
 		Conns: extensions.IntegrationConnections{Repo: integrationRepo},
 		Inst:  extensionInstanceStore,
+		Allow: extensionPolicyRepo,
 	}
 	extensionProviders := builtin.Providers(extensionDeps)
 	for _, p := range extensionProviders {
@@ -244,10 +247,9 @@ func main() {
 			}
 		}()
 	}
-	extensionPolicyRepo := postgres.NewInstanceExtensionPolicyRepo(db)
 	extensionInstanceSettingsHandler := handler.NewExtensionInstanceSettingsHandler(instanceSettingRepo, instanceSettingRepo, extensionRegistry, extensionEnvSources).WithJournal(extensionPolicyRepo)
-	extensionInstanceAdminHandler := handler.NewExtensionInstanceAdminHandler(extensionPolicyRepo, instanceSettingRepo, postgres.NewInstalledExtensionRepo(db), instanceSettingRepo)
-	runtimeRepo := postgres.NewRuntimeRepo(db)
+	extensionInstanceAdminHandler := handler.NewExtensionInstanceAdminHandler(extensionPolicyRepo, instanceSettingRepo, postgres.NewInstalledExtensionRepo(db), instanceSettingRepo).WithUsage(postgres.NewInstalledExtensionRepo(db))
+	runtimeRepo := postgres.NewRuntimeRepo(db).WithAllowList(extensionPolicyRepo)
 	projectUpdateRepo := postgres.NewProjectUpdateRepo(db)
 	initiativeRepo := postgres.NewInitiativeRepo(db)
 	ruleRepo := postgres.NewRuleRepo(db)
@@ -365,11 +367,14 @@ func main() {
 	// Webhook service is created before taskService so it can be injected for agent wakeup dispatch.
 	// Extension subscriptions with delivery=webhook ride the same service; the
 	// signing secret is resolved from the workspace secret named by secret_ref.
+	// Workspace secrets live in Keep only: secretRepo holds the
+	// Keep provider of the process store, nil when Keep is not configured.
+	secretRepo := postgres.NewSecretRefRepo(db, secretRouter.Keep)
 	webhookService := service.NewWebhookService(webhookRepo,
 		service.WithExtensionDelivery(
 			postgres.NewExtensionEventSubscriptionRepo(db),
 			postgres.NewIntegrationRepo(db),
-			postgres.NewSecretRepo(db),
+			secretRepo,
 		))
 
 	projectIntegrationRepo := postgres.NewProjectIntegrationRepo(db)
@@ -377,7 +382,6 @@ func main() {
 	// One repo, two services, deliberately not one. secretService is what the
 	// public CRUD handlers get and it cannot decrypt anything;
 	// secretMaterializationService can, and reaches exactly one route.
-	secretRepo := postgres.NewSecretRepo(db)
 	secretService := service.NewSecretService(secretRepo)
 	secretMaterializationService := service.NewSecretMaterializationService(secretRepo)
 	mw.CheckSpawnTokenConfigured()
@@ -502,6 +506,7 @@ func main() {
 	mailThemes := &themes.Service{
 		Installed: postgres.NewInstalledExtensionRepo(db),
 		Themes:    postgres.NewThemeRepo(db),
+		Allow:     extensionPolicyRepo,
 	}
 	emailSvc := service.NewEmailService(cfg.Email, service.WithBrandSource(mailThemes))
 	if emailSvc.Enabled() {
@@ -1065,7 +1070,9 @@ func main() {
 	externalHandshaker := &external.Handshaker{
 		Client: externalHTTPClient, Conns: integrationRepo, Secrets: secretRepo,
 		Reader: secretRepo, Subs: postgres.NewExtensionEventSubscriptionRepo(db),
+		Tokens: extensionActorService,
 	}
+	extensionActorHandler.WithTokenDelivery(&external.TokenRotator{Reg: extensionRegistry, Conns: integrationRepo, HS: externalHandshaker})
 	externalRuntime := &external.Runtime{
 		Reg: extensionRegistry, Installed: postgres.NewInstalledExtensionRepo(db), Deps: extensionDeps,
 		Client: externalHTTPClient, HS: externalHandshaker,
@@ -1603,6 +1610,7 @@ func main() {
 		Installed: postgres.NewInstalledExtensionRepo(db),
 		Themes:    postgres.NewThemeRepo(db),
 		Journal:   extensionPolicyRepo,
+		Allow:     extensionPolicyRepo,
 	}
 	if s3Client != nil {
 		themeService.Store = s3Client
@@ -1754,6 +1762,7 @@ func main() {
 	api.GET("/workspaces/:ws_id/agent-grants", agentWorkspaceGrantHandler.List)
 	api.GET("/workspaces/:ws_id/runtime", runtimeHandler.Inventory, rbac(mw.PermManageWebhooks))
 	api.PUT("/workspaces/:ws_id/runtime", runtimeHandler.Save, rbac(mw.PermManageWebhooks))
+	api.POST("/workspaces/:ws_id/runtime/restore", runtimeHandler.Restore, rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/runtime/revisions", runtimeHandler.Revisions, rbac(mw.PermManageWebhooks))
 	api.GET("/workspaces/:ws_id/runtime/capacity", runtimeHandler.Capacity)
 	api.POST("/workspaces/:ws_id/runtime/controllers/:controller_ref/report", runtimeHandler.Report)
@@ -2177,7 +2186,7 @@ func main() {
 	// Secret materialization — deliberately OUTSIDE the `api` group. DualAuth
 	// there accepts a user JWT or ANY agent's API key; this route must accept
 	// neither, since either would let something wielding an ordinary agent
-	// identity decrypt secrets. Gated by mw.SpawnAuth() — see its doc
+	// identity read secret values (served from Keep). Gated by mw.SpawnAuth() — see its doc
 	// comment for the trust model — behind mw.DirectOnly(), which 404s
 	// anything that came through a reverse proxy, so the route's closure no
 	// longer rests on the edge Caddyfile alone.
@@ -2195,7 +2204,8 @@ func main() {
 	// PermManageSecrets, which no agent key holds — see its declaration in
 	// rbac.go. That includes the masked LIST: it carries a fingerprint, and
 	// the point of this store is that an agent identity learns nothing about
-	// a value it did not supply.
+	// a value it did not supply. Create and rotate write the value to Keep
+	// Mesh keeps only the name, the Keep ref and the masked view.
 	api.POST("/workspaces/:ws_id/secrets", secretHandler.Create, rbac(mw.PermManageSecrets))
 	api.GET("/workspaces/:ws_id/secrets", secretHandler.List, rbac(mw.PermManageSecrets))
 	api.POST("/secrets/:secret_id/rotate", secretHandler.Rotate, rbac(mw.PermManageSecrets))
@@ -2256,7 +2266,13 @@ func main() {
 		},
 	}).Apply
 	go extensionCatalog.Run(context.Background(), extensions.ExtensionsAPIVersion)
-	extensionHandler := handler.NewExtensionHandler(installedExtRepo, extensionInstanceStore).WithAllowList(extensionPolicyRepo).WithCatalog(extensionCatalog)
+	// One id per extension in every source: the code shipped with Mesh owns
+	// its ids, the signed catalog owns the rest it lists.
+	shipsWithMesh := func(id string) bool {
+		_, ok := extensionRegistry.Get(id)
+		return ok || themes.BuiltinKnown(id)
+	}
+	extensionHandler := handler.NewExtensionHandler(installedExtRepo, extensionInstanceStore).WithAllowList(extensionPolicyRepo).WithCatalog(extensionCatalog).WithBuiltins(shipsWithMesh)
 	api.GET("/extensions", extensionHandler.List)
 	api.GET("/extensions/catalog", extensionHandler.Catalog)
 	api.GET("/extensions/:ext_id/catalog-card", extensionHandler.CatalogCard)
@@ -2272,6 +2288,17 @@ func main() {
 		},
 	}
 	repoInstallSvc.Themes = themeService
+	repoInstallSvc.Owner = func(_ context.Context, id string) string {
+		if shipsWithMesh(id) {
+			return string(domain.ExtensionSourceBuiltin)
+		}
+		if cat, cerr := extensionCatalog.Current(); cerr == nil {
+			if _, listed := cat.Entry(id); listed {
+				return string(domain.ExtensionSourceCatalog)
+			}
+		}
+		return ""
+	}
 	themeHandler.WithRepoInstall(repoInstallSvc)
 	go repoInstallSvc.RunAutoUpdate(context.Background(), 30*time.Minute)
 	catalogInstaller := &catalog.Installer{

@@ -83,10 +83,29 @@ func (h *RuntimeHandler) Save(c echo.Context) error {
 		return handleError(c, err)
 	}
 	var input postgres.RuntimeSave
-	if err = runtimeBody(c, &input, "if_revision", "enabled", "config"); err != nil {
+	// enabled is still accepted but ignored: the Runner is switched only by
+	// POST /extensions/runner/enable|disable.
+	if err = runtimeBody(c, &input, "if_revision", "config"); err != nil {
 		return handleError(c, err)
 	}
 	value, err := h.repo.Save(c.Request().Context(), ws, runtimeActor(c), input)
+	if err != nil {
+		return handleError(c, err)
+	}
+	return c.JSON(http.StatusOK, value)
+}
+
+// Restore saves a stored revision's catalog as the next revision (history tab).
+func (h *RuntimeHandler) Restore(c echo.Context) error {
+	ws, err := runtimeWorkspace(c)
+	if err != nil {
+		return handleError(c, err)
+	}
+	var input postgres.RuntimeRestore
+	if err = runtimeBody(c, &input, "if_revision", "revision"); err != nil {
+		return handleError(c, err)
+	}
+	value, err := h.repo.Restore(c.Request().Context(), ws, runtimeActor(c), input)
 	if err != nil {
 		return handleError(c, err)
 	}

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"github.com/entire-vc/evc-mesh/internal/extensions/external"
 	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
@@ -17,6 +20,21 @@ import (
 // admin's token rotation.
 type ExtensionActorHandler struct {
 	actors service.ExtensionActorService
+	tokens ExtensionTokenDeliverer
+}
+
+// ExtensionTokenDeliverer rotates and delivers the token of a connection whose
+// extension takes it from Mesh (external.token_path); handled is false for
+// any other connection.
+type ExtensionTokenDeliverer interface {
+	RotateAndDeliver(ctx context.Context, ws, connID uuid.UUID) (res external.Delivered, handled bool, err error)
+}
+
+// WithTokenDelivery makes RotateToken deliver the new token to the service of
+// an extension with token_path instead of returning it.
+func (h *ExtensionActorHandler) WithTokenDelivery(d ExtensionTokenDeliverer) *ExtensionActorHandler {
+	h.tokens = d
+	return h
 }
 
 // NewExtensionActorHandler creates a new ExtensionActorHandler.
@@ -50,7 +68,10 @@ func (h *ExtensionActorHandler) Me(c echo.Context) error {
 }
 
 // RotateToken handles POST /integrations/:int_id/rotate-token. The new token is
-// in the response once; the previous one keeps working for five minutes.
+// in the response once; the previous one keeps working for five minutes. For an
+// extension with token_path Mesh posts the new token to the service and the
+// response carries no token: delivered=true, or 502 with the previous token
+// working exactly as before the call.
 func (h *ExtensionActorHandler) RotateToken(c echo.Context) error {
 	connID, err := uuid.Parse(c.Param("int_id"))
 	if err != nil {
@@ -59,6 +80,15 @@ func (h *ExtensionActorHandler) RotateToken(c echo.Context) error {
 	wsID, err := middleware.GetWorkspaceID(c)
 	if err != nil {
 		return c.JSON(http.StatusForbidden, apierror.Forbidden("workspace context required"))
+	}
+	if h.tokens != nil {
+		res, handled, derr := h.tokens.RotateAndDeliver(c.Request().Context(), wsID, connID)
+		if handled {
+			return h.delivered(c, connID, res, derr)
+		}
+		if derr != nil {
+			return handleError(c, derr)
+		}
 	}
 	issued, err := h.actors.Rotate(c.Request().Context(), wsID, connID)
 	if err != nil {
@@ -69,6 +99,34 @@ func (h *ExtensionActorHandler) RotateToken(c echo.Context) error {
 		"extension_token":    issued.Token,
 		"actor":              issued.Actor,
 		"previous_valid_for": int(issued.Grace.Seconds()),
+	})
+}
+
+// delivered answers a rotate-token that went to the extension's service.
+func (h *ExtensionActorHandler) delivered(c echo.Context, connID uuid.UUID, res external.Delivered, err error) error {
+	var de *external.DeliveryError
+	if errors.As(err, &de) {
+		// The message names only the status and the host.
+		slog.Warn("extension token delivery failed", "connection_id", connID, "error", de.Error())
+		return c.JSON(http.StatusBadGateway, &apierror.Error{Code: http.StatusBadGateway, Message: de.Error()})
+	}
+	if err != nil {
+		return handleError(c, err)
+	}
+	row, err := h.actors.Get(c.Request().Context(), connID)
+	if err != nil || row == nil {
+		return handleError(c, apierror.InternalError("extension actor is not readable after delivery"))
+	}
+	grace := 0
+	if res.Rotated {
+		grace = int(service.ExtensionTokenRotationGrace.Seconds())
+	}
+	slog.Info("extension token delivered to the service", "actor", row.Principal(), "connection_id", connID)
+	c.Response().Header().Set("Cache-Control", "no-store")
+	return c.JSON(http.StatusOK, map[string]any{
+		"actor":              row.Principal(),
+		"previous_valid_for": grace,
+		"delivered":          true,
 	})
 }
 

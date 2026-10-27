@@ -71,11 +71,11 @@ const ExtensionScreenPage = lazy(() =>
 const ExtensionsPage = lazy(() =>
   import("@/pages/extensions").then((m) => ({ default: m.ExtensionsPage })),
 );
-const ExtensionInstanceSettingsPage = lazy(() =>
-  import("@/pages/extension-instance-settings").then((m) => ({ default: m.ExtensionInstanceSettingsPage })),
+const InstanceAdminPage = lazy(() =>
+  import("@/pages/instance-admin").then((m) => ({ default: m.InstanceAdminPage })),
 );
-const InstanceThemesPage = lazy(() =>
-  import("@/pages/instance-themes").then((m) => ({ default: m.InstanceThemesPage })),
+const InstanceAdminRedirect = lazy(() =>
+  import("@/pages/instance-admin").then((m) => ({ default: m.InstanceAdminRedirect })),
 );
 const IntegrationsRedirect = lazy(() =>
   import("@/pages/extensions").then((m) => ({ default: m.IntegrationsRedirect })),
@@ -351,10 +351,18 @@ const router = createBrowserRouter(
           }
         />
         <Route
+          path="w/:wsSlug/instance"
+          element={
+            <LazyPage>
+              <InstanceAdminPage />
+            </LazyPage>
+          }
+        />
+        <Route
           path="w/:wsSlug/instance/extensions"
           element={
             <LazyPage>
-              <ExtensionInstanceSettingsPage />
+              <InstanceAdminRedirect tab="extensions" />
             </LazyPage>
           }
         />
@@ -362,7 +370,7 @@ const router = createBrowserRouter(
           path="w/:wsSlug/instance/themes"
           element={
             <LazyPage>
-              <InstanceThemesPage />
+              <InstanceAdminRedirect tab="themes" />
             </LazyPage>
           }
         />

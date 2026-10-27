@@ -178,7 +178,7 @@ var workspaceParamResolvers = []workspaceParamResolver{
 	// No notFoundResource: the handler's own GetByID scopes by workspace and
 	// answers NotFound for a foreign row anyway, so both layers give a
 	// stranger the same answer for "no such secret" and "not yours".
-	{param: "secret_id", resolve: uuidResolver(`SELECT workspace_id FROM secrets WHERE id = $1`)},
+	{param: "secret_id", resolve: uuidResolver(`SELECT workspace_id FROM secret_refs WHERE id = $1`)},
 	{param: "comment_id", resolve: uuidResolver(`SELECT p.workspace_id
 	                               FROM comments c
 	                               JOIN tasks t ON c.task_id = t.id AND t.deleted_at IS NULL

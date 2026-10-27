@@ -5,13 +5,17 @@
 // lib/__tests__/pinned-locale-number-format.test.ts fails on it.
 import { formatDistanceToNow, parseISO } from "date-fns";
 import { enUS } from "date-fns/locale/en-US";
-import { ru } from "date-fns/locale/ru";
+// formatDistanceToNow reads only `locale.formatDistance`; the whole `ru` locale object would also
+// pull its localize/match/formatLong tables into the initial chunk (~1.9 KB gz). The package exports
+// no subpath for that one function, hence the file path. enUS stays whole: date-fns bundles it as
+// its default locale anyway.
+import { formatDistance as ruFormatDistance } from "../../node_modules/date-fns/locale/ru/_lib/formatDistance.js";
 import { currentLanguage } from "./index";
 import { intlLocale } from "./config";
 
 type DateInput = string | number | Date;
 
-const DATE_FNS_LOCALES = { en: enUS, ru } as const;
+const DATE_FNS_LOCALES = { en: enUS, ru: { formatDistance: ruFormatDistance } } as const;
 
 function toDate(v: DateInput): Date {
   return v instanceof Date ? v : typeof v === "string" ? parseISO(v) : new Date(v);

@@ -24,8 +24,17 @@ async function freshModule() {
   return import("../prefetch-next-route");
 }
 
-/** Lets the flag fetch, the idle callback and the dynamic imports all run. */
+/** Gives a warm-up that is NOT expected the time to show up anyway (negative cases only). */
 const flush = () => new Promise((r) => setTimeout(r, 20));
+
+/** Waits for both chunks to be imported. A fixed sleep is not enough on a loaded CI runner: the
+ *  mocked import resolves after it, the count is still 0, and the late import lands in the next
+ *  test's counter (job 419478 failed "warms…" with 0 and "kill switch is off" with 1). */
+const warmed = () =>
+  vi.waitFor(() => {
+    expect(imported.dashboard).toBe(1);
+    expect(imported.board).toBe(1);
+  });
 
 describe("prefetchNextRouteOnIdle", () => {
   beforeEach(() => {
@@ -46,9 +55,7 @@ describe("prefetchNextRouteOnIdle", () => {
   it("warms the dashboard and board chunks when the flag is on (the default)", async () => {
     const { prefetchNextRouteOnIdle } = await freshModule();
     prefetchNextRouteOnIdle();
-    await flush();
-    expect(imported.dashboard).toBe(1);
-    expect(imported.board).toBe(1);
+    await warmed();
   });
 
   it("does nothing when the kill switch is off", async () => {
@@ -75,7 +82,7 @@ describe("prefetchNextRouteOnIdle", () => {
     const { prefetchNextRouteOnIdle } = await freshModule();
     prefetchNextRouteOnIdle();
     prefetchNextRouteOnIdle();
-    await flush();
+    await warmed();
     prefetchNextRouteOnIdle();
     await flush();
     expect(imported.dashboard).toBe(1);

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/entire-vc/evc-mesh/internal/extensions"
 	"github.com/entire-vc/evc-mesh/internal/middleware"
 	"github.com/entire-vc/evc-mesh/internal/repository"
+	"github.com/entire-vc/evc-mesh/internal/themes"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
 
@@ -24,6 +26,25 @@ type ExtensionInstanceAdminHandler struct {
 	settings  repository.InstanceExtensionSettingRepository
 	installed repository.InstalledExtensionRepository
 	admins    InstanceAdminChecker
+	usage     ExtensionUsageCounter
+}
+
+// ExtensionUsageCounter counts, per extension id, the workspaces where it is on.
+type ExtensionUsageCounter interface {
+	CountActiveConnections(ctx context.Context) (map[string]int, error)
+}
+
+// journalSearcher is the filtered journal read; repositories without it get
+// the newest entries unfiltered.
+type journalSearcher interface {
+	SearchJournal(ctx context.Context, f domain.InstanceJournalFilter) ([]domain.InstanceExtensionJournalEntry, error)
+	JournalFacets(ctx context.Context) (*domain.InstanceJournalFacets, error)
+}
+
+// WithUsage makes Overview report "on in N workspaces".
+func (h *ExtensionInstanceAdminHandler) WithUsage(u ExtensionUsageCounter) *ExtensionInstanceAdminHandler {
+	h.usage = u
+	return h
 }
 
 func NewExtensionInstanceAdminHandler(policy repository.InstanceExtensionPolicyRepository, settings repository.InstanceExtensionSettingRepository, installed repository.InstalledExtensionRepository, admins InstanceAdminChecker) *ExtensionInstanceAdminHandler {
@@ -51,16 +72,23 @@ func authorizeInstanceAdmin(c echo.Context, admins InstanceAdminChecker) (uid uu
 }
 
 type instanceOverviewItem struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Kind            string `json:"kind"`
-	TrustLevel      string `json:"trust_level"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Source     string `json:"source"`
+	Version    string `json:"version"`
+	TrustLevel string `json:"trust_level"`
+	// Blocked is the catalog's block of the installed row; it beats the allow-list.
+	Blocked         bool   `json:"blocked"`
+	BlockedReason   string `json:"blocked_reason,omitempty"`
 	Allowed         bool   `json:"allowed"`
 	AllowExplicit   bool   `json:"allow_explicit"`
 	HasInstanceForm bool   `json:"has_instance_form"`
 	Enabled         bool   `json:"enabled"`
 	SettingsSource  string `json:"settings_source"`
 	SettingsAt      string `json:"settings_updated_at,omitempty"`
+	// Workspaces is how many workspaces have it on; nil when not counted.
+	Workspaces *int `json:"enabled_workspaces,omitempty"`
 }
 
 type instanceOverviewResponse struct {
@@ -86,16 +114,27 @@ func (h *ExtensionInstanceAdminHandler) Overview(c echo.Context) error {
 	if err != nil {
 		return handleError(c, err)
 	}
+	var usage map[string]int
+	if h.usage != nil {
+		if usage, err = h.usage.CountActiveConnections(ctx); err != nil {
+			return handleError(c, err)
+		}
+	}
 	out := instanceOverviewResponse{AutoUpdate: cfg.AutoUpdate, Items: []instanceOverviewItem{}}
 	for i := range rows {
 		m, perr := extensions.ParseManifest(rows[i].Manifest)
-		if perr != nil {
+		if perr != nil || extensions.IsSystemPart(rows[i].ExtensionID) {
 			continue
 		}
 		it := instanceOverviewItem{
-			ID: rows[i].ExtensionID, Name: m.Name, Kind: m.Kind, TrustLevel: string(rows[i].TrustLevel),
-			Allowed: domain.DefaultExtensionAllowed(string(rows[i].TrustLevel)), HasInstanceForm: m.Levels.Instance && m.HasInstanceFields(),
+			ID: rows[i].ExtensionID, Name: m.Name, Kind: m.Kind, Source: string(rows[i].Source), Version: rows[i].Version,
+			TrustLevel: string(rows[i].TrustLevel), Blocked: rows[i].Blocked, BlockedReason: rows[i].BlockedReason,
+			Allowed: domain.DefaultExtensionAllowed(string(rows[i].TrustLevel)), HasInstanceForm: m.Kind != themes.KindTheme && m.Levels.Instance && m.HasInstanceFields(),
 			SettingsSource: "none",
+		}
+		if usage != nil {
+			n := usage[it.ID]
+			it.Workspaces = &n
 		}
 		if p, ok := policies[it.ID]; ok {
 			it.Allowed, it.AllowExplicit = p.Allowed, true
@@ -174,6 +213,9 @@ type journalEntryResponse struct {
 }
 
 // Journal handles GET /extensions/instance/journal?limit=N (newest first, max 200).
+// Optional filters: extension, action, actor (user id), since, until (RFC3339 or
+// YYYY-MM-DD; until is exclusive). With facets=1 the response also lists the
+// values those filters can take.
 func (h *ExtensionInstanceAdminHandler) Journal(c echo.Context) error {
 	if _, denied, err := authorizeInstanceAdmin(c, h.admins); denied {
 		return err
@@ -182,7 +224,39 @@ func (h *ExtensionInstanceAdminHandler) Journal(c echo.Context) error {
 	if v, perr := strconv.Atoi(c.QueryParam("limit")); perr == nil && v > 0 {
 		limit = min(v, 200)
 	}
-	rows, err := h.policy.ListJournal(c.Request().Context(), limit)
+	f := domain.InstanceJournalFilter{Limit: limit, ExtensionID: c.QueryParam("extension"), Action: c.QueryParam("action")}
+	if v := c.QueryParam("actor"); v != "" {
+		id, perr := uuid.Parse(v)
+		if perr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest("actor must be a user id"))
+		}
+		f.ActorID = &id
+	}
+	for _, p := range []struct {
+		name string
+		dst  **time.Time
+	}{{"since", &f.Since}, {"until", &f.Until}} {
+		v := c.QueryParam(p.name)
+		if v == "" {
+			continue
+		}
+		t, perr := parseJournalTime(v)
+		if perr != nil {
+			return c.JSON(http.StatusBadRequest, apierror.BadRequest(p.name+" must be RFC3339 or YYYY-MM-DD"))
+		}
+		*p.dst = &t
+	}
+	ctx := c.Request().Context()
+	search, canSearch := h.policy.(journalSearcher)
+	var (
+		rows []domain.InstanceExtensionJournalEntry
+		err  error
+	)
+	if canSearch {
+		rows, err = search.SearchJournal(ctx, f)
+	} else {
+		rows, err = h.policy.ListJournal(ctx, limit)
+	}
 	if err != nil {
 		return handleError(c, err)
 	}
@@ -193,7 +267,22 @@ func (h *ExtensionInstanceAdminHandler) Journal(c echo.Context) error {
 			Details: r.Details, CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
-	return c.JSON(http.StatusOK, map[string]any{"entries": out})
+	resp := map[string]any{"entries": out}
+	if c.QueryParam("facets") == "1" && canSearch {
+		facets, ferr := search.JournalFacets(ctx)
+		if ferr != nil {
+			return handleError(c, ferr)
+		}
+		resp["facets"] = facets
+	}
+	return c.JSON(http.StatusOK, resp)
+}
+
+func parseJournalTime(v string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.DateOnly, v)
 }
 
 // appendJournal records an admin action. The action already happened, so a

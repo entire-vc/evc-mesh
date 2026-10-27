@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSecretsPlaintextNeverCrossesTheBoundary is S6 (task #a2c330a8, epic
-// #64e84eb1): a CI-gated negative test that walks EVERY surface a value
+// TestSecretsPlaintextNeverCrossesTheBoundary is S6 (an internal ticket, epic
+// an internal ticket): a CI-gated negative test that walks EVERY surface a value
 // could leak through separately, rather than "wrote it, read it back
 // through the same layer" — which the parent task explicitly warns proves
 // nothing, since the write path and its own read path share whatever bug
@@ -32,12 +32,12 @@ import (
 //     layer below the API entirely, so a bug that only manifests in raw SQL
 //     (e.g. a future column added to the JSON without updating the handler)
 //     would still be caught
-//  6. The secrets.encrypted_value column itself, read directly from
-//     Postgres — confirms the value is genuinely encrypted at rest, not
-//     merely masked on the way out
+//  6. Every column of the secret's secret_refs rows, read directly from
+//     Postgres — the value lives in Keep only and must appear in no column,
+//     not merely be masked on the way out
 //  7. POST /internal/secrets/materialize with a normal user's Bearer token
 //     and no spawn header — the ONE endpoint in this codebase that
-//     legitimately returns plaintext (see secret_materialize_handler.go)
+//     legitimately returns plaintext (see spawn_secrets.go)
 //     must refuse an ordinary authenticated caller
 //
 // get_task / recall / MCP payloads are NOT probed here: secrets carry no
@@ -85,7 +85,7 @@ func TestSecretsPlaintextNeverCrossesTheBoundary(t *testing.T) {
 	secretID, _ := created["id"].(string)
 	require.NotEmpty(t, secretID)
 	env.OnCleanup(func() {
-		_, _ = env.DB.ExecContext(context.Background(), "DELETE FROM secrets WHERE name = $1", secretName)
+		_, _ = env.DB.ExecContext(context.Background(), "DELETE FROM secret_refs WHERE name = $1", secretName)
 	})
 
 	// 2. List, before rotation.
@@ -131,15 +131,20 @@ func TestSecretsPlaintextNeverCrossesTheBoundary(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, changesLeakCount, "activity_log.changes must never contain a secret's plaintext value")
 
-	// 6. Raw Postgres check of the encrypted column itself — confirms the
-	// value is genuinely encrypted at rest, not merely masked on the way out
-	// by a handler that happens to be careful today.
-	var storedPlaintextCount int
+	// 6. Raw Postgres check of whole rows — the value lives in Keep only, so it
+	// must not appear in any column of the index, whatever a handler renders.
+	// The positive control is the row count: both versions are there to look at.
+	var rowCount, storedPlaintextCount int
+	err = env.DB.GetContext(context.Background(), &rowCount,
+		`SELECT COUNT(*) FROM secret_refs WHERE name = $1`, secretName)
+	require.NoError(t, err)
+	require.Equal(t, 2, rowCount, "the created and the rotated version")
 	err = env.DB.GetContext(context.Background(), &storedPlaintextCount,
-		`SELECT COUNT(*) FROM secrets WHERE name = $1 AND (encrypted_value = $2 OR encrypted_value = $3)`,
+		`SELECT COUNT(*) FROM secret_refs s WHERE name = $1
+		    AND (row_to_json(s)::text LIKE '%' || $2 || '%' OR row_to_json(s)::text LIKE '%' || $3 || '%')`,
 		secretName, plaintext1, plaintext2)
 	require.NoError(t, err)
-	assert.Equal(t, 0, storedPlaintextCount, "secrets.encrypted_value must never equal the plaintext value verbatim")
+	assert.Equal(t, 0, storedPlaintextCount, "secret_refs must never hold a secret's value")
 
 	// 7. The one legitimate plaintext-returning endpoint must refuse a normal
 	// authenticated user. env.Post sends this user's Bearer JWT; SpawnAuth

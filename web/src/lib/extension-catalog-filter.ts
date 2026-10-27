@@ -4,7 +4,7 @@ export const CATEGORIES = [
   "development", "communication", "documents", "agents", "security", "analytics", "entire-vc",
 ] as const;
 export const KINDS: ExtensionKind[] = ["integration", "plugin", "theme"];
-export const TRUSTS: TrustLevel[] = ["official", "verified", "community", "custom"];
+export const TRUSTS: TrustLevel[] = ["builtin", "official", "verified", "community", "custom"];
 export const SORTS = ["popular", "new", "updated"] as const;
 export type CatalogSort = (typeof SORTS)[number];
 
@@ -62,7 +62,7 @@ export function applyFilters(entries: CatalogEntry[], f: CatalogFilters): Catalo
   const byName = (a: CatalogEntry, b: CatalogEntry) => a.name.localeCompare(b.name, "en");
   const popular = (a: CatalogEntry, b: CatalogEntry) =>
     Number(b.connected) - Number(a.connected) ||
-    Number(b.trust === "official") - Number(a.trust === "official") ||
+    Number(b.trust === "official" || b.trust === "builtin") - Number(a.trust === "official" || a.trust === "builtin") ||
     byName(a, b);
   const cmp =
     f.sort === "new" ? (a: CatalogEntry, b: CatalogEntry) => time(b.createdAt) - time(a.createdAt) || popular(a, b)

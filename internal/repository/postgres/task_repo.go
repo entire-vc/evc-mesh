@@ -1626,6 +1626,12 @@ func (r *TaskRepo) ForceReleaseCheckout(context.Context, uuid.UUID) error {
 // is in the past. This is called periodically by the background reaper goroutine so
 // that orphan locks (held by dead sessions) are reclaimed without waiting for
 // another agent to attempt a checkout on the same task.
+//
+// An in_progress task is left to phase 1 only while its stage is the one the
+// checkout set (checkout_stage_status_id): phase 1 moves it and releases the
+// lease in the same guarded write. On a manual or business in_progress stage
+// phase 1 never moves the card, so the expired lease is released here and the
+// stage stays as it is.
 func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
 	const query = `
 		UPDATE tasks
@@ -1637,7 +1643,8 @@ func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
 		WHERE checkout_expires < now()
 		  AND checkout_expires IS NOT NULL
 		  AND deleted_at IS NULL
- AND status_id NOT IN (SELECT id FROM task_statuses WHERE category = 'in_progress')`
+		  AND NOT (checkout_stage_status_id IS NOT DISTINCT FROM status_id
+		       AND status_id IN (SELECT id FROM task_statuses WHERE category = 'in_progress'))`
 	res, err := r.db.ExecContext(ctx, query)
 	if err != nil {
 		return 0, err
@@ -1647,8 +1654,9 @@ func (r *TaskRepo) ReleaseExpiredCheckouts(ctx context.Context) (int64, error) {
 }
 
 // FindExpiredInProgressCheckouts returns tasks whose checkout_expires is in the past
-// and whose status category is in_progress. Selection is only a snapshot; the
-// transition must repeat lease/version predicates at the conditional write.
+// and whose status category is in_progress, set by the checkout itself
+// (checkout_stage_status_id). Selection is only a snapshot; the transition must
+// repeat lease/version/stage predicates at the conditional write.
 func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain.Task, error) {
 	const q = `
 		SELECT ` + taskBaseColsNoAlias + `
@@ -1656,6 +1664,7 @@ func (r *TaskRepo) FindExpiredInProgressCheckouts(ctx context.Context) ([]domain
 		WHERE checkout_expires < now()
 		  AND checkout_expires IS NOT NULL
 		  AND deleted_at IS NULL
+		  AND checkout_stage_status_id = status_id
 		  AND status_id IN (
 		      SELECT id FROM task_statuses WHERE category = 'in_progress'
 		  )`
@@ -1746,6 +1755,14 @@ const liveMarkerLineRE = `(?in)^[[:space:]]*(⏳[[:blank:]]*WAIT\M|↻ NEXT([[:b
 // The exemption is capped at LiveWaitMarkerMaxAge so a WAIT nobody ever answers does
 // not make a card immortal; past the cap it is swept like any other quiet card.
 //
+// Only a stage the checkout itself set is a candidate (checkout_stage_status_id
+// = status_id). "No lease and quiet" says nothing about who put the card in
+// in_progress: a person or a CRM/Proto agent moving a deal to In Progress or
+// Proposal never takes a checkout, and this sweep returned such cards to the
+// first todo status (New) two hours later (an internal ticket, 27.10: 13 resets in a
+// week on Proto, CRM deals In Progress -> New). Any later status change clears
+// the marker, so the stage is intentional from then on.
+//
 // human_gate and is_shipped are excluded because a system actor is FORBIDDEN to
 // move such a task, so selecting one produces a retry loop that can never end:
 // MoveTask returns HumanGateFrozenError (backlog/done/cancelled are user-only
@@ -1771,6 +1788,7 @@ func (r *TaskRepo) FindStaleUnleasedInProgress(ctx context.Context, olderThan ti
 		WHERE t.checked_out_by IS NULL
 		  AND t.checkout_expires IS NULL
 		  AND t.deleted_at IS NULL
+		  AND t.checkout_stage_status_id = t.status_id
 		  AND t.human_gate = false
 		  AND t.is_shipped = false
 		  AND t.status_id IN (

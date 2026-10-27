@@ -6,6 +6,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	mw "github.com/entire-vc/evc-mesh/internal/middleware"
+	"github.com/entire-vc/evc-mesh/internal/repository/postgres"
 	"github.com/entire-vc/evc-mesh/internal/service"
 	"github.com/entire-vc/evc-mesh/pkg/apierror"
 )
@@ -114,7 +116,12 @@ func (h *ExtensionWorkspaceHandler) setEnabled(c echo.Context, enabled bool) err
 			return c.JSON(http.StatusBadRequest, apierror.BadRequest("invalid request body"))
 		}
 	}
-	v, err := h.svc.SetEnabled(c.Request().Context(), ws, c.Param("ext_id"), enabled, req.Confirm)
+	// Switching the Runner appends a catalog revision authored by this user.
+	ctx := c.Request().Context()
+	if user, err := mw.GetUserID(c); err == nil {
+		ctx = postgres.WithRuntimeAuthor(ctx, user)
+	}
+	v, err := h.svc.SetEnabled(ctx, ws, c.Param("ext_id"), enabled, req.Confirm)
 	if err != nil {
 		return h.fail(c, err)
 	}

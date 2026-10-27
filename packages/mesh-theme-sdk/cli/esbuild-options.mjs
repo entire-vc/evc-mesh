@@ -13,6 +13,8 @@ export function bundleOptions({ entry, cssEntry }) {
     legalComments: "none",
     sourcemap: false, // the bundle's sha256 is the manifest's; a map would change nothing but the size
     logLevel: "silent",
+    // Theme CSS may only url() a data: URI (ADR D4), so fonts and images a stylesheet references are inlined.
+    loader: { ".woff2": "dataurl", ".woff": "dataurl", ".png": "dataurl", ".svg": "dataurl" },
     write: false,
     outdir: "out",
   };

@@ -112,3 +112,37 @@ func (r *InstanceExtensionPolicyRepo) ListJournal(ctx context.Context, limit int
 		ORDER BY j.created_at DESC, j.id DESC LIMIT $1`, limit)
 	return rows, err
 }
+
+// SearchJournal is ListJournal with filters, newest first.
+func (r *InstanceExtensionPolicyRepo) SearchJournal(ctx context.Context, f domain.InstanceJournalFilter) ([]domain.InstanceExtensionJournalEntry, error) {
+	var rows []domain.InstanceExtensionJournalEntry
+	err := r.db.SelectContext(ctx, &rows, `
+		SELECT j.id, j.actor_id, COALESCE(NULLIF(u.display_name, ''), u.email, '') AS actor_name,
+		       j.extension_id, j.action, j.details, j.created_at
+		FROM instance_extension_journal j LEFT JOIN users u ON u.id = j.actor_id
+		WHERE ($2 = '' OR j.extension_id = $2)
+		  AND ($3 = '' OR j.action = $3)
+		  AND ($4::uuid IS NULL OR j.actor_id = $4::uuid)
+		  AND ($5::timestamptz IS NULL OR j.created_at >= $5::timestamptz)
+		  AND ($6::timestamptz IS NULL OR j.created_at < $6::timestamptz)
+		ORDER BY j.created_at DESC, j.id DESC LIMIT $1`,
+		f.Limit, f.ExtensionID, f.Action, f.ActorID, f.Since, f.Until)
+	return rows, err
+}
+
+// JournalFacets returns the distinct actions, actors and extensions of the whole journal.
+func (r *InstanceExtensionPolicyRepo) JournalFacets(ctx context.Context) (*domain.InstanceJournalFacets, error) {
+	out := &domain.InstanceJournalFacets{Actions: []string{}, Actors: []domain.InstanceJournalActor{}, Extensions: []string{}}
+	if err := r.db.SelectContext(ctx, &out.Actions, `SELECT DISTINCT action FROM instance_extension_journal ORDER BY action`); err != nil {
+		return nil, err
+	}
+	if err := r.db.SelectContext(ctx, &out.Extensions, `
+		SELECT DISTINCT extension_id FROM instance_extension_journal WHERE extension_id <> '' ORDER BY extension_id`); err != nil {
+		return nil, err
+	}
+	err := r.db.SelectContext(ctx, &out.Actors, `
+		SELECT u.id, COALESCE(NULLIF(u.display_name, ''), u.email, '') AS name
+		FROM users u WHERE u.id IN (SELECT DISTINCT actor_id FROM instance_extension_journal WHERE actor_id IS NOT NULL)
+		ORDER BY name`)
+	return out, err
+}

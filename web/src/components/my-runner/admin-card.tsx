@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -6,54 +6,43 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { useExtensionCatalog } from "@/hooks/useExtensionCatalog";
-import { api, ApiRequestError } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-error";
 import { setWorkspaceExtensionEnabled } from "@/lib/extension-settings";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { isWorkspaceAdmin, useWorkspaceRole } from "@/components/my-runner/use-workspace-role";
+import { RUNNER_SERVER_ID } from "@/lib/runner-product";
 
-export const RUNNER_EXTENSION_ID = "runner";
+export const RUNNER_EXTENSION_ID = RUNNER_SERVER_ID;
 
 /**
- * The workspace admin's whole part in Runner: one button that turns the
- * extension on. Everything else is the operator's, on this page. Shown to
- * workspace owners and admins only.
+ * The one place Runner is switched on or off for the workspace. The extension
+ * route also writes the catalog's enabled flag, which is what the controllers
+ * drain on. Shown to workspace owners and admins only.
  */
 export function RunnerAdminCard() {
   const { t } = useTranslation("runner");
   const { currentWorkspace } = useWorkspaceStore();
   const catalog = useExtensionCatalog();
   const [busy, setBusy] = useState(false);
+  const [confirmOff, setConfirmOff] = useState(false);
   const wsId = currentWorkspace?.id;
 
-  // The shell does not load the role and the shared store keeps whichever response landed
-  // last, so the card asks for its own workspace's role and keeps it in local state, keyed
-  // by workspace: a late answer for another workspace can never unlock this one.
-  const [role, setRole] = useState<{ ws: string; role: string | null } | null>(null);
-  useEffect(() => {
-    if (!wsId) return;
-    let live = true;
-    setRole(null);
-    api<{ role: string }>(`/api/v1/workspaces/${wsId}/members/me`)
-      .then((me) => me?.role ?? null, () => null)
-      .then((r) => { if (live) setRole({ ws: wsId, role: r }); });
-    return () => { live = false; };
-  }, [wsId]);
-
-  const myRole = role && role.ws === wsId ? role.role : null;
-  if (myRole !== "owner" && myRole !== "admin") return null;
+  const myRole = useWorkspaceRole(wsId);
+  if (!isWorkspaceAdmin(myRole)) return null;
   const entry = catalog.entries.find((e) => e.id === RUNNER_EXTENSION_ID);
   const on = Boolean(entry?.status?.enabled);
 
-  const enable = async () => {
+  const turn = async (next: boolean) => {
     if (!wsId) return;
     setBusy(true);
     try {
-      await setWorkspaceExtensionEnabled(wsId, RUNNER_EXTENSION_ID, true);
-      toast.success(t("admin.enabled"));
+      // confirm: the inline question was already answered, also for an instance-wide Runner.
+      await setWorkspaceExtensionEnabled(wsId, RUNNER_EXTENSION_ID, next, true);
+      toast.success(t(next ? "admin.enabled" : "admin.disabled"));
+      setConfirmOff(false);
       catalog.refresh();
     } catch (e) {
-      // 404: the workspace has no Runner connection row yet, which the enable route cannot create.
-      toast.error(e instanceof ApiRequestError && e.status === 404 ? t("admin.notConnected") : apiErrorMessage(e, t("admin.failed")));
+      toast.error(apiErrorMessage(e, t(next ? "admin.failed" : "admin.disableFailed")));
     } finally {
       setBusy(false);
     }
@@ -66,9 +55,9 @@ export function RunnerAdminCard() {
           {t("admin.title")}
           {catalog.state === "ready" && entry && <Badge variant={on ? "success" : "outline"}>{t(on ? "admin.enabled" : "admin.off")}</Badge>}
         </CardTitle>
-        <CardDescription>{on ? t("admin.onHint") : t("admin.offHint")}</CardDescription>
+        {/* No hint until the status is known: a loading card must not claim Runner is off. */}
+        {catalog.state === "ready" && entry && <CardDescription>{on ? t("admin.onHint") : t("admin.offHint")}</CardDescription>}
       </CardHeader>
-      {!on && (
       <CardContent>
         {catalog.state === "loading" && <Skeleton className="h-9 w-40" />}
         {catalog.state === "error" && (
@@ -78,10 +67,24 @@ export function RunnerAdminCard() {
           </div>
         )}
         {catalog.state === "ready" && entry && !on && (
-          <Button disabled={busy} onClick={() => void enable()}>{t(busy ? "admin.enabling" : "admin.enable")}</Button>
+          <Button disabled={busy} onClick={() => void turn(true)}>{t(busy ? "admin.enabling" : "admin.enable")}</Button>
+        )}
+        {catalog.state === "ready" && entry && on && !confirmOff && (
+          <Button variant="outline" disabled={busy} onClick={() => setConfirmOff(true)}>{t("admin.disable")}</Button>
+        )}
+        {catalog.state === "ready" && entry && on && confirmOff && (
+          // Inline, not a modal: switching off drains every runner of the workspace.
+          <div role="group" aria-label={t("admin.disable")} className="space-y-3 rounded-lg border border-warning/50 p-3" data-testid="my-runner-disable-confirm">
+            <p className="text-sm">{t("admin.disableConfirm")}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="destructive" disabled={busy} onClick={() => void turn(false)}>
+                {t(busy ? "admin.disabling" : "admin.disableYes")}
+              </Button>
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmOff(false)}>{t("admin.cancel")}</Button>
+            </div>
+          </div>
         )}
       </CardContent>
-      )}
     </Card>
   );
 }

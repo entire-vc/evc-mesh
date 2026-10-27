@@ -78,6 +78,16 @@ test.describe("board-studio: the board", () => {
     expect(await page.locator(".studio-band").count()).toBeGreaterThanOrEqual(4);
   });
 
+  test("it is drawn as Prototypes: the brand orange and the SB Sans Display stack reach the page", async ({ page }) => {
+    await openBoard(page);
+    const look = await page.evaluate(() => ({
+      primary: getComputedStyle(document.documentElement).getPropertyValue("--primary").trim(),
+      body: getComputedStyle(document.body).fontFamily,
+    }));
+    expect(look.primary).toBe("20.1 100% 56.1%"); // #FF6A1F exactly
+    expect(look.body).toMatch(/^"?SB Sans Display"?,\s*"?Inter"?,/);
+  });
+
   test("dragging a card changes its status, and a second user sees it without reloading", async ({ page, browser }) => {
     test.setTimeout(BOOT_MS * 2);
     await fixture(page, { studio: true, broadcastMoves: true });
@@ -277,6 +287,11 @@ for (const width of [1440, 393]) {
         await openBoard(page, scheme);
         await expect(page.locator(".studio-band").first()).toBeVisible();
         await shot(page, "board-studio-board");
+        const first = page.locator('[data-testid="task-card"]').first();
+        const [taskId, title] = [await first.getAttribute("data-task-id"), (await first.locator(".studio-title").textContent())!.trim()];
+        await page.goto(`/t/${taskId}`);
+        await expect(page.getByRole("heading", { name: title })).toBeVisible({ timeout: BOOT_MS });
+        await shot(page, "board-studio-task");
         await openDash(page, scheme);
         await expect(page.getByRole("heading", { name: "Team focus" })).toBeVisible();
         await shot(page, "board-studio-dashboard");

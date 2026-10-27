@@ -61,7 +61,7 @@ func New(d extensions.Deps) *Provider {
 	if err != nil {
 		panic(fmt.Sprintf("gitlab: embedded manifest: %v", err))
 	}
-	return &Provider{BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst}}
+	return &Provider{BaseProvider: extensions.BaseProvider{Man: m, Conns: d.Conns, Inst: d.Inst, Allow: d.Allow}}
 }
 
 // Validate checks the settings of a level. A connection must carry a token or a
@@ -113,7 +113,7 @@ func (p *Provider) Resolve(ctx context.Context, workspaceID uuid.UUID) (extensio
 		return res, nil
 	}
 	if res.Source == extensions.SourceWorkspace {
-		return extensions.ResolveSettings(ctx, nil, p.Inst, workspaceID, p.Man.ID)
+		return extensions.ResolveSettings(ctx, nil, p.Inst, p.Allow, workspaceID, p.Man.ID)
 	}
 	return extensions.Resolved{ExtensionID: p.Man.ID, Source: extensions.SourceNone}, nil
 }
@@ -169,7 +169,7 @@ func (p *Provider) ResolveConfig(ctx context.Context, workspaceID uuid.UUID) (ba
 	res, err := p.Resolve(ctx, workspaceID)
 	if err != nil {
 		log.Printf("[gitlab-integration] resolve failed for workspace %s: %v — trying instance level", workspaceID, err)
-		res, err = extensions.ResolveSettings(ctx, nil, p.Inst, workspaceID, p.Man.ID)
+		res, err = extensions.ResolveSettings(ctx, nil, p.Inst, p.Allow, workspaceID, p.Man.ID)
 		if err != nil {
 			log.Printf("[gitlab-integration] instance level failed: %v", err)
 			return "", "", "", "", false
@@ -191,7 +191,7 @@ func (p *Provider) ResolveConfig(ctx context.Context, workspaceID uuid.UUID) (ba
 // InstanceWebhookSecret is the webhook secret of the instance level alone, ""
 // when the instance level is off or has none.
 func (p *Provider) InstanceWebhookSecret(ctx context.Context) string {
-	res, err := extensions.ResolveSettings(ctx, nil, p.Inst, uuid.Nil, p.Man.ID)
+	res, err := extensions.ResolveSettings(ctx, nil, p.Inst, p.Allow, uuid.Nil, p.Man.ID)
 	if err != nil || !res.Enabled {
 		return ""
 	}

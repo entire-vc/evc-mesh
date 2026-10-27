@@ -1498,6 +1498,16 @@ type ExtensionActorRepository interface {
 	// Rotate installs newHash as the current token and keeps the old one valid
 	// until prevExpiresAt. Reports false when the actor is missing or revoked.
 	Rotate(ctx context.Context, connectionID uuid.UUID, newHash string, prevExpiresAt time.Time) (bool, error)
+	// RotateKeepingState is Rotate that also returns the token state it replaced
+	// (token_hash, prev_token_*, rotated_at, token_delivered_at), read under the
+	// same row lock, for RestoreToken. nil when the actor is missing or revoked.
+	RotateKeepingState(ctx context.Context, connectionID uuid.UUID, newHash string, prevExpiresAt time.Time) (*domain.ExtensionActor, error)
+	// RestoreToken puts the token state before back, but only while newHash is
+	// still the current token: a rotation made after it is never undone.
+	RestoreToken(ctx context.Context, connectionID uuid.UUID, newHash string, before *domain.ExtensionActor) (bool, error)
+	// MarkTokenDelivered records that the token with tokenHash, still current,
+	// reached the extension's service at at. Reports false otherwise.
+	MarkTokenDelivered(ctx context.Context, connectionID uuid.UUID, tokenHash string, at time.Time) (bool, error)
 	// Revoke sets revoked_at and drops the previous token. Idempotent; reports
 	// whether this call changed anything.
 	Revoke(ctx context.Context, connectionID uuid.UUID) (bool, error)
@@ -1926,7 +1936,7 @@ type ProjectIntegrationRepository interface {
 // plaintext or ciphertext" a property the compiler can help enforce, not
 // just something a test happens to check.
 type SecretRepository interface {
-	// Create encrypts input.Value and inserts a new current row. Returns
+	// Create stores input.Value in Keep and inserts a new current row. Returns
 	// apierror.Conflict if a current (unrotated) secret already exists for
 	// the same workspace/scope/name — callers must Rotate instead.
 	Create(ctx context.Context, input domain.CreateSecretInput) (domain.Secret, error)
@@ -1966,14 +1976,14 @@ type SecretRepository interface {
 	AssertScopeRefInWorkspace(ctx context.Context, workspaceID uuid.UUID, projectID, agentID *uuid.UUID) error
 }
 
-// SecretMaterializer decrypts current secret values for spawn-time env-file
+// SecretMaterializer reads current secret values from Keep for spawn-time env-file
 // materialization (an internal ticket, S4). This is a SEPARATE interface from
 // SecretRepository on purpose: SecretRepository is what the public secrets
 // API (S3) is built on, and it has no method that can return a value at all.
 // Wire this interface into exactly one caller — the spawn-hook endpoint —
 // never into anything a browser session or a general agent tool reaches.
 type SecretMaterializer interface {
-	// ResolveCurrentValues decrypts every CURRENT secret in scope for the
+	// ResolveCurrentValues reads every CURRENT secret in scope for the
 	// given resolution and reports each one's expiry state explicitly — an
 	// expired entry is returned WITH Expired=true and an empty Value, so the
 	// caller can name it in a loud spawn error rather than silently omit the
