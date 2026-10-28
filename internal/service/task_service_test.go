@@ -3322,7 +3322,7 @@ func setupTaskServiceWithDoneGateAndGitHubChecker(checker githubapi.PullRequestC
 
 // fakeGitLabMRChecker is gitlabapi.MergeRequestChecker's counterpart to
 // fakeGitHubPRChecker, for the done-evidence gate's GitLab live-check branch
-// type fakeGitLabMRChecker struct {
+type fakeGitLabMRChecker struct {
 	mu              sync.Mutex
 	state           gitlabapi.MergeRequestState
 	err             error
