@@ -61,6 +61,7 @@ import { useRulesStore } from "@/stores/rules";
 import { cn } from "@/lib/cn";
 import { displayName, inlineLabel, isNamePlaceholder } from "@/lib/user-display";
 import { apiErrorMessage } from "@/lib/api-error";
+import { api, ApiRequestError } from "@/lib/api";
 import type {
   AgentWorkspaceGrantWithAgent,
   AssignmentRulesConfig,
@@ -507,6 +508,18 @@ function ViolationRow({ v }: { v: RuleViolation }) {
 
 // ---- Main page ----
 
+
+// Fields an owner/admin may change on another member's account. Only the keys
+// present are sent: an unchanged name must not be re-sent, because the API
+// refuses any write to a name its owner has chosen. The PATCH is issued from
+// this page rather than the member store: the store ships in the login bundle,
+// and this edit is only reachable from settings.
+interface MemberAccountChanges {
+  name?: string;
+  email?: string;
+  username?: string;
+  password?: string;
+}
 export function WorkspaceSettingsPage() {
   const { wsSlug } = useParams<{ wsSlug: string }>();
   const navigate = useNavigate();
@@ -521,7 +534,6 @@ export function WorkspaceSettingsPage() {
     fetchWorkspaceMembers,
     fetchMyRole,
     updateWorkspaceMemberRole,
-    updateWorkspaceMemberName,
     removeWorkspaceMember,
     workspaceInvites,
     fetchWorkspaceInvites,
@@ -594,6 +606,10 @@ export function WorkspaceSettingsPage() {
   const [memberToRename, setMemberToRename] =
     useState<WorkspaceMemberWithUser | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editUsername, setEditUsername] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+  const [editPasswordConfirm, setEditPasswordConfirm] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   // Outcome of the last Resend, scoped to the invite it belongs to.
@@ -790,23 +806,76 @@ export function WorkspaceSettingsPage() {
     // Prefilling with a placeholder would just make the operator delete the
     // address before typing, so start empty when there is no real name.
     setRenameValue(isNamePlaceholder(member.user) ? "" : member.user.name);
+    setEditEmail(member.user.email);
+    setEditUsername(member.user.username ?? "");
+    setEditPassword("");
+    setEditPasswordConfirm("");
     setRenameError(null);
   };
 
   const handleConfirmRename = async () => {
     if (!currentWorkspace || !memberToRename) return;
+    const original = memberToRename.user;
+    // Only what the operator actually changed is sent. Re-sending an untouched
+    // name would be refused once its owner has chosen it, and would block the
+    // password reset riding in the same request.
+    const changes: MemberAccountChanges = {};
     const trimmed = renameValue.trim();
-    if (!trimmed) {
-      setRenameError(t("workspace.general.nameRequired"));
+    const originalName = isNamePlaceholder(original) ? "" : original.name;
+    if (trimmed !== originalName) {
+      if (!trimmed) {
+        setRenameError(t("workspace.general.nameRequired"));
+        return;
+      }
+      changes.name = trimmed;
+    }
+    const email = editEmail.trim().toLowerCase();
+    if (email !== original.email.toLowerCase()) {
+      if (!email) {
+        setRenameError(t("workspace.members.emailRequired"));
+        return;
+      }
+      changes.email = email;
+    }
+    const username = editUsername.trim();
+    if (username && username !== (original.username ?? "")) changes.username = username;
+    if (editPassword || editPasswordConfirm) {
+      if (editPassword !== editPasswordConfirm) {
+        setRenameError(t("workspace.members.passwordMismatch"));
+        return;
+      }
+      changes.password = editPassword;
+    }
+    if (Object.keys(changes).length === 0) {
+      setMemberToRename(null);
       return;
     }
     setIsRenaming(true);
     setRenameError(null);
     try {
-      await updateWorkspaceMemberName(currentWorkspace.id, memberToRename.user_id, trimmed);
+      const updated = await api<WorkspaceMemberWithUser>(
+        `/api/v1/workspaces/${currentWorkspace.id}/members/${memberToRename.user_id}`,
+        { method: "PATCH", body: changes },
+      );
+      useMemberStore.setState((state) => ({
+        workspaceMembers: state.workspaceMembers.map((m) =>
+          m.user_id === updated.user_id ? updated : m,
+        ),
+      }));
       setMemberToRename(null);
     } catch (err) {
-      setRenameError(apiErrorMessage(err, t("workspace.members.renameFailed")));
+      // The refusals here each have one cause the operator can act on, and the
+      // generic fallback would hide it: 403 is the authority rule, 409 a taken
+      // address or handle, 400 the password or handle format the server names.
+      if (err instanceof ApiRequestError && err.status === 403) {
+        setRenameError(t("workspace.members.editForbidden"));
+      } else if (err instanceof ApiRequestError && err.status === 409) {
+        setRenameError(t("workspace.members.editConflict"));
+      } else if (err instanceof ApiRequestError && err.status === 400 && err.message) {
+        setRenameError(err.message);
+      } else {
+        setRenameError(apiErrorMessage(err, t("workspace.members.editFailed")));
+      }
     } finally {
       setIsRenaming(false);
     }
@@ -1244,6 +1313,10 @@ export function WorkspaceSettingsPage() {
                 const isLastOwner = member.role === "owner" && ownerCount <= 1;
                 const canEditRole =
                   canManageMembers && member.role !== "owner";
+                // The API refuses edits above the actor's own role (an admin
+                // cannot rewrite an owner), so the control is not offered.
+                const canEditAccount =
+                  canManageMembers && !isMe && (myRole === "owner" || member.role !== "owner");
                 const canRemove =
                   canManageMembers && !isLastOwner;
 
@@ -1301,13 +1374,14 @@ export function WorkspaceSettingsPage() {
                       {/* Edit name. Own name is edited on the Profile tab, which
                           is also the only place it can be changed once its owner
                           has chosen it. */}
-                      {canManageMembers && !isMe && (
+                      {canEditAccount && (
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-foreground"
                           onClick={() => handleOpenRename(member)}
-                          title={t("workspace.members.editName")}
+                          title={t("workspace.members.editMember")}
+                          aria-label={t("workspace.members.editMember")}
                         >
                           <Pencil className="h-4 w-4" />
                         </Button>
@@ -2114,12 +2188,12 @@ export function WorkspaceSettingsPage() {
         open={!!memberToRename}
         onOpenChange={(next) => { if (!next) setMemberToRename(null); }}
       >
-        <DialogContent onClose={() => setMemberToRename(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto" onClose={() => setMemberToRename(null)}>
           <DialogHeader>
-            <DialogTitle>{t("workspace.members.editName")}</DialogTitle>
+            <DialogTitle>{t("workspace.members.editMember")}</DialogTitle>
             <DialogDescription>
               {memberToRename
-                ? t("workspace.members.renameDescription", { email: memberToRename.user.email })
+                ? t("workspace.members.editDescription", { email: memberToRename.user.email })
                 : ""}
             </DialogDescription>
           </DialogHeader>
@@ -2145,6 +2219,64 @@ export function WorkspaceSettingsPage() {
               </p>
             </div>
 
+            <div className="space-y-1.5">
+              <label htmlFor="ws-edit-email" className="text-sm font-medium">
+                {t("workspace.members.emailLabel")}
+              </label>
+              <Input
+                id="ws-edit-email"
+                type="email"
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                autoComplete="off"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="ws-edit-username" className="text-sm font-medium">
+                {t("workspace.members.usernameLabel")}
+              </label>
+              <Input
+                id="ws-edit-username"
+                value={editUsername}
+                onChange={(e) => setEditUsername(e.target.value)}
+                autoComplete="off"
+                maxLength={40}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label htmlFor="ws-edit-password" className="text-sm font-medium">
+                  {t("workspace.members.newPasswordLabel")}
+                </label>
+                <Input
+                  id="ws-edit-password"
+                  type="password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  autoComplete="new-password"
+                  maxLength={72}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="ws-edit-password-confirm" className="text-sm font-medium">
+                  {t("workspace.members.confirmPasswordLabel")}
+                </label>
+                <Input
+                  id="ws-edit-password-confirm"
+                  type="password"
+                  value={editPasswordConfirm}
+                  onChange={(e) => setEditPasswordConfirm(e.target.value)}
+                  autoComplete="new-password"
+                  maxLength={72}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t("workspace.members.passwordHint")}
+            </p>
+
             {renameError && <p className="text-sm text-destructive">{renameError}</p>}
 
             <DialogFooter>
@@ -2157,7 +2289,7 @@ export function WorkspaceSettingsPage() {
                 {t("workspace.cancel")}
               </Button>
               <Button type="submit" disabled={isRenaming}>
-                {isRenaming ? t("workspace.members.savingName") : t("workspace.members.saveName")}
+                {isRenaming ? t("workspace.members.savingName") : t("workspace.members.saveMember")}
               </Button>
             </DialogFooter>
           </form>

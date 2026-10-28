@@ -91,7 +91,7 @@ var (
 // Errors returned by the auth service.
 var (
 	ErrPasswordTooShort       = apierror.BadRequest("password must be at least 8 characters")
-	ErrPasswordTooLong        = apierror.BadRequest("password must be at most 128 characters")
+	ErrPasswordTooLong        = apierror.BadRequest("password must be at most 72 bytes")
 	ErrPasswordWeakComplexity = apierror.BadRequest("password must contain at least one uppercase letter, one lowercase letter, and one digit")
 	ErrInvalidEmail           = apierror.BadRequest("invalid email address")
 	ErrEmailAlreadyExists     = apierror.Conflict("a user with this email already exists")
@@ -664,7 +664,9 @@ func ValidatePassword(password string) error {
 	if len(password) < 8 {
 		return ErrPasswordTooShort
 	}
-	if len(password) > 128 {
+	// bcrypt refuses anything longer than 72 bytes, so a longer password
+	// would pass here and then fail to hash with a 500.
+	if len(password) > 72 {
 		return ErrPasswordTooLong
 	}
 
@@ -885,6 +887,18 @@ func (s *Service) deriveUniqueUsername(ctx context.Context, email string) (strin
 // chk_users_username.
 func (s *Service) DeriveUsername(ctx context.Context, email string) (string, error) {
 	return s.deriveUniqueUsername(ctx, NormalizeEmail(email))
+}
+
+// ValidUsername reports whether username has the shape users.username accepts
+// (chk_users_username): 2-40 characters, lowercase letters, digits and inner
+// hyphens. It checks format only, not availability.
+func ValidUsername(username string) bool {
+	return usernameRe.MatchString(username)
+}
+
+// ValidEmail reports whether email parses as a single address.
+func ValidEmail(email string) bool {
+	return validateEmail(email) == nil
 }
 
 // NormalizeEmail canonicalizes an email address for storage and comparison:

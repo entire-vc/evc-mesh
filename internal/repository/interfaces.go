@@ -1016,7 +1016,16 @@ type UserRepository interface {
 	// registration policy — otherwise a closed self-host instance could never
 	// be bootstrapped.
 	Count(ctx context.Context) (int, error)
+	// UpdateEmail rewrites the login address. Returns ErrEmailTaken when another
+	// account already holds it (unique index on lower(email)).
+	UpdateEmail(ctx context.Context, userID uuid.UUID, email string) error
+	// UpdatePasswordHash replaces the stored bcrypt hash.
+	UpdatePasswordHash(ctx context.Context, userID uuid.UUID, hash string) error
 }
+
+// ErrEmailTaken is returned by UserRepository.UpdateEmail when the address
+// already belongs to another account.
+var ErrEmailTaken = errors.New("email already belongs to another account")
 
 // MentionFilter holds filtering options for listing mention records.
 type MentionFilter struct {
